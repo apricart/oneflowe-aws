@@ -32,5 +32,10 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
+# playwright
+/playwright-report/
+/test-results/
+/blob-report/
+
 # database exports (uncomment to ignore, or keep specific files by not adding them)
 # database-export-*.sql

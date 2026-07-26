@@ -481,10 +481,8 @@ const generateOrderTokenEmailHTML = (details: OrderTokenEmailDetails) => {
   `
 }
 
-export async function sendOrderTokenEmail(details: OrderTokenEmailDetails): Promise<boolean> {
+export async function sendOrderTokenEmail(details: OrderTokenEmailDetails): Promise<void> {
   try {
-    if (!validateSesConfig()) return false
-
     const createdAt = details.createdAt ? new Date(details.createdAt).toLocaleString() : "N/A"
     const itemLines = details.items.map((item) =>
       `  - ${item.productCode ? `${item.productCode} - ` : ""}${item.productName}: ${formatQuantity(item.quantity)}${item.unit ? ` ${item.unit}` : ""}`
@@ -514,12 +512,10 @@ export async function sendOrderTokenEmail(details: OrderTokenEmailDetails): Prom
         { name: "tid", value: sanitizeEmailTagValue(details.tid) },
       ],
     })
-
-    return true
   } catch (error) {
     console.error("[Email] Failed to send order token email with AWS SES:", error)
     logError(error, "SES_SEND_ORDER_TOKEN", { to: details.to, tid: details.tid })
-    return false
+    throw error
   }
 }
 

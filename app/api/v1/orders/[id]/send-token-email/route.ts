@@ -81,19 +81,23 @@ export async function POST(
     .from(orderItems)
     .where(eq(orderItems.orderId, orderId))
 
-  const sent = await sendOrderTokenEmail({
-    to: TOKEN_EMAIL_RECIPIENT,
-    token: order.approvalToken,
-    tid: order.tid,
-    organizationName: order.organizationName || `Organization ${order.organizationId || ""}`,
-    branchName: order.branchName || `Branch ${order.branchId}`,
-    status: order.status,
-    createdAt: order.createdAt,
-    items,
-  })
+  try {
+    await sendOrderTokenEmail({
+      to: TOKEN_EMAIL_RECIPIENT,
+      token: order.approvalToken,
+      tid: order.tid,
+      organizationName: order.organizationName || `Organization ${order.organizationId || ""}`,
+      branchName: order.branchName || `Branch ${order.branchId}`,
+      status: order.status,
+      createdAt: order.createdAt,
+      items,
+    })
+  } catch (emailError) {
+    const emailErrorMessage = emailError instanceof Error
+      ? `${emailError.name}: ${emailError.message}`
+      : String(emailError)
 
-  if (!sent) {
-    return error("Failed to send token email through AWS SES. Please check SES sender, region, and credentials configuration.", 400)
+    return error(`Failed to send token email through AWS SES: ${emailErrorMessage}`, 400)
   }
 
   await db.insert(auditLogs).values({

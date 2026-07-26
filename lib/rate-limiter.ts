@@ -109,6 +109,18 @@ export async function checkRateLimit(
     identifier: string,
     type: RateLimitType = "api"
 ): Promise<{ allowed: boolean; remaining: number; resetIn: number }> {
+    // Browser E2E runs use isolated users and an isolated test database. Avoid
+    // coupling those local runs to a shared Upstash instance. This can never
+    // disable rate limiting in a production runtime.
+    if (env.NODE_ENV !== "production" && process.env.E2E_TESTING === "1") {
+        const config = RATE_LIMITS[type] || RATE_LIMITS.api
+        return {
+            allowed: true,
+            remaining: config.requests,
+            resetIn: config.windowSeconds,
+        }
+    }
+
     try {
         // Validate inputs
         if (!identifier || typeof identifier !== 'string') {
@@ -232,6 +244,10 @@ export function getRateLimitHeaders(remaining: number, resetIn: number): Record<
  * Reset rate limit for a specific identifier (admin function)
  */
 export async function resetRateLimit(identifier: string, type: RateLimitType): Promise<boolean> {
+    if (env.NODE_ENV !== "production" && process.env.E2E_TESTING === "1") {
+        return true
+    }
+
     try {
         if (!identifier || !type) {
             console.error('[RateLimit] Invalid parameters for resetRateLimit')

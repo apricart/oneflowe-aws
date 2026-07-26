@@ -743,6 +743,10 @@ export async function clearAllMFACooldowns(userId: string): Promise<void> {
  * Clear daily OTP count for a user (called after successful login)
  */
 export async function clearDailyCount(userId: string): Promise<void> {
+  if (process.env.NODE_ENV !== "production" && process.env.E2E_TESTING === "1") {
+    return
+  }
+
   try {
     await RedisMFA.deleteDailyCount(userId)
   } catch (error) {
