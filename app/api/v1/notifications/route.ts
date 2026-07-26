@@ -69,6 +69,7 @@ export async function GET() {
     return NextResponse.json({
       items: rows.map((notification) => ({
         id: `db-${notification.id}`,
+        type: notification.type,
         title: notificationTitle(notification.type),
         message: notification.message,
         severity: notificationSeverity(notification.type),

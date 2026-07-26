@@ -250,23 +250,19 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json()
     const {
-      organizationInventoryIds,
+      organizationInventoryIds: requestedOrganizationInventoryIds,
       branchIds: directBranchIds, // Optional: for backward compatibility
       groupId, // New: assign to all branches in a group
       organizationId: bodyOrgId,
       isVisible = true,
-      isActive = true,
     } = body
 
-    // Debug logging
     console.log('POST /api/v1/head-office/branch-assignments received:', {
-      organizationInventoryIds,
-      directBranchIds,
+      organizationInventoryCount: Array.isArray(requestedOrganizationInventoryIds)
+        ? requestedOrganizationInventoryIds.length
+        : 0,
+      directBranchCount: Array.isArray(directBranchIds) ? directBranchIds.length : 0,
       groupId,
-      organizationIdTypes: {
-        orgInvIds: organizationInventoryIds?.map((id: any) => typeof id),
-        branchIds: directBranchIds?.map((id: any) => typeof id)
-      }
     })
 
     // Get organizationId from session or body (for Super Admin context selector)
@@ -278,26 +274,42 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Organization ID is required" }, { status: 400 })
     }
 
-    if (!organizationInventoryIds || organizationInventoryIds.length === 0) {
+    const parsedOrganizationId = Number(organizationId)
+    if (!Number.isInteger(parsedOrganizationId) || parsedOrganizationId <= 0) {
+      return NextResponse.json({ error: "Invalid organization ID" }, { status: 400 })
+    }
+
+    if (!Array.isArray(requestedOrganizationInventoryIds) || requestedOrganizationInventoryIds.length === 0) {
       return NextResponse.json({ error: "Organization inventory IDs are required" }, { status: 400 })
     }
+
+    const parsedOrganizationInventoryIds = requestedOrganizationInventoryIds.map(Number)
+    if (parsedOrganizationInventoryIds.some(id => !Number.isInteger(id) || id <= 0)) {
+      return NextResponse.json({ error: "Invalid organization inventory IDs" }, { status: 400 })
+    }
+    const organizationInventoryIds = [...new Set(parsedOrganizationInventoryIds)]
 
     // Determine branch IDs: either from groupId (expanded) or direct branchIds
     let branchIds: number[] = []
     let groupName: string | null = null
 
     if (groupId) {
+      const parsedGroupId = Number(groupId)
+      if (!Number.isInteger(parsedGroupId) || parsedGroupId <= 0) {
+        return NextResponse.json({ error: "Invalid group ID" }, { status: 400 })
+      }
+
       // Fetch group and validate it belongs to the organization
       const [group] = await db.select()
         .from(groups)
-        .where(eq(groups.id, groupId))
+        .where(eq(groups.id, parsedGroupId))
         .limit(1)
 
       if (!group) {
         return NextResponse.json({ error: "Group not found" }, { status: 400 })
       }
 
-      if (group.organizationId !== parseInt(organizationId)) {
+      if (group.organizationId !== parsedOrganizationId) {
         return NextResponse.json({ error: "Group does not belong to this organization" }, { status: 403 })
       }
 
@@ -310,8 +322,8 @@ export async function POST(req: NextRequest) {
         .from(branches)
         .where(
           and(
-            eq(branches.organizationId, parseInt(organizationId)),
-            eq(branches.groupId, groupId)
+            eq(branches.organizationId, parsedOrganizationId),
+            eq(branches.groupId, parsedGroupId)
           )
         )
 
@@ -320,10 +332,14 @@ export async function POST(req: NextRequest) {
       }
 
       branchIds = groupBranches.map(b => b.id)
-      console.log(`Expanded groupId ${groupId} to ${branchIds.length} branches:`, branchIds)
-    } else if (directBranchIds && directBranchIds.length > 0) {
+      console.log(`Expanded groupId ${parsedGroupId} to ${branchIds.length} branches`)
+    } else if (Array.isArray(directBranchIds) && directBranchIds.length > 0) {
       // Use direct branch IDs (backward compatibility)
-      branchIds = directBranchIds
+      const parsedBranchIds = directBranchIds.map(Number)
+      if (parsedBranchIds.some(id => !Number.isInteger(id) || id <= 0)) {
+        return NextResponse.json({ error: "Invalid branch IDs" }, { status: 400 })
+      }
+      branchIds = [...new Set(parsedBranchIds)]
     } else {
       return NextResponse.json({ error: "Either groupId or branchIds is required" }, { status: 400 })
     }
@@ -337,16 +353,16 @@ export async function POST(req: NextRequest) {
       .from(organizationInventory)
       .where(
         and(
-          eq(organizationInventory.organizationId, parseInt(organizationId)),
+          eq(organizationInventory.organizationId, parsedOrganizationId),
           inArray(organizationInventory.id, organizationInventoryIds),
           isNull(organizationInventory.deletedAt)
         )
       )
 
     console.log('Organization inventory validation:', {
-      requested: organizationInventoryIds,
-      found: orgInventoryItems.map(i => i.id),
-      organizationId: parseInt(organizationId)
+      requestedCount: organizationInventoryIds.length,
+      foundCount: orgInventoryItems.length,
+      organizationId: parsedOrganizationId
     })
 
     if (orgInventoryItems.length !== organizationInventoryIds.length) {
@@ -374,14 +390,19 @@ export async function POST(req: NextRequest) {
         .filter(a => a.deletedAt === null)
         .map(a => `${a.organizationInventoryId}-${a.branchId}`)
     )
-    const softDeletedAssignments = allExistingAssignments.filter(a => a.deletedAt !== null)
+    const softDeletedByKey = new Map(
+      allExistingAssignments
+        .filter(a => a.deletedAt !== null)
+        .map(a => [`${a.organizationInventoryId}-${a.branchId}`, a])
+    )
+    const orgInventoryById = new Map(orgInventoryItems.map(item => [item.id, item]))
 
     // Create assignments for each inventory item and branch combination
-    const toInsert = []
+    const toInsert: (typeof branchInventory.$inferInsert)[] = []
     const toRestore: { id: number; isActive: boolean }[] = []  // soft-deleted records to restore
 
     for (const orgInventoryId of organizationInventoryIds) {
-      const orgItem = orgInventoryItems.find(item => item.id === orgInventoryId)
+      const orgItem = orgInventoryById.get(orgInventoryId)
       if (!orgItem) continue
 
       for (const branchId of branchIds) {
@@ -391,16 +412,14 @@ export async function POST(req: NextRequest) {
         if (activeKeys.has(key)) continue
 
         // Check if soft-deleted record exists - restore it instead of inserting
-        const softDeleted = softDeletedAssignments.find(
-          a => a.organizationInventoryId === orgInventoryId && a.branchId === branchId
-        )
+        const softDeleted = softDeletedByKey.get(key)
 
         if (softDeleted) {
           toRestore.push({ id: softDeleted.id, isActive: orgItem.isActive })
         } else {
           toInsert.push({
             branchId: Number(branchId),
-            organizationId: Number(organizationId),
+            organizationId: parsedOrganizationId,
             organizationInventoryId: Number(orgInventoryId),
             assignedByUserId: (session.user as any).id,
             isVisible: Boolean(isVisible),
@@ -419,61 +438,78 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    const newAssignments = []
+    const writeChunkSize = 1000
+    const newAssignments = await db.transaction(async (tx) => {
+      const writtenAssignments: (typeof branchInventory.$inferSelect)[] = []
+      const now = new Date()
 
-    // Restore soft-deleted records
-    if (toRestore.length > 0) {
-      for (const item of toRestore) {
-        const [restored] = await db.update(branchInventory)
-          .set({
-            deletedAt: null,
-            isActive: item.isActive, // Inherit from org inventory
-            isVisible: isVisible,
-            assignedByUserId: (session.user as any).id,
-            updatedAt: new Date(),
-          })
-          .where(eq(branchInventory.id, item.id))
-          .returning()
-        newAssignments.push(restored)
-      }
-      console.log('Restored assignments:', toRestore.length)
-    }
+      // At most two batched UPDATE statements per chunk are needed because
+      // restored rows only differ by the inherited organization active state.
+      for (const inheritedIsActive of [true, false]) {
+        const ids = toRestore
+          .filter(item => item.isActive === inheritedIsActive)
+          .map(item => item.id)
 
-    // Insert new records
-    if (toInsert.length > 0) {
-      for (const assignment of toInsert) {
-        try {
-          const [result] = await db.insert(branchInventory)
-            .values(assignment)
+        for (let offset = 0; offset < ids.length; offset += writeChunkSize) {
+          const restored = await tx.update(branchInventory)
+            .set({
+              deletedAt: null,
+              isActive: inheritedIsActive,
+              isVisible: Boolean(isVisible),
+              assignedByUserId: (session.user as any).id,
+              updatedAt: now,
+            })
+            .where(inArray(branchInventory.id, ids.slice(offset, offset + writeChunkSize)))
             .returning()
-          newAssignments.push(result)
-        } catch (insertError: any) {
-          console.error("Insert failed:", assignment, insertError.message)
-          return NextResponse.json({
-            error: insertError.message,
-            code: insertError.code,
-            detail: insertError.detail
-          }, { status: 500 })
+          writtenAssignments.push(...restored)
         }
       }
-      console.log('Inserted assignments:', toInsert.length)
-    }
 
-    // Log the assignment creation
-    await db.insert(auditLogs).values({
-      userId: (session.user as any).id,
-      action: "CREATE",
-      entity: "BranchAssignment",
-      entityId: newAssignments.map(a => a.id).join(','),
-      metadata: {
-        assignedCount: newAssignments.length,
-        organizationId,
-        organizationInventoryIds,
-        branchIds,
-        groupId: groupId || null,
-        groupName: groupName || null,
-        skippedCount: (organizationInventoryIds.length * branchIds.length) - newAssignments.length
-      },
+      // Insert in bounded bulk statements instead of one database round trip
+      // per product/branch pair. The conflict guard makes concurrent retries
+      // idempotent if another request inserts the same assignment first.
+      for (let offset = 0; offset < toInsert.length; offset += writeChunkSize) {
+        const inserted = await tx.insert(branchInventory)
+          .values(toInsert.slice(offset, offset + writeChunkSize))
+          .onConflictDoNothing()
+          .returning()
+        writtenAssignments.push(...inserted)
+      }
+
+      // Keep the audit row in the same transaction so a logging failure cannot
+      // leave the request partially applied. entityId is limited to 128 chars.
+      if (writtenAssignments.length > 0) {
+        const firstAssignmentId = writtenAssignments[0].id
+        const lastAssignmentId = writtenAssignments[writtenAssignments.length - 1].id
+        const entityId = writtenAssignments.length === 1
+          ? String(firstAssignmentId)
+          : `${firstAssignmentId}-${lastAssignmentId}`
+
+        await tx.insert(auditLogs).values({
+          userId: (session.user as any).id,
+          organizationId: parsedOrganizationId,
+          action: "CREATE",
+          entity: "BranchAssignment",
+          entityId,
+          metadata: {
+            assignedCount: writtenAssignments.length,
+            organizationId: parsedOrganizationId,
+            organizationInventoryIds,
+            branchIds,
+            groupId: groupId || null,
+            groupName: groupName || null,
+            skippedCount: (organizationInventoryIds.length * branchIds.length) - writtenAssignments.length
+          },
+        })
+      }
+
+      return writtenAssignments
+    })
+
+    console.log('Completed branch assignment writes:', {
+      plannedInserts: toInsert.length,
+      plannedRestores: toRestore.length,
+      written: newAssignments.length,
     })
 
     // Log to inventory audit file
@@ -486,7 +522,7 @@ export async function POST(req: NextRequest) {
         role: (session.user as any).role
       },
       {
-        organizationId: parseInt(organizationId),
+        organizationId: parsedOrganizationId,
         productIds: organizationInventoryIds,
         assignmentIds: newAssignments.map(a => a.id),
         count: newAssignments.length,

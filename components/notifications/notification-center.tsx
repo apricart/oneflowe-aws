@@ -158,13 +158,13 @@ function RailChip({ notification }: { notification: DashboardNotification }) {
         ? "bg-amber-50 dark:bg-amber-900/30 border-amber-100 dark:border-amber-800 text-amber-900 dark:text-amber-200"
         : "bg-slate-50 dark:bg-slate-800 border-slate-100 dark:border-slate-700 text-slate-900 dark:text-slate-100"
   return (
-    <div className={cn("flex min-w-[220px] flex-col gap-1 rounded-xl border px-4 py-3", tone)}>
-      <div className="flex items-center gap-2">
+    <div className={cn("flex min-w-[220px] max-w-full flex-col gap-1 whitespace-normal rounded-xl border px-4 py-3", tone)}>
+      <div className="flex flex-wrap items-center gap-2">
         {severityIcon[notification.severity]}
         <p className="text-sm font-semibold leading-none">{notification.title}</p>
         {notification.tag && <Badge variant="secondary">{notification.tag}</Badge>}
       </div>
-      <p className="text-xs text-muted-foreground dark:text-slate-400">{notification.message}</p>
+      <p className="break-words text-xs text-muted-foreground dark:text-slate-400">{notification.message}</p>
       {notification.cta && (
         <Button asChild size="sm" variant="ghost" className="h-7 self-start px-2 text-xs">
           <Link href={notification.cta.href}>{notification.cta.label}</Link>

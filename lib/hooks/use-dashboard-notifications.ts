@@ -9,6 +9,7 @@ export type NotificationSeverity = "info" | "warning" | "critical"
 
 export type DashboardNotification = {
   id: string
+  type?: string
   title: string
   message: string
   severity: NotificationSeverity
@@ -116,20 +117,20 @@ export function useDashboardNotifications() {
       const pendingRefunds = pendingRefundsQuery.data?.refunds || []
       if (pendingRefunds.length > 0) {
         const latest = pendingRefunds[0]
-        const amountLabel = latest?.amountCents ? `PKR ${(latest.amountCents / 100).toFixed(2)}` : "A refund"
-        const targetLabel = latest?.tid ? ` for Transaction ID ${latest.tid}` : ""
+        const amountLabel =
+          typeof latest?.amountCents === "number"
+            ? `PKR ${(latest.amountCents / 100).toFixed(2)}`
+            : "amount unavailable"
+        const targetLabel = latest?.tid ? `Transaction ID ${latest.tid}` : "unknown transaction"
         const branchLabel = latest?.branchName ? ` from ${latest.branchName}` : ""
 
         items.push({
-          id: `pending-refunds-${pendingRefunds.map((refund) => refund.id).join("-")}`,
-          title: "Refund requests awaiting review",
-          message:
-            pendingRefunds.length === 1
-              ? `${amountLabel}${targetLabel}${branchLabel} is pending approval.`
-              : `${pendingRefunds.length} refund requests are pending approval.`,
+          id: "pending-refunds",
+          title: `${pendingRefunds.length} refund request${pendingRefunds.length === 1 ? "" : "s"} awaiting review`,
+          message: `Latest request: ${targetLabel} — ${amountLabel}${branchLabel}.`,
           severity: pendingRefunds.length > 5 ? "critical" : "warning",
           cta: { label: "Review refunds", href: "/refunds" },
-          tag: "refund",
+          tag: `${pendingRefunds.length} pending`,
         })
       }
     }
@@ -174,9 +175,17 @@ export function useDashboardNotifications() {
     usersQuery.data?.items,
   ])
 
-  const dbNotifications = useMemo(
+  const rawDbNotifications = useMemo(
     () => dbNotificationsQuery.data?.items || [],
     [dbNotificationsQuery.data?.items],
+  )
+
+  const dbNotifications = useMemo(
+    () =>
+      role === "SUPER_ADMIN"
+        ? rawDbNotifications.filter((notification) => notification.type !== "REFUND_REQUESTED")
+        : rawDbNotifications,
+    [rawDbNotifications, role],
   )
 
   const notifications = useMemo<DashboardNotification[]>(
@@ -215,7 +224,7 @@ export function useDashboardNotifications() {
       return new Set(serializedKeys)
     })
 
-    if (dbNotifications.length > 0) {
+    if (rawDbNotifications.length > 0) {
       void fetch("/api/v1/notifications", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -224,7 +233,7 @@ export function useDashboardNotifications() {
         // Keep the existing local read state if the server update fails.
       })
     }
-  }, [dbNotifications.length, notifications, seenStorageKey])
+  }, [notifications, rawDbNotifications.length, seenStorageKey])
 
   const criticalCount = unreadNotifications.filter((n) => n.severity !== "info").length
 
