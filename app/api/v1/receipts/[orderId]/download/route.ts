@@ -9,6 +9,8 @@ import { shouldHidePricesForRole } from "@/lib/price-visibility"
 import { aggregateReceiptRefundItems, getReceiptItemQuantity, getReceiptNetTotal, toDisplayNameCase } from "@/lib/receipt-display"
 import { getOrderDerivedStatus } from "@/lib/order-status"
 import { formatBranchAddress } from "@/lib/branch-address"
+import { isInvoiceAvailableForOrder } from "@/lib/invoice-availability"
+import { getReceiptUserDisplayName } from "@/lib/receipt-user"
 import { jsPDF } from "jspdf"
 import path from "path"
 import fs from "fs"
@@ -35,8 +37,8 @@ export async function GET(
             .where(eq(orders.id, orderId))
             .limit(1)
 
-        if (!order || !order.receiptData) {
-            return NextResponse.json({ error: "Invoice not found" }, { status: 404 })
+        if (!order) {
+            return NextResponse.json({ error: "Order not found" }, { status: 404 })
         }
 
         const { verifyResourceAccess } = await import("@/lib/auth")
@@ -45,34 +47,52 @@ export async function GET(
             return NextResponse.json({ error: "Forbidden: You do not have access to this invoice" }, { status: 403 })
         }
 
+        if (!isInvoiceAvailableForOrder(order)) {
+            return NextResponse.json(
+                { error: "Invoice is available after the order is approved" },
+                { status: 409 }
+            )
+        }
+
+        if (!order.receiptData) {
+            return NextResponse.json({ error: "Invoice not found" }, { status: 404 })
+        }
+
         const userRole = (session.user as any).role
         const pricesHidden = await shouldHidePricesForRole(userRole, order.organizationId)
         if (pricesHidden) {
             return NextResponse.json({ error: "Invoice download is unavailable while prices are hidden" }, { status: 403 })
         }
 
-        const [creator] = await db
-            .select({
-                fullName: users.fullName,
-                firstName: users.firstName,
-                lastName: users.lastName,
-                username: users.username,
-                email: users.email,
-                phone: users.phone,
-            })
-            .from(users)
-            .where(eq(users.id, order.createdByUserId))
-            .limit(1)
-
-        const creatorName = creator
-            ? (
-                creator.fullName ||
-                [creator.firstName, creator.lastName].filter(Boolean).join(" ") ||
-                creator.username ||
-                creator.email ||
-                "Unknown"
-            )
-            : "Unknown"
+        const userIdentityColumns = {
+            fullName: users.fullName,
+            firstName: users.firstName,
+            lastName: users.lastName,
+            username: users.username,
+            email: users.email,
+            phone: users.phone,
+        }
+        const [creatorRows, approverRows] = await Promise.all([
+            db
+                .select(userIdentityColumns)
+                .from(users)
+                .where(eq(users.id, order.createdByUserId))
+                .limit(1),
+            order.approvedByUserId
+                ? db
+                    .select(userIdentityColumns)
+                    .from(users)
+                    .where(eq(users.id, order.approvedByUserId))
+                    .limit(1)
+                : Promise.resolve([]),
+        ])
+        const creator = creatorRows[0]
+        const approver = approverRows[0]
+        const creatorName = getReceiptUserDisplayName(creator, "Unknown")
+        const approverName = getReceiptUserDisplayName(
+            approver,
+            order.approvedByUserId ? "Unknown" : "N/A"
+        )
 
         let branchAddress = ""
         if (order.branchId !== null && order.organizationId !== null) {
@@ -121,6 +141,7 @@ export async function GET(
             buyerAddress: branchAddress,
             placedByName: creatorName,
             placedByPhone: creator?.phone || null,
+            approvedByName: approverName,
             status: derivedStatus.label,
             statusKey: derivedStatus.key,
             refund: totalApprovedRefundAmount,
@@ -176,7 +197,7 @@ function renderReceiptPagePdf(receiptData: any) {
 
     let y = 70
     drawDetailCards(doc, receiptData, itemQuantity, margin, y, contentWidth)
-    y += 44
+    y += 50
 
     y = drawItemsTable(doc, receiptData, margin, y, contentWidth, pageHeight)
     y += 7
@@ -252,12 +273,13 @@ function drawHeader(doc: any, receiptData: any, margin: number, right: number) {
 function drawDetailCards(doc: any, receiptData: any, itemQuantity: number, x: number, y: number, width: number) {
     const gap = 6
     const cardWidth = (width - gap * 2) / 3
-    const cardHeight = 38
+    const cardHeight = 44
 
     drawCard(doc, x, y, cardWidth, cardHeight, "BILLED TO", [
         ["Name:", receiptData.buyerName || "N/A"],
         ["Address:", toDisplayNameCase(receiptData.buyerAddress || "-")],
-        ["Created By:", toDisplayNameCase(receiptData.placedByName || "N/A")],
+        ["Initiator:", toDisplayNameCase(receiptData.placedByName || "N/A")],
+        ["Approver:", toDisplayNameCase(receiptData.approvedByName || "N/A")],
         ["Phone:", receiptData.placedByPhone || receiptData.buyerPhone || "N/A"],
     ])
 

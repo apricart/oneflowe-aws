@@ -3,6 +3,7 @@
 import React from "react"
 import { FileText } from "lucide-react"
 import Link from "next/link"
+import { isInvoiceAvailableForOrder } from "@/lib/invoice-availability"
 import {
     Tooltip,
     TooltipContent,
@@ -12,6 +13,8 @@ import {
 
 interface ReceiptIconButtonProps {
     orderId: number
+    orderStatus: string | null | undefined
+    statusAtRefund?: string | null
     variant?: "ghost" | "outline" | "default"
     size?: "sm" | "default" | "lg"
     showLabel?: boolean
@@ -19,10 +22,16 @@ interface ReceiptIconButtonProps {
 
 export function ReceiptIconButton({
     orderId,
+    orderStatus,
+    statusAtRefund,
     variant = "ghost",
     size = "sm",
     showLabel = false,
 }: ReceiptIconButtonProps) {
+    if (!isInvoiceAvailableForOrder({ status: orderStatus, statusAtRefund })) {
+        return null
+    }
+
     return (
         <TooltipProvider>
             <Tooltip>

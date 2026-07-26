@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { motion, AnimatePresence } from "framer-motion"
 import {
@@ -25,7 +25,10 @@ import {
   Copy,
   Send,
   Truck,
-  Banknote
+  Banknote,
+  ChevronDown,
+  Loader2,
+  User,
 } from "lucide-react"
 import { format } from "date-fns"
 import { toast } from "@/hooks/use-toast"
@@ -51,7 +54,9 @@ import {
 } from "@/components/ui/dialog"
 import { ReceiptIconButton } from "@/components/receipts/receipt-icon-button"
 import { Separator } from "@/components/ui/separator"
+import { isInvoiceAvailableForOrder } from "@/lib/invoice-availability"
 import { getOrderDerivedStatus, hasPartialRefund, type DerivedOrderStatusKey, type OrderStatusContext } from "@/lib/order-status"
+import { calculateLineCents, formatQuantity } from "@/lib/quantity"
 import {
   FULFILLMENT_STATUS_LABELS,
   getNextFulfillmentStatus,
@@ -65,6 +70,29 @@ import {
 } from "@/lib/payment-status"
 
 type OrderItem = any // Avoiding strict type definition for speed, will rely on usage
+type OrderDetailLine = {
+  id: number
+  productName: string
+  productCode?: string | null
+  quantity: number
+  quantityRefunded?: number | null
+  priceCents: number | null
+  unit?: string | null
+}
+
+type OrderDetails = {
+  id: number
+  orderItems?: OrderDetailLine[]
+  receiptData?: {
+    buyerName?: string | null
+    buyerPhone?: string | null
+  } | null
+  creatorName?: string | null
+  creatorPhone?: string | null
+  creatorEmployeeId?: string | null
+  pricesHidden?: boolean
+}
+
 type OrdersDirectoryProps = {
   orders: OrderItem[]
   statusContext?: OrderStatusContext
@@ -100,7 +128,78 @@ export function OrdersDirectory({
   const [isUpdatingProgress, setIsUpdatingProgress] = useState(false)
   const [isUpdatingPayment, setIsUpdatingPayment] = useState(false)
   const [isSendingTokenEmail, setIsSendingTokenEmail] = useState(false)
+  const [isOrderDetailsExpanded, setIsOrderDetailsExpanded] = useState(false)
+  const [orderDetails, setOrderDetails] = useState<OrderDetails | null>(null)
+  const [isOrderDetailsLoading, setIsOrderDetailsLoading] = useState(false)
+  const [orderDetailsError, setOrderDetailsError] = useState<string | null>(null)
+  const [orderDetailsRequestKey, setOrderDetailsRequestKey] = useState(0)
+  const viewingOrderId = viewingOrder?.id
   const shouldShowCostCenterId = showCostCenterId ?? orders.some((order) => Boolean(order.branchCostCenterId))
+
+  useEffect(() => {
+    setIsOrderDetailsExpanded(false)
+    setOrderDetails(null)
+    setOrderDetailsError(null)
+    setIsOrderDetailsLoading(false)
+    setOrderDetailsRequestKey(0)
+  }, [viewingOrderId])
+
+  useEffect(() => {
+    if (
+      !isOrderDetailsExpanded ||
+      viewingOrderId === null ||
+      viewingOrderId === undefined ||
+      orderDetails?.id === viewingOrderId
+    ) {
+      return
+    }
+
+    const controller = new AbortController()
+    let isCurrentRequest = true
+
+    const loadOrderDetails = async () => {
+      setIsOrderDetailsLoading(true)
+      setOrderDetailsError(null)
+
+      try {
+        const response = await fetch(`/api/v1/orders/${viewingOrderId}`, {
+          signal: controller.signal,
+        })
+        const data = await response.json().catch(() => ({}))
+
+        if (!response.ok) {
+          throw new Error(data.error || "Unable to load order details")
+        }
+        if (!data.item) {
+          throw new Error("Order details are unavailable")
+        }
+
+        if (isCurrentRequest) {
+          setOrderDetails(data.item)
+        }
+      } catch (error: any) {
+        if (error?.name !== "AbortError" && isCurrentRequest) {
+          setOrderDetailsError(error?.message || "Unable to load order details")
+        }
+      } finally {
+        if (isCurrentRequest) {
+          setIsOrderDetailsLoading(false)
+        }
+      }
+    }
+
+    loadOrderDetails()
+
+    return () => {
+      isCurrentRequest = false
+      controller.abort()
+    }
+  }, [
+    isOrderDetailsExpanded,
+    orderDetails?.id,
+    orderDetailsRequestKey,
+    viewingOrderId,
+  ])
 
   // Helpers
   const getStatusColor = (statusKey: DerivedOrderStatusKey) => {
@@ -753,6 +852,15 @@ export function OrdersDirectory({
                   </div>
                 )}
 
+                <OrderDetailsDisclosure
+                  order={viewingOrder}
+                  details={orderDetails?.id === viewingOrder.id ? orderDetails : null}
+                  expanded={isOrderDetailsExpanded}
+                  loading={isOrderDetailsLoading}
+                  error={orderDetailsError}
+                  onToggle={() => setIsOrderDetailsExpanded((expanded) => !expanded)}
+                  onRetry={() => setOrderDetailsRequestKey((key) => key + 1)}
+                />
 
               </div>
 
@@ -791,9 +899,15 @@ export function OrdersDirectory({
                   })()
                 )}
 
-                <div className="flex bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-700 h-14 rounded-2xl justify-center items-center border border-dashed border-slate-200 dark:border-slate-700 transition-colors">
-                  <ReceiptIconButton orderId={viewingOrder.id} />
-                </div>
+                {isInvoiceAvailableForOrder(viewingOrder) && (
+                  <div className="flex bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-700 h-14 rounded-2xl justify-center items-center border border-dashed border-slate-200 dark:border-slate-700 transition-colors">
+                    <ReceiptIconButton
+                      orderId={viewingOrder.id}
+                      orderStatus={viewingOrder.status}
+                      statusAtRefund={viewingOrder.statusAtRefund}
+                    />
+                  </div>
+                )}
 
                 <div className="flex gap-3">
                   {viewingOrder.status.toLowerCase() === "pending" && isBranchAdmin && (
@@ -944,6 +1058,266 @@ export function OrdersDirectory({
       </Dialog>
 
 
+    </div>
+  )
+}
+
+function OrderDetailsDisclosure({
+  order,
+  details,
+  expanded,
+  loading,
+  error,
+  onToggle,
+  onRetry,
+}: {
+  order: OrderItem
+  details: OrderDetails | null
+  expanded: boolean
+  loading: boolean
+  error: string | null
+  onToggle: () => void
+  onRetry: () => void
+}) {
+  const detailLines = details?.orderItems || []
+  const profileName =
+    details?.receiptData?.buyerName ||
+    details?.creatorName ||
+    order.branchName ||
+    "Not available"
+  const profilePhone =
+    details?.receiptData?.buyerPhone ||
+    details?.creatorPhone
+  const pricesHidden =
+    details?.pricesHidden === true ||
+    order.totalCents === null ||
+    order.totalCents === undefined
+
+  return (
+    <div className="space-y-3">
+      <h3 className="flex items-center gap-2 pl-2 text-[11px] font-bold uppercase tracking-widest text-slate-400">
+        <Package className="h-3.5 w-3.5" />
+        Transaction History
+      </h3>
+      <div
+        className={cn(
+          "overflow-hidden rounded-[1.75rem] border transition-all duration-300",
+          expanded
+            ? "border-indigo-200 bg-white shadow-lg ring-1 ring-indigo-500/10 dark:border-indigo-800 dark:bg-slate-900"
+            : "border-slate-200 bg-white/60 hover:border-indigo-300 hover:bg-white dark:border-slate-800 dark:bg-slate-900/50 dark:hover:border-indigo-700 dark:hover:bg-slate-900"
+        )}
+      >
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-controls={`order-detail-breakdown-${order.id}`}
+          onClick={onToggle}
+          className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-3 p-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500"
+        >
+          <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-amber-50 text-sm font-black text-amber-600 dark:bg-amber-950/40 dark:text-amber-400">
+            1
+          </span>
+          <span className="min-w-0">
+            <span className="block truncate font-mono text-xs font-bold tracking-tight text-slate-900 dark:text-white">
+              {order.tid}
+            </span>
+            <span className="mt-1 flex min-w-0 items-center gap-2 text-[9px] font-bold uppercase tracking-widest text-slate-400">
+              <span className="flex shrink-0 items-center gap-1">
+                <Clock className="h-3 w-3" />
+                {format(new Date(order.createdAt), "HH:mm")}
+              </span>
+              <span className="flex min-w-0 items-center gap-1">
+                <Package className="h-3 w-3 shrink-0" />
+                <span className="truncate">
+                  {order.branchName || `#${order.branchId}`}
+                </span>
+              </span>
+            </span>
+          </span>
+          <span className="text-right">
+            <span className="block text-[9px] font-bold uppercase leading-none tracking-wider text-slate-400">
+              Value
+            </span>
+            <span className="mt-1 block whitespace-nowrap text-xs font-bold tabular-nums text-slate-900 dark:text-white">
+              {pricesHidden ? "—" : formatPKR(order.totalCents / 100)}
+            </span>
+          </span>
+          <ChevronDown
+            className={cn(
+              "h-4 w-4 text-slate-300 transition-transform duration-300",
+              expanded && "rotate-180 text-indigo-500"
+            )}
+          />
+        </button>
+
+        <AnimatePresence initial={false}>
+          {expanded && (
+            <motion.div
+              id={`order-detail-breakdown-${order.id}`}
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.25, ease: "easeInOut" }}
+              className="overflow-hidden"
+            >
+              <div className="mx-4 border-t border-slate-100 pb-4 pt-4 dark:border-slate-800">
+                {loading ? (
+                  <div className="flex min-h-32 flex-col items-center justify-center gap-2 text-slate-400">
+                    <Loader2 className="h-5 w-5 animate-spin text-indigo-500" />
+                    <p className="text-[10px] font-bold uppercase tracking-wider">
+                      Loading order details
+                    </p>
+                  </div>
+                ) : error ? (
+                  <div className="flex min-h-32 flex-col items-center justify-center gap-3 rounded-2xl bg-rose-50/60 px-4 text-center dark:bg-rose-950/20">
+                    <p className="text-xs font-semibold text-rose-600 dark:text-rose-300">
+                      {error}
+                    </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={onRetry}
+                      className="h-8 rounded-xl border-rose-200 bg-white px-4 text-[10px] font-bold uppercase tracking-wider text-rose-600 hover:bg-rose-50 dark:border-rose-800 dark:bg-slate-950 dark:text-rose-300"
+                    >
+                      Try Again
+                    </Button>
+                  </div>
+                ) : details ? (
+                  <div className="space-y-5">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="min-w-0 rounded-2xl border border-indigo-100/60 bg-indigo-50/30 p-3 dark:border-indigo-900/40 dark:bg-indigo-950/20">
+                        <h4 className="mb-3 text-[8px] font-bold uppercase tracking-widest text-indigo-500">
+                          Customer Profile
+                        </h4>
+                        <div className="flex items-center gap-2.5">
+                          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-indigo-100 bg-white shadow-sm dark:border-indigo-900 dark:bg-slate-800">
+                            <User className="h-4 w-4 text-indigo-500" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="truncate text-[11px] font-semibold text-slate-900 dark:text-white">
+                              {profileName}
+                            </p>
+                            {profilePhone && (
+                              <p className="truncate text-[9px] font-medium text-slate-500">
+                                {profilePhone}
+                              </p>
+                            )}
+                            {details.creatorEmployeeId && (
+                              <p className="mt-0.5 truncate font-mono text-[8px] font-black text-indigo-500">
+                                #{details.creatorEmployeeId}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="min-w-0 rounded-2xl border border-slate-200/60 bg-slate-50/50 p-3 dark:border-slate-800/60 dark:bg-slate-950/50">
+                        <h4 className="mb-3 text-[8px] font-bold uppercase tracking-widest text-slate-400">
+                          Order Source
+                        </h4>
+                        <div className="space-y-2">
+                          <div className="min-w-0">
+                            <p className="mb-0.5 text-[8px] font-semibold uppercase text-slate-400">
+                              Entity
+                            </p>
+                            <p className="truncate text-[10px] font-medium text-slate-900 dark:text-white">
+                              {order.organizationName || `#${order.organizationId}`}
+                            </p>
+                          </div>
+                          <div className="min-w-0">
+                            <p className="mb-0.5 text-[8px] font-semibold uppercase text-slate-400">
+                              Point
+                            </p>
+                            <p className="truncate text-[10px] font-medium text-slate-900 dark:text-white">
+                              {order.branchName || `#${order.branchId}`}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <h4 className="text-[9px] font-bold uppercase tracking-widest text-indigo-500">
+                        Transaction Breakdown
+                      </h4>
+                      <div className="overflow-hidden rounded-2xl border border-slate-200/60 bg-white/50 dark:border-slate-800/60 dark:bg-slate-900/50">
+                        {detailLines.length > 0 ? (
+                          <>
+                            <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                              {detailLines.map((line) => (
+                                <div
+                                  key={line.id}
+                                  className="flex items-start justify-between gap-3 p-3 transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/40"
+                                >
+                                  <div className="min-w-0 flex-1">
+                                    <p className="truncate text-[11px] font-semibold leading-tight text-slate-900 dark:text-white">
+                                      {line.productName}
+                                    </p>
+                                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                                      <span className="font-mono text-[8px] font-semibold italic text-slate-400">
+                                        {line.productCode || "N/A"}
+                                      </span>
+                                      <Badge
+                                        variant="outline"
+                                        className="h-4 border-slate-200 bg-slate-50 px-1.5 py-0 text-[7px] font-medium dark:border-slate-700 dark:bg-slate-800"
+                                      >
+                                        Qty: {formatQuantity(line.quantity)}
+                                        {line.unit ? ` ${line.unit}` : ""}
+                                      </Badge>
+                                      {Number(line.quantityRefunded || 0) > 0 && (
+                                        <Badge
+                                          variant="outline"
+                                          className="h-4 border-rose-200 bg-rose-50 px-1.5 py-0 text-[7px] font-medium text-rose-600 dark:border-rose-800 dark:bg-rose-950/30 dark:text-rose-300"
+                                        >
+                                          Refunded: {formatQuantity(line.quantityRefunded)}
+                                        </Badge>
+                                      )}
+                                    </div>
+                                  </div>
+                                  {!pricesHidden && line.priceCents !== null && (
+                                    <div className="shrink-0 text-right">
+                                      <p className="text-[11px] font-bold text-slate-900 dark:text-white">
+                                        {formatPKR(calculateLineCents(line.priceCents, line.quantity) / 100)}
+                                      </p>
+                                      <p className="mt-1 text-[8px] font-medium text-slate-400">
+                                        @ {formatPKR(line.priceCents / 100)}
+                                      </p>
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                            <div className="border-t border-slate-100 bg-slate-50/80 p-3 dark:border-slate-800 dark:bg-slate-800/50">
+                              <div className="flex items-center justify-between gap-3 text-[8px] font-bold uppercase tracking-widest text-slate-400">
+                                <span>Order Summary</span>
+                                <span className="text-right text-slate-600 dark:text-slate-400">
+                                  {detailLines.length} {detailLines.length === 1 ? "Product" : "Products"} ·{" "}
+                                  {formatQuantity(
+                                    detailLines.reduce(
+                                      (total, line) => total + Number(line.quantity || 0),
+                                      0
+                                    )
+                                  )}{" "}
+                                  Units
+                                </span>
+                              </div>
+                            </div>
+                          </>
+                        ) : (
+                          <p className="p-6 text-center text-[10px] font-medium text-slate-400">
+                            No product lines are available for this order.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
     </div>
   )
 }

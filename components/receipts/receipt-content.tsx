@@ -10,7 +10,16 @@ import { getReceiptItemQuantity, toDisplayNameCase } from "@/lib/receipt-display
 import { formatQuantity } from "@/lib/quantity"
 import { safeFilenamePart } from "@/lib/security"
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json())
+const fetcher = async (url: string) => {
+    const response = await fetch(url)
+    const body = await response.json()
+
+    if (!response.ok) {
+        throw new Error(body?.error || "Failed to load invoice")
+    }
+
+    return body
+}
 
 interface ReceiptContentProps {
     orderId: number
@@ -81,7 +90,9 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Receipt
                     <X className="h-5 w-5 text-red-400" />
                 </div>
                 <p className="text-sm text-slate-600 font-medium">Invoice Not Available</p>
-                <p className="text-xs text-slate-400 mt-1">Check your connection or order ID.</p>
+                <p className="text-xs text-slate-400 mt-1">
+                    {error instanceof Error ? error.message : "Check your connection or order ID."}
+                </p>
             </div>
         )
     }
@@ -370,9 +381,15 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Receipt
                             <span className="detail-value max-w-[140px]">{toDisplayNameCase(receiptData.buyerAddress || "—")}</span>
                         </div>
                         <div className="detail-row">
-                            <span className="detail-label">Created By:</span>
+                            <span className="detail-label">Initiator:</span>
                             <span className="detail-value truncate max-w-[140px]">
                                 {toDisplayNameCase(receiptData.placedByName || "N/A")}
+                            </span>
+                        </div>
+                        <div className="detail-row">
+                            <span className="detail-label">Approver:</span>
+                            <span className="detail-value truncate max-w-[140px]">
+                                {toDisplayNameCase(receiptData.approvedByName || "N/A")}
                             </span>
                         </div>
                         <div className="detail-row">

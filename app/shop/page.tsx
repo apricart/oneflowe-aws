@@ -1051,7 +1051,11 @@ export default function OrderPortalPage() {
                             <RefreshCw className="h-4 w-4" />
                             View Details
                           </Button>
-                          <ReceiptIconButton orderId={order.id} />
+                          <ReceiptIconButton
+                            orderId={order.id}
+                            orderStatus={order.status}
+                            statusAtRefund={order.statusAtRefund}
+                          />
                         </div>
                       </Card>
                     )

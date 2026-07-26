@@ -8,6 +8,8 @@ import { shouldHidePricesForRole, redactReceiptPrices } from "@/lib/price-visibi
 import { aggregateReceiptRefundItems, getReceiptNetTotal } from "@/lib/receipt-display"
 import { getOrderDerivedStatus } from "@/lib/order-status"
 import { formatBranchAddress } from "@/lib/branch-address"
+import { isInvoiceAvailableForOrder } from "@/lib/invoice-availability"
+import { getReceiptUserDisplayName } from "@/lib/receipt-user"
 
 export async function GET(
     req: NextRequest,
@@ -42,31 +44,49 @@ export async function GET(
             return NextResponse.json({ error: "Forbidden: You do not have access to this invoice" }, { status: 403 })
         }
 
+        if (!isInvoiceAvailableForOrder(order)) {
+            return NextResponse.json(
+                { error: "Invoice is available after the order is approved" },
+                { status: 409 }
+            )
+        }
+
+        if (!order.receiptData) {
+            return NextResponse.json({ error: "Invoice not found" }, { status: 404 })
+        }
+
         const userRole = (session.user as any).role
         const pricesHidden = await shouldHidePricesForRole(userRole, order.organizationId)
 
-        const [creator] = await db
-            .select({
-                fullName: users.fullName,
-                firstName: users.firstName,
-                lastName: users.lastName,
-                username: users.username,
-                email: users.email,
-                phone: users.phone,
-            })
-            .from(users)
-            .where(eq(users.id, order.createdByUserId))
-            .limit(1)
-
-        const creatorName = creator
-            ? (
-                creator.fullName ||
-                [creator.firstName, creator.lastName].filter(Boolean).join(" ") ||
-                creator.username ||
-                creator.email ||
-                "Unknown"
-            )
-            : "Unknown"
+        const userIdentityColumns = {
+            fullName: users.fullName,
+            firstName: users.firstName,
+            lastName: users.lastName,
+            username: users.username,
+            email: users.email,
+            phone: users.phone,
+        }
+        const [creatorRows, approverRows] = await Promise.all([
+            db
+                .select(userIdentityColumns)
+                .from(users)
+                .where(eq(users.id, order.createdByUserId))
+                .limit(1),
+            order.approvedByUserId
+                ? db
+                    .select(userIdentityColumns)
+                    .from(users)
+                    .where(eq(users.id, order.approvedByUserId))
+                    .limit(1)
+                : Promise.resolve([]),
+        ])
+        const creator = creatorRows[0]
+        const approver = approverRows[0]
+        const creatorName = getReceiptUserDisplayName(creator, "Unknown")
+        const approverName = getReceiptUserDisplayName(
+            approver,
+            order.approvedByUserId ? "Unknown" : "N/A"
+        )
 
         let branchAddress = ""
         if (order.branchId !== null && order.organizationId !== null) {
@@ -169,6 +189,7 @@ export async function GET(
             buyerAddress: branchAddress,
             placedByName: creatorName,
             placedByPhone: creator?.phone || null,
+            approvedByName: approverName,
             status: derivedStatus.label,
             statusKey: derivedStatus.key,
             refund: totalApprovedRefundAmount,

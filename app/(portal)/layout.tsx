@@ -15,9 +15,9 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
           <div className="min-h-svh w-full flex bg-background dark:bg-slate-950">
             <PreloadData />
             <Sidebar />
-            <div className="flex-1 grid grid-rows-[auto_1fr] bg-background dark:bg-slate-950">
+            <div className="min-w-0 flex-1 grid grid-rows-[auto_1fr] bg-background dark:bg-slate-950">
               <Topbar />
-              <main className="p-4 bg-background dark:bg-slate-950">{children}</main>
+              <main className="min-w-0 p-4 bg-background dark:bg-slate-950">{children}</main>
             </div>
           </div>
           <Toaster />
