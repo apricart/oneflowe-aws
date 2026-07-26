@@ -12,7 +12,9 @@ import {
   uniqueIndex,
   bigint,
   numeric,
+  check,
 } from "drizzle-orm/pg-core"
+import { sql } from "drizzle-orm"
 
 export const organizations = pgTable(
   "organizations",
@@ -293,6 +295,7 @@ export const budgets = pgTable(
     branchPeriodUq: uniqueIndex("budgets_branch_period_uq").on(t.branchId, t.period),
     orgIdx: index("budgets_org_idx").on(t.organizationId),
     branchIdx: index("budgets_branch_idx").on(t.branchId),
+    budgetValuesValid: check("budgets_values_valid_ck", sql`${t.amountAllocatedCents} >= 0 AND ${t.amountSpentCents} >= 0 AND ${t.amountHeldCents} >= 0 AND ${t.amountCreditedCents} >= 0 AND (${t.amountAllocatedCents} + ${t.amountCreditedCents}) >= (${t.amountSpentCents} + ${t.amountHeldCents})`),
   }),
 )
 
@@ -324,6 +327,7 @@ export const organizationSettings = pgTable(
   },
   (t) => ({
     orgSettingsOrgIdx: index("org_settings_org_idx").on(t.organizationId),
+    orgSettingsOrgKeyUq: uniqueIndex("organization_settings_org_key_uq").on(t.organizationId, t.key),
   }),
 )
 
@@ -353,6 +357,9 @@ export const invoiceSequences = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
+  (t) => ({
+    invoiceSequenceRange: check("invoice_sequences_range_ck", sql`${t.lastValue} >= 0 AND ${t.lastValue} <= 999999`),
+  }),
 )
 
 export const orders = pgTable(
@@ -360,6 +367,8 @@ export const orders = pgTable(
   {
     id: serial("id").primaryKey(),
     tid: varchar("tid", { length: 26 }).notNull().unique(), // Transaction ID
+    idempotencyKey: varchar("idempotency_key", { length: 128 }),
+    requestFingerprint: varchar("request_fingerprint", { length: 64 }),
     organizationId: integer("organization_id").references(() => organizations.id),
     branchId: integer("branch_id")
       .references(() => branches.id)
@@ -377,6 +386,7 @@ export const orders = pgTable(
       .references(() => users.id)
       .notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    deliveredAt: timestamp("delivered_at", { withTimezone: true }),
     fulfilledAt: timestamp("fulfilled_at", { withTimezone: true }),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
     // Approval tracking fields
@@ -437,6 +447,9 @@ export const orders = pgTable(
     ordersOrgBranchStatusIdx: index("orders_org_branch_status_idx").on(t.organizationId, t.branchId, t.status),
     ordersBranchStatusCreatedIdx: index("orders_branch_status_created_idx").on(t.branchId, t.status, t.createdAt),
     ordersOrgCreatedIdx: index("orders_org_created_idx").on(t.organizationId, t.createdAt),
+    ordersCreatorIdempotencyUq: uniqueIndex("orders_creator_idempotency_uq").on(t.createdByUserId, t.idempotencyKey),
+    orderAmountsNonnegative: check("orders_amounts_nonnegative_ck", sql`${t.subtotalCents} >= 0 AND ${t.taxCents} >= 0 AND ${t.totalCents} >= 0 AND COALESCE(${t.refundAmountCents}, 0) >= 0 AND COALESCE(${t.refundAmountCents}, 0) <= ${t.totalCents}`),
+    orderIdempotencyPair: check("orders_idempotency_pair_ck", sql`(${t.idempotencyKey} IS NULL AND ${t.requestFingerprint} IS NULL) OR (${t.idempotencyKey} IS NOT NULL AND ${t.requestFingerprint} IS NOT NULL)`),
   }),
 )
 
@@ -467,6 +480,7 @@ export const orderItems = pgTable(
     organizationInventoryIdx: index("order_items_organization_inventory_idx").on(t.organizationInventoryId),
     globalProductIdx: index("order_items_product_idx").on(t.globalProductId),
     orderItemsProductOrderIdx: index("order_items_product_order_idx").on(t.globalProductId, t.orderId),
+    orderItemValuesValid: check("order_items_values_valid_ck", sql`${t.quantity} > 0 AND ${t.quantity} <= 1000000 AND ${t.priceCents} >= 0`),
   }),
 )
 
@@ -492,6 +506,7 @@ export const refunds = pgTable(
     orderIdx: index("refunds_order_idx").on(t.orderId),
     refundsOrgIdx: index("refunds_org_idx").on(t.organizationId),
     processedByIdx: index("refunds_processed_by_idx").on(t.processedByUserId),
+    refundAmountPositive: check("refunds_amount_positive_ck", sql`${t.amountCents} > 0`),
   }),
 )
 
@@ -512,6 +527,7 @@ export const refundItems = pgTable(
   (t) => ({
     refundIdx: index("refund_items_refund_idx").on(t.refundId),
     orderItemIdx: index("refund_items_order_item_idx").on(t.orderItemId),
+    refundItemValuesValid: check("refund_items_values_valid_ck", sql`${t.quantity} > 0 AND ${t.quantity} <= 1000000 AND ${t.amountCents} >= 0`),
   }),
 )
 
@@ -527,6 +543,8 @@ export const notifications = pgTable(
     branchId: integer("branch_id").references(() => branches.id),
     type: varchar("type", { length: 64 }).notNull(),
     targetRole: varchar("target_role", { length: 64 }),
+    orderId: integer("order_id").references(() => orders.id, { onDelete: "cascade" }),
+    eventKey: varchar("event_key", { length: 255 }),
     message: text("message").notNull(),
     readAt: timestamp("read_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
@@ -536,6 +554,51 @@ export const notifications = pgTable(
     typeIdx: index("notifications_type_idx").on(t.type),
     notiOrgIdx: index("notifications_org_idx").on(t.organizationId),
     notiBranchIdx: index("notifications_branch_idx").on(t.branchId),
+    notiOrderIdx: index("notifications_order_idx").on(t.orderId),
+    notiEventKeyUq: uniqueIndex("notifications_event_key_uq").on(t.eventKey),
+  }),
+)
+
+export const emailOutbox = pgTable(
+  "email_outbox",
+  {
+    id: serial("id").primaryKey(),
+    eventKey: varchar("event_key", { length: 255 }).notNull(),
+    recipientUserId: uuid("recipient_user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    recipientEmail: varchar("recipient_email", { length: 255 }).notNull(),
+    recipientRole: varchar("recipient_role", { length: 64 }).notNull(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id, { onDelete: "cascade" })
+      .notNull(),
+    branchId: integer("branch_id")
+      .references(() => branches.id, { onDelete: "cascade" })
+      .notNull(),
+    orderId: integer("order_id")
+      .references(() => orders.id, { onDelete: "cascade" })
+      .notNull(),
+    template: varchar("template", { length: 64 }).notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    status: varchar("status", { length: 32 }).notNull().default("PENDING"),
+    attempts: integer("attempts").notNull().default(0),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).defaultNow(),
+    processingStartedAt: timestamp("processing_started_at", { withTimezone: true }),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    providerMessageId: varchar("provider_message_id", { length: 255 }),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => ({
+    eventKeyUq: uniqueIndex("email_outbox_event_key_uq").on(t.eventKey),
+    statusNextAttemptIdx: index("email_outbox_status_next_attempt_idx").on(t.status, t.nextAttemptAt),
+    recipientIdx: index("email_outbox_recipient_idx").on(t.recipientUserId),
+    orgIdx: index("email_outbox_org_idx").on(t.organizationId),
+    branchIdx: index("email_outbox_branch_idx").on(t.branchId),
+    orderIdx: index("email_outbox_order_idx").on(t.orderId),
+    attemptsNonnegative: check("email_outbox_attempts_nonnegative_ck", sql`${t.attempts} >= 0`),
+    statusValid: check("email_outbox_status_valid_ck", sql`${t.status} IN ('PENDING', 'PROCESSING', 'SENT', 'FAILED', 'SKIPPED')`),
   }),
 )
 
@@ -625,6 +688,7 @@ export const globalProducts = pgTable(
     statusIdx: index("global_products_status_idx").on(t.status),
     globalProductsCatStatusIdx: index("global_products_cat_status_idx").on(t.categoryId, t.status),
     globalProductsStatusCreatedIdx: index("global_products_status_created_idx").on(t.status, t.createdAt),
+    globalProductValuesValid: check("global_products_values_valid_ck", sql`${t.basePrice} >= 0 AND ${t.stockQuantity} >= 0 AND ${t.quantityStep} > 0 AND COALESCE(${t.discountValue}, 0) >= 0`),
   }),
 )
 
@@ -653,6 +717,7 @@ export const organizationProducts = pgTable(
     orgIdx: index("org_products_org_idx").on(t.organizationId),
     globalProductIdx: index("org_products_global_idx").on(t.globalProductId),
     enabledIdx: index("org_products_enabled_idx").on(t.isEnabled),
+    organizationProductPriceValid: check("organization_products_price_valid_ck", sql`${t.customPrice} IS NULL OR ${t.customPrice} >= 0`),
   }),
 )
 
@@ -851,6 +916,7 @@ export const organizationInventory = pgTable(
     assignedByIdx: index("org_inventory_assigned_by_idx").on(t.assignedByUserId),
     activeIdx: index("org_inventory_active_idx").on(t.isActive),
     deletedAtIdx: index("org_inventory_deleted_at_idx").on(t.deletedAt),
+    organizationInventoryPriceValid: check("organization_inventory_price_valid_ck", sql`${t.customPrice} IS NULL OR ${t.customPrice} >= 0`),
   }),
 )
 
@@ -916,6 +982,7 @@ export const productQuantityBudgets = pgTable(
     branchIdx: index("product_quantity_budgets_branch_idx").on(t.branchId),
     productIdx: index("product_quantity_budgets_product_idx").on(t.globalProductId),
     periodIdx: index("product_quantity_budgets_period_idx").on(t.period),
+    quantityBudgetValuesValid: check("product_quantity_budgets_values_valid_ck", sql`${t.allocatedQuantity} >= 0 AND ${t.heldQuantity} >= 0 AND ${t.usedQuantity} >= 0 AND ${t.creditedQuantity} >= 0 AND ${t.amountAllocatedCents} >= 0 AND ${t.amountCreditedCents} >= 0 AND (${t.allocatedQuantity} + ${t.creditedQuantity}) >= (${t.heldQuantity} + ${t.usedQuantity})`),
   }),
 )
 

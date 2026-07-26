@@ -19,6 +19,7 @@ export const orderSelectColumns = {
   notes: orders.notes,
   createdByUserId: orders.createdByUserId,
   createdAt: orders.createdAt,
+  deliveredAt: orders.deliveredAt,
   fulfilledAt: orders.fulfilledAt,
   updatedAt: orders.updatedAt,
   approvedByUserId: orders.approvedByUserId,
@@ -77,12 +78,75 @@ export async function updateOrderFulfillmentStatusColumn(
   try {
     await client.execute(sql`
       UPDATE "orders"
-      SET "fulfillment_status" = ${status}, "updated_at" = NOW()
+      SET "fulfillment_status" = ${status},
+          "delivered_at" = CASE
+            WHEN ${status} = 'DELIVERED' THEN COALESCE("delivered_at", NOW())
+            ELSE "delivered_at"
+          END,
+          "updated_at" = NOW()
       WHERE "id" = ${orderId}
     `)
     return true
   } catch (error) {
     if (isMissingFulfillmentStatusColumn(error)) return false
+    throw error
+  }
+}
+
+export type AtomicTransitionResult = "updated" | "conflict" | "missing-column"
+
+export async function transitionOrderPaymentStatusColumn(
+  client: { execute: (query: any) => Promise<any> },
+  orderId: number,
+  currentStatus: PaymentStatus,
+  nextStatus: PaymentStatus,
+  userId: string,
+): Promise<AtomicTransitionResult> {
+  try {
+    const result = nextStatus === "PAID"
+      ? await client.execute(sql`
+          UPDATE "orders"
+          SET "payment_status" = ${nextStatus}, "paid_at" = NOW(), "paid_by_user_id" = ${userId}, "updated_at" = NOW()
+          WHERE "id" = ${orderId} AND COALESCE("payment_status", 'UNPAID') = ${currentStatus}
+          RETURNING "id"
+        `)
+      : await client.execute(sql`
+          UPDATE "orders"
+          SET "payment_status" = ${nextStatus}, "paid_at" = NULL, "paid_by_user_id" = NULL, "updated_at" = NOW()
+          WHERE "id" = ${orderId} AND COALESCE("payment_status", 'UNPAID') = ${currentStatus}
+          RETURNING "id"
+        `)
+
+    return (result as any)?.rows?.length > 0 ? "updated" : "conflict"
+  } catch (error) {
+    if (isMissingFulfillmentStatusColumn(error)) return "missing-column"
+    throw error
+  }
+}
+
+export async function transitionOrderFulfillmentStatusColumn(
+  client: { execute: (query: any) => Promise<any> },
+  orderId: number,
+  currentStatus: FulfillmentStatus,
+  nextStatus: FulfillmentStatus,
+): Promise<AtomicTransitionResult> {
+  try {
+    const result = await client.execute(sql`
+      UPDATE "orders"
+      SET "fulfillment_status" = ${nextStatus},
+          "delivered_at" = CASE
+            WHEN ${nextStatus} = 'DELIVERED' THEN COALESCE("delivered_at", NOW())
+            ELSE "delivered_at"
+          END,
+          "updated_at" = NOW()
+      WHERE "id" = ${orderId}
+        AND UPPER("status") = 'APPROVED'
+        AND COALESCE("fulfillment_status", 'NOT_STARTED') = ${currentStatus}
+      RETURNING "id"
+    `)
+    return (result as any)?.rows?.length > 0 ? "updated" : "conflict"
+  } catch (error) {
+    if (isMissingFulfillmentStatusColumn(error)) return "missing-column"
     throw error
   }
 }

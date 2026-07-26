@@ -5,6 +5,7 @@ import { db } from "@/lib/db"
 import { groups, groupAuditLogs, branches, organizations } from "@/db/schema"
 import { and, eq, sql } from "drizzle-orm"
 import { getCached, invalidateByPrefix, scopedCacheKey, CACHE_TTL } from "@/lib/cache-utils"
+import { groupCreateSchema, validationMessage } from "@/lib/server/mutation-validation"
 
 export async function GET(req: NextRequest) {
     try {
@@ -65,7 +66,7 @@ export async function GET(req: NextRequest) {
         console.error("Error fetching groups:", e)
         return NextResponse.json({
             error: "Failed to fetch groups",
-            details: process.env.NODE_ENV === 'development' ? e.message : undefined
+            details: "Request failed"
         }, { status: 500 })
     }
 }
@@ -84,8 +85,13 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ error: "Forbidden: Insufficient permissions" }, { status: 403 })
         }
 
-        const body = await req.json()
-        let { organizationId, name, description } = body
+        const rawBody = await req.json().catch(() => null)
+        const parsedBody = groupCreateSchema.safeParse(rawBody)
+        if (!parsedBody.success) {
+            return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
+        }
+        let { organizationId } = parsedBody.data
+        const { name, description } = parsedBody.data
 
         // Security: Head Office can only create groups in their own organization
         if (role === "HEAD_OFFICE") {
@@ -140,7 +146,7 @@ export async function POST(req: NextRequest) {
         console.error("Error creating group:", e)
         return NextResponse.json({
             error: "Internal Server Error",
-            details: process.env.NODE_ENV === 'development' ? (e.detail || e.message) : undefined
+            details: "Request failed"
         }, { status: 500 })
     }
 }

@@ -7,6 +7,7 @@ import { eq, and, like, ilike, or, desc, sql, isNull, SQL, ne, inArray } from "d
 import { alias } from "drizzle-orm/pg-core"
 import { cascadeOrgStatusChange } from "@/lib/inventory-cascade"
 import { getCached, invalidateByPrefix, scopedCacheKey, CACHE_TTL } from "@/lib/cache-utils"
+import { normalizeSafeImageUrl } from "@/lib/security"
 
 // GET /api/v1/head-office/organization-inventory - List products in organization inventory
 export async function GET(req: NextRequest) {
@@ -40,8 +41,8 @@ export async function GET(req: NextRequest) {
     const category = searchParams.get("category") || ""
     const subCategory = searchParams.get("subCategory") || ""
     const status = searchParams.get("status") || ""
-    const page = parseInt(searchParams.get("page") || "1")
-    const limit = parseInt(searchParams.get("limit") || "50")
+    const page = Math.min(Math.max(Math.trunc(Number(searchParams.get("page"))) || 1, 1), 10_000)
+    const limit = Math.min(Math.max(Math.trunc(Number(searchParams.get("limit"))) || 50, 1), 1_000)
     const offset = (page - 1) * limit
 
     const cacheKey = scopedCacheKey('org-inv', { orgId: organizationId }, {
@@ -179,8 +180,42 @@ export async function PUT(req: NextRequest) {
       customImageUrl
     } = body
 
-    if (!id) {
+    const inventoryId = Number(id)
+    if (!Number.isInteger(inventoryId) || inventoryId <= 0) {
       return NextResponse.json({ error: "Inventory ID is required" }, { status: 400 })
+    }
+    if (isActive !== undefined && typeof isActive !== "boolean") {
+      return NextResponse.json({ error: "isActive must be a boolean" }, { status: 400 })
+    }
+    if (customName !== undefined && customName !== null && (typeof customName !== "string" || customName.length > 255)) {
+      return NextResponse.json({ error: "customName must be at most 255 characters" }, { status: 400 })
+    }
+    if (
+      customDescription !== undefined &&
+      customDescription !== null &&
+      (typeof customDescription !== "string" || customDescription.length > 10_000)
+    ) {
+      return NextResponse.json({ error: "customDescription must be at most 10,000 characters" }, { status: 400 })
+    }
+
+    const normalizedCustomImageUrl = normalizeSafeImageUrl(customImageUrl)
+    if (customImageUrl && !normalizedCustomImageUrl) {
+      return NextResponse.json({
+        error: "Image URL must be a same-origin path, HTTPS URL, or supported raster data URL",
+      }, { status: 400 })
+    }
+
+    let customPriceCents: number | null | undefined
+    if (customPrice !== undefined) {
+      if (customPrice === null || customPrice === "") {
+        customPriceCents = null
+      } else {
+        const parsedPrice = Number(customPrice)
+        customPriceCents = Math.round(parsedPrice * 100)
+        if (!Number.isFinite(parsedPrice) || parsedPrice < 0 || !Number.isSafeInteger(customPriceCents)) {
+          return NextResponse.json({ error: "customPrice must be a non-negative amount" }, { status: 400 })
+        }
+      }
     }
 
     // Check if inventory item exists and get current status
@@ -191,7 +226,7 @@ export async function PUT(req: NextRequest) {
       .from(organizationInventory)
       .where(
         and(
-          eq(organizationInventory.id, parseInt(id)),
+          eq(organizationInventory.id, inventoryId),
           eq(organizationInventory.organizationId, parseInt(organizationId)),
           isNull(organizationInventory.deletedAt)
         )
@@ -208,15 +243,15 @@ export async function PUT(req: NextRequest) {
 
     if (isActive !== undefined) updateData.isActive = isActive
     if (customName !== undefined) updateData.customName = customName || null
-    if (customPrice !== undefined) updateData.customPrice = customPrice ? Math.round(parseFloat(customPrice) * 100) : null
+    if (customPrice !== undefined) updateData.customPrice = customPriceCents
     if (customDescription !== undefined) updateData.customDescription = customDescription || null
-    if (customImageUrl !== undefined) updateData.customImageUrl = customImageUrl || null
+    if (customImageUrl !== undefined) updateData.customImageUrl = normalizedCustomImageUrl
 
     const [updatedInventory] = await db.update(organizationInventory)
       .set(updateData)
       .where(
         and(
-          eq(organizationInventory.id, parseInt(id)),
+          eq(organizationInventory.id, inventoryId),
           eq(organizationInventory.organizationId, parseInt(organizationId))
         )
       )
@@ -225,7 +260,7 @@ export async function PUT(req: NextRequest) {
     // If isActive status changed, cascade to branches
     if (isActive !== undefined && isActive !== existingItem.isActive) {
       const cascadeResult = await cascadeOrgStatusChange(
-        parseInt(id),
+        inventoryId,
         isActive,
         (session.user as any).id,
         "HEAD_OFFICE"

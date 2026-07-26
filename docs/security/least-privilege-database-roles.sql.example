@@ -1,0 +1,32 @@
+-- REVIEWED TEMPLATE ONLY. Do not run unchanged.
+-- Set credentials through the approved secret manager or identity integration;
+-- never place passwords in this file.
+
+CREATE ROLE oneflowe_runtime
+  LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+
+CREATE ROLE oneflowe_migrator
+  LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+GRANT CONNECT ON DATABASE oneflowe TO oneflowe_runtime, oneflowe_migrator;
+GRANT USAGE ON SCHEMA public TO oneflowe_runtime;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO oneflowe_runtime;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO oneflowe_runtime;
+
+GRANT USAGE, CREATE ON SCHEMA public TO oneflowe_migrator;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO oneflowe_migrator;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO oneflowe_migrator;
+
+-- Run default-privilege statements as the role that owns objects created by
+-- migrations. Adjust the owner role after a DBA reviews the ownership model.
+ALTER DEFAULT PRIVILEGES FOR ROLE oneflowe_migrator IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO oneflowe_runtime;
+ALTER DEFAULT PRIVILEGES FOR ROLE oneflowe_migrator IN SCHEMA public
+  GRANT USAGE, SELECT ON SEQUENCES TO oneflowe_runtime;
+
+-- Existing object ownership must be transferred to the migration role through
+-- a separately reviewed DBA change before it can ALTER those objects.
+-- Do not switch the application to oneflowe_runtime until tenant-aware RLS
+-- policies are present and verified; current deny-by-default RLS has no app
+-- policies and will correctly reject this NOBYPASSRLS role.

@@ -7,6 +7,9 @@ import { eq, or, ilike, sql, and, desc, ne } from "drizzle-orm"
 import { releaseRefundedQuantityBudget } from "@/lib/server/product-quantity-budget-ledger"
 import { calculateLineCents, formatQuantity, validateProductQuantity } from "@/lib/quantity"
 import { resolveAdminRefundReason } from "@/lib/admin-refund-approval"
+import { adminRefundProcessSchema, validationMessage } from "@/lib/server/mutation-validation"
+import { isPaidForRefund, isRefundEligibleOrderStatus } from "@/lib/business-rules"
+import { withRateLimit } from "@/lib/rate-limiter"
 
 /**
  * GET /api/v1/admin/refunds/search?q=<order_tid_or_id>
@@ -83,6 +86,7 @@ export async function GET(req: NextRequest) {
                 organizationId: orders.organizationId,
                 branchId: orders.branchId,
                 status: orders.status,
+                paymentStatus: orders.paymentStatus,
                 subtotalCents: orders.subtotalCents,
                 taxCents: orders.taxCents,
                 totalCents: orders.totalCents,
@@ -232,7 +236,7 @@ export async function GET(req: NextRequest) {
         console.error("[Refunds Search] Error:", error)
         console.error("[Refunds Search] Error message:", error?.message)
         console.error("[Refunds Search] Error stack:", error?.stack)
-        return NextResponse.json({ error: "Internal server error", details: error?.message }, { status: 500 })
+        return NextResponse.json({ error: "Internal server error", details: "Request failed" }, { status: 500 })
     }
 }
 
@@ -258,20 +262,19 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ error: "Forbidden: Super Admin access required" }, { status: 403 })
         }
 
+        const rateLimit = await withRateLimit("refund", userId)
+        if (rateLimit) return rateLimit
+
         // Parse request body
-        let body
-        try {
-            body = await req.json()
-        } catch {
+        const rawBody = await req.json().catch(() => null)
+        if (!rawBody) {
             return NextResponse.json({ error: "Invalid JSON in request body" }, { status: 400 })
         }
-
-        const { orderId, items, reason, refundRequestId } = body as {
-            orderId: number
-            items: Array<{ itemId: number; quantity: number }>
-            reason?: string
-            refundRequestId?: number
+        const parsedBody = adminRefundProcessSchema.safeParse(rawBody)
+        if (!parsedBody.success) {
+            return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
         }
+        const { orderId, items, reason, refundRequestId } = parsedBody.data
 
         // ===== INPUT VALIDATION =====
 
@@ -317,6 +320,7 @@ export async function POST(req: NextRequest) {
                 organizationId: orders.organizationId,
                 branchId: orders.branchId,
                 status: orders.status,
+                paymentStatus: orders.paymentStatus,
                 totalCents: orders.totalCents,
                 subtotalCents: orders.subtotalCents,
                 taxCents: orders.taxCents,
@@ -362,16 +366,14 @@ export async function POST(req: NextRequest) {
 
         // No longer blocking PENDING orders as per user request
 
-        if (currentStatus === "REJECTED") {
+        if (!isRefundEligibleOrderStatus(currentStatus)) {
             return NextResponse.json({
-                error: "Cannot refund rejected orders."
+                error: `Order in ${currentStatus || "unknown"} state is not eligible for a refund.`
             }, { status: 400 })
         }
 
-        if (currentStatus === "REFUNDED") {
-            return NextResponse.json({
-                error: "Order has already been fully refunded."
-            }, { status: 400 })
+        if (!isPaidForRefund(orderData.paymentStatus)) {
+            return NextResponse.json({ error: "Only paid orders are eligible for a refund." }, { status: 400 })
         }
 
         // ===== VALIDATE REFUND PERIOD (SAME MONTH ONLY) =====
@@ -509,6 +511,10 @@ export async function POST(req: NextRequest) {
             })
         }
 
+        if (!Number.isSafeInteger(totalRefundAmount) || totalRefundAmount <= 0) {
+            return NextResponse.json({ error: "Selected items do not have a positive refundable amount" }, { status: 400 })
+        }
+
         // ===== VALIDATE REFUND AMOUNT =====
         const orderTotal = orderData.totalCents || 0
         const approvedTotal = await db
@@ -531,22 +537,74 @@ export async function POST(req: NextRequest) {
             }, { status: 400 })
         }
 
-        const newApprovedTotal = approvedTotal + totalRefundAmount
-        const isFullRefund = newApprovedTotal >= orderTotal
-        const refundType = isFullRefund ? "FULL" : "PARTIAL"
         const effectiveReason = resolveAdminRefundReason(reason, pendingRefundRequest?.reason)
 
         // ===== PROCESS REFUND IN TRANSACTION =====
-        await db.transaction(async (tx) => {
-
-            // 1. Update order with refund info and update receipt data
-            const [currentOrder] = await tx
-                .select({ receiptData: orders.receiptData })
+        const processed = await db.transaction(async (tx) => {
+            const [lockedOrder] = await tx
+                .select({
+                    id: orders.id,
+                    status: orders.status,
+                    paymentStatus: orders.paymentStatus,
+                    totalCents: orders.totalCents,
+                    refundAmountCents: orders.refundAmountCents,
+                    receiptData: orders.receiptData,
+                })
                 .from(orders)
                 .where(eq(orders.id, orderId))
-                .limit(1)
+                .for('update')
 
-            let updatedReceiptData = currentOrder?.receiptData as any
+            if (!lockedOrder || !isRefundEligibleOrderStatus(lockedOrder.status) || !isPaidForRefund(lockedOrder.paymentStatus)) {
+                throw new Error("REFUND_ELIGIBILITY_CONFLICT")
+            }
+
+            const liveApprovedLines = await tx
+                .select({
+                    orderItemId: refundItems.orderItemId,
+                    quantity: refundItems.quantity,
+                })
+                .from(refundItems)
+                .innerJoin(refunds, eq(refunds.id, refundItems.refundId))
+                .where(and(
+                    eq(refunds.orderId, orderId),
+                    or(eq(refunds.status, "APPROVED"), eq(refunds.status, "COMPLETED")),
+                ))
+            const liveApprovedQuantityByItem = new Map<number, number>()
+            for (const line of liveApprovedLines) {
+                liveApprovedQuantityByItem.set(
+                    line.orderItemId,
+                    (liveApprovedQuantityByItem.get(line.orderItemId) || 0) + Number(line.quantity || 0),
+                )
+            }
+            for (const detail of refundDetails) {
+                const originalItem = orderItemsMap.get(detail.itemId)
+                const remainingQuantity = Number(originalItem?.quantity || 0) - (liveApprovedQuantityByItem.get(detail.itemId) || 0)
+                if (!originalItem || detail.quantity > remainingQuantity) {
+                    throw new Error("REFUND_AVAILABILITY_CONFLICT")
+                }
+            }
+
+            const liveApprovedRefunds = await tx
+                .select({ amountCents: refunds.amountCents })
+                .from(refunds)
+                .where(and(
+                    eq(refunds.orderId, orderId),
+                    or(eq(refunds.status, "APPROVED"), eq(refunds.status, "COMPLETED")),
+                ))
+            const liveApprovedRecordTotal = liveApprovedRefunds.reduce(
+                (sum, record) => sum + Number(record.amountCents || 0),
+                0,
+            )
+            const liveApprovedTotal = Math.max(liveApprovedRecordTotal, Number(lockedOrder.refundAmountCents || 0))
+            if (totalRefundAmount > Number(lockedOrder.totalCents) - liveApprovedTotal) {
+                throw new Error("REFUND_AVAILABILITY_CONFLICT")
+            }
+            const liveCurrentStatus = String(lockedOrder.status || "").toUpperCase()
+            const liveNewApprovedTotal = liveApprovedTotal + totalRefundAmount
+            const liveIsFullRefund = liveNewApprovedTotal >= Number(lockedOrder.totalCents)
+
+            // 1. Update order with refund info and update receipt data
+            let updatedReceiptData = lockedOrder.receiptData as any
             if (updatedReceiptData) {
                 // Update receipt with new refund amount and itemized details
                 const { updateReceiptWithRefund } = await import('@/lib/receipt-generator')
@@ -565,13 +623,13 @@ export async function POST(req: NextRequest) {
                 .update(orders)
                 .set({
                     // Change status to REFUNDED if this is a full refund
-                    status: isFullRefund ? "REFUNDED" : currentStatus,
-                    statusAtRefund: currentStatus,
+                    status: liveIsFullRefund ? "REFUNDED" : liveCurrentStatus,
+                    statusAtRefund: liveCurrentStatus,
                     refundedAt: new Date(),
                     refundedByUserId: userId,
-                    refundAmountCents: newApprovedTotal,
+                    refundAmountCents: liveNewApprovedTotal,
                     refundReason: effectiveReason || orderData.refundReason,
-                    receiptData: updatedReceiptData || currentOrder?.receiptData,
+                    receiptData: updatedReceiptData || lockedOrder.receiptData,
                     updatedAt: new Date(),
                 })
                 .where(eq(orders.id, orderId))
@@ -605,7 +663,7 @@ export async function POST(req: NextRequest) {
 
             await releaseRefundedQuantityBudget(
                 tx,
-                orderData,
+                { ...orderData, status: liveCurrentStatus },
                 refundDetails.map((item) => ({
                     itemId: item.itemId,
                     quantity: item.quantity,
@@ -622,13 +680,13 @@ export async function POST(req: NextRequest) {
                 branchId: orderData.branchId,
                 metadata: {
                     tid: orderData.tid,
-                    previousStatus: currentStatus,
-                    statusPreserved: currentStatus,
+                    previousStatus: liveCurrentStatus,
+                    statusPreserved: liveCurrentStatus,
                     refundItems: refundDetails,
                     totalRefundAmountCents: totalRefundAmount,
                     totalRefundAmountPKR: (totalRefundAmount / 100).toFixed(2),
-                    totalRefunded: newApprovedTotal,
-                    isFullRefund,
+                    totalRefunded: liveNewApprovedTotal,
+                    isFullRefund: liveIsFullRefund,
                     reason: effectiveReason || "No reason provided",
                     approvedRefundRequestId: pendingRefundRequest?.id || null,
                 },
@@ -706,17 +764,27 @@ export async function POST(req: NextRequest) {
                     updatedAt: new Date()
                 })
                 .where(and(...supersedeConditions))
+
+            return {
+                totalRefundedCents: liveNewApprovedTotal,
+                orderTotalCents: Number(lockedOrder.totalCents),
+            }
         })
 
         return NextResponse.json({
             message: `Refund of PKR ${(totalRefundAmount / 100).toFixed(2)} processed successfully`,
             refundAmount: (totalRefundAmount / 100).toFixed(2),
             itemsRefunded: refundDetails.length,
-            totalRefunded: (newApprovedTotal / 100).toFixed(2),
-            orderTotal: (orderTotal / 100).toFixed(2),
+            totalRefunded: (processed.totalRefundedCents / 100).toFixed(2),
+            orderTotal: (processed.orderTotalCents / 100).toFixed(2),
         })
 
     } catch (error: any) {
+        if (["REFUND_AVAILABILITY_CONFLICT", "REFUND_ELIGIBILITY_CONFLICT", "QUANTITY_BUDGET_LEDGER_INVARIANT"].includes(error?.message)) {
+            return NextResponse.json({
+                error: "Refund eligibility changed while the request was being processed. Refresh and try again."
+            }, { status: 409 })
+        }
         if (error?.message === "PENDING_REFUND_APPROVAL_CONFLICT") {
             return NextResponse.json({
                 error: "This refund request was already processed or changed. Refresh and try again."
@@ -734,7 +802,7 @@ export async function POST(req: NextRequest) {
 
         return NextResponse.json({
             error: "Internal server error while processing refund",
-            details: error?.message || "Unknown error"
+            details: "Request failed"
         }, { status: 500 })
     }
 }

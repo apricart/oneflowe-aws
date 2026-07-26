@@ -10,6 +10,7 @@ import {
   type LegacyOrder,
   type LegacySaleLine,
 } from "../lib/legacy-import/ke-electric"
+import { createCsv } from "../lib/spreadsheet"
 
 dotenv.config({ path: ".env.local", quiet: true })
 dotenv.config({ quiet: true })
@@ -95,11 +96,6 @@ function explanation(reason: ExclusionReason, status: string): { explanation: st
   }
 }
 
-function csvCell(value: unknown): string {
-  const text = String(value ?? "")
-  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
-}
-
 function rupees(cents: number): string {
   return `Rs ${(cents / 100).toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
@@ -121,7 +117,7 @@ async function main() {
   }
   const rejectionById = new Map(source.rejected.map((rejection) => [rejection.legacyOrderId, rejection.reason as ExclusionReason]))
 
-  const { pool } = await import("../lib/db")
+  const { pool } = await import("../lib/db-cli")
   const batchResult = await pool.query(`
     select id, source_manifest, counts, imported_by_user_id, created_at, completed_at
     from legacy_import_batches
@@ -257,7 +253,7 @@ async function main() {
     (row.subtotalDifferenceCents / 100).toFixed(2), (row.taxCents / 100).toFixed(2), (row.grandTotalCents / 100).toFixed(2),
     (row.refundCents / 100).toFixed(2), row.explanation, row.requiredEvidence,
   ])
-  writeFileSync(OUTPUT_CSV, `${[csvHeaders, ...csvRows].map((row) => row.map(csvCell).join(",")).join("\r\n")}\r\n`, "utf8")
+  writeFileSync(OUTPUT_CSV, `${createCsv(csvHeaders, csvRows)}\r\n`, "utf8")
 
   const reasonDescriptions: Record<ExclusionReason, string> = {
     NOT_DELIVERED: "The header was not in final Delivered state. This includes active, partial, cancelled, and refunded workflow states.",

@@ -490,10 +490,8 @@ async function invalidateProductCaches(): Promise<JsonRecord> {
     "cache:analytics:catalog-performance*",
     "product-summary:*",
   ]
-  if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
-    return { status: "SKIPPED", reason: "Redis credentials are unavailable", patterns }
-  }
-  const { redis } = await import("../lib/redis")
+  const { redis } = await import("../lib/redis-cli")
+  if (!redis) return { status: "SKIPPED", reason: "Redis configuration is unavailable", patterns }
   let deleted = 0
   const deletedByPattern: Record<string, number> = {}
   for (const pattern of patterns) {
@@ -741,7 +739,7 @@ async function applyMigration(client: PoolClient, options: Options): Promise<voi
 
 async function main(): Promise<void> {
   const options = parseOptions()
-  const { pool } = await import("../lib/db")
+  const { pool } = await import("../lib/db-cli")
   const client = await pool.connect()
   try {
     if (options.apply || options.simulate) await applyMigration(client, options)

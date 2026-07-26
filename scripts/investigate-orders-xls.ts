@@ -76,7 +76,7 @@ async function main() {
   console.log(" ", distinct("locationGroup"))
 
   // ── Cross-reference against DB ──────────────────────────────────────
-  const { db } = await import("../lib/db")
+  const { db } = await import("../lib/db-cli")
   const { branches, users, groups } = await import("../db/schema")
   const { eq } = await import("drizzle-orm")
 

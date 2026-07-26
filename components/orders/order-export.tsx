@@ -13,6 +13,7 @@ import * as XLSX from "xlsx"
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
 import { formatPKR } from "@/lib/utils"
+import { sanitizeSpreadsheetRecords } from "@/lib/spreadsheet"
 
 interface OrderExportProps {
     orders: any[]
@@ -69,7 +70,7 @@ export function OrderExport({ orders, role }: OrderExportProps) {
     const handleExportCSV = () => {
         try {
             setIsExporting(true)
-            const data = orders.map(o => formatDataForExport(o))
+            const data = sanitizeSpreadsheetRecords(orders.map(o => formatDataForExport(o)))
             const worksheet = XLSX.utils.json_to_sheet(data)
             const workbook = XLSX.utils.book_new()
             XLSX.utils.book_append_sheet(workbook, worksheet, "Orders")
@@ -84,7 +85,7 @@ export function OrderExport({ orders, role }: OrderExportProps) {
     const handleExportExcel = () => {
         try {
             setIsExporting(true)
-            const data = orders.map(o => formatDataForExport(o))
+            const data = sanitizeSpreadsheetRecords(orders.map(o => formatDataForExport(o)))
             const worksheet = XLSX.utils.json_to_sheet(data)
             const workbook = XLSX.utils.book_new()
             XLSX.utils.book_append_sheet(workbook, worksheet, "Orders")

@@ -1,351 +1,736 @@
 #!/usr/bin/env tsx
 /**
- * Import users from CSV for K-Electric.
+ * Organization-agnostic user import for CSV/XLS/XLSX files.
  *
- * Usage:
- *   npx tsx scripts/import-users-csv.ts
- *     Dry run for BRANCH_ADMIN users. No DB writes.
+ * Dry run (default):
+ *   npx tsx scripts/import-users-csv.ts --file users.xlsx --organization ORG_CODE
  *
- *   npx tsx scripts/import-users-csv.ts --role ORDER_PORTAL
- *     Dry run for ORDER_PORTAL users. Usernames get the default "_op" suffix.
- *
- *   npx tsx scripts/import-users-csv.ts --role ORDER_PORTAL --insert
- *     Live insert for ORDER_PORTAL users.
- *
- * Notes:
- *   - K-Electric is intentionally fixed to database ID 10 / display code 0001.
- *   - ORDER_PORTAL and BRANCH_ADMIN users are branch-scoped, so CSV Location is
- *     resolved to a K-Electric branch and stored as branchId.
- *   - Usernames are stored lowercase because login normalizes input to lowercase.
- *     For ORDER_PORTAL, "1703154_OP" entered at login becomes "1703154_op",
- *     so the importer stores "1703154_op".
- *
- * Decisions applied:
- *   - Row 83 (Imran Khan Muhammad): skipped, no email.
- *   - Row 115 (Hafiz M. Irfan): Location "1. GSO" maps to "GSO" branch.
- *   - Last Name "-" is stored as null.
- *   - Last Name with job titles is stored as-is.
- *   - Shared emails are allowed because email is not unique in users schema.
- *   - Department column is ignored because there is no DB column for it.
+ * Live import with generated one-time passwords:
+ *   npx tsx scripts/import-users-csv.ts --file users.xlsx --organization ORG_CODE \
+ *     --overrides config/user-import-overrides.example.json \
+ *     --generate-passwords --send-welcome --insert --confirm ORG_CODE
  */
 
-import { readFileSync } from "fs"
-import { resolve } from "path"
 import * as dotenv from "dotenv"
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "fs"
+import { basename, dirname, extname, resolve } from "path"
+import * as XLSX from "xlsx"
+import { sanitizeSpreadsheetRecords } from "../lib/spreadsheet"
+import { inArray, or, sql, type SQL } from "drizzle-orm"
+import {
+  normalizeImportKey,
+  normalizeImportText,
+  normalizePhoneKey,
+  parseUserImportRecords,
+  resolveImportBranch,
+  type ImportableUserRole,
+  type ParsedUserImportRow,
+  type UserImportIssue,
+  type UserImportRecord,
+  type UserImportUsernameFormat,
+} from "../lib/user-import"
+import { generateImportPassword, hashImportPassword } from "../lib/password-cli"
 
 dotenv.config({ path: ".env.local" })
 dotenv.config()
 
-type ImportRole = "BRANCH_ADMIN" | "ORDER_PORTAL"
-
-const CSV_PATH = resolve("userlist.csv")
-const ORG_ID = 10 // K-Electric database primary key
-const ORG_CODE = "0001" // K-Electric display/business code shown in the app
-const DEFAULT_ROLE: ImportRole = "BRANCH_ADMIN"
-const DEFAULT_ORDER_PORTAL_SUFFIX = "_op"
-const DRY_RUN = !process.argv.includes("--insert")
-const BCRYPT_SALT_ROUNDS = 12 // same as app default in lib/password.ts
-
-// CSV Location value (lowercase) -> branch name to look up.
-const LOCATION_OVERRIDES: Record<string, string> = {
-  "1. gso": "gso",
+type Options = {
+  file: string
+  organization: string
+  sheet?: string
+  overrides?: string
+  insert: boolean
+  confirmation?: string
+  generatePasswords: boolean
+  sendWelcome: boolean
+  credentialsOutput?: string
 }
 
-// File line numbers to skip (1-indexed header = line 1, first data = line 2).
-const SKIP_LINE_NOS = new Set([83]) // Line 83: Imran Khan Muhammad, missing email
+type OrganizationRow = {
+  id: number
+  name: string
+  code: string | null
+  status: string | null
+}
 
-interface UserRow {
-  lineNo: number
-  firstName: string
-  lastName: string | null
-  location: string
-  password: string
-  loginCode: string
+type BranchRow = {
+  id: number
+  name: string
+  code: string | null
+  status: string | null
+}
+
+type RoleRow = {
+  id: number
+  name: string
+}
+
+type ExistingUserRow = {
+  id: string
   email: string
-  fullName: string
+  username: string | null
+  phone: string | null
+  employeeId: string | null
+  fullName: string | null
+  firstName: string | null
+  lastName: string | null
+  organizationId: number | null
+  branchId: number | null
+  roleId: number
+  address: string | null
+  isActive: boolean
+  deletedAt: Date | null
 }
 
-interface Options {
-  roleName: ImportRole
-  usernameSuffix: string
+type ExistingCredentialRow = {
+  id: number
+  email: string
+  username: string | null
+  organizationId: number
+  branchId: number
 }
 
-function getArgValue(name: string): string | undefined {
-  const prefix = `${name}=`
-  const inline = process.argv.find((arg) => arg.startsWith(prefix))
-  if (inline) return inline.slice(prefix.length)
-
-  const index = process.argv.indexOf(name)
-  if (index >= 0) return process.argv[index + 1]
-
-  return undefined
+type ExistingAccounts = {
+  users: ExistingUserRow[]
+  credentials: ExistingCredentialRow[]
 }
 
-function parseOptions(): Options {
-  const rawRole = (getArgValue("--role") || DEFAULT_ROLE).trim().toUpperCase()
-  if (rawRole !== "BRANCH_ADMIN" && rawRole !== "ORDER_PORTAL") {
-    console.error(`Invalid --role "${rawRole}". Supported roles: BRANCH_ADMIN, ORDER_PORTAL.`)
-    process.exit(1)
-  }
+type OverrideConfig = {
+  organization: string | number
+  branchOverrides: Record<string, string>
+  allowedEmailDomains: string[]
+  usernameFormat: UserImportUsernameFormat
+}
 
-  const rawSuffix = getArgValue("--username-suffix")
-  const usernameSuffix =
-    rawSuffix !== undefined
-      ? rawSuffix.trim().toLowerCase()
-      : rawRole === "ORDER_PORTAL"
-        ? DEFAULT_ORDER_PORTAL_SUFFIX
-        : ""
+type ClassifiedRow = {
+  row: ParsedUserImportRow
+  branch: BranchRow | null
+  state: "ready" | "existing" | "blocked"
+  existingUser?: ExistingUserRow
+  issues: UserImportIssue[]
+}
 
-  if (rawRole === "ORDER_PORTAL" && !usernameSuffix) {
-    console.error("ORDER_PORTAL import requires a username suffix. Default is _op.")
-    process.exit(1)
-  }
+function usage(): string {
+  return [
+    "Usage:",
+    "  npx tsx scripts/import-users-csv.ts --file <csv|xls|xlsx> --organization <id|code|name> [options]",
+    "",
+    "Options:",
+    "  --sheet <name>           Workbook sheet (defaults to first sheet)",
+    "  --overrides <json>       Organization-bound branch name overrides",
+    "  --generate-passwords     Generate secure passwords for rows without Password",
+    "  --send-welcome           Email usernames and temporary passwords after commit",
+    "  --credentials-output     Write an XLSX credential handoff file instead of emailing",
+    "  --insert                 Commit rows that pass preflight (dry run is default)",
+    "  --confirm <org-code>     Required with --insert; must exactly match the org code",
+    "  --help                   Show this help",
+  ].join("\n")
+}
 
+function getArgValue(argv: string[], name: string): string | undefined {
+  const inline = argv.find((arg) => arg.startsWith(`${name}=`))
+  if (inline) return inline.slice(name.length + 1)
+  const index = argv.indexOf(name)
+  return index >= 0 ? argv[index + 1] : undefined
+}
+
+function parseOptions(argv: string[]): Options | null {
+  if (argv.includes("--help") || argv.includes("-h")) return null
+  const file = getArgValue(argv, "--file")
+  const organization = getArgValue(argv, "--organization")
+  if (!file || !organization) throw new Error("--file and --organization are required.\n\n" + usage())
   return {
-    roleName: rawRole,
-    usernameSuffix,
+    file: resolve(file),
+    organization: normalizeImportText(organization),
+    sheet: getArgValue(argv, "--sheet"),
+    overrides: getArgValue(argv, "--overrides"),
+    insert: argv.includes("--insert"),
+    confirmation: getArgValue(argv, "--confirm"),
+    generatePasswords: argv.includes("--generate-passwords"),
+    sendWelcome: argv.includes("--send-welcome"),
+    credentialsOutput: getArgValue(argv, "--credentials-output"),
   }
 }
 
-function normalizeUsername(loginCode: string, usernameSuffix: string): string {
-  return `${loginCode.trim()}${usernameSuffix}`.toLowerCase()
+function credentialsWorkbook(items: Array<{
+  row: ParsedUserImportRow
+  branch: BranchRow | null
+  temporaryPassword: string
+}>): Buffer {
+  const sheet = XLSX.utils.json_to_sheet(sanitizeSpreadsheetRecords(items.map((item) => ({
+    "Workbook Row": item.row.rowNumber,
+    "Full Name": item.row.fullName,
+    "Email": item.row.email,
+    "Username": item.row.username,
+    "Temporary Password": item.temporaryPassword,
+    "Role": item.row.role,
+    "Branch": item.row.role === "HEAD_OFFICE" ? "Head Office" : item.branch?.name ?? "",
+    "Password Change Required": "Yes",
+  }))))
+  sheet["!cols"] = [
+    { wch: 14 }, { wch: 28 }, { wch: 34 }, { wch: 28 },
+    { wch: 28 }, { wch: 18 }, { wch: 36 }, { wch: 26 },
+  ]
+  const workbook = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(workbook, sheet, "Credentials")
+  return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer
 }
 
-function branchLookupKey(location: string): string {
-  const key = location.toLowerCase().trim()
-  return LOCATION_OVERRIDES[key] ?? key
-}
-
-function parseCSV(): { parsed: UserRow[]; skipped: { lineNo: number; reason: string }[] } {
-  const raw = readFileSync(CSV_PATH, "utf-8")
-  const lines = raw.split(/\r?\n/)
-
-  const parsed: UserRow[] = []
-  const skipped: { lineNo: number; reason: string }[] = []
-
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trim()
-    if (!line) continue
-
-    const lineNo = i + 1
-    const cols = line.split(",")
-
-    const firstName = (cols[0] || "").trim()
-    const rawLast = (cols[1] || "").trim()
-    const location = (cols[2] || "").trim()
-    const password = (cols[3] || "").trim()
-    const loginCode = (cols[4] || "").trim()
-    const email = (cols[5] || "").trim().toLowerCase()
-
-    if (SKIP_LINE_NOS.has(lineNo)) {
-      skipped.push({ lineNo, reason: `missing email - ${firstName} ${rawLast}` })
-      continue
-    }
-
-    if (!firstName) continue
-    if (!email) {
-      skipped.push({ lineNo, reason: `missing email - ${firstName} ${rawLast}` })
-      continue
-    }
-    if (!loginCode) {
-      skipped.push({ lineNo, reason: `missing login code - ${firstName} ${rawLast}` })
-      continue
-    }
-    if (!password) {
-      skipped.push({ lineNo, reason: `missing password - ${firstName} ${rawLast}` })
-      continue
-    }
-
-    const lastName = rawLast === "-" || rawLast === "" ? null : rawLast
-    const fullName = lastName ? `${firstName} ${lastName}` : firstName
-
-    parsed.push({ lineNo, firstName, lastName, location, password, loginCode, email, fullName })
+function loadRecords(filePath: string, requestedSheet?: string): { records: UserImportRecord[]; sheetName: string } {
+  if (!existsSync(filePath)) throw new Error(`Input file not found: ${filePath}`)
+  if (statSync(filePath).size > 10 * 1024 * 1024) {
+    throw new Error("User import file exceeds the 10MB limit.")
+  }
+  const extension = extname(filePath).toLowerCase()
+  if (![".csv", ".xls", ".xlsx"].includes(extension)) {
+    throw new Error(`Unsupported input type "${extension}". Use CSV, XLS, or XLSX.`)
   }
 
-  return { parsed, skipped }
+  const workbook = XLSX.readFile(filePath, { cellDates: false })
+  const sheetName = requestedSheet || workbook.SheetNames[0]
+  if (!sheetName || !workbook.Sheets[sheetName]) {
+    throw new Error(`Sheet "${requestedSheet}" was not found. Available sheets: ${workbook.SheetNames.join(", ")}`)
+  }
+  const records = XLSX.utils.sheet_to_json<UserImportRecord>(workbook.Sheets[sheetName], {
+    defval: "",
+    raw: false,
+  })
+  if (records.length > 5000) throw new Error("User import exceeds the 5,000-row limit.")
+  return { records, sheetName }
 }
 
-async function main() {
-  const options = parseOptions()
-  const { parsed, skipped } = parseCSV()
+function loadOverrides(filePath?: string): OverrideConfig | null {
+  if (!filePath) return null
+  const resolvedPath = resolve(filePath)
+  if (!existsSync(resolvedPath)) throw new Error(`Override file not found: ${resolvedPath}`)
+  const parsed = JSON.parse(readFileSync(resolvedPath, "utf8")) as Partial<OverrideConfig>
+  if ((typeof parsed.organization !== "string" && typeof parsed.organization !== "number") || !parsed.branchOverrides) {
+    throw new Error("Override JSON must contain organization and branchOverrides.")
+  }
+  if (typeof parsed.branchOverrides !== "object" || Array.isArray(parsed.branchOverrides)) {
+    throw new Error("branchOverrides must be an object of source-name to database-name mappings.")
+  }
+  for (const [source, target] of Object.entries(parsed.branchOverrides)) {
+    if (!normalizeImportText(source) || typeof target !== "string" || !normalizeImportText(target)) {
+      throw new Error("Every branch override must map a non-empty source name to a non-empty database branch name.")
+    }
+  }
+  const rawDomains = (parsed as Partial<OverrideConfig>).allowedEmailDomains ?? []
+  if (!Array.isArray(rawDomains) || rawDomains.some((domain) => typeof domain !== "string" || !normalizeImportText(domain))) {
+    throw new Error("allowedEmailDomains must be an array of domain names when provided.")
+  }
+  const usernameFormat = (parsed as Partial<OverrideConfig>).usernameFormat ?? "explicit"
+  if (usernameFormat !== "explicit" && usernameFormat !== "first.last") {
+    throw new Error("usernameFormat must be either explicit or first.last.")
+  }
+  return {
+    organization: parsed.organization,
+    branchOverrides: parsed.branchOverrides as Record<string, string>,
+    allowedEmailDomains: rawDomains.map((domain) => normalizeImportKey(domain).replace(/^@/, "")),
+    usernameFormat,
+  }
+}
+
+function makeIssue(
+  severity: UserImportIssue["severity"],
+  code: string,
+  rowNumber: number,
+  message: string,
+  field?: string,
+): UserImportIssue {
+  return { severity, code, rowNumber, message, field }
+}
+
+function unique(values: string[]): string[] {
+  return [...new Set(values.filter(Boolean))]
+}
+
+async function findExistingAccounts(connection: any, importRows: ParsedUserImportRow[]): Promise<ExistingAccounts> {
+  if (importRows.length === 0) return { users: [], credentials: [] }
+  const { users, employeeCredentials } = await import("../db/schema")
+  const emails = unique(importRows.map((row) => normalizeImportKey(row.email)))
+  const usernames = unique(importRows.map((row) => normalizeImportKey(row.username)))
+  const phones = unique(importRows.map((row) => normalizePhoneKey(row.phone)))
+  const employeeIds = unique(importRows.map((row) => normalizeImportKey(row.employeeId)))
+
+  const userConditions: SQL[] = [
+    inArray(sql<string>`lower(trim(${users.email}))`, emails),
+    inArray(sql<string>`lower(trim(coalesce(${users.username}, '')))`, usernames),
+  ]
+  if (phones.length > 0) {
+    userConditions.push(inArray(sql<string>`regexp_replace(coalesce(${users.phone}, ''), '[^0-9]', '', 'g')`, phones))
+  }
+  if (employeeIds.length > 0) {
+    userConditions.push(inArray(sql<string>`lower(trim(coalesce(${users.employeeId}, '')))`, employeeIds))
+  }
+
+  const credentialConditions: SQL[] = [
+    inArray(sql<string>`lower(trim(${employeeCredentials.email}))`, emails),
+    inArray(sql<string>`lower(trim(coalesce(${employeeCredentials.username}, '')))`, usernames),
+  ]
+
+  const [foundUsers, foundCredentials] = await Promise.all([
+    connection
+      .select({
+        id: users.id,
+        email: users.email,
+        username: users.username,
+        phone: users.phone,
+        employeeId: users.employeeId,
+        fullName: users.fullName,
+        firstName: users.firstName,
+        lastName: users.lastName,
+        organizationId: users.organizationId,
+        branchId: users.branchId,
+        roleId: users.roleId,
+        address: users.address,
+        isActive: users.isActive,
+        deletedAt: users.deletedAt,
+      })
+      .from(users)
+      .where(or(...userConditions)),
+    connection
+      .select({
+        id: employeeCredentials.id,
+        email: employeeCredentials.email,
+        username: employeeCredentials.username,
+        organizationId: employeeCredentials.organizationId,
+        branchId: employeeCredentials.branchId,
+      })
+      .from(employeeCredentials)
+      .where(or(...credentialConditions)),
+  ])
+
+  return { users: foundUsers, credentials: foundCredentials }
+}
+
+function userMatchFields(existing: ExistingUserRow, row: ParsedUserImportRow): string[] {
+  const fields: string[] = []
+  if (normalizeImportKey(existing.username) === normalizeImportKey(row.username)) fields.push("username")
+  if (existing.deletedAt) return fields
+  if (normalizeImportKey(existing.email) === normalizeImportKey(row.email)) fields.push("email")
+  if (row.phone && normalizePhoneKey(existing.phone) === normalizePhoneKey(row.phone)) fields.push("phone")
+  if (row.employeeId && normalizeImportKey(existing.employeeId) === normalizeImportKey(row.employeeId)) fields.push("employeeId")
+  return fields
+}
+
+function credentialMatchFields(existing: ExistingCredentialRow, row: ParsedUserImportRow): string[] {
+  const fields: string[] = []
+  if (normalizeImportKey(existing.username) === normalizeImportKey(row.username)) fields.push("username")
+  if (normalizeImportKey(existing.email) === normalizeImportKey(row.email)) fields.push("email")
+  return fields
+}
+
+function existingNameMatches(existing: ExistingUserRow, row: ParsedUserImportRow): boolean {
+  const candidates = [existing.fullName, `${existing.firstName ?? ""} ${existing.lastName ?? ""}`]
+  return candidates.some((candidate) => normalizeImportKey(candidate) === normalizeImportKey(row.fullName))
+}
+
+function classifyRows(args: {
+  rows: ParsedUserImportRow[]
+  organization: OrganizationRow
+  branches: BranchRow[]
+  roles: RoleRow[]
+  branchOverrides: Record<string, string>
+  allowedEmailDomains: string[]
+  accounts: ExistingAccounts
+  generatePasswords: boolean
+}): ClassifiedRow[] {
+  const roleByName = new Map(args.roles.map((role) => [role.name, role]))
+
+  return args.rows.map((row) => {
+    const issues = [...row.issues]
+    let branch: BranchRow | null = null
+    if (row.role === "BRANCH_ADMIN" || row.role === "ORDER_PORTAL") {
+      const resolved = resolveImportBranch(row.branchSource, args.branches, args.branchOverrides)
+      branch = resolved.branch
+      if (!branch) {
+        issues.push(makeIssue(
+          "error",
+          "BRANCH_NOT_FOUND",
+          row.rowNumber,
+          `Branch/department "${row.branchSource}" does not exactly match a branch in ${args.organization.name}. Add an explicit override if the names intentionally differ.`,
+          "branch",
+        ))
+      } else if (normalizeImportKey(branch.status) !== "active") {
+        issues.push(makeIssue("error", "BRANCH_NOT_ACTIVE", row.rowNumber, `Branch "${branch.name}" is not active.`, "branch"))
+      } else if (resolved.overriddenName) {
+        issues.push(makeIssue(
+          "warning",
+          "BRANCH_OVERRIDE_APPLIED",
+          row.rowNumber,
+          `Branch override mapped "${row.branchSource}" to "${branch.name}".`,
+          "branch",
+        ))
+      }
+    }
+    if (row.role && !roleByName.has(row.role)) {
+      issues.push(makeIssue("error", "ROLE_NOT_IN_DATABASE", row.rowNumber, `Role ${row.role} is not present in the database.`, "role"))
+    }
+    if (args.allowedEmailDomains.length > 0) {
+      const emailDomain = normalizeImportKey(row.email.split("@").at(-1))
+      if (!args.allowedEmailDomains.includes(emailDomain)) {
+        issues.push(makeIssue(
+          "error",
+          "EMAIL_DOMAIN_NOT_ALLOWED",
+          row.rowNumber,
+          `Email domain is not in the organization-bound allowlist (${args.allowedEmailDomains.join(", ")}).`,
+          "email",
+        ))
+      }
+    }
+    const matchingUsers = args.accounts.users
+      .map((existing) => ({ existing, fields: userMatchFields(existing, row) }))
+      .filter((match) => match.fields.length > 0)
+    const matchingCredentials = args.accounts.credentials
+      .map((existing) => ({ existing, fields: credentialMatchFields(existing, row) }))
+      .filter((match) => match.fields.length > 0)
+
+    const soleMatch = matchingUsers.length === 1 ? matchingUsers[0] : null
+    const isSameExistingUser = !!soleMatch
+      && !soleMatch.existing.deletedAt
+      && soleMatch.existing.organizationId === args.organization.id
+      && existingNameMatches(soleMatch.existing, row)
+      && (soleMatch.fields.includes("email") || soleMatch.fields.includes("employeeId"))
+      && matchingCredentials.length === 0
+
+    if (isSameExistingUser && soleMatch) {
+      const existing = soleMatch.existing
+      issues.push(makeIssue("warning", "ALREADY_EXISTS", row.rowNumber, "A matching active user already exists in this organization; the importer will not update or duplicate it."))
+      if (normalizeImportKey(existing.username) !== normalizeImportKey(row.username)) {
+        issues.push(makeIssue("warning", "EXISTING_USERNAME_DIFFERS", row.rowNumber, "Existing username differs from the imported/derived username."))
+      }
+      if (row.role && existing.roleId !== roleByName.get(row.role)?.id) {
+        issues.push(makeIssue("warning", "EXISTING_ROLE_DIFFERS", row.rowNumber, "Existing role differs from the workbook role."))
+      }
+      const expectedBranchId = row.role === "HEAD_OFFICE" ? null : branch?.id ?? null
+      if (existing.branchId !== expectedBranchId) {
+        issues.push(makeIssue("warning", "EXISTING_BRANCH_DIFFERS", row.rowNumber, "Existing branch differs from the resolved workbook branch."))
+      }
+      if (normalizeImportKey(existing.email) !== normalizeImportKey(row.email)) {
+        issues.push(makeIssue("warning", "EXISTING_EMAIL_DIFFERS", row.rowNumber, "Existing email differs from the workbook email."))
+      }
+      if (row.phone && normalizePhoneKey(existing.phone) !== normalizePhoneKey(row.phone)) {
+        issues.push(makeIssue("warning", "EXISTING_PHONE_DIFFERS", row.rowNumber, "Existing phone differs from the workbook phone."))
+      }
+      if (row.employeeId && normalizeImportKey(existing.employeeId) !== normalizeImportKey(row.employeeId)) {
+        issues.push(makeIssue("warning", "EXISTING_EMPLOYEE_ID_DIFFERS", row.rowNumber, "Existing employee ID differs from the workbook employee ID."))
+      }
+      if (row.address && normalizeImportKey(existing.address) !== normalizeImportKey(row.address)) {
+        issues.push(makeIssue("warning", "EXISTING_ADDRESS_DIFFERS", row.rowNumber, "Existing address differs from the workbook address."))
+      }
+      if (existing.isActive !== row.isActive) {
+        issues.push(makeIssue("warning", "EXISTING_STATUS_DIFFERS", row.rowNumber, "Existing activation status differs from the workbook status."))
+      }
+      return { row, branch, state: "existing", existingUser: existing, issues }
+    }
+
+    if (matchingUsers.length > 0) {
+      const fields = unique(matchingUsers.flatMap((match) => match.fields)).join(", ")
+      issues.push(makeIssue("error", "USER_IDENTITY_CONFLICT", row.rowNumber, `An existing user conflicts on: ${fields}.`))
+    }
+    if (matchingCredentials.length > 0) {
+      const fields = unique(matchingCredentials.flatMap((match) => match.fields)).join(", ")
+      issues.push(makeIssue("error", "EMPLOYEE_CREDENTIAL_CONFLICT", row.rowNumber, `Legacy employee credentials conflict on: ${fields}.`))
+    }
+    if (!row.password && !args.generatePasswords) {
+      issues.push(makeIssue(
+        "error",
+        "MISSING_PASSWORD",
+        row.rowNumber,
+        "Password is blank. Supply a compliant Password or use --generate-passwords.",
+        "password",
+      ))
+    }
+
+    const state = issues.some((item) => item.severity === "error") ? "blocked" : "ready"
+    return { row, branch, state, issues }
+  })
+}
+
+function assertOverrideOrganization(config: OverrideConfig | null, organization: OrganizationRow): void {
+  if (!config) return
+  const expected = normalizeImportKey(config.organization)
+  const permitted = [String(organization.id), organization.name, organization.code ?? ""].map(normalizeImportKey)
+  if (!permitted.includes(expected)) {
+    throw new Error(
+      `Override file is bound to organization "${config.organization}" and cannot be used for ${organization.name} (${organization.code ?? organization.id}).`,
+    )
+  }
+}
+
+function printPreflight(args: {
+  options: Options
+  organization: OrganizationRow
+  sheetName: string
+  classified: ClassifiedRow[]
+}): void {
+  const ready = args.classified.filter((item) => item.state === "ready")
+  const existing = args.classified.filter((item) => item.state === "existing")
+  const blocked = args.classified.filter((item) => item.state === "blocked")
+  const issueGroups = new Map<string, { severity: string; code: string; message: string; rows: number[] }>()
+
+  for (const item of args.classified) {
+    for (const found of item.issues) {
+      const key = `${found.severity}:${found.code}:${found.message}`
+      const group = issueGroups.get(key) ?? { severity: found.severity, code: found.code, message: found.message, rows: [] }
+      group.rows.push(found.rowNumber)
+      issueGroups.set(key, group)
+    }
+  }
+
+  const branchMappings = new Map<string, { workbook: string; database: string; rows: number[] }>()
+  for (const item of args.classified) {
+    if (item.row.role !== "BRANCH_ADMIN" && item.row.role !== "ORDER_PORTAL") continue
+    const key = normalizeImportKey(item.row.branchSource)
+    const mapping = branchMappings.get(key) ?? {
+      workbook: item.row.branchSource,
+      database: item.branch?.name ?? "NOT FOUND",
+      rows: [],
+    }
+    mapping.rows.push(item.row.rowNumber)
+    branchMappings.set(key, mapping)
+  }
 
   console.log("\n============================================================")
-  console.log(`  User CSV Import - ${DRY_RUN ? "DRY RUN (no DB writes)" : "LIVE INSERT"}`)
+  console.log(` User Import - ${args.options.insert ? "LIVE MODE" : "DRY RUN (no writes)"}`)
   console.log("============================================================")
-  console.log(`  File            : ${CSV_PATH}`)
-  console.log(`  Org             : K-Electric (db id=${ORG_ID}, code=${ORG_CODE})`)
-  console.log(`  Role            : ${options.roleName}`)
-  console.log(`  Username suffix : ${options.usernameSuffix || "(none)"}`)
-  console.log(`  Parsed rows     : ${parsed.length}`)
-  console.log(`  Pre-skipped     : ${skipped.length}`)
-  console.log("------------------------------------------------------------\n")
+  console.log(` File          : ${args.options.file}`)
+  console.log(` Sheet         : ${args.sheetName}`)
+  console.log(` Organization  : ${args.organization.name} (id=${args.organization.id}, code=${args.organization.code ?? "n/a"})`)
+  console.log(` Workbook rows : ${args.classified.length}`)
+  console.log(` Ready to add  : ${ready.length}`)
+  console.log(` Already exist : ${existing.length}`)
+  console.log(` Blocked       : ${blocked.length}`)
 
-  const { db } = await import("../lib/db")
-  const { branches, users, organizations, roles, employeeCredentials } = await import("../db/schema")
-  const { eq } = await import("drizzle-orm")
+  console.log("\nBranch resolution:")
+  console.table([...branchMappings.values()].map((mapping) => ({
+    workbook: mapping.workbook,
+    database: mapping.database,
+    rows: mapping.rows.join(", "),
+  })))
 
-  const [org] = await db
-    .select({ id: organizations.id, name: organizations.name, code: organizations.code })
-    .from(organizations)
-    .where(eq(organizations.id, ORG_ID))
-    .limit(1)
-
-  if (!org) {
-    console.error(`\nOrganization id=${ORG_ID} not found. Aborting.`)
-    process.exit(1)
-  }
-
-  const [role] = await db
-    .select({ id: roles.id, name: roles.name })
-    .from(roles)
-    .where(eq(roles.name, options.roleName))
-    .limit(1)
-
-  if (!role) {
-    console.error(`\nRole ${options.roleName} not found. Aborting.`)
-    process.exit(1)
-  }
-
-  if (org.id !== ORG_ID || org.code !== ORG_CODE || org.name.toLowerCase() !== "k-electric") {
-    console.error(
-      `\nSafety check failed. Expected K-Electric db id=${ORG_ID}, code=${ORG_CODE}; got ${org.name} db id=${org.id}, code=${org.code}.`,
-    )
-    process.exit(1)
-  }
-
-  const allBranches = await db
-    .select({ id: branches.id, name: branches.name, code: branches.code })
-    .from(branches)
-    .where(eq(branches.organizationId, ORG_ID))
-
-  const branchMap = new Map<string, { id: number; name: string; code: string | null }>()
-  for (const branch of allBranches) {
-    branchMap.set(branch.name.toLowerCase().trim(), branch)
-  }
-
-  console.log(`Verified org  : ${org.name} (db id=${org.id}, code=${org.code})`)
-  console.log(`Verified role : ${role.name} (id=${role.id})`)
-  console.log(`Branches read : ${allBranches.length}\n`)
-
-  if (DRY_RUN) {
-    console.log("DRY RUN PREVIEW (would be inserted):\n")
-  } else {
-    console.log(`Inserting ${parsed.length} users...\n`)
-  }
-
-  const bcrypt = DRY_RUN ? null : await import("bcryptjs")
-
-  let inserted = 0
-  let wouldInsert = 0
-  let skippedNoBranch = 0
-  let skippedDuplicateCsv = 0
-  let skippedDuplicateUser = 0
-  let skippedDuplicateEmployee = 0
-  const seenUsernames = new Set<string>()
-
-  for (const row of parsed) {
-    const username = normalizeUsername(row.loginCode, options.usernameSuffix)
-    const branch = branchMap.get(branchLookupKey(row.location))
-
-    if (seenUsernames.has(username)) {
-      console.log(`  SKIP [L${row.lineNo}] Username "${username}" is duplicated in CSV - ${row.fullName}`)
-      skippedDuplicateCsv++
-      continue
-    }
-    seenUsernames.add(username)
-
-    if (!branch) {
-      console.log(`  SKIP [L${row.lineNo}] Branch not found: "${row.location}" - ${row.fullName}`)
-      skippedNoBranch++
-      continue
-    }
-
-    const [existingUser] = await db
-      .select({ id: users.id })
-      .from(users)
-      .where(eq(users.username, username))
-      .limit(1)
-
-    if (existingUser) {
-      console.log(`  SKIP [L${row.lineNo}] Username "${username}" already exists in users - ${row.fullName}`)
-      skippedDuplicateUser++
-      continue
-    }
-
-    const [existingEmployee] = await db
-      .select({ id: employeeCredentials.id })
-      .from(employeeCredentials)
-      .where(eq(employeeCredentials.username, username))
-      .limit(1)
-
-    if (existingEmployee) {
-      console.log(`  SKIP [L${row.lineNo}] Username "${username}" already exists in employee credentials - ${row.fullName}`)
-      skippedDuplicateEmployee++
-      continue
-    }
-
-    if (DRY_RUN) {
-      console.log(`  OK [L${row.lineNo}] ${row.fullName}`)
-      console.log(`       username : ${username}`)
-      console.log(`       email    : ${row.email}`)
-      console.log(`       branch   : ${branch.name} (id=${branch.id}, code=${branch.code})`)
-      wouldInsert++
-      continue
-    }
-
-    const passwordHash = await bcrypt!.default.hash(row.password, BCRYPT_SALT_ROUNDS)
-
-    await db.insert(users).values({
-      email: row.email,
-      username,
-      passwordHash,
-      roleId: role.id,
-      organizationId: ORG_ID,
-      branchId: branch.id,
-      firstName: row.firstName,
-      lastName: row.lastName,
-      fullName: row.fullName,
-      isActive: true,
-      mfaEnabled: false,
-      mustChangePassword: false,
-      sessionVersion: 1,
-    })
-
-    console.log(`  INSERTED [L${row.lineNo}] ${row.fullName} | @${username} | ${branch.name}`)
-    inserted++
-  }
-
-  console.log("\nPre-skipped rows:")
-  if (skipped.length === 0) {
-    console.log("  None")
-  } else {
-    skipped.forEach((item) => console.log(`  Line ${item.lineNo}: ${item.reason}`))
-  }
-
-  console.log("\n------------------------------------------------------------")
-  console.log("  Summary")
-  console.log(`    ${DRY_RUN ? "Would insert" : "Inserted"}              : ${DRY_RUN ? wouldInsert : inserted}`)
-  console.log(`    Skipped (pre-check)        : ${skipped.length}`)
-  console.log(`    Skipped (no branch)        : ${skippedNoBranch}`)
-  console.log(`    Skipped (duplicate CSV)    : ${skippedDuplicateCsv}`)
-  console.log(`    Skipped (duplicate users)  : ${skippedDuplicateUser}`)
-  console.log(`    Skipped (duplicate emp)    : ${skippedDuplicateEmployee}`)
-  console.log("------------------------------------------------------------")
-
-  if (DRY_RUN) {
-    console.log("\nNothing written to DB.")
-    console.log("When ready, run:")
-    console.log(`  npx tsx scripts/import-users-csv.ts --role ${options.roleName} --insert`)
-    if (options.roleName === "ORDER_PORTAL") {
-      console.log("\nFor Order Portal, users can log in with the suffixed username, e.g. 1703154_op.")
+  if (issueGroups.size > 0) {
+    console.log("\nPreflight findings (personal values are intentionally omitted):")
+    for (const group of [...issueGroups.values()].sort((a, b) => {
+      if (a.severity !== b.severity) return a.severity === "error" ? -1 : 1
+      return a.code.localeCompare(b.code)
+    })) {
+      console.log(` ${group.severity === "error" ? "ERROR" : "WARN "} ${group.code} [rows ${unique(group.rows.map(String)).join(", ")}]: ${group.message}`)
     }
   }
 
-  console.log("")
-  process.exit(0)
+  console.log("\nSummary:")
+  console.log(` Ready rows    : ${ready.map((item) => item.row.rowNumber).join(", ") || "none"}`)
+  console.log(` Existing rows : ${existing.map((item) => item.row.rowNumber).join(", ") || "none"}`)
+  console.log(` Blocked rows  : ${blocked.map((item) => item.row.rowNumber).join(", ") || "none"}`)
+  if (!args.options.insert) console.log("\nNothing was written to the database.")
 }
 
-main().catch((err) => {
-  console.error("\nError:", err.message)
-  process.exit(1)
+async function main(): Promise<void> {
+  const options = parseOptions(process.argv.slice(2))
+  if (!options) {
+    console.log(usage())
+    return
+  }
+
+  const { records, sheetName } = loadRecords(options.file, options.sheet)
+  const overrideConfig = loadOverrides(options.overrides)
+  const parsedRows = parseUserImportRecords(records, {
+    usernameFormat: overrideConfig?.usernameFormat ?? "explicit",
+  })
+  if (parsedRows.length === 0) throw new Error("The selected sheet contains no user rows.")
+
+  const { db, closePool } = await import("../lib/db-cli")
+  const { organizations, branches, roles, users, systemLogs } = await import("../db/schema")
+
+  try {
+    const selector = normalizeImportKey(options.organization)
+    const organizationConditions: SQL[] = [
+      sql`lower(trim(${organizations.name})) = ${selector}`,
+      sql`lower(trim(coalesce(${organizations.code}, ''))) = ${selector}`,
+    ]
+    if (/^\d+$/.test(selector)) organizationConditions.push(sql`${organizations.id} = ${Number(selector)}`)
+    const matchingOrganizations = await db
+      .select({ id: organizations.id, name: organizations.name, code: organizations.code, status: organizations.status })
+      .from(organizations)
+      .where(or(...organizationConditions))
+
+    if (matchingOrganizations.length !== 1) {
+      throw new Error(`Organization selector "${options.organization}" matched ${matchingOrganizations.length} organizations; expected exactly one.`)
+    }
+    const organization = matchingOrganizations[0]
+    if (normalizeImportKey(organization.status) !== "active") {
+      throw new Error(`Organization ${organization.name} is not active.`)
+    }
+    assertOverrideOrganization(overrideConfig, organization)
+
+    const [organizationBranches, databaseRoles, accounts] = await Promise.all([
+      db
+        .select({ id: branches.id, name: branches.name, code: branches.code, status: branches.status })
+        .from(branches)
+        .where(sql`${branches.organizationId} = ${organization.id}`),
+      db.select({ id: roles.id, name: roles.name }).from(roles),
+      findExistingAccounts(db, parsedRows),
+    ])
+
+    const classified = classifyRows({
+      rows: parsedRows,
+      organization,
+      branches: organizationBranches,
+      roles: databaseRoles,
+      branchOverrides: overrideConfig?.branchOverrides ?? {},
+      allowedEmailDomains: overrideConfig?.allowedEmailDomains ?? [],
+      accounts,
+      generatePasswords: options.generatePasswords,
+    })
+    printPreflight({ options, organization, sheetName, classified })
+
+    const blocked = classified.filter((item) => item.state === "blocked")
+    const ready = classified.filter((item) => item.state === "ready")
+    if (!options.insert) return
+    if (blocked.length > 0) throw new Error(`Live import refused: ${blocked.length} workbook rows have blocking errors.`)
+    if (ready.length === 0) {
+      console.log("\nNo new users need to be inserted.")
+      return
+    }
+
+    const confirmationToken = organization.code ?? String(organization.id)
+    if (options.confirmation !== confirmationToken) {
+      throw new Error(`Live import refused: --confirm must exactly equal "${confirmationToken}".`)
+    }
+    if (ready.some((item) => !item.row.password) && !options.generatePasswords) {
+      throw new Error("Live import refused: some new rows have no password.")
+    }
+    if (options.sendWelcome && options.credentialsOutput) {
+      throw new Error("Live import refused: choose either --send-welcome or --credentials-output, not both.")
+    }
+    if (ready.some((item) => !item.row.password) && !options.sendWelcome && !options.credentialsOutput) {
+      throw new Error("Live import refused: generated passwords require either --send-welcome or --credentials-output.")
+    }
+
+    if (options.sendWelcome) {
+      const { verifyUserImportEmailConfig } = await import("../lib/email/user-import-cli")
+      if (!verifyUserImportEmailConfig()) {
+        throw new Error("Live import refused: welcome-email configuration is not valid.")
+      }
+    }
+
+    const prepared = await Promise.all(ready.map(async (item) => {
+      const temporaryPassword = item.row.password ?? generateImportPassword(20)
+      return { ...item, temporaryPassword, passwordHash: await hashImportPassword(temporaryPassword) }
+    }))
+    const roleByName = new Map(databaseRoles.map((role) => [role.name, role]))
+    const created: Array<{ id: string; rowNumber: number; email: string; firstName: string; username: string; temporaryPassword: string }> = []
+    const credentialsPath = options.credentialsOutput ? resolve(options.credentialsOutput) : null
+    let credentialsFileCreated = false
+
+    if (credentialsPath) {
+      if (extname(credentialsPath).toLowerCase() !== ".xlsx") {
+        throw new Error("--credentials-output must use an .xlsx filename.")
+      }
+      if (existsSync(credentialsPath)) {
+        throw new Error(`Credentials output already exists; refusing to overwrite: ${credentialsPath}`)
+      }
+      mkdirSync(dirname(credentialsPath), { recursive: true })
+      writeFileSync(credentialsPath, credentialsWorkbook(prepared), { flag: "wx", mode: 0o600 })
+      credentialsFileCreated = true
+    }
+
+    try {
+      await db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext('oneflowe:user-import'))`)
+        const changedAccounts = await findExistingAccounts(tx, prepared.map((item) => item.row))
+        if (changedAccounts.users.length > 0 || changedAccounts.credentials.length > 0) {
+          throw new Error("Database changed after preflight; rerun the dry run before importing.")
+        }
+
+        for (const item of prepared) {
+          const role = item.row.role ? roleByName.get(item.row.role) : undefined
+          if (!role) throw new Error(`Role resolution failed for workbook row ${item.row.rowNumber}.`)
+          const [inserted] = await tx
+            .insert(users)
+            .values({
+              email: item.row.email,
+              username: item.row.username,
+              passwordHash: item.passwordHash,
+              roleId: role.id,
+              isActive: item.row.isActive,
+              fullName: item.row.fullName,
+              firstName: item.row.firstName,
+              lastName: item.row.lastName,
+              phone: item.row.phone,
+              employeeId: item.row.employeeId,
+              mfaEnabled: false,
+              organizationId: organization.id,
+              branchId: item.row.role === "HEAD_OFFICE" ? null : item.branch?.id ?? null,
+              location: item.row.branchSource || null,
+              address: item.row.address,
+              mustChangePassword: true,
+              sessionVersion: 1,
+            })
+            .returning({ id: users.id })
+
+          await tx.insert(systemLogs).values({
+            userRole: "SYSTEM",
+            organizationId: organization.id,
+            branchId: item.row.role === "HEAD_OFFICE" ? null : item.branch?.id ?? null,
+            action: "USER_BULK_IMPORT",
+            resourceType: "user",
+            resourceId: inserted.id,
+            details: {
+              sourceFile: basename(options.file),
+              sourceSheet: sheetName,
+              sourceRow: item.row.rowNumber,
+              importedRole: item.row.role,
+            },
+            success: true,
+          })
+
+          created.push({
+            id: inserted.id,
+            rowNumber: item.row.rowNumber,
+            email: item.row.email,
+            firstName: item.row.firstName,
+            username: item.row.username,
+            temporaryPassword: item.temporaryPassword,
+          })
+        }
+      }, { isolationLevel: "serializable" })
+    } catch (error) {
+      if (credentialsPath && credentialsFileCreated) {
+        try {
+          unlinkSync(credentialsPath)
+        } catch {
+          console.error(`Import failed and the uncommitted credential file could not be removed: ${credentialsPath}`)
+        }
+      }
+      throw error
+    }
+
+    console.log(`\nInserted ${created.length} users in one transaction.`)
+    if (credentialsPath) {
+      console.log(`Credentials written to: ${credentialsPath}`)
+    }
+    if (options.sendWelcome) {
+      const { sendUserImportWelcomeEmail } = await import("../lib/email/user-import-cli")
+      const failedRows: number[] = []
+      for (const user of created) {
+        const sent = await sendUserImportWelcomeEmail(user.email, user.firstName, user.username, user.temporaryPassword)
+        if (!sent) failedRows.push(user.rowNumber)
+      }
+      console.log(`Welcome emails sent: ${created.length - failedRows.length}/${created.length}.`)
+      if (failedRows.length > 0) {
+        console.error(`Welcome email failed for workbook rows ${failedRows.join(", ")}; reset those users' passwords before sharing access.`)
+        process.exitCode = 2
+      }
+    }
+  } finally {
+    await closePool()
+  }
+}
+
+main().catch((error) => {
+  console.error(`\nUser import failed: ${error instanceof Error ? error.message : String(error)}`)
+  process.exitCode = 1
 })

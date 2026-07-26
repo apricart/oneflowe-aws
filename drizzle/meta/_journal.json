@@ -211,6 +211,34 @@
       "when": 1783904400000,
       "tag": "20260713010000_add_normalized_global_product_code_uniqueness",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1784070000000,
+      "tag": "20260715000000_business_logic_integrity",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1784631600000,
+      "tag": "20260721120000_add_order_notification_outbox",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1784635200000,
+      "tag": "20260721130000_repair_skipped_business_logic_integrity",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1784718000000,
+      "tag": "20260722120000_add_order_delivered_at",
+      "breakpoints": true
     }
   ]
 }

@@ -1,12 +1,13 @@
 import { ok, error, readJson, requireApiRole } from "@/lib/api"
 import { db } from "@/lib/db"
 import { orders, budgets } from "@/db/schema"
-import { eq, and, sql } from "drizzle-orm"
+import { eq, and, gte, sql } from "drizzle-orm"
 import { getCurrentUser } from "@/lib/auth"
 import { verifyApprovalToken } from "@/lib/approval-token"
 import { logFulfillmentAttempt } from "@/lib/global-logger"
 import { moveHeldQuantityBudgetToUsedForOrder } from "@/lib/server/product-quantity-budget-ledger"
 import { orderSelectColumns, updateOrderFulfillmentStatusColumn } from "@/lib/order-select"
+import { fulfillmentSchema, validationMessage } from "@/lib/server/mutation-validation"
 
 export async function POST(
   req: Request,
@@ -18,11 +19,14 @@ export async function POST(
 
   const params = await props.params
   const orderId = Number(params.id)
+  if (!Number.isInteger(orderId) || orderId <= 0) return error("Invalid order ID", 400)
   const user = await getCurrentUser()
-  const body = await readJson<{ approvalToken: string }>(req)
+  const rawBody = await readJson<unknown>(req)
+  const parsedBody = fulfillmentSchema.safeParse(rawBody)
 
   if (!user) return error("Unauthorized", 401)
-  if (!body?.approvalToken) return error("Approval token is required", 400)
+  if (!parsedBody.success) return error(validationMessage(parsedBody.error), 400)
+  const input = parsedBody.data
 
   // Fetch order
   const [ord] = await db.select(orderSelectColumns).from(orders).where(eq(orders.id, orderId)).limit(1)
@@ -41,7 +45,7 @@ export async function POST(
     return error("Order has no approval token - cannot fulfill", 400)
   }
 
-  const isValid = await verifyApprovalToken(body.approvalToken, ord.approvalTokenHash)
+  const isValid = await verifyApprovalToken(input.approvalToken, ord.approvalTokenHash)
 
   if (!isValid) {
     logFulfillmentAttempt(
@@ -56,37 +60,63 @@ export async function POST(
     return error("Invalid approval token - fulfillment denied", 403)
   }
 
-  await db.transaction(async (tx) => {
-    // 1. Update order status
-    await tx.update(orders).set({
-      status: "FULFILLED",
-      fulfilledAt: new Date(),
-      fulfilledByUserId: user.id,
-      updatedAt: new Date()
-    }).where(eq(orders.id, orderId))
-    await updateOrderFulfillmentStatusColumn(tx, orderId, "DELIVERED")
+  try {
+    await db.transaction(async (tx) => {
+      // Claim the transition so only one simultaneous fulfilment can move ledgers.
+      const fulfilledAt = new Date()
+      const [fulfilledOrder] = await tx.update(orders).set({
+        status: "FULFILLED",
+        deliveredAt: fulfilledAt,
+        fulfilledAt,
+        fulfilledByUserId: user.id,
+        updatedAt: fulfilledAt,
+      }).where(and(
+        eq(orders.id, orderId),
+        sql`UPPER(${orders.status}) = 'APPROVED'`,
+      )).returning(orderSelectColumns)
 
-    // 2. Move budget from held to spent
-    const orderMonth = ord.createdAt
-      ? new Date(ord.createdAt).toISOString().slice(0, 7)
-      : new Date().toISOString().slice(0, 7)
+      if (!fulfilledOrder) throw new Error("ORDER_TRANSITION_CONFLICT")
+      const migrationReady = await updateOrderFulfillmentStatusColumn(tx, orderId, "DELIVERED")
+      if (!migrationReady) throw new Error("FULFILLMENT_MIGRATION_MISSING")
 
-    const [budget] = await tx.select().from(budgets).where(
-      and(
-        eq(budgets.branchId, ord.branchId),
-        eq(budgets.period, orderMonth)
-      )
-    ).limit(1)
+      // 2. Move budget from held to spent
+      const orderMonth = fulfilledOrder.createdAt
+        ? new Date(fulfilledOrder.createdAt).toISOString().slice(0, 7)
+        : new Date().toISOString().slice(0, 7)
 
-    if (budget) {
-      await tx.update(budgets).set({
-        amountHeldCents: sql`${budgets.amountHeldCents} - ${ord.totalCents}`,
-        amountSpentCents: sql`${budgets.amountSpentCents} + ${ord.totalCents}`,
-      }).where(eq(budgets.id, budget.id))
+      const [budget] = await tx.select().from(budgets).where(
+        and(
+          eq(budgets.branchId, fulfilledOrder.branchId),
+          eq(budgets.period, orderMonth)
+        )
+      ).limit(1)
+
+      if (budget) {
+        const [movedBudget] = await tx.update(budgets).set({
+          amountHeldCents: sql`${budgets.amountHeldCents} - ${fulfilledOrder.totalCents}`,
+          amountSpentCents: sql`${budgets.amountSpentCents} + ${fulfilledOrder.totalCents}`,
+          updatedAt: new Date(),
+        }).where(and(
+          eq(budgets.id, budget.id),
+          gte(budgets.amountHeldCents, fulfilledOrder.totalCents),
+        )).returning({ id: budgets.id })
+        if (!movedBudget) throw new Error("BUDGET_LEDGER_INVARIANT")
+      }
+
+      await moveHeldQuantityBudgetToUsedForOrder(tx, fulfilledOrder)
+    })
+  } catch (transitionError: any) {
+    if (transitionError?.message === "ORDER_TRANSITION_CONFLICT") {
+      return error("Order was already fulfilled or otherwise changed", 409)
     }
-
-    await moveHeldQuantityBudgetToUsedForOrder(tx, ord)
-  })
+    if (["BUDGET_LEDGER_INVARIANT", "QUANTITY_BUDGET_LEDGER_INVARIANT"].includes(transitionError?.message)) {
+      return error("Order budget hold is inconsistent; fulfilment was not applied", 409)
+    }
+    if (transitionError?.message === "FULFILLMENT_MIGRATION_MISSING") {
+      return error("Fulfillment progress migration has not been applied", 503)
+    }
+    throw transitionError
+  }
 
   return ok({ message: "Order fulfilled successfully" })
 }

@@ -9,11 +9,17 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
   const branchId = searchParams.get("branchId")
   const type = (searchParams.get("type") || undefined) as any
+  const limit = Math.min(Math.max(Math.trunc(Number(searchParams.get("limit"))) || 100, 1), 500)
   const where = [
     branchId ? eq(inventory.branchId, Number(branchId)) : undefined,
   ].filter(Boolean) as any
-  const items = await db.select().from(inventory).where(where.length ? and(...where) : undefined as any).orderBy(desc(inventory.updatedAt))
-  return ok({ items })
+  const items = await db
+    .select()
+    .from(inventory)
+    .where(where.length ? and(...where) : undefined as any)
+    .orderBy(desc(inventory.updatedAt))
+    .limit(limit)
+  return ok({ items, limit })
 }
 
 export async function POST(req: Request) {

@@ -497,16 +497,17 @@ export function OrdersDirectory({
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
             transition={{ duration: 0.2 }}
-            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl overflow-hidden shadow-sm"
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl overflow-x-auto shadow-sm"
           >
-            <table className="w-full text-sm">
+            <table className="w-full min-w-[900px] text-sm">
               <thead>
                 <tr className="border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/50 text-[10px] uppercase font-bold text-slate-400 tracking-wider">
                   <th className="text-left font-bold py-4 pl-6">TID</th>
                   <th className="text-left font-bold py-4">Branch</th>
                   {shouldShowCostCenterId && <th className="text-left font-bold py-4">Cost Center</th>}
                   <th className="text-left font-bold py-4">Status</th>
-                  <th className="text-left font-bold py-4">Date</th>
+                  <th className="text-left font-bold py-4">Order Date</th>
+                  <th className="text-left font-bold py-4">Delivery Date</th>
                   <th className="text-right font-bold py-4 pr-6">Amount</th>
                 </tr>
               </thead>
@@ -562,6 +563,9 @@ export function OrdersDirectory({
                       <td className="py-4 font-medium text-slate-500 text-xs">
                         {format(new Date(order.createdAt), "dd MMM yyyy")}
                       </td>
+                      <td className="py-4 font-medium text-slate-500 text-xs">
+                        {order.deliveredAt ? format(new Date(order.deliveredAt), "dd MMM yyyy") : "—"}
+                      </td>
                       <td className="py-4 pr-6 text-right font-bold text-slate-800 dark:text-slate-200">
                         {order.totalCents !== null && order.totalCents !== undefined ? formatPKR(order.totalCents / 100) : "-"}
                       </td>
@@ -570,7 +574,7 @@ export function OrdersDirectory({
                 })}
                 {orders.length === 0 && (
                   <tr>
-                    <td colSpan={shouldShowCostCenterId ? 6 : 5}>
+                    <td colSpan={shouldShowCostCenterId ? 7 : 6}>
                       <EmptyOrdersState compact />
                     </td>
                   </tr>

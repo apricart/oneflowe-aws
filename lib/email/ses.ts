@@ -5,12 +5,10 @@ import {
   type MessageTag,
   type SendEmailCommandInput,
 } from "@aws-sdk/client-sesv2"
+import { env } from "@/lib/server/env"
 
 type SesEmailConfig = {
   region: string
-  accessKeyId: string
-  secretAccessKey: string
-  sessionToken?: string
   fromEmail: string
   configurationSetName?: string
 }
@@ -39,17 +37,12 @@ let sesClient: SESv2Client | null = null
 let sesClientRegion: string | null = null
 
 function readSesEmailConfig(): { config: SesEmailConfig | null; missing: string[] } {
-  const region = process.env.NNAWS_REGION || process.env.NAWS_REGION || process.env.AWS_REGION
-  const accessKeyId = process.env.NNAWS_ACCESS_KEY_ID || process.env.NAWS_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID
-  const secretAccessKey = process.env.NAWS_SECRET_ACCESS_KEY || process.env.NNAWS_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY
-  const sessionToken = process.env.AWS_SESSION_TOKEN
-  const fromEmail = process.env.SES_FROM_EMAIL
-  const configurationSetName = process.env.SES_CONFIGURATION_SET
+  const region = env.AWS_REGION
+  const fromEmail = env.SES_FROM_EMAIL
+  const configurationSetName = env.SES_CONFIGURATION_SET
 
   const requiredConfig: Array<[string, string | undefined]> = [
-    ["NNAWS_REGION or NAWS_REGION or AWS_REGION", region],
-    ["NNAWS_ACCESS_KEY_ID or NAWS_ACCESS_KEY_ID or AWS_ACCESS_KEY_ID", accessKeyId],
-    ["NAWS_SECRET_ACCESS_KEY or NNAWS_SECRET_ACCESS_KEY or AWS_SECRET_ACCESS_KEY", secretAccessKey],
+    ["AWS_REGION", region],
     ["SES_FROM_EMAIL", fromEmail],
   ]
 
@@ -64,9 +57,6 @@ function readSesEmailConfig(): { config: SesEmailConfig | null; missing: string[
   return {
     config: {
       region: region!,
-      accessKeyId: accessKeyId!,
-      secretAccessKey: secretAccessKey!,
-      sessionToken: sessionToken || undefined,
       fromEmail: fromEmail!,
       configurationSetName: configurationSetName || undefined,
     },
@@ -91,11 +81,6 @@ function getSesClient(config: SesEmailConfig): SESv2Client {
   if (!sesClient || sesClientRegion !== config.region) {
     sesClient = new SESv2Client({
       region: config.region,
-      credentials: {
-        accessKeyId: config.accessKeyId,
-        secretAccessKey: config.secretAccessKey,
-        sessionToken: config.sessionToken,
-      },
     })
     sesClientRegion = config.region
   }

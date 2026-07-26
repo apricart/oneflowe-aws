@@ -14,6 +14,7 @@ import {
   DEFAULT_BUDGET_ALLOCATION_MODE,
   parseBudgetAllocationMode,
 } from "@/lib/budget-allocation-mode"
+import { moneyBudgetUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
 
 /**
  * Validate numeric ID parameter
@@ -546,27 +547,18 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 403 })
     }
 
-    let body
+    let rawBody
     try {
-      body = await req.json()
+      rawBody = await req.json()
     } catch (jsonError) {
       return NextResponse.json({ error: "Invalid JSON in request body" }, { status: 400 })
     }
 
-    const { branchId, amountAllocatedCents, setAbsolute, resetAddons, type = "addon" } = body as {
-      branchId: number;
-      amountAllocatedCents: number;
-      type?: "addon" | "monthly";
-      setAbsolute?: boolean;
-      resetAddons?: boolean;
+    const parsedBody = moneyBudgetUpdateSchema.safeParse(rawBody)
+    if (!parsedBody.success) {
+      return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
     }
-    if (!branchId) {
-      return NextResponse.json({ error: "branchId is required" }, { status: 400 })
-    }
-
-    if (amountAllocatedCents === undefined || amountAllocatedCents === null) {
-      return NextResponse.json({ error: "amountAllocatedCents is required" }, { status: 400 })
-    }
+    const { branchId, amountAllocatedCents, setAbsolute, resetAddons, type, reason } = parsedBody.data
 
     // Validate types
     if (typeof branchId !== 'number' || branchId <= 0) {
@@ -609,6 +601,104 @@ export async function PUT(req: NextRequest) {
 
     // Update or create budget for current period
     const currentMonth = new Date().toISOString().slice(0, 7) // YYYY-MM format
+    try {
+      const allocation = await db.transaction(async (tx) => {
+        await tx.insert(budgets).values({
+          organizationId: branch.organizationId,
+          branchId,
+          period: currentMonth,
+          amountAllocatedCents: branch.baselineBudgetCents ?? 0,
+          amountSpentCents: 0,
+          amountHeldCents: 0,
+          amountCreditedCents: 0,
+        }).onConflictDoNothing()
+
+        const [lockedBudget] = await tx
+          .select()
+          .from(budgets)
+          .where(and(eq(budgets.branchId, branchId), eq(budgets.period, currentMonth)))
+          .for('update')
+        if (!lockedBudget) throw new Error("BUDGET_ROW_MISSING")
+
+        const oldAmount = lockedBudget.amountAllocatedCents
+        const oldCredited = lockedBudget.amountCreditedCents
+        const newAllocated = type === "monthly" ? amountAllocatedCents : oldAmount
+        const newCredited = type === "addon"
+          ? (resetAddons ? 0 : oldCredited) + amountAllocatedCents
+          : oldCredited
+        const committed = lockedBudget.amountSpentCents + lockedBudget.amountHeldCents
+        if (newAllocated + newCredited < committed) {
+          throw new Error(`BUDGET_BELOW_COMMITTED:${newAllocated + newCredited}:${committed}`)
+        }
+
+        if (type === "monthly") {
+          await tx.update(branches)
+            .set({ baselineBudgetCents: newAllocated, updatedAt: new Date() })
+            .where(eq(branches.id, branchId))
+        }
+
+        const [updatedBudget] = await tx.update(budgets)
+          .set({
+            amountAllocatedCents: newAllocated,
+            amountCreditedCents: newCredited,
+            updatedAt: new Date(),
+          })
+          .where(eq(budgets.id, lockedBudget.id))
+          .returning()
+
+        if (type === "addon") {
+          await tx.insert(budgetAddons).values({
+            budgetId: updatedBudget.id,
+            amountCents: amountAllocatedCents,
+            reason: reason || "Monthly Add-on Credit",
+            createdByUserId: userId,
+          })
+        }
+
+        await tx.insert(auditLogs).values({
+          userId,
+          organizationId: branch.organizationId,
+          action: type === "monthly" ? "UPDATE_BRANCH_BASELINE" : "ADD_CREDIT",
+          entity: type === "monthly" ? "BRANCH" : "BUDGET",
+          entityId: String(branchId),
+          metadata: {
+            branchName: branch.name,
+            period: currentMonth,
+            oldAmount: oldAmount / 100,
+            newAmount: newAllocated / 100,
+            addedAmount: type === "addon" ? amountAllocatedCents / 100 : undefined,
+          },
+        })
+
+        return { oldAmount, newAllocated, newCredited }
+      })
+
+      return NextResponse.json(type === "monthly" ? {
+        message: "Baseline budget updated successfully",
+        baseline: allocation.newAllocated / 100,
+      } : {
+        message: "Add-on credited successfully",
+        budget: {
+          branchId,
+          branchName: branch.name,
+          period: currentMonth,
+          oldAmount: allocation.oldAmount / 100,
+          newAmount: allocation.newAllocated / 100,
+          newCredited: allocation.newCredited / 100,
+          wasReset: allocation.newAllocated === 0,
+        },
+      })
+    } catch (allocationError: any) {
+      if (String(allocationError?.message || "").startsWith("BUDGET_BELOW_COMMITTED:")) {
+        const [, proposed, committed] = String(allocationError.message).split(":").map(Number)
+        return NextResponse.json({
+          error: `Validation Failed: Total budget (PKR ${(proposed / 100).toFixed(2)}) cannot be less than spent and held commitments (PKR ${(committed / 100).toFixed(2)}).`,
+        }, { status: 400 })
+      }
+      throw allocationError
+    }
+
+    /* istanbul ignore next -- retained temporarily for migration-safe dead code */
     const [budget] = await db
       .select()
       .from(budgets)
@@ -748,7 +838,7 @@ export async function PUT(req: NextRequest) {
       await db.insert(budgetAddons).values({
         budgetId: finalRecord.id,
         amountCents: amountAllocatedCents,
-        reason: body.reason || "Monthly Add-on Credit",
+        reason: reason || "Monthly Add-on Credit",
         createdByUserId: userId,
       })
     }

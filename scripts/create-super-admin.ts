@@ -1,59 +1,81 @@
 /**
- * Create a SUPER_ADMIN user.
- * Usage: npx tsx scripts/create-super-admin.ts <email> <password> [fullName]
+ * Controlled, one-time SUPER_ADMIN bootstrap.
+ *
+ * The password is read only from SUPER_ADMIN_PASSWORD so it is not exposed in
+ * shell history or the process argument list. Remove both bootstrap variables
+ * from the environment immediately after successful use.
  */
 
-import * as dotenv from "dotenv"
-dotenv.config({ path: ".env.local" })
-dotenv.config()
+import bcrypt from 'bcryptjs'
+import { eq } from 'drizzle-orm'
+
+import { auditLogs, roles, users } from '@/db/schema'
+import { db } from '@/lib/db-cli'
+import { loadBootstrapEnv } from '@/lib/server/bootstrap-env'
+
+const CONFIRMATION = '--confirm=CREATE_SUPER_ADMIN'
 
 async function main() {
-  const { db } = await import("../lib/db")
-  const { users, roles } = await import("../db/schema")
-  const { eq } = await import("drizzle-orm")
-  const bcrypt = (await import("bcryptjs")).default
-
-  const [email, password, fullName] = process.argv.slice(2)
-
-  if (!email || !password) {
-    console.error("Usage: npx tsx scripts/create-super-admin.ts <email> <password> [fullName]")
-    process.exit(1)
+  if (!process.argv.includes(CONFIRMATION)) {
+    throw new Error(`Administrator bootstrap requires ${CONFIRMATION}`)
   }
 
+  const bootstrapEnv = loadBootstrapEnv()
   const [superAdminRole] = await db
-    .select()
+    .select({ id: roles.id })
     .from(roles)
-    .where(eq(roles.name, "SUPER_ADMIN"))
+    .where(eq(roles.name, 'SUPER_ADMIN'))
     .limit(1)
 
   if (!superAdminRole) {
-    throw new Error("SUPER_ADMIN role not found — run npm run db:seed first")
+    throw new Error('SUPER_ADMIN role not found; run npm run db:seed first')
   }
 
-  const existing = await db.select().from(users).where(eq(users.email, email)).limit(1)
-  if (existing.length > 0) {
-    console.log(`ℹ️  User already exists: ${email} (id: ${existing[0].id})`)
-    process.exit(0)
+  const [existingAdministrator] = await db
+    .select({ id: users.id })
+    .from(users)
+    .innerJoin(roles, eq(users.roleId, roles.id))
+    .where(eq(roles.name, 'SUPER_ADMIN'))
+    .limit(1)
+
+  if (existingAdministrator) {
+    throw new Error('Administrator bootstrap refused because a SUPER_ADMIN already exists')
   }
 
-  const passwordHash = await bcrypt.hash(password, 10)
+  const passwordHash = await bcrypt.hash(bootstrapEnv.SUPER_ADMIN_PASSWORD, 12)
+  const createdId = await db.transaction(async (transaction) => {
+    const [created] = await transaction
+      .insert(users)
+      .values({
+        email: bootstrapEnv.SUPER_ADMIN_EMAIL,
+        passwordHash,
+        roleId: superAdminRole.id,
+        fullName: 'Super Admin',
+        isActive: true,
+        mustChangePassword: true,
+      })
+      .returning({ id: users.id })
 
-  const [created] = await db
-    .insert(users)
-    .values({
-      email,
-      passwordHash,
-      roleId: superAdminRole.id,
-      fullName: fullName || email.split("@")[0],
-      isActive: true,
+    if (!created) throw new Error('Administrator bootstrap did not create a user')
+
+    await transaction.insert(auditLogs).values({
+      userId: created.id,
+      action: 'SUPER_ADMIN_BOOTSTRAPPED',
+      entity: 'User',
+      entityId: created.id,
+      metadata: { source: 'controlled-one-time-bootstrap' },
     })
-    .returning()
 
-  console.log(`✅ Created super admin: ${created.email} (id: ${created.id})`)
-  process.exit(0)
+    return created.id
+  })
+
+  console.log(`SUPER_ADMIN bootstrap completed for user id ${createdId}.`)
+  console.log('Remove SUPER_ADMIN_EMAIL and SUPER_ADMIN_PASSWORD from the environment now.')
 }
 
-main().catch((error) => {
-  console.error("❌ Failed:", error)
-  process.exit(1)
-})
+main()
+  .then(() => process.exit(0))
+  .catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : 'Administrator bootstrap failed')
+    process.exit(1)
+  })

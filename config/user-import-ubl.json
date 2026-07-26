@@ -1,0 +1,9 @@
+{
+  "organization": "UBL_123A",
+  "branchOverrides": {
+    "Procurment": "Procurement",
+    "Printing & Stationery Department": "Printing & Stationery"
+  },
+  "allowedEmailDomains": ["ubl.com.pk"],
+  "usernameFormat": "first.last"
+}

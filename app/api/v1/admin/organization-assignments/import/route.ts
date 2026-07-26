@@ -1,108 +1,41 @@
-"use server"
-
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
+import { and, eq, inArray } from "drizzle-orm"
+
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
-import { globalProducts, organizationInventory, auditLogs } from "@/db/schema"
-import { eq, inArray, and, isNull } from "drizzle-orm"
+import {
+  auditLogs,
+  globalProducts,
+  organizationInventory,
+  organizations,
+} from "@/db/schema"
+import { withRateLimit } from "@/lib/rate-limiter"
+import { readStrictCsvFile } from "@/lib/server/csv-import"
+
+const ALLOWED_HEADERS = [
+  "productcode",
+  "customprice",
+  "customname",
+  "customdescription",
+  "isactive",
+] as const
 
 type ParsedRow = {
+  rowNumber: number
   productCode: string
-  customPrice?: number | null
-  customName?: string | null
-  customDescription?: string | null
+  customPrice: number | null
+  customName: string | null
+  customDescription: string | null
   isActive?: boolean
 }
 
-const REQUIRED_HEADERS = ["productcode"]
-
-function parseCsv(content: string) {
-  const lines = content
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-
-  if (lines.length === 0) {
-    throw new Error("CSV file is empty")
-  }
-
-  const headers = lines
-    .shift()!
-    .split(",")
-    .map((header) => header.trim().toLowerCase())
-
-  const missingHeaders = REQUIRED_HEADERS.filter(
-    (header) => !headers.includes(header)
-  )
-  if (missingHeaders.length > 0) {
-    throw new Error(
-      `Missing required headers: ${missingHeaders.join(", ")}`
-    )
-  }
-
-  const headerIndex = (name: string) =>
-    headers.indexOf(name.toLowerCase())
-
-  const rows: ParsedRow[] = []
-  const errors: string[] = []
-
-  lines.forEach((line, index) => {
-    const cols = line.split(",").map((col) => col.trim())
-    const rowNumber = index + 2 // account for header line
-    const productCodeIdx = headerIndex("productcode")
-    const customPriceIdx = headerIndex("customprice")
-    const customNameIdx = headerIndex("customname")
-    const customDescriptionIdx = headerIndex("customdescription")
-    const isActiveIdx = headerIndex("isactive")
-
-    if (productCodeIdx === -1) {
-      return
-    }
-
-    const productCode = cols[productCodeIdx]
-    if (!productCode) {
-      errors.push(`Row ${rowNumber}: productCode is required`)
-      return
-    }
-
-    const parsedRow: ParsedRow = {
-      productCode: productCode.toUpperCase(),
-    }
-
-    if (customPriceIdx !== -1) {
-      const priceValue = cols[customPriceIdx]
-      if (priceValue) {
-        const parsedPrice = Number(priceValue)
-        if (Number.isNaN(parsedPrice)) {
-          errors.push(`Row ${rowNumber}: invalid customPrice "${priceValue}"`)
-        } else {
-          parsedRow.customPrice = Math.round(parsedPrice * 100)
-        }
-      }
-    }
-
-    if (customNameIdx !== -1) {
-      parsedRow.customName = cols[customNameIdx] || null
-    }
-
-    if (customDescriptionIdx !== -1) {
-      parsedRow.customDescription = cols[customDescriptionIdx] || null
-    }
-
-    if (isActiveIdx !== -1) {
-      const value = cols[isActiveIdx]?.toLowerCase()
-      if (value === "true" || value === "1") {
-        parsedRow.isActive = true
-      } else if (value === "false" || value === "0") {
-        parsedRow.isActive = false
-      }
-    }
-
-    rows.push(parsedRow)
-  })
-
-  return { rows, errors }
+function parseOptionalBoolean(value: string): boolean | null | undefined {
+  const normalized = value.trim().toLowerCase()
+  if (!normalized) return undefined
+  if (["true", "yes", "1"].includes(normalized)) return true
+  if (["false", "no", "0"].includes(normalized)) return false
+  return null
 }
 
 export async function POST(req: NextRequest) {
@@ -112,134 +45,187 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
+    const userId = (session.user as any).id as string
     if ((session.user as any).role !== "SUPER_ADMIN") {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
 
+    const rateLimit = await withRateLimit("import", userId)
+    if (rateLimit) return rateLimit
+
     const formData = await req.formData()
     const file = formData.get("file")
     const organizationIdValue = formData.get("organizationId")
-    const isActiveValue = formData.get("isActive")
+    const defaultIsActiveValue = String(formData.get("isActive") ?? "")
 
     if (!file || !(file instanceof File)) {
       return NextResponse.json({ error: "CSV file is required" }, { status: 400 })
     }
 
-    if (!organizationIdValue) {
-      return NextResponse.json({ error: "organizationId is required" }, { status: 400 })
+    const organizationId = Number(organizationIdValue)
+    if (!Number.isInteger(organizationId) || organizationId <= 0) {
+      return NextResponse.json({ error: "A valid organizationId is required" }, { status: 400 })
     }
 
-    const organizationId = parseInt(String(organizationIdValue))
-    if (!Number.isFinite(organizationId)) {
-      return NextResponse.json({ error: "Invalid organizationId" }, { status: 400 })
+    const defaultIsActive = parseOptionalBoolean(defaultIsActiveValue)
+    if (defaultIsActive === null) {
+      return NextResponse.json({ error: "isActive must be true or false" }, { status: 400 })
     }
 
-    const defaultIsActive =
-      typeof isActiveValue === "string"
-        ? !(isActiveValue.toLowerCase() === "false" || isActiveValue === "0")
-        : true
-
-    const fileContent = await file.text()
-    const { rows, errors: parsingErrors } = parseCsv(fileContent)
-
-    if (rows.length === 0) {
+    let records: Array<Record<string, string>>
+    try {
+      records = await readStrictCsvFile(file, {
+        requiredHeaders: ["productcode"],
+        allowedHeaders: ALLOWED_HEADERS,
+      })
+    } catch (error) {
       return NextResponse.json(
-        { error: "No valid rows found in CSV", details: parsingErrors },
-        { status: 400 }
+        { error: error instanceof Error ? error.message : "Invalid CSV file" },
+        { status: 400 },
       )
     }
 
-    const productCodes = Array.from(new Set(rows.map((row) => row.productCode)))
-    const products = await db
-      .select({
-        id: globalProducts.id,
-        productCode: globalProducts.productCode,
-      })
-      .from(globalProducts)
-      .where(inArray(globalProducts.productCode, productCodes))
+    const validationErrors: Array<{ row: number; errors: string[] }> = []
+    const parsedRows: ParsedRow[] = []
+    const seenCodes = new Set<string>()
 
-    const productMap = new Map(products.map((product) => [product.productCode.toUpperCase(), product]))
-    const missingProducts = productCodes.filter((code) => !productMap.has(code))
+    records.forEach((record, index) => {
+      const rowNumber = index + 2
+      const errors: string[] = []
+      const productCode = record.productcode.trim().toUpperCase()
+      const customName = record.customname?.trim() || null
+      const customDescription = record.customdescription?.trim() || null
+      const rawPrice = record.customprice?.trim() || ""
+      const isActive = parseOptionalBoolean(record.isactive ?? "")
 
-    const validRows = rows.filter((row) => productMap.has(row.productCode))
-    if (validRows.length === 0) {
-      return NextResponse.json(
-        { error: "No matching products found for provided codes", missingProducts, parsingErrors },
-        { status: 400 }
-      )
-    }
+      if (!productCode || productCode.length > 128) {
+        errors.push("productCode is required and must be at most 128 characters")
+      }
+      if (seenCodes.has(productCode)) errors.push("productCode is duplicated in this file")
+      seenCodes.add(productCode)
+      if (customName && customName.length > 255) errors.push("customName must be at most 255 characters")
+      if (customDescription && customDescription.length > 10_000) {
+        errors.push("customDescription must be at most 10,000 characters")
+      }
+      if (isActive === null) errors.push("isActive must be true/false, yes/no, or 1/0")
 
-    const productIds = validRows.map((row) => productMap.get(row.productCode)!.id)
-    const existingAssignments = await db
-      .select({
-        globalProductId: organizationInventory.globalProductId,
-      })
-      .from(organizationInventory)
-      .where(
-        and(
-          eq(organizationInventory.organizationId, organizationId),
-          inArray(organizationInventory.globalProductId, productIds),
-          isNull(organizationInventory.deletedAt)
-        )
-      )
-
-    const existingProductIds = new Set(existingAssignments.map((assignment) => assignment.globalProductId))
-    const assignmentsToInsert = validRows
-      .filter((row) => {
-        const product = productMap.get(row.productCode)
-        return product && !existingProductIds.has(product.id)
-      })
-      .map((row) => {
-        const product = productMap.get(row.productCode)!
-        return {
-          globalProductId: product.id,
-          organizationId,
-          assignedByUserId: (session.user as any).id,
-          isActive: row.isActive ?? defaultIsActive,
-          customName: row.customName ?? null,
-          customPrice: typeof row.customPrice === "number" ? row.customPrice : null,
-          customDescription: row.customDescription ?? null,
-          customImageUrl: null,
+      let customPrice: number | null = null
+      if (rawPrice) {
+        customPrice = Math.round(Number(rawPrice) * 100)
+        if (
+          !/^\d+(?:\.\d{1,2})?$/.test(rawPrice) ||
+          !Number.isSafeInteger(customPrice) ||
+          customPrice < 0
+        ) {
+          errors.push("customPrice must be a non-negative number with at most two decimal places")
         }
-      })
+      }
 
-    if (assignmentsToInsert.length === 0) {
+      if (errors.length > 0) {
+        validationErrors.push({ row: rowNumber, errors })
+        return
+      }
+
+      parsedRows.push({
+        rowNumber,
+        productCode,
+        customPrice,
+        customName,
+        customDescription,
+        isActive: isActive ?? defaultIsActive ?? true,
+      })
+    })
+
+    if (validationErrors.length > 0) {
       return NextResponse.json({
-        error: "All products in CSV are already assigned to this organization",
-        missingProducts,
-        parsingErrors,
-        alreadyAssigned: Array.from(existingProductIds),
+        error: "CSV validation failed; no assignments were imported",
+        validationErrors: validationErrors.slice(0, 50),
       }, { status: 400 })
     }
 
-    const inserted = await db
-      .insert(organizationInventory)
-      .values(assignmentsToInsert)
-      .returning()
+    const [organization] = await db
+      .select({ id: organizations.id })
+      .from(organizations)
+      .where(eq(organizations.id, organizationId))
+      .limit(1)
+    if (!organization) {
+      return NextResponse.json({ error: "Organization not found" }, { status: 404 })
+    }
 
-    await db.insert(auditLogs).values({
-      userId: (session.user as any).id,
-      action: "CREATE",
-      entity: "OrganizationAssignmentImport",
-      entityId: inserted.map((row) => row.id).join(","),
-      metadata: {
-        organizationId,
-        importedCount: inserted.length,
-        skippedCount: existingProductIds.size,
+    const productCodes = parsedRows.map((row) => row.productCode)
+    const products = await db
+      .select({ id: globalProducts.id, productCode: globalProducts.productCode })
+      .from(globalProducts)
+      .where(inArray(globalProducts.productCode, productCodes))
+    const productMap = new Map(products.map((product) => [product.productCode.toUpperCase(), product]))
+    const missingProducts = productCodes.filter((code) => !productMap.has(code))
+    if (missingProducts.length > 0) {
+      return NextResponse.json({
+        error: "Some product codes were not found; no assignments were imported",
         missingProducts,
-      },
+      }, { status: 400 })
+    }
+
+    const productIds = parsedRows.map((row) => productMap.get(row.productCode)!.id)
+    const existingAssignments = await db
+      .select({ globalProductId: organizationInventory.globalProductId })
+      .from(organizationInventory)
+      .where(and(
+        eq(organizationInventory.organizationId, organizationId),
+        inArray(organizationInventory.globalProductId, productIds),
+      ))
+    if (existingAssignments.length > 0) {
+      const existingIds = new Set(existingAssignments.map((assignment) => assignment.globalProductId))
+      const alreadyAssigned = parsedRows
+        .filter((row) => existingIds.has(productMap.get(row.productCode)!.id))
+        .map((row) => row.productCode)
+      return NextResponse.json({
+        error: "Some products are already assigned or archived for this organization; no assignments were imported",
+        alreadyAssigned,
+      }, { status: 409 })
+    }
+
+    const inserted = await db.transaction(async (tx) => {
+      const assignments = await tx
+        .insert(organizationInventory)
+        .values(parsedRows.map((row) => ({
+          globalProductId: productMap.get(row.productCode)!.id,
+          organizationId,
+          assignedByUserId: userId,
+          isActive: row.isActive ?? true,
+          customName: row.customName,
+          customPrice: row.customPrice,
+          customDescription: row.customDescription,
+          customImageUrl: null,
+        })))
+        .returning()
+
+      await tx.insert(auditLogs).values({
+        userId,
+        action: "CREATE",
+        entity: "OrganizationAssignmentImport",
+        entityId: assignments.map((row) => row.id).join(","),
+        metadata: {
+          organizationId,
+          importedCount: assignments.length,
+          fileName: file.name,
+        },
+      })
+
+      return assignments
     })
 
     return NextResponse.json({
       message: `Imported ${inserted.length} products successfully`,
       imported: inserted.length,
-      skippedExisting: existingProductIds.size,
-      missingProducts,
-      parsingErrors,
+      skippedExisting: 0,
+      missingProducts: [],
     })
-  } catch (error: any) {
+  } catch (error) {
     console.error("Error importing assignments:", error)
-    return NextResponse.json({ error: error.message || "Internal Server Error" }, { status: 500 })
+    return NextResponse.json(
+      { error: "Import failed; no assignments were committed" },
+      { status: 500 },
+    )
   }
 }
-

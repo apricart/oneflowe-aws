@@ -5,7 +5,7 @@ dotenv.config()
 const ORG_ID = 10 // K-Electric
 
 async function main() {
-  const { db } = await import("../lib/db")
+  const { db } = await import("../lib/db-cli")
   const {
     organizations,
     branches,

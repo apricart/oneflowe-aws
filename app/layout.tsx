@@ -41,24 +41,7 @@ export default function RootLayout({
         <link rel="shortcut icon" href="/logo-web.png" type="image/png" />
         <link rel="apple-touch-icon" href="/logo-web.png" />
         <meta name="theme-color" content="#1e3a8a" />
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `
-              (function() {
-                try {
-                  const theme = localStorage.getItem('theme') || 'system';
-                  const isDark = theme === 'dark' || 
-                    (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-                  if (isDark) {
-                    document.documentElement.classList.add('dark');
-                  } else {
-                    document.documentElement.classList.remove('dark');
-                  }
-                } catch (e) {}
-              })();
-            `,
-          }}
-        />
+        <script src="/theme-init.js" />
       </head>
       <body className={`font-sans ${inter.variable} ${jetbrainsMono.variable} selection:bg-indigo-100 selection:text-indigo-900`} suppressHydrationWarning>
         <ThemeProvider>

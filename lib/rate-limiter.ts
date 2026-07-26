@@ -6,6 +6,8 @@
 import { redis } from "@/lib/redis"
 import { NextResponse } from "next/server"
 import { headers } from "next/headers"
+import { env } from "@/lib/server/env"
+import { resolveTrustedClientIp } from "@/lib/security/client-ip"
 
 // Rate limit configurations for different endpoint types
 const RATE_LIMITS = {
@@ -23,9 +25,32 @@ const RATE_LIMITS = {
 
     // Write operations (POST/PUT/DELETE)
     write: { requests: 50, windowSeconds: 60 },          // 50 per minute
+
+    // OTP and resource-heavy endpoints
+    otpSend: { requests: 5, windowSeconds: 60 * 15 },    // 5 per 15 minutes
+    otpVerify: { requests: 10, windowSeconds: 60 * 10 }, // 10 per 10 minutes
+    upload: { requests: 20, windowSeconds: 60 * 60 },    // 20 per hour
+    import: { requests: 5, windowSeconds: 60 * 10 },     // 5 per 10 minutes
+    report: { requests: 10, windowSeconds: 60 * 10 },    // 10 per 10 minutes
+    order: { requests: 20, windowSeconds: 60 },           // 20 per minute
+    refund: { requests: 10, windowSeconds: 60 * 10 },    // 10 per 10 minutes
+    email: { requests: 5, windowSeconds: 60 * 10 },      // 5 per 10 minutes
 } as const
 
 export type RateLimitType = keyof typeof RATE_LIMITS
+
+const FAIL_CLOSED_RATE_LIMITS = new Set<RateLimitType>([
+    "login",
+    "sensitive",
+    "otpSend",
+    "otpVerify",
+    "upload",
+    "import",
+    "report",
+    "order",
+    "refund",
+    "email",
+])
 
 // Validate rate limit configuration on startup
 Object.entries(RATE_LIMITS).forEach(([key, config]) => {
@@ -58,43 +83,22 @@ export async function getClientIdentifier(userId?: string): Promise<string> {
         }
 
         const headersList = await headers()
+        const cloudFrontViewerAddress = headersList.get("cloudfront-viewer-address")
         const forwardedFor = headersList.get("x-forwarded-for")
         const realIp = headersList.get("x-real-ip")
 
-        // Parse forwarded-for header (may contain multiple IPs)
-        let ip = "unknown"
-        if (forwardedFor) {
-            const ips = forwardedFor.split(",").map(ip => ip.trim())
-            ip = ips[0] || "unknown"
-        } else if (realIp) {
-            ip = realIp.trim()
-        }
-
-        // Validate IP format (basic check)
-        if (ip !== "unknown" && !isValidIP(ip)) {
-            console.warn(`[RateLimit] Invalid IP detected: ${ip}`)
-            ip = "unknown"
-        }
+        const ip = resolveTrustedClientIp({
+            cloudFrontViewerAddress,
+            forwardedFor,
+            realIp,
+            trustedProxyHops: env.RATE_LIMIT_TRUST_PROXY_HOPS,
+        })
 
         return `ip:${ip}`
     } catch (error) {
         console.error('[RateLimit] Error getting client identifier:', error)
         return 'ip:unknown'
     }
-}
-
-/**
- * Basic IP validation (supports IPv4 and basic IPv6)
- */
-function isValidIP(ip: string): boolean {
-    // IPv4-mapped IPv6 pattern (e.g., ::ffff:127.0.0.1)
-    const ipv4MappedIpv6Pattern = /^::ffff:(\d{1,3}\.){3}\d{1,3}$/
-    // IPv4 pattern
-    const ipv4Pattern = /^(\d{1,3}\.){3}\d{1,3}$/
-    // Basic IPv6 pattern (simplified)
-    const ipv6Pattern = /^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}$/
-
-    return ipv4Pattern.test(ip) || ipv6Pattern.test(ip) || ipv4MappedIpv6Pattern.test(ip)
 }
 
 /**
@@ -147,14 +151,15 @@ export async function checkRateLimit(
             resetIn: validTTL
         }
     } catch (error: any) {
-        // If Redis fails, allow the request but log the error gracefully
+        const failClosed = FAIL_CLOSED_RATE_LIMITS.has(type)
         if (error.message?.includes('WRONGPASS') || error.message?.includes('unauthorized')) {
-            console.warn("[RateLimit] Redis authentication failed. Please check UPSTASH_REDIS_REST_TOKEN. Allowing request (fail-open).")
+            console.warn(`[RateLimit] Redis authentication failed for ${type} limiter.`)
         } else {
             console.error("[RateLimit] Rate limit check failed:", error)
         }
-        // Return permissive values to avoid blocking legitimate traffic during Redis outage
-        return { allowed: true, remaining: 0, resetIn: 0 }
+        return failClosed
+            ? { allowed: false, remaining: 0, resetIn: 60 }
+            : { allowed: true, remaining: 0, resetIn: 0 }
     }
 }
 

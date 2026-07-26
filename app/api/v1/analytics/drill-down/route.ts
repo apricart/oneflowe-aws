@@ -6,6 +6,7 @@ import { orders, users, orderItems, branches, organizations, refundItems, refund
 import { getRequestScope } from "@/lib/auth"
 import { redactAnalyticsPrices, shouldHidePricesForRole } from "@/lib/price-visibility"
 import { parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
+import { resolveDrillDownSortColumn } from "@/lib/server/drill-down-sort"
 
 const allowedRoles = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"] as const
 
@@ -38,7 +39,7 @@ export async function GET(req: NextRequest) {
     const parsedCompMonths = compareMonthsRaw ? compareMonthsRaw.split(',').map(Number).filter((n: any) => !isNaN(n) && n >= 1 && n <= 12) : []
     const parsedCompYears = compareYearsRaw ? compareYearsRaw.split(',').map(Number).filter((n: any) => !isNaN(n) && n > 2000) : []
     const refundType = searchParams.get("refundType")?.toLowerCase() // all, full, partial
-    const sortBy = searchParams.get("sortBy")?.toLowerCase() === "value" ? "value" : "date"
+    const sortColumn = resolveDrillDownSortColumn(searchParams.get("sortBy"))
     if (!type || !["REVENUE", "REJECTED", "FULFILLED", "ORDERS", "REFUNDED", "PENDING", "APPROVED", "PARTIAL", "DELIVERED", "NOT_DELIVERED"].includes(type)) {
         return error("Invalid or missing drill-down type")
     }
@@ -232,7 +233,7 @@ export async function GET(req: NextRequest) {
             .leftJoin(organizations, eq(orders.organizationId, organizations.id))
             .leftJoin(users, eq(orders.createdByUserId, users.id))
             .where(whereClause)
-            .orderBy(sortBy === "value" ? desc(orders.totalCents) : desc(orders.createdAt))
+            .orderBy(desc(sortColumn))
             .limit(1000) // Increase limit for aggregation accuracy
 
         // Fetch order items & refunds in bulk for the top 100 display items

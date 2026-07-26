@@ -6,6 +6,7 @@ import { organizationProducts, globalProducts, auditLogs, branchInventory, branc
 import { eq, and, sql, inArray, exists } from "drizzle-orm"
 import { getCached, invalidateByPrefix, scopedCacheKey, CACHE_TTL } from "@/lib/cache-utils"
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
+import { organizationProductUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
 
 // GET /api/v1/inventory/organization-products - Get products for organization
 export async function GET(req: NextRequest) {
@@ -126,7 +127,7 @@ export async function GET(req: NextRequest) {
           )
       }
 
-      const rows = await query.where(and(...whereConditions))
+      const rows = await query.where(and(...whereConditions)).limit(1000)
       return pricesHidden
         ? rows.map((item) => ({ ...item, basePrice: null, customPrice: null }))
         : rows
@@ -152,12 +153,13 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
 
-    const body = await req.json()
-    const { organizationProductId, isEnabled, customName, customDescription, customPrice, customImageUrl, tags, priority } = body
-
-    if (!organizationProductId) {
-      return NextResponse.json({ error: "Organization product ID is required" }, { status: 400 })
+    const rawBody = await req.json().catch(() => null)
+    const parsedBody = organizationProductUpdateSchema.safeParse(rawBody)
+    if (!parsedBody.success) {
+      return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
     }
+    const input = parsedBody.data
+    const { organizationProductId, isEnabled, customName, customDescription, customPrice, customImageUrl, tags, priority } = input
 
     // BOLA: Scope update to user's organization for non-SUPER_ADMIN
     const userOrgId = (session.user as any).organizationId
@@ -171,13 +173,13 @@ export async function PUT(req: NextRequest) {
     // Update organization product with ownership scope
     const [updated] = await db.update(organizationProducts)
       .set({
-        ...(isEnabled !== undefined && { isEnabled }),
-        ...(customName !== undefined && { customName }),
-        ...(customDescription !== undefined && { customDescription }),
-        ...(customPrice !== undefined && { customPrice }),
-        ...(customImageUrl !== undefined && { customImageUrl }),
-        ...(tags !== undefined && { tags }),
-        ...(priority !== undefined && { priority }),
+        isEnabled,
+        customName,
+        customDescription,
+        customPrice,
+        customImageUrl,
+        tags,
+        priority,
         updatedByUserId: (session.user as any).id,
         updatedAt: new Date()
       })
@@ -196,7 +198,7 @@ export async function PUT(req: NextRequest) {
       action: "update_org_product",
       entity: "organization_products",
       entityId: organizationProductId.toString(),
-      metadata: { changes: body }
+      metadata: { changedFields: Object.keys(input) }
     })
 
     // Invalidate inventory caches so data refreshes immediately

@@ -76,6 +76,7 @@ export async function GET(req: NextRequest) {
         }).from(globalProducts)
           .where(and(...conditions))
           .orderBy(globalProducts.name)
+          .limit(1000)
 
         return NextResponse.json({ items })
     } catch (error) {

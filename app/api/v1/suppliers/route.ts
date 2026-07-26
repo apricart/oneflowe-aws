@@ -1,8 +1,9 @@
 import { ok, error, readJson, requireApiRole } from "@/lib/api"
 import { db } from "@/lib/db"
-import { suppliers } from "@/db/schema"
+import { branches, suppliers } from "@/db/schema"
 import { and, desc, eq } from "drizzle-orm"
 import { getRequestScope } from "@/lib/auth"
+import { supplierCreateSchema, validationMessage } from "@/lib/server/mutation-validation"
 
 export async function GET(req: Request) {
   const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE"])
@@ -29,6 +30,7 @@ export async function GET(req: Request) {
       .from(suppliers)
       .where(where.length ? and(...where) : (undefined as any))
       .orderBy(desc(suppliers.createdAt))
+      .limit(500)
     return ok({ items })
   } catch (e: any) {
     if (e?.code === '42P01') {
@@ -42,20 +44,36 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE"])
   if (err) return err
-  const body = await readJson<any>(req)
-  if (!body?.organizationId || !body?.branchId || !body?.name) {
-    return error("organizationId, branchId, name are required", 400)
+  const rawBody = await readJson<unknown>(req)
+  const parsedBody = supplierCreateSchema.safeParse(rawBody)
+  if (!parsedBody.success) return error(validationMessage(parsedBody.error), 400)
+  const input = parsedBody.data
+
+  const scope = await getRequestScope()
+  if (scope?.role === "HEAD_OFFICE" && input.organizationId !== scope.organizationId) {
+    return error("You can only create suppliers in your organization", 403)
   }
+
+  const [branch] = await db
+    .select({ id: branches.id })
+    .from(branches)
+    .where(and(
+      eq(branches.id, input.branchId),
+      eq(branches.organizationId, input.organizationId),
+    ))
+    .limit(1)
+  if (!branch) return error("Branch does not belong to the selected organization", 400)
+
   const [item] = await db
     .insert(suppliers)
     .values({
-      organizationId: Number(body.organizationId),
-      branchId: Number(body.branchId),
-      name: String(body.name),
-      address: body.address ? String(body.address) : null,
-      contact: body.contact ? String(body.contact) : null,
-      email: body.email ? String(body.email) : null,
-      description: body.description ? String(body.description) : null,
+      organizationId: input.organizationId,
+      branchId: input.branchId,
+      name: input.name,
+      address: input.address ?? null,
+      contact: input.contact ?? null,
+      email: input.email ?? null,
+      description: input.description ?? null,
     })
     .returning()
   return ok({ item }, { status: 201 })

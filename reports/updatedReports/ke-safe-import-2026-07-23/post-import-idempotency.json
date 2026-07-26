@@ -1,0 +1,1251 @@
+{
+  "generatedAt": "2026-07-23T08:43:41.586Z",
+  "mode": "DRY_RUN",
+  "organization": {
+    "id": 10,
+    "code": "0001",
+    "name": "K-Electric",
+    "status": "active"
+  },
+  "manifestDigest": "3a0e8217b1406aac86bca6cb5b9efe2a461086041e44667bf6a4e70c7185fd02",
+  "manifest": {
+    "orders": {
+      "path": "C:\\Users\\ESHOP\\Desktop\\uzair\\OneFlowe\\reports\\updatedReports\\ke-safe-import-2026-07-23\\reports\\order.json",
+      "sha256": "8717c6acc1319e5003b79ad796dcebbfe36e27112971e84947e2d2cd7e87f583",
+      "bytes": 62299
+    },
+    "sales": {
+      "path": "C:\\Users\\ESHOP\\Desktop\\uzair\\OneFlowe\\reports\\updatedReports\\ke-safe-import-2026-07-23\\reports\\sales-report.json",
+      "sha256": "d1e98bd5e330c7a731392b9af60c070ecb0ad7943d91e08df25e060268d93282",
+      "bytes": 718900
+    },
+    "productSummary": {
+      "path": "C:\\Users\\ESHOP\\Desktop\\uzair\\OneFlowe\\reports\\updatedReports\\ke-safe-import-2026-07-23\\reports\\user-product-summary-report.json",
+      "sha256": "71ac3b326b6fdbca5e5819e2941daf26fd060be7d5f0810ccc01d8cc5976c595",
+      "bytes": 3898801
+    },
+    "priceHistory": {
+      "path": "C:\\Users\\ESHOP\\Desktop\\uzair\\OneFlowe\\reports\\updatedReports\\ke-safe-import-2026-07-23\\reports\\item-price-history-report.json",
+      "sha256": "71fe08f898d5e0b560049c5212ae058434ada0081fa19048356922663fbc6b71",
+      "bytes": 589481
+    },
+    "overrides": {
+      "path": "C:\\Users\\ESHOP\\Desktop\\uzair\\OneFlowe\\config\\ke-legacy-import-overrides.json",
+      "sha256": "bc10b2698ca55ea26ea0822dbf3e84af14e8c804d75214068c38af22c728edc5",
+      "bytes": 155
+    }
+  },
+  "sourceCounts": {
+    "orders": 51,
+    "salesLines": 505,
+    "productSummaryRows": 6741,
+    "priceHistoryRows": 2753
+  },
+  "financiallySafeOrders": 51,
+  "exclusions": {},
+  "readyOrderIds": [],
+  "historicalUsers": [],
+  "products": [
+    {
+      "normalizedName": "test 1",
+      "sourceName": "TEST 1",
+      "sourceCodes": [
+        "25194376948168"
+      ],
+      "latestPriceCents": 2200,
+      "globalProductId": 193,
+      "organizationInventoryId": 203,
+      "existingProductCode": "PRD--48",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "nestle everyday (2 kg)",
+      "sourceName": "Nestle Everyday (2 KG)",
+      "sourceCodes": [
+        "16754200496574",
+        "APRA-MP02-11"
+      ],
+      "latestPriceCents": 385000,
+      "globalProductId": 200,
+      "organizationInventoryId": 210,
+      "existingProductCode": "PRD--55",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "tapal danedar teabags (600 pcs)",
+      "sourceName": "Tapal Danedar Teabags (600 PCS)",
+      "sourceCodes": [
+        "20509291975962",
+        "97708711533289",
+        "APRA-T07-03"
+      ],
+      "latestPriceCents": 335000,
+      "globalProductId": 195,
+      "organizationInventoryId": 205,
+      "existingProductCode": "PRD--50",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "sugar (01 kg)",
+      "sourceName": "Sugar (01 KG)",
+      "sourceCodes": [
+        "22241050269463",
+        "53355451239898",
+        "APRA-OB05-01"
+      ],
+      "latestPriceCents": 19500,
+      "globalProductId": 182,
+      "organizationInventoryId": 192,
+      "existingProductCode": "PRD--37",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "english biscuit factory (half roll)",
+      "sourceName": "English Biscuit Factory (Half Roll)",
+      "sourceCodes": [
+        "16213429220649",
+        "42364841141157",
+        "7003148853789"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 213,
+      "organizationInventoryId": 223,
+      "existingProductCode": "PRD--68",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "rose petal pop-up (1pcs)",
+      "sourceName": "Rose Petal Pop-Up (1pcs)",
+      "sourceCodes": [
+        "25861846070277",
+        "36162009132182",
+        "APRA-HS02-14"
+      ],
+      "latestPriceCents": 22500,
+      "globalProductId": 202,
+      "organizationInventoryId": 212,
+      "existingProductCode": "PRD--57",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "biscuits peak freens (halfroll)",
+      "sourceName": "Biscuits Peak Freens (Halfroll)",
+      "sourceCodes": [
+        "55577036520631",
+        "APRA-BC34-10"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 199,
+      "organizationInventoryId": 209,
+      "existingProductCode": "PRD--54",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "biscuits lu prince (halfroll)",
+      "sourceName": "Biscuits LU prince (Halfroll)",
+      "sourceCodes": [
+        "56067245585361",
+        "64085577575769",
+        "APRA-BC44-02"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 198,
+      "organizationInventoryId": 208,
+      "existingProductCode": "PRD--53",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "nestle everyday (1 kg)",
+      "sourceName": "Nestle Everyday (1 KG)",
+      "sourceCodes": [
+        "35271411689713",
+        "59765152510283",
+        "96298002532190",
+        "APRA-MP02-10"
+      ],
+      "latestPriceCents": 204000,
+      "globalProductId": 186,
+      "organizationInventoryId": 196,
+      "existingProductCode": "PRD--41",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "tapal danedar teabags (100 pcs)",
+      "sourceName": "Tapal Danedar Teabags (100 PCS)",
+      "sourceCodes": [
+        "34009983510254",
+        "APRA-T01-12"
+      ],
+      "latestPriceCents": 92500,
+      "globalProductId": 188,
+      "organizationInventoryId": 198,
+      "existingProductCode": "PRD--43",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "mug (6 pcs)",
+      "sourceName": "Mug (6 Pcs)",
+      "sourceCodes": [
+        "APRA-DS01-05"
+      ],
+      "latestPriceCents": 170000,
+      "globalProductId": 184,
+      "organizationInventoryId": 194,
+      "existingProductCode": "PRD--39",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "motein spray insert killer triple action (375ml)",
+      "sourceName": "Motein Spray Insert Killer Triple Action (375ml)",
+      "sourceCodes": [
+        "APR-IK05-01"
+      ],
+      "latestPriceCents": 85000,
+      "globalProductId": 171,
+      "organizationInventoryId": 181,
+      "existingProductCode": "PRD--26",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "sprite can (250 ml)",
+      "sourceName": "Sprite Can (250 ML)",
+      "sourceCodes": [
+        "APRA-BG47-07"
+      ],
+      "latestPriceCents": 10500,
+      "globalProductId": 176,
+      "organizationInventoryId": 186,
+      "existingProductCode": "PRD--31",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "coke can (250 ml)",
+      "sourceName": "Coke Can (250 ML)",
+      "sourceCodes": [
+        "APRA-BG06-06"
+      ],
+      "latestPriceCents": 10500,
+      "globalProductId": 181,
+      "organizationInventoryId": 191,
+      "existingProductCode": "PRD--36",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "max dishwash soap (85 gm)",
+      "sourceName": "Max Dishwash Soap (85 GM)",
+      "sourceCodes": [
+        "15865330379071",
+        "91756016452067",
+        "APRA-CN44-09"
+      ],
+      "latestPriceCents": 3200,
+      "globalProductId": 174,
+      "organizationInventoryId": 184,
+      "existingProductCode": "PRD--29",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "biscuits marrie, butter puff & lemon biscuits (half roll)",
+      "sourceName": "Biscuits Marrie, Butter Puff & Lemon Biscuits(Half Roll)",
+      "sourceCodes": [
+        "33525831379842"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 211,
+      "organizationInventoryId": 221,
+      "existingProductCode": "PRD--66",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "party pack tissues (1pcs)",
+      "sourceName": "Party pack Tissues (1pcs)",
+      "sourceCodes": [
+        "APRA-HS14-21"
+      ],
+      "latestPriceCents": 24500,
+      "globalProductId": 234,
+      "organizationInventoryId": 244,
+      "existingProductCode": "PRD--89",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "maxob toilet roll 8+2 (10 rolls)",
+      "sourceName": "Maxob Toilet Roll 8+2 (10 Rolls)",
+      "sourceCodes": [
+        "APRA-HS02-18"
+      ],
+      "latestPriceCents": 95000,
+      "globalProductId": 230,
+      "organizationInventoryId": 240,
+      "existingProductCode": "PRD--85",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "tapal green tea bags (30 pcs)",
+      "sourceName": "Tapal Green Tea Bags (30 PCS)",
+      "sourceCodes": [
+        "18641979585235",
+        "APRA-T01-03"
+      ],
+      "latestPriceCents": 25000,
+      "globalProductId": 191,
+      "organizationInventoryId": 201,
+      "existingProductCode": "PRD--46",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "olpers milk powder (800 gm)",
+      "sourceName": "Olpers Milk Powder (800 GM)",
+      "sourceCodes": [
+        "11453743021636",
+        "APRA-MP08-02"
+      ],
+      "latestPriceCents": 208000,
+      "globalProductId": 215,
+      "organizationInventoryId": 225,
+      "existingProductCode": "PRD--70",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "klassno classic coffee (100gm)",
+      "sourceName": "Klassno Classic Coffee (100gm)",
+      "sourceCodes": [
+        "26956021274377",
+        "296616358241"
+      ],
+      "latestPriceCents": 170000,
+      "globalProductId": 224,
+      "organizationInventoryId": 234,
+      "existingProductCode": "PRD--79",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "tapal cardamom teabags (30 pcs)",
+      "sourceName": "Tapal Cardamom Teabags (30 pcs)",
+      "sourceCodes": [
+        "48864546495314",
+        "84796939985835"
+      ],
+      "latestPriceCents": 25000,
+      "globalProductId": 216,
+      "organizationInventoryId": 226,
+      "existingProductCode": "PRD--71",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "cell-toshiba (aa)1pc",
+      "sourceName": "Cell - Toshiba(AA) 1pc",
+      "sourceCodes": [
+        "17563913855121",
+        "9119069939284"
+      ],
+      "latestPriceCents": 4900,
+      "globalProductId": 241,
+      "organizationInventoryId": 251,
+      "existingProductCode": "PRD--96",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "cell-toshiba (aaa)1pc",
+      "sourceName": "Cell - Toshiba(AAA) 1pc",
+      "sourceCodes": [
+        "40619034074043",
+        "46832735111822",
+        "68211541919096",
+        "75265190098766",
+        "91746571593708"
+      ],
+      "latestPriceCents": 4900,
+      "globalProductId": 242,
+      "organizationInventoryId": 252,
+      "existingProductCode": "PRD--97",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "dish washing liquid (lemon max 475ml)",
+      "sourceName": "Dish Washing Liquid (Lemon Max 475ml)",
+      "sourceCodes": [
+        "8383419269188",
+        "APRA-KI04-01"
+      ],
+      "latestPriceCents": 26200,
+      "globalProductId": 203,
+      "organizationInventoryId": 213,
+      "existingProductCode": "PRD--58",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "kingtox spray (600ml)",
+      "sourceName": "Kingtox Spray (600ml)",
+      "sourceCodes": [
+        "21727527464772",
+        "APRA-IK04-06"
+      ],
+      "latestPriceCents": 65000,
+      "globalProductId": 175,
+      "organizationInventoryId": 185,
+      "existingProductCode": "PRD--30",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "air freshener-perfect (300 ml)",
+      "sourceName": "Air Freshener - PERFECT (300 ML)",
+      "sourceCodes": [
+        "23188310162760",
+        "APRA-RS02-07"
+      ],
+      "latestPriceCents": 45900,
+      "globalProductId": 208,
+      "organizationInventoryId": 218,
+      "existingProductCode": "PRD--63",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "glass (6 pcs)",
+      "sourceName": "Glass (6 Pcs)",
+      "sourceCodes": [
+        "APRA-GL01-03"
+      ],
+      "latestPriceCents": 155000,
+      "globalProductId": 223,
+      "organizationInventoryId": 233,
+      "existingProductCode": "PRD--78",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "rose petal luxury tissue box (1pcs)",
+      "sourceName": "Rose Petal Luxury Tissue Box (1pcs)",
+      "sourceCodes": [
+        "4053437807699",
+        "APRA-HS14-23"
+      ],
+      "latestPriceCents": 32500,
+      "globalProductId": 187,
+      "organizationInventoryId": 197,
+      "existingProductCode": "PRD--42",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "max bright foam (2 pcs)",
+      "sourceName": "Max bright foam (2 Pcs)",
+      "sourceCodes": [
+        "14830150376562",
+        "17302456324698"
+      ],
+      "latestPriceCents": 14500,
+      "globalProductId": 214,
+      "organizationInventoryId": 224,
+      "existingProductCode": "PRD--69",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "tapal green tea bags (90 pcs)",
+      "sourceName": "Tapal Green Tea Bags (90 PCS)",
+      "sourceCodes": [
+        "15541375962049",
+        "17491276985495",
+        "APRA-T01-08"
+      ],
+      "latestPriceCents": 68000,
+      "globalProductId": 206,
+      "organizationInventoryId": 216,
+      "existingProductCode": "PRD--61",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "nescafe classic coffee (475 gm)",
+      "sourceName": "Nescafe Classic Coffee (475 GM)",
+      "sourceCodes": [
+        "68736113484113",
+        "APRA-T16-02"
+      ],
+      "latestPriceCents": 812500,
+      "globalProductId": 194,
+      "organizationInventoryId": 204,
+      "existingProductCode": "PRD--49",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "olper milk (1 litre)",
+      "sourceName": "Olper Milk (1 Litre)",
+      "sourceCodes": [
+        "9062234140795",
+        "APR-LM03-03"
+      ],
+      "latestPriceCents": 35500,
+      "globalProductId": 165,
+      "organizationInventoryId": 175,
+      "existingProductCode": "PRD--20",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "sugar",
+      "sourceName": "Sugar",
+      "sourceCodes": [
+        "16670841985878"
+      ],
+      "latestPriceCents": 19500,
+      "globalProductId": 7,
+      "organizationInventoryId": 268,
+      "existingProductCode": "PRD-007",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "family pack biscuits marrie, butter puff, zeera plus, chocolate sooper, chocolicious & lemon biscuits)(100 pack)",
+      "sourceName": "Family Pack Biscuits Marrie, Butter Puff, Zeera plus, Chocolate sooper, chocolicious & Lemon Biscuits) (100 pack)",
+      "sourceCodes": [
+        "37398443925258"
+      ],
+      "latestPriceCents": 9500,
+      "globalProductId": 258,
+      "organizationInventoryId": 269,
+      "existingProductCode": "PRD--113",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "nescafe classic coffee (100 gm)",
+      "sourceName": "Nescafe Classic Coffee (100 GM)",
+      "sourceCodes": [
+        "23954298533462",
+        "77022694420000",
+        "APRA-T16-01"
+      ],
+      "latestPriceCents": 210000,
+      "globalProductId": 190,
+      "organizationInventoryId": 200,
+      "existingProductCode": "PRD--45",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "milkpak (1 litre)",
+      "sourceName": "Milkpak (1 Litre)",
+      "sourceCodes": [
+        "28390804881771",
+        "APR-LM01-01"
+      ],
+      "latestPriceCents": 36000,
+      "globalProductId": 201,
+      "organizationInventoryId": 211,
+      "existingProductCode": "PRD--56",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "nescafe classic coffee (gold)(100 gm)",
+      "sourceName": "Nescafe Classic Coffee(Gold) (100 GM)",
+      "sourceCodes": [
+        "53887889437420"
+      ],
+      "latestPriceCents": 230000,
+      "globalProductId": 259,
+      "organizationInventoryId": 270,
+      "existingProductCode": "PRD--114",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "lipton tea bags (500 pcs)",
+      "sourceName": "Lipton Tea Bags (500 PCS)",
+      "sourceCodes": [
+        "9055833031847",
+        "APRA-T01-22"
+      ],
+      "latestPriceCents": 360000,
+      "globalProductId": 250,
+      "organizationInventoryId": 260,
+      "existingProductCode": "PRD--105",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "lipton green tea bags (25 pcs)",
+      "sourceName": "Lipton Green Tea Bags (25 PCS)",
+      "sourceCodes": [
+        "52240353046074",
+        "70287616011671",
+        "APRA-T01-24"
+      ],
+      "latestPriceCents": 29000,
+      "globalProductId": 217,
+      "organizationInventoryId": 227,
+      "existingProductCode": "PRD--72",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "biscuits lu prince (tikki pack)",
+      "sourceName": "Biscuits LU prince (Tikki pack)",
+      "sourceCodes": [
+        "10189247318721"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 264,
+      "organizationInventoryId": 275,
+      "existingProductCode": "PRD--119",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "nescafe classic coffee (200 gm)",
+      "sourceName": "Nescafe Classic Coffee (200 GM)",
+      "sourceCodes": [
+        "13708338857861",
+        "62208324713953",
+        "66098173839531"
+      ],
+      "latestPriceCents": 380000,
+      "globalProductId": 253,
+      "organizationInventoryId": 263,
+      "existingProductCode": "PRD--108",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "tapal family mixture tea (900 gm)",
+      "sourceName": "Tapal Family Mixture Tea (900 GM)",
+      "sourceCodes": [
+        "30023417011713",
+        "57039303851746",
+        "APR-T04-01"
+      ],
+      "latestPriceCents": 177000,
+      "globalProductId": 209,
+      "organizationInventoryId": 219,
+      "existingProductCode": "PRD--64",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "dustbin shoppers-15 bags per roll (4ltr)",
+      "sourceName": "Dustbin Shoppers -15 bags per roll (4ltr)",
+      "sourceCodes": [
+        "68292951720698"
+      ],
+      "latestPriceCents": 45000,
+      "globalProductId": 219,
+      "organizationInventoryId": 229,
+      "existingProductCode": "PRD--74",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "coopex powder bottle (100g)",
+      "sourceName": "Coopex Powder Bottle (100g)",
+      "sourceCodes": [
+        "19500227484147",
+        "APRA-IK11-03"
+      ],
+      "latestPriceCents": 45000,
+      "globalProductId": 246,
+      "organizationInventoryId": 256,
+      "existingProductCode": "PRD--101",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "steel balls (jhoona 1pcs)",
+      "sourceName": "Steel Balls(Jhoona 1pcs)",
+      "sourceCodes": [
+        "29783000514646",
+        "APR-KI10-01"
+      ],
+      "latestPriceCents": 15000,
+      "globalProductId": 169,
+      "organizationInventoryId": 179,
+      "existingProductCode": "PRD--24",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "brasso (200ml)",
+      "sourceName": "Brasso (200ml)",
+      "sourceCodes": [
+        "93056138440193"
+      ],
+      "latestPriceCents": 85000,
+      "globalProductId": 251,
+      "organizationInventoryId": 261,
+      "existingProductCode": "PRD--106",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "lipton tea bags (600 pcs)",
+      "sourceName": "Lipton Tea Bags (600 PCS)",
+      "sourceCodes": [
+        "9055833031847",
+        "APRA-T01-22"
+      ],
+      "latestPriceCents": 360000,
+      "globalProductId": 315,
+      "organizationInventoryId": 347,
+      "existingProductCode": "PRD--167",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "tapal family mixture tea (430 gm)",
+      "sourceName": "Tapal Family Mixture Tea (430 GM)",
+      "sourceCodes": [
+        "17417470470106",
+        "6073968607185",
+        "APRA-T01-09"
+      ],
+      "latestPriceCents": 91000,
+      "globalProductId": 227,
+      "organizationInventoryId": 237,
+      "existingProductCode": "PRD--82",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "lipton tea bags (100 pcs)",
+      "sourceName": "Lipton Tea Bags ( 100 PCS )",
+      "sourceCodes": [
+        "65546177580868",
+        "APR-T01-03"
+      ],
+      "latestPriceCents": 106000,
+      "globalProductId": 239,
+      "organizationInventoryId": 249,
+      "existingProductCode": "PRD--94",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "peanut pik half roll",
+      "sourceName": "Peanut Pik Half Roll",
+      "sourceCodes": [
+        "35952369867093"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 271,
+      "organizationInventoryId": 282,
+      "existingProductCode": "PRD--126",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "click zeera half roll (peek freans)",
+      "sourceName": "Click Zeera Half Roll (Peek Freans)",
+      "sourceCodes": [
+        "91718357077793"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 270,
+      "organizationInventoryId": 281,
+      "existingProductCode": "PRD--125",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "sooper biscuits half roll (peek freans)",
+      "sourceName": "Sooper Biscuits Half Roll (Peek Freans)",
+      "sourceCodes": [
+        "69402840496969"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 276,
+      "organizationInventoryId": 287,
+      "existingProductCode": "PRD--131",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "butter puff half roll (peek freans)",
+      "sourceName": "Butter Puff Half Roll (Peek Freans)",
+      "sourceCodes": [
+        "49714639441712"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 292,
+      "organizationInventoryId": 303,
+      "existingProductCode": "PRD--147",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "gala biscuits snack pack (lu)",
+      "sourceName": "Gala Biscuits\tSnack Pack (Lu)",
+      "sourceCodes": [
+        "26540543122390"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 284,
+      "organizationInventoryId": 295,
+      "existingProductCode": "PRD--139",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "candi biscuits half roll (lu)",
+      "sourceName": "Candi Biscuits\tHalf Roll (LU)",
+      "sourceCodes": [
+        "24160543692735"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 302,
+      "organizationInventoryId": 313,
+      "existingProductCode": "PRD--157",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "tuc biscuits snack pack (lu)",
+      "sourceName": "Tuc Biscuits\tSnack Pack (Lu)",
+      "sourceCodes": [
+        "48690186271671"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 288,
+      "organizationInventoryId": 299,
+      "existingProductCode": "PRD--143",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "milcolu biscuits snack pack (lu)",
+      "sourceName": "Milcolu Biscuits\tSnack Pack(Lu)",
+      "sourceCodes": [
+        "36858954651668"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 304,
+      "organizationInventoryId": 315,
+      "existingProductCode": "PRD--159",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "nankhatai biscuits half roll (lu)",
+      "sourceName": "Nankhatai Biscuits\tHalf Roll (LU)",
+      "sourceCodes": [
+        "3794369108263"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 283,
+      "organizationInventoryId": 294,
+      "existingProductCode": "PRD--138",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "candi biscuits snack pack (lu)",
+      "sourceName": "Candi Biscuits\tSnack Pack (Lu)",
+      "sourceCodes": [
+        "93456563923748"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 286,
+      "organizationInventoryId": 297,
+      "existingProductCode": "PRD--141",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "gluco snack pack (peek freans)",
+      "sourceName": "Gluco Snack Pack (Peek Freans)",
+      "sourceCodes": [
+        "96701069049789"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 298,
+      "organizationInventoryId": 309,
+      "existingProductCode": "PRD--153",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "choclate sandwitch half roll (peek freans)",
+      "sourceName": "Choclate Sandwitch Half Roll (Peek Freans)",
+      "sourceCodes": [
+        "90725161074650"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 293,
+      "organizationInventoryId": 304,
+      "existingProductCode": "PRD--148",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "gluco half roll (peek freans)",
+      "sourceName": "Gluco Half Roll (Peek Freans)",
+      "sourceCodes": [
+        "8877205492496"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 280,
+      "organizationInventoryId": 291,
+      "existingProductCode": "PRD--135",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "nestle cardamom tea pouch (500 gm)",
+      "sourceName": "Nestle Cardamom Tea Pouch (500 GM)",
+      "sourceCodes": [
+        "42722191144425",
+        "APRA-T01-27"
+      ],
+      "latestPriceCents": 130000,
+      "globalProductId": 196,
+      "organizationInventoryId": 206,
+      "existingProductCode": "PRD--51",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "nankhatai biscuits snack pack (lu)",
+      "sourceName": "Nankhatai Biscuits\tSnack Pack (Lu)",
+      "sourceCodes": [
+        "22906398526423"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 287,
+      "organizationInventoryId": 298,
+      "existingProductCode": "PRD--142",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "zeera plus biscuits snack pack (lu)",
+      "sourceName": "Zeera Plus Biscuits\tSnack Pack (Lu)",
+      "sourceCodes": [
+        "98099181110266"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 295,
+      "organizationInventoryId": 306,
+      "existingProductCode": "PRD--150",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "butter puff snack pack (peek freans)",
+      "sourceName": "Butter Puff Snack Pack (Peek Freans)",
+      "sourceCodes": [
+        "57634949131777"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 285,
+      "organizationInventoryId": 296,
+      "existingProductCode": "PRD--140",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "party pik snack pack (peek freans)",
+      "sourceName": "Party Pik\tSnack Pack ( Peek Freans)",
+      "sourceCodes": [
+        "92148051259305"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 279,
+      "organizationInventoryId": 290,
+      "existingProductCode": "PRD--134",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "peanut pista snack pack (peek freans)",
+      "sourceName": "Peanut Pista Snack Pack (Peek Freans)",
+      "sourceCodes": [
+        "25982884437940"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 294,
+      "organizationInventoryId": 305,
+      "existingProductCode": "PRD--149",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "rio half roll choclate (peek freans)",
+      "sourceName": "Rio Half Roll Choclate (Peek Freans)",
+      "sourceCodes": [
+        "84032244668025"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 303,
+      "organizationInventoryId": 314,
+      "existingProductCode": "PRD--158",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "party pik half roll (peek freans)",
+      "sourceName": "Party Pik\tHalf Roll (Peek Freans)",
+      "sourceCodes": [
+        "8095529486970"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 272,
+      "organizationInventoryId": 283,
+      "existingProductCode": "PRD--127",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "click zeera snack pack (peek freans)",
+      "sourceName": "Click Zeera Snack Pack (Peek Freans)",
+      "sourceCodes": [
+        "7136138758248"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 296,
+      "organizationInventoryId": 307,
+      "existingProductCode": "PRD--151",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "bakery biscuits half roll (lu)",
+      "sourceName": "Bakery Biscuits Half Roll (LU)",
+      "sourceCodes": [
+        "8436251237236"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 301,
+      "organizationInventoryId": 312,
+      "existingProductCode": "PRD--156",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "zeera plus biscuits half roll (lu)",
+      "sourceName": "Zeera Plus Biscuits Half Roll(LU)",
+      "sourceCodes": [
+        "99795749002146"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 289,
+      "organizationInventoryId": 300,
+      "existingProductCode": "PRD--144",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "gala biscuits half roll (lu)",
+      "sourceName": "Gala Biscuits Half Roll (LU)",
+      "sourceCodes": [
+        "56583733407535"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 297,
+      "organizationInventoryId": 308,
+      "existingProductCode": "PRD--152",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "bakery biscuits snack pack (lu)",
+      "sourceName": "Bakery Biscuits\tSnack Pack (Lu)",
+      "sourceCodes": [
+        "33120178423502"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 274,
+      "organizationInventoryId": 285,
+      "existingProductCode": "PRD--129",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "marie biscuits half roll (peek freans)",
+      "sourceName": "Marie Biscuits Half Roll (Peek Freans)",
+      "sourceCodes": [
+        "46418630143557"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 269,
+      "organizationInventoryId": 280,
+      "existingProductCode": "PRD--124",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "sooper biscuits choclate half roll (peek freans)",
+      "sourceName": "Sooper Biscuits Choclate Half Roll (Peek Freans)",
+      "sourceCodes": [
+        "66757595747936"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 275,
+      "organizationInventoryId": 286,
+      "existingProductCode": "PRD--130",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "lemon sandwitch snack pack (peek freans)",
+      "sourceName": "Lemon Sandwitch Snack Pack (Peek Freans)",
+      "sourceCodes": [
+        "82347906977954"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 281,
+      "organizationInventoryId": 292,
+      "existingProductCode": "PRD--136",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "choclate sandwitch snack pack (peek freans)",
+      "sourceName": "Choclate Sandwitch Snack Pack (Peek Freans)",
+      "sourceCodes": [
+        "5015310776995"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 305,
+      "organizationInventoryId": 316,
+      "existingProductCode": "PRD--160",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "sooper biscuits snack pack (peek freans)",
+      "sourceName": "Sooper Biscuits Snack Pack (Peek Freans)",
+      "sourceCodes": [
+        "37056475387307"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 308,
+      "organizationInventoryId": 319,
+      "existingProductCode": "PRD--163",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "coffee pods eespresso (8 boxes)",
+      "sourceName": "Coffee Pods Eespresso (8 boxes)",
+      "sourceCodes": [
+        "50620497682738"
+      ],
+      "latestPriceCents": 350000,
+      "globalProductId": 183,
+      "organizationInventoryId": 193,
+      "existingProductCode": "PRD--38",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "peanut pista half roll (peek freans)",
+      "sourceName": "Peanut Pista Half Roll (Peek Freans)",
+      "sourceCodes": [
+        "8331096902247"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 273,
+      "organizationInventoryId": 284,
+      "existingProductCode": "PRD--128",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "sooper biscuits choclate snack pack (peek freans)",
+      "sourceName": "Sooper Biscuits Choclate Snack Pack (Peek Freans)",
+      "sourceCodes": [
+        "8870004776034"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 290,
+      "organizationInventoryId": 301,
+      "existingProductCode": "PRD--145",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "tuc biscuits half roll (lu)",
+      "sourceName": "Tuc Biscuits Half Roll (LU)",
+      "sourceCodes": [
+        "49116202053366"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 300,
+      "organizationInventoryId": 311,
+      "existingProductCode": "PRD--155",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "lemon sandwitch half roll (peek freans)",
+      "sourceName": "Lemon Sandwitch Half Roll (Peek Freans)",
+      "sourceCodes": [
+        "66066482647462"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 277,
+      "organizationInventoryId": 288,
+      "existingProductCode": "PRD--132",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "rio strawbery snack pack",
+      "sourceName": "Rio Strawbery Snack Pack",
+      "sourceCodes": [
+        "46643387399585"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 307,
+      "organizationInventoryId": 318,
+      "existingProductCode": "PRD--162",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "milcolu biscuits half roll (lu)",
+      "sourceName": "Milcolu Biscuits Half Roll (LU)",
+      "sourceCodes": [
+        "70109117453458"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 299,
+      "organizationInventoryId": 310,
+      "existingProductCode": "PRD--154",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "peanut pik snack pack (peek freans)",
+      "sourceName": "Peanut Pik Snack Pack (Peek Freans)",
+      "sourceCodes": [
+        "84379511250360"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 278,
+      "organizationInventoryId": 289,
+      "existingProductCode": "PRD--133",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "hiclean handwash (500 ml)",
+      "sourceName": "Hiclean Handwash (500 ML)",
+      "sourceCodes": [
+        "APRA-SP01-07"
+      ],
+      "latestPriceCents": 34000,
+      "globalProductId": 226,
+      "organizationInventoryId": 236,
+      "existingProductCode": "PRD--81",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "marie biscuits snack pack (peek freans)",
+      "sourceName": "Marie Biscuits\tSnack Pack (Peek Freans)",
+      "sourceCodes": [
+        "76785072983265"
+      ],
+      "latestPriceCents": 32000,
+      "globalProductId": 291,
+      "organizationInventoryId": 302,
+      "existingProductCode": "PRD--146",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "pakola (500ml)",
+      "sourceName": "Pakola (500ml)",
+      "sourceCodes": [
+        "70395371397750"
+      ],
+      "latestPriceCents": 3700,
+      "globalProductId": 231,
+      "organizationInventoryId": 241,
+      "existingProductCode": "PRD--86",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "nescafe classic coffee (95gm)",
+      "sourceName": "Nescafe Classic Coffee (95gm)",
+      "sourceCodes": [
+        "84098609325322"
+      ],
+      "latestPriceCents": 230000,
+      "globalProductId": 265,
+      "organizationInventoryId": 276,
+      "existingProductCode": "PRD--120",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "duster (1pcs)",
+      "sourceName": "Duster (1pcs)",
+      "sourceCodes": [
+        "20166558369297",
+        "APRA-DC01-11"
+      ],
+      "latestPriceCents": 7000,
+      "globalProductId": 220,
+      "organizationInventoryId": 230,
+      "existingProductCode": "PRD--75",
+      "kind": "EXISTING_MAPPING"
+    },
+    {
+      "normalizedName": "fay glow glass cleaner (550ml)",
+      "sourceName": "Fay Glow Glass Cleaner (550ml)",
+      "sourceCodes": [],
+      "latestPriceCents": 36000,
+      "globalProductId": 254,
+      "organizationInventoryId": 264,
+      "existingProductCode": "PRD--109",
+      "kind": "EXISTING_MAPPING"
+    }
+  ],
+  "errors": {
+    "branchErrors": [],
+    "userErrors": [],
+    "groupErrors": [],
+    "assignmentErrors": [],
+    "mappingErrors": [],
+    "changedImports": [],
+    "tidErrors": []
+  }
+}

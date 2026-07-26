@@ -81,6 +81,7 @@ import { useCallback, useEffect, useRef } from "react"
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
 import * as XLSX from "xlsx"
+import { sanitizeSpreadsheetRow } from "@/lib/spreadsheet"
 import { resolveOrganizationReportScope } from "@/lib/organization-report-scope"
 
 
@@ -292,7 +293,10 @@ export default function OrganizationReportPage() {
             return
         }
 
-        const worksheet = XLSX.utils.aoa_to_sheet([headers, ...rows])
+        const worksheet = XLSX.utils.aoa_to_sheet([
+            sanitizeSpreadsheetRow(headers),
+            ...rows.map(sanitizeSpreadsheetRow),
+        ])
         const workbook = XLSX.utils.book_new()
         XLSX.utils.book_append_sheet(workbook, worksheet, "Organizations")
         XLSX.writeFile(workbook, `organization-report-${new Date().getTime()}.${format === 'excel' ? 'xlsx' : 'csv'}`)

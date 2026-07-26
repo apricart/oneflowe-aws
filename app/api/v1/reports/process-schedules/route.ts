@@ -1,21 +1,60 @@
 import { NextRequest } from "next/server"
-import { eq, and, sql, lte, or, isNull } from "drizzle-orm"
+import { eq, and } from "drizzle-orm"
 import { db } from "@/lib/db"
 import { scheduledReports, orders, branches } from "@/db/schema"
 import { sendReportEmail } from "@/lib/email"
-import { ok, error } from "@/lib/api"
-import { subDays, subMonths } from "date-fns"
+import { ok, error, requireApiRole } from "@/lib/api"
+import { z } from "zod"
+import { timingSafeEqual } from "node:crypto"
+import { getRequestScope } from "@/lib/auth"
+import { env } from "@/lib/server/env"
+import { withRateLimit } from "@/lib/rate-limiter"
+import { createCsv } from "@/lib/spreadsheet"
+
+const processScheduleSchema = z.object({
+    scheduleId: z.coerce.number().int().positive().optional(),
+    isTest: z.boolean().optional().default(false),
+}).strict()
+
+function hasCronAuthorization(req: NextRequest): boolean {
+    const supplied = req.headers.get("authorization") || ""
+    const expected = `Bearer ${env.CRON_SECRET}`
+    const suppliedBuffer = Buffer.from(supplied)
+    const expectedBuffer = Buffer.from(expected)
+    return suppliedBuffer.length === expectedBuffer.length &&
+        timingSafeEqual(suppliedBuffer, expectedBuffer)
+}
 
 /**
  * Report Processing API
  * Used by a cron job or "Test Now" trigger to send scheduled reports.
  */
 export async function POST(req: NextRequest) {
-    const { scheduleId, isTest } = await req.json().catch(() => ({}))
+    const parsedBody = processScheduleSchema.safeParse(await req.json().catch(() => null))
+    if (!parsedBody.success) return error("Invalid schedule request", 400)
+
+    const cronAuthorized = hasCronAuthorization(req)
+    let userId: string | null = null
+    let { scheduleId, isTest } = parsedBody.data
+
+    if (!cronAuthorized) {
+        const authError = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"])
+        if (authError) return authError
+
+        const scope = await getRequestScope()
+        if (!scope?.userId) return error("Unauthorized", 401)
+        if (!scheduleId) return error("scheduleId is required for manual processing", 400)
+
+        userId = scope.userId
+        isTest = true
+        const rateLimit = await withRateLimit("report", scope.userId)
+        if (rateLimit) return rateLimit
+    }
 
     const conditions = []
     if (scheduleId) {
         conditions.push(eq(scheduledReports.id, Number(scheduleId)))
+        if (userId) conditions.push(eq(scheduledReports.userId, userId))
     } else {
         conditions.push(eq(scheduledReports.enabled, true))
         // Batch mode: only process if due (pseudo-logic for demo purposes)
@@ -26,6 +65,11 @@ export async function POST(req: NextRequest) {
         .select()
         .from(scheduledReports)
         .where(and(...conditions))
+        .limit(50)
+
+    if (!cronAuthorized && schedules.length === 0) {
+        return error("Schedule not found", 404)
+    }
 
     const results = []
 
@@ -39,7 +83,9 @@ export async function POST(req: NextRequest) {
             const csv = convertToCSV(reportData)
 
             // 3. Send Email
-            const fileName = `${schedule.reportName.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.csv`
+            const safeReportFileName =
+                schedule.reportName.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 80) || "report"
+            const fileName = `${safeReportFileName}_${new Date().toISOString().split('T')[0]}.csv`
             const sent = await sendReportEmail(
                 schedule.emails,
                 schedule.reportName,
@@ -57,7 +103,7 @@ export async function POST(req: NextRequest) {
             results.push({ id: schedule.id, status: sent ? "sent" : "failed" })
         } catch (err) {
             console.error(`Error processing schedule ${schedule.id}:`, err)
-            results.push({ id: schedule.id, status: "error", error: String(err) })
+            results.push({ id: schedule.id, status: "error" })
         }
     }
 
@@ -91,9 +137,7 @@ async function fetchReportData(reportName: string, organizationId: number | null
 
 function convertToCSV(data: any[]) {
     if (data.length === 0) return "No data available"
-    const headers = Object.keys(data[0]).join(",")
-    const rows = data.map(row =>
-        Object.values(row).map(val => `"${val}"`).join(",")
-    ).join("\n")
-    return `${headers}\n${rows}`
+    const headers = Object.keys(data[0])
+    const rows = data.map((row) => Object.values(row))
+    return createCsv(headers, rows)
 }

@@ -3,6 +3,14 @@ import { roles, rolePermissions, auditLogs } from "@/db/schema"
 import { eq } from "drizzle-orm"
 import { ok, err, requireApiRole } from "@/lib/api"
 import { NextRequest } from "next/server"
+import { Permission } from "@/lib/permissions"
+import {
+  rolePermissionCreateSchema,
+  rolePermissionReplaceSchema,
+  validationMessage,
+} from "@/lib/server/mutation-validation"
+
+const validPermissionKeys = new Set<string>(Object.values(Permission))
 
 export async function GET(req: NextRequest) {
   const authErr = await requireApiRole(["SUPER_ADMIN"])
@@ -35,19 +43,18 @@ export async function POST(req: NextRequest) {
   if (authErr) return authErr
 
   try {
-    const body = await req.json()
-    const { roleId, permissionKey, allowed = true } = body
+    const rawBody = await req.json().catch(() => null)
+    const parsedBody = rolePermissionCreateSchema.safeParse(rawBody)
+    if (!parsedBody.success) return err(validationMessage(parsedBody.error), 400)
+    const { roleId, permissionKey, allowed } = parsedBody.data
+    if (!validPermissionKeys.has(permissionKey)) return err("Invalid permission key", 400)
 
-    if (!roleId || !permissionKey) {
-      return err("roleId and permissionKey are required", 400)
-    }
-
-    // Check if permission already exists
-    const existing = await db
-      .select()
-      .from(rolePermissions)
-      .where(eq(rolePermissions.roleId, roleId))
+    const [targetRole] = await db
+      .select({ id: roles.id })
+      .from(roles)
+      .where(eq(roles.id, roleId))
       .limit(1)
+    if (!targetRole) return err("Invalid role", 400)
 
     // Insert new permission
     const [newPermission] = await db
@@ -78,12 +85,21 @@ export async function PUT(req: NextRequest) {
   if (authErr) return authErr
 
   try {
-    const body = await req.json()
-    const { roleId, permissions } = body
-
-    if (!roleId || !permissions || !Array.isArray(permissions)) {
-      return err("roleId and permissions array are required", 400)
+    const rawBody = await req.json().catch(() => null)
+    const parsedBody = rolePermissionReplaceSchema.safeParse(rawBody)
+    if (!parsedBody.success) return err(validationMessage(parsedBody.error), 400)
+    const { roleId } = parsedBody.data
+    const permissions = [...new Set(parsedBody.data.permissions)]
+    if (permissions.some((key) => !validPermissionKeys.has(key))) {
+      return err("Invalid permission key", 400)
     }
+
+    const [targetRole] = await db
+      .select({ id: roles.id })
+      .from(roles)
+      .where(eq(roles.id, roleId))
+      .limit(1)
+    if (!targetRole) return err("Invalid role", 400)
 
     // Delete existing permissions for this role
     await db.delete(rolePermissions).where(eq(rolePermissions.roleId, roleId))

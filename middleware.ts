@@ -1,6 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server"
 import { logger } from "@/lib/utils"
 import { getToken } from "next-auth/jwt"
+import { edgeEnv } from "@/lib/edge/env"
+import {
+  isCookieAuthenticatedMutationAllowed,
+  isKnownBodyTooLarge,
+  requestBodyLimitForPath,
+} from "@/lib/edge/request-security"
 
 const protectedPrefixes = ["/dashboard", "/organizations", "/users", "/orders", "/inventory", "/budgets", "/reports", "/settings", "/branches", "/shop", "/change-password"]
 
@@ -23,23 +29,30 @@ function withSecurityHeaders(response: NextResponse, pathname: string = ""): Nex
   // Content Security Policy
   response.headers.set(
     "Content-Security-Policy",
-    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https:; frame-ancestors 'none'"
+    [
+      "default-src 'self'",
+      `script-src 'self' 'unsafe-inline'${process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : ""}`,
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+      "img-src 'self' data: blob: https:",
+      "font-src 'self' data: https://fonts.gstatic.com",
+      "connect-src 'self' https://vitals.vercel-insights.com",
+      "object-src 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+      "frame-src 'none'",
+      "frame-ancestors 'none'",
+      "worker-src 'self' blob:",
+      "manifest-src 'self'",
+      "media-src 'self'",
+      ...(process.env.NODE_ENV === "production" ? ["upgrade-insecure-requests"] : []),
+    ].join("; ")
   )
   // Remove server identification
   response.headers.delete("X-Powered-By")
 
   // Browsing Cache (Browser Caching)
   if (pathname.startsWith("/api/v1/")) {
-    if (pathname.includes("/roles") || pathname.includes("/categories") || pathname.includes("/settings")) {
-      response.headers.set("Cache-Control", "public, s-maxage=600, stale-while-revalidate=300")
-    } else if (pathname.includes("/organizations") || pathname.includes("/branches") || pathname.includes("/groups")) {
-      response.headers.set("Cache-Control", "public, s-maxage=60, stale-while-revalidate=30")
-    } else if (pathname.includes("/branch/inventory")) {
-      response.headers.set("Cache-Control", "public, s-maxage=10, stale-while-revalidate=10")
-    } else {
-      // Default for other APIs: no sensitive caching by default
-      response.headers.set("Cache-Control", "no-store, max-age=0")
-    }
+    response.headers.set("Cache-Control", "private, no-store, max-age=0")
   }
 
   return response
@@ -49,12 +62,39 @@ export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl
   const response = NextResponse.next()
 
+  if (pathname.startsWith("/api/v1/")) {
+    const allowedMutation = isCookieAuthenticatedMutationAllowed({
+      method: req.method,
+      requestUrl: req.url,
+      origin: req.headers.get("origin"),
+      secFetchSite: req.headers.get("sec-fetch-site"),
+      cookieHeader: req.headers.get("cookie"),
+    })
+
+    if (!allowedMutation) {
+      return withSecurityHeaders(
+        NextResponse.json({ error: "Cross-site request blocked" }, { status: 403 }),
+        pathname,
+      )
+    }
+
+    const maximumBytes = requestBodyLimitForPath(pathname)
+    if (isKnownBodyTooLarge(req.headers.get("content-length"), maximumBytes)) {
+      return withSecurityHeaders(
+        NextResponse.json({ error: "Request body too large" }, { status: 413 }),
+        pathname,
+      )
+    }
+
+    return withSecurityHeaders(response, pathname)
+  }
+
   const isPublicPath = ["/login"].includes(pathname)
   const needsAuth = protectedPrefixes.some((p) => pathname.startsWith(p)) && !isPublicPath
 
   if (!needsAuth) return withSecurityHeaders(response, pathname)
 
-  const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET })
+  const token = await getToken({ req, secret: edgeEnv.NEXTAUTH_SECRET })
   if (!token) {
     logger("middleware", { reason: "no_session", path: pathname })
     const loginPath = "/login"
@@ -119,7 +159,7 @@ export const config = {
   matcher: [
     /*
      * Match all request paths except for the ones starting with:
-     * - api (API routes that need custom auth handling)
+     * - API routes are matched separately below for CSRF/body-size checks
      * - _next/static (static files)
      * - _next/image (image optimization files)
      * - favicon.ico (favicon file)
@@ -140,5 +180,6 @@ export const config = {
     "/shop/:path*",
     "/change-password",
     "/change-password/:path*",
+    "/api/v1/:path*",
   ],
 }

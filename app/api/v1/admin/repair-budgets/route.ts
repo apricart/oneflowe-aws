@@ -168,6 +168,6 @@ export async function POST(req: NextRequest) {
 
   } catch (e: any) {
     console.error("[REPAIR] Error:", e)
-    return NextResponse.json({ error: "Repair failed: " + e.message }, { status: 500 })
+    return NextResponse.json({ error: "Repair failed" }, { status: 500 })
   }
 }

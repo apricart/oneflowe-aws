@@ -5,6 +5,7 @@ import { db } from "@/lib/db"
 import { branchInventory, branches, groups, auditLogs } from "@/db/schema"
 import { eq, and, inArray, isNull } from "drizzle-orm"
 import { invalidateByPrefix } from "@/lib/cache-utils"
+import { branchAssignmentToggleSchema, validationMessage } from "@/lib/server/mutation-validation"
 
 /**
  * PUT /api/v1/head-office/branch-assignments/toggle
@@ -28,18 +29,18 @@ export async function PUT(req: NextRequest) {
             return NextResponse.json({ error: "Forbidden" }, { status: 403 })
         }
 
-        const body = await req.json()
-        const { organizationInventoryId, organizationId, isActive, groupIds } = body
-
-        if (!organizationInventoryId || !organizationId || isActive === undefined) {
-            return NextResponse.json({ error: "Missing required fields: organizationInventoryId, organizationId, isActive" }, { status: 400 })
+        const rawBody = await req.json().catch(() => null)
+        const parsedBody = branchAssignmentToggleSchema.safeParse(rawBody)
+        if (!parsedBody.success) {
+            return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
         }
+        const { organizationInventoryId, organizationId, isActive, groupIds } = parsedBody.data
 
-        if (!groupIds || (Array.isArray(groupIds) && groupIds.length === 0)) {
-            return NextResponse.json({ error: "groupIds is required (array of group IDs or 'all')" }, { status: 400 })
+        const sessionOrganizationId = Number((session.user as any).organizationId)
+        if (userRole === "HEAD_OFFICE" && organizationId !== sessionOrganizationId) {
+            return NextResponse.json({ error: "Tenant reassignment is not permitted" }, { status: 403 })
         }
-
-        const orgId = parseInt(organizationId)
+        const orgId = userRole === "HEAD_OFFICE" ? sessionOrganizationId : organizationId
 
         // Determine which branch IDs to update
         let targetBranchIds: number[] = []
@@ -56,7 +57,10 @@ export async function PUT(req: NextRequest) {
                 const groupIdList = orgGroups.map(g => g.id)
                 const branchList = await db.select({ id: branches.id, name: branches.name })
                     .from(branches)
-                    .where(inArray(branches.groupId, groupIdList))
+                    .where(and(
+                        eq(branches.organizationId, orgId),
+                        inArray(branches.groupId, groupIdList),
+                    ))
 
                 targetBranchIds = branchList.map(b => b.id)
             }
@@ -65,7 +69,10 @@ export async function PUT(req: NextRequest) {
             const selectedGroupIds = (groupIds as number[]).map(Number)
             const branchList = await db.select({ id: branches.id, name: branches.name })
                 .from(branches)
-                .where(inArray(branches.groupId, selectedGroupIds))
+                .where(and(
+                    eq(branches.organizationId, orgId),
+                    inArray(branches.groupId, selectedGroupIds),
+                ))
 
             targetBranchIds = branchList.map(b => b.id)
         }
@@ -85,7 +92,7 @@ export async function PUT(req: NextRequest) {
             })
             .where(
                 and(
-                    eq(branchInventory.organizationInventoryId, parseInt(organizationInventoryId)),
+                    eq(branchInventory.organizationInventoryId, organizationInventoryId),
                     eq(branchInventory.organizationId, orgId),
                     inArray(branchInventory.branchId, targetBranchIds),
                     isNull(branchInventory.deletedAt)

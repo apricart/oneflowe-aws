@@ -1,6 +1,12 @@
 import { NextRequest } from "next/server"
 import { ok, error, readJson } from "@/lib/api"
 import { verifyOTP } from "@/lib/mfa"
+import { createHash } from "node:crypto"
+import {
+  checkRateLimit,
+  getClientIdentifier,
+  rateLimitResponse,
+} from "@/lib/rate-limiter"
 
 export async function POST(req: NextRequest) {
   try {
@@ -12,6 +18,15 @@ export async function POST(req: NextRequest) {
       return error("Username or email and code are required", 400)
     }
     const identifier = String(username).trim().toLowerCase()
+    const clientIdentifier = await getClientIdentifier()
+    const accountIdentifier = `account:${createHash("sha256").update(identifier).digest("hex").slice(0, 32)}`
+    const [clientLimit, accountLimit] = await Promise.all([
+      checkRateLimit(clientIdentifier, "otpVerify"),
+      checkRateLimit(accountIdentifier, "otpVerify"),
+    ])
+    if (!clientLimit.allowed || !accountLimit.allowed) {
+      return rateLimitResponse(Math.max(clientLimit.resetIn, accountLimit.resetIn))
+    }
 
     if (code.length !== 6) {
       return error("Please enter a valid 6-digit OTP code", 400)
@@ -50,11 +65,11 @@ export async function POST(req: NextRequest) {
     }
 
     if (!user) {
-      return error("User not found", 404)
+      return error("Invalid or expired OTP code", 400)
     }
 
     if (!user.mfaEnabled) {
-      return error("MFA is not enabled for this user", 400)
+      return error("Invalid or expired OTP code", 400)
     }
 
     const result = await verifyOTP(user.id, code, type)

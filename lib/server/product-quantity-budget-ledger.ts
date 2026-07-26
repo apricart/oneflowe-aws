@@ -114,31 +114,52 @@ async function applyQuantityDelta(
   for (const line of lines) {
     if (!line.organizationInventoryId || line.quantity <= 0) continue
 
+    const conditions = and(
+      eq(productQuantityBudgets.branchId, order.branchId),
+      eq(productQuantityBudgets.period, period),
+      eq(productQuantityBudgets.organizationInventoryId, line.organizationInventoryId),
+    )
+    const [current] = await tx
+      .select({
+        id: productQuantityBudgets.id,
+        heldQuantity: productQuantityBudgets.heldQuantity,
+        usedQuantity: productQuantityBudgets.usedQuantity,
+      })
+      .from(productQuantityBudgets)
+      .where(conditions)
+      .for("update")
+
+    // Money-budget organizations legitimately have no product quantity row.
+    if (!current) continue
+
+    const available = delta === "releaseUsed"
+      ? Number(current.usedQuantity || 0)
+      : Number(current.heldQuantity || 0)
+    if (available < line.quantity) {
+      throw new Error("QUANTITY_BUDGET_LEDGER_INVARIANT")
+    }
+
     const set =
       delta === "moveHeldToUsed"
         ? {
-            heldQuantity: sql`GREATEST(0, ${productQuantityBudgets.heldQuantity} - ${line.quantity})`,
+            heldQuantity: sql`${productQuantityBudgets.heldQuantity} - ${line.quantity}`,
             usedQuantity: sql`${productQuantityBudgets.usedQuantity} + ${line.quantity}`,
             updatedAt: new Date(),
           }
         : delta === "releaseUsed"
           ? {
-              usedQuantity: sql`GREATEST(0, ${productQuantityBudgets.usedQuantity} - ${line.quantity})`,
+              usedQuantity: sql`${productQuantityBudgets.usedQuantity} - ${line.quantity}`,
               updatedAt: new Date(),
             }
           : {
-              heldQuantity: sql`GREATEST(0, ${productQuantityBudgets.heldQuantity} - ${line.quantity})`,
+              heldQuantity: sql`${productQuantityBudgets.heldQuantity} - ${line.quantity}`,
               updatedAt: new Date(),
             }
 
     await tx
       .update(productQuantityBudgets)
       .set(set)
-      .where(and(
-        eq(productQuantityBudgets.branchId, order.branchId),
-        eq(productQuantityBudgets.period, period),
-        eq(productQuantityBudgets.organizationInventoryId, line.organizationInventoryId),
-      ))
+      .where(eq(productQuantityBudgets.id, current.id))
   }
 }
 

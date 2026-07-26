@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { globalProducts, auditLogs } from "@/db/schema"
 import { eq, and, ne } from "drizzle-orm"
+import { globalProductUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
 
 // GET /api/v1/inventory/global-products/[id] - Get single product
 export async function GET(
@@ -47,11 +48,19 @@ export async function PUT(
     if (!session?.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
+    if ((session.user as any).role !== "SUPER_ADMIN") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    }
 
     const params = await props.params
     const productId = parseInt(params.id)
-    const body = await req.json()
-    const { productCode, name, description, categoryId, imageUrl, basePrice, unit, status, metadata } = body
+    const rawBody = await req.json().catch(() => null)
+    const parsedBody = globalProductUpdateSchema.safeParse(rawBody)
+    if (!parsedBody.success) {
+      return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
+    }
+    const input = parsedBody.data
+    const { productCode, name, description, categoryId, imageUrl, basePrice, unit, status, metadata } = input
 
     // Check if product code already exists
     if (productCode) {
@@ -82,15 +91,15 @@ export async function PUT(
     // Update product
     const [updatedProduct] = await db.update(globalProducts)
       .set({
-        ...(productCode && { productCode }),
-        ...(name && { name }),
-        ...(description !== undefined && { description }),
-        ...(categoryId !== undefined && { categoryId }),
-        ...(imageUrl !== undefined && { imageUrl }),
-        ...(basePrice !== undefined && { basePrice }),
-        ...(unit && { unit }),
-        ...(status && { status }),
-        ...(metadata !== undefined && { metadata }),
+        productCode,
+        name,
+        description,
+        categoryId,
+        imageUrl,
+        basePrice,
+        unit,
+        status,
+        metadata,
         updatedAt: new Date()
       })
       .where(eq(globalProducts.id, productId))
@@ -104,7 +113,7 @@ export async function PUT(
       action: "update_global_product",
       entity: "global_products",
       entityId: productId.toString(),
-      metadata: { changes: body }
+      metadata: { changedFields: Object.keys(input) }
     })
 
     return NextResponse.json({ product: updatedProduct })
@@ -129,6 +138,9 @@ export async function DELETE(
     const session = await getServerSession(authOptions)
     if (!session?.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    }
+    if ((session.user as any).role !== "SUPER_ADMIN") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
 
     const params = await props.params

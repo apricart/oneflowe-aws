@@ -26,7 +26,8 @@ npm run lint
 # Database
 npm run db:migrate    # Run pending migrations
 npm run db:generate   # Generate new migrations from schema changes
-npm run db:seed       # Seed super admin and initial roles
+npm run db:seed       # Seed roles, permissions, and organization settings
+npm run db:bootstrap-admin -- --confirm=CREATE_SUPER_ADMIN  # One-time admin bootstrap
 npm run db:studio     # Open Drizzle Studio UI for inspection
 npm run db:check      # Check current users in DB
 
@@ -34,7 +35,7 @@ npm run db:check      # Check current users in DB
 npm run import:products-csv  # Import products from CSV file
 ```
 
-No test runner is wired up for frontend components; `vitest.config.ts` exists but no test files are present.
+Vitest is configured for focused unit and security tests (`npm test`).
 
 ## Architecture
 
@@ -120,13 +121,11 @@ Defined in `db/schema.ts`:
 
 ### Environment Variables
 
-Required in `.env.local`:
-- `DATABASE_URL` — PostgreSQL connection string
-- `NEXTAUTH_URL`, `NEXTAUTH_SECRET`
-- `JWT_SECRET`
-- `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` — for MFA/rate limiting
-- SMTP variables for email (`EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_USER`, `EMAIL_PASS`)
-- AWS S3 credentials for file storage
+Copy `.env.example` to `.env.local`. The application runtime uses
+`DATABASE_URL`; Drizzle and schema-sync commands use only
+`MIGRATION_DATABASE_URL`. AWS SES uses the default AWS credential provider chain,
+not credentials configured in application code. The general seed never creates
+an administrator; use the explicit one-time bootstrap command when required.
 
 ## Important Patterns
 

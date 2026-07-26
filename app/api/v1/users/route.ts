@@ -1,14 +1,16 @@
 import { ok, error, readJson, requireApiRole } from "@/lib/api"
 import { db } from "@/lib/db"
-import { users as usersTable, roles as rolesTable, systemLogs, employeeCredentials } from "@/db/schema"
+import { users as usersTable, roles as rolesTable, systemLogs, employeeCredentials, branches, organizations } from "@/db/schema"
 import { and, desc, eq, ne, isNull, or } from "drizzle-orm"
 import { getRequestScope } from "@/lib/auth"
 import { headers } from "next/headers"
-type Role = "SUPER_ADMIN" | "HEAD_OFFICE" | "BRANCH_ADMIN" | "ORDER_PORTAL"
 import { hashPassword } from "@/lib/password"
 import { getCached, invalidateByPrefix, scopedCacheKey, CACHE_TTL } from "@/lib/cache-utils"
 import { assertUniqueUserFields, normalizeEmail, normalizeOptionalText, UserUniqueFieldError } from "@/lib/user-uniqueness"
 import { sendWelcomeEmail } from "@/lib/email"
+import { userCreateSchema, validationMessage } from "@/lib/server/mutation-validation"
+import { canAssignRole } from "@/lib/server/user-access-policy"
+import { withRateLimit } from "@/lib/rate-limiter"
 
 function getLoginUrl(requestUrl: string): string {
   const configuredUrl = process.env.NEXTAUTH_URL?.trim()
@@ -66,6 +68,7 @@ export async function GET(req: Request) {
       .leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
       .where(and(...conditions))
       .orderBy(desc(usersTable.createdAt))
+      .limit(500)
 
     return rows.map((r: any) => ({
       id: r.id,
@@ -100,44 +103,34 @@ export async function POST(req: Request) {
   const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE"])
   if (err) return err
 
-  const body = await readJson<any>(req)
-  if (!body) return error("Invalid body", 400)
+  const rawBody = await readJson<unknown>(req)
+  if (!rawBody) return error("Invalid body", 400)
+  const parsedBody = userCreateSchema.safeParse(rawBody)
+  if (!parsedBody.success) return error(validationMessage(parsedBody.error), 400)
 
-  const firstName = String(body.firstName || "")
-  const lastName = String(body.lastName || "")
-  const email = normalizeEmail(body.email)
-  const username = String(body.username || "").toLowerCase()
-  const location = String(body.location || "")
-  const password = String(body.password || "")
-  const role = String(body.role || "") as Role
-  const phone = normalizeOptionalText(body.phone)
-  const employeeId = normalizeOptionalText(body.employeeId)
-  const parseId = (val: any) => {
-    if (val === null || val === undefined || val === "") return null
-    const n = Number(val)
-    return Number.isNaN(n) ? null : n
-  }
-
-  const organizationId = parseId(body.organizationId)
-  const branchId = parseId(body.branchId)
-
-  if (!firstName || !lastName || !email || !username || !password || !role) {
-    return error("firstName, lastName, email, username, password, role are required", 400)
-  }
+  const input = parsedBody.data
+  const firstName = input.firstName
+  const lastName = input.lastName
+  const email = normalizeEmail(input.email)
+  const username = input.username.toLowerCase()
+  const password = input.password
+  const role = input.role
+  const phone = normalizeOptionalText(input.phone)
+  const employeeId = normalizeOptionalText(input.employeeId)
+  const organizationId = input.organizationId
+  const branchId = input.branchId
   // Get the current user's role to determine what roles they can create
   const scope = await getRequestScope()
   const currentUserRole = scope?.role
 
-  let allowed: Role[] = []
-  if (currentUserRole === "SUPER_ADMIN") {
-    allowed = ["HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL"]
-  } else if (currentUserRole === "HEAD_OFFICE") {
-    allowed = ["HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL"]
+  if (scope?.userId) {
+    const rateLimit = await withRateLimit("sensitive", scope.userId)
+    if (rateLimit) return rateLimit
   }
 
-  if (!allowed.includes(role)) {
-    console.error("[DEBUG] Role not allowed:", { role, currentUserRole, allowed })
-    return error(`Only ${allowed.join(" or ")} can be created by ${currentUserRole}`, 400)
+  if (!currentUserRole || !canAssignRole(currentUserRole, role)) {
+    console.error("[SECURITY] Role assignment denied:", { role, currentUserRole })
+    return error("You cannot assign this role", 403)
   }
 
   // Additional validation for HEAD_OFFICE users
@@ -154,6 +147,26 @@ export async function POST(req: Request) {
   if (role === "BRANCH_ADMIN" || role === "ORDER_PORTAL") {
     if (!organizationId || !branchId) {
       return error("organizationId and branchId required for BRANCH_ADMIN and ORDER_PORTAL", 400)
+    }
+  }
+
+  if (organizationId) {
+    const [organization] = await db
+      .select({ id: organizations.id })
+      .from(organizations)
+      .where(eq(organizations.id, organizationId))
+      .limit(1)
+    if (!organization) return error("Invalid organization", 400)
+  }
+
+  if (branchId) {
+    const [branch] = await db
+      .select({ id: branches.id, organizationId: branches.organizationId })
+      .from(branches)
+      .where(eq(branches.id, branchId))
+      .limit(1)
+    if (!branch || branch.organizationId !== organizationId) {
+      return error("Branch does not belong to the selected organization", 400)
     }
   }
 
@@ -200,16 +213,16 @@ export async function POST(req: Request) {
         firstName,
         lastName,
         phone,
-        mfaEnabled: Boolean(body.mfaEnabled),
-        isActive: body.isActive !== undefined ? Boolean(body.isActive) : true,
+        mfaEnabled: input.mfaEnabled,
+        isActive: input.isActive,
         organizationId,
         branchId,
         fullName: `${firstName} ${lastName}`,
         employeeId,
-        imprestHolder: body.imprestHolder ? String(body.imprestHolder) : null,
-        contactPerson: body.contactPerson ? String(body.contactPerson) : null,
-        location: location || null,
-        address: body.address ? String(body.address) : null,
+        imprestHolder: input.imprestHolder ?? null,
+        contactPerson: input.contactPerson ?? null,
+        location: input.location ?? null,
+        address: input.address ?? null,
         mustChangePassword: true,
       })
       .returning()
@@ -255,7 +268,8 @@ export async function POST(req: Request) {
     // Invalidate users cache so lists refresh immediately
     await invalidateByPrefix('users')
 
-    return ok({ item: createdUser }, { status: 201 })
+    const { passwordHash: _passwordHash, ...safeCreatedUser } = createdUser
+    return ok({ item: safeCreatedUser }, { status: 201 })
   } catch (err: any) {
     if (err instanceof UserUniqueFieldError) {
       return error(err.message, 400)

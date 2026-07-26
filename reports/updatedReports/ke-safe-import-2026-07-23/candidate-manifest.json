@@ -1,0 +1,148 @@
+{
+  "kind": "KE_SAFE_INCREMENTAL_IMPORT_SOURCE",
+  "version": 1,
+  "generatedAt": "2026-07-23T08:32:12.073Z",
+  "organization": {
+    "id": 10,
+    "code": "0001",
+    "name": "K-Electric"
+  },
+  "sourceSystem": "KE_LOGISTICS",
+  "candidateOrderIds": [
+    201,
+    202,
+    525,
+    591,
+    603,
+    626,
+    919,
+    920,
+    950,
+    998,
+    1004,
+    1005,
+    1006,
+    1007,
+    1014,
+    1021,
+    1022,
+    1023,
+    1026,
+    1027,
+    1028,
+    1033,
+    1098,
+    1130,
+    1133,
+    1134,
+    1136,
+    1139,
+    1141,
+    1145,
+    1148,
+    1149,
+    1153,
+    1154,
+    1157,
+    1158,
+    1159,
+    1162,
+    1163,
+    1166,
+    1167,
+    1174,
+    1175,
+    1178,
+    1179,
+    1181,
+    1182,
+    1183,
+    1185,
+    1186,
+    1188
+  ],
+  "explicitlyExcludedZeroQuantityOrderIds": [
+    250,
+    1165,
+    1177
+  ],
+  "candidateTotals": {
+    "orders": 51,
+    "items": 505,
+    "quantity": 3839,
+    "subtotalCents": 383214700,
+    "taxCents": 0,
+    "totalCents": 383214700
+  },
+  "construction": {
+    "headers": "Prior authoritative headers updated only from matching updated detailed rows, then restricted to the reviewed allowlist.",
+    "sales": "Updated orderPurchaseReport rows restricted to the reviewed allowlist; every quantity is greater than zero.",
+    "productSummary": "Updated UserProductSummary.json used as price/code evidence.",
+    "priceHistory": "Original item-price-history-report.json retained because no updated price-history export was available.",
+    "refunds": "All candidate IDs verified absent from the updated refund report."
+  },
+  "inputFiles": [
+    {
+      "path": "C:\\Users\\ESHOP\\Desktop\\uzair\\OneFlowe\\reports\\order.json",
+      "bytes": 1172104,
+      "sha256": "2ecadc7e7a0cbb6c96986de1749d116a53e74c8ef96bbc35e5c10a5ef8863288"
+    },
+    {
+      "path": "C:\\Users\\ESHOP\\Desktop\\uzair\\OneFlowe\\reports\\sales-report.json",
+      "bytes": 10795177,
+      "sha256": "065095251268be5c67aad2512c80b04b0e76c45845a80d557698866c366eef6b"
+    },
+    {
+      "path": "C:\\Users\\ESHOP\\Desktop\\uzair\\OneFlowe\\reports\\item-price-history-report.json",
+      "bytes": 589481,
+      "sha256": "71fe08f898d5e0b560049c5212ae058434ada0081fa19048356922663fbc6b71"
+    },
+    {
+      "path": "C:\\Users\\ESHOP\\Desktop\\uzair\\OneFlowe\\reports\\ke-import-exclusion-report.json",
+      "bytes": 202525,
+      "sha256": "d200903f40f41b189e42ce02c8ae2027cb9755e6cac6cfe50734d69efb7da029"
+    },
+    {
+      "path": "C:\\Users\\ESHOP\\Desktop\\uzair\\OneFlowe\\reports\\updatedReports\\Orders (8).xls",
+      "bytes": 74116,
+      "sha256": "fd6703f94197bf269d5626db5d21ccae984b85547c8f88c2b85328df0979812d"
+    },
+    {
+      "path": "C:\\Users\\ESHOP\\Desktop\\uzair\\OneFlowe\\reports\\updatedReports\\orderPurchaseReport.json",
+      "bytes": 10867175,
+      "sha256": "592cbabfe391b78bd49f7cfcda6f5e7061f3b12220f89fa4b08590922a3738df"
+    },
+    {
+      "path": "C:\\Users\\ESHOP\\Desktop\\uzair\\OneFlowe\\reports\\updatedReports\\UserProductSummary.json",
+      "bytes": 3898801,
+      "sha256": "71ac3b326b6fdbca5e5819e2941daf26fd060be7d5f0810ccc01d8cc5976c595"
+    },
+    {
+      "path": "C:\\Users\\ESHOP\\Desktop\\uzair\\OneFlowe\\reports\\updatedReports\\refundReport.json",
+      "bytes": 37720,
+      "sha256": "d0f5a3535230f2ec886d1bc66d5719661b61671f35e536ef3045a1951a5a4355"
+    }
+  ],
+  "generatedFiles": [
+    {
+      "path": "C:\\Users\\ESHOP\\Desktop\\uzair\\OneFlowe\\reports\\updatedReports\\ke-safe-import-2026-07-23\\reports\\order.json",
+      "bytes": 62299,
+      "sha256": "8717c6acc1319e5003b79ad796dcebbfe36e27112971e84947e2d2cd7e87f583"
+    },
+    {
+      "path": "C:\\Users\\ESHOP\\Desktop\\uzair\\OneFlowe\\reports\\updatedReports\\ke-safe-import-2026-07-23\\reports\\sales-report.json",
+      "bytes": 718900,
+      "sha256": "d1e98bd5e330c7a731392b9af60c070ecb0ad7943d91e08df25e060268d93282"
+    },
+    {
+      "path": "C:\\Users\\ESHOP\\Desktop\\uzair\\OneFlowe\\reports\\updatedReports\\ke-safe-import-2026-07-23\\reports\\user-product-summary-report.json",
+      "bytes": 3898801,
+      "sha256": "71ac3b326b6fdbca5e5819e2941daf26fd060be7d5f0810ccc01d8cc5976c595"
+    },
+    {
+      "path": "C:\\Users\\ESHOP\\Desktop\\uzair\\OneFlowe\\reports\\updatedReports\\ke-safe-import-2026-07-23\\reports\\item-price-history-report.json",
+      "bytes": 589481,
+      "sha256": "71fe08f898d5e0b560049c5212ae058434ada0081fa19048356922663fbc6b71"
+    }
+  ]
+}

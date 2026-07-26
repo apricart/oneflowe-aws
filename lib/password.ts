@@ -1,18 +1,10 @@
 import bcrypt from "bcryptjs"
 import { randomInt } from "crypto"
+import { env } from "@/lib/server/env"
 
 const MIN_PASSWORD_LENGTH = 12
 const MAX_PASSWORD_LENGTH = 128
-const DEFAULT_SALT_ROUNDS = 12
-
-// Validate salt rounds configuration
-const SALT_ROUNDS = (() => {
-  const envRounds = Number(process.env.BCRYPT_ROUNDS)
-  if (isNaN(envRounds) || envRounds < 10 || envRounds > 15) {
-    return DEFAULT_SALT_ROUNDS
-  }
-  return envRounds
-})()
+const SALT_ROUNDS = env.BCRYPT_ROUNDS
 
 /**
  * Validate password meets bank-grade requirements

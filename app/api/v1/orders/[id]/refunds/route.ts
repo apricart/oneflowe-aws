@@ -9,8 +9,11 @@ import { releaseRefundedQuantityBudget } from "@/lib/server/product-quantity-bud
 import { orderSelectColumns } from "@/lib/order-select"
 import { calculateLineCents, formatQuantity, validateProductQuantity } from "@/lib/quantity"
 import { sendRefundRequestEmail } from "@/lib/email"
+import { withRateLimit } from "@/lib/rate-limiter"
 import { ADMIN_OPERATIONS_EMAIL } from "@/lib/email/recipients"
 import { buildRefundSuccessPayload, redactRefundHistoryForPriceHidden } from "@/lib/refund-visibility"
+import { refundRequestSchema, validationMessage } from "@/lib/server/mutation-validation"
+import { isPaidForRefund, isRefundEligibleOrderStatus } from "@/lib/business-rules"
 
 const refundRequestRoles = new Set(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL"])
 
@@ -172,6 +175,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
+    const rateLimit = await withRateLimit("refund", (session.user as any).id)
+    if (rateLimit) return rateLimit
+
     const { id } = await params
 
     // Validate order ID
@@ -184,18 +190,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ error: "Invalid order ID" }, { status: 400 })
     }
 
-    let body
+    let rawBody
     try {
-      body = await req.json()
+      rawBody = await req.json()
     } catch (jsonError) {
       return NextResponse.json({ error: "Invalid JSON in request body" }, { status: 400 })
     }
 
-    const { items, reason } = body as { items: { id: number, quantity: number }[], reason?: string }
-
-    if (!items || !Array.isArray(items) || items.length === 0) {
-      return NextResponse.json({ error: 'List of items to refund is required' }, { status: 400 })
+    const parsedBody = refundRequestSchema.safeParse(rawBody)
+    if (!parsedBody.success) {
+      return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
     }
+    const { items, reason } = parsedBody.data
 
     // Fetch order with validation
     const [ord] = await db.select(orderSelectColumns).from(orders).where(eq(orders.id, orderId)).limit(1)
@@ -209,10 +215,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // Validate order status
     const orderStatus = String(orderData.status || '').toUpperCase()
 
-    if (orderStatus === 'REFUNDED') {
+    if (!isRefundEligibleOrderStatus(orderStatus)) {
       return NextResponse.json({
-        error: 'Order has already been fully refunded'
+        error: `Order in ${orderStatus || "unknown"} state is not eligible for a refund`
       }, { status: 400 })
+    }
+
+    if (!isPaidForRefund(orderData.paymentStatus)) {
+      return NextResponse.json({ error: "Only paid orders are eligible for a refund" }, { status: 400 })
     }
 
     // Validate refund window (must be same month/year)
@@ -317,6 +327,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       })
     }
 
+    if (!Number.isSafeInteger(totalRefundAmount) || totalRefundAmount <= 0) {
+      return NextResponse.json({ error: "Selected items do not have a positive refundable amount" }, { status: 400 })
+    }
+
     // Check for existing refunds to prevent over-refunding (amount check as safety net)
     const existingRefunds = await db
       .select({ amountCents: refunds.amountCents, status: refunds.status })
@@ -398,11 +412,67 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     // Execute refund in transaction
     await db.transaction(async (tx) => {
+      const [lockedOrder] = await tx
+        .select(orderSelectColumns)
+        .from(orders)
+        .where(eq(orders.id, orderId))
+        .for('update')
+
+      if (!lockedOrder || !isRefundEligibleOrderStatus(lockedOrder.status) || !isPaidForRefund(lockedOrder.paymentStatus)) {
+        throw new Error("REFUND_ELIGIBILITY_CONFLICT")
+      }
+
+      const liveRefundLines = await tx
+        .select({
+          orderItemId: refundItems.orderItemId,
+          quantity: refundItems.quantity,
+          status: refunds.status,
+        })
+        .from(refundItems)
+        .innerJoin(refunds, eq(refundItems.refundId, refunds.id))
+        .where(and(
+          eq(refunds.orderId, orderId),
+          inArray(refunds.status, ["PENDING", "APPROVED", "COMPLETED"]),
+        ))
+
+      const liveRefundedQuantityByItem = new Map<number, number>()
+      for (const line of liveRefundLines) {
+        liveRefundedQuantityByItem.set(
+          line.orderItemId,
+          (liveRefundedQuantityByItem.get(line.orderItemId) || 0) + Number(line.quantity || 0),
+        )
+      }
+
+      for (const detail of refundDetails) {
+        const originalItem = orderItemsMap.get(detail.orderItemId)
+        const remainingQuantity = Number(originalItem?.quantity || 0) - (liveRefundedQuantityByItem.get(detail.orderItemId) || 0)
+        if (!originalItem || detail.quantity > remainingQuantity) {
+          throw new Error("REFUND_AVAILABILITY_CONFLICT")
+        }
+      }
+
+      const liveRefundRecords = await tx
+        .select({ amountCents: refunds.amountCents, status: refunds.status })
+        .from(refunds)
+        .where(eq(refunds.orderId, orderId))
+      const liveApprovedRecordTotal = liveRefundRecords
+        .filter((record) => record.status === "APPROVED" || record.status === "COMPLETED")
+        .reduce((sum, record) => sum + Number(record.amountCents || 0), 0)
+      const livePendingTotal = liveRefundRecords
+        .filter((record) => record.status === "PENDING")
+        .reduce((sum, record) => sum + Number(record.amountCents || 0), 0)
+      const liveApprovedTotal = Math.max(liveApprovedRecordTotal, Number(lockedOrder.refundAmountCents || 0))
+
+      if (totalRefundAmount > Number(lockedOrder.totalCents) - liveApprovedTotal - livePendingTotal) {
+        throw new Error("REFUND_AVAILABILITY_CONFLICT")
+      }
+
       let refundId: number;
 
       // Check if this is a full refund
-      const newApprovedTotal = approvedTotal + (userRole === "SUPER_ADMIN" ? totalRefundAmount : 0)
-      const isFullRefund = newApprovedTotal >= orderData.totalCents
+      const newApprovedTotal = liveApprovedTotal + (userRole === "SUPER_ADMIN" ? totalRefundAmount : 0)
+      const liveOrderStatus = String(lockedOrder.status || "").toUpperCase()
+      const isFullRefund = newApprovedTotal >= Number(lockedOrder.totalCents)
       const refundType = isFullRefund ? "FULL" : "PARTIAL"
 
       if (userRole === "SUPER_ADMIN") {
@@ -439,7 +509,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           // FULFILLED → amountSpentCents; APPROVED/PENDING → amountHeldCents
           // We NEVER touch amountCreditedCents (addon) on a refund — that field
           // is exclusively for manual Head-Office add-on credits.
-          const isFulfilled = orderStatus === "FULFILLED"
+          const isFulfilled = liveOrderStatus === "FULFILLED"
           await tx
             .update(budgets)
             .set(
@@ -460,7 +530,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
         await releaseRefundedQuantityBudget(
           tx,
-          orderData,
+          lockedOrder,
           refundDetails.map((item) => ({
             orderItemId: item.orderItemId,
             quantity: item.quantity,
@@ -472,11 +542,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           .update(orders)
           .set({
             refundAmountCents: sql`COALESCE(${orders.refundAmountCents}, 0) + ${totalRefundAmount}`,
-            statusAtRefund: orderStatus, // Preserve original order status
+            statusAtRefund: liveOrderStatus, // Preserve original order status
             refundedAt: new Date(),
             refundedByUserId: userId,
             // Change status to REFUNDED only if this is a full refund
-            status: isFullRefund ? "REFUNDED" : orderStatus,
+            status: isFullRefund ? "REFUNDED" : liveOrderStatus,
             updatedAt: new Date()
           })
           .where(eq(orders.id, orderId))
@@ -607,6 +677,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     }))
   } catch (e: any) {
     console.error('[Refunds] Error processing refund:', e)
+    if (["REFUND_AVAILABILITY_CONFLICT", "REFUND_ELIGIBILITY_CONFLICT", "QUANTITY_BUDGET_LEDGER_INVARIANT"].includes(e?.message)) {
+      return NextResponse.json({
+        error: "Refund eligibility changed while the request was being processed. Refresh and try again."
+      }, { status: 409 })
+    }
     if (e.code === '23503') {
       return NextResponse.json({ error: 'Referenced order or user not found' }, { status: 404 })
     }

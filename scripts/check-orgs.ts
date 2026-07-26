@@ -3,7 +3,7 @@ dotenv.config({ path: ".env.local" })
 dotenv.config()
 
 async function main() {
-  const { db } = await import("../lib/db")
+  const { db } = await import("../lib/db-cli")
   const { organizations } = await import("../db/schema")
   const { sql } = await import("drizzle-orm")
 

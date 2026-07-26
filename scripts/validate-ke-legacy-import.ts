@@ -26,7 +26,7 @@ async function main() {
     totalCents: totals.totalCents + order.totalCents,
   }), { orders: 0, items: 0, quantity: 0, subtotalCents: 0, taxCents: 0, totalCents: 0 })
 
-  const { pool } = await import("../lib/db")
+  const { pool } = await import("../lib/db-cli")
   const client = await pool.connect()
   try {
     await client.query("begin transaction isolation level repeatable read read only")

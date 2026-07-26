@@ -4,6 +4,11 @@ import { requireApiRole, ok, error } from "@/lib/api"
 import { db } from "@/lib/db"
 import { scheduledReports } from "@/db/schema"
 import { getRequestScope } from "@/lib/auth"
+import {
+    reportScheduleSchema,
+    validationMessage,
+} from "@/lib/server/mutation-validation"
+import { withRateLimit } from "@/lib/rate-limiter"
 
 const allowedRoles = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"] as const
 
@@ -19,6 +24,7 @@ export async function GET(req: NextRequest) {
             .select()
             .from(scheduledReports)
             .where(eq(scheduledReports.userId, scope.userId))
+            .limit(100)
 
         return ok(userSchedules)
     } catch (e: any) {
@@ -38,12 +44,15 @@ export async function POST(req: NextRequest) {
     const scope = await getRequestScope()
     if (!scope?.userId) return error("Unauthorized", 401)
 
-    const body = await req.json()
-    const { reportName, frequency, format, emails, enabled, id } = body
+    const rateLimit = await withRateLimit("report", scope.userId)
+    if (rateLimit) return rateLimit
 
-    if (!reportName || !frequency || !format || !emails) {
-        return error("Missing required fields")
+    const rawBody = await req.json().catch(() => null)
+    const parsedBody = reportScheduleSchema.safeParse(rawBody)
+    if (!parsedBody.success) {
+        return error(validationMessage(parsedBody.error), 400)
     }
+    const { reportName, frequency, format, emails, enabled, id } = parsedBody.data
 
     try {
         if (id) {
@@ -80,7 +89,7 @@ export async function POST(req: NextRequest) {
         }
     } catch (e: any) {
         console.error("Schedule Save Error:", e)
-        return error(e.message || "Failed to save schedule")
+        return error("Failed to save schedule")
     }
 }
 
@@ -90,6 +99,9 @@ export async function DELETE(req: NextRequest) {
 
     const scope = await getRequestScope()
     if (!scope?.userId) return error("Unauthorized", 401)
+
+    const rateLimit = await withRateLimit("report", scope.userId)
+    if (rateLimit) return rateLimit
 
     const { searchParams } = new URL(req.url)
     const id = searchParams.get("id")

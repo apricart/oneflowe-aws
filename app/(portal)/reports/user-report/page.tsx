@@ -13,6 +13,7 @@ import {
 } from "lucide-react"
 import { KPICard } from "@/components/reports/kpi-card"
 import * as XLSX from "xlsx"
+import { sanitizeSpreadsheetRow } from "@/lib/spreadsheet"
 import { formatPKR, cn } from "@/lib/utils"
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
@@ -442,7 +443,10 @@ export default function UserReportPage() {
             return
         }
 
-        const worksheet = XLSX.utils.aoa_to_sheet([headers, ...rows])
+        const worksheet = XLSX.utils.aoa_to_sheet([
+            sanitizeSpreadsheetRow(headers),
+            ...rows.map(sanitizeSpreadsheetRow),
+        ])
         const workbook = XLSX.utils.book_new()
         XLSX.utils.book_append_sheet(workbook, worksheet, "Users")
         XLSX.writeFile(workbook, `user-report-${new Date().getTime()}.${format === 'excel' ? 'xlsx' : 'csv'}`)

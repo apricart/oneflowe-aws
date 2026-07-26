@@ -100,6 +100,20 @@ export const ERROR_MESSAGES = {
  */
 export function parseError(error: any): ErrorDetails {
   const errorMsg = error?.message || error?.toString() || ''
+  const databaseError = error?.cause || error
+
+  // Drizzle includes SQL column names such as `organization_id` in query
+  // failures. Classify database failures before user-facing keyword matching so
+  // they are not incorrectly reported as organization permission errors.
+  if (
+    error?.name === 'DrizzleQueryError' ||
+    errorMsg.includes('Failed query:') ||
+    databaseError?.severity ||
+    databaseError?.routine ||
+    isDatabaseError(databaseError)
+  ) {
+    return parseDatabaseError(databaseError)
+  }
 
   // Validation errors
   if (errorMsg.includes('required')) {

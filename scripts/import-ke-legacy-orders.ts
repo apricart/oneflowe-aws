@@ -169,8 +169,11 @@ function loadOverrides(path: string | undefined): {
   }
 }
 
-function generatedProductCode(normalizedName: string): string {
-  return `LEG-KE-${createHash("sha1").update(normalizedName).digest("hex").slice(0, 16).toUpperCase()}`
+function canonicalKeProductCodeNumber(value: unknown): number | undefined {
+  const match = /^prd--(\d+)$/i.exec(String(value ?? "").trim())
+  if (!match) return undefined
+  const number = Number(match[1])
+  return Number.isSafeInteger(number) && number > 0 ? number : undefined
 }
 
 function uniqueBy<T>(rows: T[], key: (row: T) => string): T | undefined {
@@ -225,7 +228,7 @@ async function main() {
     : source.manifest
   const digest = manifestDigest(confirmationManifest)
 
-  const { db, pool } = await import("../lib/db")
+  const { db, pool } = await import("../lib/db-cli")
   const schema = await import("../db/schema")
   const { and, eq, inArray, isNull, sql } = await import("drizzle-orm")
 
@@ -548,6 +551,19 @@ async function main() {
     productsByName.set(name, [...(productsByName.get(name) ?? []), product])
     productsByCode.set(code, [...(productsByCode.get(code) ?? []), product])
   }
+  let nextCanonicalProductCode = dbProducts.reduce((maximum, product) => {
+    const number = canonicalKeProductCodeNumber(product.productCode)
+    return number === undefined ? maximum : Math.max(maximum, number)
+  }, 0) + 1
+  const reserveCanonicalProductCode = (): string => {
+    while (productsByCode.has(normalizeText(`PRD--${nextCanonicalProductCode}`))) {
+      nextCanonicalProductCode += 1
+    }
+    const code = `PRD--${nextCanonicalProductCode}`
+    nextCanonicalProductCode += 1
+    productsByCode.set(normalizeText(code), [])
+    return code
+  }
 
   const productResolutions: ProductResolution[] = []
   for (const [normalizedName, fact] of productFacts) {
@@ -590,7 +606,7 @@ async function main() {
         productResolutions.push({ normalizedName, sourceName: fact.sourceName, sourceCodes: [...fact.codes], latestPriceCents: fact.latestPriceCents, globalProductId: product.id, organizationInventoryId: orgInventoryByProduct.get(product.id), existingProductCode: product.productCode, kind: uniqueCode ? "EXISTING_CODE" : "EXISTING_NAME" })
       }
     } else {
-      const proposedProductCode = generatedProductCode(normalizedName)
+      const proposedProductCode = reserveCanonicalProductCode()
       if ((productsByCode.get(normalizeText(proposedProductCode)) ?? []).length > 0) {
         productResolutions.push({ normalizedName, sourceName: fact.sourceName, sourceCodes: [...fact.codes], latestPriceCents: fact.latestPriceCents, kind: "CONFLICT", reason: `generated product code ${proposedProductCode} already exists without a legacy mapping` })
       } else {
@@ -1001,20 +1017,41 @@ async function main() {
         notes: `Historical import from ${LEGACY_SOURCE}; legacy order ${order.legacyOrderId}`,
         createdByUserId,
         createdAt: order.createdAt,
+        deliveredAt: order.fulfilledAt,
         fulfilledAt: order.fulfilledAt,
         updatedAt: order.fulfilledAt,
         receiptData: buildReceipt(order, branch, productIds) as any,
       }
     })
     const orderIdByLegacyId = new Map<number, number>()
-    const legacyIdByTid = new Map(readyOrders.map((order) => [`KE-LEGACY-${order.legacyOrderId}`, order.legacyOrderId]))
-    for (const values of chunksOf(orderValues, 100)) {
-      const created = await tx.insert(schema.orders).values(values).returning({ id: schema.orders.id, tid: schema.orders.tid })
-      for (const row of created) {
-        const legacyOrderId = legacyIdByTid.get(row.tid)
-        if (!legacyOrderId) throw new Error(`Unexpected TID returned from bulk order insert: ${row.tid}`)
-        orderIdByLegacyId.set(legacyOrderId, row.id)
+    // Production may temporarily lag additive application columns such as
+    // idempotency_key/request_fingerprint. Historical imports do not use those
+    // fields, so name only the stable physical columns required by this
+    // K-Electric transaction instead of asking Drizzle to emit every modeled
+    // orders column with DEFAULT.
+    for (const orderValue of orderValues) {
+      const result = await tx.execute<{ id: number; tid: string }>(sql`
+        insert into orders (
+          tid, organization_id, branch_id, status, fulfillment_status,
+          payment_status, subtotal_cents, tax_cents, total_cents, notes,
+          created_by_user_id, created_at, fulfilled_at, updated_at, receipt_data
+        ) values (
+          ${orderValue.tid}, ${orderValue.organizationId}, ${orderValue.branchId},
+          ${orderValue.status}, ${orderValue.fulfillmentStatus},
+          ${orderValue.paymentStatus}, ${orderValue.subtotalCents},
+          ${orderValue.taxCents}, ${orderValue.totalCents}, ${orderValue.notes},
+          ${orderValue.createdByUserId}, ${orderValue.createdAt},
+          ${orderValue.fulfilledAt}, ${orderValue.updatedAt},
+          ${JSON.stringify(orderValue.receiptData)}::jsonb
+        )
+        returning id, tid
+      `)
+      const row = result.rows[0]
+      const legacyOrderId = Number(row?.tid?.replace(/^KE-LEGACY-/, ""))
+      if (!row || !Number.isSafeInteger(legacyOrderId)) {
+        throw new Error(`Unexpected TID returned from historical order insert: ${row?.tid ?? "missing"}`)
       }
+      orderIdByLegacyId.set(legacyOrderId, row.id)
     }
     if (orderIdByLegacyId.size !== readyOrders.length) throw new Error("Bulk order creation count validation failed")
 
@@ -1200,7 +1237,21 @@ async function main() {
   await pool.end()
 }
 
+function safeImportError(error: unknown): Record<string, unknown> {
+  const top = error && typeof error === "object" ? error as Record<string, unknown> : {}
+  const cause = top.cause && typeof top.cause === "object" ? top.cause as Record<string, unknown> : {}
+  const safe = {
+    message: cause.message ?? top.message ?? String(error),
+    code: cause.code,
+    detail: cause.detail,
+    constraint: cause.constraint,
+    table: cause.table,
+    column: cause.column,
+  }
+  return Object.fromEntries(Object.entries(safe).filter(([, value]) => value !== undefined))
+}
+
 main().catch(async (error) => {
-  console.error(`\nImport failed: ${error instanceof Error ? error.message : String(error)}`)
+  console.error(`\nImport failed: ${JSON.stringify(safeImportError(error))}`)
   process.exitCode = 1
 })

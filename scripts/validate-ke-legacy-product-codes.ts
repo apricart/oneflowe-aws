@@ -268,7 +268,7 @@ async function main(): Promise<void> {
   }
 
   const targetIds = Array.from({ length: CONFIG.productCount }, (_, index) => CONFIG.firstProductId + index)
-  const { pool } = await import("../lib/db")
+  const { pool } = await import("../lib/db-cli")
   const client = await pool.connect()
   try {
     await client.query("begin transaction isolation level repeatable read read only")

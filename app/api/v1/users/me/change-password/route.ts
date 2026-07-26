@@ -5,6 +5,7 @@ import { hashPassword } from "@/lib/password"
 import { ok, error, readJson } from "@/lib/api"
 import { getCurrentUser } from "@/lib/auth"
 import { invalidateSessionValidationCache } from "@/lib/session-validation-cache"
+import { withRateLimit } from "@/lib/rate-limiter"
 
 export async function POST(req: Request) {
   try {
@@ -15,6 +16,9 @@ export async function POST(req: Request) {
     if (currentUser.id.startsWith("emp_")) {
       return error("Not applicable for employee accounts", 400)
     }
+
+    const rateLimit = await withRateLimit("sensitive", currentUser.id)
+    if (rateLimit) return rateLimit
 
     const body = await readJson<{ password?: string }>(req)
     if (!body?.password) return error("New password is required", 400)

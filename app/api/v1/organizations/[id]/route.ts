@@ -30,6 +30,7 @@ import {
   groupAuditLogs
 } from "@/db/schema"
 import { eq, count, and, ne, isNull, isNotNull } from "drizzle-orm"
+import { organizationUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
 
 export async function GET(
   _: Request,
@@ -57,8 +58,11 @@ export async function PATCH(
 ) {
   const err = await requireApiRole(["SUPER_ADMIN"])
   if (err) return err
-  const body = await readJson<any>(req)
-  if (!body) return error("Invalid body", 400)
+  const rawBody = await readJson<unknown>(req)
+  if (!rawBody) return error("Invalid body", 400)
+  const parsedBody = organizationUpdateSchema.safeParse(rawBody)
+  if (!parsedBody.success) return error(validationMessage(parsedBody.error), 400)
+  const body = parsedBody.data
   try {
     const params = await props.params
     const { id } = params
@@ -109,32 +113,17 @@ export async function PATCH(
         .returning()
 
       if (budgetAllocationMode !== undefined) {
-        const [existingSetting] = await tx
-          .select({ id: organizationSettings.id })
-          .from(organizationSettings)
-          .where(and(
-            eq(organizationSettings.organizationId, Number(id)),
-            eq(organizationSettings.key, BUDGET_ALLOCATION_MODE_SETTING_KEY),
-          ))
-          .limit(1)
-
-        if (existingSetting) {
-          await tx
-            .update(organizationSettings)
-            .set({
-              value: budgetAllocationMode,
-              updatedAt: new Date(),
-            })
-            .where(eq(organizationSettings.id, existingSetting.id))
-        } else {
-          await tx
-            .insert(organizationSettings)
-            .values({
-              organizationId: Number(id),
-              key: BUDGET_ALLOCATION_MODE_SETTING_KEY,
-              value: budgetAllocationMode,
-            })
-        }
+        await tx
+          .insert(organizationSettings)
+          .values({
+            organizationId: Number(id),
+            key: BUDGET_ALLOCATION_MODE_SETTING_KEY,
+            value: budgetAllocationMode,
+          })
+          .onConflictDoUpdate({
+            target: [organizationSettings.organizationId, organizationSettings.key],
+            set: { value: budgetAllocationMode, updatedAt: new Date() },
+          })
       }
 
       return [updatedOrganization]
@@ -156,7 +145,7 @@ export async function PATCH(
       },
     })
   } catch (e: any) {
-    return error(e?.message || "Update failed", 400)
+    return error("Update failed", 400)
   }
 }
 

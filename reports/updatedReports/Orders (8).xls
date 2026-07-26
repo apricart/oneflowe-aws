@@ -1,0 +1,799 @@
+﻿Location,TransactionNo,OrderNo,Date,UserDetails,LocationGroup,GrandTotal,OrderType,Order Status
+Cluster Office Korangi,7,2,2026-07-11,Muhammad Javeed -,Distribution Group,6335,Urgent,Cancelled
+Cluster Office Korangi,6,1,2026-07-11,Muhammad Javeed -,Distribution Group,6335,Urgent,Cancelled
+ACCOUNT PAYABLE,22,1,2026-07-10,MUHAMMAD AAMIR NAEEM Account Payable,Enabling Group,47288,Counter Order,Delivered
+Corp Taxation,21,1,2026-07-10,Muhammad Huzaifa Qureshi,Enabling Group,19994,Urgent,Out For Delivery
+NETWORK CONTROL  (LDC),13,1,2026-07-09,Muhammad Usman Siddiqui (DM),Tranmission Group,125290,Urgent,Delivered
+CHSEQ,12,2,2026-07-09,Syed Sheeraz Jawaid,Enabling Group,84825,Urgent,Delivered
+PROCUREMENT,84,1,2026-07-07,Sajjad Ahmed Bashir Procurement,Enabling Group,8385,Counter Order,Delivered
+SCADA - MST,16,1,2026-07-07,Syed Salik Hussain (DGM SCADA),Tranmission Group,7994,Counter Order,Delivered
+Telecom,16,1,2026-07-07,Anwer Ali Sheikh (DGM Telecom),Tranmission Group,21985,Counter Order,Delivered
+Works,20,1,2026-07-07,RIZWAN BAIG -,Enabling Group,24602,Urgent,Delivered
+GSMP North,15,1,2026-07-07,KASHIF (DGM GSMP),Tranmission Group,14997,Counter Order,Delivered
+KE HOUSE,26,1,2026-07-07,SHAHZAD ALI KE House,Enabling Group,699996,Counter Order,Delivered
+GSMP Centralized,13,1,2026-07-06,MUHAMMAD ADIL NADEEM (DGM GSMP),Tranmission Group,14988,Counter Order,Delivered
+IT DEPARTMENT,58,1,2026-07-03,Muhammad Nauman Liaqat,Enabling Group,208582,Urgent,Delivered
+PROCUREMENT,83,1,2026-07-03,Sajjad Ahmed Bashir Procurement,Enabling Group,101474,Counter Order,Delivered
+GSMP-KKI,52,1,2026-07-03,Kashif Memon LDC Building,Tranmission Group,9994,Urgent,Delivered
+HQ (75-B) Security,13,1,2026-07-03,Syed Khawar Hasan,Enabling Group,129831,Urgent,Delivered
+CEO Task Force,13,1,2026-07-03,khawar Hassan,Enabling Group,20288,Urgent,Delivered
+GSMP South,14,1,2026-07-02,SYED IBTIHAJ UDDIN (Manager GSMP),Tranmission Group,14987,Urgent,Delivered
+People Services,16,1,2026-07-01,Hafiz Sharif,Enabling Group,149986,Counter Order,Out For Delivery
+GSMP East,14,1,2026-07-01,SAJID ALI (DGM GSMP),Tranmission Group,14982,Counter Order,Delivered
+GSMP AQA,15,1,2026-07-01,MUDASSAR QAISER (Manager GSMP),Tranmission Group,14988,Urgent,Delivered
+SCADA - SAS/RTU,21,1,2026-07-01,Sikander Sheikh (Manager SCADA),Tranmission Group,25785,Urgent,Delivered
+Internal Audit,19,1,2026-07-01,Amina Akhtar,Enabling Group,64154,Urgent,Delivered
+FMS,11,1,2026-07-01,WAJIHA AKHTER,Enabling Group,9980,Urgent,Delivered
+IBC Nazimabad,5,1,2026-06-30,Khurram Ali -,Distribution Group,17745,Urgent,Delivered
+Industrial Region III - Zone 2,1,1,2026-06-30,Nabi Dad Khan -,Distribution Group,34750,Urgent,Delivered
+network engenering,2,1,2026-06-30,Viqar Sami -,Distribution Group,29875,Urgent,Delivered
+NCSD,5,1,2026-06-29,Rehan Sajid -,Distribution Group,54295,Urgent,InProcess
+Society Cluster,1,1,2026-06-24,Tariq shan -,Distribution Group,49595,Urgent,Delivered
+Cluster Office Korangi,5,1,2026-06-24,Muhammad Javeed -,Distribution Group,11245,Counter Order,Delivered
+CRMC,1,1,2026-06-24,Faheem Ahmed Channa DM,Distribution Group,71015,Urgent,Delivered
+SITE,3,1,2026-06-24,Murtaza Ali Shah -,Distribution Group,29840,Counter Order,Delivered
+Cluster Gulshan,3,1,2026-06-23,Rahila Naz -,Distribution Group,61130,Counter Order,Delivered
+North Karachi,4,1,2026-06-23,Sumaira Bukhari -,Distribution Group,34880,Counter Order,Delivered
+Corp. Affairs,9,1,2026-06-23,Irfanuddin -,Enabling Group,16525,Counter Order,Delivered
+IBC Nazimabad,4,1,2026-06-23,Khurram Ali -,Distribution Group,19870,Counter Order,Delivered
+Business Finance Capex,7,1,2026-06-23,mukesh.kumar -,Distribution Group,22515,Urgent,Delivered
+Transformation,2,1,2026-06-23,Waheed-ur-Rehman Chughtai -,Distribution Group,47240,Urgent,Delivered
+PSC,2,1,2026-06-23,Atif Nisar Hassan -,Distribution Group,33445,Counter Order,Delivered
+bin qasim,1,1,2026-06-23,Syed Musharraf Ali -,Distribution Group,34730,Counter Order,Delivered
+IBC Clifton (Transmission),11,1,2026-06-22,Yasir Miohiuddin,Tranmission Group,14832,Urgent,Cancelled
+BALDIA,7,1,2026-06-22,Umer Sajjad -,Distribution Group,16000,Counter Order,Delivered
+IBC Gulshan,6,1,2026-06-22,Imtiaz Ali -,Distribution Group,51250,Counter Order,Delivered
+Network planing,1,1,2026-06-22,Shahzad Hussain Baloch -,Distribution Group,31950,Urgent,Delivered
+Cluster defense,5,1,2026-06-22,Hammad khan -,Distribution Group,19180,Counter Order,Delivered
+CNC DEPT,3,1,2026-06-22,Ibadur Rehman -,Distribution Group,14860,Urgent,Delivered
+North Nazimabad,6,1,2026-06-20,Imran-ul-Hassan -,Distribution Group,35815,Counter Order,Delivered
+liyari I,4,1,2026-06-20,Abdul Rauf Amanullah -,Distribution Group,14985,Urgent,Delivered
+Technical head,2,2,2026-06-19,Adnan Shareef Rathore -,Distribution Group,7410,Urgent,Delivered
+REGION 1,5,1,2026-06-19,Rehan Umer -,Distribution Group,31880,Counter Order,Delivered
+IBC Defence,8,1,2026-06-19,Tehreem fatima -,Distribution Group,18115,Counter Order,Delivered
+REGION 2,2,1,2026-06-19,Ifrah Sabeeh -,Distribution Group,69775,Counter Order,Delivered
+New Karachi,4,1,2026-06-19,Ayesha Hanif -,Distribution Group,39720,Urgent,Delivered
+Technical head,1,1,2026-06-19,Adnan Shareef Rathore -,Distribution Group,27516,Urgent,Delivered
+Cluster Johar,3,1,2026-06-19,Aamir Aslam,Distribution Group,39935,Urgent,Delivered
+HOPE ( P & E ),3,1,2026-06-19,Muhammad Kashif Shah -,Distribution Group,39995,Counter Order,Delivered
+Energy Planning & +50,1,1,2026-06-19,Asim Khan (Engg),Distribution Group,60740,Counter Order,Delivered
+HR L&OD,9,1,2026-06-18,SHEHRYAR AMAN,Enabling Group,55455,Counter Order,Delivered
+Legal DLD,10,1,2026-06-18,MASAHIB ALI,Enabling Group,29954,Counter Order,Delivered
+Saddar IBC,2,1,2026-06-18,Kaleem Baig Mirza Muhammad,Distribution Group,35260,Counter Order,Delivered
+CM-Surjani,5,1,2026-06-18,Syed Kashif Raza -,Distribution Group,29860,Urgent,Delivered
+IBC UTHAL,1,1,2026-06-18,Shokat Ali Saifal -,Distribution Group,34800,Counter Order,Delivered
+GSMP West,11,1,2026-06-18,ALLAH WASAYO DAHRI (DGM GSMP),Tranmission Group,15000,Counter Order,Delivered
+CM Korangi cluster,3,1,2026-06-18,usman Anjum -,Distribution Group,24970,Counter Order,Delivered
+Civil,10,1,2026-06-18,RIZWAN BAIG -,Enabling Group,6975,Urgent,Delivered
+Works,19,1,2026-06-18,RIZWAN BAIG -,Enabling Group,16417,Urgent,Delivered
+Defence cluster (CM),3,1,2026-06-17,Muhammad Kashif -,Distribution Group,2560,Counter Order,Delivered
+IBC KIMZ,1,1,2026-06-17,Ayesha Islam Abdul -,Distribution Group,16135,Counter Order,Delivered
+Project Dept,1,1,2026-06-17,Huzaifa Anis -,Distribution Group,149850,Urgent,Delivered
+Inventory Management,10,1,2026-06-17,Wasiulhaq -,Enabling Group,184980,Counter Order,Delivered
+IBC Liaquatabad,5,1,2026-06-17,Waseem Ahmed -,Distribution Group,34190,Counter Order,Delivered
+IBC shah faisal,8,1,2026-06-17,Zain Yasir,Distribution Group,3840,Counter Order,Delivered
+Cluster Gulshan,2,1,2026-06-17,Rahila Naz -,Distribution Group,48865,Urgent,Delivered
+Cluster Office Korangi,4,1,2026-06-17,Muhammad Javeed -,Distribution Group,13225,Urgent,Delivered
+IBC Gulshan,5,1,2026-06-16,Imtiaz Ali -,Distribution Group,48710,Urgent,Delivered
+Technical RIII - Zone 1,1,1,2026-06-16,Muneeb Ahmed Shaikh -,Distribution Group,28080,Urgent,Delivered
+IBC Nazimabad,3,1,2026-06-16,Khurram Ali -,Distribution Group,15505,Urgent,Delivered
+Defence cluster (CM),2,2,2026-06-16,Muhammad Kashif -,Distribution Group,10440,Counter Order,Cancelled
+Defence cluster (CM),1,1,2026-06-16,Muhammad Kashif -,Distribution Group,10440,Counter Order,Delivered
+HSEQ & Quality control,3,1,2026-06-16,Waheed Solangi -,Distribution Group,64980,Counter Order,Delivered
+IBC BHD,3,1,2026-06-16,Danyal Ahmed Siddiqui -,Distribution Group,49935,Urgent,Delivered
+IBC korangi,3,1,2026-06-16,Nisma Zafar -,Distribution Group,37140,Counter Order,Delivered
+IBC Malir,1,1,2026-06-15,Shaikh Zeesan -,Distribution Group,37190,Urgent,Delivered
+MTD,4,1,2026-06-15,Muhammad Faiz -,Distribution Group,35990,Counter Order,Delivered
+1. GSO,32,1,2026-06-15,Hafiz M. Irfan,Tranmission Group,1459600,Urgent,Delivered
+Society Cluster - Technical,2,1,2026-06-15,Ali Jaffari -,Distribution Group,15430,Counter Order,Delivered
+NETWORK CONTROL  (LDC),12,1,2026-06-12,Muhammad Usman Siddiqui (DM),Tranmission Group,166532,Urgent,Delivered
+KEDNA,4,1,2026-06-12,Nida Hashim -,Distribution Group,3470,Urgent,Delivered
+IBC shah faisal,7,3,2026-06-12,Zain Yasir,Distribution Group,2130,Counter Order,Delivered
+IBC shah faisal,6,2,2026-06-12,Zain Yasir,Distribution Group,2100,Counter Order,Delivered
+IBC shah faisal,5,1,2026-06-12,Zain Yasir,Distribution Group,2240,Counter Order,Delivered
+GSMP North,14,1,2026-06-12,KASHIF (DGM GSMP),Tranmission Group,15000,Counter Order,Delivered
+CHSEQ,10,1,2026-06-12,Syed Sheeraz Jawaid,Enabling Group,84855,Urgent,Delivered
+Johar |,1,1,2026-06-11,Muhammad Shehryar -,Distribution Group,36990,Urgent,Delivered
+TPCM (P & E),3,1,2026-06-11,Kanwal Saeed,Distribution Group,29975,Counter Order,Delivered
+IT DEPARTMENT,57,1,2026-06-10,Muhammad Nauman Liaqat,Enabling Group,213841,Urgent,Delivered
+GSMP,7,1,2026-06-10,Zahid Mushtaq LDC Building,Tranmission Group,4810,Counter Order,Delivered
+KEDNA,3,1,2026-06-10,Nida Hashim -,Distribution Group,57915,Urgent,Delivered
+Surjani,12,3,2026-06-10,Muddasir Khan -,Distribution Group,2240,Urgent,Delivered
+Surjani,11,2,2026-06-10,Muddasir Khan -,Distribution Group,10000,Urgent,Delivered
+Surjani,10,1,2026-06-10,Muddasir Khan -,Distribution Group,20155,Urgent,Delivered
+BALDIA,6,1,2026-06-09,Umer Sajjad -,Distribution Group,15985,Counter Order,Delivered
+ALMAWA,2,1,2026-06-09,Syed Kashif Raza -,Distribution Group,15980,Urgent,Delivered
+GSMP-KKI,51,1,2026-06-09,Kashif Memon LDC Building,Tranmission Group,9959,Urgent,Delivered
+INDUSTRIAL REGION R-3,1,1,2026-06-09,lareb Sabir,Distribution Group,59820,Counter Order,Delivered
+ASM-QYD,22,1,2026-06-09,Farooq Muhammad Hassan GM Asset Maintenance (Qayyumabad Region),Tranmission Group,56970,Urgent,Delivered
+Telecom,15,1,2026-06-08,Anwer Ali Sheikh (DGM Telecom),Tranmission Group,21999,Counter Order,Delivered
+SCADA - MST,15,1,2026-06-08,Syed Salik Hussain (DGM SCADA),Tranmission Group,7993,Counter Order,Delivered
+Civic Center,1,1,2026-06-08,FAHAD AHMED KHAN,Enabling Group,382325,Counter Order,Delivered
+Fleet Qayyumabad,8,1,2026-06-08,farhan Abdul Rehman,Distribution Group,89970,Urgent,Delivered
+AMI,1,1,2026-06-05,Mohammad Azher Saeed Abbasi,Distribution Group,41960,Counter Order,Delivered
+IBC Gadap,5,1,2026-06-05,Arsalan Asghar khan -,Distribution Group,40000,Counter Order,Delivered
+Cluster Office Korangi,3,1,2026-06-05,Muhammad Javeed -,Distribution Group,1725,Counter Order,Delivered
+KE HOUSE,25,1,2026-06-04,SHAHZAD ALI KE House,Enabling Group,699990,Counter Order,Delivered
+Works,18,1,2026-06-04,RIZWAN BAIG -,Enabling Group,23545,Urgent,Delivered
+PAYROLL & FUNDS,21,1,2026-06-04,SHOAIB UR REHMAN Payroll & Funds,Enabling Group,20970,Urgent,Delivered
+GSMP AQA,14,1,2026-06-04,MUDASSAR QAISER (Manager GSMP),Tranmission Group,14976,Urgent,Delivered
+PROCUREMENT,82,1,2026-06-04,Sajjad Ahmed Bashir Procurement,Enabling Group,50021,Counter Order,Delivered
+COMPLIANCE & RISK MO,7,1,2026-06-03,Huzaifa Ashraf,Enabling Group,46987,Urgent,Delivered
+IBC Clifton (Transmission),10,1,2026-06-03,Yasir Miohiuddin,Tranmission Group,14847,Urgent,Delivered
+IBC Landhi,2,1,2026-06-03,Abeera Kamran -,Distribution Group,24205,Counter Order,Delivered
+GSMP East,13,1,2026-06-02,SAJID ALI (DGM GSMP),Tranmission Group,15000,Counter Order,Delivered
+GSMP South,13,1,2026-06-02,SYED IBTIHAJ UDDIN (Manager GSMP),Tranmission Group,14967,Urgent,Delivered
+Business Finance Capex,6,1,2026-06-02,mukesh.kumar -,Distribution Group,45550,Urgent,Delivered
+Internal Audit,18,1,2026-06-02,Amina Akhtar,Enabling Group,69039,Urgent,Delivered
+GSMP Centralized,12,1,2026-06-02,MUHAMMAD ADIL NADEEM (DGM GSMP),Tranmission Group,14995,Counter Order,Delivered
+SCADA - SAS/RTU,20,1,2026-06-02,Sikander Sheikh (Manager SCADA),Tranmission Group,25787,Urgent,Delivered
+HQ (75-B) Security,12,1,2026-06-01,Syed Khawar Hasan,Enabling Group,123032,Urgent,Delivered
+KE Police (Security),10,1,2026-06-01,Mustafa Khan,Enabling Group,11230,Counter Order,Delivered
+PSC,1,1,2026-06-01,Atif Nisar Hassan -,Distribution Group,33360,Normal,Delivered
+lyari II,6,1,2026-06-01,Mobin Khan -,Distribution Group,14925,Counter Order,Delivered
+Corp Taxation,20,11,2026-06-01,Rohail Qadir,Enabling Group,19979,Counter Order,Delivered
+Corp Taxation,19,10,2026-06-01,Rohail Qadir,Enabling Group,19979,Normal,Cancelled
+Corp Taxation,18,9,2026-06-01,Rohail Qadir,Enabling Group,19979,Normal,Cancelled
+Corp Taxation,17,8,2026-06-01,Rohail Qadir,Enabling Group,19979,Normal,Cancelled
+Corp Taxation,16,7,2026-06-01,Rohail Qadir,Enabling Group,19979,Normal,Cancelled
+Corp Taxation,15,6,2026-06-01,Rohail Qadir,Enabling Group,19979,Normal,Cancelled
+Corp Taxation,14,5,2026-06-01,Rohail Qadir,Enabling Group,19979,Normal,Cancelled
+Corp Taxation,13,4,2026-06-01,Rohail Qadir,Enabling Group,19979,Normal,Cancelled
+Corp Taxation,12,3,2026-06-01,Rohail Qadir,Enabling Group,19979,Urgent,Cancelled
+Corp Taxation,11,2,2026-06-01,Rohail Qadir,Enabling Group,19979,Urgent,Cancelled
+Corp Taxation,10,1,2026-06-01,Rohail Qadir,Enabling Group,19979,Urgent,Cancelled
+ASM-KDA,12,1,2026-06-01,Daniyal Fatmi (Manager ASMK),Tranmission Group,24360,Counter Order,Delivered
+CLUSTER 7 Baldia,6,1,2026-06-01,Sheikh Zakir -,Distribution Group,34985,Urgent,Delivered
+FMS,10,1,2026-06-01,WAJIHA AKHTER,Enabling Group,9935,Urgent,Delivered
+GAMZAN,5,2,2026-06-01,Syeda Urooj Fatima,Generation Group,30547,Urgent,Cancelled
+GAMZAN,4,1,2026-06-01,Syeda Urooj Fatima,Generation Group,30547,Urgent,Delivered
+People Services,15,1,2026-06-01,Hafiz Sharif,Enabling Group,149993,Counter Order,Delivered
+CEO Task Force,12,1,2026-06-01,khawar Hassan,Enabling Group,20538,Counter Order,Delivered
+Cluster Office Korangi,2,1,2026-05-30,Muhammad Javeed -,Distribution Group,10130,Counter Order,Delivered
+MTD,3,1,2026-05-30,Muhammad Faiz -,Distribution Group,35965,Counter Order,Delivered
+Cluster office Surjani,6,1,2026-05-30,Faisal Shaikh -,Distribution Group,39970,Counter Order,Delivered
+Transformation,1,1,2026-05-29,Waheed-ur-Rehman Chughtai -,Distribution Group,47235,Urgent,Delivered
+network engenering,1,1,2026-05-29,Viqar Sami -,Distribution Group,29970,Urgent,Delivered
+Cluster Office Korangi,1,1,2026-05-29,Muhammad Javeed -,Distribution Group,14605,Urgent,Delivered
+North Karachi,3,1,2026-05-29,Sumaira Bukhari -,Distribution Group,34930,Counter Order,Delivered
+HR L&OD,8,1,2026-05-25,SHEHRYAR AMAN,Enabling Group,55465,Counter Order,Delivered
+Internal Audit,17,1,2026-05-25,Amina Akhtar,Enabling Group,2145,Urgent,Delivered
+HOPE ( P & E ),2,1,2026-05-22,Muhammad Kashif Shah -,Distribution Group,39685,Counter Order,Delivered
+NCSD,4,1,2026-05-22,Rehan Sajid -,Distribution Group,54345,Counter Order,Delivered
+Saddar IBC,1,1,2026-05-22,Kaleem Baig Mirza Muhammad,Distribution Group,34220,Counter Order,Delivered
+IBC Defence,7,1,2026-05-22,Tehreem fatima -,Distribution Group,9175,Urgent,Delivered
+GSMP West,10,1,2026-05-22,ALLAH WASAYO DAHRI (DGM GSMP),Tranmission Group,14991,Counter Order,Delivered
+CM Korangi cluster,2,1,2026-05-22,usman Anjum -,Distribution Group,24990,Counter Order,Delivered
+Corp. Affairs,8,1,2026-05-21,Irfanuddin -,Enabling Group,17820,Counter Order,Delivered
+REGION 2,1,1,2026-05-21,Ifrah Sabeeh -,Distribution Group,69990,Urgent,Delivered
+Fleet Qayyumabad,7,7,2026-05-21,farhan Abdul Rehman,Distribution Group,85630,Urgent,Delivered
+Fleet Qayyumabad,6,6,2026-05-21,farhan Abdul Rehman,Distribution Group,85630,Counter Order,Cancelled
+Fleet Qayyumabad,5,5,2026-05-21,farhan Abdul Rehman,Distribution Group,85630,Counter Order,Cancelled
+Fleet Qayyumabad,4,4,2026-05-21,farhan Abdul Rehman,Distribution Group,83930,Urgent,Cancelled
+Fleet Qayyumabad,3,3,2026-05-21,farhan Abdul Rehman,Distribution Group,83930,Urgent,Cancelled
+Fleet Qayyumabad,2,2,2026-05-21,farhan Abdul Rehman,Distribution Group,83930,Urgent,Cancelled
+Fleet Qayyumabad,1,1,2026-05-21,farhan Abdul Rehman,Distribution Group,83930,Urgent,Cancelled
+IBC shah faisal,4,4,2026-05-21,Zain Yasir,Distribution Group,960,Counter Order,Delivered
+IBC shah faisal,3,3,2026-05-21,Zain Yasir,Distribution Group,12280,Counter Order,Delivered
+IBC shah faisal,2,2,2026-05-21,Zain Yasir,Distribution Group,6280,Counter Order,Delivered
+IBC shah faisal,1,1,2026-05-21,Zain Yasir,Distribution Group,4970,Urgent,Delivered
+New Karachi,3,1,2026-05-20,Ayesha Hanif -,Distribution Group,39975,Urgent,Delivered
+Legal DLD,9,1,2026-05-20,MASAHIB ALI,Enabling Group,29940,Counter Order,Delivered
+BALDIA,5,1,2026-05-19,Umer Sajjad -,Distribution Group,15925,Counter Order,Delivered
+CNC DEPT,2,1,2026-05-19,Ibadur Rehman -,Distribution Group,14860,Urgent,Delivered
+HSEQ & Quality control,2,1,2026-05-18,Waheed Solangi -,Distribution Group,65000,Counter Order,Delivered
+REGION 1,4,1,2026-05-18,Rehan Umer -,Distribution Group,65345,Counter Order,Delivered
+TPCM (P & E),2,1,2026-05-18,Kanwal Saeed,Distribution Group,29920,Urgent,Delivered
+liyari I,3,1,2026-05-18,Abdul Rauf Amanullah -,Distribution Group,14960,Urgent,Delivered
+ASM-KDA,11,1,2026-05-18,Daniyal Fatmi (Manager ASMK),Tranmission Group,24284,Counter Order,Delivered
+Inventory Management,9,1,2026-05-18,Wasiulhaq -,Enabling Group,184977,Counter Order,Delivered
+1. GSO,31,1,2026-05-15,Hafiz M. Irfan,Tranmission Group,1459530,Urgent,Delivered
+GSMP-KKI,50,1,2026-05-15,Kashif Memon LDC Building,Tranmission Group,9964,Counter Order,Delivered
+People Services,14,1,2026-05-14,Hafiz Sharif,Enabling Group,44781,Counter Order,Delivered
+IBC korangi,2,1,2026-05-14,Nisma Zafar -,Distribution Group,37215,Counter Order,Delivered
+Civil,9,1,2026-05-14,RIZWAN BAIG -,Enabling Group,6800,Urgent,Delivered
+Works,17,1,2026-05-14,RIZWAN BAIG -,Enabling Group,39984,Urgent,Delivered
+IBC Gadap,4,1,2026-05-12,Arsalan Asghar khan -,Distribution Group,40000,Urgent,Delivered
+PROCUREMENT,81,1,2026-05-12,Sajjad Ahmed Bashir Procurement,Enabling Group,109999,Counter Order,Delivered
+NETWORK CONTROL  (LDC),11,1,2026-05-12,Muhammad Usman Siddiqui (DM),Tranmission Group,102645,Urgent,Delivered
+North Nazimabad,5,1,2026-05-11,Imran-ul-Hassan -,Distribution Group,40000,Counter Order,Delivered
+KPC,3,1,2026-05-11,Syeda Urooj Fatima Rizvi,Generation Group,20235,Counter Order,Cancelled
+ASM-QYD,21,1,2026-05-11,Farooq Muhammad Hassan GM Asset Maintenance (Qayyumabad Region),Tranmission Group,56983,Urgent,Delivered
+CHSEQ,9,1,2026-05-11,Syed Sheeraz Jawaid,Enabling Group,84925,Urgent,Delivered
+SCADA - MST,14,1,2026-05-11,Syed Salik Hussain (DGM SCADA),Tranmission Group,8000,Counter Order,Delivered
+Surjani,9,1,2026-05-09,Muddasir Khan -,Distribution Group,3830,Urgent,Delivered
+lyari II,5,1,2026-05-09,Mobin Khan -,Distribution Group,14990,Counter Order,Delivered
+CM-Surjani,4,1,2026-05-08,Syed Kashif Raza -,Distribution Group,39950,Counter Order,Delivered
+Cluster office Surjani,5,1,2026-05-08,Faisal Shaikh -,Distribution Group,39700,Counter Order,Delivered
+IBC Clifton (Transmission),9,1,2026-05-08,Yasir Miohiuddin,Tranmission Group,14832,Urgent,Delivered
+ALMAWA,1,1,2026-05-08,Syed Kashif Raza -,Distribution Group,19855,Counter Order,Delivered
+IBC Landhi,1,1,2026-05-08,Abeera Kamran -,Distribution Group,24980,Urgent,Delivered
+Surjani,8,1,2026-05-08,Muddasir Khan -,Distribution Group,23490,Urgent,Delivered
+GSMP,6,1,2026-05-08,Zahid Mushtaq LDC Building,Tranmission Group,4805,Urgent,Delivered
+PAYROLL & FUNDS,20,1,2026-05-08,SHOAIB UR REHMAN Payroll & Funds,Enabling Group,20987,Urgent,Delivered
+GSMP North,13,1,2026-05-08,KASHIF (DGM GSMP),Tranmission Group,15000,Counter Order,Delivered
+Telecom,14,1,2026-05-06,Anwer Ali Sheikh (DGM Telecom),Tranmission Group,21968,Counter Order,Delivered
+GSMP Centralized,11,1,2026-05-06,MUHAMMAD ADIL NADEEM (DGM GSMP),Tranmission Group,14984,Counter Order,Delivered
+Corp Taxation,9,1,2026-05-06,Rohail Qadir,Enabling Group,19998,Urgent,Delivered
+KE Police (Security),9,1,2026-05-06,Mustafa Khan,Enabling Group,11265,Counter Order,Delivered
+SCADA - SAS/RTU,19,1,2026-05-05,Sikander Sheikh (Manager SCADA),Tranmission Group,25778,Urgent,Delivered
+KE HOUSE,24,1,2026-05-05,SHAHZAD ALI KE House,Enabling Group,700000,Counter Order,Delivered
+Business Finance Capex,5,1,2026-05-05,mukesh.kumar -,Distribution Group,44985,Urgent,Delivered
+GSMP AQA,13,1,2026-05-05,MUDASSAR QAISER (Manager GSMP),Tranmission Group,14985,Urgent,Delivered
+FMS,9,1,2026-05-04,WAJIHA AKHTER,Enabling Group,9975,Counter Order,Delivered
+Internal Audit,16,1,2026-05-04,Amina Akhtar,Enabling Group,53556,Urgent,Delivered
+People Services,13,1,2026-05-04,Hafiz Sharif,Enabling Group,104484,Counter Order,Delivered
+GSMP South,12,1,2026-05-04,SYED IBTIHAJ UDDIN (Manager GSMP),Tranmission Group,14965,Urgent,Delivered
+CEO Task Force,11,1,2026-05-04,khawar Hassan,Enabling Group,19928,Counter Order,Delivered
+HQ (75-B) Security,11,1,2026-05-04,Syed Khawar Hasan,Enabling Group,123567,Urgent,Delivered
+GSMP East,12,1,2026-05-04,SAJID ALI (DGM GSMP),Tranmission Group,14975,Counter Order,Delivered
+HSEQ & Quality control,1,1,2026-04-30,Waheed Solangi -,Distribution Group,59890,Counter Order,Delivered
+NCSD,3,1,2026-04-30,Rehan Sajid -,Distribution Group,54200,Counter Order,Delivered
+HR L&OD,7,1,2026-04-30,SHEHRYAR AMAN,Enabling Group,55465,Counter Order,Delivered
+CM Korangi cluster,1,1,2026-04-30,usman Anjum -,Distribution Group,24990,Counter Order,Delivered
+TPCM (P & E),1,1,2026-04-29,Kanwal Saeed,Distribution Group,29640,Urgent,Delivered
+HOPE ( P & E ),1,1,2026-04-29,Muhammad Kashif Shah -,Distribution Group,39670,Urgent,Delivered
+COMPLIANCE & RISK MO,6,1,2026-04-29,Huzaifa Ashraf,Enabling Group,44842,Counter Order,Delivered
+ACCOUNT PAYABLE,21,1,2026-04-29,MUHAMMAD AAMIR NAEEM Account Payable,Enabling Group,41685,Counter Order,Delivered
+IT DEPARTMENT,56,1,2026-04-29,Muhammad Nauman Liaqat,Enabling Group,229974,Counter Order,Delivered
+Corp. Affairs,7,1,2026-04-29,Irfanuddin -,Enabling Group,15195,Counter Order,Delivered
+CNC DEPT,1,1,2026-04-28,Ibadur Rehman -,Distribution Group,14915,Urgent,Delivered
+North Nazimabad,4,1,2026-04-27,Imran-ul-Hassan -,Distribution Group,39915,Counter Order,Delivered
+IBC korangi,1,1,2026-04-27,Nisma Zafar -,Distribution Group,12945,Counter Order,Delivered
+ASM-QYD,20,1,2026-04-27,Farooq Muhammad Hassan GM Asset Maintenance (Qayyumabad Region),Tranmission Group,10110,Urgent,Delivered
+Legal DLD,8,1,2026-04-24,MASAHIB ALI,Enabling Group,29944,Counter Order,Delivered
+MTD,2,1,2026-04-24,Muhammad Faiz -,Distribution Group,35855,Counter Order,Delivered
+MEGA CENTER,1,1,2026-04-23,Tariq shan -, ,34685,Urgent,Cancelled
+New Karachi,2,1,2026-04-23,Ayesha Hanif -,Distribution Group,38520,Urgent,Delivered
+GSMP North,12,1,2026-04-22,KASHIF (DGM GSMP),Tranmission Group,14998,Counter Order,Delivered
+GSMP West,9,1,2026-04-21,ALLAH WASAYO DAHRI (DGM GSMP),Tranmission Group,15000,Counter Order,Delivered
+GSMP,5,1,2026-04-20,Zahid Mushtaq LDC Building,Tranmission Group,4890,Counter Order,Delivered
+Inventory Management,8,1,2026-04-20,Wasiulhaq -,Enabling Group,184989,Counter Order,Delivered
+ASM-KDA,10,1,2026-04-20,Daniyal Fatmi (Manager ASMK),Tranmission Group,24290,Counter Order,Delivered
+ASM-QYD,19,1,2026-04-17,Farooq Muhammad Hassan GM Asset Maintenance (Qayyumabad Region),Tranmission Group,46882,Urgent,Delivered
+NETWORK CONTROL  (LDC),10,1,2026-04-15,Muhammad Usman Siddiqui (DM),Tranmission Group,125799,Urgent,Delivered
+PROCUREMENT,80,1,2026-04-15,Sajjad Ahmed Bashir Procurement,Enabling Group,109985,Counter Order,Delivered
+IBC Clifton (Transmission),8,1,2026-04-15,Yasir Miohiuddin,Tranmission Group,14820,Urgent,Delivered
+North Nazimabad,3,1,2026-04-14,Imran-ul-Hassan -,Distribution Group,39930,Counter Order,Cancelled
+New Karachi,1,1,2026-04-14,Ayesha Hanif -,Distribution Group,19300,Urgent,Cancelled
+BALDIA,4,1,2026-04-14,Umer Sajjad -,Distribution Group,16805,Counter Order,Cancelled
+People Services,12,1,2026-04-14,Hafiz Sharif,Enabling Group,128824,Counter Order,Delivered
+1. GSO,30,1,2026-04-13,Hafiz M. Irfan,Tranmission Group,1459570,Urgent,Delivered
+Business Finance Capex,4,1,2026-04-13,mukesh.kumar -,Distribution Group,41625,Urgent,Delivered
+REGION 1,3,1,2026-04-13,Rehan Umer -,Distribution Group,65365,Counter Order,Delivered
+CLUSTER 7 Baldia,5,1,2026-04-13,Sheikh Zakir -,Distribution Group,34985,Counter Order,Delivered
+Civil,8,1,2026-04-13,RIZWAN BAIG -,Enabling Group,6995,Urgent,Delivered
+Works,16,1,2026-04-13,RIZWAN BAIG -,Enabling Group,39824,Urgent,Delivered
+CHSEQ,8,1,2026-04-10,Syed Sheeraz Jawaid,Enabling Group,84815,Urgent,Delivered
+GSMP AQA,12,1,2026-04-10,MUDASSAR QAISER (Manager GSMP),Tranmission Group,14967,Urgent,Delivered
+FMS,8,1,2026-04-10,WAJIHA AKHTER,Enabling Group,9975,Urgent,Delivered
+Telecom,13,1,2026-04-09,Anwer Ali Sheikh (DGM Telecom),Tranmission Group,21870,Counter Order,Delivered
+IBC Gadap,3,1,2026-04-09,Arsalan Asghar khan -,Distribution Group,20995,Counter Order,Cancelled
+lyari II,4,2,2026-04-09,Mobin Khan -,Distribution Group,2200,Counter Order,Delivered
+lyari II,3,1,2026-04-09,Mobin Khan -,Distribution Group,30850,Counter Order,Delivered
+CM-Surjani,3,1,2026-04-09,Syed Kashif Raza -,Distribution Group,24975,Counter Order,Delivered
+Cluster defense,4,1,2026-04-09,Hammad khan -,Distribution Group,13195,Counter Order,Delivered
+GSMP South,11,1,2026-04-09,SYED IBTIHAJ UDDIN (Manager GSMP),Tranmission Group,14994,Urgent,Delivered
+Cluster office Surjani,4,1,2026-04-09,Faisal Shaikh -,Distribution Group,39700,Counter Order,Cancelled
+IBC Defence,6,1,2026-04-09,Tehreem fatima -,Distribution Group,11845,Urgent,Delivered
+Corp Taxation,8,1,2026-04-08,Rohail Qadir,Enabling Group,19991,Urgent,Delivered
+GSMP Centralized,10,1,2026-04-07,MUHAMMAD ADIL NADEEM (DGM GSMP),Tranmission Group,14971,Counter Order,Delivered
+SCADA - MST,13,1,2026-04-06,Syed Salik Hussain (DGM SCADA),Tranmission Group,8000,Counter Order,Delivered
+GSMP East,11,1,2026-04-06,SAJID ALI (DGM GSMP),Tranmission Group,14992,Counter Order,Delivered
+GAMZAN,3,3,2026-04-06,Syeda Urooj Fatima,Generation Group,18657,Urgent,Cancelled
+GAMZAN,2,2,2026-04-06,Syeda Urooj Fatima,Generation Group,18657,Urgent,Cancelled
+GAMZAN,1,1,2026-04-06,Syeda Urooj Fatima,Generation Group,18657,Counter Order,Delivered
+KPC,2,1,2026-04-06,Syeda Urooj Fatima Rizvi,Generation Group,3015,Counter Order,Delivered
+Internal Audit,15,1,2026-04-06,Amina Akhtar,Enabling Group,53839,Urgent,Cancelled
+SCADA - SAS/RTU,18,1,2026-04-03,Sikander Sheikh (Manager SCADA),Tranmission Group,25800,Urgent,Delivered
+KPC,1,1,2026-04-03,Syeda Urooj Fatima Rizvi,Generation Group,20210,Counter Order,Delivered
+HQ (75-B) Security,10,1,2026-04-03,Syed Khawar Hasan,Enabling Group,115205,Counter Order,Delivered
+KE HOUSE,23,1,2026-04-03,SHAHZAD ALI KE House,Enabling Group,699990,Counter Order,Delivered
+CEO Task Force,10,1,2026-04-03,khawar Hassan,Enabling Group,7460,Counter Order,Delivered
+KE Police (Security),8,1,2026-04-03,Mustafa Khan,Enabling Group,11320,Counter Order,Delivered
+Internal Audit,14,4,2026-04-02,Amina Akhtar,Enabling Group,60154,Urgent,Delivered
+Internal Audit,13,3,2026-04-02,Amina Akhtar,Enabling Group,60154,Urgent,Cancelled
+Internal Audit,12,2,2026-04-02,Amina Akhtar,Enabling Group,60154,Urgent,Cancelled
+Internal Audit,11,1,2026-04-02,Amina Akhtar,Enabling Group,60154,Urgent,Cancelled
+GSMP-KKI,49,1,2026-04-02,Kashif Memon LDC Building,Tranmission Group,9969,Counter Order,Delivered
+HR L&OD,6,1,2026-03-31,SHEHRYAR AMAN,Enabling Group,55466,Counter Order,Delivered
+PAYROLL & FUNDS,19,1,2026-03-30,SHOAIB UR REHMAN Payroll & Funds,Enabling Group,11100,Counter Order,Delivered
+People Services,11,1,2026-03-30,Hafiz Sharif,Enabling Group,23204,Counter Order,Delivered
+GSMP North,11,1,2026-03-30,KASHIF (DGM GSMP),Tranmission Group,14998,Counter Order,Delivered
+People Services,10,1,2026-03-27,Hafiz Sharif,Enabling Group,72035,Counter Order,Delivered
+Works,15,1,2026-03-27,RIZWAN BAIG -,Enabling Group,9177,Urgent,Delivered
+Civil,7,1,2026-03-27,RIZWAN BAIG -,Enabling Group,6998,Urgent,Delivered
+Legal DLD,7,1,2026-03-27,MASAHIB ALI,Enabling Group,29953,Counter Order,Delivered
+SCADA - SAS/RTU,17,1,2026-03-27,Sikander Sheikh (Manager SCADA),Tranmission Group,3380,Urgent,Delivered
+Corp. Affairs,6,1,2026-03-27,Irfanuddin -,Enabling Group,17745,Counter Order,Delivered
+Corp Taxation,7,1,2026-03-26,Rohail Qadir,Enabling Group,9670,Urgent,Delivered
+IBC Clifton (Transmission),7,1,2026-03-26,Yasir Miohiuddin,Tranmission Group,14819,Urgent,Delivered
+Business Finance Capex,3,1,2026-03-25,mukesh.kumar -,Distribution Group,44884,Urgent,Delivered
+GSMP Centralized,9,1,2026-03-25,MUHAMMAD ADIL NADEEM (DGM GSMP),Tranmission Group,15000,Counter Order,Delivered
+FMS,7,1,2026-03-25,WAJIHA AKHTER,Enabling Group,9980,Urgent,Delivered
+SCADA - SAS/RTU,16,1,2026-03-24,Sikander Sheikh (Manager SCADA),Tranmission Group,25798,Counter Order,Delivered
+ACCOUNT PAYABLE,20,1,2026-03-24,MUHAMMAD AAMIR NAEEM Account Payable,Enabling Group,59991,Counter Order,Delivered
+Inventory Management,7,1,2026-03-24,Wasiulhaq -,Enabling Group,184998,Urgent,Delivered
+ASM-QYD,18,1,2026-03-24,Farooq Muhammad Hassan GM Asset Maintenance (Qayyumabad Region),Tranmission Group,39892,Urgent,Delivered
+GSMP South,10,1,2026-03-24,SYED IBTIHAJ UDDIN (Manager GSMP),Tranmission Group,14998,Urgent,Delivered
+Works,14,1,2026-03-16,RIZWAN BAIG -,Enabling Group,30810,Counter Order,Delivered
+SCADA - MST,12,1,2026-03-13,Syed Salik Hussain (DGM SCADA),Tranmission Group,8000,Counter Order,Delivered
+GSMP AQA,11,1,2026-03-13,MUDASSAR QAISER (Manager GSMP),Tranmission Group,1728,Urgent,Delivered
+1. GSO,29,1,2026-03-12,Hafiz M. Irfan,Tranmission Group,1459545,Urgent,Delivered
+Telecom,12,1,2026-03-12,Anwer Ali Sheikh (DGM Telecom),Tranmission Group,21960,Counter Order,Delivered
+KE HOUSE,22,1,2026-03-11,SHAHZAD ALI KE House,Enabling Group,700000,Counter Order,Delivered
+PROCUREMENT,79,1,2026-03-10,Sajjad Ahmed Bashir Procurement,Enabling Group,109987,Counter Order,Delivered
+Internal Audit,10,1,2026-03-10,Amina Akhtar,Enabling Group,55816,Urgent,Delivered
+GSMP East,10,1,2026-03-09,SAJID ALI (DGM GSMP),Tranmission Group,14974,Counter Order,Delivered
+IT DEPARTMENT,55,1,2026-03-09,Muhammad Nauman Liaqat,Enabling Group,229957,Counter Order,Delivered
+HQ (75-B) Security,9,1,2026-03-06,Syed Khawar Hasan,Enabling Group,58372,Counter Order,Delivered
+GSMP AQA,10,1,2026-03-06,MUDASSAR QAISER (Manager GSMP),Tranmission Group,14966,Urgent,Delivered
+KE Police (Security),7,1,2026-03-06,Mustafa Khan,Enabling Group,8130,Counter Order,Delivered
+CEO Task Force,9,1,2026-03-06,khawar Hassan,Enabling Group,6830,Counter Order,Delivered
+GSMP-KKI,48,1,2026-03-05,Kashif Memon LDC Building,Tranmission Group,9979,Counter Order,Delivered
+CHSEQ,7,1,2026-03-05,Syed Sheeraz Jawaid,Enabling Group,84925,Urgent,Delivered
+HR L&OD,5,1,2026-02-25,SHEHRYAR AMAN,Enabling Group,55466,Normal,Delivered
+1. GSO,28,1,2026-02-24,Hafiz M. Irfan,Tranmission Group,1459580,Urgent,Delivered
+NETWORK CONTROL  (LDC),9,1,2026-02-24,Muhammad Usman Siddiqui (DM),Tranmission Group,120515,Urgent,Delivered
+Legal DLD,6,1,2026-02-23,MASAHIB ALI,Enabling Group,29920,Counter Order,Delivered
+Works,13,1,2026-02-19,RIZWAN BAIG -,Enabling Group,16335,Urgent,Delivered
+PAYROLL & FUNDS,18,1,2026-02-17,SHOAIB UR REHMAN Payroll & Funds,Enabling Group,21000,Counter Order,Delivered
+HQ (75-B) Security,8,1,2026-02-13,Syed Khawar Hasan,Enabling Group,5833,Urgent,Delivered
+ASM-QYD,17,1,2026-02-12,Farooq Muhammad Hassan GM Asset Maintenance (Qayyumabad Region),Tranmission Group,8052,Urgent,Delivered
+GSMP West,8,1,2026-02-11,ALLAH WASAYO DAHRI (DGM GSMP),Tranmission Group,14999,Counter Order,Delivered
+GSMP East,9,1,2026-02-11,SAJID ALI (DGM GSMP),Tranmission Group,14970,Counter Order,Delivered
+Corp. Affairs,5,1,2026-02-11,Irfanuddin -,Enabling Group,17423,Counter Order,Delivered
+GSMP-KKI,47,1,2026-02-09,Kashif Memon LDC Building,Tranmission Group,9999,Urgent,Delivered
+IBC Clifton (Transmission),6,1,2026-02-09,Yasir Miohiuddin,Tranmission Group,14840,Urgent,Delivered
+PROCUREMENT,78,1,2026-02-09,Sajjad Ahmed Bashir Procurement,Enabling Group,69118,Counter Order,Delivered
+GSMP North,10,1,2026-02-09,KASHIF (DGM GSMP),Tranmission Group,14989,Counter Order,Delivered
+FMS,6,1,2026-02-07,WAJIHA AKHTER,Enabling Group,9980,Urgent,Delivered
+Inventory Management,6,1,2026-02-07,Wasiulhaq -,Enabling Group,184982,Counter Order,Delivered
+CHSEQ,6,1,2026-02-06,Syed Sheeraz Jawaid,Enabling Group,84885,Urgent,Delivered
+KE HOUSE,21,1,2026-02-06,SHAHZAD ALI KE House,Enabling Group,699975,Counter Order,Delivered
+PROCUREMENT,77,1,2026-02-04,Sajjad Ahmed Bashir Procurement,Enabling Group,40800,Counter Order,Delivered
+SCADA - MST,11,1,2026-02-04,Syed Salik Hussain (DGM SCADA),Tranmission Group,7897,Urgent,Delivered
+Corp Taxation,6,1,2026-02-04,Rohail Qadir,Enabling Group,19981,Urgent,Delivered
+ASM-KDA,9,1,2026-02-03,Daniyal Fatmi (Manager ASMK),Tranmission Group,24120,Counter Order,Delivered
+Telecom,11,1,2026-02-03,Anwer Ali Sheikh (DGM Telecom),Tranmission Group,21965,Counter Order,Delivered
+SCADA - SAS/RTU,15,1,2026-02-03,Sikander Sheikh (Manager SCADA),Tranmission Group,25800,Urgent,Delivered
+Internal Audit,9,1,2026-02-03,Amina Akhtar,Enabling Group,50017,Urgent,Delivered
+GSMP AQA,9,1,2026-02-02,MUDASSAR QAISER (Manager GSMP),Tranmission Group,14952,Urgent,Delivered
+GSMP South,9,1,2026-02-02,SYED IBTIHAJ UDDIN (Manager GSMP),Tranmission Group,14992,Urgent,Delivered
+Telecom,10,1,2026-02-02,Anwer Ali Sheikh (DGM Telecom),Tranmission Group,21986,Counter Order,Cancelled
+GSMP Centralized,8,1,2026-02-02,MUHAMMAD ADIL NADEEM (DGM GSMP),Tranmission Group,14990,Counter Order,Delivered
+KE Police (Security),6,1,2026-02-02,Mustafa Khan,Enabling Group,11320,Counter Order,Delivered
+CEO Task Force,8,1,2026-02-02,khawar Hassan,Enabling Group,22698,Counter Order,Delivered
+HQ (75-B) Security,7,1,2026-02-02,Syed Khawar Hasan,Enabling Group,102379,Urgent,Delivered
+COMPLIANCE & RISK MO,5,1,2026-02-02,Anas Tariq Rehmani -,Enabling Group,33483,Urgent,Delivered
+People Services,9,1,2026-02-02,Hafiz Sharif,Enabling Group,149980,Counter Order,Delivered
+Civil,6,1,2026-02-02,RIZWAN BAIG -,Enabling Group,6959,Urgent,Delivered
+Works,12,1,2026-02-02,RIZWAN BAIG -,Enabling Group,21005,Urgent,Delivered
+GSMP West,7,1,2026-01-29,ALLAH WASAYO DAHRI (DGM GSMP),Tranmission Group,15000,Counter Order,Delivered
+ASM-QYD,16,1,2026-01-27,Farooq Muhammad Hassan GM Asset Maintenance (Qayyumabad Region),Tranmission Group,5450,Urgent,Delivered
+Legal DLD,5,1,2026-01-26,MASAHIB ALI,Enabling Group,29972,Counter Order,Delivered
+IT DEPARTMENT,54,1,2026-01-26,Muhammad Nauman Liaqat,Enabling Group,229989,Counter Order,Delivered
+1. GSO,27,1,2026-01-22,Hafiz M. Irfan,Tranmission Group,1459635,Urgent,Partial
+NETWORK CONTROL  (LDC),8,1,2026-01-22,Muhammad Usman Siddiqui (DM),Tranmission Group,117675,Urgent,Delivered
+Business Finance Capex,2,1,2026-01-20,mukesh.kumar -,Distribution Group,45030,Urgent,Delivered
+ASM-QYD,15,1,2026-01-20,Farooq Muhammad Hassan GM Asset Maintenance (Qayyumabad Region),Tranmission Group,35917,Urgent,Delivered
+Corp. Affairs,4,1,2026-01-19,Irfanuddin -,Enabling Group,15508,Urgent,Delivered
+Surjani,7,6,2026-01-19,Muddasir Khan -,Distribution Group,2128,Urgent,Cancelled
+Surjani,6,5,2026-01-19,Muddasir Khan -,Distribution Group,2128,Urgent,Cancelled
+Surjani,5,4,2026-01-19,Muddasir Khan -,Distribution Group, ,Counter Order,Cancelled
+Surjani,4,3,2026-01-19,Muddasir Khan -,Distribution Group,3850,Urgent,Cancelled
+Surjani,3,2,2026-01-19,Muddasir Khan -,Distribution Group,18600,Urgent,Cancelled
+Surjani,2,1,2026-01-19,Muddasir Khan -,Distribution Group,13400,Urgent,Cancelled
+IBC BHD,2,1,2026-01-16,Danyal Ahmed Siddiqui -,Distribution Group,9325,Counter Order,Cancelled
+ACCOUNT PAYABLE,19,1,2026-01-16,MUHAMMAD AAMIR NAEEM Account Payable,Enabling Group,58760,Counter Order,Delivered
+IBC Defence,5,1,2026-01-16,Tehreem fatima -,Distribution Group,4998,Counter Order,Delivered
+PAYROLL & FUNDS,17,1,2026-01-15,SHOAIB UR REHMAN Payroll & Funds,Enabling Group,20987,Counter Order,Delivered
+GSMP-KKI,46,1,2026-01-10,Kashif Memon LDC Building,Tranmission Group,9975,Counter Order,Delivered
+Works,11,1,2026-01-09,RIZWAN BAIG -,Enabling Group,17872,Urgent,Delivered
+Civil,5,1,2026-01-09,RIZWAN BAIG -,Enabling Group,6945,Urgent,Delivered
+COMPLIANCE & RISK MO,4,1,2026-01-08,Anas Tariq Rehmani -,Enabling Group,30467,Urgent,Delivered
+Inventory Management,5,1,2026-01-08,Wasiulhaq -,Enabling Group,184964,Counter Order,Delivered
+IBC Defence,4,1,2026-01-08,Tehreem fatima -,Distribution Group,12454,Urgent,Delivered
+Corp Taxation,5,1,2026-01-08,Rohail Qadir,Enabling Group,19970,Urgent,Delivered
+IBC CLIFTON,1,1,2026-01-07,Sabir tunio -,Distribution Group,12883,Counter Order,Delivered
+FMS,5,1,2026-01-07,WAJIHA AKHTER,Enabling Group,9980,Urgent,Delivered
+IBC Clifton (Transmission),5,1,2026-01-07,Yasir Miohiuddin,Tranmission Group,14844,Urgent,Delivered
+GSMP South,8,1,2026-01-06,SYED IBTIHAJ UDDIN (Manager GSMP),Tranmission Group,14981,Urgent,Delivered
+Internal Audit,8,1,2026-01-06,Amina Akhtar,Enabling Group,69133,Urgent,Delivered
+GSMP AQA,8,1,2026-01-06,MUDASSAR QAISER (Manager GSMP),Tranmission Group,14988,Urgent,Delivered
+CHSEQ,5,1,2026-01-05,Syed Sheeraz Jawaid,Enabling Group,84950,Urgent,Delivered
+Telecom,9,1,2026-01-05,Anwer Ali Sheikh (DGM Telecom),Tranmission Group,21964,Counter Order,Delivered
+SCADA - MST,10,3,2026-01-05,Syed Salik Hussain (DGM SCADA),Tranmission Group,7975,Urgent,Delivered
+SCADA - MST,9,2,2026-01-05,Syed Salik Hussain (DGM SCADA),Tranmission Group,7974,Urgent,Cancelled
+PROCUREMENT,76,2,2026-01-05,Sajjad Ahmed Bashir Procurement,Enabling Group,6000,Counter Order,Delivered
+SCADA - MST,8,1,2026-01-05,Syed Salik Hussain (DGM SCADA),Tranmission Group,1920,Urgent,Cancelled
+GSMP East,8,1,2026-01-05,SAJID ALI (DGM GSMP),Tranmission Group,14995,Counter Order,Delivered
+GSMP Centralized,7,1,2026-01-05,MUHAMMAD ADIL NADEEM (DGM GSMP),Tranmission Group,14999,Counter Order,Delivered
+GSMP North,9,1,2026-01-05,KASHIF (DGM GSMP),Tranmission Group,15000,Counter Order,Delivered
+PROCUREMENT,75,1,2026-01-05,Sajjad Ahmed Bashir Procurement,Enabling Group,79994,Counter Order,Delivered
+People Services,8,1,2026-01-05,Hafiz Sharif,Enabling Group,149976,Counter Order,Delivered
+People Services,7,2,2026-01-03,Hafiz Sharif,Enabling Group,149926,Counter Order,Cancelled
+People Services,6,1,2026-01-03,Hafiz Sharif,Enabling Group,149986,Counter Order,Cancelled
+SCADA - SAS/RTU,14,1,2026-01-02,Sikander Sheikh (Manager SCADA),Tranmission Group,25800,Urgent,Delivered
+KE HOUSE,20,1,2026-01-02,SHAHZAD ALI KE House,Enabling Group,699971,Counter Order,Delivered
+ASM-KDA,8,1,2026-01-02,Daniyal Fatmi (Manager ASMK),Tranmission Group,24339,Urgent,Delivered
+Cluster defense,3,1,2026-01-01,Hammad khan -,Distribution Group,18953,Counter Order,Delivered
+PROCUREMENT,74,1,2026-01-01,Sajjad Ahmed Bashir Procurement,Enabling Group,24000,Counter Order,Delivered
+HQ (75-B) Security,6,1,2026-01-01,Syed Khawar Hasan,Enabling Group,118280,Urgent,Delivered
+CEO Task Force,7,1,2026-01-01,khawar Hassan,Enabling Group,24101,Counter Order,Delivered
+KE Police (Security),5,1,2026-01-01,Mustafa Khan,Enabling Group,11240,Normal,Delivered
+HR L&OD,4,1,2026-01-01,SHEHRYAR AMAN,Enabling Group,55467,Counter Order,Delivered
+Works,10,1,2026-01-01,RIZWAN BAIG -,Enabling Group,22120,Counter Order,Delivered
+GSMP West,6,1,2025-12-31,ALLAH WASAYO DAHRI (DGM GSMP),Tranmission Group,15000,Counter Order,Delivered
+ASM-QYD,14,1,2025-12-29,Farooq Muhammad Hassan GM Asset Maintenance (Qayyumabad Region),Tranmission Group,9279,Urgent,Delivered
+Corp Taxation,4,1,2025-12-29,Rohail Qadir,Enabling Group,6320,Urgent,Delivered
+Internal Audit,7,1,2025-12-29,Amina Akhtar,Enabling Group,22150,Urgent,Delivered
+NETWORK CONTROL  (LDC),7,1,2025-12-23,Muhammad Usman Siddiqui (DM),Tranmission Group,152475,Counter Order,Delivered
+IT DEPARTMENT,53,1,2025-12-22,Muhammad Nauman Liaqat,Enabling Group,229925,Counter Order,Delivered
+Legal DLD,4,1,2025-12-22,MASAHIB ALI,Enabling Group,29985,Counter Order,Delivered
+Inventory Management,4,1,2025-12-19,Wasiulhaq -,Enabling Group,184987,Counter Order,Delivered
+1. GSO,26,1,2025-12-18,Hafiz M. Irfan,Tranmission Group,1459390,Urgent,Delivered
+REGION 1,2,1,2025-12-17,Rehan Umer -,Distribution Group,65358,Counter Order,Refunded
+IBC BHD,1,1,2025-12-16,Danyal Ahmed Siddiqui -,Distribution Group,6010,Urgent,Delivered
+GSMP North,8,1,2025-12-16,KASHIF (DGM GSMP),Tranmission Group,14990,Counter Order,Delivered
+ACCOUNT PAYABLE,18,1,2025-12-16,MUHAMMAD AAMIR NAEEM Account Payable,Enabling Group,52065,Counter Order,Delivered
+Business Finance Capex,1,1,2025-12-15,mukesh.kumar -,Distribution Group,69889,Urgent,Delivered
+HR L&OD,3,1,2025-12-15,SHEHRYAR AMAN,Enabling Group,55467,Urgent,Delivered
+GSMP South,7,1,2025-12-15,SYED IBTIHAJ UDDIN (Manager GSMP),Tranmission Group,14984,Urgent,Delivered
+IBC Clifton (Transmission),4,1,2025-12-15,Yasir Miohiuddin,Tranmission Group,14814,Urgent,Delivered
+IBC Gulshan,4,1,2025-12-13,Imtiaz Ali -,Distribution Group,13580,Counter Order,Delivered
+IBC Liaquatabad,4,1,2025-12-13,Waseem Ahmed -,Distribution Group,14525,Urgent,Delivered
+liyari I,2,1,2025-12-13,Abdul Rauf Amanullah -,Distribution Group,20026,Counter Order,Delivered
+North Nazimabad,2,1,2025-12-12,Imran-ul-Hassan -,Distribution Group,38520,Counter Order,Delivered
+Cluster office Surjani,3,1,2025-12-12,Faisal Shaikh -,Distribution Group,8160,Counter Order,Delivered
+CM-Surjani,2,1,2025-12-11,Syed Kashif Raza -,Distribution Group,29991,Normal,Delivered
+Corp. Affairs,3,1,2025-12-10,Irfanuddin -,Enabling Group,18795,Normal,Delivered
+Works,9,1,2025-12-10,RIZWAN BAIG -,Enabling Group,19845,Urgent,Delivered
+PAYROLL & FUNDS,16,1,2025-12-10,SHOAIB UR REHMAN Payroll & Funds,Enabling Group,20999,Counter Order,Delivered
+Orangi II,5,1,2025-12-09,M Zeeshan -,Distribution Group,10380,Urgent,Delivered
+CM BALDIA,4,1,2025-12-09,Azam Shaikh -,Distribution Group,19965,Counter Order,Delivered
+Corp Taxation,3,1,2025-12-09,Rohail Qadir,Enabling Group,20000,Urgent,Delivered
+BALDIA,3,2,2025-12-09,Umer Sajjad -,Distribution Group,2300,Counter Order,Delivered
+BALDIA,2,1,2025-12-09,Umer Sajjad -,Distribution Group,19194,Counter Order,Delivered
+COMPLIANCE & RISK MO,3,1,2025-12-09,Anas Tariq Rehmani -,Enabling Group,39393,Counter Order,Delivered
+ASM-QYD,13,1,2025-12-09,Farooq Muhammad Hassan GM Asset Maintenance (Qayyumabad Region),Tranmission Group,43730,Urgent,Delivered
+lyari II,2,1,2025-12-09,Mobin Khan -,Distribution Group,36751,Urgent,Delivered
+CLUSTER 7 Baldia,4,1,2025-12-08,Sheikh Zakir -,Distribution Group,34983,Counter Order,Delivered
+Telecom,8,1,2025-12-08,Anwer Ali Sheikh (DGM Telecom),Tranmission Group,21977,Counter Order,Delivered
+IBC Gadap,2,1,2025-12-08,Arsalan Asghar khan -,Distribution Group,39710,Counter Order,Refunded
+IBC Garden,1,1,2025-12-08,Noor ul Mubeen -,Distribution Group,26130,Counter Order,Delivered
+SCADA - SAS/RTU,13,1,2025-12-08,Sikander Sheikh (Manager SCADA),Tranmission Group,25740,Urgent,Delivered
+GSMP,4,1,2025-12-07,Zahid Mushtaq LDC Building,Tranmission Group,4810,Counter Order,Delivered
+GSMP-KKI,45,1,2025-12-07,Kashif Memon LDC Building,Tranmission Group,9814,Urgent,Delivered
+FMS,4,1,2025-12-05,WAJIHA AKHTER,Enabling Group,9980,Urgent,Delivered
+Cluster Johar,2,1,2025-12-04,Aiman Najam -,Distribution Group,30170,Urgent,Delivered
+IBC Gulshan,3,1,2025-12-04,Imtiaz Ali -,Distribution Group,14230,Urgent,Delivered
+Cluster Gulshan,1,1,2025-12-04,Rahila Naz -,Distribution Group,20595,Urgent,Delivered
+IBC Defence,3,1,2025-12-04,Tehreem fatima -,Distribution Group,4220,Counter Order,Delivered
+CHSEQ,4,1,2025-12-03,Syed Sheeraz Jawaid,Enabling Group,84980,Counter Order,Delivered
+Gulshan CM,1,1,2025-12-03,Irfan Haider Abdi Syed,Distribution Group,18840,Urgent,Delivered
+Cluster defense,2,1,2025-12-03,Hammad khan -,Distribution Group,10320,Counter Order,Delivered
+SCADA - MST,7,1,2025-12-03,Syed Salik Hussain (DGM SCADA),Tranmission Group,7990,Urgent,Delivered
+IBC Nazimabad,2,1,2025-12-03,Khurram Ali -,Distribution Group,12815,Counter Order,Delivered
+GSMP AQA,7,1,2025-12-03,MUDASSAR QAISER (Manager GSMP),Tranmission Group,14976,Urgent,Delivered
+SITE,2,1,2025-12-03,Murtaza Ali Shah -,Distribution Group,29997,Counter Order,Delivered
+Cluster office Surjani,2,1,2025-12-03,Faisal Shaikh -,Distribution Group,31635,Counter Order,Delivered
+PROCUREMENT,73,1,2025-12-02,Sajjad Ahmed Bashir Procurement,Enabling Group,109996,Counter Order,Delivered
+ASM-KDA,7,1,2025-12-02,Daniyal Fatmi (Manager ASMK),Tranmission Group,24220,Urgent,Delivered
+KE HOUSE,19,1,2025-12-02,SHAHZAD ALI KE House,Enabling Group,699971,Counter Order,Delivered
+GSMP East,7,1,2025-12-02,SAJID ALI (DGM GSMP),Tranmission Group,14998,Counter Order,Delivered
+Internal Audit,6,1,2025-12-02,Amina Akhtar,Enabling Group,51819,Counter Order,Delivered
+GSMP Centralized,6,1,2025-12-02,MUHAMMAD ADIL NADEEM (DGM GSMP),Tranmission Group,14983,Counter Order,Delivered
+People Services,5,1,2025-12-01,Hafiz Sharif,Enabling Group,149986,Counter Order,Delivered
+HQ (75-B) Security,5,1,2025-12-01,Syed Khawar Hasan,Enabling Group,128100,Urgent,Delivered
+CEO Task Force,6,1,2025-12-01,khawar Hassan,Enabling Group,24101,Counter Order,Delivered
+KE Police (Security),4,1,2025-12-01,Mustafa Khan,Enabling Group,11275,Counter Order,Delivered
+Society Cluster - Technical,1,1,2025-12-01,Ali Jaffari -,Distribution Group,13480,Counter Order,Delivered
+Civil,4,1,2025-12-01,RIZWAN BAIG -,Enabling Group,6974,Urgent,Delivered
+Works,8,1,2025-12-01,RIZWAN BAIG -,Enabling Group,20116,Urgent,Delivered
+IBC F.B. Area,3,1,2025-11-29,Zafar Iqbal -,Distribution Group,11390,Urgent,Delivered
+IBC Liaquatabad,3,1,2025-11-29,Waseem Ahmed -,Distribution Group,2545,Urgent,Delivered
+IBC Liaquatabad,2,2,2025-11-28,Waseem Ahmed -,Distribution Group,2760,Urgent,Delivered
+NCSD,2,1,2025-11-28,Rehan Sajid -,Distribution Group,23153,Urgent,Delivered
+IBC Liaquatabad,1,1,2025-11-28,Waseem Ahmed -,Distribution Group,5360,Urgent,Cancelled
+IBC Nazimabad,1,1,2025-11-28,Khurram Ali -,Distribution Group,2630,Counter Order,Delivered
+IBC Tipu sultan,1,1,2025-11-27,Siddiqua Mahboob -,Distribution Group,9922,Urgent,Delivered
+IBC Defence,2,1,2025-11-27,Tehreem fatima -,Distribution Group,3185,Normal,Delivered
+COMPLIANCE & RISK MO,2,1,2025-11-26,Anas Tariq Rehmani -,Enabling Group,20122,Counter Order,Delivered
+Internal Audit,5,1,2025-11-25,Amina Akhtar,Enabling Group,19250,Counter Order,Delivered
+society cluster,1,1,2025-11-25,tariq.shan -,Distribution Group,37264,Counter Order,Delivered
+IBC F.B. Area,2,1,2025-11-25,Zafar Iqbal -,Distribution Group,8030,Counter Order,Cancelled
+Orangi II,4,2,2025-11-25,M Zeeshan -,Distribution Group,5026,Counter Order,Delivered
+Orangi II,3,1,2025-11-25,M Zeeshan -,Distribution Group,18940,Counter Order,Delivered
+NCSD,1,1,2025-11-24,Rehan Sajid -,Distribution Group,19502,Counter Order,Delivered
+HR L&OD,2,1,2025-11-24,SHEHRYAR AMAN,Enabling Group,55467,Urgent,Delivered
+Inventory Management,3,1,2025-11-24,Wasiulhaq -,Enabling Group,184992,Counter Order,Delivered
+NETWORK CONTROL  (LDC),6,1,2025-11-21,Muhammad Usman Siddiqui (DM),Tranmission Group,199411,Urgent,Delivered
+GSMP South,6,1,2025-11-21,SYED IBTIHAJ UDDIN (Manager GSMP),Tranmission Group,1700,Urgent,Delivered
+IBC Gulshan,2,2,2025-11-19,Imtiaz Ali -,Distribution Group,105,Counter Order,Delivered
+KEDNA,2,1,2025-11-19,Nida Hashim -,Distribution Group,10035,Urgent,Delivered
+IBC Gulshan,1,1,2025-11-19,Imtiaz Ali -,Distribution Group,49895,Urgent,Delivered
+GSMP West,5,1,2025-11-19,ALLAH WASAYO DAHRI (DGM GSMP),Tranmission Group,14978,Counter Order,Delivered
+REGION 1,1,1,2025-11-18,Rehan Umer -,Distribution Group,65465,Urgent,Delivered
+IBC F.B. Area,1,1,2025-11-18,Zafar Iqbal -,Distribution Group,23298,Urgent,Delivered
+Surjani,1,1,2025-11-18,Muddasir Khan -,Distribution Group,2040,Urgent,Delivered
+IT DEPARTMENT,52,1,2025-11-18,Muhammad Nauman Liaqat,Enabling Group,229868,Urgent,Delivered
+ASM-QYD,12,1,2025-11-18,Farooq Muhammad Hassan GM Asset Maintenance (Qayyumabad Region),Tranmission Group,19798,Urgent,Delivered
+BALDIA,1,1,2025-11-17,Umer Sajjad -,Distribution Group,36986,Urgent,Delivered
+Cluster defense,1,1,2025-11-15,Hammad khan -,Distribution Group,12354,Counter Order,Delivered
+liyari I,1,1,2025-11-15,Abdul Rauf Amanullah -,Distribution Group,14910,Urgent,Delivered
+IBC Defence,1,1,2025-11-14,Tehreem fatima -,Distribution Group,8763,Urgent,Delivered
+MTD,1,1,2025-11-14,Muhammad Faiz -,Distribution Group,35950,Counter Order,Delivered
+North Karachi,2,1,2025-11-14,Sumaira Bukhari -,Distribution Group,13962,Counter Order,Delivered
+Corp. Affairs,2,1,2025-11-14,Irfanuddin -,Enabling Group,18313,Counter Order,Delivered
+CLUSTER 7 Baldia,3,1,2025-11-14,Sheikh Zakir -,Distribution Group,5935,Counter Order,Delivered
+COMPLIANCE & RISK MO,1,1,2025-11-13,Anas Tariq Rehmani -,Enabling Group,31231,Counter Order,Delivered
+North Karachi,1,1,2025-11-13,Sumaira Bukhari -,Distribution Group,21262,Counter Order,Delivered
+Works,7,1,2025-11-13,RIZWAN BAIG -,Enabling Group,17419,Urgent,Delivered
+North Nazimabad,1,1,2025-11-13,Imran-ul-Hassan -,Distribution Group,38960,Counter Order,Delivered
+SITE,1,1,2025-11-13,Murtaza Ali Shah -,Distribution Group,29997,Normal,Delivered
+Cluster Johar,1,1,2025-11-13,Muhammad Nabeel Noor -,Distribution Group,32035,Urgent,Delivered
+1. GSO,25,8,2025-11-12,Hafiz M. Irfan,Tranmission Group,235290,Urgent,Delivered
+1. GSO,24,7,2025-11-12,Hafiz M. Irfan,Tranmission Group,135850,Urgent,Delivered
+1. GSO,23,6,2025-11-12,Hafiz M. Irfan,Tranmission Group,189475,Urgent,Delivered
+Legal DLD,3,1,2025-11-12,MASAHIB ALI,Enabling Group,29950,Counter Order,Delivered
+1. GSO,22,5,2025-11-12,Hafiz M. Irfan,Tranmission Group,310435,Urgent,Delivered
+1. GSO,21,4,2025-11-12,Hafiz M. Irfan,Tranmission Group,115605,Urgent,Delivered
+1. GSO,20,3,2025-11-12,Hafiz M. Irfan,Tranmission Group,166050,Urgent,Delivered
+1. GSO,19,2,2025-11-12,Hafiz M. Irfan,Tranmission Group,257345,Urgent,Delivered
+1. GSO,18,1,2025-11-12,Hafiz M. Irfan,Tranmission Group,49545,Urgent,Delivered
+ACCOUNT PAYABLE,17,1,2025-11-12,MUHAMMAD AAMIR NAEEM Account Payable,Enabling Group,49975,Counter Order,Delivered
+CM BALDIA,3,1,2025-11-12,Azam Shaikh -,Distribution Group,4720,Counter Order,Delivered
+CLUSTER 7 Baldia,2,1,2025-11-11,Sheikh Zakir -,Distribution Group,28406,Normal,Delivered
+CM-Surjani,1,1,2025-11-11,Syed Kashif Raza -,Distribution Group,29961,Urgent,Delivered
+KEDNA,1,1,2025-11-10,Nida Hashim -,Distribution Group,40540,Urgent,Delivered
+PAYROLL & FUNDS,15,1,2025-11-10,SHOAIB UR REHMAN Payroll & Funds,Enabling Group,20969,Counter Order,Delivered
+IBC Clifton (Transmission),3,1,2025-11-10,Yasir Miohiuddin,Tranmission Group,14814,Urgent,Delivered
+Orangi II,2,2,2025-11-10,M Zeeshan -,Distribution Group,4764,Counter Order,Delivered
+Orangi II,1,1,2025-11-10,M Zeeshan -,Distribution Group,11260,Counter Order,Delivered
+Cluster office Surjani,1,1,2025-11-07,Faisal Shaikh -,Distribution Group,39910,Counter Order,Delivered
+CHSEQ,3,1,2025-11-06,Syed Sheeraz Jawaid,Enabling Group,84860,Counter Order,Delivered
+FMS,3,1,2025-11-06,WAJIHA AKHTER,Enabling Group,9955,Urgent,Delivered
+GSMP South,5,1,2025-11-06,SYED IBTIHAJ UDDIN (Manager GSMP),Tranmission Group,14995,Urgent,Delivered
+Internal Audit,4,1,2025-11-06,Amina Akhtar,Enabling Group,52694,Counter Order,Delivered
+CM BALDIA,2,1,2025-11-06,Azam Shaikh -,Distribution Group,6470,Counter Order,Delivered
+SCADA - SAS/RTU,12,1,2025-11-06,Sikander Sheikh (Manager SCADA),Tranmission Group,25740,Urgent,Delivered
+ASM-KDA,6,1,2025-11-06,Daniyal Fatmi (Manager ASMK),Tranmission Group,24260,Urgent,Delivered
+SCADA - MST,6,1,2025-11-05,Syed Salik Hussain (DGM SCADA),Tranmission Group,5999,Urgent,Delivered
+CM BALDIA,1,1,2025-11-05,Azam Shaikh -,Distribution Group,8090,Counter Order,Delivered
+Corp Taxation,2,1,2025-11-05,Rohail Qadir,Enabling Group,19983,Urgent,Delivered
+GSMP North,7,1,2025-11-04,KASHIF (DGM GSMP),Tranmission Group,14985,Counter Order,Delivered
+Telecom,7,1,2025-11-04,Anwer Ali Sheikh (DGM Telecom),Tranmission Group,21989,Counter Order,Delivered
+lyari II,1,1,2025-11-04,Mobin Khan -,Distribution Group,36807,Urgent,Delivered
+GSMP-KKI,44,1,2025-11-04,Kashif Memon LDC Building,Tranmission Group,9972,Urgent,Delivered
+People Services,4,1,2025-11-04,Hafiz Sharif,Enabling Group,149890,Counter Order,Delivered
+GSMP Centralized,5,1,2025-11-03,MUHAMMAD ADIL NADEEM (DGM GSMP),Tranmission Group,14999,Counter Order,Delivered
+KE HOUSE,18,1,2025-11-03,SHAHZAD ALI KE House,Enabling Group,699965,Counter Order,Delivered
+PROCUREMENT,72,1,2025-11-03,Sajjad Ahmed Bashir Procurement,Enabling Group,89979,Counter Order,Delivered
+ASM-QYD,11,1,2025-11-03,Farooq Muhammad Hassan GM Asset Maintenance (Qayyumabad Region),Tranmission Group,34545,Urgent,Delivered
+KE Police (Security),3,1,2025-11-03,Mustafa Khan,Enabling Group,11235,Counter Order,Delivered
+CEO Task Force,5,1,2025-11-03,khawar Hassan,Enabling Group,22366,Counter Order,Delivered
+HQ (75-B) Security,4,1,2025-11-03,Syed Khawar Hasan,Enabling Group,120439,Counter Order,Delivered
+GSMP AQA,6,1,2025-11-03,MUDASSAR QAISER (Manager GSMP),Tranmission Group,14995,Counter Order,Delivered
+GSMP East,6,1,2025-11-03,SAJID ALI (DGM GSMP),Tranmission Group,14979,Counter Order,Delivered
+Civil,3,1,2025-11-03,RIZWAN BAIG -,Enabling Group,6995,Counter Order,Delivered
+Works,6,1,2025-11-03,RIZWAN BAIG -,Enabling Group,21715,Urgent,Delivered
+CLUSTER 7 Baldia,1,1,2025-10-31,Sheikh Zakir -,Distribution Group,439,Normal,Delivered
+IBC Gadap,1,1,2025-10-31,Arsalan Asghar khan -,Distribution Group,16769,Counter Order,Delivered
+ASM-QYD,10,1,2025-10-29,Farooq Muhammad Hassan GM Asset Maintenance (Qayyumabad Region),Tranmission Group,10854,Urgent,Delivered
+HQ (75-B) Security,3,1,2025-10-24,Syed Khawar Hasan,Enabling Group,5175,Counter Order,Delivered
+1. GSO,17,3,2025-10-23,Hafiz M. Irfan,Tranmission Group,39350,Urgent,Delivered
+1. GSO,16,2,2025-10-23,Hafiz M. Irfan,Tranmission Group,94950,Urgent,Delivered
+1. GSO,15,1,2025-10-23,Hafiz M. Irfan,Tranmission Group,98800,Urgent,Delivered
+HR L&OD,1,1,2025-10-22,SHEHRYAR AMAN,Enabling Group,55466,Urgent,Delivered
+IT DEPARTMENT,51,1,2025-10-22,Muhammad Nauman Liaqat,Enabling Group,229970,Counter Order,Delivered
+Inventory Management,2,1,2025-10-22,Wasiulhaq -,Enabling Group,185000,Counter Order,Delivered
+GSMP West,4,1,2025-10-17,ALLAH WASAYO DAHRI (DGM GSMP),Tranmission Group,14990,Counter Order,Delivered
+FMS,2,1,2025-10-16,WAJIHA AKHTER,Enabling Group,9955,Urgent,Delivered
+ACCOUNT PAYABLE,16,1,2025-10-15,MUHAMMAD AAMIR NAEEM Account Payable,Enabling Group,59938,Counter Order,Delivered
+PAYROLL & FUNDS,14,1,2025-10-15,SHOAIB UR REHMAN Payroll & Funds,Enabling Group,20995,Urgent,Delivered
+Civil,2,1,2025-10-15,RIZWAN BAIG -,Enabling Group,6988,Urgent,Delivered
+Works,5,1,2025-10-15,RIZWAN BAIG -,Enabling Group,15637,Counter Order,Delivered
+NETWORK CONTROL  (LDC),5,1,2025-10-14,Muhammad Usman Siddiqui (DM),Tranmission Group,177616,Urgent,Delivered
+Corp. Affairs,1,1,2025-10-14,Irfanuddin -,Enabling Group,17597,Counter Order,Delivered
+1. GSO,14,14,2025-10-13,Hafiz M. Irfan,Tranmission Group,31650,Urgent,Delivered
+1. GSO,13,13,2025-10-13,Hafiz M. Irfan,Tranmission Group,19675,Urgent,Delivered
+1. GSO,12,12,2025-10-13,Hafiz M. Irfan,Tranmission Group,15825,Urgent,Delivered
+1. GSO,11,11,2025-10-13,Hafiz M. Irfan,Tranmission Group,146275,Urgent,Delivered
+1. GSO,10,10,2025-10-13,Hafiz M. Irfan,Tranmission Group,94950,Urgent,Delivered
+1. GSO,9,9,2025-10-13,Hafiz M. Irfan,Tranmission Group,79125,Urgent,Delivered
+1. GSO,8,8,2025-10-13,Hafiz M. Irfan,Tranmission Group,146275,Urgent,Delivered
+1. GSO,7,7,2025-10-13,Hafiz M. Irfan,Tranmission Group,71000,Urgent,Delivered
+1. GSO,6,6,2025-10-13,Hafiz M. Irfan,Tranmission Group,165950,Urgent,Delivered
+1. GSO,5,5,2025-10-13,Hafiz M. Irfan,Tranmission Group,63300,Urgent,Delivered
+1. GSO,4,4,2025-10-13,Hafiz M. Irfan,Tranmission Group,63300,Counter Order,Delivered
+1. GSO,3,3,2025-10-13,Hafiz M. Irfan,Tranmission Group,110775,Urgent,Delivered
+1. GSO,2,2,2025-10-13,Hafiz M. Irfan,Tranmission Group,79125,Urgent,Delivered
+1. GSO,1,1,2025-10-13,Hafiz M. Irfan,Tranmission Group,36425,Urgent,Delivered
+Legal DLD,2,1,2025-10-10,MASAHIB ALI,Enabling Group,29820,Counter Order,Delivered
+IBC Clifton (Transmission),2,1,2025-10-10,Yasir Miohiuddin,Tranmission Group,14824,Counter Order,Delivered
+Internal Audit,3,1,2025-10-10,Amina Akhtar,Enabling Group,48800,Counter Order,Delivered
+ACCOUNT PAYABLE,15,1,2025-10-09,Head Office K-Electric,Enabling Group,4205,Counter Order,Refunded
+ASM-KDA,5,1,2025-10-07,Daniyal Fatmi (Manager ASMK),Tranmission Group,24238,Urgent,Delivered
+CHSEQ,2,1,2025-10-07,Syed Sheeraz Jawaid,Enabling Group,84880,Counter Order,Delivered
+SCADA - MST,5,1,2025-10-06,Syed Salik Hussain (DGM SCADA),Tranmission Group,7990,Urgent,Delivered
+People Services,3,2,2025-10-06,Hafiz Sharif,Enabling Group,21684,Counter Order,Delivered
+People Services,2,1,2025-10-06,Hafiz Sharif,Enabling Group,149738,Counter Order,Delivered
+GSMP Centralized,4,1,2025-10-03,MUHAMMAD ADIL NADEEM (DGM GSMP),Tranmission Group,15000,Counter Order,Delivered
+ASM-QYD,9,1,2025-10-03,Farooq Muhammad Hassan GM Asset Maintenance (Qayyumabad Region),Tranmission Group,37455,Urgent,Delivered
+Telecom,6,1,2025-10-03,Anwer Ali Sheikh (DGM Telecom),Tranmission Group,21980,Counter Order,Delivered
+Works,4,1,2025-10-03,RIZWAN BAIG -,Enabling Group,23350,Counter Order,Delivered
+GSMP-KKI,43,1,2025-10-03,Kashif Memon LDC Building,Tranmission Group,9938,Urgent,Delivered
+SCADA - SAS/RTU,11,1,2025-10-02,Sikander Sheikh (Manager SCADA),Tranmission Group,25795,Urgent,Delivered
+HQ (75-B) Security,2,1,2025-10-02,Syed Khawar Hasan,Enabling Group,119447,Counter Order,Delivered
+GSMP East,5,1,2025-10-02,SAJID ALI (DGM GSMP),Tranmission Group,14995,Counter Order,Delivered
+GSMP South,4,1,2025-10-02,SYED IBTIHAJ UDDIN (Manager GSMP),Tranmission Group,14986,Urgent,Delivered
+CEO Task Force,4,1,2025-10-02,khawar Hassan,Enabling Group,640,Counter Order,Delivered
+KE Police (Security),2,1,2025-10-01,Mustafa Khan,Enabling Group,11045,Counter Order,Delivered
+GSMP North,6,1,2025-10-01,KASHIF (DGM GSMP),Tranmission Group,14989,Counter Order,Delivered
+KE HOUSE,17,1,2025-10-01,SHAHZAD ALI KE House,Enabling Group,699965,Counter Order,Delivered
+GSMP AQA,5,1,2025-10-01,MUDASSAR QAISER (Manager GSMP),Tranmission Group,14999,Urgent,Delivered
+CEO Task Force,3,1,2025-10-01,khawar Hassan,Enabling Group,21284,Counter Order,Delivered
+PROCUREMENT,71,1,2025-10-01,Sajjad Ahmed Bashir Procurement,Enabling Group,89993,Counter Order,Delivered
+Works,3,1,2025-09-24,RIZWAN BAIG -,Enabling Group,19727,Counter Order,Delivered
+IT DEPARTMENT,50,1,2025-09-22,Muhammad Nauman Liaqat,Enabling Group,229847,Urgent,Delivered
+NETWORK CONTROL  (LDC),4,1,2025-09-19,Muhammad Usman Siddiqui (DM),Tranmission Group,116445,Urgent,Delivered
+IBC Clifton (Transmission),1,1,2025-09-18,Yasir Miohiuddin,Tranmission Group,14590,Urgent,Delivered
+PAYROLL & FUNDS,13,1,2025-09-18,SHOAIB UR REHMAN Payroll & Funds,Enabling Group,20973,Counter Order,Delivered
+GSMP West,3,1,2025-09-17,ALLAH WASAYO DAHRI (DGM GSMP),Tranmission Group,14990,Urgent,Delivered
+Internal Audit,2,1,2025-09-16,Amina Akhtar,Enabling Group,21060,Counter Order,Delivered
+Works,2,1,2025-09-15,RIZWAN BAIG -,Enabling Group,10290,Counter Order,Delivered
+Civil,1,1,2025-09-15,RIZWAN BAIG -,Enabling Group,6995,Counter Order,Delivered
+Inventory Management,1,1,2025-09-14,Wasiulhaq -,Enabling Group,184972,Counter Order,Delivered
+ACCOUNT PAYABLE,14,1,2025-09-12,MUHAMMAD AAMIR NAEEM Account Payable,Enabling Group,59880,Normal,Delivered
+People Services,1,1,2025-09-11,Hafiz Sharif,Enabling Group,148180,Counter Order,Delivered
+Telecom,5,1,2025-09-11,Anwer Ali Sheikh (DGM Telecom),Tranmission Group,21883,Counter Order,Delivered
+ASM-QYD,8,2,2025-09-11,Farooq Muhammad Hassan GM Asset Maintenance (Qayyumabad Region),Tranmission Group,34295,Urgent,Delivered
+ASM-QYD,7,1,2025-09-11,Farooq Muhammad Hassan GM Asset Maintenance (Qayyumabad Region),Tranmission Group,7715,Urgent,Delivered
+GSMP AQA,4,1,2025-09-11,MUDASSAR QAISER (Manager GSMP),Tranmission Group,14990,Urgent,Delivered
+GSMP East,4,1,2025-09-10,SAJID ALI (DGM GSMP),Tranmission Group,14975,Counter Order,Delivered
+CHSEQ,1,1,2025-09-09,Syed Sheeraz Jawaid,Enabling Group,76950,Urgent,Delivered
+SCADA - MST,4,1,2025-09-08,Syed Salik Hussain (DGM SCADA),Tranmission Group,7984,Urgent,Delivered
+GSMP Centralized,3,1,2025-09-08,MUHAMMAD ADIL NADEEM (DGM GSMP),Tranmission Group,14987,Counter Order,Delivered
+ASM-KDA,4,1,2025-09-05,Daniyal Fatmi (Manager ASMK),Tranmission Group,24391,Urgent,Delivered
+SCADA - SAS/RTU,10,1,2025-09-04,Sikander Sheikh (Manager SCADA),Tranmission Group,25705,Urgent,Delivered
+GSMP,3,1,2025-09-04,Zahid Mushtaq LDC Building,Tranmission Group,4960,Counter Order,Delivered
+HQ (75-B) Security,1,1,2025-09-03,Syed Khawar Hasan,Enabling Group,129994,Urgent,Delivered
+KE Police (Security),1,1,2025-09-03,Mustafa Khan,Enabling Group,11470,Normal,Delivered
+PROCUREMENT,70,1,2025-09-03,Sajjad Ahmed Bashir Procurement,Enabling Group,89844,Counter Order,Delivered
+CEO Task Force,2,1,2025-09-03,khawar Hassan,Enabling Group,24537,Counter Order,Delivered
+Internal Audit,1,1,2025-09-02,Amina Akhtar,Enabling Group,62923,Counter Order,Delivered
+FMS,1,1,2025-09-02,WAJIHA AKHTER,Enabling Group,9988,Urgent,Delivered
+GSMP South,3,1,2025-09-02,SYED IBTIHAJ UDDIN (Manager GSMP),Tranmission Group,14988,Urgent,Delivered
+GSMP-KKI,42,1,2025-09-02,Kashif Memon LDC Building,Tranmission Group,9995,Normal,Delivered
+KE HOUSE,16,1,2025-09-02,SHAHZAD ALI KE House,Enabling Group,699986,Counter Order,Delivered
+GSMP North,5,2,2025-09-01,KASHIF (DGM GSMP),Tranmission Group,14900,Counter Order,Delivered
+GSMP North,4,1,2025-09-01,KASHIF (DGM GSMP),Tranmission Group, ,Counter Order,Delivered
+Works,1,1,2025-09-01,RIZWAN BAIG -,Enabling Group,20183,Counter Order,Delivered
+ASM-QYD,6,1,2025-08-29,Farooq Muhammad Hassan GM Asset Maintenance (Qayyumabad Region),Tranmission Group,17595,Urgent,Delivered
+NETWORK CONTROL  (LDC),3,2,2025-08-27,Muhammad Usman Siddiqui (DM),Tranmission Group,150438,Urgent,Delivered
+NETWORK CONTROL  (LDC),2,1,2025-08-27,Muhammad Usman Siddiqui (DM),Tranmission Group,24480,Urgent,Delivered
+GSMP-KKI,41,1,2025-08-26,Kashif Memon LDC Building,Tranmission Group,9985,Counter Order,Delivered
+Corp Taxation,1,1,2025-08-25,Rohail Qadir,Enabling Group,52,Counter Order,Cancelled
+CEO Task Force,1,1,2025-08-25,khawar Hassan,Enabling Group,7250,Counter Order,Cancelled
+Legal DLD,1,1,2025-08-25,MASAHIB ALI,Enabling Group,21290,Counter Order,Cancelled
+GSMP Centralized,2,1,2025-08-25,MUHAMMAD ADIL NADEEM (DGM GSMP),Tranmission Group,14977,Counter Order,Delivered
+GSMP AQA,3,1,2025-08-25,MUDASSAR QAISER (Manager GSMP),Tranmission Group,14972,Urgent,Delivered
+GSMP West,2,1,2025-08-18,ALLAH WASAYO DAHRI (DGM GSMP),Tranmission Group,14990,Counter Order,Delivered
+Telecom,4,1,2025-08-18,Anwer Ali Sheikh (DGM Telecom),Tranmission Group,21984,Counter Order,Delivered
+IT DEPARTMENT,49,1,2025-08-18,Muhammad Nauman Liaqat,Enabling Group,229952,Urgent,Delivered
+ASM-QYD,5,1,2025-08-15,Farooq Muhammad Hassan GM Asset Maintenance (Qayyumabad Region),Tranmission Group,19985,Urgent,Delivered
+ASM-KDA,3,1,2025-08-15,Daniyal Fatmi (Manager ASMK),Tranmission Group,24360,Urgent,Delivered
+SCADA - SAS/RTU,9,1,2025-08-13,Sikander Sheikh (Manager SCADA),Tranmission Group,25800,Urgent,Delivered
+PAYROLL & FUNDS,12,1,2025-08-12,SHOAIB UR REHMAN Payroll & Funds,Enabling Group,20997,Counter Order,Delivered
+GSMP North,3,1,2025-08-12,KASHIF (DGM GSMP),Tranmission Group,14985,Counter Order,Delivered
+ACCOUNT PAYABLE,13,1,2025-08-11,MUHAMMAD AAMIR NAEEM Account Payable,Enabling Group,59775,Counter Order,Delivered
+GSMP South,2,1,2025-08-05,SYED IBTIHAJ UDDIN (Manager GSMP),Tranmission Group,14963,Urgent,Delivered
+SCADA - MST,3,1,2025-08-05,Syed Salik Hussain (DGM SCADA),Tranmission Group,7953,Urgent,Delivered
+PROCUREMENT,69,1,2025-08-01,Sajjad Ahmed Bashir Procurement,Enabling Group,89975,Counter Order,Delivered
+GSMP East,3,1,2025-08-01,SAJID ALI (DGM GSMP),Tranmission Group,14986,Urgent,Delivered
+KE HOUSE,15,1,2025-07-31,SHAHZAD ALI KE House,Enabling Group,699990,Counter Order,Delivered
+GSMP Centralized,1,1,2025-07-30,MUHAMMAD ADIL NADEEM (DGM GSMP),Tranmission Group,14996,Counter Order,Delivered
+GSMP,2,2,2025-07-29,Zahid Mushtaq LDC Building,Tranmission Group,4540,Counter Order,Delivered
+GSMP,1,1,2025-07-29,Zahid Mushtaq LDC Building,Tranmission Group,320,Counter Order,Delivered
+ASM-KDA,2,1,2025-07-29,Daniyal Fatmi (Manager ASMK),Tranmission Group,24292,Urgent,Delivered
+NETWORK CONTROL  (LDC),1,1,2025-07-28,Muhammad Usman Siddiqui (DM),Tranmission Group,134800,Urgent,Delivered
+GSMP-KKI,40,1,2025-07-28,Kashif Memon LDC Building,Tranmission Group,9964,Counter Order,Delivered
+ASM-QYD,4,1,2025-07-21,Farooq Muhammad Hassan GM Asset Maintenance (Qayyumabad Region),Tranmission Group,36900,Counter Order,Delivered
+SCADA - SAS/RTU,8,1,2025-07-21,Sikander Sheikh (Manager SCADA),Tranmission Group,320,Urgent,Delivered
+GSMP West,1,1,2025-07-21,ALLAH WASAYO DAHRI (DGM GSMP),Tranmission Group,14998,Counter Order,Delivered
+GSMP AQA,2,1,2025-07-21,MUDASSAR QAISER (Manager GSMP),Tranmission Group,14975,Urgent,Delivered
+SCADA - SAS/RTU,7,1,2025-07-18,Sikander Sheikh (Manager SCADA),Tranmission Group,25799,Counter Order,Delivered
+GSMP South,1,1,2025-07-18,SYED IBTIHAJ UDDIN (Manager GSMP),Tranmission Group,14950,Urgent,Delivered
+GSMP East,2,1,2025-07-18,SAJID ALI (DGM GSMP),Tranmission Group,4668,Counter Order,Delivered
+GSMP East,1,1,2025-07-17,SAJID ALI (DGM GSMP),Tranmission Group,10290,Counter Order,Delivered
+GSMP North,2,1,2025-07-16,KASHIF (DGM GSMP),Tranmission Group,14905,Urgent,Delivered
+ASM-QYD,3,1,2025-07-16,Farooq Muhammad Hassan GM Asset Maintenance (Qayyumabad Region),Tranmission Group,19994,Counter Order,Delivered
+Telecom,3,1,2025-07-16,Anwer Ali Sheikh (DGM Telecom),Tranmission Group,21997,Urgent,Delivered
+IT DEPARTMENT,48,1,2025-07-16,Muhammad Nauman Liaqat,Enabling Group,199945,Urgent,Delivered
+PAYROLL & FUNDS,11,1,2025-07-10,SHOAIB UR REHMAN Payroll & Funds,Enabling Group,20974,Counter Order,Delivered
+ACCOUNT PAYABLE,12,1,2025-07-03,MUHAMMAD AAMIR NAEEM Account Payable,Enabling Group,59452,Counter Order,Delivered
+SCADA - MST,2,1,2025-07-02,Syed Salik Hussain (DGM SCADA),Tranmission Group,4990,Urgent,Delivered
+PROCUREMENT,68,1,2025-07-01,Sajjad Ahmed Bashir Procurement,Enabling Group,89875,Counter Order,Delivered
+KE HOUSE,14,1,2025-07-01,SHAHZAD ALI KE House,Enabling Group,699986,Normal,Delivered
+IT DEPARTMENT,47,1,2025-06-24,Muhammad Nauman Liaqat,Enabling Group,229960,Counter Order,Delivered
+PAYROLL & FUNDS,10,2,2025-06-17,SHOAIB UR REHMAN Payroll & Funds,Enabling Group,1350,Counter Order,Delivered
+PAYROLL & FUNDS,9,1,2025-06-17,SHOAIB UR REHMAN Payroll & Funds,Enabling Group,1505,Counter Order,Cancelled
+Telecom,2,1,2025-06-16,Anwer Ali Sheikh (DGM Telecom),Tranmission Group,19959,Urgent,Delivered
+ASM-QYD,2,1,2025-06-11,Farooq Muhammad Hassan GM Asset Maintenance (Qayyumabad Region),Tranmission Group,19976,Counter Order,Delivered
+ACCOUNT PAYABLE,11,1,2025-06-03,MUHAMMAD AAMIR NAEEM Account Payable,Enabling Group,59890,Counter Order,Delivered
+PROCUREMENT,67,1,2025-06-03,Sajjad Ahmed Bashir Procurement,Enabling Group,89970,Counter Order,Delivered
+SCADA - MST,1,1,2025-06-03,Syed Salik Hussain (DGM SCADA),Tranmission Group,4998,Urgent,Delivered
+PAYROLL & FUNDS,8,1,2025-06-03,SHOAIB UR REHMAN Payroll & Funds,Enabling Group,20750,Counter Order,Delivered
+KE HOUSE,13,1,2025-06-02,SHAHZAD ALI KE House,Enabling Group,699983,Normal,Delivered
+ASM-KDA,1,1,2025-05-26,Daniyal Fatmi (Manager ASMK),Tranmission Group,14925,Urgent,Delivered
+ASM-QYD,1,1,2025-05-26,Farooq Muhammad Hassan GM Asset Maintenance (Qayyumabad Region),Tranmission Group,19988,Urgent,Delivered
+GSMP North,1,1,2025-05-19,KASHIF (DGM GSMP),Tranmission Group,14954,Counter Order,Delivered
+Telecom,1,1,2025-05-19,Anwer Ali Sheikh (DGM Telecom),Tranmission Group,20000,Urgent,Delivered
+GSMP AQA,1,1,2025-05-19,MUDASSAR QAISER (Manager GSMP),Tranmission Group,12996,Counter Order,Delivered
+SCADA - SAS/RTU,6,6,2025-05-16,Sikander Sheikh (Manager SCADA),Tranmission Group,21995,Urgent,Cancelled
+SCADA - SAS/RTU,5,5,2025-05-16,Sikander Sheikh (Manager SCADA),Tranmission Group,21995,Normal,Cancelled
+SCADA - SAS/RTU,4,4,2025-05-16,Sikander Sheikh (Manager SCADA),Tranmission Group,21995,Normal,Cancelled
+SCADA - SAS/RTU,3,3,2025-05-16,Sikander Sheikh (Manager SCADA),Tranmission Group,21995,Normal,Cancelled
+SCADA - SAS/RTU,2,2,2025-05-16,Sikander Sheikh (Manager SCADA),Tranmission Group,21995,Normal,Cancelled
+SCADA - SAS/RTU,1,1,2025-05-16,Sikander Sheikh (Manager SCADA),Tranmission Group,21995,Urgent,Delivered
+IT DEPARTMENT,46,1,2025-05-16,Muhammad Nauman Liaqat,Enabling Group,229971,Urgent,Delivered
+PROCUREMENT,66,1,2025-05-07,Sajjad Ahmed Bashir Procurement,Enabling Group,89962,Counter Order,Delivered
+GSMP-KKI,39,8,2025-05-05,test branch,Tranmission Group,22,Counter Order,Cancelled
+KE HOUSE,12,1,2025-05-06,SHAHZAD ALI KE House,Enabling Group,698430,Counter Order,Delivered
+GSMP-KKI,38,7,2025-05-05,test branch,Tranmission Group,22,Counter Order,Delivered
+GSMP-KKI,37,6,2025-05-05,test branch,Tranmission Group,22,Counter Order,Delivered
+GSMP-KKI,36,5,2025-05-05,test branch,Tranmission Group,22,Counter Order,Delivered
+GSMP-KKI,35,4,2025-05-05,test branch,Tranmission Group,22,Counter Order,Cancelled
+GSMP-KKI,34,3,2025-05-05,test branch,Tranmission Group,22,Counter Order,Cancelled
+GSMP-KKI,33,2,2025-05-05,test branch,Tranmission Group,22,Counter Order,Cancelled
+GSMP-KKI,32,1,2025-05-05,test branch,Tranmission Group,22,Counter Order,Cancelled
+PROCUREMENT,65,1,2025-04-28,Sajjad Ahmed Bashir Procurement,Enabling Group,13580,Counter Order,Delivered
+GSMP-KKI,31,4,2025-04-28,test branch,Tranmission Group,37.8,Counter Order,Refunded
+GSMP-KKI,30,3,2025-04-28,test branch,Tranmission Group,257.8,Counter Order,Cancelled
+GSMP-KKI,29,2,2025-04-28,test branch,Tranmission Group,220,Counter Order,Cancelled
+GSMP-KKI,28,1,2025-04-28,test branch,Tranmission Group,15.8,Counter Order,Cancelled
+GSMP-KKI,27,12,2025-04-25,test branch,Tranmission Group,257.8,Counter Order,Cancelled
+GSMP-KKI,26,11,2025-04-25,test branch,Tranmission Group,22,Counter Order,Cancelled
+GSMP-KKI,25,10,2025-04-25,test branch,Tranmission Group,22,Counter Order,Cancelled
+GSMP-KKI,24,9,2025-04-25,test branch,Tranmission Group,719.8,Counter Order,Cancelled
+GSMP-KKI,23,8,2025-04-25,test branch,Tranmission Group,75.6,Counter Order,Cancelled
+GSMP-KKI,22,7,2025-04-25,test branch,Tranmission Group,15.8,Counter Order,Cancelled
+GSMP-KKI,21,6,2025-04-25,test branch,Tranmission Group,220,Counter Order,Cancelled
+GSMP-KKI,20,5,2025-04-25,test branch,Tranmission Group,22,Counter Order,Cancelled
+GSMP-KKI,19,4,2025-04-25,test branch,Tranmission Group,578.8,Counter Order,Cancelled
+GSMP-KKI,18,3,2025-04-25,test branch,Tranmission Group,257.8,Counter Order,Cancelled
+GSMP-KKI,17,2,2025-04-25,test branch,Tranmission Group,22,Counter Order,Cancelled
+GSMP-KKI,16,1,2025-04-25,test branch,Tranmission Group,257.8,Counter Order,Refunded
+GSMP-KKI,15,15,2025-04-24,test branch,Tranmission Group,37.8,Counter Order,Cancelled
+GSMP-KKI,14,14,2025-04-24,test branch,Tranmission Group,235.8,Counter Order,Cancelled
+GSMP-KKI,13,13,2025-04-24,test branch,Tranmission Group,22,Counter Order,Refunded
+GSMP-KKI,12,12,2025-04-24,test branch,Tranmission Group,295.6,Counter Order,Refunded
+GSMP-KKI,11,11,2025-04-24,test branch,Tranmission Group,258.4,Counter Order,Cancelled
+GSMP-KKI,10,10,2025-04-24,test branch,Tranmission Group,477.8,Counter Order,Cancelled
+GSMP-KKI,9,9,2025-04-24,test branch,Tranmission Group,257.8,Counter Order,Cancelled
+GSMP-KKI,8,8,2025-04-24,test branch,Tranmission Group,220,Counter Order,Cancelled
+GSMP-KKI,7,7,2025-04-24,test branch,Tranmission Group,22,Counter Order,Cancelled
+GSMP-KKI,6,6,2025-04-24,test branch,Tranmission Group,220,Counter Order,Cancelled
+GSMP-KKI,5,5,2025-04-24,test branch,Tranmission Group,15.8,Counter Order,Cancelled
+GSMP-KKI,4,4,2025-04-24,test branch,Tranmission Group,220,Counter Order,Cancelled
+GSMP-KKI,3,3,2025-04-24,test branch,Tranmission Group,44,Counter Order,Cancelled
+GSMP-KKI,2,2,2025-04-24,test branch,Tranmission Group,22,Counter Order,Cancelled
+GSMP-KKI,1,1,2025-04-24,test branch,Tranmission Group,220,Counter Order,Cancelled
+ACCOUNT PAYABLE,10,1,2025-04-21,Head Office K-Electric,Enabling Group,59438,Counter Order,Delivered
+PAYROLL & FUNDS,7,1,2025-04-18,Head Office K-Electric,Enabling Group,20905,Counter Order,Delivered
+IT DEPARTMENT,45,1,2025-04-16,Muhammad Nauman Liaqat,Enabling Group,229852,Urgent,Delivered
+PROCUREMENT,64,3,2025-04-09,Sajjad Ahmed Bashir Procurement,Enabling Group,89868.8,Counter Order,Delivered
+ACCOUNT PAYABLE,9,1,2025-03-28,Head Office K-Electric,Enabling Group,20654.72,Counter Order,Delivered
+IT DEPARTMENT,44,1,2025-03-21,Muhammad Nauman Liaqat,Enabling Group,229998.52,Urgent,Delivered
+PAYROLL & FUNDS,6,1,2025-03-17,Head Office K-Electric,Enabling Group,15011.96,Counter Order,Delivered
+PROCUREMENT,28,2,2025-03-17,Sajjad Ahmed Bashir Procurement,Enabling Group,82236.56,Counter Order,Delivered
+ACCOUNT PAYABLE,5,2,2025-02-05,SHOAIB UR REHMAN Payroll & Funds,Enabling Group,7262.9,Counter Order,Delivered
+IT DEPARTMENT,21,5,2025-01-13,Muhammad Nauman Liaqat,Enabling Group,5507.0599999999995,Counter Order,Delivered
+IT DEPARTMENT,20,4,2025-01-13,Muhammad Nauman Liaqat,Enabling Group,489.7,Counter Order,Delivered
+IT DEPARTMENT,19,3,2025-01-13,Muhammad Nauman Liaqat,Enabling Group,628.94,Counter Order,Delivered
+KE HOUSE,8,2,2025-01-13,Head Office K-Electric,Enabling Group,12928.08,Counter Order,Delivered
+KE HOUSE,7,1,2025-01-13,Head Office K-Electric,Enabling Group,140.42000000000002,Counter Order,Delivered
+IT DEPARTMENT,16,3,2025-01-10,Muhammad Nauman Liaqat,Enabling Group,139.24,Counter Order,Delivered
+IT DEPARTMENT,14,1,2025-01-10,Muhammad Nauman Liaqat,Enabling Group,418.9,Counter Order,Delivered
+KE HOUSE,4,2,2025-01-06,SHAHZAD ALI KE House,Enabling Group,761.1,Counter Order,Refunded

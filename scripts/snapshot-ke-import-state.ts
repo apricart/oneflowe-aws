@@ -10,7 +10,7 @@ const ORG_ID = 10
 
 async function main() {
   const output = resolve(process.argv[2] || `backups/ke-import-state-${new Date().toISOString().replace(/[:.]/g, "-")}.json`)
-  const { pool } = await import("../lib/db")
+  const { pool } = await import("../lib/db-cli")
   const client = await pool.connect()
   try {
     await client.query("begin transaction isolation level repeatable read read only")
@@ -25,6 +25,10 @@ async function main() {
       groups: { text: "select * from groups where organization_id = $1 order by id", params: [ORG_ID] },
       orders: { text: "select id, tid, organization_id, branch_id, status, fulfillment_status, payment_status, subtotal_cents, tax_cents, total_cents, created_by_user_id, created_at, fulfilled_at, updated_at from orders where organization_id = $1 order by id", params: [ORG_ID] },
       orderItems: { text: "select id, organization_id, organization_inventory_id, order_id, global_product_id, product_name, product_code, unit, quantity, price_cents, created_at from order_items where organization_id = $1 order by id", params: [ORG_ID] },
+      legacyImportBatches: { text: "select * from legacy_import_batches where organization_id = $1 order by created_at, id", params: [ORG_ID] },
+      legacyProductMappings: { text: "select * from legacy_product_mappings where organization_id = $1 order by id", params: [ORG_ID] },
+      legacyUserMappings: { text: "select * from legacy_user_mappings where organization_id = $1 order by id", params: [ORG_ID] },
+      legacyOrderImports: { text: "select * from legacy_order_imports where organization_id = $1 order by id", params: [ORG_ID] },
       budgets: { text: "select * from budgets where organization_id = $1 order by id", params: [ORG_ID] },
       quantityBudgets: { text: "select * from product_quantity_budgets where organization_id = $1 order by id", params: [ORG_ID] },
       invoiceSequence: { text: "select * from invoice_sequences where organization_id = $1", params: [ORG_ID] },

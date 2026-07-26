@@ -5,13 +5,9 @@ import { sessions, users } from "@/db/schema"
 import { and, eq } from "drizzle-orm"
 import { authOptions } from "./auth-options"
 import { logError } from "@/lib/global-logger"
+import { env } from "@/lib/server/env"
 
-const INACTIVITY_TIMEOUT_MIN = Number(process.env.INACTIVITY_TIMEOUT_MINUTES || 30)
-
-// Validate inactivity timeout configuration
-if (isNaN(INACTIVITY_TIMEOUT_MIN) || INACTIVITY_TIMEOUT_MIN < 0) {
-  console.warn(`Invalid INACTIVITY_TIMEOUT_MINUTES: ${process.env.INACTIVITY_TIMEOUT_MINUTES}. Using default: 30`)
-}
+const INACTIVITY_TIMEOUT_MIN = env.INACTIVITY_TIMEOUT_MINUTES
 
 export type CurrentUser = {
   id: string

@@ -6,15 +6,11 @@ import { Download, X, Printer, FileText, CheckCircle2, ChevronRight } from "luci
 import { useToast } from "@/hooks/use-toast"
 import useSWR from "swr"
 import Image from "next/image"
-import { getReceiptItemQuantity } from "@/lib/receipt-display"
+import { getReceiptItemQuantity, toDisplayNameCase } from "@/lib/receipt-display"
 import { formatQuantity } from "@/lib/quantity"
+import { safeFilenamePart } from "@/lib/security"
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
-
-const toDisplayNameCase = (value: string) =>
-    value
-        .toLowerCase()
-        .replace(/\b[a-z]/g, (char) => char.toUpperCase())
 
 interface ReceiptContentProps {
     orderId: number
@@ -41,7 +37,7 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Receipt
             const url = window.URL.createObjectURL(blob)
             const a = document.createElement("a")
             a.href = url
-            a.download = `invoice-${data?.receiptData?.invoiceNumber || orderId}.pdf`
+            a.download = `invoice-${safeFilenamePart(data?.receiptData?.invoiceNumber, String(orderId))}.pdf`
             document.body.appendChild(a)
             a.click()
             window.URL.revokeObjectURL(url)
@@ -99,8 +95,7 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Receipt
     return (
         <div className={`receipt-container ${standalone ? 'py-8 px-4' : 'p-2'}`}>
             {/* Professional Styles */}
-            <style dangerouslySetInnerHTML={{
-                __html: `
+            <style>{`
                 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
                 
                 .official-invoice {
@@ -201,6 +196,10 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Receipt
                     font-weight: 700;
                 }
 
+                .billed-to-section .detail-value {
+                    text-align: right;
+                }
+
                 /* Enhanced Table Styles */
                 .items-table {
                     width: 100%;
@@ -292,7 +291,7 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Receipt
                     }
                     body { -webkit-print-color-adjust: exact; }
                 }
-            ` }} />
+            `}</style>
 
             {/* Action Bar */}
             <div className="flex justify-end gap-2 mb-6 print-hidden max-w-[850px] mx-auto">
@@ -358,7 +357,7 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Receipt
 
                 {/* Detail Grid */}
                 <div className="detail-grid">
-                    <div className="detail-section">
+                    <div className="detail-section billed-to-section">
                         <div className="section-title">
                             <FileText className="h-3 w-3" /> Billed To
                         </div>
@@ -368,12 +367,12 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Receipt
                         </div>
                         <div className="detail-row">
                             <span className="detail-label">Address:</span>
-                            <span className="detail-value  max-w-[140px]">{receiptData.buyerAddress || "—"}</span>
+                            <span className="detail-value max-w-[140px]">{toDisplayNameCase(receiptData.buyerAddress || "—")}</span>
                         </div>
                         <div className="detail-row">
-                            <span className="detail-label">Created by:</span>
+                            <span className="detail-label">Created By:</span>
                             <span className="detail-value truncate max-w-[140px]">
-                                {receiptData.placedByName || "N/A"}
+                                {toDisplayNameCase(receiptData.placedByName || "N/A")}
                             </span>
                         </div>
                         <div className="detail-row">
@@ -434,8 +433,8 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Receipt
                         <tr>
                             <th className="w-12 text-center">#</th>
                             <th>Description</th>
-                            {!pricesHidden && <th className="text-right w-24">Price</th>}
                             <th className="text-center w-20">Qty</th>
+                            {!pricesHidden && <th className="text-right w-24">Price</th>}
                             {!pricesHidden && <th className="text-right w-28">Total</th>}
                         </tr>
                     </thead>
@@ -458,8 +457,8 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Receipt
                                                 <tr key={`${i}-${si}-${ii}`}>
                                                     <td className="text-center text-slate-400 font-medium">{serialCounter}</td>
                                                     <td className="text-slate-800 font-medium">{item.description}</td>
-                                                    {!pricesHidden && <td className="text-right tabular-nums text-slate-600">{Number(item.rate).toLocaleString()}</td>}
                                                     <td className="text-center tabular-nums text-slate-600">{formatQuantity(item.quantity)}</td>
+                                                    {!pricesHidden && <td className="text-right tabular-nums text-slate-600">{Number(item.rate).toLocaleString()}</td>}
                                                     {!pricesHidden && <td className="text-right tabular-nums font-bold text-slate-900">{Number(item.total).toLocaleString()}</td>}
                                                 </tr>
                                             )

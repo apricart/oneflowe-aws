@@ -174,13 +174,15 @@ export async function verifyEmailConfig(): Promise<boolean> {
  * Generate HTML email template for Reports
  */
 function generateReportEmailHTML(reportName: string, frequency: string): string {
+  const safeReportName = escapeHtml(reportName)
+  const safeFrequency = escapeHtml(frequency)
   return `
     <!DOCTYPE html>
     <html>
     <head>
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>${reportName} Delivery</title>
+      <title>${safeReportName} Delivery</title>
     </head>
     <body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #f8fafc;">
       <table role="presentation" style="width: 100%; border-collapse: collapse;">
@@ -199,18 +201,18 @@ function generateReportEmailHTML(reportName: string, frequency: string): string 
               <tr>
                 <td style="padding: 40px 30px;">
                   <div style="display: flex; align-items: center; margin-bottom: 24px;">
-                    <span style="background-color: #f0f9ff; color: #0369a1; padding: 4px 12px; border-radius: 9999px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;">${frequency} REPORT</span>
+                    <span style="background-color: #f0f9ff; color: #0369a1; padding: 4px 12px; border-radius: 9999px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;">${safeFrequency} REPORT</span>
                   </div>
-                  <h2 style="margin: 0 0 16px 0; color: #1e293b; font-size: 20px; font-weight: 700;">${reportName}</h2>
+                  <h2 style="margin: 0 0 16px 0; color: #1e293b; font-size: 20px; font-weight: 700;">${safeReportName}</h2>
                   <p style="margin: 0 0 24px 0; color: #475569; font-size: 15px; line-height: 1.6;">
-                    Hello, please find your scheduled ${reportName.toLowerCase()} attached below. This report contains the latest data audits and performance metrics based on your configuration.
+                    Hello, please find your scheduled ${escapeHtml(reportName.toLowerCase())} attached below. This report contains the latest data audits and performance metrics based on your configuration.
                   </p>
                   
                   <div style="padding: 24px; background-color: #f8fafc; border-radius: 12px; border: 1px solid #f1f5f9; margin-bottom: 24px;">
                     <p style="margin: 0 0 8px 0; color: #64748b; font-size: 12px; font-weight: 600; text-transform: uppercase;">Delivery Details</p>
                     <p style="margin: 0; color: #1e293b; font-size: 14px; font-weight: 500;">
                       <strong>Generated At:</strong> ${new Date().toLocaleString()}<br>
-                      <strong>Frequency:</strong> ${frequency}<br>
+                      <strong>Frequency:</strong> ${safeFrequency}<br>
                       <strong>Format:</strong> CSV Attachment
                     </p>
                   </div>

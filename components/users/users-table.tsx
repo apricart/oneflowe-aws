@@ -105,11 +105,13 @@ export function UsersTable() {
     if (!editingUser) return
 
     try {
-      const body: any = {
+      const profileBody: any = {
         firstName: editForm.firstName,
         lastName: editForm.lastName,
         email: editForm.email,
         phone: editForm.phone || null,
+      }
+      const accessBody = {
         organizationId: editForm.organizationId ? parseInt(editForm.organizationId) : null,
         branchId: editForm.branchId ? parseInt(editForm.branchId) : null,
         mfaEnabled: editForm.mfaEnabled
@@ -141,13 +143,19 @@ export function UsersTable() {
           })
           return
         }
-        body.password = editForm.password
+        profileBody.password = editForm.password
       }
+
+      await jsonFetcher<any>(`/api/v1/users/${editingUser.id}/access`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(accessBody)
+      })
 
       const response = await jsonFetcher<any>(`/api/v1/users/${editingUser.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
+        body: JSON.stringify(profileBody)
       })
 
       if (response.error) {

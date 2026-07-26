@@ -44,7 +44,7 @@ export default function HeadOfficeInventoryView() {
     // Fetch ALL org inventory data once — no filter params in URL.
     // Deferred until the org context has hydrated so we don't fire an
     // unscoped request first and re-fetch when organizationId arrives.
-    const query = `/api/v1/head-office/organization-inventory?limit=5000${organizationId ? `&organizationId=${organizationId}` : ""}`
+    const query = `/api/v1/head-office/organization-inventory?limit=1000${organizationId ? `&organizationId=${organizationId}` : ""}`
 
     const { data, isLoading } = useSWR<{ items: OrganizationInventoryItem[]; total: number }>(isInitialized ? query : null, fetcher, {
         // No fallbackData: zero-filled fallback made the stat cards flash "0"

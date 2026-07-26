@@ -8,6 +8,11 @@ import { alias } from "drizzle-orm/pg-core"
 import { cascadeGlobalProductDeletion, cascadeGlobalProductStatusChange, cascadeGlobalProductFieldUpdate } from "@/lib/inventory-cascade"
 import { escapeLikePattern } from "@/lib/utils"
 import { getCached, invalidateByPrefix, scopedCacheKey, CACHE_TTL } from "@/lib/cache-utils"
+import {
+  globalProductAdminCreateSchema,
+  globalProductAdminUpdateSchema,
+  validationMessage,
+} from "@/lib/server/mutation-validation"
 import { parseQuantity, sanitizeQuantityStep, validateProductQuantity } from "@/lib/quantity"
 
 // Increase body size limit to handle Base64-encoded product images
@@ -44,6 +49,9 @@ export async function GET(req: NextRequest) {
 
       if (productIds.length === 0) {
         return NextResponse.json({ items: [] })
+      }
+      if (productIds.length > 100) {
+        return NextResponse.json({ error: "A maximum of 100 image IDs is allowed" }, { status: 400 })
       }
 
       const items = await db
@@ -129,8 +137,8 @@ export async function GET(req: NextRequest) {
     const category = searchParams.get("category") || ""
     const status = searchParams.get("status") || ""
     const lite = searchParams.get("lite") === "true"
-    const page = parseInt(searchParams.get("page") || "1")
-    const limit = parseInt(searchParams.get("limit") || "50")
+    const page = Math.min(Math.max(Math.trunc(Number(searchParams.get("page"))) || 1, 1), 10_000)
+    const limit = Math.min(Math.max(Math.trunc(Number(searchParams.get("limit"))) || 50, 1), 500)
     const offset = (page - 1) * limit
 
     const cacheKey = scopedCacheKey('global-inv', { role: 'SUPER_ADMIN' }, {
@@ -286,7 +294,7 @@ export async function GET(req: NextRequest) {
     }, 30).then(data => NextResponse.json(data))
   } catch (error: any) {
     console.error("Error fetching global products:", error)
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 })
   }
 }
 
@@ -303,7 +311,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Forbidden - Super Admin access required" }, { status: 403 })
     }
 
-    const body = await req.json()
+    const rawBody = await req.json().catch(() => null)
+    const parsedBody = globalProductAdminCreateSchema.safeParse(rawBody)
+    if (!parsedBody.success) {
+      return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
+    }
     const {
       productCode,
       name,
@@ -322,7 +334,7 @@ export async function POST(req: NextRequest) {
       discountStartAt,
       discountEndAt,
       discountActive,
-    } = body
+    } = parsedBody.data
 
     if (!productCode || !name || !basePrice) {
       return NextResponse.json({ error: "Product code, name, and base price are required" }, { status: 400 })
@@ -362,9 +374,9 @@ export async function POST(req: NextRequest) {
         productCode,
         name,
         description: description || null,
-        categoryId: categoryId ? parseInt(categoryId) : null,
+        categoryId: categoryId ?? null,
         imageUrl: imageUrl || null,
-        basePrice: Math.round(parseFloat(basePrice) * 100), // Convert to cents
+        basePrice: Math.round(basePrice * 100), // Convert to cents
         unit: unit || "unit",
         status,
         stockQuantity: normalizedStockQuantity,
@@ -372,7 +384,7 @@ export async function POST(req: NextRequest) {
         quantityStep: normalizedQuantityStep,
         metadata,
         discountType: discountType || null,
-        discountValue: discountValue !== undefined && discountValue !== null ? parseInt(discountValue) : null,
+        discountValue: discountValue ?? null,
         discountStartAt: discountStartAt ? new Date(discountStartAt) : null,
         discountEndAt: discountEndAt ? new Date(discountEndAt) : null,
         discountActive: !!discountActive,
@@ -397,7 +409,7 @@ export async function POST(req: NextRequest) {
     })
   } catch (error: any) {
     console.error("Error creating product:", error)
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 })
   }
 }
 
@@ -414,7 +426,11 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: "Forbidden - Super Admin access required" }, { status: 403 })
     }
 
-    const body = await req.json()
+    const rawBody = await req.json().catch(() => null)
+    const parsedBody = globalProductAdminUpdateSchema.safeParse(rawBody)
+    if (!parsedBody.success) {
+      return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
+    }
     const {
       id,
       productCode,
@@ -434,13 +450,13 @@ export async function PUT(req: NextRequest) {
       discountStartAt,
       discountEndAt,
       discountActive,
-    } = body
+    } = parsedBody.data
 
     if (!id) {
       return NextResponse.json({ error: "Product ID is required" }, { status: 400 })
     }
 
-    const productId = parseInt(id)
+    const productId = id
 
     // Check if product code already exists for another product (excluding soft-deleted)
     if (productCode) {
@@ -472,7 +488,7 @@ export async function PUT(req: NextRequest) {
       quantityStep: globalProducts.quantityStep,
     })
       .from(globalProducts)
-      .where(eq(globalProducts.id, parseInt(id)))
+      .where(eq(globalProducts.id, id))
       .limit(1)
 
     if (!existingProduct) {
@@ -483,9 +499,9 @@ export async function PUT(req: NextRequest) {
     if (productCode !== undefined) updateData.productCode = productCode
     if (name !== undefined) updateData.name = name
     if (description !== undefined) updateData.description = description
-    if (categoryId !== undefined) updateData.categoryId = categoryId ? parseInt(categoryId) : null
+    if (categoryId !== undefined) updateData.categoryId = categoryId
     if (imageUrl !== undefined) updateData.imageUrl = imageUrl
-    if (basePrice !== undefined) updateData.basePrice = Math.round(parseFloat(basePrice) * 100)
+    if (basePrice !== undefined) updateData.basePrice = Math.round(basePrice * 100)
     if (unit !== undefined) updateData.unit = unit
     if (status !== undefined) updateData.status = status
     const existingDecimalEnabled = Boolean((existingProduct as any).allowDecimalQuantity)
@@ -511,7 +527,7 @@ export async function PUT(req: NextRequest) {
     }
     if (metadata !== undefined) updateData.metadata = metadata
     if (discountType !== undefined) updateData.discountType = discountType || null
-    if (discountValue !== undefined) updateData.discountValue = discountValue !== null ? parseInt(discountValue) : null
+    if (discountValue !== undefined) updateData.discountValue = discountValue
     if (discountStartAt !== undefined) updateData.discountStartAt = discountStartAt ? new Date(discountStartAt) : null
     if (discountEndAt !== undefined) updateData.discountEndAt = discountEndAt ? new Date(discountEndAt) : null
     if (discountActive !== undefined) updateData.discountActive = !!discountActive
@@ -519,13 +535,13 @@ export async function PUT(req: NextRequest) {
 
     const [updatedProduct] = await db.update(globalProducts)
       .set(updateData)
-      .where(eq(globalProducts.id, parseInt(id)))
+      .where(eq(globalProducts.id, id))
       .returning()
 
     // If status changed, cascade to organization and branch inventory
     if (status !== undefined && status !== existingProduct.status) {
       const cascadeResult = await cascadeGlobalProductStatusChange(
-        parseInt(id),
+        id,
         status,
         (session.user as any).id,
         "SUPER_ADMIN"
@@ -538,7 +554,7 @@ export async function PUT(req: NextRequest) {
         entity: "GlobalProduct",
         entityId: id.toString(),
         metadata: {
-          globalProductId: parseInt(id),
+          globalProductId: id,
           status,
           orgUpdates: cascadeResult.updatedOrgCount,
           branchUpdates: cascadeResult.updatedBranchCount,
@@ -562,7 +578,7 @@ export async function PUT(req: NextRequest) {
       fieldChanges.push({ field: 'imageUrl', oldValue: existingProduct.imageUrl, newValue: imageUrl })
     }
     if (basePrice !== undefined) {
-      const newPriceCents = Math.round(parseFloat(basePrice) * 100)
+      const newPriceCents = Math.round(basePrice * 100)
       if (newPriceCents !== existingProduct.basePrice) {
         fieldChanges.push({ field: 'basePrice', oldValue: existingProduct.basePrice, newValue: newPriceCents })
       }
@@ -570,7 +586,7 @@ export async function PUT(req: NextRequest) {
 
     if (fieldChanges.length > 0) {
       const cascadeResult = await cascadeGlobalProductFieldUpdate(
-        parseInt(id),
+        id,
         fieldChanges,
         (session.user as any).id
       )
@@ -612,7 +628,7 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: "Product code already exists" }, { status: 400 })
     }
 
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 })
   }
 }
 
@@ -711,7 +727,7 @@ export async function DELETE(req: NextRequest) {
     })
   } catch (error: any) {
     console.error("Error deleting product:", error)
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 })
   }
 }
 

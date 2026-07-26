@@ -106,11 +106,15 @@ export async function GET(req: NextRequest) {
     const conditions: (SQL | undefined)[] = [
       eq(branchInventory.branchId, branchId),
       eq(branchInventory.organizationId, orgIdNum),
+      eq(branchInventory.isActive, true),
+      eq(branchInventory.isVisible, true),
       isNull(branchInventory.deletedAt),
       // Only show globally active products
       eq(globalProducts.status, "active"),
       // Only show products that are active at the organization level
       eq(organizationInventory.isActive, true),
+      isNull(organizationInventory.deletedAt),
+      isNull(globalProducts.deletedAt),
     ]
 
     if (quantityBudgetCatalogActive) {

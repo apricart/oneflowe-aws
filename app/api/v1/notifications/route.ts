@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
-import { and, desc, eq, isNull } from "drizzle-orm"
+import { and, desc, eq, isNull, or, type SQL } from "drizzle-orm"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { notifications } from "@/db/schema"
@@ -12,8 +12,40 @@ function getSessionUserId(session: any) {
   return typeof userId === "string" && uuidPattern.test(userId) ? userId : null
 }
 
+function scopedNotificationConditions(session: any, userId: string): SQL[] | null {
+  const role = (session?.user as any)?.role
+  if (!["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL"].includes(role)) return null
+
+  const conditions: SQL[] = [
+    eq(notifications.userId, userId),
+    isNull(notifications.readAt),
+    or(isNull(notifications.targetRole), eq(notifications.targetRole, role))!,
+  ]
+  const organizationId = Number((session?.user as any)?.organizationId)
+  const branchId = Number((session?.user as any)?.branchId)
+
+  if (role !== "SUPER_ADMIN") {
+    if (!Number.isInteger(organizationId) || organizationId <= 0) return null
+    conditions.push(eq(notifications.organizationId, organizationId))
+  }
+  if (role === "BRANCH_ADMIN" || role === "ORDER_PORTAL") {
+    if (!Number.isInteger(branchId) || branchId <= 0) return null
+    conditions.push(eq(notifications.branchId, branchId))
+  }
+
+  return conditions
+}
+
 function notificationTitle(type: string) {
   switch (type) {
+    case "ORDER_CREATED":
+      return "New order awaiting approval"
+    case "ORDER_APPROVED":
+      return "Order approved"
+    case "ORDER_APPROVED_ADMIN":
+      return "Order approved by Branch Admin"
+    case "ORDER_REJECTED":
+      return "Order rejected"
     case "REFUND_REQUESTED":
       return "Refund request submitted"
     default:
@@ -23,6 +55,9 @@ function notificationTitle(type: string) {
 
 function notificationSeverity(type: string): "info" | "warning" | "critical" {
   switch (type) {
+    case "ORDER_CREATED":
+    case "ORDER_APPROVED_ADMIN":
+    case "ORDER_REJECTED":
     case "REFUND_REQUESTED":
       return "warning"
     default:
@@ -30,8 +65,19 @@ function notificationSeverity(type: string): "info" | "warning" | "critical" {
   }
 }
 
-function notificationCta(type: string) {
+function notificationCta(type: string, orderId: number | null, role: string | undefined) {
   switch (type) {
+    case "ORDER_CREATED":
+      return orderId && role === "BRANCH_ADMIN"
+        ? { label: "Review order", href: `/orders/${orderId}` }
+        : undefined
+    case "ORDER_APPROVED":
+    case "ORDER_REJECTED":
+      return role === "ORDER_PORTAL" ? { label: "View my orders", href: "/shop" } : undefined
+    case "ORDER_APPROVED_ADMIN":
+      return orderId && role === "SUPER_ADMIN"
+        ? { label: "Review order", href: `/orders/${orderId}` }
+        : undefined
     case "REFUND_REQUESTED":
       return { label: "Review refund", href: "/refunds" }
     default:
@@ -50,6 +96,8 @@ export async function GET() {
     if (!userId) {
       return NextResponse.json({ items: [] })
     }
+    const scopeConditions = scopedNotificationConditions(session, userId)
+    if (!scopeConditions) return NextResponse.json({ items: [] })
 
     const rows = await db
       .select({
@@ -58,11 +106,12 @@ export async function GET() {
         message: notifications.message,
         organizationId: notifications.organizationId,
         branchId: notifications.branchId,
+        orderId: notifications.orderId,
         targetRole: notifications.targetRole,
         createdAt: notifications.createdAt,
       })
       .from(notifications)
-      .where(and(eq(notifications.userId, userId), isNull(notifications.readAt)))
+      .where(and(...scopeConditions))
       .orderBy(desc(notifications.createdAt))
       .limit(25)
 
@@ -73,11 +122,12 @@ export async function GET() {
         title: notificationTitle(notification.type),
         message: notification.message,
         severity: notificationSeverity(notification.type),
-        cta: notificationCta(notification.type),
+        cta: notificationCta(notification.type, notification.orderId, (session.user as any)?.role),
         tag: notification.type.toLowerCase().replace(/_/g, "-"),
         createdAt: notification.createdAt,
         organizationId: notification.organizationId,
         branchId: notification.branchId,
+        orderId: notification.orderId,
         targetRole: notification.targetRole,
       })),
     })
@@ -98,6 +148,8 @@ export async function PATCH(req: NextRequest) {
     if (!userId) {
       return NextResponse.json({ updated: 0 })
     }
+    const scopeConditions = scopedNotificationConditions(session, userId)
+    if (!scopeConditions) return NextResponse.json({ updated: 0 })
 
     const body = await req.json().catch(() => ({}))
     if (body?.action !== "mark-all-read") {
@@ -107,7 +159,7 @@ export async function PATCH(req: NextRequest) {
     const updated = await db
       .update(notifications)
       .set({ readAt: new Date() })
-      .where(and(eq(notifications.userId, userId), isNull(notifications.readAt)))
+      .where(and(...scopeConditions))
       .returning({ id: notifications.id })
 
     return NextResponse.json({ updated: updated.length })

@@ -1,6 +1,16 @@
 import { NextRequest } from "next/server"
 import { ok, error, readJson } from "@/lib/api"
 import { generateAndSendOTP } from "@/lib/mfa"
+import { createHash } from "node:crypto"
+import {
+  checkRateLimit,
+  getClientIdentifier,
+  rateLimitResponse,
+} from "@/lib/rate-limiter"
+
+const genericResponse = () => ok({
+  message: "If MFA is enabled for this account, a verification code has been sent.",
+})
 
 export async function POST(req: NextRequest) {
   try {
@@ -12,7 +22,19 @@ export async function POST(req: NextRequest) {
     if (!username) {
       return error("Username or email is required", 400)
     }
+    if (type !== "LOGIN") {
+      return error("Unsupported MFA request type", 400)
+    }
     const identifier = String(username).trim().toLowerCase()
+    const clientIdentifier = await getClientIdentifier()
+    const accountIdentifier = `account:${createHash("sha256").update(identifier).digest("hex").slice(0, 32)}`
+    const [clientLimit, accountLimit] = await Promise.all([
+      checkRateLimit(clientIdentifier, "otpSend"),
+      checkRateLimit(accountIdentifier, "otpSend"),
+    ])
+    if (!clientLimit.allowed || !accountLimit.allowed) {
+      return rateLimitResponse(Math.max(clientLimit.resetIn, accountLimit.resetIn))
+    }
 
     const { db } = await import("@/lib/db")
     const { users, employeeCredentials } = await import("@/db/schema")
@@ -47,26 +69,23 @@ export async function POST(req: NextRequest) {
     }
 
     if (!user) {
-      return error("User not found", 404)
+      return genericResponse()
     }
 
     if (!user.mfaEnabled) {
-      return error("MFA is not enabled for this user", 400)
+      return genericResponse()
     }
 
     const result = await generateAndSendOTP(user.id, user.email, type)
-
-    if (result.success) {
-      return ok({
-        message: result.message,
-        cooldownUntil: result.cooldownUntil
+    if (!result.success) {
+      console.warn("[MFA] Login OTP request was not completed", {
+        account: accountIdentifier,
       })
-    } else {
-      return error(result.message, 400)
     }
+    return genericResponse()
 
   } catch (err) {
     console.error("Error sending OTP:", err)
-    return error("Failed to send OTP", 500)
+    return genericResponse()
   }
 }

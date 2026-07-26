@@ -1,0 +1,8 @@
+{
+  "organization": "ORG_CODE",
+  "branchOverrides": {
+    "Workbook branch name": "Exact database branch name"
+  },
+  "allowedEmailDomains": ["example.com"],
+  "usernameFormat": "first.last"
+}

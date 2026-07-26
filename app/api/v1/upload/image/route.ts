@@ -1,15 +1,8 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
-
-// Increase body size limit for image uploads
-export const config = {
-  api: {
-    bodyParser: {
-      sizeLimit: '8mb',
-    },
-  },
-}
+import { sanitizeRasterUpload } from "@/lib/server/upload-security"
+import { withRateLimit } from "@/lib/rate-limiter"
 
 export async function POST(req: NextRequest) {
   try {
@@ -23,52 +16,43 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Forbidden - Super Admin access required" }, { status: 403 })
     }
 
-    const formData = await req.formData()
-    const file = formData.get("image") as File
+    const rateLimit = await withRateLimit("upload", (session.user as any).id)
+    if (rateLimit) return rateLimit
 
-    if (!file) {
+    const formData = await req.formData()
+    const file = formData.get("image")
+
+    if (!file || !(file instanceof File)) {
       return NextResponse.json({ error: "No image file provided" }, { status: 400 })
     }
 
-    // Validate file type
-    const allowedTypes = ["image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp"]
-    if (!allowedTypes.includes(file.type)) {
-      console.warn(`[Upload] Rejected file with type: ${file.type}`)
-      return NextResponse.json({
-        error: `Invalid file type: ${file.type}. Only JPG, PNG, GIF, and WEBP are allowed`
-      }, { status: 400 })
-    }
-
-    // Validate file size (4MB max)
-    const maxSize = 4 * 1024 * 1024 // 4MB
-    if (file.size > maxSize) {
-      console.warn(`[Upload] Rejected file with size: ${file.size} bytes`)
-      return NextResponse.json({
-        error: "please upload image under 4MB"
-      }, { status: 400 })
-    }
-
-    // Convert file to Base64 data URL
     const bytes = await file.arrayBuffer()
     const buffer = Buffer.from(bytes)
-    const base64Image = buffer.toString('base64')
-    const dataUrl = `data:${file.type};base64,${base64Image}`
+    const validation = await sanitizeRasterUpload({
+      buffer,
+      declaredMime: file.type,
+    })
+    if (!validation.ok) {
+      return NextResponse.json({ error: validation.error }, { status: 400 })
+    }
 
-    console.log(`[Upload] Converted image to Base64 (${file.size} bytes)`)
+    const base64Image = validation.buffer.toString('base64')
+    const dataUrl = `data:${validation.image.mime};base64,${base64Image}`
 
     return NextResponse.json({
       url: dataUrl,
-      fileName: file.name,
-      size: file.size,
-      type: file.type
+      fileName: validation.generatedFileName,
+      size: validation.buffer.length,
+      type: validation.image.mime,
+      width: validation.image.width,
+      height: validation.image.height,
     })
 
   } catch (error: any) {
     console.error("Critical Upload Error:", error)
     return NextResponse.json({
       error: "Internal Server Error",
-      details: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      details: "Upload failed"
     }, { status: 500 })
   }
 }

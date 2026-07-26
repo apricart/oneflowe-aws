@@ -1,0 +1,21 @@
+version: 1
+frontend:
+  phases:
+    preBuild:
+      commands:
+        - npm ci
+    build:
+      commands:
+        # Amplify console variables are build-time only unless they are copied
+        # into a Next.js environment file. This script copies an exact,
+        # server-runtime allowlist and fails without printing secret values.
+        - node scripts/write-amplify-runtime-env.mjs
+        - npm run build
+  artifacts:
+    baseDirectory: .next
+    files:
+      - '**/*'
+  cache:
+    paths:
+      - node_modules/**/*
+      - .next/cache/**/*

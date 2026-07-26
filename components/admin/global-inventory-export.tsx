@@ -14,6 +14,7 @@ import {
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { formatPKR } from "@/lib/utils"
+import { sanitizeSpreadsheetRecords } from "@/lib/spreadsheet"
 
 type GlobalInventoryExportItem = {
     id: number
@@ -52,7 +53,9 @@ export function GlobalInventoryExport({ products }: GlobalInventoryExportProps) 
     const handleExportCSV = () => {
         try {
             setIsExporting(true)
-            const worksheet = XLSX.utils.json_to_sheet(products.map(formatDataForExport))
+            const worksheet = XLSX.utils.json_to_sheet(
+                sanitizeSpreadsheetRecords(products.map(formatDataForExport)),
+            )
             const workbook = XLSX.utils.book_new()
             XLSX.utils.book_append_sheet(workbook, worksheet, "Global Products")
             XLSX.writeFile(workbook, `global-products-export-${exportDate}.csv`)
@@ -66,7 +69,9 @@ export function GlobalInventoryExport({ products }: GlobalInventoryExportProps) 
     const handleExportExcel = () => {
         try {
             setIsExporting(true)
-            const worksheet = XLSX.utils.json_to_sheet(products.map(formatDataForExport))
+            const worksheet = XLSX.utils.json_to_sheet(
+                sanitizeSpreadsheetRecords(products.map(formatDataForExport)),
+            )
             const workbook = XLSX.utils.book_new()
             XLSX.utils.book_append_sheet(workbook, worksheet, "Global Products")
             XLSX.writeFile(workbook, `global-products-export-${exportDate}.xlsx`)

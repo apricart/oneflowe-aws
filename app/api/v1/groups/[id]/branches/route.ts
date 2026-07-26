@@ -5,6 +5,7 @@ import { db } from "@/lib/db"
 import { groups, branches, groupAuditLogs, branchInventory } from "@/db/schema"
 import { eq, inArray, and, sql, isNull, count } from "drizzle-orm"
 import { invalidateByPrefix } from "@/lib/cache-utils"
+import { groupBranchesUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
 
 export async function GET(
     req: Request,
@@ -60,12 +61,12 @@ export async function PUT(
             return NextResponse.json({ error: "Forbidden: You can only manage branches for groups within your own organization" }, { status: 403 })
         }
 
-        const body = await req.json()
-        const { branchIds, newlyAddedBranchIds: clientNewIds } = body // integer[]
-
-        if (!Array.isArray(branchIds)) {
-            return NextResponse.json({ error: "branchIds array required" }, { status: 400 })
+        const rawBody = await req.json().catch(() => null)
+        const parsedBody = groupBranchesUpdateSchema.safeParse(rawBody)
+        if (!parsedBody.success) {
+            return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
         }
+        const { branchIds, newlyAddedBranchIds: clientNewIds } = parsedBody.data
 
         // ============================================================
         // PRODUCT PROTECTION: Check if branches being REMOVED have products
@@ -309,6 +310,6 @@ export async function PUT(
             newlyAddedBranchIds,
         })
     } catch (e: any) {
-        return NextResponse.json({ error: e.message || "Internal Server Error" }, { status: 500 })
+        return NextResponse.json({ error: "Internal Server Error" }, { status: 500 })
     }
 }

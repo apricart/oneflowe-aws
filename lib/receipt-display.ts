@@ -17,6 +17,11 @@ export type ReceiptRefundItem = {
   amount: number | null
 }
 
+export const toDisplayNameCase = (value: unknown) =>
+  String(value ?? "")
+    .toLowerCase()
+    .replace(/\b[a-z]/g, (character) => character.toUpperCase())
+
 export function getReceiptItemQuantity(items?: ReceiptCategory[] | null) {
   if (!Array.isArray(items)) return 0
 

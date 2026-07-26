@@ -362,7 +362,8 @@ export async function cascadeGlobalProductFieldUpdate(
     oldValue: any
     newValue: any
   }>,
-  performedByUserId: string
+  performedByUserId: string,
+  database: any = db,
 ) {
   try {
     if (updates.length === 0) return { updatedCount: 0 }
@@ -389,7 +390,7 @@ export async function cascadeGlobalProductFieldUpdate(
         // Ensure we are comparing same types
       }
 
-      const result = await db.update(organizationInventory)
+      const result: any[] = await database.update(organizationInventory)
         .set({
           [customField]: null,
           updatedAt: new Date()
@@ -407,7 +408,7 @@ export async function cascadeGlobalProductFieldUpdate(
 
       if (result.length > 0) {
         // Log the cascade override clearing
-        await db.insert(auditLogs).values({
+        await database.insert(auditLogs).values({
           userId: performedByUserId,
           action: "CASCADE_CLEAR_OVERRIDE",
           entity: "OrganizationInventory",

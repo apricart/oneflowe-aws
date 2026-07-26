@@ -70,6 +70,7 @@ interface OrderItem {
   taxCents: number
   totalCents: number
   createdAt: string
+  deliveredAt?: string | null
   createdByUserId: string
   hasRefundRequests?: number
   rejectionReason?: string | null

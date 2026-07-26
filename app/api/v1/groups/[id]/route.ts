@@ -5,6 +5,7 @@ import { db } from "@/lib/db"
 import { groups, groupAuditLogs, branches, branchInventory, organizationInventory, globalProducts } from "@/db/schema"
 import { eq, and, sql, count, isNull, or, ne, inArray } from "drizzle-orm"
 import { invalidateByPrefix } from "@/lib/cache-utils"
+import { groupUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
 
 export async function GET(
     req: NextRequest,
@@ -67,8 +68,12 @@ export async function PUT(
             return NextResponse.json({ error: "Invalid Group ID" }, { status: 400 })
         }
 
-        const body = await req.json()
-        const { name, description, status } = body
+        const rawBody = await req.json().catch(() => null)
+        const parsedBody = groupUpdateSchema.safeParse(rawBody)
+        if (!parsedBody.success) {
+            return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
+        }
+        const { name, description } = parsedBody.data
 
         const [existing] = await db
             .select()

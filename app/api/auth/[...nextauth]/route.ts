@@ -114,7 +114,9 @@ export async function POST(req: NextRequest, context: any) {
     // Only rate-limit actual credential login attempts, not signOut or CSRF requests
     const url = new URL(req.url || "http://localhost")
     const isSignIn = url.pathname.endsWith('/callback/credentials') ||
-        url.pathname.endsWith('/callback/employee-credentials')
+        url.pathname.endsWith('/callback/employee-credentials') ||
+        url.pathname.endsWith('/callback/mfa-credentials') ||
+        url.pathname.endsWith('/callback/employee-mfa-credentials')
 
     if (isSignIn) {
         // Rate limit failed login attempts per IP and username.

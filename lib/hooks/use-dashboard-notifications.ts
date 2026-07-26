@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useSession } from "next-auth/react"
 import { useAppContext } from "@/components/context/app-context"
-import { useAPI, useBranches, useOrders, useUsers } from "@/lib/hooks/use-api"
+import { useAPI } from "@/lib/hooks/use-api"
 
 export type NotificationSeverity = "info" | "warning" | "critical"
 
@@ -43,14 +43,15 @@ const getNotificationReadKey = (notification: DashboardNotification) =>
   ].join("|")
 
 export function useDashboardNotifications() {
-  const { data: session } = useSession()
-  const role = ((session?.user as any)?.role || "BRANCH_ADMIN") as "SUPER_ADMIN" | "HEAD_OFFICE" | "BRANCH_ADMIN"
+  const { data: session, status: sessionStatus } = useSession()
+  const role = (session?.user as any)?.role as "SUPER_ADMIN" | "HEAD_OFFICE" | "BRANCH_ADMIN" | "ORDER_PORTAL" | undefined
   const userId = (session?.user as any)?.id || session?.user?.email || "anonymous"
   const { organizationId, branchId, isInitialized } = useAppContext()
   const [seenNotificationKeys, setSeenNotificationKeys] = useState<Set<string>>(new Set())
 
   const scopedOrgId = role === "SUPER_ADMIN" ? undefined : organizationId || undefined
   const scopedBranchId = role === "BRANCH_ADMIN" ? branchId || undefined : undefined
+  const isAdminRole = role === "SUPER_ADMIN" || role === "HEAD_OFFICE" || role === "BRANCH_ADMIN"
   const seenStorageKey = useMemo(
     () => [
       "oneflowe.dashboard-notifications.seen",
@@ -74,15 +75,24 @@ export function useDashboardNotifications() {
     }
   }, [seenStorageKey])
 
-  const pendingOrdersQuery = useOrders({
-    organizationId: scopedOrgId,
-    branchId: scopedBranchId,
-    status: "pending",
-  })
+  const pendingOrdersUrl = useMemo(() => {
+    if (!isAdminRole) return null
+    const params = new URLSearchParams({ status: "pending" })
+    if (scopedOrgId) params.set("organizationId", scopedOrgId)
+    if (scopedBranchId) params.set("branchId", scopedBranchId)
+    return `/api/v1/orders?${params.toString()}`
+  }, [isAdminRole, scopedOrgId, scopedBranchId])
+  const branchesUrl = role === "HEAD_OFFICE"
+    ? `/api/v1/branches${organizationId ? `?organizationId=${encodeURIComponent(organizationId)}` : ""}`
+    : null
+  const usersUrl = role === "HEAD_OFFICE"
+    ? `/api/v1/users${organizationId ? `?organizationId=${encodeURIComponent(organizationId)}` : ""}`
+    : null
 
-  const branchesQuery = useBranches(organizationId || undefined)
-  const usersQuery = useUsers(organizationId || undefined)
-  const dbNotificationsQuery = useAPI<ApiNotificationsResponse>("/api/v1/notifications", {
+  const pendingOrdersQuery = useAPI<{ items: any[] }>(pendingOrdersUrl)
+  const branchesQuery = useAPI<{ items: any[] }>(branchesUrl)
+  const usersQuery = useAPI<{ items: any[] }>(usersUrl)
+  const dbNotificationsQuery = useAPI<ApiNotificationsResponse>(session?.user ? "/api/v1/notifications" : null, {
     refreshInterval: 30000,
     errorRetryCount: 1,
   })
@@ -95,7 +105,7 @@ export function useDashboardNotifications() {
   )
 
   const computedNotifications = useMemo<DashboardNotification[]>(() => {
-    if (!isInitialized) return []
+    if (!isInitialized || !isAdminRole) return []
     const items: DashboardNotification[] = []
     const pendingOrders = pendingOrdersQuery.data?.items || []
     if (pendingOrders.length > 0) {
@@ -168,6 +178,7 @@ export function useDashboardNotifications() {
     return items
   }, [
     isInitialized,
+    isAdminRole,
     role,
     branchesQuery.data?.items,
     pendingRefundsQuery.data?.refunds,
@@ -194,6 +205,7 @@ export function useDashboardNotifications() {
   )
 
   const isLoading =
+    sessionStatus === "loading" ||
     !isInitialized ||
     pendingOrdersQuery.isLoading ||
     branchesQuery.isLoading ||

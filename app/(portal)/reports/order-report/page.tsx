@@ -15,6 +15,7 @@ import { getOrderDerivedStatus } from "@/lib/order-status"
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
 import * as XLSX from "xlsx"
+import { sanitizeSpreadsheetRow } from "@/lib/spreadsheet"
 import { Badge } from "@/components/ui/badge"
 import { Role } from "@/lib/rbac"
 import { useSession } from "next-auth/react"
@@ -470,7 +471,10 @@ export default function OrderReportPage() {
             doc.save(`order-report-${Date.now()}.pdf`); return
         }
 
-        const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
+        const ws = XLSX.utils.aoa_to_sheet([
+            sanitizeSpreadsheetRow(headers),
+            ...rows.map(sanitizeSpreadsheetRow),
+        ])
         const wb = XLSX.utils.book_new()
         XLSX.utils.book_append_sheet(wb, ws, "Orders")
         XLSX.writeFile(wb, `order-report-${Date.now()}.${format === 'excel' ? 'xlsx' : 'csv'}`)

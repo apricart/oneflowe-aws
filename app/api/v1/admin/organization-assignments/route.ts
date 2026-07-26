@@ -8,6 +8,7 @@ import { alias } from "drizzle-orm/pg-core"
 import { cascadeOrgDeletion, cascadeOrgStatusChange } from "@/lib/inventory-cascade"
 import { validateAssignmentData } from "@/lib/inventory-validation"
 import { invalidateByPrefix } from "@/lib/cache-utils"
+import { normalizeSafeImageUrl } from "@/lib/security"
 
 // GET /api/v1/admin/organization-assignments - List organization assignments
 export async function GET(req: NextRequest) {
@@ -156,11 +157,24 @@ export async function POST(req: NextRequest) {
       customImageUrl,
     } = body
 
-    console.log("Parsed data:", { productIds, organizationId, isActive, customName, customPrice, customDescription, customImageUrl })
+    const normalizedCustomImageUrl = normalizeSafeImageUrl(customImageUrl)
+    if (customImageUrl && !normalizedCustomImageUrl) {
+      return NextResponse.json({ error: "Invalid custom image URL" }, { status: 400 })
+    }
+
+    const normalizedAssignmentOverrides = Array.isArray(assignmentOverrides)
+      ? assignmentOverrides.map((entry: any) => {
+        const safeImageUrl = normalizeSafeImageUrl(entry?.customImageUrl)
+        if (entry?.customImageUrl && !safeImageUrl) {
+          throw new Error("INVALID_ASSIGNMENT_IMAGE_URL")
+        }
+        return { ...entry, customImageUrl: safeImageUrl }
+      })
+      : []
 
     let normalizedProductIds: number[] = []
-    if (Array.isArray(assignmentOverrides) && assignmentOverrides.length > 0) {
-      normalizedProductIds = assignmentOverrides
+    if (normalizedAssignmentOverrides.length > 0) {
+      normalizedProductIds = normalizedAssignmentOverrides
         .map((entry: any) => parseInt(entry.productId))
         .filter((value: number) => Number.isFinite(value))
     } else if (Array.isArray(productIds) && productIds.length > 0) {
@@ -209,13 +223,13 @@ export async function POST(req: NextRequest) {
 
     // Create a set of existing product IDs for quick lookup
     const existingProductIds = new Set(existingAssignments.map(a => a.globalProductId))
-    const unassignedProductIds = productIds.filter((id: string) => !existingProductIds.has(parseInt(id)))
+    const unassignedProductIds = normalizedProductIds.filter((id) => !existingProductIds.has(id))
 
     // If all products are already assigned, return a helpful message
     if (unassignedProductIds.length === 0) {
       return NextResponse.json({
         error: "All selected products are already assigned to this organization",
-        alreadyAssigned: productIds.map((id: string) => parseInt(id)),
+        alreadyAssigned: normalizedProductIds,
         unassigned: []
       }, { status: 400 })
     }
@@ -225,9 +239,9 @@ export async function POST(req: NextRequest) {
       const alreadyAssignedIds = normalizedProductIds.filter(id => existingProductIds.has(id))
 
       // Create assignments only for unassigned products
-      const assignments = unassignedProductIds.map((productId: string) => {
-        const override = Array.isArray(assignmentOverrides)
-          ? assignmentOverrides.find((entry: any) => parseInt(entry.productId) === parseInt(productId))
+      const assignments = unassignedProductIds.map((productId) => {
+        const override = normalizedAssignmentOverrides.length > 0
+          ? normalizedAssignmentOverrides.find((entry: any) => parseInt(entry.productId) === productId)
           : null
         const resolvedCustomPrice =
           override && override.customPrice !== undefined && override.customPrice !== null
@@ -237,14 +251,14 @@ export async function POST(req: NextRequest) {
               : null
 
         return {
-          globalProductId: productId,
+          globalProductId: Number(productId),
           organizationId: parseInt(organizationId),
           assignedByUserId: (session.user as any).id,
           isActive: override?.isActive ?? isActive,
           customName: override?.customName ?? customName ?? null,
           customPrice: resolvedCustomPrice,
           customDescription: override?.customDescription ?? customDescription ?? null,
-          customImageUrl: override?.customImageUrl ?? customImageUrl ?? null,
+          customImageUrl: override?.customImageUrl ?? normalizedCustomImageUrl,
         }
       })
 
@@ -260,8 +274,8 @@ export async function POST(req: NextRequest) {
 
     // All products are unassigned, proceed with normal assignment
     const assignments = normalizedProductIds.map(productId => {
-      const override = Array.isArray(assignmentOverrides)
-        ? assignmentOverrides.find((entry: any) => parseInt(entry.productId) === productId)
+      const override = normalizedAssignmentOverrides.length > 0
+        ? normalizedAssignmentOverrides.find((entry: any) => parseInt(entry.productId) === productId)
         : null
       const resolvedCustomPrice =
         override && override.customPrice !== undefined && override.customPrice !== null
@@ -278,7 +292,7 @@ export async function POST(req: NextRequest) {
         customName: override?.customName ?? customName ?? null,
         customPrice: resolvedCustomPrice,
         customDescription: override?.customDescription ?? customDescription ?? null,
-        customImageUrl: override?.customImageUrl ?? customImageUrl ?? null,
+        customImageUrl: override?.customImageUrl ?? normalizedCustomImageUrl,
       }
     })
 
@@ -295,8 +309,8 @@ export async function POST(req: NextRequest) {
       metadata: {
         assignedCount: newAssignments.length,
         organizationId,
-        productIds,
-        skippedCount: productIds.length - newAssignments.length
+        productIds: normalizedProductIds,
+        skippedCount: normalizedProductIds.length - newAssignments.length
       },
     })
 
@@ -306,10 +320,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       message: `${newAssignments.length} products assigned successfully!`,
       assignments: newAssignments,
-      skipped: productIds.length - newAssignments.length
+      skipped: normalizedProductIds.length - newAssignments.length
     })
   } catch (error: any) {
     console.error("Error creating organization assignments:", error)
+
+    if (error?.message === "INVALID_ASSIGNMENT_IMAGE_URL") {
+      return NextResponse.json({ error: "Invalid custom image URL" }, { status: 400 })
+    }
 
     // Handle duplicate-assignment case more gracefully
     if (error?.code === "23505") {
@@ -462,6 +480,11 @@ export async function PUT(req: NextRequest) {
       customImageUrl
     } = body
 
+    const normalizedCustomImageUrl = normalizeSafeImageUrl(customImageUrl)
+    if (customImageUrl && !normalizedCustomImageUrl) {
+      return NextResponse.json({ error: "Invalid custom image URL" }, { status: 400 })
+    }
+
     if (!id) {
       return NextResponse.json({ error: "Assignment ID is required" }, { status: 400 })
     }
@@ -491,7 +514,7 @@ export async function PUT(req: NextRequest) {
     if (customName !== undefined) updateData.customName = customName
     if (customPrice !== undefined) updateData.customPrice = customPrice ? Math.round(parseFloat(customPrice) * 100) : null
     if (customDescription !== undefined) updateData.customDescription = customDescription
-    if (customImageUrl !== undefined) updateData.customImageUrl = customImageUrl
+    if (customImageUrl !== undefined) updateData.customImageUrl = normalizedCustomImageUrl
 
     // Update the assignment
     const [updatedAssignment] = await db.update(organizationInventory)

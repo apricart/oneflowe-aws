@@ -1,10 +1,11 @@
 import { error, ok, readJson, requireApiRole } from "@/lib/api"
 import { getCurrentUser, verifyResourceAccess } from "@/lib/auth"
 import { db } from "@/lib/db"
-import { auditLogs, orders } from "@/db/schema"
+import { auditLogs, orders, refunds } from "@/db/schema"
 import { PAYMENT_STATUSES, normalizePaymentStatus } from "@/lib/payment-status"
-import { orderSelectColumns, updateOrderPaymentStatusColumn } from "@/lib/order-select"
-import { eq } from "drizzle-orm"
+import { orderSelectColumns, transitionOrderPaymentStatusColumn } from "@/lib/order-select"
+import { and, eq, inArray } from "drizzle-orm"
+import { paymentStatusSchema, validationMessage } from "@/lib/server/mutation-validation"
 
 export async function POST(
   req: Request,
@@ -22,8 +23,10 @@ export async function POST(
     return error("Invalid order ID", 400)
   }
 
-  const body = await readJson<{ paymentStatus?: string }>(req)
-  const rawStatus = String(body?.paymentStatus || "").trim().toUpperCase()
+  const rawBody = await readJson<unknown>(req)
+  const parsedBody = paymentStatusSchema.safeParse(rawBody)
+  if (!parsedBody.success) return error(validationMessage(parsedBody.error), 400)
+  const rawStatus = parsedBody.data.paymentStatus
   if (!PAYMENT_STATUSES.includes(rawStatus as (typeof PAYMENT_STATUSES)[number])) {
     return error("Invalid payment status. Must be PAID or UNPAID.", 400)
   }
@@ -41,8 +44,20 @@ export async function POST(
   }
 
   const updated = await db.transaction(async (tx) => {
-    const migrationReady = await updateOrderPaymentStatusColumn(tx, orderId, nextStatus, user.id)
-    if (!migrationReady) return null
+    const transition = await transitionOrderPaymentStatusColumn(tx, orderId, currentStatus, nextStatus, user.id)
+    if (transition !== "updated") return transition
+
+    if (nextStatus === "UNPAID") {
+      const [approvedRefund] = await tx
+        .select({ id: refunds.id })
+        .from(refunds)
+        .where(and(
+          eq(refunds.orderId, orderId),
+          inArray(refunds.status, ["APPROVED", "COMPLETED"]),
+        ))
+        .limit(1)
+      if (approvedRefund) throw new Error("PAID_REFUND_EXISTS")
+    }
 
     await tx.insert(auditLogs).values({
       userId: user.id,
@@ -59,10 +74,17 @@ export async function POST(
     })
 
     return { ...order, paymentStatus: nextStatus }
+  }).catch((transitionError: any) => {
+    if (transitionError?.message === "PAID_REFUND_EXISTS") return "paid-refund-exists" as const
+    throw transitionError
   })
 
-  if (!updated) {
+  if (updated === "missing-column") {
     return error("Payment status migration has not been applied. Run the order payment status migration first.", 503)
+  }
+  if (updated === "conflict") return error("Payment status was already changed by another request", 409)
+  if (updated === "paid-refund-exists") {
+    return error("An order with an approved refund cannot be marked unpaid", 409)
   }
 
   return ok({

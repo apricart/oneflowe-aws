@@ -2,6 +2,7 @@ import { NextRequest } from "next/server"
 import { ok, error, requireApiRole, readJson } from "@/lib/api"
 import { getRequestScope } from "@/lib/auth"
 import { verifyOTP } from "@/lib/mfa"
+import { withRateLimit } from "@/lib/rate-limiter"
 
 export async function POST(req: NextRequest) {
   const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"])
@@ -21,6 +22,9 @@ export async function POST(req: NextRequest) {
     if (!scope?.userId) {
       return error("User not authenticated", 401)
     }
+
+    const rateLimit = await withRateLimit("otpVerify", scope.userId)
+    if (rateLimit) return rateLimit
 
     const result = await verifyOTP(scope.userId, code, type)
 

@@ -22,6 +22,6 @@ export async function POST() {
         return NextResponse.json({ message: "Migration completed successfully - partial unique index created" })
     } catch (error: any) {
         console.error("Migration error:", error)
-        return NextResponse.json({ error: error.message }, { status: 500 })
+        return NextResponse.json({ error: "Migration failed" }, { status: 500 })
     }
 }

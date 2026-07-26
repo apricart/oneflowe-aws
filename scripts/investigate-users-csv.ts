@@ -8,7 +8,7 @@ const CSV_PATH = resolve("userlist.csv")
 const ORG_ID = 10
 
 async function main() {
-  const { db } = await import("../lib/db")
+  const { db } = await import("../lib/db-cli")
   const { branches, users } = await import("../db/schema")
   const { eq, inArray } = await import("drizzle-orm")
 

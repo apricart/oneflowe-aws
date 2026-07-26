@@ -12,6 +12,7 @@ import { MFAVerificationDialog } from "@/components/mfa/mfa-verification-dialog"
 import { useToast } from "@/hooks/use-toast"
 import Image from "next/image"
 import { Eye, EyeOff } from "lucide-react"
+import { safeInternalRedirectPath } from "@/lib/security"
 
 /**
  * Clear stale NextAuth session cookies to prevent "Invalid URL" errors.
@@ -170,7 +171,7 @@ function LoginForm() {
         window.location.replace("/shop")
       } else {
         const cb = searchParams.get("callbackUrl")
-        const targetUrl = (cb && cb !== "undefined" && cb !== "null") ? cb : "/dashboard"
+        const targetUrl = safeInternalRedirectPath(cb)
         window.location.replace(targetUrl)
       }
     } catch (err: any) {
@@ -208,7 +209,7 @@ function LoginForm() {
         window.location.replace("/shop")
       } else {
         const cb = searchParams.get("callbackUrl")
-        const targetUrl = (cb && cb !== "undefined" && cb !== "null") ? cb : "/dashboard"
+        const targetUrl = safeInternalRedirectPath(cb)
         window.location.replace(targetUrl)
       }
     } catch (err: any) {

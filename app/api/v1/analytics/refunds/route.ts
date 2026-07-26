@@ -109,7 +109,7 @@ export async function GET(req: NextRequest) {
     } catch (error: any) {
         console.error("[Analytics Refunds] Error:", error)
         return NextResponse.json(
-            { error: "Failed to fetch refund data", details: error?.message },
+            { error: "Failed to fetch refund data", details: "Request failed" },
             { status: 500 }
         )
     }

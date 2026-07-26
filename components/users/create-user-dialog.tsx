@@ -734,7 +734,9 @@ export function CreateUserDialog({ onSuccess }: CreateUserDialogProps) {
                       <SelectValue placeholder="Select role" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="HEAD_OFFICE">Head Office</SelectItem>
+                      {userRole === "SUPER_ADMIN" && (
+                        <SelectItem value="HEAD_OFFICE">Head Office</SelectItem>
+                      )}
                       <SelectItem value="BRANCH_ADMIN">Branch Admin</SelectItem>
                       <SelectItem value="ORDER_PORTAL">Order Portal User</SelectItem>
                     </SelectContent>

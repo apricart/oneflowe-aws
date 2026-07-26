@@ -1,6 +1,6 @@
 import { type NextRequest } from "next/server"
 import { db } from "@/lib/db"
-import { users, systemLogs, mfaCodes, orders, groups, auditLogs, notifications, employeeCredentials, sessions, groupAuditLogs } from "@/db/schema"
+import { users, roles, systemLogs, mfaCodes, orders, groups, auditLogs, notifications, employeeCredentials, sessions, groupAuditLogs } from "@/db/schema"
 import { eq, or, count } from "drizzle-orm"
 import { hashPassword } from "@/lib/password"
 import { ok, error, requireApiRole, readJson } from "@/lib/api"
@@ -9,6 +9,8 @@ import { invalidateByPrefix } from "@/lib/cache-utils"
 import { invalidateSessionValidationCache } from "@/lib/session-validation-cache"
 import { headers } from "next/headers"
 import { assertUniqueUserFields, normalizeEmail, normalizeOptionalText, UserUniqueFieldError } from "@/lib/user-uniqueness"
+import { systemRoleSchema, userProfileUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
+import { canManageUser } from "@/lib/server/user-access-policy"
 
 export async function PATCH(
   req: NextRequest,
@@ -19,8 +21,11 @@ export async function PATCH(
     if (err) return err
     const params = await props.params
     const { id } = params
-    const body = await readJson<any>(req)
-    if (!body) return error("Invalid body", 400)
+    const rawBody = await readJson<unknown>(req)
+    if (!rawBody) return error("Invalid body", 400)
+    const parsedBody = userProfileUpdateSchema.safeParse(rawBody)
+    if (!parsedBody.success) return error(validationMessage(parsedBody.error), 400)
+    const input = parsedBody.data
 
     // Check if HEAD_OFFICE user can edit this user (BOLA Protection)
     const { verifyResourceAccess } = await import("@/lib/auth")
@@ -28,22 +33,32 @@ export async function PATCH(
       organizationId: users.organizationId,
       branchId: users.branchId,
       email: users.email,
-      username: users.username
-    }).from(users).where(eq(users.id, id)).limit(1)
+      username: users.username,
+      firstName: users.firstName,
+      lastName: users.lastName,
+      sessionVersion: users.sessionVersion,
+      role: roles.name
+    }).from(users).innerJoin(roles, eq(users.roleId, roles.id)).where(eq(users.id, id)).limit(1)
     if (!targetUser) return error("User not found", 404)
+
+    const scope = await getRequestScope()
+    const parsedTargetRole = systemRoleSchema.safeParse(targetUser.role)
+    if (!scope || !parsedTargetRole.success || !canManageUser(scope.role, parsedTargetRole.data)) {
+      return error("You cannot manage a user at this privilege level", 403)
+    }
 
     const hasAccess = await verifyResourceAccess(targetUser.organizationId)
     if (!hasAccess) return error("Unauthorized to assign user to this resource", 403)
 
     const currentUsername = String(targetUser.username || "").trim().toLowerCase()
-    const nextUsername = body.username !== undefined ? String(body.username).trim().toLowerCase() : currentUsername
+    const nextUsername = input.username !== undefined ? input.username.toLowerCase() : currentUsername
 
-    if (body.username !== undefined && !nextUsername) {
+    if (input.username !== undefined && !nextUsername) {
       return error("Username is required", 400)
     }
 
     // Check uniqueness if username changed
-    if (body.username !== undefined) {
+    if (input.username !== undefined) {
       const [existing] = await db
         .select({ id: users.id })
         .from(users)
@@ -64,11 +79,11 @@ export async function PATCH(
     }
 
     const currentEmail = normalizeEmail(targetUser.email)
-    const nextEmail = body.email !== undefined ? normalizeEmail(body.email) : currentEmail
-    const nextPhone = body.phone !== undefined ? normalizeOptionalText(body.phone) : undefined
-    const nextEmployeeId = body.employeeId !== undefined ? normalizeOptionalText(body.employeeId) : undefined
+    const nextEmail = input.email !== undefined ? normalizeEmail(input.email) : currentEmail
+    const nextPhone = input.phone !== undefined ? normalizeOptionalText(input.phone) : undefined
+    const nextEmployeeId = input.employeeId !== undefined ? normalizeOptionalText(input.employeeId) : undefined
 
-    if (body.email !== undefined && !nextEmail) {
+    if (input.email !== undefined && !nextEmail) {
       return error("Email is required", 400)
     }
 
@@ -78,66 +93,50 @@ export async function PATCH(
       employeeId?: string | null
     } = {}
 
-    if (body.email !== undefined) uniqueFieldsToValidate.email = nextEmail
-    if (body.phone !== undefined) uniqueFieldsToValidate.phone = nextPhone
-    if (body.employeeId !== undefined) uniqueFieldsToValidate.employeeId = nextEmployeeId
+    if (input.email !== undefined) uniqueFieldsToValidate.email = nextEmail
+    if (input.phone !== undefined) uniqueFieldsToValidate.phone = nextPhone
+    if (input.employeeId !== undefined) uniqueFieldsToValidate.employeeId = nextEmployeeId
 
     if (Object.keys(uniqueFieldsToValidate).length > 0) {
       await assertUniqueUserFields(uniqueFieldsToValidate, id)
     }
 
-    const patch: any = { updatedAt: new Date() }
-
     // Determine if email actually changed (avoid unnecessary session invalidation)
-    const emailActuallyChanged = body.email !== undefined && nextEmail !== currentEmail
-    const usernameActuallyChanged = body.username !== undefined && nextUsername !== currentUsername
-
-    // Update basic fields
-    if (emailActuallyChanged) patch.email = nextEmail
-    if (usernameActuallyChanged) patch.username = nextUsername
-    if (body.firstName !== undefined) patch.firstName = body.firstName
-    if (body.lastName !== undefined) patch.lastName = body.lastName
-    if (body.phone !== undefined) patch.phone = nextPhone
-    if (typeof body.isActive === "boolean") patch.isActive = body.isActive
-    if (typeof body.mfaEnabled === "boolean") patch.mfaEnabled = body.mfaEnabled
-    if (body.employeeId !== undefined) patch.employeeId = nextEmployeeId
-    if (body.imprestHolder !== undefined) patch.imprestHolder = body.imprestHolder || null
-    if (body.contactPerson !== undefined) patch.contactPerson = body.contactPerson || null
-    if (body.address !== undefined) patch.address = body.address || null
+    const emailActuallyChanged = input.email !== undefined && nextEmail !== currentEmail
+    const usernameActuallyChanged = input.username !== undefined && nextUsername !== currentUsername
 
     // Update full name if first or last name changed
-    if (body.firstName || body.lastName) {
-      const [existing] = await db.select().from(users).where(eq(users.id, id)).limit(1)
-      const firstName = body.firstName || existing?.firstName || ""
-      const lastName = body.lastName || existing?.lastName || ""
-      patch.fullName = `${firstName} ${lastName}`.trim()
-    }
-
-    // Update organization and branch
-    if (body.organizationId !== undefined) {
-      const orgId = (body.organizationId === null || body.organizationId === "") ? null : parseInt(body.organizationId)
-      patch.organizationId = isNaN(orgId as any) ? null : orgId
-    }
-    if (body.branchId !== undefined) {
-      const bId = (body.branchId === null || body.branchId === "") ? null : parseInt(body.branchId)
-      patch.branchId = isNaN(bId as any) ? null : bId
-    }
+    const fullName = input.firstName !== undefined || input.lastName !== undefined
+      ? `${input.firstName ?? targetUser.firstName ?? ""} ${input.lastName ?? targetUser.lastName ?? ""}`.trim()
+      : undefined
 
     // Update password if provided
-    if (body.password) {
-      patch.passwordHash = await hashPassword(body.password)
-    }
+    const passwordHash = input.password ? await hashPassword(input.password) : undefined
 
     // Only password changes should invalidate the current session.
-    const isSecurityChange = !!body.password
+    const isSecurityChange = !!input.password
+    const sessionVersion = isSecurityChange ? targetUser.sessionVersion + 1 : undefined
     if (isSecurityChange) {
       console.log(`[API/Users] Password changed for user ${id}. Incrementing session version...`)
-      const [currentUser] = await db.select({ sessionVersion: users.sessionVersion }).from(users).where(eq(users.id, id)).limit(1)
-      patch.sessionVersion = (currentUser?.sessionVersion || 0) + 1
     }
 
     // Execute update (includes sessionVersion bump if needed — single atomic write)
-    await db.update(users).set(patch).where(eq(users.id, id))
+    await db.update(users).set({
+      email: emailActuallyChanged ? nextEmail : undefined,
+      username: usernameActuallyChanged ? nextUsername : undefined,
+      firstName: input.firstName,
+      lastName: input.lastName,
+      phone: input.phone !== undefined ? nextPhone : undefined,
+      employeeId: input.employeeId !== undefined ? nextEmployeeId : undefined,
+      imprestHolder: input.imprestHolder,
+      contactPerson: input.contactPerson,
+      location: input.location,
+      address: input.address,
+      fullName,
+      passwordHash,
+      sessionVersion,
+      updatedAt: new Date(),
+    }).where(eq(users.id, id))
 
     // Drop the cached session-validation result so deactivation/password
     // changes take effect on the target user's next session check
@@ -165,9 +164,7 @@ export async function PATCH(
         resourceType: "user",
         resourceId: id,
         details: {
-          patchKeys: Object.keys(patch),
-          updatedUserOrgId: body.organizationId,
-          updatedUserBranchId: body.branchId,
+          patchKeys: Object.keys(input),
           sessionsInvalidated: isSecurityChange
         },
         ipAddress: ip,
@@ -233,9 +230,15 @@ export async function DELETE(
     const { verifyResourceAccess } = await import("@/lib/auth")
     const [targetUser] = await db.select({
       organizationId: users.organizationId,
-      email: users.email
-    }).from(users).where(eq(users.id, id)).limit(1)
+      email: users.email,
+      role: roles.name,
+    }).from(users).innerJoin(roles, eq(users.roleId, roles.id)).where(eq(users.id, id)).limit(1)
     if (!targetUser) return error("User not found", 404)
+
+    const parsedTargetRole = systemRoleSchema.safeParse(targetUser.role)
+    if (!scope || !parsedTargetRole.success || !canManageUser(scope.role, parsedTargetRole.data)) {
+      return error("You cannot delete a user at this privilege level", 403)
+    }
 
     const hasAccess = await verifyResourceAccess(targetUser.organizationId)
     if (!hasAccess) return error("Forbidden: You do not have access to this user", 403)

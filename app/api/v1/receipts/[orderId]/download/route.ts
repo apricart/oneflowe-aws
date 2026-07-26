@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
+import { safeFilenamePart } from "@/lib/security"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { branches, orders, orderItems, refundItems, refunds, users } from "@/db/schema"
 import { and, eq, sql } from "drizzle-orm"
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
-import { aggregateReceiptRefundItems, getReceiptItemQuantity, getReceiptNetTotal } from "@/lib/receipt-display"
+import { aggregateReceiptRefundItems, getReceiptItemQuantity, getReceiptNetTotal, toDisplayNameCase } from "@/lib/receipt-display"
 import { getOrderDerivedStatus } from "@/lib/order-status"
 import { formatBranchAddress } from "@/lib/branch-address"
 import { jsPDF } from "jspdf"
@@ -128,11 +129,12 @@ export async function GET(
         }
 
         const pdfBuffer = renderReceiptPagePdf(receiptData)
+        const invoiceFilePart = safeFilenamePart(receiptData.invoiceNumber, String(orderId))
 
         return new NextResponse(pdfBuffer, {
             headers: {
                 "Content-Type": "application/pdf",
-                "Content-Disposition": `attachment; filename="invoice-${receiptData.invoiceNumber}.pdf"`,
+                "Content-Disposition": `attachment; filename="invoice-${invoiceFilePart}.pdf"`,
             },
         })
     } catch (e: any) {
@@ -254,8 +256,8 @@ function drawDetailCards(doc: any, receiptData: any, itemQuantity: number, x: nu
 
     drawCard(doc, x, y, cardWidth, cardHeight, "BILLED TO", [
         ["Name:", receiptData.buyerName || "N/A"],
-        ["Address:", receiptData.buyerAddress || "-"],
-        ["Created by:", receiptData.placedByName || "N/A"],
+        ["Address:", toDisplayNameCase(receiptData.buyerAddress || "-")],
+        ["Created By:", toDisplayNameCase(receiptData.placedByName || "N/A")],
         ["Phone:", receiptData.placedByPhone || receiptData.buyerPhone || "N/A"],
     ])
 
@@ -312,8 +314,8 @@ function drawItemsTable(doc: any, receiptData: any, x: number, y: number, width:
         setText(doc, colors.white)
         doc.text("#", x + 4, currentY + 6.8)
         doc.text("DESCRIPTION", x + 24, currentY + 6.8)
-        doc.text("PRICE", x + 116, currentY + 6.8, { align: "right" })
-        doc.text("QTY", x + 138, currentY + 6.8, { align: "right" })
+        doc.text("QTY", x + 116, currentY + 6.8, { align: "right" })
+        doc.text("PRICE", x + 138, currentY + 6.8, { align: "right" })
         doc.text("TOTAL", x + width - 4, currentY + 6.8, { align: "right" })
         currentY += 10
     }
@@ -361,8 +363,8 @@ function drawItemsTable(doc: any, receiptData: any, x: number, y: number, width:
 
                 setText(doc, colors.primary)
                 doc.text(truncate(item.description || "", 60), x + 24, currentY + 4.8)
-                doc.text(formatMoney(item.rate), x + 116, currentY + 4.8, { align: "right" })
-                doc.text(String(item.quantity || 0), x + 138, currentY + 4.8, { align: "right" })
+                doc.text(String(item.quantity || 0), x + 116, currentY + 4.8, { align: "right" })
+                doc.text(formatMoney(item.rate), x + 138, currentY + 4.8, { align: "right" })
                 doc.setFont("helvetica", "bold")
                 doc.text(formatMoney(item.total), x + width - 4, currentY + 4.8, { align: "right" })
 

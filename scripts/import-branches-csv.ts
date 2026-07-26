@@ -13,7 +13,7 @@
  * email address, or time value — those mark the end of the address field.
  */
 
-import { readFileSync } from "fs"
+import { readFileSync, statSync } from "fs"
 import { resolve } from "path"
 import * as dotenv from "dotenv"
 
@@ -61,8 +61,12 @@ function isValidName(name: string): boolean {
 
 // ─── Parse CSV ─────────────────────────────────────────────────────────────
 
-const raw = readFileSync(CSV_PATH, "utf-8")
+if (statSync(CSV_PATH).size > 2 * 1024 * 1024) {
+  throw new Error("Branch CSV exceeds the 2MB limit.")
+}
+const raw = new TextDecoder("utf-8", { fatal: true }).decode(readFileSync(CSV_PATH))
 const lines = raw.split(/\r?\n/)
+if (lines.length > 5001) throw new Error("Branch CSV exceeds the 5,000-row limit.")
 
 interface BranchRow {
   name: string
@@ -163,11 +167,16 @@ if (DRY_RUN) {
 // ─── Live insert (dynamic imports so dry-run never touches the DB) ─────────
 
 async function runInsert() {
-  const { db } = await import("../lib/db")
+  const { db } = await import("../lib/db-cli")
   const { branches: branchesTable, organizations } = await import("../db/schema")
   const { eq, and, sql } = await import("drizzle-orm")
+  let inserted = 0
+  let skippedDuplicate = 0
+
+  await db.transaction(async (tx) => {
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtext('oneflowe:branch-import'))`)
   // Verify the organisation exists
-  const [org] = await db
+  const [org] = await tx
     .select({ id: organizations.id, name: organizations.name, code: organizations.code })
     .from(organizations)
     .where(eq(organizations.id, ORG_ID))
@@ -181,21 +190,19 @@ async function runInsert() {
   console.log(`\n✅  Found org: ${org.name} (code: ${org.code})`)
 
   // Get current branch count to seed the code counter
-  const [{ count: existingCount }] = await db
+  const [{ count: existingCount }] = await tx
     .select({ count: sql<number>`count(*)` })
     .from(branchesTable)
     .where(eq(branchesTable.organizationId, ORG_ID))
 
   let codeCounter = Number(existingCount)
-  let inserted = 0
-  let skippedDuplicate = 0
 
   console.log(`\nCurrent branch count for ${org.name}: ${codeCounter}`)
   console.log("Starting inserts...\n")
 
   for (const branch of deduped) {
     // Check for duplicate name (case-insensitive) within the same org
-    const [existing] = await db
+    const [existing] = await tx
       .select({ id: branchesTable.id })
       .from(branchesTable)
       .where(
@@ -215,7 +222,7 @@ async function runInsert() {
     codeCounter++
     const code = `${org.code}-${codeCounter.toString().padStart(2, "0")}`
 
-    await db.insert(branchesTable).values({
+    await tx.insert(branchesTable).values({
       organizationId: ORG_ID,
       name: branch.name,
       address: branch.address || null,
@@ -226,6 +233,7 @@ async function runInsert() {
     console.log(`  ✅  [${code}] ${branch.name}`)
     inserted++
   }
+  })
 
   console.log("\n════════════════════════════════════════════════════════════")
   console.log(`  Done.  Inserted: ${inserted}  |  Skipped (duplicates): ${skippedDuplicate}`)

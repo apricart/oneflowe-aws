@@ -1,103 +1,76 @@
 #!/usr/bin/env tsx
 /**
- * Export database to SQL file
+ * Export the runtime database to a SQL file.
  * Usage: tsx scripts/export-db.ts [output-file.sql]
  */
 
-import { execSync } from "child_process"
-import { writeFileSync } from "fs"
-import { join } from "path"
-import * as dotenv from "dotenv"
+import { spawnSync } from 'node:child_process'
+import { closeSync, openSync, unlinkSync } from 'node:fs'
+import { basename, dirname, resolve } from 'node:path'
 
-// Load environment variables (try .env.local first, then .env)
-dotenv.config({ path: ".env.local" })
-dotenv.config() // This will not override existing variables
+import { databaseToolEnv } from '../lib/server/database-tool-env'
 
-const DATABASE_URL = process.env.DATABASE_URL
-
-if (!DATABASE_URL) {
-  console.error("❌ DATABASE_URL environment variable is not set")
-  console.error("Please set DATABASE_URL in your .env file")
-  process.exit(1)
+const parsedUrl = new URL(databaseToolEnv.DATABASE_URL)
+const databaseConfig = {
+  host: parsedUrl.hostname,
+  port: parsedUrl.port || '5432',
+  database: parsedUrl.pathname.slice(1),
+  user: decodeURIComponent(parsedUrl.username),
+  password: decodeURIComponent(parsedUrl.password),
 }
 
-// Parse DATABASE_URL
-function parseDatabaseUrl(url: string) {
-  try {
-    const urlObj = new URL(url)
-    return {
-      host: urlObj.hostname,
-      port: parseInt(urlObj.port) || 5432,
-      database: urlObj.pathname.slice(1), // Remove leading slash
-      user: urlObj.username,
-      password: urlObj.password,
-    }
-  } catch (error) {
-    console.error("Failed to parse DATABASE_URL:", error)
-    process.exit(1)
-  }
+const outputFile =
+  process.argv[2] || `database-export-${new Date().toISOString().split('T')[0]}.sql`
+if (
+  outputFile !== basename(outputFile) ||
+  !/^[A-Za-z0-9][A-Za-z0-9._-]{0,126}\.sql$/.test(outputFile) ||
+  outputFile.includes('..')
+) {
+  throw new Error('Output must be a plain .sql file name without paths or traversal sequences.')
 }
 
-const dbConfig = parseDatabaseUrl(DATABASE_URL)
+const outputPath = resolve(process.cwd(), outputFile)
+if (dirname(outputPath) !== resolve(process.cwd())) {
+  throw new Error('Output path must remain in the current working directory.')
+}
 
-// Get output filename from command line or use default
-const outputFile = process.argv[2] || `database-export-${new Date().toISOString().split('T')[0]}.sql`
-const outputPath = join(process.cwd(), outputFile)
-
-console.log("📦 Exporting database...")
-console.log(`   Database: ${dbConfig.database}`)
-console.log(`   Host: ${dbConfig.host}:${dbConfig.port}`)
-console.log(`   Output: ${outputPath}`)
+console.log('Exporting database...')
+console.log(`Output: ${outputPath}`)
 
 try {
-  // Build pg_dump command
-  // Using PGPASSWORD environment variable to avoid password prompt
-  const env = {
-    ...process.env,
-    PGPASSWORD: dbConfig.password,
+  const outputFd = openSync(outputPath, 'wx', 0o600)
+  const result = spawnSync(
+    'pg_dump',
+    [
+      `--host=${databaseConfig.host}`,
+      `--port=${databaseConfig.port}`,
+      `--username=${databaseConfig.user}`,
+      `--dbname=${databaseConfig.database}`,
+      '--no-owner',
+      '--no-acl',
+      '--clean',
+      '--if-exists',
+      '--verbose',
+    ],
+    {
+      env: {
+        ...process.env,
+        PGPASSWORD: databaseConfig.password,
+      },
+      cwd: process.cwd(),
+      stdio: ['ignore', outputFd, 'inherit'],
+      shell: false,
+      timeout: 5 * 60 * 1000,
+      killSignal: 'SIGTERM',
+    },
+  )
+  closeSync(outputFd)
+  if (result.error || result.status !== 0) {
+    unlinkSync(outputPath)
+    throw result.error ?? new Error(`pg_dump exited with status ${result.status}`)
   }
-
-  const pgDumpCommand = [
-    "pg_dump",
-    `--host=${dbConfig.host}`,
-    `--port=${dbConfig.port}`,
-    `--username=${dbConfig.user}`,
-    `--dbname=${dbConfig.database}`,
-    "--no-owner", // Don't output commands to set ownership of objects
-    "--no-acl", // Don't output access privileges (grant/revoke commands)
-    "--clean", // Include commands to clean (drop) database objects before creating
-    "--if-exists", // Use IF EXISTS when dropping objects
-    "--verbose", // Verbose mode
-  ].join(" ")
-
-  console.log("\n⏳ Running pg_dump...")
-  const dump = execSync(pgDumpCommand, {
-    env,
-    encoding: "utf-8",
-    stdio: ["ignore", "pipe", "pipe"], // stdin: ignore, stdout: pipe, stderr: pipe
-  })
-
-  // Write to file
-  writeFileSync(outputPath, dump, "utf-8")
-
-  const fileSize = (dump.length / 1024).toFixed(2)
-  console.log(`\n✅ Database exported successfully!`)
-  console.log(`   File: ${outputPath}`)
-  console.log(`   Size: ${fileSize} KB`)
-  console.log(`\n💡 To import this database, use:`)
-  console.log(`   psql -d <database_name> -f ${outputFile}`)
-} catch (error: any) {
-  console.error("\n❌ Error exporting database:")
-  if (error.message) {
-    console.error(error.message)
-  }
-  if (error.stderr) {
-    console.error(error.stderr.toString())
-  }
-  console.error("\n💡 Make sure:")
-  console.error("   1. PostgreSQL client tools (pg_dump) are installed")
-  console.error("   2. DATABASE_URL is correctly set in .env file")
-  console.error("   3. You have access to the database")
+  console.log('Database exported successfully.')
+} catch {
+  console.error('Database export failed. Verify pg_dump is installed and DATABASE_URL is valid.')
   process.exit(1)
 }
-

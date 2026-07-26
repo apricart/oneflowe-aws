@@ -1,4 +1,5 @@
 import { redis } from "@/lib/redis"
+import { env } from "@/lib/server/env"
 
 /**
  * Short-lived Redis cache for the session-callback "is this user still valid"
@@ -15,10 +16,7 @@ import { redis } from "@/lib/redis"
  *   many users) and takes effect within the TTL window.
  */
 
-const rawTtl = Number(process.env.SESSION_VALIDATION_CACHE_TTL_SECONDS ?? 30)
-export const SESSION_VALIDATION_CACHE_TTL = Number.isFinite(rawTtl) && rawTtl > 0
-    ? Math.min(rawTtl, 300) // hard cap: never cache validity longer than 5 minutes
-    : 0
+export const SESSION_VALIDATION_CACHE_TTL = env.SESSION_VALIDATION_CACHE_TTL_SECONDS
 
 // The exact tuple the session callback validated. A cached entry only counts
 // as a hit when every field matches the incoming token, so a sessionVersion

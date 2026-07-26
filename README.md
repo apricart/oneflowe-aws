@@ -59,21 +59,14 @@ Continue building your app on:
 
 ### Environment Configuration
 
-1. Create a `.env.local` file in the project root (copy from `.env.example` if available)
-2. Set your database connection URL:
-   \`\`\`
-   DATABASE_URL=postgresql://username:password@localhost:5432/database_name
-   \`\`\`
-3. Set your JWT secrets:
-   \`\`\`
-   JWT_SECRET=your-super-secret-jwt-key
-   REFRESH_TOKEN_SECRET=your-super-secret-refresh-key
-   \`\`\`
-4. Set super admin credentials:
-   \`\`\`
-   SUPER_ADMIN_EMAIL=admin@example.com
-   SUPER_ADMIN_PASSWORD=your-secure-password
-   \`\`\`
+Copy `.env.example` to `.env.local` and obtain every secret from the approved
+secret manager. Runtime and migration database credentials are deliberately
+separate: the application uses `DATABASE_URL`, while Drizzle and schema-sync
+commands use only `MIGRATION_DATABASE_URL`.
+
+Do not add AWS access keys to environment files. Deployed environments should
+use an IAM workload identity; local development should use AWS SSO or a profile.
+See `docs/security/environment-security.md` for deployment requirements.
 
 ### Running Migrations
 
@@ -83,14 +76,23 @@ After setting up your database, run the migrations:
 npm run db:migrate
 \`\`\`
 
-### Seeding Super Admin User
+### Seeding and Administrator Bootstrap
 
-To seed a super admin user, run:
+To seed roles, permissions, and organization settings, run:
 
 \`\`\`bash
 npm run db:seed
 \`\`\`
 
-The seed script will create a SUPER_ADMIN role and user if they don't already exist, using the credentials from your `.env.local` file.
+The general seed never creates an administrator. For a controlled one-time
+bootstrap, set `SUPER_ADMIN_EMAIL` and `SUPER_ADMIN_PASSWORD`, then run:
+
+\`\`\`bash
+npm run db:bootstrap-admin -- --confirm=CREATE_SUPER_ADMIN
+\`\`\`
+
+The bootstrap refuses to run if a super administrator already exists, records
+an audit event, never prints the password, and requires the new administrator to
+change it at first login. Remove both bootstrap variables immediately afterward.
 
 Make sure your PostgreSQL server is running and the database exists before running the seed script.

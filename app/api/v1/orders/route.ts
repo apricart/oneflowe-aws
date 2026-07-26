@@ -1,23 +1,23 @@
 import { NextRequest, NextResponse } from "next/server"
+import { createHash } from "node:crypto"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
-import { budgets, orders, orderItems, organizationInventory, auditLogs, branches, globalProducts, productQuantityBudgets, refunds, systemLogs, groupAuditLogs, organizations, refundItems } from "@/db/schema"
+import { budgets, orders, orderItems, organizationInventory, branchInventory, auditLogs, branches, globalProducts, productQuantityBudgets, refunds, systemLogs, groupAuditLogs, organizations, refundItems } from "@/db/schema"
 import { headers } from "next/headers"
-import { and, desc, eq, gte, lte, sql, inArray } from "drizzle-orm"
-import { logOrderActivity, logTokenGenerated, logFulfillmentAttempt } from "@/lib/global-logger"
-import { generateApprovalToken, hashApprovalToken, verifyApprovalToken } from "@/lib/approval-token"
+import { and, desc, eq, gte, ilike, lte, or, sql, inArray, isNull } from "drizzle-orm"
+import { logOrderActivity } from "@/lib/global-logger"
 import { generateReceiptData } from "@/lib/receipt-generator"
 import { generateNextInvoiceNumber, hasInvoiceSequenceTable } from "@/lib/invoice-number"
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
 import { parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
-import { orderSelectColumns, updateOrderFulfillmentStatusColumn } from "@/lib/order-select"
+import { orderSelectColumns } from "@/lib/order-select"
 import { calculateLineCents, formatQuantity, roundQuantity, validateProductQuantity } from "@/lib/quantity"
-import {
-  moveHeldQuantityBudgetToUsedForOrder,
-  releaseHeldQuantityBudgetForOrder,
-} from "@/lib/server/product-quantity-budget-ledger"
+import { orderCreateSchema, validationMessage } from "@/lib/server/mutation-validation"
+import { withRateLimit } from "@/lib/rate-limiter"
+import { attemptImmediateOrderEmailDelivery, queueOrderCreatedNotifications } from "@/lib/server/order-notifications"
+import { canViewFulfillmentToken } from "@/lib/fulfillment-token-access"
 
 
 
@@ -69,6 +69,22 @@ export async function GET(req: NextRequest) {
     const groupIdsRaw = searchParams.get("groupIds") || undefined
     const monthsRaw = searchParams.get("months") || undefined
     const yearsRaw = searchParams.get("years") || undefined
+    const page = Math.min(Math.max(Math.trunc(Number(searchParams.get("page"))) || 1, 1), 10_000)
+    const requestedLimit = Math.trunc(Number(searchParams.get("limit"))) || 200
+    const limit = idParam ? 1 : Math.min(Math.max(requestedLimit, 1), 500)
+    const offset = idParam ? 0 : (page - 1) * limit
+    const conditions: any[] = []
+
+    if (q) {
+      if (q.length > 100) {
+        return NextResponse.json({ error: "Search query must be at most 100 characters" }, { status: 400 })
+      }
+      const escapedQuery = q.replace(/[\\%_]/g, "\\$&")
+      conditions.push(or(
+        ilike(orders.tid, `%${escapedQuery}%`),
+        ilike(branches.costCenterId, `%${escapedQuery}%`),
+      ))
+    }
 
     // Parsing branchIds
     const parsedBranchIds = branchIdsRaw
@@ -87,8 +103,6 @@ export async function GET(req: NextRequest) {
     const parsedYears = yearsRaw
       ? yearsRaw.split(",").map(id => Number(id)).filter(id => !isNaN(id) && id >= 2000 && id <= 2100)
       : []
-
-    const conditions: any[] = []
 
     // --- Role-based access ---
     if (role === "SUPER_ADMIN") {
@@ -208,6 +222,7 @@ export async function GET(req: NextRequest) {
         taxCents: orders.taxCents,
         totalCents: orders.totalCents,
         createdAt: orders.createdAt,
+        deliveredAt: orders.deliveredAt,
         fulfilledAt: orders.fulfilledAt,
         branchName: branches.name,
         branchAddress: branches.address,
@@ -230,6 +245,7 @@ export async function GET(req: NextRequest) {
           FROM ${orderItems}
           WHERE ${orderItems.orderId} = ${orders.id}
         )`,
+        createdByUserId: orders.createdByUserId,
         approvedByUserId: orders.approvedByUserId,
         approvalToken: orders.approvalToken, // Will be filtered before return
       })
@@ -238,31 +254,31 @@ export async function GET(req: NextRequest) {
       .leftJoin(organizations, eq(orders.organizationId, organizations.id))
 
     const items = await (conditions.length
-      ? selectBase.where(and(...conditions)).orderBy(desc(orders.createdAt))
-      : selectBase.orderBy(desc(orders.createdAt)))
+      ? selectBase.where(and(...conditions)).orderBy(desc(orders.createdAt)).limit(limit).offset(offset)
+      : selectBase.orderBy(desc(orders.createdAt)).limit(limit).offset(offset))
 
     const currentUserId = (session.user as any).id
 
     // Sanitize items: Only show approvalToken to authorized roles
     const sanitizedItems = items.map(item => {
-      // Show token if:
-      // 1. User is the one who approved it
-      // 2. User is a Super Admin (needs it for fulfillment)
-      // 3. User is a Branch Admin (needs it to hand off to Super Admin)
-      const canSeeToken =
-        item.approvedByUserId === currentUserId ||
-        role === "SUPER_ADMIN" ||
-        role === "BRANCH_ADMIN";
+      const canSeeToken = canViewFulfillmentToken({
+        role,
+        userId: currentUserId,
+        orderStatus: item.status,
+        orderCreatedByUserId: item.createdByUserId,
+        orderApprovedByUserId: item.approvedByUserId,
+      })
+      const { createdByUserId: _createdByUserId, ...publicItem } = item
 
       const safeItem = pricesHidden
         ? {
-          ...item,
+          ...publicItem,
           subtotalCents: null,
           taxCents: null,
           totalCents: null,
           refundAmountCents: null,
         }
-        : item
+        : publicItem
 
       return {
         ...safeItem,
@@ -270,15 +286,7 @@ export async function GET(req: NextRequest) {
       }
     })
 
-    const filtered = q
-      ? sanitizedItems.filter((o) => {
-        const lowerQuery = q.toLowerCase()
-        return (
-          o.tid.toLowerCase().includes(lowerQuery) ||
-          (o.branchCostCenterId || "").toLowerCase().includes(lowerQuery)
-        )
-      })
-      : sanitizedItems
+    const filtered = sanitizedItems
 
     // Single order with items
     if (idParam && /^\d+$/.test(idParam)) {
@@ -331,7 +339,15 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ items: filtered, pricesHidden })
+    return NextResponse.json({
+      items: filtered,
+      pricesHidden,
+      pagination: {
+        page,
+        limit,
+        hasMore: filtered.length === limit,
+      },
+    })
   } catch (e: any) {
     console.error("Orders GET error:", e)
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 })
@@ -339,6 +355,13 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  let replayContext: {
+    userId: string
+    idempotencyKey: string
+    requestFingerprint: string
+    pricesHidden: boolean
+  } | null = null
+
   try {
     const session = await getServerSession(authOptions)
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
@@ -347,15 +370,24 @@ export async function POST(req: NextRequest) {
     let organizationId = (session.user as any).organizationId
     if (organizationId) organizationId = parseInt(String(organizationId))
     const userId = (session.user as any).id
-
-    const body = await req.json()
-    const { items, branchId: branchIdInput, organizationId: orgIdInput, notes } = body as { items: { organizationInventoryId: number, quantity: number }[], branchId?: number, organizationId?: number, notes?: string }
-    if (!items || !Array.isArray(items) || items.length === 0) {
-      return NextResponse.json({ error: "Items required" }, { status: 400 })
+    const rateLimit = await withRateLimit("order", userId)
+    if (rateLimit) return rateLimit
+    const idempotencyKey = req.headers.get("idempotency-key")?.trim() || ""
+    if (!IDEMPOTENCY_KEY_PATTERN.test(idempotencyKey)) {
+      return NextResponse.json({
+        error: "A valid Idempotency-Key header (8-128 letters, numbers, '.', '_', ':', or '-') is required",
+      }, { status: 400 })
     }
 
+    const rawBody = await req.json().catch(() => null)
+    const parsedBody = orderCreateSchema.safeParse(rawBody)
+    if (!parsedBody.success) {
+      return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
+    }
+    const { items, branchId: branchIdInput, organizationId: orgIdInput, notes } = parsedBody.data
+
     const normalizedItems = items.map((item) => ({
-      ...item,
+      organizationInventoryId: item.organizationInventoryId,
       quantity: roundQuantity(Number(item.quantity)),
     }))
 
@@ -364,11 +396,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Quantities must be greater than zero" }, { status: 400 })
     }
 
-    // For admin users, accept organizationId and branchId from request body (from context selector)
-    if (role === "HEAD_OFFICE" || role === "SUPER_ADMIN") {
+    // Only Super Admin may select a tenant. Head Office remains session-scoped.
+    if (role === "SUPER_ADMIN") {
       if (orgIdInput && Number.isFinite(orgIdInput)) {
         organizationId = orgIdInput
       }
+    } else if (role === "HEAD_OFFICE" && orgIdInput !== undefined && orgIdInput !== organizationId) {
+      return NextResponse.json({ error: "Tenant reassignment is not permitted" }, { status: 403 })
     }
 
     if (!Number.isFinite(organizationId)) {
@@ -377,14 +411,71 @@ export async function POST(req: NextRequest) {
 
     const branchId = role === "HEAD_OFFICE" || role === "SUPER_ADMIN" ? parseInt(String(branchIdInput)) : parseInt(String((session.user as any).branchId))
     if (!Number.isFinite(branchId)) return NextResponse.json({ error: "Branch context required" }, { status: 400 })
+
+    const [selectedBranch] = await db
+      .select({ id: branches.id })
+      .from(branches)
+      .where(and(
+        eq(branches.id, branchId),
+        eq(branches.organizationId, Number(organizationId)),
+      ))
+      .limit(1)
+    if (!selectedBranch) {
+      return NextResponse.json({ error: "Branch does not belong to the selected organization" }, { status: 400 })
+    }
     const pricesHidden = await shouldHidePricesForRole(role, organizationId)
     const budgetAllocationMode = await getBudgetAllocationModeForOrganization(Number(organizationId))
+    const requestFingerprint = orderRequestFingerprint({
+      organizationId: Number(organizationId),
+      branchId,
+      notes,
+      items: normalizedItems,
+    })
+    replayContext = { userId, idempotencyKey, requestFingerprint, pricesHidden }
+
+    const [existingOrder] = await db
+      .select({ ...orderSelectColumns, requestFingerprint: orders.requestFingerprint })
+      .from(orders)
+      .where(and(
+        eq(orders.createdByUserId, userId),
+        eq(orders.idempotencyKey, idempotencyKey),
+      ))
+      .limit(1)
+
+    if (existingOrder) {
+      if (existingOrder.requestFingerprint !== requestFingerprint) {
+        return NextResponse.json({ error: "Idempotency key was already used for a different order" }, { status: 409 })
+      }
+      const { requestFingerprint: _requestFingerprint, ...replayedOrder } = existingOrder
+
+      return NextResponse.json({
+        message: "Order already created",
+        order: pricesHidden
+          ? { ...replayedOrder, subtotalCents: null, taxCents: null, totalCents: null }
+          : replayedOrder,
+        replayed: true,
+      })
+    }
 
     // Fetch inventory details and prices
     const orgInvIds = normalizedItems.map(i => i.organizationInventoryId)
-    const allInvRows = await db.select().from(organizationInventory)
+    const allInvRows = await db
+      .select({
+        id: organizationInventory.id,
+        globalProductId: organizationInventory.globalProductId,
+        customPrice: organizationInventory.customPrice,
+      })
+      .from(branchInventory)
+      .innerJoin(organizationInventory, eq(branchInventory.organizationInventoryId, organizationInventory.id))
       .where(and(
+        eq(branchInventory.branchId, branchId),
+        eq(branchInventory.organizationId, Number(organizationId)),
+        eq(branchInventory.isActive, true),
+        eq(branchInventory.isVisible, true),
+        isNull(branchInventory.deletedAt),
         eq(organizationInventory.organizationId, organizationId),
+        eq(organizationInventory.isActive, true),
+        isNull(organizationInventory.deletedAt),
         inArray(organizationInventory.id, orgInvIds as any)
       ))
 
@@ -402,7 +493,11 @@ export async function POST(req: NextRequest) {
 
     // join to global products for base price and unit
     const gpIds = invRows.map(r => r.globalProductId)
-    const allGpRows = await db.select().from(globalProducts).where(inArray(globalProducts.id, gpIds as any))
+    const allGpRows = await db.select().from(globalProducts).where(and(
+      inArray(globalProducts.id, gpIds as any),
+      eq(globalProducts.status, "active"),
+      isNull(globalProducts.deletedAt),
+    ))
 
     console.log("Global product rows:", allGpRows.map(r => ({ id: r.id, unit: r.unit, name: r.name })))
 
@@ -493,8 +588,11 @@ export async function POST(req: NextRequest) {
           amountSpentCents: 0,
           amountHeldCents: 0,
           amountCreditedCents: 0,
-        }).returning()
-        currentBudget = newBudget
+        }).onConflictDoNothing().returning()
+        currentBudget = newBudget || (await db.select().from(budgets).where(and(
+          eq(budgets.branchId, branchId),
+          eq(budgets.period, currentMonth),
+        )).limit(1))[0]
       } else {
         return NextResponse.json({
           error: `Budget not configured for current month (${currentMonth}). Please contact head office to allocate budget.`
@@ -522,7 +620,7 @@ export async function POST(req: NextRequest) {
     const tid = generateTid()
     const invoiceSequenceReady = await hasInvoiceSequenceTable(db)
 
-    const created = await db.transaction(async (tx) => {
+    const creationResult = await db.transaction(async (tx) => {
       const budgetId = currentBudget?.id
       if (!budgetId) throw new Error("Budget ID missing")
 
@@ -592,17 +690,99 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // 1. Lock global products to update stock safely
+      // Revalidate branch and organization availability at the write point.
+      const lockedBranchAssignments = await tx
+        .select({ organizationInventoryId: branchInventory.organizationInventoryId })
+        .from(branchInventory)
+        .where(and(
+          eq(branchInventory.branchId, branchId),
+          eq(branchInventory.organizationId, Number(organizationId)),
+          eq(branchInventory.isActive, true),
+          eq(branchInventory.isVisible, true),
+          isNull(branchInventory.deletedAt),
+          inArray(branchInventory.organizationInventoryId, orgInvIds),
+        ))
+        .for('update')
+
+      if (lockedBranchAssignments.length !== orgInvIds.length) {
+        throw new Error("Some items are no longer available for this branch")
+      }
+
+      const lockedOrganizationInventory = await tx
+        .select()
+        .from(organizationInventory)
+        .where(and(
+          eq(organizationInventory.organizationId, Number(organizationId)),
+          eq(organizationInventory.isActive, true),
+          isNull(organizationInventory.deletedAt),
+          inArray(organizationInventory.id, orgInvIds),
+        ))
+        .for('update')
+
+      if (lockedOrganizationInventory.length !== orgInvIds.length) {
+        throw new Error("Some items are no longer active for this organization")
+      }
+
+      // Lock global products to update stock safely and snapshot current prices.
       const gpIdsForLock = calculatedItems.map(i => i.globalProductId)
       const lockedGps = await tx.select()
         .from(globalProducts)
-        .where(inArray(globalProducts.id, gpIdsForLock))
+        .where(and(
+          inArray(globalProducts.id, gpIdsForLock),
+          eq(globalProducts.status, "active"),
+          isNull(globalProducts.deletedAt),
+        ))
         .for('update')
 
       const lockedGpMap = new Map(lockedGps.map(g => [g.id, g]))
+      const lockedOrgInventoryMap = new Map(lockedOrganizationInventory.map((item) => [item.id, item]))
+
+      let finalSubtotal = 0
+      const finalCalculatedItems = normalizedItems.map((requestedItem) => {
+        const inventoryItem = lockedOrgInventoryMap.get(requestedItem.organizationInventoryId)
+        if (!inventoryItem) throw new Error("An inventory item is no longer available")
+
+        const product = lockedGpMap.get(inventoryItem.globalProductId)
+        if (!product) throw new Error("A product is no longer available")
+
+        const quantityValidation = validateProductQuantity(requestedItem.quantity, {
+          allowDecimalQuantity: product.allowDecimalQuantity,
+          quantityStep: product.quantityStep,
+          label: `Quantity for ${product.name}`,
+        })
+        if (!quantityValidation.ok) throw new Error(quantityValidation.error)
+
+        const priceCents = inventoryItem.customPrice ?? product.basePrice
+        if (!Number.isSafeInteger(priceCents) || priceCents < 0) {
+          throw new Error(`Pricing is unavailable for ${product.name}`)
+        }
+
+        finalSubtotal += calculateLineCents(priceCents, quantityValidation.quantity)
+        return {
+          organizationInventoryId: inventoryItem.id,
+          globalProductId: product.id,
+          quantity: quantityValidation.quantity,
+          priceCents,
+          productName: product.name,
+          productCode: product.productCode,
+          unit: product.unit,
+        }
+      })
+      const finalTax = 0
+      const finalTotal = finalSubtotal + finalTax
+
+      if (!Number.isSafeInteger(finalSubtotal) || !Number.isSafeInteger(finalTotal) || finalTotal < 0) {
+        throw new Error("Calculated order total is invalid")
+      }
+
+      if (finalTotal > lockedMoneyRemaining) {
+        throw new Error(pricesHidden
+          ? "Insufficient budget. Please contact head office."
+          : `Insufficient budget. Required: ${(finalTotal / 100).toFixed(2)} PKR, Available: ${(lockedMoneyRemaining / 100).toFixed(2)} PKR`)
+      }
 
       // 2. Perform FINAL stock check inside the lock
-      for (const ci of calculatedItems) {
+      for (const ci of finalCalculatedItems) {
         const gp = lockedGpMap.get(ci.globalProductId)
         if (!gp) throw new Error(`Product not found: ${ci.productName}`)
 
@@ -612,32 +792,30 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // Generate token for instant approval
-      const plainToken = generateApprovalToken(10)
-      const tokenHash = await hashApprovalToken(plainToken)
-
       // 3. Create Order in PENDING state
       const [ord] = await tx.insert(orders).values({
         tid,
+        idempotencyKey,
+        requestFingerprint,
         organizationId: Number(organizationId),
         branchId: Number(branchId),
-        status: 'pending',
-        subtotalCents: subtotal,
-        taxCents: tax,
-        totalCents: total,
+        status: 'PENDING',
+        subtotalCents: finalSubtotal,
+        taxCents: finalTax,
+        totalCents: finalTotal,
         notes: notes || null,
         createdByUserId: userId,
       }).returning(orderSelectColumns)
 
       // 4. Create Order Items
-      await tx.insert(orderItems).values(calculatedItems.map(ci => ({
+      await tx.insert(orderItems).values(finalCalculatedItems.map(ci => ({
         ...ci,
         orderId: ord.id,
         organizationId: Number(organizationId),
       })))
 
       // 5. Deduct stock using the lock
-      for (const ci of calculatedItems) {
+      for (const ci of finalCalculatedItems) {
         await tx.update(globalProducts)
           .set({
             stockQuantity: sql`${globalProducts.stockQuantity} - ${ci.quantity}`,
@@ -652,13 +830,13 @@ export async function POST(req: NextRequest) {
         receiptData = await generateReceiptData({
           orderId: ord.id,
           orderTid: tid,
-          status: 'pending',
+          status: 'PENDING',
           organizationId: Number(organizationId),
           branchId: Number(branchId),
-          orderItemsData: calculatedItems,
-          subtotalCents: subtotal,
-          taxCents: tax,
-          totalCents: total,
+          orderItemsData: finalCalculatedItems,
+          subtotalCents: finalSubtotal,
+          taxCents: finalTax,
+          totalCents: finalTotal,
           discountCents: 0,
           deliveryChargesCents: 0,
         })
@@ -681,9 +859,9 @@ export async function POST(req: NextRequest) {
           .where(eq(orders.id, ord.id))
       }
 
-      await tx.update(budgets).set({ amountHeldCents: sql`${budgets.amountHeldCents} + ${total}` }).where(eq(budgets.id, budgetId))
+      await tx.update(budgets).set({ amountHeldCents: sql`${budgets.amountHeldCents} + ${finalTotal}` }).where(eq(budgets.id, budgetId))
 
-      for (const item of calculatedItems) {
+      for (const item of finalCalculatedItems) {
         const quantityBudget = quantityBudgetByOrgInventoryId.get(item.organizationInventoryId)
         if (!quantityBudget) continue
 
@@ -700,7 +878,7 @@ export async function POST(req: NextRequest) {
         // Log complete order details for archival
         logOrderActivity('CREATE', {
           ...ord,
-          orderItems: calculatedItems
+          orderItems: finalCalculatedItems
         }, {
           id: userId,
           email: session.user?.email || 'unknown',
@@ -723,22 +901,33 @@ export async function POST(req: NextRequest) {
         action: 'ORDER_CREATE',
         resourceType: 'order',
         resourceId: String(ord.id),
-        details: { tid, total, items: items.length },
+        details: { tid, total: finalTotal, items: items.length },
         ipAddress: ip,
         userAgent: userAgent,
         success: true
       })
 
-      // Log token generation
-      logTokenGenerated(
-        ord.id,
-        tid,
-        userId,
-        session.user?.email || 'unknown'
-      )
+      const queuedNotifications = role === "ORDER_PORTAL"
+        ? await queueOrderCreatedNotifications(tx, {
+          order: ord,
+          requestedBy: String(
+            (session.user as any)?.fullName || "Order Portal user",
+          ).trim().slice(0, 255),
+        })
+        : { eventKeys: [], recipientCount: 0 }
 
-      return { ...ord, _plainToken: plainToken }
+      return { order: ord, queuedNotifications }
     })
+
+    const created = creationResult.order
+    if (role === "ORDER_PORTAL" && creationResult.queuedNotifications.recipientCount === 0) {
+      console.warn("[OrderNotifications] No active Branch Admin recipient was available", {
+        orderId: created.id,
+        organizationId: created.organizationId,
+        branchId: created.branchId,
+      })
+    }
+    await attemptImmediateOrderEmailDelivery(creationResult.queuedNotifications.eventKeys)
 
     const safeOrder = pricesHidden
       ? {
@@ -752,12 +941,36 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       message: 'Order created',
       order: safeOrder,
-      approvalToken: created._plainToken,
-      warning: 'SAVE THIS TOKEN! It is required by Super Admins to fulfill the order.'
     })
   } catch (e: any) {
     console.error("Order creation error:", e)
     console.error("Error stack:", e.stack)
+
+    if (e?.code === "23505" && replayContext) {
+      const [existingOrder] = await db
+        .select({ ...orderSelectColumns, requestFingerprint: orders.requestFingerprint })
+        .from(orders)
+        .where(and(
+          eq(orders.createdByUserId, replayContext.userId),
+          eq(orders.idempotencyKey, replayContext.idempotencyKey),
+        ))
+        .limit(1)
+
+      if (existingOrder) {
+        if (existingOrder.requestFingerprint !== replayContext.requestFingerprint) {
+          return NextResponse.json({ error: "Idempotency key was already used for a different order" }, { status: 409 })
+        }
+        const { requestFingerprint: _requestFingerprint, ...replayedOrder } = existingOrder
+
+        return NextResponse.json({
+          message: "Order already created",
+          order: replayContext.pricesHidden
+            ? { ...replayedOrder, subtotalCents: null, taxCents: null, totalCents: null }
+            : replayedOrder,
+          replayed: true,
+        })
+      }
+    }
 
     const orderErrorMessage = String(e.message || "")
     const normalizedOrderErrorMessage = orderErrorMessage.toLowerCase()
@@ -767,7 +980,9 @@ export async function POST(req: NextRequest) {
       orderErrorMessage.startsWith("Budget not configured") ||
       orderErrorMessage.includes("Insufficient budget") ||
       normalizedOrderErrorMessage.includes("quantity budget") ||
-      normalizedOrderErrorMessage.includes("negative state")
+      normalizedOrderErrorMessage.includes("negative state") ||
+      normalizedOrderErrorMessage.includes("no longer") ||
+      normalizedOrderErrorMessage.includes("pricing is unavailable")
     )) {
       return NextResponse.json({ error: orderErrorMessage }, { status: 400 })
     }
@@ -776,191 +991,26 @@ export async function POST(req: NextRequest) {
   }
 }
 
-export async function PUT(req: NextRequest) {
-  try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-    if ((session.user as any).mustChangePassword === true) return NextResponse.json({ error: "Forbidden", message: "Password change required" }, { status: 403 })
-    const role = (session.user as any).role
-    const body = await req.json()
-    const { id, action, rejectionReason, approvalToken } = body as { id: number, action: 'approve' | 'cancel' | 'fulfill' | 'reject', rejectionReason?: string, approvalToken?: string }
-    if (!id || !action) return NextResponse.json({ error: 'id and action required' }, { status: 400 })
-
-    if (role === "HEAD_OFFICE") {
-      return NextResponse.json({ error: "Head office users have view-only access" }, { status: 403 })
-    }
-
-    const [ord] = await db.select(orderSelectColumns).from(orders).where(eq(orders.id, id)).limit(1)
-    if (!ord) return NextResponse.json({ error: 'Order not found' }, { status: 404 })
-
-    // Fetch budget for the ORDER's creation month (not today's month!)
-    // This ensures fulfilling/cancelling an order from a previous month
-    // updates the correct month's budget record.
-    const orderMonth = ord.createdAt
-      ? new Date(ord.createdAt).toISOString().slice(0, 7)
-      : new Date().toISOString().slice(0, 7) // fallback to current month
-    const [budget] = await db.select().from(budgets).where(
-      and(
-        eq(budgets.branchId, ord.branchId),
-        eq(budgets.period, orderMonth)
-      )
-    ).limit(1)
-
-    if (!budget) {
-      return NextResponse.json({
-        error: `Budget not configured for order month (${orderMonth})`
-      }, { status: 400 })
-    }
-
-    // Validate state transitions to prevent budget corruption
-    const currentStatus = ord.status.toLowerCase()
-    const isTerminal = ["cancelled", "fulfilled", "refunded", "rejected"].includes(currentStatus)
-
-    if (isTerminal) {
-      return NextResponse.json({
-        error: `Cannot ${action} order that is already ${currentStatus}`
-      }, { status: 400 })
-    }
-
-    let generatedApprovalToken: string | null = null
-
-    await db.transaction(async (tx) => {
-      // ─── Status and Receipt Update Preparation ───
-      const targetStatus = action === 'cancel' ? 'cancelled' :
-        action === 'reject' ? 'rejected' :
-          action === 'approve' ? 'approved' : 'fulfilled'
-
-      const updatedReceiptData = ord.receiptData ? {
-        ...(ord.receiptData as any),
-        status: targetStatus
-      } : null
-
-      if (action === 'cancel' || action === 'reject') {
-        // 1. Update Order Status
-        await tx.update(orders).set({
-          status: targetStatus,
-          rejectedByUserId: action === 'reject' ? (session.user as any).id : null,
-          rejectedAt: action === 'reject' ? new Date() : null,
-          rejectionReason: action === 'reject' ? rejectionReason : null,
-          receiptData: updatedReceiptData as any
-        }).where(eq(orders.id, id))
-
-        // 2. Release Budget
-        await tx.update(budgets).set({
-          amountHeldCents: sql`${budgets.amountHeldCents} - ${ord.totalCents}`
-        }).where(eq(budgets.id, budget.id))
-
-        // 3. Release quantity budget and restore stock
-        await releaseHeldQuantityBudgetForOrder(tx, ord)
-
-        const orderItemsList = await tx.select().from(orderItems).where(eq(orderItems.orderId, id))
-        for (const item of orderItemsList) {
-          await tx.update(globalProducts)
-            .set({
-              stockQuantity: sql`${globalProducts.stockQuantity} + ${item.quantity}`,
-              updatedAt: new Date()
-            })
-            .where(eq(globalProducts.id, item.globalProductId))
-        }
-      } else if (action === 'approve') {
-        if (currentStatus !== 'pending') {
-          throw new Error(`Cannot approve order in ${currentStatus} state`)
-        }
-
-        const plainToken = generateApprovalToken(10)
-        const tokenHash = await hashApprovalToken(plainToken)
-
-        await tx.update(orders).set({
-          status: 'approved',
-          approvedByUserId: (session.user as any).id,
-          approvedAt: new Date(),
-          approvalToken: plainToken,
-          approvalTokenHash: tokenHash,
-          approvalTokenCreatedAt: new Date(),
-          receiptData: updatedReceiptData as any
-        }).where(eq(orders.id, id))
-
-        logTokenGenerated(id, ord.tid, (session.user as any).id, (session.user as any).email || 'unknown')
-        generatedApprovalToken = plainToken
-
-      } else if (action === 'fulfill') {
-        if (!approvalToken) throw new Error('Approval token required to fulfill order')
-        if (!ord.approvalTokenHash) throw new Error('Order has no approval token - cannot fulfill')
-
-        const isValid = await verifyApprovalToken(approvalToken, ord.approvalTokenHash)
-
-        if (!isValid) {
-          logFulfillmentAttempt(id, ord.tid, (session.user as any).id, (session.user as any).email || 'unknown', role, false, 'Invalid token provided')
-          throw new Error('Invalid approval token - fulfillment denied')
-        }
-
-        await tx.update(orders).set({
-          status: 'fulfilled',
-          fulfilledAt: sql`NOW()`,
-          fulfilledByUserId: (session.user as any).id,
-          receiptData: updatedReceiptData as any
-        }).where(eq(orders.id, id))
-        await updateOrderFulfillmentStatusColumn(tx, id, "DELIVERED")
-
-        await tx.update(budgets).set({
-          amountHeldCents: sql`${budgets.amountHeldCents} - ${ord.totalCents}`,
-          amountSpentCents: sql`${budgets.amountSpentCents} + ${ord.totalCents}`,
-        }).where(eq(budgets.id, budget.id))
-
-        await moveHeldQuantityBudgetToUsedForOrder(tx, ord)
-
-        logFulfillmentAttempt(id, ord.tid, (session.user as any).id, (session.user as any).email || 'unknown', role, true)
-      }
-
-      // --- NEW: Detailed File Logging for Updates ---
-      try {
-        const currentOrderItems = await tx.select().from(orderItems).where(eq(orderItems.orderId, id))
-        logOrderActivity(action.toUpperCase() as any, {
-          ...ord,
-          status: targetStatus,
-          orderItems: currentOrderItems
-        }, {
-          id: (session.user as any).id,
-          email: (session.user as any).email || 'unknown',
-          role: role
-        })
-      } catch (logErr) {
-        console.error(`File logging failed during order ${action}`, logErr)
-      }
-
-      const headersList = await headers()
-      const userAgent = headersList.get("user-agent")
-      const forwardedFor = headersList.get("x-forwarded-for")
-      const ip = forwardedFor ? forwardedFor.split(',')[0] : "unknown"
-
-      await tx.insert(systemLogs).values({
-        userId: (session.user as any).id,
-        userRole: role,
-        organizationId: ord.organizationId,
-        branchId: ord.branchId,
-        action: `ORDER_${action.toUpperCase()}`,
-        resourceType: 'order',
-        resourceId: String(id),
-        details: { action, tid: ord.tid, rejectionReason },
-        ipAddress: ip,
-        userAgent: userAgent,
-        success: true
-      })
-    })
-
-    // Return token only for approve action (shown ONCE to user)
-    if (action === 'approve' && generatedApprovalToken) {
-      return NextResponse.json({
-        message: 'Order approved successfully',
-        approvalToken: generatedApprovalToken,
-        warning: 'SAVE THIS TOKEN! It will not be shown again.'
-      })
-    }
-
-    return NextResponse.json({ message: 'Order updated' })
-  } catch (e: any) {
-    console.error("PUT order error:", e)
-    return NextResponse.json({ error: e.message || "Internal Server Error" }, { status: 500 })
-  }
+export async function PUT(_: NextRequest) {
+  return NextResponse.json(
+    { error: "Use the dedicated approve, reject, or fulfill operation" },
+    { status: 405 },
+  )
 }
 
+const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{8,128}$/
+
+function orderRequestFingerprint(input: {
+  organizationId: number
+  branchId: number
+  notes?: string
+  items: Array<{ organizationInventoryId: number; quantity: number }>
+}) {
+  const canonical = {
+    organizationId: input.organizationId,
+    branchId: input.branchId,
+    notes: input.notes || null,
+    items: input.items.slice().sort((a, b) => a.organizationInventoryId - b.organizationInventoryId),
+  }
+  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex")
+}

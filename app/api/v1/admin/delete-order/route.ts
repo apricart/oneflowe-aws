@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { orders, orderItems, budgets, systemLogs, globalProducts, refunds } from "@/db/schema"
-import { eq, and, sql } from "drizzle-orm"
+import { eq, and, gte, sql } from "drizzle-orm"
 import { releaseQuantityBudgetForDeletedOrder } from "@/lib/server/product-quantity-budget-ledger"
 import { orderSelectColumns } from "@/lib/order-select"
 
@@ -48,13 +48,41 @@ export async function DELETE(req: NextRequest) {
             return NextResponse.json({ error: "Cannot delete orders from other organizations" }, { status: 403 })
         }
 
+        if (!["PENDING", "APPROVED"].includes(String(order.status || "").toUpperCase())) {
+            return NextResponse.json({ error: "Only pending or approved orders without financial completion can be deleted" }, { status: 409 })
+        }
+        if (String(order.paymentStatus || "").toUpperCase() === "PAID") {
+            return NextResponse.json({ error: "Paid orders cannot be deleted" }, { status: 409 })
+        }
+
         // Start transaction to safely delete everything
         await db.transaction(async (tx) => {
+            const [lockedOrder] = await tx
+                .select(orderSelectColumns)
+                .from(orders)
+                .where(eq(orders.id, orderIdNum))
+                .for('update')
+            if (!lockedOrder || !["PENDING", "APPROVED"].includes(String(lockedOrder.status || "").toUpperCase())) {
+                throw new Error("ORDER_DELETE_CONFLICT")
+            }
+            if (String(lockedOrder.paymentStatus || "").toUpperCase() === "PAID") {
+                throw new Error("ORDER_DELETE_CONFLICT")
+            }
+
+            const [refund] = await tx
+                .select({ id: refunds.id })
+                .from(refunds)
+                .where(eq(refunds.orderId, orderIdNum))
+                .limit(1)
+            if (refund) throw new Error("ORDER_DELETE_HAS_REFUNDS")
+
             // 1. Get order items (need this to restore stock)
             const items = await tx.select().from(orderItems).where(eq(orderItems.orderId, orderIdNum))
 
-            // 2. Get current month budget
-            const currentMonth = new Date().toISOString().slice(0, 7)
+            // 2. Get the budget period in which this order was created.
+            const currentMonth = lockedOrder.createdAt
+                ? new Date(lockedOrder.createdAt).toISOString().slice(0, 7)
+                : new Date().toISOString().slice(0, 7)
             const [budget] = await tx.select().from(budgets).where(
                 and(
                     eq(budgets.branchId, order.branchId),
@@ -62,7 +90,7 @@ export async function DELETE(req: NextRequest) {
                 )
             )
 
-            await releaseQuantityBudgetForDeletedOrder(tx, order)
+            await releaseQuantityBudgetForDeletedOrder(tx, lockedOrder)
 
             // 3. Delete refunds first (foreign key to order_items)
             await tx.delete(refunds).where(eq(refunds.orderId, orderIdNum))
@@ -82,21 +110,19 @@ export async function DELETE(req: NextRequest) {
 
             // 6. Release budget hold or remove from spent
             if (budget) {
-                const orderStatus = order.status.toLowerCase()
+                const orderStatus = lockedOrder.status.toLowerCase()
                 if (orderStatus === 'approved' || orderStatus === 'pending') {
                     // Release from held
-                    await tx.update(budgets)
+                    const [releasedBudget] = await tx.update(budgets)
                         .set({
-                            amountHeldCents: sql`${budgets.amountHeldCents} - ${order.totalCents}`
+                            amountHeldCents: sql`${budgets.amountHeldCents} - ${lockedOrder.totalCents}`
                         })
-                        .where(eq(budgets.id, budget.id))
-                } else if (orderStatus === 'fulfilled') {
-                    // Remove from spent
-                    await tx.update(budgets)
-                        .set({
-                            amountSpentCents: sql`${budgets.amountSpentCents} - ${order.totalCents}`
-                        })
-                        .where(eq(budgets.id, budget.id))
+                        .where(and(
+                            eq(budgets.id, budget.id),
+                            gte(budgets.amountHeldCents, lockedOrder.totalCents),
+                        ))
+                        .returning({ id: budgets.id })
+                    if (!releasedBudget) throw new Error("BUDGET_LEDGER_INVARIANT")
                 }
             }
 
@@ -126,6 +152,9 @@ export async function DELETE(req: NextRequest) {
 
     } catch (e: any) {
         console.error("Delete order error:", e)
-        return NextResponse.json({ error: e.message || "Internal server error" }, { status: 500 })
+        if (["ORDER_DELETE_CONFLICT", "ORDER_DELETE_HAS_REFUNDS", "BUDGET_LEDGER_INVARIANT", "QUANTITY_BUDGET_LEDGER_INVARIANT"].includes(e?.message)) {
+            return NextResponse.json({ error: "Order changed or has financial/refund history and was not deleted" }, { status: 409 })
+        }
+        return NextResponse.json({ error: "Internal server error" }, { status: 500 })
     }
 }

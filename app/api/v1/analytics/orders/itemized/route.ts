@@ -29,6 +29,7 @@ export async function GET(req: NextRequest) {
         const productIdsParam = url.searchParams.get("productIds")
         const organizationIdsParam = url.searchParams.get("organizationIds")
         const groupIdsParam = url.searchParams.get("groupIds")
+        const limit = Math.min(Math.max(Math.trunc(Number(url.searchParams.get("limit"))) || 5000, 1), 5000)
 
         const monthsRaw = url.searchParams.get("months")
         const yearsRaw = url.searchParams.get("years")
@@ -120,6 +121,7 @@ export async function GET(req: NextRequest) {
             .leftJoin(categories, eq(globalProducts.categoryId, categories.id))
             .where(and(...baseConditions))
             .orderBy(desc(orders.createdAt))
+            .limit(limit)
 
         const results = await q
 

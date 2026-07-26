@@ -7,9 +7,47 @@ import { verifyPassword } from "@/lib/password"
 import { checkMfaCooldown, verifyOTP, clearDailyCount } from "@/lib/mfa"
 import { compare } from "bcryptjs"
 import { getSessionValidationCache, setSessionValidationCache } from "@/lib/session-validation-cache"
+import { env } from "@/lib/server/env"
 
 export const authOptions: NextAuthOptions = {
+  secret: env.NEXTAUTH_SECRET,
+  useSecureCookies: env.NODE_ENV === "production",
   session: { strategy: "jwt", maxAge: 8 * 60 * 60 },  // 8-hour expiry (bank-grade)
+  cookies: {
+    sessionToken: {
+      name: env.NODE_ENV === "production"
+        ? "__Secure-next-auth.session-token"
+        : "next-auth.session-token",
+      options: {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        secure: env.NODE_ENV === "production",
+      },
+    },
+    callbackUrl: {
+      name: env.NODE_ENV === "production"
+        ? "__Secure-next-auth.callback-url"
+        : "next-auth.callback-url",
+      options: {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        secure: env.NODE_ENV === "production",
+      },
+    },
+    csrfToken: {
+      name: env.NODE_ENV === "production"
+        ? "__Host-next-auth.csrf-token"
+        : "next-auth.csrf-token",
+      options: {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        secure: env.NODE_ENV === "production",
+      },
+    },
+  },
   providers: [
     Credentials({
       name: "credentials",
@@ -359,6 +397,16 @@ export const authOptions: NextAuthOptions = {
     }),
   ],
   callbacks: {
+    async redirect({ url, baseUrl }) {
+      if (url.startsWith("/")) return `${baseUrl}${url}`
+
+      try {
+        const parsed = new URL(url)
+        return parsed.origin === new URL(baseUrl).origin ? parsed.toString() : baseUrl
+      } catch {
+        return baseUrl
+      }
+    },
     async jwt({ token, user }) {
       if (user) {
         token.role = (user as any).role

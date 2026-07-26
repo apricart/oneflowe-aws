@@ -1,0 +1,129 @@
+{
+  "status": "PASS",
+  "generatedAt": "2026-07-23T08:43:11.971Z",
+  "organization": {
+    "id": 10,
+    "code": "0001",
+    "name": "K-Electric"
+  },
+  "batchId": "8b9acdb1-808d-4dd7-a951-185de0257809",
+  "batchStatus": "COMPLETED",
+  "batchCounts": {
+    "orders": 51,
+    "products": 95,
+    "newProducts": 1,
+    "newHistoricalUsers": 1
+  },
+  "manifestDigest": "3a0e8217b1406aac86bca6cb5b9efe2a461086041e44667bf6a4e70c7185fd02",
+  "candidateIds": [
+    201,
+    202,
+    525,
+    591,
+    603,
+    626,
+    919,
+    920,
+    950,
+    998,
+    1004,
+    1005,
+    1006,
+    1007,
+    1014,
+    1021,
+    1022,
+    1023,
+    1026,
+    1027,
+    1028,
+    1033,
+    1098,
+    1130,
+    1133,
+    1134,
+    1136,
+    1139,
+    1141,
+    1145,
+    1148,
+    1149,
+    1153,
+    1154,
+    1157,
+    1158,
+    1159,
+    1162,
+    1163,
+    1166,
+    1167,
+    1174,
+    1175,
+    1178,
+    1179,
+    1181,
+    1182,
+    1183,
+    1185,
+    1186,
+    1188
+  ],
+  "financial": {
+    "orders": 51,
+    "subtotal_cents": "383214700",
+    "tax_cents": "0",
+    "total_cents": "383214700",
+    "violations": 0
+  },
+  "items": {
+    "items": 505,
+    "quantity": "3839.000",
+    "subtotal_cents": "383214700",
+    "violations": 0
+  },
+  "creatorCheck": {
+    "violations": 0
+  },
+  "product": [
+    {
+      "id": 315,
+      "product_code": "PRD--167",
+      "name": "Lipton Tea Bags (600 PCS)",
+      "status": "inactive",
+      "stock_quantity": "0.000",
+      "deleted_at": null,
+      "organization_inventory_id": 347,
+      "organization_id": 10,
+      "is_active": false
+    }
+  ],
+  "historicalUser": [
+    {
+      "username": "legacy_ke_223_139",
+      "is_active": false,
+      "deleted_at": null,
+      "organization_id": 10,
+      "branch_id": 223,
+      "legacy_order_taker_id": 139,
+      "is_synthetic": true,
+      "created_by_batch_id": "8b9acdb1-808d-4dd7-a951-185de0257809"
+    }
+  ],
+  "cumulative": {
+    "orders": 645,
+    "total_cents": "4499042320",
+    "imports": 645,
+    "distinct_ids": 645,
+    "distinct_orders": 645,
+    "unledgeredLegacyTids": 0
+  },
+  "snapshotChecks": {
+    "priorOrdersUnchanged": true,
+    "priorOrderItemsUnchanged": true,
+    "budgetsUnchanged": true,
+    "quantityBudgetsUnchanged": true,
+    "invoiceSequenceUnchanged": true,
+    "otherOrganizationOrderTotalsUnchanged": true
+  },
+  "failures": []
+}

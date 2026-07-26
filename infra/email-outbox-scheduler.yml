@@ -1,0 +1,85 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Processes the OneFlowe order lifecycle email outbox every minute through an
+  authenticated EventBridge API Destination. Business actions remain committed
+  when SES is unavailable; pending messages are retried by this schedule.
+
+Parameters:
+  AppUrl:
+    Type: String
+    Description: "Full base URL of the Amplify app, with no trailing slash."
+
+  CronSecret:
+    Type: String
+    NoEcho: true
+    Description: "The CRON_SECRET value configured in the Amplify app."
+
+  ScheduleExpression:
+    Type: String
+    Default: "rate(1 minute)"
+    Description: "EventBridge schedule used to process pending order emails."
+
+Resources:
+  OutboxApiConnection:
+    Type: AWS::Events::Connection
+    Properties:
+      Name: !Sub "${AWS::StackName}-connection"
+      AuthorizationType: API_KEY
+      AuthParameters:
+        ApiKeyAuthParameters:
+          ApiKeyName: Authorization
+          ApiKeyValue: !Sub "Bearer ${CronSecret}"
+
+  OutboxApiDestination:
+    Type: AWS::Events::ApiDestination
+    Properties:
+      Name: !Sub "${AWS::StackName}-destination"
+      ConnectionArn: !GetAtt OutboxApiConnection.Arn
+      HttpMethod: POST
+      InvocationEndpoint: !Sub "${AppUrl}/api/v1/notifications/email-outbox/process"
+      InvocationRateLimitPerSecond: 1
+
+  OutboxSchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeOutboxApiDestination
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: events:InvokeApiDestination
+                Resource: !GetAtt OutboxApiDestination.Arn
+
+  OutboxRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${AWS::StackName}-order-email-outbox"
+      Description: "Retries pending OneFlowe order lifecycle emails"
+      ScheduleExpression: !Ref ScheduleExpression
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt OutboxApiDestination.Arn
+          Id: OrderEmailOutboxTarget
+          RoleArn: !GetAtt OutboxSchedulerRole.Arn
+          Input: '{"limit":50}'
+          RetryPolicy:
+            MaximumRetryAttempts: 2
+            MaximumEventAgeInSeconds: 300
+
+Outputs:
+  RuleName:
+    Value: !Ref OutboxRule
+    Description: EventBridge rule name
+
+  ApiDestinationArn:
+    Value: !GetAtt OutboxApiDestination.Arn
+    Description: EventBridge API destination ARN

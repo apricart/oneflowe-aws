@@ -317,8 +317,8 @@ async function inspectRollbackState(
 
 async function invalidateCaches(): Promise<JsonRecord> {
   const patterns = ["cache:global-inv*", "cache:org-inv*", "cache:branch-inv*", "cache:inv:org-products*", "cache:inv:branch-products*", "cache:analytics:catalog-performance*", "product-summary:*"]
-  if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) return { status: "SKIPPED", patterns }
-  const { redis } = await import("../lib/redis")
+  const { redis } = await import("../lib/redis-cli")
+  if (!redis) return { status: "SKIPPED", patterns }
   let deleted = 0
   for (const pattern of patterns) {
     const keys = await redis.keys(pattern)
@@ -347,7 +347,7 @@ async function main(): Promise<void> {
     assertOutputWritable(outputPath)
   }
 
-  const { pool } = await import("../lib/db")
+  const { pool } = await import("../lib/db-cli")
   const client = await pool.connect()
   let committed = false
   try {

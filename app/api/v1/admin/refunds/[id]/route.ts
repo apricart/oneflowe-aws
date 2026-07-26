@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { refunds, orders, auditLogs } from "@/db/schema"
 import { eq, and } from "drizzle-orm"
+import { refundCancelSchema, validationMessage } from "@/lib/server/mutation-validation"
 
 /**
  * PATCH /api/v1/admin/refunds/[id]
@@ -35,15 +36,10 @@ export async function PATCH(
       return NextResponse.json({ error: "Invalid refund ID" }, { status: 400 })
     }
 
-    let body: { action?: string } = {}
-    try {
-      body = await req.json()
-    } catch {
-      return NextResponse.json({ error: "Invalid JSON in request body" }, { status: 400 })
-    }
-
-    if (body.action !== "cancel") {
-      return NextResponse.json({ error: "Unsupported action" }, { status: 400 })
+    const rawBody = await req.json().catch(() => null)
+    const parsedBody = refundCancelSchema.safeParse(rawBody)
+    if (!parsedBody.success) {
+      return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
     }
 
     // Fetch the refund record
@@ -77,12 +73,15 @@ export async function PATCH(
       .where(eq(orders.id, refund.orderId))
       .limit(1)
 
-    await db.transaction(async (tx) => {
+    const cancelled = await db.transaction(async (tx) => {
       // Soft-cancel: mark as CANCELLED so audit history is preserved
-      await tx
+      const [claimedRefund] = await tx
         .update(refunds)
         .set({ status: "CANCELLED", processedByUserId: userId, updatedAt: new Date() })
         .where(and(eq(refunds.id, refundId), eq(refunds.status, "PENDING")))
+        .returning({ id: refunds.id })
+
+      if (!claimedRefund) return false
 
       await tx.insert(auditLogs).values({
         userId,
@@ -98,7 +97,13 @@ export async function PATCH(
           reason: refund.reason,
         },
       })
+
+      return true
     })
+
+    if (!cancelled) {
+      return NextResponse.json({ error: "Refund request was already processed or cancelled" }, { status: 409 })
+    }
 
     return NextResponse.json({ message: "Refund request cancelled successfully" })
   } catch (error: any) {

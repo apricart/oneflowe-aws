@@ -12,6 +12,7 @@ import {
     Loader2, RefreshCw, Search, FileText, FileSpreadsheet, Download, FolderTree, ShoppingBag, TrendingUp, ChevronDown, ChevronRight, Layers, LayoutGrid, Building2, Calendar, ShoppingCart, Percent, ArrowUpRight, ArrowDownRight, LayoutDashboard, Table as TableIcon, LineChart as LineChartIcon, RotateCcw
 } from "lucide-react"
 import * as XLSX from "xlsx"
+import { sanitizeSpreadsheetRow } from "@/lib/spreadsheet"
 import { formatPKR, cn } from "@/lib/utils"
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
@@ -365,7 +366,10 @@ export default function GroupsReportPage() {
             return
         }
 
-        const worksheet = XLSX.utils.aoa_to_sheet([headers, ...rows])
+        const worksheet = XLSX.utils.aoa_to_sheet([
+            sanitizeSpreadsheetRow(headers),
+            ...rows.map(sanitizeSpreadsheetRow),
+        ])
         const workbook = XLSX.utils.book_new()
         XLSX.utils.book_append_sheet(workbook, worksheet, "Groups")
         XLSX.writeFile(workbook, `group-report-${new Date().getTime()}.${format === 'excel' ? 'xlsx' : 'csv'}`)

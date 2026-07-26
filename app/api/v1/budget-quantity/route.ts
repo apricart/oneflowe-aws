@@ -18,6 +18,11 @@ import {
   productQuantityBudgetAllocations,
   productQuantityBudgets,
 } from "@/db/schema"
+import {
+  quantityBudgetAllocationSchema,
+  quantityBudgetResetSchema,
+  validationMessage,
+} from "@/lib/server/mutation-validation"
 
 type AllocationType = "addon" | "monthly"
 
@@ -264,18 +269,12 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: "Organization context required" }, { status: 400 })
     }
 
-    let body: {
-      organizationId?: number
-      branchIds?: Array<number | string>
-      groupIds?: Array<number | string>
-      period?: string
-    } = {}
-
-    try {
-      body = await req.json()
-    } catch {
-      body = {}
+    const rawBody = await req.json().catch(() => ({}))
+    const parsedBody = quantityBudgetResetSchema.safeParse(rawBody)
+    if (!parsedBody.success) {
+      return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
     }
+    const body = parsedBody.data
 
     const requestedOrgId = Number(body.organizationId)
     if (body.organizationId !== undefined && (!Number.isInteger(requestedOrgId) || requestedOrgId <= 0)) {
@@ -297,12 +296,8 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: "This organization uses money-value budgeting" }, { status: 403 })
     }
 
-    const requestedBranchIds = Array.isArray(body.branchIds)
-      ? body.branchIds.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)
-      : []
-    const requestedGroupIds = Array.isArray(body.groupIds)
-      ? body.groupIds.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)
-      : []
+    const requestedBranchIds = body.branchIds ?? []
+    const requestedGroupIds = body.groupIds ?? []
     const period = body.period && periodPattern.test(body.period)
       ? body.period
       : currentBudgetPeriod()
@@ -330,6 +325,40 @@ export async function DELETE(req: NextRequest) {
     const scopedBranchIds = scopedBranches.map((branch) => branch.id)
 
     const result = await db.transaction(async (tx) => {
+      const lockedMoneyBudgets = await tx
+        .select({
+          amountSpentCents: budgets.amountSpentCents,
+          amountHeldCents: budgets.amountHeldCents,
+        })
+        .from(budgets)
+        .where(and(
+          eq(budgets.organizationId, scopedOrganizationId),
+          eq(budgets.period, period),
+          inArray(budgets.branchId, scopedBranchIds),
+        ))
+        .for('update')
+
+      const lockedQuantityBudgets = await tx
+        .select({
+          heldQuantity: productQuantityBudgets.heldQuantity,
+          usedQuantity: productQuantityBudgets.usedQuantity,
+        })
+        .from(productQuantityBudgets)
+        .where(and(
+          eq(productQuantityBudgets.organizationId, scopedOrganizationId),
+          eq(productQuantityBudgets.period, period),
+          inArray(productQuantityBudgets.branchId, scopedBranchIds),
+        ))
+        .for('update')
+
+      const hasCommittedUsage = lockedMoneyBudgets.some((budget) =>
+        Number(budget.amountSpentCents || 0) > 0 || Number(budget.amountHeldCents || 0) > 0
+      ) || lockedQuantityBudgets.some((budget) =>
+        Number(budget.heldQuantity || 0) > 0 || Number(budget.usedQuantity || 0) > 0
+      )
+
+      if (hasCommittedUsage) throw new Error("QUANTITY_BUDGET_RESET_HAS_COMMITMENTS")
+
       await tx
         .update(productQuantityBudgets)
         .set({
@@ -403,7 +432,12 @@ export async function DELETE(req: NextRequest) {
     })
   } catch (error: any) {
     console.error("[BudgetQuantity] Reset failed:", error)
-    return NextResponse.json({ error: error?.message || "Failed to reset quantity budgets" }, { status: 500 })
+    if (error?.message === "QUANTITY_BUDGET_RESET_HAS_COMMITMENTS") {
+      return NextResponse.json({
+        error: "Cannot reset quantity budgets while orders are held or spent in the selected period",
+      }, { status: 409 })
+    }
+    return NextResponse.json({ error: "Failed to reset quantity budgets" }, { status: 500 })
   }
 }
 
@@ -423,22 +457,20 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
 
-    let body: {
-      branchId?: number
-      type?: AllocationType
-      items?: QuantityAllocationRequestItem[]
-      reason?: string
-    }
-
-    try {
-      body = await req.json()
-    } catch {
+    const rawBody = await req.json().catch(() => null)
+    if (!rawBody) {
       return NextResponse.json({ error: "Invalid JSON in request body" }, { status: 400 })
     }
 
+    const parsedBody = quantityBudgetAllocationSchema.safeParse(rawBody)
+    if (!parsedBody.success) {
+      return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
+    }
+    const body = parsedBody.data
+
     const branchId = Number(body.branchId)
-    const type: AllocationType = body.type === "monthly" ? "monthly" : "addon"
-    const items = body.items || []
+    const type: AllocationType = body.type
+    const items = body.items
 
     if (!Number.isInteger(branchId) || branchId <= 0) {
       return NextResponse.json({ error: "branchId must be a positive number" }, { status: 400 })
@@ -562,6 +594,24 @@ export async function POST(req: NextRequest) {
     const result = await db.transaction(async (tx) => {
       const selectedOrganizationInventoryIds = allocationLines.map((line) => line.organizationInventoryId)
 
+      // Match checkout's lock order: money budget first, then product budgets.
+      await tx.insert(budgets).values({
+        organizationId: branch.organizationId,
+        branchId: branch.id,
+        period,
+        amountAllocatedCents: branch.baselineBudgetCents ?? 0,
+        amountCreditedCents: 0,
+        amountSpentCents: 0,
+        amountHeldCents: 0,
+      }).onConflictDoNothing()
+
+      const [existingBudget] = await tx
+        .select()
+        .from(budgets)
+        .where(and(eq(budgets.branchId, branch.id), eq(budgets.period, period)))
+        .limit(1)
+        .for('update')
+
       const existingQuantityRows = await tx
         .select()
         .from(productQuantityBudgets)
@@ -569,6 +619,7 @@ export async function POST(req: NextRequest) {
           eq(productQuantityBudgets.branchId, branch.id),
           eq(productQuantityBudgets.period, period),
         ))
+        .for('update')
 
       const existingQuantityByOrgInvId = new Map(
         existingQuantityRows.map((row) => [row.organizationInventoryId, row])
@@ -590,12 +641,6 @@ export async function POST(req: NextRequest) {
           return sum + (existing?.amountAllocatedCents || 0)
         }, 0)
         : totalAmountCents
-
-      const [existingBudget] = await tx
-        .select()
-        .from(budgets)
-        .where(and(eq(budgets.branchId, branch.id), eq(budgets.period, period)))
-        .limit(1)
 
       const currentSpent = (existingBudget?.amountSpentCents || 0) + (existingBudget?.amountHeldCents || 0)
       const oldAllocated = existingBudget?.amountAllocatedCents ?? branch.baselineBudgetCents ?? 0
@@ -773,6 +818,6 @@ export async function POST(req: NextRequest) {
     const status = message.startsWith("Validation Failed") || message.includes("cannot be lower") || message.includes("Pricing is unavailable")
       ? 400
       : 500
-    return NextResponse.json({ error: message }, { status })
+    return NextResponse.json({ error: status === 400 ? message : "Internal Server Error" }, { status })
   }
 }

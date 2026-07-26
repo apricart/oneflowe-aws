@@ -25,8 +25,9 @@ const severityTone: Record<DashboardNotification["severity"], string> = {
 }
 
 export function NotificationBell() {
-  const { notifications, criticalCount, isLoading, markAllAsRead } = useDashboardNotifications()
+  const { role, notifications, unreadCount, criticalCount, isLoading, markAllAsRead } = useDashboardNotifications()
   const [open, setOpen] = useState(false)
+  const badgeCount = role === "ORDER_PORTAL" ? unreadCount : criticalCount
 
   useEffect(() => {
     if (open && !isLoading) {
@@ -39,9 +40,9 @@ export function NotificationBell() {
       <PopoverTrigger asChild>
         <Button variant="ghost" size="icon" className="relative">
           <Bell className="h-5 w-5" />
-          {criticalCount > 0 && (
+          {badgeCount > 0 && (
             <span className="absolute -top-0.5 -right-0.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-semibold text-white">
-              {criticalCount}
+              {badgeCount}
             </span>
           )}
         </Button>
@@ -49,7 +50,7 @@ export function NotificationBell() {
       <PopoverContent className="w-80 p-0" sideOffset={8} align="end">
         <div className="border-b px-4 py-3">
           <div className="text-sm font-semibold">Notifications</div>
-          <p className="text-xs text-muted-foreground">Only the issues that need your attention.</p>
+          <p className="text-xs text-muted-foreground">Updates that need your attention.</p>
         </div>
         {isLoading ? (
           <div className="space-y-3 p-4">

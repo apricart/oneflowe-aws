@@ -6,6 +6,7 @@ import { branchProducts, globalProducts, organizationProducts, auditLogs, catego
 import { eq, and, sql } from "drizzle-orm"
 import { getCached, invalidateByPrefix, scopedCacheKey, CACHE_TTL } from "@/lib/cache-utils"
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
+import { branchProductUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
 
 // GET /api/v1/inventory/branch-products - Get products for branch
 export async function GET(req: NextRequest) {
@@ -86,6 +87,7 @@ export async function GET(req: NextRequest) {
           )
         )
         .where(eq(globalProducts.status, "active"))
+        .limit(1000)
 
       return pricesHidden
         ? rows.map((item) => ({ ...item, basePrice: null, customPrice: null }))
@@ -113,12 +115,13 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
 
-    const body = await req.json()
-    const { branchProductId, isAvailable, customNotes } = body
-
-    if (!branchProductId) {
-      return NextResponse.json({ error: "Branch product ID is required" }, { status: 400 })
+    const rawBody = await req.json().catch(() => null)
+    const parsedBody = branchProductUpdateSchema.safeParse(rawBody)
+    if (!parsedBody.success) {
+      return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
     }
+    const input = parsedBody.data
+    const { branchProductId, isAvailable, customNotes } = input
 
     const userOrgId = (session.user as any).organizationId
     const userBranchId = (session.user as any).branchId
@@ -139,8 +142,8 @@ export async function PUT(req: NextRequest) {
     // Update branch product with ownership check in WHERE clause
     const [updated] = await db.update(branchProducts)
       .set({
-        ...(isAvailable !== undefined && { isAvailable }),
-        ...(customNotes !== undefined && { customNotes }),
+        isAvailable,
+        customNotes,
         updatedByUserId: (session.user as any).id,
         updatedAt: new Date()
       })
@@ -159,7 +162,7 @@ export async function PUT(req: NextRequest) {
       action: "update_branch_product",
       entity: "branch_products",
       entityId: branchProductId.toString(),
-      metadata: { changes: body }
+      metadata: { changedFields: Object.keys(input) }
     })
     // Invalidate branch-products cache so data refreshes immediately
     await invalidateByPrefix('inv:branch-products')

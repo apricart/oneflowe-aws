@@ -15,6 +15,7 @@ import {
     ComposedChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell
 } from "recharts"
 import * as XLSX from "xlsx"
+import { sanitizeSpreadsheetRow } from "@/lib/spreadsheet"
 import { formatPKR, cn } from "@/lib/utils"
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
@@ -679,7 +680,10 @@ export default function ProductPerformancePage() {
             return
         }
 
-        const worksheet = XLSX.utils.aoa_to_sheet([headers, ...rows])
+        const worksheet = XLSX.utils.aoa_to_sheet([
+            sanitizeSpreadsheetRow(headers),
+            ...rows.map(sanitizeSpreadsheetRow),
+        ])
         const workbook = XLSX.utils.book_new()
         XLSX.utils.book_append_sheet(workbook, worksheet, "Performance")
         XLSX.writeFile(workbook, `${isBuyer ? 'product-purchase' : 'product-intelligence'}-${activeTab}-${new Date().getTime()}.${format === 'excel' ? 'xlsx' : 'csv'}`)

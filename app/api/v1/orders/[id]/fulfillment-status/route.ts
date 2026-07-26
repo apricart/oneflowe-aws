@@ -3,8 +3,9 @@ import { getCurrentUser, verifyResourceAccess } from "@/lib/auth"
 import { db } from "@/lib/db"
 import { auditLogs, orders } from "@/db/schema"
 import { FULFILLMENT_STATUSES, normalizeFulfillmentStatus, type FulfillmentStatus } from "@/lib/fulfillment-status"
-import { orderSelectColumns, updateOrderFulfillmentStatusColumn } from "@/lib/order-select"
+import { orderSelectColumns, transitionOrderFulfillmentStatusColumn } from "@/lib/order-select"
 import { eq } from "drizzle-orm"
+import { fulfillmentStatusSchema, validationMessage } from "@/lib/server/mutation-validation"
 
 const PROGRESS_STATUSES = FULFILLMENT_STATUSES.filter(
   (status) => status !== "NOT_STARTED"
@@ -26,8 +27,10 @@ export async function POST(
     return error("Invalid order ID", 400)
   }
 
-  const body = await readJson<{ fulfillmentStatus?: string }>(req)
-  const nextStatus = normalizeFulfillmentStatus(body?.fulfillmentStatus)
+  const rawBody = await readJson<unknown>(req)
+  const parsedBody = fulfillmentStatusSchema.safeParse(rawBody)
+  if (!parsedBody.success) return error(validationMessage(parsedBody.error), 400)
+  const nextStatus = normalizeFulfillmentStatus(parsedBody.data.fulfillmentStatus)
   if (!PROGRESS_STATUSES.includes(nextStatus)) {
     return error("Invalid fulfillment status", 400)
   }
@@ -52,8 +55,8 @@ export async function POST(
   }
 
   const updated = await db.transaction(async (tx) => {
-    const migrationReady = await updateOrderFulfillmentStatusColumn(tx, orderId, nextStatus)
-    if (!migrationReady) return null
+    const transition = await transitionOrderFulfillmentStatusColumn(tx, orderId, currentStatus, nextStatus)
+    if (transition !== "updated") return transition
 
     await tx.insert(auditLogs).values({
       userId: user.id,
@@ -69,11 +72,20 @@ export async function POST(
       },
     })
 
-    return { ...order, fulfillmentStatus: nextStatus }
+    const [updatedOrder] = await tx
+      .select(orderSelectColumns)
+      .from(orders)
+      .where(eq(orders.id, orderId))
+      .limit(1)
+
+    return updatedOrder || { ...order, fulfillmentStatus: nextStatus }
   })
 
-  if (!updated) {
+  if (updated === "missing-column") {
     return error("Fulfillment progress migration has not been applied. Run the order fulfillment status migration first.", 503)
+  }
+  if (updated === "conflict") {
+    return error("Fulfillment progress was already changed by another request", 409)
   }
 
   return ok({

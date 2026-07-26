@@ -1,9 +1,10 @@
 import { ok, error, readJson, requireApiRole } from "@/lib/api"
 import { invalidateByPrefix } from "@/lib/cache-utils"
 import { db } from "@/lib/db"
-import { branches } from "@/db/schema"
+import { branches, groups } from "@/db/schema"
 import { and, eq, ne, sql } from "drizzle-orm"
 import { getRequestScope } from "@/lib/auth"
+import { branchUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
 
 export async function GET(
   _: Request,
@@ -30,8 +31,11 @@ export async function PATCH(
 ) {
   const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE"])
   if (err) return err
-  const body = await readJson<any>(req)
-  if (!body) return error("Invalid body", 400)
+  const rawBody = await readJson<unknown>(req)
+  if (!rawBody) return error("Invalid body", 400)
+  const parsedBody = branchUpdateSchema.safeParse(rawBody)
+  if (!parsedBody.success) return error(validationMessage(parsedBody.error), 400)
+  const body = parsedBody.data
   try {
     const params = await props.params
     const { id } = params
@@ -66,6 +70,19 @@ export async function PATCH(
           return error("A branch with this name already exists in this organization.", 409)
         }
       }
+    }
+
+    if (body.groupId) {
+      const [group] = await db
+        .select({ id: groups.id })
+        .from(groups)
+        .where(and(
+          eq(groups.id, body.groupId),
+          eq(groups.organizationId, currentBranch.organizationId),
+          ne(groups.status, "deleted"),
+        ))
+        .limit(1)
+      if (!group) return error("Group does not belong to this organization", 400)
     }
 
     const patch: any = {}

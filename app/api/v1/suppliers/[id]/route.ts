@@ -3,6 +3,7 @@ import { db } from "@/lib/db"
 import { suppliers } from "@/db/schema"
 import { eq } from "drizzle-orm"
 import { getRequestScope } from "@/lib/auth"
+import { supplierUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
 
 export async function GET(_: Request, { params }: { params: Promise<{ id: string }> }) {
   const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE"])
@@ -34,11 +35,18 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     return error("Forbidden", 403)
   }
 
-  const body = await readJson<any>(req)
-  if (!body) return error("Invalid body", 400)
-  const patch: any = {}
-    ;["name", "address", "contact", "email", "description"].forEach((k) => { if (k in body) patch[k] = body[k] })
-  const [item] = await db.update(suppliers).set(patch).where(eq(suppliers.id, Number(id))).returning()
+  const rawBody = await readJson<unknown>(req)
+  if (!rawBody) return error("Invalid body", 400)
+  const parsedBody = supplierUpdateSchema.safeParse(rawBody)
+  if (!parsedBody.success) return error(validationMessage(parsedBody.error), 400)
+  const input = parsedBody.data
+  const [item] = await db.update(suppliers).set({
+    name: input.name,
+    address: input.address,
+    contact: input.contact,
+    email: input.email,
+    description: input.description,
+  }).where(eq(suppliers.id, Number(id))).returning()
   return ok({ item })
 }
 

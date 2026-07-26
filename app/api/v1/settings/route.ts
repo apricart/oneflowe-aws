@@ -12,6 +12,7 @@ import {
   isBudgetAllocationMode,
 } from "@/lib/budget-allocation-mode"
 import { PRICE_VISIBILITY_SETTING_KEYS, isPriceVisibilitySettingKey } from "@/lib/price-visibility"
+import { organizationSettingSchema, validationMessage } from "@/lib/server/mutation-validation"
 
 // Valid setting keys
 const VALID_SETTING_KEYS = new Set([
@@ -94,8 +95,10 @@ export async function POST(req: NextRequest) {
   if (authErr) return authErr
 
   try {
-    const body = await req.json()
-    const { organizationId, key, value } = body
+    const rawBody = await req.json().catch(() => null)
+    const parsedBody = organizationSettingSchema.safeParse(rawBody)
+    if (!parsedBody.success) return err(validationMessage(parsedBody.error), 400)
+    const { organizationId, key, value } = parsedBody.data
 
     // Validate required fields
     if (!organizationId) {
@@ -176,35 +179,26 @@ export async function POST(req: NextRequest) {
       )
       .limit(1)
 
-    let result
-    if (existing.length > 0) {
-      // Update existing setting
-      [result] = await db
-        .update(organizationSettings)
-        .set({ value, updatedAt: new Date() })
-        .where(eq(organizationSettings.id, existing[0].id))
-        .returning()
-    } else {
-      // Create new setting
-      [result] = await db
+    const result = await db.transaction(async (tx) => {
+      const [saved] = await tx
         .insert(organizationSettings)
         .values({ organizationId, key, value })
+        .onConflictDoUpdate({
+          target: [organizationSettings.organizationId, organizationSettings.key],
+          set: { value, updatedAt: new Date() },
+        })
         .returning()
-    }
 
-    // Log the action
-    try {
-      await db.insert(auditLogs).values({
+      await tx.insert(auditLogs).values({
         action: existing.length > 0 ? "UPDATE_SETTING" : "CREATE_SETTING",
         entity: "organization_settings",
-        entityId: result.id.toString(),
+        entityId: saved.id.toString(),
         organizationId,
         metadata: { key, value },
       })
-    } catch (auditError) {
-      // Log but don't fail the request
-      logError(auditError, 'SETTINGS_AUDIT_LOG')
-    }
+
+      return saved
+    })
 
     // Invalidate settings and dependent inventory cache
     await invalidateByPrefix('settings')

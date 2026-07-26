@@ -12,6 +12,7 @@ import {
     Loader2, Building2, TrendingUp, Search, Download, FileText, FileSpreadsheet, RefreshCw, Trophy, Crown, BarChart3, Calculator, ChevronDown, ShoppingBag, RotateCcw, LayoutGrid, Calendar, Layers, MapPin, ArrowUpRight, ArrowDownRight, LayoutDashboard, Table as TableIcon, LineChart as LineChartIcon
 } from "lucide-react"
 import * as XLSX from "xlsx"
+import { sanitizeSpreadsheetRow } from "@/lib/spreadsheet"
 import { formatPKR, cn } from "@/lib/utils"
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
@@ -327,7 +328,10 @@ export default function BranchReportsPage() {
             return
         }
 
-        const worksheet = XLSX.utils.aoa_to_sheet([headers, ...rows])
+        const worksheet = XLSX.utils.aoa_to_sheet([
+            sanitizeSpreadsheetRow(headers),
+            ...rows.map(sanitizeSpreadsheetRow),
+        ])
         const workbook = XLSX.utils.book_new()
         XLSX.utils.book_append_sheet(workbook, worksheet, "Branches")
         XLSX.writeFile(workbook, `branch-report-${new Date().getTime()}.${format === 'excel' ? 'xlsx' : 'csv'}`)
