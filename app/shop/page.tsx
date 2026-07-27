@@ -21,6 +21,7 @@ import { RefundManagement } from "@/components/refund-management"
 import { getOrderDerivedStatus } from "@/lib/order-status"
 import { ReceiptIconButton } from "@/components/receipts/receipt-icon-button"
 import { NotificationBell } from "@/components/notifications/notification-center"
+import { MANUAL_SIGN_OUT_EVENT } from "@/components/shell/session-guard"
 
 const ORDER_PORTAL_REFRESH_INTERVAL_MS = 5000
 
@@ -700,10 +701,15 @@ export default function OrderPortalPage() {
             <Button
               onClick={async () => {
                 const targetUrl = "/login"
-                await signOut({
-                  redirect: true,
-                  callbackUrl: targetUrl
-                })
+                window.dispatchEvent(new Event(MANUAL_SIGN_OUT_EVENT))
+                try {
+                  await signOut({
+                    redirect: true,
+                    callbackUrl: targetUrl
+                  })
+                } catch {
+                  window.location.replace(targetUrl)
+                }
               }}
               variant="ghost"
               size="icon"

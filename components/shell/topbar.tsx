@@ -11,6 +11,7 @@ import Link from "next/link"
 import { NotificationBell } from "@/components/notifications/notification-center"
 import { MultiBranchFilter } from "@/components/dashboard/multi-branch-filter"
 import { useAppContext } from "@/components/context/app-context"
+import { MANUAL_SIGN_OUT_EVENT } from "@/components/shell/session-guard"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -36,6 +37,7 @@ export function Topbar() {
       localStorage.removeItem('theme')
       localStorage.removeItem('ctx.organizationId')
       localStorage.removeItem('ctx.branchId')
+      window.dispatchEvent(new Event(MANUAL_SIGN_OUT_EVENT))
       
       // Explicitly sign out and redirect to main login
       await signOut({ 

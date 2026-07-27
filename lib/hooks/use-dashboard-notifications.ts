@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { useSession } from "next-auth/react"
 import { useAppContext } from "@/components/context/app-context"
 import { useAPI } from "@/lib/hooks/use-api"
+import { PENDING_ORDERS_REVIEW_HREF } from "@/lib/order-status"
 
 export type NotificationSeverity = "info" | "warning" | "critical"
 
@@ -118,7 +119,7 @@ export function useDashboardNotifications() {
             ? "1 order has been waiting for approval."
             : `${pendingOrders.length} orders require approval.`,
         severity,
-        cta: { label: "Review orders", href: role === "BRANCH_ADMIN" ? "/orders" : "/head-office-orders" },
+        cta: { label: "Review orders", href: PENDING_ORDERS_REVIEW_HREF },
         tag: pendingOrders[0]?.status || "pending",
       })
     }

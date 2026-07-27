@@ -463,7 +463,7 @@ export function OrdersDirectory({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 max-w-full space-y-4">
       {/* Directory Tools */}
       <div className="flex items-center justify-between px-2">
         <div className="flex items-center gap-2 text-sm text-slate-500 font-medium">
@@ -596,7 +596,7 @@ export function OrdersDirectory({
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
             transition={{ duration: 0.2 }}
-            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl overflow-x-auto shadow-sm"
+            className="w-full min-w-0 max-w-full overflow-x-auto rounded-3xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900"
           >
             <table className="w-full min-w-[900px] text-sm">
               <thead>

@@ -1,5 +1,5 @@
 "use client"
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import useSWR from "swr"
 import { jsonFetcher } from "@/lib/fetcher"
 import { Button } from "@/components/ui/button"
@@ -20,10 +20,45 @@ import { cn } from "../../lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
 import { PremiumAlert, AlertType } from "@/components/premium/premium-alert"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 
 
 type CreateUserDialogProps = {
   onSuccess?: () => void
+}
+
+function getInitialCreateUserForm(
+  organizationId?: string | null,
+  branchId?: string | null,
+  userRole?: string | null,
+) {
+  return {
+    firstName: "",
+    lastName: "",
+    email: "",
+    username: "",
+    password: "",
+    phone: "",
+    role: "",
+    organizationId: organizationId || "",
+    branchId: userRole === "BRANCH_ADMIN" ? branchId || "" : "",
+    mfaEnabled: false,
+    isActive: true,
+    employeeId: "",
+    imprestHolder: "",
+    contactPerson: "",
+    location: "",
+    address: "",
+  }
 }
 
 export function CreateUserDialog({ onSuccess }: CreateUserDialogProps) {
@@ -33,27 +68,24 @@ export function CreateUserDialog({ onSuccess }: CreateUserDialogProps) {
   const [showPassword, setShowPassword] = useState(false)
   const [branchOpen, setBranchOpen] = useState(false)
   const [branchSearch, setBranchSearch] = useState("")
+  const [discardConfirmationOpen, setDiscardConfirmationOpen] = useState(false)
   const { organizationId, branchId, userRole, isInitialized } = useAppContext()
   const { toast } = useToast()
 
-  const [form, setForm] = useState({
-    firstName: "",
-    lastName: "",
-    email: "",
-    username: "",
-    password: "",
-    phone: "",
-    role: "",
-    organizationId: "",
-    branchId: "",
-    mfaEnabled: false,
-    isActive: true,
-    employeeId: "",
-    imprestHolder: "",
-    contactPerson: "",
-    location: "",
-    address: ""
-  })
+  const initialForm = useMemo(
+    () => getInitialCreateUserForm(organizationId, branchId, userRole),
+    [branchId, organizationId, userRole],
+  )
+
+  const [form, setForm] = useState(() => initialForm)
+
+  const isDirty = useMemo(
+    () =>
+      (Object.keys(initialForm) as Array<keyof typeof initialForm>).some(
+        (field) => form[field] !== initialForm[field],
+      ),
+    [form, initialForm],
+  )
 
   const [usernameStatus, setUsernameStatus] = useState<{
     available: boolean | null
@@ -76,9 +108,10 @@ export function CreateUserDialog({ onSuccess }: CreateUserDialogProps) {
     visible: false
   })
 
-  // Fetch organizations (for Super Admin)
+  // The endpoint scopes non-Super Admins to their assigned organization.
+  // Fetch it for every role so the read-only assignment summary has a name.
   const { data: organizationsData } = useSWR(
-    userRole === "SUPER_ADMIN" ? "/api/v1/organizations" : null,
+    userRole ? "/api/v1/organizations" : null,
     jsonFetcher
   )
 
@@ -94,28 +127,15 @@ export function CreateUserDialog({ onSuccess }: CreateUserDialogProps) {
   // Initialize form when dialog opens
   useEffect(() => {
     if (open) {
-      setForm({
-        firstName: "",
-        lastName: "",
-        email: "",
-        username: "",
-        password: "",
-        phone: "",
-        role: "",
-        organizationId: organizationId || "",
-        branchId: "",
-        mfaEnabled: false,
-        isActive: true,
-        employeeId: "",
-        imprestHolder: "",
-        contactPerson: "",
-        location: "",
-        address: ""
-      })
+      setForm(initialForm)
       setUsernameStatus({ available: null, loading: false, suggestions: [] })
       setErrors({})
       setStep(1)
+      setDiscardConfirmationOpen(false)
     }
+    // Reset only on a closed -> open transition. Context synchronization while
+    // the dialog is open is handled below and must not erase user-entered data.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
   // Sync context changes to form if not manually edited or if forced by role
@@ -371,9 +391,30 @@ export function CreateUserDialog({ onSuccess }: CreateUserDialogProps) {
     return branch?.name || ""
   }
 
+  const handleDialogOpenChange = (nextOpen: boolean) => {
+    if (nextOpen) {
+      setOpen(true)
+      return
+    }
+
+    if (submitting) return
+
+    if (isDirty) {
+      setDiscardConfirmationOpen(true)
+      return
+    }
+
+    setOpen(false)
+  }
+
+  const discardChangesAndClose = () => {
+    setDiscardConfirmationOpen(false)
+    setOpen(false)
+  }
+
   return (
     <>
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={handleDialogOpenChange}>
         <DialogTrigger asChild>
           <Button style={{ background: "var(--color-brand-primary)", color: "white" }}>
             <UserPlus className="mr-2 h-4 w-4" />
@@ -916,7 +957,7 @@ export function CreateUserDialog({ onSuccess }: CreateUserDialogProps) {
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>
+            <Button variant="outline" onClick={() => handleDialogOpenChange(false)}>
               Cancel
             </Button>
             {step > 1 && (
@@ -926,6 +967,7 @@ export function CreateUserDialog({ onSuccess }: CreateUserDialogProps) {
             )}
             {step < 3 ? (
               <Button
+                className="disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100 disabled:shadow-none"
                 onClick={() => {
                   if (step === 1) {
                     // Check step 1 fields only
@@ -960,6 +1002,27 @@ export function CreateUserDialog({ onSuccess }: CreateUserDialogProps) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <AlertDialog
+        open={discardConfirmationOpen}
+        onOpenChange={setDiscardConfirmationOpen}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard unsaved user details?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The information entered in this Create User form has not been
+              saved. Keep editing to preserve it, or discard it and close the
+              form.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep editing</AlertDialogCancel>
+            <AlertDialogAction onClick={discardChangesAndClose}>
+              Discard changes
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }

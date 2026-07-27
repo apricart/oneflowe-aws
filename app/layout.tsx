@@ -11,7 +11,6 @@ const jetbrainsMono = JetBrains_Mono({
   variable: '--font-jetbrains-mono',
 })
 
-import { Analytics } from '@vercel/analytics/next'
 import { AuthSessionProvider } from '@/components/session-provider'
 import { Toaster } from '@/components/ui/toaster'
 import { ThemeProvider } from '@/components/theme-provider'
@@ -49,7 +48,6 @@ export default function RootLayout({
             <SWRProvider>
               {children}
               <Toaster />
-              <Analytics />
             </SWRProvider>
           </AuthSessionProvider>
         </ThemeProvider>

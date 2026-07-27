@@ -1,7 +1,7 @@
 "use client"
-import React, { useState, useMemo, useEffect, useCallback } from "react"
+import React, { Suspense, useState, useMemo, useEffect, useCallback } from "react"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import useSWR from "swr"
 import { useSession } from "next-auth/react"
 import { useToast } from "@/hooks/use-toast"
@@ -41,7 +41,13 @@ import { startOfDay, endOfDay } from "date-fns"
 import { BranchFilter } from "@/components/reports/branch-filter"
 import { GroupFilter } from "@/components/reports/group-filter"
 import { MultiSelectFilter } from "@/components/reports/multi-select-filter"
-import { getOrderFulfillmentVariant, getOrderRefundVariant, type OrderSplitFilter } from "@/lib/order-status"
+import {
+  getOrderFulfillmentVariant,
+  getOrderRefundVariant,
+  getOrderStatusFilter,
+  type OrderSplitFilter,
+  type OrderStatusFilter,
+} from "@/lib/order-status"
 
 type DateRange = {
   startDate: Date
@@ -79,7 +85,23 @@ interface OrderItem {
 }
 
 export default function OrdersManagementPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="py-24 text-center text-muted-foreground">
+          Loading orders…
+        </div>
+      }
+    >
+      <OrdersManagementContent />
+    </Suspense>
+  )
+}
+
+function OrdersManagementContent() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const requestedStatusFilter = getOrderStatusFilter(searchParams.get("status"))
   const { data: session } = useSession()
   const { toast } = useToast()
   const {
@@ -99,7 +121,7 @@ export default function OrdersManagementPage() {
   const [activePreset, setActivePreset] = useState<FilterPreset>("all")
   const [selectedMonths, setSelectedMonths] = useState<number[]>([])
   const [selectedYears, setSelectedYears] = useState<number[]>([])
-  const [statusFilter, setStatusFilter] = useState<string>("all")
+  const [statusFilter, setStatusFilter] = useState<OrderStatusFilter>(requestedStatusFilter)
   const [splitFilter, setSplitFilter] = useState<OrderSplitFilter>("all")
   const [selectedOrder, setSelectedOrder] = useState<OrderItem | null>(null)
   const [showApprovalDialog, setShowApprovalDialog] = useState(false)
@@ -122,6 +144,10 @@ export default function OrdersManagementPage() {
   // Error dialog state
   const [showErrorDialog, setShowErrorDialog] = useState(false)
   const [errorMessage, setErrorMessage] = useState("")
+
+  useEffect(() => {
+    setStatusFilter(requestedStatusFilter)
+  }, [requestedStatusFilter])
 
 
   const handleDateChange = useCallback((
@@ -432,7 +458,7 @@ export default function OrdersManagementPage() {
   }
 
   return (
-    <main className="min-h-screen bg-[#f8fafc] dark:bg-[#020617] p-4 md:p-8 space-y-8">
+    <main className="min-h-screen w-full min-w-0 max-w-full bg-[#f8fafc] dark:bg-[#020617] p-4 md:p-8 space-y-8">
       {/* ═══ MODERN COMPACT HEADER ═══ */}
       <section className="flex flex-col md:flex-row md:items-center justify-between gap-4 animate-in fade-in slide-in-from-top-4 duration-500">
         <div>
@@ -504,15 +530,15 @@ export default function OrdersManagementPage() {
       </section>
 
       {/* ═══ ULTRA-COMPACT UNIFIED FILTERS ═══ */}
-      <section className="animate-in fade-in slide-in-from-bottom-6 duration-1000 delay-300 fill-mode-both relative z-40">
-        <Card className="border-none shadow-[0_15px_60px_rgb(0,0,0,0.05)] dark:shadow-[0_15px_60px_rgb(0,0,0,0.3)] bg-white/80 dark:bg-[#050b1a]/80 backdrop-blur-xl rounded-[2.5rem] overflow-visible">
-          <div className="p-3 md:p-4 space-y-3">
+      <section className="relative z-40 min-w-0 max-w-full animate-in fade-in slide-in-from-bottom-6 duration-1000 delay-300 fill-mode-both">
+        <Card className="min-w-0 max-w-full overflow-visible rounded-[2.5rem] border-none bg-white/80 shadow-[0_15px_60px_rgb(0,0,0,0.05)] backdrop-blur-xl dark:bg-[#050b1a]/80 dark:shadow-[0_15px_60px_rgb(0,0,0,0.3)]">
+          <div className="min-w-0 space-y-3 p-3 md:p-4">
             {/* Top Row: Core Tools */}
-            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+            <div className="flex min-w-0 flex-col gap-3 2xl:flex-row 2xl:items-center 2xl:justify-between">
               {/* Left Side: Search & Primary Filters */}
-              <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full lg:w-auto">
+              <div className="flex w-full min-w-0 flex-col gap-3 sm:flex-row sm:items-center 2xl:flex-1">
                 {/* Status Tabs */}
-                <div className="flex items-center p-1 bg-slate-100/60 dark:bg-slate-800/50 rounded-xl border border-slate-200/50 dark:border-slate-700/50 overflow-x-auto no-scrollbar max-w-full">
+                <div className="flex min-w-0 max-w-full items-center overflow-x-auto rounded-xl border border-slate-200/50 bg-slate-100/60 p-1 no-scrollbar dark:border-slate-700/50 dark:bg-slate-800/50 sm:flex-1">
                   {([
                     ["all", "All"],
                     ["pending", "Pending Approval"],
@@ -520,7 +546,7 @@ export default function OrdersManagementPage() {
                     ["fulfilled", "Fulfilled"],
                     ["rejected", "Rejected"],
                     ["refunded", "Refunded"],
-                  ] as [string, string][]).map(([status, label]) => (
+                  ] as [OrderStatusFilter, string][]).map(([status, label]) => (
                     <Button
                       key={status}
                       onClick={() => setStatusFilter(status)}
@@ -536,7 +562,7 @@ export default function OrdersManagementPage() {
                   ))}
                 </div>
 
-                <div className="relative group min-w-[200px] sm:min-w-[280px]">
+                <div className="group relative w-full min-w-0 sm:w-[280px] sm:shrink-0">
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400 transition-colors group-focus-within:text-indigo-500" />
                   <Input
                     placeholder="Search by TID, ID, or cost center..."
@@ -548,7 +574,7 @@ export default function OrdersManagementPage() {
               </div>
 
               {/* Right Side: Environment Filters & Actions */}
-              <div className="hidden lg:flex items-center    rounded-2xl  ">
+              <div className="flex w-full flex-wrap items-center justify-end gap-2 rounded-2xl 2xl:w-auto 2xl:shrink-0 2xl:flex-nowrap">
                 <GlobalDateFilter
                   value={dateRange}
                   onChange={handleDateChange}
@@ -625,7 +651,7 @@ export default function OrdersManagementPage() {
 
           </div>
 
-          <div className="px-1 sm:px-4 pb-4 w-full">
+          <div className="w-full min-w-0 max-w-full px-1 pb-4 sm:px-4">
             <OrdersDirectory
               orders={filteredOrders}
               statusContext={showSplitFilter ? (statusFilter as "fulfilled" | "refunded") : "default"}

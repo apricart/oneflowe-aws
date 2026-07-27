@@ -49,3 +49,55 @@ test("Order Portal is confined to the shop", async ({ page }) => {
   await page.goto("/dashboard")
   await expect(page).toHaveURL(/\/shop$/)
 })
+
+test("a transient session network failure preserves the Create User form", async ({ page }) => {
+  await login(page, E2E_USERS.superAdmin, "/dashboard")
+  await page.goto("/users")
+
+  await page.getByRole("button", { name: "Create User" }).click()
+  const firstNameInput = page.getByLabel(/^First Name/)
+  await firstNameInput.fill("Unsaved QA User")
+
+  let sessionChecks = 0
+  let signOutRequests = 0
+
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/api/auth/signout") {
+      signOutRequests += 1
+    }
+  })
+
+  await page.route("**/api/auth/session", async (route) => {
+    sessionChecks += 1
+    if (sessionChecks === 1) {
+      await route.abort("internetdisconnected")
+      return
+    }
+    await route.continue()
+  })
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event("online"))
+  })
+
+  await expect.poll(() => sessionChecks).toBeGreaterThanOrEqual(2)
+  await expect(page).toHaveURL(/\/users$/)
+  await expect(firstNameInput).toHaveValue("Unsaved QA User")
+  expect(signOutRequests).toBe(0)
+
+  await page.getByRole("button", { name: "Cancel" }).click()
+  await expect(
+    page.getByRole("alertdialog", {
+      name: "Discard unsaved user details?",
+    }),
+  ).toBeVisible()
+
+  await page.getByRole("button", { name: "Keep editing" }).click()
+  await expect(firstNameInput).toHaveValue("Unsaved QA User")
+
+  await page.getByRole("button", { name: "Cancel" }).click()
+  await page.getByRole("button", { name: "Discard changes" }).click()
+  await expect(
+    page.getByRole("heading", { name: "Create User" }),
+  ).not.toBeVisible()
+})

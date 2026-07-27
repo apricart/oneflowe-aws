@@ -83,4 +83,13 @@ describe("order lifecycle notification security contracts", () => {
     expect(hook).toContain('role === "HEAD_OFFICE"')
     expect(shop).toContain("isOrderPortal && <NotificationBell />")
   })
+
+  it("routes every admin pending-order notification through the scoped orders page", () => {
+    const hook = source("lib/hooks/use-dashboard-notifications.ts")
+    const ordersPage = source("app/(portal)/orders/page.tsx")
+
+    expect(hook).toContain("href: PENDING_ORDERS_REVIEW_HREF")
+    expect(hook).not.toContain("/head-office-orders")
+    expect(ordersPage).toContain('getOrderStatusFilter(searchParams.get("status"))')
+  })
 })

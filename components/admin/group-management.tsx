@@ -417,7 +417,7 @@ export function GroupManagement({ role }: { role: string }) {
                                 <TableCell className="text-slate-500 max-w-xs truncate">{group.description}</TableCell>
                                 <TableCell>
                                     <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 border-none font-bold px-3">
-                                        {group.branchCount} branches
+                                        {group.branchCount} {group.branchCount === 1 ? "branch" : "branches"}
                                     </Badge>
                                 </TableCell>
                                 <TableCell>

@@ -5,6 +5,16 @@ type OrderStatusSource = {
 
 export type OrderStatusContext = "default" | "fulfilled" | "refunded"
 export type OrderSplitFilter = "all" | "partial" | "full"
+export const ORDER_STATUS_FILTERS = [
+  "all",
+  "pending",
+  "approved",
+  "fulfilled",
+  "rejected",
+  "refunded",
+] as const
+export type OrderStatusFilter = (typeof ORDER_STATUS_FILTERS)[number]
+export const PENDING_ORDERS_REVIEW_HREF = "/orders?status=pending"
 export type DerivedOrderStatusKey =
   | "pending"
   | "approved"
@@ -18,6 +28,13 @@ export type DerivedOrderStatusKey =
 
 function normalizeStatus(status?: string | null) {
   return (status || "").trim().toUpperCase()
+}
+
+export function getOrderStatusFilter(value?: string | null): OrderStatusFilter {
+  const normalized = (value || "").trim().toLowerCase()
+  return ORDER_STATUS_FILTERS.includes(normalized as OrderStatusFilter)
+    ? (normalized as OrderStatusFilter)
+    : "all"
 }
 
 export function getOrderRefundVariant(order: OrderStatusSource): Exclude<OrderSplitFilter, "all"> | "none" {
