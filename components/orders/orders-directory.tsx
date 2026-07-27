@@ -877,7 +877,10 @@ export function OrdersDirectory({
                   </Button>
                 )}
 
-                {isSuperAdmin && shouldShowPaymentStatus(viewingOrder) && (
+                {isSuperAdmin &&
+                  viewingOrder.status?.toLowerCase() === "fulfilled" &&
+                  normalizeFulfillmentStatus(viewingOrder.fulfillmentStatus) === "DELIVERED" &&
+                  shouldShowPaymentStatus(viewingOrder) && (
                   (() => {
                     const isPaid = normalizePaymentStatus(viewingOrder.paymentStatus) === "PAID"
                     return (

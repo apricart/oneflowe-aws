@@ -118,7 +118,7 @@ export function DashboardNotificationsPanel({ limit = 3, className }: { limit?: 
   )
 }
 
-export function NotificationRail({ limit = 4, className }: { limit?: number; className?: string }) {
+export function NotificationRail({ limit = 1, className }: { limit?: number; className?: string }) {
   const { notifications, isLoading } = useDashboardNotifications()
   const visible = notifications.slice(0, limit)
 
@@ -126,7 +126,7 @@ export function NotificationRail({ limit = 4, className }: { limit?: number; cla
     return (
       <div className={cn("rounded-2xl border bg-card/60 px-4 py-3", className)}>
         <div className="flex gap-3 overflow-hidden">
-          {Array.from({ length: 3 }).map((_, idx) => (
+          {Array.from({ length: limit }).map((_, idx) => (
             <Skeleton key={idx} className="h-16 w-48 rounded-xl" />
           ))}
         </div>
