@@ -37,6 +37,8 @@ import {
   parseBudgetAllocationMode,
 } from "@/lib/budget-allocation-mode"
 import { Loader } from "lucide-react";
+import { OrganizationExcelExportButton } from "@/components/organizations/organization-excel-export-button"
+import { BranchExcelExportButton } from "@/components/organizations/branch-excel-export-button"
 
 const LEGACY_HIDE_PRICES_SETTING_KEY = "hide_prices_for_branch_and_order_portal"
 const HIDE_BRANCH_ADMIN_PRICES_SETTING_KEY = "hide_prices_for_branch_admin"
@@ -425,6 +427,12 @@ export default function OrganizationsPage() {
                           isSuperAdmin={userRole === "SUPER_ADMIN"}
                           onSave={(payload, priceVisibility) => editOrganization(String(org.id), payload, priceVisibility)}
                         />
+                        <OrganizationExcelExportButton
+                          organization={org}
+                          branches={branchesByOrgId.get(org.id) || []}
+                          onSuccess={(message) => showFeedback(message, "success")}
+                          onError={(message) => showFeedback(message, "error")}
+                        />
                         <Button
                           variant="ghost"
                           size="icon"
@@ -654,8 +662,13 @@ function BranchesTable({
                 </Badge>
               </td>
               <td className="py-5 text-right">
-                <div className="inline-flex min-w-[88px] items-center justify-end gap-2">
+                <div className="inline-flex min-w-[124px] items-center justify-end gap-1">
                   <EditBranchDialog branch={b} onSave={(payload) => edit(String(b.id), payload)} />
+                  <BranchExcelExportButton
+                    branch={b}
+                    onSuccess={(message) => showFeedback(message, "success")}
+                    onError={(message) => showFeedback(message, "error")}
+                  />
                   <Button
                     variant="ghost"
                     size="icon"

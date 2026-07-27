@@ -36,6 +36,6 @@ next-env.d.ts
 /playwright-report/
 /test-results/
 /blob-report/
-
+/deliverables
 # database exports (uncomment to ignore, or keep specific files by not adding them)
 # database-export-*.sql

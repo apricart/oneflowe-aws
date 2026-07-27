@@ -540,7 +540,7 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Receipt
                     <div className="space-y-1">
                         <p className="text-[10px] text-slate-400 font-medium uppercase tracking-widest">Authentication</p>
                         <p className="text-[9px] text-slate-300">Generated on: {new Date().toLocaleString()}</p>
-                        <p className="text-[9px] text-slate-300">Authorized by OneFlowe ERP System</p>
+                        <p className="text-[9px] text-slate-300">Authorized by Apricart</p>
                     </div>
                     <div className="flex gap-16">
                         <div className="text-center">

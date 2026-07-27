@@ -512,7 +512,7 @@ function drawFooter(doc: any, y: number, margin: number, right: number, pageHeig
     doc.setFontSize(6.5)
     setText(doc, [203, 213, 225])
     doc.text(`Generated on: ${new Date().toLocaleString()}`, margin, footerY + 13)
-    doc.text("Authorized by OneFlowe ERP System", margin, footerY + 18)
+    doc.text("Authorized by Apricart", margin, footerY + 18)
 
     setDraw(doc, [203, 213, 225])
     doc.line(right - 86, footerY + 12, right - 56, footerY + 12)
