@@ -84,11 +84,12 @@ describe("order lifecycle notification security contracts", () => {
     expect(shop).toContain("isOrderPortal && <NotificationBell />")
   })
 
-  it("routes every admin pending-order notification through the scoped orders page", () => {
+  it("deep-links a single pending order and keeps aggregate notifications on the scoped list", () => {
     const hook = source("lib/hooks/use-dashboard-notifications.ts")
     const ordersPage = source("app/(portal)/orders/page.tsx")
 
-    expect(hook).toContain("href: PENDING_ORDERS_REVIEW_HREF")
+    expect(hook).toContain("getPendingOrderReviewHref(pendingOrders[0]?.id, pendingOrders.length)")
+    expect(hook).toContain('label: isSinglePendingOrder ? "Review order" : "Review orders"')
     expect(hook).not.toContain("/head-office-orders")
     expect(ordersPage).toContain('getOrderStatusFilter(searchParams.get("status"))')
   })

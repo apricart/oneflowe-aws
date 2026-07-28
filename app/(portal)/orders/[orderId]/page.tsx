@@ -12,7 +12,7 @@ import { calculateLineCents, formatQuantity } from "@/lib/quantity"
 import { buildStatusTimeline } from "@/lib/order-utils"
 import { getOrderDerivedStatus, hasPartialRefund } from "@/lib/order-status"
 import { PAYMENT_STATUS_LABELS, normalizePaymentStatus } from "@/lib/payment-status"
-import { ArrowLeft, Clock, TrendingDown, CheckCircle, RefreshCw, Package, Ban, Copy } from "lucide-react"
+import { ArrowLeft, Clock, TrendingDown, CheckCircle, RefreshCw, Package, Ban, Copy, User } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { RefundManagement } from "@/components/refund-management"
 
@@ -43,6 +43,10 @@ type OrderDetail = {
   tid: string
   branchId: number
   branchName?: string | null
+  creatorName?: string | null
+  creatorEmail?: string | null
+  creatorPhone?: string | null
+  creatorEmployeeId?: string | null
   status: string
   paymentStatus?: string | null
   statusAtRefund?: string | null
@@ -81,6 +85,11 @@ export default function SuperAdminOrderDetailsPage() {
   const order: OrderDetail | undefined = data?.item
   const orderItems = order?.orderItems || []
   const pricesHidden = Boolean(order?.pricesHidden)
+  const initiatorName = order?.creatorName?.trim() || order?.creatorEmail?.trim() || "Unknown user"
+  const initiatorDetails = [
+    order?.creatorEmployeeId ? `Employee #${order.creatorEmployeeId}` : null,
+    order?.creatorPhone,
+  ].filter(Boolean).join(" · ")
 
   // Hide items that have been fully refunded
   const visibleItems = orderItems.filter(item => (item.quantityRefunded || 0) < item.quantity)
@@ -183,6 +192,20 @@ export default function SuperAdminOrderDetailsPage() {
               {order.branchName || `Branch ${order.branchId}`}
             </p>
             <p className="text-xs text-muted-foreground">Order ID #{order.id}</p>
+          </Card>
+          <Card className="rounded-2xl border-0 bg-white dark:bg-slate-900 dark:border-slate-800 p-4 shadow-md">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <User className="h-4 w-4" />
+              <span>Initiated by</span>
+            </div>
+            <p className="mt-1 truncate text-xl font-semibold text-slate-900 dark:text-white" title={initiatorName}>
+              {initiatorName}
+            </p>
+            {initiatorDetails && (
+              <p className="truncate text-xs text-muted-foreground" title={initiatorDetails}>
+                {initiatorDetails}
+              </p>
+            )}
           </Card>
           {!pricesHidden && order.refundAmountCents && order.refundAmountCents > 0 && (
             <Card className="rounded-2xl border-0 bg-yellow-50 dark:bg-yellow-950/50 border-yellow-200 dark:border-yellow-800 p-4 shadow-md">
@@ -318,7 +341,7 @@ export default function SuperAdminOrderDetailsPage() {
           {order && (
             <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
               <Card className="space-y-4 border dark:bg-slate-900 dark:border-slate-800">
-                <div className="grid gap-4 border-b dark:border-slate-800 px-6 py-5 md:grid-cols-3">
+                <div className="grid gap-4 border-b dark:border-slate-800 px-6 py-5 md:grid-cols-4">
                   <div>
                     <p className="text-xs uppercase tracking-wide text-muted-foreground">
                       Transaction ID
@@ -337,6 +360,14 @@ export default function SuperAdminOrderDetailsPage() {
                     </p>
                     <p className="font-semibold dark:text-white">
                       {order.branchName || `Branch ${order.branchId}`}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                      Initiated by
+                    </p>
+                    <p className="truncate font-semibold dark:text-white" title={initiatorName}>
+                      {initiatorName}
                     </p>
                   </div>
                 </div>

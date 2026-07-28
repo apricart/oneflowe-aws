@@ -15,6 +15,16 @@ export const ORDER_STATUS_FILTERS = [
 ] as const
 export type OrderStatusFilter = (typeof ORDER_STATUS_FILTERS)[number]
 export const PENDING_ORDERS_REVIEW_HREF = "/orders?status=pending"
+
+export function getPendingOrderReviewHref(
+  orderId: number | null | undefined,
+  pendingOrderCount: number,
+): string {
+  return pendingOrderCount === 1 && Number.isInteger(orderId) && Number(orderId) > 0
+    ? `/orders/${orderId}`
+    : PENDING_ORDERS_REVIEW_HREF
+}
+
 export type DerivedOrderStatusKey =
   | "pending"
   | "approved"

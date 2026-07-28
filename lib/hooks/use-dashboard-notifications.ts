@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { useSession } from "next-auth/react"
 import { useAppContext } from "@/components/context/app-context"
 import { useAPI } from "@/lib/hooks/use-api"
-import { PENDING_ORDERS_REVIEW_HREF } from "@/lib/order-status"
+import { getPendingOrderReviewHref } from "@/lib/order-status"
 
 export type NotificationSeverity = "info" | "warning" | "critical"
 
@@ -111,15 +111,19 @@ export function useDashboardNotifications() {
     const pendingOrders = pendingOrdersQuery.data?.items || []
     if (pendingOrders.length > 0) {
       const severity = pendingOrders.length > 10 ? "critical" : "warning"
+      const isSinglePendingOrder = pendingOrders.length === 1
       items.push({
         id: "pending-orders",
         title: "Orders awaiting approval",
         message:
-          pendingOrders.length === 1
+          isSinglePendingOrder
             ? "1 order has been waiting for approval."
             : `${pendingOrders.length} orders require approval.`,
         severity,
-        cta: { label: "Review orders", href: PENDING_ORDERS_REVIEW_HREF },
+        cta: {
+          label: isSinglePendingOrder ? "Review order" : "Review orders",
+          href: getPendingOrderReviewHref(pendingOrders[0]?.id, pendingOrders.length),
+        },
         tag: pendingOrders[0]?.status || "pending",
       })
     }

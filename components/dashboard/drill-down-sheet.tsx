@@ -6,6 +6,10 @@ import useSWR from "swr"
 import { formatPKR, cn } from "@/lib/utils"
 import { format } from "date-fns"
 import { fetcher } from "@/lib/fetcher"
+import {
+    FULFILLMENT_STATUS_LABELS,
+    normalizeFulfillmentStatus,
+} from "@/lib/fulfillment-status"
 
 const formatDuration = (mins: number) => {
     if (mins <= 0) return "0m"
@@ -16,6 +20,19 @@ const formatDuration = (mins: number) => {
     const d = Math.floor(h / 24)
     const hRemaining = h % 24
     return hRemaining > 0 ? `${d}d ${hRemaining}h` : `${d}d`
+}
+
+const getDeliveryStatusColor = (status?: string | null) => {
+    switch (normalizeFulfillmentStatus(status)) {
+        case "DELIVERED":
+            return "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300"
+        case "OUT_FOR_DELIVERY":
+            return "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-800 dark:bg-sky-950/30 dark:text-sky-300"
+        case "IN_PROCESS":
+            return "border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-800 dark:bg-indigo-950/30 dark:text-indigo-300"
+        default:
+            return "border-slate-200 bg-slate-50 text-slate-500 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-400"
+    }
 }
 
 import {
@@ -445,9 +462,20 @@ export function DrillDownSheet({
                                                             <div className="flex items-center gap-2">
                                                                 <span className="text-sm font-semibold text-slate-900 dark:text-white tracking-tight">{item.tid}</span>
                                                             </div>
-                                                            <div className="flex items-center gap-3 mt-1 text-[10px] font-medium text-slate-400 uppercase tracking-widest opacity-80">
+                                                            <div className="flex flex-wrap items-center gap-3 mt-1 text-[10px] font-medium text-slate-400 uppercase tracking-widest opacity-80">
                                                                 <span className="flex items-center gap-1"><Clock className="w-3.5 h-3.5" /> {format(new Date(item.date), "HH:mm")}</span>
                                                                 <span className="flex items-center gap-1"><Box className="w-3.5 h-3.5" /> {item.branchName}</span>
+                                                                {type === "APPROVED" && (
+                                                                    <Badge
+                                                                        variant="outline"
+                                                                        className={cn(
+                                                                            "h-5 rounded-md px-1.5 py-0 text-[9px] font-bold uppercase tracking-wider",
+                                                                            getDeliveryStatusColor(item.fulfillmentStatus)
+                                                                        )}
+                                                                    >
+                                                                        {FULFILLMENT_STATUS_LABELS[normalizeFulfillmentStatus(item.fulfillmentStatus)]}
+                                                                    </Badge>
+                                                                )}
                                                             </div>
                                                         </div>
                                                     </div>

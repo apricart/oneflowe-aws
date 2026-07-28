@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
+  getPendingOrderReviewHref,
   getOrderStatusFilter,
   ORDER_STATUS_FILTERS,
   PENDING_ORDERS_REVIEW_HREF,
@@ -31,5 +32,19 @@ describe("order status navigation", () => {
     expect(url.searchParams.get("organizationId")).toBeNull()
     expect(url.searchParams.get("branchId")).toBeNull()
     expect(url.searchParams.get("branchIds")).toBeNull()
+  })
+
+  it("deep-links a single pending-order notification to that order", () => {
+    expect(getPendingOrderReviewHref(42, 1)).toBe("/orders/42")
+  })
+
+  it.each([
+    { orderId: 42, count: 2 },
+    { orderId: null, count: 1 },
+    { orderId: 0, count: 1 },
+    { orderId: -1, count: 1 },
+    { orderId: 1.5, count: 1 },
+  ])("falls back to the pending list when a specific order is unavailable: $orderId/$count", ({ orderId, count }) => {
+    expect(getPendingOrderReviewHref(orderId, count)).toBe(PENDING_ORDERS_REVIEW_HREF)
   })
 })

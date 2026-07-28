@@ -1,6 +1,6 @@
 import { eq, sql } from "drizzle-orm"
 import { getServerSession } from "next-auth"
-import { globalProducts, orderItems, orders, refundItems, refunds, users } from "@/db/schema"
+import { branches, globalProducts, orderItems, orders, refundItems, refunds, users } from "@/db/schema"
 import { error, ok, requireApiRole } from "@/lib/api"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
@@ -19,12 +19,19 @@ export async function GET(
   const [item] = await db
     .select({
       ...orderSelectColumns,
-      creatorName: users.fullName,
+      branchName: branches.name,
+      creatorName: sql<string | null>`COALESCE(
+        NULLIF(TRIM(${users.fullName}), ''),
+        NULLIF(TRIM(CONCAT_WS(' ', ${users.firstName}, ${users.lastName})), ''),
+        ${users.email}
+      )`,
+      creatorEmail: users.email,
       creatorPhone: users.phone,
       creatorEmployeeId: users.employeeId,
     })
     .from(orders)
     .leftJoin(users, eq(orders.createdByUserId, users.id))
+    .leftJoin(branches, eq(orders.branchId, branches.id))
     .where(eq(orders.id, orderId))
   if (!item) return error("Not found", 404)
 
