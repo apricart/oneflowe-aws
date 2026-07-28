@@ -11,6 +11,7 @@ import { sendWelcomeEmail } from "@/lib/email"
 import { userCreateSchema, validationMessage } from "@/lib/server/mutation-validation"
 import { canAssignRole } from "@/lib/server/user-access-policy"
 import { withRateLimit } from "@/lib/rate-limiter"
+import { USER_MANAGEMENT_ROLES } from "@/lib/user-management-access"
 
 function getLoginUrl(requestUrl: string): string {
   const configuredUrl = process.env.NEXTAUTH_URL?.trim()
@@ -28,7 +29,7 @@ function getLoginUrl(requestUrl: string): string {
 
 
 export async function GET(req: Request) {
-  const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"])
+  const err = await requireApiRole(USER_MANAGEMENT_ROLES)
   if (err) return err
   const { searchParams } = new URL(req.url)
   const organizationId = searchParams.get("organizationId")
@@ -100,7 +101,7 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   console.log("[API/Users] POST /api/v1/users triggered")
-  const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE"])
+  const err = await requireApiRole(USER_MANAGEMENT_ROLES)
   if (err) return err
 
   const rawBody = await readJson<unknown>(req)

@@ -10,6 +10,7 @@ import { invalidateSessionValidationCache } from "@/lib/session-validation-cache
 import { headers } from "next/headers"
 import { assertUniqueUserFields, normalizeEmail, normalizeOptionalText, UserUniqueFieldError } from "@/lib/user-uniqueness"
 import { systemRoleSchema, userProfileUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
+import { USER_MANAGEMENT_ROLES } from "@/lib/user-management-access"
 import { canManageUser } from "@/lib/server/user-access-policy"
 
 export async function PATCH(
@@ -17,7 +18,7 @@ export async function PATCH(
   props: { params: Promise<{ id: string }> }
 ) {
   try {
-    const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE"])
+    const err = await requireApiRole(USER_MANAGEMENT_ROLES)
     if (err) return err
     const params = await props.params
     const { id } = params
@@ -216,7 +217,7 @@ export async function DELETE(
   req: NextRequest,
   props: { params: Promise<{ id: string }> }
 ) {
-  const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE"])
+  const err = await requireApiRole(USER_MANAGEMENT_ROLES)
   if (err) return err
   const params = await props.params
   const { id } = params

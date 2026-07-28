@@ -16,11 +16,13 @@ export function PreloadData() {
     // Prefetch critical data in parallel based on role
     const preloadCritical = async () => {
       try {
-        const canViewUsersAndRoles = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"].includes(userRole)
+        const canViewUsers = ["SUPER_ADMIN", "HEAD_OFFICE"].includes(userRole)
+        const canViewRoles = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"].includes(userRole)
 
         const commonPrefetch = [
           prefetchData.organizations(),
-          ...(canViewUsersAndRoles ? [prefetchData.users(), prefetchData.roles()] : []),
+          ...(canViewUsers ? [prefetchData.users()] : []),
+          ...(canViewRoles ? [prefetchData.roles()] : []),
           prefetchData.branches(),
           prefetchData.orders(),
         ]
@@ -55,13 +57,15 @@ export function PreloadDashboardData() {
     if (!session?.user) return
 
     const userRole = (session.user as any).role
-    const canViewUsersAndRoles = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"].includes(userRole)
+    const canViewUsers = ["SUPER_ADMIN", "HEAD_OFFICE"].includes(userRole)
+    const canViewRoles = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"].includes(userRole)
 
     const preload = async () => {
       try {
         await Promise.all([
           prefetchData.organizations(),
-          ...(canViewUsersAndRoles ? [prefetchData.users(), prefetchData.roles()] : []), // Roles GET handler
+          ...(canViewUsers ? [prefetchData.users()] : []),
+          ...(canViewRoles ? [prefetchData.roles()] : []),
         ])
       } catch (error) {
         console.warn('Failed to prefetch dashboard data:', error)

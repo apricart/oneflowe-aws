@@ -484,7 +484,10 @@ function OrdersManagementContent() {
       </section>
 
       {/* ═══ COMPACT STATS ROW ═══ */}
-      <section className="grid grid-cols-2 md:grid-cols-7 gap-3 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-100 fill-mode-both">
+      <section
+        aria-label="Order summary"
+        className="grid grid-cols-6 gap-[clamp(0.25rem,0.75vw,0.75rem)] animate-in fade-in slide-in-from-bottom-4 duration-500 delay-100 fill-mode-both"
+      >
         <CompactStatCard
           label="Total Orders"
           value={statusCounts.all}
@@ -712,18 +715,18 @@ function CompactStatCard({
   iconBadge: string
 }) {
   return (
-    <Card className={cn("border border-white/40 dark:border-white/5 rounded-3xl shadow-sm transition-all duration-300 hover:shadow-md hover:-translate-y-0.5 overflow-hidden", gradient)}>
-      <CardContent className="p-6 flex items-center justify-between relative">
+    <Card className={cn("min-w-0 overflow-hidden rounded-[clamp(0.75rem,8cqw,1.5rem)] border border-white/40 shadow-sm transition-all duration-300 [container-type:inline-size] hover:-translate-y-0.5 hover:shadow-md dark:border-white/5", gradient)}>
+      <CardContent className="relative grid grid-cols-[minmax(0,1fr)_auto] items-center gap-[clamp(0.125rem,2cqw,0.75rem)] p-[clamp(0.5rem,7cqw,1.5rem)]">
         <div className="absolute inset-0 bg-gradient-to-br from-white/40 to-transparent dark:from-white/5 dark:to-transparent pointer-events-none" />
-        <div className="space-y-2 relative z-10">
-          <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
+        <div className="relative z-10 min-w-0 space-y-[clamp(0.25rem,2cqw,0.5rem)]">
+          <p className="break-words text-[clamp(0.45rem,5.5cqw,0.625rem)] font-bold uppercase leading-snug tracking-[clamp(0.08em,1cqw,0.2em)] text-slate-500 dark:text-slate-400">
             {label}
           </p>
-          <p className="text-3xl sm:text-4xl font-black tracking-tight text-slate-900 dark:text-white">
+          <p className="text-[clamp(1.25rem,18cqw,2.25rem)] font-black leading-none tracking-tight text-slate-900 dark:text-white">
             {value}
           </p>
         </div>
-        <div className={cn("flex h-14 w-14 items-center justify-center rounded-2xl relative z-10", iconBadge)}>
+        <div className={cn("relative z-10 flex size-[clamp(1.5rem,28cqw,3.5rem)] shrink-0 items-center justify-center rounded-[clamp(0.5rem,8cqw,1rem)] [&>svg]:size-[clamp(0.75rem,11cqw,1.25rem)]", iconBadge)}>
           {icon}
         </div>
       </CardContent>

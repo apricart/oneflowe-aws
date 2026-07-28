@@ -1,13 +1,17 @@
-import { ok, error } from "@/lib/api"
+import { ok, requireApiRole } from "@/lib/api"
 import { db } from "@/lib/db"
 import { users, employeeCredentials } from "@/db/schema"
-import { eq, or } from "drizzle-orm"
+import { eq } from "drizzle-orm"
+import { USER_MANAGEMENT_ROLES } from "@/lib/user-management-access"
 
 /**
  * Check if a username is available across both users and employee_credentials tables.
  * If not available, provide 3 unique suggestions.
  */
 export async function GET(req: Request) {
+  const authError = await requireApiRole(USER_MANAGEMENT_ROLES)
+  if (authError) return authError
+
   const { searchParams } = new URL(req.url)
   const username = searchParams.get("username")?.toLowerCase().trim()
 

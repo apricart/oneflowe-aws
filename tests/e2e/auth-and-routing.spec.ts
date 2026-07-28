@@ -36,10 +36,28 @@ test("Head Office is denied Super Admin organization management", async ({ page 
   await expect(page).toHaveURL(/\/login$/)
 })
 
-test("Branch Admin cannot open Head Office branch management", async ({ page }) => {
+test("Branch Admin is redirected from branch management without losing the session", async ({ page }) => {
   await login(page, E2E_USERS.branchAdmin, "/dashboard")
   await page.goto("/branches")
-  await expect(page).toHaveURL(/\/login$/)
+  await expect(page).toHaveURL(/\/dashboard$/)
+
+  const sessionResponse = await page.request.get("/api/auth/session")
+  expect(sessionResponse.ok()).toBe(true)
+  await expect(sessionResponse.json()).resolves.toMatchObject({
+    user: { role: "BRANCH_ADMIN" },
+  })
+})
+
+test("Branch Admin is denied user management by the page and API", async ({ page }) => {
+  await login(page, E2E_USERS.branchAdmin, "/dashboard")
+
+  await page.goto("/users")
+  await expect(page).toHaveURL(/\/users$/)
+  await expect(page.getByRole("heading", { name: "Access denied" })).toBeVisible()
+  await expect(page.getByRole("button", { name: "Create User" })).toHaveCount(0)
+
+  const response = await page.request.get("/api/v1/users")
+  expect(response.status()).toBe(403)
 })
 
 test("Order Portal is confined to the shop", async ({ page }) => {

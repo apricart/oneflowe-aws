@@ -687,6 +687,14 @@ export function OrdersDirectory({
       {/* Spatial Detail Drawer (Order Action Sheet) - Adorable Theme */}
       <Sheet open={!!viewingOrder && !actionType} onOpenChange={(open) => !open && setViewingOrder(null)}>
         <SheetContent className="w-full sm:max-w-md border-l-0 shadow-[0_0_50px_rgba(0,0,0,0.1)] p-0 bg-[#fdfdfd] dark:bg-[#0b0f19] overflow-y-auto">
+          <SheetHeader className="sr-only p-0">
+            <SheetTitle>Order details</SheetTitle>
+            <SheetDescription>
+              {viewingOrder
+                ? `Review status, branch information, line items, and available actions for order ${viewingOrder.tid}.`
+                : "Review the order status, branch information, line items, and available actions."}
+            </SheetDescription>
+          </SheetHeader>
           {viewingOrder && (
             (() => {
               const isRefundRelated =
@@ -959,11 +967,13 @@ export function OrdersDirectory({
       <Dialog open={!!actionType} onOpenChange={(open) => !open && setActionType(null)}>
         <DialogContent className="max-w-md border-0 shadow-2xl bg-white/90 dark:bg-slate-900/95 backdrop-blur-xl rounded-[2rem]">
           <DialogHeader>
-            <DialogTitle className="text-xl font-black tracking-tight flex items-center gap-2 capitalize">
+            <DialogTitle className="text-xl font-black tracking-tight flex items-center gap-2">
               {actionType === 'reject' && <XCircle className="text-rose-500 h-6 w-6" />}
               {actionType === 'approve' && <CheckCircle className="text-emerald-500 h-6 w-6" />}
               {actionType === 'fulfill' && <Package className="text-indigo-500 h-6 w-6" />}
-              {actionType} Order
+              {actionType === "reject" && "Reject Order"}
+              {actionType === "approve" && "Approve Order"}
+              {actionType === "fulfill" && "Fulfill Order"}
             </DialogTitle>
           </DialogHeader>
 

@@ -17,6 +17,7 @@ import {
   canUseOrganization,
   isSelfAccessChange,
 } from "@/lib/server/user-access-policy"
+import { USER_MANAGEMENT_ROLES } from "@/lib/user-management-access"
 
 /**
  * Administrative access changes are intentionally isolated from profile edits.
@@ -27,7 +28,7 @@ export async function PATCH(
   req: NextRequest,
   props: { params: Promise<{ id: string }> },
 ) {
-  const authError = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE"])
+  const authError = await requireApiRole(USER_MANAGEMENT_ROLES)
   if (authError) return authError
 
   const scope = await getRequestScope()

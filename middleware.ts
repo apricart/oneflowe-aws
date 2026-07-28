@@ -137,17 +137,12 @@ export async function middleware(req: NextRequest) {
     const redirectRes = NextResponse.redirect(url)
     return withSecurityHeaders(redirectRes, pathname)
   }
-  // Users route - accessible by SUPER_ADMIN and HEAD_OFFICE
-  if (pathname.startsWith("/users") && !["SUPER_ADMIN", "HEAD_OFFICE"].includes(role || "")) {
-    logger("middleware", { reason: "insufficient_role", path: pathname, role })
-    const url = new URL("/login", req.url || "http://localhost")
-    const redirectRes = NextResponse.redirect(url)
-    return withSecurityHeaders(redirectRes, pathname)
-  }
+  // /users performs its role check in a server layout so authenticated users
+  // receive an explicit access-denied state without mounting the management UI.
   // Head Office only routes  
   if (pathname.startsWith("/branches") && role !== "HEAD_OFFICE") {
     logger("middleware", { reason: "insufficient_role", path: pathname, role })
-    const url = new URL("/login", req.url || "http://localhost")
+    const url = new URL("/dashboard", req.url || "http://localhost")
     const redirectRes = NextResponse.redirect(url)
     return withSecurityHeaders(redirectRes, pathname)
   }

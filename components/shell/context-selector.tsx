@@ -37,6 +37,8 @@ export function ContextSelector() {
     branchId,
     branchIds,
     userRole,
+    userOrgId,
+    userBranchId,
     setOrganizationId,
     setBranchId,
     resetContext,
@@ -52,28 +54,51 @@ export function ContextSelector() {
     fetcher
   )
 
+  // Read-only roles should always use their assigned scope, even while the
+  // client context is being restored after a full page load.
+  const scopedOrganizationId =
+    userRole === "BRANCH_ADMIN" && userOrgId
+      ? String(userOrgId)
+      : organizationId
+  const scopedBranchId =
+    userRole === "BRANCH_ADMIN" && userBranchId
+      ? String(userBranchId)
+      : branchId
+
   // Fetch branches (filtered by selected organization)
   const { data: branchesData, isLoading: branchesLoading } = useSWR(
-    organizationId ? `/api/v1/branches?organizationId=${organizationId}` : null,
+    scopedOrganizationId ? `/api/v1/branches?organizationId=${scopedOrganizationId}` : null,
     fetcher
   )
 
   const organizations = (orgsData?.items || []).filter((org: any) => org.status === "active")
   const branches = (branchesData?.items || []).filter((branch: any) => branch.status === "active")
+  const listedBranch = branches.find((branch: any) => branch.id.toString() === scopedBranchId)
+
+  // The collection request can be unavailable during a route reload. Resolve
+  // the assigned branch directly so its real name still reaches the breadcrumb.
+  const { data: assignedBranchData, isLoading: assignedBranchLoading } = useSWR(
+    userRole === "BRANCH_ADMIN" && scopedBranchId && !branchesLoading && !listedBranch
+      ? `/api/v1/branches/${scopedBranchId}`
+      : null,
+    fetcher
+  )
 
   // Don't render until initialized
   if (!isInitialized) return null
 
   // Branch Admin & Head Office: show read-only breadcrumb
   if (userRole === "BRANCH_ADMIN" || userRole === "HEAD_OFFICE") {
-    const org = organizations.find((o: any) => o.id.toString() === organizationId)
-    const branch = branches.find((b: any) => b.id.toString() === branchId)
+    const org = organizations.find((o: any) => o.id.toString() === scopedOrganizationId)
+    const branch = listedBranch || assignedBranchData?.item
 
     // Handle label for HO with multiple branches
-    let branchLabel = "Global Overview"
-    if (userRole === "BRANCH_ADMIN" && branch) {
-      branchLabel = branch.name
-    } else if (userRole === "HEAD_OFFICE") {
+    let branchLabel: string
+    if (userRole === "BRANCH_ADMIN") {
+      branchLabel = branch?.name
+        || (branchesLoading || assignedBranchLoading ? "Loading branch..." : "Assigned Branch")
+    } else {
+      branchLabel = "Global Overview"
       if (branchIds.length > 1) {
         branchLabel = `${branchIds.length} Branches`
       } else if (branch) {

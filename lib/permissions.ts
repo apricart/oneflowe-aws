@@ -499,8 +499,6 @@ export const ROLE_TEMPLATES = {
     name: "Branch Admin",
     description: "Branch-level operations and management",
     permissions: [
-      Permission.USER_VIEW,
-      Permission.USER_CREATE,
       Permission.INVENTORY_CREATE,
       Permission.INVENTORY_VIEW,
       Permission.INVENTORY_EDIT,
