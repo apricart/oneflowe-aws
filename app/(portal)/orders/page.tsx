@@ -240,6 +240,10 @@ function OrdersManagementContent() {
   )
 
   const orders = ordersData?.items || []
+  const canDecideOrders = Boolean(
+    ordersData?.capabilities?.canApproveOrders
+    && ordersData?.capabilities?.canRejectOrders,
+  )
   const showSplitFilter = statusFilter === "fulfilled" || statusFilter === "refunded"
 
   useEffect(() => {
@@ -662,6 +666,7 @@ function OrdersManagementContent() {
               isSuperAdmin={isSuperAdmin}
               isBranchAdmin={isBranchAdmin}
               isHeadOffice={isHeadOffice}
+              canDecideOrders={canDecideOrders}
               showCostCenterId={showCostCenterId}
               onUpdate={() => mutateOrders()}
             />

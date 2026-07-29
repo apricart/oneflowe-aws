@@ -10,6 +10,7 @@
     "db:migrate": "drizzle-kit migrate --config=drizzle.config.ts",
     "db:seed": "tsx lib/seed.ts",
     "db:bootstrap-admin": "tsx scripts/create-super-admin.ts",
+    "db:seed-dummy-products": "tsx scripts/add-dummy-products.ts",
     "db:studio": "drizzle-kit studio --config=drizzle.config.ts",
     "db:sync": "tsx scripts/sync-schema.ts",
     "import:products-csv": "tsx scripts/import-products-csv.ts",

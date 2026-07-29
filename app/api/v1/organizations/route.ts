@@ -2,7 +2,7 @@ import { ok, error, requireApiRole, readJson } from "@/lib/api"
 export const dynamic = 'force-dynamic'
 import { NextResponse } from "next/server"
 import { db } from "@/lib/db"
-import { organizationSettings, organizations as orgsTable } from "@/db/schema"
+import { auditLogs, organizationSettings, organizations as orgsTable } from "@/db/schema"
 import { and, desc, eq, inArray } from "drizzle-orm"
 import { getRequestScope } from "@/lib/auth"
 import { handleError } from "@/lib/error-handler"
@@ -108,6 +108,8 @@ export async function POST(req: Request) {
     const parsedBody = organizationCreateSchema.safeParse(rawBody)
     if (!parsedBody.success) return error(validationMessage(parsedBody.error), 400)
     const body = parsedBody.data
+    const scope = await getRequestScope()
+    if (!scope?.userId) return error("Invalid session data", 401)
 
     // Validate required fields
     if (!body?.name || typeof body.name !== 'string') {
@@ -197,7 +199,8 @@ export async function POST(req: Request) {
         .values({
           name,
           code,
-          status
+          status,
+          orderApproverRole: body.orderApproverRole,
         })
         .returning()
 
@@ -218,6 +221,18 @@ export async function POST(req: Request) {
           value: hideOrderPortalPrices,
         },
       ])
+
+      await tx.insert(auditLogs).values({
+        userId: scope.userId,
+        organizationId: createdOrganization.id,
+        action: "CREATE_ORGANIZATION",
+        entity: "organization",
+        entityId: String(createdOrganization.id),
+        metadata: {
+          orderApproverRole: body.orderApproverRole,
+          budgetAllocationMode,
+        },
+      })
 
       return createdOrganization
     })

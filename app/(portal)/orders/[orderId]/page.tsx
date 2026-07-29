@@ -4,15 +4,24 @@ import Link from "next/link"
 import { useParams, useRouter } from "next/navigation"
 import useSWR from "swr"
 import { useSession } from "next-auth/react"
+import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { cn, formatPKR } from "@/lib/utils"
 import { calculateLineCents, formatQuantity } from "@/lib/quantity"
 import { buildStatusTimeline } from "@/lib/order-utils"
 import { getOrderDerivedStatus, hasPartialRefund } from "@/lib/order-status"
 import { PAYMENT_STATUS_LABELS, normalizePaymentStatus } from "@/lib/payment-status"
-import { ArrowLeft, Clock, TrendingDown, CheckCircle, RefreshCw, Package, Ban, Copy, User } from "lucide-react"
+import { ArrowLeft, Clock, TrendingDown, CheckCircle, RefreshCw, Package, Ban, Copy, User, XCircle } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { RefundManagement } from "@/components/refund-management"
 
@@ -72,12 +81,22 @@ export default function SuperAdminOrderDetailsPage() {
   const userRole = (session?.user as any)?.role
   const rawId = Array.isArray(params?.orderId) ? params?.orderId[0] : params?.orderId
   const numericId = rawId && /^\d+$/.test(rawId) ? Number(rawId) : null
+  const [decision, setDecision] = useState<"approve" | "reject" | null>(null)
+  const [rejectionReason, setRejectionReason] = useState("")
+  const [isDeciding, setIsDeciding] = useState(false)
+  const [generatedToken, setGeneratedToken] = useState<string | null>(null)
 
   const isSuperAdmin = userRole === "SUPER_ADMIN"
   const isHeadOffice = userRole === "HEAD_OFFICE"
   const isBranchAdmin = userRole === "BRANCH_ADMIN"
 
-  const { data, error, isLoading, mutate } = useSWR<{ item: OrderDetail & { orderItems: OrderItem[] } }>(
+  const { data, error, isLoading, mutate } = useSWR<{
+    item: OrderDetail & { orderItems: OrderItem[] }
+    capabilities: {
+      canApproveOrders: boolean
+      canRejectOrders: boolean
+    }
+  }>(
     numericId ? `/api/v1/orders/${numericId}` : null,
     fetcher
   )
@@ -85,6 +104,10 @@ export default function SuperAdminOrderDetailsPage() {
   const order: OrderDetail | undefined = data?.item
   const orderItems = order?.orderItems || []
   const pricesHidden = Boolean(order?.pricesHidden)
+  const canDecideOrders = Boolean(
+    data?.capabilities?.canApproveOrders
+    && data?.capabilities?.canRejectOrders,
+  )
   const initiatorName = order?.creatorName?.trim() || order?.creatorEmail?.trim() || "Unknown user"
   const initiatorDetails = [
     order?.creatorEmployeeId ? `Employee #${order.creatorEmployeeId}` : null,
@@ -93,6 +116,43 @@ export default function SuperAdminOrderDetailsPage() {
 
   // Hide items that have been fully refunded
   const visibleItems = orderItems.filter(item => (item.quantityRefunded || 0) < item.quantity)
+
+  const submitDecision = async () => {
+    if (!order || !decision) return
+    if (decision === "reject" && !rejectionReason.trim()) return
+
+    setIsDeciding(true)
+    try {
+      const response = await fetch(`/api/v1/orders/${order.id}/${decision}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: decision === "reject"
+          ? JSON.stringify({ reason: rejectionReason.trim() })
+          : undefined,
+      })
+      const result = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(result.error || `Unable to ${decision} order`)
+
+      if (decision === "approve" && result.approvalToken) {
+        setGeneratedToken(result.approvalToken)
+      }
+      toast({
+        title: decision === "approve" ? "Order approved" : "Order rejected",
+        description: `Order ${order.tid} was ${decision}d successfully.`,
+      })
+      setDecision(null)
+      setRejectionReason("")
+      await mutate()
+    } catch (decisionError: any) {
+      toast({
+        title: "Order decision failed",
+        description: decisionError?.message || "Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsDeciding(false)
+    }
+  }
 
   if (isLoading) return <div className="p-8 text-center text-slate-500 font-medium">Loading order details...</div>
 
@@ -150,7 +210,18 @@ export default function SuperAdminOrderDetailsPage() {
           <ArrowLeft className="h-4 w-4" />
           Back to orders
         </Button>
-
+        {order?.status.toUpperCase() === "PENDING" && canDecideOrders && (
+          <div className="flex gap-2">
+            <Button variant="outline" className="text-rose-600" onClick={() => setDecision("reject")}>
+              <XCircle className="mr-2 h-4 w-4" />
+              Reject
+            </Button>
+            <Button className="bg-emerald-600 text-white hover:bg-emerald-500" onClick={() => setDecision("approve")}>
+              <CheckCircle className="mr-2 h-4 w-4" />
+              Approve
+            </Button>
+          </div>
+        )}
       </div>
 
       {order && (
@@ -479,8 +550,7 @@ export default function SuperAdminOrderDetailsPage() {
                 </div>
               </Card>
 
-              {/* SECURITY: Approval token is NEVER shown on Super Admin view.
-                 It is only visible on the Branch Admin portal order list. */}
+              {/* The token is only returned to the configured approver or Super Admin. */}
 
               <Card className="p-5 dark:bg-slate-900 dark:border-slate-800">
                 <div className="mb-4 flex items-center justify-between">
@@ -504,7 +574,7 @@ export default function SuperAdminOrderDetailsPage() {
                     order.status,
                     order.statusAtRefund,
                     (order.refundAmountCents || 0) > 0 && order.status.toUpperCase() !== "REFUNDED",
-                    userRole === "BRANCH_ADMIN" ? order.approvalToken : null
+                    canDecideOrders ? order.approvalToken : null
                   ).map((step: any, index, arr) => {
                     const isLast = index === arr.length - 1
                     const isComplete = step.state === "complete"
@@ -577,6 +647,64 @@ export default function SuperAdminOrderDetailsPage() {
           )}
         </>
       )}
+
+      <Dialog open={decision !== null} onOpenChange={(open) => !open && setDecision(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{decision === "approve" ? "Approve order" : "Reject order"}</DialogTitle>
+          </DialogHeader>
+          {decision === "approve" ? (
+            <p className="text-sm text-muted-foreground">
+              Approve order {order?.tid}? The order creator and Super Admin will be notified.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-sm text-muted-foreground">Provide a reason for rejecting order {order?.tid}.</p>
+              <Input
+                value={rejectionReason}
+                onChange={(event) => setRejectionReason(event.target.value)}
+                placeholder="Rejection reason"
+                maxLength={2000}
+              />
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="ghost" disabled={isDeciding} onClick={() => setDecision(null)}>Cancel</Button>
+            <Button
+              disabled={isDeciding || (decision === "reject" && !rejectionReason.trim())}
+              onClick={submitDecision}
+              className={decision === "reject" ? "bg-rose-600 text-white hover:bg-rose-500" : "bg-emerald-600 text-white hover:bg-emerald-500"}
+            >
+              {isDeciding ? "Processing..." : decision === "approve" ? "Approve order" : "Reject order"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={generatedToken !== null} onOpenChange={(open) => !open && setGeneratedToken(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Order approved</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Save this fulfillment token and share it securely with the Super Admin.
+          </p>
+          <div className="rounded-xl border bg-indigo-50 p-5 text-center font-mono text-2xl font-black tracking-[0.25em] text-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-300">
+            {generatedToken}
+          </div>
+          <DialogFooter>
+            <Button
+              onClick={() => {
+                void navigator.clipboard.writeText(generatedToken || "")
+                toast({ title: "Copied", description: "Token copied to clipboard." })
+              }}
+            >
+              <Copy className="mr-2 h-4 w-4" />
+              Copy token
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

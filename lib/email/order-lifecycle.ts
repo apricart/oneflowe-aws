@@ -16,6 +16,7 @@ export type OrderLifecycleEmailPayload = {
   branchName: string
   requestedBy?: string | null
   approvedBy?: string | null
+  approvedByRole?: "BRANCH_ADMIN" | "HEAD_OFFICE" | null
   rejectionReason?: string | null
 }
 
@@ -43,18 +44,21 @@ export function buildOrderLifecycleEmail(
   const isCreated = template === "ORDER_CREATED"
   const isAdminApproval = template === "ORDER_APPROVED_ADMIN"
   const isApproved = template === "ORDER_APPROVED"
+  const approverRoleLabel = payload.approvedByRole === "HEAD_OFFICE"
+    ? "Head Office"
+    : "Branch Admin"
   const heading = isCreated
     ? "New order awaiting approval"
     : isAdminApproval
-      ? "Order approved by Branch Admin"
+      ? `Order approved by ${approverRoleLabel}`
     : isApproved
       ? "Your order was approved"
       : "Your order was rejected"
   const accent = isCreated ? "#d97706" : isApproved || isAdminApproval ? "#059669" : "#dc2626"
   const intro = isCreated
-    ? "An Order Portal user submitted a new order for your branch."
+    ? "An Order Portal user submitted a new order that requires your approval."
     : isAdminApproval
-      ? "A Branch Admin approved an order. It is ready for Super Admin review."
+      ? `${approverRoleLabel} approved an order. It is ready for Super Admin review.`
     : isApproved
       ? "An authorized administrator approved your order."
       : "An authorized administrator rejected your order."
@@ -62,7 +66,7 @@ export function buildOrderLifecycleEmail(
   const subject = isCreated
     ? `Order ${payload.tid} is awaiting approval`
     : isAdminApproval
-      ? `Order ${payload.tid} was approved by Branch Admin`
+      ? `Order ${payload.tid} was approved by ${approverRoleLabel}`
     : `Order ${payload.tid} was ${isApproved ? "approved" : "rejected"}`
 
   const rejectionBlock = template === "ORDER_REJECTED" && payload.rejectionReason

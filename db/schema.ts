@@ -23,6 +23,9 @@ export const organizations = pgTable(
     name: varchar("name", { length: 255 }).notNull(),
     code: varchar("code", { length: 64 }),
     status: varchar("status", { length: 32 }).default("active"),
+    orderApproverRole: varchar("order_approver_role", { length: 32 })
+      .notNull()
+      .default("BRANCH_ADMIN"),
     logoUrl: varchar("logo_url", { length: 512 }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
@@ -31,6 +34,10 @@ export const organizations = pgTable(
     orgNameIdx: uniqueIndex("org_name_idx").on(t.name),
     orgCodeIdx: uniqueIndex("org_code_idx").on(t.code),
     orgStatusIdx: index("org_status_idx").on(t.status),
+    orderApproverRoleCheck: check(
+      "organizations_order_approver_role_ck",
+      sql`${t.orderApproverRole} IN ('BRANCH_ADMIN', 'HEAD_OFFICE')`,
+    ),
   }),
 )
 

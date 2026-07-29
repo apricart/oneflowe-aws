@@ -239,6 +239,13 @@
       "when": 1784718000000,
       "tag": "20260722120000_add_order_delivered_at",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1785322800000,
+      "tag": "20260729150000_add_order_approver_role",
+      "breakpoints": true
     }
   ]
 }

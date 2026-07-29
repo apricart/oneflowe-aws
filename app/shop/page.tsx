@@ -452,31 +452,35 @@ export default function OrderPortalPage() {
     }
 
     const normalizedQty = clampProductQuantity(product, qty)
+    const existing = cart.find(item => item.id === product.id)
+    const currentQtyInCart = existing?.quantity || 0
+    const newTotalQty = roundQuantity(currentQtyInCart + normalizedQty)
 
+    if (newTotalQty > availableStock) {
+      toast({
+        title: "Insufficient stock",
+        description: isOrderPortal
+          ? `${product.name} is not available in the requested quantity.`
+          : `Only ${availableStock} available for ${product.name}. You already have ${currentQtyInCart} in cart.`,
+        variant: "destructive"
+      })
+      return
+    }
+
+    // State updaters must stay pure; toast dispatch synchronously updates Toaster.
     setCart(prev => {
-      const existing = prev.find(item => item.id === product.id)
-      const currentQtyInCart = existing?.quantity || 0
-      const newTotalQty = roundQuantity(currentQtyInCart + normalizedQty)
+      const currentItem = prev.find(item => item.id === product.id)
+      const nextQuantity = roundQuantity((currentItem?.quantity || 0) + normalizedQty)
+      if (nextQuantity > availableStock) return prev
 
-      if (newTotalQty > availableStock) {
-        toast({
-          title: "Insufficient stock",
-          description: isOrderPortal
-            ? `${product.name} is not available in the requested quantity.`
-            : `Only ${availableStock} available for ${product.name}. You already have ${currentQtyInCart} in cart.`,
-          variant: "destructive"
-        })
-        return prev
-      }
-
-      toast({ title: `${product.name} added to cart` })
-      if (existing) {
+      if (currentItem) {
         return prev.map(item =>
-          item.id === product.id ? { ...item, quantity: newTotalQty } : item
+          item.id === product.id ? { ...item, quantity: nextQuantity } : item
         )
       }
-      return [...prev, { ...product, quantity: qty }]
+      return [...prev, { ...product, quantity: normalizedQty }]
     })
+    toast({ title: `${product.name} added to cart` })
   }
 
   const updateQty = (id: number, qty: number) => {
@@ -542,7 +546,7 @@ export default function OrderPortalPage() {
 
       toast({
         title: "Order Submitted",
-        description: `TID: ${json.order?.tid}. Your order is now pending approval by the branch admin.`,
+        description: `TID: ${json.order?.tid}. Your order is now pending approval by the organization's assigned approver.`,
       })
       setCart([])
       orderIdempotencyKeyRef.current = null

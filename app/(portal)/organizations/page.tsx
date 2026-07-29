@@ -1,6 +1,19 @@
 "use client"
 import { useOrganizations, useBranches } from "@/lib/hooks/use-api"
-type Organization = { id: number; name: string; code: string; status?: "active" | "inactive"; budgetAllocationMode?: BudgetAllocationMode }
+import {
+  DEFAULT_ORDER_APPROVER_ROLE,
+  ORDER_APPROVER_ROLE_LABELS,
+  parseOrderApproverRole,
+  type OrderApproverRole,
+} from "@/lib/order-approver-role"
+type Organization = {
+  id: number
+  name: string
+  code: string
+  status?: "active" | "inactive"
+  budgetAllocationMode?: BudgetAllocationMode
+  orderApproverRole?: OrderApproverRole
+}
 type Branch = {
   id: number
   name: string
@@ -23,7 +36,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox"
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
-import { ReactNode, useEffect, useMemo, useState } from "react"
+import { ReactNode, useEffect, useMemo, useRef, useState } from "react"
 import { useAppContext } from "@/components/context/app-context"
 import { useSession } from "next-auth/react"
 import { PremiumConfirmDialog } from "@/components/premium/premium-confirm-dialog"
@@ -76,6 +89,8 @@ export default function OrganizationsPage() {
     setFeedback({ message, type, visible: true })
   }
   const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null)
+  const hasInitializedOrgSelectionRef = useRef(false)
+  const previousContextOrgIdRef = useRef<string | null | undefined>(undefined)
   const [orgSearch, setOrgSearch] = useState("")
   const [branchStatusFilter, setBranchStatusFilter] = useState<"all" | "active" | "inactive">("all")
   const [branchSearch, setBranchSearch] = useState("")
@@ -161,12 +176,50 @@ export default function OrganizationsPage() {
   }
 
   useEffect(() => {
-    if (contextOrgId) {
-      setSelectedOrgId(contextOrgId)
-    } else if (!selectedOrgId && (orgs?.items?.length || 0) > 0) {
-      setSelectedOrgId(String(orgs!.items[0].id))
+    const organizations = orgs?.items
+    if (!organizations) return
+
+    const normalizedContextOrgId = contextOrgId ? String(contextOrgId) : null
+    const isInitialSelection = !hasInitializedOrgSelectionRef.current
+    const contextChanged =
+      previousContextOrgIdRef.current !== undefined &&
+      previousContextOrgIdRef.current !== normalizedContextOrgId
+
+    previousContextOrgIdRef.current = normalizedContextOrgId
+
+    if (organizations.length === 0) {
+      setSelectedOrgId(null)
+      return
     }
-  }, [contextOrgId, orgs?.items, selectedOrgId])
+
+    setSelectedOrgId((currentSelection) => {
+      const hasOrganization = (id: string) =>
+        organizations.some((organization) => String(organization.id) === id)
+
+      if (contextChanged && normalizedContextOrgId && hasOrganization(normalizedContextOrgId)) {
+        return normalizedContextOrgId
+      }
+
+      if (isInitialSelection) {
+        if (normalizedContextOrgId && hasOrganization(normalizedContextOrgId)) {
+          return normalizedContextOrgId
+        }
+        return String(organizations[0].id)
+      }
+
+      if (currentSelection === null || hasOrganization(currentSelection)) {
+        return currentSelection
+      }
+
+      if (normalizedContextOrgId && hasOrganization(normalizedContextOrgId)) {
+        return normalizedContextOrgId
+      }
+
+      return String(organizations[0].id)
+    })
+
+    hasInitializedOrgSelectionRef.current = true
+  }, [contextOrgId, orgs?.items])
 
   async function removeOrganization(id: string) {
     try {
@@ -924,6 +977,7 @@ function CreateOrgDialog({
   const [code, setCode] = useState("")
   const [status, setStatus] = useState<boolean>(true)
   const [budgetAllocationMode, setBudgetAllocationMode] = useState<BudgetAllocationMode>("money")
+  const [orderApproverRole, setOrderApproverRole] = useState<OrderApproverRole>(DEFAULT_ORDER_APPROVER_ROLE)
   const [hideBranchAdminPrices, setHideBranchAdminPrices] = useState(false)
   const [hideOrderPortalPrices, setHideOrderPortalPrices] = useState(false)
   const [confirmModeOpen, setConfirmModeOpen] = useState(false)
@@ -939,6 +993,7 @@ function CreateOrgDialog({
           code,
           status: status ? "active" : "inactive",
           budgetAllocationMode,
+          orderApproverRole,
           priceVisibility: {
             hideBranchAdminPrices,
             hideOrderPortalPrices,
@@ -954,6 +1009,7 @@ function CreateOrgDialog({
       setCode("")
       setStatus(true)
       setBudgetAllocationMode("money")
+      setOrderApproverRole(DEFAULT_ORDER_APPROVER_ROLE)
       setHideBranchAdminPrices(false)
       setHideOrderPortalPrices(false)
       setConfirmModeOpen(false)
@@ -1040,6 +1096,38 @@ function CreateOrgDialog({
                   </button>
                 </div>
               </div>
+              <div className="space-y-2">
+                <Label>Order approver</Label>
+                <p className="text-xs text-muted-foreground">
+                  Exactly one role can approve or reject pending orders for this company.
+                </p>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => setOrderApproverRole("BRANCH_ADMIN")}
+                    disabled={saving}
+                    className={cn(
+                      "rounded-md border bg-background p-3 text-left transition-colors",
+                      orderApproverRole === "BRANCH_ADMIN" ? "border-indigo-500 ring-2 ring-indigo-100 dark:ring-indigo-900/40" : "hover:bg-muted/50",
+                    )}
+                  >
+                    <span className="text-sm font-semibold">Branch Admin</span>
+                    <span className="mt-1 block text-xs text-muted-foreground">Each Branch Admin decides orders for their own branch.</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOrderApproverRole("HEAD_OFFICE")}
+                    disabled={saving}
+                    className={cn(
+                      "rounded-md border bg-background p-3 text-left transition-colors",
+                      orderApproverRole === "HEAD_OFFICE" ? "border-indigo-500 ring-2 ring-indigo-100 dark:ring-indigo-900/40" : "hover:bg-muted/50",
+                    )}
+                  >
+                    <span className="text-sm font-semibold">Head Office</span>
+                    <span className="mt-1 block text-xs text-muted-foreground">Head Office decides orders across all company branches.</span>
+                  </button>
+                </div>
+              </div>
               <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
                 <div>
                   <Label htmlFor="org-status">Status</Label>
@@ -1101,7 +1189,7 @@ function CreateOrgDialog({
         onOpenChange={setConfirmModeOpen}
         onConfirm={createCompany}
         title="Confirm Budget Model"
-        description={`This company will use ${budgetAllocationMode === "quantity" ? "quantity-based" : "money-value"} budget allocation. Super Admins can change this later from Edit Company.`}
+        description={`This company will use ${budgetAllocationMode === "quantity" ? "quantity-based" : "money-value"} budget allocation. ${ORDER_APPROVER_ROLE_LABELS[orderApproverRole]} will be the only role allowed to approve or reject orders. Super Admins can change this later from Edit Company.`}
         confirmText="Create Company"
         cancelText="Review"
         type="warning"
@@ -1326,6 +1414,9 @@ function EditOrgDialog({
   const [budgetAllocationMode, setBudgetAllocationMode] = useState<BudgetAllocationMode>(
     parseBudgetAllocationMode(org.budgetAllocationMode)
   )
+  const [orderApproverRole, setOrderApproverRole] = useState<OrderApproverRole>(
+    parseOrderApproverRole(org.orderApproverRole)
+  )
   const [hideBranchAdminPrices, setHideBranchAdminPrices] = useState(false)
   const [hideOrderPortalPrices, setHideOrderPortalPrices] = useState(false)
   const [loadingSettings, setLoadingSettings] = useState(false)
@@ -1336,7 +1427,8 @@ function EditOrgDialog({
     setCode(org.code)
     setStatus(isActiveStatus(org.status))
     setBudgetAllocationMode(parseBudgetAllocationMode(org.budgetAllocationMode))
-  }, [org.name, org.code, org.status, org.budgetAllocationMode])
+    setOrderApproverRole(parseOrderApproverRole(org.orderApproverRole))
+  }, [org.name, org.code, org.status, org.budgetAllocationMode, org.orderApproverRole])
 
   useEffect(() => {
     if (!open || !isSuperAdmin) return
@@ -1422,6 +1514,38 @@ function EditOrgDialog({
             {isSuperAdmin && (
               <div className="space-y-3">
                 <div className="space-y-2 rounded-md border bg-background px-3 py-2">
+                  <Label>Order approver</Label>
+                  <p className="text-xs text-muted-foreground">
+                    This role alone can approve or reject pending orders.
+                  </p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={() => setOrderApproverRole("BRANCH_ADMIN")}
+                      disabled={loadingSettings || saving}
+                      className={cn(
+                        "rounded-md border bg-background p-3 text-left transition-colors",
+                        orderApproverRole === "BRANCH_ADMIN" ? "border-indigo-500 ring-2 ring-indigo-100 dark:ring-indigo-900/40" : "hover:bg-muted/50",
+                      )}
+                    >
+                      <span className="text-sm font-semibold">Branch Admin</span>
+                      <span className="mt-1 block text-xs text-muted-foreground">Limited to the admin's own branch.</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setOrderApproverRole("HEAD_OFFICE")}
+                      disabled={loadingSettings || saving}
+                      className={cn(
+                        "rounded-md border bg-background p-3 text-left transition-colors",
+                        orderApproverRole === "HEAD_OFFICE" ? "border-indigo-500 ring-2 ring-indigo-100 dark:ring-indigo-900/40" : "hover:bg-muted/50",
+                      )}
+                    >
+                      <span className="text-sm font-semibold">Head Office</span>
+                      <span className="mt-1 block text-xs text-muted-foreground">Covers every branch in this company.</span>
+                    </button>
+                  </div>
+                </div>
+                <div className="space-y-2 rounded-md border bg-background px-3 py-2">
                   <Label>Budget allocation model</Label>
                   <div className="grid gap-2 sm:grid-cols-2">
                     <button
@@ -1497,7 +1621,7 @@ function EditOrgDialog({
                     name,
                     code,
                     status: status ? "active" : "inactive",
-                    ...(isSuperAdmin ? { budgetAllocationMode } : {}),
+                    ...(isSuperAdmin ? { budgetAllocationMode, orderApproverRole } : {}),
                   },
                   isSuperAdmin
                     ? {

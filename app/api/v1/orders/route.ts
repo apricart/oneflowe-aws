@@ -18,6 +18,8 @@ import { orderCreateSchema, validationMessage } from "@/lib/server/mutation-vali
 import { withRateLimit } from "@/lib/rate-limiter"
 import { attemptImmediateOrderEmailDelivery, queueOrderCreatedNotifications } from "@/lib/server/order-notifications"
 import { canViewFulfillmentToken } from "@/lib/fulfillment-token-access"
+import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
+import { isValidRole } from "@/lib/rbac"
 
 
 
@@ -51,6 +53,17 @@ export async function GET(req: NextRequest) {
       branchIdFromUserRaw && /^\d+$/.test(String(branchIdFromUserRaw))
         ? Number(branchIdFromUserRaw)
         : undefined
+    const currentUserId = (session.user as any).id
+    const decisionCapabilities = await getOrderDecisionCapabilities(
+      isValidRole(role) && typeof currentUserId === "string"
+        ? {
+          role,
+          userId: currentUserId,
+          organizationId: orgIdNum ?? null,
+          branchId: branchIdFromUser ?? null,
+        }
+        : null,
+    )
 
     const { searchParams } = new URL(req.url)
     const rawStatus = searchParams.get("status") || undefined
@@ -257,8 +270,6 @@ export async function GET(req: NextRequest) {
       ? selectBase.where(and(...conditions)).orderBy(desc(orders.createdAt)).limit(limit).offset(offset)
       : selectBase.orderBy(desc(orders.createdAt)).limit(limit).offset(offset))
 
-    const currentUserId = (session.user as any).id
-
     // Sanitize items: Only show approvalToken to authorized roles
     const sanitizedItems = items.map(item => {
       const canSeeToken = canViewFulfillmentToken({
@@ -267,6 +278,7 @@ export async function GET(req: NextRequest) {
         orderStatus: item.status,
         orderCreatedByUserId: item.createdByUserId,
         orderApprovedByUserId: item.approvedByUserId,
+        configuredApproverRole: decisionCapabilities.orderApproverRole,
       })
       const { createdByUserId: _createdByUserId, ...publicItem } = item
 
@@ -335,6 +347,7 @@ export async function GET(req: NextRequest) {
             pricesHidden,
           }],
           pricesHidden,
+          capabilities: decisionCapabilities,
         })
       }
     }
@@ -342,6 +355,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       items: filtered,
       pricesHidden,
+      capabilities: decisionCapabilities,
       pagination: {
         page,
         limit,
@@ -921,7 +935,7 @@ export async function POST(req: NextRequest) {
 
     const created = creationResult.order
     if (role === "ORDER_PORTAL" && creationResult.queuedNotifications.recipientCount === 0) {
-      console.warn("[OrderNotifications] No active Branch Admin recipient was available", {
+      console.warn("[OrderNotifications] No active configured order approver recipient was available", {
         orderId: created.id,
         organizationId: created.organizationId,
         branchId: created.branchId,
