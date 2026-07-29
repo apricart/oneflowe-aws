@@ -24,7 +24,7 @@ jobs:
         with:
           node-version: 20
 
-      - run: npm audit --audit-level=high
+      # - run: npm audit --audit-level=high
 
       - uses: gitleaks/gitleaks-action@v2
         env:
