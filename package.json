@@ -116,6 +116,8 @@
     "@vitejs/plugin-react": "^5.1.4",
     "dotenv": "^17.2.3",
     "drizzle-kit": "^0.31.5",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.2.12",
     "jsdom": "^28.1.0",
     "postcss": "^8.5",
     "tailwindcss": "^4.1.14",
