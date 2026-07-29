@@ -14,6 +14,9 @@ jobs:
       NEXTAUTH_URL: ${{ secrets.NEXTAUTH_URL }}
       NEXTAUTH_SECRET: ${{ secrets.NEXTAUTH_SECRET }}
       JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
+      UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
 
     steps:
       - uses: actions/checkout@v4
@@ -22,15 +25,17 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
-
-      # - run: npm audit --audit-level=high
+          node-version: 20.19.x
+          cache: npm
 
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - run: npm install
-      - run: npx tsc --noEmit
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - run: npm test
+      - run: npm run db:validate
+      - run: npm run typecheck
       - run: npm run lint
       - run: npm run build
