@@ -29,7 +29,7 @@
     "e2e:debug": "playwright test --debug",
     "e2e:report": "playwright show-report",
     "e2e:install": "playwright install chromium",
-    "lint": "next lint",
+    "lint": "eslint .",
     "start": "next start",
     "test": "vitest run"
   },
