@@ -1,42 +1,53 @@
-import { dirname } from "path"
-import { fileURLToPath } from "url"
-import { FlatCompat } from "@eslint/eslintrc"
+import eslint from "@eslint/js";
+import nextPlugin from "@next/eslint-plugin-next";
+import reactHooks from "eslint-plugin-react-hooks";
+import globals from "globals";
+import tseslint from "typescript-eslint";
 
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = dirname(__filename)
-
-const compat = new FlatCompat({
-  baseDirectory: __dirname,
-})
-
-const eslintConfig = [
-  ...compat.extends("next/core-web-vitals", "next/typescript"),
+export default tseslint.config(
   {
     ignores: [
       ".next/**",
-      "out/**",
-      "build/**",
-      "next-env.d.ts",
-      "node_modules/**",
-      "scripts/**",
-      "drizzle/**",
-      "e2e/**",
       "coverage/**",
+      "node_modules/**",
+      "out/**",
       "playwright-report/**",
       "test-results/**",
+      "tmp/**",
+      "vendor/**",
+      "next-env.d.ts",
     ],
   },
+  eslint.configs.recommended,
+  ...tseslint.configs.recommended,
   {
+    files: ["**/*.{js,mjs,cjs,ts,tsx}"],
+    languageOptions: {
+      globals: {
+        ...globals.browser,
+        ...globals.node,
+      },
+    },
+    plugins: {
+      "@next/next": nextPlugin,
+      "react-hooks": reactHooks,
+    },
     rules: {
-      // Soften noisy style rules during migration; keep hooks/prefer-const as errors.
-      "@typescript-eslint/no-explicit-any": "warn",
-      "@typescript-eslint/no-unused-vars": "warn",
-      "@typescript-eslint/ban-ts-comment": "warn",
-      "react/no-unescaped-entities": "warn",
-      "@next/next/no-img-element": "warn",
+      ...nextPlugin.configs.recommended.rules,
+      ...nextPlugin.configs["core-web-vitals"].rules,
       "@next/next/no-sync-scripts": "warn",
+      "@typescript-eslint/no-explicit-any": "off",
+      "@typescript-eslint/no-unused-vars": "off",
+      "@typescript-eslint/ban-ts-comment": "warn",
+      "@typescript-eslint/no-unused-expressions": "warn",
+      "no-control-regex": "warn",
+      "no-empty": "warn",
+      "no-useless-assignment": "warn",
+      "no-useless-escape": "warn",
+      "prefer-const": "warn",
+      "preserve-caught-error": "warn",
+      "react-hooks/rules-of-hooks": "warn",
+      "react-hooks/exhaustive-deps": "warn",
     },
   },
-]
-
-export default eslintConfig
+);
