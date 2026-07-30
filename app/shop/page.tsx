@@ -23,7 +23,15 @@ import { ReceiptIconButton } from "@/components/receipts/receipt-icon-button"
 import { NotificationBell } from "@/components/notifications/notification-center"
 import { MANUAL_SIGN_OUT_EVENT } from "@/components/shell/session-guard"
 
-const ORDER_PORTAL_REFRESH_INTERVAL_MS = 5000
+const ORDER_STATUS_REFRESH_INTERVAL_MS = 5000
+
+// Inventory and budget data refresh on focus, reconnect, Shop-tab activation,
+// and order mutations. They must not continuously poll while the portal is idle.
+const SHOP_RESOURCE_SWR_OPTIONS = {
+  refreshInterval: 0,
+  revalidateOnFocus: true,
+  revalidateOnReconnect: true,
+} as const
 
 const fetcher = (url: string) => fetch(url, { cache: "no-store" }).then(r => r.json())
 
@@ -201,22 +209,31 @@ export default function OrderPortalPage() {
     ? `/api/v1/budgets${needsContextParams ? `?branchId=${activeBranchId}${activeOrgId ? `&organizationId=${activeOrgId}` : ""}` : ""}`
     : null
 
-  const { data: inventoryData, mutate: mutateBranchInventory, error: inventoryError } = useSWR<any>(branchInventoryUrl, fetcher, {
-    refreshInterval: ORDER_PORTAL_REFRESH_INTERVAL_MS, // Auto-refresh so admin changes appear quickly
-  })
-  const { data: budget, mutate: mutateBudget } = useSWR<any>(budgetsUrl, fetcher, {
-    refreshInterval: ORDER_PORTAL_REFRESH_INTERVAL_MS,
-  })
+  const { data: inventoryData, mutate: mutateBranchInventory, error: inventoryError } = useSWR<any>(
+    branchInventoryUrl,
+    fetcher,
+    SHOP_RESOURCE_SWR_OPTIONS,
+  )
+  const { data: budget, mutate: mutateBudget } = useSWR<any>(
+    budgetsUrl,
+    fetcher,
+    SHOP_RESOURCE_SWR_OPTIONS,
+  )
   const ordersUrl = "/api/v1/orders"
   const isViewingOrders = activeTab === "orders" || activeTab === "refunded"
   const { data: ordersData, mutate: mutateOrders } = useSWR<any>(ordersUrl, fetcher, {
-    refreshInterval: isViewingOrders || showOrderDetail ? ORDER_PORTAL_REFRESH_INTERVAL_MS : 0,
+    refreshInterval: isViewingOrders || showOrderDetail ? ORDER_STATUS_REFRESH_INTERVAL_MS : 0,
     revalidateOnFocus: true,
     revalidateOnReconnect: true,
   })
 
   const handleTabChange = async (tab: "shop" | "orders" | "refunded") => {
     setActiveTab(tab)
+
+    if (tab === "shop") {
+      await Promise.all([mutateBranchInventory(), mutateBudget()])
+      return
+    }
 
     if (tab === "orders" || tab === "refunded") {
       const freshOrders = await fetcher(`${ordersUrl}?refresh=${Date.now()}`)
@@ -286,7 +303,7 @@ export default function OrderPortalPage() {
     selectedOrder ? `/api/v1/orders?id=${selectedOrder.id}` : null,
     fetcher,
     {
-      refreshInterval: showOrderDetail ? ORDER_PORTAL_REFRESH_INTERVAL_MS : 0,
+      refreshInterval: showOrderDetail ? ORDER_STATUS_REFRESH_INTERVAL_MS : 0,
       revalidateOnFocus: true,
       revalidateOnReconnect: true,
     }
@@ -510,7 +527,12 @@ export default function OrderPortalPage() {
   }
 
   const removeFromCart = (id: number) => {
-    setCart(prev => prev.filter(item => item.id !== id))
+    const remainingItems = cart.filter(item => item.id !== id)
+
+    setCart(remainingItems)
+    if (remainingItems.length === 0) {
+      setShowCart(false)
+    }
   }
 
   const placeOrder = async () => {
