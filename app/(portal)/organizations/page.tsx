@@ -28,13 +28,14 @@ type Branch = {
 import { Button } from "@/components/ui/button"
 import { Loader2, Pencil, Trash2, Building2, GitBranch, Save } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
 import { cn } from "@/lib/utils"
+import { formatCountLabel } from "@/lib/count-label"
 import { Badge } from "@/components/ui/badge"
 import { ReactNode, useEffect, useMemo, useRef, useState } from "react"
 import { useAppContext } from "@/components/context/app-context"
@@ -462,7 +463,7 @@ export default function OrganizationsPage() {
                       isActive={!selectedOrgId}
                       onClick={() => setSelectedOrgId(null)}
                       title="All Companies"
-                      subtitle={`${orgCount} companies, ${branchCount} branches`}
+                      subtitle={`${formatCountLabel(orgCount, "company", "companies")}, ${formatCountLabel(branchCount, "branch", "branches")}`}
                       badgeLabel="Global"
                     />
                     {filteredOrganizations.map((org) => (
@@ -471,7 +472,7 @@ export default function OrganizationsPage() {
                         isActive={String(org.id) === String(selectedOrgId)}
                         onClick={() => setSelectedOrgId(String(org.id))}
                         title={org.name}
-                        subtitle={`${org.code} • ${branchesByOrgId.get(org.id)?.length || 0} branches`}
+                        subtitle={`${org.code} • ${formatCountLabel(branchesByOrgId.get(org.id)?.length || 0, "branch", "branches")}`}
                         status={isActiveStatus(org.status)}
                         budgetAllocationMode={org.budgetAllocationMode}
                       >
@@ -524,7 +525,7 @@ export default function OrganizationsPage() {
               />
               <SummaryStat
                 label="Operational Reach"
-                value={`${filteredBranches.length} Branch${filteredBranches.length === 1 ? "" : "es"}`}
+                value={formatCountLabel(filteredBranches.length, "Branch", "Branches")}
                 // helper={branchStatusFilter === "all" ? "Full Distribution" : `${branchStatusFilter} Subset`}
                 icon={<GitBranch className="h-5 w-5" />}
               />
@@ -1038,9 +1039,9 @@ function CreateOrgDialog({
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Create Company</DialogTitle>
-            <p className="text-sm text-muted-foreground">
+            <DialogDescription>
               Set up a new tenant with a memorable code, status, and budget allocation model.
-            </p>
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-5">
             <div className="rounded-lg border bg-muted/20 p-4 space-y-4">
@@ -1176,7 +1177,11 @@ function CreateOrgDialog({
             </div>
           </div>
           <DialogFooter>
-            <Button onClick={submit} className="gap-2" disabled={!name || !code || saving}>
+            <Button
+              onClick={submit}
+              className="gap-2 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100 disabled:shadow-none"
+              disabled={!name || !code || saving}
+            >
               <Save className="h-4 w-4" />
               Save Company
             </Button>

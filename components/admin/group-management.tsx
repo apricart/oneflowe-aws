@@ -36,6 +36,7 @@ import {
 import { Checkbox } from "@/components/ui/checkbox"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useAppContext } from "@/components/context/app-context"
+import { formatCountLabel } from "@/lib/count-label"
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json())
 
@@ -226,7 +227,9 @@ export function GroupManagement({ role }: { role: string }) {
                 const errorData = await res.json().catch(() => ({ error: "Failed to update branches" }))
                 // Show blocked branches info if available
                 if (errorData.blockedBranches) {
-                    const names = errorData.blockedBranches.map((b: any) => `${b.branchName} (${b.productCount} products)`).join(", ")
+                    const names = errorData.blockedBranches
+                        .map((b: any) => `${b.branchName} (${formatCountLabel(b.productCount, "product")})`)
+                        .join(", ")
                     throw new Error(`Clean products first from: ${names}`)
                 }
                 throw new Error(errorData.error || "Failed to update branches")
@@ -234,7 +237,7 @@ export function GroupManagement({ role }: { role: string }) {
 
             const data = await res.json()
             const autoMsg = data.newlyAddedBranchIds?.length > 0
-                ? ` ${data.newlyAddedBranchIds.length} new branch(es) received group products automatically.`
+                ? ` ${formatCountLabel(data.newlyAddedBranchIds.length, "new branch", "new branches")} received group products automatically.`
                 : ""
             toast({ title: "Success", description: `Branches assigned successfully.${autoMsg}`, variant: "success" })
             setIsBranchOpen(false)
@@ -417,7 +420,7 @@ export function GroupManagement({ role }: { role: string }) {
                                 <TableCell className="text-slate-500 max-w-xs truncate">{group.description}</TableCell>
                                 <TableCell>
                                     <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 border-none font-bold px-3">
-                                        {group.branchCount} {group.branchCount === 1 ? "branch" : "branches"}
+                                        {formatCountLabel(group.branchCount, "branch", "branches")}
                                     </Badge>
                                 </TableCell>
                                 <TableCell>
@@ -588,7 +591,7 @@ export function GroupManagement({ role }: { role: string }) {
                                                             if (hasProducts) {
                                                                 toast({
                                                                     title: "Cannot remove branch",
-                                                                    description: `"${branch.name}" has ${productCount} products assigned. Clean products first.`,
+                                                                    description: `"${branch.name}" has ${formatCountLabel(productCount, "product")} assigned. Clean products first.`,
                                                                     variant: "destructive"
                                                                 })
                                                                 return
@@ -620,7 +623,7 @@ export function GroupManagement({ role }: { role: string }) {
                                                             <div className="flex items-center gap-2 mt-1">
                                                                 <Badge variant="outline" className="text-[10px] text-amber-600 border-amber-200 bg-amber-50 py-0 px-1.5 h-5">
                                                                     <Package className="h-3 w-3 mr-1" />
-                                                                    {productCount} product{productCount !== 1 ? "s" : ""} assigned
+                                                                    {formatCountLabel(productCount, "product")} assigned
                                                                 </Badge>
                                                                 <span className="text-[10px] text-slate-500">
                                                                     Clean products to release
@@ -705,7 +708,7 @@ export function GroupManagement({ role }: { role: string }) {
                 onOpenChange={(v) => !isCleaning && setConfirmClean({ open: v, branchId: confirmClean.branchId, branchName: confirmClean.branchName })}
                 onConfirm={() => confirmClean.branchId && handleCleanBranch(confirmClean.branchId)}
                 title={`Clean Products from "${confirmClean.branchName}"?`}
-                description={`This will remove all ${branchProductCounts[confirmClean.branchId || 0] || 0} product(s) assigned to this branch. The branch can then be removed from the group.`}
+                description={`This will remove all ${formatCountLabel(branchProductCounts[confirmClean.branchId || 0] || 0, "product")} assigned to this branch. The branch can then be removed from the group.`}
                 confirmText="Clean All Products"
                 type="danger"
                 isLoading={isCleaning !== null}

@@ -47,6 +47,10 @@ describe("OrganizationsPage organization selection", () => {
   it("keeps a clicked organization selected when a global organization context exists", () => {
     render(<OrganizationsPage />)
 
+    expect(screen.getByText("0001 • 1 branch")).toBeTruthy()
+    expect(screen.getByText("0002 • 1 branch")).toBeTruthy()
+    expect(screen.queryByText(/1 branches/i)).toBeNull()
+
     const panacloudItem = screen.getByText("Panacloud").closest('[role="button"]')
     expect(panacloudItem).not.toBeNull()
     expect(panacloudItem?.className).toContain("border-transparent")
@@ -56,5 +60,43 @@ describe("OrganizationsPage organization selection", () => {
     expect(panacloudItem?.className).toContain("border-indigo-500/30")
     expect(screen.getAllByText("Panacloud")).toHaveLength(2)
     expect(screen.getByText("Panacloud Branch")).toBeTruthy()
+  })
+
+  it("visually distinguishes the disabled Save Company button", () => {
+    render(<OrganizationsPage />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Company" }))
+
+    const saveButton = screen.getByRole("button", { name: "Save Company" })
+    expect((saveButton as HTMLButtonElement).disabled).toBe(true)
+    expect(saveButton.getAttribute("class")).toContain("disabled:bg-muted")
+    expect(saveButton.getAttribute("class")).toContain(
+      "disabled:text-muted-foreground",
+    )
+    expect(saveButton.getAttribute("class")).toContain("disabled:opacity-100")
+    expect(saveButton.getAttribute("class")).toContain("disabled:shadow-none")
+
+    fireEvent.change(screen.getByLabelText("Company name"), {
+      target: { value: "Acme Inc." },
+    })
+    fireEvent.change(screen.getByLabelText("Code"), {
+      target: { value: "ACME" },
+    })
+
+    expect((saveButton as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it("provides an accessible description for the Create Company dialog", () => {
+    render(<OrganizationsPage />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Company" }))
+
+    const dialog = screen.getByRole("dialog", { name: "Create Company" })
+    const descriptionId = dialog.getAttribute("aria-describedby")
+
+    expect(descriptionId).toBeTruthy()
+    expect(document.getElementById(descriptionId!)?.textContent).toContain(
+      "Set up a new tenant with a memorable code, status, and budget allocation model.",
+    )
   })
 })
