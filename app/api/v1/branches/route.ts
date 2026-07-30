@@ -24,7 +24,7 @@ export async function GET(req: Request) {
     const shouldRefresh = searchParams.has("refresh")
 
     // Validate organization ID parameter (supports single or comma-separated)
-    let orgIds: number[] = []
+    const orgIds: number[] = []
     if (organizationIdRaw) {
       const ids = organizationIdRaw.split(',').map(id => id.trim())
       for (const id of ids) {

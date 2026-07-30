@@ -35,7 +35,8 @@ export async function POST(req: NextRequest) {
 
     const cronAuthorized = hasCronAuthorization(req)
     let userId: string | null = null
-    let { scheduleId, isTest } = parsedBody.data
+    const { scheduleId } = parsedBody.data
+    let { isTest } = parsedBody.data
 
     if (!cronAuthorized) {
         const authError = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"])

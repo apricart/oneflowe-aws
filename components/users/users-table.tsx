@@ -1,7 +1,7 @@
 "use client"
 
 import useSWR from "swr"
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
 import { jsonFetcher } from "@/lib/fetcher"
 import { Button } from "@/components/ui/button"
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "@/components/ui/table"
@@ -181,13 +181,6 @@ export function UsersTable() {
     }
   }
 
-  if (error)
-    return (
-      <div className="text-sm" style={{ color: "var(--color-destructive)" }}>
-        {error.message}
-      </div>
-    )
-
   const f = filter.toLowerCase()
   const filteredRows = useMemo(() => {
     return (data?.items || []).filter((u) =>
@@ -199,11 +192,11 @@ export function UsersTable() {
 
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE))
 
-  useMemo(() => {
+  useEffect(() => {
     setPage(1)
   }, [filter])
 
-  useMemo(() => {
+  useEffect(() => {
     if (page > totalPages) {
       setPage(totalPages)
     }
@@ -213,6 +206,13 @@ export function UsersTable() {
     const start = (page - 1) * PAGE_SIZE
     return filteredRows.slice(start, start + PAGE_SIZE)
   }, [filteredRows, page])
+
+  if (error)
+    return (
+      <div className="text-sm" style={{ color: "var(--color-destructive)" }}>
+        {error.message}
+      </div>
+    )
 
   return (
     <div className="grid gap-4">

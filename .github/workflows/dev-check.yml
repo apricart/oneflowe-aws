@@ -5,15 +5,32 @@ on:
     branches:
       - dev
 
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
 
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      PGPOOL_MAX: ${{ secrets.PGPOOL_MAX }}
+      PGPOOL_CONN_TIMEOUT_MS: ${{ secrets.PGPOOL_CONN_TIMEOUT_MS }}
       NEXTAUTH_URL: ${{ secrets.NEXTAUTH_URL }}
       NEXTAUTH_SECRET: ${{ secrets.NEXTAUTH_SECRET }}
       JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      REFRESH_TOKEN_SECRET: ${{ secrets.REFRESH_TOKEN_SECRET }}
+      UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
+      UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASS: ${{ secrets.SMTP_PASS }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      NNAWS_ACCESS_KEY_ID: ${{ secrets.NNAWS_ACCESS_KEY_ID }}
+      NAWS_SECRET_ACCESS_KEY: ${{ secrets.NAWS_SECRET_ACCESS_KEY }}
+      SES_FROM_EMAIL: ${{ secrets.SES_FROM_EMAIL }}
+      SES_CONFIGURATION_SET: ${{ secrets.SES_CONFIGURATION_SET }}
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
 
     steps:
       - uses: actions/checkout@v4
@@ -22,15 +39,16 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
-
-      - run: npm audit --audit-level=high
+          node-version: 20.19.x
+          cache: npm
 
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - run: npm install
-      - run: npx tsc --noEmit
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - run: npm test
+      - run: npm run typecheck
       - run: npm run lint
       - run: npm run build
