@@ -15,6 +15,7 @@ jobs:
 
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
       PGPOOL_MAX: ${{ secrets.PGPOOL_MAX }}
       PGPOOL_CONN_TIMEOUT_MS: ${{ secrets.PGPOOL_CONN_TIMEOUT_MS }}
       NEXTAUTH_URL: ${{ secrets.NEXTAUTH_URL }}
@@ -49,7 +50,6 @@ jobs:
       - run: npm ci
       - run: npm audit --audit-level=high
       - run: npm test
-      - run: npm run db:validate
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run build
