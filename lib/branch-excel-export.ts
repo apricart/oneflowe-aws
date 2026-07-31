@@ -14,6 +14,75 @@ export type BranchExportPayload = {
   sheets: BranchExportSheet[]
 }
 
+export type BranchListExportData = {
+  id: number
+  organizationId: number
+  name: string
+  code?: string | null
+  status?: string | null
+  province?: string | null
+  city?: string | null
+  address?: string | null
+  costCenterId?: string | null
+}
+
+export type BranchListOrganizationData = {
+  id: number
+  name: string
+  code?: string | null
+}
+
+export const BRANCH_LIST_HEADERS = [
+  "Organization Name",
+  "Branch Name",
+  "Branch Code",
+  "Status",
+  "Province",
+  "City",
+  "Address",
+  "Cost Center ID",
+] as const
+
+const formatStatus = (value: unknown, fallback = "Active") => {
+  if (typeof value !== "string" || !value.trim()) return fallback
+
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase())
+}
+
+export function buildBranchListWorkbookData(
+  branches: BranchListExportData[],
+  organizations: BranchListOrganizationData[],
+) {
+  const organizationNames = new Map(
+    organizations.map((organization) => [String(organization.id), organization.name]),
+  )
+
+  return branches.map((branch) => ({
+    "Organization Name": organizationNames.get(String(branch.organizationId)) || "-",
+    "Branch Name": branch.name,
+    "Branch Code": branch.code || "-",
+    "Status": formatStatus(branch.status),
+    "Province": branch.province || "-",
+    "City": branch.city || "-",
+    "Address": branch.address || "-",
+    "Cost Center ID": branch.costCenterId || "-",
+  } satisfies Record<(typeof BRANCH_LIST_HEADERS)[number], unknown>))
+}
+
+export function getBranchListExportFilename(
+  organization?: BranchListOrganizationData | null,
+  exportedAt = new Date(),
+) {
+  const scopeIdentifier = organization
+    ? safeFilenamePart(organization.code || organization.name, "organization")
+    : "all"
+  return `${scopeIdentifier}-branches-${exportedAt.toISOString().slice(0, 10)}.xlsx`
+}
+
 export function getBranchExportFilename(
   branch: { name: string; code?: string | null },
   exportedAt = new Date(),

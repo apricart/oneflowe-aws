@@ -52,7 +52,9 @@ import {
 } from "@/lib/budget-allocation-mode"
 import { Loader } from "lucide-react";
 import { OrganizationExcelExportButton } from "@/components/organizations/organization-excel-export-button"
+import { OrganizationListExcelExportButton } from "@/components/organizations/organization-list-excel-export-button"
 import { BranchExcelExportButton } from "@/components/organizations/branch-excel-export-button"
+import { BranchListExcelExportButton } from "@/components/organizations/branch-list-excel-export-button"
 
 const LEGACY_HIDE_PRICES_SETTING_KEY = "hide_prices_for_branch_and_order_portal"
 const HIDE_BRANCH_ADMIN_PRICES_SETTING_KEY = "hide_prices_for_branch_admin"
@@ -74,7 +76,7 @@ type BranchesRes = { items: Branch[] }
 export default function OrganizationsPage() {
   const { data: session } = useSession()
   const { data: orgs, mutate: refetchOrgs, isLoading: loadingOrgs } = useOrganizations()
-  const { data: branches, mutate: refetchBranches } = useBranches()
+  const { data: branches, mutate: refetchBranches, isLoading: loadingBranches } = useBranches()
   const { organizationId: contextOrgId } = useAppContext()
   const userRole = (session?.user as any)?.role
 
@@ -440,7 +442,16 @@ export default function OrganizationsPage() {
             <Card className="h-full border-none shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.2)] bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl rounded-[2rem] overflow-hidden">
               <CardHeader className="pb-4">
                 <div className="flex items-center justify-between mb-2">
-                  <CardTitle className="text-xl font-semibold tracking-tight">Company List</CardTitle>
+                  <div className="flex items-center gap-1.5">
+                    <CardTitle className="text-xl font-semibold tracking-tight">Company List</CardTitle>
+                    <OrganizationListExcelExportButton
+                      organizations={orgs?.items || []}
+                      branches={branches?.items || []}
+                      isLoading={loadingOrgs || loadingBranches}
+                      onSuccess={(message) => showFeedback(message, "success")}
+                      onError={(message) => showFeedback(message, "error")}
+                    />
+                  </div>
                   <Badge variant="outline" className="bg-indigo-50/50 text-indigo-700 border-indigo-100 dark:bg-indigo-500/10 dark:text-indigo-400 dark:border-indigo-500/20 rounded-lg px-2.5 py-1">
                     {orgCount}
                   </Badge>
@@ -534,7 +545,17 @@ export default function OrganizationsPage() {
             <Card className="border-none shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.2)] bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl rounded-[2rem] overflow-hidden">
               <CardHeader className="flex flex-col gap-4 px-5 pb-5 sm:flex-row sm:items-center sm:justify-between">
                 <div className="space-y-1">
-                  <CardTitle className="text-2xl font-bold tracking-tight">Branches Management</CardTitle>
+                  <div className="flex items-center gap-1.5">
+                    <CardTitle className="text-2xl font-bold tracking-tight">Branches Management</CardTitle>
+                    <BranchListExcelExportButton
+                      branches={branches?.items || []}
+                      organizations={orgs?.items || []}
+                      selectedOrganization={selectedOrg}
+                      isLoading={loadingOrgs || loadingBranches}
+                      onSuccess={(message) => showFeedback(message, "success")}
+                      onError={(message) => showFeedback(message, "error")}
+                    />
+                  </div>
                   <p className="text-sm font-medium text-slate-500 dark:text-slate-400">
                     {selectedOrg ? `Strategic units for ${selectedOrg.name}` : `Full enterprise distribution`}
                   </p>
