@@ -34,7 +34,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
 
-import { GlobalDateFilter, type FilterPreset, getPresetLabel } from "@/components/dashboard/global-date-filter"
+import { GlobalDateFilter, type FilterPreset } from "@/components/dashboard/global-date-filter"
 import { BranchFilter } from "@/components/reports/branch-filter"
 import { GroupFilter } from "@/components/reports/group-filter"
 
@@ -1404,19 +1404,11 @@ export default function BudgetSummaryPage() {
                                     <Card className="border-none shadow-[0_32px_64px_-16px_rgba(0,0,0,0.1)] bg-white/80 dark:bg-slate-900/80 backdrop-blur-2xl overflow-hidden rounded-[2.5rem] border border-white/40 dark:border-slate-800/20">
                                         <div className="p-4 pb-3 border-b border-indigo-50/50 dark:border-slate-800/50 bg-gradient-to-br from-white/40 via-transparent to-indigo-50/10 dark:from-slate-900/40 dark:to-transparent">
                                             <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
-                                                <div className="space-y-1">
-                                                    <div className="flex items-center gap-3">
-                                                        <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-500 via-violet-600 to-fuchsia-600 shadow-lg shadow-indigo-500/20 flex items-center justify-center">
-                                                            <FileText className="h-4 w-4 text-white" />
-                                                        </div>
-                                                        <h3 className="text-base font-[900] text-slate-900 dark:text-white uppercase tracking-tighter italic">
-                                                            Deployment Audit
-                                                        </h3>
-                                                        <Badge className="bg-indigo-600 hover:bg-indigo-600 text-white border-none rounded-full px-3 py-0.5 text-[9px] font-black tracking-widest uppercase">Live Report</Badge>
+                                                <div className="flex items-center gap-3">
+                                                    <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-500 via-violet-600 to-fuchsia-600 shadow-lg shadow-indigo-500/20 flex items-center justify-center">
+                                                        <FileText className="h-4 w-4 text-white" />
                                                     </div>
-                                                    <p className="text-xs text-slate-500 dark:text-slate-400 font-bold uppercase tracking-widest pl-1 opacity-70">
-                                                        {getPresetLabel(activePreset, dateRange)}
-                                                    </p>
+                                                    <Badge className="bg-indigo-600 hover:bg-indigo-600 text-white border-none rounded-full px-3 py-0.5 text-[9px] font-black tracking-widest uppercase">Live Report</Badge>
                                                 </div>
 
                                                 <div className="flex flex-wrap items-center gap-2">

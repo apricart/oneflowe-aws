@@ -2,13 +2,17 @@ import { ok, error, readJson, requireApiRole } from "@/lib/api"
 export const dynamic = 'force-dynamic'
 import { NextResponse } from "next/server"
 import { db } from "@/lib/db"
-import { branches as branchesTable, organizations } from "@/db/schema"
+import { auditLogs, branches as branchesTable, organizations } from "@/db/schema"
 import { and, desc, eq, sql, inArray } from "drizzle-orm"
 import { getRequestScope } from "@/lib/auth"
 import { handleError } from "@/lib/error-handler"
 import { logError } from "@/lib/global-logger"
 import { getCached, invalidateByPrefix, scopedCacheKey, CACHE_TTL } from "@/lib/cache-utils"
 import { branchCreateSchema, validationMessage } from "@/lib/server/mutation-validation"
+import {
+  BRANCH_CREATION_ROLES,
+  resolveBranchCreationAccess,
+} from "@/lib/server/branch-creation-access"
 
 /**
  * GET /api/v1/branches - List branches with access control
@@ -135,7 +139,7 @@ export async function GET(req: Request) {
  */
 export async function POST(req: Request) {
   try {
-    const err = await requireApiRole(["SUPER_ADMIN"])
+    const err = await requireApiRole(BRANCH_CREATION_ROLES)
     if (err) return err
 
     const rawBody = await readJson<unknown>(req)
@@ -148,11 +152,15 @@ export async function POST(req: Request) {
       return error("Organization ID is required", 400)
     }
 
-    // Validate organizationId type
-    const organizationId = Number(body.organizationId)
-    if (!Number.isInteger(organizationId) || organizationId <= 0) {
-      return error("Organization ID must be a positive integer", 400)
-    }
+    const requestedOrganizationId = Number(body.organizationId)
+    const scope = await getRequestScope()
+    if (!scope) return error("Invalid session data", 401)
+
+    // Multi-tenant boundary: Head Office cannot choose a tenant. The effective
+    // organization must match the user's current database-backed request scope.
+    const access = resolveBranchCreationAccess(scope, requestedOrganizationId)
+    if (!access.allowed) return error(access.message, access.status)
+    const organizationId = access.organizationId
 
     // Validate field format and length
     const name = String(body.name || "").trim()
@@ -187,91 +195,120 @@ export async function POST(req: Request) {
       return error(`Status must be one of: ${validStatuses.join(', ')}`, 400)
     }
 
-    // Verify organization exists and get its code
-    const [org] = await db
-      .select({ id: organizations.id, name: organizations.name, code: organizations.code })
-      .from(organizations)
-      .where(eq(organizations.id, organizationId))
-      .limit(1)
+    const creation = await db.transaction(async (tx) => {
+      // Branch codes are based on the current branch count. Serialize creation
+      // within this tenant so concurrent requests cannot choose the same code.
+      await tx.execute(sql`
+        SELECT pg_advisory_xact_lock(
+          hashtext('oneflowe:branch-creation'),
+          ${organizationId}::integer
+        )
+      `)
 
-    if (!org) {
+      const [org] = await tx
+        .select({ id: organizations.id, name: organizations.name, code: organizations.code })
+        .from(organizations)
+        .where(eq(organizations.id, organizationId))
+        .limit(1)
+
+      if (!org) return { kind: "organization-not-found" } as const
+
+      const [existingBranchWithName] = await tx
+        .select({ id: branchesTable.id })
+        .from(branchesTable)
+        .where(and(
+          eq(branchesTable.organizationId, organizationId),
+          sql`lower(btrim(${branchesTable.name})) = ${name.toLowerCase()}`,
+        ))
+        .limit(1)
+
+      if (existingBranchWithName) return { kind: "duplicate-name" } as const
+
+      // Preserve the existing {ORG_CODE}-{COUNT+1} branch-code format.
+      const [{ count: branchCount }] = await tx
+        .select({ count: sql<number>`count(*)` })
+        .from(branchesTable)
+        .where(eq(branchesTable.organizationId, organizationId))
+
+      const nextNumber = (Number(branchCount) + 1).toString().padStart(2, "0")
+      const generatedCode = `${org.code}-${nextNumber}`
+      const [existingCode] = await tx
+        .select({ id: branchesTable.id })
+        .from(branchesTable)
+        .where(and(
+          eq(branchesTable.organizationId, organizationId),
+          eq(branchesTable.code, generatedCode),
+        ))
+        .limit(1)
+
+      const finalCode = existingCode
+        ? `${org.code}-${nextNumber}-${Date.now().toString().slice(-4)}`
+        : generatedCode
+
+      const [item] = await tx
+        .insert(branchesTable)
+        .values({
+          organizationId,
+          name,
+          province,
+          city,
+          address,
+          costCenterId: costCenterId || null,
+          code: finalCode,
+          status,
+        })
+        .returning()
+
+      await tx.insert(auditLogs).values({
+        userId: scope.userId,
+        organizationId,
+        branchId: item.id,
+        action: "CREATE_BRANCH",
+        entity: "BRANCH",
+        entityId: String(item.id),
+        metadata: {
+          performedByRole: scope.role,
+          name: item.name,
+          code: item.code,
+          status: item.status,
+        },
+      })
+
+      return { kind: "created", item } as const
+    })
+
+    if (creation.kind === "organization-not-found") {
       return error(`Organization with ID ${organizationId} not found`, 404)
     }
-
-    // Check for duplicate branch name within the same organization (case-insensitive)
-    const [existingBranchWithName] = await db
-      .select({ id: branchesTable.id })
-      .from(branchesTable)
-      .where(and(
-        eq(branchesTable.organizationId, organizationId),
-        sql`lower(${branchesTable.name}) = ${name.toLowerCase()}`
-      ))
-      .limit(1)
-
-    if (existingBranchWithName) {
+    if (creation.kind === "duplicate-name") {
       return error("A branch with this name already exists in this organization.", 409)
     }
-
-    // Auto-generate code if not provided or to ensure standardization
-    // Format: {ORG_CODE}-{COUNT+1}
-    const [{ count: branchCount }] = await db
-      .select({ count: sql<number>`count(*)` })
-      .from(branchesTable)
-      .where(eq(branchesTable.organizationId, organizationId))
-
-    const nextNumber = (Number(branchCount) + 1).toString().padStart(2, '0')
-    const generatedCode = `${org.code}-${nextNumber}`
-
-    // Double check for duplicate code (just in case of race conditions)
-    const existing = await db
-      .select({ id: branchesTable.id })
-      .from(branchesTable)
-      .where(and(
-        eq(branchesTable.organizationId, organizationId),
-        eq(branchesTable.code, generatedCode)
-      ))
-      .limit(1)
-
-    let finalCode = generatedCode
-    if (existing.length > 0) {
-      // If collision, add a timestamp or more padding
-      finalCode = `${org.code}-${nextNumber}-${Date.now().toString().slice(-4)}`
-    }
-
-    // Insert branch
-    const [item] = await db
-      .insert(branchesTable)
-      .values({
-        organizationId,
-        name,
-        province,
-        city,
-        address,
-        costCenterId: costCenterId || null,
-        code: finalCode,
-        status,
-      })
-      .returning()
 
     // Invalidate branches cache
     await invalidateByPrefix('branches')
 
     return ok({
-      item,
+      item: creation.item,
       message: "Branch created successfully"
     }, { status: 201 })
 
   } catch (e: any) {
+    const databaseError = e?.cause ?? e
+    const databaseCode = databaseError?.code ?? e?.code
+    const databaseConstraint = databaseError?.constraint ?? e?.constraint
+
     // Handle database constraint violations
-    if (e.code === '23505') { // Unique violation
+    if (databaseCode === '23505') { // Unique violation
+      if (databaseConstraint === "branches_org_name_normalized_uq") {
+        return error("A branch with this name already exists in this organization.", 409)
+      }
       return error("Branch with this code already exists in this organization", 409)
     }
 
-    if (e.code === '23503') { // Foreign key violation
+    if (databaseCode === '23503') { // Foreign key violation
       return error("Referenced organization does not exist", 404)
     }
 
-    logError(e, 'BRANCHES_POST')
     logError(e, 'BRANCHES_POST')
     const { status, ...errorBody } = handleError(e, 'BRANCHES_POST')
     return NextResponse.json(errorBody, { status })

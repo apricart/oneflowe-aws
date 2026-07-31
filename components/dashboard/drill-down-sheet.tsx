@@ -43,7 +43,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import {
     Loader2, AlertCircle, CheckCircle2, Package, TrendingUp, TrendingDown,
     Award, Box, ChevronRight, ArrowDownAZ, ArrowDown01, RotateCcw, Truck,
-    User, Clock, Info, Search
+    User, Clock, Info, Search, CalendarDays
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
@@ -464,6 +464,14 @@ export function DrillDownSheet({
                                                             </div>
                                                             <div className="flex flex-wrap items-center gap-3 mt-1 text-[10px] font-medium text-slate-400 uppercase tracking-widest opacity-80">
                                                                 <span className="flex items-center gap-1"><Clock className="w-3.5 h-3.5" /> {format(new Date(item.date), "HH:mm")}</span>
+                                                                {type === "APPROVED" && (
+                                                                    <span className="flex items-center gap-1 normal-case tracking-normal" title="Date and time this order became active">
+                                                                        <CalendarDays className="w-3.5 h-3.5" />
+                                                                        {item.approvedAt
+                                                                            ? `Approved ${format(new Date(item.approvedAt), "dd MMM yyyy, HH:mm")}`
+                                                                            : "Approval date unavailable"}
+                                                                    </span>
+                                                                )}
                                                                 <span className="flex items-center gap-1"><Box className="w-3.5 h-3.5" /> {item.branchName}</span>
                                                                 {type === "APPROVED" && (
                                                                     <Badge

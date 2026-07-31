@@ -1278,7 +1278,6 @@ function OrderDetailsDisclosure({
                                         className="h-4 border-slate-200 bg-slate-50 px-1.5 py-0 text-[7px] font-medium dark:border-slate-700 dark:bg-slate-800"
                                       >
                                         Qty: {formatQuantity(line.quantity)}
-                                        {line.unit ? ` ${line.unit}` : ""}
                                       </Badge>
                                       {Number(line.quantityRefunded || 0) > 0 && (
                                         <Badge
