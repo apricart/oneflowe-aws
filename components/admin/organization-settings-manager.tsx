@@ -131,6 +131,68 @@ const PREDEFINED_SETTINGS = [
   },
 ]
 
+type SettingDef = {
+  key: string
+  label: string
+  type: string
+  category: string
+  defaultValue: any
+  description: string
+}
+
+function SettingEditor({
+  setting,
+  currentValue,
+  onSave,
+}: {
+  setting: SettingDef
+  currentValue: any
+  onSave: (key: string, value: any) => void
+}) {
+  const [localValue, setLocalValue] = useState(
+    currentValue ?? setting.defaultValue
+  )
+
+  return (
+    <div className="p-4 rounded-lg border bg-card">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex-1">
+          <Label className="font-semibold">{setting.label}</Label>
+          <p className="text-sm text-muted-foreground mt-1">
+            {setting.description}
+          </p>
+          <code className="text-xs bg-muted px-2 py-1 rounded mt-2 inline-block">
+            {setting.key}
+          </code>
+        </div>
+        <div className="flex items-center gap-2">
+          {setting.type === "boolean" ? (
+            <Switch
+              checked={localValue === true || localValue === "true"}
+              onCheckedChange={(checked) => {
+                setLocalValue(checked)
+                onSave(setting.key, checked)
+              }}
+            />
+          ) : (
+            <div className="flex gap-2">
+              <Input
+                type={setting.type}
+                value={localValue}
+                onChange={(e) => setLocalValue(e.target.value)}
+                className="w-48"
+              />
+              <Button size="sm" onClick={() => onSave(setting.key, localValue)}>
+                <Save className="h-4 w-4" />
+              </Button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function OrganizationSettingsManager() {
   const { toast } = useToast()
   const [selectedOrg, setSelectedOrg] = useState<number | null>(null)
@@ -282,61 +344,14 @@ export function OrganizationSettingsManager() {
                 </CardHeader>
                 <CardContent>
                   <div className="grid gap-4">
-                    {categorySettings.map((setting) => {
-                      const currentValue = getSettingValue(setting.key)
-                      const [localValue, setLocalValue] = useState(
-                        currentValue ?? setting.defaultValue
-                      )
-
-                      return (
-                        <div
-                          key={setting.key}
-                          className="p-4 rounded-lg border bg-card"
-                        >
-                          <div className="flex items-start justify-between gap-4">
-                            <div className="flex-1">
-                              <Label className="font-semibold">
-                                {setting.label}
-                              </Label>
-                              <p className="text-sm text-muted-foreground mt-1">
-                                {setting.description}
-                              </p>
-                              <code className="text-xs bg-muted px-2 py-1 rounded mt-2 inline-block">
-                                {setting.key}
-                              </code>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              {setting.type === "boolean" ? (
-                                <Switch
-                                  checked={localValue === true || localValue === "true"}
-                                  onCheckedChange={(checked) => {
-                                    setLocalValue(checked)
-                                    handleSaveSetting(setting.key, checked)
-                                  }}
-                                />
-                              ) : (
-                                <div className="flex gap-2">
-                                  <Input
-                                    type={setting.type}
-                                    value={localValue}
-                                    onChange={(e) => setLocalValue(e.target.value)}
-                                    className="w-48"
-                                  />
-                                  <Button
-                                    size="sm"
-                                    onClick={() =>
-                                      handleSaveSetting(setting.key, localValue)
-                                    }
-                                  >
-                                    <Save className="h-4 w-4" />
-                                  </Button>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      )
-                    })}
+                    {categorySettings.map((setting) => (
+                      <SettingEditor
+                        key={setting.key}
+                        setting={setting}
+                        currentValue={getSettingValue(setting.key)}
+                        onSave={handleSaveSetting}
+                      />
+                    ))}
                   </div>
                 </CardContent>
               </Card>

@@ -15,7 +15,7 @@ export async function GET(req: NextRequest) {
         const groupIdsParam = url.searchParams.get("groupIds")
         const branchIdsParam = url.searchParams.get("branchIds")
 
-        let organizationIds = organizationIdsParam ? organizationIdsParam.split(",").map(Number).filter(n => !isNaN(n)) : []
+        const organizationIds = organizationIdsParam ? organizationIdsParam.split(",").map(Number).filter(n => !isNaN(n)) : []
         const groupIds = groupIdsParam ? groupIdsParam.split(",").map(Number).filter(n => !isNaN(n)) : []
         let branchIds = branchIdsParam ? branchIdsParam.split(",").map(Number).filter(n => !isNaN(n)) : []
 

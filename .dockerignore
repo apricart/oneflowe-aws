@@ -1,0 +1,8 @@
+.env.production
+.env*
+!.env.example
+**/*.test.*
+coverage
+e2e
+playwright-report
+docs

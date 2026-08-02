@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs"
+import { resolve } from "node:path"
 import { describe, expect, it } from "vitest"
 import {
   normalizeBranch,
@@ -7,6 +9,13 @@ import {
   rejectionCounts,
   toCents,
 } from "./ke-electric"
+
+const legacyReportsAvailable = [
+  "order.json",
+  "sales-report.json",
+  "user-product-summary-report.json",
+  "item-price-history-report.json",
+].every((file) => existsSync(resolve("reports", file)))
 
 describe("K-Electric legacy source normalization", () => {
   it("normalizes the known GSO branch alias without broad fuzzy matching", () => {
@@ -30,7 +39,7 @@ describe("K-Electric legacy source normalization", () => {
   })
 })
 
-describe("K-Electric legacy report reconciliation", () => {
+describe.skipIf(!legacyReportsAvailable)("K-Electric legacy report reconciliation", () => {
   it("selects only fully delivered, non-refunded, exactly balanced orders", () => {
     const source = prepareKeLegacySource()
     expect(source.sourceCounts).toEqual({
