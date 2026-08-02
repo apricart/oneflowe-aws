@@ -1,5 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  
   // Security: Remove X-Powered-By header
   poweredByHeader: false,
   eslint: {
@@ -63,6 +64,7 @@ const nextConfig = {
     }
     return config
   },
+  output: 'standalone',
 }
 
 export default nextConfig
