@@ -141,7 +141,7 @@ async function main() {
     const detailResponse = await request(`api/OrderDetailController/${scope.locationId}/${scope.legacyOrderId}`)
     const detail = detailResponse.data && typeof detailResponse.data === "object" && !Array.isArray(detailResponse.data) ? detailResponse.data : null
     const realDetail = Boolean(detail && Number(detail.ID) === scope.legacyOrderId)
-    const items = realDetail && Array.isArray(detail.OrderDetailsList) ? detail.OrderDetailsList.map(compactItem) : []
+    const items: Row[] = realDetail && Array.isArray(detail.OrderDetailsList) ? detail.OrderDetailsList.map(compactItem) : []
     const checkouts = realDetail && Array.isArray(detail.OrderCheckoutList) ? detail.OrderCheckoutList.map(compactCheckout).filter(Boolean) : []
     const checkout = checkouts[0] ?? null
     const liveDate = dateKey(detail?.OrderCreatedDT) ?? dateKey(scope.row["Order Date"])
@@ -171,7 +171,7 @@ async function main() {
       set.add(cents(row.Price))
       exactHistoryByName.set(normalizeProduct(row.ItemName), set)
     }
-    const itemEvidence = items.map((item, index) => {
+    const itemEvidence: Row[] = items.map((item, index) => {
       const prices = [...(exactHistoryByName.get(normalizeProduct(item.Name)) ?? [])]
       const selectedHistoryPriceCents = prices.length === 1 ? prices[0] : null
       const quantity = Number(item.Quantity ?? 0)

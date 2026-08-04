@@ -50,10 +50,10 @@ function main() {
   const importedIds = new Set((snapshot.legacyOrderImports as Row[]).map((row) => Number(row.legacy_order_id)))
   const allExceptionRows = sheetRows(base, "Unimported Orders")
   const cancelledRows = allExceptionRows.filter((row) => String(row["Current Interpretation"]).trim().toLowerCase() === "cancelled")
-  const missingRows = allExceptionRows
+  const missingRows: Row[] = allExceptionRows
     .filter((row) => !importedIds.has(Number(row["Legacy Order ID"])))
     .filter((row) => String(row["Current Interpretation"]).trim().toLowerCase() !== "cancelled")
-    .map((row) => {
+    .map<Row>((row) => {
       const id = Number(row["Legacy Order ID"])
       const isOmittedDraft = String(row["Blocker Code"]) === "OMITTED_FROM_UPDATED_ORDER_EXPORT"
       return {
@@ -79,7 +79,7 @@ function main() {
     grouped.set(code, [...(grouped.get(code) ?? []), Number(row["Legacy Order ID"])])
   }
   const reasonOrder = ["WORKFLOW_NOT_FINAL", "HAS_REFUND_EVIDENCE", "OMITTED_FROM_UPDATED_ORDER_EXPORT", "MISSING_AUTHORITATIVE_ORDER_HEADER", "ZERO_QUANTITY_ITEM_LINES", "NO_ITEM_LINES"]
-  const reasonRows = reasonOrder.filter((code) => grouped.has(code)).map((code) => {
+  const reasonRows: Row[] = reasonOrder.filter((code) => grouped.has(code)).map<Row>((code) => {
     const baseRow = guideByCode.get(code) ?? {}
     const ids = grouped.get(code)!.sort((a, b) => a - b)
     return {

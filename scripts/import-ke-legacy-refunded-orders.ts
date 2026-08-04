@@ -324,7 +324,7 @@ function prepareSource(opts: Options) {
       if (matches.length !== 1) reasons.push("REFUND_DETAIL_ITEM_MISMATCH")
     }
 
-    if (reasons.length > 0 || !createdAt || !refundedAt) {
+    if (reasons.length > 0 || !createdAt || !refundedAt || !detail || !modal || !evidence) {
       excluded.push({ legacyOrderId, reasons: [...new Set(reasons)] })
       continue
     }

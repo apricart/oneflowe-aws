@@ -57,7 +57,7 @@ function main() {
   check("Exactly 19 candidate import-ledger rows exist", candidateLedgers.length === 19, candidateLedgers.length)
   check("Candidate legacy IDs are exact and unique", stable(candidateLedgers.map((row) => Number(row.legacy_order_id)).sort((a, b) => a - b)) === stable(EXPECTED_IDS), candidateLedgers.map((row) => row.legacy_order_id))
   check("All candidate rows belong to one import batch", batchIds.size === 1, [...batchIds])
-  check("Import batch exists and completed", Boolean(batch) && batch.status === "COMPLETED", batch?.status)
+  check("Import batch exists and completed", batch?.status === "COMPLETED", batch?.status)
   check("Import batch is K-Electric only", batch?.organization_id === 10 && batch?.source_system === "KE_LOGISTICS", batch ? { organizationId: batch.organization_id, sourceSystem: batch.source_system } : null)
   check("Import manifest matches reviewed digest", batch?.source_manifest?.digest === EXPECTED_MANIFEST, batch?.source_manifest?.digest)
   check("Import actor matches reviewed super-admin", batch?.imported_by_user_id === EXPECTED_ACTOR, batch?.imported_by_user_id)
@@ -91,7 +91,7 @@ function main() {
         && Number(item.price_cents) === cents(line.UnitPrice)
     })
     const itemSubtotal = items.reduce((sum, item) => sum + Math.round(Number(item.quantity) * Number(item.price_cents)), 0)
-    const pass = Boolean(order)
+    const pass = order != null
       && order.organization_id === 10
       && order.tid === `KE-LEGACY-${legacyId}`
       && order.status === "FULFILLED"

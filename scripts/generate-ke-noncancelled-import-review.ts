@@ -112,7 +112,10 @@ function indexById(rows: JsonRow[], field = "Legacy Order ID"): Map<number, Json
 }
 
 function mapById(rows: JsonRow[], field: string): Map<number, JsonRow> {
-  return new Map(rows.map((row) => [Number(row[field]), row]).filter(([id]) => Number.isSafeInteger(id)))
+  const entries = rows
+    .map((row): [number, JsonRow] => [Number(row[field]), row])
+    .filter(([id]) => Number.isSafeInteger(id))
+  return new Map(entries)
 }
 
 function isCancelledOrder(row: JsonRow): boolean {
@@ -189,7 +192,7 @@ function fileAuditRow(root: string, path: string): JsonRow {
   const stat = statSync(path)
   const extension = path.toLowerCase().split(".").pop() ?? ""
   let structure = "Binary/supporting file"
-  let rows = ""
+  let rows: string | number = ""
   let role = "Supporting evidence"
   let linkQuality = "See role/comment"
 

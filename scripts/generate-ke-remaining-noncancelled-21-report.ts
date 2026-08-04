@@ -63,9 +63,9 @@ function main() {
   if (validation.status !== "PASS") throw new Error("Seven-order production validation did not pass")
   const importedLedgerIds = new Set((snapshot.legacyOrderImports as Row[]).map((row) => Number(row.legacy_order_id)))
   const priorAssessments = rows(prior, "Order Assessment")
-  const remaining = priorAssessments
+  const remaining: Row[] = priorAssessments
     .filter((row) => !importedLedgerIds.has(Number(row["Legacy Order ID"])))
-    .map((row) => ({
+    .map<Row>((row) => ({
       ...row,
       "Final Blocker Code": finalBlocker(Number(row["Legacy Order ID"])),
       "Current Production Status": "NOT IMPORTED",
@@ -94,7 +94,7 @@ function main() {
     IN_PROCESS: "Individual detail remains In Process and was not authorized as delivered.",
     NO_LIVE_ORDER_RECORD: "Individual detail returns the default empty ID 0 record; likely an abandoned or deleted draft.",
   }
-  const reasonRows = [...blockerGroups.entries()].map(([code, ids]) => ({
+  const reasonRows: Row[] = [...blockerGroups.entries()].map<Row>(([code, ids]) => ({
     "Final Blocker Code": code,
     Orders: ids.length,
     "Legacy Order IDs": ids.sort((a, b) => a - b).join(", "),
