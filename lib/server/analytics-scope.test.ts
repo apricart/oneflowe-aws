@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import {
   normalizePositiveIds,
+  parseRequestedOrganizationIds,
   resolveAnalyticsBranchIds,
   resolveAnalyticsOrganizationIds,
 } from "@/lib/server/analytics-scope"
@@ -52,5 +53,19 @@ describe("analytics tenant scope", () => {
 
   it("normalizes positive integer identifiers", () => {
     expect(normalizePositiveIds(["2", 2, 3.5, 0, -1, "nope", 5])).toEqual([2, 5])
+  })
+
+  it("parses the report multi-select organization scope", () => {
+    expect(parseRequestedOrganizationIds({
+      organizationIds: "10,12,10,invalid,-1",
+      organizationId: "99",
+    })).toEqual([10, 12])
+  })
+
+  it("falls back to the global singular organization scope", () => {
+    expect(parseRequestedOrganizationIds({
+      organizationIds: null,
+      organizationId: "10",
+    })).toEqual([10])
   })
 })

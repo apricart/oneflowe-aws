@@ -16,6 +16,22 @@ export function normalizePositiveIds(values: unknown[]) {
   ))
 }
 
+export function parseRequestedOrganizationIds({
+  organizationIds,
+  organizationId,
+}: {
+  organizationIds: string | null
+  organizationId: string | null
+}) {
+  const requested = organizationIds?.trim()
+    ? organizationIds.split(",")
+    : organizationId
+      ? [organizationId]
+      : []
+
+  return normalizePositiveIds(requested)
+}
+
 export function resolveAnalyticsOrganizationIds({
   role,
   userOrganizationId,

@@ -3,7 +3,7 @@
  * Safely imports authoritative, delivered K-Electric legacy orders.
  *
  * Default behavior is read-only:
- *   npx tsx scripts/import-ke-legacy-orders.ts
+ *   npx tsx scripts/import-ke-legacy-orders.ts --source-root=<report-directory>
  *
  * A live import requires every printed confirmation value:
  *   npx tsx scripts/import-ke-legacy-orders.ts --commit \
@@ -48,6 +48,7 @@ interface Options {
   allowHistoricalUsers: boolean
   outputPath?: string
   overridesPath?: string
+  sourceRoot?: string
 }
 
 interface DbBranch {
@@ -123,6 +124,7 @@ function options(): Options {
     allowHistoricalUsers: process.argv.includes("--allow-historical-users"),
     outputPath: getArg("--output"),
     overridesPath: getArg("--overrides"),
+    sourceRoot: getArg("--source-root"),
   }
 }
 
@@ -221,7 +223,7 @@ function buildReceipt(order: PreparedOrder, branch: DbBranch, productIds: Map<st
 
 async function main() {
   const opts = options()
-  const source = prepareKeLegacySource()
+  const source = prepareKeLegacySource(opts.sourceRoot)
   const overrides = loadOverrides(opts.overridesPath)
   const confirmationManifest = overrides.source
     ? { ...source.manifest, overrides: overrides.source }
@@ -1034,14 +1036,15 @@ async function main() {
         insert into orders (
           tid, organization_id, branch_id, status, fulfillment_status,
           payment_status, subtotal_cents, tax_cents, total_cents, notes,
-          created_by_user_id, created_at, fulfilled_at, updated_at, receipt_data
+          created_by_user_id, created_at, delivered_at, fulfilled_at, updated_at,
+          receipt_data
         ) values (
           ${orderValue.tid}, ${orderValue.organizationId}, ${orderValue.branchId},
           ${orderValue.status}, ${orderValue.fulfillmentStatus},
           ${orderValue.paymentStatus}, ${orderValue.subtotalCents},
           ${orderValue.taxCents}, ${orderValue.totalCents}, ${orderValue.notes},
           ${orderValue.createdByUserId}, ${orderValue.createdAt},
-          ${orderValue.fulfilledAt}, ${orderValue.updatedAt},
+          ${orderValue.deliveredAt}, ${orderValue.fulfilledAt}, ${orderValue.updatedAt},
           ${JSON.stringify(orderValue.receiptData)}::jsonb
         )
         returning id, tid

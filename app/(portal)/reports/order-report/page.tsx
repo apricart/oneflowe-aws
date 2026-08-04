@@ -993,6 +993,9 @@ function MonthFilter({ selected, onChange }: { selected: number[], onChange: (va
 
 function YearFilter({ selected, onChange, allTimeData }: { selected: number[], onChange: (val: number[]) => void, allTimeData: any }) {
     const availableYears = useMemo(() => {
+        if (Array.isArray(allTimeData?.years) && allTimeData.years.length > 0) {
+            return Array.from(new Set<number>(allTimeData.years.map(Number).filter(Number.isInteger))).sort((a, b) => b - a)
+        }
         if (!allTimeData?.orders?.length) return [new Date().getFullYear()]
         const yearsSet = new Set<number>()
         allTimeData.orders.forEach((o: any) => yearsSet.add(new Date(o.createdAt).getFullYear()))

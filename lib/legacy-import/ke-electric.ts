@@ -108,12 +108,7 @@ export interface SourcePreparation {
   sourceCounts: Record<string, number>
 }
 
-const REPORT_PATHS = {
-  orders: resolve("reports/order.json"),
-  sales: resolve("reports/sales-report.json"),
-  productSummary: resolve("reports/user-product-summary-report.json"),
-  priceHistory: resolve("reports/item-price-history-report.json"),
-} as const
+const DEFAULT_REPORT_ROOT = "reports"
 
 export function normalizeText(value: unknown): string {
   return String(value ?? "")
@@ -191,11 +186,12 @@ function orderChecksum(header: LegacyOrder, lines: LegacySaleLine[]): string {
     .digest("hex")
 }
 
-export function prepareKeLegacySource(): SourcePreparation {
-  const ordersFile = jsonFile<LegacyOrder>(REPORT_PATHS.orders)
-  const salesFile = jsonFile<LegacySaleLine>(REPORT_PATHS.sales)
-  const summaryFile = jsonFile<LegacyProductSummary>(REPORT_PATHS.productSummary)
-  const historyFile = jsonFile<LegacyPriceHistory>(REPORT_PATHS.priceHistory)
+export function prepareKeLegacySource(reportRoot = DEFAULT_REPORT_ROOT): SourcePreparation {
+  const root = resolve(reportRoot)
+  const ordersFile = jsonFile<LegacyOrder>(resolve(root, "order.json"))
+  const salesFile = jsonFile<LegacySaleLine>(resolve(root, "sales-report.json"))
+  const summaryFile = jsonFile<LegacyProductSummary>(resolve(root, "user-product-summary-report.json"))
+  const historyFile = jsonFile<LegacyPriceHistory>(resolve(root, "item-price-history-report.json"))
 
   const headers = new Map(ordersFile.rows.map((row) => [Number(row.ID), row]))
   const linesByOrder = new Map<number, LegacySaleLine[]>()
