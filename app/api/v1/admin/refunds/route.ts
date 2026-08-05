@@ -47,6 +47,7 @@ export async function GET(req: NextRequest) {
                     id: refunds.id,
                     refundNumber: refunds.refundNumber,
                     amountCents: refunds.amountCents,
+                    taxRefundCents: refunds.taxRefundCents,
                     reason: refunds.reason,
                     status: refunds.status,
                     createdAt: refunds.createdAt,

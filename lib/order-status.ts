@@ -47,6 +47,23 @@ export function getOrderStatusFilter(value?: string | null): OrderStatusFilter {
     : "all"
 }
 
+export function getOrderStatusesForFilter(filter: OrderStatusFilter): string[] {
+  switch (filter) {
+    case "pending":
+      return ["PENDING"]
+    case "approved":
+      return ["APPROVED"]
+    case "fulfilled":
+      return ["FULFILLED", "PARTIAL", "PARTIALLY_FULFILLED"]
+    case "rejected":
+      return ["REJECTED", "CANCELLED"]
+    case "refunded":
+      return ["REFUNDED"]
+    default:
+      return []
+  }
+}
+
 export function getOrderRefundVariant(order: OrderStatusSource): Exclude<OrderSplitFilter, "all"> | "none" {
   const status = normalizeStatus(order.status)
   const refundAmountCents = Number(order.refundAmountCents || 0)

@@ -253,6 +253,13 @@
       "when": 1785499200000,
       "tag": "20260731120000_add_branch_tenant_uniqueness",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1785902400000,
+      "tag": "20260805090000_add_refund_tax_cents",
+      "breakpoints": true
     }
   ]
 }

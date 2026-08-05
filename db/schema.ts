@@ -499,7 +499,10 @@ export const refunds = pgTable(
     orderId: integer("order_id")
       .references(() => orders.id)
       .notNull(),
+    // Gross refund used by existing reports/filters (item refund + refunded tax).
     amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
+    // Additive breakdown field. Existing and application-created refunds remain 0.
+    taxRefundCents: bigint("tax_refund_cents", { mode: "number" }).notNull().default(0),
     reason: varchar("reason", { length: 255 }),
     // New workflow: support pending refund requests
     status: varchar("status", { length: 16 }).notNull().default("PENDING"), // PENDING, APPROVED
@@ -514,6 +517,7 @@ export const refunds = pgTable(
     refundsOrgIdx: index("refunds_org_idx").on(t.organizationId),
     processedByIdx: index("refunds_processed_by_idx").on(t.processedByUserId),
     refundAmountPositive: check("refunds_amount_positive_ck", sql`${t.amountCents} > 0`),
+    refundTaxValid: check("refunds_tax_refund_valid_ck", sql`${t.taxRefundCents} >= 0 AND ${t.taxRefundCents} <= ${t.amountCents}`),
   }),
 )
 

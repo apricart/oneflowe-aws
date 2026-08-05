@@ -40,6 +40,7 @@ dotenv.config()
 
 interface Options {
   commit: boolean
+  rollbackTest: boolean
   actorUserId?: string
   confirmOrganization?: string
   confirmManifest?: string
@@ -116,6 +117,7 @@ function options(): Options {
   const expected = getArg("--expected-orders")
   return {
     commit: process.argv.includes("--commit"),
+    rollbackTest: process.argv.includes("--rollback-test"),
     actorUserId: getArg("--actor-user-id"),
     confirmOrganization: getArg("--confirm-organization"),
     confirmManifest: getArg("--confirm-manifest"),
@@ -685,7 +687,7 @@ async function main() {
 
   console.log("\nK-Electric legacy import preflight")
   console.log("----------------------------------")
-  console.log(`Mode                     : ${opts.commit ? "COMMIT REQUESTED" : "DRY RUN (read-only)"}`)
+  console.log(`Mode                     : ${opts.commit ? "COMMIT REQUESTED" : opts.rollbackTest ? "ROLLBACK TEST REQUESTED" : "DRY RUN (read-only)"}`)
   console.log(`Organization verified    : ${organization.name} (id=${organization.id}, code=${organization.code})`)
   console.log(`Manifest confirmation    : ${digest}`)
   console.log(`Ledger migration present : ${ledgerInstalled}`)
@@ -723,7 +725,7 @@ async function main() {
   if (opts.outputPath) {
     writeFileSync(opts.outputPath, JSON.stringify({
       generatedAt: new Date().toISOString(),
-      mode: opts.commit ? "COMMIT_REQUESTED" : "DRY_RUN",
+      mode: opts.commit ? "COMMIT_REQUESTED" : opts.rollbackTest ? "ROLLBACK_TEST_REQUESTED" : "DRY_RUN",
       organization,
       manifestDigest: digest,
       manifest: confirmationManifest,
@@ -738,7 +740,7 @@ async function main() {
     console.log(`Preflight report written : ${opts.outputPath}`)
   }
 
-  if (!opts.commit) {
+  if (!opts.commit && !opts.rollbackTest) {
     console.log("\nNothing was written to the database.")
     console.log("Do not commit until Blocking issues is 0 and the migration has been reviewed/applied.")
     await pool.end()
@@ -781,7 +783,10 @@ async function main() {
     }
   }
 
-  await db.transaction(async (tx) => {
+  const rollbackTestSentinel = "KE_LEGACY_IMPORT_ROLLBACK_TEST_COMPLETE"
+  let rollbackTestPassed = false
+  try {
+    await db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(1263482710, ${KE_ORGANIZATION.id})`)
 
     // Hold shared locks during the historical insert. This prevents a current
@@ -1231,12 +1236,24 @@ async function main() {
       invoiceSequence: afterInvoiceSequence,
       stocks: afterStocks,
     })).digest("hex")
-    if (afterLedgerDigest !== operationalLedgerDigest) {
-      throw new Error("Operational stock/budget/invoice ledger changed; rolling back")
-    }
-  })
+      if (afterLedgerDigest !== operationalLedgerDigest) {
+        throw new Error("Operational stock/budget/invoice ledger changed; rolling back")
+      }
+      if (opts.rollbackTest) throw new Error(rollbackTestSentinel)
+    })
+  } catch (error) {
+    const value = error && typeof error === "object" ? error as Record<string, any> : {}
+    const message = String(value.message ?? value.cause?.message ?? "")
+    if (opts.rollbackTest && message.includes(rollbackTestSentinel)) rollbackTestPassed = true
+    else throw error
+  }
 
-  console.log(`\nCommitted ${readyOrders.length} K-Electric historical orders atomically.`)
+  if (opts.rollbackTest) {
+    if (!rollbackTestPassed) throw new Error("Rollback rehearsal did not reach the verified rollback sentinel")
+    console.log(`\nRollback rehearsal passed for ${readyOrders.length} K-Electric historical orders; no data persisted.`)
+  } else {
+    console.log(`\nCommitted ${readyOrders.length} K-Electric historical orders atomically.`)
+  }
   await pool.end()
 }
 

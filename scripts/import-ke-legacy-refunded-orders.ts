@@ -15,6 +15,7 @@ import type { PoolClient } from "pg"
 import * as dotenv from "dotenv"
 
 import { pool } from "../lib/db-cli"
+import { buildRefundBreakdownCents } from "../lib/refund-breakdown"
 import {
   KE_ORGANIZATION,
   LEGACY_SOURCE,
@@ -32,10 +33,13 @@ type JsonRow = Record<string, any>
 interface Options {
   commit: boolean
   rollbackTest: boolean
+  sourceOnly: boolean
   actorUserId?: string
   confirmOrganization?: string
   confirmManifest?: string
   expectedOrders?: number
+  approvedNonFinalLegacyOrderIds: Set<number>
+  createMissingBranchAssignments: boolean
   refundReportPath: string
   refundAuditPath: string
   outputPath?: string
@@ -73,6 +77,8 @@ interface PreparedRefundOrder {
   subtotalCents: number
   taxCents: number
   totalCents: number
+  itemRefundAmountCents: number
+  taxRefundCents: number
   refundAmountCents: number
   lines: PreparedLine[]
   omittedZeroQuantityLines: number
@@ -135,7 +141,7 @@ const REQUIRED_COLUMNS: Record<string, string[]> = {
     "price_cents", "created_at",
   ],
   refunds: [
-    "id", "organization_id", "order_id", "amount_cents", "reason", "status",
+    "id", "organization_id", "order_id", "amount_cents", "tax_refund_cents", "reason", "status",
     "refund_number", "processed_by_user_id", "created_at", "updated_at",
   ],
   refund_items: ["id", "refund_id", "order_item_id", "quantity", "amount_cents", "created_at"],
@@ -158,13 +164,22 @@ function arg(name: string): string | undefined {
 
 function options(): Options {
   const expected = arg("--expected-orders")
+  const approvedNonFinalLegacyOrderIds = new Set(
+    String(arg("--approve-nonfinal-as-delivered") ?? "")
+      .split(",")
+      .map((value) => Number(value.trim()))
+      .filter((value) => Number.isSafeInteger(value) && value > 0),
+  )
   return {
     commit: process.argv.includes("--commit"),
     rollbackTest: process.argv.includes("--rollback-test"),
+    sourceOnly: process.argv.includes("--source-only"),
     actorUserId: arg("--actor-user-id"),
     confirmOrganization: arg("--confirm-organization"),
     confirmManifest: arg("--confirm-manifest"),
     expectedOrders: expected === undefined ? undefined : Number(expected),
+    approvedNonFinalLegacyOrderIds,
+    createMissingBranchAssignments: !process.argv.includes("--skip-missing-branch-assignments"),
     refundReportPath: resolve(arg("--refund-report") ?? "updatedReports/refundReport.json"),
     refundAuditPath: resolve(arg("--refund-audit") ?? "updatedReports/ke-refund-detail-audit-2026-08-03.json"),
     outputPath: arg("--output"),
@@ -223,11 +238,17 @@ function prepareSource(opts: Options) {
     const evidence = evidenceById.get(legacyOrderId)
 
     if (!Number.isSafeInteger(legacyOrderId) || legacyOrderId <= 0) reasons.push("INVALID_LEGACY_ORDER_ID")
-    // The legacy system keeps partially refunded orders at status 2 and moves
-    // fully refunded orders to status 4 with a separate terminal delivery code.
-    // Both still require independently reconciled item evidence below.
-    if (![2, 4].includes(Number(header.StatusID))) reasons.push("NOT_REFUNDED_STATUS")
-    if (Number(header.StatusID) === 2 && Number(header.DeliveryStatus) !== 507) reasons.push("PARTIAL_REFUND_NOT_DELIVERED")
+    // Status 2/507 is the legacy delivered partial-refund state and status 4 is
+    // the full-refund state. Any other historical state must be approved by
+    // exact legacy order ID; this prevents a broad status reinterpretation.
+    const sourceStatusId = Number(header.StatusID)
+    const hasExplicitNonFinalApproval = opts.approvedNonFinalLegacyOrderIds.has(legacyOrderId)
+    const isExplicitlyApprovedNonFinal = hasExplicitNonFinalApproval
+      && sourceStatusId === 9
+      && Number(header.DeliveryStatus) === 506
+    if (hasExplicitNonFinalApproval && !isExplicitlyApprovedNonFinal) reasons.push("EXPLICIT_APPROVAL_SOURCE_STATE_MISMATCH")
+    if (![2, 4].includes(sourceStatusId) && !isExplicitlyApprovedNonFinal) reasons.push("NONFINAL_STATUS_NOT_EXPLICITLY_APPROVED")
+    if (sourceStatusId === 2 && Number(header.DeliveryStatus) !== 507) reasons.push("PARTIAL_REFUND_NOT_DELIVERED")
     if (!detail?.ok || !modal?.ok || !evidence) reasons.push("MISSING_SUCCESSFUL_DETAIL_EVIDENCE")
     if (evidence && (!evidence.originalSubtotalComplete || !evidence.originalSubtotalReconciles)) reasons.push("ORIGINAL_SUBTOTAL_NOT_RECONCILED")
     if (evidence && (!evidence.refundPriceComplete || !evidence.unitPriceComplete || !evidence.refundPriceReconciles || !evidence.unitPriceReconciles)) reasons.push("REFUND_ITEMS_NOT_RECONCILED")
@@ -236,18 +257,26 @@ function prepareSource(opts: Options) {
     const subtotalCents = toCents(header.AmountTotal)
     const taxCents = toCents(header.Tax)
     const totalCents = toCents(header.GrandTotal)
-    const refundAmountCents = toCents(header.RefundAmount)
+    const itemRefundAmountCents = toCents(header.RefundAmount)
     const taxRefundCents = toCents(header.TaxRefund)
-    if (taxRefundCents !== 0) reasons.push("UNSUPPORTED_TAX_REFUND")
+    let refundAmountCents = -1
+    try {
+      refundAmountCents = buildRefundBreakdownCents(itemRefundAmountCents, taxRefundCents).grossRefundCents
+    } catch {
+      reasons.push("INVALID_REFUND_BREAKDOWN")
+    }
     if (toCents(header.AmountDiscount) !== 0 || toCents(header.ServiceCharges) !== 0) reasons.push("UNSUPPORTED_DISCOUNT_OR_SERVICE_CHARGE")
-    if (subtotalCents + taxCents !== totalCents || refundAmountCents <= 0 || refundAmountCents > totalCents) reasons.push("INVALID_ORDER_TOTALS")
+    if (subtotalCents + taxCents !== totalCents
+      || itemRefundAmountCents <= 0
+      || taxRefundCents < 0
+      || refundAmountCents > totalCents) reasons.push("INVALID_ORDER_TOTALS")
 
     const checkout = detail?.checkout ?? {}
     if (detail && (
       toCents(checkout.AmountTotal) !== subtotalCents
       || toCents(checkout.Tax) !== taxCents
       || toCents(checkout.GrandTotal) !== totalCents
-      || toCents(checkout.RefundAmount) !== refundAmountCents
+      || toCents(checkout.RefundAmount) !== itemRefundAmountCents
       || toCents(checkout.TaxRefund) !== taxRefundCents
       || toCents(checkout.AmountDiscount) !== 0
       || toCents(checkout.ServiceCharges) !== 0
@@ -306,8 +335,8 @@ function prepareSource(opts: Options) {
     if (lines.length === 0) reasons.push("NO_POSITIVE_QUANTITY_LINES")
     if (lines.reduce((sum, line) => sum + line.lineTotalCents, 0) !== subtotalCents) reasons.push("ORIGINAL_ITEM_TOTAL_MISMATCH")
     const refundedLines = lines.filter((line) => line.refundedQuantity > 0)
-    if (refundedLines.length === 0 || refundedLines.reduce((sum, line) => sum + line.refundTotalCents, 0) !== refundAmountCents) reasons.push("REFUND_ITEM_TOTAL_MISMATCH")
-    if (Number(header.StatusID) === 4
+    if (refundedLines.length === 0 || refundedLines.reduce((sum, line) => sum + line.refundTotalCents, 0) !== itemRefundAmountCents) reasons.push("REFUND_ITEM_TOTAL_MISMATCH")
+    if (sourceStatusId === 4
       && (refundAmountCents !== totalCents || lines.some((line) => line.refundedQuantity !== line.quantity))) {
       reasons.push("FULL_REFUND_STATUS_NOT_FULLY_RECONCILED")
     }
@@ -343,6 +372,8 @@ function prepareSource(opts: Options) {
       subtotalCents,
       taxCents,
       totalCents,
+      itemRefundAmountCents,
+      taxRefundCents,
       refundAmountCents,
       lines,
       omittedZeroQuantityLines,
@@ -350,10 +381,25 @@ function prepareSource(opts: Options) {
   }
 
   const manifest = { refundReport: reportFile.source, refundAudit: auditFile.source }
-  const manifestDigest = stableDigest(Object.entries(manifest).sort(([a], [b]) => a.localeCompare(b)).map(([name, file]) => `${name}:${file.sha256}`))
+  const approvedNonFinalLegacyOrderIds = [...opts.approvedNonFinalLegacyOrderIds].sort((a, b) => a - b)
+  const manifestFiles = Object.entries(manifest)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, file]) => `${name}:${file.sha256}`)
+  // Preserve the digest used by earlier tax-free imports. The explicit status
+  // policy participates in the digest only when it is actually requested.
+  const usesNonDefaultPolicy = approvedNonFinalLegacyOrderIds.length > 0 || !opts.createMissingBranchAssignments
+  const manifestDigest = !usesNonDefaultPolicy
+    ? stableDigest(manifestFiles)
+    : stableDigest({
+      files: manifestFiles,
+      approvedNonFinalLegacyOrderIds,
+      createMissingBranchAssignments: opts.createMissingBranchAssignments,
+    })
   return {
     manifest,
     manifestDigest,
+    approvedNonFinalLegacyOrderIds,
+    createMissingBranchAssignments: opts.createMissingBranchAssignments,
     prepared: prepared.sort((a, b) => a.legacyOrderId - b.legacyOrderId),
     excluded: excluded.sort((a, b) => a.legacyOrderId - b.legacyOrderId),
     sourceCount: reportFile.value.length,
@@ -364,7 +410,11 @@ async function rows<T extends JsonRow = JsonRow>(client: PoolClient, text: strin
   return (await client.query(text, params)).rows as T[]
 }
 
-async function reconcile(client: PoolClient, prepared: PreparedRefundOrder[]): Promise<Reconciliation> {
+async function reconcile(
+  client: PoolClient,
+  prepared: PreparedRefundOrder[],
+  createMissingBranchAssignments = true,
+): Promise<Reconciliation> {
   const [organization] = await rows(client, "select id, code, name, status from organizations where id = $1", [KE_ORGANIZATION.id])
   const globalErrors: string[] = []
   if (!organization
@@ -625,7 +675,7 @@ async function reconcile(client: PoolClient, prepared: PreparedRefundOrder[]): P
     }
     for (const line of resolvedLines) {
       const key = `${branch.id}:${line.organizationInventoryId}`
-      if (!branchAssignmentByPair.has(key)) {
+      if (createMissingBranchAssignments && !branchAssignmentByPair.has(key)) {
         newBranchAssignmentByPair.set(key, {
           branchId: Number(branch.id),
           organizationInventoryId: line.organizationInventoryId,
@@ -702,7 +752,7 @@ async function commitOrders(
   await client.query("begin isolation level serializable")
   try {
     await client.query("select pg_advisory_xact_lock($1, $2)", [1263482710, KE_ORGANIZATION.id])
-    const current = await reconcile(client, source.prepared)
+    const current = await reconcile(client, source.prepared, opts.createMissingBranchAssignments)
     const blockers = current.globalErrors.length + current.requiredSchemaErrors.length
     if (blockers !== 0) throw new Error(`Commit refused: ${blockers} reconciliation blockers appeared under lock`)
     if (current.readyOrders.length !== opts.expectedOrders) throw new Error(`Commit refused: ready count changed to ${current.readyOrders.length}`)
@@ -725,7 +775,14 @@ async function commitOrders(
     `, [
       KE_ORGANIZATION.id,
       LEGACY_SOURCE,
-      JSON.stringify({ digest: source.manifestDigest, files: source.manifest, kind: "REFUND_AWARE", operationalDigest }),
+      JSON.stringify({
+        digest: source.manifestDigest,
+        files: source.manifest,
+        kind: "REFUND_AWARE_WITH_TAX_BREAKDOWN",
+        approvedNonFinalLegacyOrderIds: source.approvedNonFinalLegacyOrderIds,
+        createMissingBranchAssignments: source.createMissingBranchAssignments,
+        operationalDigest,
+      }),
       opts.actorUserId,
     ])
     if (!batch?.id) throw new Error("Failed to create import batch")
@@ -826,14 +883,15 @@ async function commitOrders(
 
       const [createdRefund] = await rows(client, `
         insert into refunds (
-          organization_id, order_id, amount_cents, reason, status, refund_number,
+          organization_id, order_id, amount_cents, tax_refund_cents, reason, status, refund_number,
           processed_by_user_id, created_at, updated_at
-        ) values ($1, $2, $3, $4, 'APPROVED', $5, $6, $7, $7)
+        ) values ($1, $2, $3, $4, $5, 'APPROVED', $6, $7, $8, $8)
         returning id, organization_id, order_id
       `, [
         KE_ORGANIZATION.id,
         createdOrder.id,
         order.refundAmountCents,
+        order.taxRefundCents,
         "Historical refund imported from K-Electric legacy logistics source",
         `KE-R-${order.legacyOrderId}`,
         opts.actorUserId,
@@ -866,6 +924,14 @@ async function commitOrders(
         order.sourceChecksum,
         JSON.stringify({
           kind: "REFUND_AWARE",
+          refundBreakdown: {
+            itemRefundCents: order.itemRefundAmountCents,
+            taxRefundCents: order.taxRefundCents,
+            grossRefundCents: order.refundAmountCents,
+          },
+          sourceStatusPolicy: opts.approvedNonFinalLegacyOrderIds.has(order.legacyOrderId)
+            ? "EXPLICITLY_APPROVED_AS_DELIVERED"
+            : "LEGACY_TERMINAL_REFUND_STATUS",
           header: order.header,
           detail: order.detail,
           modal: order.modal,
@@ -886,6 +952,9 @@ async function commitOrders(
         digest: source.manifestDigest,
         orderCount: current.readyOrders.length,
         refundAware: true,
+        taxRefundBreakdown: true,
+        approvedNonFinalLegacyOrderIds: source.approvedNonFinalLegacyOrderIds,
+        createMissingBranchAssignments: source.createMissingBranchAssignments,
         stockOrBudgetChanged: false,
       }),
     ])
@@ -913,6 +982,7 @@ async function commitOrders(
         count(r.id)::int as refunds,
         coalesce(sum(o.total_cents), 0)::bigint as total_cents,
         coalesce(sum(r.amount_cents), 0)::bigint as refund_cents,
+        coalesce(sum(r.tax_refund_cents), 0)::bigint as tax_refund_cents,
         count(*) filter (where o.organization_id <> $2 or r.organization_id <> $2)::int
           + (select count(*)::int from order_items oi
              join legacy_order_imports item_loi on item_loi.order_id = oi.order_id
@@ -925,10 +995,12 @@ async function commitOrders(
     `, [batch.id, KE_ORGANIZATION.id])
     const expectedTotalCents = current.readyOrders.reduce((sum, order) => sum + order.totalCents, 0)
     const expectedRefundCents = current.readyOrders.reduce((sum, order) => sum + order.refundAmountCents, 0)
+    const expectedTaxRefundCents = current.readyOrders.reduce((sum, order) => sum + order.taxRefundCents, 0)
     if (Number(validation.orders) !== current.readyOrders.length
       || Number(validation.refunds) !== current.readyOrders.length
       || Number(validation.total_cents) !== expectedTotalCents
       || Number(validation.refund_cents) !== expectedRefundCents
+      || Number(validation.tax_refund_cents) !== expectedTaxRefundCents
       || Number(validation.tenant_mismatches) !== 0) {
       throw new Error("Post-insert order/refund validation failed; rolling back")
     }
@@ -937,6 +1009,7 @@ async function commitOrders(
       select loi.legacy_order_id,
              coalesce(sum(ri.amount_cents), 0)::bigint as item_refund_cents,
              max(r.amount_cents)::bigint as refund_cents,
+             max(r.tax_refund_cents)::bigint as tax_refund_cents,
              count(*) filter (where ri.quantity <= 0 or ri.quantity > oi.quantity)::int as invalid_quantities
       from legacy_order_imports loi
       join refunds r on r.order_id = loi.order_id
@@ -946,7 +1019,9 @@ async function commitOrders(
       group by loi.legacy_order_id
     `, [batch.id, KE_ORGANIZATION.id])
     if (refundItemValidation.length !== current.readyOrders.length
-      || refundItemValidation.some((row) => Number(row.item_refund_cents) !== Number(row.refund_cents) || Number(row.invalid_quantities) !== 0)) {
+      || refundItemValidation.some((row) =>
+        Number(row.item_refund_cents) + Number(row.tax_refund_cents) !== Number(row.refund_cents)
+        || Number(row.invalid_quantities) !== 0)) {
       throw new Error("Post-insert refund-item validation failed; rolling back")
     }
 
@@ -984,16 +1059,40 @@ function writeReport(path: string | undefined, value: unknown) {
 async function main() {
   const opts = options()
   const source = prepareSource(opts)
+  if (opts.sourceOnly) {
+    const sourceOnlyReport = {
+      generatedAt: new Date().toISOString(),
+      mode: "SOURCE_ONLY",
+      manifestDigest: source.manifestDigest,
+      manifest: source.manifest,
+      approvedNonFinalLegacyOrderIds: source.approvedNonFinalLegacyOrderIds,
+      createMissingBranchAssignments: source.createMissingBranchAssignments,
+      sourceCount: source.sourceCount,
+      eligibleOrderIds: source.prepared.map((order) => order.legacyOrderId),
+      excluded: source.excluded,
+      totals: {
+        orderCents: source.prepared.reduce((sum, order) => sum + order.totalCents, 0),
+        itemRefundCents: source.prepared.reduce((sum, order) => sum + order.itemRefundAmountCents, 0),
+        taxRefundCents: source.prepared.reduce((sum, order) => sum + order.taxRefundCents, 0),
+        grossRefundCents: source.prepared.reduce((sum, order) => sum + order.refundAmountCents, 0),
+      },
+    }
+    console.log(JSON.stringify(sourceOnlyReport, null, 2))
+    writeReport(opts.outputPath, sourceOnlyReport)
+    return
+  }
   const client = await pool.connect()
   try {
     await client.query("begin isolation level repeatable read read only")
-    const reconciliation = await reconcile(client, source.prepared)
+    const reconciliation = await reconcile(client, source.prepared, opts.createMissingBranchAssignments)
     await client.query("commit")
 
     const blockingIssues = reconciliation.globalErrors.length
       + reconciliation.requiredSchemaErrors.length
     const totalReadyCents = reconciliation.readyOrders.reduce((sum, order) => sum + order.totalCents, 0)
     const totalReadyRefundCents = reconciliation.readyOrders.reduce((sum, order) => sum + order.refundAmountCents, 0)
+    const totalReadyItemRefundCents = reconciliation.readyOrders.reduce((sum, order) => sum + order.itemRefundAmountCents, 0)
+    const totalReadyTaxRefundCents = reconciliation.readyOrders.reduce((sum, order) => sum + order.taxRefundCents, 0)
     const report = {
       generatedAt: new Date().toISOString(),
       mode: opts.commit ? "COMMIT_REQUESTED" : opts.rollbackTest ? "ROLLBACK_TEST_REQUESTED" : "DRY_RUN",
@@ -1005,11 +1104,12 @@ async function main() {
       manifestDigest: source.manifestDigest,
       manifest: source.manifest,
       policy: {
-        taxRefunds: "EXCLUDED",
+        taxRefunds: "STORED_SEPARATELY_WHILE_AMOUNT_CENTS_REMAINS_GROSS",
+        approvedNonFinalLegacyOrderIds: source.approvedNonFinalLegacyOrderIds,
         negativeOrUnreconciledRefundState: "EXCLUDED",
         zeroQuantityLines: "OMIT_ONLY_WHEN_PROVEN_ZERO_VALUE_AND_NOT_REFUNDED",
         createCatalogOrUsers: false,
-        createInactiveBranchAssignmentsWhenMissing: true,
+        createInactiveBranchAssignmentsWhenMissing: source.createMissingBranchAssignments,
         createLedgerUserMappingsOnlyForUniqueExistingActiveUsers: true,
         operationalLedgers: "MUST_REMAIN_BYTE_EQUIVALENT",
       },
@@ -1031,6 +1131,8 @@ async function main() {
         readyRefundItems: reconciliation.readyOrders.reduce((sum, order) => sum + order.lines.filter((line) => line.refundedQuantity > 0).length, 0),
         readyGrossCents: totalReadyCents,
         readyRefundCents: totalReadyRefundCents,
+        readyItemRefundCents: totalReadyItemRefundCents,
+        readyTaxRefundCents: totalReadyTaxRefundCents,
       },
       dbCounts: reconciliation.dbCounts,
       ledgerIntegrity: reconciliation.ledgerIntegrity,
@@ -1052,6 +1154,7 @@ async function main() {
     console.log(`Already imported           : ${reconciliation.alreadyImported.length}`)
     console.log(`Ready this run             : ${reconciliation.readyOrders.length}`)
     console.log(`Ready gross/refund PKR     : ${(totalReadyCents / 100).toFixed(2)}/${(totalReadyRefundCents / 100).toFixed(2)}`)
+    console.log(`Item/tax refund PKR        : ${(totalReadyItemRefundCents / 100).toFixed(2)}/${(totalReadyTaxRefundCents / 100).toFixed(2)}`)
     console.log(`Skipped target mapping     : ${reconciliation.orderBlocks.length}`)
     console.log(`Schema/global blockers     : ${reconciliation.requiredSchemaErrors.length}/${reconciliation.globalErrors.length}`)
     console.log(`New branch/user mappings   : ${reconciliation.newBranchAssignments.length}/${reconciliation.newUserMappings.length}`)

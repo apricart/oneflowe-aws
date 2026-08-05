@@ -416,6 +416,8 @@ export const refunds = pgTable("refunds", {
 	orderId: integer("order_id").notNull(),
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
+	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	taxRefundCents: bigint("tax_refund_cents", { mode: "number" }).default(0).notNull(),
 	reason: varchar({ length: 255 }),
 	processedByUserId: uuid("processed_by_user_id"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),

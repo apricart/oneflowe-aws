@@ -95,6 +95,7 @@ export async function GET(
         id: refunds.id,
         refundNumber: refunds.refundNumber,
         amountCents: refunds.amountCents,
+        taxRefundCents: refunds.taxRefundCents,
         reason: refunds.reason,
         createdAt: refunds.createdAt,
         status: refunds.status,

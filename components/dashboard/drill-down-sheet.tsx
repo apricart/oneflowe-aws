@@ -193,7 +193,9 @@ export function DrillDownSheet({
     const [compareMonths, setCompareMonths] = useState<number[]>([])
     const [compareYears, setCompareYears] = useState<number[]>([])
     const [expandedRow, setExpandedRow] = useState<string | null>(null)
-    const [refundType, setRefundType] = useState<"all" | "full" | "partial">("all")
+    // The dashboard Refunded KPI counts only fully refunded orders. Open its
+    // drill-down on the same population so the KPI and drawer always agree.
+    const [refundType, setRefundType] = useState<"all" | "full" | "partial">("full")
     const [searchQuery, setSearchQuery] = useState("")
 
     useEffect(() => {
@@ -206,8 +208,9 @@ export function DrillDownSheet({
             setCompareMonths(parentCompareMonths || [])
             setCompareYears(parentCompareYears || [])
             setExpandedRow(null)
+            if (type === "REFUNDED") setRefundType("full")
         }
-    }, [isOpen, defaultDateRange, compareRange, parentActivePreset, parentMonths, parentYears, parentCompareMonths, parentCompareYears])
+    }, [isOpen, type, defaultDateRange, compareRange, parentActivePreset, parentMonths, parentYears, parentCompareMonths, parentCompareYears])
 
     const url = useMemo(() => {
         if (!isOpen || !type) return null
