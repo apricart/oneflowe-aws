@@ -1939,6 +1939,7 @@ export default function OrderPortalPage() {
                 orderTotalCents={selectedOrder.totalCents}
                 orderStatus={selectedOrder.status}
                 createdAt={selectedOrder.createdAt}
+                allowRefundRequest={["HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL"].includes(userRole)}
                 pricesHidden={pricesHidden}
                 initialOrderItems={orderDetailsData?.items?.[0]?.orderItems || selectedOrder.orderItems || []}
                 onRefundSuccess={() => {

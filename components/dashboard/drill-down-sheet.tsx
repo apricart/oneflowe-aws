@@ -38,6 +38,7 @@ const getDeliveryStatusColor = (status?: string | null) => {
 import {
     Sheet,
     SheetContent,
+    SheetTitle,
 } from "@/components/ui/sheet"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
@@ -311,10 +312,10 @@ export function DrillDownSheet({
                                 <Icon className="w-5 h-5" />
                             </div>
                             <div>
-                                <h2 className="text-xl font-semibold tracking-tight text-slate-900 dark:text-white">
+                                <SheetTitle className="text-xl font-semibold tracking-tight text-slate-900 dark:text-white">
                                     {title || (isBuyer && type === "REVENUE" ? "Purchase Insights" : config.title)}
                                     {activePreset === "all" && <span className="text-slate-400 font-normal ml-2">(All Time)</span>}
-                                </h2>
+                                </SheetTitle>
                             </div>
                         </div>
                         <div className="flex items-center gap-3 relative z-50">

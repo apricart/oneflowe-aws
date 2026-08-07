@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest"
 import {
   normalizeBranch,
+  normalizeBranchExact,
   normalizeLegacyUser,
   normalizeProductName,
   prepareKeLegacySource,
   rejectionCounts,
+  resolveKeLegacyBranch,
   toCents,
 } from "./ke-electric"
 
@@ -12,6 +14,58 @@ describe("K-Electric legacy source normalization", () => {
   it("normalizes the known GSO branch alias without broad fuzzy matching", () => {
     expect(normalizeBranch("1. GSO")).toBe("gso")
     expect(normalizeBranch("GSO")).toBe("gso")
+  })
+
+  it("preserves capitalization for exact external branch identity", () => {
+    expect(normalizeBranchExact(" DISTRIBUTION   STRATEGY ")).toBe("DISTRIBUTION STRATEGY")
+    expect(normalizeBranchExact("Distribution Strategy")).toBe("Distribution Strategy")
+  })
+
+  it("resolves capitalization-only branches by stable source location ID", () => {
+    const branches = [
+      { id: 184, name: "DISTRIBUTION STRATEGY", externalSource: "KE_LOGISTICS", externalId: "85" },
+      { id: 260, name: "Distribution Strategy", externalSource: "KE_LOGISTICS", externalId: "86" },
+      { id: 226, name: "society cluster", externalSource: "KE_LOGISTICS", externalId: "128" },
+      { id: 261, name: "Society Cluster", externalSource: "KE_LOGISTICS", externalId: "132" },
+    ]
+
+    expect(resolveKeLegacyBranch(branches, { locationId: 85, name: "DISTRIBUTION STRATEGY" })).toMatchObject({
+      branch: { id: 184 },
+      kind: "EXTERNAL_ID",
+    })
+    expect(resolveKeLegacyBranch(branches, { locationId: 86, name: "Distribution Strategy" })).toMatchObject({
+      branch: { id: 260 },
+      kind: "EXTERNAL_ID",
+    })
+    expect(resolveKeLegacyBranch(branches, { locationId: 128, name: "society cluster" })).toMatchObject({
+      branch: { id: 226 },
+      kind: "EXTERNAL_ID",
+    })
+    expect(resolveKeLegacyBranch(branches, { locationId: 132, name: "Society Cluster" })).toMatchObject({
+      branch: { id: 261 },
+      kind: "EXTERNAL_ID",
+    })
+  })
+
+  it("uses exact capitalization before normalized aliases and rejects ambiguity", () => {
+    const branches = [
+      { id: 1, name: "society cluster" },
+      { id: 2, name: "Society Cluster" },
+    ]
+    expect(resolveKeLegacyBranch(branches, { name: "Society Cluster" })).toMatchObject({
+      branch: { id: 2 },
+      kind: "EXACT_NAME",
+    })
+    expect(resolveKeLegacyBranch(branches, { name: "SOCIETY CLUSTER" })).toMatchObject({
+      branch: null,
+      kind: "UNRESOLVED",
+      matchCount: 2,
+    })
+    expect(resolveKeLegacyBranch([{ id: 1, name: "society cluster" }], { name: "Society Cluster" })).toMatchObject({
+      branch: null,
+      kind: "UNRESOLVED",
+      matchCount: 1,
+    })
   })
 
   it("removes only the legacy trailing user separator", () => {

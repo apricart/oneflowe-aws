@@ -299,7 +299,12 @@ export async function POST(req: Request) {
 
     // Handle database constraint violations
     if (databaseCode === '23505') { // Unique violation
-      if (databaseConstraint === "branches_org_name_normalized_uq") {
+      if ([
+        "branches_org_name_normalized_uq",
+        "branches_org_name_normalized_unmapped_uq",
+        "branches_org_name_exact_uq",
+        "branches_org_name_identity_guard",
+      ].includes(databaseConstraint)) {
         return error("A branch with this name already exists in this organization.", 409)
       }
       return error("Branch with this code already exists in this organization", 409)

@@ -8,7 +8,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import {
     RefreshCw, Search, Download, FileText, FileSpreadsheet, Package, TrendingUp, Loader2, AlertOctagon, RotateCcw, Calculator,
-    ChevronDown, BarChart3, ListOrdered, Calendar, Hash, Store, Layers, ArrowUpRight, ArrowDownRight, LayoutDashboard, Database, Filter, LayoutGrid
+    ChevronDown, ChevronLeft, ChevronRight, BarChart3, ListOrdered, Calendar, Hash, Store, Layers, ArrowUpRight, ArrowDownRight, LayoutDashboard, Database, Filter, LayoutGrid
 } from "lucide-react"
 import { formatPKR, cn } from "@/lib/utils"
 import { getOrderDerivedStatus } from "@/lib/order-status"
@@ -21,6 +21,7 @@ import { Role } from "@/lib/rbac"
 import { useSession } from "next-auth/react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination"
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -53,9 +54,12 @@ import { OrganizationFilter } from "@/components/reports/organization-filter"
 import { MultiBranchFilter } from "@/components/dashboard/multi-branch-filter"
 import { MultiSelectFilter } from "@/components/reports/multi-select-filter"
 import { KPICard } from "@/components/reports/kpi-card"
+import { useDebounce } from "@/hooks/use-debounce"
+import { useToast } from "@/hooks/use-toast"
 import { Upload } from "lucide-react"
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
+const ORDER_REPORT_PAGE_SIZE = 25
 
 const ALL_COLUMNS: ColumnDef[] = [
     { key: "orderDate", label: "Date", defaultVisible: true },
@@ -99,6 +103,7 @@ export default function OrderReportPage() {
     } = useAppContext()
 
     const { data: session, status: sessionStatus } = useSession()
+    const { toast } = useToast()
     const role = (session?.user as any)?.role as Role
     const userOrgId = (session?.user as any)?.organizationId
     const organizationId = userOrgId || contextOrgId
@@ -114,7 +119,10 @@ export default function OrderReportPage() {
     const [hasMounted, setHasMounted] = useState(false)
     const [activeTab, setActiveTab] = useState("analytics")
     const [reportSearch, setReportSearch] = useState("")
+    const debouncedReportSearch = useDebounce(reportSearch.trim(), 300)
     const [statusFilter, setStatusFilter] = useState<StatusFilter>("all")
+    const [currentPage, setCurrentPage] = useState(1)
+    const [isExporting, setIsExporting] = useState(false)
     const [generatedDate, setGeneratedDate] = useState("")
 
     // ━━━ 1. GLOBAL STATE (Sticky Header) ━━━
@@ -143,7 +151,27 @@ export default function OrderReportPage() {
     const [reportGroupIds, setReportGroupIds] = useState<string[]>([])
     const [reportBranchIds, setReportBranchIds] = useState<string[]>([])
 
+    const lastSyncedMonths = useRef<number[]>([])
+    const lastSyncedYears = useRef<number[]>([])
     const lastSyncedBranchIds = useRef<string[]>([])
+
+    useEffect(() => {
+        const hasGlobalChanged = JSON.stringify(selectedMonths) !== JSON.stringify(lastSyncedMonths.current)
+        if (hasGlobalChanged) {
+            setChartMonths([...selectedMonths])
+            setReportMonths([...selectedMonths])
+            lastSyncedMonths.current = [...selectedMonths]
+        }
+    }, [selectedMonths])
+
+    useEffect(() => {
+        const hasGlobalChanged = JSON.stringify(selectedYears) !== JSON.stringify(lastSyncedYears.current)
+        if (hasGlobalChanged) {
+            setChartYears([...selectedYears])
+            setReportYears([...selectedYears])
+            lastSyncedYears.current = [...selectedYears]
+        }
+    }, [selectedYears])
 
     // ━━━ SMART SYNC (Global to Local) ━━━
     useEffect(() => {
@@ -231,7 +259,12 @@ export default function OrderReportPage() {
     if (dateRange?.endDate) reportParams.set("endDate", dateRange.endDate.toISOString())
     if (reportMonths.length > 0) reportParams.set("months", reportMonths.join(","))
     if (reportYears.length > 0) reportParams.set("years", reportYears.join(","))
-    const { data: reportData, isLoading: isReportLoading, mutate: mutateReport } = useSWR(
+    if (statusFilter !== "all") reportParams.set("status", statusFilter)
+    if (debouncedReportSearch) reportParams.set("q", debouncedReportSearch)
+    reportParams.set("page", currentPage.toString())
+    reportParams.set("limit", ORDER_REPORT_PAGE_SIZE.toString())
+    reportParams.set("ordersOnly", "true")
+    const { data: reportData, isLoading: isReportLoading, isValidating: isReportValidating, mutate: mutateReport } = useSWR(
         isInitialized ? `/api/v1/analytics/summary?${reportParams.toString()}` : null, fetcher,
         { keepPreviousData: true }
     )
@@ -281,6 +314,7 @@ export default function OrderReportPage() {
         setReportOrgIds([])
         setReportGroupIds([])
         setReportBranchIds(contextBranchIds.length > 0 ? [...contextBranchIds] : [])
+        setCurrentPage(1)
         setDateRange(null)
         setActivePreset("all")
         setSelectedMonths([])
@@ -302,6 +336,12 @@ export default function OrderReportPage() {
     const comparison = globalData?.comparison
     const chartOrders = chartData?.orders || []
     const reportOrders = reportData?.orders || []
+    const totalReportOrders = Number(reportData?.pagination?.total || 0)
+    const totalReportPages = Math.max(
+        1,
+        Number(reportData?.pagination?.totalPages) || Math.ceil(totalReportOrders / ORDER_REPORT_PAGE_SIZE),
+    )
+    const firstVisibleOrder = totalReportOrders === 0 ? 0 : (currentPage - 1) * ORDER_REPORT_PAGE_SIZE + 1
 
     const filteredOrders = useMemo(() => {
         return reportOrders.filter((order: any) => {
@@ -314,6 +354,20 @@ export default function OrderReportPage() {
             return matchesSearch && matchesStatus;
         })
     }, [reportOrders, reportSearch, statusFilter])
+    const lastVisibleOrder = Math.min(
+        (currentPage - 1) * ORDER_REPORT_PAGE_SIZE + filteredOrders.length,
+        totalReportOrders,
+    )
+
+    useEffect(() => {
+        setCurrentPage(1)
+    }, [debouncedReportSearch, statusFilter, dateRange, reportMonths, reportYears, reportOrgIds, reportGroupIds, reportBranchIds, organizationId, contextBranchId])
+
+    useEffect(() => {
+        if (reportData?.pagination && currentPage > totalReportPages) {
+            setCurrentPage(totalReportPages)
+        }
+    }, [currentPage, reportData?.pagination, totalReportPages])
 
     const getTrend = (current: number, prev: number) => {
         if (!prev || prev === 0) return null
@@ -427,57 +481,113 @@ export default function OrderReportPage() {
         return Object.entries(counts).map(([name, value]) => ({ name, value, fill: STATUS_COLORS[name] || "#94a3b8" }))
     }, [chartData, chartOrders])
 
-    const handleExport = (format: 'csv' | 'excel' | 'pdf') => {
-        // Build active column list — single source of truth for both headers and data
-        const financialColumns = new Set(["subtotalValue", "refundValue", "netTotalValue"])
-        const activeColumns = ALL_COLUMNS.filter(c => {
-            if (role === "BRANCH_ADMIN" && (c.key === "group" || c.key === "branchName")) return false;
-            if (role !== "SUPER_ADMIN" && c.key === "organizationName") return false;
-            if (pricesHidden && financialColumns.has(c.key)) return false;
-            return isVisible(c.key);
-        })
+    const fetchAllReportOrders = async () => {
+        const exportParams = new URLSearchParams(reportParams)
+        const activeSearch = reportSearch.trim()
+        if (activeSearch) exportParams.set("q", activeSearch)
+        else exportParams.delete("q")
+        exportParams.set("page", "1")
+        exportParams.set("limit", "100")
 
-        const headers = activeColumns.map(c => {
-            if (c.key === "netTotalValue" && isBuyer) return "Net Purchased"
-            return c.label
-        })
-
-        // Map each active column key to its data value — order guaranteed to match headers
-        const rows = filteredOrders.map((order: any) => activeColumns.map(c => {
-            switch (c.key) {
-                case "orderDate": return new Date(order.createdAt).toLocaleDateString()
-                case "userName": return order.userName || "-"
-                case "employeeId": return order.employeeId || order.userId || "-"
-                case "tid": return order.tid || "-"
-                case "organizationName": return order.organizationName || "N/A"
-                case "group": return order.groupName || "-"
-                case "branchName": return order.branchName || "-"
-                case "status": return getOrderDerivedStatus({ status: order.status }).label || "-"
-                case "quantityOrdered": return order.quantityOrdered || 0
-                case "quantityDelivered": return (order.quantityOrdered || 0) - (order.quantityRefunded || 0)
-                case "quantityRefunded": return order.quantityRefunded || 0
-                case "subtotalValue": return ((order.subtotalCents || 0) / 100).toFixed(2)
-                case "refundValue": return ((order.refundAmountCents || 0) / 100).toFixed(2)
-                case "netTotalValue": return (((order.totalCents || 0) - (order.refundAmountCents || 0)) / 100).toFixed(2)
-                default: return "-"
-            }
-        }))
-
-        if (format === 'pdf') {
-            const doc = new jsPDF('landscape')
-            doc.setFontSize(20); doc.text(exportTitleLabel, 14, 20)
-            doc.setFontSize(10); doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 28)
-            autoTable(doc, { startY: 40, head: [headers], body: rows, theme: 'grid', styles: { fontSize: 8 } })
-            doc.save(`order-report-${Date.now()}.pdf`); return
+        const fetchPage = async (page: number) => {
+            const pageParams = new URLSearchParams(exportParams)
+            pageParams.set("page", page.toString())
+            const response = await fetch(`/api/v1/analytics/summary?${pageParams.toString()}`)
+            if (!response.ok) throw new Error(`Export request failed (${response.status})`)
+            const data = await response.json()
+            if (data?.error) throw new Error(data.error)
+            return data
         }
 
-        const ws = XLSX.utils.aoa_to_sheet([
-            sanitizeSpreadsheetRow(headers),
-            ...rows.map(sanitizeSpreadsheetRow),
-        ])
-        const wb = XLSX.utils.book_new()
-        XLSX.utils.book_append_sheet(wb, ws, "Orders")
-        XLSX.writeFile(wb, `order-report-${Date.now()}.${format === 'excel' ? 'xlsx' : 'csv'}`)
+        const firstPage = await fetchPage(1)
+        const allOrders = [...(firstPage?.orders || [])]
+        const totalPages = Math.max(1, Number(firstPage?.pagination?.totalPages) || 1)
+        const exportConcurrency = 4
+
+        for (let page = 2; page <= totalPages; page += exportConcurrency) {
+            const pageNumbers = Array.from(
+                { length: Math.min(exportConcurrency, totalPages - page + 1) },
+                (_, index) => page + index,
+            )
+            const pageResults = await Promise.all(pageNumbers.map(fetchPage))
+            pageResults.forEach((data) => allOrders.push(...(data?.orders || [])))
+        }
+
+        return allOrders
+    }
+
+    const handleExport = async (format: 'csv' | 'excel' | 'pdf') => {
+        if (isExporting) return
+        setIsExporting(true)
+
+        try {
+            const exportOrders = await fetchAllReportOrders()
+            if (exportOrders.length === 0) {
+                toast({ title: "No orders to export", description: "No orders match the active report filters." })
+                return
+            }
+
+            // Build active column list — single source of truth for both headers and data
+            const financialColumns = new Set(["subtotalValue", "refundValue", "netTotalValue"])
+            const activeColumns = ALL_COLUMNS.filter(c => {
+                if (role === "BRANCH_ADMIN" && (c.key === "group" || c.key === "branchName")) return false;
+                if (role !== "SUPER_ADMIN" && c.key === "organizationName") return false;
+                if (pricesHidden && financialColumns.has(c.key)) return false;
+                return isVisible(c.key);
+            })
+
+            const headers = activeColumns.map(c => {
+                if (c.key === "netTotalValue" && isBuyer) return "Net Purchased"
+                return c.label
+            })
+
+            // Map every filtered API page, not just the currently visible table page.
+            const rows = exportOrders.map((order: any) => activeColumns.map(c => {
+                switch (c.key) {
+                    case "orderDate": return new Date(order.createdAt).toLocaleDateString()
+                    case "userName": return order.userName || "-"
+                    case "employeeId": return order.employeeId || order.userId || "-"
+                    case "tid": return order.tid || "-"
+                    case "organizationName": return order.organizationName || "N/A"
+                    case "group": return order.groupName || "-"
+                    case "branchName": return order.branchName || "-"
+                    case "status": return getOrderDerivedStatus({ status: order.status }).label || "-"
+                    case "quantityOrdered": return order.quantityOrdered || 0
+                    case "quantityDelivered": return (order.quantityOrdered || 0) - (order.quantityRefunded || 0)
+                    case "quantityRefunded": return order.quantityRefunded || 0
+                    case "subtotalValue": return ((order.subtotalCents || 0) / 100).toFixed(2)
+                    case "refundValue": return ((order.refundAmountCents || 0) / 100).toFixed(2)
+                    case "netTotalValue": return (((order.totalCents || 0) - (order.refundAmountCents || 0)) / 100).toFixed(2)
+                    default: return "-"
+                }
+            }))
+
+            if (format === 'pdf') {
+                const doc = new jsPDF('landscape')
+                doc.setFontSize(20); doc.text(exportTitleLabel, 14, 20)
+                doc.setFontSize(10); doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 28)
+                autoTable(doc, { startY: 40, head: [headers], body: rows, theme: 'grid', styles: { fontSize: 8 } })
+                doc.save(`order-report-${Date.now()}.pdf`)
+                return
+            }
+
+            const ws = XLSX.utils.aoa_to_sheet([
+                sanitizeSpreadsheetRow(headers),
+                ...rows.map(sanitizeSpreadsheetRow),
+            ])
+            const wb = XLSX.utils.book_new()
+            XLSX.utils.book_append_sheet(wb, ws, "Orders")
+            XLSX.writeFile(wb, `order-report-${Date.now()}.${format === 'excel' ? 'xlsx' : 'csv'}`)
+        } catch (error) {
+            console.error("Order report export failed", error)
+            toast({
+                title: "Export failed",
+                description: error instanceof Error ? error.message : "Unable to export the filtered orders.",
+                variant: "destructive",
+            })
+        } finally {
+            setIsExporting(false)
+        }
     }
 
     const pricesHidden = Boolean((globalData as any)?.pricesHidden || (chartData as any)?.pricesHidden || (reportData as any)?.pricesHidden)
@@ -820,9 +930,9 @@ export default function OrderReportPage() {
                                 </Button>
                                 <DropdownMenu>
                                     <DropdownMenuTrigger asChild>
-                                        <Button variant="outline" size="sm" className="h-11 text-[11px] font-black underline decoration-slate-200 gap-2 rounded-xl border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 shadow-sm px-5">
-                                            <Upload className="h-3.5 w-3.5" />
-                                            EXPORT
+                                        <Button disabled={isExporting || totalReportOrders === 0} variant="outline" size="sm" className="h-11 text-[11px] font-black underline decoration-slate-200 gap-2 rounded-xl border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 shadow-sm px-5">
+                                            {isExporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                                            {isExporting ? "EXPORTING..." : "EXPORT"}
                                         </Button>
                                     </DropdownMenuTrigger>
                                     <DropdownMenuContent align="end" className="w-52 rounded-2xl border-slate-200 dark:border-slate-800 p-2 shadow-2xl bg-white dark:bg-slate-900">
@@ -836,23 +946,23 @@ export default function OrderReportPage() {
 
                         {/* Report Table */}
                         <Card className="min-w-0 rounded-[2.5rem] border-slate-200 dark:border-slate-800 shadow-2xl bg-white dark:bg-slate-900/40 overflow-hidden min-h-[600px] flex flex-col">
-                            <div className="min-w-0 flex-1 overflow-hidden [&_[data-slot=table-container]]:overflow-hidden">
-                                <Table className="table-fixed [&_th]:overflow-hidden [&_td]:overflow-hidden">
+                            <div className="min-w-0 flex-1 overflow-hidden [&_[data-slot=table-container]]:overflow-x-auto [&_[data-slot=table-container]]:overscroll-x-contain">
+                                <Table className="min-w-[1850px] table-fixed">
                                     <colgroup>
-                                        {isVisible("tid") && <col className="w-[10%]" />}
-                                        {isVisible("orderDate") && <col className="w-[6.5%]" />}
-                                        {isVisible("userName") && <col className="w-[9%]" />}
-                                        {isVisible("employeeId") && <col className="w-[7%]" />}
-                                        {isVisible("organizationName") && role === "SUPER_ADMIN" && <col className="w-[5.5%]" />}
-                                        {isVisible("group") && role !== "BRANCH_ADMIN" && <col className="w-[7.5%]" />}
-                                        {isVisible("branchName") && role !== "BRANCH_ADMIN" && <col className="w-[8%]" />}
-                                        {isVisible("status") && <col className="w-[9%]" />}
-                                        {isVisible("quantityOrdered") && <col className="w-[4.5%]" />}
-                                        {isVisible("quantityDelivered") && <col className="w-[4.5%]" />}
-                                        {isVisible("quantityRefunded") && <col className="w-[4.5%]" />}
-                                        {!pricesHidden && isVisible("subtotalValue") && <col className="w-[7%]" />}
-                                        {!pricesHidden && isVisible("refundValue") && <col className="w-[6.5%]" />}
-                                        {!pricesHidden && isVisible("netTotalValue") && <col className="w-[10.5%]" />}
+                                        {isVisible("tid") && <col className="w-[185px]" />}
+                                        {isVisible("orderDate") && <col className="w-[125px]" />}
+                                        {isVisible("userName") && <col className="w-[150px]" />}
+                                        {isVisible("employeeId") && <col className="w-[125px]" />}
+                                        {isVisible("organizationName") && role === "SUPER_ADMIN" && <col className="w-[145px]" />}
+                                        {isVisible("group") && role !== "BRANCH_ADMIN" && <col className="w-[155px]" />}
+                                        {isVisible("branchName") && role !== "BRANCH_ADMIN" && <col className="w-[180px]" />}
+                                        {isVisible("status") && <col className="w-[135px]" />}
+                                        {isVisible("quantityOrdered") && <col className="w-[90px]" />}
+                                        {isVisible("quantityDelivered") && <col className="w-[90px]" />}
+                                        {isVisible("quantityRefunded") && <col className="w-[90px]" />}
+                                        {!pricesHidden && isVisible("subtotalValue") && <col className="w-[135px]" />}
+                                        {!pricesHidden && isVisible("refundValue") && <col className="w-[130px]" />}
+                                        {!pricesHidden && isVisible("netTotalValue") && <col className="w-[155px]" />}
                                     </colgroup>
                                     <TableHeader>
                                         <TableRow className="bg-slate-50/50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800 hover:bg-transparent">
@@ -860,7 +970,7 @@ export default function OrderReportPage() {
                                                 <TableHead className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500 bg-slate-50/100 dark:bg-slate-900/100 border-r border-slate-200/60 dark:border-slate-800/60">
                                                     <div className="flex min-w-0 items-center gap-1.5">
                                                         <Hash className="h-3.5 w-3.5 shrink-0 text-indigo-500" />
-                                                        <span className="truncate">Transaction ID</span>
+                                                        <span>Transaction ID</span>
                                                     </div>
                                                 </TableHead>
                                             )}
@@ -892,11 +1002,11 @@ export default function OrderReportPage() {
                                                             <div className="flex min-w-0 flex-col gap-1.5">
                                                                 <div className="flex min-w-0 items-center gap-1.5">
                                                                     <Hash className="h-3 w-3 shrink-0 text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity" />
-                                                                    <span className="truncate text-[11px] font-black text-slate-900 dark:text-white font-mono tracking-tight tabular-nums" title={order.tid}>{order.tid}</span>
+                                                                    <span className="whitespace-normal break-all text-[11px] font-black text-slate-900 dark:text-white font-mono tracking-tight tabular-nums" title={order.tid}>{order.tid}</span>
                                                                 </div>
                                                                 <span className="flex min-w-0 items-center gap-1 text-[9px] font-bold text-slate-400 uppercase tracking-wide">
                                                                     <span className="h-1 w-1 shrink-0 rounded-full bg-slate-300 dark:bg-slate-700" />
-                                                                    <span className="truncate">Audit Invoice</span>
+                                                                    <span>Audit Invoice</span>
                                                                 </span>
                                                             </div>
                                                         </TableCell>
@@ -909,17 +1019,17 @@ export default function OrderReportPage() {
                                                             </div>
                                                         </TableCell>
                                                     )}
-                                                    {isVisible("userName") && <TableCell className="px-3 2xl:px-4 py-5"><span className="block truncate text-[11px] font-black text-slate-900 dark:text-white uppercase tracking-tighter" title={order.userName || "Guest System"}>{order.userName || "Guest System"}</span></TableCell>}
+                                                    {isVisible("userName") && <TableCell className="px-3 2xl:px-4 py-5 whitespace-normal break-words"><span className="block text-[11px] font-black text-slate-900 dark:text-white uppercase tracking-tighter" title={order.userName || "Guest System"}>{order.userName || "Guest System"}</span></TableCell>}
                                                     {isVisible("employeeId") && (
                                                         <TableCell className="px-3 2xl:px-4 py-5">
-                                                            <div className="inline-flex max-w-full items-center truncate px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800/50 text-[10px] font-black text-slate-600 dark:text-slate-400 font-mono ring-1 ring-slate-200 dark:ring-slate-700/50">
+                                                            <div className="inline-flex max-w-full items-center whitespace-normal break-all px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800/50 text-[10px] font-black text-slate-600 dark:text-slate-400 font-mono ring-1 ring-slate-200 dark:ring-slate-700/50" title={order.employeeId || "N/A"}>
                                                                 #{order.employeeId || (order.userId ? order.userId.split('-')[0] : 'N/A')}
                                                             </div>
                                                         </TableCell>
                                                     )}
-                                                    {isVisible("organizationName") && role === "SUPER_ADMIN" && <TableCell className="truncate px-3 2xl:px-4 py-5 text-[10px] font-bold text-slate-500 uppercase tracking-tighter" title={order.organizationName || "N/A"}>{order.organizationName || "N/A"}</TableCell>}
-                                                    {isVisible("group") && role !== "BRANCH_ADMIN" && <TableCell className="truncate px-3 2xl:px-4 py-5 text-[10px] font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-wide tabular-nums" title={order.groupName || "-"}>{order.groupName || "-"}</TableCell>}
-                                                    {isVisible("branchName") && role !== "BRANCH_ADMIN" && <TableCell className="truncate px-3 2xl:px-4 py-5 text-[11px] font-black text-slate-700 dark:text-slate-300 uppercase tracking-tighter" title={order.branchName}>{order.branchName}</TableCell>}
+                                                    {isVisible("organizationName") && role === "SUPER_ADMIN" && <TableCell className="px-3 2xl:px-4 py-5 whitespace-normal break-words text-[10px] font-bold text-slate-500 uppercase tracking-tighter" title={order.organizationName || "N/A"}>{order.organizationName || "N/A"}</TableCell>}
+                                                    {isVisible("group") && role !== "BRANCH_ADMIN" && <TableCell className="px-3 2xl:px-4 py-5 whitespace-normal break-words text-[10px] font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-wide tabular-nums" title={order.groupName || "-"}>{order.groupName || "-"}</TableCell>}
+                                                    {isVisible("branchName") && role !== "BRANCH_ADMIN" && <TableCell className="px-3 2xl:px-4 py-5 whitespace-normal break-words text-[11px] font-black text-slate-700 dark:text-slate-300 uppercase tracking-tighter" title={order.branchName}>{order.branchName}</TableCell>}
                                                     {isVisible("status") && (
                                                         <TableCell className="px-2 2xl:px-3 py-5 text-center">
                                                             <div className="inline-flex max-w-full flex-col items-center justify-center gap-1">
@@ -930,7 +1040,7 @@ export default function OrderReportPage() {
                                                                         color: STATUS_COLORS[order.status?.toUpperCase()] || '#94a3b8',
                                                                         borderColor: `${STATUS_COLORS[order.status?.toUpperCase()] || '#94a3b8'}30`
                                                                     }}
-                                                                    className="max-w-full truncate text-[9px] font-black uppercase tracking-wide px-2 py-1 rounded-xl border shadow-sm transition-transform group-hover:scale-105 duration-300"
+                                                                    className="max-w-full whitespace-normal text-[9px] font-black uppercase tracking-wide px-2 py-1 rounded-xl border shadow-sm transition-transform group-hover:scale-105 duration-300"
                                                                 >
                                                                     {getOrderDerivedStatus({ status: order.status }).label}
                                                                 </Badge>
@@ -945,12 +1055,12 @@ export default function OrderReportPage() {
                                                     {isVisible("quantityOrdered") && <TableCell className="px-2 py-5 text-center text-[12px] font-black font-mono text-slate-900 dark:text-white tabular-nums">{order.quantityOrdered || 0}</TableCell>}
                                                     {isVisible("quantityDelivered") && <TableCell className="px-2 py-5 text-center text-[12px] font-black font-mono text-emerald-600 dark:text-emerald-400 tabular-nums">{(order.quantityOrdered || 0) - (order.quantityRefunded || 0)}</TableCell>}
                                                     {isVisible("quantityRefunded") && <TableCell className="px-2 py-5 text-center text-[12px] font-black font-mono text-rose-500 dark:text-rose-400 tabular-nums">{order.quantityRefunded || 0}</TableCell>}
-                                                    {!pricesHidden && isVisible("subtotalValue") && <TableCell className="truncate px-3 2xl:px-4 py-5 text-right text-[11px] font-black font-mono text-slate-700 dark:text-slate-200 tabular-nums" title={formatPKR(order.subtotalCents / 100)}>{formatPKR(order.subtotalCents / 100)}</TableCell>}
-                                                    {!pricesHidden && isVisible("refundValue") && <TableCell className="truncate px-3 2xl:px-4 py-5 text-right text-[11px] font-black font-mono text-rose-500 tabular-nums" title={order.refundAmountCents > 0 ? `-${formatPKR(order.refundAmountCents / 100)}` : "—"}>{order.refundAmountCents > 0 ? `-${formatPKR(order.refundAmountCents / 100)}` : "—"}</TableCell>}
+                                                    {!pricesHidden && isVisible("subtotalValue") && <TableCell className="px-3 2xl:px-4 py-5 text-right text-[11px] font-black font-mono text-slate-700 dark:text-slate-200 tabular-nums" title={formatPKR(order.subtotalCents / 100)}>{formatPKR(order.subtotalCents / 100)}</TableCell>}
+                                                    {!pricesHidden && isVisible("refundValue") && <TableCell className="px-3 2xl:px-4 py-5 text-right text-[11px] font-black font-mono text-rose-500 tabular-nums" title={order.refundAmountCents > 0 ? `-${formatPKR(order.refundAmountCents / 100)}` : "—"}>{order.refundAmountCents > 0 ? `-${formatPKR(order.refundAmountCents / 100)}` : "—"}</TableCell>}
                                                     {!pricesHidden && isVisible("netTotalValue") && (
                                                         <TableCell className="px-3 2xl:px-4 py-5 text-right">
                                                             <div className="flex min-w-0 flex-col items-end">
-                                                                <span className="block max-w-full truncate text-[12px] font-black font-mono text-indigo-600 dark:text-indigo-400 tabular-nums leading-none" title={formatPKR((order.totalCents - (order.refundAmountCents || 0)) / 100)}>
+                                                                <span className="block max-w-full text-[12px] font-black font-mono text-indigo-600 dark:text-indigo-400 tabular-nums leading-none" title={formatPKR((order.totalCents - (order.refundAmountCents || 0)) / 100)}>
                                                                     {formatPKR((order.totalCents - (order.refundAmountCents || 0)) / 100)}
                                                                 </span>
                                                             </div>
@@ -962,8 +1072,50 @@ export default function OrderReportPage() {
                                     </TableBody>
                                 </Table>
                             </div>
-                            <div className="px-8 py-5 border-t border-slate-100 dark:border-slate-900 bg-slate-50/50 dark:bg-slate-900/40 flex items-center justify-between">
-                                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest italic">System Generated Audit • {generatedDate}</p>
+                            <div className="flex flex-col gap-4 border-t border-slate-100 bg-slate-50/50 px-6 py-5 dark:border-slate-900 dark:bg-slate-900/40 sm:flex-row sm:items-center sm:justify-between sm:px-8">
+                                <div className="space-y-1">
+                                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest italic">System Generated Audit • {generatedDate}</p>
+                                    <p className="text-xs font-semibold text-slate-500" aria-live="polite">
+                                        Showing {firstVisibleOrder}-{lastVisibleOrder} of {totalReportOrders.toLocaleString()} orders
+                                    </p>
+                                </div>
+                                <Pagination className="mx-0 w-auto justify-end">
+                                    <PaginationContent>
+                                        <PaginationItem>
+                                            <Button
+                                                type="button"
+                                                variant="outline"
+                                                size="sm"
+                                                className="gap-1 rounded-xl"
+                                                aria-label="Go to previous order-report page"
+                                                disabled={currentPage <= 1 || isReportValidating}
+                                                onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                                            >
+                                                <ChevronLeft className="h-4 w-4" />
+                                                <span className="hidden sm:inline">Previous</span>
+                                            </Button>
+                                        </PaginationItem>
+                                        <PaginationItem>
+                                            <span className="flex h-9 min-w-24 items-center justify-center px-3 text-xs font-semibold text-slate-600 dark:text-slate-300">
+                                                Page {currentPage} of {totalReportPages}
+                                            </span>
+                                        </PaginationItem>
+                                        <PaginationItem>
+                                            <Button
+                                                type="button"
+                                                variant="outline"
+                                                size="sm"
+                                                className="gap-1 rounded-xl"
+                                                aria-label="Go to next order-report page"
+                                                disabled={currentPage >= totalReportPages || totalReportOrders === 0 || isReportValidating}
+                                                onClick={() => setCurrentPage((page) => Math.min(totalReportPages, page + 1))}
+                                            >
+                                                <span className="hidden sm:inline">Next</span>
+                                                <ChevronRight className="h-4 w-4" />
+                                            </Button>
+                                        </PaginationItem>
+                                    </PaginationContent>
+                                </Pagination>
                             </div>
                         </Card>
                     </TabsContent>

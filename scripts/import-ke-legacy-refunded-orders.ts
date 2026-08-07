@@ -19,9 +19,9 @@ import { buildRefundBreakdownCents } from "../lib/refund-breakdown"
 import {
   KE_ORGANIZATION,
   LEGACY_SOURCE,
-  normalizeBranch,
   normalizeProductName,
   normalizeText,
+  resolveKeLegacyBranch,
   toCents,
 } from "../lib/legacy-import/ke-electric"
 
@@ -489,12 +489,10 @@ async function reconcile(
     globalErrors.push("Existing K-Electric legacy ledger integrity check failed")
   }
 
-  const branches = await rows(client, "select id, organization_id, name, address from branches where organization_id = $1", [KE_ORGANIZATION.id])
-  const branchesByName = new Map<string, JsonRow[]>()
-  for (const branch of branches) {
-    const key = normalizeBranch(branch.name)
-    branchesByName.set(key, [...(branchesByName.get(key) ?? []), branch])
-  }
+  const branches = await rows(client, `
+    select id, organization_id, name, address, external_source, external_id
+    from branches where organization_id = $1
+  `, [KE_ORGANIZATION.id])
 
   const userMappings = await rows(client, `
     select lum.legacy_order_taker_id, lum.branch_id, lum.user_id,
@@ -591,9 +589,19 @@ async function reconcile(
       reasons.push("EXISTING_IMPORT_CHECKSUM_OR_TENANT_MISMATCH")
     }
 
-    const branchCandidates = branchesByName.get(normalizeBranch(order.branchName)) ?? []
-    const branch = uniqueBy(branchCandidates, (row) => String(row.id))
-    if (!branch) reasons.push(`BRANCH_MATCH_COUNT_${branchCandidates.length}`)
+    const branchResolution = resolveKeLegacyBranch(branches.map((branch) => ({
+      id: Number(branch.id),
+      name: String(branch.name),
+      organization_id: branch.organization_id,
+      address: branch.address,
+      externalSource: branch.external_source,
+      externalId: branch.external_id,
+    })), {
+      locationId: order.header.LocationID,
+      name: order.branchName,
+    })
+    const branch = branchResolution.branch
+    if (!branch) reasons.push(`BRANCH_MATCH_COUNT_${branchResolution.matchCount}`)
 
     const tidCollision = tidByValue.get(`KE-LEGACY-${order.legacyOrderId}`)
     if (tidCollision && !existing) reasons.push(`UNLEDGERED_TID_COLLISION_ORDER_${tidCollision.id}`)

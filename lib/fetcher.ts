@@ -5,6 +5,22 @@ const DEFAULT_TIMEOUT_MS = 30000
 const MAX_TIMEOUT_MS = 60000
 const MIN_TIMEOUT_MS = 1000
 
+type FetcherError = Error & {
+  code?: string
+  status?: number
+  statusText?: string
+  timeout?: number
+  url?: string
+}
+
+function formatFetcherFailure(url: string, error: FetcherError): string {
+  const status = error.status ?? 'N/A'
+  const code = error.code ?? 'N/A'
+  const message = error.message || 'Unknown error'
+
+  return `[Fetcher] Request failed: ${url} | status=${status} | code=${code} | ${message}`
+}
+
 /**
  * Validate URL format - accepts both absolute URLs and relative paths
  */
@@ -72,20 +88,22 @@ export async function jsonFetcher<T>(url: string, init?: RequestInit): Promise<T
       const data = await res.json()
       return data as T
     } catch (parseError) {
-      console.error('[Fetcher] Failed to parse JSON response:', parseError)
-      throw new Error('Invalid JSON response from server')
+      const error = new Error('Invalid JSON response from server') as FetcherError
+      error.code = 'INVALID_JSON'
+      error.status = res.status
+      error.statusText = res.statusText
+      error.url = url
+      throw error
     }
 
   } catch (error: any) {
     // Suppress console.error for expected validation errors (4xx) to avoid noisy console logs
     const isValidationError = error?.status >= 400 && error?.status < 500
-    const logMethod = isValidationError ? 'debug' : 'error'
+    const logMethod = isValidationError ? 'debug' : 'warn'
 
-    // Enhanced error logging using separate arguments for better console visibility
-    console[logMethod](`[Fetcher] Request failed: ${url}`)
-    console[logMethod]('  - Message:', error?.message || 'Unknown error')
-    console[logMethod]('  - Status:', error?.status || 'N/A')
-    console[logMethod]('  - Code:', error?.code || 'N/A')
+    // Keep handled request failures out of Next.js' development error overlay.
+    // The error is still re-thrown below so SWR and callers receive it normally.
+    console[logMethod](formatFetcherFailure(url, error))
 
     // Also log the full error stack for deep debugging
     if (error?.stack) console.debug('[Fetcher] Error stack:', error.stack)
@@ -152,8 +170,12 @@ export async function fetcher<T>(url: string, timeoutMs: number = DEFAULT_TIMEOU
         const data = await res.json()
         return data as T
       } catch (parseError) {
-        console.error('[Fetcher] JSON parse error:', parseError)
-        throw new Error('Server returned invalid JSON')
+        const error = new Error('Server returned invalid JSON') as FetcherError
+        error.code = 'INVALID_JSON'
+        error.status = res.status
+        error.statusText = res.statusText
+        error.url = url
+        throw error
       }
 
     } catch (fetchError: any) {
@@ -184,14 +206,10 @@ export async function fetcher<T>(url: string, timeoutMs: number = DEFAULT_TIMEOU
     if (isValidationError) {
       console.debug(`[Fetcher] ${error?.status || '4xx'} Error: ${url} - ${error?.message || 'Validation failed'}`)
     } else {
-      // Top-level error handler with enhanced logging for actual failures (5xx, network, etc.)
-      console.error('[Fetcher] Critical Error:', {
-        url,
-        errorCode: error?.code || 'N/A',
-        errorMessage: error?.message || 'Unknown error',
-        errorStatus: error?.status || 'N/A',
-        fullError: JSON.stringify(error, Object.getOwnPropertyNames(error))
-      })
+      // A rejected SWR request is handled application state, not an uncaught
+      // runtime exception. console.error makes Next.js show a misleading error
+      // overlay, so emit one readable warning and preserve the rejection.
+      console.warn(formatFetcherFailure(url, error))
     }
     throw error
   }
@@ -204,7 +222,7 @@ export async function safeFetcher<T>(url: string): Promise<T | null> {
   try {
     return await fetcher<T>(url)
   } catch (error) {
-    console.error('[SafeFetcher] Request failed, returning null:', error)
+    console.warn('[SafeFetcher] Request failed, returning null:', error)
     return null
   }
 }

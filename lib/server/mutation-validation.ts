@@ -176,7 +176,10 @@ export const refundRequestSchema = z.object({
     (items) => isUniquePositiveIdList(items.map((item) => item.id)),
     "Each order item can only appear once in a refund",
   ),
-  reason: z.string().trim().max(2_000).optional(),
+  reason: z.string()
+    .trim()
+    .min(1, "Refund reason is required")
+    .max(2_000, "Refund reason must not exceed 2000 characters"),
 }).strict()
 
 export const rolePermissionCreateSchema = z.object({

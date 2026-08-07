@@ -53,6 +53,14 @@ describe("business rules", () => {
     }).success).toBe(false)
   })
 
+  it("requires a non-blank refund request reason", () => {
+    const items = [{ id: 1, quantity: 1 }]
+
+    expect(refundRequestSchema.safeParse({ items }).success).toBe(false)
+    expect(refundRequestSchema.safeParse({ items, reason: "   " }).success).toBe(false)
+    expect(refundRequestSchema.safeParse({ items, reason: "Damaged item" }).success).toBe(true)
+  })
+
   it("enforces the per-line maximum quantity", () => {
     expect(orderCreateSchema.safeParse({
       items: [{ organizationInventoryId: 1, quantity: MAX_BUSINESS_QUANTITY }],

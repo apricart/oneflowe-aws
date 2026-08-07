@@ -26,6 +26,7 @@ interface RefundManagementProps {
     orderTotalCents: number | null
     orderStatus: string
     createdAt: string // Order creation date for refund window validation
+    allowRefundRequest?: boolean
     pricesHidden?: boolean
     initialOrderItems?: any[]
     refundAmountCents?: number | null
@@ -41,6 +42,7 @@ export function RefundManagement({
     orderTotalCents,
     orderStatus,
     createdAt,
+    allowRefundRequest = false,
     pricesHidden = false,
     initialOrderItems = [],
     refundAmountCents,
@@ -50,6 +52,7 @@ export function RefundManagement({
 }: RefundManagementProps) {
     const { toast } = useToast()
     const [reason, setReason] = useState("")
+    const [reasonError, setReasonError] = useState("")
     const [processing, setProcessing] = useState(false)
     const [showForm, setShowForm] = useState(false)
 
@@ -157,7 +160,7 @@ export function RefundManagement({
         : orderTotalCents !== null && totalApproved >= orderTotalCents
 
     const isOrderApproved = ["APPROVED", "FULFILLED", "REFUNDED"].includes(orderStatus.toUpperCase())
-    const canRefund = isOrderApproved && hasRefundCapacity && isWithinRefundWindow
+    const canRefund = allowRefundRequest && isOrderApproved && hasRefundCapacity && isWithinRefundWindow
 
     const handleItemToggle = (itemId: number, maxRefundableQty: number) => {
         setSelectedItems(prev => {
@@ -210,10 +213,24 @@ export function RefundManagement({
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault()
 
+        if (!allowRefundRequest) return
+
         if (Object.keys(selectedItems).length === 0) {
             toast({ title: "No items selected", description: "Please select at least one item to refund", variant: "destructive" })
             return
         }
+
+        const trimmedReason = reason.trim()
+        if (!trimmedReason) {
+            setReasonError("Refund reason is required")
+            toast({
+                title: "Refund reason required",
+                description: "Please provide a reason before submitting the refund request.",
+                variant: "destructive"
+            })
+            return
+        }
+        setReasonError("")
 
         if (!pricesHidden && selectedRefundAmount > remainingRefundable) {
             toast({
@@ -236,7 +253,7 @@ export function RefundManagement({
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     items: itemsPayload,
-                    reason: reason.trim()
+                    reason: trimmedReason
                 })
             })
 
@@ -250,6 +267,7 @@ export function RefundManagement({
 
             setSelectedItems({})
             setReason("")
+            setReasonError("")
             setShowForm(false)
             mutateRefunds()
             onRefundSuccess?.()
@@ -300,13 +318,13 @@ export function RefundManagement({
                             Request Refund
                         </Button>
                     )}
-                    {!isOrderApproved && hasRefundCapacity && !showForm && (
+                    {allowRefundRequest && !isOrderApproved && hasRefundCapacity && !showForm && (
                         <div className="text-xs text-slate-600 bg-slate-50 px-3 py-2 rounded-md border border-slate-200 flex items-center gap-2">
                             <Clock className="h-3 w-3" />
                             Refund available after approval
                         </div>
                     )}
-                    {isOrderApproved && !isWithinRefundWindow && hasRefundCapacity && !showForm && (
+                    {allowRefundRequest && isOrderApproved && !isWithinRefundWindow && hasRefundCapacity && !showForm && (
                         <div className="text-xs text-amber-700 bg-amber-50 px-3 py-2 rounded-md border border-amber-200 flex items-center gap-2">
                             <Clock className="h-3 w-3" />
                             Refund period ended
@@ -316,22 +334,22 @@ export function RefundManagement({
             </div>
 
             {/* Refund window explanation */}
-            {isOrderApproved && !isWithinRefundWindow && hasRefundCapacity && !showForm && (
+            {allowRefundRequest && isOrderApproved && !isWithinRefundWindow && hasRefundCapacity && !showForm && (
                 <p className="text-xs text-muted-foreground text-right mt-1">
                     Requests are limited to the calendar month of the order.
                 </p>
             )}
 
-            {pricesHidden && !quantityOnlyRefundAvailable && !showForm && (
+            {allowRefundRequest && pricesHidden && !quantityOnlyRefundAvailable && !showForm && (
                 <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
                     This order has a legacy refund. A Super Admin must review it before another refund can be requested.
                 </p>
             )}
 
             {
-                showForm && (
+                allowRefundRequest && showForm && (
                     <Card className="p-4 border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/20">
-                        <form onSubmit={handleSubmit} className="space-y-4">
+                        <form onSubmit={handleSubmit} className="space-y-4" noValidate>
                             <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400 mb-2">
                                 <AlertTriangle className="h-4 w-4" />
                                 <span className="text-sm font-medium">Select Items to Refund</span>
@@ -461,21 +479,48 @@ export function RefundManagement({
                             </div>
 
                             <div className="space-y-2">
-                                <Label>Reason</Label>
+                                <Label htmlFor="refund-reason">
+                                    Reason <span className="text-destructive" aria-hidden="true">*</span>
+                                </Label>
                                 <Textarea
+                                    id="refund-reason"
                                     placeholder="Why is this refund being requested?"
                                     value={reason}
-                                    onChange={e => setReason(e.target.value)}
+                                    onChange={e => {
+                                        const nextReason = e.target.value
+                                        setReason(nextReason)
+                                        if (nextReason.trim()) setReasonError("")
+                                    }}
+                                    onBlur={() => {
+                                        if (!reason.trim()) setReasonError("Refund reason is required")
+                                    }}
                                     rows={2}
                                     maxLength={255}
+                                    required
+                                    aria-invalid={Boolean(reasonError)}
+                                    aria-describedby={reasonError ? "refund-reason-error refund-reason-count" : "refund-reason-count"}
                                 />
-                                <div className="text-xs text-muted-foreground text-right">
+                                {reasonError && (
+                                    <p id="refund-reason-error" className="text-xs text-destructive" role="alert">
+                                        {reasonError}
+                                    </p>
+                                )}
+                                <div id="refund-reason-count" className="text-xs text-muted-foreground text-right">
                                     {reason.length}/255
                                 </div>
                             </div>
 
                             <div className="flex items-center justify-end gap-2">
-                                <Button type="button" variant="ghost" size="sm" onClick={() => setShowForm(false)}>
+                                <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => {
+                                        setReason("")
+                                        setReasonError("")
+                                        setShowForm(false)
+                                    }}
+                                >
                                     Cancel
                                 </Button>
                                 <Button

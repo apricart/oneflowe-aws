@@ -136,6 +136,90 @@ export function normalizeBranch(value: unknown): string {
   return normalized === "1. gso" ? "gso" : normalized
 }
 
+/**
+ * Normalizes transport/whitespace differences while preserving capitalization.
+ * Some K-Electric source locations intentionally differ only by letter case, so
+ * normalizeBranch() must not be used as their primary identity.
+ */
+export function normalizeBranchExact(value: unknown): string {
+  return String(value ?? "")
+    .normalize("NFKC")
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u2013\u2014]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
+export interface KeLegacyBranchCandidate {
+  id: number
+  name: string
+  externalSource?: string | null
+  externalId?: string | null
+}
+
+export type KeLegacyBranchResolutionKind =
+  | "EXTERNAL_ID"
+  | "EXACT_NAME"
+  | "NORMALIZED_ALIAS"
+  | "UNRESOLVED"
+
+export function resolveKeLegacyBranch<T extends KeLegacyBranchCandidate>(
+  branches: readonly T[],
+  source: { locationId?: unknown; name: unknown },
+  aliases: Readonly<Record<string, string>> = {},
+): {
+  branch: T | null
+  kind: KeLegacyBranchResolutionKind
+  matchCount: number
+  lookupKey: string
+} {
+  const numericLocationId = Number(source.locationId)
+  if (Number.isSafeInteger(numericLocationId) && numericLocationId > 0) {
+    const externalId = String(numericLocationId)
+    const externalMatches = branches.filter((branch) =>
+      branch.externalSource === LEGACY_SOURCE && String(branch.externalId ?? "") === externalId,
+    )
+    if (externalMatches.length === 1) {
+      return { branch: externalMatches[0], kind: "EXTERNAL_ID", matchCount: 1, lookupKey: externalId }
+    }
+    if (externalMatches.length > 1) {
+      return { branch: null, kind: "UNRESOLVED", matchCount: externalMatches.length, lookupKey: externalId }
+    }
+  }
+
+  const exactKey = normalizeBranchExact(source.name)
+  const exactMatches = branches.filter((branch) => normalizeBranchExact(branch.name) === exactKey)
+  if (exactMatches.length === 1) {
+    return { branch: exactMatches[0], kind: "EXACT_NAME", matchCount: 1, lookupKey: exactKey }
+  }
+  if (exactMatches.length > 1) {
+    return { branch: null, kind: "UNRESOLVED", matchCount: exactMatches.length, lookupKey: exactKey }
+  }
+
+  const normalizedSource = normalizeBranch(source.name)
+  const hasExplicitAlias = Object.prototype.hasOwnProperty.call(aliases, normalizedSource)
+  const hasBuiltInAlias = normalizedSource !== normalizeText(source.name)
+  const normalizedLookup = aliases[normalizedSource] ?? normalizedSource
+  const normalizedMatches = branches.filter((branch) => normalizeBranch(branch.name) === normalizedLookup)
+  // Never silently collapse a capitalization-only source branch. Normalized
+  // fallback is allowed only for an explicit reviewed alias or a narrowly
+  // encoded built-in alias such as "1. GSO" -> "GSO".
+  if ((hasExplicitAlias || hasBuiltInAlias) && normalizedMatches.length === 1) {
+    return {
+      branch: normalizedMatches[0],
+      kind: "NORMALIZED_ALIAS",
+      matchCount: 1,
+      lookupKey: normalizedLookup,
+    }
+  }
+  return {
+    branch: null,
+    kind: "UNRESOLVED",
+    matchCount: normalizedMatches.length,
+    lookupKey: normalizedLookup,
+  }
+}
+
 export function toCents(value: unknown): number {
   const number = Number(value ?? 0)
   if (!Number.isFinite(number)) throw new Error(`Invalid monetary value: ${String(value)}`)

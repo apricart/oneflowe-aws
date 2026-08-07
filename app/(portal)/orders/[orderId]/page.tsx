@@ -89,6 +89,7 @@ export default function SuperAdminOrderDetailsPage() {
   const isSuperAdmin = userRole === "SUPER_ADMIN"
   const isHeadOffice = userRole === "HEAD_OFFICE"
   const isBranchAdmin = userRole === "BRANCH_ADMIN"
+  const canRequestRefundFromOrderReview = isHeadOffice || isBranchAdmin || userRole === "ORDER_PORTAL"
 
   const { data, error, isLoading, mutate } = useSWR<{
     item: OrderDetail & { orderItems: OrderItem[] }
@@ -540,6 +541,7 @@ export default function SuperAdminOrderDetailsPage() {
                     orderTotalCents={order.totalCents}
                     orderStatus={order.status}
                     createdAt={order.createdAt}
+                    allowRefundRequest={canRequestRefundFromOrderReview}
                     pricesHidden={pricesHidden}
                     initialOrderItems={orderItems}
                     onRefundSuccess={() => mutate()}

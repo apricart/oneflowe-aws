@@ -260,6 +260,20 @@
       "when": 1785902400000,
       "tag": "20260805090000_add_refund_tax_cents",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1785949200000,
+      "tag": "20260805170000_add_external_branch_identity",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1785951000000,
+      "tag": "20260805173000_guard_external_branch_name_collisions",
+      "breakpoints": true
     }
   ]
 }

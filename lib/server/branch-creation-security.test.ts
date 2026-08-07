@@ -37,4 +37,27 @@ describe("branch creation security contracts", () => {
     expect(migration).toContain("RAISE EXCEPTION")
     expect(migration).not.toMatch(/\b(DELETE|UPDATE)\s+"branches"/i)
   })
+
+  it("scopes case-sensitive external identities without relaxing ordinary branch creation", () => {
+    const migration = source("drizzle/20260805170000_add_external_branch_identity.sql")
+    const guardMigration = source("drizzle/20260805173000_guard_external_branch_name_collisions.sql")
+    const createRoute = source("app/api/v1/branches/route.ts")
+    const updateRoute = source("app/api/v1/branches/[id]/route.ts")
+
+    expect(migration).toContain('"external_source" varchar(64)')
+    expect(migration).toContain('"external_id" varchar(128)')
+    expect(migration).toContain('CREATE UNIQUE INDEX IF NOT EXISTS "branches_org_external_identity_uq"')
+    expect(migration).toContain('CREATE UNIQUE INDEX IF NOT EXISTS "branches_org_name_exact_uq"')
+    expect(migration).toContain('CREATE UNIQUE INDEX IF NOT EXISTS "branches_org_name_normalized_unmapped_uq"')
+    expect(migration).toContain('WHERE "external_source" IS NULL AND "external_id" IS NULL')
+    expect(migration).not.toMatch(/\b(INSERT|UPDATE|DELETE)\s+(?:INTO\s+)?"branches"/i)
+    expect(guardMigration).toContain("branches_name_identity_guard_trg")
+    expect(guardMigration).toContain("pg_advisory_xact_lock")
+    expect(guardMigration).toContain("branches_org_name_identity_guard")
+    expect(guardMigration).toContain("branch.external_source <> NEW.external_source")
+
+    expect(createRoute).toContain("lower(btrim(${branchesTable.name}))")
+    expect(updateRoute).toContain("currentHasExternalIdentity")
+    expect(updateRoute).toContain("isDistinctSiblingFromSameSource")
+  })
 })

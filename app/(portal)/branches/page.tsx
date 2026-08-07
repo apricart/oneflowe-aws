@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Sheet, SheetContent } from "@/components/ui/sheet"
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet"
 import { cn } from "@/lib/utils"
 import {
   Building2, Users, RefreshCcw, Search, Boxes, UserCog, Sparkles,
@@ -625,9 +625,9 @@ export default function BranchesPage() {
                       </div>
                       <div>
                         <p className="text-[10px] font-bold text-blue-400/80 dark:text-blue-500 uppercase tracking-widest mb-0.5">Branch</p>
-                        <h2 className="text-lg font-black text-slate-800 dark:text-slate-100 tracking-tight leading-tight">
+                        <SheetTitle className="text-lg font-black text-slate-800 dark:text-slate-100 tracking-tight leading-tight">
                           {viewingBranch.name}
-                        </h2>
+                        </SheetTitle>
                       </div>
                     </div>
                     <Badge className={cn(

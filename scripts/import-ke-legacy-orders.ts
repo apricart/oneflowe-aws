@@ -32,6 +32,7 @@ import {
   normalizeText,
   prepareKeLegacySource,
   rejectionCounts,
+  resolveKeLegacyBranch,
   type PreparedOrder,
 } from "../lib/legacy-import/ke-electric"
 
@@ -58,6 +59,8 @@ interface DbBranch {
   organizationId: number
   groupId: number | null
   address: string | null
+  externalSource: string | null
+  externalId: string | null
 }
 
 interface DbUser {
@@ -257,6 +260,8 @@ async function main() {
       organizationId: schema.branches.organizationId,
       groupId: schema.branches.groupId,
       address: schema.branches.address,
+      externalSource: schema.branches.externalSource,
+      externalId: schema.branches.externalId,
     }).from(schema.branches).where(eq(schema.branches.organizationId, KE_ORGANIZATION.id)),
     db.select({
       id: schema.users.id,
@@ -375,22 +380,23 @@ async function main() {
     return valid
   })
 
-  const branchesByName = new Map<string, DbBranch[]>()
-  for (const branch of dbBranches) {
-    const key = normalizeBranch(branch.name)
-    branchesByName.set(key, [...(branchesByName.get(key) ?? []), branch])
-  }
-
   const branchResolution = new Map<number, DbBranch>()
   const branchErrors: string[] = []
   for (const order of source.prepared) {
-    const sourceBranchKey = normalizeBranch(order.branchName)
-    const lookupKey = overrides.values.branchAliases[sourceBranchKey] ?? sourceBranchKey
-    const candidates = branchesByName.get(lookupKey) ?? []
-    const branch = uniqueBy(candidates, (row) => String(row.id))
-    if (!branch) branchErrors.push(`order ${order.legacyOrderId}: branch "${order.branchName}" matched ${candidates.length}`)
+    const resolved = resolveKeLegacyBranch(dbBranches, {
+      locationId: order.sourceHeader.LocationID,
+      name: order.branchName,
+    }, overrides.values.branchAliases)
+    const branch = resolved.branch
+    if (!branch) {
+      branchErrors.push(
+        `order ${order.legacyOrderId}: branch "${order.branchName}" / location ${String(order.sourceHeader.LocationID)} matched ${resolved.matchCount} (${resolved.lookupKey})`,
+      )
+    }
     else if (branch.organizationId !== KE_ORGANIZATION.id) branchErrors.push(`order ${order.legacyOrderId}: cross-tenant branch ${branch.id}`)
-    else branchResolution.set(order.legacyOrderId, branch)
+    else {
+      branchResolution.set(order.legacyOrderId, branch)
+    }
   }
 
   const activeDbUsers = dbUsers.filter((user) => user.isActive && user.deletedAt === null)

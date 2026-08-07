@@ -8,8 +8,8 @@
  * Historical policy:
  * - one budget row per database branch/month from its first local order month;
  * - branches without orders start in the current month;
- * - source rows that normalize to one database branch are aggregated, producing
- *   one row per branch/month (for example 1. GSO + GSO);
+ * - source rows resolve by exact case-preserving branch name first; explicitly
+ *   approved aliases may still aggregate (for example 1. GSO + GSO);
  * - periods earlier than a branch's first source budget use that earliest source
  *   allocation, as explicitly requested for pre-budget order months;
  * - only allocation/additional values are imported. Legacy UsedBudget is retained
@@ -21,18 +21,22 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs"
 import { dirname, resolve } from "path"
 import * as dotenv from "dotenv"
 import { and, asc, eq, sql } from "drizzle-orm"
-import { normalizeBranch, normalizeText, toCents } from "../lib/legacy-import/ke-electric"
+import {
+  normalizeBranchExact,
+  resolveKeLegacyBranch,
+  toCents,
+} from "../lib/legacy-import/ke-electric"
 
 dotenv.config({ path: ".env.local", quiet: true })
 dotenv.config({ quiet: true })
 
 const KE_ORGANIZATION = { id: 10, code: "0001", name: "K-Electric" } as const
 const CONFIRM_ORGANIZATION = `${KE_ORGANIZATION.id}:${KE_ORGANIZATION.code}:${KE_ORGANIZATION.name}`
-const SOURCE_ALIASES = new Map<string, string>([
-  ["baldia ibc", "baldia"],
-  ["johar technical", "technical"],
-  ["lyari i", "liyari i"],
-])
+const SOURCE_ALIAS_RECORD: Record<string, string> = {
+  "baldia ibc": "baldia",
+  "johar technical": "technical",
+  "lyari i": "liyari i",
+}
 
 interface SourceRow {
   Location: string
@@ -223,24 +227,20 @@ async function main() {
         name: branches.name,
         status: branches.status,
         baselineBudgetCents: branches.baselineBudgetCents,
+        externalSource: branches.externalSource,
+        externalId: branches.externalId,
       })
       .from(branches)
       .where(eq(branches.organizationId, KE_ORGANIZATION.id))
       .orderBy(asc(branches.id))
     assert(dbBranches.length > 0, "K-Electric has no database branches")
 
-    const dbByKey = new Map<string, typeof dbBranches[number]>()
-    for (const branch of dbBranches) {
-      const key = normalizeBranch(branch.name)
-      assert(!dbByKey.has(key), `Duplicate normalized database branch name: ${branch.name}`)
-      dbByKey.set(key, branch)
-    }
-
     const sourceGroups = new Map<string, AggregatedSource>()
     const sourceOnly = new Map<string, { names: Set<string>; periods: Set<string>; rowCount: number }>()
     for (const row of source.rows) {
-      const normalized = normalizeBranch(row.Location)
-      const targetKey = SOURCE_ALIASES.get(normalized) ?? normalized
+      const resolution = resolveKeLegacyBranch(dbBranches, { name: row.Location }, SOURCE_ALIAS_RECORD)
+      const targetBranch = resolution.branch
+      const targetKey = targetBranch ? String(targetBranch.id) : normalizeBranchExact(row.Location)
       const period = sourcePeriod(row)
       const monthlyBudget = Number(row.MonthlyBudget ?? 0)
       const additionalBudget = Number(row.AdditionalBudget ?? 0)
@@ -249,9 +249,9 @@ async function main() {
       assert([monthlyBudget, additionalBudget, usedBudget, remainingBudget].every(Number.isFinite), `Invalid source money row: ${JSON.stringify(row)}`)
       assert(monthlyBudget >= 0 && additionalBudget >= 0 && usedBudget >= 0, `Negative source budget value: ${JSON.stringify(row)}`)
 
-      if (!dbByKey.has(targetKey)) {
+      if (!targetBranch) {
         const current = sourceOnly.get(targetKey) ?? { names: new Set<string>(), periods: new Set<string>(), rowCount: 0 }
-        current.names.add(normalizeText(row.Location))
+        current.names.add(normalizeBranchExact(row.Location))
         current.periods.add(period)
         current.rowCount += 1
         sourceOnly.set(targetKey, current)
@@ -302,7 +302,7 @@ async function main() {
     }
     for (const rows of sourceByTarget.values()) rows.sort((a, b) => a.period.localeCompare(b.period))
 
-    const missingSourceBranches = dbBranches.filter((branch) => !sourceByTarget.has(normalizeBranch(branch.name)))
+    const missingSourceBranches = dbBranches.filter((branch) => !sourceByTarget.has(String(branch.id)))
     assert(missingSourceBranches.length === 0, `Database branches without source budget mapping: ${missingSourceBranches.map((branch) => branch.name).join(", ")}`)
 
     const orderStartsResult = await pool.query<{
@@ -346,7 +346,7 @@ async function main() {
     const branchPlans: Array<Record<string, unknown>> = []
     const baselines: Array<{ branchId: number; branchName: string; previousAmountCents: number; amountCents: number }> = []
     for (const branch of dbBranches) {
-      const targetKey = normalizeBranch(branch.name)
+      const targetKey = String(branch.id)
       const available = sourceByTarget.get(targetKey)!
       const orderStart = orderStarts.get(branch.id)
       assert(orderStart, `Missing order aggregate for branch ${branch.id}`)
@@ -434,7 +434,7 @@ async function main() {
         firstPeriod: "earliest local order month per branch",
         branchWithoutOrders: "current month only",
         missingEarlierSourcePeriod: "backfill the earliest available source allocation",
-        duplicateSourceRows: "aggregate to one database branch/month; insert one row",
+        duplicateSourceRows: "aggregate only when exact identity or an explicit alias resolves to one database branch/month",
         existingDatabaseBudget: "skip; never overwrite",
         importedFields: ["amountAllocatedCents", "amountCreditedCents"],
         preservedOperationalFields: { amountSpentCents: 0, amountHeldCents: 0 },
