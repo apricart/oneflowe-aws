@@ -1,0 +1,170 @@
+name: deploy-prod
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  scan-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.x
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # ---- SonarCloud scan (report only, never blocks) ----
+      - name: SonarCloud Scan
+        continue-on-error: true
+        uses: SonarSource/sonarqube-scan-action@v4
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
+            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
+
+      # ---- Trivy filesystem/dependency scan (report only) ----
+      - name: Trivy filesystem scan
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          exit-code: 0
+          format: json
+          output: trivy-fs-report.json
+
+      - name: Trivy filesystem scan (readable table, for the report bundle)
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          exit-code: 0
+          format: table
+          output: trivy-fs-report.txt
+
+      # ---- Snyk scan (report only) ----
+      - name: Snyk Scan
+        continue-on-error: true
+        uses: snyk/actions/node@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --json-file-output=snyk-report.json
+
+      # ---- Build the Docker image ----
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.DEPLOY_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.DEPLOY_AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.DEPLOY_AWS_REGION }}
+
+      - name: Log in to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build image
+        run: |
+          docker build -t ${{ secrets.ECR_REPOSITORY_URL }}:prod-${{ github.sha }} .
+
+      # ---- Trivy image scan (report only, the built image itself) ----
+      - name: Trivy image scan
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ secrets.ECR_REPOSITORY_URL }}:prod-${{ github.sha }}
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          exit-code: 0
+          format: table
+          output: trivy-image-report.txt
+
+      # ---- Upload all reports as downloadable artifacts ----
+      - name: Upload scan reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-reports-prod-${{ github.sha }}
+          path: |
+            trivy-fs-report.json
+            trivy-fs-report.txt
+            trivy-image-report.txt
+            snyk-report.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      # ---- Push to ECR ----
+      - name: Push image to ECR
+        run: |
+          docker push ${{ secrets.ECR_REPOSITORY_URL }}:prod-${{ github.sha }}
+
+      # ---- Deploy to production via SSM, then wait for and verify the result ----
+      - name: Deploy to production
+        run: |
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "${{ secrets.PROD_EC2_INSTANCE_ID }}" \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=[
+              "cd /home/ubuntu/app",
+              "aws ecr get-login-password --region ${{ secrets.DEPLOY_AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ secrets.ECR_REPOSITORY_URL }}",
+              "sudo docker pull ${{ secrets.ECR_REPOSITORY_URL }}:prod-${{ github.sha }}",
+              "sudo sed -i \"s|image:.*oneflowe-app:.*|image: ${{ secrets.ECR_REPOSITORY_URL }}:prod-${{ github.sha }}|\" docker-compose.yml",
+              "sudo docker compose up -d",
+              "sleep 15",
+              "sudo docker ps --filter name=app-app-1 --filter status=running | grep app-app-1"
+            ]' \
+            --comment "Deploy prod-${{ github.sha }} to production" \
+            --query "Command.CommandId" \
+            --output text)
+
+          echo "SSM Command ID: $COMMAND_ID"
+          echo "Waiting for deployment to complete..."
+
+          aws ssm wait command-executed \
+            --command-id "$COMMAND_ID" \
+            --instance-id "${{ secrets.PROD_EC2_INSTANCE_ID }}" \
+            --region "${{ secrets.DEPLOY_AWS_REGION }}" || true
+
+          STATUS=$(aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "${{ secrets.PROD_EC2_INSTANCE_ID }}" \
+            --region "${{ secrets.DEPLOY_AWS_REGION }}" \
+            --query "Status" --output text)
+
+          echo "Deployment status: $STATUS"
+
+          if [ "$STATUS" != "Success" ]; then
+            echo "=== STDOUT ==="
+            aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "${{ secrets.PROD_EC2_INSTANCE_ID }}" \
+              --region "${{ secrets.DEPLOY_AWS_REGION }}" \
+              --query "StandardOutputContent" --output text
+            echo "=== STDERR ==="
+            aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "${{ secrets.PROD_EC2_INSTANCE_ID }}" \
+              --region "${{ secrets.DEPLOY_AWS_REGION }}" \
+              --query "StandardErrorContent" --output text
+            echo "Deployment failed - see output above"
+            exit 1
+          fi
+
+          echo "Deployment succeeded and container confirmed running"
