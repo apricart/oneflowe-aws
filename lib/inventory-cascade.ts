@@ -384,7 +384,7 @@ export async function cascadeGlobalProductFieldUpdate(
 
       // Find all organization inventory items where the custom override matches the old global value
       // This indicates the override was likely a static copy of the old global data
-      let oldValue = update.oldValue
+      const oldValue = update.oldValue
       if (update.field === 'basePrice' && typeof oldValue === 'number') {
         // basePrice in globalProducts is in cents, customPrice in organizationInventory is also in cents
         // Ensure we are comparing same types

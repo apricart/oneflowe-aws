@@ -8,15 +8,29 @@ export function useScopedSWR<Key extends string, Data = any, Error = any>(
   config?: SWRConfiguration<Data, Error>,
 ): SWRResponse<Data, Error> {
   const { organizationId, branchId } = useAppContext()
-  if (!key || key === "undefined" || key === "null") return useSWR(null, fetcher, config) as any
-  const url = new URL(key, typeof window !== "undefined" ? window.location.origin : "http://localhost")
-  if (organizationId) url.searchParams.set("organizationId", organizationId)
-  if (branchId) url.searchParams.set("branchId", branchId)
-  // Use context as cache key to trigger revalidation when context changes
-  const cacheKey = `${url.toString()}_${organizationId}_${branchId}`
-  return useSWR(cacheKey, () => fetcher(url.toString()), {
-    revalidateOnFocus: true,
-    keepPreviousData: true,
-    ...config,
-  })
+  const isInvalidKey = !key || key === "undefined" || key === "null"
+
+  let requestUrl: string | null = null
+  let cacheKey: string | null = null
+
+  if (!isInvalidKey) {
+    const url = new URL(
+      key,
+      typeof window !== "undefined" ? window.location.origin : "http://localhost",
+    )
+    if (organizationId) url.searchParams.set("organizationId", organizationId)
+    if (branchId) url.searchParams.set("branchId", branchId)
+    requestUrl = url.toString()
+    cacheKey = `${requestUrl}_${organizationId}_${branchId}`
+  }
+
+  return useSWR(
+    cacheKey,
+    () => fetcher(requestUrl as string),
+    {
+      revalidateOnFocus: true,
+      keepPreviousData: true,
+      ...config,
+    },
+  )
 }

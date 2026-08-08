@@ -34,7 +34,7 @@ describe('formatPKR', () => {
 
     it('handles invalid input', () => {
         expect(formatPKR(NaN)).toBe('PKR 0.00')
-        // @ts-ignore
+        // @ts-expect-error intentional invalid input for runtime guard
         expect(formatPKR('invalid')).toBe('PKR 0.00')
     })
 })

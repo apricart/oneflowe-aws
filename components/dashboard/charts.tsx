@@ -334,9 +334,6 @@ export function ChartTooltip({
         ? `${value.toLocaleString()} orders`
         : value.toLocaleString()
 
-  const { theme } = useTheme()
-  const isDark = theme === 'dark'
-
   return (
     <div className="relative glass-card rounded-[2.5rem] p-8 shadow-2xl overflow-hidden min-h-[440px]">
       <div className="bg-slate-50 dark:bg-slate-900 px-4 py-2 border-b border-slate-200 dark:border-slate-700">
@@ -757,6 +754,9 @@ const formatCurrency = (value: number) => {
 }
 
 const SalesPerfTooltip = ({ active, payload, label: tooltipLabel, activeMetric, hasComparison }: any) => {
+  const { userRole } = useAppContext()
+  const isBuyer = userRole === "HEAD_OFFICE" || userRole === "BRANCH_ADMIN"
+
   if (!active || !payload?.length) return null
   const d = payload[0].payload
   const sales = d.sales ?? 0
@@ -767,9 +767,6 @@ const SalesPerfTooltip = ({ active, payload, label: tooltipLabel, activeMetric, 
   const isRevenue = activeMetric === 'revenue'
   const currentVal = isRevenue ? sales : orders
   const prevVal = isRevenue ? compSales : compOrders
-  
-  const { userRole } = useAppContext()
-  const isBuyer = userRole === "HEAD_OFFICE" || userRole === "BRANCH_ADMIN"
 
   const metricLabel = isRevenue 
     ? (isBuyer ? 'Purchased' : 'Revenue') 
