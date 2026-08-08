@@ -57,6 +57,7 @@ type OrderDetail = {
   creatorPhone?: string | null
   creatorEmployeeId?: string | null
   status: string
+  fulfillmentStatus?: string | null
   paymentStatus?: string | null
   statusAtRefund?: string | null
   refundedAt?: string | null
@@ -540,8 +541,10 @@ export default function SuperAdminOrderDetailsPage() {
                     orderId={order.id}
                     orderTotalCents={order.totalCents}
                     orderStatus={order.status}
+                    orderFulfillmentStatus={order.fulfillmentStatus}
                     createdAt={order.createdAt}
                     allowRefundRequest={canRequestRefundFromOrderReview}
+                    requesterRole={userRole}
                     pricesHidden={pricesHidden}
                     initialOrderItems={orderItems}
                     onRefundSuccess={() => mutate()}

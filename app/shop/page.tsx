@@ -68,6 +68,7 @@ interface Order {
   id: number
   tid: string
   status: string
+  fulfillmentStatus?: string | null
   totalCents: number | null
   createdAt: string
   refundAmountCents?: number | null
@@ -1938,8 +1939,10 @@ export default function OrderPortalPage() {
                 orderId={selectedOrder.id}
                 orderTotalCents={selectedOrder.totalCents}
                 orderStatus={selectedOrder.status}
+                orderFulfillmentStatus={selectedOrder.fulfillmentStatus}
                 createdAt={selectedOrder.createdAt}
                 allowRefundRequest={["HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL"].includes(userRole)}
+                requesterRole={userRole}
                 pricesHidden={pricesHidden}
                 initialOrderItems={orderDetailsData?.items?.[0]?.orderItems || selectedOrder.orderItems || []}
                 onRefundSuccess={() => {

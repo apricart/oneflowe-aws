@@ -18,6 +18,7 @@ const baseProps = {
     orderId: 42,
     orderTotalCents: 100_000,
     orderStatus: "FULFILLED",
+    orderFulfillmentStatus: "DELIVERED",
     createdAt: new Date().toISOString(),
 }
 
@@ -34,8 +35,34 @@ describe("RefundManagement refund request visibility", () => {
     })
 
     it("shows the request action for an eligible non-super-admin user", () => {
-        render(<RefundManagement {...baseProps} allowRefundRequest />)
+        render(<RefundManagement {...baseProps} allowRefundRequest requesterRole="ORDER_PORTAL" />)
 
         expect(screen.getByRole("button", { name: "Request Refund" })).toBeTruthy()
+    })
+
+    it("hides the request action from Order Portal until fulfillment and delivery", () => {
+        const { rerender } = render(
+            <RefundManagement
+                {...baseProps}
+                orderStatus="APPROVED"
+                allowRefundRequest
+                requesterRole="ORDER_PORTAL"
+            />
+        )
+
+        expect(screen.queryByRole("button", { name: "Request Refund" })).toBeNull()
+        expect(screen.getByText("Refund available after fulfillment and delivery")).toBeTruthy()
+
+        rerender(
+            <RefundManagement
+                {...baseProps}
+                orderFulfillmentStatus="OUT_FOR_DELIVERY"
+                allowRefundRequest
+                requesterRole="ORDER_PORTAL"
+            />
+        )
+
+        expect(screen.queryByRole("button", { name: "Request Refund" })).toBeNull()
+        expect(screen.getByText("Refund available after fulfillment and delivery")).toBeTruthy()
     })
 })

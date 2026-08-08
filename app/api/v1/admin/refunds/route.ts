@@ -8,7 +8,7 @@ import { releaseRefundedQuantityBudget } from "@/lib/server/product-quantity-bud
 import { calculateLineCents, formatQuantity, validateProductQuantity } from "@/lib/quantity"
 import { resolveAdminRefundReason } from "@/lib/admin-refund-approval"
 import { adminRefundProcessSchema, validationMessage } from "@/lib/server/mutation-validation"
-import { isPaidForRefund, isRefundEligibleOrderStatus } from "@/lib/business-rules"
+import { isRefundEligibleOrderStatus } from "@/lib/business-rules"
 import { withRateLimit } from "@/lib/rate-limiter"
 
 /**
@@ -321,7 +321,6 @@ export async function POST(req: NextRequest) {
                 organizationId: orders.organizationId,
                 branchId: orders.branchId,
                 status: orders.status,
-                paymentStatus: orders.paymentStatus,
                 totalCents: orders.totalCents,
                 subtotalCents: orders.subtotalCents,
                 taxCents: orders.taxCents,
@@ -371,10 +370,6 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({
                 error: `Order in ${currentStatus || "unknown"} state is not eligible for a refund.`
             }, { status: 400 })
-        }
-
-        if (!isPaidForRefund(orderData.paymentStatus)) {
-            return NextResponse.json({ error: "Only paid orders are eligible for a refund." }, { status: 400 })
         }
 
         // ===== VALIDATE REFUND PERIOD (SAME MONTH ONLY) =====
@@ -546,7 +541,6 @@ export async function POST(req: NextRequest) {
                 .select({
                     id: orders.id,
                     status: orders.status,
-                    paymentStatus: orders.paymentStatus,
                     totalCents: orders.totalCents,
                     refundAmountCents: orders.refundAmountCents,
                     receiptData: orders.receiptData,
@@ -555,7 +549,7 @@ export async function POST(req: NextRequest) {
                 .where(eq(orders.id, orderId))
                 .for('update')
 
-            if (!lockedOrder || !isRefundEligibleOrderStatus(lockedOrder.status) || !isPaidForRefund(lockedOrder.paymentStatus)) {
+            if (!lockedOrder || !isRefundEligibleOrderStatus(lockedOrder.status)) {
                 throw new Error("REFUND_ELIGIBILITY_CONFLICT")
             }
 

@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest"
 import {
   MAX_BUSINESS_QUANTITY,
   canTransitionOrderStatus,
-  isPaidForRefund,
+  isOrderPortalRefundEligible,
+  isPaymentStatusUpdateEligible,
   isRefundEligibleOrderStatus,
 } from "./business-rules"
 import {
@@ -25,14 +26,27 @@ describe("business rules", () => {
     expect(canTransitionOrderStatus("REFUNDED", "FULFILLED")).toBe(false)
   })
 
-  it("requires a paid, non-terminal order for refunds", () => {
+  it("requires a non-terminal order status for refunds", () => {
     expect(isRefundEligibleOrderStatus("PENDING")).toBe(true)
     expect(isRefundEligibleOrderStatus("APPROVED")).toBe(true)
     expect(isRefundEligibleOrderStatus("FULFILLED")).toBe(true)
     expect(isRefundEligibleOrderStatus("REJECTED")).toBe(false)
     expect(isRefundEligibleOrderStatus("REFUNDED")).toBe(false)
-    expect(isPaidForRefund("PAID")).toBe(true)
-    expect(isPaidForRefund("UNPAID")).toBe(false)
+  })
+
+  it("allows Order Portal refunds only after fulfillment and delivery", () => {
+    expect(isOrderPortalRefundEligible("FULFILLED", "DELIVERED")).toBe(true)
+    expect(isOrderPortalRefundEligible(" fulfilled ", " delivered ")).toBe(true)
+    expect(isOrderPortalRefundEligible("APPROVED", "DELIVERED")).toBe(false)
+    expect(isOrderPortalRefundEligible("FULFILLED", "OUT_FOR_DELIVERY")).toBe(false)
+  })
+
+  it("allows payment status updates only after an order is fulfilled and delivered", () => {
+    expect(isPaymentStatusUpdateEligible("FULFILLED", "DELIVERED")).toBe(true)
+    expect(isPaymentStatusUpdateEligible(" fulfilled ", " delivered ")).toBe(true)
+    expect(isPaymentStatusUpdateEligible("APPROVED", "DELIVERED")).toBe(false)
+    expect(isPaymentStatusUpdateEligible("FULFILLED", "OUT_FOR_DELIVERY")).toBe(false)
+    expect(isPaymentStatusUpdateEligible("REFUNDED", "DELIVERED")).toBe(false)
   })
 
   it("rejects duplicate order and refund lines", () => {

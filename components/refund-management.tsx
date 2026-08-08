@@ -20,12 +20,15 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table"
+import { isOrderPortalRefundEligible } from "@/lib/business-rules"
 
 interface RefundManagementProps {
     orderId: number
     orderTotalCents: number | null
     orderStatus: string
+    orderFulfillmentStatus?: string | null
     createdAt: string // Order creation date for refund window validation
+    requesterRole?: string
     allowRefundRequest?: boolean
     pricesHidden?: boolean
     initialOrderItems?: any[]
@@ -41,7 +44,9 @@ export function RefundManagement({
     orderId,
     orderTotalCents,
     orderStatus,
+    orderFulfillmentStatus,
     createdAt,
+    requesterRole,
     allowRefundRequest = false,
     pricesHidden = false,
     initialOrderItems = [],
@@ -160,7 +165,14 @@ export function RefundManagement({
         : orderTotalCents !== null && totalApproved >= orderTotalCents
 
     const isOrderApproved = ["APPROVED", "FULFILLED", "REFUNDED"].includes(orderStatus.toUpperCase())
-    const canRefund = allowRefundRequest && isOrderApproved && hasRefundCapacity && isWithinRefundWindow
+    const isOrderPortal = requesterRole === "ORDER_PORTAL"
+    const meetsOrderPortalDeliveryRequirement = !isOrderPortal
+        || isOrderPortalRefundEligible(orderStatus, orderFulfillmentStatus)
+    const canRefund = allowRefundRequest
+        && isOrderApproved
+        && meetsOrderPortalDeliveryRequirement
+        && hasRefundCapacity
+        && isWithinRefundWindow
 
     const handleItemToggle = (itemId: number, maxRefundableQty: number) => {
         setSelectedItems(prev => {
@@ -318,13 +330,19 @@ export function RefundManagement({
                             Request Refund
                         </Button>
                     )}
-                    {allowRefundRequest && !isOrderApproved && hasRefundCapacity && !showForm && (
+                    {allowRefundRequest && isOrderPortal && !meetsOrderPortalDeliveryRequirement && hasRefundCapacity && !showForm && (
+                        <div className="text-xs text-slate-600 bg-slate-50 px-3 py-2 rounded-md border border-slate-200 flex items-center gap-2">
+                            <Clock className="h-3 w-3" />
+                            Refund available after fulfillment and delivery
+                        </div>
+                    )}
+                    {allowRefundRequest && !isOrderPortal && !isOrderApproved && hasRefundCapacity && !showForm && (
                         <div className="text-xs text-slate-600 bg-slate-50 px-3 py-2 rounded-md border border-slate-200 flex items-center gap-2">
                             <Clock className="h-3 w-3" />
                             Refund available after approval
                         </div>
                     )}
-                    {allowRefundRequest && isOrderApproved && !isWithinRefundWindow && hasRefundCapacity && !showForm && (
+                    {allowRefundRequest && isOrderApproved && meetsOrderPortalDeliveryRequirement && !isWithinRefundWindow && hasRefundCapacity && !showForm && (
                         <div className="text-xs text-amber-700 bg-amber-50 px-3 py-2 rounded-md border border-amber-200 flex items-center gap-2">
                             <Clock className="h-3 w-3" />
                             Refund period ended
@@ -334,7 +352,7 @@ export function RefundManagement({
             </div>
 
             {/* Refund window explanation */}
-            {allowRefundRequest && isOrderApproved && !isWithinRefundWindow && hasRefundCapacity && !showForm && (
+            {allowRefundRequest && isOrderApproved && meetsOrderPortalDeliveryRequirement && !isWithinRefundWindow && hasRefundCapacity && !showForm && (
                 <p className="text-xs text-muted-foreground text-right mt-1">
                     Requests are limited to the calendar month of the order.
                 </p>
