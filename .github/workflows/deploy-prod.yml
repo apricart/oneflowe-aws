@@ -127,7 +127,11 @@ jobs:
       # ---- Push image to ECR (ready and waiting for approval) ----
       - name: Push image to ECR
         run: |
-          docker push ${{ secrets.ECR_REPOSITORY_URL }}:prod-${{ github.sha }}
+          if aws ecr describe-images --repository-name oneflowe-app --region ${{ secrets.DEPLOY_AWS_REGION }} --image-ids imageTag=prod-${{ github.sha }} >/dev/null 2>&1; then
+            echo "Image tag prod-${{ github.sha }} already exists in ECR (likely a re-run on the same commit) - skipping push."
+          else
+            docker push ${{ secrets.ECR_REPOSITORY_URL }}:prod-${{ github.sha }}
+          fi
 
       # ---- Email the PDF report ----
       - name: Email pipeline report
