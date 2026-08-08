@@ -141,7 +141,7 @@
     "@esbuild-kit/core-utils": {
       "esbuild": "0.25.12"
     },
-    "dompurify": "3.4.12",
+    "dompurify": "3.4.13",
     "lodash": "4.18.1",
     "postcss": "$postcss",
     "rollup": "4.62.3",
