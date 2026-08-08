@@ -1,0 +1,134 @@
+name: deploy-test
+
+on:
+  push:
+    branches:
+      - test
+
+permissions:
+  contents: read
+
+jobs:
+  scan-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.x
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # ---- SonarCloud scan (report only, never blocks) ----
+      - name: SonarCloud Scan
+        continue-on-error: true
+        uses: SonarSource/sonarqube-scan-action@v4
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
+            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
+
+      # ---- Trivy filesystem/dependency scan (report only) ----
+      - name: Trivy filesystem scan
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          exit-code: 0
+          format: json
+          output: trivy-fs-report.json
+
+      - name: Trivy filesystem scan (readable table, for the report bundle)
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          exit-code: 0
+          format: table
+          output: trivy-fs-report.txt
+
+      # ---- Snyk scan (report only) ----
+      - name: Snyk Scan
+        continue-on-error: true
+        uses: snyk/actions/node@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --json-file-output=snyk-report.json
+
+      # ---- Build the Docker image ----
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.DEPLOY_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.DEPLOY_AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.DEPLOY_AWS_REGION }}
+
+      - name: Log in to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build image
+        run: |
+          docker build -t ${{ secrets.ECR_REPOSITORY_URL }}:test-${{ github.sha }} .
+          docker tag ${{ secrets.ECR_REPOSITORY_URL }}:test-${{ github.sha }} ${{ secrets.ECR_REPOSITORY_URL }}:test-latest
+
+      # ---- Trivy image scan (report only, the built image itself) ----
+      - name: Trivy image scan
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ secrets.ECR_REPOSITORY_URL }}:test-${{ github.sha }}
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          exit-code: 0
+          format: table
+          output: trivy-image-report.txt
+
+      # ---- Upload all reports as downloadable artifacts ----
+      - name: Upload scan reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-reports-test-${{ github.sha }}
+          path: |
+            trivy-fs-report.json
+            trivy-fs-report.txt
+            trivy-image-report.txt
+            snyk-report.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      # ---- Push to ECR (always runs now, regardless of scan findings) ----
+      - name: Push image to ECR
+        run: |
+          docker push ${{ secrets.ECR_REPOSITORY_URL }}:test-${{ github.sha }}
+          docker push ${{ secrets.ECR_REPOSITORY_URL }}:test-latest
+
+      # ---- Deploy to staging via SSM ----
+      - name: Deploy to staging
+        run: |
+          aws ssm send-command \
+            --instance-ids "${{ secrets.STAGING_EC2_INSTANCE_ID }}" \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=[
+              "cd /home/ubuntu/app",
+              "aws ecr get-login-password --region ${{ secrets.DEPLOY_AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ secrets.ECR_REPOSITORY_URL }}",
+              "sudo docker pull ${{ secrets.ECR_REPOSITORY_URL }}:test-latest",
+              "sudo docker compose down",
+              "sudo docker compose up -d"
+            ]' \
+            --comment "Deploy test-${{ github.sha }} to staging" \
+            --output text
