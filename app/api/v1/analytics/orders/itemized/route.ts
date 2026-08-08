@@ -2,10 +2,16 @@ import { NextResponse, type NextRequest } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
-import { orders, orderItems, branches, users, globalProducts, categories, refundItems, groups, organizations } from "@/db/schema"
-import { and, eq, gte, lte, inArray, desc, sql } from "drizzle-orm"
+import { orders, orderItems, branches, users, globalProducts, categories, refundItems, refunds, groups, organizations } from "@/db/schema"
+import { and, eq, gte, lte, inArray, desc, sql, ilike, or } from "drizzle-orm"
 import { redactAnalyticsPrices, shouldHidePricesForRole } from "@/lib/price-visibility"
 import { parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
+import { escapeLikePattern } from "@/lib/utils"
+import {
+    isBranchScopedAnalyticsRole,
+    resolveAnalyticsBranchIds,
+    resolveAnalyticsOrganizationIds,
+} from "@/lib/server/analytics-scope"
 
 export async function GET(req: NextRequest) {
     try {
@@ -28,8 +34,14 @@ export async function GET(req: NextRequest) {
         const status = url.searchParams.get("status")
         const productIdsParam = url.searchParams.get("productIds")
         const organizationIdsParam = url.searchParams.get("organizationIds")
+        const organizationIdParam = url.searchParams.get("organizationId")
         const groupIdsParam = url.searchParams.get("groupIds")
         const limit = Math.min(Math.max(Math.trunc(Number(url.searchParams.get("limit"))) || 5000, 1), 5000)
+        const searchTermRaw = (url.searchParams.get("searchTerm") || "").trim()
+        if (searchTermRaw.length > 100) {
+            return NextResponse.json({ error: "Search query must be at most 100 characters" }, { status: 400 })
+        }
+        const searchTerm = searchTermRaw ? escapeLikePattern(searchTermRaw) : ""
 
         const monthsRaw = url.searchParams.get("months")
         const yearsRaw = url.searchParams.get("years")
@@ -41,19 +53,55 @@ export async function GET(req: NextRequest) {
         const parsedCompMonths = compareMonthsRaw ? compareMonthsRaw.split(',').map(Number).filter((n: any) => !isNaN(n) && n >= 1 && n <= 12) : []
         const parsedCompYears = compareYearsRaw ? compareYearsRaw.split(',').map(Number).filter((n: any) => !isNaN(n) && n > 2000) : []
 
-        // RBAC Context Parsing
-        let branchIds: number[] = []
-        if (branchIdsParam && branchIdsParam.trim() !== "") {
-            branchIds = branchIdsParam.split(",").map(id => Number(id)).filter(id => !isNaN(id) && id > 0)
-        } else if (userRole === "BRANCH_ADMIN" || userRole === "BRANCH_MANAGER" || userRole === "ORDER_PORTAL") {
-            if (userBranchId) branchIds = [userBranchId]
-        } else {
-            const b = await db.select({ id: branches.id }).from(branches).where(userOrgId ? eq(branches.organizationId, userOrgId) : undefined)
-            branchIds = b.map(br => br.id)
+        const requestedOrganizationIds = organizationIdsParam
+            ? organizationIdsParam.split(",").map(Number)
+            : (organizationIdParam ? [Number(organizationIdParam)] : [])
+        const scopedOrganizationIds = resolveAnalyticsOrganizationIds({
+            role: userRole,
+            userOrganizationId: userOrgId,
+            requestedOrganizationIds,
+        })
+
+        if (userRole !== "SUPER_ADMIN" && scopedOrganizationIds.length === 0) {
+            return NextResponse.json({ error: "Organization not assigned" }, { status: 403 })
+        }
+
+        let allowedBranchQuery = db.select({ id: branches.id }).from(branches)
+        if (scopedOrganizationIds.length > 0) {
+            allowedBranchQuery = allowedBranchQuery
+                .where(inArray(branches.organizationId, scopedOrganizationIds)) as any
+        }
+        const allowedBranches = await allowedBranchQuery
+        const requestedBranchIds = branchIdsParam
+            ? branchIdsParam.split(",").map(Number)
+            : []
+        let branchIds = resolveAnalyticsBranchIds({
+            role: userRole,
+            userBranchId,
+            requestedBranchIds,
+            allowedBranchIds: allowedBranches.map((branch) => branch.id),
+        })
+
+        if (groupIdsParam && groupIdsParam.trim() !== "") {
+            const groupIds = groupIdsParam.split(",").map(Number).filter(id => !isNaN(id) && id > 0)
+            if (groupIds.length > 0) {
+                const groupBranches = await db
+                    .select({ id: branches.id })
+                    .from(branches)
+                    .where(and(
+                        inArray(branches.groupId, groupIds),
+                        scopedOrganizationIds.length > 0
+                            ? inArray(branches.organizationId, scopedOrganizationIds)
+                            : undefined,
+                    ))
+                const groupBranchIds = new Set(groupBranches.map((branch) => branch.id))
+                branchIds = branchIds.filter((branchId) => groupBranchIds.has(branchId))
+            }
         }
 
         if (branchIds.length === 0) {
-            return NextResponse.json({ error: "No branches resolved" }, { status: 400 })
+            const responseStatus = isBranchScopedAnalyticsRole(userRole) ? 403 : 400
+            return NextResponse.json({ error: "No permitted branches resolved" }, { status: responseStatus })
         }
 
         const startDate = parseStartDateParam(startDateParam)
@@ -80,13 +128,24 @@ export async function GET(req: NextRequest) {
             const productIds = productIdsParam.split(",").map(Number).filter(id => !isNaN(id) && id > 0)
             if (productIds.length > 0) baseConditions.push(inArray(orderItems.globalProductId, productIds))
         }
-        if (groupIdsParam && groupIdsParam.trim() !== "") {
-            const groupIds = groupIdsParam.split(",").map(Number).filter(id => !isNaN(id) && id > 0)
-            if (groupIds.length > 0) baseConditions.push(inArray(branches.groupId, groupIds))
+        if (scopedOrganizationIds.length > 0) {
+            baseConditions.push(inArray(orders.organizationId, scopedOrganizationIds))
         }
-        if (organizationIdsParam && organizationIdsParam.trim() !== "") {
-            const organizationIds = organizationIdsParam.split(",").map(Number).filter(id => !isNaN(id) && id > 0)
-            if (organizationIds.length > 0) baseConditions.push(inArray(orders.organizationId, organizationIds))
+        if (searchTerm) {
+            const searchCondition = or(
+                ilike(orderItems.productName, `%${searchTerm}%`),
+                ilike(orderItems.productCode, `%${searchTerm}%`),
+                ilike(globalProducts.name, `%${searchTerm}%`),
+                ilike(globalProducts.productCode, `%${searchTerm}%`),
+                ilike(users.fullName, `%${searchTerm}%`),
+                ilike(users.email, `%${searchTerm}%`),
+                ilike(users.employeeId, `%${searchTerm}%`),
+                ilike(orders.tid, `%${searchTerm}%`),
+                ilike(branches.name, `%${searchTerm}%`),
+                ilike(organizations.name, `%${searchTerm}%`),
+                ilike(groups.name, `%${searchTerm}%`),
+            )
+            if (searchCondition) baseConditions.push(searchCondition)
         }
 
         // Find all order items matching filters
@@ -137,7 +196,11 @@ export async function GET(req: NextRequest) {
                     amount: refundItems.amountCents,
                 })
                 .from(refundItems)
-                .where(inArray(refundItems.orderItemId, validOrderItemIds))
+                .innerJoin(refunds, eq(refundItems.refundId, refunds.id))
+                .where(and(
+                    inArray(refundItems.orderItemId, validOrderItemIds),
+                    inArray(sql`UPPER(${refunds.status})`, ['APPROVED', 'COMPLETED']),
+                ))
 
             refundQuantities = refundsObj.reduce((acc, curr) => {
                 if (curr.orderItemId) {

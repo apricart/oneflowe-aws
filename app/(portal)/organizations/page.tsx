@@ -1,6 +1,19 @@
 "use client"
 import { useOrganizations, useBranches } from "@/lib/hooks/use-api"
-type Organization = { id: number; name: string; code: string; status?: "active" | "inactive"; budgetAllocationMode?: BudgetAllocationMode }
+import {
+  DEFAULT_ORDER_APPROVER_ROLE,
+  ORDER_APPROVER_ROLE_LABELS,
+  parseOrderApproverRole,
+  type OrderApproverRole,
+} from "@/lib/order-approver-role"
+type Organization = {
+  id: number
+  name: string
+  code: string
+  status?: "active" | "inactive"
+  budgetAllocationMode?: BudgetAllocationMode
+  orderApproverRole?: OrderApproverRole
+}
 type Branch = {
   id: number
   name: string
@@ -15,15 +28,16 @@ type Branch = {
 import { Button } from "@/components/ui/button"
 import { Loader2, Pencil, Trash2, Building2, GitBranch, Save } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
 import { cn } from "@/lib/utils"
+import { formatCountLabel } from "@/lib/count-label"
 import { Badge } from "@/components/ui/badge"
-import { ReactNode, useEffect, useMemo, useState } from "react"
+import { ReactNode, useEffect, useMemo, useRef, useState } from "react"
 import { useAppContext } from "@/components/context/app-context"
 import { useSession } from "next-auth/react"
 import { PremiumConfirmDialog } from "@/components/premium/premium-confirm-dialog"
@@ -38,7 +52,9 @@ import {
 } from "@/lib/budget-allocation-mode"
 import { Loader } from "lucide-react";
 import { OrganizationExcelExportButton } from "@/components/organizations/organization-excel-export-button"
+import { OrganizationListExcelExportButton } from "@/components/organizations/organization-list-excel-export-button"
 import { BranchExcelExportButton } from "@/components/organizations/branch-excel-export-button"
+import { BranchListExcelExportButton } from "@/components/organizations/branch-list-excel-export-button"
 
 const LEGACY_HIDE_PRICES_SETTING_KEY = "hide_prices_for_branch_and_order_portal"
 const HIDE_BRANCH_ADMIN_PRICES_SETTING_KEY = "hide_prices_for_branch_admin"
@@ -60,7 +76,7 @@ type BranchesRes = { items: Branch[] }
 export default function OrganizationsPage() {
   const { data: session } = useSession()
   const { data: orgs, mutate: refetchOrgs, isLoading: loadingOrgs } = useOrganizations()
-  const { data: branches, mutate: refetchBranches } = useBranches()
+  const { data: branches, mutate: refetchBranches, isLoading: loadingBranches } = useBranches()
   const { organizationId: contextOrgId } = useAppContext()
   const userRole = (session?.user as any)?.role
 
@@ -76,6 +92,8 @@ export default function OrganizationsPage() {
     setFeedback({ message, type, visible: true })
   }
   const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null)
+  const hasInitializedOrgSelectionRef = useRef(false)
+  const previousContextOrgIdRef = useRef<string | null | undefined>(undefined)
   const [orgSearch, setOrgSearch] = useState("")
   const [branchStatusFilter, setBranchStatusFilter] = useState<"all" | "active" | "inactive">("all")
   const [branchSearch, setBranchSearch] = useState("")
@@ -161,12 +179,50 @@ export default function OrganizationsPage() {
   }
 
   useEffect(() => {
-    if (contextOrgId) {
-      setSelectedOrgId(contextOrgId)
-    } else if (!selectedOrgId && (orgs?.items?.length || 0) > 0) {
-      setSelectedOrgId(String(orgs!.items[0].id))
+    const organizations = orgs?.items
+    if (!organizations) return
+
+    const normalizedContextOrgId = contextOrgId ? String(contextOrgId) : null
+    const isInitialSelection = !hasInitializedOrgSelectionRef.current
+    const contextChanged =
+      previousContextOrgIdRef.current !== undefined &&
+      previousContextOrgIdRef.current !== normalizedContextOrgId
+
+    previousContextOrgIdRef.current = normalizedContextOrgId
+
+    if (organizations.length === 0) {
+      setSelectedOrgId(null)
+      return
     }
-  }, [contextOrgId, orgs?.items, selectedOrgId])
+
+    setSelectedOrgId((currentSelection) => {
+      const hasOrganization = (id: string) =>
+        organizations.some((organization) => String(organization.id) === id)
+
+      if (contextChanged && normalizedContextOrgId && hasOrganization(normalizedContextOrgId)) {
+        return normalizedContextOrgId
+      }
+
+      if (isInitialSelection) {
+        if (normalizedContextOrgId && hasOrganization(normalizedContextOrgId)) {
+          return normalizedContextOrgId
+        }
+        return String(organizations[0].id)
+      }
+
+      if (currentSelection === null || hasOrganization(currentSelection)) {
+        return currentSelection
+      }
+
+      if (normalizedContextOrgId && hasOrganization(normalizedContextOrgId)) {
+        return normalizedContextOrgId
+      }
+
+      return String(organizations[0].id)
+    })
+
+    hasInitializedOrgSelectionRef.current = true
+  }, [contextOrgId, orgs?.items])
 
   async function removeOrganization(id: string) {
     try {
@@ -386,7 +442,16 @@ export default function OrganizationsPage() {
             <Card className="h-full border-none shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.2)] bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl rounded-[2rem] overflow-hidden">
               <CardHeader className="pb-4">
                 <div className="flex items-center justify-between mb-2">
-                  <CardTitle className="text-xl font-semibold tracking-tight">Company List</CardTitle>
+                  <div className="flex items-center gap-1.5">
+                    <CardTitle className="text-xl font-semibold tracking-tight">Company List</CardTitle>
+                    <OrganizationListExcelExportButton
+                      organizations={orgs?.items || []}
+                      branches={branches?.items || []}
+                      isLoading={loadingOrgs || loadingBranches}
+                      onSuccess={(message) => showFeedback(message, "success")}
+                      onError={(message) => showFeedback(message, "error")}
+                    />
+                  </div>
                   <Badge variant="outline" className="bg-indigo-50/50 text-indigo-700 border-indigo-100 dark:bg-indigo-500/10 dark:text-indigo-400 dark:border-indigo-500/20 rounded-lg px-2.5 py-1">
                     {orgCount}
                   </Badge>
@@ -409,7 +474,7 @@ export default function OrganizationsPage() {
                       isActive={!selectedOrgId}
                       onClick={() => setSelectedOrgId(null)}
                       title="All Companies"
-                      subtitle={`${orgCount} companies, ${branchCount} branches`}
+                      subtitle={`${formatCountLabel(orgCount, "company", "companies")}, ${formatCountLabel(branchCount, "branch", "branches")}`}
                       badgeLabel="Global"
                     />
                     {filteredOrganizations.map((org) => (
@@ -418,7 +483,7 @@ export default function OrganizationsPage() {
                         isActive={String(org.id) === String(selectedOrgId)}
                         onClick={() => setSelectedOrgId(String(org.id))}
                         title={org.name}
-                        subtitle={`${org.code} • ${branchesByOrgId.get(org.id)?.length || 0} branches`}
+                        subtitle={`${org.code} • ${formatCountLabel(branchesByOrgId.get(org.id)?.length || 0, "branch", "branches")}`}
                         status={isActiveStatus(org.status)}
                         budgetAllocationMode={org.budgetAllocationMode}
                       >
@@ -471,7 +536,7 @@ export default function OrganizationsPage() {
               />
               <SummaryStat
                 label="Operational Reach"
-                value={`${filteredBranches.length} Branch${filteredBranches.length === 1 ? "" : "es"}`}
+                value={formatCountLabel(filteredBranches.length, "Branch", "Branches")}
                 // helper={branchStatusFilter === "all" ? "Full Distribution" : `${branchStatusFilter} Subset`}
                 icon={<GitBranch className="h-5 w-5" />}
               />
@@ -480,7 +545,17 @@ export default function OrganizationsPage() {
             <Card className="border-none shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.2)] bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl rounded-[2rem] overflow-hidden">
               <CardHeader className="flex flex-col gap-4 px-5 pb-5 sm:flex-row sm:items-center sm:justify-between">
                 <div className="space-y-1">
-                  <CardTitle className="text-2xl font-bold tracking-tight">Branches Management</CardTitle>
+                  <div className="flex items-center gap-1.5">
+                    <CardTitle className="text-2xl font-bold tracking-tight">Branches Management</CardTitle>
+                    <BranchListExcelExportButton
+                      branches={branches?.items || []}
+                      organizations={orgs?.items || []}
+                      selectedOrganization={selectedOrg}
+                      isLoading={loadingOrgs || loadingBranches}
+                      onSuccess={(message) => showFeedback(message, "success")}
+                      onError={(message) => showFeedback(message, "error")}
+                    />
+                  </div>
                   <p className="text-sm font-medium text-slate-500 dark:text-slate-400">
                     {selectedOrg ? `Strategic units for ${selectedOrg.name}` : `Full enterprise distribution`}
                   </p>
@@ -924,6 +999,7 @@ function CreateOrgDialog({
   const [code, setCode] = useState("")
   const [status, setStatus] = useState<boolean>(true)
   const [budgetAllocationMode, setBudgetAllocationMode] = useState<BudgetAllocationMode>("money")
+  const [orderApproverRole, setOrderApproverRole] = useState<OrderApproverRole>(DEFAULT_ORDER_APPROVER_ROLE)
   const [hideBranchAdminPrices, setHideBranchAdminPrices] = useState(false)
   const [hideOrderPortalPrices, setHideOrderPortalPrices] = useState(false)
   const [confirmModeOpen, setConfirmModeOpen] = useState(false)
@@ -939,6 +1015,7 @@ function CreateOrgDialog({
           code,
           status: status ? "active" : "inactive",
           budgetAllocationMode,
+          orderApproverRole,
           priceVisibility: {
             hideBranchAdminPrices,
             hideOrderPortalPrices,
@@ -954,6 +1031,7 @@ function CreateOrgDialog({
       setCode("")
       setStatus(true)
       setBudgetAllocationMode("money")
+      setOrderApproverRole(DEFAULT_ORDER_APPROVER_ROLE)
       setHideBranchAdminPrices(false)
       setHideOrderPortalPrices(false)
       setConfirmModeOpen(false)
@@ -982,9 +1060,9 @@ function CreateOrgDialog({
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Create Company</DialogTitle>
-            <p className="text-sm text-muted-foreground">
+            <DialogDescription>
               Set up a new tenant with a memorable code, status, and budget allocation model.
-            </p>
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-5">
             <div className="rounded-lg border bg-muted/20 p-4 space-y-4">
@@ -1040,6 +1118,38 @@ function CreateOrgDialog({
                   </button>
                 </div>
               </div>
+              <div className="space-y-2">
+                <Label>Order approver</Label>
+                <p className="text-xs text-muted-foreground">
+                  Exactly one role can approve or reject pending orders for this company.
+                </p>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => setOrderApproverRole("BRANCH_ADMIN")}
+                    disabled={saving}
+                    className={cn(
+                      "rounded-md border bg-background p-3 text-left transition-colors",
+                      orderApproverRole === "BRANCH_ADMIN" ? "border-indigo-500 ring-2 ring-indigo-100 dark:ring-indigo-900/40" : "hover:bg-muted/50",
+                    )}
+                  >
+                    <span className="text-sm font-semibold">Branch Admin</span>
+                    <span className="mt-1 block text-xs text-muted-foreground">Each Branch Admin decides orders for their own branch.</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOrderApproverRole("HEAD_OFFICE")}
+                    disabled={saving}
+                    className={cn(
+                      "rounded-md border bg-background p-3 text-left transition-colors",
+                      orderApproverRole === "HEAD_OFFICE" ? "border-indigo-500 ring-2 ring-indigo-100 dark:ring-indigo-900/40" : "hover:bg-muted/50",
+                    )}
+                  >
+                    <span className="text-sm font-semibold">Head Office</span>
+                    <span className="mt-1 block text-xs text-muted-foreground">Head Office decides orders across all company branches.</span>
+                  </button>
+                </div>
+              </div>
               <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
                 <div>
                   <Label htmlFor="org-status">Status</Label>
@@ -1088,7 +1198,11 @@ function CreateOrgDialog({
             </div>
           </div>
           <DialogFooter>
-            <Button onClick={submit} className="gap-2" disabled={!name || !code || saving}>
+            <Button
+              onClick={submit}
+              className="gap-2 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100 disabled:shadow-none"
+              disabled={!name || !code || saving}
+            >
               <Save className="h-4 w-4" />
               Save Company
             </Button>
@@ -1101,7 +1215,7 @@ function CreateOrgDialog({
         onOpenChange={setConfirmModeOpen}
         onConfirm={createCompany}
         title="Confirm Budget Model"
-        description={`This company will use ${budgetAllocationMode === "quantity" ? "quantity-based" : "money-value"} budget allocation. Super Admins can change this later from Edit Company.`}
+        description={`This company will use ${budgetAllocationMode === "quantity" ? "quantity-based" : "money-value"} budget allocation. ${ORDER_APPROVER_ROLE_LABELS[orderApproverRole]} will be the only role allowed to approve or reject orders. Super Admins can change this later from Edit Company.`}
         confirmText="Create Company"
         cancelText="Review"
         type="warning"
@@ -1326,6 +1440,9 @@ function EditOrgDialog({
   const [budgetAllocationMode, setBudgetAllocationMode] = useState<BudgetAllocationMode>(
     parseBudgetAllocationMode(org.budgetAllocationMode)
   )
+  const [orderApproverRole, setOrderApproverRole] = useState<OrderApproverRole>(
+    parseOrderApproverRole(org.orderApproverRole)
+  )
   const [hideBranchAdminPrices, setHideBranchAdminPrices] = useState(false)
   const [hideOrderPortalPrices, setHideOrderPortalPrices] = useState(false)
   const [loadingSettings, setLoadingSettings] = useState(false)
@@ -1336,7 +1453,8 @@ function EditOrgDialog({
     setCode(org.code)
     setStatus(isActiveStatus(org.status))
     setBudgetAllocationMode(parseBudgetAllocationMode(org.budgetAllocationMode))
-  }, [org.name, org.code, org.status, org.budgetAllocationMode])
+    setOrderApproverRole(parseOrderApproverRole(org.orderApproverRole))
+  }, [org.name, org.code, org.status, org.budgetAllocationMode, org.orderApproverRole])
 
   useEffect(() => {
     if (!open || !isSuperAdmin) return
@@ -1422,6 +1540,38 @@ function EditOrgDialog({
             {isSuperAdmin && (
               <div className="space-y-3">
                 <div className="space-y-2 rounded-md border bg-background px-3 py-2">
+                  <Label>Order approver</Label>
+                  <p className="text-xs text-muted-foreground">
+                    This role alone can approve or reject pending orders.
+                  </p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={() => setOrderApproverRole("BRANCH_ADMIN")}
+                      disabled={loadingSettings || saving}
+                      className={cn(
+                        "rounded-md border bg-background p-3 text-left transition-colors",
+                        orderApproverRole === "BRANCH_ADMIN" ? "border-indigo-500 ring-2 ring-indigo-100 dark:ring-indigo-900/40" : "hover:bg-muted/50",
+                      )}
+                    >
+                      <span className="text-sm font-semibold">Branch Admin</span>
+                      <span className="mt-1 block text-xs text-muted-foreground">Limited to the admin's own branch.</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setOrderApproverRole("HEAD_OFFICE")}
+                      disabled={loadingSettings || saving}
+                      className={cn(
+                        "rounded-md border bg-background p-3 text-left transition-colors",
+                        orderApproverRole === "HEAD_OFFICE" ? "border-indigo-500 ring-2 ring-indigo-100 dark:ring-indigo-900/40" : "hover:bg-muted/50",
+                      )}
+                    >
+                      <span className="text-sm font-semibold">Head Office</span>
+                      <span className="mt-1 block text-xs text-muted-foreground">Covers every branch in this company.</span>
+                    </button>
+                  </div>
+                </div>
+                <div className="space-y-2 rounded-md border bg-background px-3 py-2">
                   <Label>Budget allocation model</Label>
                   <div className="grid gap-2 sm:grid-cols-2">
                     <button
@@ -1497,7 +1647,7 @@ function EditOrgDialog({
                     name,
                     code,
                     status: status ? "active" : "inactive",
-                    ...(isSuperAdmin ? { budgetAllocationMode } : {}),
+                    ...(isSuperAdmin ? { budgetAllocationMode, orderApproverRole } : {}),
                   },
                   isSuperAdmin
                     ? {

@@ -1,7 +1,7 @@
 export const AUTO_APPROVAL_WINDOW_MS = 1000 * 60 * 60 * 2 // 2 hours
 
 export const STATUS_FLOW = [
-  { key: "pending", label: "Pending review", description: "Awaiting head office approval." },
+  { key: "pending", label: "Pending review", description: "Awaiting approval by the organization's assigned approver." },
   { key: "approved", label: "Active", description: "Order cleared for branch processing." },
   { key: "fulfilled", label: "Fulfilled", description: "Branch completed the order and delivery." },
   { key: "refunded", label: "Refunded", description: "Finance has issued a refund for this order." },

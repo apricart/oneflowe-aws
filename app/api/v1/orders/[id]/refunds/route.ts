@@ -13,7 +13,7 @@ import { withRateLimit } from "@/lib/rate-limiter"
 import { ADMIN_OPERATIONS_EMAIL } from "@/lib/email/recipients"
 import { buildRefundSuccessPayload, redactRefundHistoryForPriceHidden } from "@/lib/refund-visibility"
 import { refundRequestSchema, validationMessage } from "@/lib/server/mutation-validation"
-import { isPaidForRefund, isRefundEligibleOrderStatus } from "@/lib/business-rules"
+import { isOrderPortalRefundEligible, isRefundEligibleOrderStatus } from "@/lib/business-rules"
 
 const refundRequestRoles = new Set(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL"])
 
@@ -95,6 +95,7 @@ export async function GET(
         id: refunds.id,
         refundNumber: refunds.refundNumber,
         amountCents: refunds.amountCents,
+        taxRefundCents: refunds.taxRefundCents,
         reason: refunds.reason,
         createdAt: refunds.createdAt,
         status: refunds.status,
@@ -221,10 +222,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       }, { status: 400 })
     }
 
-    if (!isPaidForRefund(orderData.paymentStatus)) {
-      return NextResponse.json({ error: "Only paid orders are eligible for a refund" }, { status: 400 })
-    }
-
     // Validate refund window (must be same month/year)
     const orderDate = new Date(orderData.createdAt)
     const now = new Date()
@@ -242,6 +239,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     if (!canAccessOrderForRefund(userRole, orderData, userOrgId, userBranchId, userId)) {
       return NextResponse.json({ error: "Forbidden: Cannot request a refund for this order" }, { status: 403 })
+    }
+
+    if (
+      userRole === "ORDER_PORTAL"
+      && !isOrderPortalRefundEligible(orderStatus, orderData.fulfillmentStatus)
+    ) {
+      return NextResponse.json({
+        error: "Order Portal users can request a refund only after the order is fulfilled and delivered."
+      }, { status: 400 })
     }
 
     // 1. Fetch original order items to validate prices and quantities
@@ -418,7 +424,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         .where(eq(orders.id, orderId))
         .for('update')
 
-      if (!lockedOrder || !isRefundEligibleOrderStatus(lockedOrder.status) || !isPaidForRefund(lockedOrder.paymentStatus)) {
+      if (
+        !lockedOrder
+        || !isRefundEligibleOrderStatus(lockedOrder.status)
+        || (
+          userRole === "ORDER_PORTAL"
+          && !isOrderPortalRefundEligible(lockedOrder.status, lockedOrder.fulfillmentStatus)
+        )
+      ) {
         throw new Error("REFUND_ELIGIBILITY_CONFLICT")
       }
 

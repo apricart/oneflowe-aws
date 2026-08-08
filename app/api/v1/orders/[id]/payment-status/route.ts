@@ -2,6 +2,8 @@ import { error, ok, readJson, requireApiRole } from "@/lib/api"
 import { getCurrentUser, verifyResourceAccess } from "@/lib/auth"
 import { db } from "@/lib/db"
 import { auditLogs, orders, refunds } from "@/db/schema"
+import { isPaymentStatusUpdateEligible } from "@/lib/business-rules"
+import { normalizeFulfillmentStatus } from "@/lib/fulfillment-status"
 import { PAYMENT_STATUSES, normalizePaymentStatus } from "@/lib/payment-status"
 import { orderSelectColumns, transitionOrderPaymentStatusColumn } from "@/lib/order-select"
 import { and, eq, inArray } from "drizzle-orm"
@@ -37,6 +39,13 @@ export async function POST(
 
   const hasAccess = await verifyResourceAccess(order.organizationId, order.branchId)
   if (!hasAccess) return error("Forbidden: You do not have access to this order", 403)
+
+  if (!isPaymentStatusUpdateEligible(order.status, order.fulfillmentStatus)) {
+    return error(
+      `Payment status can only be updated for fulfilled and delivered orders. Current order status: ${order.status}; fulfillment status: ${normalizeFulfillmentStatus(order.fulfillmentStatus)}`,
+      400,
+    )
+  }
 
   const currentStatus = normalizePaymentStatus(order.paymentStatus)
   if (currentStatus === nextStatus) {
@@ -82,7 +91,7 @@ export async function POST(
   if (updated === "missing-column") {
     return error("Payment status migration has not been applied. Run the order payment status migration first.", 503)
   }
-  if (updated === "conflict") return error("Payment status was already changed by another request", 409)
+  if (updated === "conflict") return error("Order state or payment status was already changed by another request", 409)
   if (updated === "paid-refund-exists") {
     return error("An order with an approved refund cannot be marked unpaid", 409)
   }

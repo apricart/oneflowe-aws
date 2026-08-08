@@ -18,6 +18,10 @@ import { orderCreateSchema, validationMessage } from "@/lib/server/mutation-vali
 import { withRateLimit } from "@/lib/rate-limiter"
 import { attemptImmediateOrderEmailDelivery, queueOrderCreatedNotifications } from "@/lib/server/order-notifications"
 import { canViewFulfillmentToken } from "@/lib/fulfillment-token-access"
+import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
+import { isValidRole } from "@/lib/rbac"
+import { metricExpressions } from "@/lib/metric-utils"
+import { getOrderStatusesForFilter, getOrderStatusFilter } from "@/lib/order-status"
 
 
 
@@ -51,10 +55,21 @@ export async function GET(req: NextRequest) {
       branchIdFromUserRaw && /^\d+$/.test(String(branchIdFromUserRaw))
         ? Number(branchIdFromUserRaw)
         : undefined
+    const currentUserId = (session.user as any).id
+    const decisionCapabilities = await getOrderDecisionCapabilities(
+      isValidRole(role) && typeof currentUserId === "string"
+        ? {
+          role,
+          userId: currentUserId,
+          organizationId: orgIdNum ?? null,
+          branchId: branchIdFromUser ?? null,
+        }
+        : null,
+    )
 
     const { searchParams } = new URL(req.url)
     const rawStatus = searchParams.get("status") || undefined
-    const status = rawStatus?.toUpperCase()
+    const statusFilter = getOrderStatusFilter(rawStatus)
     const branchId = searchParams.get("branchId") || undefined
     const branchIdsRaw = searchParams.get("branchIds") || undefined
     const q = searchParams.get("q") || undefined
@@ -76,14 +91,28 @@ export async function GET(req: NextRequest) {
     const conditions: any[] = []
 
     if (q) {
-      if (q.length > 100) {
+      const normalizedQuery = q.trim()
+      if (normalizedQuery.length > 100) {
         return NextResponse.json({ error: "Search query must be at most 100 characters" }, { status: 400 })
       }
-      const escapedQuery = q.replace(/[\\%_]/g, "\\$&")
-      conditions.push(or(
-        ilike(orders.tid, `%${escapedQuery}%`),
-        ilike(branches.costCenterId, `%${escapedQuery}%`),
-      ))
+      if (normalizedQuery) {
+        const escapedQuery = normalizedQuery.replace(/[\\%_]/g, "\\$&")
+        const searchConditions: any[] = [
+          ilike(orders.tid, `%${escapedQuery}%`),
+          ilike(branches.costCenterId, `%${escapedQuery}%`),
+          sql`EXISTS (
+            SELECT 1
+            FROM ${orderItems}
+            WHERE ${orderItems.orderId} = ${orders.id}
+            AND ${orderItems.productName} ILIKE ${`%${escapedQuery}%`}
+          )`,
+        ]
+        const numericOrderId = Number(normalizedQuery)
+        if (/^\d+$/.test(normalizedQuery) && Number.isSafeInteger(numericOrderId)) {
+          searchConditions.push(eq(orders.id, numericOrderId))
+        }
+        conditions.push(or(...searchConditions))
+      }
     }
 
     // Parsing branchIds
@@ -129,7 +158,6 @@ export async function GET(req: NextRequest) {
 
     const pricesHidden = await shouldHidePricesForRole(role, orgIdNum)
 
-    if (status) conditions.push(eq(orders.status, status))
     if (idParam && /^\d+$/.test(idParam)) conditions.push(eq(orders.id, Number(idParam)))
 
     // Branch filtering
@@ -173,6 +201,14 @@ export async function GET(req: NextRequest) {
     if (to && !endDate) {
       const end = parseEndDateParam(to)
       if (end) conditions.push(lte(orders.createdAt, end))
+    }
+
+    // Status changes which rows are returned, but not the KPI scope. Keeping a
+    // separate snapshot prevents a selected tab from zeroing the other cards.
+    const summaryConditions = [...conditions]
+    const requestedStatuses = getOrderStatusesForFilter(statusFilter)
+    if (requestedStatuses.length > 0) {
+      conditions.push(inArray(orders.status, requestedStatuses))
     }
 
     // --- Audit Logging for Group Access ---
@@ -257,7 +293,22 @@ export async function GET(req: NextRequest) {
       ? selectBase.where(and(...conditions)).orderBy(desc(orders.createdAt)).limit(limit).offset(offset)
       : selectBase.orderBy(desc(orders.createdAt)).limit(limit).offset(offset))
 
-    const currentUserId = (session.user as any).id
+    // The list is intentionally paginated, but the summary cards must describe
+    // the complete filtered scope rather than only the current page of rows.
+    const [summaryRow] = idParam
+      ? []
+      : await db
+        .select({
+          all: metricExpressions.totalOrderCount,
+          pending: sql<number>`COALESCE(COUNT(CASE WHEN UPPER(${orders.status}) = 'PENDING' THEN 1 END), 0)`.mapWith(Number),
+          approved: metricExpressions.approvedCount,
+          fulfilled: metricExpressions.fulfilledCount,
+          rejected: metricExpressions.rejectedCount,
+          refunded: metricExpressions.refundedCount,
+        })
+        .from(orders)
+        .leftJoin(branches, eq(orders.branchId, branches.id))
+        .where(summaryConditions.length ? and(...summaryConditions) : undefined)
 
     // Sanitize items: Only show approvalToken to authorized roles
     const sanitizedItems = items.map(item => {
@@ -267,6 +318,7 @@ export async function GET(req: NextRequest) {
         orderStatus: item.status,
         orderCreatedByUserId: item.createdByUserId,
         orderApprovedByUserId: item.approvedByUserId,
+        configuredApproverRole: decisionCapabilities.orderApproverRole,
       })
       const { createdByUserId: _createdByUserId, ...publicItem } = item
 
@@ -335,17 +387,35 @@ export async function GET(req: NextRequest) {
             pricesHidden,
           }],
           pricesHidden,
+          capabilities: decisionCapabilities,
         })
       }
     }
 
+    const paginationTotal = Number(
+      statusFilter === "all"
+        ? summaryRow?.all || 0
+        : summaryRow?.[statusFilter] || 0
+    )
+
     return NextResponse.json({
       items: filtered,
+      summary: {
+        all: Number(summaryRow?.all || 0),
+        pending: Number(summaryRow?.pending || 0),
+        approved: Number(summaryRow?.approved || 0),
+        fulfilled: Number(summaryRow?.fulfilled || 0),
+        rejected: Number(summaryRow?.rejected || 0),
+        refunded: Number(summaryRow?.refunded || 0),
+      },
       pricesHidden,
+      capabilities: decisionCapabilities,
       pagination: {
         page,
         limit,
-        hasMore: filtered.length === limit,
+        total: paginationTotal,
+        totalPages: Math.ceil(paginationTotal / limit),
+        hasMore: page * limit < paginationTotal,
       },
     })
   } catch (e: any) {
@@ -921,7 +991,7 @@ export async function POST(req: NextRequest) {
 
     const created = creationResult.order
     if (role === "ORDER_PORTAL" && creationResult.queuedNotifications.recipientCount === 0) {
-      console.warn("[OrderNotifications] No active Branch Admin recipient was available", {
+      console.warn("[OrderNotifications] No active configured order approver recipient was available", {
         orderId: created.id,
         organizationId: created.organizationId,
         branchId: created.branchId,

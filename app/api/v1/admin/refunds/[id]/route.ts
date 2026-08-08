@@ -50,6 +50,7 @@ export async function PATCH(
         orderId: refunds.orderId,
         organizationId: refunds.organizationId,
         amountCents: refunds.amountCents,
+        taxRefundCents: refunds.taxRefundCents,
         reason: refunds.reason,
       })
       .from(refunds)
@@ -94,6 +95,7 @@ export async function PATCH(
           refundId,
           tid: order?.tid,
           amountCents: refund.amountCents,
+          taxRefundCents: refund.taxRefundCents,
           reason: refund.reason,
         },
       })

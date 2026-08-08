@@ -26,8 +26,20 @@ export function isRefundEligibleOrderStatus(status: unknown): boolean {
   return normalized === "PENDING" || normalized === "APPROVED" || normalized === "FULFILLED"
 }
 
-export function isPaidForRefund(paymentStatus: unknown): boolean {
-  return String(paymentStatus || "").trim().toUpperCase() === "PAID"
+export function isOrderPortalRefundEligible(
+  orderStatus: unknown,
+  fulfillmentStatus: unknown,
+): boolean {
+  return normalizeOrderStatus(orderStatus) === "FULFILLED"
+    && String(fulfillmentStatus || "").trim().toUpperCase() === "DELIVERED"
+}
+
+export function isPaymentStatusUpdateEligible(
+  orderStatus: unknown,
+  fulfillmentStatus: unknown,
+): boolean {
+  return normalizeOrderStatus(orderStatus) === "FULFILLED"
+    && String(fulfillmentStatus || "").trim().toUpperCase() === "DELIVERED"
 }
 
 export function isUniquePositiveIdList(ids: number[]): boolean {

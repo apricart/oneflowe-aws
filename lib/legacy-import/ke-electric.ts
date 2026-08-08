@@ -108,12 +108,7 @@ export interface SourcePreparation {
   sourceCounts: Record<string, number>
 }
 
-const REPORT_PATHS = {
-  orders: resolve("reports/order.json"),
-  sales: resolve("reports/sales-report.json"),
-  productSummary: resolve("reports/user-product-summary-report.json"),
-  priceHistory: resolve("reports/item-price-history-report.json"),
-} as const
+const DEFAULT_REPORT_ROOT = "reports"
 
 export function normalizeText(value: unknown): string {
   return String(value ?? "")
@@ -139,6 +134,90 @@ export function normalizeLegacyUser(value: unknown): string {
 export function normalizeBranch(value: unknown): string {
   const normalized = normalizeText(value)
   return normalized === "1. gso" ? "gso" : normalized
+}
+
+/**
+ * Normalizes transport/whitespace differences while preserving capitalization.
+ * Some K-Electric source locations intentionally differ only by letter case, so
+ * normalizeBranch() must not be used as their primary identity.
+ */
+export function normalizeBranchExact(value: unknown): string {
+  return String(value ?? "")
+    .normalize("NFKC")
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u2013\u2014]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
+export interface KeLegacyBranchCandidate {
+  id: number
+  name: string
+  externalSource?: string | null
+  externalId?: string | null
+}
+
+export type KeLegacyBranchResolutionKind =
+  | "EXTERNAL_ID"
+  | "EXACT_NAME"
+  | "NORMALIZED_ALIAS"
+  | "UNRESOLVED"
+
+export function resolveKeLegacyBranch<T extends KeLegacyBranchCandidate>(
+  branches: readonly T[],
+  source: { locationId?: unknown; name: unknown },
+  aliases: Readonly<Record<string, string>> = {},
+): {
+  branch: T | null
+  kind: KeLegacyBranchResolutionKind
+  matchCount: number
+  lookupKey: string
+} {
+  const numericLocationId = Number(source.locationId)
+  if (Number.isSafeInteger(numericLocationId) && numericLocationId > 0) {
+    const externalId = String(numericLocationId)
+    const externalMatches = branches.filter((branch) =>
+      branch.externalSource === LEGACY_SOURCE && String(branch.externalId ?? "") === externalId,
+    )
+    if (externalMatches.length === 1) {
+      return { branch: externalMatches[0], kind: "EXTERNAL_ID", matchCount: 1, lookupKey: externalId }
+    }
+    if (externalMatches.length > 1) {
+      return { branch: null, kind: "UNRESOLVED", matchCount: externalMatches.length, lookupKey: externalId }
+    }
+  }
+
+  const exactKey = normalizeBranchExact(source.name)
+  const exactMatches = branches.filter((branch) => normalizeBranchExact(branch.name) === exactKey)
+  if (exactMatches.length === 1) {
+    return { branch: exactMatches[0], kind: "EXACT_NAME", matchCount: 1, lookupKey: exactKey }
+  }
+  if (exactMatches.length > 1) {
+    return { branch: null, kind: "UNRESOLVED", matchCount: exactMatches.length, lookupKey: exactKey }
+  }
+
+  const normalizedSource = normalizeBranch(source.name)
+  const hasExplicitAlias = Object.prototype.hasOwnProperty.call(aliases, normalizedSource)
+  const hasBuiltInAlias = normalizedSource !== normalizeText(source.name)
+  const normalizedLookup = aliases[normalizedSource] ?? normalizedSource
+  const normalizedMatches = branches.filter((branch) => normalizeBranch(branch.name) === normalizedLookup)
+  // Never silently collapse a capitalization-only source branch. Normalized
+  // fallback is allowed only for an explicit reviewed alias or a narrowly
+  // encoded built-in alias such as "1. GSO" -> "GSO".
+  if ((hasExplicitAlias || hasBuiltInAlias) && normalizedMatches.length === 1) {
+    return {
+      branch: normalizedMatches[0],
+      kind: "NORMALIZED_ALIAS",
+      matchCount: 1,
+      lookupKey: normalizedLookup,
+    }
+  }
+  return {
+    branch: null,
+    kind: "UNRESOLVED",
+    matchCount: normalizedMatches.length,
+    lookupKey: normalizedLookup,
+  }
 }
 
 export function toCents(value: unknown): number {
@@ -191,11 +270,12 @@ function orderChecksum(header: LegacyOrder, lines: LegacySaleLine[]): string {
     .digest("hex")
 }
 
-export function prepareKeLegacySource(): SourcePreparation {
-  const ordersFile = jsonFile<LegacyOrder>(REPORT_PATHS.orders)
-  const salesFile = jsonFile<LegacySaleLine>(REPORT_PATHS.sales)
-  const summaryFile = jsonFile<LegacyProductSummary>(REPORT_PATHS.productSummary)
-  const historyFile = jsonFile<LegacyPriceHistory>(REPORT_PATHS.priceHistory)
+export function prepareKeLegacySource(reportRoot = DEFAULT_REPORT_ROOT): SourcePreparation {
+  const root = resolve(reportRoot)
+  const ordersFile = jsonFile<LegacyOrder>(resolve(root, "order.json"))
+  const salesFile = jsonFile<LegacySaleLine>(resolve(root, "sales-report.json"))
+  const summaryFile = jsonFile<LegacyProductSummary>(resolve(root, "user-product-summary-report.json"))
+  const historyFile = jsonFile<LegacyPriceHistory>(resolve(root, "item-price-history-report.json"))
 
   const headers = new Map(ordersFile.rows.map((row) => [Number(row.ID), row]))
   const linesByOrder = new Map<number, LegacySaleLine[]>()

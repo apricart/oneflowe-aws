@@ -3,10 +3,14 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { orders, users, roles, branches, organizations, groups, orderItems, refunds, refundItems } from "@/db/schema"
-import { and, desc, eq, gte, lte, sql, sum, count, inArray } from "drizzle-orm"
+import { and, desc, eq, gte, ilike, lte, or, sql, sum, count, inArray } from "drizzle-orm"
 import { metricExpressions } from "@/lib/metric-utils"
 import { redactAnalyticsPrices, shouldHidePricesForRole } from "@/lib/price-visibility"
 import { parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
+import {
+    parseRequestedOrganizationIds,
+    resolveAnalyticsOrganizationIds,
+} from "@/lib/server/analytics-scope"
 
 export async function GET(req: NextRequest) {
     const session = await getServerSession(authOptions)
@@ -45,9 +49,11 @@ export async function GET(req: NextRequest) {
     const branchId = url.searchParams.get("branchId")
     const branchIdsRaw = url.searchParams.get("branchIds")
     const organizationId = url.searchParams.get("organizationId")
+    const organizationIdsRaw = url.searchParams.get("organizationIds")
     const groupId = url.searchParams.get("groupId")
     const groupIdsRaw = url.searchParams.get("groupIds")
     const statusParam = url.searchParams.get("status")
+    const searchParam = url.searchParams.get("q")
     const compare = url.searchParams.get("compare") === "true"
     const compareStartDateParam = url.searchParams.get("compareStartDate")
     const compareEndDateParam = url.searchParams.get("compareEndDate")
@@ -61,8 +67,9 @@ export async function GET(req: NextRequest) {
         ? groupIdsRaw.split(",").map(id => Number(id)).filter(id => !isNaN(id) && id > 0)
         : (groupId && groupId !== "all" ? [Number(groupId)] : [])
 
-    const page = parseInt(url.searchParams.get("page") || "1")
-    const limit = parseInt(url.searchParams.get("limit") || "50")
+    const page = Math.min(Math.max(Math.trunc(Number(url.searchParams.get("page"))) || 1, 1), 10_000)
+    const requestedLimit = Math.trunc(Number(url.searchParams.get("limit"))) || 50
+    const limit = Math.min(Math.max(requestedLimit, 1), 100)
     const offset = (page - 1) * limit
 
     const monthsRaw = url.searchParams.get("months")
@@ -70,12 +77,41 @@ export async function GET(req: NextRequest) {
     const compareMonthsRaw = url.searchParams.get("compareMonths")
     const compareYearsRaw = url.searchParams.get("compareYears")
 
+    const requestedOrganizationIds = parseRequestedOrganizationIds({
+        organizationIds: organizationIdsRaw,
+        organizationId,
+    })
+
     const parsedMonths = monthsRaw ? monthsRaw.split(',').map(Number).filter(n => !isNaN(n) && n >= 1 && n <= 12) : []
     const parsedYears = yearsRaw ? yearsRaw.split(',').map(Number).filter(n => !isNaN(n) && n > 2000) : []
     const parsedCompMonths = compareMonthsRaw ? compareMonthsRaw.split(',').map(Number).filter(n => !isNaN(n) && n >= 1 && n <= 12) : []
     const parsedCompYears = compareYearsRaw ? compareYearsRaw.split(',').map(Number).filter(n => !isNaN(n) && n > 2000) : []
 
     const conditions = []
+
+    if (searchParam) {
+        const normalizedQuery = searchParam.trim()
+        if (normalizedQuery.length > 100) {
+            return NextResponse.json({ error: "Search query must be at most 100 characters" }, { status: 400 })
+        }
+        if (normalizedQuery) {
+            const escapedQuery = normalizedQuery.replace(/[\\%_]/g, "\\$&")
+            const searchPattern = `%${escapedQuery}%`
+            conditions.push(or(
+                ilike(orders.tid, searchPattern),
+                sql`CAST(${orders.createdByUserId} AS text) ILIKE ${searchPattern}`,
+                sql`EXISTS (
+                    SELECT 1
+                    FROM ${users} AS report_users
+                    WHERE report_users.id = ${orders.createdByUserId}
+                    AND (
+                        report_users.full_name ILIKE ${searchPattern}
+                        OR report_users.employee_id ILIKE ${searchPattern}
+                    )
+                )`,
+            ))
+        }
+    }
 
     // Status filter
     if (statusParam && statusParam.toLowerCase() !== "all") {
@@ -88,15 +124,17 @@ export async function GET(req: NextRequest) {
 
     // Security: RBAC
     const normalizedRole = (roleName || "").toUpperCase().replace(/\s+/g, '_')
+    const scopedOrganizationIds = resolveAnalyticsOrganizationIds({
+        role: normalizedRole,
+        userOrganizationId: currentUserOrgId,
+        requestedOrganizationIds,
+    })
     const pricesHidden = await shouldHidePricesForRole(normalizedRole, currentUserOrgId)
     const respond = (payload: any) => NextResponse.json(pricesHidden ? redactAnalyticsPrices({ ...payload, pricesHidden }) : { ...payload, pricesHidden })
     console.log(`[Summary API] User: ${userId}, Role: ${normalizedRole}, Params: Branch=${branchId}, Org=${organizationId}, Group=${groupId}`)
 
     if (normalizedRole === "SUPER_ADMIN") {
-        if (organizationId && organizationId !== "null" && organizationId !== "undefined" && organizationId !== "0") {
-            const orgId = Number(organizationId)
-            if (orgId > 0) conditions.push(eq(orders.organizationId, orgId))
-        }
+        if (scopedOrganizationIds.length > 0) conditions.push(inArray(orders.organizationId, scopedOrganizationIds))
         if (parsedBranchIds.length > 0) {
             conditions.push(inArray(orders.branchId, parsedBranchIds))
         } else if (branchId && branchId !== "all" && branchId !== "null") {
@@ -108,8 +146,8 @@ export async function GET(req: NextRequest) {
             conditions.push(eq(branches.groupId, Number(groupId)))
         }
     } else if (normalizedRole === "HEAD_OFFICE") {
-        if (currentUserOrgId) {
-            conditions.push(eq(orders.organizationId, currentUserOrgId))
+        if (scopedOrganizationIds.length > 0) {
+            conditions.push(inArray(orders.organizationId, scopedOrganizationIds))
             if (parsedBranchIds.length > 0) {
                 conditions.push(inArray(orders.branchId, parsedBranchIds))
             } else if (branchId && branchId !== "all" && branchId !== "null") {
@@ -149,6 +187,80 @@ export async function GET(req: NextRequest) {
     }
 
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined
+
+    const fetchOrderPage = () => db.select({
+        id: orders.id,
+        tid: orders.tid,
+        status: orders.status,
+        totalCents: orders.totalCents,
+        subtotalCents: orders.subtotalCents,
+        taxCents: orders.taxCents,
+        refundAmountCents: orders.refundAmountCents,
+        branchId: orders.branchId,
+        branchName: branches.name,
+        groupName: groups.name,
+        organizationName: organizations.name,
+        createdAt: orders.createdAt,
+        fulfilledAt: orders.fulfilledAt,
+        refundedAt: orders.refundedAt,
+        userName: users.fullName,
+        employeeId: users.employeeId,
+        quantityOrdered: sql<number>`(
+            SELECT COALESCE(SUM(${orderItems.quantity}), 0)
+            FROM ${orderItems}
+            WHERE ${orderItems.orderId} = ${orders.id}
+        )`.mapWith(Number),
+        quantityRefunded: sql<number>`(
+            SELECT COALESCE(SUM(${refundItems.quantity}), 0)
+            FROM ${refundItems}
+            INNER JOIN ${refunds} ON ${refundItems.refundId} = ${refunds.id}
+            WHERE ${refunds.orderId} = ${orders.id}
+            AND UPPER(${refunds.status}) IN ('APPROVED', 'COMPLETED')
+        )`.mapWith(Number)
+    })
+        .from(orders)
+        .leftJoin(branches, eq(orders.branchId, branches.id))
+        .leftJoin(organizations, eq(orders.organizationId, organizations.id))
+        .leftJoin(groups, eq(branches.groupId, groups.id))
+        .leftJoin(users, eq(orders.createdByUserId, users.id))
+        .where(whereClause)
+        .orderBy(desc(orders.createdAt), desc(orders.id))
+        .limit(limit)
+        .offset(offset)
+
+    if (url.searchParams.get("ordersOnly") === "true") {
+        const [totalResult, recentOrders] = await Promise.all([
+            db.select({ total: count(orders.id) })
+                .from(orders)
+                .leftJoin(branches, eq(orders.branchId, branches.id))
+                .where(whereClause),
+            fetchOrderPage(),
+        ])
+        const paginationTotal = Number(totalResult[0]?.total || 0)
+
+        return respond({
+            orders: recentOrders,
+            pagination: {
+                page,
+                limit,
+                total: paginationTotal,
+                totalPages: Math.ceil(paginationTotal / limit),
+                hasMore: page * limit < paginationTotal,
+            },
+        })
+    }
+
+    if (url.searchParams.get("allTime") === "true") {
+        const distinctYears = await db
+            .select({ year: sql<number>`EXTRACT(YEAR FROM ${orders.createdAt})::int` })
+            .from(orders)
+            .leftJoin(branches, eq(orders.branchId, branches.id))
+            .where(whereClause)
+            .groupBy(sql`EXTRACT(YEAR FROM ${orders.createdAt})`)
+            .orderBy(desc(sql`EXTRACT(YEAR FROM ${orders.createdAt})`))
+
+        return respond({ years: distinctYears.map(({ year }) => year) })
+    }
 
     // COMPARISON LOGIC
     let comparisonSummary = null
@@ -308,45 +420,7 @@ export async function GET(req: NextRequest) {
     }
 
     // Recent Orders for Table with Branch Name and Pagination
-    const recentOrders = await db.select({
-        id: orders.id,
-        tid: orders.tid,
-        status: orders.status,
-        totalCents: orders.totalCents,
-        subtotalCents: orders.subtotalCents,
-        taxCents: orders.taxCents,
-        refundAmountCents: orders.refundAmountCents,
-        branchId: orders.branchId,
-        branchName: branches.name,
-        groupName: groups.name,
-        organizationName: organizations.name,
-        createdAt: orders.createdAt,
-        fulfilledAt: orders.fulfilledAt,
-        refundedAt: orders.refundedAt,
-        userName: users.fullName,
-employeeId: users.employeeId,
-        quantityOrdered: sql<number>`(
-            SELECT COALESCE(SUM(${orderItems.quantity}), 0)
-            FROM ${orderItems}
-            WHERE ${orderItems.orderId} = ${orders.id}
-        )`.mapWith(Number),
-        quantityRefunded: sql<number>`(
-            SELECT COALESCE(SUM(${refundItems.quantity}), 0)
-            FROM ${refundItems}
-            INNER JOIN ${refunds} ON ${refundItems.refundId} = ${refunds.id}
-            WHERE ${refunds.orderId} = ${orders.id}
-            AND UPPER(${refunds.status}) IN ('APPROVED', 'COMPLETED')
-        )`.mapWith(Number)
-    })
-        .from(orders)
-        .leftJoin(branches, eq(orders.branchId, branches.id))
-        .leftJoin(organizations, eq(orders.organizationId, organizations.id))
-        .leftJoin(groups, eq(branches.groupId, groups.id))
-        .leftJoin(users, eq(orders.createdByUserId, users.id))
-        .where(whereClause)
-        .orderBy(desc(orders.createdAt))
-        .limit(limit)
-        .offset(offset)
+    const recentOrders = await fetchOrderPage()
 
     // Branch Ranking (Top Performers) aggregated by sales volume
     const topPerformers = await db.select({
@@ -365,6 +439,8 @@ employeeId: users.employeeId,
         .orderBy(desc(metricExpressions.revenue))
         .limit(10)
 
+    const paginationTotal = Number(summary.totalOrderCount || 0)
+
     return respond({
         summary: {
             ...summary,
@@ -375,7 +451,9 @@ employeeId: users.employeeId,
         pagination: {
             page,
             limit,
-            hasMore: recentOrders.length === limit
+            total: paginationTotal,
+            totalPages: Math.ceil(paginationTotal / limit),
+            hasMore: page * limit < paginationTotal
         }
     })
 }

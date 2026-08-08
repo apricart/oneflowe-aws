@@ -130,6 +130,7 @@ export function CreateUserDialog({ onSuccess }: CreateUserDialogProps) {
       setForm(initialForm)
       setUsernameStatus({ available: null, loading: false, suggestions: [] })
       setErrors({})
+      setFeedback({ message: "", type: "info", visible: false })
       setStep(1)
       setDiscardConfirmationOpen(false)
     }

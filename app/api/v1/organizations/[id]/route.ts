@@ -31,6 +31,7 @@ import {
 } from "@/db/schema"
 import { eq, count, and, ne, isNull, isNotNull } from "drizzle-orm"
 import { organizationUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
+import { getRequestScope } from "@/lib/auth"
 
 export async function GET(
   _: Request,
@@ -66,13 +67,17 @@ export async function PATCH(
   try {
     const params = await props.params
     const { id } = params
+    const orgId = Number(id)
+    if (!Number.isInteger(orgId) || orgId <= 0) return error("Invalid organization ID", 400)
+    const scope = await getRequestScope()
+    if (!scope?.userId) return error("Invalid session data", 401)
     const patch: any = {}
     if (body.name !== undefined) {
       const name = String(body.name).trim()
       // Check for duplicate name
       const exists = await db.select({ id: organizations.id })
         .from(organizations)
-        .where(and(eq(organizations.name, name), ne(organizations.id, Number(id))))
+        .where(and(eq(organizations.name, name), ne(organizations.id, orgId)))
         .limit(1)
       if (exists.length > 0) return error(`Organization with name '${name}' already exists`, 400)
       patch.name = name
@@ -82,7 +87,7 @@ export async function PATCH(
       // Check for duplicate code
       const exists = await db.select({ id: organizations.id })
         .from(organizations)
-        .where(and(eq(organizations.code, code), ne(organizations.id, Number(id))))
+        .where(and(eq(organizations.code, code), ne(organizations.id, orgId)))
         .limit(1)
       if (exists.length > 0) return error(`Organization with code '${code}' already exists`, 400)
       patch.code = code
@@ -96,6 +101,9 @@ export async function PATCH(
       patch.status = normalized
       console.log(`[Org Update] PATCH /api/v1/organizations/${id} - New status: ${patch.status}`)
     }
+    if (body.orderApproverRole !== undefined) {
+      patch.orderApproverRole = body.orderApproverRole
+    }
     const budgetAllocationMode = body.budgetAllocationMode === undefined
       ? undefined
       : String(body.budgetAllocationMode)
@@ -105,18 +113,31 @@ export async function PATCH(
     }
 
     patch.updatedAt = new Date()
-    const [item] = await db.transaction(async (tx) => {
+    const transactionResult = await db.transaction(async (tx) => {
+      // Serialize a policy change with in-flight approval/rejection decisions.
+      const [existingOrganization] = await tx
+        .select({
+          id: organizations.id,
+          orderApproverRole: organizations.orderApproverRole,
+        })
+        .from(organizations)
+        .where(eq(organizations.id, orgId))
+        .for("update")
+        .limit(1)
+
+      if (!existingOrganization) return null
+
       const [updatedOrganization] = await tx
         .update(organizations)
         .set(patch)
-        .where(eq(organizations.id, Number(id)))
+        .where(eq(organizations.id, orgId))
         .returning()
 
       if (budgetAllocationMode !== undefined) {
         await tx
           .insert(organizationSettings)
           .values({
-            organizationId: Number(id),
+            organizationId: orgId,
             key: BUDGET_ALLOCATION_MODE_SETTING_KEY,
             value: budgetAllocationMode,
           })
@@ -126,8 +147,27 @@ export async function PATCH(
           })
       }
 
-      return [updatedOrganization]
+      if (
+        body.orderApproverRole !== undefined
+        && body.orderApproverRole !== existingOrganization.orderApproverRole
+      ) {
+        await tx.insert(auditLogs).values({
+          userId: scope.userId,
+          organizationId: orgId,
+          action: "UPDATE_ORDER_APPROVER_ROLE",
+          entity: "organization",
+          entityId: String(orgId),
+          metadata: {
+            previousOrderApproverRole: existingOrganization.orderApproverRole,
+            orderApproverRole: body.orderApproverRole,
+          },
+        })
+      }
+
+      return updatedOrganization
     })
+    if (!transactionResult) return error("Organization not found", 404)
+    const item = transactionResult
 
     // Invalidate organizations cache so GET returns fresh data immediately
     await invalidateByPrefix('organizations')

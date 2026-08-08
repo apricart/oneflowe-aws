@@ -38,4 +38,19 @@ describe("fulfillment token access", () => {
     expect(canViewFulfillmentToken({ ...approvedOrder, role: "BRANCH_ADMIN", userId: "branch-admin-id" })).toBe(true)
     expect(canViewFulfillmentToken({ ...approvedOrder, role: "HEAD_OFFICE", userId: "approver-id" })).toBe(true)
   })
+
+  it("exposes the token only to the currently configured approver role", () => {
+    expect(canViewFulfillmentToken({
+      ...approvedOrder,
+      role: "BRANCH_ADMIN",
+      userId: "branch-admin-id",
+      configuredApproverRole: "HEAD_OFFICE",
+    })).toBe(false)
+    expect(canViewFulfillmentToken({
+      ...approvedOrder,
+      role: "HEAD_OFFICE",
+      userId: "head-office-id",
+      configuredApproverRole: "HEAD_OFFICE",
+    })).toBe(true)
+  })
 })

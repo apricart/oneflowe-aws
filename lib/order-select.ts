@@ -107,13 +107,19 @@ export async function transitionOrderPaymentStatusColumn(
       ? await client.execute(sql`
           UPDATE "orders"
           SET "payment_status" = ${nextStatus}, "paid_at" = NOW(), "paid_by_user_id" = ${userId}, "updated_at" = NOW()
-          WHERE "id" = ${orderId} AND COALESCE("payment_status", 'UNPAID') = ${currentStatus}
+          WHERE "id" = ${orderId}
+            AND UPPER(TRIM("status")) = 'FULFILLED'
+            AND UPPER(TRIM(COALESCE("fulfillment_status", 'NOT_STARTED'))) = 'DELIVERED'
+            AND COALESCE("payment_status", 'UNPAID') = ${currentStatus}
           RETURNING "id"
         `)
       : await client.execute(sql`
           UPDATE "orders"
           SET "payment_status" = ${nextStatus}, "paid_at" = NULL, "paid_by_user_id" = NULL, "updated_at" = NOW()
-          WHERE "id" = ${orderId} AND COALESCE("payment_status", 'UNPAID') = ${currentStatus}
+          WHERE "id" = ${orderId}
+            AND UPPER(TRIM("status")) = 'FULFILLED'
+            AND UPPER(TRIM(COALESCE("fulfillment_status", 'NOT_STARTED'))) = 'DELIVERED'
+            AND COALESCE("payment_status", 'UNPAID') = ${currentStatus}
           RETURNING "id"
         `)
 

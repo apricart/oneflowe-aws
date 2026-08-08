@@ -13,6 +13,11 @@ import {
 } from "@/db/schema"
 import { sendOrderLifecycleEmail, type OrderLifecycleEmailPayload, type OrderLifecycleEmailTemplate } from "@/lib/email/order-lifecycle"
 import { db } from "@/lib/db"
+import {
+  isOrderApproverRole,
+  ORDER_APPROVER_ROLE_LABELS,
+  type OrderApproverRole,
+} from "@/lib/order-approver-role"
 
 type DbLike = any
 
@@ -48,6 +53,7 @@ async function getOrderContext(tx: DbLike, order: OrderEventInput) {
   const [context] = await tx
     .select({
       organizationName: organizations.name,
+      orderApproverRole: organizations.orderApproverRole,
       branchName: branches.name,
     })
     .from(branches)
@@ -64,7 +70,7 @@ async function getOrderContext(tx: DbLike, order: OrderEventInput) {
 async function insertRecipientEvents(tx: DbLike, input: {
   order: OrderEventInput & { organizationId: number }
   template: OrderLifecycleEmailTemplate
-  targetRole: "BRANCH_ADMIN" | "ORDER_PORTAL" | "SUPER_ADMIN"
+  targetRole: "BRANCH_ADMIN" | "HEAD_OFFICE" | "ORDER_PORTAL" | "SUPER_ADMIN"
   message: string
   payload: OrderLifecycleEmailPayload
   recipients: Array<{ id: string; email: string }>
@@ -128,25 +134,28 @@ export async function queueOrderCreatedNotifications(tx: DbLike, input: {
 
   if (!creator) return { eventKeys: [], recipientCount: 0 }
 
+  const context = await getOrderContext(tx, order)
+  if (!context || !isOrderApproverRole(context.orderApproverRole)) {
+    throw new Error("ORDER_NOTIFICATION_SCOPE_INVALID")
+  }
+  const approverRole = context.orderApproverRole
+
   const recipients = await tx
     .select({ id: users.id, email: users.email })
     .from(users)
     .innerJoin(roles, eq(users.roleId, roles.id))
     .where(and(
-      eq(roles.name, "BRANCH_ADMIN"),
+      eq(roles.name, approverRole),
       eq(users.organizationId, order.organizationId),
-      eq(users.branchId, order.branchId),
+      approverRole === "BRANCH_ADMIN" ? eq(users.branchId, order.branchId) : undefined,
       eq(users.isActive, true),
       isNull(users.deletedAt),
     ))
 
-  const context = await getOrderContext(tx, order)
-  if (!context) throw new Error("ORDER_NOTIFICATION_SCOPE_INVALID")
-
   return insertRecipientEvents(tx, {
     order: { ...order, organizationId: order.organizationId },
     template: "ORDER_CREATED",
-    targetRole: "BRANCH_ADMIN",
+    targetRole: approverRole,
     message: `Order ${order.tid} was submitted and is awaiting approval.`,
     payload: {
       orderId: order.id,
@@ -208,9 +217,16 @@ export async function queueOrderDecisionNotification(tx: DbLike, input: {
 export async function queueSuperAdminApprovalNotifications(tx: DbLike, input: {
   order: OrderEventInput
   approvedByUserId: string
+  approvedByRole: OrderApproverRole
 }): Promise<QueuedOrderNotifications> {
   const { order } = input
   if (!order.organizationId) return { eventKeys: [], recipientCount: 0 }
+
+  const context = await getOrderContext(tx, order)
+  if (!context || context.orderApproverRole !== input.approvedByRole) {
+    throw new Error("ORDER_NOTIFICATION_SCOPE_INVALID")
+  }
+  const approverLabel = ORDER_APPROVER_ROLE_LABELS[input.approvedByRole]
 
   const [approver] = await tx
     .select({ id: users.id, fullName: users.fullName })
@@ -218,9 +234,9 @@ export async function queueSuperAdminApprovalNotifications(tx: DbLike, input: {
     .innerJoin(roles, eq(users.roleId, roles.id))
     .where(and(
       eq(users.id, input.approvedByUserId),
-      eq(roles.name, "BRANCH_ADMIN"),
+      eq(roles.name, input.approvedByRole),
       eq(users.organizationId, order.organizationId),
-      eq(users.branchId, order.branchId),
+      input.approvedByRole === "BRANCH_ADMIN" ? eq(users.branchId, order.branchId) : undefined,
       eq(users.isActive, true),
       isNull(users.deletedAt),
     ))
@@ -238,20 +254,18 @@ export async function queueSuperAdminApprovalNotifications(tx: DbLike, input: {
       isNull(users.deletedAt),
     ))
 
-  const context = await getOrderContext(tx, order)
-  if (!context) throw new Error("ORDER_NOTIFICATION_SCOPE_INVALID")
-
   return insertRecipientEvents(tx, {
     order: { ...order, organizationId: order.organizationId },
     template: "ORDER_APPROVED_ADMIN",
     targetRole: "SUPER_ADMIN",
-    message: `Order ${order.tid} was approved by a Branch Admin and is ready for review.`,
+    message: `Order ${order.tid} was approved by ${approverLabel} and is ready for review.`,
     payload: {
       orderId: order.id,
       tid: order.tid,
       organizationName: context.organizationName,
       branchName: context.branchName,
-      approvedBy: approver.fullName?.trim() || "Branch Admin",
+      approvedBy: approver.fullName?.trim() || approverLabel,
+      approvedByRole: input.approvedByRole,
     },
     recipients,
   })
@@ -282,6 +296,7 @@ function parsePayload(value: Record<string, unknown>): OrderLifecycleEmailPayloa
     branchName: value.branchName,
     requestedBy: typeof value.requestedBy === "string" ? value.requestedBy : null,
     approvedBy: typeof value.approvedBy === "string" ? value.approvedBy : null,
+    approvedByRole: isOrderApproverRole(value.approvedByRole) ? value.approvedByRole : null,
     rejectionReason: typeof value.rejectionReason === "string" ? value.rejectionReason : null,
   }
 }
@@ -382,10 +397,15 @@ export async function processOrderEmailOutbox(options?: {
 
     const recipientScopeCondition = row.recipientRole === "SUPER_ADMIN"
       ? undefined
-      : and(
+      : row.recipientRole === "HEAD_OFFICE"
+        ? eq(users.organizationId, row.organizationId)
+        : and(
         eq(users.organizationId, row.organizationId),
         eq(users.branchId, row.branchId),
       )
+    const currentApproverCondition = row.template === "ORDER_CREATED"
+      ? eq(organizations.orderApproverRole, row.recipientRole)
+      : undefined
 
     const [recipient] = await db
       .select({
@@ -396,6 +416,7 @@ export async function processOrderEmailOutbox(options?: {
       .from(users)
       .innerJoin(roles, eq(users.roleId, roles.id))
       .innerJoin(orders, eq(orders.id, row.orderId))
+      .innerJoin(organizations, eq(orders.organizationId, organizations.id))
       .where(and(
         eq(users.id, row.recipientUserId),
         eq(users.isActive, true),
@@ -404,6 +425,7 @@ export async function processOrderEmailOutbox(options?: {
         eq(roles.name, row.recipientRole),
         eq(orders.organizationId, row.organizationId),
         eq(orders.branchId, row.branchId),
+        currentApproverCondition,
       ))
       .limit(1)
 

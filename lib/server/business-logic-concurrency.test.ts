@@ -30,8 +30,12 @@ describe("concurrency protection contracts", () => {
     for (const route of [requestRefund, processRefund]) {
       expect(route).toContain(".for('update')")
       expect(route).toContain("REFUND_AVAILABILITY_CONFLICT")
-      expect(route).toContain("isPaidForRefund")
+      expect(route).toContain("isRefundEligibleOrderStatus")
+      expect(route).not.toContain("isPaidForRefund")
+      expect(route).not.toContain("Only paid orders are eligible for a refund")
     }
+    expect(requestRefund).toContain('userRole === "ORDER_PORTAL"')
+    expect(requestRefund).toContain("isOrderPortalRefundEligible(lockedOrder.status, lockedOrder.fulfillmentStatus)")
   })
 
   it("prevents simultaneous auto/manual fulfilment from moving ledgers twice", () => {
@@ -39,6 +43,15 @@ describe("concurrency protection contracts", () => {
     expect(autoFulfil).toContain("const [claimedOrder]")
     expect(autoFulfil).toContain(".returning({ id: orders.id })")
     expect(autoFulfil).toContain("if (!claimedOrder) return false")
+  })
+
+  it("keeps payment status updates atomically restricted to fulfilled, delivered orders", () => {
+    const paymentRoute = source("app/api/v1/orders/[id]/payment-status/route.ts")
+    const orderTransitions = source("lib/order-select.ts")
+
+    expect(paymentRoute).toContain("isPaymentStatusUpdateEligible(order.status, order.fulfillmentStatus)")
+    expect(orderTransitions).toContain(`UPPER(TRIM("status")) = 'FULFILLED'`)
+    expect(orderTransitions).toContain(`UPPER(TRIM(COALESCE("fulfillment_status", 'NOT_STARTED'))) = 'DELIVERED'`)
   })
 
   it("serializes budget allocation and preserves committed quantity usage", () => {

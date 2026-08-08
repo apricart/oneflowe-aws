@@ -66,6 +66,21 @@ async function main() {
 
     // Delete only rows proven to belong to this batch; operational delete routes
     // are not used because they would mutate today's stock and budget ledgers.
+    // Refund rows must be removed before their order items and parent orders.
+    const ownedRefunds = await tx.select({ id: schema.refunds.id })
+      .from(schema.refunds)
+      .where(and(
+        eq(schema.refunds.organizationId, KE_ORGANIZATION.id),
+        inArray(schema.refunds.orderId, orderIds),
+      ))
+    const refundIds = ownedRefunds.map((refund) => refund.id)
+    if (refundIds.length > 0) {
+      await tx.delete(schema.refundItems).where(inArray(schema.refundItems.refundId, refundIds))
+      await tx.delete(schema.refunds).where(and(
+        eq(schema.refunds.organizationId, KE_ORGANIZATION.id),
+        inArray(schema.refunds.id, refundIds),
+      ))
+    }
     await tx.delete(schema.orderItems).where(and(
       eq(schema.orderItems.organizationId, KE_ORGANIZATION.id),
       inArray(schema.orderItems.orderId, orderIds),
@@ -88,7 +103,7 @@ async function main() {
       action: "LEGACY_ORDER_IMPORT_ROLLBACK",
       entity: "legacy_import_batch",
       entityId: batchId,
-      metadata: { source: LEGACY_SOURCE, deletedOrders: orderIds.length, stockOrBudgetChanged: false },
+      metadata: { source: LEGACY_SOURCE, deletedOrders: orderIds.length, deletedRefunds: refundIds.length, stockOrBudgetChanged: false },
     })
   })
 

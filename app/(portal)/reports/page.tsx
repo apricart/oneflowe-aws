@@ -33,9 +33,16 @@ const reportCards = [
     gradient: "from-rose-500 to-pink-500",
   },
   {
+    title: "Refund Report",
+    href: "/reports/refund-report",
+    description: "Track refund requests, statuses, amounts, item details, and processing history.",
+    icon: RotateCcw,
+    gradient: "from-orange-500 to-rose-500",
+  },
+  {
     title: "Product Report",
     description: "Analyze product performance and category-wise breakdown",
-    href: "/reports/product-Report",
+    href: "/reports/product-performance",
     icon: Package,
     gradient: "from-blue-500 to-cyan-500",
   },
@@ -194,12 +201,12 @@ export default function ReportsPage() {
             </div>
             <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Order Reports</p>
-              <p className="text-2xl font-bold text-slate-900 dark:text-white">1</p>
+              <p className="text-2xl font-bold text-slate-900 dark:text-white">2</p>
               <p className="text-xs text-muted-foreground">Refund tracking</p>
             </div>
             <div className="p-4 rounded-xl bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-800">
               <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 uppercase tracking-wide mb-1">Total Reports</p>
-              <p className="text-2xl font-bold text-indigo-600 dark:text-indigo-400">6</p>
+              <p className="text-2xl font-bold text-indigo-600 dark:text-indigo-400">{displayReportCards.length}</p>
               <p className="text-xs text-muted-foreground">Available types</p>
             </div>
           </div>

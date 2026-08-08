@@ -5,9 +5,10 @@ import { describe, expect, it } from "vitest"
 const source = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8")
 
 describe("order lifecycle notification security contracts", () => {
-  it("selects branch administrators by exact tenant and branch with active-account checks", () => {
+  it("selects the configured approver by exact tenant and role with branch scope for Branch Admin", () => {
     const service = source("lib/server/order-notifications.ts")
-    expect(service).toContain('eq(roles.name, "BRANCH_ADMIN")')
+    expect(service).toContain("eq(roles.name, approverRole)")
+    expect(service).toContain('approverRole === "BRANCH_ADMIN" ? eq(users.branchId, order.branchId) : undefined')
     expect(service).toContain("eq(users.organizationId, order.organizationId)")
     expect(service).toContain("eq(users.branchId, order.branchId)")
     expect(service).toContain("eq(users.isActive, true)")
@@ -23,15 +24,15 @@ describe("order lifecycle notification security contracts", () => {
     expect(service).toContain("eq(orders.branchId, row.branchId)")
   })
 
-  it("notifies global Super Admins only after a scoped Branch Admin approval", () => {
+  it("notifies global Super Admins after either configured approver role approves", () => {
     const service = source("lib/server/order-notifications.ts")
     const approval = source("app/api/v1/orders/[id]/approve/route.ts")
     expect(service).toContain("queueSuperAdminApprovalNotifications")
     expect(service).toContain('eq(roles.name, "SUPER_ADMIN")')
-    expect(service).toContain('eq(roles.name, "BRANCH_ADMIN")')
+    expect(service).toContain("eq(roles.name, input.approvedByRole)")
     expect(service).toContain('template: "ORDER_APPROVED_ADMIN"')
     expect(service).toContain('row.recipientRole === "SUPER_ADMIN"')
-    expect(approval).toContain('user.role === "BRANCH_ADMIN"')
+    expect(approval).toContain("approvedByRole: authorization.configuredApproverRole")
     expect(approval).toContain("queueSuperAdminApprovalNotifications(tx")
   })
 
@@ -61,8 +62,11 @@ describe("order lifecycle notification security contracts", () => {
     const email = source("lib/email/order-lifecycle.ts")
     expect(service).toContain("eq(users.id, row.recipientUserId)")
     expect(service).toContain("eq(roles.name, row.recipientRole)")
+    expect(service).toContain('row.recipientRole === "HEAD_OFFICE"')
+    expect(service).toContain("eq(organizations.orderApproverRole, row.recipientRole)")
     expect(service).toContain("to: recipient.email")
     expect(email).toContain("to: string")
+    expect(email).toContain('payload.approvedByRole === "HEAD_OFFICE"')
     expect(email).not.toContain("approvalToken")
     expect(email).not.toContain("approvalTokenHash")
   })

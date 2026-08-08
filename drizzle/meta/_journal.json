@@ -239,6 +239,41 @@
       "when": 1784718000000,
       "tag": "20260722120000_add_order_delivered_at",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1785322800000,
+      "tag": "20260729150000_add_order_approver_role",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1785499200000,
+      "tag": "20260731120000_add_branch_tenant_uniqueness",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1785902400000,
+      "tag": "20260805090000_add_refund_tax_cents",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1785949200000,
+      "tag": "20260805170000_add_external_branch_identity",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1785951000000,
+      "tag": "20260805173000_guard_external_branch_name_collisions",
+      "breakpoints": true
     }
   ]
 }

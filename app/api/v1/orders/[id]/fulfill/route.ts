@@ -13,8 +13,8 @@ export async function POST(
   req: Request,
   props: { params: Promise<{ id: string }> }
 ) {
-  // Only SUPER_ADMIN or HEAD_OFFICE can fulfill
-  const err = await requireApiRole(["HEAD_OFFICE", "SUPER_ADMIN"])
+  // Order fulfillment remains a Super Admin-only responsibility.
+  const err = await requireApiRole(["SUPER_ADMIN"])
   if (err) return err
 
   const params = await props.params

@@ -1,8 +1,56 @@
 import { describe, expect, it } from "vitest"
 import {
+  ORGANIZATION_LIST_HEADERS,
+  buildOrganizationListWorkbookData,
   buildOrganizationWorkbookData,
+  getOrganizationListExportFilename,
   getOrganizationExportFilename,
 } from "./organization-excel-export"
+
+describe("buildOrganizationListWorkbookData", () => {
+  it("creates one row per authorized organization with exactly eight columns", () => {
+    const rows = buildOrganizationListWorkbookData(
+      [
+        {
+          id: 7,
+          name: "Acme Holdings",
+          code: "ACME",
+          status: "active",
+          budgetAllocationMode: "quantity",
+          orderApproverRole: "HEAD_OFFICE",
+        },
+        {
+          id: 8,
+          name: "Beta Limited",
+          code: "BETA",
+          status: "inactive",
+          budgetAllocationMode: "money",
+          orderApproverRole: "BRANCH_ADMIN",
+        },
+      ],
+      [
+        { id: 11, organizationId: 7, name: "Karachi", code: "KHI", status: "active" },
+        { id: 12, organizationId: 7, name: "Lahore", code: "LHE", status: "inactive" },
+        { id: 13, organizationId: 999, name: "Out of scope", code: "OTHER", status: "active" },
+      ],
+    )
+
+    expect(ORGANIZATION_LIST_HEADERS).toHaveLength(8)
+    expect(rows).toHaveLength(2)
+    expect(Object.keys(rows[0])).toEqual([...ORGANIZATION_LIST_HEADERS])
+    expect(rows[0]).toEqual({
+      "Organization Name": "Acme Holdings",
+      "Organization Code": "ACME",
+      "Status": "Active",
+      "Budget Allocation Mode": "Quantity-based",
+      "Order Approver": "Head Office",
+      "Total Branches": 2,
+      "Active Branches": 1,
+      "Inactive Branches": 1,
+    })
+    expect(rows[1]["Total Branches"]).toBe(0)
+  })
+})
 
 describe("buildOrganizationWorkbookData", () => {
   it("exports the organization summary and only its branches", () => {
@@ -77,5 +125,11 @@ describe("getOrganizationExportFilename", () => {
       { name: "Acme Holdings", code: "../../ACME / North" },
       new Date("2026-07-27T08:15:30.000Z"),
     )).toBe("ACME_North-organization-details-2026-07-27.xlsx")
+  })
+
+  it("creates a dated filename for the organization list", () => {
+    expect(getOrganizationListExportFilename(
+      new Date("2026-07-31T08:15:30.000Z"),
+    )).toBe("organizations-2026-07-31.xlsx")
   })
 })
