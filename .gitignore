@@ -39,3 +39,5 @@ next-env.d.ts
 /deliverables
 # database exports (uncomment to ignore, or keep specific files by not adding them)
 # database-export-*.sql
+/updatedReports
+/backups

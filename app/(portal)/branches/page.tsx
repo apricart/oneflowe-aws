@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Sheet, SheetContent } from "@/components/ui/sheet"
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet"
 import { cn } from "@/lib/utils"
 import {
   Building2, Users, RefreshCcw, Search, Boxes, UserCog, Sparkles,
@@ -20,6 +20,7 @@ import {
 } from "lucide-react"
 import { motion, AnimatePresence } from "framer-motion"
 import { useRouter } from "next/navigation"
+import { HeadOfficeCreateBranchDialog } from "@/components/organizations/head-office-create-branch-dialog"
 
 type Branch = {
   id: number
@@ -50,7 +51,7 @@ type User = {
 
 export default function BranchesPage() {
   const router = useRouter()
-  const { organizationId, userRole, isInitialized, setBranchId } = useAppContext()
+  const { organizationId, userOrgId, userRole, isInitialized, setBranchId } = useAppContext()
   const { data: branchesRes, isLoading, isValidating: isRefreshingBranches, mutate: refetchBranches } = useBranches(organizationId || undefined)
   const { data: usersRes, isValidating: isRefreshingUsers, mutate: refetchUsers } = useUsers(organizationId || undefined)
 
@@ -219,6 +220,10 @@ export default function BranchesPage() {
           </div>
         </div>
         <div className="flex items-center gap-3">
+          <HeadOfficeCreateBranchDialog
+            organizationId={userOrgId}
+            onCreated={() => { void refetchBranches() }}
+          />
           <Badge variant="outline" className="h-8 px-3 rounded-full border-blue-200 bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:border-blue-800/60 dark:text-blue-400 font-semibold uppercase tracking-wider text-[10px]">
             {totalBranches} Branches
           </Badge>
@@ -620,9 +625,9 @@ export default function BranchesPage() {
                       </div>
                       <div>
                         <p className="text-[10px] font-bold text-blue-400/80 dark:text-blue-500 uppercase tracking-widest mb-0.5">Branch</p>
-                        <h2 className="text-lg font-black text-slate-800 dark:text-slate-100 tracking-tight leading-tight">
+                        <SheetTitle className="text-lg font-black text-slate-800 dark:text-slate-100 tracking-tight leading-tight">
                           {viewingBranch.name}
-                        </h2>
+                        </SheetTitle>
                       </div>
                     </div>
                     <Badge className={cn(

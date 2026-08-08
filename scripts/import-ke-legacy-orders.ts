@@ -3,7 +3,7 @@
  * Safely imports authoritative, delivered K-Electric legacy orders.
  *
  * Default behavior is read-only:
- *   npx tsx scripts/import-ke-legacy-orders.ts
+ *   npx tsx scripts/import-ke-legacy-orders.ts --source-root=<report-directory>
  *
  * A live import requires every printed confirmation value:
  *   npx tsx scripts/import-ke-legacy-orders.ts --commit \
@@ -32,6 +32,7 @@ import {
   normalizeText,
   prepareKeLegacySource,
   rejectionCounts,
+  resolveKeLegacyBranch,
   type PreparedOrder,
 } from "../lib/legacy-import/ke-electric"
 
@@ -40,6 +41,7 @@ dotenv.config()
 
 interface Options {
   commit: boolean
+  rollbackTest: boolean
   actorUserId?: string
   confirmOrganization?: string
   confirmManifest?: string
@@ -48,6 +50,7 @@ interface Options {
   allowHistoricalUsers: boolean
   outputPath?: string
   overridesPath?: string
+  sourceRoot?: string
 }
 
 interface DbBranch {
@@ -56,6 +59,8 @@ interface DbBranch {
   organizationId: number
   groupId: number | null
   address: string | null
+  externalSource: string | null
+  externalId: string | null
 }
 
 interface DbUser {
@@ -115,6 +120,7 @@ function options(): Options {
   const expected = getArg("--expected-orders")
   return {
     commit: process.argv.includes("--commit"),
+    rollbackTest: process.argv.includes("--rollback-test"),
     actorUserId: getArg("--actor-user-id"),
     confirmOrganization: getArg("--confirm-organization"),
     confirmManifest: getArg("--confirm-manifest"),
@@ -123,6 +129,7 @@ function options(): Options {
     allowHistoricalUsers: process.argv.includes("--allow-historical-users"),
     outputPath: getArg("--output"),
     overridesPath: getArg("--overrides"),
+    sourceRoot: getArg("--source-root"),
   }
 }
 
@@ -221,7 +228,7 @@ function buildReceipt(order: PreparedOrder, branch: DbBranch, productIds: Map<st
 
 async function main() {
   const opts = options()
-  const source = prepareKeLegacySource()
+  const source = prepareKeLegacySource(opts.sourceRoot)
   const overrides = loadOverrides(opts.overridesPath)
   const confirmationManifest = overrides.source
     ? { ...source.manifest, overrides: overrides.source }
@@ -253,6 +260,8 @@ async function main() {
       organizationId: schema.branches.organizationId,
       groupId: schema.branches.groupId,
       address: schema.branches.address,
+      externalSource: schema.branches.externalSource,
+      externalId: schema.branches.externalId,
     }).from(schema.branches).where(eq(schema.branches.organizationId, KE_ORGANIZATION.id)),
     db.select({
       id: schema.users.id,
@@ -371,22 +380,23 @@ async function main() {
     return valid
   })
 
-  const branchesByName = new Map<string, DbBranch[]>()
-  for (const branch of dbBranches) {
-    const key = normalizeBranch(branch.name)
-    branchesByName.set(key, [...(branchesByName.get(key) ?? []), branch])
-  }
-
   const branchResolution = new Map<number, DbBranch>()
   const branchErrors: string[] = []
   for (const order of source.prepared) {
-    const sourceBranchKey = normalizeBranch(order.branchName)
-    const lookupKey = overrides.values.branchAliases[sourceBranchKey] ?? sourceBranchKey
-    const candidates = branchesByName.get(lookupKey) ?? []
-    const branch = uniqueBy(candidates, (row) => String(row.id))
-    if (!branch) branchErrors.push(`order ${order.legacyOrderId}: branch "${order.branchName}" matched ${candidates.length}`)
+    const resolved = resolveKeLegacyBranch(dbBranches, {
+      locationId: order.sourceHeader.LocationID,
+      name: order.branchName,
+    }, overrides.values.branchAliases)
+    const branch = resolved.branch
+    if (!branch) {
+      branchErrors.push(
+        `order ${order.legacyOrderId}: branch "${order.branchName}" / location ${String(order.sourceHeader.LocationID)} matched ${resolved.matchCount} (${resolved.lookupKey})`,
+      )
+    }
     else if (branch.organizationId !== KE_ORGANIZATION.id) branchErrors.push(`order ${order.legacyOrderId}: cross-tenant branch ${branch.id}`)
-    else branchResolution.set(order.legacyOrderId, branch)
+    else {
+      branchResolution.set(order.legacyOrderId, branch)
+    }
   }
 
   const activeDbUsers = dbUsers.filter((user) => user.isActive && user.deletedAt === null)
@@ -683,7 +693,7 @@ async function main() {
 
   console.log("\nK-Electric legacy import preflight")
   console.log("----------------------------------")
-  console.log(`Mode                     : ${opts.commit ? "COMMIT REQUESTED" : "DRY RUN (read-only)"}`)
+  console.log(`Mode                     : ${opts.commit ? "COMMIT REQUESTED" : opts.rollbackTest ? "ROLLBACK TEST REQUESTED" : "DRY RUN (read-only)"}`)
   console.log(`Organization verified    : ${organization.name} (id=${organization.id}, code=${organization.code})`)
   console.log(`Manifest confirmation    : ${digest}`)
   console.log(`Ledger migration present : ${ledgerInstalled}`)
@@ -721,7 +731,7 @@ async function main() {
   if (opts.outputPath) {
     writeFileSync(opts.outputPath, JSON.stringify({
       generatedAt: new Date().toISOString(),
-      mode: opts.commit ? "COMMIT_REQUESTED" : "DRY_RUN",
+      mode: opts.commit ? "COMMIT_REQUESTED" : opts.rollbackTest ? "ROLLBACK_TEST_REQUESTED" : "DRY_RUN",
       organization,
       manifestDigest: digest,
       manifest: confirmationManifest,
@@ -736,7 +746,7 @@ async function main() {
     console.log(`Preflight report written : ${opts.outputPath}`)
   }
 
-  if (!opts.commit) {
+  if (!opts.commit && !opts.rollbackTest) {
     console.log("\nNothing was written to the database.")
     console.log("Do not commit until Blocking issues is 0 and the migration has been reviewed/applied.")
     await pool.end()
@@ -779,7 +789,10 @@ async function main() {
     }
   }
 
-  await db.transaction(async (tx) => {
+  const rollbackTestSentinel = "KE_LEGACY_IMPORT_ROLLBACK_TEST_COMPLETE"
+  let rollbackTestPassed = false
+  try {
+    await db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(1263482710, ${KE_ORGANIZATION.id})`)
 
     // Hold shared locks during the historical insert. This prevents a current
@@ -1034,14 +1047,15 @@ async function main() {
         insert into orders (
           tid, organization_id, branch_id, status, fulfillment_status,
           payment_status, subtotal_cents, tax_cents, total_cents, notes,
-          created_by_user_id, created_at, fulfilled_at, updated_at, receipt_data
+          created_by_user_id, created_at, delivered_at, fulfilled_at, updated_at,
+          receipt_data
         ) values (
           ${orderValue.tid}, ${orderValue.organizationId}, ${orderValue.branchId},
           ${orderValue.status}, ${orderValue.fulfillmentStatus},
           ${orderValue.paymentStatus}, ${orderValue.subtotalCents},
           ${orderValue.taxCents}, ${orderValue.totalCents}, ${orderValue.notes},
           ${orderValue.createdByUserId}, ${orderValue.createdAt},
-          ${orderValue.fulfilledAt}, ${orderValue.updatedAt},
+          ${orderValue.deliveredAt}, ${orderValue.fulfilledAt}, ${orderValue.updatedAt},
           ${JSON.stringify(orderValue.receiptData)}::jsonb
         )
         returning id, tid
@@ -1228,12 +1242,24 @@ async function main() {
       invoiceSequence: afterInvoiceSequence,
       stocks: afterStocks,
     })).digest("hex")
-    if (afterLedgerDigest !== operationalLedgerDigest) {
-      throw new Error("Operational stock/budget/invoice ledger changed; rolling back")
-    }
-  })
+      if (afterLedgerDigest !== operationalLedgerDigest) {
+        throw new Error("Operational stock/budget/invoice ledger changed; rolling back")
+      }
+      if (opts.rollbackTest) throw new Error(rollbackTestSentinel)
+    })
+  } catch (error) {
+    const value = error && typeof error === "object" ? error as Record<string, any> : {}
+    const message = String(value.message ?? value.cause?.message ?? "")
+    if (opts.rollbackTest && message.includes(rollbackTestSentinel)) rollbackTestPassed = true
+    else throw error
+  }
 
-  console.log(`\nCommitted ${readyOrders.length} K-Electric historical orders atomically.`)
+  if (opts.rollbackTest) {
+    if (!rollbackTestPassed) throw new Error("Rollback rehearsal did not reach the verified rollback sentinel")
+    console.log(`\nRollback rehearsal passed for ${readyOrders.length} K-Electric historical orders; no data persisted.`)
+  } else {
+    console.log(`\nCommitted ${readyOrders.length} K-Electric historical orders atomically.`)
+  }
   await pool.end()
 }
 

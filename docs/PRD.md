@@ -334,12 +334,13 @@ The system enforces strict tenant isolation: each organization sees only its own
 ### 4.10 Refunds
 
 **Purpose:** Partially or fully refund fulfilled or approved orders.  
-**Main Users:** BRANCH_ADMIN (request), SUPER_ADMIN (approve/process)  
+**Main Users:** HEAD_OFFICE, BRANCH_ADMIN, ORDER_PORTAL (request), SUPER_ADMIN (approve/process)<br>
 **Pages/Routes:** `/refunds`  
 **API Routes:** `GET/POST /api/v1/orders/[id]/refunds`, `GET/PATCH/DELETE /api/v1/admin/refunds`, `GET/PATCH /api/v1/admin/refunds/[id]`
 
 **Key Features:**
 - Branch Admin can submit a refund request for specific items and quantities on an approved or fulfilled order.
+- Order Portal users can submit a request only for their own fulfilled order after delivery status reaches `DELIVERED`.
 - Refund request starts as `PENDING`; Super Admin reviews and approves.
 - On approval: `amountCreditedCents` is added back to the branch budget for the order's creation month.
 - Refund notifications are sent via email to Super Admin.
@@ -550,6 +551,7 @@ The system enforces strict tenant isolation: each organization sees only its own
 ### Refunds
 
 - As a Branch Admin, I want to submit a refund request for items on a fulfilled order, so that the branch budget can be credited back.
+- As an Order Portal user, I want to request a refund for my own fulfilled and delivered order, so that returned items can be reviewed.
 - As a Super Admin, I want to review and approve pending refund requests, so that budget credits are properly authorized.
 - As an employee, I want to see refund status on my orders, so that I know if a credit was applied.
 
@@ -956,7 +958,7 @@ graph TD
 | `POST /api/v1/orders/cron/auto-fulfill` | Cron: auto-fulfill approved orders | System/Cron | Orders |
 | `GET/POST/PUT /api/v1/budgets` | Budget management | HEAD_OFFICE, BRANCH_ADMIN | Budget Management |
 | `GET/POST /api/v1/budget-quantity` | Quantity budget management | HEAD_OFFICE | Budget Management |
-| `GET/POST /api/v1/orders/[id]/refunds` | Request refund for order | BRANCH_ADMIN | Refunds |
+| `GET/POST /api/v1/orders/[id]/refunds` | Request refund for order | HEAD_OFFICE, BRANCH_ADMIN, ORDER_PORTAL; SUPER_ADMIN processes directly | Refunds |
 | `GET/PATCH /api/v1/admin/refunds` | List/process refund requests | SUPER_ADMIN | Refunds |
 | `GET/PATCH/DELETE /api/v1/admin/refunds/[id]` | Single refund management | SUPER_ADMIN | Refunds |
 | `GET /api/v1/receipts/[orderId]` | Get receipt data | All | Receipts |

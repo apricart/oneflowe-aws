@@ -6,6 +6,9 @@ import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { orderSelectColumns } from "@/lib/order-select"
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
+import { canViewFulfillmentToken } from "@/lib/fulfillment-token-access"
+import { getRequestScope } from "@/lib/auth"
+import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
 
 export async function GET(
   _: Request,
@@ -20,6 +23,7 @@ export async function GET(
     .select({
       ...orderSelectColumns,
       branchName: branches.name,
+      branchOrganizationId: branches.organizationId,
       creatorName: sql<string | null>`COALESCE(
         NULLIF(TRIM(${users.fullName}), ''),
         NULLIF(TRIM(CONCAT_WS(' ', ${users.firstName}, ${users.lastName})), ''),
@@ -34,6 +38,9 @@ export async function GET(
     .leftJoin(branches, eq(orders.branchId, branches.id))
     .where(eq(orders.id, orderId))
   if (!item) return error("Not found", 404)
+  if (!item.organizationId || item.branchOrganizationId !== item.organizationId) {
+    return error("Forbidden: Invalid order tenant scope", 403)
+  }
 
   const { verifyResourceAccess } = await import("@/lib/auth")
   const hasAccess = await verifyResourceAccess(item.organizationId, item.branchId)
@@ -42,9 +49,23 @@ export async function GET(
   const session = await getServerSession(authOptions)
   const currentUserId = (session?.user as any)?.id
   const currentRole = (session?.user as any)?.role
+  const capabilities = await getOrderDecisionCapabilities(await getRequestScope())
   const pricesHidden = await shouldHidePricesForRole(currentRole, item.organizationId)
-  const { approvalToken, approvalTokenHash: _approvalTokenHash, approvalTokenCreatedAt: _approvalTokenCreatedAt, ...safeItem } = item
-  const isBranchAdminApprover = currentRole === "BRANCH_ADMIN" && item.approvedByUserId === currentUserId
+  const {
+    approvalToken,
+    approvalTokenHash: _approvalTokenHash,
+    approvalTokenCreatedAt: _approvalTokenCreatedAt,
+    branchOrganizationId: _branchOrganizationId,
+    ...safeItem
+  } = item
+  const canSeeToken = canViewFulfillmentToken({
+    role: currentRole,
+    userId: currentUserId,
+    orderStatus: item.status,
+    orderCreatedByUserId: item.createdByUserId,
+    orderApprovedByUserId: item.approvedByUserId,
+    configuredApproverRole: capabilities.orderApproverRole,
+  })
 
   const itemsData = await db
     .select({
@@ -84,9 +105,10 @@ export async function GET(
       orderItems: pricesHidden
         ? itemsData.map((orderItem) => ({ ...orderItem, priceCents: null }))
         : itemsData,
-      approvalToken: isBranchAdminApprover ? approvalToken : null,
+      approvalToken: canSeeToken ? approvalToken : null,
       pricesHidden,
     },
+    capabilities,
   })
 }
 

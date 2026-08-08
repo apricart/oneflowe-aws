@@ -23,6 +23,9 @@ export const organizations = pgTable(
     name: varchar("name", { length: 255 }).notNull(),
     code: varchar("code", { length: 64 }),
     status: varchar("status", { length: 32 }).default("active"),
+    orderApproverRole: varchar("order_approver_role", { length: 32 })
+      .notNull()
+      .default("BRANCH_ADMIN"),
     logoUrl: varchar("logo_url", { length: 512 }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
@@ -31,6 +34,10 @@ export const organizations = pgTable(
     orgNameIdx: uniqueIndex("org_name_idx").on(t.name),
     orgCodeIdx: uniqueIndex("org_code_idx").on(t.code),
     orgStatusIdx: index("org_status_idx").on(t.status),
+    orderApproverRoleCheck: check(
+      "organizations_order_approver_role_ck",
+      sql`${t.orderApproverRole} IN ('BRANCH_ADMIN', 'HEAD_OFFICE')`,
+    ),
   }),
 )
 
@@ -49,6 +56,11 @@ export const branches = pgTable(
     // Avoid circular type init between users <-> branches; store admin user id without FK
     adminUserId: uuid("admin_user_id"),
     code: varchar("code", { length: 64 }),
+    // Optional stable identity for branches imported from an external system.
+    // Ordinary UI-created branches leave both fields null and retain the
+    // existing case-insensitive tenant-name uniqueness behavior.
+    externalSource: varchar("external_source", { length: 64 }),
+    externalId: varchar("external_id", { length: 128 }),
     status: varchar("status", { length: 32 }).default("active"),
     // Group assignment for reporting and analytics
     groupId: integer("group_id"),
@@ -61,8 +73,16 @@ export const branches = pgTable(
     orgIdx: index("branches_org_idx").on(t.organizationId),
     nameIdx: index("branches_name_idx").on(t.name),
     costCenterIdx: index("branches_cost_center_idx").on(t.costCenterId),
+    externalIdentityIdx: uniqueIndex("branches_org_external_identity_uq")
+      .on(t.organizationId, t.externalSource, t.externalId)
+      .where(sql`${t.externalSource} IS NOT NULL AND ${t.externalId} IS NOT NULL`),
     statusIdx: index("branches_status_idx").on(t.status),
     groupIdx: index("branches_group_idx").on(t.groupId),
+    externalIdentityPairCheck: check(
+      "branches_external_identity_pair_ck",
+      sql`(${t.externalSource} IS NULL) = (${t.externalId} IS NULL)
+        AND (${t.externalSource} IS NULL OR (btrim(${t.externalSource}) <> '' AND btrim(${t.externalId}) <> ''))`,
+    ),
   }),
 )
 
@@ -492,7 +512,10 @@ export const refunds = pgTable(
     orderId: integer("order_id")
       .references(() => orders.id)
       .notNull(),
+    // Gross refund used by existing reports/filters (item refund + refunded tax).
     amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
+    // Additive breakdown field. Existing and application-created refunds remain 0.
+    taxRefundCents: bigint("tax_refund_cents", { mode: "number" }).notNull().default(0),
     reason: varchar("reason", { length: 255 }),
     // New workflow: support pending refund requests
     status: varchar("status", { length: 16 }).notNull().default("PENDING"), // PENDING, APPROVED
@@ -507,6 +530,7 @@ export const refunds = pgTable(
     refundsOrgIdx: index("refunds_org_idx").on(t.organizationId),
     processedByIdx: index("refunds_processed_by_idx").on(t.processedByUserId),
     refundAmountPositive: check("refunds_amount_positive_ck", sql`${t.amountCents} > 0`),
+    refundTaxValid: check("refunds_tax_refund_valid_ck", sql`${t.taxRefundCents} >= 0 AND ${t.taxRefundCents} <= ${t.amountCents}`),
   }),
 )
 

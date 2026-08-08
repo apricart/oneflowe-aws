@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
-import { and, desc, eq, isNull, or, type SQL } from "drizzle-orm"
+import { and, desc, eq, isNull, ne, or, type SQL } from "drizzle-orm"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { notifications } from "@/db/schema"
+import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
@@ -43,7 +44,7 @@ function notificationTitle(type: string) {
     case "ORDER_APPROVED":
       return "Order approved"
     case "ORDER_APPROVED_ADMIN":
-      return "Order approved by Branch Admin"
+      return "Order approved and ready for review"
     case "ORDER_REJECTED":
       return "Order rejected"
     case "REFUND_REQUESTED":
@@ -65,10 +66,15 @@ function notificationSeverity(type: string): "info" | "warning" | "critical" {
   }
 }
 
-function notificationCta(type: string, orderId: number | null, role: string | undefined) {
+function notificationCta(
+  type: string,
+  orderId: number | null,
+  role: string | undefined,
+  canDecideOrders: boolean,
+) {
   switch (type) {
     case "ORDER_CREATED":
-      return orderId && role === "BRANCH_ADMIN"
+      return orderId && canDecideOrders
         ? { label: "Review order", href: `/orders/${orderId}` }
         : undefined
     case "ORDER_APPROVED":
@@ -98,6 +104,18 @@ export async function GET() {
     }
     const scopeConditions = scopedNotificationConditions(session, userId)
     if (!scopeConditions) return NextResponse.json({ items: [] })
+    const role = (session.user as any)?.role
+    const organizationId = Number((session.user as any)?.organizationId)
+    const branchId = Number((session.user as any)?.branchId)
+    const capabilities = await getOrderDecisionCapabilities({
+      role,
+      userId,
+      organizationId: Number.isInteger(organizationId) && organizationId > 0 ? organizationId : null,
+      branchId: Number.isInteger(branchId) && branchId > 0 ? branchId : null,
+    })
+    if (!capabilities.canApproveOrders) {
+      scopeConditions.push(ne(notifications.type, "ORDER_CREATED"))
+    }
 
     const rows = await db
       .select({
@@ -122,7 +140,12 @@ export async function GET() {
         title: notificationTitle(notification.type),
         message: notification.message,
         severity: notificationSeverity(notification.type),
-        cta: notificationCta(notification.type, notification.orderId, (session.user as any)?.role),
+        cta: notificationCta(
+          notification.type,
+          notification.orderId,
+          role,
+          capabilities.canApproveOrders,
+        ),
         tag: notification.type.toLowerCase().replace(/_/g, "-"),
         createdAt: notification.createdAt,
         organizationId: notification.organizationId,

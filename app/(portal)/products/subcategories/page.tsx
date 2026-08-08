@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/hooks/use-toast"
 import { Search, Sparkles, Plus, Edit, Trash2, FolderOpen, Package, Loader2, FolderTree, RefreshCw } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { formatCountLabel } from "@/lib/count-label"
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json())
 
@@ -232,7 +233,7 @@ export default function SubcategoriesPage() {
                 <CardHeader>
                     <CardTitle className="text-xl text-slate-900 dark:text-white">Subcategories</CardTitle>
                     <p className="text-sm text-muted-foreground">
-                        {data ? `${totalSubcategories} ${totalSubcategories === 1 ? "subcategory" : "subcategories"} in total` : "Loading…"}
+                        {data ? `${formatCountLabel(totalSubcategories, "subcategory", "subcategories")} in total` : "Loading…"}
                     </p>
                 </CardHeader>
                 <CardContent>
@@ -310,7 +311,7 @@ export default function SubcategoriesPage() {
                                             <TableCell>
                                                 <div className="flex items-center gap-2">
                                                     <Package className="h-3 w-3 text-muted-foreground" />
-                                                    <span className="text-sm">{subcategory.productsCount} products</span>
+                                                    <span className="text-sm">{formatCountLabel(subcategory.productsCount, "product")}</span>
                                                 </div>
                                             </TableCell>
                                             <TableCell className="text-sm text-muted-foreground">
@@ -409,7 +410,7 @@ export default function SubcategoriesPage() {
                             Are you sure you want to delete "{selectedSubcategory?.name}"?
                             {selectedSubcategory && selectedSubcategory.productsCount > 0 && (
                                 <span className="block mt-2 text-amber-600 dark:text-amber-400">
-                                    ⚠️ This subcategory has {selectedSubcategory.productsCount} product(s).
+                                    ⚠️ This subcategory has {formatCountLabel(selectedSubcategory.productsCount, "product")}.
                                 </span>
                             )}
                         </DialogDescription>

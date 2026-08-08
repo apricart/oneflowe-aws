@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { ORDER_APPROVER_ROLES } from "@/lib/order-approver-role"
 import { MAX_BUSINESS_QUANTITY, isUniquePositiveIdList } from "@/lib/business-rules"
 import {
   MAX_STORED_IMAGE_URL_LENGTH,
@@ -116,6 +117,7 @@ export const organizationCreateSchema = z.object({
   name: z.string().trim().min(2).max(100),
   code: z.string().trim().min(2).max(20).regex(/^[A-Za-z0-9_]+$/),
   status: z.enum(["active", "inactive", "suspended"]).optional().default("active"),
+  orderApproverRole: z.enum(ORDER_APPROVER_ROLES).optional().default("BRANCH_ADMIN"),
   budgetAllocationMode: z.enum(["money", "quantity"]).optional(),
   priceVisibility: z.object({
     hideBranchAdminPrices: z.boolean().optional(),
@@ -127,6 +129,7 @@ export const organizationUpdateSchema = z.object({
   name: z.string().trim().min(2).max(100).optional(),
   code: z.string().trim().min(2).max(20).regex(/^[A-Za-z0-9_]+$/).optional(),
   status: z.enum(["active", "inactive", "suspended"]).optional(),
+  orderApproverRole: z.enum(ORDER_APPROVER_ROLES).optional(),
   budgetAllocationMode: z.enum(["money", "quantity"]).optional(),
 }).strict().refine((input) => Object.keys(input).length > 0, {
   message: "At least one organization field is required",
@@ -173,7 +176,10 @@ export const refundRequestSchema = z.object({
     (items) => isUniquePositiveIdList(items.map((item) => item.id)),
     "Each order item can only appear once in a refund",
   ),
-  reason: z.string().trim().max(2_000).optional(),
+  reason: z.string()
+    .trim()
+    .min(1, "Refund reason is required")
+    .max(2_000, "Refund reason must not exceed 2000 characters"),
 }).strict()
 
 export const rolePermissionCreateSchema = z.object({
