@@ -124,12 +124,8 @@ jobs:
             --parameters 'commands=[
               "cd /home/ubuntu/app",
               "aws ecr get-login-password --region ${{ secrets.DEPLOY_AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ secrets.ECR_REPOSITORY_URL }}",
-<<<<<<< HEAD
               "sudo docker pull ${{ secrets.ECR_REPOSITORY_URL }}:test-${{ github.sha }}",
               "sudo sed -i \"s|image:.*oneflowe-app:.*|image: ${{ secrets.ECR_REPOSITORY_URL }}:test-${{ github.sha }}|\" docker-compose.yml",
-=======
-              "sudo docker pull ${{ secrets.ECR_REPOSITORY_URL }}:test-latest",
->>>>>>> 1430e8dcf0cdab5ef39d298b72fba253342ea0e1
               "sudo docker compose up -d",
               "sleep 15",
               "sudo docker ps --filter name=app-app-1 --filter status=running | grep app-app-1"
