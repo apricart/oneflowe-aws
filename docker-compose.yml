@@ -3,7 +3,7 @@ services:
     image: 969913181802.dkr.ecr.ap-southeast-1.amazonaws.com/oneflowe-app:latest
     restart: unless-stopped
     ports:
-      - "127.0.0.1:3000:3000"
+      - "3000:3000"
     env_file:
       - .env.production
     security_opt:
