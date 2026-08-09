@@ -2,11 +2,12 @@ import { error, ok, requireApiRole } from "@/lib/api"
 import { db } from "@/lib/db"
 import { auditLogs, branches, orderItems, orders, organizations } from "@/db/schema"
 import { eq } from "drizzle-orm"
-import { getCurrentUser, verifyResourceAccess } from "@/lib/auth"
+import { getCurrentUser, getRequestScope, verifyResourceAccess } from "@/lib/auth"
 import { sendOrderTokenEmail } from "@/lib/email"
 import { ADMIN_OPERATIONS_EMAIL } from "@/lib/email/recipients"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { canViewFulfillmentToken } from "@/lib/fulfillment-token-access"
+import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
 
 const TOKEN_EMAIL_RECIPIENT = ADMIN_OPERATIONS_EMAIL
 
@@ -14,7 +15,7 @@ export async function POST(
   _req: Request,
   props: { params: Promise<{ id: string }> }
 ) {
-  const roleError = await requireApiRole(["BRANCH_ADMIN", "ORDER_PORTAL"])
+  const roleError = await requireApiRole(["HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL"])
   if (roleError) return roleError
 
   const user = await getCurrentUser()
@@ -41,7 +42,9 @@ export async function POST(
       approvalToken: orders.approvalToken,
       createdAt: orders.createdAt,
       organizationName: organizations.name,
+      orderApproverRole: organizations.orderApproverRole,
       branchName: branches.name,
+      branchOrganizationId: branches.organizationId,
     })
     .from(orders)
     .leftJoin(organizations, eq(orders.organizationId, organizations.id))
@@ -50,16 +53,21 @@ export async function POST(
     .limit(1)
 
   if (!order) return error("Order not found", 404)
+  if (!order.organizationId || order.branchOrganizationId !== order.organizationId) {
+    return error("Forbidden: Invalid order tenant scope", 403)
+  }
 
   const hasAccess = await verifyResourceAccess(order.organizationId, order.branchId)
   if (!hasAccess) return error("Forbidden: You do not have access to this order", 403)
 
+  const capabilities = await getOrderDecisionCapabilities(await getRequestScope())
   const canShareToken = canViewFulfillmentToken({
     role: user.role,
     userId: user.id,
     orderStatus: order.status,
     orderCreatedByUserId: order.createdByUserId,
     orderApprovedByUserId: order.approvedByUserId,
+    configuredApproverRole: capabilities.orderApproverRole,
   })
   if (!canShareToken) return error("Forbidden: You do not have access to this fulfillment token", 403)
 

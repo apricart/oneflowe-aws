@@ -110,6 +110,7 @@ export async function GET(
             .select({
                 refundId: refunds.id,
                 refundAmount: refunds.amountCents,
+                taxRefundAmount: refunds.taxRefundCents,
                 refundReason: refunds.reason,
                 refundStatus: refunds.status,
                 refundCreatedAt: refunds.createdAt,
@@ -141,6 +142,7 @@ export async function GET(
                 acc.push({
                     refundId: item.refundId,
                     amount: pricesHidden ? null : (item.refundAmount || 0) / 100,
+                    taxRefundAmount: pricesHidden ? null : (item.taxRefundAmount || 0) / 100,
                     reason: item.refundReason || "",
                     status: item.refundStatus || "PENDING",
                     createdAt: item.refundCreatedAt || new Date(),
@@ -156,6 +158,7 @@ export async function GET(
         }, [] as Array<{
             refundId: number
             amount: number | null
+            taxRefundAmount: number | null
             reason: string
             status: string
             createdAt: Date

@@ -5,10 +5,16 @@ import { useRouter, useSearchParams } from "next/navigation"
 import useSWR from "swr"
 import { useSession } from "next-auth/react"
 import { useToast } from "@/hooks/use-toast"
+import { useDebounce } from "@/hooks/use-debounce"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+} from "@/components/ui/pagination"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
 import {
   Package,
@@ -29,6 +35,8 @@ import {
   Eye,
   XCircle,
   Activity,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react"
 import { formatPKR, cn } from "@/lib/utils"
 import { useAppContext } from "@/components/context/app-context"
@@ -57,6 +65,7 @@ const getDefaultDateRange = (): DateRange => ({
   startDate: startOfDay(new Date()),
   endDate: endOfDay(new Date()),
 })
+const ORDERS_PAGE_SIZE = 25
 
 const fetcher = (url: string) => fetch(url).then(r => r.json())
 
@@ -117,6 +126,8 @@ function OrdersManagementContent() {
   const isSuperAdmin = userRole === "SUPER_ADMIN"
 
   const [searchQuery, setSearchQuery] = useState("")
+  const debouncedSearchQuery = useDebounce(searchQuery.trim(), 300)
+  const [currentPage, setCurrentPage] = useState(1)
   const [dateRange, setDateRange] = useState<DateRange | null>(null)
   const [activePreset, setActivePreset] = useState<FilterPreset>("all")
   const [selectedMonths, setSelectedMonths] = useState<number[]>([])
@@ -146,6 +157,7 @@ function OrdersManagementContent() {
   const [errorMessage, setErrorMessage] = useState("")
 
   useEffect(() => {
+    setCurrentPage(1)
     setStatusFilter(requestedStatusFilter)
   }, [requestedStatusFilter])
 
@@ -158,6 +170,7 @@ function OrdersManagementContent() {
     months: number[] = [],
     years: number[] = []
   ) => {
+    setCurrentPage(1)
     setDateRange(range)
     setActivePreset(preset)
     setSelectedMonths(months)
@@ -176,6 +189,7 @@ function OrdersManagementContent() {
     splitFilter !== "all"
 
   const resetOrderFilters = useCallback(() => {
+    setCurrentPage(1)
     setReportGroupIds([])
     setReportBranchIds([])
     setSearchQuery("")
@@ -191,6 +205,10 @@ function OrdersManagementContent() {
   useEffect(() => {
     setReportBranchIds([])
   }, [reportGroupIds])
+
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [organizationId, branchId, branchIds])
 
   // Build orders endpoint with context parameters
   const ordersEndpoint = useMemo(() => {
@@ -230,16 +248,32 @@ function OrdersManagementContent() {
       params.set("years", selectedYears.join(","))
     }
 
+    if (statusFilter !== "all") {
+      params.set("status", statusFilter)
+    }
+
+    if (debouncedSearchQuery) {
+      params.set("q", debouncedSearchQuery)
+    }
+
+    params.set("page", currentPage.toString())
+    params.set("limit", ORDERS_PAGE_SIZE.toString())
+
     return `/api/v1/orders${params.toString() ? `?${params.toString()}` : ""}`
-  }, [organizationId, branchId, branchIds, reportBranchIds, reportGroupIds, dateRange, selectedMonths, selectedYears, isInitialized])
+  }, [organizationId, branchId, branchIds, reportBranchIds, reportGroupIds, dateRange, selectedMonths, selectedYears, statusFilter, isInitialized, debouncedSearchQuery, currentPage])
 
   // Fetch orders scoped by context
-  const { data: ordersData, mutate: mutateOrders, isLoading } = useSWR<any>(
+  const { data: ordersData, mutate: mutateOrders, isValidating } = useSWR<any>(
     ordersEndpoint,
-    fetcher
+    fetcher,
+    { keepPreviousData: true },
   )
 
   const orders = ordersData?.items || []
+  const canDecideOrders = Boolean(
+    ordersData?.capabilities?.canApproveOrders
+    && ordersData?.capabilities?.canRejectOrders,
+  )
   const showSplitFilter = statusFilter === "fulfilled" || statusFilter === "refunded"
 
   useEffect(() => {
@@ -277,20 +311,10 @@ function OrdersManagementContent() {
     }
 
 
-    if (searchQuery) {
-      const lowerQuery = searchQuery.toLowerCase()
-      filtered = filtered.filter((o: OrderItem) =>
-        o.tid.toLowerCase().includes(lowerQuery) ||
-        o.id.toString().includes(lowerQuery) ||
-        (o.branchCostCenterId?.toLowerCase().includes(lowerQuery)) ||
-        (o.itemNames?.toLowerCase().includes(lowerQuery))
-      )
-    }
-
     return filtered.sort((a: OrderItem, b: OrderItem) =>
       new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     )
-  }, [orders, searchQuery, showSplitFilter, splitFilter, statusFilter])
+  }, [orders, showSplitFilter, splitFilter, statusFilter])
 
   // Approve order
   const handleApproveOrder = async (orderId: number) => {
@@ -434,7 +458,7 @@ function OrdersManagementContent() {
   const showCostCenterId = branches.some((b: any) => Boolean(b.costCenterId)) ||
     filteredOrders.some((o: OrderItem) => Boolean(o.branchCostCenterId))
 
-  const statusCounts = {
+  const statusCounts = ordersData?.summary || {
     all: orders.length,
     pending: orders.filter((o: OrderItem) => o.status.toLowerCase() === "pending").length,
     approved: orders.filter((o: OrderItem) => o.status.toLowerCase() === "approved").length,
@@ -442,6 +466,22 @@ function OrdersManagementContent() {
     refunded: orders.filter((o: OrderItem) => o.status.toLowerCase() === "refunded").length,
     rejected: orders.filter((o: OrderItem) => o.status.toLowerCase() === "rejected" || o.status.toLowerCase() === "cancelled").length,
   }
+  const totalOrders = Number(ordersData?.pagination?.total || 0)
+  const totalPages = Math.max(
+    1,
+    Number(ordersData?.pagination?.totalPages) || Math.ceil(totalOrders / ORDERS_PAGE_SIZE),
+  )
+  const firstVisibleOrder = totalOrders === 0 ? 0 : (currentPage - 1) * ORDERS_PAGE_SIZE + 1
+  const lastVisibleOrder = Math.min(
+    (currentPage - 1) * ORDERS_PAGE_SIZE + filteredOrders.length,
+    totalOrders,
+  )
+
+  useEffect(() => {
+    if (ordersData?.pagination && currentPage > totalPages) {
+      setCurrentPage(totalPages)
+    }
+  }, [currentPage, ordersData?.pagination, totalPages])
 
   const scopeText = branchId
     ? selectedBranch?.name || `Branch #${branchId}`
@@ -477,7 +517,7 @@ function OrdersManagementContent() {
             {scopeText}
           </Badge>
           <Button variant="outline" size="sm" onClick={() => mutateOrders()} className="h-8 gap-2 rounded-full border-slate-200 dark:border-slate-800 bg-white/50 dark:bg-slate-900/50 backdrop-blur-sm shadow-sm hover:bg-slate-100 dark:hover:bg-slate-800">
-            <RefreshCw className={cn("h-3.5 w-3.5 text-slate-500", isLoading && "animate-spin text-indigo-500")} />
+            <RefreshCw className={cn("h-3.5 w-3.5 text-slate-500", isValidating && "animate-spin text-indigo-500")} />
             <span className="hidden sm:inline font-semibold text-slate-600 dark:text-slate-300">Refresh</span>
           </Button>
         </div>
@@ -552,7 +592,10 @@ function OrdersManagementContent() {
                   ] as [OrderStatusFilter, string][]).map(([status, label]) => (
                     <Button
                       key={status}
-                      onClick={() => setStatusFilter(status)}
+                      onClick={() => {
+                        setCurrentPage(1)
+                        setStatusFilter(status)
+                      }}
                       variant={statusFilter === status ? "secondary" : "ghost"}
                       size="sm"
                       className={`px-3 h-8 text-xs font-bold rounded-lg transition-all duration-200 shrink-0 ${statusFilter === status
@@ -571,7 +614,10 @@ function OrdersManagementContent() {
                     placeholder="Search by TID, ID, or cost center..."
                     className="pl-9 h-8 text-[11px] font-bold bg-white dark:bg-slate-900/50 border-slate-200 dark:border-slate-800 rounded-xl focus:ring-1 focus:ring-indigo-500/30 transition-all shadow-sm"
                     value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onChange={(e) => {
+                      setCurrentPage(1)
+                      setSearchQuery(e.target.value)
+                    }}
                   />
                 </div>
               </div>
@@ -599,7 +645,10 @@ function OrdersManagementContent() {
                 {(["all", "partial", "full"] as OrderSplitFilter[]).map((value) => (
                   <Button
                     key={value}
-                    onClick={() => setSplitFilter(value)}
+                    onClick={() => {
+                      setCurrentPage(1)
+                      setSplitFilter(value)
+                    }}
                     variant={splitFilter === value ? "secondary" : "ghost"}
                     size="sm"
                     className={cn(
@@ -626,13 +675,19 @@ function OrdersManagementContent() {
                   <>
                     <GroupFilter
                       selectedIds={reportGroupIds}
-                      onChange={setReportGroupIds}
+                      onChange={(ids) => {
+                        setCurrentPage(1)
+                        setReportGroupIds(ids)
+                      }}
                       organizationIds={organizationId ? [organizationId] : undefined}
                     />
 
                     <BranchFilter
                       selectedIds={reportBranchIds}
-                      onChange={setReportBranchIds}
+                      onChange={(ids) => {
+                        setCurrentPage(1)
+                        setReportBranchIds(ids)
+                      }}
                       organizationIds={organizationId ? [organizationId] : undefined}
                       groupIds={reportGroupIds}
                     />
@@ -662,9 +717,54 @@ function OrdersManagementContent() {
               isSuperAdmin={isSuperAdmin}
               isBranchAdmin={isBranchAdmin}
               isHeadOffice={isHeadOffice}
+              canDecideOrders={canDecideOrders}
               showCostCenterId={showCostCenterId}
               onUpdate={() => mutateOrders()}
             />
+            {totalOrders > 0 && (
+              <div className="mt-4 flex flex-col items-center justify-between gap-3 border-t border-slate-100 px-2 pt-4 dark:border-slate-800 sm:flex-row">
+                <p className="text-xs font-medium text-slate-500" aria-live="polite">
+                  Showing {firstVisibleOrder}-{lastVisibleOrder} of {totalOrders} orders
+                </p>
+                <Pagination className="mx-0 w-auto justify-end">
+                  <PaginationContent>
+                    <PaginationItem>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="gap-1 rounded-xl"
+                        aria-label="Go to previous page"
+                        disabled={currentPage <= 1 || isValidating}
+                        onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                        <span className="hidden sm:inline">Previous</span>
+                      </Button>
+                    </PaginationItem>
+                    <PaginationItem>
+                      <span className="flex h-9 min-w-24 items-center justify-center px-3 text-xs font-semibold text-slate-600 dark:text-slate-300">
+                        Page {currentPage} of {totalPages}
+                      </span>
+                    </PaginationItem>
+                    <PaginationItem>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="gap-1 rounded-xl"
+                        aria-label="Go to next page"
+                        disabled={currentPage >= totalPages || isValidating}
+                        onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                      >
+                        <span className="hidden sm:inline">Next</span>
+                        <ChevronRight className="h-4 w-4" />
+                      </Button>
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
+              </div>
+            )}
           </div>
         </Card>
       </section>

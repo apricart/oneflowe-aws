@@ -55,4 +55,56 @@ describe("OrdersDirectory", () => {
       "order ORD-0042",
     )
   })
+
+  it("shows approve and reject controls to a configured Head Office approver", async () => {
+    render(
+      <OrdersDirectory
+        orders={[{
+          id: 43,
+          tid: "ORD-0043",
+          status: "PENDING",
+          branchId: 8,
+          branchName: "North Branch",
+          createdAt: "2026-07-28T10:00:00.000Z",
+          totalCents: 125000,
+        }]}
+        userRole="HEAD_OFFICE"
+        isSuperAdmin={false}
+        isBranchAdmin={false}
+        isHeadOffice
+        canDecideOrders
+        onUpdate={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByText("ORD-0043"))
+    expect(await screen.findByRole("button", { name: "Approve" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Reject" })).toBeTruthy()
+  })
+
+  it("hides decision controls from a role that is not the configured approver", async () => {
+    render(
+      <OrdersDirectory
+        orders={[{
+          id: 44,
+          tid: "ORD-0044",
+          status: "PENDING",
+          branchId: 8,
+          branchName: "North Branch",
+          createdAt: "2026-07-28T10:00:00.000Z",
+          totalCents: 125000,
+        }]}
+        userRole="BRANCH_ADMIN"
+        isSuperAdmin={false}
+        isBranchAdmin
+        canDecideOrders={false}
+        onUpdate={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByText("ORD-0044"))
+    await screen.findByRole("dialog", { name: "Order details" })
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Reject" })).toBeNull()
+  })
 })

@@ -46,7 +46,10 @@ import { ColumnSelector, useColumnSelector, type ColumnDef } from "@/components/
 import { ProductFilter } from "@/components/reports/product-filter"
 import { OrganizationFilter } from "@/components/reports/organization-filter"
 import { KPICard } from "@/components/reports/kpi-card"
+import { TopProductsRanking } from "@/components/reports/top-products-ranking"
 import { Upload } from "lucide-react"
+import { useDebounce } from "@/hooks/use-debounce"
+import type { ProductPerformanceRankBy } from "@/lib/product-performance-ranking"
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
 
@@ -108,6 +111,7 @@ export default function ProductPerformancePage() {
     const barChartLegendLabel = isBuyer ? "PURCHASED" : "REVENUE"
     const revenueShortLabel = isBuyer ? "Purchased" : "Revenue"
     const analyticsSubtitleLabel = isBuyer ? "Consolidated purchase stream" : "Consolidated revenue stream"
+    const topProductsValueLabel = isBuyer ? "Net Purchase Value" : "Net Revenue"
 
     // URL States for filtering
     const presetFromUrl = (searchParams.get("preset") as FilterPreset) || "all"
@@ -149,6 +153,8 @@ export default function ProductPerformancePage() {
     const [reportGroupIds, setReportGroupIds] = useState<string[]>([])
     const [reportProductIds, setReportProductIds] = useState<string[]>([])
     const [reportOrganizationIds, setReportOrganizationIds] = useState<string[]>([])
+    const [topProductsRankBy, setTopProductsRankBy] = useState<ProductPerformanceRankBy>("netValue")
+    const debouncedReportSearchTerm = useDebounce(reportSearchTerm, 300)
 
     const lastSyncedBranchIds = useRef<string[]>([])
 
@@ -437,6 +443,28 @@ export default function ProductPerformancePage() {
 
     const { data: ledgerData, isLoading: isLedgerLoading, mutate: mutateLedger } = useSWR<any>(isInitialized ? `/api/v1/analytics/orders/itemized?${reportQueryParams.toString()}` : null, fetcher, { keepPreviousData: true })
 
+    const topProductsQueryParams = new URLSearchParams(reportQueryParams.toString())
+    if (debouncedReportSearchTerm) {
+        topProductsQueryParams.set("searchTerm", debouncedReportSearchTerm)
+    } else {
+        topProductsQueryParams.delete("searchTerm")
+    }
+    topProductsQueryParams.set("rankBy", topProductsRankBy)
+    topProductsQueryParams.set("limit", "10")
+
+    const {
+        data: topProductsData,
+        isLoading: isTopProductsLoading,
+        isValidating: isTopProductsValidating,
+        mutate: mutateTopProducts,
+    } = useSWR<any>(
+        isInitialized && activeTab === "reports"
+            ? `/api/v1/analytics/products/performance?${topProductsQueryParams.toString()}`
+            : null,
+        fetcher,
+        { keepPreviousData: true },
+    )
+
     const resetReportFilters = useCallback(() => {
         setReportYears(getDefaultReportYears())
         setReportMonths([...ALL_MONTHS])
@@ -445,10 +473,12 @@ export default function ProductPerformancePage() {
         setReportProductIds([])
         setReportOrganizationIds([])
         setReportSearchTerm("")
+        setTopProductsRankBy("netValue")
         setExpandedRow(null)
         handleDateChange(null, "all")
         mutateLedger()
-    }, [getDefaultReportYears, handleDateChange, mutateLedger])
+        mutateTopProducts()
+    }, [getDefaultReportYears, handleDateChange, mutateLedger, mutateTopProducts])
 
     useEffect(() => {
         setHasMounted(true)
@@ -724,9 +754,14 @@ export default function ProductPerformancePage() {
         )
     }
 
-    const pricesHidden = Boolean((globalPerfData as any)?.pricesHidden || (chartPerfData as any)?.pricesHidden || (ledgerData as any)?.pricesHidden)
-    const priceVisibilityKnown = [globalPerfData, chartPerfData, ledgerData].some((data: any) => typeof data?.pricesHidden === "boolean")
+    const pricesHidden = Boolean((globalPerfData as any)?.pricesHidden || (chartPerfData as any)?.pricesHidden || (ledgerData as any)?.pricesHidden || (topProductsData as any)?.pricesHidden)
+    const priceVisibilityKnown = [globalPerfData, chartPerfData, ledgerData, topProductsData].some((data: any) => typeof data?.pricesHidden === "boolean")
     const isPriceVisibilityPending = role === "BRANCH_ADMIN" && !priceVisibilityKnown
+    const appliedTopProductsRankBy = (
+        topProductsData?.ranking?.rankBy
+        || (pricesHidden && topProductsRankBy === "netValue" ? "fulfilledQty" : topProductsRankBy)
+    ) as ProductPerformanceRankBy
+    const topProducts = Array.isArray(topProductsData?.data) ? topProductsData.data : []
 
     if (!hasMounted || sessionStatus === "loading" || isPriceVisibilityPending) {
         return (
@@ -774,8 +809,8 @@ export default function ProductPerformancePage() {
                                 <MultiBranchFilter organizationId={organizationId} selectedBranchIds={contextBranchIds} onChange={setContextBranchIds} />
                             </>
                         )}
-                        <Button variant="ghost" size="icon" className="rounded-xl text-slate-400 hover:text-indigo-500 transition-colors" onClick={() => { handleDateChange(null, "all", false, null, [], [], [], []); mutateGlobalPerf(); mutateLedger(); mutateChart(); }}>
-                            <RefreshCw className={cn("h-4 w-4", (isGlobalPerfLoading || isLedgerLoading || isChartPerfLoading) && "animate-spin")} />
+                        <Button variant="ghost" size="icon" className="rounded-xl text-slate-400 hover:text-indigo-500 transition-colors" onClick={() => { handleDateChange(null, "all", false, null, [], [], [], []); mutateGlobalPerf(); mutateLedger(); mutateChart(); mutateTopProducts(); }}>
+                            <RefreshCw className={cn("h-4 w-4", (isGlobalPerfLoading || isLedgerLoading || isChartPerfLoading || isTopProductsLoading || isTopProductsValidating) && "animate-spin")} />
                         </Button>
                     </div>
                 </div>
@@ -1364,6 +1399,15 @@ export default function ProductPerformancePage() {
                                     })}
                                 </div>
                             </div>
+                            <TopProductsRanking
+                                products={topProducts}
+                                rankBy={appliedTopProductsRankBy}
+                                pricesHidden={pricesHidden}
+                                valueLabel={topProductsValueLabel}
+                                isLoading={isTopProductsLoading || isTopProductsValidating}
+                                error={topProductsData?.error || null}
+                                onRankByChange={setTopProductsRankBy}
+                            />
                             <div className="overflow-x-auto">
                                 <Table>
                                     <TableHeader>

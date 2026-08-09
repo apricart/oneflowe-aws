@@ -29,7 +29,7 @@ describe("order delivery date contracts", () => {
     expect(orderSelect).toContain("WHEN ${nextStatus} = 'DELIVERED'")
     expect(orderSelect).toContain('COALESCE("delivered_at", NOW())')
 
-    expect(directFulfilment).toContain('requireApiRole(["HEAD_OFFICE", "SUPER_ADMIN"])')
+    expect(directFulfilment).toContain('requireApiRole(["SUPER_ADMIN"])')
     expect(directFulfilment).toContain("verifyResourceAccess(ord.organizationId, ord.branchId)")
     expect(directFulfilment).toContain("deliveredAt: fulfilledAt")
   })

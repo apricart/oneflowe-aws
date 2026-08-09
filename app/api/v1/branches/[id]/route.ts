@@ -14,7 +14,25 @@ export async function GET(
   if (err) return err
   const params = await props.params
   const { id } = params
-  const [item] = await db.select().from(branches).where(eq(branches.id, Number(id)))
+  const [item] = await db
+    .select({
+      id: branches.id,
+      organizationId: branches.organizationId,
+      name: branches.name,
+      province: branches.province,
+      city: branches.city,
+      address: branches.address,
+      costCenterId: branches.costCenterId,
+      adminUserId: branches.adminUserId,
+      code: branches.code,
+      status: branches.status,
+      groupId: branches.groupId,
+      baselineBudgetCents: branches.baselineBudgetCents,
+      createdAt: branches.createdAt,
+      updatedAt: branches.updatedAt,
+    })
+    .from(branches)
+    .where(eq(branches.id, Number(id)))
   if (!item) return error("Not found", 404)
 
   // BOLA Protection: verify user has access to this branch's organization
@@ -43,7 +61,11 @@ export async function PATCH(
     const scope = await getRequestScope()
 
     const [currentBranch] = await db
-      .select({ organizationId: branches.organizationId })
+      .select({
+        organizationId: branches.organizationId,
+        externalSource: branches.externalSource,
+        externalId: branches.externalId,
+      })
       .from(branches)
       .where(eq(branches.id, Number(id)))
     if (!currentBranch) return error("Not found", 404)
@@ -57,15 +79,30 @@ export async function PATCH(
     if (body.name !== undefined) {
       const newName = String(body.name).trim()
       if (newName) {
-        const [duplicate] = await db
-          .select({ id: branches.id })
+        const duplicateCandidates = await db
+          .select({
+            id: branches.id,
+            name: branches.name,
+            externalSource: branches.externalSource,
+            externalId: branches.externalId,
+          })
           .from(branches)
           .where(and(
             eq(branches.organizationId, currentBranch.organizationId),
-            sql`lower(${branches.name}) = ${newName.toLowerCase()}`,
+            sql`lower(btrim(${branches.name})) = ${newName.toLowerCase()}`,
             ne(branches.id, Number(id))
           ))
-          .limit(1)
+        const currentHasExternalIdentity = Boolean(currentBranch.externalSource && currentBranch.externalId)
+        const duplicate = duplicateCandidates.find((candidate) => {
+          if (!currentHasExternalIdentity) return true
+          const isDistinctSiblingFromSameSource = Boolean(
+            candidate.externalSource === currentBranch.externalSource
+            && candidate.externalId
+            && candidate.externalId !== currentBranch.externalId
+            && candidate.name.trim() !== newName,
+          )
+          return !isDistinctSiblingFromSameSource
+        })
         if (duplicate) {
           return error("A branch with this name already exists in this organization.", 409)
         }
@@ -133,6 +170,16 @@ export async function PATCH(
 
     return ok({ item })
   } catch (e: any) {
+    const databaseError = e?.cause ?? e
+    const databaseCode = databaseError?.code ?? e?.code
+    const databaseConstraint = databaseError?.constraint ?? e?.constraint
+    if (databaseCode === "23505" && [
+      "branches_org_name_normalized_unmapped_uq",
+      "branches_org_name_exact_uq",
+      "branches_org_name_identity_guard",
+    ].includes(databaseConstraint)) {
+      return error("A branch with this name already exists in this organization.", 409)
+    }
     console.error("Update branch failed:", e)
     return error("Update failed", 400)
   }

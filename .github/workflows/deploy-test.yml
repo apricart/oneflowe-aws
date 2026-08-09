@@ -84,7 +84,6 @@ jobs:
       - name: Build image
         run: |
           docker build -t ${{ secrets.ECR_REPOSITORY_URL }}:test-${{ github.sha }} .
-          docker tag ${{ secrets.ECR_REPOSITORY_URL }}:test-${{ github.sha }} ${{ secrets.ECR_REPOSITORY_URL }}:test-latest
 
       # ---- Trivy image scan (report only, the built image itself) ----
       - name: Trivy image scan
@@ -115,7 +114,6 @@ jobs:
       - name: Push image to ECR
         run: |
           docker push ${{ secrets.ECR_REPOSITORY_URL }}:test-${{ github.sha }}
-          docker push ${{ secrets.ECR_REPOSITORY_URL }}:test-latest
 
       # ---- Deploy to staging via SSM, then wait for and verify the result ----
       - name: Deploy to staging
@@ -126,7 +124,8 @@ jobs:
             --parameters 'commands=[
               "cd /home/ubuntu/app",
               "aws ecr get-login-password --region ${{ secrets.DEPLOY_AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ secrets.ECR_REPOSITORY_URL }}",
-              "sudo docker pull ${{ secrets.ECR_REPOSITORY_URL }}:test-latest",
+              "sudo docker pull ${{ secrets.ECR_REPOSITORY_URL }}:test-${{ github.sha }}",
+              "sudo sed -i \"s|image:.*oneflowe-app:.*|image: ${{ secrets.ECR_REPOSITORY_URL }}:test-${{ github.sha }}|\" docker-compose.yml",
               "sudo docker compose up -d",
               "sleep 15",
               "sudo docker ps --filter name=app-app-1 --filter status=running | grep app-app-1"

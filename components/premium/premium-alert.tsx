@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { useEffect, useState } from "react"
+import { useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { X, AlertCircle, CheckCircle2, Info, AlertTriangle } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -25,7 +25,6 @@ export function PremiumAlert({
     onClose,
     placement = "fixed",
 }: PremiumAlertProps) {
-    console.log("PremiumAlert Render:", { isVisible, message, type })
     useEffect(() => {
         if (!isVisible) return
 

@@ -2,11 +2,22 @@ import { NextResponse, type NextRequest } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
-import { orders, orderItems, branches, globalProducts, categories, refundItems, refunds, organizationInventory, branchInventory } from "@/db/schema"
-import { and, eq, gte, lte, inArray, desc, isNull, sql, exists } from "drizzle-orm"
+import { orders, orderItems, branches, globalProducts, categories, refundItems, refunds, organizationInventory, branchInventory, users, organizations, groups } from "@/db/schema"
+import { and, eq, gte, lte, inArray, sql, exists, ilike, or } from "drizzle-orm"
 import { aliasedTable } from "drizzle-orm"
 import { redactAnalyticsPrices, shouldHidePricesForRole } from "@/lib/price-visibility"
 import { parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
+import { escapeLikePattern } from "@/lib/utils"
+import {
+    parseProductPerformanceLimit,
+    parseProductPerformanceRankBy,
+    rankProductPerformanceRows,
+} from "@/lib/product-performance-ranking"
+import {
+    isBranchScopedAnalyticsRole,
+    resolveAnalyticsBranchIds,
+    resolveAnalyticsOrganizationIds,
+} from "@/lib/server/analytics-scope"
 
 export async function GET(req: NextRequest) {
     try {
@@ -42,6 +53,13 @@ export async function GET(req: NextRequest) {
 
         const productIdsRaw = url.searchParams.get("productIds")
         const parsedProductIds = productIdsRaw ? productIdsRaw.split(',').map(Number).filter(n => !isNaN(n) && n > 0) : []
+        const searchTermRaw = (url.searchParams.get("searchTerm") || "").trim()
+        if (searchTermRaw.length > 100) {
+            return NextResponse.json({ error: "Search query must be at most 100 characters" }, { status: 400 })
+        }
+        const searchTerm = searchTermRaw ? escapeLikePattern(searchTermRaw) : ""
+        const requestedRankBy = parseProductPerformanceRankBy(url.searchParams.get("rankBy"))
+        const rankingLimit = parseProductPerformanceLimit(url.searchParams.get("limit"))
 
         // Most product-report requests use the singular organizationId from the
         // global organization selector, while the report's multi-select uses
@@ -52,29 +70,34 @@ export async function GET(req: NextRequest) {
         const requestedOrgIds = organizationIdsRaw
             ? organizationIdsRaw.split(',').map(Number).filter(n => !isNaN(n) && n > 0)
             : (organizationIdRaw && Number(organizationIdRaw) > 0 ? [Number(organizationIdRaw)] : [])
-        const parsedOrgIds = userRole === "SUPER_ADMIN"
-            ? requestedOrgIds
-            : (userOrgId ? [Number(userOrgId)] : [])
+        const parsedOrgIds = resolveAnalyticsOrganizationIds({
+            role: userRole,
+            userOrganizationId: userOrgId,
+            requestedOrganizationIds: requestedOrgIds,
+        })
 
-        // RBAC Context Parsing
-        let branchIds: number[] = []
-        let branchQuery = db.select({ id: branches.id }).from(branches)
+        if (userRole !== "SUPER_ADMIN" && parsedOrgIds.length === 0) {
+            return NextResponse.json({ error: "Organization not assigned" }, { status: 403 })
+        }
 
-        // Filter branches by organization if provided, or fallback to user's org
+        // Resolve the complete allowed branch set first, then intersect all
+        // request-supplied IDs with it. Branch-scoped roles are always forced to
+        // the branch stored in their authenticated session.
+        let allowedBranchQuery = db.select({ id: branches.id }).from(branches)
         if (parsedOrgIds.length > 0) {
-            branchQuery = branchQuery.where(inArray(branches.organizationId, parsedOrgIds)) as any
-        } else if (userOrgId) {
-            branchQuery = branchQuery.where(eq(branches.organizationId, userOrgId)) as any
+            allowedBranchQuery = allowedBranchQuery
+                .where(inArray(branches.organizationId, parsedOrgIds)) as any
         }
-
-        if (branchIdsParam) {
-            branchIds = branchIdsParam.split(",").map(id => Number(id)).filter(id => !isNaN(id) && id > 0)
-        } else if (userRole === "BRANCH_ADMIN" || userRole === "BRANCH_MANAGER" || userRole === "ORDER_PORTAL") {
-            branchIds = [userBranchId]
-        } else {
-            const b = await branchQuery
-            branchIds = b.map(br => br.id)
-        }
+        const allowedBranches = await allowedBranchQuery
+        const requestedBranchIds = branchIdsParam
+            ? branchIdsParam.split(",").map(Number)
+            : []
+        let branchIds = resolveAnalyticsBranchIds({
+            role: userRole,
+            userBranchId,
+            requestedBranchIds,
+            allowedBranchIds: allowedBranches.map((branch) => branch.id),
+        })
 
         // Apply group filter if present
         if (parsedGroupIds.length > 0) {
@@ -89,7 +112,8 @@ export async function GET(req: NextRequest) {
         }
 
         if (branchIds.length === 0) {
-            return NextResponse.json({ error: "No branches resolved" }, { status: 400 })
+            const status = isBranchScopedAnalyticsRole(userRole) ? 403 : 400
+            return NextResponse.json({ error: "No permitted branches resolved" }, { status })
         }
 
         const startDate = parseStartDateParam(startDateParam)
@@ -117,11 +141,29 @@ export async function GET(req: NextRequest) {
 
         const baseConditions: any[] = [
             inArray(orders.branchId, branchIds),
-            sql`UPPER(${orders.status}) IN ('FULFILLED', 'APPROVED', 'PARTIAL', 'PARTIALLY_FULFILLED')`
+            sql`UPPER(${orders.status}) IN ('FULFILLED', 'REFUNDED', 'APPROVED', 'PARTIAL', 'PARTIALLY_FULFILLED')`
         ]
 
         if (parsedProductIds.length > 0) {
             baseConditions.push(inArray(globalProducts.id, parsedProductIds))
+        }
+        const searchCondition = searchTerm
+            ? or(
+                ilike(orderItems.productName, `%${searchTerm}%`),
+                ilike(orderItems.productCode, `%${searchTerm}%`),
+                ilike(globalProducts.name, `%${searchTerm}%`),
+                ilike(globalProducts.productCode, `%${searchTerm}%`),
+                ilike(users.fullName, `%${searchTerm}%`),
+                ilike(users.email, `%${searchTerm}%`),
+                ilike(users.employeeId, `%${searchTerm}%`),
+                ilike(orders.tid, `%${searchTerm}%`),
+                ilike(branches.name, `%${searchTerm}%`),
+                ilike(organizations.name, `%${searchTerm}%`),
+                ilike(groups.name, `%${searchTerm}%`),
+            )
+            : undefined
+        if (searchCondition) {
+            baseConditions.push(searchCondition)
         }
 
         applyDateFilters(baseConditions, parsedMonths, parsedYears, startDate, endDate)
@@ -137,6 +179,8 @@ export async function GET(req: NextRequest) {
                 itemName: globalProducts.name,
                 itemUnit: globalProducts.unit,
                 categoryName: categories.name,
+                productStatus: globalProducts.status,
+                productDeletedAt: globalProducts.deletedAt,
                 qtyOrdered: orderItems.quantity,
                 priceCents: orderItems.priceCents,
                 basePriceCents: globalProducts.basePrice,
@@ -145,6 +189,10 @@ export async function GET(req: NextRequest) {
             .from(orderItems)
             .innerJoin(orders, eq(orderItems.orderId, orders.id))
             .innerJoin(globalProducts, eq(orderItems.globalProductId, globalProducts.id))
+            .innerJoin(users, eq(orders.createdByUserId, users.id))
+            .innerJoin(branches, eq(orders.branchId, branches.id))
+            .leftJoin(organizations, eq(orders.organizationId, organizations.id))
+            .leftJoin(groups, eq(branches.groupId, groups.id))
             .leftJoin(categories, eq(globalProducts.categoryId, categories.id))
             .where(and(...baseConditions))
 
@@ -174,34 +222,6 @@ export async function GET(req: NextRequest) {
                 return acc
             }, {} as Record<number, number>)
         }
-
-        const fullRefundConditions: any[] = [
-            inArray(orders.branchId, branchIds),
-            eq(sql`UPPER(${orders.status})`, 'REFUNDED')
-        ]
-
-        if (parsedProductIds.length > 0) {
-            fullRefundConditions.push(inArray(globalProducts.id, parsedProductIds))
-        }
-
-        applyDateFilters(fullRefundConditions, parsedMonths, parsedYears, startDate, endDate)
-
-        const refundedResults = await db
-            .select({
-                createdAt: orders.createdAt,
-                globalProductId: orderItems.globalProductId,
-                refundQty: refundItems.quantity,
-                refundAmountCents: refundItems.amountCents,
-            })
-            .from(refundItems)
-            .innerJoin(refunds, eq(refundItems.refundId, refunds.id))
-            .innerJoin(orderItems, eq(refundItems.orderItemId, orderItems.id))
-            .innerJoin(orders, eq(orderItems.orderId, orders.id))
-            .innerJoin(globalProducts, eq(orderItems.globalProductId, globalProducts.id))
-            .where(and(
-                ...fullRefundConditions,
-                inArray(sql`UPPER(${refunds.status})`, ['APPROVED', 'COMPLETED'])
-            )) as any[]
 
         // 1. Fetch relevant global products based on filtering and scoping
         const productConditions: any[] = []
@@ -294,6 +314,30 @@ export async function GET(req: NextRequest) {
             }
         })
 
+        // Historical order items must remain reportable even if the product was
+        // later removed from the current organization/branch inventory.
+        results.forEach(row => {
+            if (!productMap[row.globalProductId]) {
+                productMap[row.globalProductId] = {
+                    productId: row.globalProductId,
+                    productCode: row.itemCode || 'Unknown',
+                    productName: row.itemName || 'Unknown product',
+                    unit: row.itemUnit,
+                    category: row.categoryName || 'Uncategorized',
+                    subCategory: '-',
+                    status: row.productDeletedAt ? 'deleted' : row.productStatus,
+                    totalOrders: new Set(),
+                    qtyOrdered: 0,
+                    qtyFulfilled: 0,
+                    qtyRefunded: 0,
+                    revenueGeneratedCents: 0,
+                    basePriceCents: isSuperAdmin ? (row.basePriceCents || 0) : 0,
+                    unitPriceCents: row.priceCents || 0,
+                    refundLossCents: 0
+                }
+            }
+        })
+
         // 3. Aggregate order data onto the product map
         results.forEach(row => {
             if (productMap[row.globalProductId]) {
@@ -316,25 +360,18 @@ export async function GET(req: NextRequest) {
             }
         })
 
-        refundedResults.forEach(row => {
-            if (productMap[row.globalProductId]) {
-                const pInfo = productMap[row.globalProductId]
-                pInfo.qtyRefunded += row.refundQty || 0
-                pInfo.refundLossCents += row.refundAmountCents || 0
-            }
-        })
-
-        // Format mapping back to array and sort
+        // Format mapping back to an array and apply the allowlisted ranking.
+        // When prices are hidden, net-value ranking is forced to fulfilled
+        // quantity so the response order cannot reveal restricted price data.
         const aggregated = Object.values(productMap).map(p => ({
             ...p,
             totalOrders: p.totalOrders.size // convert set -> size
         }))
-        // Sort by revenue DESC, then by product name ASC
-        aggregated.sort((a, b) => {
-            if (b.revenueGeneratedCents === a.revenueGeneratedCents) {
-                return (a.productName || "").localeCompare(b.productName || "")
-            }
-            return b.revenueGeneratedCents - a.revenueGeneratedCents
+        const ranking = rankProductPerformanceRows(aggregated, {
+            requestedRankBy,
+            pricesHidden,
+            limit: rankingLimit,
+            includeZeroActivity: rankingLimit === undefined,
         })
 
         // COMPARISON logic for overall KPIs
@@ -368,8 +405,8 @@ export async function GET(req: NextRequest) {
                 .where(
                     and(
                         inArray(orders.branchId, branchIds),
-                        sql`UPPER(${orders.status}) IN ('FULFILLED', 'APPROVED', 'PARTIAL', 'PARTIALLY_FULFILLED')`,
-                        parsedProductIds.length > 0 ? inArray(globalProducts.id, parsedProductIds) : undefined,
+                        sql`UPPER(${orders.status}) IN ('FULFILLED', 'REFUNDED', 'APPROVED', 'PARTIAL', 'PARTIALLY_FULFILLED')`,
+                        parsedProductIds.length > 0 ? inArray(orderItems.globalProductId, parsedProductIds) : undefined,
                         (() => {
                             const compCond: any[] = []
                             if (parsedCompMonths.length > 0 || parsedCompYears.length > 0) {
@@ -384,42 +421,17 @@ export async function GET(req: NextRequest) {
                     )
                 )
 
-            const compFullRefundConditions: any[] = [
-                inArray(orders.branchId, branchIds),
-                eq(sql`UPPER(${orders.status})`, 'REFUNDED')
-            ]
-
-            if (parsedProductIds.length > 0) {
-                compFullRefundConditions.push(inArray(globalProducts.id, parsedProductIds))
-            }
-
-            if (parsedCompMonths.length > 0 || parsedCompYears.length > 0) {
-                applyDateFilters(compFullRefundConditions, parsedCompMonths, parsedCompYears)
-            } else {
-                applyDateFilters(compFullRefundConditions, [], [], prevStart, prevEnd)
-            }
-
-            const compRefundedResults = await db
-                .select({
-                    refundQty: refundItems.quantity,
-                })
-                .from(refundItems)
-                .innerJoin(refunds, eq(refundItems.refundId, refunds.id))
-                .innerJoin(orderItems, eq(refundItems.orderItemId, orderItems.id))
-                .innerJoin(orders, eq(orderItems.orderId, orders.id))
-                .innerJoin(globalProducts, eq(orderItems.globalProductId, globalProducts.id))
-                .where(and(
-                    ...compFullRefundConditions,
-                    inArray(sql`UPPER(${refunds.status})`, ['APPROVED', 'COMPLETED'])
-                ))
-
             const compOrderItemIds = compResults.map(r => r.orderItemId)
             let compRefundQuantities: Record<number, number> = {}
             if (compOrderItemIds.length > 0) {
                 const compRefunds = await db
                     .select({ orderItemId: refundItems.orderItemId, qty: refundItems.quantity })
                     .from(refundItems)
-                    .where(inArray(refundItems.orderItemId, compOrderItemIds))
+                    .innerJoin(refunds, eq(refundItems.refundId, refunds.id))
+                    .where(and(
+                        inArray(refundItems.orderItemId, compOrderItemIds),
+                        inArray(sql`UPPER(${refunds.status})`, ['APPROVED', 'COMPLETED']),
+                    ))
 
                 compRefundQuantities = compRefunds.reduce((acc, curr) => {
                     if (curr.orderItemId) acc[curr.orderItemId] = (acc[curr.orderItemId] || 0) + curr.qty
@@ -430,22 +442,13 @@ export async function GET(req: NextRequest) {
             let compRev = 0, compVol = 0, compRef = 0
             compResults.forEach(r => {
                 const s = (r.status || "").toUpperCase()
-                if (s === 'FULFILLED' || s === 'APPROVED' || s === 'PARTIAL' || s === 'PARTIALLY_FULFILLED') {
+                if (s === 'FULFILLED' || s === 'REFUNDED' || s === 'APPROVED' || s === 'PARTIAL' || s === 'PARTIALLY_FULFILLED') {
                     const refQ = compRefundQuantities[r.orderItemId] || 0
                     compRef += refQ
                     const fulfilledCount = Math.max(0, r.qtyOrdered - refQ)
                     compVol += fulfilledCount
                     compRev += (fulfilledCount * r.priceCents)
-                } else if (s === 'REFUNDED') {
-                    const refQ = compRefundQuantities[r.orderItemId] || 0
-                    compRef += refQ
-                    compVol += Math.max(0, r.qtyOrdered - refQ)
-                    compRev += (Math.max(0, r.qtyOrdered - refQ) * r.priceCents)
                 }
-            })
-
-            compRefundedResults.forEach(r => {
-                compRef += r.refundQty || 0
             })
 
             comparisonSummary = {
@@ -527,32 +530,20 @@ export async function GET(req: NextRequest) {
             }
         })
 
-        refundedResults.forEach(row => {
-            const d = new Date(row.createdAt)
-            const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-            if (!trend[key]) {
-                trend[key] = {
-                    date: key,
-                    revenue: 0,
-                    compareRevenue: 0,
-                    qtyOrdered: 0,
-                    qtyFulfilled: 0,
-                    qtyRefunded: 0
-                }
-            }
-
-            trend[key].qtyRefunded += row.refundQty || 0
-        })
-        
         // If comparison results exist, we need to map them to the same "months" relatively 
         // to show them on the same X-axis if comparing same months across years.
         // For simplicity, we just return the trend of the current period.
         // If the user wants specific comparison bars, we'd need to align Jan 2025 with Jan 2026.
 
         return respond({
-            data: aggregated,
+            data: ranking.data,
             trend: Object.values(trend).sort((a,b) => a.date.localeCompare(b.date)),
-            comparison: comparisonSummary
+            comparison: comparisonSummary,
+            ranking: {
+                requestedRankBy,
+                rankBy: ranking.rankBy,
+                limit: rankingLimit || null,
+            },
         })
     } catch (error: any) {
         console.error("Products Performance Request failed: ", error)

@@ -34,6 +34,14 @@ type PendingRefundsResponse = {
   }>
 }
 
+type PendingOrdersResponse = {
+  items: any[]
+  capabilities?: {
+    canApproveOrders: boolean
+    canRejectOrders: boolean
+  }
+}
+
 const getNotificationReadKey = (notification: DashboardNotification) =>
   [
     notification.id,
@@ -90,7 +98,7 @@ export function useDashboardNotifications() {
     ? `/api/v1/users${organizationId ? `?organizationId=${encodeURIComponent(organizationId)}` : ""}`
     : null
 
-  const pendingOrdersQuery = useAPI<{ items: any[] }>(pendingOrdersUrl)
+  const pendingOrdersQuery = useAPI<PendingOrdersResponse>(pendingOrdersUrl)
   const branchesQuery = useAPI<{ items: any[] }>(branchesUrl)
   const usersQuery = useAPI<{ items: any[] }>(usersUrl)
   const dbNotificationsQuery = useAPI<ApiNotificationsResponse>(session?.user ? "/api/v1/notifications" : null, {
@@ -109,7 +117,7 @@ export function useDashboardNotifications() {
     if (!isInitialized || !isAdminRole) return []
     const items: DashboardNotification[] = []
     const pendingOrders = pendingOrdersQuery.data?.items || []
-    if (pendingOrders.length > 0) {
+    if (pendingOrdersQuery.data?.capabilities?.canApproveOrders && pendingOrders.length > 0) {
       const severity = pendingOrders.length > 10 ? "critical" : "warning"
       const isSinglePendingOrder = pendingOrders.length === 1
       items.push({
@@ -188,6 +196,7 @@ export function useDashboardNotifications() {
     branchesQuery.data?.items,
     pendingRefundsQuery.data?.refunds,
     pendingOrdersQuery.data?.items,
+    pendingOrdersQuery.data?.capabilities?.canApproveOrders,
     usersQuery.data?.items,
   ])
 

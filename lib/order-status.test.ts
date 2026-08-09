@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   getPendingOrderReviewHref,
+  getOrderStatusesForFilter,
   getOrderStatusFilter,
   ORDER_STATUS_FILTERS,
   PENDING_ORDERS_REVIEW_HREF,
@@ -32,6 +33,19 @@ describe("order status navigation", () => {
     expect(url.searchParams.get("organizationId")).toBeNull()
     expect(url.searchParams.get("branchId")).toBeNull()
     expect(url.searchParams.get("branchIds")).toBeNull()
+  })
+
+  it("maps UI filters to every database status represented by each tab", () => {
+    expect(getOrderStatusesForFilter("all")).toEqual([])
+    expect(getOrderStatusesForFilter("pending")).toEqual(["PENDING"])
+    expect(getOrderStatusesForFilter("approved")).toEqual(["APPROVED"])
+    expect(getOrderStatusesForFilter("fulfilled")).toEqual([
+      "FULFILLED",
+      "PARTIAL",
+      "PARTIALLY_FULFILLED",
+    ])
+    expect(getOrderStatusesForFilter("rejected")).toEqual(["REJECTED", "CANCELLED"])
+    expect(getOrderStatusesForFilter("refunded")).toEqual(["REFUNDED"])
   })
 
   it("deep-links a single pending-order notification to that order", () => {

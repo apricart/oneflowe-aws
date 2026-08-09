@@ -100,6 +100,7 @@ type OrdersDirectoryProps = {
   isSuperAdmin: boolean
   isBranchAdmin: boolean
   isHeadOffice?: boolean
+  canDecideOrders?: boolean
   showCostCenterId?: boolean
   onUpdate: () => void
 }
@@ -111,6 +112,7 @@ export function OrdersDirectory({
   isSuperAdmin,
   isBranchAdmin,
   isHeadOffice,
+  canDecideOrders = false,
   showCostCenterId,
   onUpdate
 }: OrdersDirectoryProps) {
@@ -402,7 +404,7 @@ export function OrdersDirectory({
         description: `Order successfully ${actionType}ed.`,
       })
 
-      if (actionType === "approve" && isBranchAdmin && (data.fulfillmentToken || data.approvalToken)) {
+      if (actionType === "approve" && canDecideOrders && (data.fulfillmentToken || data.approvalToken)) {
         setGeneratedToken(data.fulfillmentToken || data.approvalToken)
         setShowTokenDialog(true)
       }
@@ -819,7 +821,7 @@ export function OrdersDirectory({
                   </div>
                 )}
 
-                {(isBranchAdmin && (viewingOrder.fulfillmentToken || viewingOrder.approvalToken) && viewingOrder.status.toLowerCase() === "approved") && (
+                {(canDecideOrders && (viewingOrder.fulfillmentToken || viewingOrder.approvalToken) && viewingOrder.status.toLowerCase() === "approved") && (
                   <div className="space-y-3">
                     <h3 className="text-[11px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2 pl-2">
                        Fulfillment Token
@@ -921,7 +923,7 @@ export function OrdersDirectory({
                 )}
 
                 <div className="flex gap-3">
-                  {viewingOrder.status.toLowerCase() === "pending" && isBranchAdmin && (
+                  {viewingOrder.status.toLowerCase() === "pending" && canDecideOrders && (
                     <>
                       <Button onClick={() => setActionType("reject")} variant="outline" className="flex-1 h-12 rounded-xl text-rose-600 border-rose-200 hover:bg-rose-50 dark:hover:bg-rose-900/20 dark:border-rose-800">
                         Reject
@@ -997,7 +999,7 @@ export function OrdersDirectory({
               <div className="space-y-4">
                 <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-800">
                   <p className="text-sm font-medium text-amber-800 dark:text-amber-400">
-                    Enter the Approval Token provided by the Branch Admin to verify this fulfillment.
+                    Enter the approval token provided by the organization approver to verify this fulfillment.
                   </p>
                 </div>
                 <Input
@@ -1028,7 +1030,7 @@ export function OrdersDirectory({
         </DialogContent>
       </Dialog>
 
-      {/* Success Token Dialog (Branch Admin Only) */}
+      {/* Success token dialog for the organization's configured approver. */}
       <Dialog open={showTokenDialog} onOpenChange={setShowTokenDialog}>
         <DialogContent className="max-w-md border-0 shadow-2xl bg-white/90 dark:bg-slate-900/95 backdrop-blur-xl rounded-[2rem] overflow-hidden">
           <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-emerald-400 to-indigo-500" />
@@ -1276,7 +1278,6 @@ function OrderDetailsDisclosure({
                                         className="h-4 border-slate-200 bg-slate-50 px-1.5 py-0 text-[7px] font-medium dark:border-slate-700 dark:bg-slate-800"
                                       >
                                         Qty: {formatQuantity(line.quantity)}
-                                        {line.unit ? ` ${line.unit}` : ""}
                                       </Badge>
                                       {Number(line.quantityRefunded || 0) > 0 && (
                                         <Badge
