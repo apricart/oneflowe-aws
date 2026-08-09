@@ -14,33 +14,32 @@ import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
 import { formatPKR } from "@/lib/utils"
 import { sanitizeSpreadsheetRecords } from "@/lib/spreadsheet"
+import { getOrderStatusDisplay } from "@/lib/order-status-display"
+import type { OrderStatusContext } from "@/lib/order-status"
 
 interface OrderExportProps {
     orders: any[]
     role?: string
+    statusContext?: OrderStatusContext
 }
 
-export function OrderExport({ orders, role }: OrderExportProps) {
+export function OrderExport({ orders, role, statusContext = "default" }: OrderExportProps) {
     const [isExporting, setIsExporting] = useState(false)
 
     const formatDataForExport = (order: any) => {
         const isSuperAdmin = role === "SUPER_ADMIN"
 
-        // Derive refund status like in the UI
-        let refundStatus = "None"
-        if (order.status?.toLowerCase() === "refunded") {
-            refundStatus = "Full"
-        } else if (order.refundAmountCents && order.refundAmountCents > 0) {
-            refundStatus = "Partial"
-        }
+        const statusDisplay = getOrderStatusDisplay(order, statusContext)
 
         const data: any = {
             "ID": order.id,
             "TID": order.tid,
             "Date": new Date(order.createdAt).toLocaleDateString(),
             "Branch": order.branchName || "-",
-            "Status": order.status?.toUpperCase() || "-",
-            "Refund Status": refundStatus,
+            "Status": statusDisplay.orderStatus.label,
+            "Fulfillment Status": statusDisplay.fulfillmentStatus || "-",
+            "Payment Status": statusDisplay.paymentStatus || "-",
+            "Refund Status": statusDisplay.refundStatus || "None",
             "Amount (PKR)": order.totalCents !== null && order.totalCents !== undefined ? (order.totalCents / 100).toFixed(2) : "-",
             "Items": order.itemNames || "-",
         }
@@ -53,6 +52,8 @@ export function OrderExport({ orders, role }: OrderExportProps) {
                 "Organization": order.organizationName || "-",
                 "Branch": data.Branch,
                 "Status": data.Status,
+                "Fulfillment Status": data["Fulfillment Status"],
+                "Payment Status": data["Payment Status"],
                 "Refund Status": data["Refund Status"],
                 "Amount (PKR)": data["Amount (PKR)"],
                 "Date": data.Date,
@@ -110,24 +111,21 @@ export function OrderExport({ orders, role }: OrderExportProps) {
             if (role) doc.text(`Role: ${role}`, 14, 36)
 
             const isSuperAdmin = role === "SUPER_ADMIN"
-            const headers = ["ID", "TID", "Date", "Branch", "Status", "Refund", "Amount", "Items", "Reason"]
+            const headers = ["ID", "TID", "Date", "Branch", "Status", "Fulfillment", "Payment", "Refund", "Amount", "Items", "Reason"]
             if (isSuperAdmin) headers.splice(2, 0, "Organization")
 
             const tableData = orders.map(order => {
-                let refundStatus = "None"
-                if (order.status?.toLowerCase() === "refunded") {
-                    refundStatus = "Full"
-                } else if (order.refundAmountCents && order.refundAmountCents > 0) {
-                    refundStatus = "Partial"
-                }
+                const statusDisplay = getOrderStatusDisplay(order, statusContext)
 
                 const row = [
                     order.id,
                     order.tid,
                     new Date(order.createdAt).toLocaleDateString(),
                     order.branchName || "-",
-                    order.status?.toUpperCase() || "-",
-                    refundStatus,
+                    statusDisplay.orderStatus.label,
+                    statusDisplay.fulfillmentStatus || "-",
+                    statusDisplay.paymentStatus || "-",
+                    statusDisplay.refundStatus || "None",
                     order.totalCents !== null && order.totalCents !== undefined ? formatPKR(order.totalCents / 100) : "-",
                     order.itemNames || "-",
                     order.rejectionReason || "-"

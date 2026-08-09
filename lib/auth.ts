@@ -6,6 +6,7 @@ import { and, eq } from "drizzle-orm"
 import { authOptions } from "./auth-options"
 import { logError } from "@/lib/global-logger"
 import { env } from "@/lib/server/env"
+import { coalesceInFlight } from "@/lib/cache-utils"
 
 const INACTIVITY_TIMEOUT_MIN = env.INACTIVITY_TIMEOUT_MINUTES
 
@@ -154,11 +155,19 @@ async function loadRequestScope(): Promise<RequestScope | null> {
 
     // Fetch user's organization and branch with error handling
     try {
-      const [row] = await db
-        .select({ organizationId: users.organizationId, branchId: users.branchId })
-        .from(users)
-        .where(eq(users.id, userId))
-        .limit(1)
+      // Preserve the database as the source of truth while preventing a burst
+      // of simultaneous requests for the same authenticated user from issuing
+      // identical scope queries. The promise is removed immediately after it
+      // settles, so this adds no cross-request staleness window.
+      const row = await coalesceInFlight(`auth:request-scope:${userId}`, async () => {
+        const [currentScope] = await db
+          .select({ organizationId: users.organizationId, branchId: users.branchId })
+          .from(users)
+          .where(eq(users.id, userId))
+          .limit(1)
+
+        return currentScope ?? null
+      })
 
       if (!row) {
         console.warn(`[Auth] User ${userId} not found in database for request scope`)

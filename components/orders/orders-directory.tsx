@@ -68,6 +68,10 @@ import {
   normalizePaymentStatus,
   type PaymentStatus,
 } from "@/lib/payment-status"
+import {
+  shouldShowOrderFulfillmentStatus,
+  shouldShowOrderPaymentStatus,
+} from "@/lib/order-status-display"
 
 type OrderItem = any // Avoiding strict type definition for speed, will rely on usage
 type OrderDetailLine = {
@@ -243,20 +247,10 @@ export function OrdersDirectory({
     }
   }
 
-  const shouldShowFulfillmentProgress = (order: OrderItem) => {
-    const status = String(order.status || "").toLowerCase()
-    return status === "approved" || status === "fulfilled"
-  }
-
   const getPaymentStatusColor = (status?: string | null) => {
     return normalizePaymentStatus(status) === "PAID"
       ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300"
       : "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300"
-  }
-
-  const shouldShowPaymentStatus = (order: OrderItem) => {
-    const status = String(order.status || "").toLowerCase()
-    return status !== "rejected" && status !== "cancelled"
   }
 
   const updatePaymentStatus = async (nextStatus: PaymentStatus) => {
@@ -542,7 +536,7 @@ export function OrdersDirectory({
                     >
                       {derivedStatus.label}
                     </Badge>
-                    {shouldShowFulfillmentProgress(order) && (
+                    {shouldShowOrderFulfillmentStatus(order) && (
                       <Badge
                         variant="outline"
                         className={cn("max-w-full whitespace-normal break-words rounded-lg border px-2 py-0.5 text-right text-[9px] font-bold uppercase leading-tight tracking-wider", getFulfillmentProgressColor(order.fulfillmentStatus))}
@@ -550,7 +544,7 @@ export function OrdersDirectory({
                         {FULFILLMENT_STATUS_LABELS[normalizeFulfillmentStatus(order.fulfillmentStatus)]}
                       </Badge>
                     )}
-                    {shouldShowPaymentStatus(order) && (
+                    {shouldShowOrderPaymentStatus(order) && (
                       <Badge
                         variant="outline"
                         className={cn("max-w-full whitespace-normal break-words rounded-lg border px-2 py-0.5 text-right text-[9px] font-bold uppercase leading-tight tracking-wider", getPaymentStatusColor(order.paymentStatus))}
@@ -645,12 +639,12 @@ export function OrdersDirectory({
                         <Badge variant="outline" className={cn("px-2 py-0.5 text-[10px] uppercase font-bold tracking-wider rounded-lg border", statusColors.bg, statusColors.text, statusColors.border)}>
                           {derivedStatus.label}
                         </Badge>
-                        {shouldShowFulfillmentProgress(order) && (
+                        {shouldShowOrderFulfillmentStatus(order) && (
                           <Badge variant="outline" className={cn("ml-2 px-2 py-0.5 text-[9px] uppercase font-bold tracking-wider rounded-lg border", getFulfillmentProgressColor(order.fulfillmentStatus))}>
                             {FULFILLMENT_STATUS_LABELS[normalizeFulfillmentStatus(order.fulfillmentStatus)]}
                           </Badge>
                         )}
-                        {shouldShowPaymentStatus(order) && (
+                        {shouldShowOrderPaymentStatus(order) && (
                           <Badge variant="outline" className={cn("ml-2 px-2 py-0.5 text-[9px] uppercase font-bold tracking-wider rounded-lg border", getPaymentStatusColor(order.paymentStatus))}>
                             {PAYMENT_STATUS_LABELS[normalizePaymentStatus(order.paymentStatus)]}
                           </Badge>
@@ -786,7 +780,7 @@ export function OrdersDirectory({
                         </span>
                       </div>
                     )}
-                    {shouldShowFulfillmentProgress(viewingOrder) && (
+                    {shouldShowOrderFulfillmentStatus(viewingOrder) && (
                       <div className="flex items-center justify-between gap-3 group">
                         <span className="text-xs font-semibold text-slate-500 flex items-center gap-1.5"><Truck className="h-3.5 w-3.5" /> Progress</span>
                         <Badge
@@ -797,7 +791,7 @@ export function OrdersDirectory({
                         </Badge>
                       </div>
                     )}
-                    {shouldShowPaymentStatus(viewingOrder) && (
+                    {shouldShowOrderPaymentStatus(viewingOrder) && (
                       <div className="flex items-center justify-between gap-3 group">
                         <span className="text-xs font-semibold text-slate-500 flex items-center gap-1.5"><Banknote className="h-3.5 w-3.5" /> Payment</span>
                         <Badge
@@ -890,7 +884,7 @@ export function OrdersDirectory({
                 {isSuperAdmin &&
                   viewingOrder.status?.toLowerCase() === "fulfilled" &&
                   normalizeFulfillmentStatus(viewingOrder.fulfillmentStatus) === "DELIVERED" &&
-                  shouldShowPaymentStatus(viewingOrder) && (
+                  shouldShowOrderPaymentStatus(viewingOrder) && (
                   (() => {
                     const isPaid = normalizePaymentStatus(viewingOrder.paymentStatus) === "PAID"
                     return (
