@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server"
-import { Pool } from "pg"
-import { env } from "@/lib/server/env"
+import { pool } from "@/lib/db"
 
 export const runtime = "nodejs"
 
@@ -12,7 +11,6 @@ export async function GET() {
   }
 
   try {
-    const pool = new Pool({ connectionString: env.DATABASE_URL })
     await pool.query("select 1")
     const elapsedMs = Date.now() - startedAt
     return NextResponse.json(

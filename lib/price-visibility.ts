@@ -1,5 +1,6 @@
 import { eq, and, inArray } from "drizzle-orm"
 import { organizationSettings } from "@/db/schema"
+import { coalesceInFlight, scopedCacheKey } from "@/lib/cache-utils"
 import { db } from "@/lib/db"
 
 export const LEGACY_HIDE_PRICES_SETTING_KEY = "hide_prices_for_branch_and_order_portal"
@@ -33,16 +34,22 @@ export async function shouldHidePricesForRole(role: unknown, organizationId: unk
   const orgId = Number(organizationId)
   if (!Number.isFinite(orgId) || orgId <= 0) return false
 
-  const settings = await db
-    .select({ key: organizationSettings.key, value: organizationSettings.value })
-    .from(organizationSettings)
-    .where(
-      and(
-        eq(organizationSettings.organizationId, orgId),
-        inArray(organizationSettings.key, [roleSettingKey, LEGACY_HIDE_PRICES_SETTING_KEY])
+  // Coalesce only simultaneous reads for the same organization. This is not a
+  // persisted cache: price-visibility changes remain observable on the next
+  // request, while a burst cannot issue hundreds of identical settings reads.
+  const settings = await coalesceInFlight(
+    scopedCacheKey("inflight:settings:price-visibility", { orgId }),
+    () => db
+      .select({ key: organizationSettings.key, value: organizationSettings.value })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, orgId),
+          inArray(organizationSettings.key, PRICE_VISIBILITY_SETTING_KEYS)
+        )
       )
-    )
-    .limit(2)
+      .limit(PRICE_VISIBILITY_SETTING_KEYS.length),
+  )
 
   const roleSetting = settings.find((setting) => setting.key === roleSettingKey)
   if (roleSetting) return roleSetting.value === true

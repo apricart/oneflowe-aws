@@ -35,6 +35,23 @@ function isValidSettingKey(key: string): boolean {
   return VALID_SETTING_KEYS.has(key)
 }
 
+async function invalidateSettingCaches(key: string) {
+  await invalidateByPrefix('settings')
+
+  if (isPriceVisibilitySettingKey(key)) {
+    await invalidateByPrefix('branch-inv')
+    await invalidateByPrefix('inv:branch-products')
+    await invalidateByPrefix('inv:org-products')
+  }
+
+  if (key === BUDGET_ALLOCATION_MODE_SETTING_KEY) {
+    await invalidateByPrefix('organizations')
+    await invalidateByPrefix('branch-inv')
+    await invalidateByPrefix('budgets')
+    await invalidateByPrefix('analytics')
+  }
+}
+
 /**
  * GET /api/v1/settings - Fetch organization settings
  */
@@ -200,19 +217,8 @@ export async function POST(req: NextRequest) {
       return saved
     })
 
-    // Invalidate settings and dependent inventory cache
-    await invalidateByPrefix('settings')
-    if (isPriceVisibilitySettingKey(key)) {
-      await invalidateByPrefix('branch-inv')
-      await invalidateByPrefix('inv:branch-products')
-      await invalidateByPrefix('inv:org-products')
-    }
-    if (key === BUDGET_ALLOCATION_MODE_SETTING_KEY) {
-      await invalidateByPrefix('organizations')
-      await invalidateByPrefix('branch-inv')
-      await invalidateByPrefix('budgets')
-      await invalidateByPrefix('analytics')
-    }
+    // Invalidate settings and every dependent tenant-scoped read cache.
+    await invalidateSettingCaches(key)
 
     return ok({
       data: result,
@@ -277,6 +283,11 @@ export async function DELETE(req: NextRequest) {
       // Log but don't fail the request
       logError(auditError, 'SETTINGS_AUDIT_LOG')
     }
+
+    // DELETE must invalidate the same dependent caches as an update. Without
+    // this, a removed price-visibility or budget-mode setting could remain
+    // effective until its cache TTL elapsed.
+    await invalidateSettingCaches(deleted.key)
 
     return ok({
       message: "Setting deleted successfully",

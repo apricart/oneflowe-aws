@@ -7,7 +7,7 @@ import { eq, and, like, ilike, or, desc, sql, isNull, SQL, inArray } from "drizz
 import { alias } from "drizzle-orm/pg-core"
 import { getEffectiveProductData } from "@/lib/inventory-cascade"
 import { escapeLikePattern } from "@/lib/utils"
-import { getCached, invalidateByPrefix, scopedCacheKey, CACHE_TTL } from "@/lib/cache-utils"
+import { coalesceInFlight, getCached, invalidateByPrefix, scopedCacheKey, CACHE_TTL } from "@/lib/cache-utils"
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
 
@@ -88,19 +88,29 @@ export async function GET(req: NextRequest) {
     const shouldApplyQuantityBudget = includeQuantityBudget && budgetAllocationMode === "quantity"
     const currentPeriod = new Date().toISOString().slice(0, 7)
     const positiveQuantityBudgetTotal = sql`(${productQuantityBudgets.allocatedQuantity} + ${productQuantityBudgets.creditedQuantity}) > 0`
-    const [quantityBudgetModeRow] = shouldApplyQuantityBudget
-      ? await db
-        .select({ id: productQuantityBudgets.id })
-        .from(productQuantityBudgets)
-        .where(and(
-          eq(productQuantityBudgets.organizationId, orgIdNum),
-          eq(productQuantityBudgets.branchId, branchId),
-          eq(productQuantityBudgets.period, currentPeriod),
-          positiveQuantityBudgetTotal,
-        ))
-        .limit(1)
-      : []
-    const quantityBudgetCatalogActive = Boolean(quantityBudgetModeRow)
+    const quantityBudgetCatalogState = shouldApplyQuantityBudget
+      ? await coalesceInFlight(
+        scopedCacheKey('inflight:branch-inv:quantity-budget-catalog', {
+          orgId: orgIdNum,
+          branchId,
+        }, { period: currentPeriod }),
+        async () => {
+          const [row] = await db
+            .select({ id: productQuantityBudgets.id })
+            .from(productQuantityBudgets)
+            .where(and(
+              eq(productQuantityBudgets.organizationId, orgIdNum),
+              eq(productQuantityBudgets.branchId, branchId),
+              eq(productQuantityBudgets.period, currentPeriod),
+              positiveQuantityBudgetTotal,
+            ))
+            .limit(1)
+
+          return { active: Boolean(row) }
+        },
+      )
+      : { active: false }
+    const quantityBudgetCatalogActive = quantityBudgetCatalogState.active
 
     // Build conditions - products must be in branchInventory for this branch
     const conditions: (SQL | undefined)[] = [
@@ -248,22 +258,31 @@ export async function GET(req: NextRequest) {
     // so cart guidance tracks used/held quantities.
     const organizationInventoryIds = result.items.map((item) => item.organizationInventoryId)
     const quantityBudgetRows = organizationInventoryIds.length > 0
-      ? await db
-        .select({
-          organizationInventoryId: productQuantityBudgets.organizationInventoryId,
-          allocatedQuantity: productQuantityBudgets.allocatedQuantity,
-          creditedQuantity: productQuantityBudgets.creditedQuantity,
-          heldQuantity: productQuantityBudgets.heldQuantity,
-          usedQuantity: productQuantityBudgets.usedQuantity,
-        })
-        .from(productQuantityBudgets)
-        .where(and(
-          eq(productQuantityBudgets.organizationId, orgIdNum),
-          eq(productQuantityBudgets.branchId, branchId),
-          eq(productQuantityBudgets.period, currentPeriod),
-          positiveQuantityBudgetTotal,
-          inArray(productQuantityBudgets.organizationInventoryId, organizationInventoryIds),
-        ))
+      ? await coalesceInFlight(
+        scopedCacheKey('inflight:branch-inv:quantity-budget-remaining', {
+          orgId: orgIdNum,
+          branchId,
+        }, {
+          period: currentPeriod,
+          organizationInventoryIds: [...organizationInventoryIds].sort((a, b) => a - b).join(','),
+        }),
+        () => db
+          .select({
+            organizationInventoryId: productQuantityBudgets.organizationInventoryId,
+            allocatedQuantity: productQuantityBudgets.allocatedQuantity,
+            creditedQuantity: productQuantityBudgets.creditedQuantity,
+            heldQuantity: productQuantityBudgets.heldQuantity,
+            usedQuantity: productQuantityBudgets.usedQuantity,
+          })
+          .from(productQuantityBudgets)
+          .where(and(
+            eq(productQuantityBudgets.organizationId, orgIdNum),
+            eq(productQuantityBudgets.branchId, branchId),
+            eq(productQuantityBudgets.period, currentPeriod),
+            positiveQuantityBudgetTotal,
+            inArray(productQuantityBudgets.organizationInventoryId, organizationInventoryIds),
+          )),
+      )
       : []
 
     const quantityRemainingByInventoryId = new Map(

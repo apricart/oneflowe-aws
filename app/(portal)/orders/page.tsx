@@ -78,6 +78,8 @@ interface OrderItem {
   branchName?: string | null
   branchCostCenterId?: string | null
   status: string
+  fulfillmentStatus?: string | null
+  paymentStatus?: string | null
   statusAtRefund?: string | null
   refundedAt?: string | null
   refundAmountCents?: number | null
@@ -633,7 +635,11 @@ function OrdersManagementContent() {
                 />
 
                 <div className="h-6 w-px bg-slate-200 dark:bg-slate-800 mx-1" />
-                <OrderExport orders={filteredOrders} role={userRole} />
+                <OrderExport
+                  orders={filteredOrders}
+                  role={userRole}
+                  statusContext={showSplitFilter ? statusFilter : "default"}
+                />
               </div>
             </div>
 
