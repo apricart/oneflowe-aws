@@ -9,8 +9,15 @@ permissions:
   contents: read
 
 jobs:
-  scan-and-deploy:
+  # ============================================================
+  # JOB 1 - Runs immediately on push. Scans, builds, pushes the
+  # image to ECR, generates a PDF report, and emails it.
+  # Does NOT deploy anything yet.
+  # ============================================================
+  build-and-report:
     runs-on: ubuntu-latest
+    outputs:
+      commit_sha: ${{ github.sha }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -26,7 +33,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # ---- SonarCloud scan (report only, never blocks) ----
+      # ---- SonarCloud scan (report only) ----
       - name: SonarCloud Scan
         continue-on-error: true
         uses: SonarSource/sonarqube-scan-action@v4
@@ -37,8 +44,8 @@ jobs:
             -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
             -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
 
-      # ---- Trivy filesystem/dependency scan (report only) ----
-      - name: Trivy filesystem scan
+      # ---- Trivy filesystem/dependency scan ----
+      - name: Trivy filesystem scan (JSON)
         continue-on-error: true
         uses: aquasecurity/trivy-action@master
         with:
@@ -49,7 +56,7 @@ jobs:
           format: json
           output: trivy-fs-report.json
 
-      - name: Trivy filesystem scan (readable table, for the report bundle)
+      - name: Trivy filesystem scan (table)
         continue-on-error: true
         uses: aquasecurity/trivy-action@master
         with:
@@ -60,7 +67,7 @@ jobs:
           format: table
           output: trivy-fs-report.txt
 
-      # ---- Snyk scan (report only) ----
+      # ---- Snyk scan ----
       - name: Snyk Scan
         continue-on-error: true
         uses: snyk/actions/node@master
@@ -78,14 +85,13 @@ jobs:
           aws-region: ${{ secrets.DEPLOY_AWS_REGION }}
 
       - name: Log in to ECR
-        id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build image
         run: |
           docker build -t ${{ secrets.ECR_REPOSITORY_URL }}:prod-${{ github.sha }} .
 
-      # ---- Trivy image scan (report only, the built image itself) ----
+      # ---- Trivy image scan ----
       - name: Trivy image scan
         continue-on-error: true
         uses: aquasecurity/trivy-action@master
@@ -96,8 +102,15 @@ jobs:
           format: table
           output: trivy-image-report.txt
 
-      # ---- Upload all reports as downloadable artifacts ----
-      - name: Upload scan reports
+      # ---- Generate the PDF report ----
+      - name: Generate PDF report
+        env:
+          SONAR_PROJECT_KEY: ${{ secrets.SONAR_PROJECT_KEY }}
+        run: |
+          bash .github/scripts/generate-report.sh "${{ github.sha }}"
+
+      # ---- Upload everything as downloadable artifacts ----
+      - name: Upload scan reports and PDF
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -107,16 +120,62 @@ jobs:
             trivy-fs-report.txt
             trivy-image-report.txt
             snyk-report.json
+            pipeline-report-${{ github.sha }}.pdf
           if-no-files-found: warn
-          retention-days: 30
+          retention-days: 90
 
-      # ---- Push to ECR ----
+      # ---- Push image to ECR (ready and waiting for approval) ----
       - name: Push image to ECR
         run: |
-          docker push ${{ secrets.ECR_REPOSITORY_URL }}:prod-${{ github.sha }}
+          if aws ecr describe-images --repository-name oneflowe-app --region ${{ secrets.DEPLOY_AWS_REGION }} --image-ids imageTag=prod-${{ github.sha }} >/dev/null 2>&1; then
+            echo "Image tag prod-${{ github.sha }} already exists in ECR (likely a re-run on the same commit) - skipping push."
+          else
+            docker push ${{ secrets.ECR_REPOSITORY_URL }}:prod-${{ github.sha }}
+          fi
 
-      # ---- Deploy to production via SSM, then wait for and verify the result ----
-      - name: Deploy to production
+      # ---- Email the PDF report ----
+      - name: Email pipeline report
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_HOST }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USER }}
+          password: ${{ secrets.SMTP_PASS }}
+          subject: "OneFlower Production Deployment Report - Approval Needed (${{ github.sha }})"
+          to: ${{ secrets.REPORT_EMAIL_TO }}
+          from: OneFlower CI/CD
+          body: |
+            A new production deployment is ready and waiting for approval.
+
+            Commit: ${{ github.sha }}
+            Repository: ${{ github.repository }}
+
+            The full scan report is attached as a PDF.
+
+            To approve or reject this deployment, go to:
+            https://github.com/${{ github.repository }}/actions
+
+            Find the pending "deploy-prod" workflow run and click "Review deployments".
+          attachments: pipeline-report-${{ github.sha }}.pdf
+
+  # ============================================================
+  # JOB 2 - Gated behind the "production-approval" environment.
+  # Pauses here until a required reviewer approves. Only then
+  # does it pull the already-built image and deploy it.
+  # ============================================================
+  deploy:
+    needs: build-and-report
+    runs-on: ubuntu-latest
+    environment: production-approval
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.DEPLOY_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.DEPLOY_AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.DEPLOY_AWS_REGION }}
+
+      - name: Deploy to production via SSM, then wait for and verify the result
         run: |
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids "${{ secrets.PROD_EC2_INSTANCE_ID }}" \
@@ -124,13 +183,13 @@ jobs:
             --parameters 'commands=[
               "cd /home/ubuntu/app",
               "aws ecr get-login-password --region ${{ secrets.DEPLOY_AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ secrets.ECR_REPOSITORY_URL }}",
-              "sudo docker pull ${{ secrets.ECR_REPOSITORY_URL }}:prod-${{ github.sha }}",
-              "sudo sed -i \"s|image:.*oneflowe-app:.*|image: ${{ secrets.ECR_REPOSITORY_URL }}:prod-${{ github.sha }}|\" docker-compose.yml",
+              "sudo docker pull ${{ secrets.ECR_REPOSITORY_URL }}:prod-${{ needs.build-and-report.outputs.commit_sha }}",
+              "sudo sed -i \"s|image:.*oneflowe-app:.*|image: ${{ secrets.ECR_REPOSITORY_URL }}:prod-${{ needs.build-and-report.outputs.commit_sha }}|\" docker-compose.yml",
               "sudo docker compose up -d",
               "sleep 15",
               "sudo docker ps --filter name=app-app-1 --filter status=running | grep app-app-1"
             ]' \
-            --comment "Deploy prod-${{ github.sha }} to production" \
+            --comment "Deploy prod-${{ needs.build-and-report.outputs.commit_sha }} to production (approved)" \
             --query "Command.CommandId" \
             --output text)
 
