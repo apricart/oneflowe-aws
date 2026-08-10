@@ -355,6 +355,7 @@ export async function GET(req: NextRequest) {
             priceCents: orderItems.priceCents,
             unit: orderItems.unit,
             globalProductId: orderItems.globalProductId,
+            organizationInventoryId: orderItems.organizationInventoryId,
             imageUrl: globalProducts.imageUrl,
             allowDecimalQuantity: globalProducts.allowDecimalQuantity,
             quantityStep: globalProducts.quantityStep,
