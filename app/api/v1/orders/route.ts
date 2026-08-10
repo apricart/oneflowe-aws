@@ -258,6 +258,7 @@ export async function GET(req: NextRequest) {
         taxCents: orders.taxCents,
         totalCents: orders.totalCents,
         createdAt: orders.createdAt,
+        approvedAt: orders.approvedAt,
         deliveredAt: orders.deliveredAt,
         fulfilledAt: orders.fulfilledAt,
         branchName: branches.name,

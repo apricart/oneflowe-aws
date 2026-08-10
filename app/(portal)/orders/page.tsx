@@ -87,6 +87,8 @@ interface OrderItem {
   taxCents: number
   totalCents: number
   createdAt: string
+  approvedAt?: string | null
+  fulfilledAt?: string | null
   deliveredAt?: string | null
   createdByUserId: string
   hasRefundRequests?: number
@@ -725,6 +727,7 @@ function OrdersManagementContent() {
               isHeadOffice={isHeadOffice}
               canDecideOrders={canDecideOrders}
               showCostCenterId={showCostCenterId}
+              pricesHidden={Boolean(ordersData?.pricesHidden)}
               onUpdate={() => mutateOrders()}
             />
             {totalOrders > 0 && (
