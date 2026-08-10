@@ -8,6 +8,7 @@ import {
   globalProductUpdateSchema,
   moneyBudgetUpdateSchema,
   orderCreateSchema,
+  orderUpdateSchema,
   organizationProductUpdateSchema,
   supplierCreateSchema,
   userAccessUpdateSchema,
@@ -103,6 +104,12 @@ describe("strict mutation schemas", () => {
     ]) {
       expect(orderCreateSchema.safeParse({
         ...validOrder,
+        [hiddenField]: hiddenField.endsWith("Cents") ? 1 : "attacker",
+      }).success).toBe(false)
+
+      expect(orderUpdateSchema.safeParse({
+        items: validOrder.items,
+        notes: validOrder.notes,
         [hiddenField]: hiddenField.endsWith("Cents") ? 1 : "attacker",
       }).success).toBe(false)
     }

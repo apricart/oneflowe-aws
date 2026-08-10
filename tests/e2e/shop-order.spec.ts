@@ -232,4 +232,159 @@ test.describe.serial("Order Portal checkout and figures", () => {
       totalAmount: E2E_PRODUCT.priceCents / 100,
     })
   })
+
+  test("edits a pending order and reconciles its existing reservations", async ({ page }) => {
+    await login(page, E2E_USERS.orderPortal, "/shop")
+    await page.getByRole("button", { name: /Active Orders/ }).click()
+
+    await page.getByRole("button", { name: "Edit Order" }).first().click()
+    const cart = page.getByRole("dialog", { name: /Edit Order/ })
+    await expect(cart).toBeVisible()
+    await expect(page.getByRole("heading", { name: "Products" })).toHaveCount(0)
+    await expect(cart.getByRole("button", { name: "Add products" })).toBeVisible()
+    await cart.getByRole("button", { name: `Increase ${E2E_PRODUCT.name} quantity` }).click()
+    await cart.getByRole("button", { name: "Review changes" }).click()
+
+    const confirmation = page.getByRole("dialog", { name: "Confirm Order Changes" })
+    await expect(confirmation.getByText(`${E2E_PRODUCT.name} x2`)).toBeVisible()
+
+    const updateResponsePromise = page.waitForResponse(
+      (response) =>
+        /\/api\/v1\/orders\/\d+$/.test(new URL(response.url()).pathname)
+        && response.request().method() === "PUT",
+    )
+    await confirmation.getByRole("button", { name: "Save Changes" }).click()
+    const updateResponse = await updateResponsePromise
+    expect(updateResponse.ok()).toBeTruthy()
+    const updatePayload = await updateResponse.json()
+    expect(updatePayload.order).toMatchObject({
+      status: "PENDING",
+      subtotalCents: E2E_PRODUCT.priceCents * 2,
+      totalCents: E2E_PRODUCT.priceCents * 2,
+    })
+
+    await expect(page.getByText("Order Updated", { exact: true })).toBeVisible()
+    await expect(page.getByText("PKR 975.00", { exact: true })).toBeVisible()
+
+    const [ledger] = await queryE2E<{
+      quantity: string
+      stock_quantity: string
+      amount_held_cents: string
+      receipt_data: { subtotal: number; totalAmount: number } | null
+      audit_count: string
+    }>(
+      `
+        SELECT
+          oi.quantity,
+          gp.stock_quantity,
+          b.amount_held_cents,
+          o.receipt_data,
+          (
+            SELECT COUNT(*)
+            FROM audit_logs al
+            WHERE al.entity = 'order'
+              AND al.entity_id = o.id::text
+              AND al.action = 'ORDER_EDITED'
+          ) AS audit_count
+        FROM orders o
+        JOIN users u ON u.id = o.created_by_user_id
+        JOIN order_items oi ON oi.order_id = o.id
+        JOIN global_products gp ON gp.id = oi.global_product_id
+        JOIN budgets b
+          ON b.branch_id = o.branch_id
+         AND b.period = TO_CHAR(o.created_at AT TIME ZONE 'UTC', 'YYYY-MM')
+        WHERE u.username = $1
+        ORDER BY o.created_at DESC
+        LIMIT 1
+      `,
+      [E2E_USERS.orderPortal],
+    )
+
+    expect(Number(ledger.quantity)).toBe(2)
+    expect(Number(ledger.stock_quantity)).toBe(E2E_PRODUCT.startingStock - 2)
+    expect(Number(ledger.amount_held_cents)).toBe(E2E_PRODUCT.priceCents * 2)
+    expect(Number(ledger.audit_count)).toBe(1)
+    expect(ledger.receipt_data).toMatchObject({
+      subtotal: (E2E_PRODUCT.priceCents * 2) / 100,
+      totalAmount: (E2E_PRODUCT.priceCents * 2) / 100,
+    })
+  })
+
+  test("blocks the creator from editing after approval", async ({ page }) => {
+    const [approvedOrder] = await queryE2E<{
+      id: number
+      organization_inventory_id: number
+    }>(
+      `
+        UPDATE orders
+        SET status = 'APPROVED', approved_at = NOW(), updated_at = NOW()
+        WHERE id = (
+          SELECT o.id
+          FROM orders o
+          JOIN users u ON u.id = o.created_by_user_id
+          WHERE u.username = $1
+          ORDER BY o.created_at DESC
+          LIMIT 1
+        )
+        RETURNING
+          id,
+          (
+            SELECT oi.organization_inventory_id
+            FROM order_items oi
+            WHERE oi.order_id = orders.id
+            LIMIT 1
+          ) AS organization_inventory_id
+      `,
+      [E2E_USERS.orderPortal],
+    )
+
+    await login(page, E2E_USERS.orderPortal, "/shop")
+    await page.getByRole("button", { name: /Active Orders/ }).click()
+    await expect(page.getByText("Active", { exact: true }).first()).toBeVisible()
+    await expect(page.getByRole("button", { name: "Edit Order" })).toHaveCount(0)
+
+    const response = await page.evaluate(async (input) => {
+      const result = await fetch(`/api/v1/orders/${input.orderId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          items: [{
+            organizationInventoryId: input.organizationInventoryId,
+            quantity: 3,
+          }],
+        }),
+      })
+      return { status: result.status, body: await result.json() }
+    }, {
+      orderId: approvedOrder.id,
+      organizationInventoryId: approvedOrder.organization_inventory_id,
+    })
+    expect(response.status).toBe(409)
+    expect(response.body).toMatchObject({
+      error: expect.stringContaining("Only pending orders can be edited"),
+    })
+
+    const [unchanged] = await queryE2E<{
+      status: string
+      quantity: string
+      stock_quantity: string
+      amount_held_cents: string
+    }>(
+      `
+        SELECT o.status, oi.quantity, gp.stock_quantity, b.amount_held_cents
+        FROM orders o
+        JOIN order_items oi ON oi.order_id = o.id
+        JOIN global_products gp ON gp.id = oi.global_product_id
+        JOIN budgets b
+          ON b.branch_id = o.branch_id
+         AND b.period = TO_CHAR(o.created_at AT TIME ZONE 'UTC', 'YYYY-MM')
+        WHERE o.id = $1
+      `,
+      [approvedOrder.id],
+    )
+    expect(unchanged.status).toBe("APPROVED")
+    expect(Number(unchanged.quantity)).toBe(2)
+    expect(Number(unchanged.stock_quantity)).toBe(E2E_PRODUCT.startingStock - 2)
+    expect(Number(unchanged.amount_held_cents)).toBe(E2E_PRODUCT.priceCents * 2)
+  })
 })

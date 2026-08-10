@@ -53,6 +53,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog"
 import { ReceiptIconButton } from "@/components/receipts/receipt-icon-button"
+import { ColumnSelector, type ColumnDef, useColumnSelector } from "@/components/reports/column-selector"
 import { Separator } from "@/components/ui/separator"
 import { isInvoiceAvailableForOrder } from "@/lib/invoice-availability"
 import { getOrderDerivedStatus, hasPartialRefund, type DerivedOrderStatusKey, type OrderStatusContext } from "@/lib/order-status"
@@ -69,11 +70,28 @@ import {
   type PaymentStatus,
 } from "@/lib/payment-status"
 import {
+  getOrderStatusDisplay,
   shouldShowOrderFulfillmentStatus,
   shouldShowOrderPaymentStatus,
 } from "@/lib/order-status-display"
 
 type OrderItem = any // Avoiding strict type definition for speed, will rely on usage
+type OrderTableColumn = ColumnDef & { width: number }
+
+const ORDER_TABLE_COLUMNS: OrderTableColumn[] = [
+  { key: "tid", label: "TID", width: 190 },
+  { key: "branch", label: "Branch", width: 190 },
+  { key: "costCenter", label: "Cost Center", width: 125 },
+  { key: "orderStatus", label: "Order Status", width: 150 },
+  { key: "progress", label: "Progress", width: 150 },
+  { key: "paymentStatus", label: "Payment", width: 120 },
+  { key: "refundStatus", label: "Refund", width: 150 },
+  { key: "orderDate", label: "Order Date", width: 135 },
+  { key: "approvalDate", label: "Approval Date", width: 140 },
+  { key: "deliveryDate", label: "Delivery Date", width: 140 },
+  { key: "amount", label: "Amount", width: 125 },
+]
+
 type OrderDetailLine = {
   id: number
   productName: string
@@ -106,6 +124,7 @@ type OrdersDirectoryProps = {
   isHeadOffice?: boolean
   canDecideOrders?: boolean
   showCostCenterId?: boolean
+  pricesHidden?: boolean
   onUpdate: () => void
 }
 
@@ -118,6 +137,7 @@ export function OrdersDirectory({
   isHeadOffice,
   canDecideOrders = false,
   showCostCenterId,
+  pricesHidden = false,
   onUpdate
 }: OrdersDirectoryProps) {
   const router = useRouter()
@@ -141,6 +161,27 @@ export function OrdersDirectory({
   const [orderDetailsRequestKey, setOrderDetailsRequestKey] = useState(0)
   const viewingOrderId = viewingOrder?.id
   const shouldShowCostCenterId = showCostCenterId ?? orders.some((order) => Boolean(order.branchCostCenterId))
+  const { visibleKeys, isVisible, setVisibleKeys } = useColumnSelector(
+    ORDER_TABLE_COLUMNS,
+    "orders-directory-table-v1",
+  )
+  const availableTableColumns = ORDER_TABLE_COLUMNS.filter((column) => {
+    if (column.key === "costCenter") return shouldShowCostCenterId
+    if (column.key === "amount") return !pricesHidden
+    return true
+  })
+  const availableTableColumnKeys = new Set(availableTableColumns.map((column) => column.key))
+  const selectedTableColumns = availableTableColumns.filter((column) => isVisible(column.key))
+  const selectedTableColumnKeys = selectedTableColumns.map((column) => column.key)
+  const tableMinWidth = Math.max(
+    720,
+    selectedTableColumns.reduce((total, column) => total + column.width, 0),
+  )
+  const isTableColumnVisible = (key: string) => availableTableColumnKeys.has(key) && isVisible(key)
+  const setSelectedTableColumns = (nextKeys: string[]) => {
+    const unavailableKeys = visibleKeys.filter((key) => !availableTableColumnKeys.has(key))
+    setVisibleKeys([...unavailableKeys, ...nextKeys])
+  }
 
   useEffect(() => {
     setIsOrderDetailsExpanded(false)
@@ -461,7 +502,7 @@ export function OrdersDirectory({
   return (
     <div className="min-w-0 max-w-full space-y-4">
       {/* Directory Tools */}
-      <div className="flex items-center justify-between px-2">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-2">
         <div className="flex items-center gap-2 text-sm text-slate-500 font-medium">
           <span className="flex h-6 w-6 items-center justify-center rounded-md bg-white dark:bg-slate-800 text-[10px] shadow-sm text-slate-600 dark:text-slate-400">
             {orders.length}
@@ -469,25 +510,35 @@ export function OrdersDirectory({
           <span>Orders visible</span>
         </div>
 
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-1 rounded-xl shadow-sm flex items-center gap-1">
-          <Button
-            variant={viewMode === "grid" ? "secondary" : "ghost"}
-            size="sm"
-            onClick={() => setViewMode("grid")}
-            className={cn("h-8 gap-2 rounded-lg text-[11px] font-bold px-3 transition-all", viewMode === "grid" ? "bg-indigo-50 text-indigo-600 dark:bg-indigo-900/50 dark:text-indigo-400" : "text-slate-500 hover:text-slate-900")}
-          >
-            <LayoutGrid className="h-3.5 w-3.5" />
-            Grid
-          </Button>
-          <Button
-            variant={viewMode === "table" ? "secondary" : "ghost"}
-            size="sm"
-            onClick={() => setViewMode("table")}
-            className={cn("h-8 gap-2 rounded-lg text-[11px] font-bold px-3 transition-all", viewMode === "table" ? "bg-indigo-50 text-indigo-600 dark:bg-indigo-900/50 dark:text-indigo-400" : "text-slate-500 hover:text-slate-900")}
-          >
-            <List className="h-3.5 w-3.5" />
-            Table
-          </Button>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {viewMode === "table" && (
+            <ColumnSelector
+              columns={availableTableColumns}
+              storageKey="orders-directory-table-v1"
+              visibleKeys={selectedTableColumnKeys}
+              onChange={setSelectedTableColumns}
+            />
+          )}
+          <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <Button
+              variant={viewMode === "grid" ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => setViewMode("grid")}
+              className={cn("h-8 gap-2 rounded-lg text-[11px] font-bold px-3 transition-all", viewMode === "grid" ? "bg-indigo-50 text-indigo-600 dark:bg-indigo-900/50 dark:text-indigo-400" : "text-slate-500 hover:text-slate-900")}
+            >
+              <LayoutGrid className="h-3.5 w-3.5" />
+              Grid
+            </Button>
+            <Button
+              variant={viewMode === "table" ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => setViewMode("table")}
+              className={cn("h-8 gap-2 rounded-lg text-[11px] font-bold px-3 transition-all", viewMode === "table" ? "bg-indigo-50 text-indigo-600 dark:bg-indigo-900/50 dark:text-indigo-400" : "text-slate-500 hover:text-slate-900")}
+            >
+              <List className="h-3.5 w-3.5" />
+              Table
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -594,21 +645,34 @@ export function OrdersDirectory({
             transition={{ duration: 0.2 }}
             className="w-full min-w-0 max-w-full overflow-x-auto rounded-3xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900"
           >
-            <table className="w-full min-w-[900px] text-sm">
+            <table
+              className="w-full table-fixed text-sm"
+              style={{ minWidth: `${tableMinWidth}px` }}
+            >
+              <colgroup>
+                {selectedTableColumns.map((column) => (
+                  <col key={column.key} style={{ width: `${column.width}px` }} />
+                ))}
+              </colgroup>
               <thead>
-                <tr className="border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/50 text-[10px] uppercase font-bold text-slate-400 tracking-wider">
-                  <th className="text-left font-bold py-4 pl-6">TID</th>
-                  <th className="text-left font-bold py-4">Branch</th>
-                  {shouldShowCostCenterId && <th className="text-left font-bold py-4">Cost Center</th>}
-                  <th className="text-left font-bold py-4">Status</th>
-                  <th className="text-left font-bold py-4">Order Date</th>
-                  <th className="text-left font-bold py-4">Delivery Date</th>
-                  <th className="text-right font-bold py-4 pr-6">Amount</th>
+                <tr className="border-b border-slate-200 bg-slate-50/70 text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:border-slate-800 dark:bg-slate-800/50">
+                  {isTableColumnVisible("tid") && <th className="h-14 whitespace-nowrap py-3 pl-6 pr-4 text-left font-bold">TID</th>}
+                  {isTableColumnVisible("branch") && <th className="h-14 whitespace-nowrap px-4 py-3 text-left font-bold">Branch</th>}
+                  {isTableColumnVisible("costCenter") && <th className="h-14 whitespace-nowrap px-4 py-3 text-left font-bold">Cost Center</th>}
+                  {isTableColumnVisible("orderStatus") && <th className="h-14 whitespace-nowrap px-4 py-3 text-center font-bold">Order Status</th>}
+                  {isTableColumnVisible("progress") && <th className="h-14 whitespace-nowrap px-4 py-3 text-center font-bold">Progress</th>}
+                  {isTableColumnVisible("paymentStatus") && <th className="h-14 whitespace-nowrap px-4 py-3 text-center font-bold">Payment</th>}
+                  {isTableColumnVisible("refundStatus") && <th className="h-14 whitespace-nowrap px-4 py-3 text-center font-bold">Refund</th>}
+                  {isTableColumnVisible("orderDate") && <th className="h-14 whitespace-nowrap px-4 py-3 text-left font-bold">Order Date</th>}
+                  {isTableColumnVisible("approvalDate") && <th className="h-14 whitespace-nowrap px-4 py-3 text-left font-bold">Approval Date</th>}
+                  {isTableColumnVisible("deliveryDate") && <th className="h-14 whitespace-nowrap px-4 py-3 text-left font-bold">Delivery Date</th>}
+                  {isTableColumnVisible("amount") && <th className="h-14 whitespace-nowrap py-3 pl-4 pr-6 text-right font-bold">Amount</th>}
                 </tr>
               </thead>
               <tbody>
                 {orders.map((order, idx) => {
-                  const derivedStatus = getOrderDerivedStatus(order, statusContext)
+                  const statusDisplay = getOrderStatusDisplay(order, statusContext)
+                  const derivedStatus = statusDisplay.orderStatus
                   const statusColors = getStatusColor(derivedStatus.key)
                   return (
                     <motion.tr
@@ -619,57 +683,76 @@ export function OrdersDirectory({
                       onClick={() => setViewingOrder(order)}
                       className="group border-b border-slate-50 dark:border-slate-800/50 hover:bg-slate-50/80 dark:hover:bg-slate-800/30 cursor-pointer transition-colors"
                     >
-                      <td className="py-4 pl-6">
+                      {isTableColumnVisible("tid") && <td className="py-5 pl-6 pr-4">
                         <span className="font-mono text-xs font-bold text-slate-700 dark:text-slate-300 group-hover:text-indigo-600 transition-colors uppercase tracking-wider">{order.tid}</span>
-                      </td>
-                      <td className="py-4">
+                      </td>}
+                      {isTableColumnVisible("branch") && <td className="px-4 py-5">
                         <div className="flex items-center gap-2">
-                          <Building2 className="h-3.5 w-3.5 opacity-60 text-indigo-500" />
-                          <span className="font-medium text-slate-600 dark:text-slate-400">{order.branchName || `#${order.branchId}`}</span>
+                          <Building2 className="h-3.5 w-3.5 shrink-0 text-indigo-500 opacity-60" />
+                          <span className="truncate font-medium text-slate-600 dark:text-slate-400" title={order.branchName || `#${order.branchId}`}>
+                            {order.branchName || `#${order.branchId}`}
+                          </span>
                         </div>
-                      </td>
-                      {shouldShowCostCenterId && (
-                        <td className="py-4">
+                      </td>}
+                      {isTableColumnVisible("costCenter") && (
+                        <td className="px-4 py-5">
                           <span className="font-mono text-xs font-bold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-md">
                             {order.branchCostCenterId || "-"}
                           </span>
                         </td>
                       )}
-                      <td className="py-4">
+                      {isTableColumnVisible("orderStatus") && <td className="px-4 py-5 text-center">
                         <Badge variant="outline" className={cn("px-2 py-0.5 text-[10px] uppercase font-bold tracking-wider rounded-lg border", statusColors.bg, statusColors.text, statusColors.border)}>
                           {derivedStatus.label}
                         </Badge>
-                        {shouldShowOrderFulfillmentStatus(order) && (
-                          <Badge variant="outline" className={cn("ml-2 px-2 py-0.5 text-[9px] uppercase font-bold tracking-wider rounded-lg border", getFulfillmentProgressColor(order.fulfillmentStatus))}>
-                            {FULFILLMENT_STATUS_LABELS[normalizeFulfillmentStatus(order.fulfillmentStatus)]}
+                      </td>}
+                      {isTableColumnVisible("progress") && <td className="px-4 py-5 text-center">
+                        {statusDisplay.fulfillmentStatus ? (
+                          <Badge variant="outline" className={cn("px-2 py-0.5 text-[9px] uppercase font-bold tracking-wider rounded-lg border", getFulfillmentProgressColor(order.fulfillmentStatus))}>
+                            {statusDisplay.fulfillmentStatus}
                           </Badge>
-                        )}
-                        {shouldShowOrderPaymentStatus(order) && (
-                          <Badge variant="outline" className={cn("ml-2 px-2 py-0.5 text-[9px] uppercase font-bold tracking-wider rounded-lg border", getPaymentStatusColor(order.paymentStatus))}>
-                            {PAYMENT_STATUS_LABELS[normalizePaymentStatus(order.paymentStatus)]}
+                        ) : <span className="text-slate-300 dark:text-slate-600">—</span>}
+                      </td>}
+                      {isTableColumnVisible("paymentStatus") && <td className="px-4 py-5 text-center">
+                        {statusDisplay.paymentStatus ? (
+                          <Badge variant="outline" className={cn("px-2 py-0.5 text-[9px] uppercase font-bold tracking-wider rounded-lg border", getPaymentStatusColor(order.paymentStatus))}>
+                            {statusDisplay.paymentStatus}
                           </Badge>
-                        )}
-                        {hasPartialRefund(order) && (
-                          <Badge variant="outline" className="ml-2 px-2 py-0.5 text-[9px] uppercase font-bold tracking-wider rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400">
-                            Partial Refund
+                        ) : <span className="text-slate-300 dark:text-slate-600">—</span>}
+                      </td>}
+                      {isTableColumnVisible("refundStatus") && <td className="px-4 py-5 text-center">
+                        {statusDisplay.refundStatus ? (
+                          <Badge
+                            variant="outline"
+                            className={cn(
+                              "px-2 py-0.5 text-[9px] uppercase font-bold tracking-wider rounded-lg border",
+                              statusDisplay.refundStatus === "Partial Refund"
+                                ? "border-amber-300 bg-amber-50 text-amber-600 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-400"
+                                : "border-rose-300 bg-rose-50 text-rose-600 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300",
+                            )}
+                          >
+                            {statusDisplay.refundStatus}
                           </Badge>
-                        )}
-                      </td>
-                      <td className="py-4 font-medium text-slate-500 text-xs">
+                        ) : <span className="text-slate-300 dark:text-slate-600">—</span>}
+                      </td>}
+                      {isTableColumnVisible("orderDate") && <td className="whitespace-nowrap px-4 py-5 text-xs font-medium text-slate-500">
                         {format(new Date(order.createdAt), "dd MMM yyyy")}
-                      </td>
-                      <td className="py-4 font-medium text-slate-500 text-xs">
+                      </td>}
+                      {isTableColumnVisible("approvalDate") && <td className="whitespace-nowrap px-4 py-5 text-xs font-medium text-slate-500">
+                        {order.approvedAt ? format(new Date(order.approvedAt), "dd MMM yyyy") : "—"}
+                      </td>}
+                      {isTableColumnVisible("deliveryDate") && <td className="whitespace-nowrap px-4 py-5 text-xs font-medium text-slate-500">
                         {order.deliveredAt ? format(new Date(order.deliveredAt), "dd MMM yyyy") : "—"}
-                      </td>
-                      <td className="py-4 pr-6 text-right font-bold text-slate-800 dark:text-slate-200">
+                      </td>}
+                      {isTableColumnVisible("amount") && <td className="whitespace-nowrap py-5 pl-4 pr-6 text-right font-bold text-slate-800 dark:text-slate-200">
                         {order.totalCents !== null && order.totalCents !== undefined ? formatPKR(order.totalCents / 100) : "-"}
-                      </td>
+                      </td>}
                     </motion.tr>
                   )
                 })}
                 {orders.length === 0 && (
                   <tr>
-                    <td colSpan={shouldShowCostCenterId ? 7 : 6}>
+                    <td colSpan={Math.max(selectedTableColumns.length, 1)}>
                       <EmptyOrdersState compact />
                     </td>
                   </tr>
@@ -696,6 +779,10 @@ export function OrdersDirectory({
               const isRefundRelated =
                 viewingOrder.status?.toLowerCase() === "refunded" ||
                 Number(viewingOrder.refundAmountCents || 0) > 0
+              const normalizedOrderStatus = viewingOrder.status?.trim().toUpperCase()
+              const isActiveOrder = normalizedOrderStatus === "APPROVED"
+              const isFulfilledOrder = ["FULFILLED", "PARTIAL", "PARTIALLY_FULFILLED"].includes(normalizedOrderStatus)
+              const isDeliveredOrder = normalizeFulfillmentStatus(viewingOrder.fulfillmentStatus) === "DELIVERED"
 
               return (
             <div className="flex flex-col h-full font-sans">
@@ -777,6 +864,42 @@ export function OrdersDirectory({
                         <span className="text-xs font-semibold text-slate-500 flex items-center gap-1.5 shrink-0"><MapPin className="h-3.5 w-3.5" /> Address</span>
                         <span className="text-sm font-medium text-slate-700 dark:text-slate-300 text-right leading-snug">
                           {[viewingOrder.branchAddress, viewingOrder.branchCity, viewingOrder.branchProvince].filter(Boolean).join(", ")}
+                        </span>
+                      </div>
+                    )}
+                    {isActiveOrder && (
+                      <div className="flex items-start justify-between gap-3 group">
+                        <span className="flex shrink-0 items-center gap-1.5 text-xs font-semibold text-slate-500">
+                          <FileCheck className="h-3.5 w-3.5" /> Approval Date
+                        </span>
+                        <span className="text-right text-sm font-medium text-slate-700 dark:text-slate-300">
+                          {viewingOrder.approvedAt
+                            ? format(new Date(viewingOrder.approvedAt), "dd MMM yyyy, p")
+                            : "Unavailable"}
+                        </span>
+                      </div>
+                    )}
+                    {isFulfilledOrder && (
+                      <div className="flex items-start justify-between gap-3 group">
+                        <span className="flex shrink-0 items-center gap-1.5 text-xs font-semibold text-slate-500">
+                          <CheckCircle className="h-3.5 w-3.5" /> Fulfilled Date
+                        </span>
+                        <span className="text-right text-sm font-medium text-slate-700 dark:text-slate-300">
+                          {viewingOrder.fulfilledAt
+                            ? format(new Date(viewingOrder.fulfilledAt), "dd MMM yyyy, p")
+                            : "Unavailable"}
+                        </span>
+                      </div>
+                    )}
+                    {isDeliveredOrder && (
+                      <div className="flex items-start justify-between gap-3 group">
+                        <span className="flex shrink-0 items-center gap-1.5 text-xs font-semibold text-slate-500">
+                          <Truck className="h-3.5 w-3.5" /> Delivery Date
+                        </span>
+                        <span className="text-right text-sm font-medium text-slate-700 dark:text-slate-300">
+                          {viewingOrder.deliveredAt
+                            ? format(new Date(viewingOrder.deliveredAt), "dd MMM yyyy, p")
+                            : "Unavailable"}
                         </span>
                       </div>
                     )}

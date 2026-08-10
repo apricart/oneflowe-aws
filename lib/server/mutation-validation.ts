@@ -139,16 +139,23 @@ export const orderStatusUpdateSchema = z.object({
   status: z.enum(["APPROVED", "REJECTED", "FULFILLED"]),
 }).strict()
 
-export const orderCreateSchema = z.object({
-  items: z.array(z.object({
+const orderMutationItemsSchema = z.array(z.object({
     organizationInventoryId: positiveId,
     quantity: z.coerce.number().positive().max(MAX_BUSINESS_QUANTITY),
   }).strict()).min(1).max(500).refine(
     (items) => isUniquePositiveIdList(items.map((item) => item.organizationInventoryId)),
     "Each product can only appear once in an order",
-  ),
+  )
+
+export const orderCreateSchema = z.object({
+  items: orderMutationItemsSchema,
   organizationId: positiveId.optional(),
   branchId: positiveId.optional(),
+  notes: z.string().trim().max(2_000).optional(),
+}).strict()
+
+export const orderUpdateSchema = z.object({
+  items: orderMutationItemsSchema,
   notes: z.string().trim().max(2_000).optional(),
 }).strict()
 

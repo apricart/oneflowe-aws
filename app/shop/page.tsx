@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
-import { ShoppingBag, Search, Plus, Minus, Trash2, Home, X, CheckCircle, Clock, AlertTriangle, DollarSign, Star, Zap, Package, TrendingDown, Grid, LogOut, ArrowRight, ArrowLeft, Calendar, MapPin, RefreshCw, Building2, Copy, Send } from "lucide-react"
+import { ShoppingBag, Search, Plus, Minus, Trash2, Home, X, CheckCircle, Clock, AlertTriangle, DollarSign, Star, Zap, Package, TrendingDown, Grid, LogOut, ArrowRight, ArrowLeft, Calendar, MapPin, RefreshCw, Building2, Copy, Send, Pencil, Loader2 } from "lucide-react"
 import { Skeleton } from "@/components/ui/skeleton"
 import Image from "next/image"
 import { RefundManagement } from "@/components/refund-management"
@@ -60,6 +60,28 @@ interface Product {
   quantityBudgetRemaining?: number | null
 }
 
+const mapInventoryItemToProduct = (item: any, reservedQuantity = 0): Product => ({
+  id: item.organizationInventoryId,
+  name: item.customName || item.productName,
+  code: item.productCode,
+  priceCents: item.customPrice ?? item.basePrice ?? null,
+  unit: item.unit,
+  imageUrl: item.productImageUrl,
+  stock: roundQuantity(Number(item.stockQuantity || 0) + reservedQuantity),
+  allowDecimalQuantity: !!item.allowDecimalQuantity,
+  quantityStep: typeof item.quantityStep === "number" ? item.quantityStep : undefined,
+  rating: parseProductRating(item.rating),
+  description: item.customDescription || item.productDescription,
+  discountType: item.discountType,
+  discountValue: item.discountValue,
+  discountStartAt: item.discountStartAt,
+  discountEndAt: item.discountEndAt,
+  discountActive: item.discountActive,
+  quantityBudgetRemaining: typeof item.quantityBudgetRemaining === "number"
+    ? roundQuantity(item.quantityBudgetRemaining + reservedQuantity)
+    : null,
+})
+
 interface CartItem extends Product {
   quantity: number
 }
@@ -84,6 +106,14 @@ interface OrderItem {
   id: number
   quantity: number
   quantityRefunded?: number | null
+  organizationInventoryId?: number | null
+  productName?: string
+  productCode?: string | null
+  priceCents?: number | null
+  unit?: string
+  imageUrl?: string | null
+  allowDecimalQuantity?: boolean
+  quantityStep?: number
 }
 
 type RefundState = "none" | "partial" | "full"
@@ -144,6 +174,9 @@ export default function OrderPortalPage() {
   const [activeTab, setActiveTab] = useState<"shop" | "orders" | "refunded">("shop")
   const [showOrderDetail, setShowOrderDetail] = useState(false)
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null)
+  const [editingOrder, setEditingOrder] = useState<Order | null>(null)
+  const [editingOriginalQuantities, setEditingOriginalQuantities] = useState<Record<number, number>>({})
+  const [isLoadingOrderForEdit, setIsLoadingOrderForEdit] = useState(false)
   const [pageSize, setPageSize] = useState(12)
   const [currentPage, setCurrentPage] = useState(1)
   const [activeCategory, setActiveCategory] = useState<string>("All")
@@ -366,28 +399,14 @@ export default function OrderPortalPage() {
   }, [shopInventoryItems])
 
   const mappedProducts = useMemo(() => {
-    return shopInventoryItems.map((item: any) => ({
-      id: item.organizationInventoryId,
-      name: item.customName || item.productName,
-      code: item.productCode,
-      priceCents: item.customPrice ?? item.basePrice ?? null,
-      unit: item.unit,
-      imageUrl: item.productImageUrl,
-      stock: item.stockQuantity,
-      allowDecimalQuantity: !!item.allowDecimalQuantity,
-      quantityStep: typeof item.quantityStep === "number" ? item.quantityStep : undefined,
-      rating: parseProductRating(item.rating),
-      description: item.customDescription || item.productDescription,
-      discountType: item.discountType,
-      discountValue: item.discountValue,
-      discountStartAt: item.discountStartAt,
-      discountEndAt: item.discountEndAt,
-      discountActive: item.discountActive,
-      quantityBudgetRemaining: typeof item.quantityBudgetRemaining === "number"
-        ? item.quantityBudgetRemaining
-        : null,
-    }))
-  }, [shopInventoryItems])
+    // The edited order's original reservation is already absent from live
+    // stock/remaining-budget figures, so add it back to the amount that this
+    // same order is allowed to reserve.
+    return shopInventoryItems.map((item: any) => mapInventoryItemToProduct(
+      item,
+      editingOriginalQuantities[item.organizationInventoryId] || 0,
+    ))
+  }, [shopInventoryItems, editingOriginalQuantities])
 
   const products: Product[] = mappedProducts
   const productsById = useMemo(() => new Map(products.map((product) => [product.id, product])), [products])
@@ -438,8 +457,9 @@ export default function OrderPortalPage() {
 
   const cartTotal = pricesHidden ? 0 : cart.reduce((sum, item) => sum + calculateLineCents(item.priceCents || 0, item.quantity), 0)
   const remainingBudget = budget?.remainingCents || 0
+  const budgetAvailableForCart = remainingBudget + (editingOrder?.totalCents || 0)
   const totalBudgetLimit = (budget?.amountAllocatedCents || 0) + (budget?.amountCreditedCents || 0)
-  const canCheckout = pricesHidden ? cart.length > 0 : cartTotal <= remainingBudget && cart.length > 0
+  const canCheckout = pricesHidden ? cart.length > 0 : cartTotal <= budgetAvailableForCart && cart.length > 0
   const rawBudgetPercent = ((((totalBudgetLimit || 0) - remainingBudget) / (totalBudgetLimit || 1)) * 100)
   const budgetPercent = Math.min(100, Math.max(0, rawBudgetPercent || 0))
   const isLoadingInventory = !inventoryData && !inventoryError
@@ -536,43 +556,158 @@ export default function OrderPortalPage() {
     }
   }
 
+  const cancelOrderEdit = () => {
+    setEditingOrder(null)
+    setEditingOriginalQuantities({})
+    setCart([])
+    setShowCart(false)
+    setShowCheckout(false)
+  }
+
+  const beginEditOrder = async (order: Order) => {
+    if (!isOrderPortal || order.status.toUpperCase() !== "PENDING") return
+    if (editingOrder?.id === order.id && !isLoadingOrderForEdit) {
+      setShowCart(true)
+      return
+    }
+    if (cart.length > 0 && editingOrder?.id !== order.id) {
+      const replaceCart = window.confirm(
+        "Editing this order will replace the items currently in your cart. Continue?",
+      )
+      if (!replaceCart) return
+    }
+
+    setIsLoadingOrderForEdit(true)
+    setEditingOrder(order)
+    setEditingOriginalQuantities({})
+    setCart([])
+    setSelectedOrder(order)
+    setShowOrderDetail(false)
+    setShowCart(true)
+    try {
+      const hasLoadedInventory = Array.isArray(inventoryData?.items)
+      const [response, availableInventory] = await Promise.all([
+        fetch(`/api/v1/orders/${order.id}`, {
+          cache: "no-store",
+        }),
+        hasLoadedInventory
+          ? Promise.resolve(inventoryData)
+          : mutateBranchInventory(),
+      ])
+      const data = await response.json()
+      const freshOrder = data?.item as Order | undefined
+
+      if (!response.ok || !freshOrder) {
+        throw new Error(data?.error || "Order could not be loaded")
+      }
+      if (freshOrder.status.toUpperCase() !== "PENDING") {
+        await mutateOrders()
+        throw new Error("Only pending orders can be edited. This order has already changed.")
+      }
+
+      const orderItems = freshOrder.orderItems || []
+      if (orderItems.length === 0 || orderItems.some((item) => !item.organizationInventoryId)) {
+        throw new Error("This order cannot be edited because its product reservation details are unavailable.")
+      }
+
+      const originalQuantities = Object.fromEntries(
+        orderItems.map((item) => [Number(item.organizationInventoryId), Number(item.quantity)]),
+      )
+      const editProductsById = new Map<number, Product>(
+        (availableInventory?.items || []).map((item: any) => [
+          Number(item.organizationInventoryId),
+          mapInventoryItemToProduct(item),
+        ]),
+      )
+      const editableItems: CartItem[] = orderItems.map((item) => {
+        const inventoryId = Number(item.organizationInventoryId)
+        const product = editProductsById.get(inventoryId)
+        if (!product) {
+          throw new Error(`${item.productName || "An ordered product"} is no longer available in the shop.`)
+        }
+        return { ...product, quantity: Number(item.quantity) }
+      })
+
+      setEditingOriginalQuantities(originalQuantities)
+      setEditingOrder({ ...order, ...freshOrder })
+      setCart(editableItems.map((item) => ({
+        ...item,
+        stock: roundQuantity((item.stock || 0) + (originalQuantities[item.id] || 0)),
+        quantityBudgetRemaining: typeof item.quantityBudgetRemaining === "number"
+          ? roundQuantity(item.quantityBudgetRemaining + (originalQuantities[item.id] || 0))
+          : null,
+      })))
+      setSelectedOrder({ ...order, ...freshOrder })
+      // Do not delay the editor when inventory is already present. The server
+      // remains authoritative when saving, while these refreshes keep later
+      // additions and budget figures current.
+      if (hasLoadedInventory) {
+        void mutateBranchInventory()
+      }
+      void mutateBudget()
+    } catch (editLoadError) {
+      setEditingOrder(null)
+      setEditingOriginalQuantities({})
+      setCart([])
+      setShowCart(false)
+      toast({
+        title: "Unable to edit order",
+        description: editLoadError instanceof Error ? editLoadError.message : "Order could not be loaded",
+        variant: "destructive",
+      })
+    } finally {
+      setIsLoadingOrderForEdit(false)
+    }
+  }
+
   const placeOrder = async () => {
     if (!canCheckout || orderSubmissionInFlightRef.current) return
     orderSubmissionInFlightRef.current = true
     setIsPlacingOrder(true)
     const idempotencyKey = orderIdempotencyKeyRef.current || crypto.randomUUID()
-    orderIdempotencyKeyRef.current = idempotencyKey
+    if (!editingOrder) orderIdempotencyKeyRef.current = idempotencyKey
     try {
-      const res = await fetch("/api/v1/orders", {
-        method: "POST",
+      const res = await fetch(editingOrder ? `/api/v1/orders/${editingOrder.id}` : "/api/v1/orders", {
+        method: editingOrder ? "PUT" : "POST",
         headers: {
           "Content-Type": "application/json",
-          "Idempotency-Key": idempotencyKey,
+          ...(!editingOrder && { "Idempotency-Key": idempotencyKey }),
         },
         body: JSON.stringify({
           items: cart.map(c => ({ organizationInventoryId: c.id, quantity: c.quantity })),
-          ...(isAdmin && activeBranchId && { branchId: activeBranchId, organizationId: activeOrgId }),
+          ...(!editingOrder && isAdmin && activeBranchId && { branchId: activeBranchId, organizationId: activeOrgId }),
         })
       })
       const json = await res.json()
       if (!res.ok) {
-        orderIdempotencyKeyRef.current = null
+        if (!editingOrder) orderIdempotencyKeyRef.current = null
         if (json.error?.toLowerCase().includes("stock") || json.error?.toLowerCase().includes("budget")) {
           mutateBranchInventory()
           mutateBudget()
         }
         const description = pricesHidden && budgetVisible && json.error?.toLowerCase().includes("insufficient budget")
-          ? `This order exceeds your remaining budget of PKR ${(remainingBudget / 100).toFixed(2)}. Please reduce quantities or contact head office.`
+          ? `This order exceeds the available budget of PKR ${(budgetAvailableForCart / 100).toFixed(2)}. Please reduce quantities or contact head office.`
           : json.error
-        return toast({ title: "Failed", description, variant: "destructive" })
+        if (editingOrder && res.status === 409) {
+          await mutateOrders()
+        }
+        return toast({
+          title: editingOrder ? "Update failed" : "Failed",
+          description,
+          variant: "destructive",
+        })
       }
 
       toast({
-        title: "Order Submitted",
-        description: `TID: ${json.order?.tid}. Your order is now pending approval by the organization's assigned approver.`,
+        title: editingOrder ? "Order Updated" : "Order Submitted",
+        description: editingOrder
+          ? `Order ${json.order?.tid || editingOrder.tid} was updated and remains pending approval.`
+          : `TID: ${json.order?.tid}. Your order is now pending approval by the organization's assigned approver.`,
       })
       setCart([])
       orderIdempotencyKeyRef.current = null
+      setEditingOrder(null)
+      setEditingOriginalQuantities({})
       setShowCheckout(false)
 
       // Revalidate all data so UI updates immediately without refresh
@@ -749,14 +884,32 @@ export default function OrderPortalPage() {
       </header>
 
       {/* Cart Drawer */}
-      <Dialog open={showCart} onOpenChange={setShowCart}>
+      <Dialog
+        open={showCart}
+        onOpenChange={(open) => {
+          if (isLoadingOrderForEdit && !open) return
+          setShowCart(open)
+        }}
+      >
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Cart</DialogTitle>
-            <DialogDescription>Items ready to submit for purchase.</DialogDescription>
+            <DialogTitle>{editingOrder ? `Edit Order ${editingOrder.tid}` : "Cart"}</DialogTitle>
+            <DialogDescription>
+              {editingOrder
+                ? "Update the items or quantities, then review and save your changes."
+                : "Items ready to submit for purchase."}
+            </DialogDescription>
           </DialogHeader>
 
-          {cart.length === 0 ? (
+          {isLoadingOrderForEdit ? (
+            <div className="flex min-h-48 flex-col items-center justify-center gap-3 py-10 text-center text-muted-foreground">
+              <Loader2 className="h-8 w-8 animate-spin text-indigo-600" />
+              <div>
+                <p className="font-medium text-foreground">Loading order items</p>
+                <p className="text-xs">The editor will be ready in a moment.</p>
+              </div>
+            </div>
+          ) : cart.length === 0 ? (
             <div className="py-10 text-center text-muted-foreground">
               <ShoppingBag className="mx-auto mb-4 h-12 w-12 opacity-40" />
               <p className="font-medium">Your cart is empty</p>
@@ -808,6 +961,7 @@ export default function OrderPortalPage() {
                         <Button
                           size="icon"
                           variant="outline"
+                          aria-label={`Decrease ${item.name} quantity`}
                           onClick={() => updateQty(item.id, roundQuantity(item.quantity - (item.allowDecimalQuantity ? 1 : getProductStep(item))))}
                         >
                           <Minus className="h-4 w-4" />
@@ -816,6 +970,7 @@ export default function OrderPortalPage() {
                         <Button
                           size="icon"
                           variant="outline"
+                          aria-label={`Increase ${item.name} quantity`}
                           onClick={() => {
                             const maxStock = item.stock || 0
                             if (item.quantity < maxStock) {
@@ -861,11 +1016,11 @@ export default function OrderPortalPage() {
                       <span>PKR {(cartTotal / 100).toFixed(2)}</span>
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      Remaining budget after checkout: PKR {((remainingBudget - cartTotal) / 100).toFixed(2)}
+                      Remaining budget after {editingOrder ? "update" : "checkout"}: PKR {((budgetAvailableForCart - cartTotal) / 100).toFixed(2)}
                     </p>
                   </>
                 )}
-                {!pricesHidden && cartTotal > remainingBudget && (
+                {!pricesHidden && cartTotal > budgetAvailableForCart && (
                   <div className="flex items-center gap-2 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-600 dark:border-red-900 dark:bg-red-950">
                     <AlertTriangle className="h-4 w-4" />
                     Cart exceeds remaining budget.
@@ -876,24 +1031,45 @@ export default function OrderPortalPage() {
           )}
 
           <DialogFooter className="flex-col gap-2 sm:flex-row">
-            <Button
-              variant="outline"
-              className="w-full sm:w-auto"
-              onClick={() => setShowCart(false)}
-            >
-              Continue shopping
-            </Button>
-            <Button
-              className="w-full sm:w-auto gap-2"
-              disabled={!canCheckout}
-              onClick={() => {
-                setShowCart(false)
-                setShowCheckout(true)
-              }}
-            >
-              Proceed to checkout
-              <ArrowRight className="h-4 w-4" />
-            </Button>
+            {isLoadingOrderForEdit ? (
+              <Button className="w-full sm:w-auto" disabled>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Loading order
+              </Button>
+            ) : (
+              <>
+                {editingOrder && (
+                  <Button
+                    variant="ghost"
+                    className="w-full text-rose-600 sm:w-auto"
+                    onClick={cancelOrderEdit}
+                  >
+                    Cancel editing
+                  </Button>
+                )}
+                <Button
+                  variant="outline"
+                  className="w-full sm:w-auto"
+                  onClick={() => {
+                    setShowCart(false)
+                    if (editingOrder) void handleTabChange("shop")
+                  }}
+                >
+                  {editingOrder ? "Add products" : "Continue shopping"}
+                </Button>
+                <Button
+                  className="w-full sm:w-auto gap-2"
+                  disabled={!canCheckout}
+                  onClick={() => {
+                    setShowCart(false)
+                    setShowCheckout(true)
+                  }}
+                >
+                  {editingOrder ? "Review changes" : "Proceed to checkout"}
+                  <ArrowRight className="h-4 w-4" />
+                </Button>
+              </>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -926,6 +1102,32 @@ export default function OrderPortalPage() {
             Refunded ({ordersData?.items?.filter(isRefundRelatedOrder).length || 0})
           </Button>
         </div>
+
+        {editingOrder && !isLoadingOrderForEdit && (
+          <div className="mb-6 flex flex-col gap-3 rounded-2xl border border-indigo-200 bg-indigo-50 p-4 dark:border-indigo-800 dark:bg-indigo-950/30 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="font-semibold text-indigo-900 dark:text-indigo-100">
+                Editing order {editingOrder.tid}
+              </p>
+              <p className="text-xs text-indigo-700 dark:text-indigo-300">
+                Changes are saved only after you review and confirm them.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {activeTab !== "shop" && (
+                <Button type="button" variant="outline" onClick={() => { void handleTabChange("shop") }}>
+                  Add products
+                </Button>
+              )}
+              <Button type="button" onClick={() => setShowCart(true)}>
+                Review changes
+              </Button>
+              <Button type="button" variant="ghost" className="text-rose-600" onClick={cancelOrderEdit}>
+                Cancel editing
+              </Button>
+            </div>
+          </div>
+        )}
 
         {activeTab === "orders" || activeTab === "refunded" ? (
           // Orders View
@@ -1084,6 +1286,18 @@ export default function OrderPortalPage() {
                             <RefreshCw className="h-4 w-4" />
                             View Details
                           </Button>
+                          {isOrderPortal && order.status?.toUpperCase() === "PENDING" && (
+                            <Button
+                              onClick={() => { void beginEditOrder(order) }}
+                              variant="outline"
+                              size="sm"
+                              disabled={isLoadingOrderForEdit}
+                              className="flex-1 gap-2"
+                            >
+                              <Pencil className="h-4 w-4" />
+                              Edit Order
+                            </Button>
+                          )}
                           <ReceiptIconButton
                             orderId={order.id}
                             orderStatus={order.status}
@@ -1163,7 +1377,7 @@ export default function OrderPortalPage() {
               </div>
 
               {/* Budget Warning */}
-              {!pricesHidden && cartTotal > remainingBudget && (
+              {!pricesHidden && cartTotal > budgetAvailableForCart && (
                 <div className="p-3 bg-red-50/50 backdrop-blur-sm dark:bg-red-950/30 border border-red-200/50 dark:border-red-800/50 rounded-xl flex items-center gap-2">
                   <AlertTriangle className="h-4 w-4 text-red-600 dark:text-red-400" />
                   <p className="text-sm font-medium text-red-700 dark:text-red-300">Cart exceeds remaining budget</p>
@@ -1748,8 +1962,10 @@ export default function OrderPortalPage() {
       <Dialog open={showCheckout} onOpenChange={setShowCheckout}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Order Confirmation</DialogTitle>
-            <DialogDescription>Review your order before placing</DialogDescription>
+            <DialogTitle>{editingOrder ? "Confirm Order Changes" : "Order Confirmation"}</DialogTitle>
+            <DialogDescription>
+              {editingOrder ? "Review the updated order before saving" : "Review your order before placing"}
+            </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
@@ -1774,7 +1990,7 @@ export default function OrderPortalPage() {
                 </span>
               </div>
               <p className="text-xs text-muted-foreground">
-                Remaining Budget: PKR {((remainingBudget - cartTotal) / 100).toFixed(2)}
+                Remaining Budget: PKR {((budgetAvailableForCart - cartTotal) / 100).toFixed(2)}
               </p>
             </div>}
           </div>
@@ -1787,7 +2003,9 @@ export default function OrderPortalPage() {
               Back
             </Button>
             <Button onClick={placeOrder} disabled={!canCheckout || isPlacingOrder}>
-              {isPlacingOrder ? "Placing Order..." : "Place Order"}
+              {isPlacingOrder
+                ? (editingOrder ? "Saving Changes..." : "Placing Order...")
+                : (editingOrder ? "Save Changes" : "Place Order")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1998,6 +2216,16 @@ export default function OrderPortalPage() {
           )}
 
           <DialogFooter>
+            {isOrderPortal && selectedOrder?.status.toUpperCase() === "PENDING" && (
+              <Button
+                variant="outline"
+                disabled={isLoadingOrderForEdit}
+                onClick={() => { void beginEditOrder(selectedOrder) }}
+              >
+                <Pencil className="mr-2 h-4 w-4" />
+                {isLoadingOrderForEdit ? "Loading..." : "Edit Order"}
+              </Button>
+            )}
             <Button onClick={() => setShowOrderDetail(false)}>Close</Button>
           </DialogFooter>
         </DialogContent>
