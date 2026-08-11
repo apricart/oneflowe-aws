@@ -78,6 +78,8 @@ interface OrderItem {
   branchName?: string | null
   branchCostCenterId?: string | null
   status: string
+  fulfillmentStatus?: string | null
+  paymentStatus?: string | null
   statusAtRefund?: string | null
   refundedAt?: string | null
   refundAmountCents?: number | null
@@ -85,6 +87,8 @@ interface OrderItem {
   taxCents: number
   totalCents: number
   createdAt: string
+  approvedAt?: string | null
+  fulfilledAt?: string | null
   deliveredAt?: string | null
   createdByUserId: string
   hasRefundRequests?: number
@@ -633,7 +637,11 @@ function OrdersManagementContent() {
                 />
 
                 <div className="h-6 w-px bg-slate-200 dark:bg-slate-800 mx-1" />
-                <OrderExport orders={filteredOrders} role={userRole} />
+                <OrderExport
+                  orders={filteredOrders}
+                  role={userRole}
+                  statusContext={showSplitFilter ? statusFilter : "default"}
+                />
               </div>
             </div>
 
@@ -719,6 +727,7 @@ function OrdersManagementContent() {
               isHeadOffice={isHeadOffice}
               canDecideOrders={canDecideOrders}
               showCostCenterId={showCostCenterId}
+              pricesHidden={Boolean(ordersData?.pricesHidden)}
               onUpdate={() => mutateOrders()}
             />
             {totalOrders > 0 && (
