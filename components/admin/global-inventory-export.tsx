@@ -31,7 +31,7 @@ type GlobalInventoryExportProps = {
     products: GlobalInventoryExportItem[]
 }
 
-export function GlobalInventoryExport({ products }: GlobalInventoryExportProps) {
+export function GlobalInventoryExport({ products }: Readonly<GlobalInventoryExportProps>) {
     const [isExporting, setIsExporting] = useState(false)
 
     const exportDate = new Date().toISOString().split("T")[0]

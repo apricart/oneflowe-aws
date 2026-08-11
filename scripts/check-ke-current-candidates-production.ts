@@ -34,7 +34,7 @@ async function main() {
     `, [IDS.map((id) => `KE-LEGACY-${id}`)])
     await client.query("rollback")
     const org = organization.rows[0] ?? null
-    const tenantVerified = Boolean(org && org.id === 10 && org.code === "0001" && org.name === "K-Electric" && String(org.status).toLowerCase() === "active")
+    const tenantVerified = Boolean(org?.id === 10 && org.code === "0001" && org.name === "K-Electric" && String(org.status).toLowerCase() === "active")
     const result = {
       generatedAt: new Date().toISOString(),
       mode: "PRODUCTION_READ_ONLY",

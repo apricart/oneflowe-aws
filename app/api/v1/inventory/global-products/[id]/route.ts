@@ -13,13 +13,12 @@ export async function GET(
 ) {
   try {
     const params = await props.params
-    const { id } = params
     const session = await getServerSession(authOptions)
     if (!session?.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const productId = parseInt(params.id)
+    const productId = Number.parseInt(params.id)
     const [product] = await db.select().from(globalProducts).where(eq(globalProducts.id, productId)).limit(1)
 
     if (!product) {
@@ -53,7 +52,7 @@ export async function PUT(
     }
 
     const params = await props.params
-    const productId = parseInt(params.id)
+    const productId = Number.parseInt(params.id)
     const rawBody = await req.json().catch(() => null)
     const parsedBody = globalProductUpdateSchema.safeParse(rawBody)
     if (!parsedBody.success) {
@@ -121,7 +120,7 @@ export async function PUT(
     console.error("Error updating product:", error)
 
     // Handle unique constraint violation (Postgres code 23505)
-    if (error.code === '23505' || (error.message && error.message.includes('unique constraint') && error.message.includes('product_code'))) {
+    if (error.code === '23505' || (error.message?.includes('unique constraint') && error.message.includes('product_code'))) {
       return NextResponse.json({ error: "Product code already exists" }, { status: 400 })
     }
 
@@ -144,7 +143,7 @@ export async function DELETE(
     }
 
     const params = await props.params
-    const productId = parseInt(params.id)
+    const productId = Number.parseInt(params.id)
 
     // Check if product exists
     const [existingProduct] = await db.select().from(globalProducts).where(eq(globalProducts.id, productId)).limit(1)

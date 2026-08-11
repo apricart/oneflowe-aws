@@ -1,11 +1,54 @@
-import { NextRequest, NextResponse } from "next/server"
+import { NextRequest,NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
-import { groups, groupAuditLogs, branches, branchInventory, organizationInventory, globalProducts } from "@/db/schema"
-import { eq, and, sql, count, isNull, or, ne, inArray } from "drizzle-orm"
+import { groups,groupAuditLogs,branches,branchInventory,organizationInventory,globalProducts } from "@/db/schema"
+import { eq,and,sql,count,isNull,inArray } from "drizzle-orm"
 import { invalidateByPrefix } from "@/lib/cache-utils"
-import { groupUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
+import { groupUpdateSchema,validationMessage } from "@/lib/server/mutation-validation"
+
+async function getAssignedBranchesDeleteError(groupId: number, branchCount: number) {
+    const branchIdsInGroup = await db.select({ id: branches.id })
+        .from(branches)
+        .where(eq(branches.groupId, groupId))
+
+    if (branchIdsInGroup.length > 0) {
+        const branchIdList = branchIdsInGroup.map((branch) => branch.id)
+        const staleRecords = await db.select({ biId: branchInventory.id })
+            .from(branchInventory)
+            .innerJoin(organizationInventory, eq(branchInventory.organizationInventoryId, organizationInventory.id))
+            .innerJoin(globalProducts, eq(organizationInventory.globalProductId, globalProducts.id))
+            .where(and(
+                inArray(branchInventory.branchId, branchIdList),
+                isNull(branchInventory.deletedAt),
+                sql`${globalProducts.deletedAt} IS NOT NULL`,
+            ))
+        if (staleRecords.length > 0) {
+            await db.update(branchInventory)
+                .set({ deletedAt: new Date(), updatedAt: new Date() })
+                .where(inArray(branchInventory.id, staleRecords.map((record) => record.biId)))
+        }
+    }
+
+    const [productCount] = await db
+        .select({ val: count() })
+        .from(branchInventory)
+        .innerJoin(branches, eq(branchInventory.branchId, branches.id))
+        .innerJoin(organizationInventory, eq(branchInventory.organizationInventoryId, organizationInventory.id))
+        .innerJoin(globalProducts, eq(organizationInventory.globalProductId, globalProducts.id))
+        .where(and(
+            eq(branches.groupId, groupId),
+            isNull(branchInventory.deletedAt),
+            isNull(globalProducts.deletedAt),
+        ))
+
+    const detail = productCount.val > 0
+        ? ` with ${productCount.val} product(s) assigned. Please remove all products from branches in this group first.`
+        : " assigned. Please remove all branches from the group first."
+    return NextResponse.json({
+        error: `Cannot delete: This group has ${branchCount} branch(es)${detail}`,
+    }, { status: 400 })
+}
 
 export async function GET(
     req: NextRequest,
@@ -19,9 +62,9 @@ export async function GET(
 
         const role = (session.user as any).role
         const orgId = (session.user as any).organizationId
-        const groupId = parseInt(id)
+        const groupId = Number.parseInt(id)
 
-        if (isNaN(groupId)) {
+        if (Number.isNaN(groupId)) {
             return NextResponse.json({ error: "Invalid Group ID" }, { status: 400 })
         }
 
@@ -42,6 +85,7 @@ export async function GET(
 
         return NextResponse.json({ group })
     } catch (e: any) {
+        console.error("Failed to load group:", e)
         return NextResponse.json({ error: "Internal Server Error" }, { status: 500 })
     }
 }
@@ -63,8 +107,8 @@ export async function PUT(
             return NextResponse.json({ error: "Forbidden" }, { status: 403 })
         }
 
-        const groupId = parseInt(id)
-        if (isNaN(groupId)) {
+        const groupId = Number.parseInt(id)
+        if (Number.isNaN(groupId)) {
             return NextResponse.json({ error: "Invalid Group ID" }, { status: 400 })
         }
 
@@ -138,6 +182,7 @@ export async function PUT(
 
         return NextResponse.json({ group: updated })
     } catch (e: any) {
+        console.error("Failed to update group:", e)
         return NextResponse.json({ error: "Internal Server Error" }, { status: 500 })
     }
 }
@@ -159,8 +204,8 @@ export async function DELETE(
             return NextResponse.json({ error: "Forbidden" }, { status: 403 })
         }
 
-        const groupId = parseInt(id)
-        if (isNaN(groupId)) {
+        const groupId = Number.parseInt(id)
+        if (Number.isNaN(groupId)) {
             return NextResponse.json({ error: "Invalid Group ID" }, { status: 400 })
         }
 
@@ -182,56 +227,7 @@ export async function DELETE(
         // Check for assigned branches
         const [branchCount] = await db.select({ val: count() }).from(branches).where(eq(branches.groupId, groupId))
         if (branchCount.val > 0) {
-            // Auto-clean: soft-delete branch inventory records for globally deleted products
-            const branchIdsInGroup = await db.select({ id: branches.id })
-                .from(branches)
-                .where(eq(branches.groupId, groupId))
-
-            if (branchIdsInGroup.length > 0) {
-                const branchIdList = branchIdsInGroup.map(b => b.id)
-                const staleRecords = await db.select({ biId: branchInventory.id })
-                    .from(branchInventory)
-                    .innerJoin(organizationInventory, eq(branchInventory.organizationInventoryId, organizationInventory.id))
-                    .innerJoin(globalProducts, eq(organizationInventory.globalProductId, globalProducts.id))
-                    .where(
-                        and(
-                            inArray(branchInventory.branchId, branchIdList),
-                            isNull(branchInventory.deletedAt),
-                            sql`${globalProducts.deletedAt} IS NOT NULL`
-                        )
-                    )
-
-                if (staleRecords.length > 0) {
-                    await db.update(branchInventory)
-                        .set({ deletedAt: new Date(), updatedAt: new Date() })
-                        .where(inArray(branchInventory.id, staleRecords.map(r => r.biId)))
-                }
-            }
-
-            // Count remaining assigned products (matches what Group Products page shows)
-            const [productCount] = await db
-                .select({ val: count() })
-                .from(branchInventory)
-                .innerJoin(branches, eq(branchInventory.branchId, branches.id))
-                .innerJoin(organizationInventory, eq(branchInventory.organizationInventoryId, organizationInventory.id))
-                .innerJoin(globalProducts, eq(organizationInventory.globalProductId, globalProducts.id))
-                .where(
-                    and(
-                        eq(branches.groupId, groupId),
-                        isNull(branchInventory.deletedAt),
-                        isNull(globalProducts.deletedAt)
-                    )
-                )
-
-            if (productCount.val > 0) {
-                return NextResponse.json({
-                    error: `Cannot delete: This group has ${branchCount.val} branch(es) with ${productCount.val} product(s) assigned. Please remove all products from branches in this group first.`
-                }, { status: 400 })
-            }
-
-            return NextResponse.json({
-                error: `Cannot delete: This group has ${branchCount.val} branch(es) assigned. Please remove all branches from the group first.`
-            }, { status: 400 })
+            return getAssignedBranchesDeleteError(groupId, branchCount.val)
         }
 
         // Soft delete: set status to 'deleted'
@@ -260,6 +256,7 @@ export async function DELETE(
 
         return NextResponse.json({ message: "Group deleted successfully" })
     } catch (e: any) {
+        console.error("Failed to delete group:", e)
         return NextResponse.json({ error: "Internal Server Error" }, { status: 500 })
     }
 }

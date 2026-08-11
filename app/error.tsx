@@ -4,13 +4,13 @@ import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { AlertTriangle, RefreshCw, Home } from "lucide-react"
 
-export default function Error({
+export default function GlobalError({
   error,
   reset,
-}: {
+}: Readonly<{
   error: Error & { digest?: string }
   reset: () => void
-}) {
+}>) {
   useEffect(() => {
     // Log error to monitoring service
     console.error("Application Error:", error)

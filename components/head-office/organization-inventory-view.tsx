@@ -1,16 +1,15 @@
 "use client"
-import { useMemo, useState, useEffect, type ReactNode } from "react"
-import useSWR from "swr"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Badge } from "@/components/ui/badge"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Button } from "@/components/ui/button"
 import { useAppContext } from "@/components/context/app-context"
-import { formatPKR } from "@/lib/utils"
-import { Search, Package, Building2, ShieldCheck, Sparkles, RefreshCw, CheckCircle, XCircle, AlertCircle, Filter, ChevronLeft, ChevronRight } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Card,CardContent,CardHeader,CardTitle } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from "@/components/ui/table"
 import { useDebounce } from "@/hooks/use-debounce"
-import { cn } from "@/lib/utils"
+import { cn,formatPKR } from "@/lib/utils"
+import { Building2,CheckCircle,ChevronLeft,ChevronRight,Package,Search,XCircle } from "lucide-react"
+import { useEffect,useMemo,useState } from "react"
+import useSWR from "swr"
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json())
 
@@ -37,14 +36,14 @@ export default function HeadOfficeInventoryView() {
     const debouncedSearch = useDebounce(searchQuery, 300)
     const [categoryFilter, setCategoryFilter] = useState("all")
     const [subCategoryFilter, setSubCategoryFilter] = useState("all")
-    const [statusFilter, setStatusFilter] = useState("all")
+    const [statusFilter] = useState("all")
     const [page, setPage] = useState(1)
     const PAGE_SIZE = 20
 
     // Fetch ALL org inventory data once — no filter params in URL.
     // Deferred until the org context has hydrated so we don't fire an
     // unscoped request first and re-fetch when organizationId arrives.
-    const query = `/api/v1/head-office/organization-inventory?limit=1000${organizationId ? `&organizationId=${organizationId}` : ""}`
+    const query = `/api/v1/head-office/organization-inventory?limit=1000${organizationId ? ("&organizationId=" + String(organizationId)) : ""}`
 
     const { data, isLoading } = useSWR<{ items: OrganizationInventoryItem[]; total: number }>(isInitialized ? query : null, fetcher, {
         // No fallbackData: zero-filled fallback made the stat cards flash "0"
@@ -115,10 +114,6 @@ export default function HeadOfficeInventoryView() {
     }, [allProducts, statusFilter, categoryFilter, subCategoryFilter, debouncedSearch, catData?.items, subCatData?.items])
 
     const activeCount = useMemo(() => allProducts.filter((item) => item.isActive).length, [allProducts])
-    const customPriceCount = useMemo(
-        () => allProducts.filter((item) => item.customPrice !== undefined && item.customPrice !== null).length,
-        [allProducts]
-    )
 
     const totalPages = Math.max(1, Math.ceil(filteredProducts.length / PAGE_SIZE))
 
@@ -241,20 +236,27 @@ export default function HeadOfficeInventoryView() {
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {isLoading ? (
+                                {(() => {
+                                  if (isLoading) {
+                                    return (
                                     <TableRow>
                                         <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
                                             Loading assigned catalog…
                                         </TableCell>
                                     </TableRow>
-                                ) : allProducts.length === 0 ? (
+                                )
+                                  }
+                                  if (allProducts.length === 0) {
+                                    return (
                                     <TableRow>
                                         <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
                                             No products have been assigned yet. Once Super Admin approves products for your organization, they
                                             will appear here automatically.
                                         </TableCell>
                                     </TableRow>
-                                ) : (
+                                )
+                                  }
+                                  return (
                                     paginatedProducts.map((item) => (
                                         <TableRow key={item.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors border-b border-slate-100 dark:border-slate-800/50 group">
                                             <TableCell className="pl-6 py-4">
@@ -304,7 +306,8 @@ export default function HeadOfficeInventoryView() {
                                             </TableCell>
                                         </TableRow>
                                     ))
-                                )}
+                                )
+                                })()}
                             </TableBody>
                         </Table>
                     </div>
@@ -342,13 +345,13 @@ export default function HeadOfficeInventoryView() {
     )
 }
 
-function StatCard({ label, value, icon, variant, isLoading = false }: {
+function StatCard({ label, value, icon, variant, isLoading = false }: Readonly<{
     label: string;
     value: string | number;
     icon: React.ReactNode;
     variant: 'blue' | 'green' | 'red' | 'amber' | 'purple'
     isLoading?: boolean
-}) {
+}>) {
     const variants = {
         blue: "bg-gradient-to-br from-blue-50/80 to-indigo-50/80 border-blue-100/50 text-blue-700 dark:from-blue-900/20 dark:to-indigo-900/20 dark:border-blue-800/30 dark:text-blue-400",
         green: "bg-gradient-to-br from-emerald-50/80 to-teal-50/80 border-emerald-100/50 text-emerald-700 dark:from-emerald-900/20 dark:to-teal-900/20 dark:border-emerald-800/30 dark:text-emerald-400",

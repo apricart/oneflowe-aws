@@ -22,8 +22,8 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url)
     const organizationId = searchParams.get("organizationId")
     const groupIds = searchParams.get("groupIds")
-    const parsedOrgIds = organizationId ? organizationId.split(',').map(n => parseInt(n)).filter(n => !isNaN(n)) : []
-    const parsedGroupIds = groupIds ? groupIds.split(',').map(n => parseInt(n)).filter(n => !isNaN(n)) : []
+    const parsedOrgIds = organizationId ? organizationId.split(',').map(n => Number.parseInt(n)).filter(n => !Number.isNaN(n)) : []
+    const parsedGroupIds = groupIds ? groupIds.split(',').map(n => Number.parseInt(n)).filter(n => !Number.isNaN(n)) : []
 
     // Access control: users can only view their own organization's products
     // except SUPER_ADMIN who can view any organization
@@ -64,18 +64,8 @@ export async function GET(req: NextRequest) {
         })
         .from(globalProducts)
 
-      if (parsedOrgIds.length === 1) {
-        // Single organization: join and filter
-        query.leftJoin(
-          organizationProducts,
-          and(
-            eq(organizationProducts.globalProductId, globalProducts.id),
-            eq(organizationProducts.organizationId, parsedOrgIds[0])
-          )
-        )
-      } else if (parsedOrgIds.length > 1) {
-        // Multiple organizations: might need to decide how to join (maybe just join first found? or skip org-specific data)
-        // For now, let's join the first one for the names/prices if they exist
+      if (parsedOrgIds.length > 0) {
+        // Organization-specific display fields use the first requested organization.
         query.leftJoin(
           organizationProducts,
           and(

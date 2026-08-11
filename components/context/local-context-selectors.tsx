@@ -16,9 +16,9 @@ const fetcher = async (url: string) => {
 
 export function LocalContextSelectors({
   onChange,
-}: {
+}: Readonly<{
   onChange?: (ctx: { organizationId?: string | null; branchId?: string | null }) => void
-}) {
+}>) {
   const { organizationId: globalOrgId, branchId: globalBranchId } = useAppContext()
   const [localSel, setLocalSel] = React.useState<{ organizationId?: string | null; branchId?: string | null }>({
     organizationId: globalOrgId ?? null,

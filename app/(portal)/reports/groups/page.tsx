@@ -1,40 +1,52 @@
 "use client"
 
-import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from "react"
-import { useRouter, useSearchParams, usePathname } from "next/navigation"
-import useSWR from "swr"
-import { fetcher } from "@/lib/fetcher"
 import { useAppContext } from "@/components/context/app-context"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import {
-    Loader2, RefreshCw, Search, FileText, FileSpreadsheet, Download, FolderTree, ShoppingBag, TrendingUp, ChevronDown, ChevronRight, Layers, LayoutGrid, Building2, Calendar, ShoppingCart, Percent, ArrowUpRight, ArrowDownRight, LayoutDashboard, Table as TableIcon, LineChart as LineChartIcon, RotateCcw
-} from "lucide-react"
-import * as XLSX from "xlsx"
-import { sanitizeSpreadsheetRow } from "@/lib/spreadsheet"
-import { formatPKR, cn } from "@/lib/utils"
-import jsPDF from "jspdf"
-import autoTable from "jspdf-autotable"
-import { Badge } from "@/components/ui/badge"
-import { Role } from "@/lib/rbac"
-import { useSession } from "next-auth/react"
-import { Input } from "@/components/ui/input"
-import {
-    DropdownMenu,
-    DropdownMenuContent,
-    DropdownMenuItem,
-    DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ResponsiveContainer, ComposedChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from "recharts"
-import { GlobalDateFilter, type FilterPreset } from "@/components/dashboard/global-date-filter"
+import { GlobalDateFilter,type FilterPreset,type GlobalDateFilterChange } from "@/components/dashboard/global-date-filter"
+import { BranchFilter } from "@/components/reports/branch-filter"
+import { GroupFilter } from "@/components/reports/group-filter"
+import { KPICard } from "@/components/reports/kpi-card"
 import { MultiSelectFilter } from "@/components/reports/multi-select-filter"
 import { OrganizationFilter as OrgFilter } from "@/components/reports/organization-filter"
-import { GroupFilter } from "@/components/reports/group-filter"
-import { BranchFilter } from "@/components/reports/branch-filter"
-import { KPICard } from "@/components/reports/kpi-card"
-import { Upload } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Card,CardContent,CardHeader,CardTitle } from "@/components/ui/card"
+import {
+DropdownMenu,
+DropdownMenuContent,
+DropdownMenuItem,
+DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Input } from "@/components/ui/input"
+import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from "@/components/ui/table"
+import { Tabs,TabsContent,TabsList,TabsTrigger } from "@/components/ui/tabs"
+import { fetcher } from "@/lib/fetcher"
+import { Role } from "@/lib/rbac"
+import { sanitizeSpreadsheetRow } from "@/lib/spreadsheet"
+import { cn,formatPKR } from "@/lib/utils"
+import jsPDF from "jspdf"
+import autoTable from "jspdf-autotable"
+import {
+Building2,Calendar,
+ChevronDown,ChevronRight,
+FolderTree,
+Layers,
+LayoutDashboard,
+LayoutGrid,
+LineChart as LineChartIcon,
+Loader2,RefreshCw,
+RotateCcw,
+Search,
+ShoppingBag,
+Table as TableIcon,
+TrendingUp,
+Upload
+} from "lucide-react"
+import { useSession } from "next-auth/react"
+import { useRouter,useSearchParams } from "next/navigation"
+import { Fragment,useCallback,useEffect,useMemo,useRef,useState } from "react"
+import { Bar,CartesianGrid,ComposedChart,Legend,ResponsiveContainer,Tooltip,XAxis,YAxis } from "recharts"
+import useSWR from "swr"
+import * as XLSX from "xlsx"
 
 type DateRange = { startDate: Date; endDate: Date }
 
@@ -42,11 +54,9 @@ const ALL_MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 
 export default function GroupsReportPage() {
     const router = useRouter()
-    const pathname = usePathname()
     const searchParams = useSearchParams()
 
     const { organizationId: contextOrgId, isInitialized } = useAppContext()
-    const [searchTerm, setSearchTerm] = useState("")
     const [generatedDate, setGeneratedDate] = useState("")
     const [expandedGroups, setExpandedGroups] = useState<Set<number>>(new Set())
     const [activeTab, setActiveTab] = useState("analytics")
@@ -127,7 +137,7 @@ export default function GroupsReportPage() {
     // ━━━ TIER 3: REPORT (TABLE) ━━━
     const [reportMonths, setReportMonths] = useState<number[]>([])
     const [reportYears, setReportYears] = useState<number[]>([])
-    const [reportOrgIds, setReportOrgIds] = useState<string[]>([])
+    const [, setReportOrgIds] = useState<string[]>([])
     const [reportSearch, setReportSearch] = useState("")
 
     const reportQueryParams = new URLSearchParams(globalQueryParams.toString())
@@ -164,7 +174,7 @@ export default function GroupsReportPage() {
         }
     }, [hasMounted, allYears, activePreset])
 
-    const handleDateChange = useCallback((range: DateRange | null, preset: FilterPreset, c?: boolean, cr?: DateRange | null, m?: number[], y?: number[], cm?: number[], cy?: number[]) => {
+    const handleDateChange = useCallback(({ range, preset, compare: c, compareRange: cr, months: m, years: y, compareMonths: cm, compareYears: cy }: GlobalDateFilterChange) => {
         setDateRange(range)
         setActivePreset(preset)
         if (c !== undefined) setCompare(c)
@@ -190,9 +200,17 @@ export default function GroupsReportPage() {
     }, [mutateGlobal, mutateChart, mutateReport])
 
     const resetReportFilters = useCallback(() => {
-        const defaultOrgIds = contextOrgId
-            ? [String(contextOrgId)]
-            : (role === "SUPER_ADMIN" ? [] : (userOrgId ? [String(userOrgId)] : []))
+        const defaultOrgIds = (() => {
+          if (contextOrgId) {
+            return [String(contextOrgId)]
+          }
+          return ((() => {
+            if (role === "SUPER_ADMIN") {
+              return []
+            }
+            return (userOrgId ? [String(userOrgId)] : [])
+          })())
+        })()
 
         setSelectedOrgIds(defaultOrgIds)
         setSelectedGroupIds([])
@@ -209,9 +227,17 @@ export default function GroupsReportPage() {
     }, [activePreset, allYears, contextOrgId, mutateReport, role, userOrgId])
 
     const resetChartFilters = useCallback(() => {
-        const defaultOrgIds = contextOrgId
-            ? [String(contextOrgId)]
-            : (role === "SUPER_ADMIN" ? [] : (userOrgId ? [String(userOrgId)] : []))
+        const defaultOrgIds = (() => {
+          if (contextOrgId) {
+            return [String(contextOrgId)]
+          }
+          return ((() => {
+            if (role === "SUPER_ADMIN") {
+              return []
+            }
+            return (userOrgId ? [String(userOrgId)] : [])
+          })())
+        })()
 
         setSelectedOrgIds(defaultOrgIds)
         setSelectedGroupIds([])
@@ -244,7 +270,7 @@ export default function GroupsReportPage() {
         const currentYear = new Date().getFullYear()
         
         if (chartYears.length > 1) {
-            return chartYears.sort((a,b) => a-b).map(year => {
+            return chartYears.toSorted((a,b) => a-b).map(year => {
                 const yearData = trend.filter((t: any) => t.date.startsWith(String(year)))
                 const compData = chartData?.compareTrend?.filter((t: any) => t.date.startsWith(String(year))) || []
                 return {
@@ -362,7 +388,7 @@ export default function GroupsReportPage() {
                     }
                 },
             })
-            doc.save(`group-report-${new Date().getTime()}.pdf`)
+            doc.save(`group-report-${Date.now()}.pdf`)
             return
         }
 
@@ -372,7 +398,7 @@ export default function GroupsReportPage() {
         ])
         const workbook = XLSX.utils.book_new()
         XLSX.utils.book_append_sheet(workbook, worksheet, "Groups")
-        XLSX.writeFile(workbook, `group-report-${new Date().getTime()}.${format === 'excel' ? 'xlsx' : 'csv'}`)
+        XLSX.writeFile(workbook, `group-report-${Date.now()}.${format === 'excel' ? 'xlsx' : 'csv'}`)
     }
 
     if (!hasMounted) return <div className="flex h-screen items-center justify-center bg-slate-50 dark:bg-slate-950"><Loader2 className="h-8 w-8 animate-spin text-indigo-500" /></div>
@@ -507,7 +533,7 @@ export default function GroupsReportPage() {
                                                         setSelectedGroupIds(ids);
                                                         setSelectedBranchIds([]);
                                                     }} 
-                                                    organizationId={parseInt(effectiveOrganizationId)} 
+                                                    organizationId={Number.parseInt(effectiveOrganizationId)}
                                                 />
                                             )}
                                             {effectiveOrganizationId && (
@@ -528,7 +554,7 @@ export default function GroupsReportPage() {
                                                     setSelectedGroupIds(ids);
                                                     setSelectedBranchIds([]);
                                                 }} 
-                                                organizationId={parseInt(String(userOrgId || contextOrgId))} 
+                                                organizationId={Number.parseInt(String(userOrgId || contextOrgId))}
                                             />
                                             <BranchFilter 
                                                 selectedIds={selectedBranchIds} 
@@ -543,26 +569,31 @@ export default function GroupsReportPage() {
                                 </div>
                             </div>
                             <CardContent className="p-8">
-                                {(isChartLoading || !normalizedTrend.length) ? (
+                                {(() => {
+                                  if ((isChartLoading || !normalizedTrend.length)) {
+                                    return (
                                     <div className="h-[450px] flex flex-col items-center justify-center gap-4 animate-pulse">
                                         <div className="h-10 w-10 border-4 border-violet-500/20 border-t-violet-500 rounded-full animate-spin" />
                                         <p className="text-[10px] font-black uppercase text-slate-400">Syncing Analytics...</p>
                                     </div>
-                                ) : (
+                                )
+                                  }
+                                  return (
                                     <div className="h-[450px] w-full">
                                         <ResponsiveContainer width="100%" height="100%">
                                             <ComposedChart data={normalizedTrend} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
                                                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" opacity={0.3} />
                                                 <XAxis dataKey="period" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 10, fontWeight: 700 }} dy={10} />
                                                 <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 10, fontWeight: 700 }} tickFormatter={(v) => `₨${v >= 1000 ? (v/1000).toFixed(0)+'K' : v}`} />
-                                                <Tooltip content={(props) => <CustomTooltip {...props} compare={compare} isBuyer={isBuyer} />} />
+                                        <Tooltip content={<CustomTooltip compare={compare} isBuyer={isBuyer} />} />
                                                 <Legend verticalAlign="top" align="right" iconType="circle" wrapperStyle={{ paddingBottom: 30, fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '1px' }} />
                                                 <Bar dataKey="revenue" name={isBuyer ? "Total Purchased" : "Net Revenue"} fill="#8b5cf6" radius={[6, 6, 0, 0]} barSize={32} />
                                                 {compare && <Bar dataKey="prevRevenue" name="Prior Period" fill="#cbd5e1" radius={[6, 6, 0, 0]} barSize={32} />}
                                             </ComposedChart>
                                         </ResponsiveContainer>
                                     </div>
-                                )}
+                                )
+                                })()}
                             </CardContent>
                         </Card>
                     </TabsContent>
@@ -575,10 +606,10 @@ export default function GroupsReportPage() {
                             </div>
                             <GlobalDateFilter
                                 value={dateRange}
-                                onChange={(range, preset, nextCompare, nextCompareRange, months, years, nextCompareMonths, nextCompareYears) => {
-                                    handleDateChange(range, preset, nextCompare, nextCompareRange, months, years, nextCompareMonths, nextCompareYears)
-                                    setReportMonths(months ?? [])
-                                    setReportYears(years ?? [])
+                                onChange={(change) => {
+                                    handleDateChange(change)
+                                    setReportMonths(change.months ?? [])
+                                    setReportYears(change.years ?? [])
                                 }}
                                 activePreset={activePreset}
                                 customRangeOnly
@@ -606,7 +637,7 @@ export default function GroupsReportPage() {
                                             setSelectedGroupIds(ids);
                                             setSelectedBranchIds([]);
                                         }}
-                                        organizationId={effectiveOrganizationId ? parseInt(effectiveOrganizationId) : undefined}
+                                        organizationId={effectiveOrganizationId ? Number.parseInt(effectiveOrganizationId) : undefined}
                                     />
                                     {effectiveOrganizationId && (
                                         <BranchFilter 
@@ -626,7 +657,7 @@ export default function GroupsReportPage() {
                                             setSelectedGroupIds(ids);
                                             setSelectedBranchIds([]);
                                         }} 
-                                        organizationId={parseInt(String(userOrgId || contextOrgId))} 
+                                        organizationId={Number.parseInt(String(userOrgId || contextOrgId))}
                                     />
                                     <BranchFilter 
                                         selectedIds={selectedBranchIds} 
@@ -683,13 +714,20 @@ export default function GroupsReportPage() {
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
-                                        {isReportLoading ? (
-                                            Array(6).fill(0).map((_, i) => (
-                                                <TableRow key={i} className="h-20 animate-pulse"><TableCell colSpan={7}><div className="h-10 bg-slate-50 dark:bg-slate-900/50 rounded-xl mx-4" /></TableCell></TableRow>
+                                        {(() => {
+                                          if (isReportLoading) {
+                                            return (
+                                            Array.from({ length: 6 }, (_, position) => `group-report-loading-${position + 1}`).map((skeletonKey) => (
+                                                <TableRow key={skeletonKey} className="h-20 animate-pulse"><TableCell colSpan={7}><div className="h-10 bg-slate-50 dark:bg-slate-900/50 rounded-xl mx-4" /></TableCell></TableRow>
                                             ))
-                                        ) : filteredGroups.length === 0 ? (
+                                        )
+                                          }
+                                          if (filteredGroups.length === 0) {
+                                            return (
                                             <TableRow><TableCell colSpan={7} className="h-60 text-center text-slate-400 text-xs font-black uppercase tracking-widest">No records found</TableCell></TableRow>
-                                        ) : (
+                                        )
+                                          }
+                                          return (
                                             filteredGroups.map((group: any) => {
                                                 const isExpanded = expandedGroups.has(group.id)
                                                 const hasBranches = group.branches && group.branches.length > 0
@@ -737,7 +775,15 @@ export default function GroupsReportPage() {
                                                                     <span className="text-xs font-bold text-slate-400 tracking-tight">{formatPKR(branch.totalBudget / 100)}</span>
                                                                 </TableCell>
                                                                 <TableCell className="text-center font-black">
-                                                                    <Badge variant="outline" className={cn("text-[9px] font-black uppercase tracking-widest scale-90", branch.status === "active" ? "bg-emerald-50 text-emerald-600 border-emerald-200" : branch.status === "deleted" ? "bg-rose-50 text-rose-600 border-rose-200" : "bg-amber-50 text-amber-600 border-amber-200")}>
+                                                                    <Badge variant="outline" className={cn("text-[9px] font-black uppercase tracking-widest scale-90", (() => {
+                                                                      if (branch.status === "active") {
+                                                                        return "bg-emerald-50 text-emerald-600 border-emerald-200"
+                                                                      }
+                                                                      if (branch.status === "deleted") {
+                                                                        return "bg-rose-50 text-rose-600 border-rose-200"
+                                                                      }
+                                                                      return "bg-amber-50 text-amber-600 border-amber-200"
+                                                                    })())}>
                                                                         {branch.status || "Unknown"}
                                                                     </Badge>
                                                                 </TableCell>
@@ -749,7 +795,8 @@ export default function GroupsReportPage() {
                                                     </Fragment>
                                                 )
                                             })
-                                        )}
+                                        )
+                                        })()}
                                     </TableBody>
                                 </Table>
                             </CardContent>
@@ -766,7 +813,7 @@ export default function GroupsReportPage() {
 }
 
 function CustomTooltip({ active, payload, label, compare, isBuyer }: any) {
-    if (active && payload && payload.length) {
+    if (active && payload?.length) {
         const d = payload[0].payload
         return (
             <div className="bg-white dark:bg-slate-900/95 p-4 border border-slate-200 dark:border-slate-800 shadow-2xl rounded-2xl backdrop-blur-xl">
@@ -800,13 +847,13 @@ function CustomTooltip({ active, payload, label, compare, isBuyer }: any) {
 
 
 
-function MonthFilter({ selected, onChange }: { selected: number[], onChange: (v: number[]) => void }) {
+function MonthFilter({ selected, onChange }: Readonly<{ selected: number[], onChange: (v: number[]) => void }>) {
     const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
     const items = months.map((m, i) => ({ id: i + 1, label: m }))
-    return <MultiSelectFilter title="Months" items={items} selectedIds={selected} onChange={(ids) => onChange(ids.sort((a, b) => a - b))} icon={<Calendar className="h-3.5 w-3.5 mr-2 text-indigo-500" />} placeholder="Months" showSearch={false} />
+    return <MultiSelectFilter title="Months" items={items} selectedIds={selected} onChange={(ids) => onChange(ids.toSorted((a, b) => a - b))} icon={<Calendar className="h-3.5 w-3.5 mr-2 text-indigo-500" />} placeholder="Months" showSearch={false} />
 }
 
-function YearFilter({ selected, onChange, availableYears }: { selected: number[], onChange: (v: number[]) => void, availableYears: number[] }) {
+function YearFilter({ selected, onChange, availableYears }: Readonly<{ selected: number[], onChange: (v: number[]) => void, availableYears: number[] }>) {
     const items = availableYears.map(y => ({ id: y, label: String(y) }))
-    return <MultiSelectFilter title="Years" items={items} selectedIds={selected} onChange={(ids) => onChange(ids.sort((a, b) => a - b))} icon={<Layers className="h-3.5 w-3.5 mr-2 text-indigo-500" />} placeholder="Years" showSearch={false} />
+    return <MultiSelectFilter title="Years" items={items} selectedIds={selected} onChange={(ids) => onChange(ids.toSorted((a, b) => a - b))} icon={<Layers className="h-3.5 w-3.5 mr-2 text-indigo-500" />} placeholder="Years" showSearch={false} />
 }

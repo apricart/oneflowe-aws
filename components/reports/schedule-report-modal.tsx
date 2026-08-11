@@ -1,28 +1,21 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { Clock, Mail, FileText, FileSpreadsheet, FileIcon as FilePdf, CalendarClock, Check, Loader2, Play } from "lucide-react"
-import useSWR, { mutate } from "swr"
+import { useState,useEffect } from "react"
+import { Clock,Mail,FileText,FileSpreadsheet,FileIcon as FilePdf,CalendarClock,Check,Play } from "lucide-react"
+import useSWR,{ mutate } from "swr"
 import { fetcher } from "@/lib/fetcher"
 import { useToast } from "@/hooks/use-toast"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import {
-    Dialog,
-    DialogContent,
-    DialogDescription,
-    DialogHeader,
-    DialogTitle,
-    DialogTrigger,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
 } from "@/components/ui/dialog"
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 
 interface ScheduleReportModalProps {
@@ -37,7 +30,7 @@ interface ScheduleConfig {
     enabled: boolean
 }
 
-export function ScheduleReportModal({ reportName, storageKey = "schedule-report" }: ScheduleReportModalProps) {
+export function ScheduleReportModal({ reportName, storageKey = "schedule-report" }: Readonly<ScheduleReportModalProps>) {
     const [open, setOpen] = useState(false)
     const [saved, setSaved] = useState(false)
     const [isSaving, setIsSaving] = useState(false)
@@ -45,7 +38,7 @@ export function ScheduleReportModal({ reportName, storageKey = "schedule-report"
     const [emailInput, setEmailInput] = useState("")
     const { toast } = useToast()
 
-    const { data: schedules, isLoading } = useSWR<any[]>("/api/v1/reports/schedule", fetcher)
+    const { data: schedules } = useSWR<any[]>("/api/v1/reports/schedule", fetcher)
     const activeSchedule = schedules?.find(s => s.reportName === reportName)
 
     const [config, setConfig] = useState<ScheduleConfig>({
@@ -131,6 +124,7 @@ export function ScheduleReportModal({ reportName, storageKey = "schedule-report"
                 })
             }
         } catch (error) {
+            console.error("Failed to run scheduled report test:", error)
             toast({
                 title: "Test Error",
                 description: "A network error occurred during the test.",
@@ -188,12 +182,12 @@ export function ScheduleReportModal({ reportName, storageKey = "schedule-report"
                 <div className="space-y-5 pt-2">
                     {/* Frequency */}
                     <div>
-                        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2 block">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2 block">
                             Frequency
-                        </label>
+                        </p>
                         <div className="flex gap-2">
                             {(["daily", "weekly", "monthly"] as const).map(freq => (
-                                <button
+                                <button type="button"
                                     key={freq}
                                     onClick={() => setConfig(prev => ({ ...prev, frequency: freq }))}
                                     className={cn(
@@ -211,12 +205,12 @@ export function ScheduleReportModal({ reportName, storageKey = "schedule-report"
 
                     {/* Format */}
                     <div>
-                        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2 block">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2 block">
                             Export Format
-                        </label>
+                        </p>
                         <div className="flex gap-2">
                             {(["pdf", "csv", "excel"] as const).map(fmt => (
-                                <button
+                                <button type="button"
                                     key={fmt}
                                     onClick={() => setConfig(prev => ({ ...prev, format: fmt }))}
                                     className={cn(
@@ -235,11 +229,12 @@ export function ScheduleReportModal({ reportName, storageKey = "schedule-report"
 
                     {/* Email Recipients */}
                     <div>
-                        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2 block">
+                        <label htmlFor="schedule-report-recipients" className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2 block">
                             Email Recipients
                         </label>
                         <div className="flex gap-2">
                             <Input
+                                id="schedule-report-recipients"
                                 type="email"
                                 placeholder="email@example.com"
                                 value={emailInput}
@@ -280,13 +275,21 @@ export function ScheduleReportModal({ reportName, storageKey = "schedule-report"
                             )}
                             disabled={config.emails.length === 0 || isSaving}
                         >
-                            {isSaving ? (
+                            {(() => {
+                              if (isSaving) {
+                                return (
                                 "Saving..."
-                            ) : saved ? (
+                            )
+                              }
+                              if (saved) {
+                                return (
                                 <span className="flex items-center gap-2"><Check className="h-4 w-4" /> Saved Successfully</span>
-                            ) : (
+                            )
+                              }
+                              return (
                                 "Save Schedule"
-                            )}
+                            )
+                            })()}
                         </Button>
 
                         {activeSchedule && (

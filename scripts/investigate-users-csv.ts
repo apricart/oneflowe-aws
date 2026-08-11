@@ -1,6 +1,6 @@
 import * as dotenv from "dotenv"
-import { readFileSync } from "fs"
-import { resolve } from "path"
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
 dotenv.config({ path: ".env.local" })
 dotenv.config()
 
@@ -10,7 +10,7 @@ const ORG_ID = 10
 async function main() {
   const { db } = await import("../lib/db-cli")
   const { branches, users } = await import("../db/schema")
-  const { eq, inArray } = await import("drizzle-orm")
+  const { eq } = await import("drizzle-orm")
 
   // Load all K-Electric branches into a map (lowercase name → branch)
   const allBranches = await db
@@ -26,7 +26,6 @@ async function main() {
   // Load existing usernames to detect conflicts
   const existingUsers = await db.select({ username: users.username, email: users.email }).from(users)
   const existingUsernames = new Set(existingUsers.map(u => (u.username || "").toLowerCase()))
-  const existingEmails = new Set(existingUsers.map(u => (u.email || "").toLowerCase()))
 
   // Parse CSV
   const raw = readFileSync(CSV_PATH, "utf-8")

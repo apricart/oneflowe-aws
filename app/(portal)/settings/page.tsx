@@ -1,11 +1,10 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { useEffect,useState } from "react"
+import { Card,CardContent,CardDescription,CardHeader,CardTitle } from "@/components/ui/card"
 import { MFASettings } from "@/components/mfa/mfa-settings"
 import { useSession } from "next-auth/react"
-import { Settings, User, Shield, Building2, GitBranch, Mail, Clock3 } from "lucide-react"
-import { Button } from "@/components/ui/button"
+import { User,Shield,Building2,GitBranch,Mail,Clock3 } from "lucide-react"
 import useSWR from "swr"
 import { useAppContext } from "@/components/context/app-context"
 
@@ -135,26 +134,26 @@ export default function SettingsPage() {
           <CardContent>
             <div className="space-y-4">
               <div>
-                <label className="text-sm font-medium text-slate-900 dark:text-slate-100">Full Name</label>
+                <p className="text-sm font-medium text-slate-900 dark:text-slate-100">Full Name</p>
                 <p className="text-sm text-muted-foreground">
                   {(session?.user as any)?.fullName || "N/A"}
                 </p>
               </div>
               <div>
-                <label className="text-sm font-medium text-slate-900 dark:text-slate-100">Username</label>
+                <p className="text-sm font-medium text-slate-900 dark:text-slate-100">Username</p>
                 <p className="text-sm text-muted-foreground font-mono">
                   {username || "N/A"}
                 </p>
               </div>
               <div>
-                <label className="text-sm font-medium text-slate-900 dark:text-slate-100">Email Address</label>
+                <p className="text-sm font-medium text-slate-900 dark:text-slate-100">Email Address</p>
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Mail className="h-4 w-4" />
                   <span>{userEmail || "N/A"}</span>
                 </div>
               </div>
               <div>
-                <label className="text-sm font-medium text-slate-900 dark:text-slate-100">Role</label>
+                <p className="text-sm font-medium text-slate-900 dark:text-slate-100">Role</p>
                 <p className="text-sm text-muted-foreground">
                   {(session?.user as any)?.role || "N/A"}
                 </p>

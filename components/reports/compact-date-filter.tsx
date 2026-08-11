@@ -1,20 +1,19 @@
 "use client"
 
 import * as React from "react"
-import { format } from "date-fns"
-import { Calendar as CalendarIcon, ChevronDown, Check } from "lucide-react"
+import { Calendar as CalendarIcon,ChevronDown,Check } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import {
-    DropdownMenu,
-    DropdownMenuContent,
-    DropdownMenuItem,
-    DropdownMenuTrigger,
-    DropdownMenuSeparator,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Popover,PopoverContent,PopoverTrigger } from "@/components/ui/popover"
 import { Calendar } from "@/components/ui/calendar"
-import { presets, getPresetLabel, FilterPreset } from "@/components/dashboard/global-date-filter"
+import { presets,getPresetLabel,FilterPreset } from "@/components/dashboard/global-date-filter"
 import type { DateRange } from "@/lib/hooks/use-sales-performance"
 
 interface CompactDateFilterProps {
@@ -25,7 +24,7 @@ interface CompactDateFilterProps {
     compare?: boolean
 }
 
-export function CompactDateFilter({ value, onChange, activePreset, className, compare }: CompactDateFilterProps) {
+export function CompactDateFilter({ value, onChange, activePreset, className, compare }: Readonly<CompactDateFilterProps>) {
     const [calendarOpen, setCalendarOpen] = React.useState(false)
 
     const handleSelectPreset = (preset: FilterPreset) => {
@@ -99,9 +98,9 @@ export function CompactDateFilter({ value, onChange, activePreset, className, co
                             onInteractOutside={() => setCalendarOpen(false)}
                             onOpenAutoFocus={(e) => e.preventDefault()}
                         >
-                            <div onClick={(e) => e.stopPropagation()}>
+                            <div>
                                 <Calendar
-                                    initialFocus
+                                    autoFocus
                                     mode="range"
                                     defaultMonth={value?.startDate || new Date()}
                                     selected={{

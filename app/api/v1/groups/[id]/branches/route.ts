@@ -1,11 +1,11 @@
-import { NextRequest, NextResponse } from "next/server"
+import { NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
-import { groups, branches, groupAuditLogs, branchInventory } from "@/db/schema"
-import { eq, inArray, and, sql, isNull, count } from "drizzle-orm"
+import { groups,branches,groupAuditLogs,branchInventory } from "@/db/schema"
+import { eq,inArray,and,sql,isNull,count } from "drizzle-orm"
 import { invalidateByPrefix } from "@/lib/cache-utils"
-import { groupBranchesUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
+import { groupBranchesUpdateSchema,validationMessage } from "@/lib/server/mutation-validation"
 
 export async function GET(
     req: Request,
@@ -17,8 +17,8 @@ export async function GET(
         const session = await getServerSession(authOptions)
         if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
-        const groupId = parseInt(id)
-        if (isNaN(groupId)) return NextResponse.json({ error: "Invalid ID" }, { status: 400 })
+        const groupId = Number.parseInt(id)
+        if (Number.isNaN(groupId)) return NextResponse.json({ error: "Invalid ID" }, { status: 400 })
 
         const assignedBranches = await db
             .select()
@@ -27,6 +27,7 @@ export async function GET(
 
         return NextResponse.json({ branches: assignedBranches })
     } catch (e: any) {
+        console.error("Failed to list group branches:", e)
         return NextResponse.json({ error: "Internal Server Error" }, { status: 500 })
     }
 }
@@ -45,8 +46,8 @@ export async function PUT(
         const userOrgId = (session.user as any).organizationId
         if (role !== "SUPER_ADMIN" && role !== "HEAD_OFFICE") return NextResponse.json({ error: "Forbidden" }, { status: 403 })
 
-        const groupId = parseInt(id)
-        if (isNaN(groupId)) return NextResponse.json({ error: "Invalid ID" }, { status: 400 })
+        const groupId = Number.parseInt(id)
+        if (Number.isNaN(groupId)) return NextResponse.json({ error: "Invalid ID" }, { status: 400 })
 
         const [group] = await db
             .select()
@@ -310,6 +311,7 @@ export async function PUT(
             newlyAddedBranchIds,
         })
     } catch (e: any) {
+        console.error("Failed to update group branch assignments:", e)
         return NextResponse.json({ error: "Internal Server Error" }, { status: 500 })
     }
 }

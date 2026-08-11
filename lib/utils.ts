@@ -42,7 +42,7 @@ const pkFormatter = new Intl.NumberFormat("en-PK", {
 export function formatPKR(value: number, options?: Intl.NumberFormatOptions) {
   try {
     // Validate input
-    if (typeof value !== 'number' || isNaN(value)) {
+    if (typeof value !== 'number' || Number.isNaN(value)) {
       console.warn('[Utils] Invalid value for formatPKR:', value)
       return 'PKR 0.00'
     }
@@ -79,7 +79,7 @@ export function escapeLikePattern(input: string): string {
     }
 
     // Escape %, _, and \ which have special meaning in LIKE patterns
-    return input.replace(/[%_\\]/g, '\\$&')
+    return input.replace(/[%_\\]/g, String.raw`\$&`)
   } catch (error) {
     console.error('[Utils] Error escaping LIKE pattern:', error)
     return ''
@@ -123,7 +123,7 @@ export function safeJsonParse<T = any>(json: string): T | null {
 
     return JSON.parse(json) as T
   } catch (error) {
-    console.error('[Utils] JSON parse error')
+    console.error('[Utils] JSON parse error:', error)
     return null
   }
 }
@@ -134,15 +134,15 @@ export function safeJsonParse<T = any>(json: string): T | null {
 export function safeParseInt(value: string | number, defaultValue: number = 0): number {
   try {
     if (typeof value === 'number') {
-      return isNaN(value) ? defaultValue : value
+      return Number.isNaN(value) ? defaultValue : value
     }
 
     if (!value || typeof value !== 'string') {
       return defaultValue
     }
 
-    const parsed = parseInt(value, 10)
-    return isNaN(parsed) ? defaultValue : parsed
+    const parsed = Number.parseInt(value, 10)
+    return Number.isNaN(parsed) ? defaultValue : parsed
   } catch (error) {
     console.error('[Utils] Error parsing int:', error)
     return defaultValue
@@ -155,15 +155,15 @@ export function safeParseInt(value: string | number, defaultValue: number = 0): 
 export function safeParseFloat(value: string | number, defaultValue: number = 0): number {
   try {
     if (typeof value === 'number') {
-      return isNaN(value) ? defaultValue : value
+      return Number.isNaN(value) ? defaultValue : value
     }
 
     if (!value || typeof value !== 'string') {
       return defaultValue
     }
 
-    const parsed = parseFloat(value)
-    return isNaN(parsed) ? defaultValue : parsed
+    const parsed = Number.parseFloat(value)
+    return Number.isNaN(parsed) ? defaultValue : parsed
   } catch (error) {
     console.error('[Utils] Error parsing float:', error)
     return defaultValue
@@ -177,7 +177,7 @@ export function formatDate(date: Date | string, locale: string = 'en-US'): strin
   try {
     const dateObj = typeof date === 'string' ? new Date(date) : date
 
-    if (!(dateObj instanceof Date) || isNaN(dateObj.getTime())) {
+    if (!(dateObj instanceof Date) || Number.isNaN(dateObj.getTime())) {
       console.warn('[Utils] Invalid date:', date)
       return 'Invalid Date'
     }
@@ -200,7 +200,7 @@ export function formatDateTime(date: Date | string, locale: string = 'en-US'): s
   try {
     const dateObj = typeof date === 'string' ? new Date(date) : date
 
-    if (!(dateObj instanceof Date) || isNaN(dateObj.getTime())) {
+    if (!(dateObj instanceof Date) || Number.isNaN(dateObj.getTime())) {
       console.warn('[Utils] Invalid date:', date)
       return 'Invalid Date'
     }
@@ -228,7 +228,7 @@ export function clamp(value: number, min: number, max: number): number {
       return min
     }
 
-    if (isNaN(value) || isNaN(min) || isNaN(max)) {
+    if (Number.isNaN(value) || Number.isNaN(min) || Number.isNaN(max)) {
       console.warn('[Utils] NaN values in clamp')
       return min
     }

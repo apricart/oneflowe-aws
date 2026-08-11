@@ -29,22 +29,22 @@ export async function GET(req: NextRequest) {
         const userIdsRaw = url.searchParams.get("userIds")
         const groupIdsRaw = url.searchParams.get("groupIds")
 
-        const parsedMonths = monthsRaw ? monthsRaw.split(',').map(Number).filter(n => !isNaN(n) && n >= 1 && n <= 12) : []
-        const parsedYears = yearsRaw ? yearsRaw.split(',').map(Number).filter(n => !isNaN(n) && n > 2000) : []
+        const parsedMonths = monthsRaw ? monthsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n >= 1 && n <= 12) : []
+        const parsedYears = yearsRaw ? yearsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n > 2000) : []
         const userIds = userIdsRaw ? userIdsRaw.split(',').filter(id => id.length > 5) : []
-        const groupIds = groupIdsRaw ? groupIdsRaw.split(',').map(Number).filter(n => !isNaN(n)) : []
+        const groupIds = groupIdsRaw ? groupIdsRaw.split(',').map(Number).filter(n => !Number.isNaN(n)) : []
 
         // RBAC & Filter Context Parsing
         let organizationIds: number[] = []
         if (organizationIdsParam) {
-            organizationIds = organizationIdsParam.split(",").map(Number).filter(id => !isNaN(id) && id > 0)
+            organizationIds = organizationIdsParam.split(",").map(Number).filter(id => !Number.isNaN(id) && id > 0)
         } else if (userOrgId) {
             organizationIds = [userOrgId]
         }
 
         let branchIds: number[] = []
         if (branchIdsParam) {
-            branchIds = branchIdsParam.split(",").map(id => Number(id)).filter(id => !isNaN(id) && id > 0)
+            branchIds = branchIdsParam.split(",").map(Number).filter(id => !Number.isNaN(id) && id > 0)
         } else if (groupIds.length > 0) {
             const b = await db.select({ id: branches.id }).from(branches).where(inArray(branches.groupId, groupIds))
             branchIds = b.map(br => br.id)
@@ -79,10 +79,10 @@ export async function GET(req: NextRequest) {
         }
         
         if (parsedMonths.length > 0) {
-            baseConditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedMonths, sql`, `)})`)
+            baseConditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedMonths, sql.raw(", "))})`)
         }
         if (parsedYears.length > 0) {
-            baseConditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedYears, sql`, `)})`)
+            baseConditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedYears, sql.raw(", "))})`)
         }
 
         if (parsedMonths.length === 0 && parsedYears.length === 0) {

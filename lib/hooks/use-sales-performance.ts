@@ -70,7 +70,7 @@ export type DashboardStatus = "all" | "PENDING" | "FULFILLED" | "REFUNDED" | "RE
 const normalizeMonthsForApi = (selectedMonths?: number[]) => {
     if (!selectedMonths || selectedMonths.length === 0) return []
 
-    const isLegacyZeroBased = selectedMonths.some(month => month === 0)
+    const isLegacyZeroBased = selectedMonths.includes(0)
     const normalized = selectedMonths
         .map(month => isLegacyZeroBased ? month + 1 : month)
         .filter(month => Number.isInteger(month) && month >= 1 && month <= 12)
@@ -78,23 +78,23 @@ const normalizeMonthsForApi = (selectedMonths?: number[]) => {
     return Array.from(new Set(normalized)).sort((a, b) => a - b)
 }
 
-export function useSalesPerformance(
-    organizationId?: string | null,
-    branchId?: string | null,
-    branchIds?: string[], // multi-branch selection
-    groupId?: string | null,
-    dateRange?: DateRange | null,
-    status?: DashboardStatus,
-    compare?: boolean,
-    compareRange?: DateRange | null,
-    months?: number[],
-    years?: number[],
-    compareMonths?: number[],
-    compareYears?: number[],
-    granularity?: "hourly" | "daily" | "monthly" | "yearly",
-    organizationIds?: string[], // multi-org selection
-    includeStatusCounts?: boolean,
-    options?: {
+export interface SalesPerformanceOptions {
+    organizationId?: string | null
+    branchId?: string | null
+    branchIds?: string[]
+    groupId?: string | null
+    dateRange?: DateRange | null
+    status?: DashboardStatus
+    compare?: boolean
+    compareRange?: DateRange | null
+    months?: number[]
+    years?: number[]
+    compareMonths?: number[]
+    compareYears?: number[]
+    granularity?: "hourly" | "daily" | "monthly" | "yearly"
+    organizationIds?: string[]
+    includeStatusCounts?: boolean
+    request?: {
         // Pass false to defer fetching (e.g. until org/branch context has
         // hydrated) — prevents a throwaway request with the wrong scope.
         enabled?: boolean
@@ -102,103 +102,115 @@ export function useSalesPerformance(
         // is being fetched, instead of resetting data to undefined.
         keepPreviousData?: boolean
     }
-) {
-    const url = useMemo(() => {
-        const params = new URLSearchParams()
-        
-        if (granularity) {
-            params.set("granularity", granularity)
-        }
+}
 
-        if (organizationIds && organizationIds.length > 0) {
-            params.set("organizationIds", organizationIds.join(","))
-        } else if (organizationId && organizationId !== "null" && organizationId !== "0") {
-            params.set("organizationId", organizationId)
-        }
+const hasValues = <T,>(values?: T[]) => Boolean(values?.length)
 
-        if (branchIds && branchIds.length > 0) {
-            params.set("branchIds", branchIds.join(","))
-        } else if (branchId && branchId !== "null" && branchId !== "0") {
-            params.set("branchId", branchId)
-        }
+const addScopeParams = (params: URLSearchParams, options: SalesPerformanceOptions) => {
+    const { organizationIds, organizationId, branchIds, branchId, groupId } = options
+    if (hasValues(organizationIds)) {
+        params.set("organizationIds", organizationIds!.join(","))
+    } else if (organizationId && organizationId !== "null" && organizationId !== "0") {
+        params.set("organizationId", organizationId)
+    }
 
-        if (groupId && groupId !== "all") {
-            params.set("groupId", groupId)
-        }
+    if (hasValues(branchIds)) {
+        params.set("branchIds", branchIds!.join(","))
+    } else if (branchId && branchId !== "null" && branchId !== "0") {
+        params.set("branchId", branchId)
+    }
 
-        if (dateRange && (!months || months.length === 0) && (!years || years.length === 0)) {
-            params.set("startDate", dateRange.startDate.toISOString())
-            params.set("endDate", dateRange.endDate.toISOString())
-        } else if ((!months || months.length === 0) && (!years || years.length === 0)) {
-            // Default: today (only if no custom array is utilized)
-            const today = new Date()
-            const start = new Date(today)
-            start.setHours(0, 0, 0, 0)
-            const end = new Date(today)
-            end.setHours(23, 59, 59, 999)
-            params.set("startDate", start.toISOString())
-            params.set("endDate", end.toISOString())
-        }
+    if (groupId && groupId !== "all") params.set("groupId", groupId)
+}
 
-        const apiMonths = normalizeMonthsForApi(months)
-        if (apiMonths.length > 0) {
-            params.set("months", apiMonths.join(","))
-        }
+const addDateParams = (params: URLSearchParams, options: SalesPerformanceOptions) => {
+    const { dateRange, months, years } = options
+    const hasMonthOrYearSelection = hasValues(months) || hasValues(years)
+    if (dateRange && !hasMonthOrYearSelection) {
+        params.set("startDate", dateRange.startDate.toISOString())
+        params.set("endDate", dateRange.endDate.toISOString())
+        return
+    }
+    if (hasMonthOrYearSelection) return
 
-        if (years && years.length > 0) {
-            params.set("years", years.join(","))
-        }
+    const today = new Date()
+    const start = new Date(today)
+    const end = new Date(today)
+    start.setHours(0, 0, 0, 0)
+    end.setHours(23, 59, 59, 999)
+    params.set("startDate", start.toISOString())
+    params.set("endDate", end.toISOString())
+}
 
-        if (status && status !== "all") {
-            params.set("status", status)
-        }
+const addPeriodSelections = (params: URLSearchParams, options: SalesPerformanceOptions) => {
+    const apiMonths = normalizeMonthsForApi(options.months)
+    if (apiMonths.length > 0) params.set("months", apiMonths.join(","))
+    if (hasValues(options.years)) params.set("years", options.years!.join(","))
+}
 
-        if (compare) {
-            params.set("compare", "true")
-            if (compareRange) {
-                params.set("compareStartDate", compareRange.startDate.toISOString())
-                params.set("compareEndDate", compareRange.endDate.toISOString())
-            }
-            const apiCompareMonths = normalizeMonthsForApi(compareMonths)
-            if (apiCompareMonths.length > 0) {
-                params.set("compareMonths", apiCompareMonths.join(","))
-            }
-            if (compareYears && compareYears.length > 0) {
-                params.set("compareYears", compareYears.join(","))
-            }
-        }
+const addComparisonParams = (params: URLSearchParams, options: SalesPerformanceOptions) => {
+    if (!options.compare) return
 
-        if (includeStatusCounts && (!status || status === "all")) {
-            params.set("includeStatusCounts", "true")
-        }
+    params.set("compare", "true")
+    if (options.compareRange) {
+        params.set("compareStartDate", options.compareRange.startDate.toISOString())
+        params.set("compareEndDate", options.compareRange.endDate.toISOString())
+    }
+    const apiCompareMonths = normalizeMonthsForApi(options.compareMonths)
+    if (apiCompareMonths.length > 0) params.set("compareMonths", apiCompareMonths.join(","))
+    if (hasValues(options.compareYears)) params.set("compareYears", options.compareYears!.join(","))
+}
 
-        return `/api/v1/analytics/sales-performance?${params.toString()}`
-    }, [organizationId, branchId, branchIds, groupId, dateRange, status, compare, compareRange, months, years, compareMonths, compareYears, granularity, organizationIds, includeStatusCounts])
+const buildSalesPerformanceUrl = (options: SalesPerformanceOptions) => {
+    const params = new URLSearchParams()
+    if (options.granularity) params.set("granularity", options.granularity)
+    addScopeParams(params, options)
+    addDateParams(params, options)
+    addPeriodSelections(params, options)
+    if (options.status && options.status !== "all") params.set("status", options.status)
+    addComparisonParams(params, options)
+    if (options.includeStatusCounts && (!options.status || options.status === "all")) {
+        params.set("includeStatusCounts", "true")
+    }
+    return `/api/v1/analytics/sales-performance?${params.toString()}`
+}
 
-    return useSWR<SalesPerformanceResponse>(options?.enabled === false ? null : url, fetcher, {
+export function useSalesPerformance({
+    organizationId,
+    branchId,
+    branchIds,
+    groupId,
+    dateRange,
+    status,
+    compare,
+    compareRange,
+    months,
+    years,
+    compareMonths,
+    compareYears,
+    granularity,
+    organizationIds,
+    includeStatusCounts,
+    request,
+}: SalesPerformanceOptions = {}) {
+    const url = useMemo(
+        () => buildSalesPerformanceUrl({
+            organizationId, branchId, branchIds, groupId, dateRange, status, compare,
+            compareRange, months, years, compareMonths, compareYears, granularity,
+            organizationIds, includeStatusCounts,
+        }),
+        [organizationId, branchId, branchIds, groupId, dateRange, status, compare, compareRange, months, years, compareMonths, compareYears, granularity, organizationIds, includeStatusCounts],
+    )
+
+    return useSWR<SalesPerformanceResponse>(request?.enabled === false ? null : url, fetcher, {
         revalidateOnFocus: false,
         revalidateOnReconnect: true,
         refreshInterval: 120_000, // 2 minutes
-        keepPreviousData: options?.keepPreviousData === true,
+        keepPreviousData: request?.keepPreviousData === true,
     })
 }
 
 // Convenience hook for the lifetime stats using status filter
-export function useDashboardKPIs(
-    organizationId?: string | null,
-    branchId?: string | null,
-    branchIds?: string[],
-    groupId?: string | null,
-    dateRange?: DateRange | null,
-    status?: DashboardStatus,
-    compare?: boolean,
-    compareRange?: DateRange | null,
-    months?: number[],
-    years?: number[],
-    compareMonths?: number[],
-    compareYears?: number[],
-    granularity?: "hourly" | "daily" | "monthly" | "yearly",
-    organizationIds?: string[]
-) {
-    return useSalesPerformance(organizationId, branchId, branchIds, groupId, dateRange, status, compare, compareRange, months, years, compareMonths, compareYears, granularity, organizationIds)
+export function useDashboardKPIs(options: Omit<SalesPerformanceOptions, "includeStatusCounts" | "request"> = {}) {
+    return useSalesPerformance(options)
 }

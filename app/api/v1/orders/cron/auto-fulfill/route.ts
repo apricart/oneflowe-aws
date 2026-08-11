@@ -70,8 +70,7 @@ async function runAutoFulfill(dryRun = false) {
           .limit(1)
 
         if (
-          !live ||
-          live.status !== "APPROVED" ||
+          live?.status !== "APPROVED" ||
           live.fulfillmentStatus !== "DELIVERED"
         ) {
           // Already fulfilled (or rolled back) by another process — skip safely

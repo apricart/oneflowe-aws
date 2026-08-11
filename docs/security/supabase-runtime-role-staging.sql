@@ -220,9 +220,9 @@ BEGIN
   LOOP
     EXECUTE format('DROP POLICY IF EXISTS oneflowe_tenant_isolation ON public.%I', table_name);
     EXECUTE format(
-      'CREATE POLICY oneflowe_tenant_isolation ON public.%I FOR ALL TO oneflowe_runtime
-       USING (oneflowe_rls.tenant_allowed(organization_id, branch_id))
-       WITH CHECK (oneflowe_rls.tenant_allowed(organization_id, branch_id))',
+      'CREATE POLICY oneflowe_tenant_isolation ON public.%I FOR ALL TO oneflowe_runtime ' ||
+      'USING (oneflowe_rls.tenant_allowed(organization_id, branch_id)) ' ||
+      'WITH CHECK (oneflowe_rls.tenant_allowed(organization_id, branch_id))',
       table_name
     );
   END LOOP;
@@ -253,9 +253,9 @@ BEGIN
   LOOP
     EXECUTE format('DROP POLICY IF EXISTS oneflowe_tenant_isolation ON public.%I', table_name);
     EXECUTE format(
-      'CREATE POLICY oneflowe_tenant_isolation ON public.%I FOR ALL TO oneflowe_runtime
-       USING (oneflowe_rls.tenant_allowed(organization_id))
-       WITH CHECK (oneflowe_rls.tenant_allowed(organization_id))',
+      'CREATE POLICY oneflowe_tenant_isolation ON public.%I FOR ALL TO oneflowe_runtime ' ||
+      'USING (oneflowe_rls.tenant_allowed(organization_id)) ' ||
+      'WITH CHECK (oneflowe_rls.tenant_allowed(organization_id))',
       table_name
     );
   END LOOP;
@@ -273,17 +273,15 @@ BEGIN
     EXECUTE format('DROP POLICY IF EXISTS oneflowe_tenant_or_global_select ON public.%I', table_name);
     EXECUTE format('DROP POLICY IF EXISTS oneflowe_tenant_write ON public.%I', table_name);
     EXECUTE format(
-      'CREATE POLICY oneflowe_tenant_or_global_select ON public.%I FOR SELECT TO oneflowe_runtime
-       USING (
-         oneflowe_rls.has_valid_context()
-         AND (organization_id IS NULL OR oneflowe_rls.tenant_allowed(organization_id))
-       )',
+      'CREATE POLICY oneflowe_tenant_or_global_select ON public.%I FOR SELECT TO oneflowe_runtime ' ||
+      'USING (oneflowe_rls.has_valid_context() ' ||
+      'AND (organization_id IS NULL OR oneflowe_rls.tenant_allowed(organization_id)))',
       table_name
     );
     EXECUTE format(
-      'CREATE POLICY oneflowe_tenant_write ON public.%I FOR ALL TO oneflowe_runtime
-       USING (oneflowe_rls.tenant_allowed(organization_id))
-       WITH CHECK (oneflowe_rls.tenant_allowed(organization_id))',
+      'CREATE POLICY oneflowe_tenant_write ON public.%I FOR ALL TO oneflowe_runtime ' ||
+      'USING (oneflowe_rls.tenant_allowed(organization_id)) ' ||
+      'WITH CHECK (oneflowe_rls.tenant_allowed(organization_id))',
       table_name
     );
   END LOOP;
@@ -369,14 +367,14 @@ BEGIN
     EXECUTE format('DROP POLICY IF EXISTS oneflowe_global_select ON public.%I', table_name);
     EXECUTE format('DROP POLICY IF EXISTS oneflowe_global_write ON public.%I', table_name);
     EXECUTE format(
-      'CREATE POLICY oneflowe_global_select ON public.%I FOR SELECT TO oneflowe_runtime
-       USING (oneflowe_rls.has_valid_context() OR oneflowe_rls.auth_bootstrap())',
+      'CREATE POLICY oneflowe_global_select ON public.%I FOR SELECT TO oneflowe_runtime ' ||
+      'USING (oneflowe_rls.has_valid_context() OR oneflowe_rls.auth_bootstrap())',
       table_name
     );
     EXECUTE format(
-      'CREATE POLICY oneflowe_global_write ON public.%I FOR ALL TO oneflowe_runtime
-       USING (oneflowe_rls.is_privileged_context())
-       WITH CHECK (oneflowe_rls.is_privileged_context())',
+      'CREATE POLICY oneflowe_global_write ON public.%I FOR ALL TO oneflowe_runtime ' ||
+      'USING (oneflowe_rls.is_privileged_context()) ' ||
+      'WITH CHECK (oneflowe_rls.is_privileged_context())',
       table_name
     );
   END LOOP;
@@ -447,9 +445,9 @@ BEGIN
   LOOP
     EXECUTE format('DROP POLICY IF EXISTS oneflowe_privileged_only ON public.%I', table_name);
     EXECUTE format(
-      'CREATE POLICY oneflowe_privileged_only ON public.%I FOR ALL TO oneflowe_runtime
-       USING (oneflowe_rls.is_privileged_context())
-       WITH CHECK (oneflowe_rls.is_privileged_context())',
+      'CREATE POLICY oneflowe_privileged_only ON public.%I FOR ALL TO oneflowe_runtime ' ||
+      'USING (oneflowe_rls.is_privileged_context()) ' ||
+      'WITH CHECK (oneflowe_rls.is_privileged_context())',
       table_name
     );
   END LOOP;

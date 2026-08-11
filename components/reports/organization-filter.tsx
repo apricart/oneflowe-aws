@@ -23,8 +23,8 @@ export function OrganizationFilter({
     onChange, 
     placeholder = "Select Organizations",
     maxSelect
-}: OrganizationFilterProps) {
-    const { data, isLoading } = useOrganizations()
+}: Readonly<OrganizationFilterProps>) {
+    const { data } = useOrganizations()
     const orgs = (data?.items || []) as Organization[]
     const items = orgs.map(o => ({ id: o.id.toString(), label: o.name }))
 

@@ -36,7 +36,7 @@ export function getAutoApproveMeta(order: OrderLike | null) {
 
     // Validate and parse date
     const createdAt = new Date(order.createdAt).getTime()
-    if (isNaN(createdAt)) {
+    if (Number.isNaN(createdAt)) {
       console.error('[OrderUtils] Invalid createdAt date:', order.createdAt)
       return null
     }
@@ -87,6 +87,35 @@ export function getAutoApprovalCountdown(order: OrderLike | null): string | null
     console.error('[OrderUtils] Error in getAutoApprovalCountdown:', error)
     return null
   }
+}
+
+function buildTimelineStep(options: {
+  step: typeof STATUS_FLOW[number]
+  index: number
+  activeIndex: number
+  normalizedStatus: string
+  statusAtRefund?: string | null
+  isPartialRefund?: boolean
+  approvalToken?: string | null
+}) {
+  const { step, index, activeIndex, normalizedStatus, statusAtRefund, isPartialRefund, approvalToken } = options
+  let state = "upcoming"
+  const label = step.key === "refunded" && isPartialRefund ? "Partially Refunded" : step.label
+
+  if (normalizedStatus === "refunded" && step.key === "fulfilled") {
+    const refundOrigin = statusAtRefund?.toLowerCase()?.trim()
+    if (refundOrigin !== "fulfilled") return { ...step, label, state: "skipped", approvalToken: null }
+  }
+
+  if (index < activeIndex || (index === activeIndex && ["fulfilled", "refunded"].includes(step.key))) {
+    state = "complete"
+  } else if (index === activeIndex) {
+    state = "current"
+  }
+
+  const tokenToLink = step.key === "approved" && ["complete", "current"].includes(state) ? approvalToken ?? null : null
+  if (step.key === "refunded" && isPartialRefund && state === "upcoming") state = "current"
+  return { ...step, label, state, approvalToken: tokenToLink }
 }
 
 /**
@@ -142,60 +171,15 @@ export function buildStatusTimeline(
       }))
     }
 
-    const idx = activeIndex
-
-    // Build timeline
-    return STATUS_FLOW.map((step, index) => {
-      let state = "upcoming"
-      let label: string = step.label
-      let tokenToLink: string | null = null
-
-      // Dynamic label for partial refund
-      if (step.key === "refunded" && isPartialRefund) {
-        label = "Partially Refunded"
-      }
-
-      // Special handling for Refunded state skips
-      if (normalized === "refunded" && step.key === "fulfilled") {
-        const refundOrigin = statusAtRefund?.toLowerCase()?.trim()
-        const wasFulfilled = refundOrigin === "fulfilled"
-
-        if (!wasFulfilled) {
-          return { ...step, label, state: "skipped", approvalToken: null }
-        }
-      }
-
-      if (index < idx) {
-        state = "complete"
-      } else if (index === idx) {
-        // Terminal states should show as complete (green check) rather than current (clock)
-        if (["fulfilled", "refunded"].includes(step.key)) {
-          state = "complete"
-        } else {
-          state = "current"
-        }
-      }
-
-      // Attach token to "Approved" step if present and order reached that stage
-      if (step.key === "approved" && (state === "complete" || state === "current") && approvalToken) {
-        tokenToLink = approvalToken
-      }
-
-      // Highlight Partially Refunded even if order is not fully "refunded"
-      if (step.key === "refunded" && isPartialRefund && state === "upcoming") {
-        state = "current" // Highlight it as the active additional stage
-      }
-
-      // Correction for skipped fulfilled if we relied on index < idx
-      if (state === "complete" && step.key === "fulfilled" && normalized === "refunded") {
-        const refundOrigin = statusAtRefund?.toLowerCase()?.trim()
-        if (refundOrigin && refundOrigin !== "fulfilled") {
-          state = "skipped"
-        }
-      }
-
-      return { ...step, label, state, approvalToken: tokenToLink }
-    })
+    return STATUS_FLOW.map((step, index) => buildTimelineStep({
+      step,
+      index,
+      activeIndex,
+      normalizedStatus: normalized,
+      statusAtRefund,
+      isPartialRefund,
+      approvalToken,
+    }))
   } catch (error) {
     console.error('[OrderUtils] Error in buildStatusTimeline:', error)
     // Return safe default

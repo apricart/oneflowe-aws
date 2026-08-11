@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
 
         // For admin users using context selector, accept organizationId from query param
         if (orgIdParam && role === "SUPER_ADMIN") {
-            const parsedOrgId = parseInt(orgIdParam)
+            const parsedOrgId = Number.parseInt(orgIdParam)
             if (Number.isFinite(parsedOrgId)) {
                 orgId = parsedOrgId
             }

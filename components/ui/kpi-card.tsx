@@ -1,7 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { getValueFontSize } from "@/components/dashboard/charts"
 
-export function KpiCard({ title, value, hint, icon: Icon, colorClass = "text-blue-600" }: { title: string; value: string | number; hint?: string; icon?: any; colorClass?: string }) {
+export function KpiCard({ title, value, hint, icon: Icon, colorClass = "text-blue-600" }: Readonly<{ title: string; value: string | number; hint?: string; icon?: any; colorClass?: string }>) {
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">

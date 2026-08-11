@@ -5,7 +5,7 @@
  * Tokens are hashed using bcrypt - never stored in plaintext.
  */
 
-import { randomBytes } from 'crypto'
+import { randomBytes } from 'node:crypto'
 import bcrypt from 'bcryptjs'
 
 // Characters used for token generation (no confusing chars like 0/O, 1/I/L)
@@ -19,7 +19,7 @@ const BCRYPT_ROUNDS = 10
  * Validate token length
  */
 function validateTokenLength(length: number): number {
-    if (typeof length !== 'number' || isNaN(length)) {
+    if (typeof length !== 'number' || Number.isNaN(length)) {
         console.warn(`[ApprovalToken] Invalid length: ${length}, using default: ${DEFAULT_TOKEN_LENGTH}`)
         return DEFAULT_TOKEN_LENGTH
     }

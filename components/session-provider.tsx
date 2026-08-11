@@ -2,7 +2,7 @@
 
 import { SessionProvider } from "next-auth/react"
 
-export function AuthSessionProvider({ children }: { children: React.ReactNode }) {
+export function AuthSessionProvider({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <SessionProvider
       // NextAuth v4 maps a failed session fetch and an empty session to the

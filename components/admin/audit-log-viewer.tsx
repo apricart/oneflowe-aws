@@ -1,24 +1,22 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import useSWR from "swr"
 import { useAppContext } from "@/components/context/app-context"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Button } from "@/components/ui/button"
-import { Download, RefreshCw, Search, Loader2, Building, Building2, Calendar } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from "@/components/ui/select"
+import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from "@/components/ui/table"
+import { cn } from "@/lib/utils"
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
-import { cn } from "@/lib/utils"
+import { Loader2,RefreshCw,Search,Upload } from "lucide-react"
+import { useState } from "react"
+import useSWR from "swr"
 
 const fetcher = (url: string) => fetch(url).then(res => res.json())
 
-import { GlobalDateFilter, type FilterPreset } from "@/components/dashboard/global-date-filter"
-import { Upload } from "lucide-react"
-
+import { GlobalDateFilter,type FilterPreset,type GlobalDateFilterChange } from "@/components/dashboard/global-date-filter"
 export function AuditLogViewer() {
   const { organizationId, branchId } = useAppContext()
   const [actionFilter, setActionFilter] = useState<string>("all")
@@ -28,7 +26,7 @@ export function AuditLogViewer() {
   const [activePreset, setActivePreset] = useState<FilterPreset>("today")
   const [searchTerm, setSearchTerm] = useState("")
 
-  const handleDateChange = (range: any, preset: FilterPreset) => {
+  const handleDateChange = ({ range, preset }: GlobalDateFilterChange) => {
     setActivePreset(preset)
     if (range) {
       setStartDate(range.startDate.toISOString())
@@ -48,7 +46,7 @@ export function AuditLogViewer() {
   if (startDate) queryParams.append("startDate", startDate)
   if (endDate) queryParams.append("endDate", endDate)
 
-  const { data, error, isLoading, mutate } = useSWR(`/api/v1/audit-logs?${queryParams.toString()}`, fetcher)
+  const { data, isLoading, mutate } = useSWR(`/api/v1/audit-logs?${queryParams.toString()}`, fetcher)
 
   const handleExportPDF = () => {
     const doc = new jsPDF('l', 'mm', 'a4') // Landscape orientation
@@ -85,7 +83,7 @@ export function AuditLogViewer() {
       headStyles: { fillColor: [79, 70, 229] }
     })
 
-    doc.save(`audit-logs-${new Date().getTime()}.pdf`)
+    doc.save(`audit-logs-${Date.now()}.pdf`)
   }
 
   const logs = data?.items || []
@@ -195,19 +193,26 @@ export function AuditLogViewer() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {isLoading ? (
+            {(() => {
+              if (isLoading) {
+                return (
               <TableRow>
                 <TableCell colSpan={6} className="h-32 text-center">
                   <Loader2 className="h-8 w-8 animate-spin mx-auto text-muted-foreground" />
                 </TableCell>
               </TableRow>
-            ) : filteredLogs.length === 0 ? (
+            )
+              }
+              if (filteredLogs.length === 0) {
+                return (
               <TableRow>
                 <TableCell colSpan={6} className="h-32 text-center text-muted-foreground">
                   No logs found for the selected criteria.
                 </TableCell>
               </TableRow>
-            ) : (
+            )
+              }
+              return (
               filteredLogs.map((log: any) => (
                 <TableRow key={log.id} className="hover:bg-muted/30 transition-colors">
                   <TableCell className="text-xs font-mono text-muted-foreground">
@@ -220,7 +225,15 @@ export function AuditLogViewer() {
                     </div>
                   </TableCell>
                   <TableCell>
-                    <Badge variant={log.action === 'DELETE' ? 'destructive' : log.action === 'CREATE' ? 'default' : 'outline'} className="text-[10px]">
+                    <Badge variant={(() => {
+                      if (log.action === 'DELETE') {
+                        return 'destructive'
+                      }
+                      if (log.action === 'CREATE') {
+                        return 'default'
+                      }
+                      return 'outline'
+                    })()} className="text-[10px]">
                       {log.action}
                     </Badge>
                   </TableCell>
@@ -240,7 +253,8 @@ export function AuditLogViewer() {
                   </TableCell>
                 </TableRow>
               ))
-            )}
+            )
+            })()}
           </TableBody>
         </Table>
       </Card>

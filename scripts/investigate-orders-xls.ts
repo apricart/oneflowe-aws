@@ -1,6 +1,6 @@
 import * as dotenv from "dotenv"
-import { readFileSync } from "fs"
-import { resolve } from "path"
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
 dotenv.config({ path: ".env.local" })
 dotenv.config()
 
@@ -22,7 +22,7 @@ interface OrderRow {
 
 function parseCSV(): OrderRow[] {
   let raw = readFileSync(FILE_PATH, "utf-8")
-  if (raw.charCodeAt(0) === 0xFEFF) raw = raw.slice(1)
+  if (raw.codePointAt(0) === 0xFEFF) raw = raw.slice(1)
   const lines = raw.split(/\r?\n/).filter((l) => l.trim())
   const rows: OrderRow[] = []
   for (let i = 1; i < lines.length; i++) {
@@ -45,9 +45,16 @@ function parseCSV(): OrderRow[] {
 
 /** Strip a trailing "(Role/Title)" parenthetical from a user-details string. */
 function stripDesignation(s: string): { name: string; designation: string | null } {
-  const m = s.match(/^(.*?)\s*\(([^)]+)\)\s*$/)
-  if (m) return { name: m[1].trim(), designation: m[2].trim() }
-  return { name: s.trim(), designation: null }
+  const normalized = s.trim()
+  const openParenthesis = normalized.lastIndexOf("(")
+  const hasTrailingDesignation = openParenthesis > 0 && normalized.endsWith(")")
+
+  if (!hasTrailingDesignation) return { name: normalized, designation: null }
+
+  const designation = normalized.slice(openParenthesis + 1, -1).trim()
+  if (!designation || designation.includes(")")) return { name: normalized, designation: null }
+
+  return { name: normalized.slice(0, openParenthesis).trim(), designation }
 }
 
 async function main() {
@@ -121,24 +128,24 @@ async function main() {
     const { name, designation } = stripDesignation(r.userDetails)
     const u = userByName.get(name.toLowerCase().trim())
     if (u) {
-      console.log(`  ✓ [L${r.lineNo}] "${r.userDetails}" → user id=${u.id} (name="${name}"${designation ? `, designation="${designation}"` : ""})`)
+      console.log(`  ✓ [L${r.lineNo}] "${r.userDetails}" → user id=${u.id} (name="${name}"${designation ? (", designation=\"" + String(designation) + "\"") : ""})`)
       userMatched++
     } else {
-      console.log(`  ✗ [L${r.lineNo}] "${r.userDetails}" → NO MATCHING USER (parsed name="${name}"${designation ? `, designation="${designation}"` : ""})`)
+      console.log(`  ✗ [L${r.lineNo}] "${r.userDetails}" → NO MATCHING USER (parsed name="${name}"${designation ? (", designation=\"" + String(designation) + "\"") : ""})`)
       userUnmatched++
     }
   }
 
   console.log("\n── Date format check ───────────────────────────")
   for (const r of rows) {
-    const valid = /^\d{4}-\d{2}-\d{2}$/.test(r.date) && !isNaN(Date.parse(r.date))
+    const valid = /^\d{4}-\d{2}-\d{2}$/.test(r.date) && !Number.isNaN(Date.parse(r.date))
     console.log(`  ${valid ? "✓" : "✗"} [L${r.lineNo}] "${r.date}"`)
   }
 
   console.log("\n── GrandTotal numeric check ────────────────────")
   for (const r of rows) {
     const n = Number(r.grandTotal)
-    console.log(`  ${!isNaN(n) ? "✓" : "✗"} [L${r.lineNo}] "${r.grandTotal}" → ${n}`)
+    console.log(`  ${!Number.isNaN(n) ? "✓" : "✗"} [L${r.lineNo}] "${r.grandTotal}" → ${n}`)
   }
 
   console.log("\n── TransactionNo / OrderNo uniqueness ──────────")

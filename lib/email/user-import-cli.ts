@@ -1,3 +1,4 @@
+import { stringifyPrimitive } from "../stringify-primitive"
 import { SESv2Client, SendEmailCommand, type SendEmailCommandInput } from '@aws-sdk/client-sesv2'
 
 import { sesToolEnv } from '@/lib/server/ses-tool-env'
@@ -10,7 +11,7 @@ function getClient(): SESv2Client {
 }
 
 function escapeHtml(value: unknown): string {
-  return String(value ?? '')
+  return stringifyPrimitive(value)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')

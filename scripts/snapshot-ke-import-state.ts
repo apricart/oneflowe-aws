@@ -1,6 +1,6 @@
-import { createHash } from "crypto"
-import { mkdirSync, writeFileSync } from "fs"
-import { dirname, resolve } from "path"
+import { createHash } from "node:crypto"
+import { mkdirSync, writeFileSync } from "node:fs"
+import { dirname, resolve } from "node:path"
 import * as dotenv from "dotenv"
 
 dotenv.config({ path: ".env.local", quiet: true })

@@ -1,15 +1,16 @@
 "use client"
-import { ArrowUpRight, ArrowDownRight } from "lucide-react"
-import { getValueFontSize } from "@/components/dashboard/charts"
-import { motion, AnimatePresence } from "framer-motion"
+import { ArrowUpRight,ArrowDownRight } from "lucide-react"
+import { motion,AnimatePresence } from "framer-motion"
 import { cn } from "@/lib/utils"
+
+export type TrendDirection = "up" | "down"
 
 type BankingKPICardProps = {
     icon: any
     title: string
     value: string | number
     subtitle?: string
-    trend?: "up" | "down"
+    trend?: TrendDirection
     trendValue?: string
     gradient: string
     iconBg: string

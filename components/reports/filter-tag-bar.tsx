@@ -26,7 +26,7 @@ const tagColors = {
     amber: "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/20 dark:text-amber-300 dark:border-amber-800",
 }
 
-export function FilterTagBar({ tags, onRemove, onClearAll, className }: FilterTagBarProps) {
+export function FilterTagBar({ tags, onRemove, onClearAll, className }: Readonly<FilterTagBarProps>) {
     if (tags.length === 0) return null
 
     return (
@@ -45,7 +45,7 @@ export function FilterTagBar({ tags, onRemove, onClearAll, className }: FilterTa
                     {tag.icon && <span className="opacity-60">{tag.icon}</span>}
                     <span className="opacity-60">{tag.label}:</span>
                     <span>{tag.value}</span>
-                    <button
+                    <button type="button"
                         onClick={(e) => { e.stopPropagation(); onRemove(tag.key) }}
                         className="ml-0.5 hover:opacity-100 opacity-50 transition-opacity rounded-full p-0.5 hover:bg-black/5 dark:hover:bg-white/10"
                     >
@@ -54,7 +54,7 @@ export function FilterTagBar({ tags, onRemove, onClearAll, className }: FilterTa
                 </div>
             ))}
             {tags.length > 1 && onClearAll && (
-                <button
+                <button type="button"
                     onClick={onClearAll}
                     className="text-[10px] font-bold text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300 uppercase tracking-wider transition-colors"
                 >

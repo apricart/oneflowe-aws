@@ -1,4 +1,5 @@
 #!/usr/bin/env tsx
+import { stringifyPrimitive } from "../lib/stringify-primitive"
 
 import { createHash } from "node:crypto"
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
@@ -18,7 +19,7 @@ function cents(value: unknown): number {
 }
 
 function normalize(value: unknown): string {
-  return String(value ?? "").normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase()
+  return stringifyPrimitive(value).normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase()
 }
 
 function writeJson(path: string, value: unknown) {

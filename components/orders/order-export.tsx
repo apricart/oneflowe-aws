@@ -23,7 +23,7 @@ interface OrderExportProps {
     statusContext?: OrderStatusContext
 }
 
-export function OrderExport({ orders, role, statusContext = "default" }: OrderExportProps) {
+export function OrderExport({ orders, role, statusContext = "default" }: Readonly<OrderExportProps>) {
     const [isExporting, setIsExporting] = useState(false)
 
     const formatDataForExport = (order: any) => {

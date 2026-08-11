@@ -1,7 +1,7 @@
 "use client"
 import { Spinner } from "@/components/ui/spinner"
 
-export function LoaderOverlay({ show = true, label = "Loading..." }: { show?: boolean; label?: string }) {
+export function LoaderOverlay({ show = true, label = "Loading..." }: Readonly<{ show?: boolean; label?: string }>) {
   if (!show) return null
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-background/60 backdrop-blur-sm">

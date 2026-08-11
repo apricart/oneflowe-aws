@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils"
 function Skeleton({
   className,
   ...props
-}: React.HTMLAttributes<HTMLDivElement>) {
+}: Readonly<React.HTMLAttributes<HTMLDivElement>>) {
   return (
     <div
       className={cn("animate-pulse rounded-md bg-muted", className)}
@@ -12,7 +12,7 @@ function Skeleton({
   )
 }
 
-export function Spinner({ size = 20 }: { size?: number }) {
+export function Spinner({ size = 20 }: Readonly<{ size?: number }>) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" className="animate-spin" aria-hidden>
       <circle cx="12" cy="12" r="10" stroke="currentColor" strokeOpacity="0.2" strokeWidth="4" fill="none" />
@@ -34,7 +34,7 @@ export function LoaderOverlay() {
 
 export { Skeleton }
 
-export function ListSkeleton({ rows = 6 }: { rows?: number }) {
+export function ListSkeleton({ rows = 6 }: Readonly<{ rows?: number }>) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -53,8 +53,8 @@ export function ListSkeleton({ rows = 6 }: { rows?: number }) {
           <Skeleton className="col-span-2 h-4" />
         </div>
         <div className="divide-y">
-          {Array.from({ length: rows }).map((_, i) => (
-            <div key={i} className="grid grid-cols-12 gap-2 p-4">
+          {Array.from({ length: rows }, (_, position) => `table-skeleton-row-${position + 1}`).map((skeletonKey) => (
+            <div key={skeletonKey} className="grid grid-cols-12 gap-2 p-4">
               <Skeleton className="col-span-3 h-4" />
               <Skeleton className="col-span-3 h-4" />
               <Skeleton className="col-span-2 h-4" />

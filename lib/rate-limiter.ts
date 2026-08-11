@@ -209,7 +209,7 @@ export async function withRateLimit(
 ): Promise<NextResponse | null> {
     try {
         const identifier = await getClientIdentifier(userId)
-        const { allowed, remaining, resetIn } = await checkRateLimit(identifier, type)
+        const { allowed, resetIn } = await checkRateLimit(identifier, type)
 
         if (!allowed) {
             console.warn(`[RateLimit] Rate limit exceeded for ${identifier} on ${type} endpoint`)

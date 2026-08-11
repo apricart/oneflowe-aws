@@ -44,7 +44,6 @@ export default function RemoveFromBranchPage() {
     const [saving, setSaving] = useState(false)
 
     const { userRole } = useAppContext()
-    const isHOorBA = userRole === "HEAD_OFFICE" || userRole === "BRANCH_ADMIN"
 
     const selectedOrgId = contextOrgId || localOrgId
     const showOrgSelector = !contextOrgId
@@ -271,12 +270,12 @@ export default function RemoveFromBranchPage() {
                     <CardContent className="space-y-4">
                         {/* Group Selection */}
                         <div className="max-w-md">
-                            <label className="text-sm font-medium mb-3 block flex items-center gap-2">
+                            <label htmlFor="remove-inventory-group" className="text-sm font-medium mb-3 block flex items-center gap-2">
                                 <Users className="h-4 w-4" />
                                 Select Group
                             </label>
                             <Select value={selectedGroup} onValueChange={handleGroupSelect}>
-                                <SelectTrigger className={selectedGroup ? "border-red-400" : ""}>
+                                <SelectTrigger id="remove-inventory-group" className={selectedGroup ? "border-red-400" : ""}>
                                     <SelectValue placeholder="Choose a group..." />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -341,10 +340,11 @@ export default function RemoveFromBranchPage() {
                         {hasSelection && (
                             <div className="flex flex-col md:flex-row gap-4">
                                 <div className="flex-1 max-w-md">
-                                    <label className="text-sm font-medium mb-2 block">Search Products</label>
+                                    <label htmlFor="remove-inventory-search" className="text-sm font-medium mb-2 block">Search Products</label>
                                     <div className="relative">
                                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                                         <Input
+                                            id="remove-inventory-search"
                                             placeholder="Search by name or code..."
                                             className="pl-9"
                                             value={searchQuery}
@@ -354,9 +354,9 @@ export default function RemoveFromBranchPage() {
                                 </div>
 
                                 <div className="w-full md:w-48">
-                                    <label className="text-sm font-medium mb-2 block">Status</label>
+                                    <label htmlFor="remove-inventory-status" className="text-sm font-medium mb-2 block">Status</label>
                                     <Select value={statusFilter} onValueChange={setStatusFilter}>
-                                        <SelectTrigger>
+                                        <SelectTrigger id="remove-inventory-status">
                                             <SelectValue placeholder="Filter Status" />
                                         </SelectTrigger>
                                         <SelectContent>
@@ -412,19 +412,26 @@ export default function RemoveFromBranchPage() {
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                    {isLoading ? (
+                                    {(() => {
+                                      if (isLoading) {
+                                        return (
                                         <TableRow>
                                             <TableCell colSpan={3} className="py-10 text-center text-sm text-muted-foreground">
                                                 Loading products...
                                             </TableCell>
                                         </TableRow>
-                                    ) : filteredProducts.length === 0 ? (
+                                    )
+                                      }
+                                      if (filteredProducts.length === 0) {
+                                        return (
                                         <TableRow>
                                             <TableCell colSpan={3} className="py-10 text-center text-sm text-muted-foreground">
                                                 No products assigned to branches in this group.
                                             </TableCell>
                                         </TableRow>
-                                    ) : (
+                                    )
+                                      }
+                                      return (
                                         filteredProducts.map((product) => (
                                             <TableRow
                                                 key={product.organizationInventoryId}
@@ -458,7 +465,8 @@ export default function RemoveFromBranchPage() {
                                                 </TableCell>
                                             </TableRow>
                                         ))
-                                    )}
+                                    )
+                                    })()}
                                 </TableBody>
                             </Table>
                         </div>
@@ -493,8 +501,8 @@ export default function RemoveFromBranchPage() {
                                     <div key={orgInvId} className="flex items-center justify-between text-sm">
                                         <span>{product.productName}</span>
                                         <div className="flex gap-1">
-                                            {product.branchNames.slice(0, 3).map((name, idx) => (
-                                                <Badge key={idx} variant="outline" className="text-xs">{name}</Badge>
+                                            {product.branchNames.slice(0, 3).map((name) => (
+                                                <Badge key={name} variant="outline" className="text-xs">{name}</Badge>
                                             ))}
                                             {product.branchNames.length > 3 && (
                                                 <Badge variant="secondary" className="text-xs">+{product.branchNames.length - 3}</Badge>

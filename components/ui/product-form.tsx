@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useEffect } from "react"
+import React,{ useState,useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -8,9 +8,9 @@ import { Textarea } from "@/components/ui/textarea"
 import { CategorySelector } from "@/components/ui/category-selector"
 import { ModifierTags } from "@/components/ui/modifier-tags"
 import { Badge } from "@/components/ui/badge"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Package, Tag, DollarSign, Settings, Image as ImageIcon } from "lucide-react"
+import { Card,CardContent,CardHeader,CardTitle } from "@/components/ui/card"
+import { Tabs,TabsContent,TabsList,TabsTrigger } from "@/components/ui/tabs"
+import { Package,Tag,DollarSign,Image as ImageIcon } from "lucide-react"
 import useSWR from "swr"
 
 interface Product {
@@ -74,7 +74,7 @@ export function ProductForm({
   onCancel,
   isLoading = false,
   className
-}: ProductFormProps) {
+}: Readonly<ProductFormProps>) {
   const [formData, setFormData] = useState({
     productCode: "",
     name: "",
@@ -114,8 +114,6 @@ export function ProductForm({
     fetcher
   )
 
-  const categories = categoriesData?.items || []
-  const subCategories = subCategoriesData?.items || []
   const modifiers = modifiersData?.items || []
 
   // Initialize form with product data
@@ -159,7 +157,7 @@ export function ProductForm({
       newErrors.name = "Product name is required"
     }
 
-    if (!formData.basePrice || parseFloat(formData.basePrice) < 0) {
+    if (!formData.basePrice || Number.parseFloat(formData.basePrice) < 0) {
       newErrors.basePrice = "Valid base price is required"
     }
 
@@ -171,7 +169,7 @@ export function ProductForm({
     return Object.keys(newErrors).length === 0
   }
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = (e: React.SubmitEvent<HTMLFormElement>) => {
     e.preventDefault()
     
     if (!validateForm()) {
@@ -184,7 +182,7 @@ export function ProductForm({
       description: formData.description.trim() || undefined,
       categoryId: formData.categoryId || undefined,
       subCategoryId: formData.subCategoryId || undefined,
-      basePrice: Math.round(parseFloat(formData.basePrice) * 100), // Convert to cents
+      basePrice: Math.round(Number.parseFloat(formData.basePrice) * 100), // Convert to cents
       unit: formData.unit.trim(),
       status: formData.status,
       imageUrl: formData.imageUrl.trim() || undefined,
@@ -461,7 +459,15 @@ export function ProductForm({
           Cancel
         </Button>
         <Button type="submit" disabled={isLoading}>
-          {isLoading ? "Saving..." : product ? "Update Product" : "Create Product"}
+          {(() => {
+            if (isLoading) {
+              return "Saving..."
+            }
+            if (product) {
+              return "Update Product"
+            }
+            return "Create Product"
+          })()}
         </Button>
       </div>
     </form>

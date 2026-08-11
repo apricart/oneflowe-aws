@@ -40,7 +40,7 @@ export function MFAVerificationDialog({
   username,
   userPassword,
   isEmployee = false
-}: MFAVerificationDialogProps) {
+}: Readonly<MFAVerificationDialogProps>) {
   const [otp, setOtp] = useState("")
   const [isVerifying, setIsVerifying] = useState(false)
   const [isSending, setIsSending] = useState(false)
@@ -134,6 +134,34 @@ export function MFAVerificationDialog({
     }
   }
 
+  const verifyLoginOtp = async (otpCode: string) => {
+    const providerId = isEmployee ? "employee-mfa-credentials" : "mfa-credentials"
+    const result = await signIn(providerId, { username, password: userPassword, otp: otpCode, redirect: false })
+    const authError = getAuthResultError(result)
+    if (authError) {
+      throw new Error(authError === "CredentialsSignin"
+        ? "Invalid OTP code. Please check your email and try again."
+        : authError)
+    }
+    toast({ title: "Login Successful", description: "You have been successfully logged in.", variant: "default" })
+    setIsRedirecting(true)
+    setTimeout(() => {
+      onSuccess(otpCode)
+      onClose()
+    }, 5000)
+  }
+
+  const verifyApiOtp = async (otpCode: string) => {
+    const response = await jsonFetcher("/api/v1/mfa/login/verify-otp", {
+      method: "POST",
+      body: JSON.stringify({ username, code: otpCode, type })
+    }) as any
+    if (response.error) throw new Error(response.error)
+    toast({ title: "Success", description: response.message, variant: "default" })
+    onSuccess(otpCode)
+    onClose()
+  }
+
   const verifyOTP = async (otpCode: string) => {
     console.log("MFA Dialog - verifyOTP called with:", otpCode ? "***" : "undefined")
     setIsVerifying(true)
@@ -141,60 +169,9 @@ export function MFAVerificationDialog({
 
     try {
       if (type === 'LOGIN' && username && userPassword) {
-        // Use MFA credentials provider for login
-        const providerId = isEmployee ? "employee-mfa-credentials" : "mfa-credentials"
-        const result = await signIn(providerId, {
-          username: username,
-          password: userPassword,
-          otp: otpCode,
-          redirect: false
-        })
-
-        const authError = getAuthResultError(result)
-        if (authError) {
-          // NextAuth returns generic error codes like "CredentialsSignin"
-          // Map them to user-friendly messages
-          const errorMessage = authError === "CredentialsSignin"
-            ? "Invalid OTP code. Please check your email and try again."
-            : authError
-          throw new Error(errorMessage)
-        }
-
-        toast({
-          title: "Login Successful",
-          description: "You have been successfully logged in.",
-          variant: "default",
-        })
-
-        // Show loading state while dashboard compiles
-        setIsRedirecting(true)
-
-        // Delay redirect to allow dashboard compilation (5 seconds for better UX)
-        setTimeout(() => {
-          console.log("MFA Dialog - Calling onSuccess with OTP:", otpCode ? "***" : "undefined")
-          onSuccess(otpCode)
-          onClose()
-        }, 5000) // 5 second delay
+        await verifyLoginOtp(otpCode)
       } else {
-        // Use API for other MFA types
-        const response = await jsonFetcher("/api/v1/mfa/login/verify-otp", {
-          method: "POST",
-          body: JSON.stringify({ username: username, code: otpCode, type })
-        }) as any
-
-        if (response.error) {
-          throw new Error(response.error)
-        }
-
-        toast({
-          title: "Success",
-          description: response.message,
-          variant: "default",
-        })
-
-        console.log("MFA Dialog - Calling onSuccess with OTP:", otpCode ? "***" : "undefined", "otpCode param:", otpCode)
-        onSuccess(otpCode)
-        onClose()
+        await verifyApiOtp(otpCode)
       }
 
     } catch (error: any) {
@@ -291,7 +268,7 @@ export function MFAVerificationDialog({
             {/* OTP Input */}
             <div className="space-y-4">
               <div className="text-center">
-                <label className="text-sm font-medium">Enter OTP Code</label>
+                <p className="text-sm font-medium">Enter OTP Code</p>
               </div>
               <OTPInput
                 value={otp}
@@ -321,15 +298,26 @@ export function MFAVerificationDialog({
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Clock className="h-4 w-4" />
-                {isSending && isInitialSend ? (
+                {(() => {
+                  if (isSending && isInitialSend) {
+                    return (
                   <span>Sending code to your email</span>
-                ) : timeLeft > 0 ? (
+                )
+                  }
+                  if (timeLeft > 0) {
+                    return (
                   <span>Code expires in {formatTime(timeLeft)}</span>
-                ) : hasActiveCodeWindow ? (
+                )
+                  }
+                  if (hasActiveCodeWindow) {
+                    return (
                   <span>Code has expired</span>
-                ) : (
+                )
+                  }
+                  return (
                   <span>Waiting for code</span>
-                )}
+                )
+                })()}
               </div>
 
               <Button

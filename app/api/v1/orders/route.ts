@@ -1,27 +1,27 @@
-import { NextRequest, NextResponse } from "next/server"
-import { createHash, randomBytes } from "node:crypto"
+import { NextRequest,NextResponse } from "next/server"
+import { createHash,randomBytes } from "node:crypto"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
-import { budgets, orders, orderItems, organizationInventory, branchInventory, auditLogs, branches, globalProducts, productQuantityBudgets, refunds, systemLogs, groupAuditLogs, organizations, refundItems } from "@/db/schema"
+import { budgets,orders,orderItems,organizationInventory,branchInventory,branches,globalProducts,productQuantityBudgets,refunds,systemLogs,groupAuditLogs,organizations,refundItems } from "@/db/schema"
 import { headers } from "next/headers"
-import { and, desc, eq, gte, ilike, lte, or, sql, inArray, isNull } from "drizzle-orm"
+import { and,desc,eq,gte,ilike,lte,or,sql,inArray,isNull } from "drizzle-orm"
 import { logOrderActivity } from "@/lib/global-logger"
 import { generateReceiptData } from "@/lib/receipt-generator"
-import { generateNextInvoiceNumber, hasInvoiceSequenceTable } from "@/lib/invoice-number"
+import { generateNextInvoiceNumber,hasInvoiceSequenceTable } from "@/lib/invoice-number"
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
-import { parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
+import { parseEndDateParam,parseStartDateParam } from "@/lib/date-range-params"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
 import { orderSelectColumns } from "@/lib/order-select"
-import { calculateLineCents, formatQuantity, roundQuantity, validateProductQuantity } from "@/lib/quantity"
-import { orderCreateSchema, validationMessage } from "@/lib/server/mutation-validation"
+import { calculateLineCents,formatQuantity,roundQuantity,validateProductQuantity } from "@/lib/quantity"
+import { orderCreateSchema,validationMessage } from "@/lib/server/mutation-validation"
 import { withRateLimit } from "@/lib/rate-limiter"
-import { attemptImmediateOrderEmailDelivery, queueOrderCreatedNotifications } from "@/lib/server/order-notifications"
+import { attemptImmediateOrderEmailDelivery,queueOrderCreatedNotifications } from "@/lib/server/order-notifications"
 import { canViewFulfillmentToken } from "@/lib/fulfillment-token-access"
 import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
 import { isValidRole } from "@/lib/rbac"
 import { metricExpressions } from "@/lib/metric-utils"
-import { getOrderStatusesForFilter, getOrderStatusFilter } from "@/lib/order-status"
+import { getOrderStatusesForFilter,getOrderStatusFilter } from "@/lib/order-status"
 
 
 
@@ -79,7 +79,6 @@ export async function GET(req: NextRequest) {
     const endDate = searchParams.get("endDate") || undefined
     const organizationIdParam = searchParams.get("organizationId") || undefined
     const idParam = searchParams.get("id") || undefined
-    const mode = searchParams.get("mode") || undefined // weeklySales | monthlySales
     const groupId = searchParams.get("groupId") || undefined
     const groupIdsRaw = searchParams.get("groupIds") || undefined
     const monthsRaw = searchParams.get("months") || undefined
@@ -96,7 +95,7 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: "Search query must be at most 100 characters" }, { status: 400 })
       }
       if (normalizedQuery) {
-        const escapedQuery = normalizedQuery.replace(/[\\%_]/g, "\\$&")
+        const escapedQuery = normalizedQuery.replace(/[\\%_]/g, String.raw`\$&`)
         const searchConditions: any[] = [
           ilike(orders.tid, `%${escapedQuery}%`),
           ilike(branches.costCenterId, `%${escapedQuery}%`),
@@ -104,7 +103,7 @@ export async function GET(req: NextRequest) {
             SELECT 1
             FROM ${orderItems}
             WHERE ${orderItems.orderId} = ${orders.id}
-            AND ${orderItems.productName} ILIKE ${`%${escapedQuery}%`}
+            AND ${orderItems.productName} ILIKE ${("%" + String(escapedQuery) + "%")}
           )`,
         ]
         const numericOrderId = Number(normalizedQuery)
@@ -117,20 +116,20 @@ export async function GET(req: NextRequest) {
 
     // Parsing branchIds
     const parsedBranchIds = branchIdsRaw
-      ? branchIdsRaw.split(",").map(id => Number(id)).filter(id => !isNaN(id))
+      ? branchIdsRaw.split(",").map(Number).filter(id => !Number.isNaN(id))
       : []
 
     // Parsing groupIds
     const parsedGroupIds = groupIdsRaw
-      ? groupIdsRaw.split(",").map(id => Number(id)).filter(id => !isNaN(id))
+      ? groupIdsRaw.split(",").map(Number).filter(id => !Number.isNaN(id))
       : []
 
     const parsedMonths = monthsRaw
-      ? monthsRaw.split(",").map(id => Number(id)).filter(id => !isNaN(id) && id >= 1 && id <= 12)
+      ? monthsRaw.split(",").map(Number).filter(id => !Number.isNaN(id) && id >= 1 && id <= 12)
       : []
 
     const parsedYears = yearsRaw
-      ? yearsRaw.split(",").map(id => Number(id)).filter(id => !isNaN(id) && id >= 2000 && id <= 2100)
+      ? yearsRaw.split(",").map(Number).filter(id => !Number.isNaN(id) && id >= 2000 && id <= 2100)
       : []
 
     // --- Role-based access ---
@@ -186,11 +185,11 @@ export async function GET(req: NextRequest) {
 
     // Arbitrary month/year filtering from GlobalDateFilter.
     if (parsedMonths.length > 0) {
-      conditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedMonths, sql`, `)})`)
+      conditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedMonths, sql.raw(", "))})`)
     }
 
     if (parsedYears.length > 0) {
-      conditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedYears, sql`, `)})`)
+      conditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedYears, sql.raw(", "))})`)
     }
 
     // Legacy date filters
@@ -296,6 +295,7 @@ export async function GET(req: NextRequest) {
 
     // The list is intentionally paginated, but the summary cards must describe
     // the complete filtered scope rather than only the current page of rows.
+    const summaryCondition = summaryConditions.length ? and(...summaryConditions) : undefined
     const [summaryRow] = idParam
       ? []
       : await db
@@ -309,7 +309,7 @@ export async function GET(req: NextRequest) {
         })
         .from(orders)
         .leftJoin(branches, eq(orders.branchId, branches.id))
-        .where(summaryConditions.length ? and(...summaryConditions) : undefined)
+        .where(summaryCondition)
 
     // Sanitize items: Only show approvalToken to authorized roles
     const sanitizedItems = items.map(item => {
@@ -440,7 +440,7 @@ export async function POST(req: NextRequest) {
     if ((session.user as any).mustChangePassword === true) return NextResponse.json({ error: "Forbidden", message: "Password change required" }, { status: 403 })
     const role = (session.user as any).role
     let organizationId = (session.user as any).organizationId
-    if (organizationId) organizationId = parseInt(String(organizationId))
+    if (organizationId) organizationId = Number.parseInt(String(organizationId))
     const userId = (session.user as any).id
     const rateLimit = await withRateLimit("order", userId)
     if (rateLimit) return rateLimit
@@ -481,7 +481,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Organization ID not found" }, { status: 400 })
     }
 
-    const branchId = role === "HEAD_OFFICE" || role === "SUPER_ADMIN" ? parseInt(String(branchIdInput)) : parseInt(String((session.user as any).branchId))
+    const branchId = role === "HEAD_OFFICE" || role === "SUPER_ADMIN" ? Number.parseInt(String(branchIdInput)) : Number.parseInt(String((session.user as any).branchId))
     if (!Number.isFinite(branchId)) return NextResponse.json({ error: "Branch context required" }, { status: 400 })
 
     const [selectedBranch] = await db

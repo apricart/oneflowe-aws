@@ -5,8 +5,8 @@
  * Used for audit trail of approval tokens and fulfillment attempts.
  */
 
-import fs from 'fs'
-import path from 'path'
+import fs from 'node:fs'
+import path from 'node:path'
 
 const LOG_DIR = path.join(process.cwd(), 'logs')
 const SYSTEM_LOG_FILE = path.join(LOG_DIR, 'system-audit.log')

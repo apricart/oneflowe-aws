@@ -16,7 +16,7 @@ export function OverrideIndicator({
   customValue, 
   isOverridden, 
   className 
-}: OverrideIndicatorProps) {
+}: Readonly<OverrideIndicatorProps>) {
   const displayValue = isOverridden ? customValue : globalValue
 
   const formatValue = (value: string | number | null | undefined, field: string) => {

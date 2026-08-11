@@ -26,7 +26,7 @@ export function OrganizationListExcelExportButton({
   isLoading = false,
   onSuccess,
   onError,
-}: OrganizationListExcelExportButtonProps) {
+}: Readonly<OrganizationListExcelExportButtonProps>) {
   const [isExporting, setIsExporting] = useState(false)
 
   const handleExport = async () => {

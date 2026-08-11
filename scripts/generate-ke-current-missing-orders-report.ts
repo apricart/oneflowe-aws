@@ -37,7 +37,7 @@ function addSheet(workbook: XLSX.WorkBook, name: string, rows: Row[], options: {
     if (column < 0) continue
     for (let row = 1; row <= rows.length; row += 1) {
       const cell = sheet[XLSX.utils.encode_cell({ r: row, c: column })]
-      if (cell && cell.t === "n") cell.z = format
+      if (cell?.t === "n") cell.z = format
     }
   }
   XLSX.utils.book_append_sheet(workbook, sheet, name)
@@ -54,7 +54,6 @@ function main() {
     .filter((row) => !importedIds.has(Number(row["Legacy Order ID"])))
     .filter((row) => String(row["Current Interpretation"]).trim().toLowerCase() !== "cancelled")
     .map<Row>((row) => {
-      const id = Number(row["Legacy Order ID"])
       const isOmittedDraft = String(row["Blocker Code"]) === "OMITTED_FROM_UPDATED_ORDER_EXPORT"
       return {
         ...row,

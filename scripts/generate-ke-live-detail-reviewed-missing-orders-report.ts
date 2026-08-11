@@ -1,4 +1,5 @@
 #!/usr/bin/env tsx
+import { stringifyPrimitive } from "../lib/stringify-primitive"
 
 import { createHash } from "node:crypto"
 import { readFileSync, writeFileSync } from "node:fs"
@@ -16,7 +17,7 @@ const OUTPUT_JSON = resolve("updatedReports/ke-missing-orders-live-detail-review
 const CANDIDATE_IDS = [250, 520, 765, 1164, 1165, 1177, 1187]
 
 function normalize(value: unknown): string {
-  return String(value ?? "").normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase()
+  return stringifyPrimitive(value).normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase()
 }
 
 function money(value: unknown): number | null {
@@ -57,7 +58,7 @@ function addSheet(workbook: XLSX.WorkBook, name: string, rows: Row[], options: {
     if (column < 0) continue
     for (let row = 1; row <= safeRows.length; row += 1) {
       const cell = sheet[XLSX.utils.encode_cell({ r: row, c: column })]
-      if (cell && cell.t === "n") cell.z = format
+      if (cell?.t === "n") cell.z = format
     }
   }
   XLSX.utils.book_append_sheet(workbook, sheet, name)
@@ -132,9 +133,19 @@ function main() {
       "Refund Evidence": order.refundEvidence ? "YES" : "NO",
       "Partial-as-Delivered Policy Applied": order.userPolicyAcceptedAsDelivered ? "YES" : "NO",
       "Assessment": candidate ? "PROVISIONAL IMPORT CANDIDATE" : "BLOCKED / EXCLUDE",
-      "Required Import Path": candidate ? (id === 520 ? "Refund-aware historical import" : "Normal reviewed historical import") : "None until blocker is resolved",
+      "Required Import Path": (() => {
+        if (candidate) {
+          return (id === 520 ? "Refund-aware historical import" : "Normal reviewed historical import")
+        }
+        return "None until blocker is resolved"
+      })(),
       "Evidence Explanation": candidate ? candidateReason(id, order) : blockedReason(id, order),
-      "Latest K-Electric Snapshot Mapping": targetRow ? (targetRow.snapshotReady ? "PASS" : "BLOCKED") : "NOT APPLICABLE",
+      "Latest K-Electric Snapshot Mapping": (() => {
+        if (targetRow) {
+          return (targetRow.snapshotReady ? "PASS" : "BLOCKED")
+        }
+        return "NOT APPLICABLE"
+      })(),
       "New Historical User Needed": targetRow?.user?.kind === "HISTORICAL_USER_REQUIRED" ? "YES" : "NO",
       "New Products Needed": targetRow?.newProductsRequired ?? 0,
       "New Inactive Branch Assignments Needed": targetRow?.newBranchAssignmentsRequired ?? 0,
@@ -162,9 +173,12 @@ function main() {
     "Historic Line Total": item.selectedHistoryLineTotalCents == null ? null : Number(item.selectedHistoryLineTotalCents) / 100,
     "History Price Count": item.exactHistoryPriceCount,
     "History Matches Detail": item.historyMatchesDetail ? "YES" : "NO",
-    "Import Treatment": Number(item.Quantity) === 0 && item.zeroQuantityZeroValueArtifact
-      ? "EXCLUDE ZERO-QUANTITY ZERO-VALUE ARTIFACT"
-      : (candidateSet.has(Number(order.legacyOrderId)) ? "INCLUDE IF FRESH PREFLIGHT PASSES" : "DO NOT IMPORT WHILE ORDER BLOCKED"),
+    "Import Treatment": (() => {
+      if (Number(item.Quantity) === 0 && item.zeroQuantityZeroValueArtifact) {
+        return "EXCLUDE ZERO-QUANTITY ZERO-VALUE ARTIFACT"
+      }
+      return (candidateSet.has(Number(order.legacyOrderId)) ? "INCLUDE IF FRESH PREFLIGHT PASSES" : "DO NOT IMPORT WHILE ORDER BLOCKED")
+    })(),
   })))
 
   const refundRows = (live.orders as Row[]).filter((order) => order.refundEvidence).flatMap((order) => {

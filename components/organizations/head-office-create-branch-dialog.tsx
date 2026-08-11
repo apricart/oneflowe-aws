@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, type FormEvent } from "react"
+import { useState, type SubmitEvent } from "react"
 import { GitBranch, Save } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -41,7 +41,7 @@ const initialForm = {
   isActive: true,
 }
 
-export function HeadOfficeCreateBranchDialog({ organizationId, onCreated }: Props) {
+export function HeadOfficeCreateBranchDialog({ organizationId, onCreated }: Readonly<Props>) {
   const { toast } = useToast()
   const [open, setOpen] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -67,7 +67,7 @@ export function HeadOfficeCreateBranchDialog({ organizationId, onCreated }: Prop
     setForm((current) => ({ ...current, [field]: value }))
   }
 
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
+  const submit = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!canSubmit || !organizationId) return
 

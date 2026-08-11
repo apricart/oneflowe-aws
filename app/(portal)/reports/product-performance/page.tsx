@@ -1,60 +1,114 @@
 "use client"
 
-import React, { useState, useEffect, useCallback, useMemo, useRef } from "react"
-import { useRouter, useSearchParams, usePathname } from "next/navigation"
-import useSWR from "swr"
-import { format } from "date-fns"
 import { useAppContext } from "@/components/context/app-context"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Card,CardContent,CardHeader,CardTitle } from "@/components/ui/card"
 import {
-    Loader2, RefreshCw, Search, FileText, FileSpreadsheet, Download, LineChart, Package, Tags, AlertOctagon, TrendingUp, History, Layers, Calculator, ChevronDown, Check, ArrowUpRight, ArrowDownRight, ChartBar as ChartBarIcon, ShieldCheck, ShieldX, Eye, Building2, Filter, RotateCcw, X, LayoutGrid, LayoutDashboard, Database
-} from "lucide-react"
-import {
-    ComposedChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell
-} from "recharts"
-import * as XLSX from "xlsx"
+DropdownMenu,
+DropdownMenuContent,
+DropdownMenuItem,
+DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Input } from "@/components/ui/input"
+import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from "@/components/ui/table"
+import { Role } from "@/lib/rbac"
 import { sanitizeSpreadsheetRow } from "@/lib/spreadsheet"
-import { formatPKR, cn } from "@/lib/utils"
+import { cn,formatPKR } from "@/lib/utils"
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
-import { Badge } from "@/components/ui/badge"
-import { Role } from "@/lib/rbac"
-import { useSession } from "next-auth/react"
-import { Input } from "@/components/ui/input"
 import {
-    DropdownMenu,
-    DropdownMenuContent,
-    DropdownMenuItem,
-    DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
+AlertOctagon,
+ChartBar as ChartBarIcon,
+Database,
+FileSpreadsheet,
+FileText,
+Filter,
+History,Layers,
+LayoutDashboard,
+LayoutGrid,
+Loader2,
+Package,
+RefreshCw,
+RotateCcw,
+Search,
+TrendingUp,
+Upload,
+X
+} from "lucide-react"
+import { useSession } from "next-auth/react"
+import { usePathname,useRouter,useSearchParams } from "next/navigation"
+import { useCallback,useEffect,useMemo,useRef,useState } from "react"
+import {
+Bar,
+CartesianGrid,
+ComposedChart,
+Legend,
+ResponsiveContainer,
+Tooltip,
+XAxis,YAxis
+} from "recharts"
+import useSWR from "swr"
+import * as XLSX from "xlsx"
 
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Checkbox } from "@/components/ui/checkbox"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Tabs,TabsContent,TabsList,TabsTrigger } from "@/components/ui/tabs"
 
-import { GlobalDateFilter, type FilterPreset } from "@/components/dashboard/global-date-filter"
+import { GlobalDateFilter,type FilterPreset,type GlobalDateFilterChange } from "@/components/dashboard/global-date-filter"
+import { MultiBranchFilter } from "@/components/dashboard/multi-branch-filter"
 import { BranchFilter } from "@/components/reports/branch-filter"
 import { GroupFilter } from "@/components/reports/group-filter"
-import { MultiBranchFilter } from "@/components/dashboard/multi-branch-filter"
 import { MultiSelectFilter } from "@/components/reports/multi-select-filter"
-import { useBranches, useGlobalProducts, useOrganizations } from "@/lib/hooks/use-api"
+import { useGlobalProducts,useOrganizations } from "@/lib/hooks/use-api"
 
-import { ExpandableRowDrawer, type DetailField } from "@/components/reports/expandable-row-drawer"
-import { ColumnSelector, useColumnSelector, type ColumnDef } from "@/components/reports/column-selector"
-import { ProductFilter } from "@/components/reports/product-filter"
-import { OrganizationFilter } from "@/components/reports/organization-filter"
+import type { ColumnDef } from "@/components/reports/column-selector"
+import { ExpandableRowDrawer,type DetailField } from "@/components/reports/expandable-row-drawer"
 import { KPICard } from "@/components/reports/kpi-card"
+import { OrganizationFilter } from "@/components/reports/organization-filter"
+import { ProductFilter } from "@/components/reports/product-filter"
 import { TopProductsRanking } from "@/components/reports/top-products-ranking"
-import { Upload } from "lucide-react"
 import { useDebounce } from "@/hooks/use-debounce"
 import type { ProductPerformanceRankBy } from "@/lib/product-performance-ranking"
-
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
 
 const CHART_COLORS = ['#6366f1', '#8b5cf6', '#a78bfa', '#c4b5fd', '#818cf8', '#7c3aed', '#4f46e5', '#4338ca', '#6d28d9', '#5b21b6']
 const ALL_MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+
+function ProductBarTooltip({ active, payload, pricesHidden, revenueLabel }: any) {
+    if (!active || !payload?.length) {
+        return null
+    }
+
+    const data = payload[0]?.payload
+    return (
+        <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 shadow-2xl p-4 min-w-[220px]">
+            <p className="font-bold text-sm text-slate-900 dark:text-white mb-2">{data.fullName}</p>
+            <div className="space-y-1.5">
+                {!pricesHidden && (
+                    <div className="flex justify-between text-xs">
+                        <span className="text-slate-500">{revenueLabel}</span>
+                        <span className="font-bold text-indigo-600">{formatPKR(data.revenue)}</span>
+                    </div>
+                )}
+                <div className="flex justify-between text-xs">
+                    <span className="text-slate-500">Ordered</span>
+                    <span className="font-semibold">{data.ordered}</span>
+                </div>
+                <div className="flex justify-between text-xs">
+                    <span className="text-slate-500">Fulfilled</span>
+                    <span className="font-semibold text-emerald-600">{data.fulfilled}</span>
+                </div>
+                <div className="flex justify-between text-xs">
+                    <span className="text-slate-500">Refunded</span>
+                    <span className="font-semibold text-rose-500">{data.refunded}</span>
+                </div>
+                <div className="pt-1 border-t border-slate-100 dark:border-slate-800 flex justify-between text-xs">
+                    <span className="text-slate-500">Fulfillment</span>
+                    <span className="font-bold text-emerald-600">{data.fulfillRate}%</span>
+                </div>
+            </div>
+        </div>
+    )
+}
 
 const LEDGER_COLUMNS: ColumnDef[] = [
     { key: "date", label: "Date", defaultVisible: true },
@@ -72,8 +126,6 @@ export default function ProductPerformancePage() {
     const pathname = usePathname()
     const searchParams = useSearchParams()
 
-    const { visibleKeys, isVisible, setVisibleKeys } = useColumnSelector(LEDGER_COLUMNS, "product-intelligence-ledger")
-
     const {
         organizationId,
         branchId: contextBranchId,
@@ -84,7 +136,7 @@ export default function ProductPerformancePage() {
 
     const [searchTerm, setSearchTerm] = useState("")
     const [reportSearchTerm, setReportSearchTerm] = useState("")
-    const [generatedDate, setGeneratedDate] = useState("")
+    const [, setGeneratedDate] = useState("")
     const [selectedRow, setSelectedRow] = useState<any>(null)
     const [drawerOpen, setDrawerOpen] = useState(false)
     const tabFromUrl = (searchParams.get("tab") as "analytics" | "reports") || "analytics"
@@ -95,7 +147,7 @@ export default function ProductPerformancePage() {
             setActiveTab(tabFromUrl)
         }
     }, [tabFromUrl])
-    const [expandedRow, setExpandedRow] = useState<string | null>(null)
+    const [, setExpandedRow] = useState<string | null>(null)
 
     const { data: session, status: sessionStatus } = useSession()
     const role = (session?.user as any)?.role as Role
@@ -110,7 +162,6 @@ export default function ProductPerformancePage() {
     const exportRevenueHeader = isBuyer ? "Purchased" : "Revenue"
     const barChartLegendLabel = isBuyer ? "PURCHASED" : "REVENUE"
     const revenueShortLabel = isBuyer ? "Purchased" : "Revenue"
-    const analyticsSubtitleLabel = isBuyer ? "Consolidated purchase stream" : "Consolidated revenue stream"
     const topProductsValueLabel = isBuyer ? "Net Purchase Value" : "Net Revenue"
 
     // URL States for filtering
@@ -124,16 +175,16 @@ export default function ProductPerformancePage() {
 
     // Multi-select month/year states
     const [selectedMonths, setSelectedMonths] = useState<number[]>(
-        searchParams.get("months")?.split(",").map(Number).filter(n => !isNaN(n)) || []
+        searchParams.get("months")?.split(",").map(Number).filter(n => !Number.isNaN(n)) || []
     )
     const [selectedYears, setSelectedYears] = useState<number[]>(
-        searchParams.get("years")?.split(",").map(Number).filter(n => !isNaN(n)) || []
+        searchParams.get("years")?.split(",").map(Number).filter(n => !Number.isNaN(n)) || []
     )
     const [compareMonths, setCompareMonths] = useState<number[]>(
-        searchParams.get("compareMonths")?.split(",").map(Number).filter(n => !isNaN(n)) || []
+        searchParams.get("compareMonths")?.split(",").map(Number).filter(n => !Number.isNaN(n)) || []
     )
     const [compareYears, setCompareYears] = useState<number[]>(
-        searchParams.get("compareYears")?.split(",").map(Number).filter(n => !isNaN(n)) || []
+        searchParams.get("compareYears")?.split(",").map(Number).filter(n => !Number.isNaN(n)) || []
     )
 
     // Chart-local filters
@@ -143,7 +194,7 @@ export default function ProductPerformancePage() {
     const [chartGroupIds, setChartGroupIds] = useState<string[]>([])
     const [chartOrgIds, setChartOrgIds] = useState<string[]>([])
     const [chartProductIds, setChartProductIds] = useState<string[]>([])
-    const [globalGroupId, setGlobalGroupId] = useState<string>("")
+    const [globalGroupId] = useState<string>("")
     const hasInitializedChartDefaults = useRef(false)
 
     // Report-local filters
@@ -240,15 +291,8 @@ export default function ProductPerformancePage() {
 
     // Products for filter display names
     const { data: productsData } = useGlobalProducts(organizationId ? String(organizationId) : undefined)
-    const availableProducts = productsData?.items || []
 
-    const validChartBranches = availableGroups.length > 0 && chartGroupIds.length > 0
-        ? availableBranches.filter((b: any) => chartGroupIds.includes(String(b.groupId)))
-        : availableBranches;
 
-    const validReportBranches = availableGroups.length > 0 && reportGroupIds.length > 0
-        ? availableBranches.filter((b: any) => reportGroupIds.includes(String(b.groupId)))
-        : availableBranches;
 
     const availableChartYears = useMemo(() => {
         const years = new Set<number>()
@@ -257,8 +301,8 @@ export default function ProductPerformancePage() {
         // Derive from ALL-TIME trend data if available
         if (allTimeData?.trend?.length) {
             allTimeData.trend.forEach((d: any) => {
-                const y = parseInt(d.date.split("-")[0]);
-                if (!isNaN(y)) years.add(y);
+                const y = Number.parseInt(d.date.split("-")[0]);
+                if (!Number.isNaN(y)) years.add(y);
             });
         }
 
@@ -278,8 +322,8 @@ export default function ProductPerformancePage() {
                 setChartYears([currentYear])
                 setReportYears([currentYear])
             } else {
-                setChartYears([availableChartYears[availableChartYears.length - 1]])
-                setReportYears([availableChartYears[availableChartYears.length - 1]])
+                setChartYears([availableChartYears.at(-1) ?? currentYear])
+                setReportYears([availableChartYears.at(-1) ?? currentYear])
             }
             hasInitializedChartDefaults.current = true
         }
@@ -293,16 +337,7 @@ export default function ProductPerformancePage() {
         return null
     }, [startFromUrl, endFromUrl])
 
-    const handleDateChange = useCallback((
-        range: { startDate: Date; endDate: Date } | null,
-        preset: FilterPreset,
-        compareMode?: boolean,
-        compRange?: { startDate: Date; endDate: Date } | null,
-        months: number[] = [],
-        years: number[] = [],
-        cMonths: number[] = [],
-        cYears: number[] = []
-    ) => {
+    const handleDateChange = useCallback(({ range, preset, compare: compareMode, compareRange: compRange, months = [], years = [], compareMonths: cMonths = [], compareYears: cYears = [] }: GlobalDateFilterChange) => {
         const params = new URLSearchParams(searchParams.toString())
         params.set("preset", preset)
         if (compareMode !== undefined) {
@@ -340,21 +375,18 @@ export default function ProductPerformancePage() {
         router.replace(`${pathname}?${params.toString()}`, { scroll: false })
     }, [searchParams, pathname, router])
 
-    const handleBranchChange = useCallback((ids: string[]) => {
-        setContextBranchIds(ids)
-    }, [setContextBranchIds])
 
     const getDefaultReportYears = useCallback(() => {
         const currentYear = new Date().getFullYear()
         if (availableChartYears.includes(currentYear)) return [currentYear]
-        const latestYear = availableChartYears[availableChartYears.length - 1]
+        const latestYear = availableChartYears.at(-1)
         return latestYear ? [latestYear] : []
     }, [availableChartYears])
 
     const getDefaultChartYears = useCallback(() => {
         const currentYear = new Date().getFullYear()
         if (availableChartYears.includes(currentYear)) return [currentYear]
-        const latestYear = availableChartYears[availableChartYears.length - 1]
+        const latestYear = availableChartYears.at(-1)
         return latestYear ? [latestYear] : []
     }, [availableChartYears])
 
@@ -475,7 +507,7 @@ export default function ProductPerformancePage() {
         setReportSearchTerm("")
         setTopProductsRankBy("netValue")
         setExpandedRow(null)
-        handleDateChange(null, "all")
+        handleDateChange({ range: null, preset: "all" })
         mutateLedger()
         mutateTopProducts()
     }, [getDefaultReportYears, handleDateChange, mutateLedger, mutateTopProducts])
@@ -485,7 +517,7 @@ export default function ProductPerformancePage() {
         setGeneratedDate(new Date().toLocaleString())
 
         if (!startFromUrl && !endFromUrl && selectedMonths.length === 0 && selectedYears.length === 0) {
-            handleDateChange(null, "all")
+            handleDateChange({ range: null, preset: "all" })
         }
     }, [])
 
@@ -494,10 +526,6 @@ export default function ProductPerformancePage() {
         return [...p].sort((a: any, b: any) => (b.revenueGeneratedCents || 0) - (a.revenueGeneratedCents || 0))
     }, [globalPerfData])
 
-    const chartProducts = useMemo(() => {
-        const p = chartPerfData?.data || []
-        return [...p].sort((a: any, b: any) => (b.revenueGeneratedCents || 0) - (a.revenueGeneratedCents || 0))
-    }, [chartPerfData])
 
     const ledgerItems = useMemo(() => {
         const items = ledgerData?.data || []
@@ -516,7 +544,7 @@ export default function ProductPerformancePage() {
             (i.userEmail || "").toLowerCase().includes(term) ||
             (i.tid || "").toLowerCase().includes(term) ||
             (i.employeeId && String(i.employeeId).toLowerCase().includes(term)) ||
-            (i.userId && i.userId.toLowerCase().includes(term))
+            (i.userId?.toLowerCase().includes(term))
         )
     }, [ledgerItems, reportSearchTerm])
 
@@ -531,11 +559,6 @@ export default function ProductPerformancePage() {
     const totalVolume = products.reduce((sum: number, p: any) => sum + (p.qtyFulfilled || 0), 0)
     const totalRefunds = products.reduce((sum: number, p: any) => sum + (p.qtyRefunded || 0), 0)
     const totalRefundLoss = products.reduce((sum: number, p: any) => sum + (p.refundLossCents || 0), 0)
-    const fulfillmentRate = totalOrdered > 0 ? (totalVolume / totalOrdered) * 100 : 0
-    const refundRate = totalOrdered > 0 ? (totalRefunds / totalOrdered) * 100 : 0
-    const activeProductCount = products.filter((p: any) => p.status === 'active').length
-    const inactiveProductCount = products.filter((p: any) => p.status === 'inactive').length
-    const deletedProductCount = products.filter((p: any) => p.status === 'deleted').length
 
     // Comparison Trends
     const comparison = globalPerfData?.comparison
@@ -583,7 +606,7 @@ export default function ProductPerformancePage() {
 
         // If multiple years selected, show years on X-axis
         if (chartYears.length > 1) {
-            return chartYears.sort((a, b) => a - b).map(year => {
+            return chartYears.toSorted((a, b) => a - b).map(year => {
                 const yearStr = String(year);
                 const yearData = trend.filter((d: any) => d.date.startsWith(yearStr));
                 return {
@@ -623,12 +646,13 @@ export default function ProductPerformancePage() {
     }, [chartPerfData, chartYears, chartMonths, CHART_MONTH_NAMES, chartProductIds, isChartProductView])
 
     const isPriceCustom = reportGroupIds.length > 0 || reportOrganizationIds.length > 0
-    const priceLabel = isBuyer ? "Unit Price" : (isPriceCustom ? "Price" : "Base Price")
+    const priceLabel = (() => {
+      if (isBuyer) {
+        return "Unit Price"
+      }
+      return (isPriceCustom ? "Price" : "Base Price")
+    })()
 
-    const handleRowClick = (item: any) => {
-        setSelectedRow(item)
-        setDrawerOpen(true)
-    }
 
     const getDrawerFields = (item: any): DetailField[] => [
         { key: "s2", label: "Product Details", value: "", type: "section" },
@@ -636,9 +660,15 @@ export default function ProductPerformancePage() {
             key: "status", label: "Status", value: (
                 <Badge className={cn(
                     "border-none text-[10px] uppercase font-black tracking-widest px-2.5 py-0.5",
-                    item.status === "active" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" :
-                        item.status === "inactive" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" :
-                            "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+                    (() => {
+                      if (item.status === "active") {
+                        return "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+                      }
+                      if (item.status === "inactive") {
+                        return "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                      }
+                      return "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+                    })()
                 )}>
                     {item.status}
                 </Badge>
@@ -669,10 +699,15 @@ export default function ProductPerformancePage() {
             { label: "Qty Ordered",    value: (p: any) => p.qtyOrdered || 0 },
             { label: "Fulfilled",      value: (p: any) => p.qtyFulfilled || 0 },
             { label: "Refunded",       value: (p: any) => p.qtyRefunded || 0 },
-            ...(!pricesHidden ? [
+            ...((() => {
+              if (!pricesHidden) {
+                return [
                 { label: isBuyer ? "Unit Price (PKR)" : "Base Price (PKR)", value: (p: any) => ((p.unitPriceCents || p.basePriceCents || 0) / 100).toFixed(2) },
                 { label: exportRevenueHeader, value: (p: any) => ((p.revenueGeneratedCents || 0) / 100).toFixed(2) },
-            ] : []),
+            ]
+              }
+              return []
+            })()),
         ]
 
         // ── Reports/Ledger tab columns (role-aware) ──
@@ -684,9 +719,9 @@ export default function ProductPerformancePage() {
             { label: "Order Date",     value: (p: any) => new Date(p.orderCreatedAt).toLocaleDateString() },
             ...(role !== "BRANCH_ADMIN" ? [{ label: "Group",       value: (p: any) => p.group || "N/A" }] : []),
             ...(!pricesHidden ? [{ label: "Discount",       value: (_p: any) => "0" }] : []),
-            { label: "User Info",      value: (p: any) => `${p.userName || ""}${p.userEmail ? ` (${p.userEmail})` : ""}`.trim() || "-" },
+            { label: "User Info",      value: (p: any) => `${p.userName || ""}${p.userEmail ? (" (" + String(p.userEmail) + ")") : ""}`.trim() || "-" },
             { label: "Employee ID",    value: (p: any) => p.employeeId || (p.userId ? String(p.userId).split('-')[0] : "N/A") },
-            { label: "Item Details",   value: (p: any) => `${p.itemDetails || "-"}${p.itemCode ? ` (${p.itemCode})` : ""}` },
+            { label: "Item Details",   value: (p: any) => `${p.itemDetails || "-"}${p.itemCode ? (" (" + String(p.itemCode) + ")") : ""}` },
             { label: "Qty Ordered",    value: (p: any) => p.qtyOrdered || 0 },
             { label: "Item Refunded",  value: (p: any) => (p.qtyOrdered || 0) - (p.qtyDelivered || 0) },
             { label: "Net Items",      value: (p: any) => p.qtyDelivered || 0 },
@@ -706,7 +741,7 @@ export default function ProductPerformancePage() {
             doc.setFontSize(20); doc.text(reportTitle, 14, 20)
             doc.setFontSize(10); doc.text(`Generated: ${new Date().toLocaleString()} | Tab: ${activeTab.toUpperCase()}`, 14, 28)
             autoTable(doc, { startY: 40, head: [headers], body: rows, theme: 'grid' })
-            doc.save(`${isBuyer ? 'product-purchase' : 'product-intelligence'}-${activeTab}-${new Date().getTime()}.pdf`)
+            doc.save(`${isBuyer ? 'product-purchase' : 'product-intelligence'}-${activeTab}-${Date.now()}.pdf`)
             return
         }
 
@@ -716,42 +751,7 @@ export default function ProductPerformancePage() {
         ])
         const workbook = XLSX.utils.book_new()
         XLSX.utils.book_append_sheet(workbook, worksheet, "Performance")
-        XLSX.writeFile(workbook, `${isBuyer ? 'product-purchase' : 'product-intelligence'}-${activeTab}-${new Date().getTime()}.${format === 'excel' ? 'xlsx' : 'csv'}`)
-    }
-
-    // Custom tooltip for horizontal bar chart
-    const CustomBarTooltip = ({ active, payload }: any) => {
-        if (!active || !payload?.length) return null
-        const d = payload[0]?.payload
-        return (
-            <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 shadow-2xl p-4 min-w-[220px]">
-                <p className="font-bold text-sm text-slate-900 dark:text-white mb-2">{d.fullName}</p>
-                <div className="space-y-1.5">
-                    {!pricesHidden && (
-                        <div className="flex justify-between text-xs">
-                            <span className="text-slate-500">{revenueShortLabel}</span>
-                            <span className="font-bold text-indigo-600">{formatPKR(d.revenue)}</span>
-                        </div>
-                    )}
-                    <div className="flex justify-between text-xs">
-                        <span className="text-slate-500">Ordered</span>
-                        <span className="font-semibold">{d.ordered}</span>
-                    </div>
-                    <div className="flex justify-between text-xs">
-                        <span className="text-slate-500">Fulfilled</span>
-                        <span className="font-semibold text-emerald-600">{d.fulfilled}</span>
-                    </div>
-                    <div className="flex justify-between text-xs">
-                        <span className="text-slate-500">Refunded</span>
-                        <span className="font-semibold text-rose-500">{d.refunded}</span>
-                    </div>
-                    <div className="pt-1 border-t border-slate-100 dark:border-slate-800 flex justify-between text-xs">
-                        <span className="text-slate-500">Fulfillment</span>
-                        <span className="font-bold text-emerald-600">{d.fulfillRate}%</span>
-                    </div>
-                </div>
-            </div>
-        )
+        XLSX.writeFile(workbook, `${isBuyer ? 'product-purchase' : 'product-intelligence'}-${activeTab}-${Date.now()}.${format === 'excel' ? 'xlsx' : 'csv'}`)
     }
 
     const pricesHidden = Boolean((globalPerfData as any)?.pricesHidden || (chartPerfData as any)?.pricesHidden || (ledgerData as any)?.pricesHidden || (topProductsData as any)?.pricesHidden)
@@ -809,7 +809,7 @@ export default function ProductPerformancePage() {
                                 <MultiBranchFilter organizationId={organizationId} selectedBranchIds={contextBranchIds} onChange={setContextBranchIds} />
                             </>
                         )}
-                        <Button variant="ghost" size="icon" className="rounded-xl text-slate-400 hover:text-indigo-500 transition-colors" onClick={() => { handleDateChange(null, "all", false, null, [], [], [], []); mutateGlobalPerf(); mutateLedger(); mutateChart(); mutateTopProducts(); }}>
+                        <Button variant="ghost" size="icon" className="rounded-xl text-slate-400 hover:text-indigo-500 transition-colors" onClick={() => { handleDateChange({ range: null, preset: "all", compare: false, compareRange: null, months: [], years: [], compareMonths: [], compareYears: [] }); mutateGlobalPerf(); mutateLedger(); mutateChart(); mutateTopProducts(); }}>
                             <RefreshCw className={cn("h-4 w-4", (isGlobalPerfLoading || isLedgerLoading || isChartPerfLoading || isTopProductsLoading || isTopProductsValidating) && "animate-spin")} />
                         </Button>
                     </div>
@@ -917,7 +917,7 @@ export default function ProductPerformancePage() {
                                         title="Months"
                                         items={CHART_MONTH_NAMES.map((name, i) => ({ id: i + 1, label: name }))}
                                         selectedIds={chartMonths}
-                                        onChange={(ids) => setChartMonths(ids.sort((a, b) => a - b))}
+                                        onChange={(ids) => setChartMonths(ids.toSorted((a, b) => a - b))}
                                         icon={<Filter className="h-3.5 w-3.5 text-emerald-500" />}
                                         placeholder="Months"
                                         showSearch={false}
@@ -926,7 +926,7 @@ export default function ProductPerformancePage() {
                                         title="Years"
                                         items={availableChartYears.map(y => ({ id: y, label: String(y) }))}
                                         selectedIds={chartYears}
-                                        onChange={(ids) => setChartYears(ids.sort((a, b) => b - a))}
+                                        onChange={(ids) => setChartYears(ids.toSorted((a, b) => b - a))}
                                         icon={<History className="h-3.5 w-3.5 text-indigo-500" />}
                                         placeholder="Years"
                                         showSearch={false}
@@ -1042,11 +1042,15 @@ export default function ProductPerformancePage() {
                                 )}
                             </CardHeader>
                             <CardContent className="pt-6 pb-6 pr-6 pl-0">
-                                {isChartPerfLoading || isGlobalPerfLoading ? (
+                                {(() => {
+                                  if (isChartPerfLoading || isGlobalPerfLoading) {
+                                    return (
                                     <div className="h-[320px] flex items-center justify-center">
                                         <Loader2 className="h-6 w-6 animate-spin text-indigo-400" />
                                     </div>
-                                ) : (
+                                )
+                                  }
+                                  return (
                                     <div className="h-[320px] w-full ml-4">
                                         <ResponsiveContainer width="100%" height="100%">
                                             <ComposedChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
@@ -1065,7 +1069,7 @@ export default function ProductPerformancePage() {
                                                     tickFormatter={(v) => v >= 1000 ? `${(v / 1000).toFixed(0)}K` : v.toString()}
                                                     dx={-10}
                                                 />
-                                                <Tooltip content={<CustomBarTooltip />} cursor={{ fill: 'rgba(99, 102, 241, 0.05)' }} />
+                                                <Tooltip content={<ProductBarTooltip pricesHidden={pricesHidden} revenueLabel={revenueShortLabel} />} cursor={{ fill: 'rgba(99, 102, 241, 0.05)' }} />
                                                 <Legend
                                                     verticalAlign="top"
                                                     align="right"
@@ -1092,7 +1096,8 @@ export default function ProductPerformancePage() {
                                             </ComposedChart>
                                         </ResponsiveContainer>
                                     </div>
-                                )}
+                                )
+                                })()}
                             </CardContent>
                         </Card>
 
@@ -1146,11 +1151,18 @@ export default function ProductPerformancePage() {
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
-                                        {isGlobalPerfLoading ? (
+                                        {(() => {
+                                          if (isGlobalPerfLoading) {
+                                            return (
                                             <TableRow><TableCell colSpan={8} className="h-32 text-center"><Loader2 className="h-6 w-6 animate-spin mx-auto text-amber-500" /></TableCell></TableRow>
-                                        ) : filteredProducts.length === 0 ? (
+                                        )
+                                          }
+                                          if (filteredProducts.length === 0) {
+                                            return (
                                             <TableRow><TableCell colSpan={8} className="h-32 text-center text-slate-500 text-sm">No products found.</TableCell></TableRow>
-                                        ) : (
+                                        )
+                                          }
+                                          return (
                                             filteredProducts.map((p: any) => (
                                                 <TableRow key={p.productId} className="hover:bg-amber-50/40 dark:hover:bg-amber-900/10 border-b border-slate-100 dark:border-slate-800/50">
                                                     <TableCell className="font-mono text-[11px] pl-6 text-slate-500 font-semibold">{p.productCode}</TableCell>
@@ -1207,7 +1219,8 @@ export default function ProductPerformancePage() {
                                                     )}
                                                 </TableRow>
                                             ))
-                                        )}
+                                        )
+                                        })()}
                                     </TableBody>
                                 </Table>
                             </div>
@@ -1241,10 +1254,10 @@ export default function ProductPerformancePage() {
                                     <div className="flex flex-wrap items-center gap-3">
                                         <GlobalDateFilter
                                             value={dateRange}
-                                            onChange={(range, preset, nextCompare, nextCompareRange, months, years, nextCompareMonths, nextCompareYears) => {
-                                                handleDateChange(range, preset, nextCompare, nextCompareRange, months, years, nextCompareMonths, nextCompareYears)
-                                                setReportMonths(months ?? [])
-                                                setReportYears(years ?? [])
+                                            onChange={(change) => {
+                                                handleDateChange(change)
+                                                setReportMonths(change.months ?? [])
+                                                setReportYears(change.years ?? [])
                                             }}
                                             activePreset={activePreset}
                                             customRangeOnly
@@ -1259,7 +1272,7 @@ export default function ProductPerformancePage() {
                                             title="Months"
                                             items={CHART_MONTH_NAMES.map((name, i) => ({ id: i + 1, label: name }))}
                                             selectedIds={reportMonths}
-                                            onChange={(ids) => setReportMonths(ids.sort((a, b) => a - b))}
+                                            onChange={(ids) => setReportMonths(ids.toSorted((a, b) => a - b))}
                                             icon={<Filter className="h-3.5 w-3.5 text-emerald-500" />}
                                             placeholder="Months"
                                             showSearch={false}
@@ -1268,7 +1281,7 @@ export default function ProductPerformancePage() {
                                             title="Years"
                                             items={availableChartYears.map(y => ({ id: y, label: String(y) }))}
                                             selectedIds={reportYears}
-                                            onChange={(ids) => setReportYears(ids.sort((a, b) => b - a))}
+                                            onChange={(ids) => setReportYears(ids.toSorted((a, b) => b - a))}
                                             icon={<History className="h-3.5 w-3.5 text-indigo-500" />}
                                             placeholder="Years"
                                             showSearch={false}
@@ -1431,11 +1444,34 @@ export default function ProductPerformancePage() {
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
-                                        {isLedgerLoading ? (
-                                            <TableRow><TableCell colSpan={role === "SUPER_ADMIN" ? 14 : role === "BRANCH_ADMIN" ? 11 : 13} className="h-32 text-center"><Loader2 className="h-6 w-6 animate-spin mx-auto text-indigo-300" /></TableCell></TableRow>
-                                        ) : filteredLedger.length === 0 ? (
-                                            <TableRow><TableCell colSpan={role === "SUPER_ADMIN" ? 14 : role === "BRANCH_ADMIN" ? 11 : 13} className="h-32 text-center text-slate-400 text-xs">No itemized orders found.</TableCell></TableRow>
-                                        ) : (
+                                        {(() => {
+                                          if (isLedgerLoading) {
+                                            return (
+                                            <TableRow><TableCell colSpan={(() => {
+                                              if (role === "SUPER_ADMIN") {
+                                                return 14
+                                              }
+                                              if (role === "BRANCH_ADMIN") {
+                                                return 11
+                                              }
+                                              return 13
+                                            })()} className="h-32 text-center"><Loader2 className="h-6 w-6 animate-spin mx-auto text-indigo-300" /></TableCell></TableRow>
+                                        )
+                                          }
+                                          if (filteredLedger.length === 0) {
+                                            return (
+                                            <TableRow><TableCell colSpan={(() => {
+                                              if (role === "SUPER_ADMIN") {
+                                                return 14
+                                              }
+                                              if (role === "BRANCH_ADMIN") {
+                                                return 11
+                                              }
+                                              return 13
+                                            })()} className="h-32 text-center text-slate-400 text-xs">No itemized orders found.</TableCell></TableRow>
+                                        )
+                                          }
+                                          return (
                                             filteredLedger.map((item: any) => {
                                                 return (
                                                     <TableRow key={`${item.id}-${item.tid}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
@@ -1507,7 +1543,8 @@ export default function ProductPerformancePage() {
                                                     </TableRow>
                                                 )
                                             })
-                                        )}
+                                        )
+                                        })()}
                                     </TableBody>
                                 </Table>
                             </div>

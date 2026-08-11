@@ -12,8 +12,8 @@ import { formatBranchAddress } from "@/lib/branch-address"
 import { isInvoiceAvailableForOrder } from "@/lib/invoice-availability"
 import { getReceiptUserDisplayName } from "@/lib/receipt-user"
 import { jsPDF } from "jspdf"
-import path from "path"
-import fs from "fs"
+import path from "node:path"
+import fs from "node:fs"
 
 export async function GET(
     req: NextRequest,
@@ -26,8 +26,8 @@ export async function GET(
         }
 
         const params = await props.params
-        const orderId = parseInt(params.orderId)
-        if (isNaN(orderId)) {
+        const orderId = Number.parseInt(params.orderId)
+        if (Number.isNaN(orderId)) {
             return NextResponse.json({ error: "Invalid order ID" }, { status: 400 })
         }
 

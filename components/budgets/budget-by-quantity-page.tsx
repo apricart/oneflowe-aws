@@ -1,12 +1,10 @@
 "use client"
 
-import React, { useCallback, useEffect, useMemo, useState } from "react"
-import useSWR, { useSWRConfig } from "swr"
+import React,{ useCallback,useEffect,useMemo,useState } from "react"
+import useSWR,{ useSWRConfig } from "swr"
 import { useSession } from "next-auth/react"
 import {
-  AlertCircle,
-  CheckCircle2,
-  ChevronDown,
+  AlertCircle,ChevronDown,
   ChevronRight,
   Edit2,
   PackageCheck,
@@ -15,7 +13,7 @@ import {
   RefreshCw,
   Search,
   Trash2,
-  X,
+  X
 } from "lucide-react"
 
 import { useToast } from "@/hooks/use-toast"
@@ -23,18 +21,17 @@ import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Dialog,DialogContent,DialogDescription,DialogFooter,DialogHeader,DialogTitle } from "@/components/ui/dialog"
+import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from "@/components/ui/select"
+import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from "@/components/ui/table"
 import { BranchFilter } from "@/components/reports/branch-filter"
 import { GroupFilter } from "@/components/reports/group-filter"
 import { useAppContext } from "@/components/context/app-context"
-import { GlobalDateFilter, type FilterPreset } from "@/components/dashboard/global-date-filter"
+import { GlobalDateFilter,type FilterPreset,type GlobalDateFilterChange } from "@/components/dashboard/global-date-filter"
 import { cn } from "@/lib/utils"
-import { formatQuantity, parseQuantity, validateProductQuantity } from "@/lib/quantity"
-import { BUDGET_ALLOCATION_MODE_SETTING_KEY, parseBudgetAllocationMode } from "@/lib/budget-allocation-mode"
+import { formatQuantity,parseQuantity,validateProductQuantity } from "@/lib/quantity"
+import { BUDGET_ALLOCATION_MODE_SETTING_KEY,parseBudgetAllocationMode } from "@/lib/budget-allocation-mode"
 import { type DateRange } from "@/lib/hooks/use-sales-performance"
-import { CheckCircle } from "lucide-react"
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
 
@@ -161,14 +158,7 @@ export default function BudgetByQuantityPage() {
   const [selectedYears, setSelectedYears] = useState<number[]>([])
   const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([])
 
-  const handleDateChange = useCallback((
-    range: DateRange | null,
-    preset: FilterPreset,
-    _compare?: boolean,
-    _compareRange?: DateRange | null,
-    months?: number[],
-    years?: number[]
-  ) => {
+  const handleDateChange = useCallback(({ range, preset, months = [], years = [] }: GlobalDateFilterChange) => {
     setDateRange(range)
     setActivePreset(preset)
     setSelectedMonths(months || [])
@@ -177,7 +167,7 @@ export default function BudgetByQuantityPage() {
 
   useEffect(() => {
     if (isInitialized) {
-      handleDateChange(null, "all")
+      handleDateChange({ range: null, preset: "all" })
     }
   }, [isInitialized, handleDateChange])
 
@@ -328,7 +318,7 @@ export default function BudgetByQuantityPage() {
   }, [scopedBudgets, quantitySummaryByBranchId])
 
   const resetBudgetFilters = useCallback(() => {
-    handleDateChange(null, "all")
+    handleDateChange({ range: null, preset: "all" })
     setSelectedGroupIds([])
     setContextBranchIds([])
     setSearchQuery("")
@@ -631,20 +621,27 @@ export default function BudgetByQuantityPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {budgets.length === 0 ? (
+              {(() => {
+                if (budgets.length === 0) {
+                  return (
                 <TableRow>
                   <TableCell colSpan={6} className="py-16 text-center">
                     <PackageCheck className="mx-auto mb-3 h-8 w-8 text-indigo-500 opacity-40" />
                     <p className="text-sm text-muted-foreground">No branches found</p>
                   </TableCell>
                 </TableRow>
-              ) : filteredBudgets.length === 0 ? (
+              )
+                }
+                if (filteredBudgets.length === 0) {
+                  return (
                 <TableRow>
                   <TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">
                     No branches match your search
                   </TableCell>
                 </TableRow>
-              ) : (
+              )
+                }
+                return (
                 filteredBudgets.map((budget) => {
                   const summary = quantitySummaryByBranchId.get(budget.branchId) || emptyQuantitySummary(budget.branchId)
                   const productRows = quantityProductsByBranchId.get(budget.branchId) || []
@@ -719,11 +716,15 @@ export default function BudgetByQuantityPage() {
                       {isExpanded && (
                         <TableRow className="border-b border-slate-100 bg-indigo-50/40 hover:bg-indigo-50/40 dark:border-slate-800/50 dark:bg-indigo-950/10 dark:hover:bg-indigo-950/10">
                           <TableCell colSpan={6} className="px-5 py-4">
-                            {productRows.length === 0 ? (
+                            {(() => {
+                              if (productRows.length === 0) {
+                                return (
                               <div className="rounded-lg border border-dashed border-slate-200 bg-white px-4 py-6 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
                                 No product quantity allocations for this branch yet.
                               </div>
-                            ) : (
+                            )
+                              }
+                              return (
                               <div className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
                                 <Table>
                                   <TableHeader>
@@ -774,14 +775,16 @@ export default function BudgetByQuantityPage() {
                                   </TableBody>
                                 </Table>
                               </div>
-                            )}
+                            )
+                            })()}
                           </TableCell>
                         </TableRow>
                       )}
                     </React.Fragment>
                   )
                 })
-              )}
+              )
+              })()}
             </TableBody>
           </Table>
         </Card>
@@ -812,7 +815,7 @@ export default function BudgetByQuantityPage() {
               </div>
 
               <div className="flex rounded-xl border border-slate-200 bg-slate-100 p-1 dark:border-slate-700 dark:bg-slate-800">
-                <button
+                <button type="button"
                   onClick={() => setAllocationType("addon")}
                   className={cn(
                     "flex-1 rounded-lg py-2 text-xs font-bold transition-all",
@@ -823,7 +826,7 @@ export default function BudgetByQuantityPage() {
                 >
                   One-time Quantity Add-on
                 </button>
-                <button
+                <button type="button"
                   onClick={() => setAllocationType("monthly")}
                   className={cn(
                     "flex-1 rounded-lg py-2 text-xs font-bold transition-all",
@@ -846,7 +849,7 @@ export default function BudgetByQuantityPage() {
                   return (
                     <div key={line.id} className="grid grid-cols-1 gap-3 rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950 md:grid-cols-[minmax(0,1fr)_160px_36px]">
                       <div className="min-w-0">
-                        <label className="mb-1 block text-[10px] font-black uppercase tracking-widest text-slate-400">
+                        <label htmlFor={`budget-product-${line.id}`} className="mb-1 block text-[10px] font-black uppercase tracking-widest text-slate-400">
                           Product {index + 1}
                         </label>
                         <Select
@@ -854,7 +857,7 @@ export default function BudgetByQuantityPage() {
                           onValueChange={(value) => updateAllocationLine(line.id, { productId: value })}
                           disabled={productsLoading}
                         >
-                          <SelectTrigger className="h-10 w-full">
+                          <SelectTrigger id={`budget-product-${line.id}`} className="h-10 w-full">
                             <SelectValue placeholder={productsLoading ? "Loading products..." : "Select product"} />
                           </SelectTrigger>
                           <SelectContent>
@@ -874,8 +877,9 @@ export default function BudgetByQuantityPage() {
                       </div>
 
                       <div>
-                        <label className="mb-1 block text-[10px] font-black uppercase tracking-widest text-slate-400">Quantity</label>
+                        <label htmlFor={`budget-quantity-${line.id}`} className="mb-1 block text-[10px] font-black uppercase tracking-widest text-slate-400">Quantity</label>
                         <Input
+                          id={`budget-quantity-${line.id}`}
                           type="number"
                           inputMode="decimal"
                           min={quantityStep}

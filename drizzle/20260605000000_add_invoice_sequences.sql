@@ -7,4 +7,4 @@ CREATE TABLE IF NOT EXISTS "invoice_sequences" (
 );--> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS "orders_org_invoice_number_unique_idx"
 ON "orders" USING btree ("organization_id", (("receipt_data" ->> 'invoiceNumber')))
-WHERE "receipt_data" ? 'invoiceNumber' AND ("receipt_data" ->> 'invoiceNumber') IS NOT NULL;
+WHERE ("receipt_data" ->> 'invoiceNumber') IS NOT NULL;

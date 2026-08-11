@@ -1,8 +1,8 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
-import { Columns3, Check } from "lucide-react"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { useState,useEffect,useCallback } from "react"
+import { Columns3 } from "lucide-react"
+import { Popover,PopoverContent,PopoverTrigger } from "@/components/ui/popover"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { cn } from "@/lib/utils"
@@ -22,7 +22,7 @@ interface ColumnSelectorProps {
 
 export function useColumnSelector(columns: ColumnDef[], storageKey: string) {
     const defaultVisible = columns.filter(c => c.defaultVisible !== false).map(c => c.key)
-    const validKeys = columns.map(c => c.key)
+    const validKeys = new Set(columns.map(c => c.key))
 
     const [visibleKeys, setVisibleKeys] = useState<string[]>(() => {
         if (typeof window === "undefined") return defaultVisible
@@ -31,7 +31,7 @@ export function useColumnSelector(columns: ColumnDef[], storageKey: string) {
             if (saved) {
                 const parsed = JSON.parse(saved)
                 if (Array.isArray(parsed)) {
-                    const validSaved = parsed.filter(k => validKeys.includes(k))
+                    const validSaved = parsed.filter(k => validKeys.has(k))
                     if (validSaved.length > 0) return validSaved
                 }
             }
@@ -64,7 +64,7 @@ export function useColumnSelector(columns: ColumnDef[], storageKey: string) {
     return { visibleKeys, toggleColumn, resetToDefaults, isVisible, setVisibleKeys }
 }
 
-export function ColumnSelector({ columns, storageKey, onChange, visibleKeys }: ColumnSelectorProps) {
+export function ColumnSelector({ columns, storageKey, onChange, visibleKeys }: Readonly<ColumnSelectorProps>) {
     const [open, setOpen] = useState(false)
 
     const defaultVisible = columns.filter(c => c.defaultVisible !== false).map(c => c.key)
@@ -102,7 +102,7 @@ export function ColumnSelector({ columns, storageKey, onChange, visibleKeys }: C
                 <div className="p-3 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50">
                     <div className="flex items-center justify-between">
                         <span className="text-xs font-bold text-slate-700 dark:text-slate-300">Toggle Columns</span>
-                        <button
+                        <button type="button"
                             onClick={handleReset}
                             className="text-[10px] font-bold text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 uppercase tracking-wider"
                         >
@@ -116,7 +116,16 @@ export function ColumnSelector({ columns, storageKey, onChange, visibleKeys }: C
                         return (
                             <div
                                 key={col.key}
+                                role="checkbox"
+                                aria-checked={isActive}
+                                tabIndex={0}
                                 onClick={() => handleToggle(col.key)}
+                                onKeyDown={(event) => {
+                                    if (event.key === "Enter" || event.key === " ") {
+                                        event.preventDefault()
+                                        handleToggle(col.key)
+                                    }
+                                }}
                                 className={cn(
                                     "w-full flex items-center gap-3 px-3 py-2 rounded-md text-xs font-medium transition-colors cursor-pointer",
                                     isActive

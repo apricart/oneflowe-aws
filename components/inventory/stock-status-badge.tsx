@@ -16,7 +16,7 @@ export function StockStatusBadge({
   variant, 
   showIcon = true,
   className 
-}: StockStatusBadgeProps) {
+}: Readonly<StockStatusBadgeProps>) {
   // Determine variant based on quantity and threshold
   const getVariant = (): "in-stock" | "low-stock" | "out-of-stock" => {
     if (variant) return variant

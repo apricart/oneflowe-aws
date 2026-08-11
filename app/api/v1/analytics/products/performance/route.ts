@@ -1,23 +1,22 @@
-import { NextResponse, type NextRequest } from "next/server"
-import { getServerSession } from "next-auth"
+import { branches,branchInventory,categories,globalProducts,groups,orderItems,orders,organizationInventory,organizations,refundItems,refunds,users } from "@/db/schema"
 import { authOptions } from "@/lib/auth-options"
+import { parseEndDateParam,parseStartDateParam } from "@/lib/date-range-params"
 import { db } from "@/lib/db"
-import { orders, orderItems, branches, globalProducts, categories, refundItems, refunds, organizationInventory, branchInventory, users, organizations, groups } from "@/db/schema"
-import { and, eq, gte, lte, inArray, sql, exists, ilike, or } from "drizzle-orm"
-import { aliasedTable } from "drizzle-orm"
-import { redactAnalyticsPrices, shouldHidePricesForRole } from "@/lib/price-visibility"
-import { parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
-import { escapeLikePattern } from "@/lib/utils"
+import { redactAnalyticsPrices,shouldHidePricesForRole } from "@/lib/price-visibility"
 import {
-    parseProductPerformanceLimit,
-    parseProductPerformanceRankBy,
-    rankProductPerformanceRows,
+parseProductPerformanceLimit,
+parseProductPerformanceRankBy,
+rankProductPerformanceRows,
 } from "@/lib/product-performance-ranking"
 import {
-    isBranchScopedAnalyticsRole,
-    resolveAnalyticsBranchIds,
-    resolveAnalyticsOrganizationIds,
+isBranchScopedAnalyticsRole,
+resolveAnalyticsBranchIds,
+resolveAnalyticsOrganizationIds,
 } from "@/lib/server/analytics-scope"
+import { escapeLikePattern } from "@/lib/utils"
+import { aliasedTable,and,eq,exists,gte,ilike,inArray,lte,or,sql } from "drizzle-orm"
+import { getServerSession } from "next-auth"
+import { NextResponse,type NextRequest } from "next/server"
 
 export async function GET(req: NextRequest) {
     try {
@@ -43,16 +42,16 @@ export async function GET(req: NextRequest) {
         const compareMonthsRaw = url.searchParams.get("compareMonths")
         const compareYearsRaw = url.searchParams.get("compareYears")
 
-        const parsedMonths = monthsRaw ? monthsRaw.split(',').map(Number).filter(n => !isNaN(n) && n >= 1 && n <= 12) : []
-        const parsedYears = yearsRaw ? yearsRaw.split(',').map(Number).filter(n => !isNaN(n) && n > 2000) : []
-        const parsedCompMonths = compareMonthsRaw ? compareMonthsRaw.split(',').map(Number).filter(n => !isNaN(n) && n >= 1 && n <= 12) : []
-        const parsedCompYears = compareYearsRaw ? compareYearsRaw.split(',').map(Number).filter(n => !isNaN(n) && n > 2000) : []
+        const parsedMonths = monthsRaw ? monthsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n >= 1 && n <= 12) : []
+        const parsedYears = yearsRaw ? yearsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n > 2000) : []
+        const parsedCompMonths = compareMonthsRaw ? compareMonthsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n >= 1 && n <= 12) : []
+        const parsedCompYears = compareYearsRaw ? compareYearsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n > 2000) : []
 
         const groupIdsRaw = url.searchParams.get("groupIds")
-        const parsedGroupIds = groupIdsRaw ? groupIdsRaw.split(',').map(Number).filter(n => !isNaN(n) && n > 0) : []
+        const parsedGroupIds = groupIdsRaw ? groupIdsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n > 0) : []
 
         const productIdsRaw = url.searchParams.get("productIds")
-        const parsedProductIds = productIdsRaw ? productIdsRaw.split(',').map(Number).filter(n => !isNaN(n) && n > 0) : []
+        const parsedProductIds = productIdsRaw ? productIdsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n > 0) : []
         const searchTermRaw = (url.searchParams.get("searchTerm") || "").trim()
         if (searchTermRaw.length > 100) {
             return NextResponse.json({ error: "Search query must be at most 100 characters" }, { status: 400 })
@@ -67,9 +66,12 @@ export async function GET(req: NextRequest) {
         // remain scoped to the organization from their session.
         const organizationIdsRaw = url.searchParams.get("organizationIds")
         const organizationIdRaw = url.searchParams.get("organizationId")
-        const requestedOrgIds = organizationIdsRaw
-            ? organizationIdsRaw.split(',').map(Number).filter(n => !isNaN(n) && n > 0)
-            : (organizationIdRaw && Number(organizationIdRaw) > 0 ? [Number(organizationIdRaw)] : [])
+        const requestedOrgIds = (() => {
+          if (organizationIdsRaw) {
+            return organizationIdsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n > 0)
+          }
+          return (organizationIdRaw && Number(organizationIdRaw) > 0 ? [Number(organizationIdRaw)] : [])
+        })()
         const parsedOrgIds = resolveAnalyticsOrganizationIds({
             role: userRole,
             userOrganizationId: userOrgId,
@@ -105,7 +107,12 @@ export async function GET(req: NextRequest) {
                 .from(branches)
                 .where(and(
                     inArray(branches.groupId, parsedGroupIds),
-                    parsedOrgIds.length > 0 ? inArray(branches.organizationId, parsedOrgIds) : (userOrgId ? eq(branches.organizationId, userOrgId) : undefined)
+                    (() => {
+                      if (parsedOrgIds.length > 0) {
+                        return inArray(branches.organizationId, parsedOrgIds)
+                      }
+                      return (userOrgId ? eq(branches.organizationId, userOrgId) : undefined)
+                    })()
                 ));
             const groupBranchIds = new Set(groupBranches.map(b => b.id));
             branchIds = branchIds.filter(id => groupBranchIds.has(id));
@@ -127,10 +134,10 @@ export async function GET(req: NextRequest) {
             end?: Date
         ) => {
             if (months.length > 0) {
-                conditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(months, sql`, `)})`)
+                conditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(months, sql.raw(", "))})`)
             }
             if (years.length > 0) {
-                conditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(years, sql`, `)})`)
+                conditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(years, sql.raw(", "))})`)
             }
 
             if (months.length === 0 && years.length === 0) {
@@ -286,7 +293,12 @@ export async function GET(req: NextRequest) {
             .leftJoin(parentCategories, eq(categories.parentId, parentCategories.id))
             .leftJoin(organizationInventory, and(
                 eq(organizationInventory.globalProductId, globalProducts.id),
-                parsedOrgIds.length > 0 ? inArray(organizationInventory.organizationId, parsedOrgIds) : (userOrgId ? eq(organizationInventory.organizationId, userOrgId) : undefined)
+                (() => {
+                  if (parsedOrgIds.length > 0) {
+                    return inArray(organizationInventory.organizationId, parsedOrgIds)
+                  }
+                  return (userOrgId ? eq(organizationInventory.organizationId, userOrgId) : undefined)
+                })()
             ))
             .where(and(...productConditions))
             
@@ -302,7 +314,12 @@ export async function GET(req: NextRequest) {
                 unit: p.unit,
                 category: p.categoryName || 'Uncategorized',
                 subCategory: p.subCategoryName || '-',
-                status: p.deletedAt ? 'deleted' : (p.orgIsActive === false ? 'inactive' : p.status),
+                status: (() => {
+                  if (p.deletedAt) {
+                    return 'deleted'
+                  }
+                  return (p.orgIsActive === false ? 'inactive' : p.status)
+                })(),
                 totalOrders: new Set(),
                 qtyOrdered: 0,
                 qtyFulfilled: 0,
@@ -410,8 +427,8 @@ export async function GET(req: NextRequest) {
                         (() => {
                             const compCond: any[] = []
                             if (parsedCompMonths.length > 0 || parsedCompYears.length > 0) {
-                                if (parsedCompMonths.length > 0) compCond.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedCompMonths, sql`, `)})`)
-                                if (parsedCompYears.length > 0) compCond.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedCompYears, sql`, `)})`)
+                                if (parsedCompMonths.length > 0) compCond.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedCompMonths, sql.raw(", "))})`)
+                                if (parsedCompYears.length > 0) compCond.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedCompYears, sql.raw(", "))})`)
                             } else {
                                 if (prevStart) compCond.push(gte(orders.createdAt, prevStart))
                                 if (prevEnd) compCond.push(lte(orders.createdAt, prevEnd))
@@ -468,12 +485,7 @@ export async function GET(req: NextRequest) {
                 }
                 const pInfo = compProductMap[gpid]
                 const s = (row.status || "").toUpperCase()
-                if (s === 'FULFILLED' || s === 'APPROVED' || s === 'PARTIAL' || s === 'PARTIALLY_FULFILLED') {
-                    const refQ = compRefundQuantities[row.orderItemId] || 0
-                    const fulfilledCount = Math.max(0, row.qtyOrdered - refQ)
-                    pInfo.qtyFulfilled += fulfilledCount
-                    pInfo.revenueGeneratedCents += (fulfilledCount * row.priceCents)
-                } else if (s === 'REFUNDED') {
+                if (s === 'FULFILLED' || s === 'APPROVED' || s === 'PARTIAL' || s === 'PARTIALLY_FULFILLED' || s === 'REFUNDED') {
                     const refQ = compRefundQuantities[row.orderItemId] || 0
                     const fulfilledCount = Math.max(0, row.qtyOrdered - refQ)
                     pInfo.qtyFulfilled += fulfilledCount

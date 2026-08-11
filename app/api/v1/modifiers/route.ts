@@ -1,9 +1,9 @@
-import { NextRequest, NextResponse } from "next/server"
+import { NextRequest,NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
-import { modifiers, productModifiers, globalProducts } from "@/db/schema"
-import { eq, and, like, or, desc, sql } from "drizzle-orm"
+import { modifiers,productModifiers } from "@/db/schema"
+import { eq,and,like,or,desc,sql } from "drizzle-orm"
 import { escapeLikePattern } from "@/lib/utils"
 
 // GET /api/v1/modifiers - List all modifiers with search/filter
@@ -24,8 +24,8 @@ export async function GET(req: NextRequest) {
     const search = searchRaw ? escapeLikePattern(searchRaw) : "" // Sanitize LIKE patterns
     const type = searchParams.get("type") || ""
     const status = searchParams.get("status") || ""
-    const page = parseInt(searchParams.get("page") || "1")
-    const limit = parseInt(searchParams.get("limit") || "50")
+    const page = Number.parseInt(searchParams.get("page") || "1")
+    const limit = Number.parseInt(searchParams.get("limit") || "50")
     const offset = (page - 1) * limit
 
     // Build where clause
@@ -245,7 +245,7 @@ export async function DELETE(req: NextRequest) {
     const existingModifier = await db
       .select()
       .from(modifiers)
-      .where(eq(modifiers.id, parseInt(id)))
+      .where(eq(modifiers.id, Number.parseInt(id)))
       .limit(1)
 
     if (existingModifier.length === 0) {
@@ -256,7 +256,7 @@ export async function DELETE(req: NextRequest) {
     const productUsage = await db
       .select()
       .from(productModifiers)
-      .where(eq(productModifiers.modifierId, parseInt(id)))
+      .where(eq(productModifiers.modifierId, Number.parseInt(id)))
       .limit(1)
 
     if (productUsage.length > 0) {
@@ -265,7 +265,7 @@ export async function DELETE(req: NextRequest) {
 
     await db
       .delete(modifiers)
-      .where(eq(modifiers.id, parseInt(id)))
+      .where(eq(modifiers.id, Number.parseInt(id)))
 
     return NextResponse.json({ message: "Modifier deleted successfully" })
   } catch (error) {

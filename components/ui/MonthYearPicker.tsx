@@ -35,7 +35,7 @@ export function MonthYearPicker({
   selectedMonths: controlledMonths,
   onYearChange,
   onMonthsChange,
-}: MonthYearPickerProps) {
+}: Readonly<MonthYearPickerProps>) {
   const years = React.useMemo(() => {
     const currentYear = new Date().getFullYear()
     const startYear = 2022
@@ -95,10 +95,10 @@ export function MonthYearPicker({
     <div className="space-y-4 rounded-xl border-0 p-5 w-80 bg-white dark:bg-slate-800">
       {/* Year Select */}
       <div>
-        <label className="block mb-2 text-sm font-semibold text-slate-700 dark:text-slate-300">Year</label>
+        <label htmlFor="month-year-picker-year" className="block mb-2 text-sm font-semibold text-slate-700 dark:text-slate-300">Year</label>
 
         <Select.Root value={year} onValueChange={handleYearChange}>
-          <Select.Trigger className="inline-flex w-full items-center justify-between rounded-lg border-2 border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-4 py-2.5 text-sm font-medium hover:border-indigo-300 dark:hover:border-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 focus:ring-offset-2 dark:focus:ring-offset-slate-800 transition-colors">
+          <Select.Trigger id="month-year-picker-year" className="inline-flex w-full items-center justify-between rounded-lg border-2 border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-4 py-2.5 text-sm font-medium hover:border-indigo-300 dark:hover:border-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 focus:ring-offset-2 dark:focus:ring-offset-slate-800 transition-colors">
             <Select.Value className="text-slate-900 dark:text-slate-100" />
             <Select.Icon>
               <ChevronDownIcon className="h-4 w-4 text-slate-500 dark:text-slate-400" />
@@ -133,18 +133,18 @@ export function MonthYearPicker({
       {/* Month Checkboxes */}
       <div>
         <div className="flex items-center justify-between mb-3">
-          <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300">
+          <p className="block text-sm font-semibold text-slate-700 dark:text-slate-300">
             Months
-          </label>
+          </p>
           <div className="flex gap-2">
-            <button
+            <button type="button"
               onClick={selectAllMonths}
               className="text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 transition-colors"
             >
               Select All
             </button>
             <span className="text-slate-300 dark:text-slate-600">|</span>
-            <button
+            <button type="button"
               onClick={clearAllMonths}
               className="text-xs font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300 transition-colors"
             >

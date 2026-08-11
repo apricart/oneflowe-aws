@@ -10,7 +10,7 @@ interface ReceiptViewerProps {
     onOpenChange: (open: boolean) => void
 }
 
-export function ReceiptViewer({ orderId, open, onOpenChange }: ReceiptViewerProps) {
+export function ReceiptViewer({ orderId, open, onOpenChange }: Readonly<ReceiptViewerProps>) {
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent className="max-w-[850px] p-0 border-0 bg-transparent shadow-none overflow-visible">

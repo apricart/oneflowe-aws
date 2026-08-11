@@ -1,8 +1,7 @@
 "use client"
 
-import React, { useState, useEffect } from "react"
+import { useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import {
   Command,
@@ -17,7 +16,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
-import { Check, ChevronsUpDown, FolderTree, FolderOpen } from "lucide-react"
+import { Check,ChevronsUpDown,FolderTree,FolderOpen } from "lucide-react"
 import { cn } from "@/lib/utils"
 import useSWR from "swr"
 
@@ -45,7 +44,7 @@ export function CategorySelector({
   placeholder = "Select category...",
   showSubCategories = true,
   className
-}: CategorySelectorProps) {
+}: Readonly<CategorySelectorProps>) {
   const [open, setOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
 
@@ -91,19 +90,27 @@ export function CategorySelector({
           aria-expanded={open}
           className={cn("justify-between", className)}
         >
-          {selectedCategory ? (
+          {(() => {
+            if (selectedCategory) {
+              return (
             <div className="flex items-center gap-2">
               <FolderTree size={16} />
               <span>{selectedCategory.name}</span>
             </div>
-          ) : selectedSubCategory ? (
+          )
+            }
+            if (selectedSubCategory) {
+              return (
             <div className="flex items-center gap-2">
               <FolderOpen size={16} />
               <span>{selectedSubCategory.name}</span>
             </div>
-          ) : (
+          )
+            }
+            return (
             placeholder
-          )}
+          )
+          })()}
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>

@@ -33,6 +33,48 @@ import { eq, count, and, ne, isNull, isNotNull } from "drizzle-orm"
 import { organizationUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
 import { getRequestScope } from "@/lib/auth"
 
+type OrganizationUpdateInput = ReturnType<typeof organizationUpdateSchema.parse>
+
+async function buildOrganizationPatch(body: OrganizationUpdateInput, organizationId: number) {
+  const patch: Record<string, unknown> = {}
+  if (body.name !== undefined) {
+    const name = String(body.name).trim()
+    const exists = await db.select({ id: organizations.id })
+      .from(organizations)
+      .where(and(eq(organizations.name, name), ne(organizations.id, organizationId)))
+      .limit(1)
+    if (exists.length > 0) return { response: error(`Organization with name '${name}' already exists`, 400) }
+    patch.name = name
+  }
+  if (body.code !== undefined) {
+    const code = String(body.code).trim().toUpperCase()
+    const exists = await db.select({ id: organizations.id })
+      .from(organizations)
+      .where(and(eq(organizations.code, code), ne(organizations.id, organizationId)))
+      .limit(1)
+    if (exists.length > 0) return { response: error(`Organization with code '${code}' already exists`, 400) }
+    patch.code = code
+  }
+  if (body.status !== undefined) {
+    const status = String(body.status).toLowerCase()
+    const validStatuses = ["active", "inactive", "suspended"]
+    if (!validStatuses.includes(status)) {
+      return { response: error(`Status must be one of: ${validStatuses.join(", ")}`, 400) }
+    }
+    patch.status = status
+  }
+  if (body.orderApproverRole !== undefined) patch.orderApproverRole = body.orderApproverRole
+
+  const budgetAllocationMode = body.budgetAllocationMode === undefined
+    ? undefined
+    : String(body.budgetAllocationMode)
+  if (budgetAllocationMode !== undefined && !isBudgetAllocationMode(budgetAllocationMode)) {
+    return { response: error("Budget allocation mode must be either money or quantity", 400) }
+  }
+  patch.updatedAt = new Date()
+  return { patch, budgetAllocationMode }
+}
+
 export async function GET(
   _: Request,
   props: { params: Promise<{ id: string }> }
@@ -71,48 +113,9 @@ export async function PATCH(
     if (!Number.isInteger(orgId) || orgId <= 0) return error("Invalid organization ID", 400)
     const scope = await getRequestScope()
     if (!scope?.userId) return error("Invalid session data", 401)
-    const patch: any = {}
-    if (body.name !== undefined) {
-      const name = String(body.name).trim()
-      // Check for duplicate name
-      const exists = await db.select({ id: organizations.id })
-        .from(organizations)
-        .where(and(eq(organizations.name, name), ne(organizations.id, orgId)))
-        .limit(1)
-      if (exists.length > 0) return error(`Organization with name '${name}' already exists`, 400)
-      patch.name = name
-    }
-    if (body.code !== undefined) {
-      const code = String(body.code).trim().toUpperCase()
-      // Check for duplicate code
-      const exists = await db.select({ id: organizations.id })
-        .from(organizations)
-        .where(and(eq(organizations.code, code), ne(organizations.id, orgId)))
-        .limit(1)
-      if (exists.length > 0) return error(`Organization with code '${code}' already exists`, 400)
-      patch.code = code
-    }
-    if (body.status !== undefined) {
-      const normalized = String(body.status).toLowerCase()
-      const validStatuses = ['active', 'inactive', 'suspended']
-      if (!validStatuses.includes(normalized)) {
-        return error(`Status must be one of: ${validStatuses.join(', ')}`, 400)
-      }
-      patch.status = normalized
-      console.log(`[Org Update] PATCH /api/v1/organizations/${id} - New status: ${patch.status}`)
-    }
-    if (body.orderApproverRole !== undefined) {
-      patch.orderApproverRole = body.orderApproverRole
-    }
-    const budgetAllocationMode = body.budgetAllocationMode === undefined
-      ? undefined
-      : String(body.budgetAllocationMode)
-
-    if (budgetAllocationMode !== undefined && !isBudgetAllocationMode(budgetAllocationMode)) {
-      return error("Budget allocation mode must be either money or quantity", 400)
-    }
-
-    patch.updatedAt = new Date()
+    const prepared = await buildOrganizationPatch(body, orgId)
+    if (prepared.response) return prepared.response
+    const { patch, budgetAllocationMode } = prepared
     const transactionResult = await db.transaction(async (tx) => {
       // Serialize a policy change with in-flight approval/rejection decisions.
       const [existingOrganization] = await tx
@@ -185,6 +188,7 @@ export async function PATCH(
       },
     })
   } catch (e: any) {
+    console.error("Update organization failed:", e)
     return error("Update failed", 400)
   }
 }

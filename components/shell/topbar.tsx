@@ -1,27 +1,42 @@
 "use client"
-import { useState, useEffect } from "react"
-import { Button } from "@/components/ui/button"
-import { signOut, useSession } from "next-auth/react"
-import Image from "next/image"
-import { Moon, Sun, BarChart3 } from "lucide-react"
-import { useTheme } from "next-themes"
-import { CommandPalette } from "@/components/ui/command-palette"
-import { ContextSelector } from "@/components/shell/context-selector"
-import Link from "next/link"
-import { NotificationBell } from "@/components/notifications/notification-center"
-import { MultiBranchFilter } from "@/components/dashboard/multi-branch-filter"
 import { useAppContext } from "@/components/context/app-context"
+import { MultiBranchFilter } from "@/components/dashboard/multi-branch-filter"
+import { NotificationBell } from "@/components/notifications/notification-center"
+import { ContextSelector } from "@/components/shell/context-selector"
 import { MANUAL_SIGN_OUT_EVENT } from "@/components/shell/session-guard"
-import { useRouter } from "next/navigation"
+import { Button } from "@/components/ui/button"
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
+DropdownMenu,
+DropdownMenuContent,
+DropdownMenuItem,
+DropdownMenuLabel,
+DropdownMenuSeparator,
+DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { LogOut, Settings as SettingsIcon } from "lucide-react"
+import { BarChart3,LogOut,Moon,Settings as SettingsIcon,Sun } from "lucide-react"
+import { signOut,useSession } from "next-auth/react"
+import { useTheme } from "next-themes"
+import Image from "next/image"
+import Link from "next/link"
+import { useRouter } from "next/navigation"
+import { useEffect,useState } from "react"
+
+async function logout() {
+  try {
+    localStorage.removeItem('theme')
+    localStorage.removeItem('ctx.organizationId')
+    localStorage.removeItem('ctx.branchId')
+    window.dispatchEvent(new Event(MANUAL_SIGN_OUT_EVENT))
+
+    await signOut({
+      redirect: true,
+      callbackUrl: "/login"
+    })
+  } catch (error) {
+    console.warn("Sign-out request failed; redirecting to login:", error)
+    window.location.replace("/login")
+  }
+}
 
 export function Topbar() {
   const { data: session } = useSession()
@@ -33,25 +48,6 @@ export function Topbar() {
   useEffect(() => {
     setMounted(true)
   }, [])
-
-  async function logout() {
-    try {
-      localStorage.removeItem('theme')
-      localStorage.removeItem('ctx.organizationId')
-      localStorage.removeItem('ctx.branchId')
-      window.dispatchEvent(new Event(MANUAL_SIGN_OUT_EVENT))
-      
-      // Explicitly sign out and redirect to main login
-      await signOut({ 
-        redirect: true,
-        callbackUrl: "/login"
-      })
-    } catch (_) {
-      // Ensure redirect happens even if signOut fails
-      window.location.replace("/login")
-    }
-  }
-
 
   return (
     <header
@@ -94,7 +90,9 @@ export function Topbar() {
         <NotificationBell />
 
         {/* Theme Toggle */}
-        {mounted ? (
+        {(() => {
+          if (mounted) {
+            return (
           <Button
             variant="ghost"
             size="icon"
@@ -108,20 +106,36 @@ export function Topbar() {
             }}
             className="relative"
             aria-label="Toggle theme"
-            title={mounted && theme ? `Current: ${theme === "system" ? "System" : theme === "dark" ? "Dark" : "Light"}` : "Toggle theme"}
+            title={(() => {
+              if (mounted && theme) {
+                return `Current: ${(() => {
+                  if (theme === "system") {
+                    return "System"
+                  }
+                  if (theme === "dark") {
+                    return "Dark"
+                  }
+                  return "Light"
+                })()}`
+              }
+              return "Toggle theme"
+            })()}
           >
             <Sun className="h-5 w-5 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
             <Moon className="absolute h-5 w-5 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
             <span className="sr-only">Toggle theme</span>
           </Button>
-        ) : (
+        )
+          }
+          return (
           <div className="h-10 w-10" />
-        )}
+        )
+        })()}
 
         {/* Profile Menu */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button
+            <button type="button"
               className="flex items-center gap-2 rounded-full px-2 py-1 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors focus:outline-none"
             >
               <Image

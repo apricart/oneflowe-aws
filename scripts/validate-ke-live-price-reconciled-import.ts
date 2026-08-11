@@ -91,8 +91,7 @@ function main() {
         && Number(item.price_cents) === cents(line.UnitPrice)
     })
     const itemSubtotal = items.reduce((sum, item) => sum + Math.round(Number(item.quantity) * Number(item.price_cents)), 0)
-    const pass = order != null
-      && order.organization_id === 10
+    const pass = order?.organization_id === 10
       && order.tid === `KE-LEGACY-${legacyId}`
       && order.status === "FULFILLED"
       && order.fulfillment_status === "DELIVERED"

@@ -38,24 +38,24 @@ export async function GET(req: NextRequest) {
         const compareMonthsRaw = url.searchParams.get("compareMonths")
         const compareYearsRaw = url.searchParams.get("compareYears")
 
-        const parsedMonths = monthsRaw ? monthsRaw.split(',').map(Number).filter(n => !isNaN(n) && n >= 1 && n <= 12) : []
-        const parsedYears = yearsRaw ? yearsRaw.split(',').map(Number).filter(n => !isNaN(n) && n > 2000) : []
+        const parsedMonths = monthsRaw ? monthsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n >= 1 && n <= 12) : []
+        const parsedYears = yearsRaw ? yearsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n > 2000) : []
         const userIds = userIdsRaw ? userIdsRaw.split(',').filter(id => id.length > 5) : [] 
-        const groupIds = groupIdsRaw ? groupIdsRaw.split(',').map(Number).filter(n => !isNaN(n)) : []
-        const parsedCompMonths = compareMonthsRaw ? compareMonthsRaw.split(',').map(Number).filter(n => !isNaN(n) && n >= 1 && n <= 12) : []
-        const parsedCompYears = compareYearsRaw ? compareYearsRaw.split(',').map(Number).filter(n => !isNaN(n) && n > 2000) : []
+        const groupIds = groupIdsRaw ? groupIdsRaw.split(',').map(Number).filter(n => !Number.isNaN(n)) : []
+        const parsedCompMonths = compareMonthsRaw ? compareMonthsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n >= 1 && n <= 12) : []
+        const parsedCompYears = compareYearsRaw ? compareYearsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n > 2000) : []
 
         // RBAC & Filter Context Parsing
         let organizationIds: number[] = []
         if (organizationIdsParam) {
-            organizationIds = organizationIdsParam.split(",").map(Number).filter(id => !isNaN(id) && id > 0)
+            organizationIds = organizationIdsParam.split(",").map(Number).filter(id => !Number.isNaN(id) && id > 0)
         } else if (userOrgId) {
             organizationIds = [userOrgId]
         }
 
         let branchIds: number[] = []
         if (branchIdsParam) {
-            branchIds = branchIdsParam.split(",").map(id => Number(id)).filter(id => !isNaN(id) && id > 0)
+            branchIds = branchIdsParam.split(",").map(Number).filter(id => !Number.isNaN(id) && id > 0)
         } else if (groupIds.length > 0) {
             const b = await db.select({ id: branches.id }).from(branches).where(inArray(branches.groupId, groupIds))
             branchIds = b.map(br => br.id)
@@ -86,10 +86,10 @@ export async function GET(req: NextRequest) {
             baseConditions.push(inArray(orders.createdByUserId, userIds))
         }
         if (parsedMonths.length > 0) {
-            baseConditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedMonths, sql`, `)})`)
+            baseConditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedMonths, sql.raw(", "))})`)
         }
         if (parsedYears.length > 0) {
-            baseConditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedYears, sql`, `)})`)
+            baseConditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedYears, sql.raw(", "))})`)
         }
 
         if (parsedMonths.length === 0 && parsedYears.length === 0) {
@@ -127,17 +127,14 @@ export async function GET(req: NextRequest) {
         // COMPARISON logic for overall KPIs
         let comparisonSummary = null
         if (compare && startDateParam && endDateParam) {
-            let prevStart: Date
             let prevEnd: Date
             
             if (compareStartDateParam && compareEndDateParam) {
-                prevStart = parseStartDateParam(compareStartDateParam) || new Date(compareStartDateParam)
                 prevEnd = parseEndDateParam(compareEndDateParam) || new Date(compareEndDateParam)
             } else {
                 const start = parseStartDateParam(startDateParam) || new Date(startDateParam)
                 const end = parseEndDateParam(endDateParam) || new Date(endDateParam)
                 const duration = end.getTime() - start.getTime()
-                prevStart = new Date(start.getTime() - duration - 1)
                 prevEnd = new Date(start.getTime() - 1)
             }
 
@@ -158,10 +155,10 @@ export async function GET(req: NextRequest) {
                         (() => {
                             const compCond: any[] = []
                             if (parsedCompMonths.length > 0 || parsedCompYears.length > 0) {
-                                if (parsedCompMonths.length > 0) compCond.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedCompMonths, sql`, `)})`)
-                                if (parsedCompYears.length > 0) compCond.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedCompYears, sql`, `)})`)
-                            } else {
-                                if (prevEnd) compCond.push(lte(orders.createdAt, prevEnd))
+                                if (parsedCompMonths.length > 0) compCond.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedCompMonths, sql.raw(", "))})`)
+                                if (parsedCompYears.length > 0) compCond.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedCompYears, sql.raw(", "))})`)
+                            } else if (prevEnd) {
+                                compCond.push(lte(orders.createdAt, prevEnd))
                             }
                             if (userIds.length > 0) {
                                 compCond.push(inArray(orders.createdByUserId, userIds))
@@ -243,8 +240,8 @@ export async function GET(req: NextRequest) {
                             (() => {
                                 const compCond: any[] = []
                                 if (parsedCompMonths.length > 0 || parsedCompYears.length > 0) {
-                                    if (parsedCompMonths.length > 0) compCond.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedCompMonths, sql`, `)})`)
-                                    if (parsedCompYears.length > 0) compCond.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedCompYears, sql`, `)})`)
+                                    if (parsedCompMonths.length > 0) compCond.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedCompMonths, sql.raw(", "))})`)
+                                    if (parsedCompYears.length > 0) compCond.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedCompYears, sql.raw(", "))})`)
                                 } else {
                                     const cEnd = parseEndDateParam(compareEndDateParam!)
                                     if (cEnd) compCond.push(lte(orders.createdAt, cEnd))

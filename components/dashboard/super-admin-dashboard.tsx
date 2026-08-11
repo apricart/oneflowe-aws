@@ -1,32 +1,31 @@
 "use client"
 
-import { useMemo, useState, useCallback, useEffect } from "react"
-import { motion, AnimatePresence } from "framer-motion"
+import { useMemo,useState,useCallback,useEffect } from "react"
+import { motion } from "framer-motion"
 import useSWR from "swr"
 import { fetcher } from "@/lib/fetcher"
-import { useOrganizations, useBranches, useUsers } from "@/lib/hooks/use-api"
-import { useLifetimeStats } from "@/lib/hooks/use-dashboard-analytics"
-import { useSalesPerformance, type DateRange, type DashboardStatus } from "@/lib/hooks/use-sales-performance"
-import { Card, CardContent } from "@/components/ui/card"
+import { useOrganizations,useBranches,useUsers } from "@/lib/hooks/use-api"
+import { useSalesPerformance,type DateRange } from "@/lib/hooks/use-sales-performance"
+import { Card,CardContent } from "@/components/ui/card"
 import { NotificationRail } from "@/components/notifications/notification-center"
-import { formatPKR, cn } from "@/lib/utils"
+import { formatPKR,cn } from "@/lib/utils"
 import {
-  Users, Building2, TrendingDown, TrendingUp,
-  Package, RefreshCw, Filter, CheckCircle2, RotateCcw, XCircle, Activity,
-  Calendar, Layers, Clock
+  TrendingUp,
+  Package,RefreshCw,Filter,CheckCircle2,RotateCcw,XCircle,Activity,
+  Calendar,Layers,Clock
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { SalesPerformanceBarChart } from "@/components/dashboard/charts"
-import { BankingKPICard } from "@/components/dashboard/banking-kpi-card"
-import { GlobalDateFilter, type FilterPreset, getPresetLabel, getPresetRange } from "@/components/dashboard/global-date-filter"
+import { BankingKPICard,type TrendDirection } from "@/components/dashboard/banking-kpi-card"
+import { GlobalDateFilter,type FilterPreset,type GlobalDateFilterChange,getPresetLabel,getPresetRange } from "@/components/dashboard/global-date-filter"
 import { MultiBranchFilter } from "@/components/dashboard/multi-branch-filter"
 import { OrganizationFilter } from "@/components/reports/organization-filter"
 import { BranchFilter } from "@/components/reports/branch-filter"
-import { DrillDownSheet, type DrillDownType } from "@/components/dashboard/drill-down-sheet"
+import { DrillDownSheet,type DrillDownType } from "@/components/dashboard/drill-down-sheet"
 import { MultiSelectFilter } from "@/components/reports/multi-select-filter"
 
 import { useAppContext } from "@/components/context/app-context"
-import { startOfDay, endOfDay, format, subDays, addDays } from "date-fns"
+import { startOfDay,endOfDay } from "date-fns"
 
 export function SuperAdminDashboard() {
   const { organizationId, branchId, isInitialized } = useAppContext()
@@ -61,8 +60,8 @@ export function SuperAdminDashboard() {
     const series = (allTimePerf as any)?.seriesData || []
     const years = new Set<number>()
     series.forEach((s: any) => {
-      const y = parseInt(s.label)
-      if (!isNaN(y)) years.add(y)
+      const y = Number.parseInt(s.label)
+      if (!Number.isNaN(y)) years.add(y)
     })
     if (years.size === 0) years.add(new Date().getFullYear())
     return Array.from(years).sort((a, b) => b - a)
@@ -147,7 +146,6 @@ export function SuperAdminDashboard() {
   const { data: orgsData } = useOrganizations()
   const { data: usersData } = useUsers(organizationId || undefined)
   const { data: branchesData } = useBranches(organizationId || undefined)
-  const { data: lifetimeStats } = useLifetimeStats(organizationId, branchId)
 
   const orgs = orgsData?.items || []
   const branchesRaw = branchesData?.items || []
@@ -155,8 +153,6 @@ export function SuperAdminDashboard() {
 
   const branchesInScope = branchId ? branchesRaw.filter(b => b.id?.toString() === branchId) : branchesRaw
   const usersInScope = branchId ? usersRaw.filter(u => u.branchId?.toString() === branchId) : usersRaw
-  const usersCount = usersInScope.length
-  const branchesCount = branchesInScope.length
 
   // Initialize chartYears with all available years on first load
   useEffect(() => {
@@ -175,40 +171,60 @@ export function SuperAdminDashboard() {
     }
   }, [orgs, isInitialLoad])
 
-  const { data: perfData, isLoading: isLoadingPerf } = useSalesPerformance(
-    organizationId, branchId,
-    selectedBranchIds.length > 0 ? selectedBranchIds : undefined,
-    undefined, dateRange, "all", compare, compareRange,
-    months, years, compareMonths, compareYears,
-    activePreset === "all" ? "yearly" : undefined,
-    undefined, // organizationIds — scoped per card by context, not needed here
-    true,       // includeStatusCounts — fetches all 6 status breakdowns in one query
-    { enabled: isInitialized, keepPreviousData: true }
-  )
+  const { data: perfData, isLoading: isLoadingPerf } = useSalesPerformance({
+    organizationId,
+    branchId,
+    branchIds: selectedBranchIds.length > 0 ? selectedBranchIds : undefined,
+    dateRange,
+    status: "all",
+    compare,
+    compareRange,
+    months,
+    years,
+    compareMonths,
+    compareYears,
+    granularity: activePreset === "all" ? "yearly" : undefined,
+    includeStatusCounts: true,
+    request: { enabled: isInitialized, keepPreviousData: true },
+  })
 
   const hasChartFilters = chartMonths.length > 0 || chartYears.length > 0
-  const chartComponentDateRange = chartQuickFilter === "today" ? getPresetRange("today") : (hasChartFilters ? null : chartDateRange)
+  const chartComponentDateRange = (() => {
+    if (chartQuickFilter === "today") {
+      return getPresetRange("today")
+    }
+    return (hasChartFilters ? null : chartDateRange)
+  })()
 
   const isBroadRange = !chartQuickFilter && ["all", "yearly", "monthly", "custom"].includes(activePreset)
 
-  const chartGranularity = (chartQuickFilter === "today" || (activePreset === "today" && !hasChartFilters))
-    ? "daily" as const
-    : (chartYears.length > 1 || (chartYears.length === 0 && years.length > 1 && !chartQuickFilter && chartMonths.length === 0))
-      ? "yearly" as const
-      : (chartMonths.length > 0 || chartYears.length === 1 || (!chartQuickFilter && (months.length > 0 || years.length === 1)) || isBroadRange)
-        ? "monthly" as const
-        : "daily" as const
+  const chartGranularity = (() => {
+    if ((chartQuickFilter === "today" || (activePreset === "today" && !hasChartFilters))) {
+      return "daily" as const
+    }
+    if ((chartYears.length > 1 || (chartYears.length === 0 && years.length > 1 && !chartQuickFilter && chartMonths.length === 0))) {
+      return "yearly" as const
+    }
+    if ((chartMonths.length > 0 || chartYears.length === 1 || (!chartQuickFilter && (months.length > 0 || years.length === 1)) || isBroadRange)) {
+      return "monthly" as const
+    }
+    return "daily" as const
+  })()
 
-  const { data: chartPerfData, isLoading: isLoadingChart } = useSalesPerformance(
-    undefined, undefined,
-    chartSelectedBranchIds.length > 0 ? chartSelectedBranchIds : undefined,
-    undefined, chartDateRange, "all", false, null,
-    chartMonths, chartYears, [], [],
-    chartGranularity,
-    chartSelectedOrgIds.length > 0 ? chartSelectedOrgIds : undefined,
-    undefined,
-    { enabled: isInitialized, keepPreviousData: true }
-  )
+  const { data: chartPerfData, isLoading: isLoadingChart } = useSalesPerformance({
+    branchIds: chartSelectedBranchIds.length > 0 ? chartSelectedBranchIds : undefined,
+    dateRange: chartDateRange,
+    status: "all",
+    compare: false,
+    compareRange: null,
+    months: chartMonths,
+    years: chartYears,
+    compareMonths: [],
+    compareYears: [],
+    granularity: chartGranularity,
+    organizationIds: chartSelectedOrgIds.length > 0 ? chartSelectedOrgIds : undefined,
+    request: { enabled: isInitialized, keepPreviousData: true },
+  })
 
   const normalizedChartData = useMemo(() => {
     const raw = chartPerfData?.seriesData ?? []
@@ -251,16 +267,7 @@ export function SuperAdminDashboard() {
 
 
 
-  const handleDateChange = useCallback((
-    range: DateRange | null, 
-    preset: FilterPreset, 
-    compareMode?: boolean, 
-    compRange?: DateRange | null,
-    m?: number[],
-    y?: number[],
-    cm?: number[],
-    cy?: number[]
-  ) => {
+  const handleDateChange = useCallback(({ range, preset, compare: compareMode, compareRange: compRange, months: m, years: y, compareMonths: cm, compareYears: cy }: GlobalDateFilterChange) => {
     setDateRange(range)
     setActivePreset(preset)
     if (compareMode !== undefined) setCompare(compareMode)
@@ -273,7 +280,7 @@ export function SuperAdminDashboard() {
   }, [])
 
   const resetDashboardFilters = useCallback(() => {
-    handleDateChange(getPresetRange("all"), "all", false, null, [], [], [], [])
+    handleDateChange({ range: getPresetRange("all"), preset: "all", compare: false, compareRange: null, months: [], years: [], compareMonths: [], compareYears: [] })
   }, [handleDateChange])
 
   const totalRevenue = perfData?.totalNetSales ?? perfData?.totalSales ?? 0
@@ -291,10 +298,16 @@ export function SuperAdminDashboard() {
   const buildTrend = useCallback((current: number, prev: number | undefined, formatFn?: (v: number) => string) => {
     if (!compare || prev === undefined || prev === null) return undefined
     const diff = current - prev
-    const percentage = prev > 0 ? (diff / prev) * 100 : (current > 0 ? 100 : 0)
+    const percentage = (() => {
+      if (prev > 0) {
+        return (diff / prev) * 100
+      }
+      return (current > 0 ? 100 : 0)
+    })()
     const fmt = formatFn || ((v: number) => v.toLocaleString())
+    const type: TrendDirection = diff >= 0 ? "up" : "down"
     return {
-      type: diff >= 0 ? "up" : "down" as const,
+      type,
       value: `${Math.abs(percentage).toFixed(1)}%`,
       label: `${fmt(current)} vs ${fmt(prev)}`
     }
@@ -385,7 +398,7 @@ export function SuperAdminDashboard() {
           subtitle={getPresetLabel(activePreset, dateRange)}
           gradient="from-emerald-500 to-teal-600" iconBg="text-emerald-600 bg-emerald-600" delay={0}
           onClick={() => handleKPIOpen("REVENUE")}
-          trend={revenueTrend?.type as "up" | "down" | undefined}
+          trend={revenueTrend?.type}
           trendValue={revenueTrend?.value}
           comparisonValue={revenueTrend?.label}
           comparisonLabel="VS LAST"
@@ -397,7 +410,7 @@ export function SuperAdminDashboard() {
           subtitle={getPresetLabel(activePreset, dateRange)}
           gradient="from-blue-500 to-indigo-600" iconBg="text-blue-600 bg-blue-600" delay={50}
           onClick={() => handleKPIOpen("ORDERS")}
-          trend={ordersTrend?.type as "up" | "down" | undefined}
+          trend={ordersTrend?.type}
           trendValue={ordersTrend?.value}
           comparisonValue={ordersTrend?.label}
           comparisonLabel="VS LAST"
@@ -409,7 +422,7 @@ export function SuperAdminDashboard() {
           subtitle={getPresetLabel(activePreset, dateRange)}
           gradient="from-amber-400 to-orange-500" iconBg="text-amber-600 bg-amber-600" delay={75}
           onClick={() => handleKPIOpen("PENDING" as any)} // Cast if PENDING is not in DrillDownType yet
-          trend={pendingTrend?.type as "up" | "down" | undefined}
+          trend={pendingTrend?.type}
           trendValue={pendingTrend?.value}
           comparisonValue={pendingTrend?.label}
           comparisonLabel="VS LAST"
@@ -421,7 +434,7 @@ export function SuperAdminDashboard() {
           subtitle={getPresetLabel(activePreset, dateRange)}
           gradient="from-blue-400 to-indigo-500" iconBg="text-blue-600 bg-blue-600" delay={100}
           onClick={() => handleKPIOpen("APPROVED")}
-          trend={approvedTrend?.type as "up" | "down" | undefined}
+          trend={approvedTrend?.type}
           trendValue={approvedTrend?.value}
           comparisonValue={approvedTrend?.label}
           comparisonLabel="VS LAST"
@@ -437,7 +450,7 @@ export function SuperAdminDashboard() {
           subtitle={getPresetLabel(activePreset, dateRange)}
           gradient="from-teal-500 to-cyan-600" iconBg="text-teal-600 bg-teal-600" delay={125}
           onClick={() => handleKPIOpen("FULFILLED")}
-          trend={fulfilledTrend?.type as "up" | "down" | undefined}
+          trend={fulfilledTrend?.type}
           trendValue={fulfilledTrend?.value}
           comparisonValue={fulfilledTrend?.label}
           comparisonLabel="VS LAST"
@@ -449,7 +462,7 @@ export function SuperAdminDashboard() {
           subtitle={getPresetLabel(activePreset, dateRange)}
           gradient="from-red-500 to-rose-600" iconBg="text-red-600 bg-red-600" delay={150}
           onClick={() => handleKPIOpen("REFUNDED")}
-          trend={refundedTrend?.type as "up" | "down" | undefined}
+          trend={refundedTrend?.type}
           trendValue={refundedTrend?.value}
           comparisonValue={refundedTrend?.label}
           comparisonLabel="VS LAST"
@@ -461,7 +474,7 @@ export function SuperAdminDashboard() {
           subtitle={getPresetLabel(activePreset, dateRange)}
           gradient="from-slate-500 to-slate-700" iconBg="text-slate-600 bg-slate-600" delay={175}
           onClick={() => handleKPIOpen("REJECTED")}
-          trend={rejectedTrend?.type as "up" | "down" | undefined}
+          trend={rejectedTrend?.type}
           trendValue={rejectedTrend?.value}
           comparisonValue={rejectedTrend?.label}
           comparisonLabel="VS LAST"
@@ -593,7 +606,7 @@ export function SuperAdminDashboard() {
   )
 }
 
-function MonthFilter({ selected, onChange }: { selected: number[], onChange: (v: number[]) => void }) {
+function MonthFilter({ selected, onChange }: Readonly<{ selected: number[], onChange: (v: number[]) => void }>) {
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
   const items = months.map((m, i) => ({ id: i + 1, label: m }))
   
@@ -602,7 +615,7 @@ function MonthFilter({ selected, onChange }: { selected: number[], onChange: (v:
       title="Months"
       items={items}
       selectedIds={selected}
-      onChange={(ids) => onChange(ids.sort((a, b) => a - b))}
+      onChange={(ids) => onChange(ids.toSorted((a, b) => a - b))}
       icon={<Calendar className="h-3.5 w-3.5 mr-2 text-indigo-500" />}
       placeholder="Months"
       showSearch={false}
@@ -610,7 +623,7 @@ function MonthFilter({ selected, onChange }: { selected: number[], onChange: (v:
   )
 }
 
-function YearFilter({ selected, onChange, availableYears }: { selected: number[], onChange: (v: number[]) => void, availableYears: number[] }) {
+function YearFilter({ selected, onChange, availableYears }: Readonly<{ selected: number[], onChange: (v: number[]) => void, availableYears: number[] }>) {
   const items = availableYears.map(y => ({ id: y, label: String(y) }))
 
   return (
@@ -618,7 +631,7 @@ function YearFilter({ selected, onChange, availableYears }: { selected: number[]
       title="Years"
       items={items}
       selectedIds={selected}
-      onChange={(ids) => onChange(ids.sort((a, b) => b - a))}
+      onChange={(ids) => onChange(ids.toSorted((a, b) => b - a))}
       icon={<Layers className="h-3.5 w-3.5 mr-2 text-indigo-500" />}
       placeholder="Years"
       showSearch={false}

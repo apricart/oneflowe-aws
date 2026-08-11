@@ -1,9 +1,9 @@
 #!/usr/bin/env tsx
 /** Guarded reversal for renumber-ke-legacy-product-codes.ts. */
 
-import { randomUUID } from "crypto"
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "fs"
-import { dirname, resolve } from "path"
+import { randomUUID } from "node:crypto"
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
+import { dirname, resolve } from "node:path"
 import type { PoolClient } from "pg"
 import * as dotenv from "dotenv"
 import {
@@ -31,7 +31,7 @@ function assert(condition: unknown, message: string): asserts condition {
 }
 
 function normalized<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T
+  return structuredClone(value)
 }
 
 function canonicalJson(value: unknown): unknown {

@@ -25,6 +25,46 @@ function hasCronAuthorization(req: NextRequest): boolean {
         timingSafeEqual(suppliedBuffer, expectedBuffer)
 }
 
+async function authorizeScheduleProcessing(
+    cronAuthorized: boolean,
+    scheduleId: number | undefined,
+) {
+    if (cronAuthorized) return { userId: null, isTest: false }
+    const authError = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"])
+    if (authError) return { response: authError }
+    const scope = await getRequestScope()
+    if (!scope?.userId) return { response: error("Unauthorized", 401) }
+    if (!scheduleId) return { response: error("scheduleId is required for manual processing", 400) }
+    const rateLimit = await withRateLimit("report", scope.userId)
+    if (rateLimit) return { response: rateLimit }
+    return { userId: scope.userId, isTest: true }
+}
+
+async function processSchedule(schedule: typeof scheduledReports.$inferSelect, isTest: boolean) {
+    try {
+        const reportData = await fetchReportData(schedule.reportName, schedule.organizationId)
+        const csv = convertToCSV(reportData)
+        const safeReportFileName = schedule.reportName.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 80) || "report"
+        const fileName = `${safeReportFileName}_${new Date().toISOString().split("T")[0]}.csv`
+        const sent = await sendReportEmail(
+            schedule.emails,
+            schedule.reportName,
+            schedule.frequency,
+            csv,
+            fileName,
+        )
+        if (sent && !isTest) {
+            await db.update(scheduledReports)
+                .set({ lastExecutedAt: new Date(), updatedAt: new Date() })
+                .where(eq(scheduledReports.id, schedule.id))
+        }
+        return { id: schedule.id, status: sent ? "sent" : "failed" }
+    } catch (processingError) {
+        console.error(`Error processing schedule ${schedule.id}:`, processingError)
+        return { id: schedule.id, status: "error" }
+    }
+}
+
 /**
  * Report Processing API
  * Used by a cron job or "Test Now" trigger to send scheduled reports.
@@ -34,23 +74,10 @@ export async function POST(req: NextRequest) {
     if (!parsedBody.success) return error("Invalid schedule request", 400)
 
     const cronAuthorized = hasCronAuthorization(req)
-    let userId: string | null = null
     const { scheduleId } = parsedBody.data
-    let { isTest } = parsedBody.data
-
-    if (!cronAuthorized) {
-        const authError = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"])
-        if (authError) return authError
-
-        const scope = await getRequestScope()
-        if (!scope?.userId) return error("Unauthorized", 401)
-        if (!scheduleId) return error("scheduleId is required for manual processing", 400)
-
-        userId = scope.userId
-        isTest = true
-        const rateLimit = await withRateLimit("report", scope.userId)
-        if (rateLimit) return rateLimit
-    }
+    const authorization = await authorizeScheduleProcessing(cronAuthorized, scheduleId)
+    if (authorization.response) return authorization.response
+    const { userId, isTest } = authorization
 
     const conditions = []
     if (scheduleId) {
@@ -75,37 +102,7 @@ export async function POST(req: NextRequest) {
     const results = []
 
     for (const schedule of schedules) {
-        try {
-            // 1. Fetch Data based on report type
-            // For this implementation, we fetch recent order data as a generic report
-            const reportData = await fetchReportData(schedule.reportName, schedule.organizationId)
-
-            // 2. Convert to CSV
-            const csv = convertToCSV(reportData)
-
-            // 3. Send Email
-            const safeReportFileName =
-                schedule.reportName.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 80) || "report"
-            const fileName = `${safeReportFileName}_${new Date().toISOString().split('T')[0]}.csv`
-            const sent = await sendReportEmail(
-                schedule.emails,
-                schedule.reportName,
-                schedule.frequency,
-                csv,
-                fileName
-            )
-
-            if (sent && !isTest) {
-                await db.update(scheduledReports)
-                    .set({ lastExecutedAt: new Date(), updatedAt: new Date() })
-                    .where(eq(scheduledReports.id, schedule.id))
-            }
-
-            results.push({ id: schedule.id, status: sent ? "sent" : "failed" })
-        } catch (err) {
-            console.error(`Error processing schedule ${schedule.id}:`, err)
-            results.push({ id: schedule.id, status: "error" })
-        }
+        results.push(await processSchedule(schedule, isTest ?? parsedBody.data.isTest))
     }
 
     return ok({ processed: results.length, details: results })

@@ -30,14 +30,13 @@ interface ContextSwitcherProps {
   showResetButton?: boolean
 }
 
-export function ContextSwitcher({ type, className, disabled = false, showResetButton = false }: ContextSwitcherProps) {
+export function ContextSwitcher({ type, className, disabled = false, showResetButton = false }: Readonly<ContextSwitcherProps>) {
   const { data: session } = useSession()
   const [open, setOpen] = React.useState(false)
   const [selectedId, setSelectedId] = React.useState<string>("")
 
   const userRole = (session?.user as any)?.role
   const userOrgId = (session?.user as any)?.organizationId
-  const userBranchId = (session?.user as any)?.branchId
 
   // For HEAD_OFFICE: organization is fixed, only branches can be switched
   // For BRANCH_ADMIN: both are fixed (context selector hidden)
@@ -66,9 +65,12 @@ export function ContextSwitcher({ type, className, disabled = false, showResetBu
     }
   }, [type, userRole, userOrgId])
     
-  const endpoint = type === "organization" 
-    ? "/api/v1/organizations" 
-    : (orgIdForBranches ? `/api/v1/branches?organizationId=${orgIdForBranches}` : "/api/v1/branches")
+  const endpoint = (() => {
+    if (type === "organization") {
+      return "/api/v1/organizations"
+    }
+    return (orgIdForBranches ? `/api/v1/branches?organizationId=${orgIdForBranches}` : "/api/v1/branches")
+  })()
   
   const { data, isLoading: isLoadingData } = useSWR(endpoint)
   const items = data?.items || []
@@ -220,8 +222,12 @@ export function ContextSwitcher({ type, className, disabled = false, showResetBu
             )}
             <span className="truncate">
                 {selectedItem?.name || 
-                  (selectedId && isLoadingData ? "Loading..." : 
-                    (type === "organization" ? "All Organizations" : "All Branches")
+                  ((() => {
+                    if (selectedId && isLoadingData) {
+                      return "Loading..."
+                    }
+                    return (type === "organization" ? "All Organizations" : "All Branches")
+                  })()
                   )
                 }
             </span>

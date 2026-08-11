@@ -34,7 +34,7 @@ export function ProductFilter({
     branchIds,
     placeholder = "Select Products",
     disabled = false
-}: ProductFilterProps) {
+}: Readonly<ProductFilterProps>) {
     const params = new URLSearchParams()
     
     // Combine single organizationId and organizationIds array

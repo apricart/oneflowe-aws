@@ -56,32 +56,32 @@ export default function SuppliersPage() {
           </DialogHeader>
           <div className="grid gap-3 md:grid-cols-2">
             <div className="grid gap-1">
-              <label className="text-sm">Organization Id</label>
-              <Input value={form.organizationId} onChange={(e) => setForm({ ...form, organizationId: e.target.value })} />
+              <label htmlFor="supplier-organization-id" className="text-sm">Organization Id</label>
+              <Input id="supplier-organization-id" value={form.organizationId} onChange={(e) => setForm({ ...form, organizationId: e.target.value })} />
             </div>
             <div className="grid gap-1">
-              <label className="text-sm">Branch Id</label>
-              <Input value={form.branchId} onChange={(e) => setForm({ ...form, branchId: e.target.value })} />
+              <label htmlFor="supplier-branch-id" className="text-sm">Branch Id</label>
+              <Input id="supplier-branch-id" value={form.branchId} onChange={(e) => setForm({ ...form, branchId: e.target.value })} />
             </div>
             <div className="grid gap-1">
-              <label className="text-sm">Name</label>
-              <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+              <label htmlFor="supplier-name" className="text-sm">Name</label>
+              <Input id="supplier-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
             </div>
             <div className="grid gap-1">
-              <label className="text-sm">Address</label>
-              <Input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} />
+              <label htmlFor="supplier-address" className="text-sm">Address</label>
+              <Input id="supplier-address" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} />
             </div>
             <div className="grid gap-1">
-              <label className="text-sm">Contact</label>
-              <Input value={form.contact} onChange={(e) => setForm({ ...form, contact: e.target.value })} />
+              <label htmlFor="supplier-contact" className="text-sm">Contact</label>
+              <Input id="supplier-contact" value={form.contact} onChange={(e) => setForm({ ...form, contact: e.target.value })} />
             </div>
             <div className="grid gap-1">
-              <label className="text-sm">Email</label>
-              <Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+              <label htmlFor="supplier-email" className="text-sm">Email</label>
+              <Input id="supplier-email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
             </div>
             <div className="grid gap-1 md:col-span-2">
-              <label className="text-sm">Description</label>
-              <Input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+              <label htmlFor="supplier-description" className="text-sm">Description</label>
+              <Input id="supplier-description" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
             </div>
           </div>
           <div className="flex justify-end gap-2 pt-2">

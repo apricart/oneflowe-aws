@@ -97,11 +97,35 @@ function normalizeRecipients(to: string | string[]): string[] {
     .filter(Boolean)
 }
 
+function replaceHtmlTagsWithSpaces(html: string): string {
+  const output: string[] = []
+  let tagStart = -1
+
+  for (let index = 0; index < html.length; index += 1) {
+    const character = html[index]
+    if (tagStart === -1 && character === "<") {
+      tagStart = index
+    } else if (tagStart !== -1 && character === ">") {
+      output.push(" ")
+      tagStart = -1
+    } else if (tagStart === -1) {
+      output.push(character)
+    }
+  }
+
+  if (tagStart !== -1) {
+    output.push(html.slice(tagStart))
+  }
+
+  return output.join("")
+}
+
 function stripHtml(html: string): string {
-  return html
+  const withoutEmbeddedContent = html
     .replace(/<style[\s\S]*?<\/style>/gi, "")
     .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<[^>]*>/g, " ")
+
+  return replaceHtmlTagsWithSpaces(withoutEmbeddedContent)
     .replace(/\s+/g, " ")
     .trim()
 }
@@ -113,8 +137,8 @@ function formatFromEmailAddress(fromEmail: string, fromName?: string): string {
 
   const safeName = fromName
     .replace(/[\r\n]/g, " ")
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '\\"')
+    .replace(/\\/g, String.raw`\\`)
+    .replace(/"/g, String.raw`\"`)
     .trim()
 
   return safeName ? `"${safeName}" <${fromEmail}>` : fromEmail

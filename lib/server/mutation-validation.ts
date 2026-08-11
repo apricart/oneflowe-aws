@@ -31,7 +31,7 @@ const passwordSchema = z.string().min(12).max(128)
 export const userCreateSchema = z.object({
   firstName: z.string().trim().min(1).max(100),
   lastName: z.string().trim().min(1).max(100),
-  email: z.string().trim().email().max(255),
+  email: z.string().trim().pipe(z.email().max(255)),
   username: z.string().trim().min(1).max(255),
   password: passwordSchema,
   role: systemRoleSchema,
@@ -50,7 +50,7 @@ export const userCreateSchema = z.object({
 export const userProfileUpdateSchema = z.object({
   firstName: z.string().trim().min(1).max(100).optional(),
   lastName: z.string().trim().min(1).max(100).optional(),
-  email: z.string().trim().email().max(255).optional(),
+  email: z.string().trim().pipe(z.email().max(255)).optional(),
   username: z.string().trim().min(1).max(255).optional(),
   phone: nullableText(32).optional(),
   employeeId: nullableText(64).optional(),
@@ -101,7 +101,7 @@ export const supplierCreateSchema = z.object({
   name: z.string().trim().min(1).max(255),
   address: nullableText(2_000).optional(),
   contact: nullableText(255).optional(),
-  email: z.union([z.string().trim().email().max(255), z.literal(""), z.null()]).optional()
+  email: z.union([z.string().trim().pipe(z.email().max(255)), z.literal(""), z.null()]).optional()
     .transform((value) => value || null),
   description: nullableText(2_000).optional(),
 }).strict()
@@ -115,7 +115,7 @@ export const supplierUpdateSchema = supplierCreateSchema.omit({
 
 export const organizationCreateSchema = z.object({
   name: z.string().trim().min(2).max(100),
-  code: z.string().trim().min(2).max(20).regex(/^[A-Za-z0-9_]+$/),
+  code: z.string().trim().min(2).max(20).regex(/^\w+$/),
   status: z.enum(["active", "inactive", "suspended"]).optional().default("active"),
   orderApproverRole: z.enum(ORDER_APPROVER_ROLES).optional().default("BRANCH_ADMIN"),
   budgetAllocationMode: z.enum(["money", "quantity"]).optional(),
@@ -127,7 +127,7 @@ export const organizationCreateSchema = z.object({
 
 export const organizationUpdateSchema = z.object({
   name: z.string().trim().min(2).max(100).optional(),
-  code: z.string().trim().min(2).max(20).regex(/^[A-Za-z0-9_]+$/).optional(),
+  code: z.string().trim().min(2).max(20).regex(/^\w+$/).optional(),
   status: z.enum(["active", "inactive", "suspended"]).optional(),
   orderApproverRole: z.enum(ORDER_APPROVER_ROLES).optional(),
   budgetAllocationMode: z.enum(["money", "quantity"]).optional(),
@@ -201,7 +201,7 @@ export const rolePermissionReplaceSchema = z.object({
 }).strict()
 
 export const employeeCredentialCreateSchema = z.object({
-  email: z.string().trim().email().max(255),
+  email: z.string().trim().pipe(z.email().max(255)),
   password: passwordSchema,
   firstName: z.string().trim().max(100).optional(),
   lastName: z.string().trim().max(100).optional(),
@@ -210,7 +210,7 @@ export const employeeCredentialCreateSchema = z.object({
 
 export const employeeCredentialUpdateSchema = z.object({
   id: positiveId,
-  email: z.string().trim().email().max(255).optional(),
+  email: z.string().trim().pipe(z.email().max(255)).optional(),
   password: passwordSchema.optional(),
   firstName: z.string().trim().max(100).optional(),
   lastName: z.string().trim().max(100).optional(),
@@ -230,13 +230,13 @@ export const reportScheduleSchema = z.object({
   reportName: z.string().trim().min(1).max(128),
   frequency: z.enum(["daily", "weekly", "monthly"]),
   format: z.enum(["pdf", "csv", "excel"]),
-  emails: z.array(z.string().trim().email().max(255)).min(1).max(20),
+  emails: z.array(z.string().trim().pipe(z.email().max(255))).min(1).max(20),
   enabled: z.boolean().optional().default(true),
 }).strict()
 
 export const moneyBudgetUpdateSchema = z.object({
   branchId: positiveId,
-  amountAllocatedCents: z.number().finite().nonnegative().max(Number.MAX_SAFE_INTEGER / 2),
+  amountAllocatedCents: z.number().nonnegative().max(Number.MAX_SAFE_INTEGER / 2),
   type: z.enum(["addon", "monthly"]).optional().default("addon"),
   setAbsolute: z.boolean().optional(),
   resetAddons: z.boolean().optional(),
@@ -279,7 +279,7 @@ export const globalProductUpdateSchema = z.object({
   description: nullableLongText.optional(),
   categoryId: nullablePositiveId.optional(),
   imageUrl: nullableImageUrl.optional(),
-  basePrice: z.number().finite().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+  basePrice: z.number().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
   unit: z.string().trim().min(1).max(64).optional(),
   status: z.enum(["active", "inactive"]).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
@@ -294,12 +294,12 @@ const globalProductAdminFields = {
   categoryId: nullablePositiveId.optional(),
   subcategoryId: z.union([z.string(), z.number(), z.null()]).optional(),
   imageUrl: nullableImageUrl.optional(),
-  basePrice: z.number().finite().positive().max(Number.MAX_SAFE_INTEGER / 100),
+  basePrice: z.number().positive().max(Number.MAX_SAFE_INTEGER / 100),
   unit: z.string().trim().min(1).max(64).optional(),
   status: z.enum(["active", "inactive"]).optional(),
-  stockQuantity: z.coerce.number().finite().nonnegative().optional(),
+  stockQuantity: z.coerce.number().nonnegative().optional(),
   allowDecimalQuantity: z.boolean().optional(),
-  quantityStep: z.coerce.number().finite().positive().optional(),
+  quantityStep: z.coerce.number().positive().optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
   discountType: z.union([z.enum(["percent", "flat"]), z.null()]).optional(),
   discountValue: z.union([z.coerce.number().int().nonnegative(), z.null()]).optional(),

@@ -1,4 +1,4 @@
-import { createHash } from "crypto"
+import { createHash } from "node:crypto"
 
 export const KE_PRODUCT_CODE_MIGRATION = {
   version: 1,
@@ -58,7 +58,15 @@ export function classifyKeProductCodeState(rows: KeImportedProductCodeRow[]): Ke
   assertExpectedKeProductRows(ordered)
   const pending = ordered.every((row) => /^LEG-KE-[A-F0-9]{16}$/.test(row.productCode))
   const applied = ordered.every((row) => row.productCode === expectedKeProductCode(row.id))
-  return pending ? "PENDING" : applied ? "APPLIED" : "MIXED"
+  return (() => {
+    if (pending) {
+      return "PENDING"
+    }
+    if (applied) {
+      return "APPLIED"
+    }
+    return "MIXED"
+  })()
 }
 
 export function buildKeProductCodeMappings(rows: KeImportedProductCodeRow[]): KeProductCodeMapping[] {
@@ -100,7 +108,7 @@ export function buildKeProductCodeMappingPayload(
   mappings: KeProductCodeMapping[],
   ublAssignment: Record<string, unknown>,
 ): Record<string, unknown> {
-  return JSON.parse(JSON.stringify({
+  return structuredClone({
     version: KE_PRODUCT_CODE_MIGRATION.version,
     organization: KE_PRODUCT_CODE_MIGRATION.organization,
     sourceSystem: KE_PRODUCT_CODE_MIGRATION.sourceSystem,
@@ -117,5 +125,5 @@ export function buildKeProductCodeMappingPayload(
     },
     ublAssignment,
     mappings,
-  })) as Record<string, unknown>
+  })
 }

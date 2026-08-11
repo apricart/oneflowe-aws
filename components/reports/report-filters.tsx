@@ -1,14 +1,13 @@
 "use client"
 
-import { Search, RotateCcw, Upload, FileText, FileSpreadsheet, FileIcon as FilePdf } from "lucide-react"
+import { Search,RotateCcw,Upload,FileText,FileSpreadsheet,FileIcon as FilePdf } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
-    DropdownMenu,
-    DropdownMenuContent,
-    DropdownMenuItem,
-    DropdownMenuTrigger,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { GroupFilter } from "./group-filter"
 import { BranchFilter } from "./branch-filter"
@@ -58,7 +57,7 @@ export function ReportFilters({
     searchPlaceholder = "Search...",
     showGroupFilter = true,
     showBranchFilter = false
-}: ReportFiltersProps) {
+}: Readonly<ReportFiltersProps>) {
     return (
         <div className="flex flex-wrap items-center gap-2 bg-white dark:bg-slate-900 p-2 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm transition-all duration-300">
             {/* Global Search - Focal point */}

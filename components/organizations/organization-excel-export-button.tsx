@@ -25,7 +25,7 @@ export function OrganizationExcelExportButton({
   branches,
   onSuccess,
   onError,
-}: OrganizationExcelExportButtonProps) {
+}: Readonly<OrganizationExcelExportButtonProps>) {
   const [isExporting, setIsExporting] = useState(false)
 
   const handleExport = async (event: MouseEvent<HTMLButtonElement>) => {

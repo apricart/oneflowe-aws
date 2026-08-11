@@ -1,14 +1,14 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState,useMemo } from "react"
 import useSWR from "swr"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card,CardContent,CardHeader,CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from "@/components/ui/table"
+import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from "@/components/ui/select"
 import { formatPKR } from "@/lib/utils"
-import { Search, Package, Building2, Sparkles, Eye } from "lucide-react"
+import { Search,Package,Building2 } from "lucide-react"
 import { useAppContext } from "@/components/context/app-context"
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json())
@@ -75,7 +75,7 @@ export default function ViewOrgProductsPage() {
             (p) =>
                 p.productName.toLowerCase().includes(q) ||
                 p.productCode.toLowerCase().includes(q) ||
-                (p.customName && p.customName.toLowerCase().includes(q))
+                (p.customName?.toLowerCase().includes(q))
         )
     }, [orgProducts, searchQuery])
 
@@ -166,13 +166,18 @@ export default function ViewOrgProductsPage() {
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                    {isLoading ? (
+                                    {(() => {
+                                      if (isLoading) {
+                                        return (
                                         <TableRow>
                                             <TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">
                                                 Loading products...
                                             </TableCell>
                                         </TableRow>
-                                    ) : filteredProducts.length === 0 ? (
+                                    )
+                                      }
+                                      if (filteredProducts.length === 0) {
+                                        return (
                                         <TableRow>
                                             <TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">
                                                 {orgProducts.length === 0
@@ -180,7 +185,9 @@ export default function ViewOrgProductsPage() {
                                                     : "No products match your search."}
                                             </TableCell>
                                         </TableRow>
-                                    ) : (
+                                    )
+                                      }
+                                      return (
                                         filteredProducts.map((product) => (
                                             <TableRow
                                                 key={product.id}
@@ -252,7 +259,8 @@ export default function ViewOrgProductsPage() {
                                                 </TableCell>
                                             </TableRow>
                                         ))
-                                    )}
+                                    )
+                                    })()}
                                 </TableBody>
                             </Table>
                         </div>
@@ -276,7 +284,7 @@ export default function ViewOrgProductsPage() {
     )
 }
 
-function StatsCard({ label, value, accent, isLoading = false }: { label: string; value: number; accent: string; isLoading?: boolean }) {
+function StatsCard({ label, value, accent, isLoading = false }: Readonly<{ label: string; value: number; accent: string; isLoading?: boolean }>) {
     return (
         <Card className="border border-slate-200 dark:border-slate-800 shadow-sm bg-white dark:bg-slate-900">
             <CardContent className="p-5 space-y-2">

@@ -1,4 +1,5 @@
 #!/usr/bin/env tsx
+import { stringifyPrimitive } from "../lib/stringify-primitive"
 
 import { createHash } from "node:crypto"
 import { readFileSync, writeFileSync } from "node:fs"
@@ -14,11 +15,18 @@ const NORMAL_IDS = [250, 765, 1164, 1165, 1177, 1187]
 const REFUND_IDS = [520]
 
 function normalize(value: unknown): string {
-  return String(value ?? "").normalize("NFKC").replace(/[\u2018\u2019]/g, "'").replace(/[\u2013\u2014]/g, "-").replace(/\s+/g, " ").trim().toLowerCase()
+  return stringifyPrimitive(value).normalize("NFKC").replace(/[\u2018\u2019]/g, "'").replace(/[\u2013\u2014]/g, "-").replace(/\s+/g, " ").trim().toLowerCase()
 }
 
 function normalizeProduct(value: unknown): string {
-  return normalize(value).replace(/\s*\(\s*/g, " (").replace(/\s*\)\s*/g, ")").replace(/\s*-\s*/g, "-")
+  return normalize(value)
+    .replaceAll(" (", "(")
+    .replaceAll("( ", "(")
+    .replaceAll("(", " (")
+    .replaceAll(" )", ")")
+    .replaceAll(") ", ")")
+    .replaceAll(" -", "-")
+    .replaceAll("- ", "-")
 }
 
 function normalizeBranch(value: unknown): string {
@@ -65,7 +73,7 @@ function main() {
       && Number(row.branch_id) === Number(branch.id))
     if (mappings.length === 1) {
       const user = userById.get(String(mappings[0].user_id))
-      const valid = user && user.organization_id === 10 && Number(user.branch_id) === Number(branch.id) && user.role_name === "ORDER_PORTAL" && user.deleted_at == null
+      const valid = user?.organization_id === 10 && Number(user.branch_id) === Number(branch.id) && user.role_name === "ORDER_PORTAL" && user.deleted_at == null
       return { kind: valid ? "EXISTING_LEDGER_MAPPING" : "INVALID_LEDGER_MAPPING", mapping: mappings[0], user: user ?? null, valid: Boolean(valid) }
     }
     const exact = (snapshot.users as Row[]).filter((user) => user.organization_id === 10 && Number(user.branch_id) === Number(branch.id)
@@ -98,8 +106,8 @@ function main() {
     const valid = Boolean(product && organizationInventory) || kind === "NEW_PRODUCT_REQUIRED"
     const branchAssignments = organizationInventory ? (snapshot.branchInventory as Row[]).filter((row) => Number(row.branch_id) === Number(branch.id)
       && row.organization_id === 10 && Number(row.organization_inventory_id) === Number(organizationInventory.id)) : []
-    const liveAssignment = branchAssignments.find((row) => row.deleted_at == null)
-    const onlyDeletedAssignment = branchAssignments.length > 0 && !liveAssignment
+    const hasLiveAssignment = branchAssignments.some((row) => row.deleted_at == null)
+    const onlyDeletedAssignment = branchAssignments.length > 0 && !hasLiveAssignment
     return {
       itemName: name,
       normalizedName: key,
@@ -107,7 +115,12 @@ function main() {
       globalProductId: product?.id ?? null,
       organizationInventoryId: organizationInventory?.id ?? null,
       valid: valid && !onlyDeletedAssignment,
-      branchAssignment: liveAssignment ? "EXISTING" : (onlyDeletedAssignment ? "SOFT_DELETED_BLOCKER" : "NEW_INACTIVE_ASSIGNMENT_REQUIRED"),
+      branchAssignment: (() => {
+        if (hasLiveAssignment) {
+          return "EXISTING"
+        }
+        return (onlyDeletedAssignment ? "SOFT_DELETED_BLOCKER" : "NEW_INACTIVE_ASSIGNMENT_REQUIRED")
+      })(),
     }
   }
 

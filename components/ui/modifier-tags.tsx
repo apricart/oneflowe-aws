@@ -1,8 +1,7 @@
 "use client"
 
-import React, { useState, useEffect } from "react"
+import { useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import {
   Command,
@@ -17,7 +16,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
-import { Check, ChevronsUpDown, Tag, X, Plus } from "lucide-react"
+import { Check,ChevronsUpDown,Tag,X,Plus } from "lucide-react"
 import { cn } from "@/lib/utils"
 import useSWR from "swr"
 
@@ -53,7 +52,7 @@ export function ModifierTags({
   placeholder = "Select modifiers...",
   className,
   maxTags
-}: ModifierTagsProps) {
+}: Readonly<ModifierTagsProps>) {
   const [open, setOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
 
@@ -113,7 +112,7 @@ export function ModifierTags({
             >
               <Tag size={12} />
               <span>{modifier.name}</span>
-              <button
+              <button type="button"
                 onClick={() => handleRemove(modifier.id)}
                 className="ml-1 hover:bg-black/10 rounded-full p-0.5"
               >

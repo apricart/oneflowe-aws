@@ -188,14 +188,14 @@ async function repairExistingReport() {
       summary.fields = {}
     }
   }
-  for (const module of Object.values(report.perLocationModules || {})) {
-    for (const entry of module.countsByLocation || []) {
+  for (const moduleSummary of Object.values(report.perLocationModules || {})) {
+    for (const entry of moduleSummary.countsByLocation || []) {
       if (!Number.isFinite(entry.status) || entry.status < 200 || entry.status >= 300 || entry.error) entry.rowCount = 0
     }
-    module.errorLocations = (module.countsByLocation || []).filter((entry) => !Number.isFinite(entry.status) || entry.status < 200 || entry.status >= 300 || entry.error).length
-    module.successfulLocations = module.queriedLocations - module.errorLocations
-    module.nonEmptyLocations = (module.countsByLocation || []).filter((entry) => entry.rowCount > 0).length
-    module.totalRowsAcrossLocations = (module.countsByLocation || []).reduce((sum, entry) => sum + (entry.rowCount || 0), 0)
+    moduleSummary.errorLocations = (moduleSummary.countsByLocation || []).filter((entry) => !Number.isFinite(entry.status) || entry.status < 200 || entry.status >= 300 || entry.error).length
+    moduleSummary.successfulLocations = moduleSummary.queriedLocations - moduleSummary.errorLocations
+    moduleSummary.nonEmptyLocations = (moduleSummary.countsByLocation || []).filter((entry) => entry.rowCount > 0).length
+    moduleSummary.totalRowsAcrossLocations = (moduleSummary.countsByLocation || []).reduce((sum, entry) => sum + (entry.rowCount || 0), 0)
   }
   await writeFile(output, `${JSON.stringify(report, null, 2)}\n`, "utf8")
   console.log(JSON.stringify({ repaired: output }, null, 2))
@@ -461,7 +461,7 @@ async function main() {
       errorLocations: entries.filter((entry) => !entry.ok).length,
       nonEmptyLocations: entries.filter((entry) => entry.rowCount > 0).length,
       totalRowsAcrossLocations: entries.reduce((sum, entry) => sum + (entry.rowCount || 0), 0),
-      unionFields: [...unionFields].sort(),
+      unionFields: [...unionFields].sort((a, b) => a.localeCompare(b)),
       countsByLocation: entries.map(({ locationId, locationName, status, rowCount, error }) => ({ locationId, locationName, status, rowCount, error })),
     }
   }
@@ -571,7 +571,9 @@ async function main() {
   })
 }
 
-main().catch((error) => {
+try {
+  await main()
+} catch (error) {
   console.error(error.stack || error.message)
   process.exitCode = 1
-})
+}

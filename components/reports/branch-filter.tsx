@@ -30,12 +30,17 @@ export function BranchFilter({
     groupIds,
     placeholder = "Select Branches",
     disabled = false
-}: BranchFilterProps) {
-    const orgQuery = organizationIds?.length ? organizationIds.join(",") : (organizationId ? String(organizationId) : undefined)
+}: Readonly<BranchFilterProps>) {
+    const orgQuery = (() => {
+      if (organizationIds?.length) {
+        return organizationIds.join(",")
+      }
+      return (organizationId ? String(organizationId) : undefined)
+    })()
     const groupQuery = groupIds?.length ? groupIds.join(",") : undefined
     
     // Updated useBranches hook or manual fetching to support groupIds
-    const { data, isLoading } = useBranches(orgQuery, groupQuery)
+    const { data } = useBranches(orgQuery, groupQuery)
     const branches = (data?.items || []) as Branch[]
     const items = branches.map(b => ({ id: b.id.toString(), label: b.name }))
 

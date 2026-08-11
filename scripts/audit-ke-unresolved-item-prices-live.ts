@@ -1,4 +1,5 @@
 #!/usr/bin/env tsx
+import { stringifyPrimitive } from "../lib/stringify-primitive"
 
 import { createHash } from "node:crypto"
 import { readFileSync, writeFileSync } from "node:fs"
@@ -13,16 +14,23 @@ const SOURCE = resolve("updatedReports/orderPurchaseReport.json")
 const OUTPUT = resolve("updatedReports/ke-unresolved-item-prices-13-live-audit-2026-08-03.json")
 
 function normalize(value: unknown): string {
-  return String(value ?? "").normalize("NFKC").replace(/[\u2018\u2019]/g, "'").replace(/[\u2013\u2014]/g, "-").replace(/\s+/g, " ").trim().toLowerCase()
+  return stringifyPrimitive(value).normalize("NFKC").replace(/[\u2018\u2019]/g, "'").replace(/[\u2013\u2014]/g, "-").replace(/\s+/g, " ").trim().toLowerCase()
 }
 
 function normalizeProduct(value: unknown): string {
-  return normalize(value).replace(/\s*\(\s*/g, " (").replace(/\s*\)\s*/g, ")").replace(/\s*-\s*/g, "-")
+  return normalize(value)
+    .replaceAll(" (", "(")
+    .replaceAll("( ", "(")
+    .replaceAll("(", " (")
+    .replaceAll(" )", ")")
+    .replaceAll(") ", ")")
+    .replaceAll(" -", "-")
+    .replaceAll("- ", "-")
 }
 
 function dateKey(value: unknown): string {
-  const match = String(value ?? "").match(/^(\d{4}-\d{2}-\d{2})/)
-  if (!match) throw new Error(`Invalid date: ${String(value)}`)
+  const match = /^(\d{4}-\d{2}-\d{2})/.exec(stringifyPrimitive(value))
+  if (!match) throw new Error(`Invalid date: ${stringifyPrimitive(value)}`)
   return match[1]
 }
 

@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
 
     const { code, type = 'LOGIN' } = body
 
-    if (!code || code.length !== 6) {
+    if (code?.length !== 6) {
       return error("Please enter a valid 6-digit OTP code", 400)
     }
 

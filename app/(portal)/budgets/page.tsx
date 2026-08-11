@@ -1,23 +1,23 @@
 "use client"
-import React, { useState, useMemo, ReactNode, useEffect, useCallback } from "react"
-import useSWR, { useSWRConfig } from "swr"
+import { useState,useMemo,ReactNode,useEffect,useCallback } from "react"
+import useSWR,{ useSWRConfig } from "swr"
 import { useSession } from "next-auth/react"
 import { useToast } from "@/hooks/use-toast"
-import { Card, CardContent } from "@/components/ui/card"
+import { Card,CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Wallet, AlertCircle, Edit2, Zap, PieChart, CheckCircle2, Clock, AlertTriangle, RefreshCw, Trash2, Search, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react"
-import { formatPKR, cn } from "@/lib/utils"
+import { Dialog,DialogContent,DialogHeader,DialogTitle,DialogFooter,DialogDescription } from "@/components/ui/dialog"
+import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from "@/components/ui/table"
+import { Wallet,AlertCircle,Edit2,Zap,PieChart,CheckCircle2,AlertTriangle,RefreshCw,Trash2,Search,ArrowUp,ArrowDown,ArrowUpDown } from "lucide-react"
+import { formatPKR,cn } from "@/lib/utils"
 import { useAppContext } from "@/components/context/app-context"
-import { GlobalDateFilter, type FilterPreset } from "@/components/dashboard/global-date-filter"
+import { GlobalDateFilter,type FilterPreset,type GlobalDateFilterChange } from "@/components/dashboard/global-date-filter"
 
 import { BranchFilter } from "@/components/reports/branch-filter"
 import { GroupFilter } from "@/components/reports/group-filter"
 import { type DateRange } from "@/lib/hooks/use-sales-performance"
-import { BUDGET_ALLOCATION_MODE_SETTING_KEY, parseBudgetAllocationMode, type BudgetAllocationMode } from "@/lib/budget-allocation-mode"
+import { BUDGET_ALLOCATION_MODE_SETTING_KEY,parseBudgetAllocationMode,type BudgetAllocationMode } from "@/lib/budget-allocation-mode"
 
 const fetcher = (url: string) => fetch(url).then(r => r.json())
 
@@ -60,13 +60,58 @@ const formatPercentageNoRound = (value: number) => {
   return `${sign}${whole}.${decimal}%`
 }
 
+const buildBudgetsEndpoint = (options: {
+  enabled: boolean
+  organizationId: string | number | null
+  dateRange: DateRange | null
+  activePreset: FilterPreset
+  selectedMonths: number[]
+  selectedYears: number[]
+  selectedGroupIds: string[]
+  branchIds: string[]
+}) => {
+  if (!options.enabled) return null
+  const params = new URLSearchParams({ all: "true", preset: options.activePreset })
+  if (options.organizationId) params.set("organizationId", String(options.organizationId))
+  if (options.dateRange) {
+    params.set("startDate", options.dateRange.startDate.toISOString())
+    params.set("endDate", options.dateRange.endDate.toISOString())
+  }
+  if (options.selectedMonths.length > 0) params.set("months", options.selectedMonths.join(","))
+  const years = options.selectedMonths.length > 0 && options.selectedYears.length === 0 && !options.dateRange
+    ? [new Date().getFullYear()]
+    : options.selectedYears
+  if (years.length > 0) params.set("years", years.join(","))
+  if (options.selectedGroupIds.length > 0) params.set("groupIds", options.selectedGroupIds.join(","))
+  if (options.branchIds.length > 0) params.set("branchIds", options.branchIds.join(","))
+  return `/api/v1/budgets?${params.toString()}`
+}
+
+const isBudgetManagerRole = (role: string | undefined) => (
+  role === "HEAD_OFFICE" || role === "SUPER_ADMIN"
+)
+
+const getMoneyAllocationDisabledTitle = (mode: BudgetAllocationMode) => (
+  mode === "quantity"
+    ? "This organization uses quantity-based budgeting. Allocate budgets from Budget by Quantity."
+    : undefined
+)
+
+const getAverageUtilization = (allocated: number, spent: number, held: number) => (
+  allocated > 0 ? ((spent + held) / allocated) * 100 : 0
+)
+
+const getPercentageOfTotal = (value: number, total: number) => (
+  total > 0 ? ((value / total) * 100).toFixed(1) : "0"
+)
+
 export default function BudgetsPage() {
   const { data: session, status } = useSession()
   const { toast } = useToast()
   const { mutate: globalMutate } = useSWRConfig()
   const role = (session?.user as any)?.role
-  const isHeadOffice = role === "HEAD_OFFICE" || role === "SUPER_ADMIN"
-  const { organizationId, branchId, branchIds: contextBranchIds, setBranchIds: setContextBranchIds, isInitialized } = useAppContext()
+  const isHeadOffice = isBudgetManagerRole(role)
+  const { organizationId, branchIds: contextBranchIds, setBranchIds: setContextBranchIds, isInitialized } = useAppContext()
 
   const [searchQuery, setSearchQuery] = useState("")
   const [sortColumn, setSortColumn] = useState<"branch" | "base" | "addon" | "total" | "spent" | "remaining">("total")
@@ -88,14 +133,7 @@ export default function BudgetsPage() {
   const [selectedYears, setSelectedYears] = useState<number[]>([])
   const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([])
 
-  const handleDateChange = useCallback((
-    range: DateRange | null,
-    preset: FilterPreset,
-    _compare?: boolean,
-    _compareRange?: DateRange | null,
-    months?: number[],
-    years?: number[]
-  ) => {
+  const handleDateChange = useCallback(({ range, preset, months = [], years = [] }: GlobalDateFilterChange) => {
     setDateRange(range)
     setActivePreset(preset)
     setSelectedMonths(months || [])
@@ -104,35 +142,21 @@ export default function BudgetsPage() {
 
   useEffect(() => {
     if (isInitialized) {
-      handleDateChange(null, "all")
+      handleDateChange({ range: null, preset: "all" })
     }
   }, [isInitialized, handleDateChange])
 
   // Build endpoint respecting context (organization scope)
-  const budgetsEndpoint = useMemo(() => {
-    if (!isHeadOffice || !isInitialized) return null
-    const params = new URLSearchParams()
-    params.set("all", "true")
-    if (organizationId) {
-      params.set("organizationId", String(organizationId))
-    }
-
-    if (dateRange) {
-      params.set("startDate", dateRange.startDate.toISOString())
-      params.set("endDate", dateRange.endDate.toISOString())
-    }
-    params.set("preset", activePreset)
-    if (selectedMonths.length > 0) params.set("months", selectedMonths.join(","))
-    const effectiveSelectedYears = selectedMonths.length > 0 && selectedYears.length === 0 && !dateRange
-      ? [new Date().getFullYear()]
-      : selectedYears
-    if (effectiveSelectedYears.length > 0) params.set("years", effectiveSelectedYears.join(","))
-
-    if (selectedGroupIds.length > 0) params.set("groupIds", selectedGroupIds.join(","))
-    if (contextBranchIds.length > 0) params.set("branchIds", contextBranchIds.join(","))
-
-    return `/api/v1/budgets?${params.toString()}`
-  }, [isHeadOffice, isInitialized, organizationId, dateRange, activePreset, selectedMonths, selectedYears, contextBranchIds, selectedGroupIds])
+  const budgetsEndpoint = useMemo(() => buildBudgetsEndpoint({
+    enabled: isHeadOffice && isInitialized,
+    organizationId,
+    dateRange,
+    activePreset,
+    selectedMonths,
+    selectedYears,
+    selectedGroupIds,
+    branchIds: contextBranchIds,
+  }), [isHeadOffice, isInitialized, organizationId, dateRange, activePreset, selectedMonths, selectedYears, contextBranchIds, selectedGroupIds])
 
   const settingsEndpoint = useMemo(() => {
     if (!isHeadOffice || !isInitialized || !organizationId) return null
@@ -144,7 +168,7 @@ export default function BudgetsPage() {
   const { data: settingsData } = useSWR<any>(settingsEndpoint, fetcher)
 
   const resetBudgetFilters = useCallback(() => {
-    handleDateChange(null, "all")
+    handleDateChange({ range: null, preset: "all" })
     setSelectedGroupIds([])
     setContextBranchIds([])
     setSearchQuery("")
@@ -156,9 +180,7 @@ export default function BudgetsPage() {
     settingsData?.data?.find((setting: any) => setting.key === BUDGET_ALLOCATION_MODE_SETTING_KEY)?.value
   )
   const isQuantityBudgetMode = budgetAllocationMode === "quantity"
-  const moneyAllocationDisabledTitle = isQuantityBudgetMode
-    ? "This organization uses quantity-based budgeting. Allocate budgets from Budget by Quantity."
-    : undefined
+  const moneyAllocationDisabledTitle = getMoneyAllocationDisabledTitle(budgetAllocationMode)
 
   const formatAmount = (cents: number) => formatPKR(cents / 100)
 
@@ -237,9 +259,7 @@ export default function BudgetsPage() {
   const totalSpent = scopedBudgets.reduce((sum, b) => sum + b.amountSpentCents, 0)
   const totalHeld = scopedBudgets.reduce((sum, b) => sum + b.amountHeldCents, 0)
   const totalRemaining = scopedBudgets.reduce((sum, b) => sum + b.remainingCents, 0)
-  const avgUtilization = totalAllocated > 0
-    ? ((totalSpent + totalHeld) / totalAllocated) * 100
-    : 0
+  const avgUtilization = getAverageUtilization(totalAllocated, totalSpent, totalHeld)
 
   const handleEditBudget = (budget: BudgetAllocation) => {
     if (getRowBudgetAllocationMode(budget, budgetAllocationMode) === "quantity") {
@@ -266,7 +286,7 @@ export default function BudgetsPage() {
       })
     }
 
-    const amountCents = Math.round(parseFloat(newAmount) * 100)
+    const amountCents = Math.round(Number.parseFloat(newAmount) * 100)
     if (!Number.isFinite(amountCents) || amountCents < 0) {
       return toast({ title: "Invalid amount", variant: "destructive" })
     }
@@ -305,10 +325,10 @@ export default function BudgetsPage() {
         return toast({ title: "Failed", description: json.error, variant: "destructive" })
       }
 
-      const newRemaining = (editingBudget.remainingCents / 100) + parseFloat(newAmount)
+      const newRemaining = (editingBudget.remainingCents / 100) + Number.parseFloat(newAmount)
       toast({
         title: "Budget Updated",
-        description: `Added ${formatPKR(parseFloat(newAmount))} to ${editingBudget.branchName}. New remaining: ${formatPKR(newRemaining)}`,
+        description: `Added ${formatPKR(Number.parseFloat(newAmount))} to ${editingBudget.branchName}. New remaining: ${formatPKR(newRemaining)}`,
       })
       setShowDialog(false)
       setEditingBudget(null)
@@ -427,7 +447,7 @@ export default function BudgetsPage() {
       })
     }
 
-    const amountCents = Math.round(parseFloat(bulkAmount) * 100)
+    const amountCents = Math.round(Number.parseFloat(bulkAmount) * 100)
     if (!Number.isFinite(amountCents) || amountCents < 0) {
       return toast({ title: "Invalid amount", variant: "destructive" })
     }
@@ -449,7 +469,7 @@ export default function BudgetsPage() {
 
       toast({
         title: "Bulk Allocation Complete",
-        description: `Allocated ${formatPKR(parseFloat(bulkAmount))} to ${successCount}/${moneyBasedScopedBudgets.length} money-based branches.${quantityBasedScopedBudgetCount > 0 ? ` Skipped ${quantityBasedScopedBudgetCount} quantity-based branches.` : ""}`
+        description: `Allocated ${formatPKR(Number.parseFloat(bulkAmount))} to ${successCount}/${moneyBasedScopedBudgets.length} money-based branches.${quantityBasedScopedBudgetCount > 0 ? (" Skipped " + String(quantityBasedScopedBudgetCount) + " quantity-based branches.") : ""}`
       })
       setShowBulkDialog(false)
       setBulkAmount("")
@@ -491,7 +511,6 @@ export default function BudgetsPage() {
     )
   }
 
-  const currentMonth = new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" })
 
   return (
     <div className="min-h-screen bg-[#f8fafc] dark:bg-[#020617] pb-20">
@@ -594,7 +613,15 @@ export default function BudgetsPage() {
           <Button
             onClick={() => setShowBulkDialog(true)}
             disabled={scopedBudgets.length > 0 && moneyBasedScopedBudgets.length === 0}
-            title={moneyBasedScopedBudgets.length === 0 ? moneyAllocationDisabledTitle || "No money-based branches available for bulk allocation." : quantityBasedScopedBudgetCount > 0 ? "Quantity-based branches will be skipped." : undefined}
+            title={(() => {
+              if (moneyBasedScopedBudgets.length === 0) {
+                return moneyAllocationDisabledTitle || "No money-based branches available for bulk allocation."
+              }
+              if (quantityBasedScopedBudgetCount > 0) {
+                return "Quantity-based branches will be skipped."
+              }
+              return undefined
+            })()}
             variant="outline"
             className="flex-1 font-bold uppercase text-[10px] tracking-widest border-slate-200 dark:border-slate-800 rounded-xl px-6"
           >
@@ -611,41 +638,78 @@ export default function BudgetsPage() {
           <TableHeader>
             <TableRow className="bg-gradient-to-r from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800 border-b border-slate-200 dark:border-slate-700">
               <TableHead className="font-black text-[10px] uppercase tracking-widest text-slate-500 dark:text-slate-400 pl-5 cursor-pointer select-none hover:text-slate-700 dark:hover:text-slate-200 transition-colors" onClick={() => handleSort("branch")}>
-                <span className="flex items-center gap-1">Branch {sortColumn === "branch" ? (sortDirection === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />) : <ArrowUpDown className="h-3 w-3 opacity-40" />}</span>
+                <span className="flex items-center gap-1">Branch {(() => {
+                  if (sortColumn === "branch") {
+                    return (sortDirection === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)
+                  }
+                  return <ArrowUpDown className="h-3 w-3 opacity-40" />
+                })()}</span>
               </TableHead>
               <TableHead className="text-right font-black text-[10px] uppercase tracking-widest text-slate-500 dark:text-slate-400 cursor-pointer select-none hover:text-slate-700 dark:hover:text-slate-200 transition-colors" onClick={() => handleSort("base")}>
-                <span className="flex items-center justify-end gap-1">Base {sortColumn === "base" ? (sortDirection === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />) : <ArrowUpDown className="h-3 w-3 opacity-40" />}</span>
+                <span className="flex items-center justify-end gap-1">Base {(() => {
+                  if (sortColumn === "base") {
+                    return (sortDirection === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)
+                  }
+                  return <ArrowUpDown className="h-3 w-3 opacity-40" />
+                })()}</span>
               </TableHead>
               <TableHead className="text-right font-black text-[10px] uppercase tracking-widest text-slate-500 dark:text-slate-400 cursor-pointer select-none hover:text-slate-700 dark:hover:text-slate-200 transition-colors" onClick={() => handleSort("addon")}>
-                <span className="flex items-center justify-end gap-1">Add-on {sortColumn === "addon" ? (sortDirection === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />) : <ArrowUpDown className="h-3 w-3 opacity-40" />}</span>
+                <span className="flex items-center justify-end gap-1">Add-on {(() => {
+                  if (sortColumn === "addon") {
+                    return (sortDirection === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)
+                  }
+                  return <ArrowUpDown className="h-3 w-3 opacity-40" />
+                })()}</span>
               </TableHead>
               <TableHead className="text-right font-black text-[10px] uppercase tracking-widest text-indigo-500 cursor-pointer select-none hover:text-indigo-700 transition-colors" onClick={() => handleSort("total")}>
-                <span className="flex items-center justify-end gap-1">Total Budget {sortColumn === "total" ? (sortDirection === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />) : <ArrowUpDown className="h-3 w-3 opacity-40" />}</span>
+                <span className="flex items-center justify-end gap-1">Total Budget {(() => {
+                  if (sortColumn === "total") {
+                    return (sortDirection === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)
+                  }
+                  return <ArrowUpDown className="h-3 w-3 opacity-40" />
+                })()}</span>
               </TableHead>
               <TableHead className="text-right font-black text-[10px] uppercase tracking-widest text-slate-500 dark:text-slate-400 cursor-pointer select-none hover:text-slate-700 dark:hover:text-slate-200 transition-colors" onClick={() => handleSort("spent")}>
-                <span className="flex items-center justify-end gap-1">Spent {sortColumn === "spent" ? (sortDirection === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />) : <ArrowUpDown className="h-3 w-3 opacity-40" />}</span>
+                <span className="flex items-center justify-end gap-1">Spent {(() => {
+                  if (sortColumn === "spent") {
+                    return (sortDirection === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)
+                  }
+                  return <ArrowUpDown className="h-3 w-3 opacity-40" />
+                })()}</span>
               </TableHead>
               <TableHead className="text-right font-black text-[10px] uppercase tracking-widest text-slate-500 dark:text-slate-400 cursor-pointer select-none hover:text-slate-700 dark:hover:text-slate-200 transition-colors" onClick={() => handleSort("remaining")}>
-                <span className="flex items-center justify-end gap-1">Remaining {sortColumn === "remaining" ? (sortDirection === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />) : <ArrowUpDown className="h-3 w-3 opacity-40" />}</span>
+                <span className="flex items-center justify-end gap-1">Remaining {(() => {
+                  if (sortColumn === "remaining") {
+                    return (sortDirection === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)
+                  }
+                  return <ArrowUpDown className="h-3 w-3 opacity-40" />
+                })()}</span>
               </TableHead>
               <TableHead className="text-right font-black text-[10px] uppercase tracking-widest text-slate-500 dark:text-slate-400 pr-5">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {budgets.length === 0 ? (
+            {(() => {
+              if (budgets.length === 0) {
+                return (
               <TableRow>
                 <TableCell colSpan={7} className="text-center py-16">
                   <AlertTriangle className="h-8 w-8 text-yellow-500 mx-auto mb-3 opacity-40" />
                   <p className="text-sm text-muted-foreground">No branches found</p>
                 </TableCell>
               </TableRow>
-            ) : filteredBudgets.length === 0 ? (
+            )
+              }
+              if (filteredBudgets.length === 0) {
+                return (
               <TableRow>
                 <TableCell colSpan={7} className="text-center py-10 text-muted-foreground text-sm">
                   No branches match your search
                 </TableCell>
               </TableRow>
-            ) : (
+            )
+              }
+              return (
               sortedFilteredBudgets.map(budget => {
                 const spendingPercent = getSpendingPercentage(budget)
                 const isNearLimit = spendingPercent >= 90
@@ -671,7 +735,18 @@ export default function BudgetsPage() {
                       <div className="flex items-center gap-2.5 min-w-0">
                         <div className={cn(
                           "w-2 h-2 rounded-full shrink-0",
-                          hasNoBudget ? "bg-slate-300" : isNearLimit ? "bg-red-500" : isMedium ? "bg-amber-500" : "bg-emerald-500"
+                          (() => {
+                            if (hasNoBudget) {
+                              return "bg-slate-300"
+                            }
+                            if (isNearLimit) {
+                              return "bg-red-500"
+                            }
+                            if (isMedium) {
+                              return "bg-amber-500"
+                            }
+                            return "bg-emerald-500"
+                          })()
                         )} />
                         <span className="font-semibold text-[13px] text-slate-800 dark:text-slate-200 truncate" title={budget.branchName}>
                           {budget.branchName}
@@ -761,7 +836,8 @@ export default function BudgetsPage() {
                   </TableRow>
                 )
               })
-            )}
+            )
+            })()}
           </TableBody>
         </Table>
       </Card>
@@ -775,11 +851,11 @@ export default function BudgetsPage() {
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-sm text-slate-700 dark:text-slate-300">Spent (Inc. Pending)</span>
-              <span className="font-bold text-slate-900 dark:text-white">{totalAllocated > 0 ? (((totalSpent + totalHeld) / totalAllocated) * 100).toFixed(1) : 0}%</span>
+              <span className="font-bold text-slate-900 dark:text-white">{getPercentageOfTotal(totalSpent + totalHeld, totalAllocated)}%</span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-sm text-slate-700 dark:text-slate-300">Available Remaining</span>
-              <span className="font-bold text-green-600">{totalAllocated > 0 ? ((totalRemaining / totalAllocated) * 100).toFixed(1) : 0}%</span>
+              <span className="font-bold text-green-600">{getPercentageOfTotal(totalRemaining, totalAllocated)}%</span>
             </div>
           </div>
         </Card>
@@ -790,7 +866,7 @@ export default function BudgetsPage() {
             <h3 className="font-bold text-lg text-slate-900 dark:text-white">At-Risk Branches</h3>
           </div>
           <div className="space-y-2">
-            {scopedBudgets.filter(b => getSpendingPercentage(b) >= 70).length > 0 ? (
+            {scopedBudgets.some(b => getSpendingPercentage(b) >= 70) ? (
               <>
                 <p className="text-2xl font-bold text-red-600">{scopedBudgets.filter(b => getSpendingPercentage(b) >= 90).length}</p>
                 <p className="text-xs text-muted-foreground">Branches at/near budget limit ({scopedBudgets.filter(b => getSpendingPercentage(b) >= 90).length} at 90%+)</p>
@@ -810,7 +886,7 @@ export default function BudgetsPage() {
           </DialogHeader>
           <div className="space-y-4">
             <div className="flex p-1 bg-slate-100 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700">
-              <button
+              <button type="button"
                 onClick={() => setAllocationType("monthly")}
                 className={cn(
                   "flex-1 py-2 text-xs font-bold rounded-lg transition-all",
@@ -821,7 +897,7 @@ export default function BudgetsPage() {
               >
                 Monthly Base
               </button>
-              <button
+              <button type="button"
                 onClick={() => setAllocationType("addon")}
                 className={cn(
                   "flex-1 py-2 text-xs font-bold rounded-lg transition-all",
@@ -863,21 +939,21 @@ export default function BudgetsPage() {
               </div>
             </div>
             <div>
-              <label className="block text-sm font-semibold mb-2 text-slate-900 dark:text-white">
+              <label htmlFor="budget-adjustment-amount" className="block text-sm font-semibold mb-2 text-slate-900 dark:text-white">
                 {allocationType === "monthly" ? "New Baseline Amount (PKR)" : "Amount to Add (PKR)"}
               </label>
               <div className="relative">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-muted-foreground">PKR</span>
-                <Input type="number" value={newAmount} onChange={(e) => setNewAmount(e.target.value)} placeholder="0.00" step="0.01" min="0" className="pl-12 text-lg font-bold h-11" />
+                <Input id="budget-adjustment-amount" type="number" value={newAmount} onChange={(e) => setNewAmount(e.target.value)} placeholder="0.00" step="0.01" min="0" className="pl-12 text-lg font-bold h-11" />
               </div>
               <p className="text-xs text-blue-600 dark:text-blue-400 mt-2 font-medium">
                 {allocationType === "monthly"
-                  ? `Branch baseline will be updated to ${formatPKR(parseFloat(newAmount || "0"))}`
-                  : `New total budget will be: ${formatPKR((editingBudget?.amountAllocatedCents || 0) / 100 + (editingBudget?.amountCreditedCents || 0) / 100 + parseFloat(newAmount || "0"))}`
+                  ? `Branch baseline will be updated to ${formatPKR(Number.parseFloat(newAmount || "0"))}`
+                  : `New total budget will be: ${formatPKR((editingBudget?.amountAllocatedCents || 0) / 100 + (editingBudget?.amountCreditedCents || 0) / 100 + Number.parseFloat(newAmount || "0"))}`
                 }
               </p>
               {(() => {
-                const amt = parseFloat(newAmount || "0")
+                const amt = Number.parseFloat(newAmount || "0")
                 const amtCents = Math.round(amt * 100)
                 const currentSpentCents = (editingBudget?.amountSpentCents || 0) + (editingBudget?.amountHeldCents || 0)
                 let proposedTotalCents = 0
@@ -936,10 +1012,10 @@ export default function BudgetsPage() {
               </div>
             )}
             <div>
-              <label className="block text-sm font-semibold mb-2 text-slate-900 dark:text-white">Monthly Budget Amount (PKR)</label>
+              <label htmlFor="bulk-budget-amount" className="block text-sm font-semibold mb-2 text-slate-900 dark:text-white">Monthly Budget Amount (PKR)</label>
               <div className="relative">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-muted-foreground">PKR</span>
-                <Input type="number" value={bulkAmount} onChange={(e) => setBulkAmount(e.target.value)} placeholder="0.00" step="0.01" min="0" className="pl-12 text-lg font-bold h-11" />
+                <Input id="bulk-budget-amount" type="number" value={bulkAmount} onChange={(e) => setBulkAmount(e.target.value)} placeholder="0.00" step="0.01" min="0" className="pl-12 text-lg font-bold h-11" />
               </div>
               <p className="text-xs text-muted-foreground mt-2">
                 This amount will be assigned to {moneyBasedScopedBudgets.length} money-based branch{moneyBasedScopedBudgets.length === 1 ? "" : "es"} currently in view.
@@ -1028,14 +1104,14 @@ function CompactStatCard({
   gradient,
   iconBadge,
   isLoading = false,
-}: {
+}: Readonly<{
   label: string
   value: string | number
   icon: ReactNode
   gradient: string
   iconBadge: string
   isLoading?: boolean
-}) {
+}>) {
   return (
     <Card className={cn("border rounded-2xl shadow-sm transition-all duration-300 hover:shadow-md hover:-translate-y-0.5 [container-type:inline-size]", gradient)}>
       <CardContent className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1.5 p-3">

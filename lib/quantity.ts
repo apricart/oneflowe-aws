@@ -7,7 +7,7 @@ export const roundQuantity = (value: number) =>
 
 export const parseQuantity = (value: unknown) => {
   const quantity = typeof value === "number" ? value : Number(value)
-  return Number.isFinite(quantity) ? roundQuantity(quantity) : NaN
+  return Number.isFinite(quantity) ? roundQuantity(quantity) : Number.NaN
 }
 
 export const isWholeQuantity = (value: number) =>

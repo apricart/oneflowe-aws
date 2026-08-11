@@ -1,32 +1,29 @@
 "use client"
-import React, { useState, useMemo } from "react"
-import { Card } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Table } from "@/components/ui/table"
+import { Button } from "@/components/ui/button"
+import { Card } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
 import {
-  Package,
-  Search,
-  RefreshCw,
-  MapPin,
-  CheckCircle,
-  AlertCircle,
-  Filter,
-  XCircle
-} from "lucide-react"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
+Select,
+SelectContent,
+SelectItem,
+SelectTrigger,
+SelectValue,
 } from "@/components/ui/select"
-import useSWR from "swr"
-import { useToast } from "@/hooks/use-toast"
-import { formatPKR } from "@/lib/utils"
+import { Table } from "@/components/ui/table"
 import { fetcher } from "@/lib/fetcher"
-import { cn } from "@/lib/utils"
+import { cn,formatPKR } from "@/lib/utils"
+import {
+AlertCircle,
+CheckCircle,
+Filter,
+MapPin,
+Package,
+RefreshCw,
+Search
+} from "lucide-react"
+import React,{ useMemo,useState } from "react"
+import useSWR from "swr"
 
 interface AssignedProduct {
   id: number
@@ -53,8 +50,7 @@ interface Branch {
   isActive: boolean
 }
 
-export default function HeadOfficeInventory({ organizationId }: { organizationId: number }) {
-  const { toast } = useToast()
+export default function HeadOfficeInventory({ organizationId }: Readonly<{ organizationId: number }>) {
   const [searchQuery, setSearchQuery] = useState("")
   const [categoryFilter, setCategoryFilter] = useState<string>("all")
   const [selectedProducts, setSelectedProducts] = useState<number[]>([])
@@ -238,13 +234,17 @@ export default function HeadOfficeInventory({ organizationId }: { organizationId
               </tr>
             </thead>
             <tbody>
-              {filteredProducts.length === 0 ? (
+              {(() => {
+                if (filteredProducts.length === 0) {
+                  return (
                 <tr>
                   <td colSpan={6} className="p-8 text-center text-gray-500">
                     No active assigned products found
                   </td>
                 </tr>
-              ) : (
+              )
+                }
+                return (
                 filteredProducts.map(product => (
                   <tr key={product.id} className="hover:bg-gray-50">
                     <td className="p-4">
@@ -295,17 +295,32 @@ export default function HeadOfficeInventory({ organizationId }: { organizationId
                     </td>
                     <td className="p-4 text-right">
                       <Badge
-                        variant={product.overrideLevel === "super_admin" ? "default" :
-                          product.overrideLevel === "head_office" ? "secondary" : "outline"}
-                        className={product.overrideLevel === "super_admin" ? "bg-blue-100 text-blue-800" :
-                          product.overrideLevel === "head_office" ? "bg-green-100 text-green-800" : ""}
+                        variant={(() => {
+                          if (product.overrideLevel === "super_admin") {
+                            return "default"
+                          }
+                          if (product.overrideLevel === "head_office") {
+                            return "secondary"
+                          }
+                          return "outline"
+                        })()}
+                        className={(() => {
+                          if (product.overrideLevel === "super_admin") {
+                            return "bg-blue-100 text-blue-800"
+                          }
+                          if (product.overrideLevel === "head_office") {
+                            return "bg-green-100 text-green-800"
+                          }
+                          return ""
+                        })()}
                       >
                         {product.overrideLevel?.replace("_", " ").toUpperCase() || "SUPER ADMIN"}
                       </Badge>
                     </td>
                   </tr>
                 ))
-              )}
+              )
+              })()}
             </tbody>
           </Table>
         </Card>
@@ -314,12 +329,12 @@ export default function HeadOfficeInventory({ organizationId }: { organizationId
   )
 }
 
-function StatCard({ label, value, icon, variant }: { 
+function StatCard({ label, value, icon, variant }: Readonly<{
   label: string; 
   value: string | number; 
   icon: React.ReactNode;
   variant: 'blue' | 'green' | 'red' | 'amber' | 'purple'
-}) {
+}>) {
   const variants = {
     blue: "bg-gradient-to-br from-blue-50/80 to-indigo-50/80 border-blue-100/50 text-blue-700 dark:from-blue-900/20 dark:to-indigo-900/20 dark:border-blue-800/30 dark:text-blue-400",
     green: "bg-gradient-to-br from-emerald-50/80 to-teal-50/80 border-emerald-100/50 text-emerald-700 dark:from-emerald-900/20 dark:to-teal-900/20 dark:border-emerald-800/30 dark:text-emerald-400",

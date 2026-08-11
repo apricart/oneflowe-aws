@@ -121,7 +121,7 @@ export async function GET(req: NextRequest) {
             conditions.push(sql`${refunds.amountCents} < ${orders.totalCents}`)
         }
         if (query) {
-            const escapedQuery = query.replace(/[\\%_]/g, "\\$&")
+            const escapedQuery = query.replace(/[\\%_]/g, String.raw`\$&`)
             const pattern = `%${escapedQuery}%`
             conditions.push(or(
                 ilike(refunds.refundNumber, pattern),

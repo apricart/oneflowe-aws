@@ -442,7 +442,9 @@ async function main() {
   console.log(JSON.stringify({ output: OUTPUT, summary: report.summary, failures: details.filter((detail) => !detail.ok).map((detail) => ({ reportOrderId: detail.reportOrderId, status: detail.status })) }, null, 2))
 }
 
-main().catch((error) => {
+try {
+  await main()
+} catch (error) {
   console.error(error.stack || error.message)
   process.exitCode = 1
-})
+}

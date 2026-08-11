@@ -1,3 +1,4 @@
+import { stringifyPrimitive } from "./stringify-primitive"
 import { safeFilenamePart } from "@/lib/security"
 
 export type BranchExportSheet = {
@@ -99,7 +100,7 @@ export function resolveBranchSheetWidths(sheet: BranchExportSheet) {
   return sheet.headers.map((header) => {
     const contentWidth = sheet.rows.reduce((width, row) => {
       const value = row[header]
-      return Math.max(width, String(value ?? "").length)
+      return Math.max(width, stringifyPrimitive(value).length)
     }, header.length)
 
     return { wch: Math.min(Math.max(contentWidth + 2, 10), 50) }

@@ -11,7 +11,7 @@ export function isBranchScopedAnalyticsRole(role: unknown) {
 export function normalizePositiveIds(values: unknown[]) {
   return Array.from(new Set(
     values
-      .map((value) => Number(value))
+      .map(Number)
       .filter((value) => Number.isInteger(value) && value > 0),
   ))
 }
@@ -23,11 +23,15 @@ export function parseRequestedOrganizationIds({
   organizationIds: string | null
   organizationId: string | null
 }) {
-  const requested = organizationIds?.trim()
-    ? organizationIds.split(",")
-    : organizationId
-      ? [organizationId]
-      : []
+  const requested = (() => {
+    if (organizationIds?.trim()) {
+      return organizationIds.split(",")
+    }
+    if (organizationId) {
+      return [organizationId]
+    }
+    return []
+  })()
 
   return normalizePositiveIds(requested)
 }

@@ -38,19 +38,19 @@ export async function GET(req: NextRequest) {
         const compareMonthsRaw = url.searchParams.get("compareMonths")
         const compareYearsRaw = url.searchParams.get("compareYears")
 
-        const parsedMonths = monthsRaw ? monthsRaw.split(',').map(Number).filter(n => !isNaN(n) && n >= 1 && n <= 12) : []
-        const parsedYears = yearsRaw ? yearsRaw.split(',').map(Number).filter(n => !isNaN(n) && n > 2000) : []
-        const parsedCompMonths = compareMonthsRaw ? compareMonthsRaw.split(',').map(Number).filter(n => !isNaN(n) && n >= 1 && n <= 12) : []
-        const parsedCompYears = compareYearsRaw ? compareYearsRaw.split(',').map(Number).filter(n => !isNaN(n) && n > 2000) : []
+        const parsedMonths = monthsRaw ? monthsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n >= 1 && n <= 12) : []
+        const parsedYears = yearsRaw ? yearsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n > 2000) : []
+        const parsedCompMonths = compareMonthsRaw ? compareMonthsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n >= 1 && n <= 12) : []
+        const parsedCompYears = compareYearsRaw ? compareYearsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n > 2000) : []
 
         // RBAC Check
         let finalOrgId = userRole === "SUPER_ADMIN" ? null : userOrgId
         if (userRole === "SUPER_ADMIN" && organizationIdParam) {
-            finalOrgId = parseInt(organizationIdParam)
+            finalOrgId = Number.parseInt(organizationIdParam)
         }
 
-        const parsedGroupIds = groupIdsParam ? groupIdsParam.split(',').map(Number).filter(id => !isNaN(id)) : []
-        const parsedBranchIds = branchIdsParam ? branchIdsParam.split(',').map(Number).filter(id => !isNaN(id)) : []
+        const parsedGroupIds = groupIdsParam ? groupIdsParam.split(',').map(Number).filter(id => !Number.isNaN(id)) : []
+        const parsedBranchIds = branchIdsParam ? branchIdsParam.split(',').map(Number).filter(id => !Number.isNaN(id)) : []
 
         const conditions: any[] = [REVENUE_ELIGIBLE_FILTER]
         if (finalOrgId) conditions.push(eq(branches.organizationId, finalOrgId))
@@ -74,10 +74,10 @@ export async function GET(req: NextRequest) {
 
         // Date Conditions
         if (parsedMonths.length > 0) {
-            conditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedMonths, sql`, `)})`)
+            conditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedMonths, sql.raw(", "))})`)
         }
         if (parsedYears.length > 0) {
-            conditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedYears, sql`, `)})`)
+            conditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedYears, sql.raw(", "))})`)
         }
 
         if (parsedMonths.length === 0 && parsedYears.length === 0) {
@@ -129,8 +129,8 @@ export async function GET(req: NextRequest) {
                         (() => {
                             const compCond: any[] = []
                             if (parsedCompMonths.length > 0 || parsedCompYears.length > 0) {
-                                if (parsedCompMonths.length > 0) compCond.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedCompMonths, sql`, `)})`)
-                                if (parsedCompYears.length > 0) compCond.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedCompYears, sql`, `)})`)
+                                if (parsedCompMonths.length > 0) compCond.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedCompMonths, sql.raw(", "))})`)
+                                if (parsedCompYears.length > 0) compCond.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedCompYears, sql.raw(", "))})`)
                             } else {
                                 compCond.push(gte(orders.createdAt, prevStart), lte(orders.createdAt, prevEnd))
                             }
@@ -186,8 +186,8 @@ export async function GET(req: NextRequest) {
                         (() => {
                             const compCond: any[] = []
                             if (parsedCompMonths.length > 0 || parsedCompYears.length > 0) {
-                                if (parsedCompMonths.length > 0) compCond.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedCompMonths, sql`, `)})`)
-                                if (parsedCompYears.length > 0) compCond.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedCompYears, sql`, `)})`)
+                                if (parsedCompMonths.length > 0) compCond.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedCompMonths, sql.raw(", "))})`)
+                                if (parsedCompYears.length > 0) compCond.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedCompYears, sql.raw(", "))})`)
                             } else {
                                 compCond.push(gte(orders.createdAt, prevStart), lte(orders.createdAt, prevEnd))
                             }

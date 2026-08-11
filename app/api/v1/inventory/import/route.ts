@@ -34,6 +34,68 @@ type PreparedRow = z.infer<typeof importRowSchema> & {
   basePriceCents: number
 }
 
+type ExistingProduct = typeof globalProducts.$inferSelect
+type ImportTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0]
+
+const getCascadeUpdates = (existingProduct: ExistingProduct, row: PreparedRow) => [
+  existingProduct.name !== row.name
+    ? { field: "name" as const, oldValue: existingProduct.name, newValue: row.name }
+    : null,
+  existingProduct.description !== (row.description || null)
+    ? { field: "description" as const, oldValue: existingProduct.description, newValue: row.description || null }
+    : null,
+  existingProduct.imageUrl !== row.normalizedImageUrl
+    ? { field: "imageUrl" as const, oldValue: existingProduct.imageUrl, newValue: row.normalizedImageUrl }
+    : null,
+  existingProduct.basePrice !== row.basePriceCents
+    ? { field: "basePrice" as const, oldValue: existingProduct.basePrice, newValue: row.basePriceCents }
+    : null,
+].filter((update): update is NonNullable<typeof update> => update !== null)
+
+async function upsertImportedProduct(
+  tx: ImportTransaction,
+  row: PreparedRow,
+  existingProduct: ExistingProduct | undefined,
+  userId: string,
+) {
+  if (existingProduct) {
+    const [updated] = await tx
+      .update(globalProducts)
+      .set({
+        name: row.name,
+        description: row.description || null,
+        categoryId: row.categoryId,
+        imageUrl: row.normalizedImageUrl,
+        basePrice: row.basePriceCents,
+        unit: row.unit || "unit",
+        status: row.status || "active",
+        updatedAt: new Date(),
+        lastSyncedAt: new Date(),
+      })
+      .where(eq(globalProducts.id, existingProduct.id))
+      .returning()
+    await cascadeGlobalProductFieldUpdate(updated.id, getCascadeUpdates(existingProduct, row), userId, tx)
+    return updated.id
+  }
+
+  const [created] = await tx
+    .insert(globalProducts)
+    .values({
+      productCode: row.productCode,
+      name: row.name,
+      description: row.description || null,
+      categoryId: row.categoryId,
+      imageUrl: row.normalizedImageUrl,
+      basePrice: row.basePriceCents,
+      unit: row.unit || "unit",
+      status: row.status || "active",
+      createdByUserId: userId,
+      lastSyncedAt: new Date(),
+    })
+    .returning()
+  return created.id
+}
+
 export async function POST(req: NextRequest) {
   try {
     const session = await getServerSession(authOptions)
@@ -137,57 +199,7 @@ export async function POST(req: NextRequest) {
 
       for (const row of preparedRows) {
         const existingProduct = existingByCode.get(row.productCode)
-        if (existingProduct) {
-          const [updated] = await tx
-            .update(globalProducts)
-            .set({
-              name: row.name,
-              description: row.description || null,
-              categoryId: row.categoryId,
-              imageUrl: row.normalizedImageUrl,
-              basePrice: row.basePriceCents,
-              unit: row.unit || "unit",
-              status: row.status || "active",
-              updatedAt: new Date(),
-              lastSyncedAt: new Date(),
-            })
-            .where(eq(globalProducts.id, existingProduct.id))
-            .returning()
-
-          const updates = [
-            existingProduct.name !== row.name
-              ? { field: "name" as const, oldValue: existingProduct.name, newValue: row.name }
-              : null,
-            existingProduct.description !== (row.description || null)
-              ? { field: "description" as const, oldValue: existingProduct.description, newValue: row.description || null }
-              : null,
-            existingProduct.imageUrl !== row.normalizedImageUrl
-              ? { field: "imageUrl" as const, oldValue: existingProduct.imageUrl, newValue: row.normalizedImageUrl }
-              : null,
-            existingProduct.basePrice !== row.basePriceCents
-              ? { field: "basePrice" as const, oldValue: existingProduct.basePrice, newValue: row.basePriceCents }
-              : null,
-          ].filter((update): update is NonNullable<typeof update> => update !== null)
-          await cascadeGlobalProductFieldUpdate(updated.id, updates, userId, tx)
-          importedProductIds.push(updated.id)
-        } else {
-          const [created] = await tx
-            .insert(globalProducts)
-            .values({
-              productCode: row.productCode,
-              name: row.name,
-              description: row.description || null,
-              categoryId: row.categoryId,
-              imageUrl: row.normalizedImageUrl,
-              basePrice: row.basePriceCents,
-              unit: row.unit || "unit",
-              status: row.status || "active",
-              createdByUserId: userId,
-              lastSyncedAt: new Date(),
-            })
-            .returning()
-          importedProductIds.push(created.id)
-        }
+        importedProductIds.push(await upsertImportedProduct(tx, row, existingProduct, userId))
       }
 
       const [batch] = await tx

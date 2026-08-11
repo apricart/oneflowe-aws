@@ -97,7 +97,7 @@ function main() {
   const reasonRows: Row[] = [...blockerGroups.entries()].map<Row>(([code, ids]) => ({
     "Final Blocker Code": code,
     Orders: ids.length,
-    "Legacy Order IDs": ids.sort((a, b) => a - b).join(", "),
+    "Legacy Order IDs": ids.toSorted((a, b) => a - b).join(", "),
     Explanation: blockerDescriptions[code],
     "Import Decision": "DO NOT IMPORT until the blocker is resolved and a fresh production preflight passes.",
   })).sort((a, b) => String(a["Final Blocker Code"]).localeCompare(String(b["Final Blocker Code"])))

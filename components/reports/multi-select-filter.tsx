@@ -1,9 +1,9 @@
 "use client"
 
 import * as React from "react"
-import { Check, ChevronDown, Search, X, Filter } from "lucide-react"
+import { ChevronDown,Search } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Popover,PopoverContent,PopoverTrigger } from "@/components/ui/popover"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -41,7 +41,7 @@ export function MultiSelectFilter({
     buttonClassName,
     disabled = false,
     maxSelect
-}: MultiSelectFilterProps) {
+}: Readonly<MultiSelectFilterProps>) {
     const [open, setOpen] = React.useState(false)
     const [draft, setDraft] = React.useState<(string | number)[]>(selectedIds)
     const [searchQuery, setSearchQuery] = React.useState("")
@@ -101,11 +101,15 @@ export function MultiSelectFilter({
         draft.filter(id => items.some(i => i.id === id)).length,
     [draft, items])
 
-    const displayText = visibleSelectedCount === 0 
-        ? placeholder 
-        : visibleSelectedCount === 1
-            ? (items.find(i => selectedIds.includes(i.id))?.label || "1 Selected")
-            : `${visibleSelectedCount} Selected`
+    const displayText = (() => {
+      if (visibleSelectedCount === 0) {
+        return placeholder
+      }
+      if (visibleSelectedCount === 1) {
+        return (items.find(i => selectedIds.includes(i.id))?.label || "1 Selected")
+      }
+      return `${visibleSelectedCount} Selected`
+    })()
 
     return (
         <Popover open={open} onOpenChange={setOpen}>
@@ -156,14 +160,21 @@ export function MultiSelectFilter({
                     </div>
 
                     <div className="overflow-y-auto flex-1 p-1">
-                        {filteredItems.length === 0 ? (
+                        {(() => {
+                          if (filteredItems.length === 0) {
+                            return (
                             <div className="p-4 text-center text-[10px] font-bold text-slate-400 italic">No matches found</div>
-                        ) : (
+                        )
+                          }
+                          return (
                             filteredItems.map((item) => {
                                 const isChecked = draft.includes(item.id)
                                 return (
                                     <div
                                         key={item.id}
+                                        role="checkbox"
+                                        aria-checked={isChecked}
+                                        tabIndex={0}
                                         className={cn(
                                             "flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-all",
                                             isChecked ? "bg-indigo-50/50 dark:bg-indigo-900/10 text-indigo-700 dark:text-indigo-300" : "hover:bg-slate-50 dark:hover:bg-slate-800/50 text-slate-600 dark:text-slate-400"
@@ -171,6 +182,13 @@ export function MultiSelectFilter({
                                         onClick={(e) => {
                                             e.stopPropagation();
                                             toggleItem(item.id);
+                                        }}
+                                        onKeyDown={(event) => {
+                                            if (event.key === "Enter" || event.key === " ") {
+                                                event.preventDefault()
+                                                event.stopPropagation()
+                                                toggleItem(item.id)
+                                            }
                                         }}
                                     >
                                         <Checkbox
@@ -182,7 +200,8 @@ export function MultiSelectFilter({
                                     </div>
                                 )
                             })
-                        )}
+                        )
+                        })()}
                     </div>
 
                     <div className="p-2 border-t border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-950">

@@ -1,42 +1,40 @@
 "use client"
 
-import { useState, useMemo } from "react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { useState,useMemo } from "react"
+import { Card,CardContent,CardDescription,CardHeader,CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Separator } from "@/components/ui/separator"
+import { Tabs,TabsContent,TabsList,TabsTrigger } from "@/components/ui/tabs"
+import { Alert,AlertDescription } from "@/components/ui/alert"
 import { useToast } from "@/hooks/use-toast"
-import { 
-  Shield, 
-  ShieldAlert, 
-  Save, 
+import {
+  Shield,
+  ShieldAlert,
+  Save,
   RotateCcw,
   CheckCircle2,
   XCircle,
   Info,
-  Search,
-  Filter,
+  Search
 } from "lucide-react"
 import { Input } from "@/components/ui/input"
-import { 
-  PERMISSION_DEFINITIONS, 
-  PermissionCategory, 
+import {
+  PERMISSION_DEFINITIONS,
+  PermissionCategory,
   getPermissionsByCategory,
   ROLE_TEMPLATES,
   type PermissionInfo,
 } from "@/lib/permissions"
-import useSWR, { mutate } from "swr"
+import useSWR,{ mutate } from "swr"
 
 interface RolePermissionsManagerProps {
   roleId?: number
   roleName?: string
 }
 
-export function RolePermissionsManager({ roleId, roleName }: RolePermissionsManagerProps) {
+export function RolePermissionsManager({ roleId, roleName }: Readonly<RolePermissionsManagerProps>) {
   const { toast } = useToast()
   const [selectedRole, setSelectedRole] = useState<number | null>(roleId || null)
   const [permissions, setPermissions] = useState<Set<string>>(new Set())
@@ -125,6 +123,7 @@ export function RolePermissionsManager({ roleId, roleName }: RolePermissionsMana
       setHasChanges(false)
       mutate(`/api/v1/roles/permissions?roleId=${selectedRole}`)
     } catch (error) {
+      console.error("Failed to save role permissions:", error)
       toast({
         title: "Error",
         description: "Failed to save permissions",
@@ -177,7 +176,7 @@ export function RolePermissionsManager({ roleId, roleName }: RolePermissionsMana
           <div className="grid gap-4">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               {roles.map((role: any) => (
-                <button
+                <button type="button"
                   key={role.id}
                   onClick={() => setSelectedRole(role.id)}
                   className={`p-4 rounded-lg border-2 transition-all text-left ${

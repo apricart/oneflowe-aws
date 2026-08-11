@@ -341,8 +341,7 @@ async function addDummyProducts() {
   const invalidProductCodes = DUMMY_PRODUCTS.flatMap((expected) => {
     const saved = savedByCode.get(expected.productCode)
     const isValid = Boolean(
-      saved &&
-      saved.name === expected.name &&
+      saved?.name === expected.name &&
       saved.description === expected.description &&
       saved.categoryId === subcategory.id &&
       saved.imageUrl === PLACEHOLDER_IMAGE_URL &&
@@ -383,7 +382,7 @@ async function addDummyProducts() {
   )
   console.table(
     savedProducts
-      .sort((left, right) => left.productCode.localeCompare(right.productCode))
+      .toSorted((left, right) => left.productCode.localeCompare(right.productCode))
       .map((product) => ({
         id: product.id,
         code: product.productCode,

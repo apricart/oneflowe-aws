@@ -25,14 +25,14 @@ export async function GET(req: NextRequest) {
     const searchRaw = searchParams.get("search") || ""
     const normalizedSearch = searchRaw.trim().toLowerCase()
     const search = normalizedSearch ? escapeLikePattern(normalizedSearch) : "" // Sanitize LIKE patterns
-    const page = parseInt(searchParams.get("page") || "1")
-    const limit = parseInt(searchParams.get("limit") || "50")
+    const page = Number.parseInt(searchParams.get("page") || "1")
+    const limit = Number.parseInt(searchParams.get("limit") || "50")
     const offset = (page - 1) * limit
 
     // Build where clause - flat categories only (no parent)
     const conditions = [isNull(categories.parentId)]
     if (search) {
-      conditions.push(sql`lower(${categories.name}) like ${`%${search}%`}`)
+      conditions.push(sql`lower(${categories.name}) like ${("%" + String(search) + "%")}`)
     }
 
     const whereClause = and(...conditions)
@@ -101,7 +101,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json()
-    const { name, description } = body
+    const { name } = body
 
     if (!name || name.trim().length === 0) {
       return NextResponse.json({ error: "Name is required" }, { status: 400 })
@@ -154,7 +154,7 @@ export async function PUT(req: NextRequest) {
     }
 
     const body = await req.json()
-    const { id, name, parentId, description } = body
+    const { id, name, parentId } = body
 
     if (!id) {
       return NextResponse.json({ error: "Category ID is required" }, { status: 400 })
@@ -252,7 +252,7 @@ export async function DELETE(req: NextRequest) {
     const existingCategory = await db
       .select()
       .from(categories)
-      .where(eq(categories.id, parseInt(id)))
+      .where(eq(categories.id, Number.parseInt(id)))
       .limit(1)
 
     if (existingCategory.length === 0) {
@@ -263,7 +263,7 @@ export async function DELETE(req: NextRequest) {
     const subcategoryCount = await db
       .select({ count: sql<number>`count(*)` })
       .from(categories)
-      .where(eq(categories.parentId, parseInt(id)))
+      .where(eq(categories.parentId, Number.parseInt(id)))
 
     const subCount = subcategoryCount[0]?.count || 0
     if (subCount > 0) {
@@ -277,7 +277,7 @@ export async function DELETE(req: NextRequest) {
     const productCount = await db
       .select({ count: sql<number>`count(*)` })
       .from(globalProducts)
-      .where(eq(globalProducts.categoryId, parseInt(id)))
+      .where(eq(globalProducts.categoryId, Number.parseInt(id)))
 
     const prodCount = productCount[0]?.count || 0
     if (prodCount > 0) {
@@ -289,7 +289,7 @@ export async function DELETE(req: NextRequest) {
 
     await db
       .delete(categories)
-      .where(eq(categories.id, parseInt(id)))
+      .where(eq(categories.id, Number.parseInt(id)))
 
     await invalidateByPrefix('categories')
     await invalidateByPrefix('subcategories')

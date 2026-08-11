@@ -21,16 +21,16 @@ export async function GET(req: NextRequest) {
 
         let organizationIds: number[] = []
         if (organizationIdsParam) {
-            organizationIds = organizationIdsParam.split(",").map(Number).filter(id => !isNaN(id) && id > 0)
+            organizationIds = organizationIdsParam.split(",").map(Number).filter(id => !Number.isNaN(id) && id > 0)
         } else if (userOrgId) {
             organizationIds = [userOrgId]
         }
 
         let branchIds: number[] = []
         if (branchIdsParam) {
-            branchIds = branchIdsParam.split(",").map(Number).filter(id => !isNaN(id) && id > 0)
+            branchIds = branchIdsParam.split(",").map(Number).filter(id => !Number.isNaN(id) && id > 0)
         } else if (groupIdsParam) {
-            const gIds = groupIdsParam.split(",").map(Number).filter(id => !isNaN(id) && id > 0)
+            const gIds = groupIdsParam.split(",").map(Number).filter(id => !Number.isNaN(id) && id > 0)
             if (gIds.length > 0) {
                 const b = await db.select({ id: branches.id }).from(branches).where(inArray(branches.groupId, gIds))
                 branchIds = b.map(br => br.id)

@@ -1,7 +1,5 @@
 'use client'
 
-import * as React from 'react'
-import { ComponentProps } from 'react'
 import { GripVerticalIcon } from 'lucide-react'
 import * as ResizablePrimitiveModule from 'react-resizable-panels'
 

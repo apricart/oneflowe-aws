@@ -8,18 +8,20 @@ export type MonthPreset = "jan" | "feb" | "mar" | "apr" | "may" | "jun" | "jul" 
 export type FilterPreset = "today" | "3d" | "7d" | "monthly" | "thisMonth" | "yearly" | "all" | "custom" | MonthPreset
 type CalendarRangeDraft = { from: Date | undefined; to?: Date } | undefined
 
+export interface GlobalDateFilterChange {
+    range: DateRange | null
+    preset: FilterPreset
+    compare?: boolean
+    compareRange?: DateRange | null
+    months?: number[]
+    years?: number[]
+    compareMonths?: number[]
+    compareYears?: number[]
+}
+
 interface GlobalDateFilterProps {
     value: DateRange | null
-    onChange: (
-        range: DateRange | null, 
-        preset: FilterPreset, 
-        compare?: boolean, 
-        compareRange?: DateRange | null,
-        months?: number[],
-        years?: number[],
-        compareMonths?: number[],
-        compareYears?: number[]
-    ) => void
+    onChange: (change: GlobalDateFilterChange) => void
     activePreset: FilterPreset
     className?: string
     hidePresets?: boolean
@@ -118,7 +120,7 @@ export function GlobalDateFilter({
     compare, compareRange, months = EMPTY_ARRAY, years = EMPTY_ARRAY, 
     compareMonths = EMPTY_ARRAY, compareYears = EMPTY_ARRAY,
     customRangeOnly = false
-}: GlobalDateFilterProps) {
+}: Readonly<GlobalDateFilterProps>) {
     const filterRootRef = useRef<HTMLDivElement>(null)
     const [filterOpen, setFilterOpen] = useState(false)
     const [calendarOpen, setCalendarOpen] = useState(false)
@@ -229,7 +231,7 @@ export function GlobalDateFilter({
         }
         
         // When picking a classic preset, clear the array selections to avoid conflicts
-        onChange(range, preset, compare, compareRange, [], [], compareMonths, compareYears)
+        onChange({ range, preset, compare, compareRange, months: [], years: [], compareMonths, compareYears })
     }
 
     const [tempMonths, setTempMonths] = useState<number[]>(months)
@@ -260,10 +262,10 @@ export function GlobalDateFilter({
         const nextCompareYears = type === 'compareYears' ? tempCompareYears : compareYears
 
         if (type === 'compareMonths' || type === 'compareYears') {
-            onChange(value, activePreset, compare, compareRange, months, years, nextCompareMonths, nextCompareYears)
+            onChange({ range: value, preset: activePreset, compare, compareRange, months, years, compareMonths: nextCompareMonths, compareYears: nextCompareYears })
         } else {
             const { nextRange, nextPreset } = getMainSelectionChange(nextMonths, nextYears)
-            onChange(nextRange, nextPreset, compare, compareRange, nextMonths, nextYears, compareMonths, compareYears)
+            onChange({ range: nextRange, preset: nextPreset, compare, compareRange, months: nextMonths, years: nextYears, compareMonths, compareYears })
         }
 
         setMonthsOpen(false)
@@ -280,20 +282,20 @@ export function GlobalDateFilter({
             const next = toggleValue(tempMonths)
             const { nextRange, nextPreset } = getMainSelectionChange(next, years)
             setTempMonths(next)
-            onChange(nextRange, nextPreset, compare, compareRange, next, years, compareMonths, compareYears)
+            onChange({ range: nextRange, preset: nextPreset, compare, compareRange, months: next, years, compareMonths, compareYears })
         } else if (type === 'years') {
             const next = toggleValue(tempYears)
             const { nextRange, nextPreset } = getMainSelectionChange(months, next)
             setTempYears(next)
-            onChange(nextRange, nextPreset, compare, compareRange, months, next, compareMonths, compareYears)
+            onChange({ range: nextRange, preset: nextPreset, compare, compareRange, months, years: next, compareMonths, compareYears })
         } else if (type === 'compareMonths') {
             const next = toggleValue(tempCompareMonths)
             setTempCompareMonths(next)
-            onChange(value, activePreset, compare, compareRange, months, years, next, compareYears)
+            onChange({ range: value, preset: activePreset, compare, compareRange, months, years, compareMonths: next, compareYears })
         } else if (type === 'compareYears') {
             const next = toggleValue(tempCompareYears)
             setTempCompareYears(next)
-            onChange(value, activePreset, compare, compareRange, months, years, compareMonths, next)
+            onChange({ range: value, preset: activePreset, compare, compareRange, months, years, compareMonths, compareYears: next })
         }
     }
 
@@ -310,16 +312,16 @@ export function GlobalDateFilter({
         }
 
         setCalendarDraft(range)
-        onChange(
-            { startDate: startOfDay(range.from), endDate: endOfDay(range.to) },
-            "custom",
+        onChange({
+            range: { startDate: startOfDay(range.from), endDate: endOfDay(range.to) },
+            preset: "custom",
             compare,
             compareRange,
-            [],
-            [],
+            months: [],
+            years: [],
             compareMonths,
-            compareYears
-        )
+            compareYears,
+        })
         closeFilter()
     }
 
@@ -337,7 +339,7 @@ export function GlobalDateFilter({
 
         const newCompareRange = { startDate: startOfDay(range.from), endDate: endOfDay(range.to) }
         setCompareCalendarDraft(range)
-        onChange(value, activePreset, compare, newCompareRange, months, years, [], [])
+        onChange({ range: value, preset: activePreset, compare, compareRange: newCompareRange, months, years, compareMonths: [], compareYears: [] })
         closeFilter()
     }
 
@@ -380,7 +382,7 @@ export function GlobalDateFilter({
                         onOpenAutoFocus={(e) => e.preventDefault()}
                     >
                         <Calendar
-                            initialFocus
+                            autoFocus
                             mode="range"
                             defaultMonth={new Date()}
                             selected={calendarDraft}
@@ -422,18 +424,20 @@ export function GlobalDateFilter({
                 <ChevronDown className="h-3.5 w-3.5 opacity-50 shrink-0" />
             </Button>
             {filterOpen && (
-                <div
+                <dialog
+                    open
                     data-global-date-filter-layer
                     className={cn(
                         "absolute left-0 top-full z-[80] mt-2 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl bg-white/95 dark:bg-slate-900/95 backdrop-blur-md md:left-auto md:right-0",
                         calendarOpen ? "w-auto p-0 overflow-visible" : "w-60 p-1.5"
                     )}
-                    role="dialog"
                 >
-                    {calendarOpen ? (
-                        <div data-global-date-filter-layer onClick={(e) => e.stopPropagation()}>
+                    {(() => {
+                      if (calendarOpen) {
+                        return (
+                        <div data-global-date-filter-layer>
                             <Calendar
-                                initialFocus
+                                autoFocus
                                 mode="range"
                                 defaultMonth={new Date()}
                                 selected={calendarDraft}
@@ -442,7 +446,9 @@ export function GlobalDateFilter({
                                 className="p-4 bg-white dark:bg-slate-900"
                             />
                         </div>
-                    ) : (
+                    )
+                      }
+                      return (
                         <>
                     <div className="px-2 py-1.5 mb-1 flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-slate-400">
                         <span>Date Range</span>
@@ -489,17 +495,18 @@ export function GlobalDateFilter({
                                     {monthPresets.map((m, i) => {
                                         const monthValue = i + 1
                                         return (
-                                        <div 
+                                        <button
+                                            type="button"
                                             key={m.id} 
                                             className={cn(
-                                                "flex items-center justify-between px-2 py-1.5 rounded-lg text-xs cursor-pointer transition-colors",
+                                                "flex w-full items-center justify-between px-2 py-1.5 rounded-lg text-left text-xs cursor-pointer transition-colors",
                                                 tempMonths.includes(monthValue) ? "bg-indigo-50 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400" : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
                                             )}
                                             onClick={() => toggleTempSelection('months', monthValue)}
                                         >
                                             {m.label}
                                             {tempMonths.includes(monthValue) && <Check className="h-3.5 w-3.5" />}
-                                        </div>
+                                        </button>
                                         )
                                     })}
                                 </div>
@@ -532,17 +539,18 @@ export function GlobalDateFilter({
                             >
                                 <div className="space-y-1 max-h-[calc(var(--radix-popover-content-available-height)-3.5rem)] overflow-y-auto pr-1">
                                     {dynamicYears.map((y: number) => (
-                                        <div 
+                                        <button
+                                            type="button"
                                             key={y} 
                                             className={cn(
-                                                "flex items-center justify-between px-2 py-1.5 rounded-lg text-xs cursor-pointer transition-colors",
+                                                "flex w-full items-center justify-between px-2 py-1.5 rounded-lg text-left text-xs cursor-pointer transition-colors",
                                                 tempYears.includes(y) ? "bg-indigo-50 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400" : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
                                             )}
                                             onClick={() => toggleTempSelection('years', y)}
                                         >
                                             {y}
                                             {tempYears.includes(y) && <Check className="h-3.5 w-3.5" />}
-                                        </div>
+                                        </button>
                                     ))}
                                 </div>
                                 <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-800">
@@ -576,12 +584,20 @@ export function GlobalDateFilter({
                             />
                         </div> */}
                         {compare && (
-                            <div className="mt-2 text-center" onClick={(e) => e.stopPropagation()}>
+                            <div className="mt-2 text-center">
                                 <Popover open={compareCalendarOpen} onOpenChange={handleCompareCalendarOpenChange}>
                                     <PopoverTrigger asChild>
                                         <Button variant="outline" size="sm" className="w-full h-8 text-[11px] justify-start px-2.5 font-semibold text-slate-600 dark:text-slate-400 border-indigo-200 dark:border-indigo-800/60 bg-indigo-50/50 hover:bg-indigo-100/50 hover:text-indigo-600">
                                             <CalendarIcon className="mr-2 h-3.5 w-3.5 opacity-60" />
-                                            {compareRange ? `${format(compareRange.startDate, "dd MMM yyyy")} – ${format(compareRange.endDate, "dd MMM yyyy")}` : (compareMonths.length > 0 || compareYears.length > 0) ? "Complex Comparison Array" : "Previous Period (Auto)"}
+                                            {(() => {
+                                              if (compareRange) {
+                                                return `${format(compareRange.startDate, "dd MMM yyyy")} – ${format(compareRange.endDate, "dd MMM yyyy")}`
+                                              }
+                                              if ((compareMonths.length > 0 || compareYears.length > 0)) {
+                                                return "Complex Comparison Array"
+                                              }
+                                              return "Previous Period (Auto)"
+                                            })()}
                                         </Button>
                                     </PopoverTrigger>
                                     <PopoverContent
@@ -594,7 +610,7 @@ export function GlobalDateFilter({
                                         onFocusOutside={preventDropdownDismissForDateLayer}
                                         onOpenAutoFocus={(e) => e.preventDefault()}
                                     >
-                                        <div onClick={(e) => e.stopPropagation()}>
+                                        <div>
                                             <div className="px-4 pt-3 pb-1 border-b border-slate-100 dark:border-slate-800">
                                                 <p className="text-xs font-bold text-slate-500 uppercase tracking-wider text-center">Compare Period B Range</p>
                                             </div>
@@ -619,17 +635,18 @@ export function GlobalDateFilter({
                                                             {monthPresets.map((m, i) => {
                                                                 const monthValue = i + 1
                                                                 return (
-                                                                <div 
+                                                                <button
+                                                                    type="button"
                                                                     key={m.id} 
                                                                     className={cn(
-                                                                        "flex items-center justify-between px-2 py-1.5 rounded-lg text-xs cursor-pointer transition-colors",
+                                                                        "flex w-full items-center justify-between px-2 py-1.5 rounded-lg text-left text-xs cursor-pointer transition-colors",
                                                                         tempCompareMonths.includes(monthValue) ? "bg-rose-50 dark:bg-rose-900/40 text-rose-600 dark:text-rose-400" : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
                                                                     )}
                                                                     onClick={() => toggleTempSelection('compareMonths', monthValue)}
                                                                 >
                                                                     {m.label}
                                                                     {tempCompareMonths.includes(monthValue) && <Check className="h-3.5 w-3.5" />}
-                                                                </div>
+                                                                </button>
                                                                 )
                                                             })}
                                                         </div>
@@ -662,17 +679,18 @@ export function GlobalDateFilter({
                                                     >
                                                         <div className="space-y-1 max-h-[calc(var(--radix-popover-content-available-height)-3.5rem)] overflow-y-auto pr-1">
                                                             {dynamicYears.map((y) => (
-                                                                <div 
+                                                                <button
+                                                                    type="button"
                                                                     key={y} 
                                                                     className={cn(
-                                                                        "flex items-center justify-between px-2 py-1.5 rounded-lg text-xs cursor-pointer transition-colors",
+                                                                        "flex w-full items-center justify-between px-2 py-1.5 rounded-lg text-left text-xs cursor-pointer transition-colors",
                                                                         tempCompareYears.includes(y) ? "bg-rose-50 dark:bg-rose-900/40 text-rose-600 dark:text-rose-400" : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
                                                                     )}
                                                                     onClick={() => toggleTempSelection('compareYears', y)}
                                                                 >
                                                                     {y}
                                                                     {tempCompareYears.includes(y) && <Check className="h-3.5 w-3.5" />}
-                                                                </div>
+                                                                </button>
                                                             ))}
                                                         </div>
                                                         <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-800">
@@ -689,7 +707,7 @@ export function GlobalDateFilter({
                                             </div>
 
                                             <Calendar
-                                                initialFocus
+                                                autoFocus
                                                 mode="range"
                                                 defaultMonth={compareRange?.startDate || value?.startDate || new Date()}
                                                 selected={compareCalendarDraft}
@@ -704,7 +722,7 @@ export function GlobalDateFilter({
                                                         size="sm" 
                                                         className="h-8 text-[11px] text-rose-500 hover:text-rose-600 hover:bg-rose-50 w-full"
                                                         onClick={() => {
-                                                            onChange(value, activePreset, compare, undefined, months, years, compareMonths, compareYears);
+                                                            onChange({ range: value, preset: activePreset, compare, compareRange: undefined, months, years, compareMonths, compareYears });
                                                             closeFilter();
                                                         }}
                                                     >
@@ -735,8 +753,9 @@ export function GlobalDateFilter({
                         Custom Range...
                     </button>
                         </>
-                    )}
-                </div>
+                    )
+                    })()}
+                </dialog>
             )}
         </div>
     )

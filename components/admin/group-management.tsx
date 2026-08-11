@@ -1,25 +1,25 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import useSWR, { mutate } from "swr"
-import { Plus, Pencil, Trash2, Building, ChevronRight, CheckCircle2, History, Users, AlertCircle, Eraser, Package, Loader2, Search } from "lucide-react"
+import { useState,useEffect } from "react"
+import useSWR,{ mutate } from "swr"
+import { Plus,Pencil,Trash2,Building,CheckCircle2,Users,AlertCircle,Eraser,Package,Loader2,Search } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { PremiumConfirmDialog } from "@/components/premium/premium-confirm-dialog"
 import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
 } from "@/components/ui/table"
 import {
-    Dialog,
-    DialogContent,
-    DialogDescription,
-    DialogFooter,
-    DialogHeader,
-    DialogTitle,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -27,11 +27,11 @@ import { Textarea } from "@/components/ui/textarea"
 import { useToast } from "@/hooks/use-toast"
 import { Badge } from "@/components/ui/badge"
 import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
 } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -64,7 +64,7 @@ interface Branch {
     groupName?: string | null
 }
 
-export function GroupManagement({ role }: { role: string }) {
+export function GroupManagement({ role }: Readonly<{ role: string }>) {
     const { toast } = useToast()
     const { organizationId: globalOrgId } = useAppContext()
     const [isCreateOpen, setIsCreateOpen] = useState(false)
@@ -134,7 +134,7 @@ export function GroupManagement({ role }: { role: string }) {
             const res = await fetch("/api/v1/groups", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ name, description, organizationId: parseInt(organizationId) }),
+                body: JSON.stringify({ name, description, organizationId: Number.parseInt(organizationId) }),
             })
 
             if (!res.ok) {
@@ -425,13 +425,25 @@ export function GroupManagement({ role }: { role: string }) {
                                 </TableCell>
                                 <TableCell>
                                     <Badge className={
-                                        group.status === "connected"
-                                            ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-none px-3 font-bold"
-                                            : group.status === "not connected"
-                                                ? "bg-amber-100 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400 border-none px-3 font-bold"
-                                                : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 border-none px-3"
+                                        (() => {
+                                          if (group.status === "connected") {
+                                            return "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-none px-3 font-bold"
+                                          }
+                                          if (group.status === "not connected") {
+                                            return "bg-amber-100 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400 border-none px-3 font-bold"
+                                          }
+                                          return "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 border-none px-3"
+                                        })()
                                     }>
-                                        {group.status === "connected" ? "Connected" : group.status === "not connected" ? "Not Connected" : group.status}
+                                        {(() => {
+                                          if (group.status === "connected") {
+                                            return "Connected"
+                                          }
+                                          if (group.status === "not connected") {
+                                            return "Not Connected"
+                                          }
+                                          return group.status
+                                        })()}
                                     </Badge>
                                 </TableCell>
                                 <TableCell className="text-right">
@@ -563,12 +575,16 @@ export function GroupManagement({ role }: { role: string }) {
                         </div>
                         <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden bg-slate-50/50 dark:bg-slate-900/50">
                             <ScrollArea className="h-[350px] p-4">
-                                {isLoadingCounts ? (
+                                {(() => {
+                                  if (isLoadingCounts) {
+                                    return (
                                     <div className="h-full flex flex-col items-center justify-center space-y-3 text-slate-500">
                                         <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
                                         <p>Loading assigned branches...</p>
                                     </div>
-                                ) : (
+                                )
+                                  }
+                                  return (
                                     <div className="space-y-2">
                                         {branchesData?.items?.filter((b: Branch) => b.name.toLowerCase().includes(branchSearch.toLowerCase())).map((branch: Branch) => {
                                             const isInThisGroup = branch.groupId === selectedGroup?.id
@@ -579,9 +595,15 @@ export function GroupManagement({ role }: { role: string }) {
                                             const willGetProducts = isNewlyAdded && totalGroupProducts > 0
 
                                             return (
-                                                <div key={branch.id} className={`flex items-center space-x-3 p-3 rounded-lg transition-colors group ${hasProducts ? "bg-amber-50/50 dark:bg-amber-950/10 border border-amber-100 dark:border-amber-900/30"
-                                                    : willGetProducts ? "bg-emerald-50/50 dark:bg-emerald-950/10 border border-emerald-100 dark:border-emerald-900/30"
-                                                        : "hover:bg-white dark:hover:bg-slate-800"
+                                                <div key={branch.id} className={`flex items-center space-x-3 p-3 rounded-lg transition-colors group ${(() => {
+                                                  if (hasProducts) {
+                                                    return "bg-amber-50/50 dark:bg-amber-950/10 border border-amber-100 dark:border-amber-900/30"
+                                                  }
+                                                  if (willGetProducts) {
+                                                    return "bg-emerald-50/50 dark:bg-emerald-950/10 border border-emerald-100 dark:border-emerald-900/30"
+                                                  }
+                                                  return "hover:bg-white dark:hover:bg-slate-800"
+                                                })()
                                                     }`}>
                                                     <Checkbox
                                                         id={`branch-${branch.id}`}
@@ -671,7 +693,8 @@ export function GroupManagement({ role }: { role: string }) {
                                             </div>
                                         )}
                                     </div>
-                                )}
+                                )
+                                })()}
                             </ScrollArea>
                         </div>
                         <p className="mt-4 text-xs text-slate-500 flex items-start gap-2">

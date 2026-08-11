@@ -1,13 +1,12 @@
-import { NextRequest, NextResponse } from "next/server"
+import { NextRequest,NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
-import { branchInventory, globalProducts, organizationInventory, categories, auditLogs, productQuantityBudgets } from "@/db/schema"
-import { eq, and, like, ilike, or, desc, sql, isNull, SQL, inArray } from "drizzle-orm"
+import { branchInventory,globalProducts,organizationInventory,categories,auditLogs,productQuantityBudgets } from "@/db/schema"
+import { eq,and,ilike,or,desc,sql,isNull,SQL,inArray } from "drizzle-orm"
 import { alias } from "drizzle-orm/pg-core"
-import { getEffectiveProductData } from "@/lib/inventory-cascade"
 import { escapeLikePattern } from "@/lib/utils"
-import { coalesceInFlight, getCached, invalidateByPrefix, scopedCacheKey, CACHE_TTL } from "@/lib/cache-utils"
+import { coalesceInFlight,getCached,invalidateByPrefix,scopedCacheKey,CACHE_TTL } from "@/lib/cache-utils"
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
 
@@ -26,8 +25,8 @@ export async function GET(req: NextRequest) {
     let organizationId = (session.user as any).organizationId
     let branchId = (session.user as any).branchId
 
-    if (branchId && typeof branchId === "string") branchId = parseInt(branchId)
-    if (organizationId && typeof organizationId === "string") organizationId = parseInt(organizationId)
+    if (branchId && typeof branchId === "string") branchId = Number.parseInt(branchId)
+    if (organizationId && typeof organizationId === "string") organizationId = Number.parseInt(organizationId)
 
     const { searchParams } = new URL(req.url)
 
@@ -49,14 +48,14 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: "branchId parameter required for admin users" }, { status: 400 })
       }
 
-      branchId = parseInt(branchIdParam)
+      branchId = Number.parseInt(branchIdParam)
       if (!Number.isFinite(branchId)) {
         return NextResponse.json({ error: "Invalid branch ID" }, { status: 400 })
       }
 
       // Use organizationId from query param if provided (from context selector), otherwise use session
       if (orgIdParam) {
-        organizationId = parseInt(orgIdParam)
+        organizationId = Number.parseInt(orgIdParam)
         if (!Number.isFinite(organizationId)) {
           return NextResponse.json({ error: "Invalid organization ID" }, { status: 400 })
         }
@@ -73,13 +72,13 @@ export async function GET(req: NextRequest) {
     const category = searchParams.get("category") || ""
     const subCategory = searchParams.get("subCategory") || ""
     const includeQuantityBudget = searchParams.get("includeQuantityBudget") === "true"
-    const pageNum = Math.max(1, parseInt(searchParams.get("page") || "1") || 1)
-    const limitNum = Math.max(1, parseInt(searchParams.get("limit") || "50") || 50)
+    const pageNum = Math.max(1, Number.parseInt(searchParams.get("page") || "1") || 1)
+    const limitNum = Math.max(1, Number.parseInt(searchParams.get("limit") || "50") || 50)
     const offset = (pageNum - 1) * limitNum
 
-    const orgIdNum = typeof organizationId === "string" ? parseInt(organizationId) : Number(organizationId)
+    const orgIdNum = typeof organizationId === "string" ? Number.parseInt(organizationId) : Number(organizationId)
 
-    if (isNaN(orgIdNum)) {
+    if (Number.isNaN(orgIdNum)) {
       return NextResponse.json({ error: "Invalid organization ID" }, { status: 400 })
     }
 
@@ -149,7 +148,7 @@ export async function GET(req: NextRequest) {
       )
     }
     if (category && category !== 'all') {
-      const catId = parseInt(category)
+      const catId = Number.parseInt(category)
       // Find all subcategories for this parent
       const subCatsList = await db.select({ id: categories.id })
         .from(categories)
@@ -164,7 +163,7 @@ export async function GET(req: NextRequest) {
       }
     }
     if (subCategory && subCategory !== 'all') {
-      conditions.push(eq(globalProducts.categoryId, parseInt(subCategory)))
+      conditions.push(eq(globalProducts.categoryId, Number.parseInt(subCategory)))
     }
     const whereClause = and(...conditions)
 
@@ -333,15 +332,14 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: "organizationId and branchId query params are required" }, { status: 400 })
     }
 
-    const organizationId = parseInt(organizationIdParam)
-    const branchId = parseInt(branchIdParam)
+    const organizationId = Number.parseInt(organizationIdParam)
+    const branchId = Number.parseInt(branchIdParam)
     console.log(`Params: org=${organizationId}, branch=${branchId}`)
 
     const body = await req.json()
     console.log("Body received:", JSON.stringify(body))
     const {
       id,
-      isVisible,
       isActive,
     } = body
 

@@ -135,14 +135,14 @@ function loadSourceEvidence(opts: Options): JsonRow {
   const firstSheet = workbook.Sheets[workbook.SheetNames[0]]
   assert(firstSheet, "The supplied branch list has no worksheet")
   const sheetRows = XLSX.utils.sheet_to_json<JsonRow>(firstSheet, { defval: null })
-  const branchListNames = sheetRows.map((row) => String(row.Name ?? "").trim()).filter(Boolean)
+  const branchListNames = new Set(sheetRows.map((row) => String(row.Name ?? "").trim()).filter(Boolean))
 
   const investigation = JSON.parse(readFileSync(opts.investigationPath, "utf8")) as JsonRow
   const locationRows = investigation?.perLocationModules?.inventories?.countsByLocation
   assert(Array.isArray(locationRows), "Legacy location identity evidence is missing")
 
   const verifiedLocations = SOURCE_LOCATIONS.map((expected) => {
-    assert(branchListNames.includes(expected.name), `Supplied branch list is missing exact name ${expected.name}`)
+    assert(branchListNames.has(expected.name), `Supplied branch list is missing exact name ${expected.name}`)
     const sourceMatches = locationRows.filter((row: JsonRow) =>
       String(row.locationId) === expected.externalId && row.locationName === expected.name)
     assert(sourceMatches.length === 1, `Legacy identity ${expected.externalId}:${expected.name} is missing or ambiguous`)
@@ -292,14 +292,14 @@ async function validateCommittedState(
   commitResult: JsonRow,
 ): Promise<JsonRow> {
   const after = await loadState(client)
-  const createdIds = (commitResult.createdBranches as JsonRow[]).map((branch) => branch.id)
+  const createdIds = new Set((commitResult.createdBranches as JsonRow[]).map((branch) => branch.id))
   const afterBranches = after.branches as JsonRow[]
-  const created = afterBranches.filter((branch) => createdIds.includes(branch.id))
+  const created = afterBranches.filter((branch) => createdIds.has(branch.id))
   assert(created.length === SOURCE_LOCATIONS.length, `Expected ${SOURCE_LOCATIONS.length} created branches, found ${created.length}`)
   assert(afterBranches.length === (before.branches as JsonRow[]).length + SOURCE_LOCATIONS.length, "Unexpected K-Electric branch count after insert")
   assert(stable(after.protectedCounts) === stable(before.protectedCounts), "A protected table or another tenant changed during branch creation")
 
-  const previousBranchesAfter = afterBranches.filter((branch) => !createdIds.includes(branch.id))
+  const previousBranchesAfter = afterBranches.filter((branch) => !createdIds.has(branch.id))
   assert(stable(previousBranchesAfter) === stable(before.branches), "An existing K-Electric branch changed unexpectedly")
 
   for (const expected of plan.branchesToCreate as JsonRow[]) {

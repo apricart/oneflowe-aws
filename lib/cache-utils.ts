@@ -45,7 +45,7 @@ export function scopedCacheKey(
     if (scope.branchId) parts.push(`b:${scope.branchId}`)
     if (params) {
         const sorted = Object.keys(params)
-            .sort()
+            .sort((a, b) => a.localeCompare(b))
             .filter(k => params[k] !== undefined && params[k] !== null && params[k] !== '')
             .map(k => `${k}=${params[k]}`)
             .join('&')
@@ -114,7 +114,7 @@ export async function invalidateCache(key: string): Promise<void> {
 // ── Generate Simple Cache Key (legacy compat) ──
 export function generateCacheKey(prefix: string, params: Record<string, any>): string {
     const sortedParams = Object.keys(params)
-        .sort()
+        .sort((a, b) => a.localeCompare(b))
         .map(key => `${key}=${params[key]}`)
         .join('&')
     return `${prefix}:${sortedParams}`

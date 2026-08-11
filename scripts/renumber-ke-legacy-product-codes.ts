@@ -9,9 +9,9 @@
  * orders, assignments, and financial values are verified unchanged.
  */
 
-import { randomUUID } from "crypto"
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "fs"
-import { dirname, resolve } from "path"
+import { randomUUID } from "node:crypto"
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
+import { dirname, resolve } from "node:path"
 import type { PoolClient } from "pg"
 import * as dotenv from "dotenv"
 import {
@@ -87,7 +87,7 @@ function asNumber(value: unknown): number {
 }
 
 function normalized<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T
+  return structuredClone(value)
 }
 
 function writeJsonExclusive(path: string, value: unknown): void {
@@ -550,11 +550,15 @@ async function dryRun(client: PoolClient, options: Options): Promise<void> {
       ...summary(state),
       readyForApply: report.readyForApply,
       output: options.outputPath ? resolve(options.outputPath) : null,
-      note: state.state === "APPLIED"
-        ? "Migration is already applied; no database writes are required."
-        : report.readyForApply
-          ? "Dry-run passed; apply still requires the saved preflight and explicit confirmations."
-          : "Dry-run passed, but the normalized unique-index migration must be installed before apply.",
+      note: (() => {
+        if (state.state === "APPLIED") {
+          return "Migration is already applied; no database writes are required."
+        }
+        if (report.readyForApply) {
+          return "Dry-run passed; apply still requires the saved preflight and explicit confirmations."
+        }
+        return "Dry-run passed, but the normalized unique-index migration must be installed before apply."
+      })(),
     }, null, 2))
   } catch (error) {
     await client.query("rollback").catch(() => undefined)

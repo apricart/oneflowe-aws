@@ -1,6 +1,6 @@
 "use client"
 
-import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from "react"
+import { createContext, useContext, useEffect, useMemo, useState, useCallback, type ReactNode } from "react"
 import { useSession } from "next-auth/react"
 
 // Types
@@ -31,7 +31,44 @@ const AppContext = createContext<AppContextValue | undefined>(undefined)
 
 const STORAGE_KEY = "oneflowe:app-context"
 
-export function AppContextProvider({ children }: { children: ReactNode }) {
+type SavedContext = { organizationId: string | null; branchId: string | null; branchIds: string[] }
+
+function loadSavedContext(): SavedContext | null {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY)
+    return saved ? JSON.parse(saved) as SavedContext : null
+  } catch (error) {
+    console.warn("Unable to restore the saved application context:", error)
+    return null
+  }
+}
+
+function initializeRoleContext(options: {
+  userRole: Role | null
+  userOrgId: number | null
+  userBranchId: number | null
+  savedContext: SavedContext | null
+  setOrganizationId: (value: string | null) => void
+  setBranchId: (value: string | null) => void
+  setBranchIds: (value: string[]) => void
+}): void {
+  const { userRole, userOrgId, userBranchId, savedContext, setOrganizationId, setBranchId, setBranchIds } = options
+  if (userRole === "SUPER_ADMIN") {
+    setOrganizationId(savedContext?.organizationId || null)
+    setBranchId(savedContext?.branchId || null)
+    setBranchIds(savedContext?.branchIds || [])
+  } else if (userRole === "HEAD_OFFICE" && userOrgId) {
+    setOrganizationId(String(userOrgId))
+    setBranchId(savedContext?.branchId || null)
+    setBranchIds(savedContext?.branchIds || [])
+  } else if (userRole === "BRANCH_ADMIN" && userOrgId && userBranchId) {
+    setOrganizationId(String(userOrgId))
+    setBranchId(String(userBranchId))
+    setBranchIds([String(userBranchId)])
+  }
+}
+
+export function AppContextProvider({ children }: Readonly<{ children: ReactNode }>) {
   const { data: session, status } = useSession()
 
   const [organizationId, setOrganizationIdState] = useState<string | null>(null)
@@ -60,34 +97,15 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
       return
     }
 
-    // Read from localStorage
-    let savedContext: { organizationId: string | null; branchId: string | null; branchIds: string[] } | null = null
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY)
-      if (saved) savedContext = JSON.parse(saved)
-    } catch { }
-
-    // Initialize based on role
-    if (userRole === "SUPER_ADMIN") {
-      // Super Admin: use saved context or null (global scope)
-      setOrganizationIdState(savedContext?.organizationId || null)
-      setBranchIdState(savedContext?.branchId || null)
-      setBranchIdsState(savedContext?.branchIds || [])
-    } else if (userRole === "HEAD_OFFICE") {
-      // Head Office: force organization to user's org, use saved branch
-      if (userOrgId) {
-        setOrganizationIdState(String(userOrgId))
-        setBranchIdState(savedContext?.branchId || null)
-        setBranchIdsState(savedContext?.branchIds || [])
-      }
-    } else if (userRole === "BRANCH_ADMIN") {
-      // Branch Admin: force both to user's assignment
-      if (userOrgId && userBranchId) {
-        setOrganizationIdState(String(userOrgId))
-        setBranchIdState(String(userBranchId))
-        setBranchIdsState([String(userBranchId)])
-      }
-    }
+    initializeRoleContext({
+      userRole,
+      userOrgId,
+      userBranchId,
+      savedContext: loadSavedContext(),
+      setOrganizationId: setOrganizationIdState,
+      setBranchId: setBranchIdState,
+      setBranchIds: setBranchIdsState,
+    })
 
     setIsInitialized(true)
   }, [session, status, userRole, userOrgId, userBranchId])
@@ -101,7 +119,9 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
         STORAGE_KEY,
         JSON.stringify({ organizationId, branchId, branchIds })
       )
-    } catch { }
+    } catch (error) {
+      console.warn("Unable to save the application context:", error)
+    }
   }, [organizationId, branchId, branchIds, isInitialized])
 
   // Actions
@@ -149,7 +169,7 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
     }
   }, [userRole, userOrgId, userBranchId])
 
-  const value: AppContextValue = {
+  const value = useMemo<AppContextValue>(() => ({
     organizationId,
     branchId,
     branchIds,
@@ -161,7 +181,7 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
     setBranchIds,
     resetContext,
     isInitialized,
-  }
+  }), [organizationId, branchId, branchIds, userRole, userOrgId, userBranchId, setOrganizationId, setBranchId, setBranchIds, resetContext, isInitialized])
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>
 }
