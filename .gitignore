@@ -36,8 +36,20 @@ next-env.d.ts
 /playwright-report/
 /test-results/
 /blob-report/
+/LoadTestingReport/
 /deliverables
 # database exports (uncomment to ignore, or keep specific files by not adding them)
 # database-export-*.sql
 /updatedReports
 /backups
+
+# Local-only K-Electric migration analysis scripts
+/scripts/analyze-ke-receivables-candidates.ts
+/scripts/build-ke-receivables-reconciliation.ts
+/scripts/compare-ke-orders-sheet-to-live.ts
+/scripts/export-ke-receivables-match-source.ts
+/scripts/generate-ke-minimal-remaining-noncancelled-report.ts
+
+# Local Codex/Sonar agent integration
+/.codex/
+/AGENTS.md

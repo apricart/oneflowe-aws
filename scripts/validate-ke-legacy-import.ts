@@ -1,7 +1,7 @@
 import { readFileSync } from "fs"
-import { resolve } from "path"
 import * as dotenv from "dotenv"
 import { KE_ORGANIZATION, LEGACY_SOURCE, prepareKeLegacySource } from "../lib/legacy-import/ke-electric"
+import { resolveWorkspacePath } from "./lib/resolve-workspace-path"
 
 dotenv.config({ path: ".env.local", quiet: true })
 dotenv.config({ quiet: true })
@@ -14,7 +14,7 @@ function assert(condition: unknown, message: string): asserts condition {
 }
 
 async function main() {
-  const snapshotPath = resolve(process.argv[2] || "backups/ke-import-state-2026-07-13-pre-migration.json")
+  const snapshotPath = resolveWorkspacePath(process.argv[2] || "backups/ke-import-state-2026-07-13-pre-migration.json")
   const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, any>
   const source = prepareKeLegacySource()
   const expected = source.prepared.reduce((totals, order) => ({
