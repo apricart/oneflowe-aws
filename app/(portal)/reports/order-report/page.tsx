@@ -1,63 +1,73 @@
 "use client"
 
-import { useState, useEffect, useMemo, useCallback, useRef } from "react"
-import { useRouter, useSearchParams, usePathname } from "next/navigation"
-import useSWR from "swr"
 import { useAppContext } from "@/components/context/app-context"
-import { Card, CardContent } from "@/components/ui/card"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Card } from "@/components/ui/card"
 import {
-    RefreshCw, Search, Download, FileText, FileSpreadsheet, Package, TrendingUp, Loader2, AlertOctagon, RotateCcw, Calculator,
-    ChevronDown, ChevronLeft, ChevronRight, BarChart3, ListOrdered, Calendar, Hash, Store, Layers, ArrowUpRight, ArrowDownRight, LayoutDashboard, Database, Filter, LayoutGrid
-} from "lucide-react"
-import { formatPKR, cn } from "@/lib/utils"
+DropdownMenu,
+DropdownMenuContent,
+DropdownMenuItem,
+DropdownMenuTrigger
+} from "@/components/ui/dropdown-menu"
+import { Input } from "@/components/ui/input"
+import { Pagination,PaginationContent,PaginationItem } from "@/components/ui/pagination"
+import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from "@/components/ui/table"
+import { Tabs,TabsContent,TabsList,TabsTrigger } from "@/components/ui/tabs"
 import { getOrderDerivedStatus } from "@/lib/order-status"
+import { Role } from "@/lib/rbac"
+import { sanitizeSpreadsheetRow } from "@/lib/spreadsheet"
+import { cn,formatPKR } from "@/lib/utils"
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
-import * as XLSX from "xlsx"
-import { sanitizeSpreadsheetRow } from "@/lib/spreadsheet"
-import { Badge } from "@/components/ui/badge"
-import { Role } from "@/lib/rbac"
+import {
+Calculator,
+Calendar,
+ChevronLeft,ChevronRight,
+Database,
+FileSpreadsheet,
+FileText,
+Filter,
+Hash,
+Layers,LayoutDashboard,
+Loader2,
+Package,
+RefreshCw,
+RotateCcw,
+Search,
+Store,
+TrendingUp,
+Upload
+} from "lucide-react"
 import { useSession } from "next-auth/react"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination"
+import { useCallback,useEffect,useMemo,useRef,useState } from "react"
 import {
-    DropdownMenu,
-    DropdownMenuContent,
-    DropdownMenuItem,
-    DropdownMenuTrigger,
-    DropdownMenuCheckboxItem,
-} from "@/components/ui/dropdown-menu"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import {
-    ResponsiveContainer,
-    ComposedChart,
-    Bar,
-    Line,
-    XAxis,
-    YAxis,
-    CartesianGrid,
-    Tooltip as RechartsTooltip,
-    Legend,
-    Cell,
-    PieChart,
-    Pie,
+Bar,
+CartesianGrid,
+Cell,
+ComposedChart,
+Line,
+Pie,
+PieChart,
+Tooltip as RechartsTooltip,
+ResponsiveContainer,
+XAxis,
+YAxis
 } from "recharts"
+import useSWR from "swr"
+import * as XLSX from "xlsx"
 
-import { ColumnSelector, useColumnSelector, type ColumnDef } from "@/components/reports/column-selector"
-import { GlobalDateFilter, type FilterPreset } from "@/components/dashboard/global-date-filter"
-import type { DateRange } from "@/lib/hooks/use-sales-performance"
-import { BranchFilter } from "@/components/reports/branch-filter"
-import { GroupFilter } from "@/components/reports/group-filter"
-import { OrganizationFilter } from "@/components/reports/organization-filter"
+import { GlobalDateFilter,type FilterPreset,type GlobalDateFilterChange } from "@/components/dashboard/global-date-filter"
 import { MultiBranchFilter } from "@/components/dashboard/multi-branch-filter"
-import { MultiSelectFilter } from "@/components/reports/multi-select-filter"
+import { BranchFilter } from "@/components/reports/branch-filter"
+import { ColumnSelector,useColumnSelector,type ColumnDef } from "@/components/reports/column-selector"
+import { GroupFilter } from "@/components/reports/group-filter"
 import { KPICard } from "@/components/reports/kpi-card"
+import { MultiSelectFilter } from "@/components/reports/multi-select-filter"
+import { OrganizationFilter } from "@/components/reports/organization-filter"
 import { useDebounce } from "@/hooks/use-debounce"
 import { useToast } from "@/hooks/use-toast"
-import { Upload } from "lucide-react"
-
+import type { DateRange } from "@/lib/hooks/use-sales-performance"
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
 const ORDER_REPORT_PAGE_SIZE = 25
 
@@ -90,9 +100,6 @@ const STATUS_COLORS: Record<string, string> = {
 }
 
 export default function OrderReportPage() {
-    const router = useRouter()
-    const pathname = usePathname()
-    const searchParams = useSearchParams()
 
     const {
         organizationId: contextOrgId,
@@ -113,7 +120,7 @@ export default function OrderReportPage() {
     const kpiRevenueLabel = isBuyer ? "Net Amount" : "Net Revenue"
     const kpiAvgLabel = isBuyer ? "Avg Purchased Value" : "Avg Value"
     const chartRevenueLabel = isBuyer ? "Purchased" : "Revenue"
-    const chartOrdersLabel = isBuyer ? "Orders" : "Orders"
+    const chartOrdersLabel = "Orders"
     const exportTitleLabel = isBuyer ? "Order Purchase Report" : "Order Consumption Report"
 
     const [hasMounted, setHasMounted] = useState(false)
@@ -195,8 +202,8 @@ export default function OrderReportPage() {
         const adminBranchId = contextBranchId || (session?.user as any)?.branchId
         if (userOrgId) globalParams.set("organizationId", String(userOrgId))
         if (adminBranchId) globalParams.set("branchIds", String(adminBranchId))
-    } else {
-        if (organizationId) globalParams.set("organizationId", organizationId.toString())
+    } else if (organizationId) {
+        globalParams.set("organizationId", organizationId.toString())
     }
 
     if (dateRange?.startDate) globalParams.set("startDate", dateRange.startDate.toISOString())
@@ -277,7 +284,7 @@ export default function OrderReportPage() {
         setGeneratedDate(new Date().toLocaleString())
     }, [])
 
-    const handleDateChange = useCallback((range: DateRange | null, preset: FilterPreset, c?: boolean, cr?: DateRange | null, m?: number[], y?: number[], cm?: number[], cy?: number[]) => {
+    const handleDateChange = useCallback(({ range, preset, compare: c, compareRange: cr, months: m, years: y, compareMonths: cm, compareYears: cy }: GlobalDateFilterChange) => {
         setDateRange(range)
         setActivePreset(preset)
         if (c !== undefined) setCompare(c)
@@ -302,9 +309,6 @@ export default function OrderReportPage() {
         mutateReport()
     }, [mutateGlobal, mutateChart, mutateReport])
 
-    const handleBranchChange = useCallback((ids: string[]) => {
-        setContextBranchIds(ids)
-    }, [setContextBranchIds])
 
     const resetReportFilters = useCallback(() => {
         setStatusFilter("all")
@@ -346,10 +350,10 @@ export default function OrderReportPage() {
     const filteredOrders = useMemo(() => {
         return reportOrders.filter((order: any) => {
             const matchesSearch = !reportSearch ||
-                (order.tid && order.tid.toLowerCase().includes(reportSearch.toLowerCase())) ||
-                (order.userName && order.userName.toLowerCase().includes(reportSearch.toLowerCase())) ||
+                (order.tid?.toLowerCase().includes(reportSearch.toLowerCase())) ||
+                (order.userName?.toLowerCase().includes(reportSearch.toLowerCase())) ||
                 (order.employeeId && String(order.employeeId).toLowerCase().includes(reportSearch.toLowerCase())) ||
-                (order.userId && order.userId.toLowerCase().includes(reportSearch.toLowerCase()))
+                (order.userId?.toLowerCase().includes(reportSearch.toLowerCase()))
             const matchesStatus = statusFilter === 'all' || order.status?.toLowerCase() === statusFilter.toLowerCase();
             return matchesSearch && matchesStatus;
         })
@@ -375,9 +379,6 @@ export default function OrderReportPage() {
         return { value: Math.abs(diff).toFixed(1), isUp: diff > 0, isDown: diff < 0 }
     }
 
-    const revenueTrend = getTrend(summary.totalSales, comparison?.totalSales || 0)
-    const refundsTrend = getTrend(summary.totalRefunds, comparison?.totalRefunds || 0)
-    const ordersTrend = getTrend(summary.orderCount, comparison?.totalOrders || 0)
 
     // ━━━ CHART TREND DATA: Normalized X-Axis ━━━
     const chartTrendData = useMemo(() => {
@@ -410,7 +411,7 @@ export default function OrderReportPage() {
 
         // Case A: Multiple years -> Show Years on X-Axis
         if (chartYears.length > 1) {
-            return chartYears.sort((a, b) => a - b).map(year => {
+            return chartYears.toSorted((a, b) => a - b).map(year => {
                 const yearOrders = trend.filter((o: any) => new Date(o.createdAt || o.orderDate).getFullYear() === year)
                 const compOrders = (chartData?.comparisonOrders || []).filter((o: any) =>
                     ['FULFILLED', 'APPROVED', 'PARTIAL', 'PARTIALLY_FULFILLED'].includes((o.status || "").toUpperCase()) &&
@@ -713,13 +714,23 @@ export default function OrderReportPage() {
                                                 <GroupFilter
                                                     selectedIds={chartGroupIds}
                                                     onChange={setChartGroupIds}
-                                                    organizationIds={chartOrgIds.length > 0 ? chartOrgIds : (organizationId ? [String(organizationId)] : [])}
+                                                    organizationIds={(() => {
+                                                      if (chartOrgIds.length > 0) {
+                                                        return chartOrgIds
+                                                      }
+                                                      return (organizationId ? [String(organizationId)] : [])
+                                                    })()}
                                                     disabled={chartBranchIds.length > 0}
                                                 />
                                                 <BranchFilter
                                                     selectedIds={chartBranchIds}
                                                     onChange={setChartBranchIds}
-                                                    organizationIds={chartOrgIds.length > 0 ? chartOrgIds : (organizationId ? [organizationId] : [])}
+                                                    organizationIds={(() => {
+                                                      if (chartOrgIds.length > 0) {
+                                                        return chartOrgIds
+                                                      }
+                                                      return (organizationId ? [organizationId] : [])
+                                                    })()}
                                                     groupIds={chartGroupIds}
                                                 />
                                             </>
@@ -738,9 +749,13 @@ export default function OrderReportPage() {
                                     </div>
                                 </div>
                                 <div className="p-8 h-[400px]">
-                                    {isChartLoading ? (
+                                    {(() => {
+                                      if (isChartLoading) {
+                                        return (
                                         <div className="h-full flex items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-indigo-500/20" /></div>
-                                    ) : (
+                                    )
+                                      }
+                                      return (
                                         <ResponsiveContainer width="100%" height="100%">
                                             <ComposedChart data={chartTrendData} margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
                                                 <defs>
@@ -762,7 +777,8 @@ export default function OrderReportPage() {
                                                 <Line type="monotone" dataKey="orders" stroke="#10b981" strokeWidth={3} dot={{ r: 4, fill: '#10b981', strokeWidth: 2, stroke: '#fff' }} name={chartOrdersLabel} />
                                             </ComposedChart>
                                         </ResponsiveContainer>
-                                    )}
+                                    )
+                                    })()}
                                 </div>
                             </Card>
 
@@ -789,25 +805,14 @@ export default function OrderReportPage() {
                                             >
                                                 {statusChartData.map((entry, index) => (
                                                     <Cell
-                                                        key={`cell-${index}`}
+                                                        key={entry.name}
                                                         fill={entry.fill}
                                                         style={{ filter: `drop-shadow(0 0 8px ${entry.fill}40)` }}
                                                     />
                                                 ))}
                                             </Pie>
                                             <RechartsTooltip
-                                                content={({ active, payload }) => {
-                                                    if (active && payload && payload.length) {
-                                                        const d = payload[0].payload;
-                                                        return (
-                                                            <div className="bg-white dark:bg-slate-900 p-3 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800">
-                                                                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">{d.name}</p>
-                                                                <p className="text-lg font-black text-slate-900 dark:text-white">{d.value} <span className="text-xs font-medium text-slate-400">orders</span></p>
-                                                            </div>
-                                                        );
-                                                    }
-                                                    return null;
-                                                }}
+                                                content={<StatusMixTooltip />}
                                             />
                                         </PieChart>
                                     </ResponsiveContainer>
@@ -833,11 +838,11 @@ export default function OrderReportPage() {
                         {/* Report Controls */}
                         <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-6 bg-white dark:bg-slate-900/40 p-5 rounded-[2.5rem] border border-slate-200/60 dark:border-slate-800/60 shadow-sm backdrop-blur-xl">
                             <div className="flex flex-wrap items-center gap-2.5 p-1 bg-slate-50 dark:bg-slate-950/50 rounded-[1.25rem] border border-slate-100 dark:border-slate-800/50">
-                                <button onClick={() => setStatusFilter("all")} className={cn("px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-300", statusFilter === "all" ? "bg-white dark:bg-slate-800 text-indigo-600 shadow-md ring-1 ring-slate-200 dark:ring-slate-700" : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200")}>All</button>
-                                <button onClick={() => setStatusFilter("pending")} className={cn("px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-300", statusFilter === "pending" ? "bg-white dark:bg-slate-800 text-slate-700 shadow-md ring-1 ring-slate-200 dark:ring-slate-700" : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200")}>Pending Approval</button>
-                                <button onClick={() => setStatusFilter("approved")} className={cn("px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-300", statusFilter === "approved" ? "bg-blue-500 text-white shadow-lg shadow-blue-500/20" : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200")}>Active</button>
-                                <button onClick={() => setStatusFilter("fulfilled")} className={cn("px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-300", statusFilter === "fulfilled" ? "bg-emerald-500 text-white shadow-lg shadow-emerald-500/20" : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200")}>Fulfilled</button>
-                                <button onClick={() => setStatusFilter("refunded")} className={cn("px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-300", statusFilter === "refunded" ? "bg-rose-500 text-white shadow-lg shadow-rose-500/20" : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200")}>Refunds</button>
+                                <button type="button" onClick={() => setStatusFilter("all")} className={cn("px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-300", statusFilter === "all" ? "bg-white dark:bg-slate-800 text-indigo-600 shadow-md ring-1 ring-slate-200 dark:ring-slate-700" : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200")}>All</button>
+                                <button type="button" onClick={() => setStatusFilter("pending")} className={cn("px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-300", statusFilter === "pending" ? "bg-white dark:bg-slate-800 text-slate-700 shadow-md ring-1 ring-slate-200 dark:ring-slate-700" : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200")}>Pending Approval</button>
+                                <button type="button" onClick={() => setStatusFilter("approved")} className={cn("px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-300", statusFilter === "approved" ? "bg-blue-500 text-white shadow-lg shadow-blue-500/20" : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200")}>Active</button>
+                                <button type="button" onClick={() => setStatusFilter("fulfilled")} className={cn("px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-300", statusFilter === "fulfilled" ? "bg-emerald-500 text-white shadow-lg shadow-emerald-500/20" : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200")}>Fulfilled</button>
+                                <button type="button" onClick={() => setStatusFilter("refunded")} className={cn("px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-300", statusFilter === "refunded" ? "bg-rose-500 text-white shadow-lg shadow-rose-500/20" : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200")}>Refunds</button>
                             </div>
                             <div className="flex flex-wrap items-center gap-3">
                                 <div className="relative group/search">
@@ -855,10 +860,10 @@ export default function OrderReportPage() {
                                 <div className="h-8 w-px bg-slate-200 dark:bg-slate-800 mx-1" />
                                 <GlobalDateFilter
                                     value={dateRange}
-                                    onChange={(range, preset, nextCompare, nextCompareRange, months, years, nextCompareMonths, nextCompareYears) => {
-                                        handleDateChange(range, preset, nextCompare, nextCompareRange, months, years, nextCompareMonths, nextCompareYears)
-                                        setReportMonths(months ?? [])
-                                        setReportYears(years ?? [])
+                                    onChange={(change) => {
+                                        handleDateChange(change)
+                                        setReportMonths(change.months ?? [])
+                                        setReportYears(change.years ?? [])
                                     }}
                                     activePreset={activePreset}
                                     customRangeOnly
@@ -887,14 +892,24 @@ export default function OrderReportPage() {
                                                 setReportGroupIds(ids)
                                                 setReportBranchIds([])
                                             }}
-                                            organizationIds={reportOrgIds.length > 0 ? reportOrgIds : (organizationId ? [String(organizationId)] : undefined)}
+                                            organizationIds={(() => {
+                                              if (reportOrgIds.length > 0) {
+                                                return reportOrgIds
+                                              }
+                                              return (organizationId ? [String(organizationId)] : undefined)
+                                            })()}
                                             disabled={reportBranchIds.length > 0}
                                         />
                                         {(reportOrgIds.length > 0 || organizationId) && (
                                             <BranchFilter
                                                 selectedIds={reportBranchIds}
                                                 onChange={setReportBranchIds}
-                                                organizationIds={reportOrgIds.length > 0 ? reportOrgIds : (organizationId ? [organizationId] : [])}
+                                                organizationIds={(() => {
+                                                  if (reportOrgIds.length > 0) {
+                                                    return reportOrgIds
+                                                  }
+                                                  return (organizationId ? [organizationId] : [])
+                                                })()}
                                                 groupIds={reportGroupIds}
                                             />
                                         )}
@@ -990,11 +1005,18 @@ export default function OrderReportPage() {
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
-                                        {isReportLoading ? (
+                                        {(() => {
+                                          if (isReportLoading) {
+                                            return (
                                             <TableRow><TableCell colSpan={ALL_COLUMNS.length} className="h-64 text-center"><Loader2 className="h-8 w-8 animate-spin mx-auto text-indigo-500/20" /></TableCell></TableRow>
-                                        ) : filteredOrders.length === 0 ? (
+                                        )
+                                          }
+                                          if (filteredOrders.length === 0) {
+                                            return (
                                             <TableRow><TableCell colSpan={ALL_COLUMNS.length} className="h-64 text-center text-slate-400 font-bold uppercase tracking-widest text-xs">No records found</TableCell></TableRow>
-                                        ) : (
+                                        )
+                                          }
+                                          return (
                                             filteredOrders.map((order: any) => (
                                                 <TableRow key={order.id} className="group border-b border-slate-100 dark:border-slate-800/50 hover:bg-slate-50/80 dark:hover:bg-indigo-500/5 transition-all duration-300">
                                                     {isVisible("tid") && (
@@ -1068,7 +1090,8 @@ export default function OrderReportPage() {
                                                     )}
                                                 </TableRow>
                                             ))
-                                        )}
+                                        )
+                                        })()}
                                     </TableBody>
                                 </Table>
                             </div>
@@ -1127,7 +1150,7 @@ export default function OrderReportPage() {
 
 // ━━━ HELPER COMPONENTS ━━━
 
-function MonthFilter({ selected, onChange }: { selected: number[], onChange: (val: number[]) => void }) {
+function MonthFilter({ selected, onChange }: Readonly<{ selected: number[], onChange: (val: number[]) => void }>) {
     const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
     const items = months.map((m, i) => ({ id: i + 1, label: m }))
     return (
@@ -1143,7 +1166,7 @@ function MonthFilter({ selected, onChange }: { selected: number[], onChange: (va
     )
 }
 
-function YearFilter({ selected, onChange, allTimeData }: { selected: number[], onChange: (val: number[]) => void, allTimeData: any }) {
+function YearFilter({ selected, onChange, allTimeData }: Readonly<{ selected: number[], onChange: (val: number[]) => void, allTimeData: any }>) {
     const availableYears = useMemo(() => {
         if (Array.isArray(allTimeData?.years) && allTimeData.years.length > 0) {
             return Array.from(new Set<number>(allTimeData.years.map(Number).filter(Number.isInteger))).sort((a, b) => b - a)
@@ -1169,8 +1192,20 @@ function YearFilter({ selected, onChange, allTimeData }: { selected: number[], o
     )
 }
 
+function StatusMixTooltip({ active, payload }: any) {
+    if (!active || !payload?.length) return null
+
+    const data = payload[0].payload
+    return (
+        <div className="bg-white dark:bg-slate-900 p-3 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800">
+            <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">{data.name}</p>
+            <p className="text-lg font-black text-slate-900 dark:text-white">{data.value} <span className="text-xs font-medium text-slate-400">orders</span></p>
+        </div>
+    )
+}
+
 function BarTooltip({ active, payload, label, compare, revenueLabel, pricesHidden }: any) {
-    if (active && payload && payload.length) {
+    if (active && payload?.length) {
         return (
             <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 min-w-[200px] backdrop-blur-xl bg-white/90 dark:bg-slate-900/90">
                 <div className="flex items-center gap-2 mb-3 pb-2 border-b border-slate-100 dark:border-slate-800">

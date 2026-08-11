@@ -12,6 +12,87 @@ const allowedRoles = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"] as const
 
 type Role = typeof allowedRoles[number]
 
+const parseOptionalId = (value: string | null) => (
+  value && value !== "null" && value !== "0" ? Number(value) : null
+)
+
+function resolveDashboardScope(
+  role: string | undefined,
+  scope: Awaited<ReturnType<typeof getRequestScope>>,
+  organizationIdParam: string | null,
+  branchIdParam: string | null,
+) {
+  if (role === "BRANCH_ADMIN") {
+    return { organizationId: scope?.organizationId ?? null, branchId: scope?.branchId ?? null }
+  }
+  if (role === "HEAD_OFFICE") {
+    return {
+      organizationId: scope?.organizationId ?? null,
+      branchId: parseOptionalId(branchIdParam),
+    }
+  }
+  return {
+    organizationId: parseOptionalId(organizationIdParam),
+    branchId: parseOptionalId(branchIdParam),
+  }
+}
+
+function addRoleScopeConditions(
+  conditions: any[],
+  role: string | undefined,
+  organizationId: number | null,
+  branchId: number | null,
+) {
+  if (role !== "SUPER_ADMIN" && organizationId) conditions.push(eq(orders.organizationId, organizationId))
+  if (role === "BRANCH_ADMIN" && branchId) conditions.push(eq(orders.branchId, branchId))
+  return conditions
+}
+
+function getBranchFilters(
+  role: string | undefined,
+  organizationId: number | null,
+  branchId: number | null,
+  groupId: number | null,
+) {
+  const conditions: any[] = []
+  if (role !== "SUPER_ADMIN" && organizationId) conditions.push(eq(branches.organizationId, organizationId))
+  if (role === "BRANCH_ADMIN" && branchId) conditions.push(eq(branches.id, branchId))
+  if (groupId) conditions.push(eq(branches.groupId, groupId))
+  return conditions
+}
+
+function getPendingApprovalsQuery(
+  role: string | undefined,
+  organizationId: number | null,
+  branchId: number | null,
+) {
+  if (role === "SUPER_ADMIN") return null
+  const conditions: any[] = [or(eq(orders.status, "PENDING"), eq(orders.status, "pending"))]
+  addRoleScopeConditions(conditions, role, organizationId, branchId)
+  return db
+    .select({ count: sql<number>`coalesce(count(${orders.id}), 0)` })
+    .from(orders)
+    .leftJoin(branches, eq(orders.branchId, branches.id))
+    .where(and(...conditions))
+}
+
+function getCurrentMonthConditions(
+  role: string | undefined,
+  organizationId: number | null,
+  branchId: number | null,
+) {
+  const now = new Date()
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
+  const startOfNextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1)
+  startOfMonth.setHours(0, 0, 0, 0)
+  startOfNextMonth.setHours(0, 0, 0, 0)
+  return addRoleScopeConditions([
+    gte(orders.createdAt, startOfMonth),
+    lt(orders.createdAt, startOfNextMonth),
+    REVENUE_ELIGIBLE_FILTER,
+  ], role, organizationId, branchId)
+}
+
 function getOrderConditions(role: Role | undefined, organizationId: number | null, branchId: number | null) {
   const fromDate = new Date()
   fromDate.setDate(fromDate.getDate() - 6)
@@ -45,33 +126,8 @@ export async function GET(req: NextRequest) {
   const branchIdParam = searchParams.get("branchId")
   const groupIdParam = searchParams.get("groupId")
 
-  let organizationId: number | null = null
-  let branchId: number | null = null
-  let groupId: number | null = null
-
-  // BOLA: BRANCH_ADMIN must always use session values, never query params
-  if (role === "BRANCH_ADMIN") {
-    organizationId = scope?.organizationId ?? null
-    branchId = scope?.branchId ?? null
-  } else if (role === "HEAD_OFFICE") {
-    // HEAD_OFFICE is scoped to their org, but can filter by branch
-    organizationId = scope?.organizationId ?? null
-    if (branchIdParam && branchIdParam !== "null" && branchIdParam !== "0") {
-      branchId = Number(branchIdParam)
-    }
-  } else {
-    // SUPER_ADMIN can use query params freely
-    if (orgIdParam && orgIdParam !== "null" && orgIdParam !== "0") {
-      organizationId = Number(orgIdParam)
-    }
-    if (branchIdParam && branchIdParam !== "null" && branchIdParam !== "0") {
-      branchId = Number(branchIdParam)
-    }
-  }
-
-  if (groupIdParam && groupIdParam !== "null" && groupIdParam !== "0") {
-    groupId = Number(groupIdParam)
-  }
+  const { organizationId, branchId } = resolveDashboardScope(role, scope, orgIdParam, branchIdParam)
+  const groupId = parseOptionalId(groupIdParam)
   const pricesHidden = await shouldHidePricesForRole(role, scope?.organizationId)
 
   const cacheKey = generateCacheKey('dashboard-analytics', {
@@ -101,16 +157,7 @@ export async function GET(req: NextRequest) {
       .groupBy(dayExpr)
       .orderBy(dayExpr)
 
-    const branchFilters = []
-    if (role !== "SUPER_ADMIN" && organizationId) {
-      branchFilters.push(eq(branches.organizationId, organizationId))
-    }
-    if (role === "BRANCH_ADMIN" && branchId) {
-      branchFilters.push(eq(branches.id, branchId))
-    }
-    if (groupId) {
-      branchFilters.push(eq(branches.groupId, groupId))
-    }
+    const branchFilters = getBranchFilters(role, organizationId, branchId, groupId)
 
     const branchSelect = db.select({
       id: branches.id,
@@ -136,40 +183,8 @@ export async function GET(req: NextRequest) {
       ? countSelect.where(and(...(branchFilters as any)))
       : countSelect
 
-    let pendingQuery: Promise<any[]> | null = null
-    if (role !== "SUPER_ADMIN") {
-      const pendingConditions: any[] = [or(eq(orders.status, "PENDING"), eq(orders.status, "pending"))]
-      if (organizationId) {
-        pendingConditions.push(eq(orders.organizationId, organizationId))
-      }
-      if (role === "BRANCH_ADMIN" && branchId) {
-        pendingConditions.push(eq(orders.branchId, branchId))
-      }
-
-      pendingQuery = db
-        .select({ count: sql<number>`coalesce(count(${orders.id}), 0)` })
-        .from(orders)
-        .leftJoin(branches, eq(orders.branchId, branches.id))
-        .where(and(...(pendingConditions as any)))
-    }
-
-    const now = new Date()
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
-    startOfMonth.setHours(0, 0, 0, 0)
-    const startOfNextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1)
-    startOfNextMonth.setHours(0, 0, 0, 0)
-
-    const monthConditions: any[] = [
-      gte(orders.createdAt, startOfMonth),
-      lt(orders.createdAt, startOfNextMonth),
-      REVENUE_ELIGIBLE_FILTER,
-    ]
-    if (role !== "SUPER_ADMIN" && organizationId) {
-      monthConditions.push(eq(orders.organizationId, organizationId))
-    }
-    if (role === "BRANCH_ADMIN" && branchId) {
-      monthConditions.push(eq(orders.branchId, branchId))
-    }
+    const pendingQuery = getPendingApprovalsQuery(role, organizationId, branchId)
+    const monthConditions = getCurrentMonthConditions(role, organizationId, branchId)
 
     const ordersMonthQuery = db
       .select({ count: sql<number>`coalesce(count(${orders.id}), 0)` })

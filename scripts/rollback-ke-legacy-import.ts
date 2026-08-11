@@ -36,7 +36,7 @@ async function main() {
     .innerJoin(schema.roles, eq(schema.users.roleId, schema.roles.id))
     .where(and(eq(schema.users.id, actorUserId), eq(schema.users.isActive, true), isNull(schema.users.deletedAt)))
     .limit(1)
-  if (!actor || actor.role !== "SUPER_ADMIN") throw new Error("Actor must be an active SUPER_ADMIN")
+  if (actor?.role !== "SUPER_ADMIN") throw new Error("Actor must be an active SUPER_ADMIN")
 
   await db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(1263482710, ${KE_ORGANIZATION.id})`)

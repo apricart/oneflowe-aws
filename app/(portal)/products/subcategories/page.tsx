@@ -1,15 +1,15 @@
 "use client"
 import { useState } from "react"
 import useSWR from "swr"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card,CardContent,CardHeader,CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Dialog,DialogContent,DialogHeader,DialogTitle,DialogFooter,DialogDescription } from "@/components/ui/dialog"
+import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from "@/components/ui/select"
 import { useToast } from "@/hooks/use-toast"
-import { Search, Sparkles, Plus, Edit, Trash2, FolderOpen, Package, Loader2, FolderTree, RefreshCw } from "lucide-react"
+import { Search,Plus,Edit,Trash2,FolderOpen,Package,Loader2,FolderTree,RefreshCw } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { formatCountLabel } from "@/lib/count-label"
 
@@ -109,7 +109,7 @@ export default function SubcategoriesPage() {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     name: subcategoryName.trim(),
-                    categoryId: parseInt(selectedCategoryId)
+                    categoryId: Number.parseInt(selectedCategoryId)
                 }),
             })
             const data = await res.json()
@@ -122,6 +122,7 @@ export default function SubcategoriesPage() {
                 toast({ title: "Error", description: data.error || "Failed to create subcategory", variant: "destructive" })
             }
         } catch (error) {
+            console.error("Failed to create subcategory:", error)
             toast({ title: "Error", description: "Failed to create subcategory", variant: "destructive" })
         } finally {
             setIsSubmitting(false)
@@ -142,7 +143,7 @@ export default function SubcategoriesPage() {
                 body: JSON.stringify({
                     id: selectedSubcategory.id,
                     name: subcategoryName.trim(),
-                    categoryId: parseInt(selectedCategoryId)
+                    categoryId: Number.parseInt(selectedCategoryId)
                 }),
             })
             const data = await res.json()
@@ -155,6 +156,7 @@ export default function SubcategoriesPage() {
                 toast({ title: "Error", description: data.error || "Failed to update subcategory", variant: "destructive" })
             }
         } catch (error) {
+            console.error("Failed to update subcategory:", error)
             toast({ title: "Error", description: "Failed to update subcategory", variant: "destructive" })
         } finally {
             setIsSubmitting(false)
@@ -179,6 +181,7 @@ export default function SubcategoriesPage() {
                 toast({ title: "Cannot Delete", description: data.error, variant: "destructive" })
             }
         } catch (error) {
+            console.error("Failed to delete subcategory:", error)
             toast({ title: "Error", description: "Failed to delete subcategory", variant: "destructive" })
         } finally {
             setIsSubmitting(false)
@@ -273,14 +276,19 @@ export default function SubcategoriesPage() {
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {isLoading ? (
+                                {(() => {
+                                  if (isLoading) {
+                                    return (
                                     <TableRow>
                                         <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
                                             <Loader2 className="h-5 w-5 animate-spin mx-auto mb-2" />
                                             Loading subcategories…
                                         </TableCell>
                                     </TableRow>
-                                ) : subcategories.length === 0 ? (
+                                )
+                                  }
+                                  if (subcategories.length === 0) {
+                                    return (
                                     <TableRow>
                                         <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
                                             {searchQuery || categoryFilter
@@ -288,7 +296,9 @@ export default function SubcategoriesPage() {
                                                 : "No subcategories yet. Create your first subcategory to organize products."}
                                         </TableCell>
                                     </TableRow>
-                                ) : (
+                                )
+                                  }
+                                  return (
                                     subcategories.map((subcategory) => (
                                         <TableRow key={subcategory.id} className="hover:bg-muted/40">
                                             <TableCell>
@@ -339,7 +349,8 @@ export default function SubcategoriesPage() {
                                             </TableCell>
                                         </TableRow>
                                     ))
-                                )}
+                                )
+                                })()}
                             </TableBody>
                         </Table>
                     </div>
@@ -359,9 +370,9 @@ export default function SubcategoriesPage() {
                     </DialogHeader>
                     <div className="space-y-4 py-4">
                         <div>
-                            <label className="block text-sm font-medium mb-2">Parent Category *</label>
+                            <label htmlFor="subcategory-parent" className="block text-sm font-medium mb-2">Parent Category *</label>
                             <Select value={selectedCategoryId} onValueChange={setSelectedCategoryId}>
-                                <SelectTrigger>
+                                <SelectTrigger id="subcategory-parent">
                                     <SelectValue placeholder="Select a category" />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -374,8 +385,9 @@ export default function SubcategoriesPage() {
                             </Select>
                         </div>
                         <div>
-                            <label className="block text-sm font-medium mb-2">Subcategory Name *</label>
+                            <label htmlFor="subcategory-name" className="block text-sm font-medium mb-2">Subcategory Name *</label>
                             <Input
+                                id="subcategory-name"
                                 value={subcategoryName}
                                 onChange={(e) => setSubcategoryName(e.target.value)}
                                 placeholder="Enter subcategory name"
@@ -433,13 +445,13 @@ export default function SubcategoriesPage() {
     )
 }
 
-function StatCard({ label, value, icon, variant, isLoading = false }: {
+function StatCard({ label, value, icon, variant, isLoading = false }: Readonly<{
     label: string;
     value: string | number;
     icon: React.ReactNode;
     variant: 'blue' | 'green' | 'red' | 'amber' | 'purple'
     isLoading?: boolean
-}) {
+}>) {
     const variants = {
         blue: "bg-gradient-to-br from-blue-50/80 to-indigo-50/80 border-blue-100/50 text-blue-700 dark:from-blue-900/20 dark:to-indigo-900/20 dark:border-blue-800/30 dark:text-blue-400",
         green: "bg-gradient-to-br from-emerald-50/80 to-teal-50/80 border-emerald-100/50 text-emerald-700 dark:from-emerald-900/20 dark:to-teal-900/20 dark:border-emerald-800/30 dark:text-emerald-400",

@@ -14,8 +14,8 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { SalesPerformanceBarChart } from "@/components/dashboard/charts"
-import { BankingKPICard } from "@/components/dashboard/banking-kpi-card"
-import { GlobalDateFilter, type FilterPreset, getPresetLabel, getPresetRange } from "@/components/dashboard/global-date-filter"
+import { BankingKPICard,type TrendDirection } from "@/components/dashboard/banking-kpi-card"
+import { GlobalDateFilter, type FilterPreset,type GlobalDateFilterChange, getPresetLabel, getPresetRange } from "@/components/dashboard/global-date-filter"
 import { DrillDownSheet, type DrillDownType } from "@/components/dashboard/drill-down-sheet"
 import { MultiSelectFilter } from "@/components/reports/multi-select-filter"
 
@@ -56,8 +56,8 @@ export function BranchAdminDashboard() {
     const series = (allTimePerf as any)?.seriesData || []
     const years = new Set<number>()
     series.forEach((s: any) => {
-      const y = parseInt(s.label)
-      if (!isNaN(y)) years.add(y)
+      const y = Number.parseInt(s.label)
+      if (!Number.isNaN(y)) years.add(y)
     })
     if (years.size === 0) years.add(new Date().getFullYear())
     return Array.from(years).sort((a, b) => b - a)
@@ -111,16 +111,21 @@ export function BranchAdminDashboard() {
   }
 
   // Sales performance data for KPIs (Global Filter)
-  const { data: perfData, isLoading: isLoadingPerf } = useSalesPerformance(
-    organizationId, branchId,
-    undefined,
-    undefined, dateRange, "all", compare, compareRange,
-    months, years, compareMonths, compareYears,
-    activePreset === "all" ? "yearly" : undefined,
-    undefined, // organizationIds
-    true,       // includeStatusCounts
-    { enabled: isInitialized, keepPreviousData: true }
-  )
+  const { data: perfData, isLoading: isLoadingPerf } = useSalesPerformance({
+    organizationId,
+    branchId,
+    dateRange,
+    status: "all",
+    compare,
+    compareRange,
+    months,
+    years,
+    compareMonths,
+    compareYears,
+    granularity: activePreset === "all" ? "yearly" : undefined,
+    includeStatusCounts: true,
+    request: { enabled: isInitialized, keepPreviousData: true },
+  })
 
   // Chart Logic (Local Filters)
   const chartDateRange = useMemo(() => {
@@ -135,28 +140,42 @@ export function BranchAdminDashboard() {
   }, [chartQuickFilter, chartMonths, chartYears, dateRange])
 
   const hasChartFilters = chartMonths.length > 0 || chartYears.length > 0
-  const chartComponentDateRange = chartQuickFilter === "today" ? getPresetRange("today") : (hasChartFilters ? null : chartDateRange)
+  const chartComponentDateRange = (() => {
+    if (chartQuickFilter === "today") {
+      return getPresetRange("today")
+    }
+    return (hasChartFilters ? null : chartDateRange)
+  })()
 
   const isBroadRange = !chartQuickFilter && ["all", "yearly", "monthly", "custom"].includes(activePreset)
 
-  const chartGranularity = (chartQuickFilter === "today" || (activePreset === "today" && !hasChartFilters))
-    ? "daily" as const
-    : (chartYears.length > 1 || (chartYears.length === 0 && years.length > 1 && !chartQuickFilter && chartMonths.length === 0))
-      ? "yearly" as const
-      : (chartMonths.length > 0 || chartYears.length === 1 || (!chartQuickFilter && (months.length > 0 || years.length === 1)) || isBroadRange)
-        ? "monthly" as const
-        : "daily" as const
+  const chartGranularity = (() => {
+    if ((chartQuickFilter === "today" || (activePreset === "today" && !hasChartFilters))) {
+      return "daily" as const
+    }
+    if ((chartYears.length > 1 || (chartYears.length === 0 && years.length > 1 && !chartQuickFilter && chartMonths.length === 0))) {
+      return "yearly" as const
+    }
+    if ((chartMonths.length > 0 || chartYears.length === 1 || (!chartQuickFilter && (months.length > 0 || years.length === 1)) || isBroadRange)) {
+      return "monthly" as const
+    }
+    return "daily" as const
+  })()
 
-  const { data: chartPerfData, isLoading: isLoadingChart } = useSalesPerformance(
-    organizationId, branchId,
-    undefined,
-    undefined, chartDateRange, "all", false, null,
-    chartMonths, chartYears, [], [],
-    chartGranularity,
-    undefined,
-    undefined,
-    { enabled: isInitialized, keepPreviousData: true }
-  )
+  const { data: chartPerfData, isLoading: isLoadingChart } = useSalesPerformance({
+    organizationId,
+    branchId,
+    dateRange: chartDateRange,
+    status: "all",
+    compare: false,
+    compareRange: null,
+    months: chartMonths,
+    years: chartYears,
+    compareMonths: [],
+    compareYears: [],
+    granularity: chartGranularity,
+    request: { enabled: isInitialized, keepPreviousData: true },
+  })
   const pricesHidden = Boolean((perfData as any)?.pricesHidden || (chartPerfData as any)?.pricesHidden || (allTimePerf as any)?.pricesHidden)
   const priceVisibilityKnown = [perfData, chartPerfData, allTimePerf].some((data: any) => typeof data?.pricesHidden === "boolean")
   const isPriceVisibilityPending = userRole === "BRANCH_ADMIN" && !priceVisibilityKnown
@@ -203,7 +222,7 @@ export function BranchAdminDashboard() {
   }, [chartPerfData, chartMonths, chartYears, months, years, hasChartFilters])
 
 
-  const handleDateChange = useCallback((range: DateRange | null, preset: FilterPreset, compareMode?: boolean, compRange?: DateRange | null, m?: number[], y?: number[], cm?: number[], cy?: number[]) => {
+  const handleDateChange = useCallback(({ range, preset, compare: compareMode, compareRange: compRange, months: m, years: y, compareMonths: cm, compareYears: cy }: GlobalDateFilterChange) => {
     setDateRange(range)
     setActivePreset(preset)
     if (compareMode !== undefined) setCompare(compareMode)
@@ -215,16 +234,22 @@ export function BranchAdminDashboard() {
   }, [])
 
   const resetDashboardFilters = useCallback(() => {
-    handleDateChange(getPresetRange("all"), "all", false, null, [], [], [], [])
+    handleDateChange({ range: getPresetRange("all"), preset: "all", compare: false, compareRange: null, months: [], years: [], compareMonths: [], compareYears: [] })
   }, [handleDateChange])
 
   const buildTrend = useCallback((current: number, prev: number | undefined, formatFn?: (v: number) => string) => {
     if (!compare || prev === undefined || prev === null) return undefined
     const diff = current - prev
-    const percentage = prev > 0 ? (diff / prev) * 100 : (current > 0 ? 100 : 0)
+    const percentage = (() => {
+      if (prev > 0) {
+        return (diff / prev) * 100
+      }
+      return (current > 0 ? 100 : 0)
+    })()
     const fmt = formatFn || ((v: number) => v.toLocaleString())
+    const type: TrendDirection = diff >= 0 ? "up" : "down"
     return {
-      type: diff >= 0 ? "up" : "down" as const,
+      type,
       value: `${Math.abs(percentage).toFixed(1)}%`,
       label: `${fmt(current)} vs ${fmt(prev)}`
     }
@@ -285,7 +310,9 @@ export function BranchAdminDashboard() {
 
       {/* ━━━ KPI Cards ━━━ */}
       <div className="relative z-10 grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        {isPriceVisibilityPending ? (
+        {(() => {
+          if (isPriceVisibilityPending) {
+            return (
           <BankingKPICard
             icon={TrendingUp} title="Loading"
             value="..."
@@ -293,39 +320,45 @@ export function BranchAdminDashboard() {
             gradient="from-slate-400 to-slate-600" iconBg="text-slate-600 bg-slate-600" delay={0}
             isLoading={!perfData}
           />
-        ) : pricesHidden ? (
+        )
+          }
+          if (pricesHidden) {
+            return (
           <BankingKPICard
             icon={TrendingUp} title="Items"
             value={totalItemsSold.toLocaleString()}
             subtitle={getPresetLabel(activePreset, dateRange)}
             gradient="from-emerald-500 to-teal-600" iconBg="text-emerald-600 bg-emerald-600" delay={0}
-            trend={buildTrend(totalItemsSold, perfData?.comparison?.totalItemsSold)?.type as "up" | "down" | undefined}
+            trend={buildTrend(totalItemsSold, perfData?.comparison?.totalItemsSold)?.type}
             trendValue={buildTrend(totalItemsSold, perfData?.comparison?.totalItemsSold)?.value}
             comparisonValue={buildTrend(totalItemsSold, perfData?.comparison?.totalItemsSold)?.label}
             comparisonLabel="VS LAST"
             isLoading={!perfData}
           />
-        ) : (
+        )
+          }
+          return (
           <BankingKPICard
             icon={TrendingUp} title="Purchased"
             value={formatPKR(totalRevenue, { maximumFractionDigits: 0 })}
             subtitle={getPresetLabel(activePreset, dateRange)}
             gradient="from-emerald-500 to-teal-600" iconBg="text-emerald-600 bg-emerald-600" delay={0}
             onClick={() => handleKPIOpen("REVENUE")}
-            trend={buildTrend(totalRevenue, perfData?.comparison?.totalNetSales ?? perfData?.comparison?.totalSales)?.type as "up" | "down" | undefined}
+            trend={buildTrend(totalRevenue, perfData?.comparison?.totalNetSales ?? perfData?.comparison?.totalSales)?.type}
             trendValue={buildTrend(totalRevenue, perfData?.comparison?.totalNetSales ?? perfData?.comparison?.totalSales)?.value}
             comparisonValue={buildTrend(totalRevenue, perfData?.comparison?.totalNetSales ?? perfData?.comparison?.totalSales)?.label}
             comparisonLabel="VS LAST"
             isLoading={!perfData}
           />
-        )}
+        )
+        })()}
         <BankingKPICard
           icon={Package} title="Orders"
           value={totalOrders.toLocaleString()}
           subtitle={getPresetLabel(activePreset, dateRange)}
           gradient="from-blue-500 to-indigo-600" iconBg="text-blue-600 bg-blue-600" delay={50}
           onClick={() => handleKPIOpen("ORDERS")}
-          trend={buildTrend(totalOrders, perfData?.comparison?.totalOrders)?.type as "up" | "down" | undefined}
+          trend={buildTrend(totalOrders, perfData?.comparison?.totalOrders)?.type}
           trendValue={buildTrend(totalOrders, perfData?.comparison?.totalOrders)?.value}
           comparisonValue={buildTrend(totalOrders, perfData?.comparison?.totalOrders)?.label}
           comparisonLabel="VS LAST"
@@ -337,7 +370,7 @@ export function BranchAdminDashboard() {
           subtitle={getPresetLabel(activePreset, dateRange)}
           gradient="from-amber-400 to-orange-500" iconBg="text-amber-600 bg-amber-600" delay={75}
           onClick={() => handleKPIOpen("PENDING" as any)}
-          trend={buildTrend(pendingCount, perfData?.comparison?.pendingCount)?.type as "up" | "down" | undefined}
+          trend={buildTrend(pendingCount, perfData?.comparison?.pendingCount)?.type}
           trendValue={buildTrend(pendingCount, perfData?.comparison?.pendingCount)?.value}
           comparisonValue={buildTrend(pendingCount, perfData?.comparison?.pendingCount)?.label}
           comparisonLabel="VS LAST"
@@ -349,7 +382,7 @@ export function BranchAdminDashboard() {
           subtitle={getPresetLabel(activePreset, dateRange)}
           gradient="from-blue-400 to-indigo-500" iconBg="text-blue-600 bg-blue-600" delay={100}
           onClick={() => handleKPIOpen("APPROVED")}
-          trend={buildTrend(approvedCount, perfData?.comparison?.approvedCount)?.type as "up" | "down" | undefined}
+          trend={buildTrend(approvedCount, perfData?.comparison?.approvedCount)?.type}
           trendValue={buildTrend(approvedCount, perfData?.comparison?.approvedCount)?.value}
           comparisonValue={buildTrend(approvedCount, perfData?.comparison?.approvedCount)?.label}
           comparisonLabel="VS LAST"
@@ -365,7 +398,7 @@ export function BranchAdminDashboard() {
           subtitle={getPresetLabel(activePreset, dateRange)}
           gradient="from-teal-500 to-cyan-600" iconBg="text-teal-600 bg-teal-600" delay={125}
           onClick={() => handleKPIOpen("FULFILLED")}
-          trend={buildTrend(fulfilledCount, perfData?.comparison?.fulfilledCount)?.type as "up" | "down" | undefined}
+          trend={buildTrend(fulfilledCount, perfData?.comparison?.fulfilledCount)?.type}
           trendValue={buildTrend(fulfilledCount, perfData?.comparison?.fulfilledCount)?.value}
           comparisonValue={buildTrend(fulfilledCount, perfData?.comparison?.fulfilledCount)?.label}
           comparisonLabel="VS LAST"
@@ -377,7 +410,7 @@ export function BranchAdminDashboard() {
           subtitle={getPresetLabel(activePreset, dateRange)}
           gradient="from-red-500 to-rose-600" iconBg="text-red-600 bg-red-600" delay={150}
           onClick={() => handleKPIOpen("REFUNDED")}
-          trend={buildTrend(refundedCount, perfData?.comparison?.refundedCount)?.type as "up" | "down" | undefined}
+          trend={buildTrend(refundedCount, perfData?.comparison?.refundedCount)?.type}
           trendValue={buildTrend(refundedCount, perfData?.comparison?.refundedCount)?.value}
           comparisonValue={buildTrend(refundedCount, perfData?.comparison?.refundedCount)?.label}
           comparisonLabel="VS LAST"
@@ -389,7 +422,7 @@ export function BranchAdminDashboard() {
           subtitle={getPresetLabel(activePreset, dateRange)}
           gradient="from-slate-500 to-slate-700" iconBg="text-slate-600 bg-slate-600" delay={175}
           onClick={() => handleKPIOpen("REJECTED")}
-          trend={buildTrend(rejectedCount, perfData?.comparison?.rejectedCount)?.type as "up" | "down" | undefined}
+          trend={buildTrend(rejectedCount, perfData?.comparison?.rejectedCount)?.type}
           trendValue={buildTrend(rejectedCount, perfData?.comparison?.rejectedCount)?.value}
           comparisonValue={buildTrend(rejectedCount, perfData?.comparison?.rejectedCount)?.label}
           comparisonLabel="VS LAST"
@@ -438,11 +471,16 @@ export function BranchAdminDashboard() {
               )}
             </div>
 
-            {!chartPerfData || isPriceVisibilityPending ? (
+            {(() => {
+              if (!chartPerfData || isPriceVisibilityPending) {
+                return (
               <div className="h-[400px] flex items-center justify-center rounded-[2.5rem] border border-dashed border-slate-200 dark:border-slate-800 bg-white/50 dark:bg-slate-900/50">
                 <div className="animate-spin rounded-full h-10 w-10 border-2 border-slate-200 dark:border-slate-800 border-t-emerald-500" />
               </div>
-            ) : pricesHidden ? (
+            )
+              }
+              if (pricesHidden) {
+                return (
               <BranchQuantityBarChart
                 seriesData={normalizedChartData}
                 totalItemsSold={chartPerfData?.totalItemsSold ?? 0}
@@ -450,7 +488,9 @@ export function BranchAdminDashboard() {
                 peakPeriod={chartPerfData?.peakQuantityPeriod ?? null}
                 granularity={chartGranularity}
               />
-            ) : (
+            )
+              }
+              return (
               <SalesPerformanceBarChart
                 seriesData={normalizedChartData}
                 totalSales={chartPerfData?.totalNetSales ?? chartPerfData?.totalSales ?? 0}
@@ -463,7 +503,8 @@ export function BranchAdminDashboard() {
                 comparisonSeries={chartPerfData?.comparison?.seriesData}
                 showOrgView={false}
               />
-            )}
+            )
+            })()}
           </CardContent>
         </Card>
       </div>
@@ -520,13 +561,13 @@ function BranchQuantityBarChart({
   avgItemsSold,
   peakPeriod,
   granularity,
-}: {
+}: Readonly<{
   seriesData: BranchQuantityPoint[]
   totalItemsSold: number
   avgItemsSold: number
   peakPeriod: BranchQuantityPoint | null
   granularity: "hourly" | "daily" | "monthly" | "yearly"
-}) {
+}>) {
   const isEmpty = !seriesData || seriesData.length === 0 || totalItemsSold === 0
   const peakLabel = peakPeriod?.label || "-"
   const peakValue = Number(peakPeriod?.itemQuantity || 0)
@@ -616,7 +657,7 @@ function BranchQuantityBarChart({
   )
 }
 
-function MonthFilter({ selected, onChange }: { selected: number[], onChange: (v: number[]) => void }) {
+function MonthFilter({ selected, onChange }: Readonly<{ selected: number[], onChange: (v: number[]) => void }>) {
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
   const items = months.map((m, i) => ({ id: i + 1, label: m }))
   
@@ -625,7 +666,7 @@ function MonthFilter({ selected, onChange }: { selected: number[], onChange: (v:
       title="Months"
       items={items}
       selectedIds={selected}
-      onChange={(ids) => onChange(ids.sort((a, b) => a - b))}
+      onChange={(ids) => onChange(ids.toSorted((a, b) => a - b))}
       icon={<Calendar className="h-3.5 w-3.5 mr-2 text-indigo-500" />}
       placeholder="Months"
       showSearch={false}
@@ -633,7 +674,7 @@ function MonthFilter({ selected, onChange }: { selected: number[], onChange: (v:
   )
 }
 
-function YearFilter({ selected, onChange, availableYears }: { selected: number[], onChange: (v: number[]) => void, availableYears: number[] }) {
+function YearFilter({ selected, onChange, availableYears }: Readonly<{ selected: number[], onChange: (v: number[]) => void, availableYears: number[] }>) {
   const items = availableYears.map(y => ({ id: y, label: String(y) }))
 
   return (
@@ -641,7 +682,7 @@ function YearFilter({ selected, onChange, availableYears }: { selected: number[]
       title="Years"
       items={items}
       selectedIds={selected}
-      onChange={(ids) => onChange(ids.sort((a, b) => a - b))}
+      onChange={(ids) => onChange(ids.toSorted((a, b) => a - b))}
       icon={<Layers className="h-3.5 w-3.5 mr-2 text-indigo-500" />}
       placeholder="Years"
       showSearch={false}

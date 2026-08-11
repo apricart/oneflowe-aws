@@ -2,7 +2,6 @@ import { and, eq, inArray, sql } from "drizzle-orm"
 
 import { orderItems, productQuantityBudgets, refundItems, refunds } from "@/db/schema"
 
-type DbLike = any
 type OrderLike = {
   id: number
   branchId: number
@@ -20,7 +19,7 @@ const orderPeriod = (order: OrderLike) =>
 
 const approvedRefundStatusSql = sql`UPPER(${refunds.status}) IN ('APPROVED', 'COMPLETED')`
 
-async function getNetOrderQuantityLines(tx: DbLike, orderId: number): Promise<QuantityLine[]> {
+async function getNetOrderQuantityLines(tx: any, orderId: number): Promise<QuantityLine[]> {
   const rows = await tx
     .select({
       id: orderItems.id,
@@ -63,7 +62,7 @@ async function getNetOrderQuantityLines(tx: DbLike, orderId: number): Promise<Qu
 }
 
 async function getRefundQuantityLines(
-  tx: DbLike,
+  tx: any,
   requestedLines: Array<{ orderItemId?: number; itemId?: number; quantity: number }>,
 ): Promise<QuantityLine[]> {
   const orderItemIds = requestedLines
@@ -104,7 +103,7 @@ async function getRefundQuantityLines(
 }
 
 async function applyQuantityDelta(
-  tx: DbLike,
+  tx: any,
   order: OrderLike,
   lines: QuantityLine[],
   delta: "releaseHeld" | "moveHeldToUsed" | "releaseUsed",
@@ -140,21 +139,25 @@ async function applyQuantityDelta(
     }
 
     const set =
-      delta === "moveHeldToUsed"
-        ? {
+      (() => {
+        if (delta === "moveHeldToUsed") {
+          return {
             heldQuantity: sql`${productQuantityBudgets.heldQuantity} - ${line.quantity}`,
             usedQuantity: sql`${productQuantityBudgets.usedQuantity} + ${line.quantity}`,
             updatedAt: new Date(),
           }
-        : delta === "releaseUsed"
-          ? {
+        }
+        if (delta === "releaseUsed") {
+          return {
               usedQuantity: sql`${productQuantityBudgets.usedQuantity} - ${line.quantity}`,
               updatedAt: new Date(),
             }
-          : {
+        }
+        return {
               heldQuantity: sql`${productQuantityBudgets.heldQuantity} - ${line.quantity}`,
               updatedAt: new Date(),
             }
+      })()
 
     await tx
       .update(productQuantityBudgets)
@@ -163,17 +166,17 @@ async function applyQuantityDelta(
   }
 }
 
-export async function releaseHeldQuantityBudgetForOrder(tx: DbLike, order: OrderLike) {
+export async function releaseHeldQuantityBudgetForOrder(tx: any, order: OrderLike) {
   const lines = await getNetOrderQuantityLines(tx, order.id)
   await applyQuantityDelta(tx, order, lines, "releaseHeld")
 }
 
-export async function moveHeldQuantityBudgetToUsedForOrder(tx: DbLike, order: OrderLike) {
+export async function moveHeldQuantityBudgetToUsedForOrder(tx: any, order: OrderLike) {
   const lines = await getNetOrderQuantityLines(tx, order.id)
   await applyQuantityDelta(tx, order, lines, "moveHeldToUsed")
 }
 
-export async function releaseQuantityBudgetForDeletedOrder(tx: DbLike, order: OrderLike) {
+export async function releaseQuantityBudgetForDeletedOrder(tx: any, order: OrderLike) {
   const status = String(order.status || "").toUpperCase()
   const lines = await getNetOrderQuantityLines(tx, order.id)
 
@@ -188,7 +191,7 @@ export async function releaseQuantityBudgetForDeletedOrder(tx: DbLike, order: Or
 }
 
 export async function releaseRefundedQuantityBudget(
-  tx: DbLike,
+  tx: any,
   order: OrderLike,
   requestedLines: Array<{ orderItemId?: number; itemId?: number; quantity: number }>,
 ) {

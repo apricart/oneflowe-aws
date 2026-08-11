@@ -1,4 +1,5 @@
 #!/usr/bin/env tsx
+import { stringifyPrimitive } from "../lib/stringify-primitive"
 /**
  * Guarded K-Electric migration for orders created strictly after 2026-07-10.
  *
@@ -9,9 +10,9 @@
  * It never changes stock, quantity budgets, invoice sequences or other tenants.
  */
 
-import { randomBytes } from "crypto"
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs"
-import { dirname, relative, resolve, sep } from "path"
+import { randomBytes } from "node:crypto"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { dirname, relative, resolve, sep } from "node:path"
 import * as dotenv from "dotenv"
 import type { PoolClient } from "pg"
 import {
@@ -60,6 +61,7 @@ const MILLAC_OVERRIDE = {
 } as const
 
 type Row = Record<string, any>
+type QueryClient = Pick<PoolClient, "query">
 
 interface Options {
   sourceRoot: string
@@ -198,9 +200,12 @@ function parseOptions(): Options {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-")
   return {
     sourceRoot: resolve(argument("--source-root") ?? "updatedReports/ke-post-cutoff-2026-08-07"),
-    outputPath: resolve(argument("--output") ?? (commit || rollbackTest
-      ? `backups/ke-post-cutoff-import-${rollbackTest ? "rollback-test" : "commit"}-${timestamp}.json`
-      : "updatedReports/ke-post-cutoff-2026-08-07/preflight.json")),
+    outputPath: resolve(argument("--output") ?? ((() => {
+      if (commit || rollbackTest) {
+        return `backups/ke-post-cutoff-import-${rollbackTest ? "rollback-test" : "commit"}-${timestamp}.json`
+      }
+      return "updatedReports/ke-post-cutoff-2026-08-07/preflight.json"
+    })())),
     commit,
     rollbackTest,
     actorUserId: argument("--actor-user-id"),
@@ -226,13 +231,13 @@ function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf8")
 }
 
-async function rows<T extends Row = Row>(client: PoolClient | { query: Function }, text: string, params: unknown[] = []): Promise<T[]> {
+async function rows<T extends Row = Row>(client: QueryClient, text: string, params: unknown[] = []): Promise<T[]> {
   return (await client.query(text, params)).rows as T[]
 }
 
 function integer(value: unknown, context: string): number {
   const number = Number(value)
-  if (!Number.isSafeInteger(number)) throw new Error(`${context}: expected a safe integer, got ${String(value)}`)
+  if (!Number.isSafeInteger(number)) throw new Error(`${context}: expected a safe integer, got ${stringifyPrimitive(value)}`)
   return number
 }
 
@@ -287,7 +292,7 @@ function groupKey(value: string): string {
 }
 
 function exactBranchName(value: unknown): string {
-  return String(value ?? "")
+  return stringifyPrimitive(value)
     .normalize("NFKC")
     .replace(/[\u2018\u2019]/g, "'")
     .replace(/[\u2013\u2014]/g, "-")
@@ -348,7 +353,7 @@ function receipt(order: PreparedPostCutoffOrder, branch: BranchPlan, productByNa
   }
 }
 
-async function buildPlan(client: PoolClient | { query: Function }, source: LoadedSource): Promise<MigrationPlan> {
+async function buildPlan(client: QueryClient, source: LoadedSource): Promise<MigrationPlan> {
   const issues: string[] = []
   const orderIds = source.prepared.map((order) => order.legacyOrderId)
   const tids = orderIds.map((id) => `KE-LEGACY-${id}`)
@@ -477,7 +482,7 @@ async function buildPlan(client: PoolClient | { query: Function }, source: Loade
     if (!pairedIdentity && !correctIdentity) issues.push(`Location ${locationId}: branch ${branch.id} has conflicting external identity`)
     const currentGroup = branch.group_id == null ? null : Number(branch.group_id)
     if (currentGroup !== null && currentGroup !== Number(group.id)) issues.push(`Location ${locationId}: branch ${branch.id} belongs to group ${currentGroup}, expected ${group.id}`)
-    const isReviewedExistingAlias = Object.prototype.hasOwnProperty.call(EXISTING_BRANCH_ALIASES, locationId)
+    const isReviewedExistingAlias = Object.hasOwn(EXISTING_BRANCH_ALIASES, locationId)
     branches.push({
       key: branchKey(locationId), legacyLocationId: locationId, sourceName, sourceGroupName,
       action: "EXISTING", id: Number(branch.id), currentName: String(branch.name), code: String(branch.code), address: branch.address,
@@ -564,14 +569,13 @@ async function buildPlan(client: PoolClient | { query: Function }, source: Loade
     })
   }
   if (products.length !== productFacts.size) issues.push(`Resolved ${products.length}/${productFacts.size} products`)
-  const productPlanByName = new Map(products.map((product) => [product.normalizedName, product]))
 
   const dbUserById = new Map(dbUsers.map((user) => [String(user.id), user]))
   const mappingByKey = new Map<string, Row>()
   for (const mapping of dbUserMappings) {
-    const branch = dbBranches.find((item) => Number(item.id) === Number(mapping.branch_id))
+    const branchExists = dbBranches.some((item) => Number(item.id) === Number(mapping.branch_id))
     const user = dbUserById.get(String(mapping.user_id))
-    if (!branch || !user || Number(user.organization_id) !== ORGANIZATION.id || Number(user.branch_id) !== Number(mapping.branch_id)
+    if (!branchExists || !user || Number(user.organization_id) !== ORGANIZATION.id || Number(user.branch_id) !== Number(mapping.branch_id)
       || user.role_name !== "ORDER_PORTAL" || user.deleted_at != null) {
       issues.push(`Legacy user mapping ${mapping.legacy_order_taker_id}/${mapping.branch_id} is invalid`)
       continue
@@ -600,7 +604,7 @@ async function buildPlan(client: PoolClient | { query: Function }, source: Loade
     const ledger = branch.id == null ? undefined : mappingByKey.get(`${branch.id}:${fact.takerId}`)
     if (ledger) {
       users.push({ key, legacyLocationId: fact.locationId, legacyOrderTakerId: fact.takerId, branchKey: branch.key,
-        sourceName, action: "LEDGER", userId: String(ledger.user_id), username: null, email: null, mappingAction: "NONE", orderIds: fact.orderIds.sort((a, b) => a - b) })
+        sourceName, action: "LEDGER", userId: String(ledger.user_id), username: null, email: null, mappingAction: "NONE", orderIds: fact.orderIds.toSorted((a, b) => a - b) })
       continue
     }
     const candidates = branch.id == null ? [] : activeUsers.filter((user) => {
@@ -620,7 +624,7 @@ async function buildPlan(client: PoolClient | { query: Function }, source: Loade
     if (uniqueCandidates.length === 1) {
       users.push({ key, legacyLocationId: fact.locationId, legacyOrderTakerId: fact.takerId, branchKey: branch.key,
         sourceName, action: "EXACT", userId: String(uniqueCandidates[0].id), username: String(uniqueCandidates[0].username ?? ""), email: null,
-        mappingAction: "CREATE", orderIds: fact.orderIds.sort((a, b) => a - b) })
+        mappingAction: "CREATE", orderIds: fact.orderIds.toSorted((a, b) => a - b) })
       continue
     }
     const username = `legacy_ke_loc${fact.locationId}_user${fact.takerId}`
@@ -631,7 +635,7 @@ async function buildPlan(client: PoolClient | { query: Function }, source: Loade
     usernameSet.add(normalizeLegacyText(username))
     users.push({ key, legacyLocationId: fact.locationId, legacyOrderTakerId: fact.takerId, branchKey: branch.key,
       sourceName, action: "HISTORICAL", userId: null, username, email: `${username}@historical.invalid`, mappingAction: "CREATE",
-      orderIds: fact.orderIds.sort((a, b) => a - b) })
+      orderIds: fact.orderIds.toSorted((a, b) => a - b) })
   }
   if (users.length !== userFacts.size) issues.push(`Resolved ${users.length}/${userFacts.size} legacy user/branch pairs`)
   const userPlanByKey = new Map(users.map((user) => [user.key, user]))
@@ -653,7 +657,7 @@ async function buildPlan(client: PoolClient | { query: Function }, source: Loade
   }
   const allBudgetKeys = new Set([...sourceBudgetByKey.keys(), ...holds.keys()])
   const budgets: BudgetPlan[] = []
-  for (const key of [...allBudgetKeys].sort()) {
+  for (const key of [...allBudgetKeys].sort((a, b) => a.localeCompare(b))) {
     const separator = key.lastIndexOf("|")
     const bKey = key.slice(0, separator)
     const period = key.slice(separator + 1)

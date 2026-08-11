@@ -1,8 +1,8 @@
 #!/usr/bin/env tsx
 
-import { createHash } from "crypto"
-import { readFileSync, writeFileSync } from "fs"
-import { resolve } from "path"
+import { createHash } from "node:crypto"
+import { readFileSync, writeFileSync } from "node:fs"
+import { resolve } from "node:path"
 
 type Row = Record<string, any>
 

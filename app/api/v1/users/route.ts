@@ -1,14 +1,14 @@
-import { ok, error, readJson, requireApiRole } from "@/lib/api"
+import { ok,error,readJson,requireApiRole } from "@/lib/api"
 import { db } from "@/lib/db"
-import { users as usersTable, roles as rolesTable, systemLogs, employeeCredentials, branches, organizations } from "@/db/schema"
-import { and, desc, eq, ne, isNull, or } from "drizzle-orm"
+import { users as usersTable,roles as rolesTable,systemLogs,employeeCredentials,branches,organizations } from "@/db/schema"
+import { and,desc,eq,ne,isNull } from "drizzle-orm"
 import { getRequestScope } from "@/lib/auth"
 import { headers } from "next/headers"
 import { hashPassword } from "@/lib/password"
-import { getCached, invalidateByPrefix, scopedCacheKey, CACHE_TTL } from "@/lib/cache-utils"
-import { assertUniqueUserFields, normalizeEmail, normalizeOptionalText, UserUniqueFieldError } from "@/lib/user-uniqueness"
+import { getCached,invalidateByPrefix,scopedCacheKey,CACHE_TTL } from "@/lib/cache-utils"
+import { assertUniqueUserFields,normalizeEmail,normalizeOptionalText,UserUniqueFieldError } from "@/lib/user-uniqueness"
 import { sendWelcomeEmail } from "@/lib/email"
-import { userCreateSchema, validationMessage } from "@/lib/server/mutation-validation"
+import { userCreateSchema,validationMessage } from "@/lib/server/mutation-validation"
 import { canAssignRole } from "@/lib/server/user-access-policy"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { USER_MANAGEMENT_ROLES } from "@/lib/user-management-access"
@@ -35,7 +35,12 @@ export async function GET(req: Request) {
   const organizationId = searchParams.get("organizationId")
   const shouldRefresh = searchParams.has("refresh")
   const scope = await getRequestScope()
-  const scopedOrgId = scope?.role === "SUPER_ADMIN" ? (organizationId ? Number(organizationId) : undefined) : (scope?.organizationId ?? undefined)
+  const scopedOrgId = (() => {
+    if (scope?.role === "SUPER_ADMIN") {
+      return (organizationId ? Number(organizationId) : undefined)
+    }
+    return (scope?.organizationId ?? undefined)
+  })()
 
   const cacheKey = scopedCacheKey('users', { orgId: scopedOrgId, role: scope?.role })
 
@@ -166,7 +171,7 @@ export async function POST(req: Request) {
       .from(branches)
       .where(eq(branches.id, branchId))
       .limit(1)
-    if (!branch || branch.organizationId !== organizationId) {
+    if (branch?.organizationId !== organizationId) {
       return error("Branch does not belong to the selected organization", 400)
     }
   }

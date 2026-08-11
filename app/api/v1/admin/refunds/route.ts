@@ -11,6 +11,52 @@ import { adminRefundProcessSchema, validationMessage } from "@/lib/server/mutati
 import { isRefundEligibleOrderStatus } from "@/lib/business-rules"
 import { withRateLimit } from "@/lib/rate-limiter"
 
+const parseRefundRequestId = (value: string | null) => {
+    if (!value) return { id: null }
+    if (!/^\d+$/.test(value) || Number(value) <= 0) {
+        return { id: null, response: NextResponse.json({ error: "Invalid refund request ID" }, { status: 400 }) }
+    }
+    return { id: Number(value) }
+}
+
+const getPendingRefundCondition = (refundRequestId: number | null) => (
+    refundRequestId
+        ? and(eq(refunds.status, "PENDING"), eq(refunds.id, refundRequestId))
+        : eq(refunds.status, "PENDING")
+)
+
+function aggregateRefundQuantities(
+    records: Array<{ refundId: number; orderItemId: number; quantity: number }>,
+    statusByRefundId: Map<number, string>,
+) {
+    const approved = new Map<number, number>()
+    const pending = new Map<number, number>()
+    for (const record of records) {
+        const status = statusByRefundId.get(record.refundId)
+        const target = status === "PENDING" ? pending : approved
+        if (["PENDING", "APPROVED", "COMPLETED"].includes(status || "")) {
+            target.set(record.orderItemId, (target.get(record.orderItemId) || 0) + record.quantity)
+        }
+    }
+    return { approved, pending }
+}
+
+function assertRefundQuantitiesAvailable(
+    details: Array<{ itemId: number; quantity: number }>,
+    orderItemsById: Map<number, any>,
+    approvedLines: Array<{ orderItemId: number; quantity: number }>,
+) {
+    const approvedByItem = new Map<number, number>()
+    for (const line of approvedLines) {
+        approvedByItem.set(line.orderItemId, (approvedByItem.get(line.orderItemId) || 0) + Number(line.quantity || 0))
+    }
+    for (const detail of details) {
+        const originalItem = orderItemsById.get(detail.itemId)
+        const remainingQuantity = Number(originalItem?.quantity || 0) - (approvedByItem.get(detail.itemId) || 0)
+        if (!originalItem || detail.quantity > remainingQuantity) throw new Error("REFUND_AVAILABILITY_CONFLICT")
+    }
+}
+
 /**
  * GET /api/v1/admin/refunds/search?q=<order_tid_or_id>
  * Search for an order by TID or internal ID (Super Admin only)
@@ -32,14 +78,9 @@ export async function GET(req: NextRequest) {
         // Get search query
         const { searchParams } = new URL(req.url)
         const query = searchParams.get("q")?.trim()
-        const refundRequestIdParam = searchParams.get("refundRequestId")
-        const refundRequestId = refundRequestIdParam && /^\d+$/.test(refundRequestIdParam)
-            ? Number(refundRequestIdParam)
-            : null
-
-        if (refundRequestIdParam && (!refundRequestId || refundRequestId <= 0)) {
-            return NextResponse.json({ error: "Invalid refund request ID" }, { status: 400 })
-        }
+        const parsedRefundRequestId = parseRefundRequestId(searchParams.get("refundRequestId"))
+        if (parsedRefundRequestId.response) return parsedRefundRequestId.response
+        const refundRequestId = parsedRefundRequestId.id
 
         if (searchParams.has("status") && searchParams.get("status") === "pending") {
             const pendingRefunds = await db
@@ -179,9 +220,7 @@ export async function GET(req: NextRequest) {
                 or(
                     eq(refunds.status, "APPROVED"),
                     eq(refunds.status, "COMPLETED"),
-                    refundRequestId
-                        ? and(eq(refunds.status, "PENDING"), eq(refunds.id, refundRequestId))
-                        : eq(refunds.status, "PENDING")
+                    getPendingRefundCondition(refundRequestId)
                 )
             ))
 
@@ -197,19 +236,10 @@ export async function GET(req: NextRequest) {
         const refundStatusMap = new Map(refundRecords.map(r => [r.id, r.status]))
 
         // Aggregate refunded vs requested quantities
-        const approvedQuantityMap = new Map<number, number>()
-        const pendingQuantityMap = new Map<number, number>()
-
-        for (const record of refundedItemsData) {
-            const status = refundStatusMap.get(record.refundId)
-            if (status === "APPROVED" || status === "COMPLETED") {
-                const current = approvedQuantityMap.get(record.orderItemId) || 0
-                approvedQuantityMap.set(record.orderItemId, current + record.quantity)
-            } else if (status === "PENDING") {
-                const current = pendingQuantityMap.get(record.orderItemId) || 0
-                pendingQuantityMap.set(record.orderItemId, current + record.quantity)
-            }
-        }
+        const { approved: approvedQuantityMap, pending: pendingQuantityMap } = aggregateRefundQuantities(
+            refundedItemsData,
+            refundStatusMap,
+        )
 
         // Merge with items
         const itemsWithRefundStats = items.map(item => {
@@ -485,7 +515,6 @@ export async function POST(req: NextRequest) {
             }
 
             const approvedQty = approvedQuantityMap.get(refundItem.itemId) || 0
-            const pendingQty = pendingQuantityMap.get(refundItem.itemId) || 0
             const remainingQty = orderItem.quantity - approvedQty
 
             // Validate quantity doesn't exceed remaining amount
@@ -519,11 +548,6 @@ export async function POST(req: NextRequest) {
             .where(and(eq(refunds.orderId, orderId), or(eq(refunds.status, "APPROVED"), eq(refunds.status, "COMPLETED"))))
             .then(res => res.reduce((sum, r) => sum + (r.amount || 0), 0))
 
-        const pendingTotal = await db
-            .select({ amount: refunds.amountCents })
-            .from(refunds)
-            .where(and(eq(refunds.orderId, orderId), eq(refunds.status, "PENDING")))
-            .then(res => res.reduce((sum, r) => sum + (r.amount || 0), 0))
 
         const remainingRefundable = orderTotal - approvedTotal
 
@@ -564,20 +588,7 @@ export async function POST(req: NextRequest) {
                     eq(refunds.orderId, orderId),
                     or(eq(refunds.status, "APPROVED"), eq(refunds.status, "COMPLETED")),
                 ))
-            const liveApprovedQuantityByItem = new Map<number, number>()
-            for (const line of liveApprovedLines) {
-                liveApprovedQuantityByItem.set(
-                    line.orderItemId,
-                    (liveApprovedQuantityByItem.get(line.orderItemId) || 0) + Number(line.quantity || 0),
-                )
-            }
-            for (const detail of refundDetails) {
-                const originalItem = orderItemsMap.get(detail.itemId)
-                const remainingQuantity = Number(originalItem?.quantity || 0) - (liveApprovedQuantityByItem.get(detail.itemId) || 0)
-                if (!originalItem || detail.quantity > remainingQuantity) {
-                    throw new Error("REFUND_AVAILABILITY_CONFLICT")
-                }
-            }
+            assertRefundQuantitiesAvailable(refundDetails, orderItemsMap, liveApprovedLines)
 
             const liveApprovedRefunds = await tx
                 .select({ amountCents: refunds.amountCents })

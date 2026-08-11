@@ -1,6 +1,7 @@
-import { createHash } from "crypto"
-import { readFileSync } from "fs"
-import { resolve } from "path"
+import { stringifyPrimitive } from "../stringify-primitive"
+import { createHash } from "node:crypto"
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
 
 export const KE_ORGANIZATION = { id: 10, code: "0001", name: "K-Electric" } as const
 export const LEGACY_SOURCE = "KE_LOGISTICS"
@@ -111,7 +112,7 @@ export interface SourcePreparation {
 const DEFAULT_REPORT_ROOT = "reports"
 
 export function normalizeText(value: unknown): string {
-  return String(value ?? "")
+  return stringifyPrimitive(value)
     .normalize("NFKC")
     .replace(/[\u2018\u2019]/g, "'")
     .replace(/[\u2013\u2014]/g, "-")
@@ -122,13 +123,18 @@ export function normalizeText(value: unknown): string {
 
 export function normalizeProductName(value: unknown): string {
   return normalizeText(value)
-    .replace(/\s*\(\s*/g, " (")
-    .replace(/\s*\)\s*/g, ")")
-    .replace(/\s*-\s*/g, "-")
+    .replaceAll(" (", "(")
+    .replaceAll("( ", "(")
+    .replaceAll("(", " (")
+    .replaceAll(" )", ")")
+    .replaceAll(") ", ")")
+    .replaceAll(" -", "-")
+    .replaceAll("- ", "-")
 }
 
 export function normalizeLegacyUser(value: unknown): string {
-  return normalizeText(value).replace(/\s+-\s*$/, "").trim()
+  const normalized = normalizeText(value)
+  return normalized.endsWith(" -") ? normalized.slice(0, -2).trim() : normalized
 }
 
 export function normalizeBranch(value: unknown): string {
@@ -142,7 +148,7 @@ export function normalizeBranch(value: unknown): string {
  * normalizeBranch() must not be used as their primary identity.
  */
 export function normalizeBranchExact(value: unknown): string {
-  return String(value ?? "")
+  return stringifyPrimitive(value)
     .normalize("NFKC")
     .replace(/[\u2018\u2019]/g, "'")
     .replace(/[\u2013\u2014]/g, "-")
@@ -197,7 +203,7 @@ export function resolveKeLegacyBranch<T extends KeLegacyBranchCandidate>(
   }
 
   const normalizedSource = normalizeBranch(source.name)
-  const hasExplicitAlias = Object.prototype.hasOwnProperty.call(aliases, normalizedSource)
+  const hasExplicitAlias = Object.hasOwn(aliases, normalizedSource)
   const hasBuiltInAlias = normalizedSource !== normalizeText(source.name)
   const normalizedLookup = aliases[normalizedSource] ?? normalizedSource
   const normalizedMatches = branches.filter((branch) => normalizeBranch(branch.name) === normalizedLookup)
@@ -222,12 +228,12 @@ export function resolveKeLegacyBranch<T extends KeLegacyBranchCandidate>(
 
 export function toCents(value: unknown): number {
   const number = Number(value ?? 0)
-  if (!Number.isFinite(number)) throw new Error(`Invalid monetary value: ${String(value)}`)
+  if (!Number.isFinite(number)) throw new Error(`Invalid monetary value: ${stringifyPrimitive(value)}`)
   return Math.round((number + Number.EPSILON) * 100)
 }
 
 function dateKey(value: unknown): string {
-  const date = new Date(String(value))
+  const date = new Date(stringifyPrimitive(value))
   if (Number.isNaN(date.getTime())) return "INVALID_DATE"
   return date.toISOString().slice(0, 10)
 }
@@ -255,12 +261,12 @@ function addCandidate(map: Map<string, Set<number>>, key: string, cents: number)
 
 function uniqueCandidate(map: Map<string, Set<number>>, key: string): number | undefined {
   const values = map.get(key)
-  if (!values || values.size !== 1) return undefined
+  if (values?.size !== 1) return undefined
   return [...values][0]
 }
 
 function isUsableProductCode(value: unknown): boolean {
-  const code = String(value ?? "").trim()
+  const code = stringifyPrimitive(value).trim()
   return code !== "" && code !== "0" && code.toLowerCase() !== "null" && code.toLowerCase() !== "undefined"
 }
 
@@ -406,7 +412,7 @@ export function prepareKeLegacySource(reportRoot = DEFAULT_REPORT_ROOT): SourceP
       pricingMethod = "RAW_EXACT"
     }
 
-    if (prices.some((price) => price === undefined)) {
+    if (prices.includes(undefined)) {
       rejected.push({ legacyOrderId, reason: "UNRESOLVED_ITEM_PRICE" })
       continue
     }
@@ -448,7 +454,7 @@ export function prepareKeLegacySource(reportRoot = DEFAULT_REPORT_ROOT): SourceP
           quantity,
           priceCents,
           lineTotalCents: Math.round(priceCents * quantity),
-          sourceCodes: [...(codesByName.get(normalizedName) ?? [])].sort(),
+          sourceCodes: [...(codesByName.get(normalizedName) ?? [])].sort((a, b) => a.localeCompare(b)),
         }
       }),
       pricingMethod,
@@ -462,8 +468,8 @@ export function prepareKeLegacySource(reportRoot = DEFAULT_REPORT_ROOT): SourceP
       productSummary: summaryFile.source,
       priceHistory: historyFile.source,
     },
-    prepared: prepared.sort((a, b) => a.legacyOrderId - b.legacyOrderId),
-    rejected: rejected.sort((a, b) => a.legacyOrderId - b.legacyOrderId),
+    prepared: prepared.toSorted((a, b) => a.legacyOrderId - b.legacyOrderId),
+    rejected: rejected.toSorted((a, b) => a.legacyOrderId - b.legacyOrderId),
     sourceCounts: {
       orders: ordersFile.rows.length,
       salesLines: salesFile.rows.length,

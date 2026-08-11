@@ -8,7 +8,7 @@ interface FieldSourceBadgeProps {
   className?: string
 }
 
-export function FieldSourceBadge({ source, field, className }: FieldSourceBadgeProps) {
+export function FieldSourceBadge({ source, field, className }: Readonly<FieldSourceBadgeProps>) {
   const variants = {
     organization: {
       className: "bg-blue-100 text-blue-800 border-blue-200",

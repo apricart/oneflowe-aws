@@ -4,9 +4,9 @@
  * remaining budget is negative. Default mode is a read-only dry run.
  */
 
-import { createHash } from "crypto"
-import { mkdirSync, writeFileSync } from "fs"
-import { dirname, resolve } from "path"
+import { createHash } from "node:crypto"
+import { mkdirSync, writeFileSync } from "node:fs"
+import { dirname, resolve } from "node:path"
 import * as dotenv from "dotenv"
 
 dotenv.config({ path: ".env.local", quiet: true })
@@ -209,7 +209,7 @@ async function main() {
       client.query("show timezone"),
     ])
     const organization = organizationResult.rows[0]
-    assert(organization && organization.id === KE.id && organization.code === KE.code && organization.name === KE.name, "K-Electric organization identity mismatch")
+    assert(organization?.id === KE.id && organization.code === KE.code && organization.name === KE.name, "K-Electric organization identity mismatch")
     assert(missingResult.rows.length === 0, `Consumption exists without a budget row for ${missingResult.rows.length} branch/months`)
 
     const plan = buildPlan(negativeResult.rows)

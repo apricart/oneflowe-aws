@@ -74,6 +74,7 @@ export async function jsonFetcher<T>(url: string, init?: RequestInit): Promise<T
         message = data?.error || data?.message || message
       } catch (parseError) {
         // Failed to parse error response, use status text
+        console.warn('[Fetcher] Failed to parse error response:', parseError)
         message = res.statusText || message
       }
 
@@ -88,7 +89,7 @@ export async function jsonFetcher<T>(url: string, init?: RequestInit): Promise<T
       const data = await res.json()
       return data as T
     } catch (parseError) {
-      const error = new Error('Invalid JSON response from server') as FetcherError
+      const error = new Error('Invalid JSON response from server', { cause: parseError }) as FetcherError
       error.code = 'INVALID_JSON'
       error.status = res.status
       error.statusText = res.statusText
@@ -113,102 +114,87 @@ export async function jsonFetcher<T>(url: string, init?: RequestInit): Promise<T
 
 export const apiFetch = jsonFetcher
 
+function normalizedTimeout(timeoutMs: number): number {
+  const validTimeout = Math.min(Math.max(timeoutMs, MIN_TIMEOUT_MS), MAX_TIMEOUT_MS)
+  if (validTimeout !== timeoutMs) {
+    console.warn(`[Fetcher] Timeout adjusted from ${timeoutMs}ms to ${validTimeout}ms`)
+  }
+  return validTimeout
+}
+
+async function httpErrorFromResponse(res: Response, url: string): Promise<FetcherError> {
+  let errorMessage = `HTTP ${res.status}: ${res.statusText}`
+  try {
+    if (res.headers.get('content-type')?.includes('application/json')) {
+      const errorData = await res.json()
+      errorMessage = errorData?.error || errorData?.message || errorMessage
+    }
+  } catch (parseError) {
+    console.warn('[Fetcher] Failed to parse retry error response:', parseError)
+  }
+  const error = new Error(errorMessage) as FetcherError
+  error.status = res.status
+  error.statusText = res.statusText
+  error.url = url
+  return error
+}
+
+async function parseFetcherResponse<T>(res: Response, url: string): Promise<T> {
+  if (!res.ok) throw await httpErrorFromResponse(res, url)
+  try {
+    return await res.json() as T
+  } catch (parseError) {
+    const error = new Error('Server returned invalid JSON', { cause: parseError }) as FetcherError
+    error.code = 'INVALID_JSON'
+    error.status = res.status
+    error.statusText = res.statusText
+    error.url = url
+    throw error
+  }
+}
+
+function normalizeFetchFailure(error: FetcherError, validTimeout: number): FetcherError {
+  if (error.name === 'AbortError') {
+    const timeoutError = new Error(`Request timed out after ${validTimeout}ms. Please try again.`) as FetcherError
+    timeoutError.code = 'TIMEOUT'
+    timeoutError.timeout = validTimeout
+    return timeoutError
+  }
+  if (error.name === 'TypeError' && error.message?.includes('fetch')) {
+    const networkError = new Error('Network error. Please check your connection and try again.') as FetcherError
+    networkError.code = 'NETWORK_ERROR'
+    return networkError
+  }
+  return error
+}
+
+async function requestJson<T>(url: string, validTimeout: number): Promise<T> {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), validTimeout)
+  try {
+    const res = await fetch(url, { headers: COMMON_HEADERS, signal: controller.signal })
+    return await parseFetcherResponse<T>(res, url)
+  } catch (error) {
+    throw normalizeFetchFailure(error as FetcherError, validTimeout)
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
 /**
  * Optimized fetcher for SWR with advanced error handling
  */
 export async function fetcher<T>(url: string, timeoutMs: number = DEFAULT_TIMEOUT_MS): Promise<T> {
   try {
-    // Validate inputs
     if (!isValidUrl(url)) {
-      // If the URL is explicitly broken, reject quietly to let SWR handle it
       throw new Error(`Invalid URL validation failed: ${url}`)
     }
-
-    // Validate and sanitize timeout
-    let validTimeout = DEFAULT_TIMEOUT_MS
-    if (typeof timeoutMs === 'number') {
-      validTimeout = Math.min(Math.max(timeoutMs, MIN_TIMEOUT_MS), MAX_TIMEOUT_MS)
-      if (validTimeout !== timeoutMs) {
-        console.warn(`[Fetcher] Timeout adjusted from ${timeoutMs}ms to ${validTimeout}ms`)
-      }
-    }
-
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), validTimeout)
-
-    try {
-      const res = await fetch(url, {
-        headers: COMMON_HEADERS,
-        signal: controller.signal,
-      })
-
-      clearTimeout(timeoutId)
-
-      if (!res.ok) {
-        let errorMessage = `HTTP ${res.status}: ${res.statusText}`
-
-        // Attempt to get detailed error message from response
-        try {
-          const contentType = res.headers.get('content-type')
-          if (contentType?.includes('application/json')) {
-            const errorData = await res.json()
-            errorMessage = errorData?.error || errorData?.message || errorMessage
-          }
-        } catch {
-          // Failed to parse error response, use default message
-        }
-
-        const error: any = new Error(errorMessage)
-        error.status = res.status
-        error.statusText = res.statusText
-        error.url = url
-        throw error
-      }
-
-      // Parse and validate JSON response
-      try {
-        const data = await res.json()
-        return data as T
-      } catch (parseError) {
-        const error = new Error('Server returned invalid JSON') as FetcherError
-        error.code = 'INVALID_JSON'
-        error.status = res.status
-        error.statusText = res.statusText
-        error.url = url
-        throw error
-      }
-
-    } catch (fetchError: any) {
-      clearTimeout(timeoutId)
-
-      // Handle different error types
-      if (fetchError?.name === 'AbortError') {
-        const error: any = new Error(`Request timed out after ${validTimeout}ms. Please try again.`)
-        error.code = 'TIMEOUT'
-        error.timeout = validTimeout
-        throw error
-      }
-
-      if (fetchError?.name === 'TypeError' && fetchError?.message?.includes('fetch')) {
-        const error: any = new Error('Network error. Please check your connection and try again.')
-        error.code = 'NETWORK_ERROR'
-        throw error
-      }
-
-      // Re-throw other errors
-      throw fetchError
-    }
-
+    return await requestJson<T>(url, normalizedTimeout(timeoutMs))
   } catch (error: any) {
-    // Suppress heavy logging for expected validation errors (4xx)
     const isValidationError = error?.status >= 400 && error?.status < 500
-
     if (isValidationError) {
       console.debug(`[Fetcher] ${error?.status || '4xx'} Error: ${url} - ${error?.message || 'Validation failed'}`)
     } else {
-      // A rejected SWR request is handled application state, not an uncaught
-      // runtime exception. console.error makes Next.js show a misleading error
-      // overlay, so emit one readable warning and preserve the rejection.
       console.warn(formatFetcherFailure(url, error))
     }
     throw error

@@ -1,4 +1,5 @@
 #!/usr/bin/env tsx
+import { stringifyPrimitive } from "../lib/stringify-primitive"
 
 import { createHash } from "node:crypto"
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
@@ -18,7 +19,7 @@ function readJson<T>(path: string): T {
 }
 
 function normalize(value: unknown): string {
-  return String(value ?? "")
+  return stringifyPrimitive(value)
     .normalize("NFKC")
     .replace(/[\u2018\u2019]/g, "'")
     .replace(/[\u2013\u2014]/g, "-")
@@ -29,21 +30,25 @@ function normalize(value: unknown): string {
 
 function normalizeProduct(value: unknown): string {
   return normalize(value)
-    .replace(/\s*\(\s*/g, " (")
-    .replace(/\s*\)\s*/g, ")")
-    .replace(/\s*-\s*/g, "-")
+    .replaceAll(" (", "(")
+    .replaceAll("( ", "(")
+    .replaceAll("(", " (")
+    .replaceAll(" )", ")")
+    .replaceAll(") ", ")")
+    .replaceAll(" -", "-")
+    .replaceAll("- ", "-")
 }
 
 function dateKey(value: unknown): string {
-  const raw = String(value ?? "")
-  const match = raw.match(/^(\d{4}-\d{2}-\d{2})/)
+  const raw = stringifyPrimitive(value)
+  const match = /^(\d{4}-\d{2}-\d{2})/.exec(raw)
   if (!match) throw new Error(`Invalid date: ${raw}`)
   return match[1]
 }
 
 function toCents(value: unknown): number {
   const parsed = Number(value ?? 0)
-  if (!Number.isFinite(parsed)) throw new Error(`Invalid monetary value: ${String(value)}`)
+  if (!Number.isFinite(parsed)) throw new Error(`Invalid monetary value: ${stringifyPrimitive(value)}`)
   return Math.round((parsed + Number.EPSILON) * 100)
 }
 
@@ -114,7 +119,7 @@ function main() {
       const detailLine = detailLines[index]
       const sourceQuantity = Number(sourceLine.ItemQuantity)
       const detailQuantity = Number(detailLine.Quantity)
-      if (!(sourceQuantity > 0) || sourceQuantity !== detailQuantity) {
+      if (sourceQuantity <= 0 || sourceQuantity !== detailQuantity) {
         throw new Error(`Order ${legacyOrderId} line ${index + 1} quantity/order mismatch`)
       }
       const prices = [...(historyByName.get(normalizeProduct(detailLine.Name)) ?? [])]

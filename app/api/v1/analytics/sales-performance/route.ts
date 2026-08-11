@@ -1,13 +1,13 @@
 import { NextRequest } from "next/server"
-import { and, eq, gte, lte, sql, or, inArray, desc, gt } from "drizzle-orm"
-import { requireApiRole, ok, error } from "@/lib/api"
+import { and,eq,gte,lte,sql,or,inArray,desc } from "drizzle-orm"
+import { requireApiRole,ok,error } from "@/lib/api"
 import { db } from "@/lib/db"
-import { orders, branches, organizations, orderItems, refunds, refundItems } from "@/db/schema"
+import { orders,branches,organizations,orderItems,refunds,refundItems } from "@/db/schema"
 import { getRequestScope } from "@/lib/auth"
-import { getCached, generateCacheKey, CACHE_TTL } from "@/lib/cache-utils"
+import { getCached,generateCacheKey,CACHE_TTL } from "@/lib/cache-utils"
 import { metricExpressions } from "@/lib/metric-utils"
-import { redactAnalyticsPrices, shouldHidePricesForRole } from "@/lib/price-visibility"
-import { parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
+import { redactAnalyticsPrices,shouldHidePricesForRole } from "@/lib/price-visibility"
+import { parseEndDateParam,parseStartDateParam } from "@/lib/date-range-params"
 
 const allowedRoles = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"] as const
 type Role = typeof allowedRoles[number]
@@ -37,10 +37,10 @@ export async function GET(req: NextRequest) {
     const compareMonthsRaw = searchParams.get("compareMonths")
     const compareYearsRaw = searchParams.get("compareYears")
 
-    const parsedMonths = monthsRaw ? monthsRaw.split(',').map(Number).filter(n => !isNaN(n) && n >= 1 && n <= 12) : []
-    const parsedYears = yearsRaw ? yearsRaw.split(',').map(Number).filter(n => !isNaN(n) && n > 2000) : []
-    const parsedCompMonths = compareMonthsRaw ? compareMonthsRaw.split(',').map(Number).filter(n => !isNaN(n) && n >= 1 && n <= 12) : []
-    const parsedCompYears = compareYearsRaw ? compareYearsRaw.split(',').map(Number).filter(n => !isNaN(n) && n > 2000) : []
+    const parsedMonths = monthsRaw ? monthsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n >= 1 && n <= 12) : []
+    const parsedYears = yearsRaw ? yearsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n > 2000) : []
+    const parsedCompMonths = compareMonthsRaw ? compareMonthsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n >= 1 && n <= 12) : []
+    const parsedCompYears = compareYearsRaw ? compareYearsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n > 2000) : []
     const includeStatusCounts = searchParams.get("includeStatusCounts") === "true"
 
     let organizationId: number | null = null
@@ -100,11 +100,11 @@ export async function GET(req: NextRequest) {
     const pricesHidden = await shouldHidePricesForRole(role, scope?.organizationId)
 
     if (branchIdsParam) {
-        branchIds = branchIdsParam.split(",").map(Number).filter(n => !isNaN(n) && n > 0)
+        branchIds = branchIdsParam.split(",").map(Number).filter(n => !Number.isNaN(n) && n > 0)
     }
 
     if (organizationIdsParam) {
-        organizationIds = organizationIdsParam.split(",").map(Number).filter(n => !isNaN(n) && n > 0)
+        organizationIds = organizationIdsParam.split(",").map(Number).filter(n => !Number.isNaN(n) && n > 0)
     }
 
     if (groupIdParam && groupIdParam !== "null" && groupIdParam !== "0") {
@@ -112,7 +112,7 @@ export async function GET(req: NextRequest) {
     }
 
     if (groupIdsParam) {
-        groupIds = groupIdsParam.split(",").map(Number).filter(n => !isNaN(n) && n > 0)
+        groupIds = groupIdsParam.split(",").map(Number).filter(n => !Number.isNaN(n) && n > 0)
     } else if (groupId) {
         groupIds = [groupId]
     }
@@ -144,7 +144,18 @@ export async function GET(req: NextRequest) {
         // Multi-select years: if multiple years, use yearly, otherwise monthly for that specific year
         granularity = parsedYears.length > 1 ? "yearly" : "monthly"
     } else {
-        granularity = diffDays <= 1 ? "hourly" : diffDays <= 32 ? "daily" : diffDays <= 400 ? "monthly" : "yearly"
+        granularity = (() => {
+          if (diffDays <= 1) {
+            return "hourly"
+          }
+          if (diffDays <= 32) {
+            return "daily"
+          }
+          if (diffDays <= 400) {
+            return "monthly"
+          }
+          return "yearly"
+        })()
     }
 
     const cacheKey = generateCacheKey("sales-perf", {
@@ -174,16 +185,15 @@ export async function GET(req: NextRequest) {
 
         // Primary Date filter logic (Fallback to bounds only if exact disjoint sets not sent)
         if (!monthsRaw && !yearsRaw) {
-            conditions.push(gte(orders.createdAt, startDate))
-            conditions.push(lte(orders.createdAt, endDate))
+            conditions.push(gte(orders.createdAt, startDate), lte(orders.createdAt, endDate))
         }
 
         // Advanced Multi-Select Date Filtering (Months / Years arrays)
         if (parsedMonths.length > 0) {
-            conditions.push(sql`EXTRACT(MONTH FROM ${dashboardCreatedAt}) IN (${sql.join(parsedMonths, sql`, `)})`)
+            conditions.push(sql`EXTRACT(MONTH FROM ${dashboardCreatedAt}) IN (${sql.join(parsedMonths, sql.raw(", "))})`)
         }
         if (parsedYears.length > 0) {
-            conditions.push(sql`EXTRACT(YEAR FROM ${dashboardCreatedAt}) IN (${sql.join(parsedYears, sql`, `)})`)
+            conditions.push(sql`EXTRACT(YEAR FROM ${dashboardCreatedAt}) IN (${sql.join(parsedYears, sql.raw(", "))})`)
         }
 
         // Status filter: normalize to uppercase for comparison
@@ -311,12 +321,18 @@ export async function GET(req: NextRequest) {
         const avgSales = activePeriods.length > 0 ? totalSales / activePeriods.length : 0
         const avgItemsSold = activeQuantityPeriods.length > 0 ? totalItemsSold / activeQuantityPeriods.length : 0
 
-        const peakPeriod = seriesData.length > 0
-            ? seriesData.reduce((max, r) => r.sales > max.sales ? r : max, seriesData[0])
-            : null
-        const peakQuantityPeriod = seriesData.length > 0
-            ? seriesData.reduce((max, r) => r.itemQuantity > max.itemQuantity ? r : max, seriesData[0])
-            : null
+        const peakPeriod = (() => {
+          if (seriesData.length > 0) {
+            return seriesData.reduce((max, r) => r.sales > max.sales ? r : max, seriesData[0])
+          }
+          return null
+        })()
+        const peakQuantityPeriod = (() => {
+          if (seriesData.length > 0) {
+            return seriesData.reduce((max, r) => r.itemQuantity > max.itemQuantity ? r : max, seriesData[0])
+          }
+          return null
+        })()
 
         // ── Branch breakdown ──
         const branchConditions: any[] = [...conditions] // Apply primary date matrices 
@@ -410,10 +426,10 @@ export async function GET(req: NextRequest) {
             const compConditions: any[] = []
 
             if (parsedCompMonths.length > 0) {
-                compConditions.push(sql`EXTRACT(MONTH FROM ${dashboardCreatedAt}) IN (${sql.join(parsedCompMonths, sql`, `)})`)
+                compConditions.push(sql`EXTRACT(MONTH FROM ${dashboardCreatedAt}) IN (${sql.join(parsedCompMonths, sql.raw(", "))})`)
             }
             if (parsedCompYears.length > 0) {
-                compConditions.push(sql`EXTRACT(YEAR FROM ${dashboardCreatedAt}) IN (${sql.join(parsedCompYears, sql`, `)})`)
+                compConditions.push(sql`EXTRACT(YEAR FROM ${dashboardCreatedAt}) IN (${sql.join(parsedCompYears, sql.raw(", "))})`)
             }
 
             if (!hasCompareArrays) {
@@ -434,8 +450,7 @@ export async function GET(req: NextRequest) {
                 }
 
                 if (prevStart.getTime() !== 0) {
-                    compConditions.push(gte(orders.createdAt, prevStart))
-                    compConditions.push(lte(orders.createdAt, prevEnd))
+                    compConditions.push(gte(orders.createdAt, prevStart), lte(orders.createdAt, prevEnd))
                 }
             }
 

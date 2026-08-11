@@ -5,8 +5,6 @@ dotenv.config()
 async function main() {
   const { db } = await import("../lib/db-cli")
   const { organizations } = await import("../db/schema")
-  const { sql } = await import("drizzle-orm")
-
   const orgs = await db
     .select({
       id: organizations.id,

@@ -98,6 +98,79 @@ export const ERROR_MESSAGES = {
 /**
  * Parse error message to determine error type and details
  */
+const REQUIRED_FIELD_RULES = [
+  { token: 'firstName', label: 'First name', field: 'firstName' },
+  { token: 'lastName', label: 'Last name', field: 'lastName' },
+  { token: 'email', label: 'Email', field: 'email' },
+  { token: 'password', label: 'Password', field: 'password' },
+  { token: 'role', label: 'Role', field: 'role' },
+  { token: 'organizationId', label: 'Organization', field: 'organizationId' },
+  { token: 'branchId', label: 'Branch', field: 'branchId' },
+] as const
+
+function parseRequiredError(errorMsg: string): ErrorDetails | null {
+  if (!errorMsg.includes('required')) return null
+  const rule = REQUIRED_FIELD_RULES.find(({ token }) => errorMsg.includes(token))
+  if (!rule) return null
+  return {
+    type: 'VALIDATION_ERROR',
+    message: ERROR_MESSAGES.REQUIRED_FIELD(rule.label),
+    field: rule.field,
+    statusCode: 400,
+  }
+}
+
+function isDuplicateMessage(errorMsg: string): boolean {
+  return ['already exists', 'already registered', 'unique'].some((token) => errorMsg.includes(token))
+}
+
+function parseDuplicateError(errorMsg: string): ErrorDetails | null {
+  if (!isDuplicateMessage(errorMsg)) return null
+  const usernameTokens = ['taken', 'use', 'exists', 'idx', 'uq']
+  if (errorMsg.includes('username') && usernameTokens.some((token) => errorMsg.includes(token))) {
+    return { type: 'DUPLICATE_ERROR', message: 'This username already exists. Please choose a different username.', field: 'username', statusCode: 400 }
+  }
+  if (errorMsg.includes('email')) {
+    return { type: 'DUPLICATE_ERROR', message: 'This email is already registered with this app. Please use another email.', field: 'email', statusCode: 400 }
+  }
+  if (errorMsg.includes('phone')) {
+    return { type: 'DUPLICATE_ERROR', message: 'This phone number is already registered with this app. Please use another phone number.', field: 'phone', statusCode: 400 }
+  }
+  if (errorMsg.includes('employee')) {
+    return { type: 'DUPLICATE_ERROR', message: 'This employee number is already registered with this app. Please use another employee number.', field: 'employeeId', statusCode: 400 }
+  }
+  return null
+}
+
+const KNOWN_ERROR_RULES: Array<{ matches: (message: string) => boolean; details: ErrorDetails }> = [
+  { matches: (message) => message.includes('organization'), details: { type: 'PERMISSION_ERROR', message: ERROR_MESSAGES.ORGANIZATION_SCOPE, statusCode: 403 } },
+  { matches: (message) => ['permission', 'unauthorized'].some((token) => message.includes(token)), details: { type: 'PERMISSION_ERROR', message: ERROR_MESSAGES.INSUFFICIENT_PERMISSIONS, statusCode: 403 } },
+  { matches: (message) => ['not found', '404'].some((token) => message.includes(token)), details: { type: 'NOT_FOUND_ERROR', message: ERROR_MESSAGES.USER_NOT_FOUND, statusCode: 404 } },
+  { matches: (message) => ['timeout', 'timed out'].some((token) => message.includes(token)), details: { type: 'NETWORK_ERROR', message: ERROR_MESSAGES.REQUEST_TIMEOUT, statusCode: 408 } },
+  { matches: (message) => ['network', 'fetch'].some((token) => message.includes(token)), details: { type: 'NETWORK_ERROR', message: ERROR_MESSAGES.NETWORK_ERROR, statusCode: 503 } },
+  { matches: (message) => ['Daily OTP request limit exceeded', 'daily limit'].some((token) => message.includes(token)), details: { type: 'MFA_ERROR', message: ERROR_MESSAGES.DAILY_LIMIT_EXCEEDED, statusCode: 400 } },
+  { matches: (message) => ['cooldown', 'wait before requesting'].some((token) => message.includes(token)), details: { type: 'MFA_ERROR', message: ERROR_MESSAGES.COOLDOWN_ACTIVE, statusCode: 400 } },
+  { matches: (message) => ['Invalid OTP', 'Invalid or expired OTP code', 'invalid code'].some((token) => message.includes(token)), details: { type: 'MFA_ERROR', message: ERROR_MESSAGES.INVALID_OTP, statusCode: 400 } },
+  { matches: (message) => ['expired', 'OTP has expired'].some((token) => message.includes(token)), details: { type: 'MFA_ERROR', message: ERROR_MESSAGES.OTP_EXPIRED, statusCode: 400 } },
+  { matches: (message) => message.includes('Invalid') && message.includes('email'), details: { type: 'VALIDATION_ERROR', message: ERROR_MESSAGES.INVALID_EMAIL, field: 'email', statusCode: 400 } },
+  { matches: (message) => message.includes('Invalid') && message.includes('role'), details: { type: 'VALIDATION_ERROR', message: ERROR_MESSAGES.INVALID_ROLE, field: 'role', statusCode: 400 } },
+  { matches: (message) => message.includes('password'), details: { type: 'VALIDATION_ERROR', message: ERROR_MESSAGES.INVALID_PASSWORD, field: 'password', statusCode: 400 } },
+]
+
+function parseKnownError(errorMsg: string): ErrorDetails | null {
+  return KNOWN_ERROR_RULES.find(({ matches }) => matches(errorMsg))?.details ?? null
+}
+
+function isDatabaseFailure(error: any, errorMsg: string, databaseError: any): boolean {
+  return [
+    error?.name === 'DrizzleQueryError',
+    errorMsg.includes('Failed query:'),
+    Boolean(databaseError?.severity),
+    Boolean(databaseError?.routine),
+    isDatabaseError(databaseError),
+  ].some(Boolean)
+}
+
 export function parseError(error: any): ErrorDetails {
   const errorMsg = error?.message || error?.toString() || ''
   const databaseError = error?.cause || error
@@ -105,218 +178,19 @@ export function parseError(error: any): ErrorDetails {
   // Drizzle includes SQL column names such as `organization_id` in query
   // failures. Classify database failures before user-facing keyword matching so
   // they are not incorrectly reported as organization permission errors.
-  if (
-    error?.name === 'DrizzleQueryError' ||
-    errorMsg.includes('Failed query:') ||
-    databaseError?.severity ||
-    databaseError?.routine ||
-    isDatabaseError(databaseError)
-  ) {
+  if (isDatabaseFailure(error, errorMsg, databaseError)) {
     return parseDatabaseError(databaseError)
   }
 
-  // Validation errors
-  if (errorMsg.includes('required')) {
-    if (errorMsg.includes('firstName')) {
-      return {
-        type: 'VALIDATION_ERROR',
-        message: ERROR_MESSAGES.REQUIRED_FIELD('First name'),
-        field: 'firstName',
-        statusCode: 400
-      }
-    }
-    if (errorMsg.includes('lastName')) {
-      return {
-        type: 'VALIDATION_ERROR',
-        message: ERROR_MESSAGES.REQUIRED_FIELD('Last name'),
-        field: 'lastName',
-        statusCode: 400
-      }
-    }
-    if (errorMsg.includes('email')) {
-      return {
-        type: 'VALIDATION_ERROR',
-        message: ERROR_MESSAGES.REQUIRED_FIELD('Email'),
-        field: 'email',
-        statusCode: 400
-      }
-    }
-    if (errorMsg.includes('password')) {
-      return {
-        type: 'VALIDATION_ERROR',
-        message: ERROR_MESSAGES.REQUIRED_FIELD('Password'),
-        field: 'password',
-        statusCode: 400
-      }
-    }
-    if (errorMsg.includes('role')) {
-      return {
-        type: 'VALIDATION_ERROR',
-        message: ERROR_MESSAGES.REQUIRED_FIELD('Role'),
-        field: 'role',
-        statusCode: 400
-      }
-    }
-    if (errorMsg.includes('organizationId')) {
-      return {
-        type: 'VALIDATION_ERROR',
-        message: ERROR_MESSAGES.REQUIRED_FIELD('Organization'),
-        field: 'organizationId',
-        statusCode: 400
-      }
-    }
-    if (errorMsg.includes('branchId')) {
-      return {
-        type: 'VALIDATION_ERROR',
-        message: ERROR_MESSAGES.REQUIRED_FIELD('Branch'),
-        field: 'branchId',
-        statusCode: 400
-      }
-    }
-  }
+  const requiredError = parseRequiredError(errorMsg)
+  if (requiredError) return requiredError
 
-  // Duplicate errors (username, email, phone, and employee number)
-  if (errorMsg.includes('already exists') || errorMsg.includes('already registered') || errorMsg.includes('unique')) {
-    if (errorMsg.includes('username') && (errorMsg.includes('taken') || errorMsg.includes('use') || errorMsg.includes('exists') || errorMsg.includes('idx') || errorMsg.includes('uq'))) {
-      return {
-        type: 'DUPLICATE_ERROR',
-        message: 'This username already exists. Please choose a different username.',
-        field: 'username',
-        statusCode: 400
-      }
-    }
-    if (errorMsg.includes('email')) {
-      return {
-        type: 'DUPLICATE_ERROR',
-        message: 'This email is already registered with this app. Please use another email.',
-        field: 'email',
-        statusCode: 400
-      }
-    }
-    if (errorMsg.includes('phone')) {
-      return {
-        type: 'DUPLICATE_ERROR',
-        message: 'This phone number is already registered with this app. Please use another phone number.',
-        field: 'phone',
-        statusCode: 400
-      }
-    }
-    if (errorMsg.includes('employee')) {
-      return {
-        type: 'DUPLICATE_ERROR',
-        message: 'This employee number is already registered with this app. Please use another employee number.',
-        field: 'employeeId',
-        statusCode: 400
-      }
-    }
-  }
+  const duplicateError = parseDuplicateError(errorMsg)
+  if (duplicateError) return duplicateError
 
 
-  // Permission errors
-  if (errorMsg.includes('organization')) {
-    return {
-      type: 'PERMISSION_ERROR',
-      message: ERROR_MESSAGES.ORGANIZATION_SCOPE,
-      statusCode: 403
-    }
-  }
-
-  if (errorMsg.includes('permission') || errorMsg.includes('unauthorized')) {
-    return {
-      type: 'PERMISSION_ERROR',
-      message: ERROR_MESSAGES.INSUFFICIENT_PERMISSIONS,
-      statusCode: 403
-    }
-  }
-
-  // Not found errors
-  if (errorMsg.includes('not found') || errorMsg.includes('404')) {
-    return {
-      type: 'NOT_FOUND_ERROR',
-      message: ERROR_MESSAGES.USER_NOT_FOUND,
-      statusCode: 404
-    }
-  }
-
-  // Network errors
-  if (errorMsg.includes('timeout') || errorMsg.includes('timed out')) {
-    return {
-      type: 'NETWORK_ERROR',
-      message: ERROR_MESSAGES.REQUEST_TIMEOUT,
-      statusCode: 408
-    }
-  }
-
-  if (errorMsg.includes('network') || errorMsg.includes('fetch')) {
-    return {
-      type: 'NETWORK_ERROR',
-      message: ERROR_MESSAGES.NETWORK_ERROR,
-      statusCode: 503
-    }
-  }
-
-  // MFA errors must be checked before generic "Invalid ... email" validation,
-  // because the user-facing invalid OTP message asks users to check their email.
-  if (errorMsg.includes('Daily OTP request limit exceeded') || errorMsg.includes('daily limit')) {
-    return {
-      type: 'MFA_ERROR',
-      message: ERROR_MESSAGES.DAILY_LIMIT_EXCEEDED,
-      statusCode: 400
-    }
-  }
-
-  if (errorMsg.includes('cooldown') || errorMsg.includes('wait before requesting')) {
-    return {
-      type: 'MFA_ERROR',
-      message: ERROR_MESSAGES.COOLDOWN_ACTIVE,
-      statusCode: 400
-    }
-  }
-
-  if (errorMsg.includes('Invalid OTP') || errorMsg.includes('Invalid or expired OTP code') || errorMsg.includes('invalid code')) {
-    return {
-      type: 'MFA_ERROR',
-      message: ERROR_MESSAGES.INVALID_OTP,
-      statusCode: 400
-    }
-  }
-
-  if (errorMsg.includes('expired') || errorMsg.includes('OTP has expired')) {
-    return {
-      type: 'MFA_ERROR',
-      message: ERROR_MESSAGES.OTP_EXPIRED,
-      statusCode: 400
-    }
-  }
-
-  // Invalid format errors
-  if (errorMsg.includes('Invalid')) {
-    if (errorMsg.includes('email')) {
-      return {
-        type: 'VALIDATION_ERROR',
-        message: ERROR_MESSAGES.INVALID_EMAIL,
-        field: 'email',
-        statusCode: 400
-      }
-    }
-    if (errorMsg.includes('role')) {
-      return {
-        type: 'VALIDATION_ERROR',
-        message: ERROR_MESSAGES.INVALID_ROLE,
-        field: 'role',
-        statusCode: 400
-      }
-    }
-  }
-
-  if (errorMsg.includes('password')) {
-    return {
-      type: 'VALIDATION_ERROR',
-      message: ERROR_MESSAGES.INVALID_PASSWORD,
-      field: 'password',
-      statusCode: 400
-    }
-  }
+  const knownError = parseKnownError(errorMsg)
+  if (knownError) return knownError
 
   // Pre-mapped specific messages from our APIs (e.g. blockers)
   if (errorMsg.startsWith('Cannot delete') || errorMsg.includes('Please') || errorMsg.includes('assigned') || errorMsg.includes('records') || errorMsg.includes('Linked')) {
@@ -552,6 +426,30 @@ export function parseDatabaseError(error: any): ErrorDetails {
 /**
  * Validate input and throw descriptive error if invalid
  */
+type InputValidationOptions = {
+  required?: boolean
+  minLength?: number
+  maxLength?: number
+  pattern?: RegExp
+  custom?: (val: any) => boolean
+}
+
+function isEmptyInput(value: any): boolean {
+  return value === null || value === undefined || value === ''
+}
+
+function validateStringInput(value: string, fieldName: string, options: InputValidationOptions): void {
+  if (options.minLength && value.length < options.minLength) {
+    throw new Error(`${fieldName} must be at least ${options.minLength} characters`)
+  }
+  if (options.maxLength && value.length > options.maxLength) {
+    throw new Error(`${fieldName} must not exceed ${options.maxLength} characters`)
+  }
+  if (options.pattern && !options.pattern.test(value)) {
+    throw new Error(ERROR_MESSAGES.INVALID_FORMAT(fieldName))
+  }
+}
+
 export function validateInput(value: any, fieldName: string, options?: {
   required?: boolean
   minLength?: number
@@ -559,26 +457,18 @@ export function validateInput(value: any, fieldName: string, options?: {
   pattern?: RegExp
   custom?: (val: any) => boolean
 }): void {
-  if (options?.required && (value === null || value === undefined || value === '')) {
+  if (options?.required && isEmptyInput(value)) {
     throw new Error(ERROR_MESSAGES.REQUIRED_FIELD(fieldName))
   }
 
-  if (value !== null && value !== undefined && value !== '') {
-    if (typeof value === 'string') {
-      if (options?.minLength && value.length < options.minLength) {
-        throw new Error(`${fieldName} must be at least ${options.minLength} characters`)
-      }
-      if (options?.maxLength && value.length > options.maxLength) {
-        throw new Error(`${fieldName} must not exceed ${options.maxLength} characters`)
-      }
-      if (options?.pattern && !options.pattern.test(value)) {
-        throw new Error(ERROR_MESSAGES.INVALID_FORMAT(fieldName))
-      }
-    }
+  if (isEmptyInput(value)) return
 
-    if (options?.custom && !options.custom(value)) {
-      throw new Error(ERROR_MESSAGES.INVALID_INPUT)
-    }
+  if (typeof value === 'string') {
+    validateStringInput(value, fieldName, options ?? {})
+  }
+
+  if (options?.custom && !options.custom(value)) {
+    throw new Error(ERROR_MESSAGES.INVALID_INPUT)
   }
 }
 
@@ -586,8 +476,8 @@ export function validateInput(value: any, fieldName: string, options?: {
  * Validate numeric range
  */
 export function validateRange(value: number, fieldName: string, min?: number, max?: number): void {
-  if (typeof value !== 'number' || isNaN(value)) {
-    throw new Error(ERROR_MESSAGES.INVALID_FORMAT(fieldName))
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    throw new TypeError(ERROR_MESSAGES.INVALID_FORMAT(fieldName))
   }
 
   if (min !== undefined && value < min) {

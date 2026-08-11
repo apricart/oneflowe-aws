@@ -1,4 +1,5 @@
-import { createHash } from "crypto"
+import { stringifyPrimitive } from "../stringify-primitive"
+import { createHash } from "node:crypto"
 
 export const KE_POST_CUTOFF_SOURCE = "KE_LOGISTICS"
 export const KE_POST_CUTOFF_DATE = "2026-07-10"
@@ -118,7 +119,7 @@ export interface PreparedPostCutoffOrder {
 }
 
 export function normalizeLegacyText(value: unknown): string {
-  return String(value ?? "")
+  return stringifyPrimitive(value)
     .normalize("NFKC")
     .trim()
     .toLowerCase()
@@ -128,17 +129,26 @@ export function normalizeLegacyText(value: unknown): string {
     .trim()
 }
 
+function stripTrailingRoleSeparator(value: string): string {
+  const normalized = value.trim()
+  return normalized.endsWith(" -") ? normalized.slice(0, -2).trim() : normalized
+}
+
 export function normalizeLegacyProduct(value: unknown): string {
-  return String(value ?? "")
+  return stringifyPrimitive(value)
     .normalize("NFKC")
     .replace(/[\u2018\u2019]/g, "'")
     .replace(/[\u2013\u2014]/g, "-")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase()
-    .replace(/\s*\(\s*/g, " (")
-    .replace(/\s*\)\s*/g, ")")
-    .replace(/\s*-\s*/g, "-")
+    .replaceAll(" (", "(")
+    .replaceAll("( ", "(")
+    .replaceAll("(", " (")
+    .replaceAll(" )", ")")
+    .replaceAll(") ", ")")
+    .replaceAll(" -", "-")
+    .replaceAll("- ", "-")
 }
 
 export function legacyStatusText(row: Pick<LegacyOrderListRow, "ID" | "StatusID" | "DeliveryStatus">): string {
@@ -175,7 +185,13 @@ export function canonicalJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value)
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`
   const record = value as Record<string, unknown>
-  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`
+  return `{${Object.keys(record).sort(compareCanonicalKeys).map((key) => (String(JSON.stringify(key)) + ":" + String(canonicalJson(record[key])))).join(",")}}`
+}
+
+function compareCanonicalKeys(left: string, right: string): number {
+  if (left < right) return -1
+  if (left > right) return 1
+  return left.localeCompare(right)
 }
 
 export function sha256(value: string | Buffer): string {
@@ -193,8 +209,8 @@ function cents(value: unknown, context: string): number {
 }
 
 function requiredDate(value: unknown, context: string): Date {
-  const result = new Date(String(value ?? ""))
-  if (Number.isNaN(result.getTime())) throw new Error(`${context}: invalid date ${String(value)}`)
+  const result = new Date(stringifyPrimitive(value))
+  if (Number.isNaN(result.getTime())) throw new Error(`${context}: invalid date ${stringifyPrimitive(value)}`)
   return result
 }
 
@@ -209,7 +225,7 @@ export function preparePostCutoffOrders(
   const cancelledIds: number[] = []
   const zeroValueLineIds: number[] = []
 
-  for (const header of afterCutoff.sort((a, b) => Number(a.ID) - Number(b.ID))) {
+  for (const header of afterCutoff.toSorted((a, b) => Number(a.ID) - Number(b.ID))) {
     const mapping = mapLegacyStatus(header)
     if (mapping.skip) {
       cancelledIds.push(Number(header.ID))
@@ -292,7 +308,7 @@ export function preparePostCutoffOrders(
       branchName: String(header.LocationName ?? "").trim(),
       groupName: String(header.LocationGroup ?? "").trim(),
       legacyOrderTakerId: Number(header.OrderTakerID),
-      userName: String(header.UserDetails ?? detail.LastUpdatedBy ?? "").trim().replace(/\s+-\s*$/, ""),
+      userName: stripTrailingRoleSeparator(String(header.UserDetails ?? detail.LastUpdatedBy ?? "")),
       sourceStatus: mapping.sourceStatus,
       status: mapping.status,
       fulfillmentStatus: mapping.fulfillmentStatus,

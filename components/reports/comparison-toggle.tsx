@@ -16,7 +16,7 @@ export function ComparisonToggle({
     onToggle,
     currentLabel = "Current Period",
     previousLabel = "Previous Period",
-}: ComparisonToggleProps) {
+}: Readonly<ComparisonToggleProps>) {
     return (
         <div className={cn(
             "inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border transition-all duration-200",

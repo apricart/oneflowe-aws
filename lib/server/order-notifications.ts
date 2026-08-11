@@ -13,13 +13,12 @@ import {
 } from "@/db/schema"
 import { sendOrderLifecycleEmail, type OrderLifecycleEmailPayload, type OrderLifecycleEmailTemplate } from "@/lib/email/order-lifecycle"
 import { db } from "@/lib/db"
+import { isValidEmailAddress } from "@/lib/validation/email"
 import {
   isOrderApproverRole,
   ORDER_APPROVER_ROLE_LABELS,
   type OrderApproverRole,
 } from "@/lib/order-approver-role"
-
-type DbLike = any
 
 type OrderEventInput = {
   id: number
@@ -37,8 +36,6 @@ export type QueuedOrderNotifications = {
 const MAX_DELIVERY_ATTEMPTS = 5
 const PROCESSING_TIMEOUT_MS = 10 * 60 * 1000
 const RETRY_DELAYS_MS = [60_000, 5 * 60_000, 30 * 60_000, 2 * 60 * 60_000, 12 * 60 * 60_000]
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-
 export function orderNotificationEventKey(
   template: OrderLifecycleEmailTemplate,
   orderId: number,
@@ -47,7 +44,7 @@ export function orderNotificationEventKey(
   return `${template}:${orderId}:${recipientUserId}`
 }
 
-async function getOrderContext(tx: DbLike, order: OrderEventInput) {
+async function getOrderContext(tx: any, order: OrderEventInput) {
   if (!order.organizationId) return null
 
   const [context] = await tx
@@ -67,7 +64,7 @@ async function getOrderContext(tx: DbLike, order: OrderEventInput) {
   return context || null
 }
 
-async function insertRecipientEvents(tx: DbLike, input: {
+async function insertRecipientEvents(tx: any, input: {
   order: OrderEventInput & { organizationId: number }
   template: OrderLifecycleEmailTemplate
   targetRole: "BRANCH_ADMIN" | "HEAD_OFFICE" | "ORDER_PORTAL" | "SUPER_ADMIN"
@@ -111,7 +108,7 @@ async function insertRecipientEvents(tx: DbLike, input: {
   }
 }
 
-export async function queueOrderCreatedNotifications(tx: DbLike, input: {
+export async function queueOrderCreatedNotifications(tx: any, input: {
   order: OrderEventInput
   requestedBy: string
 }): Promise<QueuedOrderNotifications> {
@@ -168,7 +165,7 @@ export async function queueOrderCreatedNotifications(tx: DbLike, input: {
   })
 }
 
-export async function queueOrderDecisionNotification(tx: DbLike, input: {
+export async function queueOrderDecisionNotification(tx: any, input: {
   order: OrderEventInput
   decision: "APPROVED" | "REJECTED"
   rejectionReason?: string | null
@@ -200,9 +197,12 @@ export async function queueOrderDecisionNotification(tx: DbLike, input: {
     order: { ...order, organizationId: order.organizationId },
     template,
     targetRole: "ORDER_PORTAL",
-    message: input.decision === "APPROVED"
-      ? `Order ${order.tid} was approved.`
-      : `Order ${order.tid} was rejected${input.rejectionReason ? `: ${input.rejectionReason}` : "."}`,
+    message: (() => {
+      if (input.decision === "APPROVED") {
+        return `Order ${order.tid} was approved.`
+      }
+      return `Order ${order.tid} was rejected${input.rejectionReason ? (": " + String(input.rejectionReason)) : "."}`
+    })(),
     payload: {
       orderId: order.id,
       tid: order.tid,
@@ -214,7 +214,7 @@ export async function queueOrderDecisionNotification(tx: DbLike, input: {
   })
 }
 
-export async function queueSuperAdminApprovalNotifications(tx: DbLike, input: {
+export async function queueSuperAdminApprovalNotifications(tx: any, input: {
   order: OrderEventInput
   approvedByUserId: string
   approvedByRole: OrderApproverRole
@@ -223,7 +223,7 @@ export async function queueSuperAdminApprovalNotifications(tx: DbLike, input: {
   if (!order.organizationId) return { eventKeys: [], recipientCount: 0 }
 
   const context = await getOrderContext(tx, order)
-  if (!context || context.orderApproverRole !== input.approvedByRole) {
+  if (context?.orderApproverRole !== input.approvedByRole) {
     throw new Error("ORDER_NOTIFICATION_SCOPE_INVALID")
   }
   const approverLabel = ORDER_APPROVER_ROLE_LABELS[input.approvedByRole]
@@ -320,6 +320,75 @@ async function markSkipped(id: number, reason: string) {
   }).where(and(eq(emailOutbox.id, id), eq(emailOutbox.status, "PROCESSING")))
 }
 
+type DeliveryOutcome = "sent" | "retried" | "failed" | "skipped"
+type ClaimedOutboxRow = typeof emailOutbox.$inferSelect & { attempts: number }
+
+function recipientScopeCondition(row: ClaimedOutboxRow) {
+  if (row.recipientRole === "SUPER_ADMIN") return undefined
+  if (row.recipientRole === "HEAD_OFFICE") return eq(users.organizationId, row.organizationId)
+  return and(eq(users.organizationId, row.organizationId), eq(users.branchId, row.branchId))
+}
+
+async function deliverClaimedOrderEmail(row: ClaimedOutboxRow): Promise<DeliveryOutcome> {
+  const template = isLifecycleTemplate(row.template) ? row.template : null
+  const payload = parsePayload(row.payload)
+  if (!template || !payload) {
+    await markSkipped(row.id, "Invalid order email template or payload")
+    return "skipped"
+  }
+
+  const currentApproverCondition = row.template === "ORDER_CREATED"
+    ? eq(organizations.orderApproverRole, row.recipientRole)
+    : undefined
+  const [recipient] = await db
+    .select({ email: users.email, role: roles.name, orderCreatorId: orders.createdByUserId })
+    .from(users)
+    .innerJoin(roles, eq(users.roleId, roles.id))
+    .innerJoin(orders, eq(orders.id, row.orderId))
+    .innerJoin(organizations, eq(orders.organizationId, organizations.id))
+    .where(and(
+      eq(users.id, row.recipientUserId),
+      eq(users.isActive, true),
+      isNull(users.deletedAt),
+      recipientScopeCondition(row),
+      eq(roles.name, row.recipientRole),
+      eq(orders.organizationId, row.organizationId),
+      eq(orders.branchId, row.branchId),
+      currentApproverCondition,
+    ))
+    .limit(1)
+
+  const creatorMatches = row.recipientRole !== "ORDER_PORTAL" || recipient?.orderCreatorId === row.recipientUserId
+  if (!recipient || !creatorMatches || !isValidEmailAddress(recipient.email)) {
+    await markSkipped(row.id, "Recipient is no longer authorized for this order scope")
+    return "skipped"
+  }
+
+  try {
+    const providerMessageId = await sendOrderLifecycleEmail({ to: recipient.email, template, payload })
+    await db.update(emailOutbox).set({
+      recipientEmail: recipient.email,
+      status: "SENT",
+      processingStartedAt: null,
+      sentAt: new Date(),
+      providerMessageId,
+      lastError: null,
+      updatedAt: new Date(),
+    }).where(and(eq(emailOutbox.id, row.id), eq(emailOutbox.status, "PROCESSING")))
+    return "sent"
+  } catch (error) {
+    const terminal = row.attempts >= MAX_DELIVERY_ATTEMPTS
+    await db.update(emailOutbox).set({
+      status: terminal ? "FAILED" : "PENDING",
+      processingStartedAt: null,
+      nextAttemptAt: terminal ? null : retryTime(row.attempts),
+      lastError: safeDeliveryError(error),
+      updatedAt: new Date(),
+    }).where(and(eq(emailOutbox.id, row.id), eq(emailOutbox.status, "PROCESSING")))
+    return terminal ? "failed" : "retried"
+  }
+}
+
 export async function processOrderEmailOutbox(options?: {
   eventKeys?: string[]
   limit?: number
@@ -381,92 +450,12 @@ export async function processOrderEmailOutbox(options?: {
     return rows.map((row) => ({ ...row, attempts: row.attempts + 1 }))
   })
 
-  let sent = 0
-  let retried = 0
-  let failed = 0
-  let skipped = 0
-
+  const outcomes: Record<DeliveryOutcome, number> = { sent: 0, retried: 0, failed: 0, skipped: 0 }
   for (const row of claimed) {
-    const template = isLifecycleTemplate(row.template) ? row.template : null
-    const payload = parsePayload(row.payload)
-    if (!template || !payload) {
-      await markSkipped(row.id, "Invalid order email template or payload")
-      skipped++
-      continue
-    }
-
-    const recipientScopeCondition = row.recipientRole === "SUPER_ADMIN"
-      ? undefined
-      : row.recipientRole === "HEAD_OFFICE"
-        ? eq(users.organizationId, row.organizationId)
-        : and(
-        eq(users.organizationId, row.organizationId),
-        eq(users.branchId, row.branchId),
-      )
-    const currentApproverCondition = row.template === "ORDER_CREATED"
-      ? eq(organizations.orderApproverRole, row.recipientRole)
-      : undefined
-
-    const [recipient] = await db
-      .select({
-        email: users.email,
-        role: roles.name,
-        orderCreatorId: orders.createdByUserId,
-      })
-      .from(users)
-      .innerJoin(roles, eq(users.roleId, roles.id))
-      .innerJoin(orders, eq(orders.id, row.orderId))
-      .innerJoin(organizations, eq(orders.organizationId, organizations.id))
-      .where(and(
-        eq(users.id, row.recipientUserId),
-        eq(users.isActive, true),
-        isNull(users.deletedAt),
-        recipientScopeCondition,
-        eq(roles.name, row.recipientRole),
-        eq(orders.organizationId, row.organizationId),
-        eq(orders.branchId, row.branchId),
-        currentApproverCondition,
-      ))
-      .limit(1)
-
-    const creatorMatches = row.recipientRole !== "ORDER_PORTAL" || recipient?.orderCreatorId === row.recipientUserId
-    if (!recipient || !creatorMatches || !EMAIL_PATTERN.test(recipient.email)) {
-      await markSkipped(row.id, "Recipient is no longer authorized for this order scope")
-      skipped++
-      continue
-    }
-
-    try {
-      const providerMessageId = await sendOrderLifecycleEmail({
-        to: recipient.email,
-        template,
-        payload,
-      })
-      await db.update(emailOutbox).set({
-        recipientEmail: recipient.email,
-        status: "SENT",
-        processingStartedAt: null,
-        sentAt: new Date(),
-        providerMessageId,
-        lastError: null,
-        updatedAt: new Date(),
-      }).where(and(eq(emailOutbox.id, row.id), eq(emailOutbox.status, "PROCESSING")))
-      sent++
-    } catch (error) {
-      const terminal = row.attempts >= MAX_DELIVERY_ATTEMPTS
-      await db.update(emailOutbox).set({
-        status: terminal ? "FAILED" : "PENDING",
-        processingStartedAt: null,
-        nextAttemptAt: terminal ? null : retryTime(row.attempts),
-        lastError: safeDeliveryError(error),
-        updatedAt: new Date(),
-      }).where(and(eq(emailOutbox.id, row.id), eq(emailOutbox.status, "PROCESSING")))
-      if (terminal) failed++
-      else retried++
-    }
+    outcomes[await deliverClaimedOrderEmail(row)]++
   }
 
-  return { claimed: claimed.length, sent, retried, failed, skipped }
+  return { claimed: claimed.length, ...outcomes }
 }
 
 export async function attemptImmediateOrderEmailDelivery(eventKeys: string[]) {

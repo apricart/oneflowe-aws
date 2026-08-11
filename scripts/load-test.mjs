@@ -276,7 +276,9 @@ async function virtualUser(vuId, clients) {
   const endpoints = profiles[client.label]
 
   try {
-    while (!stopping && vuId <= desiredVus) {
+    while (true) {
+      if (stopping || vuId > desiredVus) break
+
       const endpoint = pickWeighted(endpoints)
       await executeRequest(client, endpoint, vuId)
       if (!stopping && vuId <= desiredVus) {

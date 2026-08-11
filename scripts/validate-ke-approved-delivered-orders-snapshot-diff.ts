@@ -25,7 +25,7 @@ const EXPECTED_NEW_ASSIGNMENTS = [
   "183:308",
   "183:310",
   "183:313",
-].sort()
+].sort((a, b) => a.localeCompare(b))
 
 function json(path: string): any { return JSON.parse(readFileSync(path, "utf8")) }
 function same(a: unknown, b: unknown): boolean { return JSON.stringify(a) === JSON.stringify(b) }
@@ -151,7 +151,9 @@ function main() {
     && Number(mapping?.global_product_id) === Number(product?.id)
     && Number(mapping?.organization_inventory_id) === Number(inventory?.id), "New Olpers mapping mismatch")
 
-  const newAssignmentPairs = newAssignments.map((row) => `${row.branch_id}:${row.organization_inventory_id}`).sort()
+  const newAssignmentPairs = newAssignments
+    .map((row) => `${row.branch_id}:${row.organization_inventory_id}`)
+    .sort((a, b) => a.localeCompare(b))
   check(same(newAssignmentPairs, EXPECTED_NEW_ASSIGNMENTS), "New branch-assignment pairs mismatch")
   check(newAssignments.every((row) => Number(row.organization_id) === 10
     && row.is_active === false

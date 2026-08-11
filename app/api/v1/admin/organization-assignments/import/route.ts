@@ -1,3 +1,4 @@
+import { stringifyPrimitive } from "@/lib/stringify-primitive"
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { and, eq, inArray } from "drizzle-orm"
@@ -56,7 +57,7 @@ export async function POST(req: NextRequest) {
     const formData = await req.formData()
     const file = formData.get("file")
     const organizationIdValue = formData.get("organizationId")
-    const defaultIsActiveValue = String(formData.get("isActive") ?? "")
+    const defaultIsActiveValue = stringifyPrimitive(formData.get("isActive"))
 
     if (!file || !(file instanceof File)) {
       return NextResponse.json({ error: "CSV file is required" }, { status: 400 })

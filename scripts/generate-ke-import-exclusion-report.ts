@@ -1,5 +1,5 @@
-import { readFileSync, writeFileSync } from "fs"
-import { resolve } from "path"
+import { readFileSync, writeFileSync } from "node:fs"
+import { resolve } from "node:path"
 import * as dotenv from "dotenv"
 import {
   KE_ORGANIZATION,
@@ -288,7 +288,7 @@ async function main() {
     "|---|---:|---:|---:|---|",
     ...reasonSummary.map((summary) => `| ${summary.reason} | ${summary.count} | ${percent(summary.count, unionIds.size)} | ${rupees(summary.grandTotalCents)} | ${reasonDescriptions[summary.reason]} |`),
     "",
-    "\* Excluded totals are informational legacy header values. They are not all valid sale revenue; for example, cancelled and refunded headers are included.",
+    "* Excluded totals are informational legacy header values. They are not all valid sale revenue; for example, cancelled and refunded headers are included.",
     "",
     "## Excluded workflow-status breakdown",
     "",

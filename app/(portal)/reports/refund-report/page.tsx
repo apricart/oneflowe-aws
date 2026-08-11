@@ -27,7 +27,7 @@ import {
 } from "lucide-react"
 
 import { useAppContext } from "@/components/context/app-context"
-import { GlobalDateFilter, type FilterPreset } from "@/components/dashboard/global-date-filter"
+import { GlobalDateFilter, type FilterPreset,type GlobalDateFilterChange } from "@/components/dashboard/global-date-filter"
 import { BranchFilter } from "@/components/reports/branch-filter"
 import { ColumnSelector, type ColumnDef, useColumnSelector } from "@/components/reports/column-selector"
 import { RefundDetailsDrawer } from "@/components/reports/refund-details-drawer"
@@ -167,6 +167,44 @@ const StatusBadge = ({ status }: { status: string }) => (
     </Badge>
 )
 
+function addRefundScopeParams(params: URLSearchParams, options: {
+    role: string | undefined
+    contextBranchId: string | null
+    sessionBranchId: number | null
+    organizationId: string | number | null
+    organizationIds: string[]
+    groupIds: string[]
+    branchIds: string[]
+}): void {
+    const { role, contextBranchId, sessionBranchId, organizationId, organizationIds, groupIds, branchIds } = options
+    if (["BRANCH_ADMIN", "BRANCH_MANAGER"].includes(role ?? "")) {
+        const branchId = contextBranchId || sessionBranchId
+        if (organizationId) params.set("organizationId", String(organizationId))
+        if (branchId) params.set("branchIds", String(branchId))
+        return
+    }
+    if (organizationIds.length > 0) params.set("organizationIds", organizationIds.join(","))
+    else if (organizationId) params.set("organizationId", String(organizationId))
+    if (groupIds.length > 0) params.set("groupIds", groupIds.join(","))
+    if (branchIds.length > 0) params.set("branchIds", branchIds.join(","))
+}
+
+function buildRefundQueryParams(options: Parameters<typeof addRefundScopeParams>[1] & {
+    dateRange: DateRange | null
+    statusFilter: RefundStatus
+    typeFilter: string[]
+    search: string
+}): URLSearchParams {
+    const params = new URLSearchParams()
+    addRefundScopeParams(params, options)
+    if (options.dateRange?.startDate) params.set("startDate", options.dateRange.startDate.toISOString())
+    if (options.dateRange?.endDate) params.set("endDate", options.dateRange.endDate.toISOString())
+    if (options.statusFilter !== "all") params.set("status", options.statusFilter)
+    if (options.typeFilter[0]) params.set("refundType", options.typeFilter[0])
+    if (options.search) params.set("q", options.search)
+    return params
+}
+
 export default function RefundReportPage() {
     const { data: session, status: sessionStatus } = useSession()
     const { toast } = useToast()
@@ -197,25 +235,19 @@ export default function RefundReportPage() {
 
     useEffect(() => setGeneratedAt(new Date().toLocaleString()), [])
 
-    const queryParams = useMemo(() => {
-        const params = new URLSearchParams()
-        if (role === "BRANCH_ADMIN" || role === "BRANCH_MANAGER") {
-            const branchId = contextBranchId || (session?.user as any)?.branchId
-            if (organizationId) params.set("organizationId", String(organizationId))
-            if (branchId) params.set("branchIds", String(branchId))
-        } else {
-            if (organizationIds.length > 0) params.set("organizationIds", organizationIds.join(","))
-            else if (organizationId) params.set("organizationId", String(organizationId))
-            if (groupIds.length > 0) params.set("groupIds", groupIds.join(","))
-            if (branchIds.length > 0) params.set("branchIds", branchIds.join(","))
-        }
-        if (dateRange?.startDate) params.set("startDate", dateRange.startDate.toISOString())
-        if (dateRange?.endDate) params.set("endDate", dateRange.endDate.toISOString())
-        if (statusFilter !== "all") params.set("status", statusFilter)
-        if (typeFilter[0]) params.set("refundType", typeFilter[0])
-        if (debouncedSearch) params.set("q", debouncedSearch)
-        return params
-    }, [
+    const queryParams = useMemo(() => buildRefundQueryParams({
+        role,
+        contextBranchId,
+        sessionBranchId: (session?.user as any)?.branchId ?? null,
+        organizationId,
+        organizationIds,
+        groupIds,
+        branchIds,
+        dateRange,
+        statusFilter,
+        typeFilter,
+        search: debouncedSearch,
+    }), [
         branchIds,
         contextBranchId,
         dateRange,
@@ -259,7 +291,7 @@ export default function RefundReportPage() {
         if (currentPage > totalPages) setCurrentPage(totalPages)
     }, [currentPage, totalPages])
 
-    const handleDateChange = useCallback((range: DateRange | null, preset: FilterPreset) => {
+    const handleDateChange = useCallback(({ range, preset }: GlobalDateFilterChange) => {
         setDateRange(range)
         setActivePreset(preset)
     }, [])
@@ -440,7 +472,7 @@ export default function RefundReportPage() {
                     <div className="flex flex-col justify-between gap-5 rounded-[2rem] border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-800/60 dark:bg-slate-900/40 xl:flex-row xl:items-center">
                         <div className="flex max-w-full flex-wrap items-center gap-2 rounded-[1.25rem] border border-slate-100 bg-slate-50 p-1 dark:border-slate-800/50 dark:bg-slate-950/50">
                             {(["all", "pending", "approved", "completed", "cancelled", "superseded"] as RefundStatus[]).map((status) => (
-                                <button
+                                <button type="button"
                                     key={status}
                                     onClick={() => setStatusFilter(status)}
                                     className={cn(
@@ -496,12 +528,22 @@ export default function RefundReportPage() {
                                             setGroupIds(ids)
                                             setBranchIds([])
                                         }}
-                                        organizationIds={organizationIds.length > 0 ? organizationIds : (organizationId ? [String(organizationId)] : undefined)}
+                                        organizationIds={(() => {
+                                          if (organizationIds.length > 0) {
+                                            return organizationIds
+                                          }
+                                          return (organizationId ? [String(organizationId)] : undefined)
+                                        })()}
                                     />
                                     <BranchFilter
                                         selectedIds={branchIds}
                                         onChange={setBranchIds}
-                                        organizationIds={organizationIds.length > 0 ? organizationIds : (organizationId ? [organizationId] : undefined)}
+                                        organizationIds={(() => {
+                                          if (organizationIds.length > 0) {
+                                            return organizationIds
+                                          }
+                                          return (organizationId ? [organizationId] : undefined)
+                                        })()}
                                         groupIds={groupIds}
                                     />
                                 </>
@@ -547,13 +589,23 @@ export default function RefundReportPage() {
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                    {isLoading ? (
+                                    {(() => {
+                                      if (isLoading) {
+                                        return (
                                         <TableRow><TableCell colSpan={ALL_COLUMNS.length} className="h-72 text-center"><Loader2 className="mx-auto h-8 w-8 animate-spin text-rose-400" /></TableCell></TableRow>
-                                    ) : error ? (
+                                    )
+                                      }
+                                      if (error) {
+                                        return (
                                         <TableRow><TableCell colSpan={ALL_COLUMNS.length} className="h-72 text-center"><p className="font-bold text-rose-500">{error.message}</p><Button variant="outline" className="mt-4 rounded-xl" onClick={() => mutate()}>Try again</Button></TableCell></TableRow>
-                                    ) : !data?.items?.length ? (
+                                    )
+                                      }
+                                      if (!data?.items?.length) {
+                                        return (
                                         <TableRow><TableCell colSpan={ALL_COLUMNS.length} className="h-72 text-center"><ReceiptText className="mx-auto mb-4 h-10 w-10 text-slate-300" /><p className="text-xs font-black uppercase tracking-widest text-slate-400">No refunds match these filters</p></TableCell></TableRow>
-                                    ) : data.items.map((refund) => (
+                                    )
+                                      }
+                                      return data.items.map((refund) => (
                                         <TableRow
                                             key={refund.id}
                                             tabIndex={0}
@@ -590,7 +642,8 @@ export default function RefundReportPage() {
                                             {!pricesHidden && isVisible("amount") && <TableCell className="px-4 py-5 text-right font-mono text-xs font-black text-rose-500">-{money(refund.amountCents)}</TableCell>}
                                             {isVisible("processedBy") && <TableCell className="px-4 py-5 text-[11px] font-bold text-slate-600 dark:text-slate-300">{refund.processedByName || refund.processedByEmail || "-"}</TableCell>}
                                         </TableRow>
-                                    ))}
+                                    ))
+                                    })()}
                                 </TableBody>
                             </Table>
                         </div>

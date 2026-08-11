@@ -58,35 +58,37 @@ function withSecurityHeaders(response: NextResponse, pathname: string = ""): Nex
   return response
 }
 
+function handleApiRequest(req: NextRequest, pathname: string, response: NextResponse): NextResponse {
+  const allowedMutation = isCookieAuthenticatedMutationAllowed({
+    method: req.method,
+    requestUrl: req.url,
+    origin: req.headers.get("origin"),
+    secFetchSite: req.headers.get("sec-fetch-site"),
+    cookieHeader: req.headers.get("cookie"),
+  })
+  if (!allowedMutation) {
+    return withSecurityHeaders(
+      NextResponse.json({ error: "Cross-site request blocked" }, { status: 403 }),
+      pathname,
+    )
+  }
+
+  const maximumBytes = requestBodyLimitForPath(pathname)
+  if (isKnownBodyTooLarge(req.headers.get("content-length"), maximumBytes)) {
+    return withSecurityHeaders(
+      NextResponse.json({ error: "Request body too large" }, { status: 413 }),
+      pathname,
+    )
+  }
+  return withSecurityHeaders(response, pathname)
+}
+
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl
   const response = NextResponse.next()
 
   if (pathname.startsWith("/api/v1/")) {
-    const allowedMutation = isCookieAuthenticatedMutationAllowed({
-      method: req.method,
-      requestUrl: req.url,
-      origin: req.headers.get("origin"),
-      secFetchSite: req.headers.get("sec-fetch-site"),
-      cookieHeader: req.headers.get("cookie"),
-    })
-
-    if (!allowedMutation) {
-      return withSecurityHeaders(
-        NextResponse.json({ error: "Cross-site request blocked" }, { status: 403 }),
-        pathname,
-      )
-    }
-
-    const maximumBytes = requestBodyLimitForPath(pathname)
-    if (isKnownBodyTooLarge(req.headers.get("content-length"), maximumBytes)) {
-      return withSecurityHeaders(
-        NextResponse.json({ error: "Request body too large" }, { status: 413 }),
-        pathname,
-      )
-    }
-
-    return withSecurityHeaders(response, pathname)
+    return handleApiRequest(req, pathname, response)
   }
 
   const isPublicPath = ["/login"].includes(pathname)
@@ -160,7 +162,7 @@ export const config = {
      * - favicon.ico (favicon file)
      * - Static file extensions (manifest.json, images, etc.)
      */
-    "/((?!api|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|json|ico)$).*)",
+    String.raw`/((?!api|_next/static|_next/image|favicon.ico|.*\.(?:svg|png|jpg|jpeg|gif|webp|json|ico)$).*)`,
     "/dashboard",
     "/dashboard/:path*",
     "/organizations/:path*",

@@ -46,8 +46,8 @@ function webpDimensions(buffer: Buffer): SupportedImage | null {
   }
 
   const chunkType = buffer.toString("ascii", 12, 16)
-  let width = 0
-  let height = 0
+  let width: number
+  let height: number
 
   if (chunkType === "VP8X" && buffer.length >= 30) {
     width = 1 + buffer.readUIntLE(24, 3)
@@ -71,6 +71,25 @@ function webpDimensions(buffer: Buffer): SupportedImage | null {
   return { mime: "image/webp", extension: "webp", width, height }
 }
 
+function isJpegStartOfFrame(marker: number): boolean {
+  return [
+    [0xc0, 0xc3],
+    [0xc5, 0xc7],
+    [0xc9, 0xcb],
+    [0xcd, 0xcf],
+  ].some(([start, end]) => marker >= start && marker <= end)
+}
+
+function jpegFrameDimensions(buffer: Buffer, offset: number, segmentLength: number): SupportedImage | null {
+  if (segmentLength < 7) return null
+  return {
+    mime: "image/jpeg",
+    extension: "jpg",
+    width: buffer.readUInt16BE(offset + 5),
+    height: buffer.readUInt16BE(offset + 3),
+  }
+}
+
 function jpegDimensions(buffer: Buffer): SupportedImage | null {
   if (buffer.length < 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8) return null
 
@@ -91,20 +110,8 @@ function jpegDimensions(buffer: Buffer): SupportedImage | null {
     const segmentLength = buffer.readUInt16BE(offset)
     if (segmentLength < 2 || offset + segmentLength > buffer.length) return null
 
-    const isStartOfFrame =
-      (marker >= 0xc0 && marker <= 0xc3) ||
-      (marker >= 0xc5 && marker <= 0xc7) ||
-      (marker >= 0xc9 && marker <= 0xcb) ||
-      (marker >= 0xcd && marker <= 0xcf)
-
-    if (isStartOfFrame) {
-      if (segmentLength < 7) return null
-      return {
-        mime: "image/jpeg",
-        extension: "jpg",
-        width: buffer.readUInt16BE(offset + 5),
-        height: buffer.readUInt16BE(offset + 3),
-      }
+    if (isJpegStartOfFrame(marker)) {
+      return jpegFrameDimensions(buffer, offset, segmentLength)
     }
 
     offset += segmentLength

@@ -1,12 +1,11 @@
-import { NextResponse, type NextRequest } from "next/server"
+import { NextResponse,type NextRequest } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
-import { budgets, orders, orderItems, branches, globalProducts, categories } from "@/db/schema"
-import { and, eq, gte, lte, inArray, sql, desc, asc, isNotNull } from "drizzle-orm"
-import { Role } from "@/lib/rbac"
-import { redactAnalyticsPrices, shouldHidePricesForRole } from "@/lib/price-visibility"
-import { buildAppMonthPeriods, getAppMonthPeriod, parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
+import { budgets,orders,orderItems,branches,globalProducts,categories } from "@/db/schema"
+import { and,eq,gte,lte,inArray,sql,desc,asc,isNotNull } from "drizzle-orm"
+import { redactAnalyticsPrices,shouldHidePricesForRole } from "@/lib/price-visibility"
+import { buildAppMonthPeriods,getAppMonthPeriod,parseEndDateParam,parseStartDateParam } from "@/lib/date-range-params"
 
 const emptyBudgetSummary = {
     summary: { totalAllocated: 0, totalSpent: 0, totalHeld: 0, totalCredited: 0, totalRemaining: 0 },
@@ -18,7 +17,7 @@ const emptyBudgetSummary = {
 
 const parseNumberList = (value: string | null) =>
     value
-        ? value.split(",").map(id => Number(id)).filter(id => !isNaN(id) && id > 0)
+        ? value.split(",").map(Number).filter(id => !Number.isNaN(id) && id > 0)
         : []
 
 export async function GET(req: NextRequest) {
@@ -26,7 +25,6 @@ export async function GET(req: NextRequest) {
         const session = await getServerSession(authOptions)
         if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
-        const userId = (session.user as any).id
         const userRole = ((session.user as any).role || "").toUpperCase().replace(/\s+/g, '_')
         const userOrgId = (session.user as any).organizationId
         const userBranchId = (session.user as any).branchId
@@ -55,7 +53,7 @@ export async function GET(req: NextRequest) {
 
         let branchIds: number[] = []
         if (branchIdsParam) {
-            branchIds = branchIdsParam.split(",").map(id => Number(id)).filter(id => !isNaN(id) && id > 0)
+            branchIds = branchIdsParam.split(",").map(Number).filter(id => !Number.isNaN(id) && id > 0)
         } else if (branchIdParam && branchIdParam !== "all") {
             branchIds = [Number(branchIdParam)]
         } else if (userRole === "BRANCH_ADMIN" || userRole === "BRANCH_MANAGER" || userRole === "ORDER_PORTAL") {
@@ -182,7 +180,6 @@ export async function GET(req: NextRequest) {
 
         const actualBranchIds = activeBranches.map(b => b.id)
 
-        const branchMap = new Map(activeBranches.map(b => [b.id, b]))
 
         // 4. Fetch Budget Allocations for the selected branches and periods
         const budgetRecords = await db
@@ -217,8 +214,8 @@ export async function GET(req: NextRequest) {
             inArray(orders.branchId, actualBranchIds),
             startDateParam || endDateParam ? gte(orders.createdAt, startDate) : undefined,
             startDateParam || endDateParam ? lte(orders.createdAt, endDate) : undefined,
-            months.length > 0 ? sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(months, sql`, `)})` : undefined,
-            years.length > 0 ? sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(years, sql`, `)})` : undefined,
+            months.length > 0 ? sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(months, sql.raw(", "))})` : undefined,
+            years.length > 0 ? sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(years, sql.raw(", "))})` : undefined,
         ].filter(Boolean)
 
         const orderScopedSpendingRows = useOrderScopedSpending
@@ -252,12 +249,24 @@ export async function GET(req: NextRequest) {
                 const record = budgetLookup[branch.id]?.[period]
                 const orderSpending = orderSpendingLookup[branch.id]?.[period]
                 
-                totalSpent += useOrderScopedSpending
-                    ? (orderSpending?.spentCents || 0)
-                    : record ? (record.amountSpentCents || 0) : 0
-                totalHeld += useOrderScopedSpending
-                    ? (orderSpending?.heldCents || 0)
-                    : record ? (record.amountHeldCents || 0) : 0
+                totalSpent += (() => {
+                  if (useOrderScopedSpending) {
+                    return (orderSpending?.spentCents || 0)
+                  }
+                  if (record) {
+                    return (record.amountSpentCents || 0)
+                  }
+                  return 0
+                })()
+                totalHeld += (() => {
+                  if (useOrderScopedSpending) {
+                    return (orderSpending?.heldCents || 0)
+                  }
+                  if (record) {
+                    return (record.amountHeldCents || 0)
+                  }
+                  return 0
+                })()
 
                 totalAllocated += record?.amountAllocatedCents || 0
                 totalCredited += record?.amountCreditedCents || 0
@@ -356,8 +365,24 @@ export async function GET(req: NextRequest) {
                 const baseline = record?.amountAllocatedCents || 0
                 const addon = record?.amountCreditedCents || 0
                 const orderSpending = orderSpendingLookup[branch.id]?.[period]
-                const spent = useOrderScopedSpending ? (orderSpending?.spentCents || 0) : record ? (record.amountSpentCents || 0) : 0
-                const held = useOrderScopedSpending ? (orderSpending?.heldCents || 0) : record ? (record.amountHeldCents || 0) : 0
+                const spent = (() => {
+                  if (useOrderScopedSpending) {
+                    return (orderSpending?.spentCents || 0)
+                  }
+                  if (record) {
+                    return (record.amountSpentCents || 0)
+                  }
+                  return 0
+                })()
+                const held = (() => {
+                  if (useOrderScopedSpending) {
+                    return (orderSpending?.heldCents || 0)
+                  }
+                  if (record) {
+                    return (record.amountHeldCents || 0)
+                  }
+                  return 0
+                })()
                 
                 if (!chartDataMap[period].branches[branch.id]) {
                     chartDataMap[period].branches[branch.id] = { branchName: branch.name, baseline: 0, addon: 0, spent: 0 }
@@ -410,12 +435,24 @@ export async function GET(req: NextRequest) {
                 const record = budgetLookup[branch.id]?.[period]
                 const orderSpending = orderSpendingLookup[branch.id]?.[period]
                 
-                spent += useOrderScopedSpending
-                    ? (orderSpending?.spentCents || 0)
-                    : record ? (record.amountSpentCents || 0) : 0
-                held += useOrderScopedSpending
-                    ? (orderSpending?.heldCents || 0)
-                    : record ? (record.amountHeldCents || 0) : 0
+                spent += (() => {
+                  if (useOrderScopedSpending) {
+                    return (orderSpending?.spentCents || 0)
+                  }
+                  if (record) {
+                    return (record.amountSpentCents || 0)
+                  }
+                  return 0
+                })()
+                held += (() => {
+                  if (useOrderScopedSpending) {
+                    return (orderSpending?.heldCents || 0)
+                  }
+                  if (record) {
+                    return (record.amountHeldCents || 0)
+                  }
+                  return 0
+                })()
                 allocated += record?.amountAllocatedCents || 0
                 credited += record?.amountCreditedCents || 0
             })

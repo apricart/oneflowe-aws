@@ -1,11 +1,11 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState,useEffect } from "react"
 import dynamic from "next/dynamic"
 import { useSession } from "next-auth/react"
 import { useRouter } from "next/navigation"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Building2, Upload, Eye, Loader2 } from "lucide-react"
+import { Card,CardHeader,CardTitle } from "@/components/ui/card"
+import { Building2,Upload,Eye,Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 // Dynamic imports for child pages — loaded on demand for fast tab switching
@@ -82,7 +82,7 @@ export default function OrganizationInventoryPage() {
                 {tabs.map((tab) => {
                     const isActive = activeTab === tab.id
                     return (
-                        <button
+                        <button type="button"
                             key={tab.id}
                             onClick={() => setActiveTab(tab.id)}
                             className={cn(

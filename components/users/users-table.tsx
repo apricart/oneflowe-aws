@@ -112,8 +112,8 @@ export function UsersTable() {
         phone: editForm.phone || null,
       }
       const accessBody = {
-        organizationId: editForm.organizationId ? parseInt(editForm.organizationId) : null,
-        branchId: editForm.branchId ? parseInt(editForm.branchId) : null,
+        organizationId: editForm.organizationId ? Number.parseInt(editForm.organizationId) : null,
+        branchId: editForm.branchId ? Number.parseInt(editForm.branchId) : null,
         mfaEnabled: editForm.mfaEnabled
       }
 
@@ -367,7 +367,7 @@ export function UsersTable() {
               >
                 <option value="">No Branch</option>
                 {branches
-                  .filter((b: any) => !editForm.organizationId || b.organizationId === parseInt(editForm.organizationId))
+                  .filter((b: any) => !editForm.organizationId || b.organizationId === Number.parseInt(editForm.organizationId))
                   .map((branch: any) => (
                     <option key={branch.id} value={branch.id}>
                       {branch.name}

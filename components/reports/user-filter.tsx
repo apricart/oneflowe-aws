@@ -32,7 +32,7 @@ export function UserFilter({
     branchIds, 
     placeholder = "Select Users", 
     disabled = false 
-}: UserFilterProps) {
+}: Readonly<UserFilterProps>) {
     const params = new URLSearchParams()
     if (organizationIds?.length) params.set("organizationIds", organizationIds.join(","))
     if (groupIds?.length) params.set("groupIds", groupIds.join(","))

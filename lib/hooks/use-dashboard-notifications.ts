@@ -51,6 +51,79 @@ const getNotificationReadKey = (notification: DashboardNotification) =>
     notification.message,
   ].join("|")
 
+type PendingRefund = NonNullable<PendingRefundsResponse["refunds"]>[number]
+
+const getPendingOrderNotification = (
+  pendingOrders: any[],
+  canApproveOrders: boolean | undefined,
+): DashboardNotification | null => {
+  if (!canApproveOrders || pendingOrders.length === 0) return null
+
+  const isSinglePendingOrder = pendingOrders.length === 1
+  return {
+    id: "pending-orders",
+    title: "Orders awaiting approval",
+    message: isSinglePendingOrder
+      ? "1 order has been waiting for approval."
+      : `${pendingOrders.length} orders require approval.`,
+    severity: pendingOrders.length > 10 ? "critical" : "warning",
+    cta: {
+      label: isSinglePendingOrder ? "Review order" : "Review orders",
+      href: getPendingOrderReviewHref(pendingOrders[0]?.id, pendingOrders.length),
+    },
+    tag: pendingOrders[0]?.status || "pending",
+  }
+}
+
+const getPendingRefundNotification = (
+  role: string | undefined,
+  pendingRefunds: PendingRefund[],
+): DashboardNotification | null => {
+  if (role !== "SUPER_ADMIN" || pendingRefunds.length === 0) return null
+
+  const latest = pendingRefunds[0]
+  const amountLabel = typeof latest?.amountCents === "number"
+    ? `PKR ${(latest.amountCents / 100).toFixed(2)}`
+    : "amount unavailable"
+  const targetLabel = latest?.tid ? `Transaction ID ${latest.tid}` : "unknown transaction"
+  const branchLabel = latest?.branchName ? ` from ${latest.branchName}` : ""
+  return {
+    id: "pending-refunds",
+    title: `${pendingRefunds.length} refund request${pendingRefunds.length === 1 ? "" : "s"} awaiting review`,
+    message: `Latest request: ${targetLabel} — ${amountLabel}${branchLabel}.`,
+    severity: pendingRefunds.length > 5 ? "critical" : "warning",
+    cta: { label: "Review refunds", href: "/refunds" },
+    tag: `${pendingRefunds.length} pending`,
+  }
+}
+
+const getInactiveBranchesNotification = (
+  role: string | undefined,
+  branches: Array<{ id: number; status?: string | null }>,
+): DashboardNotification | null => {
+  if (role !== "HEAD_OFFICE") return null
+
+  const inactiveCount = branches.filter(
+    (branch) => (branch.status || "inactive").toLowerCase() !== "active",
+  ).length
+  if (inactiveCount === 0) return null
+
+  return {
+    id: "inactive-branches",
+    title: "Branches offline",
+    message: `${inactiveCount} branch${inactiveCount === 1 ? " is" : "es are"} marked inactive.`,
+    severity: "warning",
+    cta: { label: "View branches", href: "/branches" },
+    tag: "ops",
+  }
+}
+
+const compactNotifications = (
+  notifications: Array<DashboardNotification | null>,
+): DashboardNotification[] => notifications.filter(
+  (notification): notification is DashboardNotification => notification !== null,
+)
+
 export function useDashboardNotifications() {
   const { data: session, status: sessionStatus } = useSession()
   const role = (session?.user as any)?.role as "SUPER_ADMIN" | "HEAD_OFFICE" | "BRANCH_ADMIN" | "ORDER_PORTAL" | undefined
@@ -91,12 +164,18 @@ export function useDashboardNotifications() {
     if (scopedBranchId) params.set("branchId", scopedBranchId)
     return `/api/v1/orders?${params.toString()}`
   }, [isAdminRole, scopedOrgId, scopedBranchId])
-  const branchesUrl = role === "HEAD_OFFICE"
-    ? `/api/v1/branches${organizationId ? `?organizationId=${encodeURIComponent(organizationId)}` : ""}`
-    : null
-  const usersUrl = role === "HEAD_OFFICE"
-    ? `/api/v1/users${organizationId ? `?organizationId=${encodeURIComponent(organizationId)}` : ""}`
-    : null
+  const branchesUrl = (() => {
+    if (role === "HEAD_OFFICE") {
+      return `/api/v1/branches${organizationId ? ("?organizationId=" + String(encodeURIComponent(organizationId))) : ""}`
+    }
+    return null
+  })()
+  const usersUrl = (() => {
+    if (role === "HEAD_OFFICE") {
+      return `/api/v1/users${organizationId ? ("?organizationId=" + String(encodeURIComponent(organizationId))) : ""}`
+    }
+    return null
+  })()
 
   const pendingOrdersQuery = useAPI<PendingOrdersResponse>(pendingOrdersUrl)
   const branchesQuery = useAPI<{ items: any[] }>(branchesUrl)
@@ -115,80 +194,15 @@ export function useDashboardNotifications() {
 
   const computedNotifications = useMemo<DashboardNotification[]>(() => {
     if (!isInitialized || !isAdminRole) return []
-    const items: DashboardNotification[] = []
     const pendingOrders = pendingOrdersQuery.data?.items || []
-    if (pendingOrdersQuery.data?.capabilities?.canApproveOrders && pendingOrders.length > 0) {
-      const severity = pendingOrders.length > 10 ? "critical" : "warning"
-      const isSinglePendingOrder = pendingOrders.length === 1
-      items.push({
-        id: "pending-orders",
-        title: "Orders awaiting approval",
-        message:
-          isSinglePendingOrder
-            ? "1 order has been waiting for approval."
-            : `${pendingOrders.length} orders require approval.`,
-        severity,
-        cta: {
-          label: isSinglePendingOrder ? "Review order" : "Review orders",
-          href: getPendingOrderReviewHref(pendingOrders[0]?.id, pendingOrders.length),
-        },
-        tag: pendingOrders[0]?.status || "pending",
-      })
-    }
-
-    if (role === "SUPER_ADMIN") {
-      const pendingRefunds = pendingRefundsQuery.data?.refunds || []
-      if (pendingRefunds.length > 0) {
-        const latest = pendingRefunds[0]
-        const amountLabel =
-          typeof latest?.amountCents === "number"
-            ? `PKR ${(latest.amountCents / 100).toFixed(2)}`
-            : "amount unavailable"
-        const targetLabel = latest?.tid ? `Transaction ID ${latest.tid}` : "unknown transaction"
-        const branchLabel = latest?.branchName ? ` from ${latest.branchName}` : ""
-
-        items.push({
-          id: "pending-refunds",
-          title: `${pendingRefunds.length} refund request${pendingRefunds.length === 1 ? "" : "s"} awaiting review`,
-          message: `Latest request: ${targetLabel} — ${amountLabel}${branchLabel}.`,
-          severity: pendingRefunds.length > 5 ? "critical" : "warning",
-          cta: { label: "Review refunds", href: "/refunds" },
-          tag: `${pendingRefunds.length} pending`,
-        })
-      }
-    }
-
-
-
-    if (role === "HEAD_OFFICE") {
-      const branches = (branchesQuery.data?.items || []) as Array<{
-        id: number
-        status?: string | null
-      }>
-      const users = (usersQuery.data?.items || []) as Array<{
-        role?: string
-        branchId?: number | null
-      }>
-      const adminsByBranch = new Set(
-        users.filter((u) => u.role === "BRANCH_ADMIN" && typeof u.branchId === "number").map((u) => String(u.branchId)),
-      )
-
-      const inactiveBranches = branches.filter((b) => (b.status || "inactive").toLowerCase() !== "active")
-      if (inactiveBranches.length > 0) {
-        items.push({
-          id: "inactive-branches",
-          title: "Branches offline",
-          message: `${inactiveBranches.length} branch${inactiveBranches.length === 1 ? " is" : "es are"
-            } marked inactive.`,
-          severity: "warning",
-          cta: { label: "View branches", href: "/branches" },
-          tag: "ops",
-        })
-      }
-    }
-
-
-    return items
+    return compactNotifications([
+      getPendingOrderNotification(
+        pendingOrders,
+        pendingOrdersQuery.data?.capabilities?.canApproveOrders,
+      ),
+      getPendingRefundNotification(role, pendingRefundsQuery.data?.refunds || []),
+      getInactiveBranchesNotification(role, branchesQuery.data?.items || []),
+    ])
   }, [
     isInitialized,
     isAdminRole,
@@ -197,7 +211,6 @@ export function useDashboardNotifications() {
     pendingRefundsQuery.data?.refunds,
     pendingOrdersQuery.data?.items,
     pendingOrdersQuery.data?.capabilities?.canApproveOrders,
-    usersQuery.data?.items,
   ])
 
   const rawDbNotifications = useMemo(

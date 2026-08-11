@@ -1,6 +1,6 @@
 import { ReactNode } from "react"
 
-export function SectionHeader({ title, subtitle, actions }: { title: string; subtitle?: string; actions?: ReactNode }) {
+export function SectionHeader({ title, subtitle, actions }: Readonly<{ title: string; subtitle?: string; actions?: ReactNode }>) {
   return (
     <div className="flex items-center justify-between">
       <div>

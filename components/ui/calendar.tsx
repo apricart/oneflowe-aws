@@ -19,6 +19,34 @@ import { Button, buttonVariants } from '@/components/ui/button'
 
 export const CALENDAR_DROPDOWN_LAYER_ATTR = 'data-calendar-dropdown-layer'
 
+type DayPickerComponents = NonNullable<React.ComponentProps<typeof DayPicker>['components']>
+
+function CalendarRoot({ className, rootRef, ...props }: React.ComponentProps<DayPickerComponents['Root']>) {
+  return <div data-slot="calendar" ref={rootRef} className={cn(className)} {...props} />
+}
+
+function CalendarChevron({ className, orientation, ...props }: React.ComponentProps<DayPickerComponents['Chevron']>) {
+  if (orientation === 'left') {
+    return <ChevronLeftIcon className={cn('size-4', className)} {...props} />
+  }
+
+  if (orientation === 'right') {
+    return <ChevronRightIcon className={cn('size-4', className)} {...props} />
+  }
+
+  return <ChevronDownIcon className={cn('size-4', className)} {...props} />
+}
+
+function CalendarWeekNumber({ children, ...props }: React.ComponentProps<DayPickerComponents['WeekNumber']>) {
+  return (
+    <td {...props}>
+      <div className="flex size-(--cell-size) items-center justify-center text-center">
+        {children}
+      </div>
+    </td>
+  )
+}
+
 function Calendar({
   className,
   classNames,
@@ -48,8 +76,8 @@ function Calendar({
           date.toLocaleString('default', { month: 'short' }),
         ...formatters,
       }}
-      fromYear={2015}
-      toYear={2050}
+      startMonth={new Date(2015, 0)}
+      endMonth={new Date(2050, 11)}
       classNames={{
         root: cn('w-fit', defaultClassNames.root),
         months: cn(
@@ -135,47 +163,11 @@ function Calendar({
         ...classNames,
       }}
       components={{
-        Root: ({ className, rootRef, ...props }) => {
-          return (
-            <div
-              data-slot="calendar"
-              ref={rootRef}
-              className={cn(className)}
-              {...props}
-            />
-          )
-        },
-        Chevron: ({ className, orientation, ...props }) => {
-          if (orientation === 'left') {
-            return (
-              <ChevronLeftIcon className={cn('size-4', className)} {...props} />
-            )
-          }
-
-          if (orientation === 'right') {
-            return (
-              <ChevronRightIcon
-                className={cn('size-4', className)}
-                {...props}
-              />
-            )
-          }
-
-          return (
-            <ChevronDownIcon className={cn('size-4', className)} {...props} />
-          )
-        },
+        Root: CalendarRoot,
+        Chevron: CalendarChevron,
         DayButton: CalendarDayButton,
         Dropdown: CalendarDropdown,
-        WeekNumber: ({ children, ...props }) => {
-          return (
-            <td {...props}>
-              <div className="flex size-(--cell-size) items-center justify-center text-center">
-                {children}
-              </div>
-            </td>
-          )
-        },
+        WeekNumber: CalendarWeekNumber,
         ...components,
       }}
       {...props}
@@ -205,8 +197,18 @@ function CalendarDropdown({
       }
     }
 
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOpen(false)
+      }
+    }
+
     document.addEventListener('pointerdown', handlePointerDown)
-    return () => document.removeEventListener('pointerdown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
   }, [open])
 
   return (
@@ -214,13 +216,6 @@ function CalendarDropdown({
       ref={dropdownRef}
       {...{ [CALENDAR_DROPDOWN_LAYER_ATTR]: '' }}
       className="relative"
-      onPointerDown={(event) => event.stopPropagation()}
-      onKeyDown={(event) => {
-        if (event.key === 'Escape') {
-          event.stopPropagation()
-          setOpen(false)
-        }
-      }}
     >
       <Button
         type="button"

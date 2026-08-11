@@ -53,7 +53,62 @@ interface UngroupedBranch {
     organizationName?: string
 }
 
-export function GroupAnalytics({ role }: { role: string }) {
+const GROUP_CHART_COLORS = ["#3b82f6", "#60a5fa", "#93c5fd", "#bfdbfe", "#dbeafe"]
+
+function formatGroupCurrency(cents: number) {
+    return new Intl.NumberFormat("en-PK", {
+        style: "currency",
+        currency: "PKR",
+        maximumFractionDigits: 0,
+    }).format(cents / 100)
+}
+
+function GroupChartTooltip({ active, payload, activeTab }: any) {
+    if (!active || !payload?.length) {
+        return null
+    }
+
+    const data = payload[0].payload
+    return (
+        <div className="bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl p-6 border border-slate-100 dark:border-slate-800 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.1)] border-b-4 border-b-blue-500">
+            <p className="font-black text-slate-900 dark:text-white text-lg mb-1">{data.fullName}</p>
+            <div className="flex items-center gap-2 text-blue-600 dark:text-blue-400 font-black text-2xl">
+                {activeTab === "purchases" ? formatGroupCurrency(data.value * 100) : `${data.value.toLocaleString()} Orders`}
+            </div>
+        </div>
+    )
+}
+
+function GroupChartLabel({ x, y, width, value, activeTab }: any) {
+    const formattedValue = activeTab === "purchases"
+        ? `₨${(value / 1000).toFixed(1)}k`
+        : value
+
+    return (
+        <g>
+            <rect
+                x={x + width / 2 - 35}
+                y={y - 35}
+                width={70}
+                height={28}
+                fill="white"
+                rx={8}
+                className="drop-shadow-lg"
+                opacity={0.95}
+            />
+            <text
+                x={x + width / 2}
+                y={y - 16}
+                textAnchor="middle"
+                className="fill-slate-900 font-black text-sm"
+            >
+                {formattedValue}
+            </text>
+        </g>
+    )
+}
+
+export function GroupAnalytics({ role }: Readonly<{ role: string }>) {
     const { organizationId: globalOrgId } = useAppContext()
     const [activeTab, setActiveTab] = useState<"purchases" | "orders">("purchases")
     const [searchQuery, setSearchQuery] = useState("")
@@ -85,13 +140,13 @@ export function GroupAnalytics({ role }: { role: string }) {
         )
 
         // Sort groups by value
-        const sortedGroups = filteredGroups.sort((a, b) => {
+        const sortedGroups = filteredGroups.toSorted((a, b) => {
             if (activeTab === "purchases") return b.totalAmountCents - a.totalAmountCents
             return b.totalOrders - a.totalOrders
         })
 
         // Sort ungrouped by value
-        const sortedUngrouped = filteredUngrouped.sort((a, b) => {
+        const sortedUngrouped = filteredUngrouped.toSorted((a, b) => {
             if (activeTab === "purchases") return b.totalAmountCents - a.totalAmountCents
             return b.totalOrders - a.totalOrders
         })
@@ -105,14 +160,6 @@ export function GroupAnalytics({ role }: { role: string }) {
         const groupsWithBranches = groupsData.filter(g => g.branchCount > 0)
         return groupsWithBranches.slice(0, 5)
     }, [groupsData])
-
-    const formatCurrency = (cents: number) => {
-        return new Intl.NumberFormat("en-PK", {
-            style: "currency",
-            currency: "PKR",
-            maximumFractionDigits: 0,
-        }).format(cents / 100)
-    }
 
     if (error) {
         console.error("Group Analytics Fetch Error:", error)
@@ -144,14 +191,6 @@ export function GroupAnalytics({ role }: { role: string }) {
         fullName: g.name,
         type: g.type
     }))
-
-    const colors = [
-        "#3b82f6", // blue-500
-        "#60a5fa", // blue-400
-        "#93c5fd", // blue-300
-        "#bfdbfe", // blue-200
-        "#dbeafe"  // blue-100
-    ]
 
     if (groupsData.length === 0 && ungroupedBranchesData.length === 0 && !searchQuery) {
         return (
@@ -208,7 +247,7 @@ export function GroupAnalytics({ role }: { role: string }) {
                     </div>
 
                     <div className="flex items-center gap-2 p-1.5 bg-slate-900/50 rounded-2xl border border-white/5 shadow-2xl overflow-hidden self-start md:self-center">
-                        <button
+                        <button type="button"
                             onClick={() => setActiveTab("purchases")}
                             className={`px-8 py-3 rounded-xl text-sm font-bold tracking-wide transition-all duration-300 ${activeTab === "purchases"
                                 ? "bg-white text-slate-950 shadow-[0_0_20px_rgba(255,255,255,0.3)]"
@@ -217,7 +256,7 @@ export function GroupAnalytics({ role }: { role: string }) {
                         >
                             {label.toUpperCase()}
                         </button>
-                        <button
+                        <button type="button"
                             onClick={() => setActiveTab("orders")}
                             className={`px-8 py-3 rounded-xl text-sm font-bold tracking-wide transition-all duration-300 ${activeTab === "orders"
                                 ? "bg-white text-slate-950 shadow-[0_0_20px_rgba(255,255,255,0.3)]"
@@ -269,61 +308,25 @@ export function GroupAnalytics({ role }: { role: string }) {
                                             axisLine={false}
                                             tickLine={false}
                                             tick={{ fill: "#94a3b8", fontSize: 11, fontWeight: 600 }}
-                                            tickFormatter={(value) => activeTab === "purchases" ? `₨${value >= 1000 ? (value / 1000).toFixed(0) + "k" : value}` : value}
+                                            tickFormatter={(value) => (() => {
+                                              if (activeTab === "purchases") {
+                                                return `₨${value >= 1000 ? (value / 1000).toFixed(0) + "k" : value}`
+                                              }
+                                              return value
+                                            })()}
                                         />
                                         <Tooltip
                                             cursor={{ fill: "rgba(59, 130, 246, 0.08)", radius: 12 }}
-                                            content={({ active, payload }) => {
-                                                if (active && payload && payload.length) {
-                                                    const data = payload[0].payload;
-                                                    return (
-                                                        <div className="bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl p-6 border border-slate-100 dark:border-slate-800 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.1)] border-b-4 border-b-blue-500">
-                                                            <p className="font-black text-slate-900 dark:text-white text-lg mb-1">{data.fullName}</p>
-                                                            <div className="flex items-center gap-2 text-blue-600 dark:text-blue-400 font-black text-2xl">
-                                                                {activeTab === "purchases" ? formatCurrency(data.value * 100) : `${data.value.toLocaleString()} Orders`}
-                                                            </div>
-                                                        </div>
-                                                    );
-                                                }
-                                                return null;
-                                            }}
+                                            content={<GroupChartTooltip activeTab={activeTab} />}
                                         />
                                         <Bar dataKey="value" radius={[18, 18, 0, 0]} barSize={64} animationDuration={1500}>
                                             {chartData.map((entry, index) => (
-                                                <Cell key={`cell-${index}`} fill={colors[index % colors.length]} className="hover:opacity-80 transition-opacity duration-300" />
+                                                <Cell key={entry.fullName} fill={GROUP_CHART_COLORS[index % GROUP_CHART_COLORS.length]} className="hover:opacity-80 transition-opacity duration-300" />
                                             ))}
                                             <LabelList
                                                 dataKey="value"
                                                 position="top"
-                                                content={(props: any) => {
-                                                    const { x, y, width, value } = props;
-                                                    const formattedValue = activeTab === "purchases"
-                                                        ? `₨${(value / 1000).toFixed(1)}k`
-                                                        : value;
-
-                                                    return (
-                                                        <g>
-                                                            <rect
-                                                                x={x + width / 2 - 35}
-                                                                y={y - 35}
-                                                                width={70}
-                                                                height={28}
-                                                                fill="white"
-                                                                rx={8}
-                                                                className="drop-shadow-lg"
-                                                                opacity={0.95}
-                                                            />
-                                                            <text
-                                                                x={x + width / 2}
-                                                                y={y - 16}
-                                                                textAnchor="middle"
-                                                                className="fill-slate-900 font-black text-sm"
-                                                            >
-                                                                {formattedValue}
-                                                            </text>
-                                                        </g>
-                                                    );
-                                                }}
+                                                content={<GroupChartLabel activeTab={activeTab} />}
                                             />
                                         </Bar>
                                     </BarChart>
@@ -389,7 +392,7 @@ export function GroupAnalytics({ role }: { role: string }) {
                                                             </div>
                                                             <div className="flex items-center gap-1.5 text-blue-600 dark:text-blue-400 font-black">
                                                                 <ShoppingBag className="h-3.5 w-3.5 opacity-60" />
-                                                                {formatCurrency(item.totalAmountCents)}
+                                                                {formatGroupCurrency(item.totalAmountCents)}
                                                             </div>
                                                         </div>
                                                     </div>
@@ -407,8 +410,8 @@ export function GroupAnalytics({ role }: { role: string }) {
                                                         <span className="text-slate-600 dark:text-slate-300">{item.branchCount} nodes</span>
                                                     </div>
                                                     <div className="flex flex-wrap gap-1.5">
-                                                        {(item.branches || []).slice(0, 3).map((b, i) => (
-                                                            <span key={i} className="text-[10px] px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-800 font-bold text-slate-600 dark:text-slate-400">
+                                                        {(item.branches || []).slice(0, 3).map((b) => (
+                                                            <span key={b.id ?? b.name} className="text-[10px] px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-800 font-bold text-slate-600 dark:text-slate-400">
                                                                 {b.name}
                                                             </span>
                                                         ))}
@@ -519,7 +522,7 @@ export function GroupAnalytics({ role }: { role: string }) {
                                                     <ShoppingBag className="h-3.5 w-3.5" />
                                                     <span className="text-[10px] font-black uppercase tracking-widest text-indigo-500/70">{label}</span>
                                                 </div>
-                                                <span className="text-2xl font-black text-indigo-600 dark:text-indigo-400">{formatCurrency(branch.totalAmountCents)}</span>
+                                                <span className="text-2xl font-black text-indigo-600 dark:text-indigo-400">{formatGroupCurrency(branch.totalAmountCents)}</span>
                                             </div>
 
                                             <div className="shrink-0 ml-4 hidden lg:block">

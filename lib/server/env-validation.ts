@@ -47,7 +47,7 @@ function requiredSecret(name: string, minimumLength = 32) {
 
 function postgresUrl(name: string) {
   return requiredValue(name)
-    .url(`${name} must be a valid URL`)
+    .pipe(z.url({ error: `${name} must be a valid URL` }))
     .refine((value) => {
       const protocol = new URL(value).protocol
       return protocol === 'postgres:' || protocol === 'postgresql:'
@@ -61,7 +61,7 @@ function postgresUrl(name: string) {
 
 function httpUrl(name: string) {
   return requiredValue(name)
-    .url(`${name} must be a valid URL`)
+    .pipe(z.url({ error: `${name} must be a valid URL` }))
     .refine((value) => {
       const protocol = new URL(value).protocol
       return protocol === 'http:' || protocol === 'https:'

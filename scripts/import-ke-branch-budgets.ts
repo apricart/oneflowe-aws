@@ -16,9 +16,9 @@
  *   in the report for review but does not mutate this application's spend ledger.
  */
 
-import { createHash } from "crypto"
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs"
-import { dirname, resolve } from "path"
+import { createHash } from "node:crypto"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { dirname, resolve } from "node:path"
 import * as dotenv from "dotenv"
 import { and, asc, eq, sql } from "drizzle-orm"
 import {
@@ -148,9 +148,9 @@ function periodRange(start: string, end: string): string[] {
   for (let year = startYear, month = startMonth; year < endYear || (year === endYear && month <= endMonth);) {
     result.push(`${year}-${String(month).padStart(2, "0")}`)
     month += 1
-    if (month === 13) {
+    if (month > 12) {
       year += 1
-      month = 1
+      month -= 12
     }
   }
   return result
@@ -185,7 +185,7 @@ function chooseSource(periods: AggregatedSource[], targetPeriod: string): {
 } {
   const exact = periods.find((row) => row.period === targetPeriod)
   if (exact) return { row: exact, method: "exact" }
-  const prior = periods.filter((row) => row.period < targetPeriod).at(-1)
+  const prior = periods.findLast((row) => row.period < targetPeriod)
   if (prior) return { row: prior, method: "carry-forward" }
   return { row: periods[0], method: "backfill-earliest" }
 }
@@ -324,7 +324,8 @@ async function main() {
     `, [KE_ORGANIZATION.id])
     const orderStarts = new Map(orderStartsResult.rows.map((row) => [row.branchId, row]))
     const currentPeriod = currentKarachiPeriod()
-    const sourcePeriods = [...new Set([...sourceGroups.values()].map((row) => row.period))].sort()
+    const sourcePeriods = [...new Set([...sourceGroups.values()].map((row) => row.period))]
+      .sort((a, b) => a.localeCompare(b))
     assert(sourcePeriods.at(-1) === currentPeriod, `Source latest period ${sourcePeriods.at(-1)} does not match current period ${currentPeriod}`)
 
     const existingBudgets = await db
@@ -411,8 +412,8 @@ async function main() {
       }))
     const sourceOnlySummary = [...sourceOnly.entries()].map(([targetKey, value]) => ({
       targetKey,
-      sourceNames: [...value.names].sort(),
-      periods: [...value.periods].sort(),
+      sourceNames: [...value.names].sort((a, b) => a.localeCompare(b)),
+      periods: [...value.periods].sort((a, b) => a.localeCompare(b)),
       rowCount: value.rowCount,
     }))
 
@@ -499,8 +500,12 @@ async function main() {
         .select({ branchId: budgets.branchId, period: budgets.period })
         .from(budgets)
         .where(eq(budgets.organizationId, KE_ORGANIZATION.id))
-      const currentKeys = currentExisting.map((row) => `${row.branchId}:${row.period}`).sort()
-      const preflightKeys = existingBudgets.map((row) => `${row.branchId}:${row.period}`).sort()
+      const currentKeys = currentExisting
+        .map((row) => `${row.branchId}:${row.period}`)
+        .sort((a, b) => a.localeCompare(b))
+      const preflightKeys = existingBudgets
+        .map((row) => `${row.branchId}:${row.period}`)
+        .sort((a, b) => a.localeCompare(b))
       assert(JSON.stringify(currentKeys) === JSON.stringify(preflightKeys), "K-Electric budgets changed after preflight; aborting")
 
       const insertedIds: number[] = []

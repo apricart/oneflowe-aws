@@ -21,11 +21,11 @@ const databaseConfig = {
 
 const pgDumpCandidates = process.platform === 'win32'
   ? [
-      'C:\\Program Files\\PostgreSQL\\18\\bin\\pg_dump.exe',
-      'C:\\Program Files\\PostgreSQL\\17\\bin\\pg_dump.exe',
-      'C:\\Program Files\\PostgreSQL\\16\\bin\\pg_dump.exe',
-      'C:\\Program Files\\PostgreSQL\\15\\bin\\pg_dump.exe',
-      'C:\\Program Files\\PostgreSQL\\14\\bin\\pg_dump.exe',
+      String.raw`C:\Program Files\PostgreSQL\18\bin\pg_dump.exe`,
+      String.raw`C:\Program Files\PostgreSQL\17\bin\pg_dump.exe`,
+      String.raw`C:\Program Files\PostgreSQL\16\bin\pg_dump.exe`,
+      String.raw`C:\Program Files\PostgreSQL\15\bin\pg_dump.exe`,
+      String.raw`C:\Program Files\PostgreSQL\14\bin\pg_dump.exe`,
     ]
   : ['/usr/bin/pg_dump', '/usr/local/bin/pg_dump', '/opt/homebrew/bin/pg_dump']
 const pgDumpPath = pgDumpCandidates.find(existsSync)

@@ -109,7 +109,7 @@ export default function BranchAssignmentsPage() {
                 {tabs.map((tab) => {
                     const isActive = activeTab === tab.id
                     return (
-                        <button
+                        <button type="button"
                             key={tab.id}
                             onClick={() => setActiveTab(tab.id)}
                             className={cn(

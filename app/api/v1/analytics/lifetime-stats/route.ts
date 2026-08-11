@@ -6,6 +6,7 @@ import { orders, branches } from "@/db/schema"
 import { getRequestScope } from "@/lib/auth"
 import { metricExpressions } from "@/lib/metric-utils"
 import { redactAnalyticsPrices, shouldHidePricesForRole } from "@/lib/price-visibility"
+import { resolveAnalyticsRequestScope } from "@/lib/analytics-request-scope"
 
 const allowedRoles = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"] as const
 
@@ -20,30 +21,7 @@ export async function GET(req: NextRequest) {
 
     // Get filter parameters from query string
     const { searchParams } = new URL(req.url)
-    const orgIdParam = searchParams.get("organizationId")
-    const branchIdParam = searchParams.get("branchId")
-    const groupIdParam = searchParams.get("groupId")
-
-    // Use query params if provided, otherwise fall back to auth scope
-    let organizationId: number | null = null
-    let branchId: number | null = null
-    let groupId: number | null = null
-
-    if (orgIdParam && orgIdParam !== "null" && orgIdParam !== "0") {
-        organizationId = Number(orgIdParam)
-    } else if (role !== "SUPER_ADMIN" && scope?.organizationId) {
-        organizationId = scope.organizationId
-    }
-
-    if (branchIdParam && branchIdParam !== "null" && branchIdParam !== "0") {
-        branchId = Number(branchIdParam)
-    } else if (role === "BRANCH_ADMIN" && scope?.branchId) {
-        branchId = scope.branchId
-    }
-
-    if (groupIdParam && groupIdParam !== "null" && groupIdParam !== "0") {
-        groupId = Number(groupIdParam)
-    }
+    const { organizationId, branchId, groupId } = resolveAnalyticsRequestScope(searchParams, scope)
     const pricesHidden = await shouldHidePricesForRole(role, scope?.organizationId)
 
     // Build conditions — query ALL orders, use CASE WHEN for revenue

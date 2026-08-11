@@ -1,4 +1,5 @@
 #!/usr/bin/env tsx
+import { stringifyPrimitive } from "../lib/stringify-primitive"
 
 import { createHash } from "node:crypto"
 import { readFileSync, writeFileSync } from "node:fs"
@@ -18,7 +19,7 @@ const ORDERS = [
   { legacyOrderId: 1184, branch: "CHSEQ", orderNo: 1, transactionNo: 11, priorStatusId: 1, priorDeliveryStatus: 501, priorDate: "2026-07-09" },
 ]
 
-function normalize(value: unknown): string { return String(value ?? "").normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase() }
+function normalize(value: unknown): string { return stringifyPrimitive(value).normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase() }
 
 async function get(pathname: string) {
   const url = new URL(pathname, BASE)
@@ -27,7 +28,11 @@ async function get(pathname: string) {
   const response = await fetch(url, { method: "GET", redirect: "follow", headers: { Accept: "application/json, text/plain, */*" } })
   const text = await response.text()
   let data: any = text
-  try { data = text ? JSON.parse(text) : null } catch {}
+  try {
+    data = text ? JSON.parse(text) : null
+  } catch (error) {
+    console.warn(`Unable to parse response from ${url}:`, error)
+  }
   return { ok: response.ok, status: response.status, durationMs: Date.now() - started, data }
 }
 
@@ -41,7 +46,7 @@ async function main() {
     return { ...order, locationId: Number(matches[0].ID) }
   })
   const openByLocation = new Map<number, any>()
-  for (const locationId of [...new Set(resolved.map((row) => row.locationId))]) {
+  for (const locationId of new Set(resolved.map((row) => row.locationId))) {
     openByLocation.set(locationId, await get(`api/OrderController/GetOrders/${locationId}`))
   }
   const results: Row[] = []
@@ -82,7 +87,7 @@ async function main() {
       alreadyImportedToProduction: results.filter((row) => importedIds.has(row.legacyOrderId)).length,
     },
     locations: resolved.map((row) => ({ branch: row.branch, locationId: row.locationId })),
-    openOrderResponses: Object.fromEntries([...openByLocation.entries()]),
+    openOrderResponses: Object.fromEntries(openByLocation),
     orders: results,
   }
   const text = `${JSON.stringify(report, null, 2)}\n`

@@ -1,3 +1,4 @@
+import { stringifyPrimitive } from "./stringify-primitive"
 /**
  * Email Service
  * Handles application email sending using AWS SES.
@@ -14,7 +15,15 @@ const sanitizeEmailTagValue = (value: string) =>
  * Generate HTML email template for OTP
  */
 function generateOTPEmailHTML(code: string, type: string): string {
-  const typeText = type === 'LOGIN' ? 'Login' : type === 'VERIFY_EMAIL' ? 'Email Verification' : 'Password Reset'
+  const typeText = (() => {
+    if (type === 'LOGIN') {
+      return 'Login'
+    }
+    if (type === 'VERIFY_EMAIL') {
+      return 'Email Verification'
+    }
+    return 'Password Reset'
+  })()
 
   return `
     <!DOCTYPE html>
@@ -92,7 +101,15 @@ function generateOTPEmailHTML(code: string, type: string): string {
  * Generate plain text email for OTP (fallback)
  */
 function generateOTPEmailText(code: string, type: string): string {
-  const typeText = type === 'LOGIN' ? 'Login' : type === 'VERIFY_EMAIL' ? 'Email Verification' : 'Password Reset'
+  const typeText = (() => {
+    if (type === 'LOGIN') {
+      return 'Login'
+    }
+    if (type === 'VERIFY_EMAIL') {
+      return 'Email Verification'
+    }
+    return 'Password Reset'
+  })()
 
   return `
 OneFlowe - ${typeText} Verification
@@ -134,7 +151,15 @@ export async function sendOTPEmail(
     }
 
     // Prepare email subject
-    const typeText = type === 'LOGIN' ? 'Login' : type === 'VERIFY_EMAIL' ? 'Email Verification' : 'Password Reset'
+    const typeText = (() => {
+      if (type === 'LOGIN') {
+        return 'Login'
+      }
+      if (type === 'VERIFY_EMAIL') {
+        return 'Email Verification'
+      }
+      return 'Password Reset'
+    })()
     const subject = `Your OneFlowe ${typeText} Code`
 
     await sendAppEmail({
@@ -282,7 +307,7 @@ export async function sendReportEmail(
 }
 
 const escapeHtml = (value: unknown) =>
-  String(value ?? "")
+  stringifyPrimitive(value)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -362,7 +387,7 @@ const generateRefundRequestEmailHTML = (details: RefundRequestEmailDetails) => {
                     <tr><td style="padding-top: 8px; color: #64748b; font-size: 13px; font-weight: 700;">Requested By</td><td style="padding-top: 8px; text-align: right; color: #1e293b; font-size: 13px; font-weight: 800;">${escapeHtml(details.requestedBy)}</td></tr>
                     <tr><td style="padding-top: 8px; color: #64748b; font-size: 13px; font-weight: 700;">Refund Amount</td><td style="padding-top: 8px; text-align: right; color: #dc2626; font-size: 16px; font-weight: 900;">PKR ${escapeHtml((details.amountCents / 100).toFixed(2))}</td></tr>
                   </table>
-                  ${details.reason ? `<div style="margin-top: 22px; padding: 14px; background-color: #f8fafc; border-radius: 10px; color: #475569; font-size: 14px; line-height: 1.5;"><strong>Reason:</strong> ${escapeHtml(details.reason)}</div>` : ""}
+                  ${details.reason ? ("<div style=\"margin-top: 22px; padding: 14px; background-color: #f8fafc; border-radius: 10px; color: #475569; font-size: 14px; line-height: 1.5;\"><strong>Reason:</strong> " + String(escapeHtml(details.reason)) + "</div>") : ""}
                   <table role="presentation" style="width: 100%; margin-top: 24px; border-collapse: collapse;">
                     <thead>
                       <tr>
@@ -421,8 +446,8 @@ const generateOrderTokenEmailHTML = (details: OrderTokenEmailDetails) => {
   const createdAt = details.createdAt ? new Date(details.createdAt).toLocaleString() : "N/A"
   const items = details.items.map((item) => `
     <tr>
-      <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9; color: #334155; font-size: 14px; font-weight: 600;">${escapeHtml(item.productCode ? `${item.productCode} - ${item.productName}` : item.productName)}</td>
-      <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9; color: #4f46e5; font-size: 14px; font-weight: 800; text-align: right;">${escapeHtml(`${formatQuantity(item.quantity)}${item.unit ? ` ${item.unit}` : ""}`)}</td>
+      <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9; color: #334155; font-size: 14px; font-weight: 600;">${escapeHtml(item.productCode ? (String(item.productCode) + " - " + String(item.productName)) : item.productName)}</td>
+      <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9; color: #4f46e5; font-size: 14px; font-weight: 800; text-align: right;">${escapeHtml((String(formatQuantity(item.quantity)) + String(item.unit ? (" " + String(item.unit)) : "")))}</td>
     </tr>
   `).join("")
 
@@ -485,7 +510,7 @@ export async function sendOrderTokenEmail(details: OrderTokenEmailDetails): Prom
   try {
     const createdAt = details.createdAt ? new Date(details.createdAt).toLocaleString() : "N/A"
     const itemLines = details.items.map((item) =>
-      `  - ${item.productCode ? `${item.productCode} - ` : ""}${item.productName}: ${formatQuantity(item.quantity)}${item.unit ? ` ${item.unit}` : ""}`
+      `  - ${item.productCode ? (String(item.productCode) + " - ") : ""}${item.productName}: ${formatQuantity(item.quantity)}${item.unit ? (" " + String(item.unit)) : ""}`
     )
 
     await sendAppEmail({

@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useEffect, useState } from "react"
+import { useMemo,useEffect,useState } from "react"
 import { useTheme } from "next-themes"
 import {
   ResponsiveContainer,
@@ -13,29 +13,21 @@ import {
   BarChart,
   Bar,
   LabelList,
-  Cell,
-  LineChart,
-  Line,
-  ReferenceArea,
-  ReferenceLine
+  Cell,Line,ReferenceLine
 } from "recharts"
 import {
-  TrendingUp, BarChart3, DollarSign, Activity,
-  Award, Trophy, Zap, MousePointerClick, Info,
-  Package, CheckCircle2, RotateCcw, XCircle, Calendar, Layers, Clock
+  TrendingUp,BarChart3,DollarSign,Activity,
+  Award,Info
 } from "lucide-react"
-import { motion, AnimatePresence } from "framer-motion"
-import { cn, formatPKR } from "@/lib/utils"
-import type { SalesSeriesPoint, BranchSalesPoint, DateRange } from "@/lib/hooks/use-sales-performance"
+import { motion } from "framer-motion"
+import { cn } from "@/lib/utils"
+import type { SalesSeriesPoint,BranchSalesPoint,DateRange } from "@/lib/hooks/use-sales-performance"
 import {
   format,
   eachDayOfInterval,
   eachHourOfInterval,
   eachMonthOfInterval,
-  isSameDay,
-  isSameHour,
-  isSameMonth,
-  startOfDay,
+  isSameDay,startOfDay,
   endOfDay,
   startOfMonth,
   endOfMonth,
@@ -116,9 +108,25 @@ export type YearlySalesSplineChartProps = {
   label?: string
 }
 
-export function YearlySalesSplineChart({ yearlySalesData, avgSales, label = "Purchase" }: YearlySalesSplineChartProps) {
+function yearlyChartTheme(isDark: boolean) {
+  return {
+    grid: isDark ? "#475569" : "#e2e8f0",
+    tick: isDark ? "#94a3b8" : "#64748b",
+    axis: isDark ? "#475569" : "#cbd5e1",
+    tooltipBackground: isDark ? "#1e293b" : "white",
+    tooltipBorder: isDark ? "1px solid #475569" : "1px solid #e2e8f0",
+    tooltipLabel: isDark ? "#cbd5e1" : "#334155",
+    average: isDark ? "#fbbf24" : "#f59e0b",
+    series: isDark ? "#60a5fa" : "#2563eb",
+    seriesFill: isDark ? "url(#salesGradientDark)" : "url(#salesGradient)",
+    dotFill: isDark ? "#1e293b" : "#ffffff",
+  }
+}
+
+export function YearlySalesSplineChart({ yearlySalesData, avgSales, label = "Purchase" }: Readonly<YearlySalesSplineChartProps>) {
   const { theme } = useTheme()
   const isDark = theme === 'dark'
+  const colors = yearlyChartTheme(isDark)
 
   // Add null safety checks
   if (!yearlySalesData || yearlySalesData.length === 0) {
@@ -232,34 +240,34 @@ export function YearlySalesSplineChart({ yearlySalesData, avgSales, label = "Pur
 
                 <CartesianGrid
                   strokeDasharray="3 3"
-                  stroke={isDark ? "#475569" : "#e2e8f0"}
+                  stroke={colors.grid}
                   vertical={false}
                 />
                 <XAxis
                   dataKey="month"
-                  tick={{ fill: isDark ? "#94a3b8" : "#64748b", fontWeight: 600, fontSize: 11 }}
-                  axisLine={{ stroke: isDark ? "#475569" : "#cbd5e1", strokeWidth: 1 }}
+                  tick={{ fill: colors.tick, fontWeight: 600, fontSize: 11 }}
+                  axisLine={{ stroke: colors.axis, strokeWidth: 1 }}
                   tickLine={false}
                   dy={5}
                 />
                 <YAxis
-                  tick={{ fill: isDark ? "#94a3b8" : "#64748b", fontWeight: 600, fontSize: 11 }}
+                  tick={{ fill: colors.tick, fontWeight: 600, fontSize: 11 }}
                   tickFormatter={(value) => `₨${value / 1000}k`}
-                  axisLine={{ stroke: isDark ? "#475569" : "#cbd5e1", strokeWidth: 1 }}
+                  axisLine={{ stroke: colors.axis, strokeWidth: 1 }}
                   tickLine={false}
                   dx={-5}
                 />
 
                 <Tooltip
                   contentStyle={{
-                    background: isDark ? "#1e293b" : "white",
+                    background: colors.tooltipBackground,
                     borderRadius: "8px",
-                    border: isDark ? "1px solid #475569" : "1px solid #e2e8f0",
+                    border: colors.tooltipBorder,
                     boxShadow: "0 4px 12px rgba(0, 0, 0, 0.1)",
                     padding: "8px 12px",
                   }}
                   labelStyle={{
-                    color: isDark ? "#cbd5e1" : "#334155",
+                    color: colors.tooltipLabel,
                     fontWeight: "600",
                     fontSize: "12px",
                     marginBottom: "4px"
@@ -272,11 +280,11 @@ export function YearlySalesSplineChart({ yearlySalesData, avgSales, label = "Pur
                   label={{
                     value: `Avg: ₨${Math.round(avgSales).toLocaleString()}`,
                     position: "right",
-                    fill: isDark ? "#fbbf24" : "#f59e0b",
+                    fill: colors.average,
                     fontWeight: "600",
                     fontSize: 10
                   }}
-                  stroke={isDark ? "#fbbf24" : "#f59e0b"}
+                  stroke={colors.average}
                   strokeWidth={1.5}
                   strokeDasharray="5 5"
                 />
@@ -284,18 +292,18 @@ export function YearlySalesSplineChart({ yearlySalesData, avgSales, label = "Pur
                 <Area
                   type="monotone"
                   dataKey="sales"
-                  stroke={isDark ? "#60a5fa" : "#2563eb"}
+                  stroke={colors.series}
                   strokeWidth={2.5}
-                  fill={isDark ? "url(#salesGradientDark)" : "url(#salesGradient)"}
+                  fill={colors.seriesFill}
                   dot={{
                     r: 4,
-                    fill: isDark ? "#1e293b" : "#ffffff",
-                    stroke: isDark ? "#60a5fa" : "#2563eb",
+                    fill: colors.dotFill,
+                    stroke: colors.series,
                     strokeWidth: 2
                   }}
                   activeDot={{
                     r: 6,
-                    fill: isDark ? "#60a5fa" : "#2563eb",
+                    fill: colors.series,
                     stroke: "#ffffff",
                     strokeWidth: 2
                   }}
@@ -318,21 +326,25 @@ export function ChartTooltip({
   label,
   prefix = "",
   labelText,
-}: {
+}: Readonly<{
   active?: boolean
   payload?: any[]
   label?: string
   prefix?: "currency" | "count" | ""
   labelText?: string
-}) {
+}>) {
   if (!active || !payload?.length) return null
   const value = payload[0].value as number
   const formatted =
-    prefix === "currency"
-      ? currencyFormatter.format(value)
-      : prefix === "count"
-        ? `${value.toLocaleString()} orders`
-        : value.toLocaleString()
+    (() => {
+      if (prefix === "currency") {
+        return currencyFormatter.format(value)
+      }
+      if (prefix === "count") {
+        return `${value.toLocaleString()} orders`
+      }
+      return value.toLocaleString()
+    })()
 
   return (
     <div className="relative glass-card rounded-[2.5rem] p-8 shadow-2xl overflow-hidden min-h-[440px]">
@@ -348,7 +360,7 @@ export function ChartTooltip({
 }
 
 // ----------------- Trend Area Chart -----------------
-export function TrendAreaChart({ data, className, label = "Purchase" }: { data: TrendPoint[]; className?: string; label?: string }) {
+export function TrendAreaChart({ data, className, label = "Purchase" }: Readonly<{ data: TrendPoint[]; className?: string; label?: string }>) {
   const { theme } = useTheme()
   const isDark = theme === 'dark'
   const chartData: ChartDatum[] = useMemo(
@@ -500,11 +512,11 @@ export function ComparisonBarChart({
   data,
   className,
   title,
-}: {
+}: Readonly<{
   data: TrendPoint[]
   className?: string
   title?: string
-}) {
+}>) {
   const { theme } = useTheme()
   const isDark = theme === 'dark'
   const chartData: ChartDatum[] = useMemo(
@@ -659,7 +671,7 @@ export default function SalesBarChart({ data, label = "Purchase" }: Props & { la
                 >
                   {data.map((entry, index) => (
                     <Cell
-                      key={`cell-${index}`}
+                      key={entry.month}
                       fill={isDark ? barColorsDark[index % barColorsDark.length] : barColors[index % barColors.length]}
                     />
                   ))}
@@ -740,11 +752,6 @@ export type SalesPerformanceLineChartProps = {
   label?: string
   granularity?: "hourly" | "daily" | "monthly" | "yearly"
   dateRange: DateRange | null
-  metricLabelOverrides?: {
-    revenue?: string
-    orders?: string
-    sales?: string
-  }
 }
 
 const formatCurrency = (value: number) => {
@@ -753,95 +760,113 @@ const formatCurrency = (value: number) => {
   return `₨${value}`
 }
 
+function salesPerformanceBaseTheme(isDark: boolean) {
+  return {
+    comparison: isDark ? "#fbbf24" : "#f59e0b",
+    comparisonDotFill: isDark ? "#0f172a" : "#ffffff",
+    comparisonActiveStroke: isDark ? "#f59e0b" : "#ffffff",
+    grid: isDark ? "#1e293b" : "#f1f5f9",
+    tick: isDark ? "#94a3b8" : "#64748b",
+    cursor: isDark ? "#475569" : "#cbd5e1",
+    secondary: isDark ? "#475569" : "#cbd5e1",
+    primaryDotFill: isDark ? "#0f172a" : "#ffffff",
+  }
+}
+
+function salesPerformanceMetricTheme(isDark: boolean, activeMetric: 'revenue' | 'orders') {
+  const isRevenue = activeMetric === 'revenue'
+  return {
+    series: isRevenue ? (isDark ? "#34d399" : "#10b981") : (isDark ? "#60a5fa" : "#3b82f6"),
+    activeDotStroke: isRevenue ? (isDark ? "#10b981" : "#ffffff") : (isDark ? "#3b82f6" : "#ffffff"),
+    shadowClass: isRevenue ? 'rgba(16,185,129,0.5)' : 'rgba(59,130,246,0.5)',
+    axisWidth: isRevenue ? 100 : 55,
+  }
+}
+
+function salesPerfTooltipModel(data: any, activeMetric: string, isBuyer: boolean, hasComparison: boolean) {
+  const sales = data.sales ?? 0
+  const orders = data.orders ?? 0
+  const compSales = data.compSales ?? 0
+  const compOrders = data.compOrders ?? 0
+  const isRevenue = activeMetric === 'revenue'
+  const currentValue = isRevenue ? sales : orders
+  const previousValue = isRevenue ? compSales : compOrders
+  const metricLabel = isRevenue ? (isBuyer ? 'Purchased' : 'Revenue') : 'Orders'
+  const formatValue = (value: number) => isRevenue ? `â‚¨ ${value.toLocaleString()}` : value.toLocaleString()
+  const changePercent = hasComparison && previousValue > 0
+    ? ((currentValue - previousValue) / previousValue) * 100
+    : 0
+  return {
+    sales,
+    orders,
+    isRevenue,
+    currentValue,
+    previousValue,
+    metricLabel,
+    formatValue,
+    changePercent,
+    changeDirection: currentValue >= previousValue ? 'up' : 'down',
+  }
+}
+
+function SalesPerfCurrentCard({ model }: Readonly<{ model: ReturnType<typeof salesPerfTooltipModel> }>) {
+  return (
+    <div className={cn("p-4 rounded-2xl ring-1 ring-inset", model.isRevenue ? 'bg-emerald-500/10 ring-emerald-500/20' : 'bg-blue-500/10 ring-blue-500/20')}>
+      <div className="flex items-center gap-2 mb-2">
+        <div className={`h-2 w-2 rounded-full ${model.isRevenue ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.5)]'}`} />
+        <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">Current {model.metricLabel}</span>
+      </div>
+      <span className={cn("text-2xl font-black tracking-tighter", model.isRevenue ? 'text-emerald-600 dark:text-emerald-400' : 'text-blue-600 dark:text-blue-400')}>
+        {model.formatValue(model.currentValue)}
+      </span>
+    </div>
+  )
+}
+
+function SalesPerfComparisonCard({ model }: Readonly<{ model: ReturnType<typeof salesPerfTooltipModel> }>) {
+  return (
+    <div className="p-4 rounded-2xl bg-amber-500/10 ring-1 ring-inset ring-amber-500/20">
+      <div className="flex items-center gap-2 mb-2">
+        <div className="h-2 w-2 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.5)]" />
+        <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">Previous {model.metricLabel}</span>
+      </div>
+      <div className="flex items-center justify-between">
+        <span className="text-xl font-bold text-amber-600 dark:text-amber-400 tracking-tight">{model.formatValue(model.previousValue)}</span>
+        <div className={cn("flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black", model.changeDirection === 'up' ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400' : 'bg-red-500/20 text-red-600 dark:text-red-400')}>
+          {model.changeDirection === 'up' ? 'â–²' : 'â–¼'} {Math.abs(model.changePercent).toFixed(1)}%
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SalesPerfSummary({ model }: Readonly<{ model: ReturnType<typeof salesPerfTooltipModel> }>) {
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      <div className="p-3 rounded-xl bg-slate-500/5 ring-1 ring-inset ring-slate-500/10">
+        <span className="text-[9px] font-bold text-slate-500 dark:text-slate-400 uppercase block mb-1">Orders</span>
+        <span className="text-sm font-bold text-slate-900 dark:text-white">{model.orders.toLocaleString()}</span>
+      </div>
+      <div className="p-3 rounded-xl bg-slate-500/5 ring-1 ring-inset ring-slate-500/10">
+        <span className="text-[9px] font-bold text-slate-500 dark:text-slate-400 uppercase block mb-1">Avg Value</span>
+        <span className="text-sm font-bold text-slate-900 dark:text-white">â‚¨{model.orders > 0 ? Math.round(model.sales / model.orders).toLocaleString() : 0}</span>
+      </div>
+    </div>
+  )
+}
+
 const SalesPerfTooltip = ({ active, payload, label: tooltipLabel, activeMetric, hasComparison }: any) => {
   const { userRole } = useAppContext()
-  const isBuyer = userRole === "HEAD_OFFICE" || userRole === "BRANCH_ADMIN"
-
   if (!active || !payload?.length) return null
-  const d = payload[0].payload
-  const sales = d.sales ?? 0
-  const orders = d.orders ?? 0
-  const compSales = d.compSales ?? 0
-  const compOrders = d.compOrders ?? 0
-
-  const isRevenue = activeMetric === 'revenue'
-  const currentVal = isRevenue ? sales : orders
-  const prevVal = isRevenue ? compSales : compOrders
-
-  const metricLabel = isRevenue 
-    ? (isBuyer ? 'Purchased' : 'Revenue') 
-    : 'Orders'
-  const formatVal = (v: number) => isRevenue ? `₨ ${v.toLocaleString()}` : v.toLocaleString()
-
-  // Calculate change if comparison
-  let changePercent = 0
-  let changeDir: 'up' | 'down' | 'same' = 'same'
-  if (hasComparison && prevVal > 0) {
-    changePercent = ((currentVal - prevVal) / prevVal) * 100
-    changeDir = currentVal >= prevVal ? 'up' : 'down'
-  }
-
+  const isBuyer = ["HEAD_OFFICE", "BRANCH_ADMIN"].includes(userRole ?? "")
+  const model = salesPerfTooltipModel(payload[0].payload, activeMetric, isBuyer, hasComparison)
   return (
     <div className="glass shadow-[0_20px_60px_rgba(0,0,0,0.2)] dark:shadow-[0_20px_60px_rgba(0,0,0,0.4)] p-5 rounded-[1.5rem] border border-white/20 dark:border-slate-700/30 min-w-[280px]">
-      <p className="font-black text-slate-900 dark:text-white text-lg mb-4 tracking-tight border-b border-slate-200/50 dark:border-slate-800/50 pb-2">
-        {tooltipLabel}
-      </p>
-
+      <p className="font-black text-slate-900 dark:text-white text-lg mb-4 tracking-tight border-b border-slate-200/50 dark:border-slate-800/50 pb-2">{tooltipLabel}</p>
       <div className="space-y-4">
-        {/* Current Period */}
-        <div className={cn(
-          "p-4 rounded-2xl ring-1 ring-inset",
-          isRevenue 
-            ? 'bg-emerald-500/10 ring-emerald-500/20' 
-            : 'bg-blue-500/10 ring-blue-500/20'
-        )}>
-          <div className="flex items-center gap-2 mb-2">
-            <div className={`h-2 w-2 rounded-full ${isRevenue ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.5)]'}`} />
-            <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">Current {metricLabel}</span>
-          </div>
-          <span className={cn(
-            "text-2xl font-black tracking-tighter",
-            isRevenue ? 'text-emerald-600 dark:text-emerald-400' : 'text-blue-600 dark:text-blue-400'
-          )}>
-            {formatVal(currentVal)}
-          </span>
-        </div>
-
-        {/* Comparison Period */}
-        {hasComparison && prevVal > 0 && (
-          <div className="p-4 rounded-2xl bg-amber-500/10 ring-1 ring-inset ring-amber-500/20">
-            <div className="flex items-center gap-2 mb-2">
-              <div className="h-2 w-2 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.5)]" />
-              <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">Previous {metricLabel}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-xl font-bold text-amber-600 dark:text-amber-400 tracking-tight">
-                {formatVal(prevVal)}
-              </span>
-              <div className={cn(
-                "flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black",
-                changeDir === 'up'
-                  ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400'
-                  : 'bg-red-500/20 text-red-600 dark:text-red-400'
-              )}>
-                {changeDir === 'up' ? '▲' : '▼'} {Math.abs(changePercent).toFixed(1)}%
-              </div>
-            </div>
-          </div>
-        )}
-
-        {!hasComparison && (
-          <div className="grid grid-cols-2 gap-3">
-             <div className="p-3 rounded-xl bg-slate-500/5 ring-1 ring-inset ring-slate-500/10">
-               <span className="text-[9px] font-bold text-slate-500 dark:text-slate-400 uppercase block mb-1">Orders</span>
-               <span className="text-sm font-bold text-slate-900 dark:text-white">{orders.toLocaleString()}</span>
-             </div>
-             <div className="p-3 rounded-xl bg-slate-500/5 ring-1 ring-inset ring-slate-500/10">
-               <span className="text-[9px] font-bold text-slate-500 dark:text-slate-400 uppercase block mb-1">Avg Value</span>
-               <span className="text-sm font-bold text-slate-900 dark:text-white">₨{orders > 0 ? Math.round(sales/orders).toLocaleString() : 0}</span>
-             </div>
-          </div>
-        )}
+        <SalesPerfCurrentCard model={model} />
+        {hasComparison && model.previousValue > 0 && <SalesPerfComparisonCard model={model} />}
+        {!hasComparison && <SalesPerfSummary model={model} />}
       </div>
     </div>
   )
@@ -861,16 +886,18 @@ export function SalesPerformanceLineChart({
   const { theme } = useTheme()
   const isDark = theme === 'dark'
   const [activeMetric, setActiveMetric] = useState<'revenue' | 'orders'>('revenue')
+  const chartTheme = salesPerformanceBaseTheme(isDark)
+  const metricTheme = salesPerformanceMetricTheme(isDark, activeMetric)
 
   const hasComparison = !!comparisonSeries && comparisonSeries.length > 0
 
   const safeData = useMemo(() => {
-    if (!dateRange || !dateRange.startDate || !dateRange.endDate) {
+    if (!dateRange?.startDate || !dateRange.endDate) {
       return seriesData
     }
 
     const { startDate, endDate } = dateRange
-    let intervals: Date[] = []
+    let intervals: Date[]
 
     if (granularity === 'hourly') {
       intervals = eachHourOfInterval({ start: startOfDay(startDate), end: endOfDay(endDate) })
@@ -956,7 +983,7 @@ export function SalesPerformanceLineChart({
 
         {/* Metric Toggle */}
         <div className="flex p-1 bg-slate-100 dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
-          <button
+          <button type="button"
             onClick={() => setActiveMetric('revenue')}
             className={`
               flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-bold transition-all duration-200
@@ -968,7 +995,7 @@ export function SalesPerformanceLineChart({
             <div className={`w-2 h-2 rounded-full ${activeMetric === 'revenue' ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-700'}`} />
             Revenue
           </button>
-          <button
+          <button type="button"
             onClick={() => setActiveMetric('orders')}
             className={`
               flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-bold transition-all duration-200
@@ -1002,40 +1029,40 @@ export function SalesPerformanceLineChart({
             >
               <defs>
                 <linearGradient id="activeMetricGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={activeMetric === 'revenue' ? (isDark ? "#34d399" : "#10b981") : (isDark ? "#60a5fa" : "#3b82f6")} stopOpacity={0.25} />
-                  <stop offset="100%" stopColor={activeMetric === 'revenue' ? (isDark ? "#34d399" : "#10b981") : (isDark ? "#60a5fa" : "#3b82f6")} stopOpacity={0.02} />
+                  <stop offset="0%" stopColor={metricTheme.series} stopOpacity={0.25} />
+                  <stop offset="100%" stopColor={metricTheme.series} stopOpacity={0.02} />
                 </linearGradient>
                 <linearGradient id="comparisonMetricGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={isDark ? "#fbbf24" : "#f59e0b"} stopOpacity={0.15} />
-                  <stop offset="100%" stopColor={isDark ? "#fbbf24" : "#f59e0b"} stopOpacity={0.02} />
+                  <stop offset="0%" stopColor={chartTheme.comparison} stopOpacity={0.15} />
+                  <stop offset="100%" stopColor={chartTheme.comparison} stopOpacity={0.02} />
                 </linearGradient>
               </defs>
-              <CartesianGrid strokeDasharray="4 4" vertical={false} stroke={isDark ? "#1e293b" : "#f1f5f9"} />
+              <CartesianGrid strokeDasharray="4 4" vertical={false} stroke={chartTheme.grid} />
               <XAxis
                 dataKey="label"
                 axisLine={false}
                 tickLine={false}
-                tick={{ fill: isDark ? "#94a3b8" : "#64748b", fontSize: 11, fontWeight: 700 }}
+                tick={{ fill: chartTheme.tick, fontSize: 11, fontWeight: 700 }}
                 dy={15}
                 minTickGap={25}
               />
               <YAxis
                 axisLine={false}
                 tickLine={false}
-                tick={{ fill: isDark ? "#94a3b8" : "#64748b", fontSize: 11, fontWeight: 700 }}
+                tick={{ fill: chartTheme.tick, fontSize: 11, fontWeight: 700 }}
                 tickFormatter={(val) => {
                   const realVal = Math.pow(val, 2)
                   return activeMetric === 'revenue'
                     ? `₨ ${formatCurrency(realVal).replace('₨', '')}`
                     : Math.round(realVal).toLocaleString()
                 }}
-                width={activeMetric === 'revenue' ? 100 : 55}
+                width={metricTheme.axisWidth}
                 dx={-10}
                 domain={[0, 'auto']}
               />
               <Tooltip
                 content={<SalesPerfTooltip activeMetric={activeMetric} hasComparison={hasComparison} />}
-                cursor={{ stroke: isDark ? "#475569" : "#cbd5e1", strokeWidth: 1.5, strokeDasharray: "4 4" }}
+                cursor={{ stroke: chartTheme.cursor, strokeWidth: 1.5, strokeDasharray: "4 4" }}
               />
 
               {/* Comparison Line */}
@@ -1043,20 +1070,20 @@ export function SalesPerformanceLineChart({
                 <Area
                   type="monotone"
                   dataKey="vCompActive"
-                  stroke={isDark ? "#fbbf24" : "#f59e0b"}
+                  stroke={chartTheme.comparison}
                   strokeWidth={3}
                   fill="url(#comparisonMetricGrad)"
                   dot={{
                     r: 3,
                     strokeWidth: 2,
-                    fill: isDark ? "#0f172a" : "#ffffff",
-                    stroke: isDark ? "#fbbf24" : "#f59e0b"
+                    fill: chartTheme.comparisonDotFill,
+                    stroke: chartTheme.comparison
                   }}
                   activeDot={{
                     r: 6,
                     strokeWidth: 2,
-                    fill: isDark ? "#fbbf24" : "#f59e0b",
-                    stroke: isDark ? "#f59e0b" : "#ffffff"
+                    fill: chartTheme.comparison,
+                    stroke: chartTheme.comparisonActiveStroke
                   }}
                   animationDuration={1500}
                 />
@@ -1067,7 +1094,7 @@ export function SalesPerformanceLineChart({
                 <Line
                   type="monotone"
                   dataKey="vSecondary"
-                  stroke={isDark ? "#475569" : "#cbd5e1"}
+                  stroke={chartTheme.secondary}
                   strokeWidth={2}
                   strokeDasharray="8 6"
                   dot={false}
@@ -1080,10 +1107,7 @@ export function SalesPerformanceLineChart({
               <Area
                 type="monotone"
                 dataKey="vActive"
-                stroke={activeMetric === 'revenue'
-                  ? (isDark ? "#34d399" : "#10b981")
-                  : (isDark ? "#60a5fa" : "#3b82f6")
-                }
+                stroke={metricTheme.series}
                 strokeWidth={4}
                 fill="url(#activeMetricGrad)"
                 animationDuration={1500}
@@ -1091,15 +1115,15 @@ export function SalesPerformanceLineChart({
                 dot={{
                   r: 4,
                   strokeWidth: 2.5,
-                  fill: isDark ? "#0f172a" : "#ffffff",
-                  stroke: activeMetric === 'revenue' ? (isDark ? "#34d399" : "#10b981") : (isDark ? "#60a5fa" : "#3b82f6")
+                  fill: chartTheme.primaryDotFill,
+                  stroke: metricTheme.series
                 }}
                 activeDot={{
                   r: 8,
                   strokeWidth: 3,
-                  fill: activeMetric === 'revenue' ? (isDark ? "#34d399" : "#10b981") : (isDark ? "#60a5fa" : "#3b82f6"),
-                  stroke: activeMetric === 'revenue' ? (isDark ? "#10b981" : "#ffffff") : (isDark ? "#3b82f6" : "#ffffff"),
-                  className: `drop-shadow-[0_0_12px_${activeMetric === 'revenue' ? 'rgba(16,185,129,0.5)' : 'rgba(59,130,246,0.5)'}]`
+                  fill: metricTheme.series,
+                  stroke: metricTheme.activeDotStroke,
+                  className: `drop-shadow-[0_0_12px_${metricTheme.shadowClass}]`
                 }}
               />
             </AreaChart>
@@ -1168,9 +1192,9 @@ export function SalesPerformanceBarChart({
   const safeData = useMemo(() => {
     let dataToMap = seriesData || []
 
-    if (dateRange && dateRange.startDate && dateRange.endDate) {
+    if (dateRange?.startDate && dateRange.endDate) {
       const { startDate, endDate } = dateRange
-      let intervals: Date[] = []
+      let intervals: Date[]
 
       if (granularity === 'hourly') {
         intervals = eachHourOfInterval({ start: startOfDay(startDate), end: endOfDay(endDate) })
@@ -1228,15 +1252,18 @@ export function SalesPerformanceBarChart({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <p className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-[0.3em]">
-            {activeMetric === 'revenue' 
-              ? (isBuyer ? 'Purchase Distribution' : 'Revenue Distribution') 
-              : 'Order Volume Metrics'}
+            {(() => {
+              if (activeMetric === 'revenue') {
+                return (isBuyer ? 'Purchase Distribution' : 'Revenue Distribution')
+              }
+              return 'Order Volume Metrics'
+            })()}
           </p>
         </div>
 
         {/* Metric Toggle */}
         <div className="flex p-1 bg-slate-100 dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
-          <button
+          <button type="button"
             onClick={() => setActiveMetric('revenue')}
             className={`
               flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-bold transition-all duration-200
@@ -1248,7 +1275,7 @@ export function SalesPerformanceBarChart({
             <div className={`w-2 h-2 rounded-full ${activeMetric === 'revenue' ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-700'}`} />
             {isBuyer ? 'Purchased' : 'Revenue'}
           </button>
-          <button
+          <button type="button"
             onClick={() => setActiveMetric('orders')}
             className={`
               flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-bold transition-all duration-200
@@ -1261,7 +1288,7 @@ export function SalesPerformanceBarChart({
             Orders
           </button>
           {(organizationSales || branchSales) && (
-            <button
+            <button type="button"
               onClick={() => setActiveMetric('sales')}
               className={`
                 flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-bold transition-all duration-200
@@ -1271,21 +1298,31 @@ export function SalesPerformanceBarChart({
               `}
             >
               <div className={`w-2 h-2 rounded-full ${activeMetric === 'sales' ? 'bg-amber-500' : 'bg-slate-300 dark:bg-slate-700'}`} />
-              {showOrgView === false 
-                ? (isBuyer ? 'Branch Purchased' : 'Branch Sales') 
-                : (organizationSales && organizationSales.length > 0 
-                  ? (isBuyer ? 'Org Purchased' : 'Org Sales') 
-                  : (isBuyer ? 'Branch Purchased' : 'Branch Sales'))}
+              {(() => {
+                if (showOrgView === false) {
+                  return (isBuyer ? 'Branch Purchased' : 'Branch Sales')
+                }
+                return ((() => {
+                  if (organizationSales && organizationSales.length > 0) {
+                    return (isBuyer ? 'Org Purchased' : 'Org Sales')
+                  }
+                  return (isBuyer ? 'Branch Purchased' : 'Branch Sales')
+                })())
+              })()}
             </button>
           )}
         </div>
       </div>
 
       <div className="relative glass-card rounded-[2.5rem] p-8 shadow-2xl overflow-hidden min-h-[440px]">
-        {activeMetric === 'sales' ? (
+        {(() => {
+          if (activeMetric === 'sales') {
+            return (
           /* ── Inline Organization / Branch Sales View ── */
           <div className="py-2">
-            {showOrgView === false ? (
+            {(() => {
+              if (showOrgView === false) {
+                return (
               /* Show Branch Sales */
               branchSales && branchSales.length > 0 ? (
                 <BranchSalesBarChart branchSales={branchSales} label={label} />
@@ -1294,20 +1331,33 @@ export function SalesPerformanceBarChart({
                   <p className="text-sm font-medium text-slate-500 dark:text-slate-400">No branch data available for this period</p>
                 </div>
               )
-            ) : (
+            )
+              }
+              return (
               /* Show Organization Sales (default when no specific org selected) */
-              organizationSales && organizationSales.length > 0 ? (
+              (() => {
+                if (organizationSales && organizationSales.length > 0) {
+                  return (
                 <OrganizationSalesBarChart organizationSales={organizationSales} label={label} />
-              ) : branchSales && branchSales.length > 0 ? (
+              )
+                }
+                if (branchSales && branchSales.length > 0) {
+                  return (
                 <BranchSalesBarChart branchSales={branchSales} label={label} />
-              ) : (
+              )
+                }
+                return (
                 <div className="h-48 flex items-center justify-center bg-slate-50/50 dark:bg-slate-900/30 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800">
                   <p className="text-sm font-medium text-slate-500 dark:text-slate-400">No organization data available for this period</p>
                 </div>
               )
-            )}
+              })()
+            )
+            })()}
           </div>
-        ) : (
+        )
+          }
+          return (
           /* ── Default Revenue / Orders Bar Chart ── */
           <>
             {isEmpty && (
@@ -1405,7 +1455,8 @@ export function SalesPerformanceBarChart({
               </div>
             )}
           </>
-        )}
+        )
+        })()}
       </div>
     </motion.div>
   )
@@ -1434,7 +1485,7 @@ const HorizontalBranchTooltip = ({ active, payload }: any) => {
   )
 }
 
-export function BranchSalesBarChart({ branchSales, label = "Sales" }: { branchSales: BranchSalesPoint[]; label?: string }) {
+export function BranchSalesBarChart({ branchSales, label = "Sales" }: Readonly<{ branchSales: BranchSalesPoint[]; label?: string }>) {
   const { theme } = useTheme()
   const isDark = theme === 'dark'
 
@@ -1512,7 +1563,7 @@ export function BranchSalesBarChart({ branchSales, label = "Sales" }: { branchSa
                 style={{ fill: isDark ? "#cbd5e1" : "#475569", fontWeight: 700, fontSize: 11 }}
               />
               {sortedBranches.map((entry, index) => (
-                <Cell key={`cell-${index}`} fill={barFill(entry)} />
+                <Cell key={entry.branchName} fill={barFill(entry)} />
               ))}
             </Bar>
           </BarChart>
@@ -1579,10 +1630,10 @@ const HorizontalOrgTooltip = ({ active, payload }: any) => {
 export function OrganizationSalesBarChart({
   organizationSales,
   label = "Organization Sales",
-}: {
+}: Readonly<{
   organizationSales: { organizationId: number; organizationName: string; sales: number; orders: number }[]
   label?: string
-}) {
+}>) {
   const { theme } = useTheme()
   const isDark = theme === 'dark'
 
@@ -1666,7 +1717,7 @@ export function OrganizationSalesBarChart({
                 style={{ fill: isDark ? "#cbd5e1" : "#475569", fontWeight: 700, fontSize: 11 }}
               />
               {sortedOrgs.map((entry, index) => (
-                <Cell key={`cell-${index}`} fill={barFill(entry)} />
+                <Cell key={entry.name} fill={barFill(entry)} />
               ))}
             </Bar>
           </BarChart>

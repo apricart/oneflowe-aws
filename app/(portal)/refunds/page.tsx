@@ -176,7 +176,7 @@ export default function RefundsPage() {
         const item = order?.items.find((orderItem) => orderItem.id === itemId)
         const step = sanitizeQuantityStep(Boolean(item?.allowDecimalQuantity), item?.quantityStep ?? 1)
         const qty = parseQuantity(value)
-        if (isNaN(qty) || qty < 0) return
+        if (Number.isNaN(qty) || qty < 0) return
 
         const finalQty = Math.min(roundQuantity(Math.round(qty / step) * step), maxQty)
         setSelectedItems(prev => {
@@ -226,7 +226,7 @@ export default function RefundsPage() {
         const totalAmountCents = pendingRefunds.reduce((sum, r) => sum + (r.amountCents || 0), 0)
         const uniqueBranches = new Set(pendingRefunds.map(r => r.branchName).filter(Boolean)).size
         // API returns desc(createdAt), so last item is the oldest
-        const oldestDate = pendingRefunds.length > 0 ? pendingRefunds[pendingRefunds.length - 1].createdAt : null
+        const oldestDate = pendingRefunds.at(-1)?.createdAt ?? null
         const daysOld = oldestDate ? Math.floor((Date.now() - new Date(oldestDate).getTime()) / 86400000) : null
         return { totalCount: pendingRefunds.length, totalAmountCents, uniqueBranches, daysOld }
     }, [pendingRefunds])
@@ -329,7 +329,7 @@ export default function RefundsPage() {
             setCancelTarget(null)
             setPendingRefundsVersion(v => v + 1)
             // If the cancelled order is currently shown in search, refresh it
-            if (order && order.tid === cancelTarget.tid) {
+            if (order?.tid === cancelTarget.tid) {
                 searchOrder()
             }
         } catch (err: unknown) {
@@ -437,13 +437,18 @@ export default function RefundsPage() {
                             <div>
                                 <p className="text-sm text-muted-foreground">Oldest Request</p>
                                 <p className="text-3xl font-bold mt-1">
-                                    {pendingRefundsLoading
-                                        ? <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                                        : pendingStats.daysOld === null
-                                            ? "—"
-                                            : pendingStats.daysOld === 0
-                                                ? "Today"
-                                                : `${pendingStats.daysOld}d ago`
+                                    {(() => {
+                                      if (pendingRefundsLoading) {
+                                        return <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                                      }
+                                      if (pendingStats.daysOld === null) {
+                                        return "—"
+                                      }
+                                      if (pendingStats.daysOld === 0) {
+                                        return "Today"
+                                      }
+                                      return `${pendingStats.daysOld}d ago`
+                                    })()
                                     }
                                 </p>
                             </div>
@@ -478,17 +483,24 @@ export default function RefundsPage() {
                     </Button>
                 </CardHeader>
                 <CardContent>
-                    {pendingRefundsLoading ? (
+                    {(() => {
+                      if (pendingRefundsLoading) {
+                        return (
                         <div className="flex items-center justify-center py-10">
                             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                         </div>
-                    ) : pendingRefunds.length === 0 ? (
+                    )
+                      }
+                      if (pendingRefunds.length === 0) {
+                        return (
                         <div className="text-center py-10 text-muted-foreground">
                             <Clock className="h-10 w-10 mx-auto mb-3 opacity-30" />
                             <p className="font-medium">No pending refund requests</p>
                             <p className="text-sm mt-1">All caught up!</p>
                         </div>
-                    ) : (
+                    )
+                      }
+                      return (
                         <Table>
                             <TableHeader>
                                 <TableRow>
@@ -559,7 +571,8 @@ export default function RefundsPage() {
                                 ))}
                             </TableBody>
                         </Table>
-                    )}
+                    )
+                    })()}
                 </CardContent>
             </Card>
 
@@ -740,7 +753,15 @@ export default function RefundsPage() {
                                             return (
                                                 <TableRow
                                                     key={item.id}
-                                                    className={isSelected ? "bg-red-50 dark:bg-red-950/20" : isFullyRefunded ? "opacity-50" : ""}
+                                                    className={(() => {
+                                                      if (isSelected) {
+                                                        return "bg-red-50 dark:bg-red-950/20"
+                                                      }
+                                                      if (isFullyRefunded) {
+                                                        return "opacity-50"
+                                                      }
+                                                      return ""
+                                                    })()}
                                                 >
                                                     <TableCell>
                                                         <Checkbox
@@ -777,7 +798,9 @@ export default function RefundsPage() {
                                                         {formatQuantity(remainingQty)} {item.unit}
                                                     </TableCell>
                                                     <TableCell className="text-right">
-                                                        {isSelected ? (
+                                                        {(() => {
+                                                          if (isSelected) {
+                                                            return (
                                                             <Input
                                                                 type="number"
                                                                 min={step}
@@ -788,11 +811,17 @@ export default function RefundsPage() {
                                                                 className="w-20 h-8 text-right"
                                                                 onClick={(e) => e.stopPropagation()}
                                                             />
-                                                        ) : isFullyRefunded ? (
+                                                        )
+                                                          }
+                                                          if (isFullyRefunded) {
+                                                            return (
                                                             <Badge variant="secondary" className="text-xs">Fully Refunded</Badge>
-                                                        ) : (
+                                                        )
+                                                          }
+                                                          return (
                                                             <span className="text-muted-foreground">-</span>
-                                                        )}
+                                                        )
+                                                        })()}
                                                     </TableCell>
                                                     <TableCell className="text-right font-medium">
                                                         {isSelected ? (
@@ -877,7 +906,7 @@ export default function RefundsPage() {
                         </DialogTitle>
                         <DialogDescription>
                             {reviewingRefund
-                                ? `This will approve ${reviewingRefund.refundNumber || `Refund-${String(reviewingRefund.id).padStart(6, '0')}`} and credit the branch budget.`
+                                ? `This will approve ${reviewingRefund.refundNumber || ("Refund-" + String(String(reviewingRefund.id).padStart(6, '0')))} and credit the branch budget.`
                                 : "This will refund the selected items and credit the branch budget."}
                         </DialogDescription>
                     </DialogHeader>

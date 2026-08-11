@@ -15,7 +15,7 @@ async function request(url, options = {}) {
     ...options,
     headers: {
       Accept: "application/json, text/plain, */*",
-      ...(options.headers || {}),
+      ...options.headers,
     },
   })
   const text = await response.text()
@@ -64,7 +64,7 @@ function parseStates(source) {
   for (const match of source.matchAll(expression)) {
     const objectStart = match.index + match[0].lastIndexOf("{")
     const block = extractBalancedObject(source, objectStart)
-    const value = (name) => block.match(new RegExp(`${name}\\s*:\\s*["']([^"']+)["']`))?.[1] || null
+    const value = (name) => block.match(new RegExp(String.raw`${name}\s*:\s*["']([^"']+)["']`))?.[1] || null
     states.push({
       state: match[1],
       url: value("url"),
@@ -87,7 +87,7 @@ function parseHttpCalls(source, script) {
 }
 
 function parseTemplate(templateUrl, source) {
-  const strip = (value) => value.replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim()
+  const strip = (value) => value.replace(/<[^>]+>/g, " ").replaceAll("&nbsp;", " ").replace(/\s+/g, " ").trim()
   return {
     templateUrl,
     titleCandidates: unique([
@@ -202,7 +202,9 @@ async function main() {
   console.log({ output, auth: report.auth, summary: report.inventory.summary })
 }
 
-main().catch((error) => {
+try {
+  await main()
+} catch (error) {
   console.error(error.stack || error.message)
   process.exitCode = 1
-})
+}

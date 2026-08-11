@@ -1,3 +1,4 @@
+import { stringifyPrimitive } from "./stringify-primitive"
 export const MAX_BUSINESS_QUANTITY = 1_000_000
 
 export const ORDER_STATUS_TRANSITIONS = {
@@ -11,7 +12,7 @@ export const ORDER_STATUS_TRANSITIONS = {
 export type OrderStatus = keyof typeof ORDER_STATUS_TRANSITIONS
 
 export function normalizeOrderStatus(status: unknown): string {
-  return String(status || "").trim().toUpperCase()
+  return stringifyPrimitive(status).trim().toUpperCase()
 }
 
 export function canTransitionOrderStatus(from: unknown, to: unknown): boolean {
@@ -31,7 +32,7 @@ export function isOrderPortalRefundEligible(
   fulfillmentStatus: unknown,
 ): boolean {
   return normalizeOrderStatus(orderStatus) === "FULFILLED"
-    && String(fulfillmentStatus || "").trim().toUpperCase() === "DELIVERED"
+    && stringifyPrimitive(fulfillmentStatus).trim().toUpperCase() === "DELIVERED"
 }
 
 export function isPaymentStatusUpdateEligible(
@@ -39,7 +40,7 @@ export function isPaymentStatusUpdateEligible(
   fulfillmentStatus: unknown,
 ): boolean {
   return normalizeOrderStatus(orderStatus) === "FULFILLED"
-    && String(fulfillmentStatus || "").trim().toUpperCase() === "DELIVERED"
+    && stringifyPrimitive(fulfillmentStatus).trim().toUpperCase() === "DELIVERED"
 }
 
 export function isUniquePositiveIdList(ids: number[]): boolean {

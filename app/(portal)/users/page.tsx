@@ -49,16 +49,20 @@ export default function UsersPage() {
   const users = hasValidUsersData ? usersData.items : []
   const branches = Array.isArray(branchesData?.items) ? branchesData.items : []
   const organizations = Array.isArray(organizationsData?.items) ? organizationsData.items : []
-  const organizationFilterId = organizationId ? parseInt(organizationId, 10) : null
-  const branchFilterId = branchId ? parseInt(branchId, 10) : null
+  const organizationFilterId = organizationId ? Number.parseInt(organizationId, 10) : null
+  const branchFilterId = branchId ? Number.parseInt(branchId, 10) : null
   const branchFilterIds = branchIds
-    .map(id => parseInt(id, 10))
+    .map(id => Number.parseInt(id, 10))
     .filter(id => Number.isFinite(id))
-  const effectiveBranchFilterIds = branchFilterIds.length > 0
-    ? branchFilterIds
-    : branchFilterId
-      ? [branchFilterId]
-      : []
+  const effectiveBranchFilterIds = (() => {
+    if (branchFilterIds.length > 0) {
+      return branchFilterIds
+    }
+    if (branchFilterId) {
+      return [branchFilterId]
+    }
+    return []
+  })()
   const effectiveBranchFilterSet = new Set(effectiveBranchFilterIds)
 
   // Filter users based on role and organization
@@ -155,7 +159,9 @@ export default function UsersPage() {
 
       {/* Main Directory Area */}
       <div className="flex flex-col pt-2">
-        {isUsersReady ? (
+        {(() => {
+          if (isUsersReady) {
+            return (
           <HeadOfficeUsersTable
             users={filteredUsers}
             branches={branches}
@@ -163,11 +169,20 @@ export default function UsersPage() {
             userRole={userRole ?? undefined}
             onUserUpdate={() => mutateUsers()}
           />
-        ) : hasInitialUsersError && isContextReady ? (
+        )
+          }
+          if (hasInitialUsersError && isContextReady) {
+            return (
           <UsersLoadError onRetry={() => mutateUsers()} />
-        ) : isUsersPending ? (
+        )
+          }
+          if (isUsersPending) {
+            return (
           <UsersDirectorySkeleton />
-        ) : null}
+        )
+          }
+          return null
+        })()}
       </div>
     </main>
   )
@@ -204,7 +219,7 @@ function UsersDirectorySkeleton() {
   )
 }
 
-function UsersLoadError({ onRetry }: { onRetry: () => void }) {
+function UsersLoadError({ onRetry }: Readonly<{ onRetry: () => void }>) {
   return (
     <Card role="alert" className="rounded-2xl border-rose-200 bg-rose-50/60 shadow-sm dark:border-rose-900/60 dark:bg-rose-950/20">
       <CardHeader className="flex flex-row items-start gap-3 space-y-0">
@@ -234,13 +249,13 @@ function CompactStatCard({
   icon,
   gradient,
   iconBadge,
-}: {
+}: Readonly<{
   label: string
   value: string | number
   icon: ReactNode
   gradient: string
   iconBadge: string
-}) {
+}>) {
   return (
     <Card className={cn("border rounded-2xl shadow-sm transition-all duration-300 hover:shadow-md hover:-translate-y-0.5", gradient)}>
       <CardContent className="p-5 flex items-center justify-between">

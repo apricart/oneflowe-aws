@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server"
-import { ok, error, requireApiRole, readJson } from "@/lib/api"
+import { ok,error,requireApiRole,readJson } from "@/lib/api"
 import { getRequestScope } from "@/lib/auth"
-import { enableMFA, disableMFA, verifyOTP } from "@/lib/mfa"
+import { enableMFA,disableMFA } from "@/lib/mfa"
 
 export async function POST(req: NextRequest) {
   const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"])
@@ -11,7 +11,7 @@ export async function POST(req: NextRequest) {
     const body = await readJson<any>(req)
     if (!body) return error("Invalid request body", 400)
 
-    const { action, otpCode } = body // 'enable' or 'disable'
+    const { action } = body // 'enable' or 'disable'
 
     const scope = await getRequestScope()
 

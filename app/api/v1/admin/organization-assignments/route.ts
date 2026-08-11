@@ -10,6 +10,94 @@ import { validateAssignmentData } from "@/lib/inventory-validation"
 import { invalidateByPrefix } from "@/lib/cache-utils"
 import { normalizeSafeImageUrl } from "@/lib/security"
 
+async function addCategoryCondition(conditions: SQL[], category: string | null) {
+  if (!category || category === "all") return
+  const categoryId = Number.parseInt(category)
+  const [categoryInfo] = await db.select({ id: categories.id, parentId: categories.parentId })
+    .from(categories)
+    .where(eq(categories.id, categoryId))
+    .limit(1)
+  if (!categoryInfo) return
+  if (categoryInfo.parentId !== null) {
+    conditions.push(eq(globalProducts.categoryId, categoryId))
+    return
+  }
+
+  const subcategories = await db.select({ id: categories.id })
+    .from(categories)
+    .where(eq(categories.parentId, categoryId))
+  const subcategoryIds = subcategories.map((subcategory) => subcategory.id)
+  conditions.push(
+    subcategoryIds.length > 0
+      ? inArray(globalProducts.categoryId, subcategoryIds)
+      : eq(globalProducts.categoryId, -1),
+  )
+}
+
+function normalizeAssignmentOverrides(overrides: unknown) {
+  if (!Array.isArray(overrides)) return []
+  return overrides.map((entry: any) => {
+    const safeImageUrl = normalizeSafeImageUrl(entry?.customImageUrl)
+    if (entry?.customImageUrl && !safeImageUrl) throw new Error("INVALID_ASSIGNMENT_IMAGE_URL")
+    return { ...entry, customImageUrl: safeImageUrl }
+  })
+}
+
+function normalizeAssignmentProductIds(overrides: any[], productIds: unknown) {
+  const source = overrides.length > 0 ? overrides.map((entry) => entry.productId) : productIds
+  if (!Array.isArray(source)) return []
+  return source.map((id) => Number.parseInt(id)).filter((id) => Number.isFinite(id))
+}
+
+const resolveCustomPrice = (override: any, fallback: unknown) => {
+  if (override?.customPrice !== undefined && override.customPrice !== null) {
+    return Math.round(Number.parseFloat(override.customPrice) * 100)
+  }
+  return fallback ? Math.round(Number.parseFloat(String(fallback)) * 100) : null
+}
+
+type AssignmentDefaults = {
+  isActive: boolean
+  customName: unknown
+  customPrice: unknown
+  customDescription: unknown
+  customImageUrl: string | null
+}
+
+function buildOrganizationAssignments(
+  productIds: number[],
+  overrides: any[],
+  organizationId: number,
+  userId: string,
+  defaults: AssignmentDefaults,
+) {
+  return productIds.map((productId) => {
+    const override = overrides.find((entry) => Number.parseInt(entry.productId) === productId)
+    return {
+      globalProductId: productId,
+      organizationId,
+      assignedByUserId: userId,
+      isActive: override?.isActive ?? defaults.isActive,
+      customName: override?.customName ?? defaults.customName ?? null,
+      customPrice: resolveCustomPrice(override, defaults.customPrice),
+      customDescription: override?.customDescription ?? defaults.customDescription ?? null,
+      customImageUrl: override?.customImageUrl ?? defaults.customImageUrl,
+    }
+  })
+}
+
+function buildAssignmentUpdateData(body: any, normalizedCustomImageUrl: string | null) {
+  const updateData: any = { updatedAt: new Date() }
+  if (body.isActive !== undefined) updateData.isActive = body.isActive
+  if (body.customName !== undefined) updateData.customName = body.customName
+  if (body.customPrice !== undefined) {
+    updateData.customPrice = body.customPrice ? Math.round(Number.parseFloat(body.customPrice) * 100) : null
+  }
+  if (body.customDescription !== undefined) updateData.customDescription = body.customDescription
+  if (body.customImageUrl !== undefined) updateData.customImageUrl = normalizedCustomImageUrl
+  return updateData
+}
+
 // GET /api/v1/admin/organization-assignments - List organization assignments
 export async function GET(req: NextRequest) {
   try {
@@ -29,8 +117,8 @@ export async function GET(req: NextRequest) {
     const search = searchParams.get("search")
     const category = searchParams.get("category")
     const subCategory = searchParams.get("subCategory")
-    const page = parseInt(searchParams.get("page") || "1")
-    const limit = parseInt(searchParams.get("limit") || "50")
+    const page = Number.parseInt(searchParams.get("page") || "1")
+    const limit = Number.parseInt(searchParams.get("limit") || "50")
     const offset = (page - 1) * limit
 
     const conditions: SQL[] = [
@@ -38,10 +126,10 @@ export async function GET(req: NextRequest) {
       isNull(globalProducts.deletedAt)
     ]
     if (organizationId) {
-      conditions.push(eq(organizationInventory.organizationId, parseInt(organizationId)))
+      conditions.push(eq(organizationInventory.organizationId, Number.parseInt(organizationId)))
     }
     if (productId) {
-      conditions.push(eq(organizationInventory.globalProductId, parseInt(productId)))
+      conditions.push(eq(organizationInventory.globalProductId, Number.parseInt(productId)))
     }
     if (search) {
       conditions.push(or(
@@ -49,36 +137,9 @@ export async function GET(req: NextRequest) {
         ilike(globalProducts.productCode, `%${search}%`)
       ) as SQL)
     }
-    if (category && category !== 'all') {
-      const catId = parseInt(category)
-      // Check if this is a parent category or a subcategory
-      const [catInfo] = await db.select({
-        id: categories.id,
-        parentId: categories.parentId
-      }).from(categories).where(eq(categories.id, catId)).limit(1)
-
-      if (catInfo) {
-        if (catInfo.parentId === null) {
-          // It's a parent category - find all subcategories
-          const subCats = await db.select({ id: categories.id })
-            .from(categories)
-            .where(eq(categories.parentId, catId))
-
-          const subCatIds = subCats.map(sc => sc.id)
-          if (subCatIds.length > 0) {
-            conditions.push(inArray(globalProducts.categoryId, subCatIds))
-          } else {
-            // No subcategories, match nothing if it's a parent with no children
-            conditions.push(eq(globalProducts.categoryId, -1))
-          }
-        } else {
-          // It's a subcategory - match directly
-          conditions.push(eq(globalProducts.categoryId, catId))
-        }
-      }
-    }
+    await addCategoryCondition(conditions, category)
     if (subCategory && subCategory !== 'all') {
-      conditions.push(eq(globalProducts.categoryId, parseInt(subCategory)))
+      conditions.push(eq(globalProducts.categoryId, Number.parseInt(subCategory)))
     }
 
     const whereClause = and(...conditions)
@@ -162,24 +223,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Invalid custom image URL" }, { status: 400 })
     }
 
-    const normalizedAssignmentOverrides = Array.isArray(assignmentOverrides)
-      ? assignmentOverrides.map((entry: any) => {
-        const safeImageUrl = normalizeSafeImageUrl(entry?.customImageUrl)
-        if (entry?.customImageUrl && !safeImageUrl) {
-          throw new Error("INVALID_ASSIGNMENT_IMAGE_URL")
-        }
-        return { ...entry, customImageUrl: safeImageUrl }
-      })
-      : []
-
-    let normalizedProductIds: number[] = []
-    if (normalizedAssignmentOverrides.length > 0) {
-      normalizedProductIds = normalizedAssignmentOverrides
-        .map((entry: any) => parseInt(entry.productId))
-        .filter((value: number) => Number.isFinite(value))
-    } else if (Array.isArray(productIds) && productIds.length > 0) {
-      normalizedProductIds = productIds.map((id: any) => parseInt(id)).filter((value: number) => Number.isFinite(value))
-    }
+    const normalizedAssignmentOverrides = normalizeAssignmentOverrides(assignmentOverrides)
+    const normalizedProductIds = normalizeAssignmentProductIds(normalizedAssignmentOverrides, productIds)
 
     if (normalizedProductIds.length === 0) {
       console.log("Validation error: Product identifiers are required")
@@ -191,9 +236,9 @@ export async function POST(req: NextRequest) {
     }
 
     // Validate assignment data
-    console.log("Validating assignment data for organizationId:", parseInt(organizationId), "productIds:", productIds)
+    console.log("Validating assignment data for organizationId:", Number.parseInt(organizationId), "productIds:", productIds)
     const validation = await validateAssignmentData({
-      organizationId: parseInt(organizationId),
+      organizationId: Number.parseInt(organizationId),
       globalProductId: normalizedProductIds[0], // representative
       userId: (session.user as any).id
     })
@@ -215,7 +260,7 @@ export async function POST(req: NextRequest) {
       .from(organizationInventory)
       .where(
         and(
-          eq(organizationInventory.organizationId, parseInt(organizationId)),
+          eq(organizationInventory.organizationId, Number.parseInt(organizationId)),
           inArray(organizationInventory.globalProductId, normalizedProductIds),
           isNull(organizationInventory.deletedAt)
         )
@@ -234,71 +279,24 @@ export async function POST(req: NextRequest) {
       }, { status: 400 })
     }
 
-    // If some products are already assigned, return partial success with details
-    if (unassignedProductIds.length < normalizedProductIds.length) {
-      const alreadyAssignedIds = normalizedProductIds.filter(id => existingProductIds.has(id))
+    const alreadyAssignedIds = normalizedProductIds.filter((id) => existingProductIds.has(id))
+    const assignments = buildOrganizationAssignments(
+      unassignedProductIds,
+      normalizedAssignmentOverrides,
+      Number.parseInt(organizationId),
+      (session.user as any).id,
+      { isActive, customName, customPrice, customDescription, customImageUrl: normalizedCustomImageUrl },
+    )
+    const newAssignments = await db.insert(organizationInventory).values(assignments).returning()
 
-      // Create assignments only for unassigned products
-      const assignments = unassignedProductIds.map((productId) => {
-        const override = normalizedAssignmentOverrides.length > 0
-          ? normalizedAssignmentOverrides.find((entry: any) => parseInt(entry.productId) === productId)
-          : null
-        const resolvedCustomPrice =
-          override && override.customPrice !== undefined && override.customPrice !== null
-            ? Math.round(parseFloat(override.customPrice) * 100)
-            : customPrice
-              ? Math.round(parseFloat(customPrice) * 100)
-              : null
-
-        return {
-          globalProductId: Number(productId),
-          organizationId: parseInt(organizationId),
-          assignedByUserId: (session.user as any).id,
-          isActive: override?.isActive ?? isActive,
-          customName: override?.customName ?? customName ?? null,
-          customPrice: resolvedCustomPrice,
-          customDescription: override?.customDescription ?? customDescription ?? null,
-          customImageUrl: override?.customImageUrl ?? normalizedCustomImageUrl,
-        }
-      })
-
-      const result = await db.insert(organizationInventory).values(assignments).returning()
-
+    if (alreadyAssignedIds.length > 0) {
       return NextResponse.json({
         message: `Successfully assigned ${assignments.length} products. ${alreadyAssignedIds.length} products were already assigned.`,
-        assignments: result,
+        assignments: newAssignments,
         alreadyAssigned: alreadyAssignedIds,
         unassigned: unassignedProductIds
       }, { status: 200 })
     }
-
-    // All products are unassigned, proceed with normal assignment
-    const assignments = normalizedProductIds.map(productId => {
-      const override = normalizedAssignmentOverrides.length > 0
-        ? normalizedAssignmentOverrides.find((entry: any) => parseInt(entry.productId) === productId)
-        : null
-      const resolvedCustomPrice =
-        override && override.customPrice !== undefined && override.customPrice !== null
-          ? Math.round(parseFloat(override.customPrice) * 100)
-          : customPrice
-            ? Math.round(parseFloat(customPrice) * 100)
-            : null
-
-      return {
-        globalProductId: productId,
-        organizationId: parseInt(organizationId),
-        assignedByUserId: (session.user as any).id,
-        isActive: override?.isActive ?? isActive,
-        customName: override?.customName ?? customName ?? null,
-        customPrice: resolvedCustomPrice,
-        customDescription: override?.customDescription ?? customDescription ?? null,
-        customImageUrl: override?.customImageUrl ?? normalizedCustomImageUrl,
-      }
-    })
-
-    const newAssignments = await db.insert(organizationInventory)
-      .values(assignments)
-      .returning()
 
     // Log the assignment creation
     await db.insert(auditLogs).values({
@@ -365,7 +363,7 @@ export async function DELETE(req: NextRequest) {
       const body = await req.json().catch(() => null)
       if (body && Array.isArray(body.assignmentIds)) {
         assignmentIdsFromBody = body.assignmentIds
-          .map((v: any) => parseInt(v))
+          .map((v: any) => Number.parseInt(v))
           .filter((v: number) => Number.isFinite(v))
       }
     } catch {
@@ -374,13 +372,13 @@ export async function DELETE(req: NextRequest) {
 
     const whereConditions = []
     if (id) {
-      whereConditions.push(eq(organizationInventory.id, parseInt(id)))
+      whereConditions.push(eq(organizationInventory.id, Number.parseInt(id)))
     }
     if (organizationId) {
-      whereConditions.push(eq(organizationInventory.organizationId, parseInt(organizationId)))
+      whereConditions.push(eq(organizationInventory.organizationId, Number.parseInt(organizationId)))
     }
     if (productId) {
-      whereConditions.push(eq(organizationInventory.globalProductId, parseInt(productId)))
+      whereConditions.push(eq(organizationInventory.globalProductId, Number.parseInt(productId)))
     }
     if (assignmentIdsFromBody.length > 0) {
       whereConditions.push(inArray(organizationInventory.id, assignmentIdsFromBody))
@@ -497,7 +495,7 @@ export async function PUT(req: NextRequest) {
       .from(organizationInventory)
       .where(
         and(
-          eq(organizationInventory.id, parseInt(id)),
+          eq(organizationInventory.id, Number.parseInt(id)),
           isNull(organizationInventory.deletedAt)
         )
       )
@@ -506,26 +504,18 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: "Assignment not found" }, { status: 404 })
     }
 
-    const updateData: any = {
-      updatedAt: new Date()
-    }
-
-    if (isActive !== undefined) updateData.isActive = isActive
-    if (customName !== undefined) updateData.customName = customName
-    if (customPrice !== undefined) updateData.customPrice = customPrice ? Math.round(parseFloat(customPrice) * 100) : null
-    if (customDescription !== undefined) updateData.customDescription = customDescription
-    if (customImageUrl !== undefined) updateData.customImageUrl = normalizedCustomImageUrl
+    const updateData = buildAssignmentUpdateData(body, normalizedCustomImageUrl)
 
     // Update the assignment
     const [updatedAssignment] = await db.update(organizationInventory)
       .set(updateData)
-      .where(eq(organizationInventory.id, parseInt(id)))
+      .where(eq(organizationInventory.id, Number.parseInt(id)))
       .returning()
 
     // If isActive status changed, cascade to branches
     if (isActive !== undefined && isActive !== existingAssignment.isActive) {
       const cascadeResult = await cascadeOrgStatusChange(
-        parseInt(id),
+        Number.parseInt(id),
         isActive,
         (session.user as any).id,
         "SUPER_ADMIN"
@@ -538,7 +528,7 @@ export async function PUT(req: NextRequest) {
         entity: "OrganizationAssignment",
         entityId: id.toString(),
         metadata: {
-          organizationInventoryId: parseInt(id),
+          organizationInventoryId: Number.parseInt(id),
           isActive,
           branchUpdates: cascadeResult.updatedCount,
           affectedBranches: cascadeResult.affectedBranches,

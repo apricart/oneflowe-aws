@@ -30,10 +30,10 @@ export async function GET(req: NextRequest) {
     const compareMonthsRaw = url.searchParams.get("compareMonths")
     const compareYearsRaw = url.searchParams.get("compareYears")
 
-    const parsedMonths = monthsRaw ? monthsRaw.split(',').map(Number).filter(n => !isNaN(n) && n >= 1 && n <= 12) : []
-    const parsedYears = yearsRaw ? yearsRaw.split(',').map(Number).filter(n => !isNaN(n) && n > 2000) : []
-    const parsedCompMonths = compareMonthsRaw ? compareMonthsRaw.split(',').map(Number).filter(n => !isNaN(n) && n >= 1 && n <= 12) : []
-    const parsedCompYears = compareYearsRaw ? compareYearsRaw.split(',').map(Number).filter(n => !isNaN(n) && n > 2000) : []
+    const parsedMonths = monthsRaw ? monthsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n >= 1 && n <= 12) : []
+    const parsedYears = yearsRaw ? yearsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n > 2000) : []
+    const parsedCompMonths = compareMonthsRaw ? compareMonthsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n >= 1 && n <= 12) : []
+    const parsedCompYears = compareYearsRaw ? compareYearsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n > 2000) : []
 
     const userRole = (session.user as any).role || ""
     const userOrgId = (session.user as any).organizationId
@@ -46,7 +46,7 @@ export async function GET(req: NextRequest) {
     }
 
     if (orgIdsParam) {
-        const ids = orgIdsParam.split(",").map(Number).filter(n => !isNaN(n))
+        const ids = orgIdsParam.split(",").map(Number).filter(n => !Number.isNaN(n))
         if (ids.length > 0) {
             branchConditions.push(inArray(branches.organizationId, ids))
         }
@@ -55,14 +55,14 @@ export async function GET(req: NextRequest) {
     }
     
     if (branchIdsParam) {
-        const ids = branchIdsParam.split(",").map(Number).filter(n => !isNaN(n))
+        const ids = branchIdsParam.split(",").map(Number).filter(n => !Number.isNaN(n))
         if (ids.length > 0) {
             branchConditions.push(inArray(branches.id, ids))
         }
     }
 
     if (groupIdsParam) {
-        const ids = groupIdsParam.split(",").map(Number).filter(n => !isNaN(n) && n > 0)
+        const ids = groupIdsParam.split(",").map(Number).filter(n => !Number.isNaN(n) && n > 0)
         if (ids.length > 0) {
             branchConditions.push(inArray(branches.groupId, ids))
         }
@@ -120,10 +120,10 @@ export async function GET(req: NextRequest) {
         
         // Date filtering logic
         if (mArray.length > 0) {
-            conditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(mArray, sql`, `)})`)
+            conditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(mArray, sql.raw(", "))})`)
         }
         if (yArray.length > 0) {
-            conditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(yArray, sql`, `)})`)
+            conditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(yArray, sql.raw(", "))})`)
         }
         
         // Fallback to explicit dates if no arrays provided
@@ -255,8 +255,8 @@ export async function GET(req: NextRequest) {
             grouping = sql`TO_CHAR((${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi', 'YYYY')`
         }
 
-        if (mArray.length > 0) conditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(mArray, sql`, `)})`)
-        if (yArray.length > 0) conditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(yArray, sql`, `)})`)
+        if (mArray.length > 0) conditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(mArray, sql.raw(", "))})`)
+        if (yArray.length > 0) conditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(yArray, sql.raw(", "))})`)
         
         if (mArray.length === 0 && yArray.length === 0 && start && end) {
             const startBoundary = parseStartDateParam(start)

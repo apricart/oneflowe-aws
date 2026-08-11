@@ -51,7 +51,7 @@ CREATE TABLE "branches" (
 	"name" varchar(255) NOT NULL,
 	"admin_user_id" uuid,
 	"code" varchar(64),
-	"status" varchar(32) DEFAULT 'active',
+	"status" varchar(32) DEFAULT 'active', -- NOSONAR: generated schema repeats this default intentionally
 	"created_at" timestamp with time zone DEFAULT now(),
 	"updated_at" timestamp with time zone DEFAULT now()
 );

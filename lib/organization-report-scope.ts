@@ -13,19 +13,28 @@ export function resolveOrganizationReportScope({
   contextBranchId,
   contextBranchIds,
 }: ReportScopeInput) {
-  const organizationIds = selectedOrganizationIds.length > 0
-    ? selectedOrganizationIds
-    : contextOrganizationId
-      ? [contextOrganizationId]
-      : []
+  const organizationIds = (() => {
+    if (selectedOrganizationIds.length > 0) {
+      return selectedOrganizationIds
+    }
+    if (contextOrganizationId) {
+      return [contextOrganizationId]
+    }
+    return []
+  })()
 
-  const branchIds = selectedBranchIds.length > 0
-    ? selectedBranchIds
-    : contextBranchIds.length > 0
-      ? contextBranchIds
-      : contextBranchId
-        ? [contextBranchId]
-        : []
+  const branchIds = (() => {
+    if (selectedBranchIds.length > 0) {
+      return selectedBranchIds
+    }
+    if (contextBranchIds.length > 0) {
+      return contextBranchIds
+    }
+    if (contextBranchId) {
+      return [contextBranchId]
+    }
+    return []
+  })()
 
   return { organizationIds, branchIds }
 }

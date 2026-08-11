@@ -1,12 +1,11 @@
 "use client"
-import React, { Suspense, useState, useMemo, useEffect, useCallback } from "react"
-import Link from "next/link"
-import { useRouter, useSearchParams } from "next/navigation"
+import React,{ Suspense,useState,useMemo,useEffect,useCallback } from "react"
+import { useRouter,useSearchParams } from "next/navigation"
 import useSWR from "swr"
 import { useSession } from "next-auth/react"
 import { useToast } from "@/hooks/use-toast"
 import { useDebounce } from "@/hooks/use-debounce"
-import { Card, CardContent } from "@/components/ui/card"
+import { Card,CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -15,7 +14,7 @@ import {
   PaginationContent,
   PaginationItem,
 } from "@/components/ui/pagination"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
+import { Dialog,DialogContent,DialogHeader,DialogTitle,DialogFooter } from "@/components/ui/dialog"
 import {
   Package,
   Search,
@@ -23,32 +22,17 @@ import {
   CheckCircle,
   Clock,
   AlertTriangle,
-  TrendingDown,
-  ChevronDown,
-  Calendar,
-  User,
-  MapPin,
-  DollarSign,
-  RefreshCw,
-  Check,
-  X,
-  Eye,
-  XCircle,
-  Activity,
-  ChevronLeft,
-  ChevronRight,
+  TrendingDown,RefreshCw,XCircle,ChevronLeft,
+  ChevronRight
 } from "lucide-react"
-import { formatPKR, cn } from "@/lib/utils"
+import { cn } from "@/lib/utils"
 import { useAppContext } from "@/components/context/app-context"
 import { OrderExport } from "@/components/orders/order-export"
 import { OrdersDirectory } from "@/components/orders/orders-directory"
-import { ReceiptIconButton } from "@/components/receipts/receipt-icon-button"
-import { GlobalDateFilter, type FilterPreset } from "@/components/dashboard/global-date-filter"
-import { MultiBranchFilter } from "@/components/dashboard/multi-branch-filter"
-import { startOfDay, endOfDay } from "date-fns"
+import { GlobalDateFilter,type FilterPreset,type GlobalDateFilterChange } from "@/components/dashboard/global-date-filter"
+import { startOfDay,endOfDay } from "date-fns"
 import { BranchFilter } from "@/components/reports/branch-filter"
 import { GroupFilter } from "@/components/reports/group-filter"
-import { MultiSelectFilter } from "@/components/reports/multi-select-filter"
 import {
   getOrderFulfillmentVariant,
   getOrderRefundVariant,
@@ -112,7 +96,6 @@ export default function OrdersManagementPage() {
 }
 
 function OrdersManagementContent() {
-  const router = useRouter()
   const searchParams = useSearchParams()
   const requestedStatusFilter = getOrderStatusFilter(searchParams.get("status"))
   const { data: session } = useSession()
@@ -121,9 +104,7 @@ function OrdersManagementContent() {
     organizationId,
     branchId,
     branchIds,
-    isInitialized,
-    setBranchIds: setContextBranchIds
-  } = useAppContext()
+    isInitialized  } = useAppContext()
   const userRole = (session?.user as any)?.role
   const isBranchAdmin = userRole === "BRANCH_ADMIN"
   const isHeadOffice = userRole === "HEAD_OFFICE"
@@ -138,22 +119,22 @@ function OrdersManagementContent() {
   const [selectedYears, setSelectedYears] = useState<number[]>([])
   const [statusFilter, setStatusFilter] = useState<OrderStatusFilter>(requestedStatusFilter)
   const [splitFilter, setSplitFilter] = useState<OrderSplitFilter>("all")
-  const [selectedOrder, setSelectedOrder] = useState<OrderItem | null>(null)
-  const [showApprovalDialog, setShowApprovalDialog] = useState(false)
-  const [showRejectDialog, setShowRejectDialog] = useState(false)
+  const [, setSelectedOrder] = useState<OrderItem | null>(null)
+  const [, setShowApprovalDialog] = useState(false)
+  const [, setShowRejectDialog] = useState(false)
   const [rejectReason, setRejectReason] = useState("")
-  const [isProcessing, setIsProcessing] = useState(false)
+  const [, setIsProcessing] = useState(false)
 
   // Local Hierarchical Filter State
   const [reportBranchIds, setReportBranchIds] = useState<string[]>([])
   const [reportGroupIds, setReportGroupIds] = useState<string[]>([])
 
   // Approval token state (shown once after approval)
-  const [showTokenDialog, setShowTokenDialog] = useState(false)
-  const [approvalToken, setApprovalToken] = useState<string | null>(null)
+  const [, setShowTokenDialog] = useState(false)
+  const [, setApprovalToken] = useState<string | null>(null)
 
   // Fulfillment token state (Super Admin must enter to fulfill)
-  const [showFulfillDialog, setShowFulfillDialog] = useState(false)
+  const [, setShowFulfillDialog] = useState(false)
   const [fulfillToken, setFulfillToken] = useState("")
 
   // Error dialog state
@@ -166,14 +147,7 @@ function OrdersManagementContent() {
   }, [requestedStatusFilter])
 
 
-  const handleDateChange = useCallback((
-    range: DateRange | null,
-    preset: FilterPreset,
-    _compare?: boolean,
-    _compareRange?: DateRange | null,
-    months: number[] = [],
-    years: number[] = []
-  ) => {
+  const handleDateChange = useCallback(({ range, preset, months = [], years = [] }: GlobalDateFilterChange) => {
     setCurrentPage(1)
     setDateRange(range)
     setActivePreset(preset)
@@ -225,11 +199,22 @@ function OrdersManagementContent() {
 
     // Local filters override global context if set
     // If a group is selected but no branches, we leave branchIds empty so the API filters solely by Group
-    const effectiveBranchIds = reportBranchIds.length > 0
-      ? reportBranchIds
-      : (reportGroupIds.length > 0
-        ? []
-        : (branchIds.length > 0 ? branchIds : (branchId ? [branchId] : [])))
+    const effectiveBranchIds = (() => {
+      if (reportBranchIds.length > 0) {
+        return reportBranchIds
+      }
+      return ((() => {
+        if (reportGroupIds.length > 0) {
+          return []
+        }
+        return ((() => {
+          if (branchIds.length > 0) {
+            return branchIds
+          }
+          return (branchId ? [branchId] : [])
+        })())
+      })())
+    })()
 
     if (effectiveBranchIds.length > 0) {
       params.set("branchIds", effectiveBranchIds.join(","))
@@ -263,7 +248,7 @@ function OrdersManagementContent() {
     params.set("page", currentPage.toString())
     params.set("limit", ORDERS_PAGE_SIZE.toString())
 
-    return `/api/v1/orders${params.toString() ? `?${params.toString()}` : ""}`
+    return `/api/v1/orders${params.toString() ? ("?" + String(params.toString())) : ""}`
   }, [organizationId, branchId, branchIds, reportBranchIds, reportGroupIds, dateRange, selectedMonths, selectedYears, statusFilter, isInitialized, debouncedSearchQuery, currentPage])
 
   // Fetch orders scoped by context
@@ -321,132 +306,11 @@ function OrdersManagementContent() {
   }, [orders, showSplitFilter, splitFilter, statusFilter])
 
   // Approve order
-  const handleApproveOrder = async (orderId: number) => {
-    setIsProcessing(true)
-    try {
-      const res = await fetch("/api/v1/orders", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: orderId,
-          action: "approve"
-        })
-      })
-
-      const data = await res.json()
-
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to approve order")
-      }
-
-      // Show approval token in modal (SECURITY: shown once, must be copied)
-      if (data.approvalToken) {
-        setApprovalToken(data.approvalToken)
-        setShowTokenDialog(true)
-      }
-
-      toast({ title: "Success", description: "Order approved successfully" })
-      mutateOrders()
-      setShowApprovalDialog(false)
-      setSelectedOrder(null)
-    } catch (error: any) {
-      toast({ title: "Error", description: error.message, variant: "destructive" })
-    } finally {
-      setIsProcessing(false)
-    }
-  }
 
   // Reject order
-  const handleRejectOrder = async (orderId: number) => {
-    if (!rejectReason.trim()) {
-      toast({ title: "Error", description: "Please provide a rejection reason", variant: "destructive" })
-      return
-    }
-
-    setIsProcessing(true)
-    try {
-      const res = await fetch("/api/v1/orders", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: orderId,
-          action: "reject",
-          rejectionReason: rejectReason
-        })
-      })
-
-      if (!res.ok) {
-        const error = await res.json()
-        throw new Error(error.error || "Failed to reject order")
-      }
-
-      toast({ title: "Success", description: "Order rejected successfully" })
-      mutateOrders()
-      setShowRejectDialog(false)
-      setSelectedOrder(null)
-      setRejectReason("")
-    } catch (error: any) {
-      toast({ title: "Error", description: error.message, variant: "destructive" })
-    } finally {
-      setIsProcessing(false)
-    }
-  }
 
   // Fulfill order (requires approval token)
-  const handleFulfillOrder = async (orderId: number) => {
-    if (!fulfillToken.trim()) {
-      setErrorMessage("Please enter the approval token to fulfill this order")
-      setShowErrorDialog(true)
-      return
-    }
 
-    setIsProcessing(true)
-    try {
-      const res = await fetch("/api/v1/orders", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: orderId,
-          action: "fulfill",
-          approvalToken: fulfillToken.trim().toUpperCase()
-        })
-      })
-
-      const data = await res.json()
-
-      if (!res.ok) {
-        setErrorMessage(data.error || "Invalid approval token. Please verify the token and try again.")
-        setShowErrorDialog(true)
-        return
-      }
-
-      toast({
-        title: "✅ Order Fulfilled",
-        description: "The order has been successfully fulfilled",
-        duration: 4000
-      })
-      mutateOrders()
-      setSelectedOrder(null)
-      setShowFulfillDialog(false)
-      setFulfillToken("")
-    } catch (error: any) {
-      setErrorMessage(error.message || "Failed to fulfill order. Please try again.")
-      setShowErrorDialog(true)
-    } finally {
-      setIsProcessing(false)
-    }
-  }
-
-  const getStatusColor = (status: string) => {
-    const colors: Record<string, { bg: string; text: string; icon: any }> = {
-      pending: { bg: "bg-yellow-50 dark:bg-yellow-950", text: "text-yellow-700 dark:text-yellow-300", icon: Clock },
-      approved: { bg: "bg-blue-50 dark:bg-slate-800", text: "text-blue-700 dark:text-slate-200", icon: CheckCircle },
-      fulfilled: { bg: "bg-green-50 dark:bg-green-950", text: "text-green-700 dark:text-green-300", icon: CheckCircle },
-      rejected: { bg: "bg-red-50 dark:bg-red-950", text: "text-red-700 dark:text-red-300", icon: AlertTriangle },
-      refunded: { bg: "bg-slate-50 dark:bg-slate-950", text: "text-slate-700 dark:text-slate-300", icon: TrendingDown },
-    }
-    return colors[status?.toLowerCase()] || colors.pending
-  }
 
   // Derive scope display from context + org/branch metadata
   // These hooks must be called before any conditional returns
@@ -487,11 +351,15 @@ function OrdersManagementContent() {
     }
   }, [currentPage, ordersData?.pagination, totalPages])
 
-  const scopeText = branchId
-    ? selectedBranch?.name || `Branch #${branchId}`
-    : organizationId
-      ? selectedOrg?.name || "Selected organization"
-      : "All organizations"
+  const scopeText = (() => {
+    if (branchId) {
+      return selectedBranch?.name || `Branch #${branchId}`
+    }
+    if (organizationId) {
+      return selectedOrg?.name || "Selected organization"
+    }
+    return "All organizations"
+  })()
 
   if (!isInitialized || !ordersEndpoint) {
     return (
@@ -816,13 +684,13 @@ function CompactStatCard({
   icon,
   gradient,
   iconBadge
-}: {
+}: Readonly<{
   label: string
   value: string | number
   icon: React.ReactNode
   gradient: string
   iconBadge: string
-}) {
+}>) {
   return (
     <Card className={cn("min-w-0 overflow-hidden rounded-[clamp(0.75rem,8cqw,1.5rem)] border border-white/40 shadow-sm transition-all duration-300 [container-type:inline-size] hover:-translate-y-0.5 hover:shadow-md dark:border-white/5", gradient)}>
       <CardContent className="relative grid grid-cols-[minmax(0,1fr)_auto] items-center gap-[clamp(0.125rem,2cqw,0.75rem)] p-[clamp(0.5rem,7cqw,1.5rem)]">

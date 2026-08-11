@@ -48,6 +48,38 @@ type BranchInventoryItem = {
   assignedAt: string
 }
 
+type InventoryScope = {
+  role: Role
+  userBranchId: string | number | null | undefined
+  userOrganizationId: string | number | null | undefined
+  branchId: string | number | null | undefined
+  organizationId: string | number | null | undefined
+}
+
+const addInventoryScope = (params: URLSearchParams, scope: InventoryScope) => {
+  const isBranchAdmin = scope.role === "BRANCH_ADMIN"
+  const organizationId = isBranchAdmin ? scope.userOrganizationId : scope.organizationId
+  const branchId = isBranchAdmin ? scope.userBranchId || scope.branchId : scope.branchId
+  if (organizationId) params.set("organizationId", String(organizationId))
+  if (branchId) params.set("branchId", String(branchId))
+}
+
+const buildInventoryParams = (
+  scope: InventoryScope,
+  filters?: { search: string; category: string; subcategory: string },
+) => {
+  const params = new URLSearchParams()
+  if (filters) {
+    params.set("search", filters.search)
+    if (filters.category !== "all") params.set("category", filters.category)
+    if (filters.subcategory !== "all") params.set("subCategory", filters.subcategory)
+  } else {
+    params.set("limit", "5000")
+  }
+  addInventoryScope(params, scope)
+  return params
+}
+
 export default function BranchInventoryPage() {
   const { data: session } = useSession()
   const role = (session?.user as any)?.role as Role
@@ -59,31 +91,13 @@ export default function BranchInventoryPage() {
   const [categoryFilter, setCategoryFilter] = useState("all")
   const [subCategoryFilter, setSubCategoryFilter] = useState("all")
 
-  const params = new URLSearchParams()
-  params.set("search", searchQuery)
-  if (categoryFilter !== "all") params.set("category", categoryFilter)
-  if (subCategoryFilter !== "all") params.set("subCategory", subCategoryFilter)
-
-  if (role === "BRANCH_ADMIN") {
-    const adminBranchId = userBranchId || branchId
-    if (userOrgId) params.set("organizationId", String(userOrgId))
-    if (adminBranchId) params.set("branchId", String(adminBranchId))
-  } else {
-    if (branchId) params.set("branchId", String(branchId))
-    if (organizationId) params.set("organizationId", String(organizationId))
-  }
-
-  const statsParams = new URLSearchParams()
-  statsParams.set("limit", "5000")
-
-  if (role === "BRANCH_ADMIN") {
-    const adminBranchId = userBranchId || branchId
-    if (userOrgId) statsParams.set("organizationId", String(userOrgId))
-    if (adminBranchId) statsParams.set("branchId", String(adminBranchId))
-  } else {
-    if (branchId) statsParams.set("branchId", String(branchId))
-    if (organizationId) statsParams.set("organizationId", String(organizationId))
-  }
+  const scope = { role, userBranchId, userOrganizationId: userOrgId, branchId, organizationId }
+  const params = buildInventoryParams(scope, {
+    search: searchQuery,
+    category: categoryFilter,
+    subcategory: subCategoryFilter,
+  })
+  const statsParams = buildInventoryParams(scope)
 
   // No fallbackData on these: zero-filled fallback made the stat cards flash
   // "0" before the real numbers arrived. Fetching is deferred until the
@@ -213,7 +227,9 @@ export default function BranchInventoryPage() {
             </TableHeader>
             <TableBody>
               <AnimatePresence mode="popLayout">
-                {isLoading ? (
+                {(() => {
+                  if (isLoading) {
+                    return (
                   <TableRow>
                     <TableCell colSpan={pricesHidden ? 4 : 5} className="h-64 text-center">
                       <div className="flex flex-col items-center justify-center gap-3 animate-pulse">
@@ -224,7 +240,10 @@ export default function BranchInventoryPage() {
                       </div>
                     </TableCell>
                   </TableRow>
-                ) : inventory.length === 0 ? (
+                )
+                  }
+                  if (inventory.length === 0) {
+                    return (
                   <TableRow>
                     <TableCell colSpan={pricesHidden ? 4 : 5} className="h-64 text-center">
                       <div className="flex flex-col items-center justify-center gap-3">
@@ -235,7 +254,9 @@ export default function BranchInventoryPage() {
                       </div>
                     </TableCell>
                   </TableRow>
-                ) : (
+                )
+                  }
+                  return (
                   inventory.map((item, idx) => (
                     <motion.tr
                       key={item.id}
@@ -303,15 +324,27 @@ export default function BranchInventoryPage() {
                         <div className="flex justify-center">
                           <div className={cn(
                             "flex items-center gap-2 px-3 py-1.5 rounded-full border shadow-sm transition-all duration-300",
-                            item.stockQuantity > item.reorderThreshold
-                              ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400 ring-4 ring-emerald-500/5"
-                              : item.stockQuantity > 0
-                                ? "bg-amber-500/10 border-amber-500/20 text-amber-600 dark:text-amber-400 ring-4 ring-amber-500/5"
-                                : "bg-rose-500/10 border-rose-500/20 text-rose-600 dark:text-rose-400 ring-4 ring-rose-500/5"
+                            (() => {
+                              if (item.stockQuantity > item.reorderThreshold) {
+                                return "bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400 ring-4 ring-emerald-500/5"
+                              }
+                              if (item.stockQuantity > 0) {
+                                return "bg-amber-500/10 border-amber-500/20 text-amber-600 dark:text-amber-400 ring-4 ring-amber-500/5"
+                              }
+                              return "bg-rose-500/10 border-rose-500/20 text-rose-600 dark:text-rose-400 ring-4 ring-rose-500/5"
+                            })()
                           )}>
                             <div className={cn(
                               "w-1.5 h-1.5 rounded-full animate-pulse",
-                              item.stockQuantity > item.reorderThreshold ? "bg-emerald-500" : item.stockQuantity > 0 ? "bg-amber-500" : "bg-rose-500"
+                              (() => {
+                                if (item.stockQuantity > item.reorderThreshold) {
+                                  return "bg-emerald-500"
+                                }
+                                if (item.stockQuantity > 0) {
+                                  return "bg-amber-500"
+                                }
+                                return "bg-rose-500"
+                              })()
                             )} />
                             <span className="text-[10px] font-black uppercase tracking-widest">
                               {item.stockQuantity > 0 ? `${item.stockQuantity} in Stock` : "Stock Out"}
@@ -327,7 +360,8 @@ export default function BranchInventoryPage() {
                       </TableCell> */}
                     </motion.tr>
                   ))
-                )}
+                )
+                })()}
               </AnimatePresence>
             </TableBody>
           </Table>
@@ -350,13 +384,13 @@ function StatCard({
   icon,
   variant,
   isLoading = false
-}: {
+}: Readonly<{
   label: string
   value: string | number
   icon: ReactNode
   variant: "blue" | "green" | "red" | "amber" | "purple"
   isLoading?: boolean
-}) {
+}>) {
   const variants = {
     blue: "bg-gradient-to-br from-blue-50/80 to-indigo-50/80 border-blue-100/50 text-blue-700 dark:from-blue-900/20 dark:to-indigo-900/20 dark:border-blue-800/30 dark:text-blue-400",
     green: "bg-gradient-to-br from-emerald-50/80 to-teal-50/80 border-emerald-100/50 text-emerald-700 dark:from-emerald-900/20 dark:to-teal-900/20 dark:border-emerald-800/30 dark:text-emerald-400",

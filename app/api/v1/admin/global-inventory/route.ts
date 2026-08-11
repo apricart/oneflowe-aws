@@ -1,19 +1,19 @@
-import { NextRequest, NextResponse } from "next/server"
+import { NextRequest,NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
-import { globalProducts, categories, organizationInventory, organizations, auditLogs } from "@/db/schema"
-import { eq, and, like, ilike, or, desc, sql, inArray, isNull, ne, type SQL } from "drizzle-orm"
+import { globalProducts,categories,organizationInventory,auditLogs } from "@/db/schema"
+import { eq,and,ilike,or,desc,sql,inArray,isNull,ne,type SQL } from "drizzle-orm"
 import { alias } from "drizzle-orm/pg-core"
-import { cascadeGlobalProductDeletion, cascadeGlobalProductStatusChange, cascadeGlobalProductFieldUpdate } from "@/lib/inventory-cascade"
+import { cascadeGlobalProductStatusChange,cascadeGlobalProductFieldUpdate } from "@/lib/inventory-cascade"
 import { escapeLikePattern } from "@/lib/utils"
-import { getCached, invalidateByPrefix, scopedCacheKey, CACHE_TTL } from "@/lib/cache-utils"
+import { getCached,invalidateByPrefix,scopedCacheKey } from "@/lib/cache-utils"
 import {
   globalProductAdminCreateSchema,
   globalProductAdminUpdateSchema,
   validationMessage,
 } from "@/lib/server/mutation-validation"
-import { parseQuantity, sanitizeQuantityStep, validateProductQuantity } from "@/lib/quantity"
+import { parseQuantity,sanitizeQuantityStep,validateProductQuantity } from "@/lib/quantity"
 
 // Increase body size limit to handle Base64-encoded product images
 export const config = {
@@ -44,7 +44,7 @@ export async function GET(req: NextRequest) {
 
     if (imagesOnly) {
       const productIds = idsParam
-        ? idsParam.split(",").map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0)
+        ? idsParam.split(",").map(Number).filter((value) => Number.isInteger(value) && value > 0)
         : []
 
       if (productIds.length === 0) {
@@ -70,7 +70,7 @@ export async function GET(req: NextRequest) {
 
     // If an ID is provided, return a single product record
     if (id) {
-      const productId = parseInt(id)
+      const productId = Number.parseInt(id)
       if (Number.isNaN(productId)) {
         return NextResponse.json({ error: "Invalid product ID" }, { status: 400 })
       }
@@ -161,7 +161,7 @@ export async function GET(req: NextRequest) {
       }
     }
     if (category) {
-      const catId = parseInt(category)
+      const catId = Number.parseInt(category)
       // Check if this is a parent category or a subcategory
       const [catInfo] = await db.select({
         id: categories.id,
@@ -191,7 +191,7 @@ export async function GET(req: NextRequest) {
 
     const subCategory = searchParams.get("subCategory")
     if (subCategory) {
-      conditions.push(eq(globalProducts.categoryId, parseInt(subCategory)))
+      conditions.push(eq(globalProducts.categoryId, Number.parseInt(subCategory)))
     }
 
     if (status && status !== "all") {
@@ -508,7 +508,7 @@ export async function PUT(req: NextRequest) {
     const nextDecimalEnabled = allowDecimalQuantity !== undefined ? Boolean(allowDecimalQuantity) : existingDecimalEnabled
     const nextQuantityStep = sanitizeQuantityStep(
       nextDecimalEnabled,
-      quantityStep !== undefined ? quantityStep : (existingProduct as any).quantityStep ?? 1,
+      quantityStep ?? (existingProduct as any).quantityStep ?? 1,
     )
 
     if (allowDecimalQuantity !== undefined) updateData.allowDecimalQuantity = nextDecimalEnabled
@@ -618,8 +618,8 @@ export async function PUT(req: NextRequest) {
     // Handle unique constraint violation (Postgres code 23505)
     // Handle unique constraint violation (Postgres code 23505)
     // Drizzle/pg may wrap the error in a cause property, so we check both
-    const errorCode = error.code || (error.cause && error.cause.code)
-    const errorMessage = error.message || (error.cause && error.cause.message) || ""
+    const errorCode = error.code || (error.cause?.code)
+    const errorMessage = error.message || (error.cause?.message) || ""
 
     if (
       errorCode === '23505' ||
@@ -653,7 +653,7 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: "Product ID is required" }, { status: 400 })
     }
 
-    const productId = parseInt(id)
+    const productId = Number.parseInt(id)
 
     // Check if product exists
     const [existingProduct] = await db.select({

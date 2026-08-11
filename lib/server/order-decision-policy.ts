@@ -11,8 +11,6 @@ import {
   type OrderApproverRole,
 } from "@/lib/order-approver-role"
 
-type DbLike = any
-
 export type OrderDecisionCapabilities = {
   canApproveOrders: boolean
   canRejectOrders: boolean
@@ -36,7 +34,7 @@ export type OrderDecisionAuthorization =
  * Super Admin changing the configured approver role.
  */
 export async function authorizeOrderDecision(
-  tx: DbLike,
+  tx: any,
   input: { orderId: number; scope: RequestScope },
 ): Promise<OrderDecisionAuthorization> {
   if (input.scope.role !== "BRANCH_ADMIN" && input.scope.role !== "HEAD_OFFICE") {
@@ -59,8 +57,7 @@ export async function authorizeOrderDecision(
     .limit(1)
 
   if (
-    !actor
-    || actor.role !== input.scope.role
+    actor?.role !== input.scope.role
     || actor.organizationId !== input.scope.organizationId
     || actor.branchId !== input.scope.branchId
   ) {
@@ -143,8 +140,7 @@ export async function getOrderDecisionCapabilities(
     .limit(1)
 
   if (
-    !actor
-    || actor.role !== scope.role
+    actor?.role !== scope.role
     || actor.organizationId !== scope.organizationId
     || actor.branchId !== scope.branchId
   ) {

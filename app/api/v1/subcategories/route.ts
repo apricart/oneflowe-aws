@@ -23,8 +23,8 @@ export async function GET(req: NextRequest) {
     const searchRaw = searchParams.get("search") || ""
     const search = searchRaw.trim().toLowerCase()
     const categoryId = searchParams.get("categoryId")
-    const page = parseInt(searchParams.get("page") || "1")
-    const limit = parseInt(searchParams.get("limit") || "50")
+    const page = Number.parseInt(searchParams.get("page") || "1")
+    const limit = Number.parseInt(searchParams.get("limit") || "50")
     const offset = (page - 1) * limit
 
     // Build where clause - subcategories have parentId set
@@ -36,7 +36,7 @@ export async function GET(req: NextRequest) {
     }
 
     if (categoryId) {
-      conditions.push(eq(categories.parentId, parseInt(categoryId)))
+      conditions.push(eq(categories.parentId, Number.parseInt(categoryId)))
     }
 
     const whereClause = and(...conditions)
@@ -77,7 +77,7 @@ export async function GET(req: NextRequest) {
         parentCategories = await db
           .select({ id: categories.id, name: categories.name })
           .from(categories)
-          .where(sql`${categories.id} IN (${sql.join(parentIds.map(id => sql`${id}`), sql`, `)})`)
+          .where(sql`${categories.id} IN (${sql.join(parentIds.map(id => sqlString(id)), sql.raw(", "))})`)
       }
 
       const parentMap = new Map(parentCategories.map(c => [c.id, c.name]))
@@ -269,7 +269,7 @@ export async function DELETE(req: NextRequest) {
     const existing = await db
       .select()
       .from(categories)
-      .where(eq(categories.id, parseInt(id)))
+      .where(eq(categories.id, Number.parseInt(id)))
       .limit(1)
 
     if (existing.length === 0) {
@@ -280,7 +280,7 @@ export async function DELETE(req: NextRequest) {
     const products = await db
       .select({ count: sql<number>`count(*)` })
       .from(globalProducts)
-      .where(eq(globalProducts.categoryId, parseInt(id)))
+      .where(eq(globalProducts.categoryId, Number.parseInt(id)))
 
     const productCount = products[0]?.count || 0
 
@@ -293,7 +293,7 @@ export async function DELETE(req: NextRequest) {
 
     await db
       .delete(categories)
-      .where(eq(categories.id, parseInt(id)))
+      .where(eq(categories.id, Number.parseInt(id)))
 
     await invalidateByPrefix('subcategories')
     await invalidateByPrefix('categories')

@@ -11,6 +11,34 @@ import { formatBranchAddress } from "@/lib/branch-address"
 import { isInvoiceAvailableForOrder } from "@/lib/invoice-availability"
 import { getReceiptUserDisplayName } from "@/lib/receipt-user"
 
+function refundHistoryLine(item: any, pricesHidden: boolean) {
+    return {
+        orderItemId: item.orderItemId,
+        productName: item.productName || "Unknown",
+        quantity: item.refundedQuantity || 0,
+        amount: pricesHidden ? null : (item.refundedAmount || 0) / 100,
+    }
+}
+
+function mergeRefundHistoryItem(accumulator: any[], item: any, pricesHidden: boolean): any[] {
+    if (!item.refundId) return accumulator
+    const existing = accumulator.find((refund) => refund.refundId === item.refundId)
+    if (existing) {
+        if (item.orderItemId) existing.items.push(refundHistoryLine(item, pricesHidden))
+        return accumulator
+    }
+    accumulator.push({
+        refundId: item.refundId,
+        amount: pricesHidden ? null : (item.refundAmount || 0) / 100,
+        taxRefundAmount: pricesHidden ? null : (item.taxRefundAmount || 0) / 100,
+        reason: item.refundReason || "",
+        status: item.refundStatus || "PENDING",
+        createdAt: item.refundCreatedAt || new Date(),
+        items: item.orderItemId ? [refundHistoryLine(item, pricesHidden)] : [],
+    })
+    return accumulator
+}
+
 export async function GET(
     req: NextRequest,
     props: { params: Promise<{ orderId: string }> }
@@ -22,8 +50,8 @@ export async function GET(
         }
 
         const params = await props.params
-        const orderId = parseInt(params.orderId)
-        if (isNaN(orderId)) {
+        const orderId = Number.parseInt(params.orderId)
+        if (Number.isNaN(orderId)) {
             return NextResponse.json({ error: "Invalid order ID" }, { status: 400 })
         }
 
@@ -125,50 +153,10 @@ export async function GET(
             .where(eq(refunds.orderId, orderId))
 
         // Group refund items by refund
-        const refundHistory = refundData.reduce((acc, item) => {
-            if (!item.refundId) return acc
-
-            const existing = acc.find(r => r.refundId === item.refundId)
-            if (existing) {
-                if (item.orderItemId) {
-                    existing.items.push({
-                        orderItemId: item.orderItemId,
-                        productName: item.productName || "Unknown",
-                        quantity: item.refundedQuantity || 0,
-                        amount: pricesHidden ? null : (item.refundedAmount || 0) / 100,
-                    })
-                }
-            } else {
-                acc.push({
-                    refundId: item.refundId,
-                    amount: pricesHidden ? null : (item.refundAmount || 0) / 100,
-                    taxRefundAmount: pricesHidden ? null : (item.taxRefundAmount || 0) / 100,
-                    reason: item.refundReason || "",
-                    status: item.refundStatus || "PENDING",
-                    createdAt: item.refundCreatedAt || new Date(),
-                    items: item.orderItemId ? [{
-                        orderItemId: item.orderItemId,
-                        productName: item.productName || "Unknown",
-                        quantity: item.refundedQuantity || 0,
-                        amount: pricesHidden ? null : (item.refundedAmount || 0) / 100,
-                    }] : [],
-                })
-            }
-            return acc
-        }, [] as Array<{
-            refundId: number
-            amount: number | null
-            taxRefundAmount: number | null
-            reason: string
-            status: string
-            createdAt: Date
-            items: Array<{
-                orderItemId: number
-                productName: string
-                quantity: number
-                amount: number | null
-            }>
-        }>)
+        const refundHistory = refundData.reduce(
+            (accumulator, item) => mergeRefundHistoryItem(accumulator, item, pricesHidden),
+            [] as any[],
+        )
 
         const approvedRefunds = refundHistory.filter((refund) =>
             ["APPROVED", "COMPLETED"].includes(String(refund.status || "").toUpperCase())

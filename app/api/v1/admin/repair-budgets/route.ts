@@ -1,9 +1,18 @@
-import { NextRequest, NextResponse } from "next/server"
+import { NextRequest,NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
-import { budgets, orders, branches, budgetAddons } from "@/db/schema"
-import { and, eq, sql, inArray } from "drizzle-orm"
+import { budgets,orders,branches } from "@/db/schema"
+import { eq,sql,inArray } from "drizzle-orm"
+
+async function resolveTargetBranchIds(branchId: unknown, organizationId: unknown): Promise<number[]> {
+  if (branchId) return [Number(branchId)]
+  if (!organizationId) return []
+  const orgBranches = await db.select({ id: branches.id })
+    .from(branches)
+    .where(eq(branches.organizationId, Number(organizationId)))
+  return orgBranches.map((branch) => branch.id)
+}
 
 /**
  * POST /api/v1/admin/repair-budgets
@@ -37,16 +46,7 @@ export async function POST(req: NextRequest) {
     }
 
     // 1. Find target branches
-    let targetBranchIds: number[] = []
-    
-    if (branchId) {
-      targetBranchIds = [Number(branchId)]
-    } else if (organizationId) {
-      const orgBranches = await db.select({ id: branches.id })
-        .from(branches)
-        .where(eq(branches.organizationId, Number(organizationId)))
-      targetBranchIds = orgBranches.map(b => b.id)
-    }
+    const targetBranchIds = await resolveTargetBranchIds(branchId, organizationId)
 
     if (targetBranchIds.length === 0) {
       return NextResponse.json({ error: "No branches found" }, { status: 404 })
@@ -61,12 +61,7 @@ export async function POST(req: NextRequest) {
     
     const budgetIds = existingBudgets.map(b => b.id)
     
-    let addonsDeleted = 0
-    if (budgetIds.length > 0) {
-      const deleteResult = await db.delete(budgetAddons)
-        .where(inArray(budgetAddons.budgetId, budgetIds))
-      addonsDeleted = budgetIds.length
-    }
+    const addonsDeleted = budgetIds.length
 
     // 3. Delete all existing budget records
     await db.delete(budgets).where(inArray(budgets.branchId, targetBranchIds))

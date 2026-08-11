@@ -30,15 +30,15 @@ export const organizations = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    orgNameIdx: uniqueIndex("org_name_idx").on(t.name),
-    orgCodeIdx: uniqueIndex("org_code_idx").on(t.code),
-    orgStatusIdx: index("org_status_idx").on(t.status),
-    orderApproverRoleCheck: check(
+  (t) => [
+    uniqueIndex("org_name_idx").on(t.name),
+    uniqueIndex("org_code_idx").on(t.code),
+    index("org_status_idx").on(t.status),
+    check(
       "organizations_order_approver_role_ck",
       sql`${t.orderApproverRole} IN ('BRANCH_ADMIN', 'HEAD_OFFICE')`,
     ),
-  }),
+  ],
 )
 
 export const branches = pgTable(
@@ -69,21 +69,21 @@ export const branches = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    orgIdx: index("branches_org_idx").on(t.organizationId),
-    nameIdx: index("branches_name_idx").on(t.name),
-    costCenterIdx: index("branches_cost_center_idx").on(t.costCenterId),
-    externalIdentityIdx: uniqueIndex("branches_org_external_identity_uq")
+  (t) => [
+    index("branches_org_idx").on(t.organizationId),
+    index("branches_name_idx").on(t.name),
+    index("branches_cost_center_idx").on(t.costCenterId),
+    uniqueIndex("branches_org_external_identity_uq")
       .on(t.organizationId, t.externalSource, t.externalId)
       .where(sql`${t.externalSource} IS NOT NULL AND ${t.externalId} IS NOT NULL`),
-    statusIdx: index("branches_status_idx").on(t.status),
-    groupIdx: index("branches_group_idx").on(t.groupId),
-    externalIdentityPairCheck: check(
+    index("branches_status_idx").on(t.status),
+    index("branches_group_idx").on(t.groupId),
+    check(
       "branches_external_identity_pair_ck",
       sql`(${t.externalSource} IS NULL) = (${t.externalId} IS NULL)
         AND (${t.externalSource} IS NULL OR (btrim(${t.externalSource}) <> '' AND btrim(${t.externalId}) <> ''))`,
     ),
-  }),
+  ],
 )
 
 export const roles = pgTable(
@@ -96,9 +96,9 @@ export const roles = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    nameIdx: uniqueIndex("roles_name_idx").on(t.name),
-  }),
+  (t) => [
+    uniqueIndex("roles_name_idx").on(t.name),
+  ],
 )
 
 export const rolePermissions = pgTable(
@@ -110,9 +110,9 @@ export const rolePermissions = pgTable(
     allowed: boolean("allowed").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    rolePermIdx: index("role_permissions_role_idx").on(t.roleId),
-  }),
+  (t) => [
+    index("role_permissions_role_idx").on(t.roleId),
+  ],
 )
 
 export const users = pgTable(
@@ -145,15 +145,15 @@ export const users = pgTable(
     sessionVersion: integer("session_version").notNull().default(1),
     mustChangePassword: boolean("must_change_password").notNull().default(false),
   },
-  (t) => ({
-    usernameIdx: uniqueIndex("users_username_idx").on(t.username),
-    emailIdx: index("users_email_idx").on(t.email),
-    roleIdx: index("users_role_idx").on(t.roleId),
-    activeIdx: index("users_active_idx").on(t.isActive),
-    orgIdx: index("users_org_idx").on(t.organizationId),
-    branchIdx: index("users_branch_idx").on(t.branchId),
-    employeeIdIdx: index("users_employee_id_idx").on(t.employeeId),
-  }),
+  (t) => [
+    uniqueIndex("users_username_idx").on(t.username),
+    index("users_email_idx").on(t.email),
+    index("users_role_idx").on(t.roleId),
+    index("users_active_idx").on(t.isActive),
+    index("users_org_idx").on(t.organizationId),
+    index("users_branch_idx").on(t.branchId),
+    index("users_employee_id_idx").on(t.employeeId),
+  ],
 )
 
 export const mfaCodes = pgTable(
@@ -168,12 +168,12 @@ export const mfaCodes = pgTable(
     isUsed: boolean("is_used").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    userIdx: index("mfa_codes_user_idx").on(t.userId),
-    codeIdx: index("mfa_codes_code_idx").on(t.code),
-    expiresIdx: index("mfa_codes_expires_idx").on(t.expiresAt),
-    typeIdx: index("mfa_codes_type_idx").on(t.type),
-  }),
+  (t) => [
+    index("mfa_codes_user_idx").on(t.userId),
+    index("mfa_codes_code_idx").on(t.code),
+    index("mfa_codes_expires_idx").on(t.expiresAt),
+    index("mfa_codes_type_idx").on(t.type),
+  ],
 )
 
 export const categories = pgTable(
@@ -186,10 +186,10 @@ export const categories = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    nameIdx: index("categories_name_idx").on(t.name),
-    catOrgIdx: index("categories_org_idx").on(t.organizationId),
-  }),
+  (t) => [
+    index("categories_name_idx").on(t.name),
+    index("categories_org_idx").on(t.organizationId),
+  ],
 )
 
 export const products = pgTable(
@@ -205,11 +205,11 @@ export const products = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    catIdx: index("products_category_idx").on(t.categoryId),
-    nameIdx: index("products_name_idx").on(t.name),
-    prodOrgIdx: index("products_org_idx").on(t.organizationId),
-  }),
+  (t) => [
+    index("products_category_idx").on(t.categoryId),
+    index("products_name_idx").on(t.name),
+    index("products_org_idx").on(t.organizationId),
+  ],
 )
 
 export const skus = pgTable(
@@ -226,11 +226,11 @@ export const skus = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    productIdx: index("skus_product_idx").on(t.productId),
-    skuIdx: uniqueIndex("skus_sku_idx").on(t.sku),
-    skusOrgIdx: index("skus_org_idx").on(t.organizationId),
-  }),
+  (t) => [
+    index("skus_product_idx").on(t.productId),
+    uniqueIndex("skus_sku_idx").on(t.sku),
+    index("skus_org_idx").on(t.organizationId),
+  ],
 )
 
 export const inventory = pgTable(
@@ -246,12 +246,12 @@ export const inventory = pgTable(
       .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    byBranchSku: uniqueIndex("inventory_branch_sku_uq").on(t.branchId, t.skuId),
-    branchIdx: index("inventory_branch_idx").on(t.branchId),
-    inventoryOrgIdx: index("inventory_org_idx").on(t.organizationId),
-    inventoryOrgBranchSkuIdx: index("inventory_org_branch_sku_idx").on(t.organizationId, t.branchId, t.skuId),
-  }),
+  (t) => [
+    uniqueIndex("inventory_branch_sku_uq").on(t.branchId, t.skuId),
+    index("inventory_branch_idx").on(t.branchId),
+    index("inventory_org_idx").on(t.organizationId),
+    index("inventory_org_branch_sku_idx").on(t.organizationId, t.branchId, t.skuId),
+  ],
 )
 
 export const headOffices = pgTable(
@@ -263,9 +263,9 @@ export const headOffices = pgTable(
     contactEmail: varchar("contact_email", { length: 255 }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    headOrgIdx: index("head_offices_org_idx").on(t.organizationId),
-  }),
+  (t) => [
+    index("head_offices_org_idx").on(t.organizationId),
+  ],
 )
 
 export const suppliers = pgTable(
@@ -286,11 +286,11 @@ export const suppliers = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    orgIdx: index("suppliers_org_idx").on(t.organizationId),
-    branchIdx: index("suppliers_branch_idx").on(t.branchId),
-    nameIdx: index("suppliers_name_idx").on(t.name),
-  }),
+  (t) => [
+    index("suppliers_org_idx").on(t.organizationId),
+    index("suppliers_branch_idx").on(t.branchId),
+    index("suppliers_name_idx").on(t.name),
+  ],
 )
 
 export const budgets = pgTable(
@@ -311,12 +311,12 @@ export const budgets = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    branchPeriodUq: uniqueIndex("budgets_branch_period_uq").on(t.branchId, t.period),
-    orgIdx: index("budgets_org_idx").on(t.organizationId),
-    branchIdx: index("budgets_branch_idx").on(t.branchId),
-    budgetValuesValid: check("budgets_values_valid_ck", sql`${t.amountAllocatedCents} >= 0 AND ${t.amountSpentCents} >= 0 AND ${t.amountHeldCents} >= 0 AND ${t.amountCreditedCents} >= 0 AND (${t.amountAllocatedCents} + ${t.amountCreditedCents}) >= (${t.amountSpentCents} + ${t.amountHeldCents})`),
-  }),
+  (t) => [
+    uniqueIndex("budgets_branch_period_uq").on(t.branchId, t.period),
+    index("budgets_org_idx").on(t.organizationId),
+    index("budgets_branch_idx").on(t.branchId),
+    check("budgets_values_valid_ck", sql`${t.amountAllocatedCents} >= 0 AND ${t.amountSpentCents} >= 0 AND ${t.amountHeldCents} >= 0 AND ${t.amountCreditedCents} >= 0 AND (${t.amountAllocatedCents} + ${t.amountCreditedCents}) >= (${t.amountSpentCents} + ${t.amountHeldCents})`),
+  ],
 )
 
 export const budgetAddons = pgTable(
@@ -331,9 +331,9 @@ export const budgetAddons = pgTable(
     createdByUserId: uuid("created_by_user_id").references(() => users.id),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    budgetIdx: index("budget_addons_budget_idx").on(t.budgetId),
-  }),
+  (t) => [
+    index("budget_addons_budget_idx").on(t.budgetId),
+  ],
 )
 
 export const organizationSettings = pgTable(
@@ -345,10 +345,10 @@ export const organizationSettings = pgTable(
     value: jsonb("value"),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    orgSettingsOrgIdx: index("org_settings_org_idx").on(t.organizationId),
-    orgSettingsOrgKeyUq: uniqueIndex("organization_settings_org_key_uq").on(t.organizationId, t.key),
-  }),
+  (t) => [
+    index("org_settings_org_idx").on(t.organizationId),
+    uniqueIndex("organization_settings_org_key_uq").on(t.organizationId, t.key),
+  ],
 )
 
 export const orgMetrics = pgTable(
@@ -361,9 +361,9 @@ export const orgMetrics = pgTable(
     totalSpendCents: integer("total_spend_cents"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    orgMetricsOrgIdx: index("org_metrics_org_idx").on(t.organizationId),
-  }),
+  (t) => [
+    index("org_metrics_org_idx").on(t.organizationId),
+  ],
 )
 
 export const invoiceSequences = pgTable(
@@ -377,9 +377,9 @@ export const invoiceSequences = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    invoiceSequenceRange: check("invoice_sequences_range_ck", sql`${t.lastValue} >= 0 AND ${t.lastValue} <= 999999`),
-  }),
+  (t) => [
+    check("invoice_sequences_range_ck", sql`${t.lastValue} >= 0 AND ${t.lastValue} <= 999999`),
+  ],
 )
 
 export const orders = pgTable(
@@ -456,21 +456,21 @@ export const orders = pgTable(
       totalAmount: number
     }>(),
   },
-  (t) => ({
-    tidIdx: uniqueIndex("orders_tid_idx").on(t.tid),
-    branchIdx: index("orders_branch_idx").on(t.branchId),
-    statusIdx: index("orders_status_idx").on(t.status),
-    fulfillmentStatusIdx: index("orders_fulfillment_status_idx").on(t.fulfillmentStatus),
-    paymentStatusIdx: index("orders_payment_status_idx").on(t.paymentStatus),
-    createdIdx: index("orders_created_idx").on(t.createdAt),
-    ordersOrgIdx: index("orders_org_idx").on(t.organizationId),
-    ordersOrgBranchStatusIdx: index("orders_org_branch_status_idx").on(t.organizationId, t.branchId, t.status),
-    ordersBranchStatusCreatedIdx: index("orders_branch_status_created_idx").on(t.branchId, t.status, t.createdAt),
-    ordersOrgCreatedIdx: index("orders_org_created_idx").on(t.organizationId, t.createdAt),
-    ordersCreatorIdempotencyUq: uniqueIndex("orders_creator_idempotency_uq").on(t.createdByUserId, t.idempotencyKey),
-    orderAmountsNonnegative: check("orders_amounts_nonnegative_ck", sql`${t.subtotalCents} >= 0 AND ${t.taxCents} >= 0 AND ${t.totalCents} >= 0 AND COALESCE(${t.refundAmountCents}, 0) >= 0 AND COALESCE(${t.refundAmountCents}, 0) <= ${t.totalCents}`),
-    orderIdempotencyPair: check("orders_idempotency_pair_ck", sql`(${t.idempotencyKey} IS NULL AND ${t.requestFingerprint} IS NULL) OR (${t.idempotencyKey} IS NOT NULL AND ${t.requestFingerprint} IS NOT NULL)`),
-  }),
+  (t) => [
+    uniqueIndex("orders_tid_idx").on(t.tid),
+    index("orders_branch_idx").on(t.branchId),
+    index("orders_status_idx").on(t.status),
+    index("orders_fulfillment_status_idx").on(t.fulfillmentStatus),
+    index("orders_payment_status_idx").on(t.paymentStatus),
+    index("orders_created_idx").on(t.createdAt),
+    index("orders_org_idx").on(t.organizationId),
+    index("orders_org_branch_status_idx").on(t.organizationId, t.branchId, t.status),
+    index("orders_branch_status_created_idx").on(t.branchId, t.status, t.createdAt),
+    index("orders_org_created_idx").on(t.organizationId, t.createdAt),
+    uniqueIndex("orders_creator_idempotency_uq").on(t.createdByUserId, t.idempotencyKey),
+    check("orders_amounts_nonnegative_ck", sql`${t.subtotalCents} >= 0 AND ${t.taxCents} >= 0 AND ${t.totalCents} >= 0 AND COALESCE(${t.refundAmountCents}, 0) >= 0 AND COALESCE(${t.refundAmountCents}, 0) <= ${t.totalCents}`),
+    check("orders_idempotency_pair_ck", sql`(${t.idempotencyKey} IS NULL AND ${t.requestFingerprint} IS NULL) OR (${t.idempotencyKey} IS NOT NULL AND ${t.requestFingerprint} IS NOT NULL)`),
+  ],
 )
 
 export const orderItems = pgTable(
@@ -494,14 +494,14 @@ export const orderItems = pgTable(
     priceCents: bigint("price_cents", { mode: "number" }).notNull(), // Price at time of order
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    orderIdx: index("order_items_order_idx").on(t.orderId),
-    orderItemsOrgIdx: index("order_items_org_idx").on(t.organizationId),
-    organizationInventoryIdx: index("order_items_organization_inventory_idx").on(t.organizationInventoryId),
-    globalProductIdx: index("order_items_product_idx").on(t.globalProductId),
-    orderItemsProductOrderIdx: index("order_items_product_order_idx").on(t.globalProductId, t.orderId),
-    orderItemValuesValid: check("order_items_values_valid_ck", sql`${t.quantity} > 0 AND ${t.quantity} <= 1000000 AND ${t.priceCents} >= 0`),
-  }),
+  (t) => [
+    index("order_items_order_idx").on(t.orderId),
+    index("order_items_org_idx").on(t.organizationId),
+    index("order_items_organization_inventory_idx").on(t.organizationInventoryId),
+    index("order_items_product_idx").on(t.globalProductId),
+    index("order_items_product_order_idx").on(t.globalProductId, t.orderId),
+    check("order_items_values_valid_ck", sql`${t.quantity} > 0 AND ${t.quantity} <= 1000000 AND ${t.priceCents} >= 0`),
+  ],
 )
 
 export const refunds = pgTable(
@@ -525,13 +525,13 @@ export const refunds = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    orderIdx: index("refunds_order_idx").on(t.orderId),
-    refundsOrgIdx: index("refunds_org_idx").on(t.organizationId),
-    processedByIdx: index("refunds_processed_by_idx").on(t.processedByUserId),
-    refundAmountPositive: check("refunds_amount_positive_ck", sql`${t.amountCents} > 0`),
-    refundTaxValid: check("refunds_tax_refund_valid_ck", sql`${t.taxRefundCents} >= 0 AND ${t.taxRefundCents} <= ${t.amountCents}`),
-  }),
+  (t) => [
+    index("refunds_order_idx").on(t.orderId),
+    index("refunds_org_idx").on(t.organizationId),
+    index("refunds_processed_by_idx").on(t.processedByUserId),
+    check("refunds_amount_positive_ck", sql`${t.amountCents} > 0`),
+    check("refunds_tax_refund_valid_ck", sql`${t.taxRefundCents} >= 0 AND ${t.taxRefundCents} <= ${t.amountCents}`),
+  ],
 )
 
 export const refundItems = pgTable(
@@ -548,11 +548,11 @@ export const refundItems = pgTable(
     amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    refundIdx: index("refund_items_refund_idx").on(t.refundId),
-    orderItemIdx: index("refund_items_order_item_idx").on(t.orderItemId),
-    refundItemValuesValid: check("refund_items_values_valid_ck", sql`${t.quantity} > 0 AND ${t.quantity} <= 1000000 AND ${t.amountCents} >= 0`),
-  }),
+  (t) => [
+    index("refund_items_refund_idx").on(t.refundId),
+    index("refund_items_order_item_idx").on(t.orderItemId),
+    check("refund_items_values_valid_ck", sql`${t.quantity} > 0 AND ${t.quantity} <= 1000000 AND ${t.amountCents} >= 0`),
+  ],
 )
 
 
@@ -573,14 +573,14 @@ export const notifications = pgTable(
     readAt: timestamp("read_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    userIdx: index("notifications_user_idx").on(t.userId),
-    typeIdx: index("notifications_type_idx").on(t.type),
-    notiOrgIdx: index("notifications_org_idx").on(t.organizationId),
-    notiBranchIdx: index("notifications_branch_idx").on(t.branchId),
-    notiOrderIdx: index("notifications_order_idx").on(t.orderId),
-    notiEventKeyUq: uniqueIndex("notifications_event_key_uq").on(t.eventKey),
-  }),
+  (t) => [
+    index("notifications_user_idx").on(t.userId),
+    index("notifications_type_idx").on(t.type),
+    index("notifications_org_idx").on(t.organizationId),
+    index("notifications_branch_idx").on(t.branchId),
+    index("notifications_order_idx").on(t.orderId),
+    uniqueIndex("notifications_event_key_uq").on(t.eventKey),
+  ],
 )
 
 export const emailOutbox = pgTable(
@@ -614,16 +614,16 @@ export const emailOutbox = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    eventKeyUq: uniqueIndex("email_outbox_event_key_uq").on(t.eventKey),
-    statusNextAttemptIdx: index("email_outbox_status_next_attempt_idx").on(t.status, t.nextAttemptAt),
-    recipientIdx: index("email_outbox_recipient_idx").on(t.recipientUserId),
-    orgIdx: index("email_outbox_org_idx").on(t.organizationId),
-    branchIdx: index("email_outbox_branch_idx").on(t.branchId),
-    orderIdx: index("email_outbox_order_idx").on(t.orderId),
-    attemptsNonnegative: check("email_outbox_attempts_nonnegative_ck", sql`${t.attempts} >= 0`),
-    statusValid: check("email_outbox_status_valid_ck", sql`${t.status} IN ('PENDING', 'PROCESSING', 'SENT', 'FAILED', 'SKIPPED')`),
-  }),
+  (t) => [
+    uniqueIndex("email_outbox_event_key_uq").on(t.eventKey),
+    index("email_outbox_status_next_attempt_idx").on(t.status, t.nextAttemptAt),
+    index("email_outbox_recipient_idx").on(t.recipientUserId),
+    index("email_outbox_org_idx").on(t.organizationId),
+    index("email_outbox_branch_idx").on(t.branchId),
+    index("email_outbox_order_idx").on(t.orderId),
+    check("email_outbox_attempts_nonnegative_ck", sql`${t.attempts} >= 0`),
+    check("email_outbox_status_valid_ck", sql`${t.status} IN ('PENDING', 'PROCESSING', 'SENT', 'FAILED', 'SKIPPED')`),
+  ],
 )
 
 export const auditLogs = pgTable(
@@ -639,13 +639,13 @@ export const auditLogs = pgTable(
     metadata: jsonb("metadata"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    userIdx: index("audit_user_idx").on(t.userId),
-    entityIdx: index("audit_entity_idx").on(t.entity),
-    auditOrgIdx: index("audit_org_idx").on(t.organizationId),
-    auditBranchIdx: index("audit_branch_idx").on(t.branchId),
-    auditCreatedActionIdx: index("audit_created_action_idx").on(t.createdAt, t.action),
-  }),
+  (t) => [
+    index("audit_user_idx").on(t.userId),
+    index("audit_entity_idx").on(t.entity),
+    index("audit_org_idx").on(t.organizationId),
+    index("audit_branch_idx").on(t.branchId),
+    index("audit_created_action_idx").on(t.createdAt, t.action),
+  ],
 )
 
 export const sessions = pgTable(
@@ -663,11 +663,11 @@ export const sessions = pgTable(
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    userIdx: index("sessions_user_idx").on(t.userId),
-    expiresIdx: index("sessions_expires_idx").on(t.expiresAt),
-    sessionOrgIdx: index("sessions_org_idx").on(t.organizationId),
-  }),
+  (t) => [
+    index("sessions_user_idx").on(t.userId),
+    index("sessions_expires_idx").on(t.expiresAt),
+    index("sessions_org_idx").on(t.organizationId),
+  ],
 )
 
 // ========================================
@@ -704,16 +704,15 @@ export const globalProducts = pgTable(
     lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
   },
-  (t) => ({
-    // Partial unique index enforced via SQL migration (allows reuse of codes from soft-deleted products)
-    codeIdx: index("global_products_code_idx").on(t.productCode),
-    nameIdx: index("global_products_name_idx").on(t.name),
-    categoryIdx: index("global_products_category_idx").on(t.categoryId),
-    statusIdx: index("global_products_status_idx").on(t.status),
-    globalProductsCatStatusIdx: index("global_products_cat_status_idx").on(t.categoryId, t.status),
-    globalProductsStatusCreatedIdx: index("global_products_status_created_idx").on(t.status, t.createdAt),
-    globalProductValuesValid: check("global_products_values_valid_ck", sql`${t.basePrice} >= 0 AND ${t.stockQuantity} >= 0 AND ${t.quantityStep} > 0 AND COALESCE(${t.discountValue}, 0) >= 0`),
-  }),
+  (t) => [
+    index("global_products_code_idx").on(t.productCode),
+    index("global_products_name_idx").on(t.name),
+    index("global_products_category_idx").on(t.categoryId),
+    index("global_products_status_idx").on(t.status),
+    index("global_products_cat_status_idx").on(t.categoryId, t.status),
+    index("global_products_status_created_idx").on(t.status, t.createdAt),
+    check("global_products_values_valid_ck", sql`${t.basePrice} >= 0 AND ${t.stockQuantity} >= 0 AND ${t.quantityStep} > 0 AND COALESCE(${t.discountValue}, 0) >= 0`),
+  ],
 )
 
 // Organization Products - Head Office shortlisting and customization
@@ -736,13 +735,13 @@ export const organizationProducts = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    orgProductUq: uniqueIndex("org_products_org_product_uq").on(t.organizationId, t.globalProductId),
-    orgIdx: index("org_products_org_idx").on(t.organizationId),
-    globalProductIdx: index("org_products_global_idx").on(t.globalProductId),
-    enabledIdx: index("org_products_enabled_idx").on(t.isEnabled),
-    organizationProductPriceValid: check("organization_products_price_valid_ck", sql`${t.customPrice} IS NULL OR ${t.customPrice} >= 0`),
-  }),
+  (t) => [
+    uniqueIndex("org_products_org_product_uq").on(t.organizationId, t.globalProductId),
+    index("org_products_org_idx").on(t.organizationId),
+    index("org_products_global_idx").on(t.globalProductId),
+    index("org_products_enabled_idx").on(t.isEnabled),
+    check("organization_products_price_valid_ck", sql`${t.customPrice} IS NULL OR ${t.customPrice} >= 0`),
+  ],
 )
 
 // Branch Products - Branch-level stock, availability, and settings
@@ -762,15 +761,15 @@ export const branchProducts = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    branchProductUq: uniqueIndex("branch_products_branch_product_uq").on(t.branchId, t.globalProductId),
-    branchIdx: index("branch_products_branch_idx").on(t.branchId),
-    orgIdx: index("branch_products_org_idx").on(t.organizationId),
-    globalProductIdx: index("branch_products_global_idx").on(t.globalProductId),
-    orgProductIdx: index("branch_products_org_product_idx").on(t.organizationProductId),
-    visibleIdx: index("branch_products_visible_idx").on(t.isVisible),
-    availableIdx: index("branch_products_available_idx").on(t.isAvailable),
-  }),
+  (t) => [
+    uniqueIndex("branch_products_branch_product_uq").on(t.branchId, t.globalProductId),
+    index("branch_products_branch_idx").on(t.branchId),
+    index("branch_products_org_idx").on(t.organizationId),
+    index("branch_products_global_idx").on(t.globalProductId),
+    index("branch_products_org_product_idx").on(t.organizationProductId),
+    index("branch_products_visible_idx").on(t.isVisible),
+    index("branch_products_available_idx").on(t.isAvailable),
+  ],
 )
 
 // Product Assignment History - Track cascading changes
@@ -787,11 +786,11 @@ export const productAssignments = pgTable(
     metadata: jsonb("metadata").$type<Record<string, any>>().default({}),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    productIdx: index("product_assignments_product_idx").on(t.globalProductId),
-    assignedToIdx: index("product_assignments_assigned_to_idx").on(t.assignedToType, t.assignedToId),
-    userIdx: index("product_assignments_user_idx").on(t.performedByUserId),
-  }),
+  (t) => [
+    index("product_assignments_product_idx").on(t.globalProductId),
+    index("product_assignments_assigned_to_idx").on(t.assignedToType, t.assignedToId),
+    index("product_assignments_user_idx").on(t.performedByUserId),
+  ],
 )
 
 // Restock Requests - Branch can request restocking
@@ -813,13 +812,13 @@ export const restockRequests = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    branchIdx: index("restock_requests_branch_idx").on(t.branchId),
-    orgIdx: index("restock_requests_org_idx").on(t.organizationId),
-    productIdx: index("restock_requests_product_idx").on(t.globalProductId),
-    statusIdx: index("restock_requests_status_idx").on(t.status),
-    requestedByIdx: index("restock_requests_requested_by_idx").on(t.requestedByUserId),
-  }),
+  (t) => [
+    index("restock_requests_branch_idx").on(t.branchId),
+    index("restock_requests_org_idx").on(t.organizationId),
+    index("restock_requests_product_idx").on(t.globalProductId),
+    index("restock_requests_status_idx").on(t.status),
+    index("restock_requests_requested_by_idx").on(t.requestedByUserId),
+  ],
 )
 
 // Inventory Sync Log - Track synchronization between levels
@@ -840,13 +839,13 @@ export const inventorySyncLogs = pgTable(
     completedAt: timestamp("completed_at", { withTimezone: true }),
     metadata: jsonb("metadata").$type<Record<string, any>>().default({}),
   },
-  (t) => ({
-    syncTypeIdx: index("inventory_sync_logs_type_idx").on(t.syncType),
-    targetIdx: index("inventory_sync_logs_target_idx").on(t.targetType, t.targetId),
-    statusIdx: index("inventory_sync_logs_status_idx").on(t.status),
-    userIdx: index("inventory_sync_logs_user_idx").on(t.performedByUserId),
-    startedAtIdx: index("inventory_sync_logs_started_at_idx").on(t.startedAt),
-  }),
+  (t) => [
+    index("inventory_sync_logs_type_idx").on(t.syncType),
+    index("inventory_sync_logs_target_idx").on(t.targetType, t.targetId),
+    index("inventory_sync_logs_status_idx").on(t.status),
+    index("inventory_sync_logs_user_idx").on(t.performedByUserId),
+    index("inventory_sync_logs_started_at_idx").on(t.startedAt),
+  ],
 )
 
 // Product Import Batches - Track CSV uploads and bulk imports
@@ -866,11 +865,11 @@ export const productImportBatches = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
   },
-  (t) => ({
-    userIdx: index("product_import_batches_user_idx").on(t.uploadedByUserId),
-    statusIdx: index("product_import_batches_status_idx").on(t.status),
-    createdAtIdx: index("product_import_batches_created_at_idx").on(t.createdAt),
-  }),
+  (t) => [
+    index("product_import_batches_user_idx").on(t.uploadedByUserId),
+    index("product_import_batches_status_idx").on(t.status),
+    index("product_import_batches_created_at_idx").on(t.createdAt),
+  ],
 )
 
 // ========================================
@@ -890,12 +889,12 @@ export const modifiers = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    nameIdx: index("modifiers_name_idx").on(t.name),
-    typeIdx: index("modifiers_type_idx").on(t.type),
-    statusIdx: index("modifiers_status_idx").on(t.status),
-    userIdx: index("modifiers_user_idx").on(t.createdByUserId),
-  }),
+  (t) => [
+    index("modifiers_name_idx").on(t.name),
+    index("modifiers_type_idx").on(t.type),
+    index("modifiers_status_idx").on(t.status),
+    index("modifiers_user_idx").on(t.createdByUserId),
+  ],
 )
 
 // Product Modifiers - Junction table linking products to their modifiers
@@ -909,11 +908,11 @@ export const productModifiers = pgTable(
     sortOrder: integer("sort_order").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    productIdx: index("product_modifiers_product_idx").on(t.productId),
-    modifierIdx: index("product_modifiers_modifier_idx").on(t.modifierId),
-    productModifierIdx: uniqueIndex("product_modifiers_product_modifier_idx").on(t.productId, t.modifierId),
-  }),
+  (t) => [
+    index("product_modifiers_product_idx").on(t.productId),
+    index("product_modifiers_modifier_idx").on(t.modifierId),
+    uniqueIndex("product_modifiers_product_modifier_idx").on(t.productId, t.modifierId),
+  ],
 )
 
 // Organization Inventory - Products assigned to organizations
@@ -933,15 +932,15 @@ export const organizationInventory = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
   },
-  (t) => ({
-    orgProductUq: uniqueIndex("org_inventory_org_product_uq").on(t.organizationId, t.globalProductId),
-    orgIdx: index("org_inventory_org_idx").on(t.organizationId),
-    globalProductIdx: index("org_inventory_global_product_idx").on(t.globalProductId),
-    assignedByIdx: index("org_inventory_assigned_by_idx").on(t.assignedByUserId),
-    activeIdx: index("org_inventory_active_idx").on(t.isActive),
-    deletedAtIdx: index("org_inventory_deleted_at_idx").on(t.deletedAt),
-    organizationInventoryPriceValid: check("organization_inventory_price_valid_ck", sql`${t.customPrice} IS NULL OR ${t.customPrice} >= 0`),
-  }),
+  (t) => [
+    uniqueIndex("org_inventory_org_product_uq").on(t.organizationId, t.globalProductId),
+    index("org_inventory_org_idx").on(t.organizationId),
+    index("org_inventory_global_product_idx").on(t.globalProductId),
+    index("org_inventory_assigned_by_idx").on(t.assignedByUserId),
+    index("org_inventory_active_idx").on(t.isActive),
+    index("org_inventory_deleted_at_idx").on(t.deletedAt),
+    check("organization_inventory_price_valid_ck", sql`${t.customPrice} IS NULL OR ${t.customPrice} >= 0`),
+  ],
 )
 
 // Branch Inventory - Products assigned to branches
@@ -959,17 +958,17 @@ export const branchInventory = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
   },
-  (t) => ({
-    branchOrgInventoryUq: uniqueIndex("branch_inventory_branch_org_inventory_uq").on(t.branchId, t.organizationInventoryId),
-    branchIdx: index("branch_inventory_branch_idx").on(t.branchId),
-    orgIdx: index("branch_inventory_org_idx").on(t.organizationId),
-    orgInventoryIdx: index("branch_inventory_org_inventory_idx").on(t.organizationInventoryId),
-    assignedByIdx: index("branch_inventory_assigned_by_idx").on(t.assignedByUserId),
-    visibleIdx: index("branch_inventory_visible_idx").on(t.isVisible),
-    activeIdx: index("branch_inventory_active_idx").on(t.isActive),
-    deletedAtIdx: index("branch_inventory_deleted_at_idx").on(t.deletedAt),
-    branchInventoryStatusIdx: index("branch_inventory_status_idx").on(t.branchId, t.isVisible, t.isActive),
-  }),
+  (t) => [
+    uniqueIndex("branch_inventory_branch_org_inventory_uq").on(t.branchId, t.organizationInventoryId),
+    index("branch_inventory_branch_idx").on(t.branchId),
+    index("branch_inventory_org_idx").on(t.organizationId),
+    index("branch_inventory_org_inventory_idx").on(t.organizationInventoryId),
+    index("branch_inventory_assigned_by_idx").on(t.assignedByUserId),
+    index("branch_inventory_visible_idx").on(t.isVisible),
+    index("branch_inventory_active_idx").on(t.isActive),
+    index("branch_inventory_deleted_at_idx").on(t.deletedAt),
+    index("branch_inventory_status_idx").on(t.branchId, t.isVisible, t.isActive),
+  ],
 )
 
 export const productQuantityBudgets = pgTable(
@@ -1000,14 +999,14 @@ export const productQuantityBudgets = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    branchProductPeriodUq: uniqueIndex("product_quantity_budgets_branch_product_period_uq").on(t.branchId, t.organizationInventoryId, t.period),
-    orgIdx: index("product_quantity_budgets_org_idx").on(t.organizationId),
-    branchIdx: index("product_quantity_budgets_branch_idx").on(t.branchId),
-    productIdx: index("product_quantity_budgets_product_idx").on(t.globalProductId),
-    periodIdx: index("product_quantity_budgets_period_idx").on(t.period),
-    quantityBudgetValuesValid: check("product_quantity_budgets_values_valid_ck", sql`${t.allocatedQuantity} >= 0 AND ${t.heldQuantity} >= 0 AND ${t.usedQuantity} >= 0 AND ${t.creditedQuantity} >= 0 AND ${t.amountAllocatedCents} >= 0 AND ${t.amountCreditedCents} >= 0 AND (${t.allocatedQuantity} + ${t.creditedQuantity}) >= (${t.heldQuantity} + ${t.usedQuantity})`),
-  }),
+  (t) => [
+    uniqueIndex("product_quantity_budgets_branch_product_period_uq").on(t.branchId, t.organizationInventoryId, t.period),
+    index("product_quantity_budgets_org_idx").on(t.organizationId),
+    index("product_quantity_budgets_branch_idx").on(t.branchId),
+    index("product_quantity_budgets_product_idx").on(t.globalProductId),
+    index("product_quantity_budgets_period_idx").on(t.period),
+    check("product_quantity_budgets_values_valid_ck", sql`${t.allocatedQuantity} >= 0 AND ${t.heldQuantity} >= 0 AND ${t.usedQuantity} >= 0 AND ${t.creditedQuantity} >= 0 AND ${t.amountAllocatedCents} >= 0 AND ${t.amountCreditedCents} >= 0 AND (${t.allocatedQuantity} + ${t.creditedQuantity}) >= (${t.heldQuantity} + ${t.usedQuantity})`),
+  ],
 )
 
 export const productQuantityBudgetAllocations = pgTable(
@@ -1039,12 +1038,12 @@ export const productQuantityBudgetAllocations = pgTable(
     metadata: jsonb("metadata").$type<Record<string, any>>().default({}),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    quantityBudgetIdx: index("product_quantity_budget_allocations_budget_idx").on(t.quantityBudgetId),
-    branchIdx: index("product_quantity_budget_allocations_branch_idx").on(t.branchId),
-    productIdx: index("product_quantity_budget_allocations_product_idx").on(t.globalProductId),
-    periodIdx: index("product_quantity_budget_allocations_period_idx").on(t.period),
-  }),
+  (t) => [
+    index("product_quantity_budget_allocations_budget_idx").on(t.quantityBudgetId),
+    index("product_quantity_budget_allocations_branch_idx").on(t.branchId),
+    index("product_quantity_budget_allocations_product_idx").on(t.globalProductId),
+    index("product_quantity_budget_allocations_period_idx").on(t.period),
+  ],
 )
 
 // Employee Credentials - For Order Portal access
@@ -1068,14 +1067,14 @@ export const employeeCredentials = pgTable(
     deactivatedAt: timestamp("deactivated_at", { withTimezone: true }),
     sessionVersion: integer("session_version").notNull().default(1),
   },
-  (t) => ({
-    usernameUq: uniqueIndex("employee_creds_username_uq").on(t.username),
-    emailUq: index("employee_creds_email_uq").on(t.email),
-    branchIdx: index("employee_creds_branch_idx").on(t.branchId),
-    orgIdx: index("employee_creds_org_idx").on(t.organizationId),
-    activeIdx: index("employee_creds_active_idx").on(t.isActive),
-    createdByIdx: index("employee_creds_created_by_idx").on(t.createdByUserId),
-  }),
+  (t) => [
+    uniqueIndex("employee_creds_username_uq").on(t.username),
+    index("employee_creds_email_uq").on(t.email),
+    index("employee_creds_branch_idx").on(t.branchId),
+    index("employee_creds_org_idx").on(t.organizationId),
+    index("employee_creds_active_idx").on(t.isActive),
+    index("employee_creds_created_by_idx").on(t.createdByUserId),
+  ],
 )
 
 // System Logs - Comprehensive audit trail for all system activities
@@ -1099,15 +1098,15 @@ export const systemLogs = pgTable(
     errorMessage: text("error_message"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    userIdx: index("system_logs_user_idx").on(t.userId),
-    actionIdx: index("system_logs_action_idx").on(t.action),
-    resourceIdx: index("system_logs_resource_idx").on(t.resourceType, t.resourceId),
-    timestampIdx: index("system_logs_timestamp_idx").on(t.timestamp),
-    orgIdx: index("system_logs_org_idx").on(t.organizationId),
-    branchIdx: index("system_logs_branch_idx").on(t.branchId),
-    roleIdx: index("system_logs_role_idx").on(t.userRole),
-  }),
+  (t) => [
+    index("system_logs_user_idx").on(t.userId),
+    index("system_logs_action_idx").on(t.action),
+    index("system_logs_resource_idx").on(t.resourceType, t.resourceId),
+    index("system_logs_timestamp_idx").on(t.timestamp),
+    index("system_logs_org_idx").on(t.organizationId),
+    index("system_logs_branch_idx").on(t.branchId),
+    index("system_logs_role_idx").on(t.userRole),
+  ],
 )
 
 // ========================================
@@ -1129,13 +1128,11 @@ export const groups = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    orgIdx: index("groups_org_idx").on(t.organizationId),
-    nameIdx: index("groups_name_idx").on(t.name),
-    statusIdx: index("groups_status_idx").on(t.status),
-    // REMOVED: orgNameUq - replaced with partial unique index via SQL migration
-    // This allows recreating groups with same name after deletion (status='deleted')
-  }),
+  (t) => [
+    index("groups_org_idx").on(t.organizationId),
+    index("groups_name_idx").on(t.name),
+    index("groups_status_idx").on(t.status),
+  ],
 )
 
 // Group Audit Logs - Track all group-related operations
@@ -1155,13 +1152,13 @@ export const groupAuditLogs = pgTable(
     metadata: jsonb("metadata").$type<Record<string, any>>().default({}),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    orgIdx: index("group_audit_org_idx").on(t.organizationId),
-    groupIdx: index("group_audit_group_idx").on(t.groupId),
-    actionIdx: index("group_audit_action_idx").on(t.action),
-    userIdx: index("group_audit_user_idx").on(t.performedByUserId),
-    timestampIdx: index("group_audit_timestamp_idx").on(t.createdAt),
-  }),
+  (t) => [
+    index("group_audit_org_idx").on(t.organizationId),
+    index("group_audit_group_idx").on(t.groupId),
+    index("group_audit_action_idx").on(t.action),
+    index("group_audit_user_idx").on(t.performedByUserId),
+    index("group_audit_timestamp_idx").on(t.createdAt),
+  ],
 )
 
 
@@ -1184,11 +1181,11 @@ export const scheduledReports = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => ({
-    userIdx: index("scheduled_reports_user_idx").on(t.userId),
-    orgIdx: index("scheduled_reports_org_idx").on(t.organizationId),
-    enabledIdx: index("scheduled_reports_enabled_idx").on(t.enabled),
-  }),
+  (t) => [
+    index("scheduled_reports_user_idx").on(t.userId),
+    index("scheduled_reports_org_idx").on(t.organizationId),
+    index("scheduled_reports_enabled_idx").on(t.enabled),
+  ],
 )
 
 // ========================================
@@ -1211,10 +1208,10 @@ export const legacyImportBatches = pgTable(
     completedAt: timestamp("completed_at", { withTimezone: true }),
     rolledBackAt: timestamp("rolled_back_at", { withTimezone: true }),
   },
-  (t) => ({
-    orgIdx: index("legacy_import_batches_org_idx").on(t.organizationId),
-    sourceStatusIdx: index("legacy_import_batches_source_status_idx").on(t.sourceSystem, t.status),
-  }),
+  (t) => [
+    index("legacy_import_batches_org_idx").on(t.organizationId),
+    index("legacy_import_batches_source_status_idx").on(t.sourceSystem, t.status),
+  ],
 )
 
 export const legacyProductMappings = pgTable(
@@ -1231,14 +1228,14 @@ export const legacyProductMappings = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
-  (t) => ({
-    sourceProductUq: uniqueIndex("legacy_product_mappings_source_product_uq").on(
+  (t) => [
+    uniqueIndex("legacy_product_mappings_source_product_uq").on(
       t.organizationId,
       t.sourceSystem,
       t.normalizedName,
     ),
-    productIdx: index("legacy_product_mappings_product_idx").on(t.globalProductId),
-  }),
+    index("legacy_product_mappings_product_idx").on(t.globalProductId),
+  ],
 )
 
 export const legacyUserMappings = pgTable(
@@ -1256,16 +1253,16 @@ export const legacyUserMappings = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
-  (t) => ({
-    sourceUserUq: uniqueIndex("legacy_user_mappings_source_user_uq").on(
+  (t) => [
+    uniqueIndex("legacy_user_mappings_source_user_uq").on(
       t.organizationId,
       t.sourceSystem,
       t.legacyOrderTakerId,
       t.branchId,
     ),
-    userIdx: index("legacy_user_mappings_user_idx").on(t.userId),
-    batchIdx: index("legacy_user_mappings_batch_idx").on(t.createdByBatchId),
-  }),
+    index("legacy_user_mappings_user_idx").on(t.userId),
+    index("legacy_user_mappings_batch_idx").on(t.createdByBatchId),
+  ],
 )
 
 export const legacyOrderImports = pgTable(
@@ -1281,13 +1278,13 @@ export const legacyOrderImports = pgTable(
     sourcePayload: jsonb("source_payload").$type<Record<string, any>>().notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
-  (t) => ({
-    sourceOrderUq: uniqueIndex("legacy_order_imports_source_order_uq").on(
+  (t) => [
+    uniqueIndex("legacy_order_imports_source_order_uq").on(
       t.organizationId,
       t.sourceSystem,
       t.legacyOrderId,
     ),
-    batchIdx: index("legacy_order_imports_batch_idx").on(t.batchId),
-    orderIdx: uniqueIndex("legacy_order_imports_order_idx").on(t.orderId),
-  }),
+    index("legacy_order_imports_batch_idx").on(t.batchId),
+    uniqueIndex("legacy_order_imports_order_idx").on(t.orderId),
+  ],
 )

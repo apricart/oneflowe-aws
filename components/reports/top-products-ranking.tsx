@@ -68,7 +68,7 @@ export function TopProductsRanking({
   isLoading,
   error,
   onRankByChange,
-}: TopProductsRankingProps) {
+}: Readonly<TopProductsRankingProps>) {
   const maximumMetric = Math.max(
     ...products.map((product) => productPerformanceMetric(product, rankBy)),
     0,
@@ -142,22 +142,32 @@ export function TopProductsRanking({
         </div>
       </div>
 
-      {isLoading ? (
+      {(() => {
+        if (isLoading) {
+          return (
         <div className="flex min-h-40 items-center justify-center rounded-2xl border border-dashed border-indigo-200 bg-white/50 dark:border-indigo-900 dark:bg-slate-950/30">
           <div className="flex items-center gap-2 text-xs font-bold text-indigo-500">
             <Loader2 className="h-4 w-4 animate-spin" />
             Updating ranking…
           </div>
         </div>
-      ) : error ? (
+      )
+        }
+        if (error) {
+          return (
         <div className="flex min-h-32 items-center justify-center rounded-2xl border border-dashed border-rose-200 bg-rose-50/50 px-4 text-center text-xs font-bold text-rose-600 dark:border-rose-900 dark:bg-rose-950/10 dark:text-rose-400">
           {error}
         </div>
-      ) : products.length === 0 ? (
+      )
+        }
+        if (products.length === 0) {
+          return (
         <div className="flex min-h-32 items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-white/50 px-4 text-center text-xs font-semibold text-slate-400 dark:border-slate-800 dark:bg-slate-950/30">
           No completed product activity matches the selected filters.
         </div>
-      ) : (
+      )
+        }
+        return (
         <ol className="grid grid-cols-1 gap-2.5 xl:grid-cols-2">
           {products.map((product, index) => {
             const metric = productPerformanceMetric(product, rankBy)
@@ -234,7 +244,8 @@ export function TopProductsRanking({
             )
           })}
         </ol>
-      )}
+      )
+      })()}
     </section>
   )
 }

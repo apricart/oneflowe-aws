@@ -1,14 +1,14 @@
 "use client"
 import { useState } from "react"
 import useSWR from "swr"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card,CardContent,CardHeader,CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
+import { Dialog,DialogContent,DialogHeader,DialogTitle,DialogFooter,DialogDescription } from "@/components/ui/dialog"
 import { useToast } from "@/hooks/use-toast"
-import { Search, Sparkles, Plus, Edit, Trash2, FolderTree, Package, Loader2, FolderOpen, RefreshCw, Folder } from "lucide-react"
+import { Search,Plus,Edit,Trash2,FolderTree,Package,Loader2,FolderOpen,RefreshCw,Folder } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json())
@@ -96,6 +96,7 @@ export default function CategoriesPage() {
                 toast({ title: "Error", description: data.error || "Failed to create category", variant: "destructive" })
             }
         } catch (error) {
+            console.error("Failed to create category:", error)
             toast({ title: "Error", description: "Failed to create category", variant: "destructive" })
         } finally {
             setIsSubmitting(false)
@@ -125,6 +126,7 @@ export default function CategoriesPage() {
                 toast({ title: "Error", description: data.error || "Failed to update category", variant: "destructive" })
             }
         } catch (error) {
+            console.error("Failed to update category:", error)
             toast({ title: "Error", description: "Failed to update category", variant: "destructive" })
         } finally {
             setIsSubmitting(false)
@@ -149,6 +151,7 @@ export default function CategoriesPage() {
                 toast({ title: "Cannot Delete", description: data.error, variant: "destructive" })
             }
         } catch (error) {
+            console.error("Failed to delete category:", error)
             toast({ title: "Error", description: "Failed to delete category", variant: "destructive" })
         } finally {
             setIsSubmitting(false)
@@ -202,7 +205,12 @@ export default function CategoriesPage() {
                 <CardHeader>
                     <CardTitle className="text-xl text-slate-900 dark:text-white">Categories</CardTitle>
                     <p className="text-sm text-muted-foreground">
-                        {data ? `${totalCategories} ${totalCategories === 1 ? "category" : "categories"} in total` : "Loading…"}
+                        {(() => {
+                          if (data) {
+                            return `${totalCategories} ${totalCategories === 1 ? "category" : "categories"} in total`
+                          }
+                          return "Loading…"
+                        })()}
                     </p>
                 </CardHeader>
                 <CardContent>
@@ -229,14 +237,19 @@ export default function CategoriesPage() {
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {isLoading ? (
+                                {(() => {
+                                  if (isLoading) {
+                                    return (
                                     <TableRow>
                                         <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
                                             <Loader2 className="h-5 w-5 animate-spin mx-auto mb-2" />
                                             Loading categories…
                                         </TableCell>
                                     </TableRow>
-                                ) : categories.length === 0 ? (
+                                )
+                                  }
+                                  if (categories.length === 0) {
+                                    return (
                                     <TableRow>
                                         <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
                                             {searchQuery
@@ -244,7 +257,9 @@ export default function CategoriesPage() {
                                                 : "No categories yet. Create your first category to organize products."}
                                         </TableCell>
                                     </TableRow>
-                                ) : (
+                                )
+                                  }
+                                  return (
                                     categories.map((category) => (
                                         <TableRow key={category.id} className="hover:bg-muted/40">
                                             <TableCell>
@@ -295,7 +310,8 @@ export default function CategoriesPage() {
                                             </TableCell>
                                         </TableRow>
                                     ))
-                                )}
+                                )
+                                })()}
                             </TableBody>
                         </Table>
                     </div>
@@ -315,8 +331,9 @@ export default function CategoriesPage() {
                     </DialogHeader>
                     <div className="space-y-4 py-4">
                         <div>
-                            <label className="block text-sm font-medium mb-2">Category Name</label>
+                            <label htmlFor="category-name" className="block text-sm font-medium mb-2">Category Name</label>
                             <Input
+                                id="category-name"
                                 value={categoryName}
                                 onChange={(e) => setCategoryName(e.target.value)}
                                 placeholder="Enter category name"
@@ -382,13 +399,13 @@ export default function CategoriesPage() {
     )
 }
 
-function StatCard({ label, value, icon, variant, isLoading = false }: {
+function StatCard({ label, value, icon, variant, isLoading = false }: Readonly<{
     label: string;
     value: string | number;
     icon: React.ReactNode;
     variant: 'blue' | 'green' | 'red' | 'amber' | 'purple'
     isLoading?: boolean
-}) {
+}>) {
     const variants = {
         blue: "bg-gradient-to-br from-blue-50/80 to-indigo-50/80 border-blue-100/50 text-blue-700 dark:from-blue-900/20 dark:to-indigo-900/20 dark:border-blue-800/30 dark:text-blue-400",
         green: "bg-gradient-to-br from-emerald-50/80 to-teal-50/80 border-emerald-100/50 text-emerald-700 dark:from-emerald-900/20 dark:to-teal-900/20 dark:border-emerald-800/30 dark:text-emerald-400",

@@ -1,54 +1,64 @@
 "use client"
 
-import { useState, useEffect, useCallback, useMemo, useRef } from "react"
-import { useRouter, useSearchParams, usePathname } from "next/navigation"
-import useSWR from "swr"
 import { useAppContext } from "@/components/context/app-context"
-import { Card, CardContent } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import {
-    Loader2, RefreshCw, Search, FileText, FileSpreadsheet, Download, Users, Package, CheckCircle, TrendingUp, Filter, UserCircle, Calculator, ChevronDown, UserPlus,
-    Calendar, Hash, ArrowUpRight, ArrowDownRight, LayoutDashboard, Database, BarChart3, Layers, LayoutGrid, RotateCcw, X, FileSearch, History, ShieldCheck, ShieldX
-} from "lucide-react"
+import { GlobalDateFilter,type FilterPreset,type GlobalDateFilterChange } from "@/components/dashboard/global-date-filter"
+import { BranchFilter } from "@/components/reports/branch-filter"
+import { GroupFilter } from "@/components/reports/group-filter"
 import { KPICard } from "@/components/reports/kpi-card"
-import * as XLSX from "xlsx"
+import { MultiSelectFilter } from "@/components/reports/multi-select-filter"
+import { OrganizationFilter } from "@/components/reports/organization-filter"
+import { UserFilter } from "@/components/reports/user-filter"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Card,CardContent } from "@/components/ui/card"
+import {
+DropdownMenu,
+DropdownMenuContent,
+DropdownMenuItem,
+DropdownMenuTrigger
+} from "@/components/ui/dropdown-menu"
+import { Input } from "@/components/ui/input"
+import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from "@/components/ui/table"
+import { Tabs,TabsContent,TabsList,TabsTrigger } from "@/components/ui/tabs"
+import type { DateRange } from "@/lib/hooks/use-sales-performance"
+import { Role } from "@/lib/rbac"
 import { sanitizeSpreadsheetRow } from "@/lib/spreadsheet"
-import { formatPKR, cn } from "@/lib/utils"
+import { cn,formatPKR } from "@/lib/utils"
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
-import { Badge } from "@/components/ui/badge"
-import { Role } from "@/lib/rbac"
+import {
+BarChart3,
+Calendar,
+CheckCircle,
+Database,
+FileSpreadsheet,
+FileText,
+Layers,
+LayoutDashboard,
+LayoutGrid,
+Loader2,
+Package,
+RefreshCw,Search,
+ShieldCheck,ShieldX,
+TrendingUp,
+Upload,
+Users
+} from "lucide-react"
 import { useSession } from "next-auth/react"
-import { Input } from "@/components/ui/input"
+import { useCallback,useEffect,useMemo,useRef,useState } from "react"
 import {
-    DropdownMenu,
-    DropdownMenuContent,
-    DropdownMenuItem,
-    DropdownMenuTrigger,
-    DropdownMenuCheckboxItem,
-} from "@/components/ui/dropdown-menu"
-import {
-    ResponsiveContainer,
-    ComposedChart,
-    CartesianGrid,
-    XAxis,
-    YAxis,
-    Tooltip as RechartsTooltip,
-    Legend,
-    Bar,
-    Line,
+Bar,
+CartesianGrid,
+ComposedChart,
+Legend,
+Line,
+Tooltip as RechartsTooltip,
+ResponsiveContainer,
+XAxis,
+YAxis,
 } from "recharts"
-import { GlobalDateFilter, type FilterPreset } from "@/components/dashboard/global-date-filter"
-import type { DateRange } from "@/lib/hooks/use-sales-performance"
-import { OrganizationFilter } from "@/components/reports/organization-filter"
-import { BranchFilter } from "@/components/reports/branch-filter"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { MultiSelectFilter } from "@/components/reports/multi-select-filter"
-import { GroupFilter } from "@/components/reports/group-filter"
-import { UserFilter } from "@/components/reports/user-filter"
-import { AlertCircle } from "lucide-react"
-import { Upload } from "lucide-react"
+import useSWR from "swr"
+import * as XLSX from "xlsx"
 
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
@@ -56,13 +66,9 @@ const fetcher = (url: string) => fetch(url).then((r) => r.json())
 const ALL_MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 
 export default function UserReportPage() {
-    const router = useRouter()
-    const pathname = usePathname()
-    const searchParams = useSearchParams()
 
     const {
         organizationId: contextOrgId,
-        branchId: contextBranchId,
         branchIds: contextBranchIds,
         isInitialized,
     } = useAppContext()
@@ -87,7 +93,7 @@ export default function UserReportPage() {
     // Global Multi-Selects
     const [selectedMonths, setSelectedMonths] = useState<number[]>([])
     const [selectedYears, setSelectedYears] = useState<number[]>([])
-    const [globalOrganizationIds, setGlobalOrganizationIds] = useState<string[]>([])
+    const [globalOrganizationIds] = useState<string[]>([])
     const [globalGroupIds, setGlobalGroupIds] = useState<string[]>([])
     const [globalBranchIds, setGlobalBranchIds] = useState<string[]>([])
     const [globalUserIds, setGlobalUserIds] = useState<string[]>([])
@@ -152,7 +158,12 @@ export default function UserReportPage() {
     if (chartYears.length) chartParams.set("years", chartYears.join(","))
     if (compare) chartParams.set("compare", "true")
     const { data: chartData, isLoading: isChartLoading, mutate: mutateChart } = useSWR(
-        isInitialized ? `/api/v1/analytics/users/performance?${chartParams.toString()}${isChartUserView ? "" : "&trendOnly=true"}` : null, fetcher,
+        (() => {
+          if (isInitialized) {
+            return `/api/v1/analytics/users/performance?${chartParams.toString()}${isChartUserView ? "" : "&trendOnly=true"}`
+          }
+          return null
+        })(), fetcher,
         { keepPreviousData: true }
     )
 
@@ -205,8 +216,8 @@ export default function UserReportPage() {
         const years = new Set<number>()
         const trendData = allTimeData?.trend || []
         trendData.forEach((t: any) => {
-            const y = parseInt(t.date.split('-')[0])
-            if (!isNaN(y)) years.add(y)
+            const y = Number.parseInt(t.date.split('-')[0])
+            if (!Number.isNaN(y)) years.add(y)
         })
         if (years.size === 0) years.add(new Date().getFullYear())
         return Array.from(years).sort((a, b) => b - a)
@@ -273,7 +284,7 @@ export default function UserReportPage() {
         setReportUserIds([])
     }, [reportBranchIds])
 
-    const handleDateChange = useCallback((range: DateRange | null, preset: FilterPreset, c?: boolean, cr?: DateRange | null, m?: number[], y?: number[], cm?: number[], cy?: number[]) => {
+    const handleDateChange = useCallback(({ range, preset, compare: c, compareRange: cr, months: m, years: y, compareMonths: cm, compareYears: cy }: GlobalDateFilterChange) => {
         setDateRange(range)
         setActivePreset(preset)
         if (c !== undefined) setCompare(c)
@@ -422,11 +433,21 @@ export default function UserReportPage() {
             { label: "Email",         value: (u: any) => u.userEmail || "-" },
             { label: "Status",        value: (u: any) => u.status || "active" },
             ...(role === "SUPER_ADMIN" ? [{ label: "Organization", value: (u: any) => u.organizationName || "N/A" }] : []),
-            ...(role !== "BRANCH_ADMIN" ? [{ label: role === "SUPER_ADMIN" ? "Domain / Branch" : "Branch", value: (u: any) => u.branchName || "N/A" }] : []),
+            ...((() => {
+              if (role !== "BRANCH_ADMIN") {
+                return [{ label: role === "SUPER_ADMIN" ? "Domain / Branch" : "Branch", value: (u: any) => u.branchName || "N/A" }]
+              }
+              return []
+            })()),
             { label: "Total Orders",     value: (u: any) => u.totalOrders || 0 },
             { label: "Fulfilled",        value: (u: any) => u.fulfilledOrders || 0 },
             { label: "Refunded",         value: (u: any) => u.refundedOrders || 0 },
-            ...(!pricesHidden ? [{ label: isBuyer ? "Purchased (PKR)" : "Revenue (PKR)", value: (u: any) => ((u.totalSpentCents || 0) / 100).toFixed(2) }] : []),
+            ...((() => {
+              if (!pricesHidden) {
+                return [{ label: isBuyer ? "Purchased (PKR)" : "Revenue (PKR)", value: (u: any) => ((u.totalSpentCents || 0) / 100).toFixed(2) }]
+              }
+              return []
+            })()),
         ]
 
         const headers = columns.map(c => c.label)
@@ -439,7 +460,7 @@ export default function UserReportPage() {
             doc.setFontSize(10)
             doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 28)
             autoTable(doc, { startY: 40, head: [headers], body: rows, theme: 'grid' })
-            doc.save(`user-report-${new Date().getTime()}.pdf`)
+            doc.save(`user-report-${Date.now()}.pdf`)
             return
         }
 
@@ -449,7 +470,7 @@ export default function UserReportPage() {
         ])
         const workbook = XLSX.utils.book_new()
         XLSX.utils.book_append_sheet(workbook, worksheet, "Users")
-        XLSX.writeFile(workbook, `user-report-${new Date().getTime()}.${format === 'excel' ? 'xlsx' : 'csv'}`)
+        XLSX.writeFile(workbook, `user-report-${Date.now()}.${format === 'excel' ? 'xlsx' : 'csv'}`)
     }
 
     const pricesHidden = Boolean((globalData as any)?.pricesHidden || (chartData as any)?.pricesHidden || (reportData as any)?.pricesHidden || (userProductsData as any)?.pricesHidden)
@@ -551,12 +572,22 @@ export default function UserReportPage() {
                                             <GroupFilter
                                                 selectedIds={chartGroupIds}
                                                 onChange={setChartGroupIds}
-                                                organizationIds={chartOrganizationIds.length > 0 ? chartOrganizationIds : (organizationId ? [organizationId.toString()] : undefined)}
+                                                organizationIds={(() => {
+                                                  if (chartOrganizationIds.length > 0) {
+                                                    return chartOrganizationIds
+                                                  }
+                                                  return (organizationId ? [organizationId.toString()] : undefined)
+                                                })()}
                                             />
                                             <BranchFilter
                                                 selectedIds={chartBranchIds}
                                                 onChange={setChartBranchIds}
-                                                organizationIds={chartOrganizationIds.length > 0 ? chartOrganizationIds : (organizationId ? [organizationId.toString()] : undefined)}
+                                                organizationIds={(() => {
+                                                  if (chartOrganizationIds.length > 0) {
+                                                    return chartOrganizationIds
+                                                  }
+                                                  return (organizationId ? [organizationId.toString()] : undefined)
+                                                })()}
                                                 groupIds={chartGroupIds}
                                             />
                                         </>
@@ -564,7 +595,12 @@ export default function UserReportPage() {
                                     <UserFilter
                                         selectedIds={chartUserIds}
                                         onChange={setChartUserIds}
-                                        organizationIds={chartOrganizationIds.length > 0 ? chartOrganizationIds : (organizationId ? [organizationId.toString()] : undefined)}
+                                        organizationIds={(() => {
+                                          if (chartOrganizationIds.length > 0) {
+                                            return chartOrganizationIds
+                                          }
+                                          return (organizationId ? [organizationId.toString()] : undefined)
+                                        })()}
                                         groupIds={chartGroupIds}
                                         branchIds={chartBranchIds}
                                     />
@@ -583,7 +619,9 @@ export default function UserReportPage() {
                                             </div>
                                         </div>
                                     )}
-                                    {processedChartData.length > 0 ? (
+                                    {(() => {
+                                      if (processedChartData.length > 0) {
+                                        return (
                                         <ResponsiveContainer width="100%" height="100%">
                                             <ComposedChart data={processedChartData} margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
                                                 <defs>
@@ -597,43 +635,7 @@ export default function UserReportPage() {
                                                 <YAxis yAxisId="left" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#64748B', fontWeight: 600 }} tickFormatter={(val) => val.toLocaleString()} />
                                                 <YAxis yAxisId="right" orientation="right" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#64748B', fontWeight: 600 }} tickFormatter={(val) => `Rs ${val >= 1000 ? (val / 1000).toFixed(0) + 'k' : val}`} />
                                                 <RechartsTooltip
-                                                    content={({ active, payload, label }: any) => {
-                                                        if (active && payload && payload.length) {
-                                                            const u = processedChartData.find((d: any) => d.name === label);
-                                                            return (
-                                                                <div className="bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-slate-200 dark:border-slate-800 p-4 rounded-2xl shadow-2xl min-w-[220px]">
-                                                                    <p className="text-[12px] font-black uppercase tracking-[0.1em] text-slate-900 dark:text-white mb-3 border-b border-slate-100 dark:border-slate-800/50 pb-2">{u?.fullName || label}</p>
-                                                                    <div className="space-y-2">
-                                                                        <div className="flex justify-between items-center bg-blue-500/5 p-2 rounded-xl">
-                                                                            <span className="text-[10px] font-bold text-blue-600 uppercase">Orders {compare ? '(A/B)' : ''}</span>
-                                                                            <span className="text-[11px] font-black text-blue-700">
-                                                                                {(payload[0]?.value || 0).toLocaleString()} {compare ? `/ ${(payload[1]?.value || 0).toLocaleString()}` : ''}
-                                                                            </span>
-                                                                        </div>
-                                                                        {isChartUserView && (
-                                                                            <>
-                                                                                <div className="flex justify-between items-center bg-rose-500/5 p-2 rounded-xl">
-                                                                                    <span className="text-[10px] font-bold text-rose-600 uppercase">Refunded</span>
-                                                                                    <span className="text-[11px] font-black text-rose-700">
-                                                                                        {u?.refunded?.toLocaleString()}
-                                                                                    </span>
-                                                                                </div>
-                                                                            </>
-                                                                        )}
-                                                                        {!pricesHidden && (
-                                                                            <div className="flex justify-between items-center bg-indigo-500/5 p-2 rounded-xl">
-                                                                                <span className="text-[10px] font-bold text-indigo-600 uppercase">{isBuyer ? "Purchased" : "Yield"} {compare ? '(A/B)' : ''}</span>
-                                                                                <span className="text-[11px] font-black text-indigo-700">
-                                                                                    {formatPKR(Number(payload[compare ? 2 : 1]?.value || 0))} {compare ? `/ ${formatPKR(Number(payload[3]?.value || 0))}` : ''}
-                                                                                </span>
-                                                                            </div>
-                                                                        )}
-                                                                    </div>
-                                                                </div>
-                                                            );
-                                                        }
-                                                        return null;
-                                                    }}
+                                                    content={<UserPerformanceTooltip chartData={processedChartData} compare={compare} isChartUserView={isChartUserView} pricesHidden={pricesHidden} isBuyer={isBuyer} />}
                                                 />
                                                 <Legend verticalAlign="top" align="right" height={40} iconType="circle" wrapperStyle={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em' }} />
                                                 <Bar yAxisId="left" dataKey="orders" name={compare ? "Orders (A)" : "Total Orders"} fill="url(#barGradient)" radius={[6, 6, 0, 0]} barSize={compare ? 15 : 30} />
@@ -642,14 +644,17 @@ export default function UserReportPage() {
                                                 {!pricesHidden && compare && <Line yAxisId="right" type="monotone" dataKey="compSpent" name={isBuyer ? "Purchased (B)" : "Spent (B)"} stroke="#94a3b8" strokeWidth={2} strokeDasharray="5 5" dot={{ r: 4 }} />}
                                             </ComposedChart>
                                         </ResponsiveContainer>
-                                    ) : (
+                                    )
+                                      }
+                                      return (
                                         <div className="h-full flex flex-col items-center justify-center text-slate-400 space-y-4">
                                             <div className="p-4 rounded-full bg-slate-100 dark:bg-slate-800">
                                                 <Users className="h-10 w-10 opacity-20" />
                                             </div>
                                             <p className="text-sm font-bold uppercase tracking-widest italic animate-pulse">Insufficient transactional history</p>
                                         </div>
-                                    )}
+                                    )
+                                    })()}
                                 </div>
                             </CardContent>
                         </Card>
@@ -666,16 +671,23 @@ export default function UserReportPage() {
                                 </div>
                             </div>
 
-                            {isUserProductsLoading ? (
+                            {(() => {
+                              if (isUserProductsLoading) {
+                                return (
                                 <div className="h-40 flex items-center justify-center">
                                     <Loader2 className="h-8 w-8 animate-spin text-slate-300" />
                                 </div>
-                            ) : (userProductsData?.data || []).length === 0 ? (
+                            )
+                              }
+                              if ((userProductsData?.data || []).length === 0) {
+                                return (
                                 <div className="p-12 flex flex-col items-center justify-center text-slate-400 bg-white dark:bg-slate-900/40 border border-slate-200 dark:border-slate-800 rounded-3xl">
                                     <Package className="h-12 w-12 mb-4 opacity-20" />
                                     <p className="text-xs font-black uppercase tracking-widest">No product data found</p>
                                 </div>
-                            ) : (
+                            )
+                              }
+                              return (
                                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                                     {(userProductsData?.data || [])
                                         .filter((u: any) =>
@@ -695,10 +707,18 @@ export default function UserReportPage() {
                                                     <div className="flex items-center gap-3 min-w-0 flex-1">
                                                         <div className={cn(
                                                             "h-10 w-10 flex shrink-0 items-center justify-center rounded-2xl font-black shadow-sm",
-                                                            idx === 0 ? "bg-amber-100 text-amber-600 dark:bg-amber-500/20" :
-                                                                idx === 1 ? "bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300" :
-                                                                    idx === 2 ? "bg-orange-100 text-orange-600 dark:bg-orange-500/20" :
-                                                                        "bg-indigo-50 text-indigo-600 dark:bg-indigo-500/10 text-indigo-400"
+                                                            (() => {
+                                                              if (idx === 0) {
+                                                                return "bg-amber-100 text-amber-600 dark:bg-amber-500/20"
+                                                              }
+                                                              if (idx === 1) {
+                                                                return "bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300"
+                                                              }
+                                                              if (idx === 2) {
+                                                                return "bg-orange-100 text-orange-600 dark:bg-orange-500/20"
+                                                              }
+                                                              return "bg-indigo-50 text-indigo-600 dark:bg-indigo-500/10 text-indigo-400"
+                                                            })()
                                                         )}>
                                                             #{idx + 1}
                                                         </div>
@@ -761,7 +781,8 @@ export default function UserReportPage() {
                                             )
                                         })}
                                 </div>
-                            )}
+                            )
+                            })()}
                         </div>
                     </TabsContent>
 
@@ -786,10 +807,10 @@ export default function UserReportPage() {
                                     </div>
                                     <GlobalDateFilter
                                         value={dateRange}
-                                        onChange={(range, preset, nextCompare, nextCompareRange, months, years, nextCompareMonths, nextCompareYears) => {
-                                            handleDateChange(range, preset, nextCompare, nextCompareRange, months, years, nextCompareMonths, nextCompareYears)
-                                            setReportMonths(months ?? [])
-                                            setReportYears(years ?? [])
+                                        onChange={(change) => {
+                                            handleDateChange(change)
+                                            setReportMonths(change.months ?? [])
+                                            setReportYears(change.years ?? [])
                                         }}
                                         activePreset={activePreset}
                                         customRangeOnly
@@ -810,12 +831,22 @@ export default function UserReportPage() {
                                             <GroupFilter
                                                 selectedIds={reportGroupIds}
                                                 onChange={setReportGroupIds}
-                                                organizationIds={reportOrganizationIds.length > 0 ? reportOrganizationIds : (organizationId ? [organizationId.toString()] : undefined)}
+                                                organizationIds={(() => {
+                                                  if (reportOrganizationIds.length > 0) {
+                                                    return reportOrganizationIds
+                                                  }
+                                                  return (organizationId ? [organizationId.toString()] : undefined)
+                                                })()}
                                             />
                                             <BranchFilter
                                                 selectedIds={reportBranchIds}
                                                 onChange={setReportBranchIds}
-                                                organizationIds={reportOrganizationIds.length > 0 ? reportOrganizationIds : (organizationId ? [organizationId.toString()] : undefined)}
+                                                organizationIds={(() => {
+                                                  if (reportOrganizationIds.length > 0) {
+                                                    return reportOrganizationIds
+                                                  }
+                                                  return (organizationId ? [organizationId.toString()] : undefined)
+                                                })()}
                                                 groupIds={reportGroupIds}
                                             />
                                         </>
@@ -823,7 +854,12 @@ export default function UserReportPage() {
                                     <UserFilter
                                         selectedIds={reportUserIds}
                                         onChange={setReportUserIds}
-                                        organizationIds={reportOrganizationIds.length > 0 ? reportOrganizationIds : (organizationId ? [organizationId.toString()] : undefined)}
+                                        organizationIds={(() => {
+                                          if (reportOrganizationIds.length > 0) {
+                                            return reportOrganizationIds
+                                          }
+                                          return (organizationId ? [organizationId.toString()] : undefined)
+                                        })()}
                                         groupIds={reportGroupIds}
                                         branchIds={reportBranchIds}
                                     />
@@ -866,9 +902,13 @@ export default function UserReportPage() {
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
-                                        {filteredUsers.length === 0 ? (
+                                        {(() => {
+                                          if (filteredUsers.length === 0) {
+                                            return (
                                             <TableRow><TableCell colSpan={8} className="h-60 text-center text-slate-400 font-bold uppercase tracking-widest italic opacity-50">No audits found for this criteria</TableCell></TableRow>
-                                        ) : (
+                                        )
+                                          }
+                                          return (
                                             filteredUsers.map((u: any) => (
                                                 <TableRow key={`${u.userId}-${u.userEmail}`} className="group hover:bg-slate-100/50 dark:hover:bg-slate-800/50 transition-all duration-300">
                                                     <TableCell className="pl-8 py-5">
@@ -880,11 +920,22 @@ export default function UserReportPage() {
                                                     <TableCell className="text-center py-5">
                                                         <Badge variant="outline" className={cn(
                                                             "text-[9px] font-black uppercase tracking-widest px-3 py-1 border-none",
-                                                            u.status === "ACTIVE" ? "bg-emerald-500/10 text-emerald-600" :
-                                                                u.status === "DELETED" ? "bg-rose-500/10 text-rose-600" :
-                                                                    "bg-slate-500/10 text-slate-600"
+                                                            (() => {
+                                                              if (u.status === "ACTIVE") {
+                                                                return "bg-emerald-500/10 text-emerald-600"
+                                                              }
+                                                              if (u.status === "DELETED") {
+                                                                return "bg-rose-500/10 text-rose-600"
+                                                              }
+                                                              return "bg-slate-500/10 text-slate-600"
+                                                            })()
                                                         )}>
-                                                            {u.status === "ACTIVE" ? <ShieldCheck className="h-3 w-3 mr-1" /> : (u.status === "DELETED" ? <ShieldX className="h-3 w-3 mr-1" /> : <ShieldX className="h-3 w-3 mr-1 opacity-50" />)}
+                                                            {(() => {
+                                                              if (u.status === "ACTIVE") {
+                                                                return <ShieldCheck className="h-3 w-3 mr-1" />
+                                                              }
+                                                              return (u.status === "DELETED" ? <ShieldX className="h-3 w-3 mr-1" /> : <ShieldX className="h-3 w-3 mr-1 opacity-50" />)
+                                                            })()}
                                                             {u.status || "INACTIVE"}
                                                         </Badge>
                                                     </TableCell>
@@ -925,7 +976,8 @@ export default function UserReportPage() {
                                                 </TableCell>}
                                                 </TableRow>
                                             ))
-                                        )}
+                                        )
+                                        })()}
                                     </TableBody>
                                 </Table>
                             </div>
@@ -948,6 +1000,39 @@ export default function UserReportPage() {
 
 // ━━━ PREMIUM HELPER COMPONENTS ━━━
 
+function UserPerformanceTooltip({ active, payload, label, chartData, compare, isChartUserView, pricesHidden, isBuyer }: any) {
+    if (!active || !payload?.length) return null
+
+    const user = chartData.find((item: any) => item.name === label)
+    return (
+        <div className="bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-slate-200 dark:border-slate-800 p-4 rounded-2xl shadow-2xl min-w-[220px]">
+            <p className="text-[12px] font-black uppercase tracking-[0.1em] text-slate-900 dark:text-white mb-3 border-b border-slate-100 dark:border-slate-800/50 pb-2">{user?.fullName || label}</p>
+            <div className="space-y-2">
+                <div className="flex justify-between items-center bg-blue-500/5 p-2 rounded-xl">
+                    <span className="text-[10px] font-bold text-blue-600 uppercase">Orders {compare ? '(A/B)' : ''}</span>
+                    <span className="text-[11px] font-black text-blue-700">
+                        {(payload[0]?.value || 0).toLocaleString()} {compare ? `/ ${(payload[1]?.value || 0).toLocaleString()}` : ''}
+                    </span>
+                </div>
+                {isChartUserView && (
+                    <div className="flex justify-between items-center bg-rose-500/5 p-2 rounded-xl">
+                        <span className="text-[10px] font-bold text-rose-600 uppercase">Refunded</span>
+                        <span className="text-[11px] font-black text-rose-700">{user?.refunded?.toLocaleString()}</span>
+                    </div>
+                )}
+                {!pricesHidden && (
+                    <div className="flex justify-between items-center bg-indigo-500/5 p-2 rounded-xl">
+                        <span className="text-[10px] font-bold text-indigo-600 uppercase">{isBuyer ? "Purchased" : "Yield"} {compare ? '(A/B)' : ''}</span>
+                        <span className="text-[11px] font-black text-indigo-700">
+                            {formatPKR(Number(payload[compare ? 2 : 1]?.value || 0))} {compare ? `/ ${formatPKR(Number(payload[3]?.value || 0))}` : ''}
+                        </span>
+                    </div>
+                )}
+            </div>
+        </div>
+    )
+}
+
 function MonthFilter({ selected, onChange }: any) {
     const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
     const items = months.map((m, i) => ({ id: i + 1, label: m }))
@@ -956,7 +1041,7 @@ function MonthFilter({ selected, onChange }: any) {
             title="Months"
             items={items}
             selectedIds={selected}
-            onChange={(ids) => onChange(ids.sort((a, b) => a - b))}
+            onChange={(ids) => onChange(ids.toSorted((a, b) => a - b))}
             icon={<Calendar className="h-3.5 w-3.5 mr-2 text-indigo-500" />}
             placeholder="Months"
             showSearch={false}
@@ -971,7 +1056,7 @@ function YearFilter({ selected, onChange, availableYears }: any) {
             title="Years"
             items={items}
             selectedIds={selected}
-            onChange={(ids) => onChange(ids.sort((a, b) => b - a))}
+            onChange={(ids) => onChange(ids.toSorted((a, b) => b - a))}
             icon={<Layers className="h-3.5 w-3.5 mr-2 text-indigo-500" />}
             placeholder="Years"
             showSearch={false}

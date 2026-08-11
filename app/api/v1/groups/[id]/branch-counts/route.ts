@@ -24,8 +24,8 @@ export async function GET(
             return NextResponse.json({ error: "Forbidden" }, { status: 403 })
         }
 
-        const groupId = parseInt(id)
-        if (isNaN(groupId)) {
+        const groupId = Number.parseInt(id)
+        if (Number.isNaN(groupId)) {
             return NextResponse.json({ error: "Invalid group ID" }, { status: 400 })
         }
 

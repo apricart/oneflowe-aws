@@ -1,9 +1,9 @@
-import { NextRequest, NextResponse } from "next/server"
+import { NextRequest,NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
-import { db, pool } from "@/lib/db"
-import { branchInventory, organizationInventory, branches, globalProducts, auditLogs, groups, categories } from "@/db/schema"
-import { eq, and, desc, sql, inArray, isNull } from "drizzle-orm"
+import { db } from "@/lib/db"
+import { branchInventory,organizationInventory,branches,globalProducts,auditLogs,groups,categories } from "@/db/schema"
+import { eq,and,desc,sql,inArray,isNull } from "drizzle-orm"
 import { logInventoryAction } from "@/lib/global-logger"
 import { invalidateByPrefix } from "@/lib/cache-utils"
 
@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
     if (userRole === "SUPER_ADMIN") {
       const orgIdParam = searchParams.get("organizationId")
       if (orgIdParam) {
-        organizationId = parseInt(orgIdParam)
+        organizationId = Number.parseInt(orgIdParam)
       }
     }
     if (!organizationId) {
@@ -39,8 +39,8 @@ export async function GET(req: NextRequest) {
     const groupId = searchParams.get("groupId") // New parameter
     const productId = searchParams.get("productId")
     const view = searchParams.get("view")
-    const page = parseInt(searchParams.get("page") || "1")
-    const limit = parseInt(searchParams.get("limit") || "50")
+    const page = Number.parseInt(searchParams.get("page") || "1")
+    const limit = Number.parseInt(searchParams.get("limit") || "50")
     const offset = (page - 1) * limit
     const parsedOrganizationId = Number(organizationId)
 
@@ -150,11 +150,11 @@ export async function GET(req: NextRequest) {
     ]
 
     if (branchId) {
-      conditions.push(eq(branchInventory.branchId, parseInt(branchId)))
+      conditions.push(eq(branchInventory.branchId, Number.parseInt(branchId)))
     }
 
     if (groupId) {
-      conditions.push(eq(branches.groupId, parseInt(groupId)))
+      conditions.push(eq(branches.groupId, Number.parseInt(groupId)))
     }
 
     console.log('[API] GET branch-assignments params:', { organizationId, branchId, groupId })
@@ -203,7 +203,7 @@ export async function GET(req: NextRequest) {
           productId
             ? and(
               ...conditions,
-              eq(organizationInventory.globalProductId, parseInt(productId))
+              eq(organizationInventory.globalProductId, Number.parseInt(productId))
             )
             : and(...conditions)
         )
@@ -220,7 +220,7 @@ export async function GET(req: NextRequest) {
           productId
             ? and(
               ...conditions,
-              eq(organizationInventory.globalProductId, parseInt(productId))
+              eq(organizationInventory.globalProductId, Number.parseInt(productId))
             )
             : and(...conditions)
         ),
@@ -480,7 +480,7 @@ export async function POST(req: NextRequest) {
       // leave the request partially applied. entityId is limited to 128 chars.
       if (writtenAssignments.length > 0) {
         const firstAssignmentId = writtenAssignments[0].id
-        const lastAssignmentId = writtenAssignments[writtenAssignments.length - 1].id
+        const lastAssignmentId = writtenAssignments.at(-1)!.id
         const entityId = writtenAssignments.length === 1
           ? String(firstAssignmentId)
           : `${firstAssignmentId}-${lastAssignmentId}`
@@ -602,7 +602,7 @@ export async function DELETE(req: NextRequest) {
     if (id && !organizationId) {
       const [assignment] = await db.select({ organizationId: branchInventory.organizationId })
         .from(branchInventory)
-        .where(eq(branchInventory.id, parseInt(id)))
+        .where(eq(branchInventory.id, Number.parseInt(id)))
         .limit(1)
       if (assignment) {
         organizationId = String(assignment.organizationId)
@@ -614,7 +614,7 @@ export async function DELETE(req: NextRequest) {
     }
 
     // Parse organizationId to number for use in queries and logging
-    const orgIdNum = parseInt(String(organizationId))
+    const orgIdNum = Number.parseInt(String(organizationId))
 
     const whereConditions = [
       eq(branchInventory.organizationId, orgIdNum),
@@ -622,10 +622,10 @@ export async function DELETE(req: NextRequest) {
     ]
 
     if (id) {
-      whereConditions.push(eq(branchInventory.id, parseInt(id)))
+      whereConditions.push(eq(branchInventory.id, Number.parseInt(id)))
     }
     if (branchId) {
-      whereConditions.push(eq(branchInventory.branchId, parseInt(branchId)))
+      whereConditions.push(eq(branchInventory.branchId, Number.parseInt(branchId)))
     }
     if (productId) {
       // Resolve product filter via organizationInventory.globalProductId
@@ -648,7 +648,7 @@ export async function DELETE(req: NextRequest) {
         productId
           ? and(
             ...whereConditions,
-            eq(organizationInventory.globalProductId, parseInt(productId))
+            eq(organizationInventory.globalProductId, Number.parseInt(productId))
           )
           : and(...whereConditions)
       )
@@ -706,7 +706,7 @@ export async function DELETE(req: NextRequest) {
         },
         {
           organizationId: orgIdNum,
-          branchId: branchId ? parseInt(branchId) : undefined,
+          branchId: branchId ? Number.parseInt(branchId) : undefined,
           assignmentIds: assignmentsToDelete.map(a => a.id),
           count: assignmentsToDelete.length,
           metadata: { productId }
@@ -774,8 +774,8 @@ export async function PUT(req: NextRequest) {
       .set(updateData)
       .where(
         and(
-          eq(branchInventory.id, parseInt(id)),
-          eq(branchInventory.organizationId, parseInt(organizationId)),
+          eq(branchInventory.id, Number.parseInt(id)),
+          eq(branchInventory.organizationId, Number.parseInt(organizationId)),
           isNull(branchInventory.deletedAt)
         )
       )

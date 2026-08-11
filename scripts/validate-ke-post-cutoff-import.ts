@@ -1,8 +1,8 @@
 #!/usr/bin/env tsx
 /** Read-only post-commit validator for the K-Electric post-cutoff batch. */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs"
-import { dirname, resolve } from "path"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { dirname, resolve } from "node:path"
 import * as dotenv from "dotenv"
 import { verifyApprovalToken } from "../lib/approval-token"
 

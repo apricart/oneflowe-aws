@@ -27,7 +27,7 @@ export function ErrorDisplay({
   onDismiss,
   onRetry,
   actions = [],
-}: ErrorDisplayProps) {
+}: Readonly<ErrorDisplayProps>) {
   const getStyles = () => {
     const styles = {
       error: {
@@ -123,9 +123,9 @@ export function ErrorDisplay({
               Retry
             </Button>
           )}
-          {actions.map((action, index) => (
+          {actions.map((action) => (
             <Button
-              key={index}
+              key={action.label}
               onClick={action.onClick}
               size="sm"
               variant={action.variant || "outline"}

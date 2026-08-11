@@ -1,3 +1,6 @@
+import { stringifyPrimitive } from "./stringify-primitive"
+import { isValidEmailAddress } from "@/lib/validation/email"
+
 export const IMPORTABLE_USER_ROLES = ["HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL"] as const
 
 export type ImportableUserRole = (typeof IMPORTABLE_USER_ROLES)[number]
@@ -56,7 +59,7 @@ const ROLE_ALIASES: Record<string, ImportableUserRole> = {
 }
 
 export function normalizeImportText(value: unknown): string {
-  return String(value ?? "").normalize("NFKC").trim().replace(/\s+/g, " ")
+  return stringifyPrimitive(value).normalize("NFKC").trim().replace(/\s+/g, " ")
 }
 
 export function normalizeImportKey(value: unknown): string {
@@ -234,6 +237,39 @@ function addDuplicateIssues(rows: ParsedUserImportRow[]): void {
   }
 }
 
+function addImportFieldIssues(options: {
+  issues: UserImportIssue[]
+  rowNumber: number
+  email: string
+  username: string
+  role: UserImportRole | null
+  rawRole: string
+  branchSource: string
+  firstName: string
+  lastName: string
+  fullName: string
+  phone: string | null
+  employeeId: string | null
+  address: string | null
+}): void {
+  const { issues, rowNumber, email, username, role, rawRole, branchSource, firstName, lastName, fullName, phone, employeeId, address } = options
+  if (!email) issues.push(issue("error", "MISSING_EMAIL", rowNumber, "Email is required.", "email"))
+  else if (email.length > 255 || !isValidEmailAddress(email)) issues.push(issue("error", "INVALID_EMAIL", rowNumber, "Email is invalid or exceeds 255 characters.", "email"))
+  if (!username) {
+    issues.push(issue("error", "MISSING_USERNAME", rowNumber, "Provide Username or configure the organization import with usernameFormat=first.last.", "username"))
+  } else if (username.length > 255 || /\s/.test(username)) {
+    issues.push(issue("error", "INVALID_USERNAME", rowNumber, "Username cannot contain whitespace or exceed 255 characters.", "username"))
+  }
+  if (!role) issues.push(issue("error", "INVALID_ROLE", rowNumber, `Role "${rawRole || "(blank)"}" is not importable.`, "role"))
+  if (["BRANCH_ADMIN", "ORDER_PORTAL"].includes(role ?? "") && !branchSource) {
+    issues.push(issue("error", "MISSING_BRANCH", rowNumber, `${role} requires a branch/department.`, "branch"))
+  }
+  if (firstName.length > 100 || lastName.length > 100 || fullName.length > 255) issues.push(issue("error", "NAME_TOO_LONG", rowNumber, "Name exceeds the database length limit.", "name"))
+  if (phone && phone.length > 32) issues.push(issue("error", "PHONE_TOO_LONG", rowNumber, "Phone exceeds 32 characters.", "phone"))
+  if (employeeId && employeeId.length > 64) issues.push(issue("error", "EMPLOYEE_ID_TOO_LONG", rowNumber, "Employee ID exceeds 64 characters.", "employeeId"))
+  if (address && address.length > 2_000) issues.push(issue("error", "ADDRESS_TOO_LONG", rowNumber, "Address exceeds 2,000 characters.", "address"))
+}
+
 export function parseUserImportRecords(
   records: UserImportRecord[],
   options: { usernameFormat?: UserImportUsernameFormat } = {},
@@ -265,40 +301,21 @@ export function parseUserImportRecords(
     )
     const issues = [...name.issues, ...status.issues, ...validatePassword(password ?? "", rowNumber)]
 
-    if (!email) {
-      issues.push(issue("error", "MISSING_EMAIL", rowNumber, "Email is required.", "email"))
-    } else if (email.length > 255 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      issues.push(issue("error", "INVALID_EMAIL", rowNumber, "Email is invalid or exceeds 255 characters.", "email"))
-    }
-    if (!username) {
-      issues.push(issue(
-        "error",
-        "MISSING_USERNAME",
-        rowNumber,
-        "Provide Username or configure the organization import with usernameFormat=first.last.",
-        "username",
-      ))
-    } else if (username.length > 255 || /\s/.test(username)) {
-      issues.push(issue("error", "INVALID_USERNAME", rowNumber, "Username cannot contain whitespace or exceed 255 characters.", "username"))
-    }
-    if (!role) {
-      issues.push(issue("error", "INVALID_ROLE", rowNumber, `Role "${rawRole || "(blank)"}" is not importable.`, "role"))
-    }
-    if ((role === "BRANCH_ADMIN" || role === "ORDER_PORTAL") && !branchSource) {
-      issues.push(issue("error", "MISSING_BRANCH", rowNumber, `${role} requires a branch/department.`, "branch"))
-    }
-    if (name.firstName.length > 100 || name.lastName.length > 100 || name.fullName.length > 255) {
-      issues.push(issue("error", "NAME_TOO_LONG", rowNumber, "Name exceeds the database length limit.", "name"))
-    }
-    if (phone && phone.length > 32) {
-      issues.push(issue("error", "PHONE_TOO_LONG", rowNumber, "Phone exceeds 32 characters.", "phone"))
-    }
-    if (employeeId && employeeId.length > 64) {
-      issues.push(issue("error", "EMPLOYEE_ID_TOO_LONG", rowNumber, "Employee ID exceeds 64 characters.", "employeeId"))
-    }
-    if (address && address.length > 2_000) {
-      issues.push(issue("error", "ADDRESS_TOO_LONG", rowNumber, "Address exceeds 2,000 characters.", "address"))
-    }
+    addImportFieldIssues({
+      issues,
+      rowNumber,
+      email,
+      username,
+      role,
+      rawRole,
+      branchSource,
+      firstName: name.firstName,
+      lastName: name.lastName,
+      fullName: name.fullName,
+      phone,
+      employeeId,
+      address,
+    })
     if (!explicitUsername && username) {
       issues.push(issue(
         "warning",

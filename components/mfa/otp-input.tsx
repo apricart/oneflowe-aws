@@ -22,7 +22,7 @@ export function OTPInput({
   disabled = false,
   error = false,
   className
-}: OTPInputProps) {
+}: Readonly<OTPInputProps>) {
   const [activeIndex, setActiveIndex] = useState(0)
   const inputRefs = useRef<(HTMLInputElement | null)[]>([])
 
@@ -112,11 +112,15 @@ export function OTPInput({
           className={cn(
             "w-12 h-12 text-center text-lg font-semibold",
             "border-2 transition-colors",
-            error
-              ? "border-red-500 bg-red-50 focus:border-red-500"
-              : activeIndex === index
-                ? "border-blue-500 focus:border-blue-500"
-                : "border-gray-300 focus:border-blue-500",
+            (() => {
+              if (error) {
+                return "border-red-500 bg-red-50 focus:border-red-500"
+              }
+              if (activeIndex === index) {
+                return "border-blue-500 focus:border-blue-500"
+              }
+              return "border-gray-300 focus:border-blue-500"
+            })(),
             disabled && "opacity-50 cursor-not-allowed"
           )}
         />

@@ -21,7 +21,7 @@ type ConnectivityState = "healthy" | "retrying" | "offline"
  * still validate the JWT, role, tenant, sessionVersion, and active statuses.
  * This guard only decides when the browser has enough evidence to redirect.
  */
-export function SessionGuard({ children }: { children: React.ReactNode }) {
+export function SessionGuard({ children }: Readonly<{ children: React.ReactNode }>) {
   const { data: session, status } = useSession()
   const [connectivity, setConnectivity] =
     useState<ConnectivityState>("healthy")

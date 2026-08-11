@@ -1,58 +1,70 @@
 "use client"
 
-import React, { useState, useEffect, useCallback, useMemo, useRef } from "react"
-import { useRouter, useSearchParams, usePathname } from "next/navigation"
-import useSWR from "swr"
-import { format, parse } from "date-fns"
-import { fetcher } from "@/lib/fetcher"
 import { useAppContext } from "@/components/context/app-context"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Card,CardContent,CardHeader,CardTitle } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
-    Filter, Building2, ChevronDown, RotateCcw, X, ReceiptText, FileText, DownloadIcon, Search, Calendar, Loader2,
-    Wallet, LayoutGrid, RefreshCw, PiggyBank, LayoutDashboard, Database, Eye, EyeOff
-} from "lucide-react"
-import { motion, AnimatePresence } from "framer-motion"
-import * as XLSX from "xlsx"
+DropdownMenu,
+DropdownMenuContent,
+DropdownMenuItem,
+DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Popover,PopoverContent,PopoverTrigger } from "@/components/ui/popover"
+import { Switch } from "@/components/ui/switch"
+import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from "@/components/ui/table"
+import { fetcher } from "@/lib/fetcher"
+import { Role } from "@/lib/rbac"
 import { sanitizeSpreadsheetRow } from "@/lib/spreadsheet"
-import { formatPKR, cn } from "@/lib/utils"
+import { cn,formatPKR } from "@/lib/utils"
+import { format } from "date-fns"
+import { AnimatePresence,motion } from "framer-motion"
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
-import { Badge } from "@/components/ui/badge"
-import { Role } from "@/lib/rbac"
-import { useSession } from "next-auth/react"
-import { Input } from "@/components/ui/input"
 import {
-    DropdownMenu,
-    DropdownMenuContent,
-    DropdownMenuItem,
-    DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Checkbox } from "@/components/ui/checkbox"
-import { Switch } from "@/components/ui/switch"
-import { Label } from "@/components/ui/label"
+Building2,
+Calendar,
+ChevronDown,
+Database,Eye,EyeOff,
+FileText,
+Filter,
+LayoutDashboard,
+LayoutGrid,
+Loader2,
+PiggyBank,
+ReceiptText,
+RefreshCw,
+RotateCcw,
+Search,
+Upload,
+Wallet,
+X
+} from "lucide-react"
+import { useSession } from "next-auth/react"
+import { usePathname,useRouter,useSearchParams } from "next/navigation"
+import { useCallback,useEffect,useMemo,useRef,useState } from "react"
+import useSWR from "swr"
+import * as XLSX from "xlsx"
 
-import { GlobalDateFilter, type FilterPreset } from "@/components/dashboard/global-date-filter"
-import { BranchFilter } from "@/components/reports/branch-filter"
+import { GlobalDateFilter,type FilterPreset,type GlobalDateFilterChange } from "@/components/dashboard/global-date-filter"
 import { GroupFilter } from "@/components/reports/group-filter"
 
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { KPICard } from "@/components/reports/kpi-card"
+import { Tabs,TabsContent,TabsList,TabsTrigger } from "@/components/ui/tabs"
 
 import {
-    ResponsiveContainer,
-    ComposedChart,
-    Area,
-    Bar,
-    XAxis,
-    YAxis,
-    CartesianGrid,
-    Tooltip as RechartsTooltip,
-    Legend
+Bar,
+CartesianGrid,
+ComposedChart,
+Legend,
+Tooltip as RechartsTooltip,
+ResponsiveContainer,
+XAxis,
+YAxis
 } from 'recharts'
-import { Upload } from "lucide-react"
 
 interface BudgetSummaryResponse {
     pricesHidden?: boolean;
@@ -108,6 +120,103 @@ const formatChartAxisPKR = (value: number) => {
 
 const ALL_MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 
+interface BudgetChartBranch {
+    id: string | number
+    name: string
+}
+
+interface BudgetChartTooltipProps {
+    active?: boolean
+    payload?: Array<{ payload: Record<string, number | string> }>
+    label?: string
+    branches: BudgetChartBranch[]
+}
+
+function BudgetChartTooltip({ active, payload, label, branches }: BudgetChartTooltipProps) {
+    if (!active || !payload?.length) {
+        return null
+    }
+
+    const data = payload[0].payload
+    const totalLimit = Number(data.totalLimit) || 0
+    const totalSpent = Number(data.totalSpent) || 0
+    const utilization = totalLimit > 0 ? (totalSpent / totalLimit) * 100 : 0
+    let utilizationColor = "text-emerald-500"
+    if (utilization > 90) {
+        utilizationColor = "text-rose-500"
+    } else if (utilization > 70) {
+        utilizationColor = "text-amber-500"
+    }
+
+    return (
+        <div className="bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200/80 dark:border-slate-700 p-4 rounded-2xl shadow-2xl min-w-[280px] ring-1 ring-black/5">
+            <p className="text-xs font-black uppercase tracking-widest text-slate-500 mb-3 pb-2 border-b border-slate-100 dark:border-slate-800">
+                {data.rawDate ? format(new Date(`${data.rawDate}-01`), "MMMM yyyy") : label}
+            </p>
+
+            <div className="space-y-3">
+                <div className="flex justify-between items-center bg-teal-50/50 dark:bg-teal-900/20 p-2.5 rounded-xl border border-teal-100/50 dark:border-teal-900/50">
+                    <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 rounded-sm bg-gradient-to-b from-teal-400 to-teal-600 shadow-sm shadow-teal-500/20" />
+                        <span className="text-[11px] font-bold text-teal-700 dark:text-teal-400 uppercase tracking-tight">Total Budget</span>
+                    </div>
+                    <span className="text-[13px] font-black text-teal-600">{formatPKR(totalLimit)}</span>
+                </div>
+
+                <div className="flex justify-between items-center bg-indigo-50/50 dark:bg-indigo-900/20 p-2.5 rounded-xl border border-indigo-100/50 dark:border-indigo-900/50">
+                    <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 rounded-sm bg-gradient-to-b from-indigo-400 to-indigo-600 shadow-sm shadow-indigo-500/20" />
+                        <span className="text-[11px] font-bold text-indigo-700 dark:text-indigo-400 uppercase tracking-tight">Total Spent</span>
+                    </div>
+                    <span className="text-[13px] font-black text-indigo-600">{formatPKR(totalSpent)}</span>
+                </div>
+
+                <div className="flex justify-between items-center pt-1 px-2">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Utilization Rate</span>
+                    <span className={cn("text-[13px] font-black", utilizationColor)}>{utilization.toFixed(1)}%</span>
+                </div>
+            </div>
+
+            {branches.length > 0 && (
+                <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800">
+                    <div className="flex justify-between items-center mb-2 px-1">
+                        <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider">Branch Details</p>
+                        <div className="flex gap-4">
+                            <span className="text-[8px] font-bold text-emerald-500 tracking-tighter uppercase opacity-70">Base</span>
+                            <span className="text-[8px] font-bold text-amber-500 tracking-tighter uppercase opacity-70">Addon</span>
+                            <span className="text-[8px] font-bold text-indigo-500 tracking-tighter uppercase opacity-70">Total</span>
+                            <span className="text-[8px] font-bold text-violet-500 tracking-tighter uppercase opacity-70">Spent</span>
+                        </div>
+                    </div>
+                    <div className="space-y-1.5">
+                        {branches.slice(0, 5).map((branch) => {
+                            const baseline = Number(data[`${branch.id}_baseline`]) || 0
+                            const addon = Number(data[`${branch.id}_addon`]) || 0
+                            const spent = Number(data[`${branch.id}_spent`]) || 0
+                            return (
+                                <div key={branch.id} className="flex justify-between items-center py-1.5 px-2 bg-slate-50/50 dark:bg-slate-800/30 rounded-lg group transition-colors hover:bg-slate-100/50 dark:hover:bg-slate-800/50">
+                                    <span className="text-[10px] text-slate-600 dark:text-slate-300 font-bold truncate max-w-[80px]">{branch.name}</span>
+                                    <div className="flex gap-3">
+                                        <span className="text-[10px] font-black text-emerald-600/80">{formatPKR(baseline)}</span>
+                                        <span className="text-[10px] font-black text-amber-600/80">{formatPKR(addon)}</span>
+                                        <span className="text-[10px] font-black text-indigo-600">{formatPKR(baseline + addon)}</span>
+                                        <span className="text-[10px] font-black text-violet-600">{formatPKR(spent)}</span>
+                                    </div>
+                                </div>
+                            )
+                        })}
+                    </div>
+                    {branches.length > 5 && (
+                        <p className="text-[8px] text-center text-slate-400 mt-2 font-bold italic tracking-wide">
+                            +{branches.length - 5} more branches filtered
+                        </p>
+                    )}
+                </div>
+            )}
+        </div>
+    )
+}
+
 export default function BudgetSummaryPage() {
     const router = useRouter()
     const pathname = usePathname()
@@ -122,7 +231,7 @@ export default function BudgetSummaryPage() {
     } = useAppContext()
 
     const [searchTerm, setSearchTerm] = useState("")
-    const [generatedDate, setGeneratedDate] = useState("")
+    const [, setGeneratedDate] = useState("")
 
     // Chart-local filters — default state
     const [chartYears, setChartYears] = useState<number[]>([]) // Will be initialized by useEffect
@@ -153,16 +262,16 @@ export default function BudgetSummaryPage() {
 
     // Multi-select month/year states
     const [selectedMonths, setSelectedMonths] = useState<number[]>(
-        searchParams.get("months")?.split(",").map(Number).filter(n => !isNaN(n)) || []
+        searchParams.get("months")?.split(",").map(Number).filter(n => !Number.isNaN(n)) || []
     )
     const [selectedYears, setSelectedYears] = useState<number[]>(
-        searchParams.get("years")?.split(",").map(Number).filter(n => !isNaN(n)) || []
+        searchParams.get("years")?.split(",").map(Number).filter(n => !Number.isNaN(n)) || []
     )
     const [compareMonths, setCompareMonths] = useState<number[]>(
-        searchParams.get("compareMonths")?.split(",").map(Number).filter(n => !isNaN(n)) || []
+        searchParams.get("compareMonths")?.split(",").map(Number).filter(n => !Number.isNaN(n)) || []
     )
     const [compareYears, setCompareYears] = useState<number[]>(
-        searchParams.get("compareYears")?.split(",").map(Number).filter(n => !isNaN(n)) || []
+        searchParams.get("compareYears")?.split(",").map(Number).filter(n => !Number.isNaN(n)) || []
     )
 
     const activePreset = presetFromUrl
@@ -173,16 +282,7 @@ export default function BudgetSummaryPage() {
         return null
     }, [startFromUrl, endFromUrl])
 
-    const handleDateChange = useCallback((
-        range: { startDate: Date; endDate: Date } | null,
-        preset: FilterPreset,
-        compareMode?: boolean,
-        compRange?: { startDate: Date; endDate: Date } | null,
-        months: number[] = [],
-        years: number[] = [],
-        cMonths: number[] = [],
-        cYears: number[] = []
-    ) => {
+    const handleDateChange = useCallback(({ range, preset, compare: compareMode, compareRange: compRange, months = [], years = [], compareMonths: cMonths = [], compareYears: cYears = [] }: GlobalDateFilterChange) => {
         const params = new URLSearchParams(searchParams.toString())
         if (preset) params.set("preset", preset)
 
@@ -221,9 +321,6 @@ export default function BudgetSummaryPage() {
         router.replace(`${pathname}?${params.toString()}`, { scroll: false })
     }, [searchParams, pathname, router])
 
-    const handleBranchChange = useCallback((ids: string[]) => {
-        setContextBranchIds(ids)
-    }, [setContextBranchIds])
 
     // Build query string
     const queryParams = new URLSearchParams()
@@ -260,13 +357,24 @@ export default function BudgetSummaryPage() {
 
     const diffMs = dateRange ? (dateRange.endDate.getTime() - dateRange.startDate.getTime()) : 0;
     const diffDays = diffMs / (1000 * 60 * 60 * 24);
-    const granularity: "daily" | "monthly" | "yearly" = activePreset === "all" ? "yearly" : diffDays > 365 ? "yearly" : diffDays > 31 ? "monthly" : "daily";
+    const granularity: "daily" | "monthly" | "yearly" = (() => {
+      if (activePreset === "all") {
+        return "yearly"
+      }
+      if (diffDays > 365) {
+        return "yearly"
+      }
+      if (diffDays > 31) {
+        return "monthly"
+      }
+      return "daily"
+    })();
     queryParams.set("granularity", granularity);
 
     // ━━━ PAGE DATA (Global) ━━━
     // Fetches are deferred until the org/branch context has hydrated, and
     // keepPreviousData keeps the current numbers on screen during filter changes
-    const { data: pageData, isLoading: isPageLoading, mutate: mutatePage } = useSWR<BudgetSummaryResponse>(isInitialized ? `/api/v1/analytics/budgets/summary?${queryParams.toString()}` : null, fetcher, { keepPreviousData: true })
+    const { data: pageData, isLoading: isPageLoading } = useSWR<BudgetSummaryResponse>(isInitialized ? `/api/v1/analytics/budgets/summary?${queryParams.toString()}` : null, fetcher, { keepPreviousData: true })
 
     // ━━━ CHART DATA (All-Time Independent) ━━━
     const chartQueryParams = new URLSearchParams()
@@ -314,7 +422,7 @@ export default function BudgetSummaryPage() {
 
         // If no explicit preset/dates, force "All Time" filter
         if (!startFromUrl && !endFromUrl && !searchParams.has("preset")) {
-            handleDateChange(null, "all")
+            handleDateChange({ range: null, preset: "all" })
         }
     }, [startFromUrl, endFromUrl, searchParams, handleDateChange])
 
@@ -356,29 +464,14 @@ export default function BudgetSummaryPage() {
         setChartBranchIds([])
         setReportBranchIds([])
     }, [organizationId])
-    const MONTHS = [
-        "January", "February", "March", "April", "May", "June",
-        "July", "August", "September", "October", "November", "December"
-    ]
 
 
-    const handleMonthYearChange = (monthIdx: number, year: number) => {
-        const startDate = new Date(year, monthIdx, 1)
-        const endDate = new Date(year, monthIdx + 1, 0)
-        handleDateChange({ startDate, endDate }, "custom")
-    }
 
-    const currentYear = dateRange?.startDate.getFullYear() || new Date().getFullYear()
-    const currentMonthIdx = dateRange?.startDate.getMonth() || new Date().getMonth()
 
     const summary = pageData?.summary || { totalAllocated: 0, totalSpent: 0, totalHeld: 0, totalCredited: 0, totalRemaining: 0 }
-    const insights = pageData?.insights || { spentGrowth: 0, allocationGrowth: 0 }
     const categories = pageData?.categories || []
     const branchBreakdown = pageData?.branchBreakdown || []
 
-    const filteredCategories = categories.filter((c: any) =>
-        (c.categoryName || "Uncategorized").toLowerCase().includes(searchTerm.toLowerCase())
-    )
 
     const filteredBranches = branchBreakdown.filter((b: any) =>
         (b.branchName || "").toLowerCase().includes(searchTerm.toLowerCase())
@@ -423,8 +516,8 @@ export default function BudgetSummaryPage() {
         let minYear = currentY;
         transformedChartData.forEach((d: any) => {
             if (d.rawDate) {
-                const y = parseInt(d.rawDate.slice(0, 4))
-                if (!isNaN(y)) {
+                const y = Number.parseInt(d.rawDate.slice(0, 4))
+                if (!Number.isNaN(y)) {
                     years.add(y)
                     if (y < minYear) minYear = y;
                 }
@@ -445,7 +538,7 @@ export default function BudgetSummaryPage() {
         chartApiData.chartData.forEach((d: any) => {
             if (d.branches) {
                 d.branches.forEach((b: any) => {
-                    if (!branches.find(br => br.id === b.branchId)) {
+                    if (!branches.some(br => br.id === b.branchId)) {
                         branches.push({ id: b.branchId, name: b.branchName });
                     }
                 });
@@ -461,8 +554,8 @@ export default function BudgetSummaryPage() {
 
         transformedChartData.forEach((d: any) => {
             if (!d.rawDate) return;
-            const yr = parseInt(d.rawDate.slice(0, 4))
-            const mo = parseInt(d.rawDate.split("-")[1])
+            const yr = Number.parseInt(d.rawDate.slice(0, 4))
+            const mo = Number.parseInt(d.rawDate.split("-")[1])
 
             // Apply reports-specific Year/Month filters
             if (reportYears.length > 0 && !reportYears.includes(yr)) return
@@ -512,8 +605,8 @@ export default function BudgetSummaryPage() {
                 setChartYears([currentYear])
                 setReportYears([currentYear])
             } else {
-                setChartYears([availableChartYears[availableChartYears.length - 1]])
-                setReportYears([availableChartYears[availableChartYears.length - 1]])
+                setChartYears([availableChartYears.at(-1) ?? currentYear])
+                setReportYears([availableChartYears.at(-1) ?? currentYear])
             }
             hasInitializedChartDefaults.current = true
         }
@@ -522,14 +615,14 @@ export default function BudgetSummaryPage() {
     const getDefaultReportYears = useCallback(() => {
         const currentYear = new Date().getFullYear()
         if (availableChartYears.includes(currentYear)) return [currentYear]
-        const latestYear = availableChartYears[availableChartYears.length - 1]
+        const latestYear = availableChartYears.at(-1)
         return latestYear ? [latestYear] : []
     }, [availableChartYears])
 
     const getDefaultChartYears = useCallback(() => {
         const currentYear = new Date().getFullYear()
         if (availableChartYears.includes(currentYear)) return [currentYear]
-        const latestYear = availableChartYears[availableChartYears.length - 1]
+        const latestYear = availableChartYears.at(-1)
         return latestYear ? [latestYear] : []
     }, [availableChartYears])
 
@@ -546,7 +639,7 @@ export default function BudgetSummaryPage() {
         setReportBranchIds(contextBranchIds.length > 0 ? [...contextBranchIds] : [])
         setReportGroupIds([])
         setSearchTerm("")
-        handleDateChange(null, "all")
+        handleDateChange({ range: null, preset: "all" })
         mutateReport()
     }, [contextBranchIds, getDefaultReportYears, handleDateChange, mutateReport])
 
@@ -560,7 +653,7 @@ export default function BudgetSummaryPage() {
         if (chartYears.length > 0) {
             filtered = filtered.filter((d: any) => {
                 if (!d.rawDate) return true
-                const yr = parseInt(d.rawDate.slice(0, 4))
+                const yr = Number.parseInt(d.rawDate.slice(0, 4))
                 return chartYears.includes(yr)
             })
         }
@@ -573,7 +666,7 @@ export default function BudgetSummaryPage() {
                 const dateParts = d.rawDate.split("-");
                 // If it's a month-level string (YYYY-MM), check the month part
                 if (dateParts.length >= 2) {
-                    const mo = parseInt(dateParts[1]);
+                    const mo = Number.parseInt(dateParts[1]);
                     return chartMonths.length === 0 || chartMonths.includes(mo);
                 }
                 // If it's just a year string, or yearly granularity, might need adjustment
@@ -597,7 +690,7 @@ export default function BudgetSummaryPage() {
 
         // PADDING: If exactly one year is selected (or none, defaulting to latest), ensure all selected months are represented
         if (chartYears.length <= 1) {
-            const selectedYear = chartYears.length === 1 ? chartYears[0] : (availableChartYears[availableChartYears.length - 1] || new Date().getFullYear());
+            const selectedYear = chartYears.length === 1 ? chartYears[0] : (availableChartYears.at(-1) || new Date().getFullYear());
             const targetMonths = chartMonths.length > 0 ? [...chartMonths].sort((a, b) => a - b) : [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 
             const padded: any[] = [];
@@ -671,10 +764,6 @@ export default function BudgetSummaryPage() {
         return uniqueBranches
     }, [uniqueBranches, chartBranchIds])
 
-    const getBranchColor = (idx: number, type: 'baseline' | 'addon') => {
-        const h = (idx * 137.5) % 360; // Golden angle for distribution
-        return type === 'baseline' ? `hsl(${h}, 60%, 45%)` : `hsl(${h}, 40%, 70%)`;
-    }
 
     const toggleChartYear = (year: number) => {
         setChartYears(prev => prev.includes(year) ? prev.filter(y => y !== year) : [...prev, year])
@@ -723,7 +812,7 @@ export default function BudgetSummaryPage() {
             doc.setFontSize(10)
             doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 28)
             autoTable(doc, { startY: 40, head: [headers], body: rows, theme: 'grid', headStyles: { fillColor: [66, 66, 66] } })
-            doc.save(`budget-intelligence-${new Date().getTime()}.pdf`)
+            doc.save(`budget-intelligence-${Date.now()}.pdf`)
             return
         }
 
@@ -735,41 +824,13 @@ export default function BudgetSummaryPage() {
         XLSX.utils.book_append_sheet(workbook, worksheet, "Budget Intelligence")
 
         if (format === 'excel') {
-            XLSX.writeFile(workbook, `budget-intelligence-${new Date().getTime()}.xlsx`)
+            XLSX.writeFile(workbook, `budget-intelligence-${Date.now()}.xlsx`)
         } else {
-            XLSX.writeFile(workbook, `budget-intelligence-${new Date().getTime()}.csv`)
+            XLSX.writeFile(workbook, `budget-intelligence-${Date.now()}.csv`)
         }
     }
 
-    const CustomTooltip = ({ active, payload, label }: any) => {
-        if (active && payload && payload.length) {
-            return (
-                <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700/50 p-3 rounded-lg shadow-xl">
-                    <p className="text-white font-medium text-sm mb-2">{label}</p>
-                    {payload.map((entry: any, index: number) => (
-                        <div key={index} className="flex items-center gap-2 text-xs">
-                            <div className="w-2 h-2 rounded-full" style={{ backgroundColor: entry.color }} />
-                            <span className="text-slate-300">{entry.name}:</span>
-                            <span className="text-white font-mono font-bold">
-                                {formatPKR(entry.value)}
-                            </span>
-                        </div>
-                    ))}
-                </div>
-            );
-        }
-        return null;
-    };
 
-    const renderSparkline = (dataKey: 'totalSpent' | 'totalBaseline' | 'totalAddon', color: string) => (
-        <div className="h-10 w-full mt-2 opacity-80">
-            <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={transformedChartData.slice(-14)}>
-                    <Area type="monotone" dataKey={dataKey} stroke={color} fill={color} fillOpacity={0.2} strokeWidth={2} isAnimationActive={false} />
-                </ComposedChart>
-            </ResponsiveContainer>
-        </div>
-    )
 
     if (!hasMounted) {
         return (
@@ -795,7 +856,6 @@ export default function BudgetSummaryPage() {
         )
     }
 
-    const COLORS = ['#6366f1', '#8b5cf6', '#ec4899', '#f43f5e', '#f97316', '#eab308', '#22c55e', '#14b8a6', '#0ea5e9'];
 
     return (
         <div className="min-h-screen bg-[#f8fafc] dark:bg-[#020617] transition-colors duration-500 pb-20">
@@ -830,7 +890,7 @@ export default function BudgetSummaryPage() {
                                 compareYears={compareYears}
                             />
                         </div>
-                        <Button variant="ghost" size="icon" className="rounded-xl text-slate-400 hover:text-indigo-500 transition-colors" onClick={() => handleDateChange(null, "all", false, null)}>
+                        <Button variant="ghost" size="icon" className="rounded-xl text-slate-400 hover:text-indigo-500 transition-colors" onClick={() => handleDateChange({ range: null, preset: "all", compare: false, compareRange: null })}>
                             <RefreshCw className={cn("h-4 w-4", isPageLoading && "animate-spin")} />
                         </Button>
                     </div>
@@ -948,9 +1008,9 @@ export default function BudgetSummaryPage() {
                                                 <div className="flex items-center justify-between px-1 pb-2 mb-2 border-b border-slate-100 dark:border-slate-800">
                                                     <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Select Years</p>
                                                     <div className="flex gap-2">
-                                                        <button onClick={() => setChartYears(availableChartYears)} className="text-[9px] font-bold text-indigo-500 hover:text-indigo-600 transition-colors uppercase tracking-tighter">All</button>
+                                                        <button type="button" onClick={() => setChartYears(availableChartYears)} className="text-[9px] font-bold text-indigo-500 hover:text-indigo-600 transition-colors uppercase tracking-tighter">All</button>
                                                         <span className="text-slate-200 dark:text-slate-800">|</span>
-                                                        <button onClick={() => setChartYears([])} className="text-[9px] font-bold text-rose-500 hover:text-rose-600 transition-colors uppercase tracking-tighter">None</button>
+                                                        <button type="button" onClick={() => setChartYears([])} className="text-[9px] font-bold text-rose-500 hover:text-rose-600 transition-colors uppercase tracking-tighter">None</button>
                                                     </div>
                                                 </div>
                                                 <div className="space-y-1 max-h-48 overflow-y-auto">
@@ -989,15 +1049,15 @@ export default function BudgetSummaryPage() {
                                                 <div className="flex items-center justify-between px-1 pb-2 mb-2 border-b border-slate-100 dark:border-slate-800">
                                                     <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Select Months</p>
                                                     <div className="flex gap-2">
-                                                        <button onClick={() => setChartMonths([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])} className="text-[9px] font-bold text-emerald-500 hover:text-emerald-600 transition-colors uppercase tracking-tighter">All</button>
+                                                        <button type="button" onClick={() => setChartMonths([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])} className="text-[9px] font-bold text-emerald-500 hover:text-emerald-600 transition-colors uppercase tracking-tighter">All</button>
                                                         <span className="text-slate-200 dark:text-slate-800">|</span>
-                                                        <button onClick={() => setChartMonths([])} className="text-[9px] font-bold text-rose-500 hover:text-rose-600 transition-colors uppercase tracking-tighter">None</button>
+                                                        <button type="button" onClick={() => setChartMonths([])} className="text-[9px] font-bold text-rose-500 hover:text-rose-600 transition-colors uppercase tracking-tighter">None</button>
                                                     </div>
                                                 </div>
                                                 <div className="grid grid-cols-3 gap-1 max-h-56 overflow-y-auto">
                                                     {CHART_MONTH_NAMES.map((name, idx) => (
-                                                        <button
-                                                            key={idx}
+                                                        <button type="button"
+                                                            key={name}
                                                             onClick={() => toggleChartMonth(idx + 1)}
                                                             className={cn(
                                                                 "px-2 py-2 rounded-lg text-xs font-bold transition-all duration-200 text-center",
@@ -1031,9 +1091,9 @@ export default function BudgetSummaryPage() {
                                                 <div className="flex items-center justify-between px-1 pb-2 mb-2 border-b border-slate-100 dark:border-slate-800">
                                                     <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Select Branches</p>
                                                     <div className="flex gap-2">
-                                                        <button onClick={() => setChartBranchIds(uniqueBranches.map(b => b.id))} className="text-[9px] font-bold text-amber-500 hover:text-amber-600 transition-colors uppercase tracking-tighter">All</button>
+                                                        <button type="button" onClick={() => setChartBranchIds(uniqueBranches.map(b => b.id))} className="text-[9px] font-bold text-amber-500 hover:text-amber-600 transition-colors uppercase tracking-tighter">All</button>
                                                         <span className="text-slate-200 dark:text-slate-800">|</span>
-                                                        <button onClick={() => setChartBranchIds([])} className="text-[9px] font-bold text-rose-500 hover:text-rose-600 transition-colors uppercase tracking-tighter">None</button>
+                                                        <button type="button" onClick={() => setChartBranchIds([])} className="text-[9px] font-bold text-rose-500 hover:text-rose-600 transition-colors uppercase tracking-tighter">None</button>
                                                     </div>
                                                 </div>
                                                 <div className="space-y-1 max-h-56 overflow-y-auto">
@@ -1129,13 +1189,29 @@ export default function BudgetSummaryPage() {
                                                             <div className="relative overflow-hidden min-w-0 bg-gradient-to-br from-slate-50 to-gray-50 dark:from-slate-950/30 dark:to-gray-950/20 rounded-xl p-3 border border-slate-200 dark:border-slate-800">
                                                                 <p className="relative z-10 whitespace-nowrap text-[8px] sm:text-[9px] font-black uppercase tracking-[0.14em] sm:tracking-widest text-slate-400 mb-1">Utilization</p>
                                                                 <div className="relative z-10 flex items-center gap-2 min-w-0">
-                                                                    <p className={cn("whitespace-nowrap text-[clamp(0.72rem,1.05vw,1rem)] leading-tight font-black tracking-tight", utilization > 90 ? "text-rose-500" : utilization > 70 ? "text-amber-500" : "text-emerald-500")}>{utilization.toFixed(1)}%</p>
+                                                                    <p className={cn("whitespace-nowrap text-[clamp(0.72rem,1.05vw,1rem)] leading-tight font-black tracking-tight", (() => {
+                                                                      if (utilization > 90) {
+                                                                        return "text-rose-500"
+                                                                      }
+                                                                      if (utilization > 70) {
+                                                                        return "text-amber-500"
+                                                                      }
+                                                                      return "text-emerald-500"
+                                                                    })())}>{utilization.toFixed(1)}%</p>
                                                                     <div className="flex-1 h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden max-w-[60px] min-w-8">
                                                                         <motion.div
                                                                             initial={{ width: 0 }}
                                                                             animate={{ width: `${Math.min(utilization, 100)}%` }}
                                                                             transition={{ duration: 1, ease: "easeOut" }}
-                                                                            className={cn("h-full", utilization > 90 ? "bg-rose-500" : utilization > 70 ? "bg-amber-500" : "bg-emerald-500")}
+                                                                            className={cn("h-full", (() => {
+                                                                              if (utilization > 90) {
+                                                                                return "bg-rose-500"
+                                                                              }
+                                                                              if (utilization > 70) {
+                                                                                return "bg-amber-500"
+                                                                              }
+                                                                              return "bg-emerald-500"
+                                                                            })())}
                                                                         />
                                                                     </div>
                                                                 </div>
@@ -1148,7 +1224,9 @@ export default function BudgetSummaryPage() {
                                         </div>
                                     )}
                                     <div className="h-[380px] w-full">
-                                        {isChartLoading ? (
+                                        {(() => {
+                                          if (isChartLoading) {
+                                            return (
                                             <div className="h-full flex flex-col items-center justify-center space-y-4">
                                                 <div className="relative">
                                                     <Loader2 className="h-10 w-10 text-indigo-500/40 animate-spin" />
@@ -1156,7 +1234,10 @@ export default function BudgetSummaryPage() {
                                                 </div>
                                                 <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 animate-pulse">Synchronizing History...</p>
                                             </div>
-                                        ) : chartDisplayData.length > 0 ? (
+                                        )
+                                          }
+                                          if (chartDisplayData.length > 0) {
+                                            return (
                                             <ResponsiveContainer width="100%" height="100%">
                                                 <ComposedChart data={chartDisplayData} margin={{ top: 5, right: 15, left: 5, bottom: 20 }} barGap={6} barCategoryGap="25%">
                                                     <defs>
@@ -1193,75 +1274,7 @@ export default function BudgetSummaryPage() {
                                                     />
                                                     <RechartsTooltip
                                                         cursor={{ fill: 'rgba(99, 102, 241, 0.04)', radius: 8 }}
-                                                        content={({ active, payload, label }) => {
-                                                            if (active && payload && payload.length) {
-                                                                const data = payload[0].payload;
-                                                                const utilPct = data.totalLimit > 0 ? ((data.totalSpent / data.totalLimit) * 100).toFixed(1) : '0.0';
-                                                                return (
-                                                                    <div className="bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200/80 dark:border-slate-700 p-4 rounded-2xl shadow-2xl min-w-[280px] ring-1 ring-black/5">
-                                                                        <p className="text-xs font-black uppercase tracking-widest text-slate-500 mb-3 pb-2 border-b border-slate-100 dark:border-slate-800">
-                                                                            {data.rawDate ? format(new Date(data.rawDate + "-01"), "MMMM yyyy") : label}
-                                                                        </p>
-
-                                                                        <div className="space-y-3">
-                                                                            <div className="flex justify-between items-center bg-teal-50/50 dark:bg-teal-900/20 p-2.5 rounded-xl border border-teal-100/50 dark:border-teal-900/50">
-                                                                                <div className="flex items-center gap-2">
-                                                                                    <div className="w-3 h-3 rounded-sm bg-gradient-to-b from-teal-400 to-teal-600 shadow-sm shadow-teal-500/20" />
-                                                                                    <span className="text-[11px] font-bold text-teal-700 dark:text-teal-400 uppercase tracking-tight">Total Budget</span>
-                                                                                </div>
-                                                                                <span className="text-[13px] font-black text-teal-600">{formatPKR(data.totalLimit)}</span>
-                                                                            </div>
-
-                                                                            <div className="flex justify-between items-center bg-indigo-50/50 dark:bg-indigo-900/20 p-2.5 rounded-xl border border-indigo-100/50 dark:border-indigo-900/50">
-                                                                                <div className="flex items-center gap-2">
-                                                                                    <div className="w-3 h-3 rounded-sm bg-gradient-to-b from-indigo-400 to-indigo-600 shadow-sm shadow-indigo-500/20" />
-                                                                                    <span className="text-[11px] font-bold text-indigo-700 dark:text-indigo-400 uppercase tracking-tight">Total Spent</span>
-                                                                                </div>
-                                                                                <span className="text-[13px] font-black text-indigo-600">{formatPKR(data.totalSpent)}</span>
-                                                                            </div>
-
-                                                                            <div className="flex justify-between items-center pt-1 px-2">
-                                                                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Utilization Rate</span>
-                                                                                <span className={cn("text-[13px] font-black", Number(utilPct) > 90 ? "text-rose-500" : Number(utilPct) > 70 ? "text-amber-500" : "text-emerald-500")}>{utilPct}%</span>
-                                                                            </div>
-                                                                        </div>
-
-                                                                        {chartVisibleBranches.length > 0 && (
-                                                                            <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800">
-                                                                                <div className="flex justify-between items-center mb-2 px-1">
-                                                                                    <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider">Branch Details</p>
-                                                                                    <div className="flex gap-4">
-                                                                                        <span className="text-[8px] font-bold text-emerald-500 tracking-tighter uppercase opacity-70">Base</span>
-                                                                                        <span className="text-[8px] font-bold text-amber-500 tracking-tighter uppercase opacity-70">Addon</span>
-                                                                                        <span className="text-[8px] font-bold text-indigo-500 tracking-tighter uppercase opacity-70">Total</span>
-                                                                                        <span className="text-[8px] font-bold text-violet-500 tracking-tighter uppercase opacity-70">Spent</span>
-                                                                                    </div>
-                                                                                </div>
-                                                                                <div className="space-y-1.5">
-                                                                                    {chartVisibleBranches.slice(0, 5).map((b) => (
-                                                                                        <div key={b.id} className="flex justify-between items-center py-1.5 px-2 bg-slate-50/50 dark:bg-slate-800/30 rounded-lg group transition-colors hover:bg-slate-100/50 dark:hover:bg-slate-800/50">
-                                                                                            <span className="text-[10px] text-slate-600 dark:text-slate-300 font-bold truncate max-w-[80px]">{b.name}</span>
-                                                                                            <div className="flex gap-3">
-                                                                                                <span className="text-[10px] font-black text-emerald-600/80">{formatPKR(data[`${b.id}_baseline`] || 0)}</span>
-                                                                                                <span className="text-[10px] font-black text-amber-600/80">{formatPKR(data[`${b.id}_addon`] || 0)}</span>
-                                                                                                <span className="text-[10px] font-black text-indigo-600">{(formatPKR((data[`${b.id}_baseline`] || 0) + (data[`${b.id}_addon`] || 0)))}</span>
-                                                                                                <span className="text-[10px] font-black text-violet-600">{formatPKR(data[`${b.id}_spent`] || 0)}</span>
-                                                                                            </div>
-                                                                                        </div>
-                                                                                    ))}
-                                                                                </div>
-                                                                                {chartVisibleBranches.length > 5 && (
-                                                                                    <p className="text-[8px] text-center text-slate-400 mt-2 font-bold italic tracking-wide">
-                                                                                        +{chartVisibleBranches.length - 5} more branches filtered
-                                                                                    </p>
-                                                                                )}
-                                                                            </div>
-                                                                        )}
-                                                                    </div>
-                                                                );
-                                                            }
-                                                            return null;
-                                                        }}
+                                                        content={<BudgetChartTooltip branches={chartVisibleBranches} />}
                                                     />
                                                     <defs>
                                                         <linearGradient id="barGradientBudget" x1="0" y1="0" x2="0" y2="1">
@@ -1323,7 +1336,9 @@ export default function BudgetSummaryPage() {
                                                     />
                                                 </ComposedChart>
                                             </ResponsiveContainer>
-                                        ) : (
+                                        )
+                                          }
+                                          return (
                                             <div className="h-full flex flex-col items-center justify-center text-slate-400 space-y-4">
                                                 <div className="p-4 rounded-2xl bg-slate-100 dark:bg-slate-800/50">
                                                     <ReceiptText className="h-8 w-8 opacity-30" />
@@ -1333,7 +1348,8 @@ export default function BudgetSummaryPage() {
                                                     <p className="text-xs text-slate-400">Try adjusting your filter selections</p>
                                                 </div>
                                             </div>
-                                        )}
+                                        )
+                                        })()}
                                     </div>
                                 </CardContent>
                             </Card>
@@ -1349,7 +1365,9 @@ export default function BudgetSummaryPage() {
                                     </div>
                                 </CardHeader>
                                 <CardContent className="p-0 flex-1 overflow-y-auto h-[350px]">
-                                    {branchBreakdown.length > 0 ? (
+                                    {(() => {
+                                      if (branchBreakdown.length > 0) {
+                                        return (
                                         <div className="divide-y divide-slate-100 dark:divide-slate-800/60 font-mono">
                                             {[...branchBreakdown].sort((a, b) => b.remaining - a.remaining).map((b: any) => (
                                                 <div key={b.branchId} className="p-4 hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors flex items-center justify-between group">
@@ -1373,18 +1391,23 @@ export default function BudgetSummaryPage() {
                                                 </div>
                                             ))}
                                         </div>
-                                    ) : (
+                                    )
+                                      }
+                                      return (
                                         <div className="h-full flex items-center justify-center p-8 text-center bg-slate-50/50 dark:bg-slate-900/20">
                                             <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">No branch metrics</p>
                                         </div>
-                                    )}
+                                    )
+                                    })()}
                                 </CardContent>
                             </Card>
                         </div>
                     </TabsContent>
 
                     <TabsContent value="reports" className="space-y-4 animate-in fade-in slide-in-from-bottom-2">
-                        {!organizationId ? (
+                        {(() => {
+                          if (!organizationId) {
+                            return (
                             <Card className="border-dashed border-2 p-20 flex flex-col items-center justify-center text-center space-y-4 bg-white/50 dark:bg-slate-900/20 rounded-[2.5rem]">
                                 <div className="p-4 rounded-full bg-slate-100 dark:bg-slate-800">
                                     <Building2 className="h-8 w-8 text-slate-400" />
@@ -1394,7 +1417,9 @@ export default function BudgetSummaryPage() {
                                     <p className="text-sm text-slate-500 max-w-sm">Please select an organization from the top filter to generate the detailed budget deployment report.</p>
                                 </div>
                             </Card>
-                        ) : (
+                        )
+                          }
+                          return (
                             hasMounted && (
                                 <motion.div
                                     initial={{ opacity: 0, scale: 0.98, y: 10 }}
@@ -1407,10 +1432,10 @@ export default function BudgetSummaryPage() {
                                                 <div className="flex flex-wrap items-center gap-2">
                                                     <GlobalDateFilter
                                                         value={dateRange}
-                                                        onChange={(range, preset, nextCompare, nextCompareRange, months, years, nextCompareMonths, nextCompareYears) => {
-                                                            handleDateChange(range, preset, nextCompare, nextCompareRange, months, years, nextCompareMonths, nextCompareYears)
-                                                            setReportMonths(months ?? [])
-                                                            setReportYears(years ?? [])
+                                                        onChange={(change) => {
+                                                            handleDateChange(change)
+                                                            setReportMonths(change.months ?? [])
+                                                            setReportYears(change.years ?? [])
                                                         }}
                                                         activePreset={activePreset}
                                                         customRangeOnly
@@ -1438,9 +1463,9 @@ export default function BudgetSummaryPage() {
                                                             <div className="flex items-center justify-between px-1 pb-2 mb-2 border-b border-slate-100 dark:border-slate-800">
                                                                 <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Select Years</p>
                                                                 <div className="flex gap-2">
-                                                                    <button onClick={() => setReportYears(availableChartYears)} className="text-[9px] font-bold text-indigo-500 hover:text-indigo-600 uppercase">All</button>
+                                                                    <button type="button" onClick={() => setReportYears(availableChartYears)} className="text-[9px] font-bold text-indigo-500 hover:text-indigo-600 uppercase">All</button>
                                                                     <span className="text-slate-200">|</span>
-                                                                    <button onClick={() => setReportYears([])} className="text-[9px] font-bold text-rose-500 hover:text-rose-600 uppercase">None</button>
+                                                                    <button type="button" onClick={() => setReportYears([])} className="text-[9px] font-bold text-rose-500 hover:text-rose-600 uppercase">None</button>
                                                                 </div>
                                                             </div>
                                                             <div className="space-y-1 max-h-48 overflow-y-auto">
@@ -1473,15 +1498,15 @@ export default function BudgetSummaryPage() {
                                                             <div className="flex items-center justify-between px-1 pb-2 mb-2 border-b border-slate-100 dark:border-slate-800">
                                                                 <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Select Months</p>
                                                                 <div className="flex gap-2">
-                                                                    <button onClick={() => setReportMonths([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])} className="text-[9px] font-bold text-emerald-500 hover:text-emerald-600 uppercase">All</button>
+                                                                    <button type="button" onClick={() => setReportMonths([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])} className="text-[9px] font-bold text-emerald-500 hover:text-emerald-600 uppercase">All</button>
                                                                     <span className="text-slate-200">|</span>
-                                                                    <button onClick={() => setReportMonths([])} className="text-[9px] font-bold text-rose-500 hover:text-rose-600 uppercase">None</button>
+                                                                    <button type="button" onClick={() => setReportMonths([])} className="text-[9px] font-bold text-rose-500 hover:text-rose-600 uppercase">None</button>
                                                                 </div>
                                                             </div>
                                                             <div className="grid grid-cols-3 gap-1">
                                                                 {CHART_MONTH_NAMES.map((name, idx) => (
-                                                                    <button
-                                                                        key={idx}
+                                                                    <button type="button"
+                                                                        key={name}
                                                                         onClick={() => toggleReportMonth(idx + 1)}
                                                                         className={cn(
                                                                             "px-2 py-2 rounded-lg text-[10px] font-black transition-all text-center uppercase tracking-tighter",
@@ -1524,9 +1549,9 @@ export default function BudgetSummaryPage() {
                                                             <div className="flex items-center justify-between px-1 pb-2 mb-2 border-b border-slate-100 dark:border-slate-800">
                                                                 <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Select Branches</p>
                                                                 <div className="flex gap-2">
-                                                                    <button onClick={() => setReportBranchIds(uniqueBranches.map(b => b.id))} className="text-[9px] font-bold text-amber-500 hover:text-amber-600 uppercase">All</button>
+                                                                    <button type="button" onClick={() => setReportBranchIds(uniqueBranches.map(b => b.id))} className="text-[9px] font-bold text-amber-500 hover:text-amber-600 uppercase">All</button>
                                                                     <span className="text-slate-200">|</span>
-                                                                    <button onClick={() => setReportBranchIds([])} className="text-[9px] font-bold text-rose-500 hover:text-rose-600 uppercase">None</button>
+                                                                    <button type="button" onClick={() => setReportBranchIds([])} className="text-[9px] font-bold text-rose-500 hover:text-rose-600 uppercase">None</button>
                                                                 </div>
                                                             </div>
                                                             <div className="space-y-1 max-h-56 overflow-y-auto">
@@ -1663,10 +1688,26 @@ export default function BudgetSummaryPage() {
                                                                                         initial={{ width: 0 }}
                                                                                         animate={{ width: `${Math.min(utilization, 100)}%` }}
                                                                                         transition={{ duration: 1.5, ease: [0.34, 1.56, 0.64, 1] }}
-                                                                                        className={cn("h-full rounded-full shadow-[0_0_8px_rgba(0,0,0,0.1)]", utilization > 90 ? "bg-gradient-to-r from-red-500 via-rose-600 to-red-500" : utilization > 70 ? "bg-gradient-to-r from-amber-400 via-orange-500 to-amber-600" : "bg-gradient-to-r from-teal-400 via-emerald-500 to-teal-400")}
+                                                                                        className={cn("h-full rounded-full shadow-[0_0_8px_rgba(0,0,0,0.1)]", (() => {
+                                                                                          if (utilization > 90) {
+                                                                                            return "bg-gradient-to-r from-red-500 via-rose-600 to-red-500"
+                                                                                          }
+                                                                                          if (utilization > 70) {
+                                                                                            return "bg-gradient-to-r from-amber-400 via-orange-500 to-amber-600"
+                                                                                          }
+                                                                                          return "bg-gradient-to-r from-teal-400 via-emerald-500 to-teal-400"
+                                                                                        })())}
                                                                                     />
                                                                                 </div>
-                                                                                <span className={cn("text-[10px] font-black uppercase tracking-[0.2em]", utilization > 90 ? "text-rose-600" : utilization > 70 ? "text-amber-600" : "text-emerald-600")}>{utilization.toFixed(1)}% SECURED</span>
+                                                                                <span className={cn("text-[10px] font-black uppercase tracking-[0.2em]", (() => {
+                                                                                  if (utilization > 90) {
+                                                                                    return "text-rose-600"
+                                                                                  }
+                                                                                  if (utilization > 70) {
+                                                                                    return "text-amber-600"
+                                                                                  }
+                                                                                  return "text-emerald-600"
+                                                                                })())}>{utilization.toFixed(1)}% SECURED</span>
                                                                             </div>
                                                                         </TableCell>
                                                                     </motion.tr>
@@ -1680,7 +1721,8 @@ export default function BudgetSummaryPage() {
                                     </Card>
                                 </motion.div>
                             )
-                        )}
+                        )
+                        })()}
                     </TabsContent>
                 </Tabs>
             </div>

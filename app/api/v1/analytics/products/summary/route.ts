@@ -1,20 +1,20 @@
-import { NextResponse, type NextRequest } from "next/server"
+import { NextResponse,type NextRequest } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
-import { orders, orderItems, branches, users, groups, categories, globalProducts, organizations, refundItems } from "@/db/schema"
-import { and, desc, eq, gte, lte, sql } from "drizzle-orm"
+import { orders,orderItems,branches,users,groups,categories,globalProducts,organizations,refundItems } from "@/db/schema"
+import { and,desc,eq,gte,lte,sql } from "drizzle-orm"
 import { handleError } from "@/lib/error-handler"
 import { logError } from "@/lib/global-logger"
 import { isValidRole } from "@/lib/rbac"
-import { getCached, generateCacheKey, invalidateCache } from "@/lib/cache-utils"
-import { redactAnalyticsPrices, shouldHidePricesForRole } from "@/lib/price-visibility"
-import { parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
+import { getCached,generateCacheKey } from "@/lib/cache-utils"
+import { redactAnalyticsPrices,shouldHidePricesForRole } from "@/lib/price-visibility"
+import { parseEndDateParam,parseStartDateParam } from "@/lib/date-range-params"
 
 function parseNumericId(value: string | null, paramName: string): number | null {
     if (!value || value === "all") return null
-    const parsed = parseInt(value, 10)
-    if (isNaN(parsed) || parsed <= 0) {
+    const parsed = Number.parseInt(value, 10)
+    if (Number.isNaN(parsed) || parsed <= 0) {
         console.warn(`[ProductSummary] Invalid ${paramName}: ${value}`)
         return null
     }

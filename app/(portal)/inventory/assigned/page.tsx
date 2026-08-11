@@ -1,14 +1,14 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState,useMemo } from "react"
 import useSWR from "swr"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card,CardContent,CardHeader,CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from "@/components/ui/table"
+import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from "@/components/ui/select"
 import { formatPKR } from "@/lib/utils"
-import { Search, Package, Sparkles, CheckCircle2, Building2 } from "lucide-react"
+import { Search,Package } from "lucide-react"
 import { useAppContext } from "@/components/context/app-context"
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json())
@@ -154,13 +154,18 @@ export default function ShowAssignedProductsPage() {
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                    {isLoading ? (
+                                    {(() => {
+                                      if (isLoading) {
+                                        return (
                                         <TableRow>
                                             <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
                                                 Loading assigned products...
                                             </TableCell>
                                         </TableRow>
-                                    ) : filteredProducts.length === 0 ? (
+                                    )
+                                      }
+                                      if (filteredProducts.length === 0) {
+                                        return (
                                         <TableRow>
                                             <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
                                                 {assignedProducts.length === 0
@@ -168,7 +173,9 @@ export default function ShowAssignedProductsPage() {
                                                     : "No products match your search."}
                                             </TableCell>
                                         </TableRow>
-                                    ) : (
+                                    )
+                                      }
+                                      return (
                                         filteredProducts.map((product) => (
                                             <TableRow key={product.id} className="hover:bg-muted/40">
                                                 <TableCell>
@@ -205,7 +212,8 @@ export default function ShowAssignedProductsPage() {
                                                 </TableCell>
                                             </TableRow>
                                         ))
-                                    )}
+                                    )
+                                    })()}
                                 </TableBody>
                             </Table>
                         </div>

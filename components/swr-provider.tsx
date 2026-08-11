@@ -3,7 +3,7 @@
 import { SWRConfig } from "swr"
 import { fetcher } from "@/lib/fetcher"
 
-export function SWRProvider({ children }: { children: React.ReactNode }) {
+export function SWRProvider({ children }: Readonly<{ children: React.ReactNode }>) {
     return (
         <SWRConfig
             value={{

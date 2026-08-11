@@ -1,4 +1,4 @@
-import { readFileSync } from "fs"
+import { readFileSync } from "node:fs"
 import * as dotenv from "dotenv"
 import { KE_ORGANIZATION, LEGACY_SOURCE, prepareKeLegacySource } from "../lib/legacy-import/ke-electric"
 import { resolveWorkspacePath } from "./lib/resolve-workspace-path"

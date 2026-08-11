@@ -1,17 +1,16 @@
 "use client"
-import { useState, useEffect, Suspense } from "react"
+import { useState,useEffect,Suspense } from "react"
 import type React from "react"
 
-import { useRouter, useSearchParams } from "next/navigation"
-import { signIn, getSession } from "next-auth/react"
+import { useRouter,useSearchParams } from "next/navigation"
+import { signIn,getSession } from "next-auth/react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card"
+import { Card,CardHeader,CardTitle,CardContent } from "@/components/ui/card"
 import { Spinner } from "@/components/ui/skeleton"
 import { MFAVerificationDialog } from "@/components/mfa/mfa-verification-dialog"
-import { useToast } from "@/hooks/use-toast"
 import Image from "next/image"
-import { Eye, EyeOff } from "lucide-react"
+import { Eye,EyeOff } from "lucide-react"
 import { safeInternalRedirectPath } from "@/lib/security"
 
 /**
@@ -34,8 +33,9 @@ function clearAuthCookies() {
       // Also clear with domain variations for Vercel
       document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; secure`
     })
-  } catch (_) {
+  } catch (error) {
     // Cookie access may fail in some contexts — safe to ignore
+    console.warn("Unable to clear stale authentication cookies:", error)
   }
 }
 
@@ -84,10 +84,31 @@ function getLoginErrorMessage(errorCode: string) {
   return errorCode
 }
 
+async function authenticateUser(username: string, password: string): Promise<{ isEmployee: boolean } | null> {
+  let result = await signInWithRetry("credentials", username, password)
+  if (!result?.error) return null
+  if (result.error === "MFA_REQUIRED") return { isEmployee: false }
+  if (result.error !== "CredentialsSignin") throw new Error(getLoginErrorMessage(result.error))
+
+  console.log("Standard login failed with CredentialsSignin, trying employee login fallback...")
+  result = await signInWithRetry("employee-credentials", username, password)
+  if (!result?.error) return null
+  if (result.error === "MFA_REQUIRED") return { isEmployee: true }
+  throw new Error(getLoginErrorMessage(result.error))
+}
+
+function redirectAuthenticatedUser(session: any, callbackUrl: string | null): void {
+  if (session.user?.mustChangePassword === true) {
+    window.location.replace("/change-password")
+  } else if (["ORDER_PORTAL", "EMPLOYEE"].includes(session.user?.role)) {
+    window.location.replace("/shop")
+  } else {
+    window.location.replace(safeInternalRedirectPath(callbackUrl))
+  }
+}
+
 function LoginForm() {
-  const router = useRouter()
   const searchParams = useSearchParams()
-  const { toast } = useToast()
   const [username, setUsername] = useState("")
   const [password, setPassword] = useState("")
   const [showPassword, setShowPassword] = useState(false)
@@ -112,7 +133,7 @@ function LoginForm() {
 
   }, [])
 
-  async function onSubmit(e: React.FormEvent) {
+  async function onSubmit(e: React.SubmitEvent<HTMLFormElement>) {
     e.preventDefault()
     setLoading(true)
     setError(null)
@@ -124,36 +145,12 @@ function LoginForm() {
       // Clear cookies again before sign-in to guarantee a clean state
       clearAuthCookies()
 
-      let result = await signInWithRetry("credentials", username, password)
-
-      if (result?.error) {
-        if (result.error === "MFA_REQUIRED") {
-          console.log("Login: MFA required for", username)
-          setPendingUser({ username, password })
-          setMfaRequired(true)
-          setIsEmployee(false)
-          return
-        }
-
-        if (result.error !== "CredentialsSignin") {
-          throw new Error(getLoginErrorMessage(result.error))
-        }
-
-        // Try employee login fallback only for true credential misses
-        console.log("Standard login failed with CredentialsSignin, trying employee login fallback...")
-        result = await signInWithRetry("employee-credentials", username, password)
-
-        if (result?.error) {
-          console.log(result.error, "resuult error login")
-          if (result.error === "MFA_REQUIRED") {
-            console.log("Login: MFA required for employee", username)
-            setPendingUser({ username, password })
-            setMfaRequired(true)
-            setIsEmployee(true)
-            return
-          }
-          throw new Error(getLoginErrorMessage(result.error))
-        }
+      const mfa = await authenticateUser(username, password)
+      if (mfa) {
+        setPendingUser({ username, password })
+        setMfaRequired(true)
+        setIsEmployee(mfa.isEmployee)
+        return
       }
 
       // Fetch session to determine redirect target
@@ -162,18 +159,7 @@ function LoginForm() {
         throw new Error(LOGIN_CONFIRMATION_ERROR)
       }
 
-      const userRole = (session?.user as any)?.role
-      const mustChangePassword = (session?.user as any)?.mustChangePassword === true
-
-      if (mustChangePassword) {
-        window.location.replace("/change-password")
-      } else if (userRole === "ORDER_PORTAL" || userRole === "EMPLOYEE") {
-        window.location.replace("/shop")
-      } else {
-        const cb = searchParams.get("callbackUrl")
-        const targetUrl = safeInternalRedirectPath(cb)
-        window.location.replace(targetUrl)
-      }
+      redirectAuthenticatedUser(session, searchParams.get("callbackUrl"))
     } catch (err: any) {
       // Catch malformed NextAuth responses without showing a misleading session-expired message on the login page.
       if (isUrlConstructorError(err)) {
@@ -313,13 +299,21 @@ function LoginForm() {
               disabled={loading || isProcessingMFA}
               className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium shadow-lg"
             >
-              {loading ? (
+              {(() => {
+                if (loading) {
+                  return (
                 <span className="inline-flex items-center gap-2"><Spinner size={16} /> Signing in…</span>
-              ) : isProcessingMFA ? (
+              )
+                }
+                if (isProcessingMFA) {
+                  return (
                 <span className="inline-flex items-center gap-2"><Spinner size={16} /> Redirecting…</span>
-              ) : (
+              )
+                }
+                return (
                 "Sign In"
-              )}
+              )
+              })()}
             </Button>
           </form>
         </CardContent>

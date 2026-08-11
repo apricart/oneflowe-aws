@@ -47,7 +47,7 @@ function main() {
   }
 
   const order = (audit.orders as Row[]).find((candidate) => Number(candidate.legacyOrderId) === LEGACY_ORDER_ID)
-  if (!order || !order.realDetail || !order.rawDetail) throw new Error("Order 415 live detail evidence is incomplete")
+  if (!order?.realDetail || !order.rawDetail) throw new Error("Order 415 live detail evidence is incomplete")
   if (Number(order.detailHeader?.ID) !== LEGACY_ORDER_ID || Number(order.detailHeader?.StatusID) !== 1 || Number(order.detailHeader?.DeliveryStatus) !== 507) {
     throw new Error("Order 415 original status evidence changed")
   }

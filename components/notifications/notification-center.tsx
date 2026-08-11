@@ -52,13 +52,17 @@ export function NotificationBell() {
           <div className="text-sm font-semibold">Notifications</div>
           <p className="text-xs text-muted-foreground">Updates that need your attention.</p>
         </div>
-        {isLoading ? (
+        {(() => {
+          if (isLoading) {
+            return (
           <div className="space-y-3 p-4">
-            {Array.from({ length: 3 }).map((_, idx) => (
-              <Skeleton key={idx} className="h-16 w-full" />
+            {Array.from({ length: 3 }, (_, position) => `notification-menu-loading-${position + 1}`).map((skeletonKey) => (
+              <Skeleton key={skeletonKey} className="h-16 w-full" />
             ))}
           </div>
-        ) : (
+        )
+          }
+          return (
           <ScrollArea className="max-h-80">
             <div className="divide-y">
               {notifications.length > 0 ? (
@@ -72,13 +76,14 @@ export function NotificationBell() {
               )}
             </div>
           </ScrollArea>
-        )}
+        )
+        })()}
       </PopoverContent>
     </Popover>
   )
 }
 
-export function DashboardNotificationsPanel({ limit = 3, className }: { limit?: number; className?: string }) {
+export function DashboardNotificationsPanel({ limit = 3, className }: Readonly<{ limit?: number; className?: string }>) {
   const { notifications, isLoading } = useDashboardNotifications()
   const visible = notifications.slice(0, limit)
 
@@ -89,8 +94,8 @@ export function DashboardNotificationsPanel({ limit = 3, className }: { limit?: 
           <CardTitle className="text-base">Notifications</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          {Array.from({ length: 3 }).map((_, idx) => (
-            <Skeleton key={idx} className="h-20 w-full" />
+          {Array.from({ length: 3 }, (_, position) => `notification-list-loading-${position + 1}`).map((skeletonKey) => (
+            <Skeleton key={skeletonKey} className="h-20 w-full" />
           ))}
         </CardContent>
       </Card>
@@ -118,7 +123,7 @@ export function DashboardNotificationsPanel({ limit = 3, className }: { limit?: 
   )
 }
 
-export function NotificationRail({ limit = 1, className }: { limit?: number; className?: string }) {
+export function NotificationRail({ limit = 1, className }: Readonly<{ limit?: number; className?: string }>) {
   const { notifications, isLoading } = useDashboardNotifications()
   const visible = notifications.slice(0, limit)
 
@@ -126,8 +131,8 @@ export function NotificationRail({ limit = 1, className }: { limit?: number; cla
     return (
       <div className={cn("rounded-2xl border bg-card/60 px-4 py-3", className)}>
         <div className="flex gap-3 overflow-hidden">
-          {Array.from({ length: limit }).map((_, idx) => (
-            <Skeleton key={idx} className="h-16 w-48 rounded-xl" />
+          {Array.from({ length: limit }, (_, position) => `notification-strip-loading-${position + 1}`).map((skeletonKey) => (
+            <Skeleton key={skeletonKey} className="h-16 w-48 rounded-xl" />
           ))}
         </div>
       </div>
@@ -151,13 +156,17 @@ export function NotificationRail({ limit = 1, className }: { limit?: number; cla
   )
 }
 
-function RailChip({ notification }: { notification: DashboardNotification }) {
+function RailChip({ notification }: Readonly<{ notification: DashboardNotification }>) {
   const tone =
-    notification.severity === "critical"
-      ? "bg-red-50 dark:bg-red-900/30 border-red-100 dark:border-red-800 text-red-900 dark:text-red-200"
-      : notification.severity === "warning"
-        ? "bg-amber-50 dark:bg-amber-900/30 border-amber-100 dark:border-amber-800 text-amber-900 dark:text-amber-200"
-        : "bg-slate-50 dark:bg-slate-800 border-slate-100 dark:border-slate-700 text-slate-900 dark:text-slate-100"
+    (() => {
+      if (notification.severity === "critical") {
+        return "bg-red-50 dark:bg-red-900/30 border-red-100 dark:border-red-800 text-red-900 dark:text-red-200"
+      }
+      if (notification.severity === "warning") {
+        return "bg-amber-50 dark:bg-amber-900/30 border-amber-100 dark:border-amber-800 text-amber-900 dark:text-amber-200"
+      }
+      return "bg-slate-50 dark:bg-slate-800 border-slate-100 dark:border-slate-700 text-slate-900 dark:text-slate-100"
+    })()
   return (
     <div className={cn("flex min-w-[220px] max-w-full flex-col gap-1 whitespace-normal rounded-xl border px-4 py-3", tone)}>
       <div className="flex flex-wrap items-center gap-2">
@@ -175,7 +184,7 @@ function RailChip({ notification }: { notification: DashboardNotification }) {
   )
 }
 
-function NotificationRow({ notification, compact }: { notification: DashboardNotification; compact?: boolean }) {
+function NotificationRow({ notification, compact }: Readonly<{ notification: DashboardNotification; compact?: boolean }>) {
   const Icon = severityIcon[notification.severity] || <CheckCircle2 className="h-4 w-4 text-emerald-500" />
   return (
     <div

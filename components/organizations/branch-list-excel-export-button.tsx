@@ -28,7 +28,7 @@ export function BranchListExcelExportButton({
   isLoading = false,
   onSuccess,
   onError,
-}: BranchListExcelExportButtonProps) {
+}: Readonly<BranchListExcelExportButtonProps>) {
   const [isExporting, setIsExporting] = useState(false)
   const branchesToExport = selectedOrganization
     ? branches.filter(

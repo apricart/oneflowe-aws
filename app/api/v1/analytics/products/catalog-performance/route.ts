@@ -8,6 +8,67 @@ import { getCached, scopedCacheKey, CACHE_TTL } from "@/lib/cache-utils"
 import { redactAnalyticsPrices, shouldHidePricesForRole } from "@/lib/price-visibility"
 import { parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
 
+function positiveIds(raw: string | null, minimum = 0): number[] {
+    return raw?.split(',').map(Number).filter((value) => !Number.isNaN(value) && value > minimum) ?? []
+}
+
+function catalogProductConditions(productIds: number[], branchIds: number[], organizationIds: number[]): any[] {
+    const conditions: any[] = []
+    if (productIds.length > 0) conditions.push(inArray(globalProducts.id, productIds))
+    if (branchIds.length > 0) {
+        conditions.push(exists(
+            db.select()
+                .from(branchInventory)
+                .innerJoin(organizationInventory, eq(branchInventory.organizationInventoryId, organizationInventory.id))
+                .where(and(
+                    eq(organizationInventory.globalProductId, globalProducts.id),
+                    inArray(branchInventory.branchId, branchIds),
+                )),
+        ))
+    } else if (organizationIds.length > 0) {
+        conditions.push(exists(
+            db.select()
+                .from(organizationInventory)
+                .where(and(
+                    eq(organizationInventory.globalProductId, globalProducts.id),
+                    inArray(organizationInventory.organizationId, organizationIds),
+                    or(isNull(organizationInventory.deletedAt), isNotNull(globalProducts.deletedAt)),
+                )),
+        ))
+    }
+    return conditions
+}
+
+function targetOrganizationId(isBranchScopedRole: boolean, organizationIds: number[], userOrgId: number | null) {
+    if (isBranchScopedRole) return userOrgId
+    return organizationIds.length === 1 ? organizationIds[0] : userOrgId
+}
+
+async function salesBranches(branchIds: number[], userOrgId: number | null): Promise<number[]> {
+    if (branchIds.length > 0 || !userOrgId) return branchIds
+    const orgBranches = await db.select({ id: branches.id }).from(branches).where(eq(branches.organizationId, userOrgId))
+    return orgBranches.map((branch) => branch.id)
+}
+
+function addCatalogDateConditions(conditions: any[], options: {
+    months: number[]
+    years: number[]
+    startDate: Date | null
+    endDate: Date | null
+}): void {
+    const { months, years, startDate, endDate } = options
+    if (months.length > 0) conditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(months, sql.raw(", "))})`)
+    if (years.length > 0) conditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(years, sql.raw(", "))})`)
+    if (months.length > 0 || years.length > 0) return
+    if (startDate) conditions.push(gte(orders.createdAt, startDate))
+    if (endDate) conditions.push(lte(orders.createdAt, endDate))
+}
+
+function catalogProductStatus(product: any): string {
+    if (product.deletedAt) return "deleted"
+    return product.organizationIsActive === false ? "inactive" : product.status
+}
+
 export async function GET(req: NextRequest) {
     try {
         const session = await getServerSession(authOptions)
@@ -30,11 +91,11 @@ export async function GET(req: NextRequest) {
         const monthsRaw = url.searchParams.get("months")
         const yearsRaw = url.searchParams.get("years")
 
-        const parsedMonths = monthsRaw ? monthsRaw.split(',').map(Number).filter(n => !isNaN(n) && n >= 1 && n <= 12) : []
-        const parsedYears = yearsRaw ? yearsRaw.split(',').map(Number).filter(n => !isNaN(n) && n > 2000) : []
-        const parsedGroupIds = groupIdsRaw ? groupIdsRaw.split(',').map(Number).filter(n => !isNaN(n) && n > 0) : []
-        const parsedOrganizationIds = organizationIdsRaw ? organizationIdsRaw.split(',').map(Number).filter(n => !isNaN(n) && n > 0) : []
-        const parsedProductIds = productIdsRaw ? productIdsRaw.split(',').map(Number).filter(n => !isNaN(n) && n > 0) : []
+        const parsedMonths = positiveIds(monthsRaw).filter((month) => month <= 12)
+        const parsedYears = positiveIds(yearsRaw, 2000)
+        const parsedGroupIds = positiveIds(groupIdsRaw)
+        const parsedOrganizationIds = positiveIds(organizationIdsRaw)
+        const parsedProductIds = positiveIds(productIdsRaw)
 
         // RBAC Context Parsing
         let branchIds: number[] = []
@@ -42,7 +103,7 @@ export async function GET(req: NextRequest) {
             if (!userBranchId) return NextResponse.json({ error: "Branch not assigned" }, { status: 403 })
             branchIds = [userBranchId]
         } else if (branchIdsParam) {
-            branchIds = branchIdsParam.split(",").map(id => Number(id)).filter(id => !isNaN(id) && id > 0)
+            branchIds = branchIdsParam.split(",").map(Number).filter(id => !Number.isNaN(id) && id > 0)
         }
 
         // If specific groups selected, resolve branches for them
@@ -78,56 +139,8 @@ export async function GET(req: NextRequest) {
 
         const result = await getCached(cacheKey, async () => {
             // 1. Fetch products with optional Organization Price and Branch Assignment filtering
-            const productConditions: any[] = []
-            
-            if (parsedProductIds.length > 0) {
-                productConditions.push(inArray(globalProducts.id, parsedProductIds))
-            }
-
-            // REFINED SCOPING LOGIC
-            if (branchIds.length > 0) {
-                // If branch/group context specified, only show products assigned to those branches
-                productConditions.push(
-                    exists(
-                        db.select()
-                        .from(branchInventory)
-                        .innerJoin(organizationInventory, eq(branchInventory.organizationInventoryId, organizationInventory.id))
-                        .where(and(
-                            eq(organizationInventory.globalProductId, globalProducts.id),
-                            inArray(branchInventory.branchId, branchIds),
-                            inArray(branchInventory.branchId, branchIds)
-                        ))
-                    )
-                )
-            } else if (parsedOrganizationIds.length > 0) {
-                // If ONLY organization context is specified, only show products in organization inventory
-                productConditions.push(
-                    exists(
-                        db.select()
-                        .from(organizationInventory)
-                        .where(and(
-                            eq(organizationInventory.globalProductId, globalProducts.id),
-                            inArray(organizationInventory.organizationId, parsedOrganizationIds),
-                            // Only include those that are NOT unassigned, UNLESS they have historical sales 
-                            // (we'll handle sales-based inclusion by allowing unassigned ones if they have transactions later if needed,
-                            // OR we just allow them if they were deleted GLOBALLY)
-                             or(
-                                isNull(organizationInventory.deletedAt),
-                                isNotNull(globalProducts.deletedAt)
-                            )
-                        ))
-                    )
-                )
-            } else if (userOrgId && (userRole === "HEAD_OFFICE" || userRole === "SUPER_ADMIN")) {
-                // Default: show products for the user's organization if no filter is active
-                // (Optional: keep as-is to show all active global products if no filter)
-            }
-
-
-            // Determine which organization ID to use for customPrice (take the first specific one or session org)
-            const targetOrgId = isBranchScopedRole
-                ? userOrgId
-                : parsedOrganizationIds.length === 1 ? parsedOrganizationIds[0] : userOrgId
+            const productConditions = catalogProductConditions(parsedProductIds, branchIds, parsedOrganizationIds)
+            const targetOrgId = targetOrganizationId(isBranchScopedRole, parsedOrganizationIds, userOrgId)
 
             const productsQuery = db.select({
                 id: globalProducts.id,
@@ -159,13 +172,7 @@ export async function GET(req: NextRequest) {
 
             // 2. Fetch Aggregated Sales Data
             // We need to resolve branchIds if we haven't already for the sales data filter
-            let salesBranchIds = branchIds;
-            if (salesBranchIds.length === 0) {
-                if (userOrgId) {
-                    const orgBranches = await db.select({ id: branches.id }).from(branches).where(eq(branches.organizationId, userOrgId))
-                    salesBranchIds = orgBranches.map(b => b.id)
-                }
-            }
+            const salesBranchIds = await salesBranches(branchIds, userOrgId)
 
             const baseConditions: any[] = [
                 salesBranchIds.length > 0 ? inArray(orders.branchId, salesBranchIds) : sql`TRUE`,
@@ -173,17 +180,7 @@ export async function GET(req: NextRequest) {
                 parsedProductIds.length > 0 ? inArray(orderItems.globalProductId, parsedProductIds) : sql`TRUE`
             ]
 
-            if (parsedMonths.length > 0) {
-                baseConditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedMonths, sql`, `)})`)
-            }
-            if (parsedYears.length > 0) {
-                baseConditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedYears, sql`, `)})`)
-            }
-
-            if (parsedMonths.length === 0 && parsedYears.length === 0) {
-                if (startDate) baseConditions.push(gte(orders.createdAt, startDate))
-                if (endDate) baseConditions.push(lte(orders.createdAt, endDate))
-            }
+            addCatalogDateConditions(baseConditions, { months: parsedMonths, years: parsedYears, startDate, endDate })
 
             const salesData = await db
                 .select({
@@ -212,9 +209,7 @@ export async function GET(req: NextRequest) {
                     productCode: p.productCode,
                     productName: p.customName || p.name,
                     unit: p.unit,
-                    status: p.deletedAt 
-                        ? "deleted" 
-                        : (p.organizationIsActive === false ? "inactive" : p.status),
+                    status: catalogProductStatus(p),
                     basePriceCents: isSuperAdmin ? (p.basePrice || 0) : 0,
                     unitPriceCents: p.customPrice || p.basePrice,
                     stockQuantity: p.stockQuantity,

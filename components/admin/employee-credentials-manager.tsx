@@ -1,14 +1,14 @@
 "use client"
-import React, { useState } from "react"
+import { useState } from "react"
 import useSWR from "swr"
 import { useToast } from "@/hooks/use-toast"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Plus, Trash2, Edit, Check, X, Copy, Eye, EyeOff } from "lucide-react"
+import { Dialog,DialogContent,DialogHeader,DialogTitle,DialogFooter,DialogDescription } from "@/components/ui/dialog"
+import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from "@/components/ui/table"
+import { Plus,Trash2,Edit,Copy,Eye,EyeOff } from "lucide-react"
 
 const fetcher = (url: string) => fetch(url).then(r => r.json())
 
@@ -129,11 +129,15 @@ export function EmployeeCredentialsManager() {
       </div>
 
       <Card className="overflow-hidden">
-        {credentials.length === 0 ? (
+        {(() => {
+          if (credentials.length === 0) {
+            return (
           <div className="p-8 text-center text-muted-foreground">
             <p>No employee credentials yet</p>
           </div>
-        ) : (
+        )
+          }
+          return (
           <Table>
             <TableHeader>
               <TableRow>
@@ -179,7 +183,8 @@ export function EmployeeCredentialsManager() {
               ))}
             </TableBody>
           </Table>
-        )}
+        )
+        })()}
       </Card>
 
       {/* Create/Edit Dialog */}
@@ -196,8 +201,9 @@ export function EmployeeCredentialsManager() {
 
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium mb-1">Email *</label>
+              <label htmlFor="employee-email" className="block text-sm font-medium mb-1">Email *</label>
               <Input
+                id="employee-email"
                 type="email"
                 placeholder="employee@example.com"
                 value={formData.email}
@@ -208,9 +214,10 @@ export function EmployeeCredentialsManager() {
 
             {isCreate && (
               <div>
-                <label className="block text-sm font-medium mb-1">Password *</label>
+                <label htmlFor="employee-password" className="block text-sm font-medium mb-1">Password *</label>
                 <div className="flex gap-2">
                   <Input
+                    id="employee-password"
                     type={showPassword ? "text" : "password"}
                     placeholder="••••••••"
                     value={formData.password}
@@ -242,16 +249,18 @@ export function EmployeeCredentialsManager() {
 
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="block text-sm font-medium mb-1">First Name</label>
+                <label htmlFor="employee-first-name" className="block text-sm font-medium mb-1">First Name</label>
                 <Input
+                  id="employee-first-name"
                   placeholder="John"
                   value={formData.firstName}
                   onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium mb-1">Last Name</label>
+                <label htmlFor="employee-last-name" className="block text-sm font-medium mb-1">Last Name</label>
                 <Input
+                  id="employee-last-name"
                   placeholder="Doe"
                   value={formData.lastName}
                   onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
@@ -278,7 +287,15 @@ export function EmployeeCredentialsManager() {
               Cancel
             </Button>
             <Button onClick={handleSubmit} disabled={isLoading}>
-              {isLoading ? "Saving..." : isCreate ? "Create" : "Update"}
+              {(() => {
+                if (isLoading) {
+                  return "Saving..."
+                }
+                if (isCreate) {
+                  return "Create"
+                }
+                return "Update"
+              })()}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -72,8 +72,8 @@ export async function GET(req: NextRequest) {
 
     if (organizationIdParam) {
       // Validate organization ID
-      const organizationId = parseInt(organizationIdParam, 10)
-      if (isNaN(organizationId) || organizationId <= 0) {
+      const organizationId = Number.parseInt(organizationIdParam, 10)
+      if (Number.isNaN(organizationId) || organizationId <= 0) {
         return err("Invalid organization ID", 400)
       }
 
@@ -249,8 +249,8 @@ export async function DELETE(req: NextRequest) {
     }
 
     // Validate ID
-    const id = parseInt(idParam, 10)
-    if (isNaN(id) || id <= 0) {
+    const id = Number.parseInt(idParam, 10)
+    if (Number.isNaN(id) || id <= 0) {
       return err("Invalid setting id", 400)
     }
 

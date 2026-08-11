@@ -2,7 +2,7 @@ import NextAuth from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { NextRequest, NextResponse } from "next/server"
 import { checkRateLimit, getClientIdentifier, resetRateLimit } from "@/lib/rate-limiter"
-import { createHash } from "crypto"
+import { createHash } from "node:crypto"
 
 const handler = NextAuth(authOptions)
 

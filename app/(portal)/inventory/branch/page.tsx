@@ -1,18 +1,17 @@
 "use client"
 
-import { useState, useMemo } from "react"
-import useSWR from "swr"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Badge } from "@/components/ui/badge"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { formatPKR } from "@/lib/utils"
-import { Search, Package, Eye, Building2, GitBranch, Loader2 } from "lucide-react"
 import { useAppContext } from "@/components/context/app-context"
+import { Badge } from "@/components/ui/badge"
+import { Card,CardContent,CardHeader,CardTitle } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from "@/components/ui/select"
+import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from "@/components/ui/table"
+import { formatPKR } from "@/lib/utils"
+import { Building2,GitBranch,Loader2,Package,Search } from "lucide-react"
 import { useSession } from "next-auth/react"
 import { useRouter } from "next/navigation"
-import { useEffect } from "react"
+import { useEffect,useMemo,useState } from "react"
+import useSWR from "swr"
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json())
 
@@ -36,6 +35,28 @@ type BranchProduct = {
     globalProductId: number
     globalStatus: string
     orgIsActive: boolean
+}
+
+function mergeBranchProduct(
+    productMap: Map<number, BranchProduct & { branches: string[] }>,
+    globalProductId: number,
+    product: BranchProduct,
+): void {
+    const existing = productMap.get(globalProductId)
+    if (!existing) {
+        productMap.set(globalProductId, {
+            ...product,
+            isActive: product.orgIsActive ?? product.isActive,
+            branches: product.branchName ? [product.branchName] : [],
+        })
+        return
+    }
+    if (product.branchName && !existing.branches.includes(product.branchName)) {
+        existing.branches.push(product.branchName)
+    }
+    if (new Date(product.assignedAt) < new Date(existing.assignedAt)) {
+        existing.assignedAt = product.assignedAt
+    }
 }
 
 export default function ViewBranchProductsPage() {
@@ -97,21 +118,7 @@ export default function ViewBranchProductsPage() {
             const gpId = p.globalProductId as number
             if (!gpId) continue
 
-            if (productMap.has(gpId)) {
-                const existing = productMap.get(gpId)!
-                if (p.branchName && !existing.branches.includes(p.branchName)) {
-                    existing.branches.push(p.branchName)
-                }
-                if (new Date(p.assignedAt) < new Date(existing.assignedAt)) {
-                    existing.assignedAt = p.assignedAt
-                }
-            } else {
-                productMap.set(gpId, {
-                    ...p,
-                    isActive: p.orgIsActive !== undefined ? p.orgIsActive : p.isActive, // Use org-level status as source of truth
-                    branches: p.branchName ? [p.branchName] : [],
-                })
-            }
+            mergeBranchProduct(productMap, gpId, p)
         }
 
         return Array.from(productMap.values())
@@ -142,9 +149,9 @@ export default function ViewBranchProductsPage() {
                 <CardContent className="space-y-4">
                     {showOrgSelector && (
                         <div>
-                            <label className="text-sm font-medium mb-2 block">Organization</label>
+                            <label htmlFor="branch-organization" className="text-sm font-medium mb-2 block">Organization</label>
                             <Select value={localOrgId} onValueChange={setLocalOrgId}>
-                                <SelectTrigger className="w-full max-w-md">
+                                <SelectTrigger id="branch-organization" className="w-full max-w-md">
                                     <SelectValue placeholder="Select organization" />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -158,11 +165,11 @@ export default function ViewBranchProductsPage() {
 
                     {selectedOrgId && (
                         <div>
-                            <label className="text-sm font-medium mb-2 block flex items-center gap-2">
+                            <label htmlFor="branch-group" className="text-sm font-medium mb-2 block flex items-center gap-2">
                                 <GitBranch className="h-4 w-4" /> Select Group
                             </label>
                             <Select value={selectedGroupId} onValueChange={setSelectedGroupId}>
-                                <SelectTrigger className="max-w-md">
+                                <SelectTrigger id="branch-group" className="max-w-md">
                                     <SelectValue placeholder="Select a group" />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -229,7 +236,9 @@ export default function ViewBranchProductsPage() {
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                    {isLoading ? (
+                                    {(() => {
+                                      if (isLoading) {
+                                        return (
                                         <TableRow>
                                             <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
                                                 <div className="flex items-center justify-center gap-2">
@@ -238,7 +247,10 @@ export default function ViewBranchProductsPage() {
                                                 </div>
                                             </TableCell>
                                         </TableRow>
-                                    ) : filteredProducts.length === 0 ? (
+                                    )
+                                      }
+                                      if (filteredProducts.length === 0) {
+                                        return (
                                         <TableRow>
                                             <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
                                                 {branchProducts.length === 0
@@ -246,7 +258,9 @@ export default function ViewBranchProductsPage() {
                                                     : "No products match your search."}
                                             </TableCell>
                                         </TableRow>
-                                    ) : (
+                                    )
+                                      }
+                                      return (
                                         filteredProducts.map((product) => (
                                             <TableRow
                                                 key={product.globalProductId || product.id}
@@ -272,11 +286,15 @@ export default function ViewBranchProductsPage() {
                                                     <Badge variant="outline">{product.productCode}</Badge>
                                                 </TableCell>
                                                 <TableCell className="font-medium">
-                                                    {product.customPrice
-                                                        ? formatPKR(product.customPrice / 100)
-                                                        : product.basePrice
-                                                            ? formatPKR(product.basePrice / 100)
-                                                            : <span className="text-muted-foreground">-</span>}
+                                                    {(() => {
+                                                      if (product.customPrice) {
+                                                        return formatPKR(product.customPrice / 100)
+                                                      }
+                                                      if (product.basePrice) {
+                                                        return formatPKR(product.basePrice / 100)
+                                                      }
+                                                      return <span className="text-muted-foreground">-</span>
+                                                    })()}
                                                 </TableCell>
                                                 <TableCell>
                                                     {product.isActive ? (
@@ -294,7 +312,8 @@ export default function ViewBranchProductsPage() {
                                                 </TableCell>
                                             </TableRow>
                                         ))
-                                    )}
+                                    )
+                                    })()}
                                 </TableBody>
                             </Table>
                         </div>

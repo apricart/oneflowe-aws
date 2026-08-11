@@ -1,22 +1,21 @@
 "use client"
-import React, { useMemo, useState } from "react"
-import { formatPKR, cn } from "@/lib/utils"
-import { calculateLineCents, formatQuantity, parseQuantity, roundQuantity, sanitizeQuantityStep } from "@/lib/quantity"
+import React,{ useMemo,useState } from "react"
+import { formatPKR,cn } from "@/lib/utils"
+import { calculateLineCents,formatQuantity,parseQuantity,roundQuantity,sanitizeQuantityStep } from "@/lib/quantity"
 import useSWR from "swr"
-import { useSession, signOut } from "next-auth/react"
+import { useSession,signOut } from "next-auth/react"
 import { useRouter } from "next/navigation"
 import { useToast } from "@/hooks/use-toast"
-import { useOrganizations, useBranches } from "@/lib/hooks/use-api"
+import { useOrganizations,useBranches } from "@/lib/hooks/use-api"
 import { useAppContext } from "@/components/context/app-context"
 import { ContextSelector } from "@/components/shell/context-selector"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
-import { ShoppingBag, Search, Plus, Minus, Trash2, Home, X, CheckCircle, Clock, AlertTriangle, DollarSign, Star, Zap, Package, TrendingDown, Grid, LogOut, ArrowRight, ArrowLeft, Calendar, MapPin, RefreshCw, Building2, Copy, Send, Pencil, Loader2 } from "lucide-react"
+import { Dialog,DialogContent,DialogHeader,DialogTitle,DialogFooter,DialogDescription } from "@/components/ui/dialog"
+import { ShoppingBag,Search,Plus,Minus,Trash2,Home,CheckCircle,Clock,AlertTriangle,DollarSign,Zap,Package,TrendingDown,Grid,LogOut,ArrowRight,ArrowLeft,Calendar,MapPin,RefreshCw,Building2,Copy,Send,Pencil,Loader2 } from "lucide-react"
 import { Skeleton } from "@/components/ui/skeleton"
-import Image from "next/image"
 import { RefundManagement } from "@/components/refund-management"
 import { getOrderDerivedStatus } from "@/lib/order-status"
 import { ReceiptIconButton } from "@/components/receipts/receipt-icon-button"
@@ -225,8 +224,8 @@ export default function OrderPortalPage() {
   const userName = (session?.user as any)?.fullName || (session?.user as any)?.email || "User"
 
   // Use context branch ID, fallback to session branch ID for BRANCH_ADMIN and employees
-  const activeBranchId = contextBranchId ? parseInt(contextBranchId) : (session?.user as any)?.branchId
-  const activeOrgId = contextOrgId ? parseInt(contextOrgId) : (session?.user as any)?.organizationId
+  const activeBranchId = contextBranchId ? Number.parseInt(contextBranchId) : (session?.user as any)?.branchId
+  const activeOrgId = contextOrgId ? Number.parseInt(contextOrgId) : (session?.user as any)?.organizationId
 
   // Determine if we need to pass branchId/organizationId as query params
   // We need to pass them if:
@@ -236,12 +235,28 @@ export default function OrderPortalPage() {
   const needsContextParams = (isAdmin && !((session?.user as any)?.branchId)) || isEmployee || isOrderPortal
 
   // Build API URLs using context
-  const branchInventoryUrl = activeBranchId
-    ? `/api/v1/branch/inventory?visibility=visible&includeQuantityBudget=true${needsContextParams ? `&branchId=${activeBranchId}${activeOrgId ? `&organizationId=${activeOrgId}` : ""}` : ""}`
-    : null
-  const budgetsUrl = activeBranchId
-    ? `/api/v1/budgets${needsContextParams ? `?branchId=${activeBranchId}${activeOrgId ? `&organizationId=${activeOrgId}` : ""}` : ""}`
-    : null
+  const branchInventoryUrl = (() => {
+    if (activeBranchId) {
+      return `/api/v1/branch/inventory?visibility=visible&includeQuantityBudget=true${(() => {
+        if (needsContextParams) {
+          return ("&branchId=" + String(activeBranchId) + String(activeOrgId ? ("&organizationId=" + String(activeOrgId)) : ""))
+        }
+        return ""
+      })()}`
+    }
+    return null
+  })()
+  const budgetsUrl = (() => {
+    if (activeBranchId) {
+      return `/api/v1/budgets${(() => {
+        if (needsContextParams) {
+          return ("?branchId=" + String(activeBranchId) + String(activeOrgId ? ("&organizationId=" + String(activeOrgId)) : ""))
+        }
+        return ""
+      })()}`
+    }
+    return null
+  })()
 
   const { data: inventoryData, mutate: mutateBranchInventory, error: inventoryError } = useSWR<any>(
     branchInventoryUrl,
@@ -834,11 +849,15 @@ export default function OrderPortalPage() {
                 </div>
                 <div className="mt-1 h-1.5 w-full rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
                   <div
-                    className={`h-full rounded-full ${budgetPercent < 60
-                      ? "bg-[color:var(--color-brand-primary)]"
-                      : budgetPercent < 85
-                        ? "bg-amber-500"
-                        : "bg-red-500"
+                    className={`h-full rounded-full ${(() => {
+                      if (budgetPercent < 60) {
+                        return "bg-[color:var(--color-brand-primary)]"
+                      }
+                      if (budgetPercent < 85) {
+                        return "bg-amber-500"
+                      }
+                      return "bg-red-500"
+                    })()
                       }`}
                     style={{ width: `${budgetPercent}%` }}
                   />
@@ -901,7 +920,9 @@ export default function OrderPortalPage() {
             </DialogDescription>
           </DialogHeader>
 
-          {isLoadingOrderForEdit ? (
+          {(() => {
+            if (isLoadingOrderForEdit) {
+              return (
             <div className="flex min-h-48 flex-col items-center justify-center gap-3 py-10 text-center text-muted-foreground">
               <Loader2 className="h-8 w-8 animate-spin text-indigo-600" />
               <div>
@@ -909,13 +930,18 @@ export default function OrderPortalPage() {
                 <p className="text-xs">The editor will be ready in a moment.</p>
               </div>
             </div>
-          ) : cart.length === 0 ? (
+          )
+            }
+            if (cart.length === 0) {
+              return (
             <div className="py-10 text-center text-muted-foreground">
               <ShoppingBag className="mx-auto mb-4 h-12 w-12 opacity-40" />
               <p className="font-medium">Your cart is empty</p>
               <p className="text-xs">Browse the catalog and add products to get started.</p>
             </div>
-          ) : (
+          )
+            }
+            return (
             <div className="space-y-4">
               <div className="max-h-64 space-y-3 overflow-y-auto pr-1">
                 {cart.map(item => {
@@ -1028,15 +1054,20 @@ export default function OrderPortalPage() {
                 )}
               </div>
             </div>
-          )}
+          )
+          })()}
 
           <DialogFooter className="flex-col gap-2 sm:flex-row">
-            {isLoadingOrderForEdit ? (
+            {(() => {
+              if (isLoadingOrderForEdit) {
+                return (
               <Button className="w-full sm:w-auto" disabled>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 Loading order
               </Button>
-            ) : (
+            )
+              }
+              return (
               <>
                 {editingOrder && (
                   <Button
@@ -1069,7 +1100,8 @@ export default function OrderPortalPage() {
                   <ArrowRight className="h-4 w-4" />
                 </Button>
               </>
-            )}
+            )
+            })()}
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1129,13 +1161,17 @@ export default function OrderPortalPage() {
           </div>
         )}
 
-        {activeTab === "orders" || activeTab === "refunded" ? (
+        {(() => {
+          if (activeTab === "orders" || activeTab === "refunded") {
+            return (
           // Orders View
           <div className="space-y-4">
-            {!ordersData ? (
+            {(() => {
+              if (!ordersData) {
+                return (
               <div className="space-y-3">
-                {Array.from({ length: 3 }).map((_, idx) => (
-                  <Card key={idx} className="p-4 dark:bg-slate-900 dark:border-slate-800">
+                {Array.from({ length: 3 }, (_, position) => `order-loading-${position + 1}`).map((skeletonKey) => (
+                  <Card key={skeletonKey} className="p-4 dark:bg-slate-900 dark:border-slate-800">
                     <div className="flex items-start justify-between mb-3">
                       <div className="flex-1 space-y-2">
                         <Skeleton className="h-4 w-40" />
@@ -1147,12 +1183,17 @@ export default function OrderPortalPage() {
                   </Card>
                 ))}
               </div>
-            ) : !ordersData.items || ordersData.items.length === 0 ? (
+            )
+              }
+              if (!ordersData.items || ordersData.items.length === 0) {
+                return (
               <div className="text-center py-16">
                 <Package className="h-12 w-12 text-muted-foreground mx-auto mb-4 opacity-50" />
                 <p className="text-lg font-medium text-muted-foreground">No orders found</p>
               </div>
-            ) : (
+            )
+              }
+              return (
               <div className="space-y-3">
                 {ordersData.items
                   .filter((order: any) => {
@@ -1325,9 +1366,12 @@ export default function OrderPortalPage() {
                     </div>
                   )}
               </div>
-            )}
+            )
+            })()}
           </div>
-        ) : (
+        )
+          }
+          return (
           // Shop View
           <>
             {/* Search & Filters */}
@@ -1405,10 +1449,12 @@ export default function OrderPortalPage() {
             </div>
 
             {/* Products Grid */}
-            {isLoadingInventory ? (
+            {(() => {
+              if (isLoadingInventory) {
+                return (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                {Array.from({ length: pageSize }).map((_, idx) => (
-                  <Card key={idx} className="overflow-hidden h-full flex flex-col dark:bg-slate-900 dark:border-slate-800">
+                {Array.from({ length: pageSize }, (_, position) => `product-loading-${position + 1}`).map((skeletonKey) => (
+                  <Card key={skeletonKey} className="overflow-hidden h-full flex flex-col dark:bg-slate-900 dark:border-slate-800">
                     <Skeleton className="h-40 w-full" />
                     <div className="p-4 space-y-3 flex-1 flex flex-col">
                       <Skeleton className="h-4 w-3/4" />
@@ -1419,29 +1465,43 @@ export default function OrderPortalPage() {
                   </Card>
                 ))}
               </div>
-            ) : filteredProducts.length === 0 ? (
+            )
+              }
+              if (filteredProducts.length === 0) {
+                return (
               <div className="text-center py-16">
                 <Package className="h-12 w-12 text-muted-foreground mx-auto mb-4 opacity-50" />
                 <p className="text-lg font-medium text-muted-foreground">No products found</p>
               </div>
-            ) : (
+            )
+              }
+              return (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                 {paginatedProducts.map(product => {
                   const itemInCart = cart.find(i => i.id === product.id)
                   const productStep = getProductStep(product)
-                  const defaultQty = (product.stock || 0) > 0 ? (product.allowDecimalQuantity ? 1 : productStep) : 0
+                  const defaultQty = (() => {
+                    if ((product.stock || 0) > 0) {
+                      return (product.allowDecimalQuantity ? 1 : productStep)
+                    }
+                    return 0
+                  })()
                   const selectionQty = cardQuantities[product.id] ?? itemInCart?.quantity ?? defaultQty
                   const isModified = selectionQty !== (itemInCart?.quantity || 0)
 
                   return (
                     <div
                       key={product.id}
-                      onClick={() => openProductDetail(product)}
-                      className="group cursor-pointer"
+                      className="group"
                     >
                       <Card className="overflow-hidden hover:shadow-2xl hover:shadow-blue-500/10 transition-all duration-500 transform hover:-translate-y-2 h-full flex flex-col bg-white/40 dark:bg-slate-900/40 backdrop-blur-xl border-white/20 dark:border-slate-800/50 shadow-sm ring-1 ring-black/5">
                         {/* Product Image */}
-                        <div className="relative h-48 overflow-hidden group-hover:bg-gradient-to-tl transition-all bg-gradient-to-br from-slate-100 to-slate-200 dark:from-slate-800 dark:to-slate-700">
+                        <button
+                          type="button"
+                          aria-label={`View details for ${product.name}`}
+                          onClick={() => openProductDetail(product)}
+                          className="relative h-48 w-full overflow-hidden text-left group-hover:bg-gradient-to-tl transition-all bg-gradient-to-br from-slate-100 to-slate-200 dark:from-slate-800 dark:to-slate-700"
+                        >
                           {product.imageUrl ? (
                             <img
                               src={product.imageUrl}
@@ -1459,11 +1519,15 @@ export default function OrderPortalPage() {
                             <Badge
                               className={cn(
                                 "absolute top-2 right-2 border-0 shadow-sm",
-                                product.stock > 10
-                                  ? "bg-emerald-500 text-white"
-                                  : product.stock > 0
-                                    ? "bg-amber-500 text-white animate-pulse"
-                                    : "bg-rose-500 text-white"
+                                (() => {
+                                  if (product.stock > 10) {
+                                    return "bg-emerald-500 text-white"
+                                  }
+                                  if (product.stock > 0) {
+                                    return "bg-amber-500 text-white animate-pulse"
+                                  }
+                                  return "bg-rose-500 text-white"
+                                })()
                               )}
                             >
                               <div className="flex items-center gap-1.5 px-0.5">
@@ -1507,7 +1571,7 @@ export default function OrderPortalPage() {
                               {product.discountType === 'percent' ? `${product.discountValue}% OFF` : `PKR ${product.discountValue} OFF`}
                             </Badge>
                           )}
-                        </div>
+                        </button>
 
                         {/* Product Info */}
                         <div className="p-4 space-y-3 flex-1 flex flex-col">
@@ -1586,7 +1650,9 @@ export default function OrderPortalPage() {
                                 >
                                   <Minus className="h-3.5 w-3.5" />
                                 </Button>
-                                {product.allowDecimalQuantity ? (
+                                {(() => {
+                                  if (product.allowDecimalQuantity) {
+                                    return (
                                   <input
                                     type="number"
                                     step="any"
@@ -1595,7 +1661,7 @@ export default function OrderPortalPage() {
                                     value={selectionQty || ""}
                                     onChange={(e) => {
                                       e.stopPropagation()
-                                      const val = parseFloat(e.target.value)
+                                      const val = Number.parseFloat(e.target.value)
                                       setCardQuantities(prev => ({
                                         ...prev,
                                         [product.id]: Number.isFinite(val) && val >= 0 ? roundQuantity(val) : 0,
@@ -1607,11 +1673,14 @@ export default function OrderPortalPage() {
                                     disabled={product.stock === 0}
                                     placeholder="0"
                                   />
-                                ) : (
+                                )
+                                  }
+                                  return (
                                   <span className="w-8 text-center text-xs font-bold text-slate-900 dark:text-white">
                                     {formatQuantity(selectionQty)}
                                   </span>
-                                )}
+                                )
+                                })()}
                                 <Button
                                   onClick={(e) => {
                                     e.stopPropagation()
@@ -1695,22 +1764,30 @@ export default function OrderPortalPage() {
                               disabled={product.stock === 0 || (selectionQty === 0 && !itemInCart)}
                               className={`w-full gap-2 shadow-sm ${itemInCart && !isModified ? 'bg-green-600 hover:bg-green-700' : ''}`}
                             >
-                              {isModified ? (
+                              {(() => {
+                                if (isModified) {
+                                  return (
                                 <>
                                   <RefreshCw className="h-4 w-4" />
                                   <span>{itemInCart ? 'Update Cart' : `Add ${formatQuantity(selectionQty)} to Cart`}</span>
                                 </>
-                              ) : itemInCart ? (
+                              )
+                                }
+                                if (itemInCart) {
+                                  return (
                                 <>
                                   <ShoppingBag className="h-4 w-4" />
                                   <span>Open Cart</span>
                                 </>
-                              ) : (
+                              )
+                                }
+                                return (
                                 <>
                                   <Plus className="h-4 w-4" />
                                   <span>Add to Cart</span>
                                 </>
-                              )}
+                              )
+                              })()}
                             </Button>
                           </div>
                         </div>
@@ -1719,7 +1796,8 @@ export default function OrderPortalPage() {
                   );
                 })}
               </div>
-            )}
+            )
+            })()}
 
             {/* Pagination controls */}
             {filteredProducts.length > 0 && (
@@ -1794,7 +1872,8 @@ export default function OrderPortalPage() {
               </div>
             )}
           </>
-        )}
+        )
+        })()}
       </div>
 
       {/* Product Detail Modal */}
@@ -1881,7 +1960,7 @@ export default function OrderPortalPage() {
 
                 {/* Quantity Selector */}
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Quantity</label>
+                  <label htmlFor="selected-product-quantity" className="text-sm font-medium">Quantity</label>
                   <div className="flex items-center gap-2">
                     <Button
                       size="icon"
@@ -1897,6 +1976,7 @@ export default function OrderPortalPage() {
                       <Minus className="h-4 w-4" />
                     </Button>
                     <Input
+                      id="selected-product-quantity"
                       type="number"
                       step={selectedProduct.allowDecimalQuantity ? "any" : getProductStep(selectedProduct)}
                       value={tempQuantity}
@@ -2003,9 +2083,12 @@ export default function OrderPortalPage() {
               Back
             </Button>
             <Button onClick={placeOrder} disabled={!canCheckout || isPlacingOrder}>
-              {isPlacingOrder
-                ? (editingOrder ? "Saving Changes..." : "Placing Order...")
-                : (editingOrder ? "Save Changes" : "Place Order")}
+              {(() => {
+                if (isPlacingOrder) {
+                  return (editingOrder ? "Saving Changes..." : "Placing Order...")
+                }
+                return (editingOrder ? "Save Changes" : "Place Order")
+              })()}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2076,7 +2159,9 @@ export default function OrderPortalPage() {
                   )}
                 </div>
                 <div className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {orderDetailsData?.items?.[0]?.orderItems ? (
+                  {(() => {
+                    if (orderDetailsData?.items?.[0]?.orderItems) {
+                      return (
                     orderDetailsData.items[0].orderItems.map((item: any) => {
                       const isFullyRefunded = (item.quantityRefunded || 0) >= item.quantity
                       const isPartiallyRefunded = (item.quantityRefunded || 0) > 0 && !isFullyRefunded
@@ -2112,11 +2197,14 @@ export default function OrderPortalPage() {
                         </div>
                       )
                     })
-                  ) : (
+                  )
+                    }
+                    return (
                     <div className="p-8 text-center text-muted-foreground text-sm">
                       Loading items...
                     </div>
-                  )}
+                  )
+                  })()}
                 </div>
               </div>
 

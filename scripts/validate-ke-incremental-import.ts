@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 
-import { readFileSync, writeFileSync } from "fs"
-import { resolve } from "path"
+import { readFileSync, writeFileSync } from "node:fs"
+import { resolve } from "node:path"
 import * as dotenv from "dotenv"
 
 dotenv.config({ path: ".env.local", quiet: true })

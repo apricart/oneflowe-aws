@@ -1,7 +1,7 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { Calendar, ChevronDown } from "lucide-react"
+import { useState,useEffect } from "react"
+import { Calendar } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 interface QuickDateRangeProps {
@@ -51,38 +51,49 @@ const ranges: { key: RangeKey; label: string }[] = [
     { key: "custom", label: "Custom" },
 ]
 
+function restoreDateRange(options: {
+    storageKey: string
+    setActiveRange: (range: RangeKey) => void
+    setShowCustom: (show: boolean) => void
+    onStartDateChange: (date: string) => void
+    onEndDateChange: (date: string) => void
+}): void {
+    const { storageKey, setActiveRange, setShowCustom, onStartDateChange, onEndDateChange } = options
+    try {
+        const saved = localStorage.getItem(storageKey)
+        if (!saved) return
+        const parsed = JSON.parse(saved)
+        if (!parsed.activeRange) return
+        setActiveRange(parsed.activeRange)
+        if (parsed.activeRange === "custom") {
+            setShowCustom(true)
+            if (parsed.startDate) onStartDateChange(parsed.startDate)
+            if (parsed.endDate) onEndDateChange(parsed.endDate)
+            return
+        }
+        const range = getDateRange(parsed.activeRange)
+        if (range) {
+            onStartDateChange(range.start)
+            onEndDateChange(range.end)
+        }
+    } catch (error) {
+        console.warn("Unable to restore the saved report date range:", error)
+    }
+}
+
 export function QuickDateRange({
     startDate,
     endDate,
     onStartDateChange,
     onEndDateChange,
     storageKey = "report-date-range",
-}: QuickDateRangeProps) {
+}: Readonly<QuickDateRangeProps>) {
     const [activeRange, setActiveRange] = useState<RangeKey>("thisMonth")
     const [showCustom, setShowCustom] = useState(false)
 
     // Restore from localStorage on mount
     useEffect(() => {
-        try {
-            const saved = localStorage.getItem(storageKey)
-            if (saved) {
-                const parsed = JSON.parse(saved)
-                if (parsed.activeRange) {
-                    setActiveRange(parsed.activeRange)
-                    if (parsed.activeRange === "custom") {
-                        setShowCustom(true)
-                        if (parsed.startDate) onStartDateChange(parsed.startDate)
-                        if (parsed.endDate) onEndDateChange(parsed.endDate)
-                    } else {
-                        const range = getDateRange(parsed.activeRange)
-                        if (range) {
-                            onStartDateChange(range.start)
-                            onEndDateChange(range.end)
-                        }
-                    }
-                }
-            }
-        } catch { }
+        restoreDateRange({ storageKey, setActiveRange, setShowCustom, onStartDateChange, onEndDateChange })
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
 
@@ -120,7 +131,7 @@ export function QuickDateRange({
             <div className="flex items-center gap-1 p-1 rounded-xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/50">
                 <Calendar className="h-3.5 w-3.5 ml-2 text-slate-400" />
                 {ranges.map(({ key, label }) => (
-                    <button
+                    <button type="button"
                         key={key}
                         onClick={() => handleRangeClick(key)}
                         className={cn(

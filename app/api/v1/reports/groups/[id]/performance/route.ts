@@ -17,9 +17,9 @@ export async function GET(
 
         const role = (session.user as any).role
         const userOrgId = (session.user as any).organizationId
-        const groupId = parseInt(id)
+        const groupId = Number.parseInt(id)
 
-        if (isNaN(groupId)) {
+        if (Number.isNaN(groupId)) {
             return NextResponse.json({ error: "Invalid Group ID" }, { status: 400 })
         }
 

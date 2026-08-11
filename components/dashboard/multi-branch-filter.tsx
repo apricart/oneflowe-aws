@@ -17,7 +17,7 @@ interface MultiBranchFilterProps {
     onChange: (ids: string[]) => void
 }
 
-export function MultiBranchFilter({ organizationId, selectedBranchIds, onChange }: MultiBranchFilterProps) {
+export function MultiBranchFilter({ organizationId, selectedBranchIds, onChange }: Readonly<MultiBranchFilterProps>) {
     const [open, setOpen] = useState(false)
     const [searchQuery, setSearchQuery] = useState("")
     const dropdownRef = useRef<HTMLDivElement>(null)
@@ -76,17 +76,21 @@ export function MultiBranchFilter({ organizationId, selectedBranchIds, onChange 
     }, [filteredBranches, onChange])
 
     const hasSelection = selectedBranchIds.length > 0
-    const label = hasSelection
-        ? selectedBranchIds.length === 1
-            ? branches.find(b => String(b.id) === selectedBranchIds[0])?.name || "1 Branch"
-            : `${selectedBranchIds.length} Branches`
-        : "All Branches"
+    const label = (() => {
+      if (hasSelection) {
+        if (selectedBranchIds.length === 1) {
+          return branches.find(b => String(b.id) === selectedBranchIds[0])?.name || "1 Branch"
+        }
+        return `${selectedBranchIds.length} Branches`
+      }
+      return "All Branches"
+    })()
 
     if (!organizationId || branches.length === 0) return null
 
     return (
         <div className="relative" ref={dropdownRef}>
-            <button
+            <button type="button"
                 onClick={() => setOpen(prev => !prev)}
                 className={`
           flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold border transition-all duration-200
@@ -98,14 +102,19 @@ export function MultiBranchFilter({ organizationId, selectedBranchIds, onChange 
             >
                 <GitBranch className="h-3 w-3" />
                 <span>{label}</span>
-                {hasSelection ? (
+                {(() => {
+                  if (hasSelection) {
+                    return (
                     <X
                         className="h-3 w-3 ml-0.5 opacity-80 hover:opacity-100"
                         onClick={(e: React.MouseEvent) => { e.stopPropagation(); clearAll() }}
                     />
-                ) : (
+                )
+                  }
+                  return (
                     <ChevronDown className={`h-3 w-3 transition-transform ${open ? "rotate-180" : ""}`} />
-                )}
+                )
+                })()}
             </button>
 
             {open && (
@@ -117,14 +126,14 @@ export function MultiBranchFilter({ organizationId, selectedBranchIds, onChange 
                                 Branches
                             </span>
                             <div className="flex items-center gap-3">
-                                <button 
+                                <button type="button"
                                     onClick={selectAll} 
                                     className="text-xs font-bold text-indigo-600 hover:text-indigo-700 uppercase tracking-wider"
                                 >
                                     All
                                 </button>
                                 <span className="text-slate-300">|</span>
-                                <button 
+                                <button type="button"
                                     onClick={clearAll} 
                                     className="text-xs font-bold text-rose-500 hover:text-rose-600 uppercase tracking-wider"
                                 >
@@ -149,18 +158,31 @@ export function MultiBranchFilter({ organizationId, selectedBranchIds, onChange 
 
                         {/* Branch List */}
                         <div className="max-h-60 overflow-y-auto px-2 pb-2">
-                            {filteredBranches.length === 0 ? (
+                            {(() => {
+                              if (filteredBranches.length === 0) {
+                                return (
                                 <div className="flex flex-col items-center justify-center py-8">
                                     <GitBranch className="h-8 w-8 text-slate-400" />
                                     <p className="text-sm text-slate-500 dark:text-slate-400 mt-2">No branches found</p>
                                 </div>
-                            ) : (
+                            )
+                              }
+                              return (
                                 <div className="space-y-1">
                                     {filteredBranches.map((branch) => (
                                         <div
                                             key={branch.id}
+                                            role="checkbox"
+                                            aria-checked={selectedBranchIds.includes(String(branch.id))}
+                                            tabIndex={0}
                                             className="flex items-center gap-3 p-3 rounded-xl transition-all duration-200 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700/50"
                                             onClick={() => toggle(String(branch.id))}
+                                            onKeyDown={(event) => {
+                                                if (event.key === "Enter" || event.key === " ") {
+                                                    event.preventDefault()
+                                                    toggle(String(branch.id))
+                                                }
+                                            }}
                                         >
                                             {/* Checkbox */}
                                             <div className={`
@@ -187,12 +209,13 @@ export function MultiBranchFilter({ organizationId, selectedBranchIds, onChange 
                                         </div>
                                     ))}
                                 </div>
-                            )}
+                            )
+                            })()}
                         </div>
 
                         {/* Apply Button */}
                         <div className="px-4 py-3 border-t border-slate-100 dark:border-slate-700">
-                            <button
+                            <button type="button"
                                 onClick={() => setOpen(false)}
                                 className="w-full py-3 rounded-xl bg-indigo-600 text-white text-xs font-bold uppercase tracking-wider hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-600/20"
                             >

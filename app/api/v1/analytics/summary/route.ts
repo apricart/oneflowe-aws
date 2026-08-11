@@ -1,3 +1,4 @@
+import { stringifyPrimitive } from "@/lib/stringify-primitive"
 import { NextResponse, type NextRequest } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
@@ -60,12 +61,15 @@ export async function GET(req: NextRequest) {
 
     // Parsing branchIds
     const parsedBranchIds = branchIdsRaw
-        ? branchIdsRaw.split(",").map(id => Number(id)).filter(id => !isNaN(id) && id > 0)
+        ? branchIdsRaw.split(",").map(Number).filter(id => !Number.isNaN(id) && id > 0)
         : []
 
-    const parsedGroupIds = groupIdsRaw
-        ? groupIdsRaw.split(",").map(id => Number(id)).filter(id => !isNaN(id) && id > 0)
-        : (groupId && groupId !== "all" ? [Number(groupId)] : [])
+    const parsedGroupIds = (() => {
+      if (groupIdsRaw) {
+        return groupIdsRaw.split(",").map(Number).filter(id => !Number.isNaN(id) && id > 0)
+      }
+      return (groupId && groupId !== "all" ? [Number(groupId)] : [])
+    })()
 
     const page = Math.min(Math.max(Math.trunc(Number(url.searchParams.get("page"))) || 1, 1), 10_000)
     const requestedLimit = Math.trunc(Number(url.searchParams.get("limit"))) || 50
@@ -82,10 +86,10 @@ export async function GET(req: NextRequest) {
         organizationId,
     })
 
-    const parsedMonths = monthsRaw ? monthsRaw.split(',').map(Number).filter(n => !isNaN(n) && n >= 1 && n <= 12) : []
-    const parsedYears = yearsRaw ? yearsRaw.split(',').map(Number).filter(n => !isNaN(n) && n > 2000) : []
-    const parsedCompMonths = compareMonthsRaw ? compareMonthsRaw.split(',').map(Number).filter(n => !isNaN(n) && n >= 1 && n <= 12) : []
-    const parsedCompYears = compareYearsRaw ? compareYearsRaw.split(',').map(Number).filter(n => !isNaN(n) && n > 2000) : []
+    const parsedMonths = monthsRaw ? monthsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n >= 1 && n <= 12) : []
+    const parsedYears = yearsRaw ? yearsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n > 2000) : []
+    const parsedCompMonths = compareMonthsRaw ? compareMonthsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n >= 1 && n <= 12) : []
+    const parsedCompYears = compareYearsRaw ? compareYearsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n > 2000) : []
 
     const conditions = []
 
@@ -95,7 +99,7 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ error: "Search query must be at most 100 characters" }, { status: 400 })
         }
         if (normalizedQuery) {
-            const escapedQuery = normalizedQuery.replace(/[\\%_]/g, "\\$&")
+            const escapedQuery = normalizedQuery.replace(/[\\%_]/g, String.raw`\$&`)
             const searchPattern = `%${escapedQuery}%`
             conditions.push(or(
                 ilike(orders.tid, searchPattern),
@@ -180,10 +184,10 @@ export async function GET(req: NextRequest) {
 
     // Advanced Multi-Select Date Filtering (Months / Years arrays)
     if (parsedMonths.length > 0) {
-        conditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedMonths, sql`, `)})`)
+        conditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedMonths, sql.raw(", "))})`)
     }
     if (parsedYears.length > 0) {
-        conditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedYears, sql`, `)})`)
+        conditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedYears, sql.raw(", "))})`)
     }
 
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined
@@ -270,15 +274,15 @@ export async function GET(req: NextRequest) {
     if (compare && (hasPrimaryDates || compareStartDateParam || hasCompareArrays)) {
         // Correctly filter out createdAt conditions to avoid overlapping periods
         const compConditions = conditions.filter(c => {
-            const str = String(c);
+            const str = stringifyPrimitive(c);
             return !str.includes("createdAt") && !str.includes("created_at") && !str.includes("EXTRACT(MONTH") && !str.includes("EXTRACT(YEAR");
         })
 
         if (parsedCompMonths.length > 0) {
-            compConditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedCompMonths, sql`, `)})`)
+            compConditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedCompMonths, sql.raw(", "))})`)
         }
         if (parsedCompYears.length > 0) {
-            compConditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedCompYears, sql`, `)})`)
+            compConditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedCompYears, sql.raw(", "))})`)
         }
 
         // Apply fallback standard dates if NO custom arrays were provided for Period B
@@ -301,8 +305,7 @@ export async function GET(req: NextRequest) {
             }
 
             if (prevStart.getTime() !== 0) {
-                compConditions.push(gte(orders.createdAt, prevStart))
-                compConditions.push(lte(orders.createdAt, prevEnd))
+                compConditions.push(gte(orders.createdAt, prevStart), lte(orders.createdAt, prevEnd))
             }
         }
 

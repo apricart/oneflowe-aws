@@ -211,8 +211,8 @@ export function parsePaginationParams(searchParams: URLSearchParams): {
 
   // Parse and validate page
   if (pageParam) {
-    const parsed = parseInt(pageParam, 10)
-    if (!isNaN(parsed) && parsed > 0) {
+    const parsed = Number.parseInt(pageParam, 10)
+    if (!Number.isNaN(parsed) && parsed > 0) {
       page = Math.min(parsed, 10000) // Max page 10000
     } else {
       console.warn(`[API] Invalid page parameter: ${pageParam}`)
@@ -221,8 +221,8 @@ export function parsePaginationParams(searchParams: URLSearchParams): {
 
   // Parse and validate limit
   if (limitParam) {
-    const parsed = parseInt(limitParam, 10)
-    if (!isNaN(parsed) && parsed > 0) {
+    const parsed = Number.parseInt(limitParam, 10)
+    if (!Number.isNaN(parsed) && parsed > 0) {
       limit = Math.min(parsed, 100) // Max limit 100
     } else {
       console.warn(`[API] Invalid limit parameter: ${limitParam}`)

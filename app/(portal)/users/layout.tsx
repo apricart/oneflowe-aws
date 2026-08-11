@@ -8,9 +8,9 @@ import { canAccessUserManagement } from "@/lib/user-management-access"
 
 export default async function UsersLayout({
   children,
-}: {
+}: Readonly<{
   children: ReactNode
-}) {
+}>) {
   const session = await getSharedServerSession()
 
   if (!session?.user) {

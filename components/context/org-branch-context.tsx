@@ -27,10 +27,10 @@ const STORAGE_KEY = "oneflowe:org-branch-context"
 export function OrgBranchProvider({
   children,
   initialRole = "HEAD_OFFICE",
-}: {
+}: Readonly<{
   children: React.ReactNode
   initialRole?: Role
-}) {
+}>) {
   const [organizationId, setOrganizationId] = useState<string | null>(null)
   const [branchId, setBranchId] = useState<string | null>(null)
   const [role, setRole] = useState<Role>(initialRole)

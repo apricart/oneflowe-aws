@@ -521,7 +521,9 @@ Machine-readable evidence: \`ke-refund-detail-audit-2026-08-03.json\`.
   } }, null, 2))
 }
 
-main().catch((error) => {
+try {
+  await main()
+} catch (error) {
   console.error(error.stack || error.message)
   process.exitCode = 1
-})
+}

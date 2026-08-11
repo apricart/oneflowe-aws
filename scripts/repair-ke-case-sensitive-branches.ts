@@ -146,9 +146,9 @@ function periodRange(start: string, end: string): string[] {
   for (let year = startYear, month = startMonth; year < endYear || (year === endYear && month <= endMonth);) {
     result.push(`${year}-${String(month).padStart(2, "0")}`)
     month += 1
-    if (month === 13) {
+    if (month > 12) {
       year += 1
-      month = 1
+      month -= 12
     }
   }
   return result
@@ -574,11 +574,15 @@ async function applyPlan(client: PoolClient | Client, plan: JsonRow): Promise<Js
   let updatedBudgets = 0
   let insertedBudgets = 0
   for (const budget of plan.budgetPlan as BudgetPlan[]) {
-    const branchId = budget.branch === "societyLower"
-      ? societyLower.id
-      : budget.branch === "societyTitle"
-        ? societyTitle.id
-        : distributionTitle.id
+    const branchId = (() => {
+      if (budget.branch === "societyLower") {
+        return societyLower.id
+      }
+      if (budget.branch === "societyTitle") {
+        return societyTitle.id
+      }
+      return distributionTitle.id
+    })()
     if (budget.operation === "UPDATE") {
       const updated = await rows(client, `
         update budgets
@@ -729,11 +733,15 @@ async function validateCommittedState(client: PoolClient | Client, before: JsonR
     order by branch_id, period
   `, [ORGANIZATION.id, [societyLower.id, societyTitle.id, distributionTitle.id]])
   for (const expected of plan.budgetPlan as BudgetPlan[]) {
-    const branchId = expected.branch === "societyLower"
-      ? societyLower.id
-      : expected.branch === "societyTitle"
-        ? societyTitle.id
-        : distributionTitle.id
+    const branchId = (() => {
+      if (expected.branch === "societyLower") {
+        return societyLower.id
+      }
+      if (expected.branch === "societyTitle") {
+        return societyTitle.id
+      }
+      return distributionTitle.id
+    })()
     const actual = repairedBudgets.find((budget) => budget.branch_id === branchId && budget.period === expected.period)
     assert(actual, `Missing repaired budget ${expected.branch}:${expected.period}`)
     assert(Number(actual.amount_allocated_cents) === expected.amountAllocatedCents && Number(actual.amount_credited_cents) === expected.amountCreditedCents, `Repaired budget amount mismatch ${expected.branch}:${expected.period}`)

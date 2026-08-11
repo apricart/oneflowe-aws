@@ -8,6 +8,24 @@ const redis = new Redis({
 
 export { redis }
 
+export interface RedisCooldownData {
+  userId: string
+  type: string
+  attempts: number
+  cooldownUntil: string
+  timestamp: number
+}
+
+export interface RedisOTPData {
+  userId: string
+  code: string
+  type: string
+  createdAt?: string
+  expiresAt?: string | Date
+  attempts: number
+  isUsed: boolean
+}
+
 // Redis key patterns for MFA system
 export const REDIS_KEYS = {
   MFA_COOLDOWN: (userId: string, type: string) => {
@@ -95,7 +113,7 @@ export class RedisMFA {
   }
 
   // Get cooldown data
-  static async getCooldown(userId: string, type: string): Promise<any | null> {
+  static async getCooldown(userId: string, type: string): Promise<RedisCooldownData | null> {
     try {
       // Validate inputs
       if (!userId || typeof userId !== 'string') {
@@ -115,13 +133,13 @@ export class RedisMFA {
       // Handle different data types from Upstash Redis
       if (typeof data === 'string') {
         try {
-          return JSON.parse(data)
+          return JSON.parse(data) as RedisCooldownData
         } catch (error) {
           console.error('Error parsing cooldown data:', error, 'Data:', data)
           return null
         }
       } else if (typeof data === 'object') {
-        return data
+        return data as RedisCooldownData
       }
       return null
     } catch (error) {
@@ -153,7 +171,7 @@ export class RedisMFA {
   }
 
   // Get OTP data
-  static async getOTP(userId: string, code: string): Promise<any | null> {
+  static async getOTP(userId: string, code: string): Promise<RedisOTPData | null> {
     const key = REDIS_KEYS.MFA_OTP(userId, code)
     const data = await redis.get(key)
     if (!data) return null
@@ -161,13 +179,13 @@ export class RedisMFA {
     // Handle different data types from Upstash Redis
     if (typeof data === 'string') {
       try {
-        return JSON.parse(data)
+        return JSON.parse(data) as RedisOTPData
       } catch (error) {
         console.error('Error parsing OTP data:', error, 'Data:', data)
         return null
       }
     } else if (typeof data === 'object') {
-      return data
+      return data as RedisOTPData
     }
     return null
   }
@@ -263,8 +281,8 @@ export class RedisMFA {
     if (!count) return 0
 
     if (typeof count === 'string') {
-      const parsed = parseInt(count)
-      return isNaN(parsed) ? 0 : parsed
+      const parsed = Number.parseInt(count)
+      return Number.isNaN(parsed) ? 0 : parsed
     } else if (typeof count === 'number') {
       return count
     }

@@ -1,16 +1,15 @@
 #!/usr/bin/env tsx
 
-import { createHash } from "crypto"
-import { existsSync, readFileSync } from "fs"
-import { resolve } from "path"
+import { createHash } from "node:crypto"
+import { existsSync,readFileSync } from "node:fs"
+import { resolve } from "node:path"
 import type { PoolClient } from "pg"
 import * as dotenv from "dotenv"
 import {
   KE_PRODUCT_CODE_MIGRATION as CONFIG,
   buildKeProductCodeMappingPayload,
   expectedKeProductCode,
-  sha256Json,
-  type KeProductCodeMapping,
+  sha256Json
 } from "../lib/legacy-import/ke-product-codes"
 
 dotenv.config({ path: ".env.local", quiet: true })
@@ -36,7 +35,7 @@ function number(value: unknown): number {
 }
 
 function normalized<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T
+  return structuredClone(value)
 }
 
 function assertRowsEqual(section: string, expectedValue: unknown[], actualValue: unknown[]): void {

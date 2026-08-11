@@ -1,20 +1,19 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState,useMemo } from "react"
 import useSWR from "swr"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card,CardContent,CardHeader,CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from "@/components/ui/table"
+import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { formatPKR } from "@/lib/utils"
-import { Search, Package, Building2, Loader2, Power, ToggleLeft } from "lucide-react"
+import { Search,Package,Loader2,ToggleLeft } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { useAppContext } from "@/components/context/app-context"
 
-import { fetcher, apiFetch } from "@/lib/fetcher"
+import { fetcher,apiFetch } from "@/lib/fetcher"
 
 type OrgProduct = {
     id: number
@@ -65,7 +64,7 @@ export default function ProductStatusPage() {
             (p) =>
                 p.productName.toLowerCase().includes(q) ||
                 p.productCode.toLowerCase().includes(q) ||
-                (p.customName && p.customName.toLowerCase().includes(q))
+                (p.customName?.toLowerCase().includes(q))
         )
     }, [orgProducts, searchQuery])
 
@@ -212,7 +211,9 @@ export default function ProductStatusPage() {
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                    {isLoading ? (
+                                    {(() => {
+                                      if (isLoading) {
+                                        return (
                                         <TableRow>
                                             <TableCell colSpan={4} className="py-10 text-center text-sm text-muted-foreground">
                                                 <div className="flex items-center justify-center gap-2">
@@ -221,19 +222,29 @@ export default function ProductStatusPage() {
                                                 </div>
                                             </TableCell>
                                         </TableRow>
-                                    ) : filteredProducts.length === 0 ? (
+                                    )
+                                      }
+                                      if (filteredProducts.length === 0) {
+                                        return (
                                         <TableRow>
                                             <TableCell colSpan={4} className="py-10 text-center text-sm text-muted-foreground">
-                                                {hasSearchQuery
-                                                    ? "No products match your search."
-                                                    : statusFilter === "active"
-                                                        ? "No active products."
-                                                        : statusFilter === "inactive"
-                                                            ? "No inactive products."
-                                                            : "No products found."}
+                                                {(() => {
+                                                  if (hasSearchQuery) {
+                                                    return "No products match your search."
+                                                  }
+                                                  if (statusFilter === "active") {
+                                                    return "No active products."
+                                                  }
+                                                  if (statusFilter === "inactive") {
+                                                    return "No inactive products."
+                                                  }
+                                                  return "No products found."
+                                                })()}
                                             </TableCell>
                                         </TableRow>
-                                    ) : (
+                                    )
+                                      }
+                                      return (
                                         filteredProducts.map((product) => (
                                             <TableRow
                                                 key={product.id}
@@ -277,18 +288,24 @@ export default function ProductStatusPage() {
                                                             checked={product.isActive}
                                                             onCheckedChange={() => handleToggleStatus(product)}
                                                         />
-                                                        {togglingId === product.id ? (
+                                                        {(() => {
+                                                          if (togglingId === product.id) {
+                                                            return (
                                                             <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
-                                                        ) : (
+                                                        )
+                                                          }
+                                                          return (
                                                             <span className={`text-xs font-semibold ${product.isActive ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"}`}>
                                                                 {product.isActive ? "Active" : "Inactive"}
                                                             </span>
-                                                        )}
+                                                        )
+                                                        })()}
                                                     </div>
                                                 </TableCell>
                                             </TableRow>
                                         ))
-                                    )}
+                                    )
+                                    })()}
                                 </TableBody>
                             </Table>
                         </div>

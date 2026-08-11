@@ -1,5 +1,6 @@
-import { readFileSync } from "fs"
-import { basename, relative, resolve } from "path"
+import { stringifyPrimitive } from "../lib/stringify-primitive"
+import { readFileSync } from "node:fs"
+import { basename, relative, resolve } from "node:path"
 import * as XLSX from "xlsx"
 
 type JsonRow = Record<string, unknown>
@@ -51,7 +52,7 @@ function readExcelRows(path: string): JsonRow[] {
 }
 
 function normalizeText(value: unknown): string {
-  return String(value ?? "")
+  return stringifyPrimitive(value)
     .normalize("NFKC")
     .replace(/[\u2018\u2019]/g, "'")
     .replace(/[\u2013\u2014]/g, "-")
@@ -61,7 +62,8 @@ function normalizeText(value: unknown): string {
 }
 
 function normalizeUser(value: unknown): string {
-  return normalizeText(value).replace(/\s+-\s*$/, "").trim()
+  const normalized = normalizeText(value)
+  return normalized.endsWith(" -") ? normalized.slice(0, -2).trim() : normalized
 }
 
 function normalizeBranch(value: unknown): string {
@@ -71,23 +73,27 @@ function normalizeBranch(value: unknown): string {
 
 function normalizeItem(value: unknown): string {
   return normalizeText(value)
-    .replace(/\s*\(\s*/g, " (")
-    .replace(/\s*\)\s*/g, ")")
-    .replace(/\s*-\s*/g, "-")
+    .replaceAll(" (", "(")
+    .replaceAll("( ", "(")
+    .replaceAll("(", " (")
+    .replaceAll(" )", ")")
+    .replaceAll(") ", ")")
+    .replaceAll(" -", "-")
+    .replaceAll("- ", "-")
 }
 
 function normalizeRegistration(value: unknown): string {
-  return String(value ?? "").replace(/\.0$/, "").trim()
+  return stringifyPrimitive(value).replace(/\.0$/, "").trim()
 }
 
 function dateKey(value: unknown): string {
-  const date = new Date(String(value ?? ""))
+  const date = new Date(stringifyPrimitive(value))
   return Number.isNaN(date.getTime()) ? "" : date.toISOString().slice(0, 10)
 }
 
 function asDate(value: unknown): Date | null {
   if (value === null || value === undefined || value === "") return null
-  const date = new Date(String(value))
+  const date = new Date(stringifyPrimitive(value))
   return Number.isNaN(date.getTime()) ? null : date
 }
 
@@ -98,7 +104,8 @@ function asNumber(value: unknown): number | null {
 }
 
 function uniqueStrings(values: unknown[]): string[] {
-  return [...new Set(values.map((value) => String(value ?? "").trim()).filter(Boolean))].sort()
+  return [...new Set(values.map((value) => stringifyPrimitive(value).trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b))
 }
 
 function indexRowsById(rows: JsonRow[]): Map<number, IndexedRow[]> {
@@ -308,7 +315,7 @@ function autoWidth(rows: JsonRow[], headers: string[]): XLSX.ColInfo[] {
       const value = row[header]
       const text = value instanceof Date
         ? value.toISOString()
-        : String(value ?? "")
+        : stringifyPrimitive(value)
       return Math.max(width, text.length)
     }, header.length)
     return { wch: Math.min(Math.max(maximum + 2, 11), 52) }
@@ -486,11 +493,15 @@ async function main() {
     const currentLines = updatedSalesById.get(id) ?? []
     const oldLines = priorSalesById.get(id) ?? []
     const selectedLines = currentLines.length > 0 ? currentLines : oldLines
-    const lineSource = currentLines.length > 0
-      ? basename(paths.updatedSalesExcel)
-      : oldLines.length > 0
-        ? basename(paths.priorSalesExcel)
-        : "No item lines"
+    const lineSource = (() => {
+      if (currentLines.length > 0) {
+        return basename(paths.updatedSalesExcel)
+      }
+      if (oldLines.length > 0) {
+        return basename(paths.priorSalesExcel)
+      }
+      return "No item lines"
+    })()
 
     for (const selected of selectedLines) {
       const line = selected.row
@@ -657,7 +668,7 @@ async function main() {
       "Prior Sales XLS Rows": excelRowRanges(oldLines.map((line) => line.rowNumber)),
       "Prior Sales Line Count": oldLines.length,
       "GroupWise Candidate Rows": excelRowRanges(relatedItems.flatMap((item) =>
-        String(item["GroupWise XLS Candidate Rows"] ?? "")
+        stringifyPrimitive(item["GroupWise XLS Candidate Rows"])
           .split(", ")
           .flatMap((part) => {
             if (!part) return []
