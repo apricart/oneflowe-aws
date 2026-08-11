@@ -1,3 +1,0 @@
-[mcp_servers.sonarqube]
-command = "sonar.exe"
-args = [ "run", "mcp", "--project", "apricart_oneflowe-aws" ]

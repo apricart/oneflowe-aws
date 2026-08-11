@@ -49,3 +49,7 @@ next-env.d.ts
 /scripts/compare-ke-orders-sheet-to-live.ts
 /scripts/export-ke-receivables-match-source.ts
 /scripts/generate-ke-minimal-remaining-noncancelled-report.ts
+
+# Local Codex/Sonar agent integration
+/.codex/
+/AGENTS.md
