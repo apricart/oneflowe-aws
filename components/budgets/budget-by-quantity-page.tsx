@@ -93,7 +93,7 @@ interface QuantityProductSummary {
 }
 
 const createAllocationLine = (): QuantityAllocationLine => ({
-  id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  id: crypto.randomUUID(),
   productId: "",
   quantity: "",
 })

@@ -5,7 +5,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import { closeSync, openSync, unlinkSync } from 'node:fs'
+import { closeSync, existsSync, openSync, unlinkSync } from 'node:fs'
 import { basename, dirname, resolve } from 'node:path'
 
 import { databaseToolEnv } from '../lib/server/database-tool-env'
@@ -17,6 +17,21 @@ const databaseConfig = {
   database: parsedUrl.pathname.slice(1),
   user: decodeURIComponent(parsedUrl.username),
   password: decodeURIComponent(parsedUrl.password),
+}
+
+const pgDumpCandidates = process.platform === 'win32'
+  ? [
+      'C:\\Program Files\\PostgreSQL\\18\\bin\\pg_dump.exe',
+      'C:\\Program Files\\PostgreSQL\\17\\bin\\pg_dump.exe',
+      'C:\\Program Files\\PostgreSQL\\16\\bin\\pg_dump.exe',
+      'C:\\Program Files\\PostgreSQL\\15\\bin\\pg_dump.exe',
+      'C:\\Program Files\\PostgreSQL\\14\\bin\\pg_dump.exe',
+    ]
+  : ['/usr/bin/pg_dump', '/usr/local/bin/pg_dump', '/opt/homebrew/bin/pg_dump']
+const pgDumpPath = pgDumpCandidates.find(existsSync)
+
+if (!pgDumpPath) {
+  throw new Error('pg_dump was not found in a trusted installation directory.')
 }
 
 const outputFile =
@@ -40,7 +55,7 @@ console.log(`Output: ${outputPath}`)
 try {
   const outputFd = openSync(outputPath, 'wx', 0o600)
   const result = spawnSync(
-    'pg_dump',
+    pgDumpPath,
     [
       `--host=${databaseConfig.host}`,
       `--port=${databaseConfig.port}`,

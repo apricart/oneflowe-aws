@@ -558,7 +558,7 @@ async function main() {
   await mkdir(OUTPUT_DIR, { recursive: true })
   const output = path.join(OUTPUT_DIR, `ke-legacy-source-live-audit-${RUN_DATE}.json`)
   await writeFile(output, `${JSON.stringify(report, null, 2)}\n`, "utf8")
-  console.log(JSON.stringify({
+  console.log({
     output,
     safety: report.safety,
     auth: { success: auth.success, accountId: auth.accountId, company: auth.company },
@@ -568,7 +568,7 @@ async function main() {
       nonEmptyLocations: value.nonEmptyLocations,
       errors: value.errorLocations,
     }])),
-  }, null, 2))
+  })
 }
 
 main().catch((error) => {
