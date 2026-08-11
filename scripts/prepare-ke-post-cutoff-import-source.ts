@@ -242,7 +242,7 @@ async function main() {
   }
   const digest = sha256(canonicalJson(sourceManifest))
   writeJson(resolve(options.outputRoot, "source-manifest.json"), { ...sourceManifest, digest })
-  console.log(JSON.stringify({ outputRoot: options.outputRoot, digest, counts: sourceManifest.counts, totalsCents: sourceManifest.totalsCents }, null, 2))
+  console.log({ outputRoot: options.outputRoot, digest, counts: sourceManifest.counts, totalsCents: sourceManifest.totalsCents })
 }
 
 main().catch((error) => {

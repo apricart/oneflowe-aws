@@ -1,4 +1,5 @@
 import { mkdir, writeFile } from "node:fs/promises"
+import { randomInt } from "node:crypto"
 import { dirname, resolve } from "node:path"
 import { performance } from "node:perf_hooks"
 
@@ -118,15 +119,15 @@ function sleep(ms) {
 }
 
 function randomInteger(min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min
+  return min === max ? min : randomInt(min, max + 1)
 }
 
 function pickWeighted(items) {
   const totalWeight = items.reduce((sum, item) => sum + item.weight, 0)
-  let cursor = Math.random() * totalWeight
+  let cursor = randomInt(totalWeight)
   for (const item of items) {
+    if (cursor < item.weight) return item
     cursor -= item.weight
-    if (cursor <= 0) return item
   }
   return items[items.length - 1]
 }
