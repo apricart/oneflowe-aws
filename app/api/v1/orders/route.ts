@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { createHash } from "node:crypto"
+import { createHash, randomBytes } from "node:crypto"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
@@ -26,9 +26,9 @@ import { getOrderStatusesForFilter, getOrderStatusFilter } from "@/lib/order-sta
 
 
 function generateTid(): string {
-  // Simple ULID-like: timestamp base36 + random base36
+  // Simple ULID-like: timestamp base36 + cryptographically secure random hex
   const ts = Date.now().toString(36)
-  const rand = Math.random().toString(36).slice(2, 10)
+  const rand = randomBytes(8).toString("hex")
   return (ts + rand).slice(0, 26)
 }
 

@@ -229,7 +229,7 @@ export function EmployeeCredentialsManager() {
                     size="icon"
                     variant="outline"
                     onClick={() => {
-                      const pwd = Math.random().toString(36).slice(-12)
+                      const pwd = crypto.randomUUID().replace(/-/g, "").slice(0, 16)
                       setFormData({ ...formData, password: pwd })
                       copyPassword(pwd)
                     }}
