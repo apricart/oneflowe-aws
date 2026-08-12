@@ -97,7 +97,8 @@ async function validateSessionAgainstDatabase(session: any, token: any): Promise
     const tokenSessionVersion = typeof token.sessionVersion === "number" ? token.sessionVersion : null
     const cachedValidation = await getSessionValidationCache(userId)
     if (
-      cachedValidation?.sv === tokenSessionVersion &&
+      cachedValidation &&
+      cachedValidation.sv === tokenSessionVersion &&
       cachedValidation.org === tokenOrgId &&
       cachedValidation.br === tokenBranchId
     ) {

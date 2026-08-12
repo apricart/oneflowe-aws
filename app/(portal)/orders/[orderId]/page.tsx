@@ -181,7 +181,7 @@ export default function SuperAdminOrderDetailsPage() {
             <p className="text-xs tracking-[0.2em] text-slate-500 dark:text-slate-400 font-bold mb-1">{roleLabel} · ORDERS</p>
             <h1 className="text-3xl font-semibold text-slate-900 dark:text-white">Order overview</h1>
             <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
-              Watch approvals, fulfillment, and refund indicators for order #{rawId}.
+              Watch approvals, fulfillment, and refund indicators for order #{params.orderId}.
             </p>
           </div>
           <div className="flex gap-2">

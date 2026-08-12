@@ -242,7 +242,7 @@ function addImportFieldIssues(options: {
   rowNumber: number
   email: string
   username: string
-  role: UserImportRole | null
+  role: ImportableUserRole | null
   rawRole: string
   branchSource: string
   firstName: string

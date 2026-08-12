@@ -19,13 +19,22 @@ import { Button, buttonVariants } from '@/components/ui/button'
 
 export const CALENDAR_DROPDOWN_LAYER_ATTR = 'data-calendar-dropdown-layer'
 
-type DayPickerComponents = NonNullable<React.ComponentProps<typeof DayPicker>['components']>
+type CalendarChevronProps = {
+  className?: string
+  size?: number
+  disabled?: boolean
+  orientation?: 'left' | 'right' | 'up' | 'down'
+}
 
-function CalendarRoot({ className, rootRef, ...props }: React.ComponentProps<DayPickerComponents['Root']>) {
+function CalendarRoot({
+  className,
+  rootRef,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement> & { rootRef?: React.Ref<HTMLDivElement> }) {
   return <div data-slot="calendar" ref={rootRef} className={cn(className)} {...props} />
 }
 
-function CalendarChevron({ className, orientation, ...props }: React.ComponentProps<DayPickerComponents['Chevron']>) {
+function CalendarChevron({ className, orientation, ...props }: CalendarChevronProps) {
   if (orientation === 'left') {
     return <ChevronLeftIcon className={cn('size-4', className)} {...props} />
   }
@@ -37,7 +46,7 @@ function CalendarChevron({ className, orientation, ...props }: React.ComponentPr
   return <ChevronDownIcon className={cn('size-4', className)} {...props} />
 }
 
-function CalendarWeekNumber({ children, ...props }: React.ComponentProps<DayPickerComponents['WeekNumber']>) {
+function CalendarWeekNumber({ children, ...props }: React.TdHTMLAttributes<HTMLTableCellElement>) {
   return (
     <td {...props}>
       <div className="flex size-(--cell-size) items-center justify-center text-center">
