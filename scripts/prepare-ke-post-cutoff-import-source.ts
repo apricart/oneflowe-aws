@@ -1,12 +1,13 @@
 #!/usr/bin/env tsx
+import { stringifyPrimitive } from "../lib/stringify-primitive"
 /**
  * Captures an immutable, self-validating source snapshot for K-Electric orders
  * created strictly after 2026-07-10. This script is read-only with respect to
  * both applications; it writes JSON evidence only beneath --output-root.
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from "fs"
-import { basename, resolve } from "path"
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { basename, resolve } from "node:path"
 import * as XLSX from "xlsx"
 import {
   KE_POST_CUTOFF_DATE,
@@ -46,7 +47,7 @@ interface Options {
 function parseOptions(): Options {
   const values = new Map<string, string>()
   for (const argument of process.argv.slice(2)) {
-    const match = argument.match(/^--([^=]+)=(.*)$/)
+    const match = /^--([^=]+)=(.*)$/.exec(argument)
     if (!match) throw new Error(`Unknown argument ${argument}; arguments must use --name=value`)
     values.set(match[1], match[2])
   }
@@ -61,14 +62,14 @@ function parseOptions(): Options {
 
 function toDay(value: SheetRow["Date"]): string {
   const date = value instanceof Date ? value : new Date(value)
-  if (Number.isNaN(date.getTime())) throw new Error(`Invalid sheet date ${String(value)}`)
+  if (Number.isNaN(date.getTime())) throw new Error(`Invalid sheet date ${stringifyPrimitive(value)}`)
   return date.toISOString().slice(0, 10)
 }
 
 function moneyKey(value: unknown): string {
   if (value == null || value === "") return "null"
   const number = Number(value)
-  if (!Number.isFinite(number)) throw new Error(`Invalid sheet/list total ${String(value)}`)
+  if (!Number.isFinite(number)) throw new Error(`Invalid sheet/list total ${stringifyPrimitive(value)}`)
   return String(Math.round(number * 100))
 }
 
@@ -82,7 +83,15 @@ function sheetKey(row: SheetRow): string {
     toDay(row.Date),
     normalizeLegacyText(row.UserDetails),
     normalizeLegacyText(row.LocationGroup),
-    status === "cancelled" ? "cancelled-total-ignored" : status === "order placed" && ["null", "0"].includes(total) ? "missing-total" : total,
+    (() => {
+      if (status === "cancelled") {
+        return "cancelled-total-ignored"
+      }
+      if (status === "order placed" && ["null", "0"].includes(total)) {
+        return "missing-total"
+      }
+      return total
+    })(),
     normalizeLegacyText(row.OrderType),
     status,
   ].join("|")
@@ -98,7 +107,15 @@ function listKey(row: LegacyOrderListRow): string {
     String(row.OrderCreatedDT).slice(0, 10),
     normalizeLegacyText(row.UserDetails),
     normalizeLegacyText(row.LocationGroup),
-    status === "cancelled" ? "cancelled-total-ignored" : status === "order placed" && ["null", "0"].includes(total) ? "missing-total" : total,
+    (() => {
+      if (status === "cancelled") {
+        return "cancelled-total-ignored"
+      }
+      if (status === "order placed" && ["null", "0"].includes(total)) {
+        return "missing-total"
+      }
+      return total
+    })(),
     normalizeLegacyText(row.OrderType),
     status,
   ].join("|")

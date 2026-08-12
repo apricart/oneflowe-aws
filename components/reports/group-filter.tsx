@@ -22,8 +22,13 @@ interface GroupFilterProps {
     disabled?: boolean
 }
 
-export function GroupFilter({ selectedIds, onChange, organizationId, organizationIds, placeholder = "Select Groups", disabled = false }: GroupFilterProps) {
-    const orgsQuery = organizationIds?.length ? organizationIds.join(",") : (organizationId ? String(organizationId) : undefined)
+export function GroupFilter({ selectedIds, onChange, organizationId, organizationIds, placeholder = "Select Groups", disabled = false }: Readonly<GroupFilterProps>) {
+    const orgsQuery = (() => {
+      if (organizationIds?.length) {
+        return organizationIds.join(",")
+      }
+      return (organizationId ? String(organizationId) : undefined)
+    })()
     const { data } = useSWR(
         orgsQuery ? `/api/v1/groups?organizationId=${orgsQuery}` : "/api/v1/groups",
         fetcher

@@ -1,3 +1,4 @@
+import { stringifyPrimitive } from "./stringify-primitive"
 const DANGEROUS_SPREADSHEET_PREFIX = /^[\u0000-\u0020]*[=+\-@]/
 
 /**
@@ -27,7 +28,7 @@ export function sanitizeSpreadsheetRecords<T extends Record<string, unknown>>(re
 }
 
 export function csvCell(value: unknown): string {
-  const safeValue = String(neutralizeSpreadsheetFormula(value ?? ""))
+  const safeValue = stringifyPrimitive(neutralizeSpreadsheetFormula(value ?? ""))
   return `"${safeValue.replace(/"/g, '""')}"`
 }
 

@@ -1,16 +1,16 @@
 "use client"
 
-import { useState, useMemo, useEffect } from "react"
+import { useState,useMemo,useEffect } from "react"
 import useSWR from "swr"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card,CardContent,CardHeader,CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from "@/components/ui/table"
+import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
 import { formatPKR } from "@/lib/utils"
-import { Search, Package, Plus, Building2, GitBranch, Users, Loader2, CheckCircle2 } from "lucide-react"
+import { Search,Package,Building2,GitBranch,Users,Loader2,CheckCircle2 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { useAppContext } from "@/components/context/app-context"
 
@@ -195,8 +195,8 @@ export default function AssignToBranchPage() {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     organizationInventoryIds: selectedProducts,
-                    groupId: parseInt(selectedGroup),
-                    organizationId: parseInt(selectedOrgId as string),
+                    groupId: Number.parseInt(selectedGroup),
+                    organizationId: Number.parseInt(selectedOrgId as string),
                 }),
             })
 
@@ -376,7 +376,7 @@ export default function AssignToBranchPage() {
                                         <TableHead className="w-12">
                                             <Checkbox
                                                 checked={
-                                                    filteredProducts.filter(p => !alreadyAssignedIds.has(p.id)).length > 0 &&
+                                                    filteredProducts.some(p => !alreadyAssignedIds.has(p.id)) &&
                                                     selectedProducts.length === filteredProducts.filter(p => !alreadyAssignedIds.has(p.id)).length
                                                 }
                                                 onCheckedChange={handleSelectAllNew}
@@ -391,7 +391,9 @@ export default function AssignToBranchPage() {
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                    {isLoading || loadingAssignments ? (
+                                    {(() => {
+                                      if (isLoading || loadingAssignments) {
+                                        return (
                                         <TableRow>
                                             <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
                                                 <div className="flex items-center justify-center gap-2">
@@ -400,7 +402,10 @@ export default function AssignToBranchPage() {
                                                 </div>
                                             </TableCell>
                                         </TableRow>
-                                    ) : filteredProducts.length === 0 ? (
+                                    )
+                                      }
+                                      if (filteredProducts.length === 0) {
+                                        return (
                                         <TableRow>
                                             <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
                                                 {orgProducts.length === 0
@@ -408,7 +413,9 @@ export default function AssignToBranchPage() {
                                                     : "No products match your search."}
                                             </TableCell>
                                         </TableRow>
-                                    ) : (
+                                    )
+                                      }
+                                      return (
                                         filteredProducts.map((product) => {
                                             const isAssigned = alreadyAssignedIds.has(product.id)
                                             const isSelected = selectedProducts.includes(product.id)
@@ -416,11 +423,15 @@ export default function AssignToBranchPage() {
                                             return (
                                                 <TableRow
                                                     key={product.id}
-                                                    className={`cursor-pointer transition-colors ${isAssigned
-                                                        ? "bg-emerald-50/60 dark:bg-emerald-950/20 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
-                                                        : isSelected
-                                                            ? "bg-blue-50/50 dark:bg-blue-950/20"
-                                                            : "hover:bg-muted/40"
+                                                    className={`cursor-pointer transition-colors ${(() => {
+                                                      if (isAssigned) {
+                                                        return "bg-emerald-50/60 dark:bg-emerald-950/20 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
+                                                      }
+                                                      if (isSelected) {
+                                                        return "bg-blue-50/50 dark:bg-blue-950/20"
+                                                      }
+                                                      return "hover:bg-muted/40"
+                                                    })()
                                                         }`}
                                                     onClick={() => handleProductToggle(product.id)}
                                                 >
@@ -473,7 +484,8 @@ export default function AssignToBranchPage() {
                                                 </TableRow>
                                             )
                                         })
-                                    )}
+                                    )
+                                    })()}
                                 </TableBody>
                             </Table>
                         </div>
@@ -481,9 +493,12 @@ export default function AssignToBranchPage() {
                         {/* Assign button bar */}
                         <div className="mt-6 flex items-center justify-between border-t pt-4">
                             <p className="text-sm text-muted-foreground">
-                                {newProductsCount > 0
-                                    ? `${newProductsCount} new product${newProductsCount !== 1 ? "s" : ""} selected to assign`
-                                    : "Select products to assign to this group's branches"}
+                                {(() => {
+                                  if (newProductsCount > 0) {
+                                    return `${newProductsCount} new product${newProductsCount !== 1 ? "s" : ""} selected to assign`
+                                  }
+                                  return "Select products to assign to this group's branches"
+                                })()}
                             </p>
                             <Button
                                 onClick={handleAssign}

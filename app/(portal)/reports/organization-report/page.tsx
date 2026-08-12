@@ -1,88 +1,75 @@
 "use client"
 
-import { useState, useMemo } from "react"
-import useSWR from "swr"
 import { useAppContext } from "@/components/context/app-context"
-import { fetcher } from "@/lib/fetcher"
-import { formatPKR, cn } from "@/lib/utils"
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from "@/components/ui/table"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { GlobalDateFilter, FilterPreset } from "@/components/dashboard/global-date-filter"
+import { type FilterPreset,GlobalDateFilter,type GlobalDateFilterChange } from "@/components/dashboard/global-date-filter"
 import { BranchFilter } from "@/components/reports/branch-filter"
 import { GroupFilter } from "@/components/reports/group-filter"
-import { DateRange } from "@/lib/hooks/use-sales-performance"
-import { startOfMonth, endOfMonth, startOfDay, endOfDay } from "date-fns"
-import { Badge } from "@/components/ui/badge"
-import {
-    ResponsiveContainer,
-    ComposedChart,
-    Bar,
-    XAxis,
-    YAxis,
-    CartesianGrid,
-    Tooltip,
-    Legend,
-    Cell,
-    Line
-} from "recharts"
-import {
-    Building2,
-    Users,
-    TrendingUp,
-    RefreshCw,
-    CheckCircle2,
-    RotateCcw,
-    BarChart3,
-    ListOrdered,
-    LayoutDashboard,
-    LayoutGrid,
-    Database,
-    Search,
-    FileSpreadsheet,
-    FileText,
-    Upload,
-    Download,
-    Calculator,
-    Package,
-    ShoppingBag,
-    Calendar,
-    Hash,
-    Store,
-    Layers,
-    ChevronRight,
-    ArrowUpRight,
-    ArrowDownRight,
-    MoreHorizontal,
-    Table as TableIcon,
-    LineChart as LineChartIcon,
-    PieChart as PieChartIcon
-} from "lucide-react"
 import { KPICard } from "@/components/reports/kpi-card"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import {
-    DropdownMenu,
-    DropdownMenuContent,
-    DropdownMenuItem,
-    DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 import { MultiSelectFilter } from "@/components/reports/multi-select-filter"
-import { Input } from "@/components/ui/input"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { useSession } from "next-auth/react"
-import { useRouter, useSearchParams, usePathname } from "next/navigation"
-import { useCallback, useEffect, useRef } from "react"
+import { Card,CardContent,CardHeader,CardTitle } from "@/components/ui/card"
+import {
+DropdownMenu,
+DropdownMenuContent,
+DropdownMenuItem,
+DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Input } from "@/components/ui/input"
+import {
+Table,
+TableBody,
+TableCell,
+TableHead,
+TableHeader,
+TableRow,
+} from "@/components/ui/table"
+import { Tabs,TabsContent,TabsList,TabsTrigger } from "@/components/ui/tabs"
+import { fetcher } from "@/lib/fetcher"
+import { DateRange } from "@/lib/hooks/use-sales-performance"
+import { resolveOrganizationReportScope } from "@/lib/organization-report-scope"
+import { sanitizeSpreadsheetRow } from "@/lib/spreadsheet"
+import { cn,formatPKR } from "@/lib/utils"
+import { endOfMonth,startOfMonth } from "date-fns"
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
+import {
+ArrowDownRight,
+ArrowUpRight,
+BarChart3,
+Building2,
+Calendar,
+CheckCircle2,
+Database,
+Layers,
+LayoutDashboard,
+LayoutGrid,
+LineChart as LineChartIcon,
+ListOrdered,
+RefreshCw,
+RotateCcw,
+Search,
+ShoppingBag,
+Store,
+TrendingUp,
+Upload,
+Users
+} from "lucide-react"
+import { useSession } from "next-auth/react"
+import { usePathname,useRouter,useSearchParams } from "next/navigation"
+import { useCallback,useEffect,useMemo,useRef,useState } from "react"
+import {
+Bar,
+CartesianGrid,
+ComposedChart,
+Legend,
+ResponsiveContainer,
+Tooltip,
+XAxis,
+YAxis
+} from "recharts"
+import useSWR from "swr"
 import * as XLSX from "xlsx"
-import { sanitizeSpreadsheetRow } from "@/lib/spreadsheet"
-import { resolveOrganizationReportScope } from "@/lib/organization-report-scope"
 
 
 
@@ -154,9 +141,8 @@ export default function OrganizationReportPage() {
     const [compareYears, setCompareYears] = useState<number[]>([])
 
     // Branch/Organization Scope
-    const [selectedOrgIds, setSelectedOrgIds] = useState<string[]>([])
+    const [selectedOrgIds] = useState<string[]>([])
     const [selectedBranchIds, setSelectedBranchIds] = useState<string[]>([])
-    const [statusFilter, setStatusFilter] = useState<string>("all")
 
     // ━━━ TIER 1: GLOBAL SUMMARY DATA ━━━
     // Page-level selections take precedence when present; otherwise inherit the
@@ -226,11 +212,15 @@ export default function OrganizationReportPage() {
 
     // ━━━ SMART SYNC (Global to Local) ━━━
     useEffect(() => {
-        const headerBranchIds = contextBranchIds.length > 0
-            ? contextBranchIds
-            : contextBranchId
-                ? [contextBranchId]
-                : []
+        const headerBranchIds = (() => {
+          if (contextBranchIds.length > 0) {
+            return contextBranchIds
+          }
+          if (contextBranchId) {
+            return [contextBranchId]
+          }
+          return []
+        })()
         const hasGlobalChanged = JSON.stringify(headerBranchIds) !== JSON.stringify(lastSyncedBranchIds.current)
         if (hasGlobalChanged) {
             setChartBranchIds([...headerBranchIds])
@@ -239,9 +229,8 @@ export default function OrganizationReportPage() {
         }
     }, [contextBranchId, contextBranchIds])
 
-    const organizationId = userOrgId || (selectedOrgIds.length === 1 ? selectedOrgIds[0] : null)
 
-    const handleDateChange = useCallback((range: DateRange | null, preset: FilterPreset, c?: boolean, cr?: DateRange | null, m?: number[], y?: number[], cm?: number[], cy?: number[]) => {
+    const handleDateChange = useCallback(({ range, preset, compare: c, compareRange: cr, months: m, years: y, compareMonths: cm, compareYears: cy }: GlobalDateFilterChange) => {
         setDateRange(range)
         setActivePreset(preset)
         if (c !== undefined) setCompare(c)
@@ -289,7 +278,7 @@ export default function OrganizationReportPage() {
             doc.setFontSize(20); doc.text(isBuyer ? "Organization Purchase Ledger" : "Organization Performance Ledger", 14, 20)
             doc.setFontSize(10); doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 28)
             autoTable(doc, { startY: 40, head: [headers], body: rows, theme: 'grid' })
-            doc.save(`organization-report-${new Date().getTime()}.pdf`)
+            doc.save(`organization-report-${Date.now()}.pdf`)
             return
         }
 
@@ -299,18 +288,17 @@ export default function OrganizationReportPage() {
         ])
         const workbook = XLSX.utils.book_new()
         XLSX.utils.book_append_sheet(workbook, worksheet, "Organizations")
-        XLSX.writeFile(workbook, `organization-report-${new Date().getTime()}.${format === 'excel' ? 'xlsx' : 'csv'}`)
+        XLSX.writeFile(workbook, `organization-report-${Date.now()}.${format === 'excel' ? 'xlsx' : 'csv'}`)
     }
 
-    const handleBranchChange = (ids: string[]) => setSelectedBranchIds(ids)
 
     // ━━━ YEAR RANGE CALCULATION ━━━
     const allYears = useMemo(() => {
         const trend = allTimeData?.trend || []
         const years = new Set<number>()
         trend.forEach((t: any) => {
-            const y = parseInt(t.period.split('-')[0])
-            if (!isNaN(y)) years.add(y)
+            const y = Number.parseInt(t.period.split('-')[0])
+            if (!Number.isNaN(y)) years.add(y)
         })
         if (years.size === 0) years.add(new Date().getFullYear())
         return Array.from(years).sort((a, b = a) => b - a)
@@ -489,7 +477,12 @@ export default function OrganizationReportPage() {
                         value={formatPKR(summary.revenue)}
                         icon={TrendingUp}
                         colorScheme="indigo"
-                        trend={revenueTrend?.value ? Number(revenueTrend.value) * (revenueTrend.isUp ? 1 : -1) : undefined}
+                        trend={(() => {
+                          if (revenueTrend?.value) {
+                            return Number(revenueTrend.value) * (revenueTrend.isUp ? 1 : -1)
+                          }
+                          return undefined
+                        })()}
                         subtitle={isBuyer ? "Consolidated net purchases" : "Consolidated net revenue"}
                         comparisonLabel="Prior Period"
                         comparisonValue={compare ? formatPKR(comparisonSummary.revenue) : undefined}
@@ -500,7 +493,12 @@ export default function OrganizationReportPage() {
                         value={summary.orders.toLocaleString()}
                         icon={ShoppingBag}
                         colorScheme="blue"
-                        trend={orderTrend?.value ? Number(orderTrend.value) * (orderTrend.isUp ? 1 : -1) : undefined}
+                        trend={(() => {
+                          if (orderTrend?.value) {
+                            return Number(orderTrend.value) * (orderTrend.isUp ? 1 : -1)
+                          }
+                          return undefined
+                        })()}
                         subtitle="Completed transactions"
                         comparisonLabel="Prior Period"
                         comparisonValue={compare ? comparisonSummary.orders.toLocaleString() : undefined}
@@ -606,12 +604,17 @@ export default function OrganizationReportPage() {
                             </div>
 
                             <CardContent className="p-8">
-                                {isChartLoading ? (
+                                {(() => {
+                                  if (isChartLoading) {
+                                    return (
                                     <div className="h-[450px] flex flex-col items-center justify-center gap-4">
                                         <div className="h-10 w-10 border-4 border-indigo-500/20 border-t-indigo-500 rounded-full animate-spin" />
                                         <p className="text-[10px] font-black uppercase text-slate-400 animate-pulse">Synchronizing Analytics...</p>
                                     </div>
-                                ) : !normalizedTrend.length ? (
+                                )
+                                  }
+                                  if (!normalizedTrend.length) {
+                                    return (
                                     <div className="h-[450px] flex flex-col items-center justify-center gap-4 text-center">
                                         <div className="h-14 w-14 rounded-2xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
                                             <BarChart3 className="h-7 w-7 text-slate-300 dark:text-slate-600" />
@@ -623,7 +626,9 @@ export default function OrganizationReportPage() {
                                             </p>
                                         </div>
                                     </div>
-                                ) : (
+                                )
+                                  }
+                                  return (
                                     <div className="h-[450px] w-full">
                                         <ResponsiveContainer width="100%" height="100%">
                                             <ComposedChart data={normalizedTrend} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
@@ -648,37 +653,7 @@ export default function OrganizationReportPage() {
                                                     tickFormatter={(v) => `₨${v >= 1000 ? (v / 1000).toFixed(0) + 'K' : v}`}
                                                 />
                                                 <Tooltip
-                                                    content={({ active, payload, label }: any) => {
-                                                        if (active && payload && payload.length) {
-                                                            const d = payload[0].payload;
-                                                            return (
-                                                                <div className="bg-white dark:bg-slate-900/95 p-4 border border-slate-200 dark:border-slate-800 shadow-2xl rounded-2xl backdrop-blur-xl">
-                                                                    <p className="text-[10px] font-black uppercase text-slate-400 mb-3 tracking-[0.2em]">{label}</p>
-                                                                    <div className="space-y-3">
-                                                                        <div className="flex items-center justify-between gap-10">
-                                                                            <span className="text-xs font-bold text-slate-600 dark:text-slate-400 flex items-center gap-2">
-                                                                                <div className="h-2 w-2 rounded-full bg-indigo-500" /> {isBuyer ? "Total Purchase" : "Net Revenue"}
-                                                                            </span>
-                                                                            <span className="text-xs font-black text-slate-900 dark:text-white">{formatPKR(payload[0].value as number)}</span>
-                                                                        </div>
-                                                                        {compare && (
-                                                                            <div className="flex items-center justify-between gap-10">
-                                                                                <span className="text-xs font-bold text-slate-600 dark:text-slate-400 flex items-center gap-2">
-                                                                                    <div className="h-2 w-2 rounded-full bg-slate-300 dark:bg-slate-600" /> {isBuyer ? "Prior Purchase" : "Prior Revenue"}
-                                                                                </span>
-                                                                                <span className="text-xs font-black text-slate-500">{formatPKR(d.prevRevenue)}</span>
-                                                                            </div>
-                                                                        )}
-                                                                        <div className="pt-2 mt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
-                                                                            <span className="text-[10px] font-black text-slate-400 uppercase">Orders</span>
-                                                                            <span className="text-xs font-black text-indigo-600">{d.orders}</span>
-                                                                        </div>
-                                                                    </div>
-                                                                </div>
-                                                            )
-                                                        }
-                                                        return null;
-                                                    }}
+                                                    content={<OrganizationTrendTooltip compare={compare} isBuyer={isBuyer} />}
                                                 />
                                                 <Legend
                                                     verticalAlign="top"
@@ -693,7 +668,8 @@ export default function OrganizationReportPage() {
                                             </ComposedChart>
                                         </ResponsiveContainer>
                                     </div>
-                                )}
+                                )
+                                })()}
                             </CardContent>
                         </Card>
 
@@ -723,10 +699,18 @@ export default function OrganizationReportPage() {
                                                     <div className="flex items-center gap-4">
                                                         <div className={cn(
                                                             "h-10 w-10 rounded-2xl flex items-center justify-center font-black text-sm shadow-sm",
-                                                            idx === 0 ? "bg-amber-100 text-amber-600 dark:bg-amber-500/20" :
-                                                                idx === 1 ? "bg-slate-200 text-slate-500 dark:bg-slate-700" :
-                                                                    idx === 2 ? "bg-orange-100 text-orange-600 dark:bg-orange-500/20" :
-                                                                        "bg-indigo-50 text-indigo-500 dark:bg-indigo-500/10"
+                                                            (() => {
+                                                              if (idx === 0) {
+                                                                return "bg-amber-100 text-amber-600 dark:bg-amber-500/20"
+                                                              }
+                                                              if (idx === 1) {
+                                                                return "bg-slate-200 text-slate-500 dark:bg-slate-700"
+                                                              }
+                                                              if (idx === 2) {
+                                                                return "bg-orange-100 text-orange-600 dark:bg-orange-500/20"
+                                                              }
+                                                              return "bg-indigo-50 text-indigo-500 dark:bg-indigo-500/10"
+                                                            })()
                                                         )}>
                                                             #{idx + 1}
                                                         </div>
@@ -830,10 +814,10 @@ export default function OrganizationReportPage() {
                                 value={dateRange}
                                 activePreset={activePreset}
                                 customRangeOnly
-                                onChange={(range, preset, nextCompare, nextCompareRange, months, years, nextCompareMonths, nextCompareYears) => {
-                                    handleDateChange(range, preset, nextCompare, nextCompareRange, months, years, nextCompareMonths, nextCompareYears)
-                                    setReportMonths(months ?? [])
-                                    setReportYears(years ?? [])
+                                onChange={(change) => {
+                                    handleDateChange(change)
+                                    setReportMonths(change.months ?? [])
+                                    setReportYears(change.years ?? [])
                                 }}
                                 compare={compare}
                                 compareRange={compareRange}
@@ -943,13 +927,18 @@ export default function OrganizationReportPage() {
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
-                                        {isReportLoading ? (
-                                            Array(6).fill(0).map((_, i) => (
-                                                <TableRow key={i} className="h-20 animate-pulse border-b border-slate-50 dark:border-slate-900">
+                                        {(() => {
+                                          if (isReportLoading) {
+                                            return (
+                                            Array.from({ length: 6 }, (_, position) => `organization-report-loading-${position + 1}`).map((skeletonKey) => (
+                                                <TableRow key={skeletonKey} className="h-20 animate-pulse border-b border-slate-50 dark:border-slate-900">
                                                     <TableCell colSpan={7}><div className="h-10 bg-slate-50 dark:bg-slate-900/50 rounded-xl mx-4" /></TableCell>
                                                 </TableRow>
                                             ))
-                                        ) : filteredStats.length === 0 ? (
+                                        )
+                                          }
+                                          if (filteredStats.length === 0) {
+                                            return (
                                             <TableRow>
                                                 <TableCell colSpan={7} className="h-60 text-center">
                                                     <div className="flex flex-col items-center gap-4 opacity-30">
@@ -958,7 +947,9 @@ export default function OrganizationReportPage() {
                                                     </div>
                                                 </TableCell>
                                             </TableRow>
-                                        ) : (
+                                        )
+                                          }
+                                          return (
                                             filteredStats.map((org: any) => (
                                                 <TableRow key={org.organizationId} className="group hover:bg-slate-50/80 dark:hover:bg-slate-900/40 border-b border-slate-50 dark:border-slate-900 transition-all duration-200 h-20">
                                                     <TableCell className="pl-8">
@@ -968,7 +959,15 @@ export default function OrganizationReportPage() {
                                                         </div>
                                                     </TableCell>
                                                     <TableCell className="text-center font-black">
-                                                        <Badge variant="outline" className={cn("text-[10px] font-black uppercase tracking-widest", org.organizationStatus === "active" ? "bg-emerald-50 text-emerald-600 border-emerald-200" : org.organizationStatus === "deleted" ? "bg-rose-50 text-rose-600 border-rose-200" : "bg-amber-50 text-amber-600 border-amber-200")}>
+                                                        <Badge variant="outline" className={cn("text-[10px] font-black uppercase tracking-widest", (() => {
+                                                          if (org.organizationStatus === "active") {
+                                                            return "bg-emerald-50 text-emerald-600 border-emerald-200"
+                                                          }
+                                                          if (org.organizationStatus === "deleted") {
+                                                            return "bg-rose-50 text-rose-600 border-rose-200"
+                                                          }
+                                                          return "bg-amber-50 text-amber-600 border-amber-200"
+                                                        })())}>
                                                             {org.organizationStatus || "Unknown"}
                                                         </Badge>
                                                     </TableCell>
@@ -1026,13 +1025,19 @@ export default function OrganizationReportPage() {
                                                     </TableCell>
                                                 </TableRow>
                                             ))
-                                        )}
+                                        )
+                                        })()}
                                     </TableBody>
                                 </Table>
                             </CardContent>
                             <div className="px-8 py-5 border-t border-slate-100 dark:border-slate-900 bg-slate-50/50 dark:bg-slate-900/40 flex items-center justify-between">
                                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                                    {filteredStats.length} {role === "SUPER_ADMIN" ? `organization${filteredStats.length !== 1 ? 's' : ''}` : `record${filteredStats.length !== 1 ? 's' : ''}`} listed
+                                    {filteredStats.length} {(() => {
+                                      if (role === "SUPER_ADMIN") {
+                                        return `organization${filteredStats.length !== 1 ? 's' : ''}`
+                                      }
+                                      return `record${filteredStats.length !== 1 ? 's' : ''}`
+                                    })()} listed
                                 </p>
                                 <p className="text-[10px] font-bold text-slate-300 dark:text-slate-700 font-mono italic" suppressHydrationWarning>
                                     GEN_TS: {generatedDate}
@@ -1048,6 +1053,37 @@ export default function OrganizationReportPage() {
 
 // ━━━ STANDARDIZED COMPONENTS ━━━
 
+
+function OrganizationTrendTooltip({ active, payload, label, compare, isBuyer }: any) {
+    if (!active || !payload?.length) return null
+
+    const data = payload[0].payload
+    return (
+        <div className="bg-white dark:bg-slate-900/95 p-4 border border-slate-200 dark:border-slate-800 shadow-2xl rounded-2xl backdrop-blur-xl">
+            <p className="text-[10px] font-black uppercase text-slate-400 mb-3 tracking-[0.2em]">{label}</p>
+            <div className="space-y-3">
+                <div className="flex items-center justify-between gap-10">
+                    <span className="text-xs font-bold text-slate-600 dark:text-slate-400 flex items-center gap-2">
+                        <div className="h-2 w-2 rounded-full bg-indigo-500" /> {isBuyer ? "Total Purchase" : "Net Revenue"}
+                    </span>
+                    <span className="text-xs font-black text-slate-900 dark:text-white">{formatPKR(payload[0].value as number)}</span>
+                </div>
+                {compare && (
+                    <div className="flex items-center justify-between gap-10">
+                        <span className="text-xs font-bold text-slate-600 dark:text-slate-400 flex items-center gap-2">
+                            <div className="h-2 w-2 rounded-full bg-slate-300 dark:bg-slate-600" /> {isBuyer ? "Prior Purchase" : "Prior Revenue"}
+                        </span>
+                        <span className="text-xs font-black text-slate-500">{formatPKR(data.prevRevenue)}</span>
+                    </div>
+                )}
+                <div className="pt-2 mt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                    <span className="text-[10px] font-black text-slate-400 uppercase">Orders</span>
+                    <span className="text-xs font-black text-indigo-600">{data.orders}</span>
+                </div>
+            </div>
+        </div>
+    )
+}
 
 function OrgFilter({ selectedIds, onChange }: any) {
     const { data: orgs } = useSWR<any>(`/api/v1/organizations`, fetcher)
@@ -1066,7 +1102,7 @@ function OrgFilter({ selectedIds, onChange }: any) {
 }
 
 
-function MonthFilter({ selected, onChange }: { selected: number[], onChange: (v: number[]) => void }) {
+function MonthFilter({ selected, onChange }: Readonly<{ selected: number[], onChange: (v: number[]) => void }>) {
     const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
     const items = months.map((m, i) => ({ id: i + 1, label: m }))
 
@@ -1075,7 +1111,7 @@ function MonthFilter({ selected, onChange }: { selected: number[], onChange: (v:
             title="Months"
             items={items}
             selectedIds={selected}
-            onChange={(ids) => onChange(ids.sort((a, b) => a - b))}
+            onChange={(ids) => onChange(ids.toSorted((a, b) => a - b))}
             icon={<Calendar className="h-3.5 w-3.5 mr-2 text-indigo-500" />}
             placeholder="Months"
             showSearch={false}
@@ -1083,7 +1119,7 @@ function MonthFilter({ selected, onChange }: { selected: number[], onChange: (v:
     )
 }
 
-function YearFilter({ selected, onChange, availableYears }: { selected: number[], onChange: (v: number[]) => void, availableYears: number[] }) {
+function YearFilter({ selected, onChange, availableYears }: Readonly<{ selected: number[], onChange: (v: number[]) => void, availableYears: number[] }>) {
     const items = availableYears.map(y => ({ id: y, label: String(y) }))
 
     return (
@@ -1091,7 +1127,7 @@ function YearFilter({ selected, onChange, availableYears }: { selected: number[]
             title="Years"
             items={items}
             selectedIds={selected}
-            onChange={(ids) => onChange(ids.sort((a, b) => b - a))}
+            onChange={(ids) => onChange(ids.toSorted((a, b) => b - a))}
             icon={<Layers className="h-3.5 w-3.5 mr-2 text-indigo-500" />}
             placeholder="Years"
             showSearch={false}

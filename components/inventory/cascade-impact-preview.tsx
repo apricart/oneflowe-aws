@@ -15,7 +15,7 @@ export function CascadeImpactPreview({
   affectedOrgs,
   affectedBranches,
   className
-}: CascadeImpactPreviewProps) {
+}: Readonly<CascadeImpactPreviewProps>) {
   const getActionDescription = () => {
     switch (type) {
       case "delete":

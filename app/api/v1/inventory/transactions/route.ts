@@ -8,7 +8,6 @@ export async function GET(req: Request) {
   if (err) return err
   const { searchParams } = new URL(req.url)
   const branchId = searchParams.get("branchId")
-  const type = (searchParams.get("type") || undefined) as any
   const limit = Math.min(Math.max(Math.trunc(Number(searchParams.get("limit"))) || 100, 1), 500)
   const where = [
     branchId ? eq(inventory.branchId, Number(branchId)) : undefined,

@@ -15,9 +15,9 @@ export async function GET(req: NextRequest) {
         const groupIdsParam = url.searchParams.get("groupIds")
         const branchIdsParam = url.searchParams.get("branchIds")
 
-        const organizationIds = organizationIdsParam ? organizationIdsParam.split(",").map(Number).filter(n => !isNaN(n)) : []
-        const groupIds = groupIdsParam ? groupIdsParam.split(",").map(Number).filter(n => !isNaN(n)) : []
-        let branchIds = branchIdsParam ? branchIdsParam.split(",").map(Number).filter(n => !isNaN(n)) : []
+        const organizationIds = organizationIdsParam ? organizationIdsParam.split(",").map(Number).filter(n => !Number.isNaN(n)) : []
+        const groupIds = groupIdsParam ? groupIdsParam.split(",").map(Number).filter(n => !Number.isNaN(n)) : []
+        let branchIds = branchIdsParam ? branchIdsParam.split(",").map(Number).filter(n => !Number.isNaN(n)) : []
 
         // If groupIds provided but no branchIds, find all branches in those groups
         if (groupIds.length > 0 && branchIds.length === 0) {
@@ -27,19 +27,7 @@ export async function GET(req: NextRequest) {
             branchIds = groupBranches.map(b => b.id)
         }
 
-        let query = db.select({
-            id: globalProducts.id,
-            name: globalProducts.name,
-            productCode: globalProducts.productCode,
-        }).from(globalProducts)
-
         const conditions: any[] = [isNull(globalProducts.deletedAt)]
-
-        if (branchIds.length > 0) {
-            query = query.innerJoin(branchInventory, eq(branchInventory.organizationInventoryId, globalProducts.id)) as any // Wait, check the join
-            // Actually, branchInventory links to organizationInventory.id, which links to globalProducts.id
-            // Let's re-verify the branchInventory join.
-        }
 
         // Simpler approach: filter by availability if needed, but the user just wants the "Product Names" 
         // that are relevant to the selected context.

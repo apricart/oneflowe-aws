@@ -39,7 +39,7 @@ const isPositiveId = (value: unknown): value is number =>
 
 const parseNumberList = (value: string | null) =>
   value
-    ? value.split(",").map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)
+    ? value.split(",").map(Number).filter((id) => Number.isInteger(id) && id > 0)
     : []
 
 export async function GET(req: NextRequest) {
@@ -74,11 +74,15 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Invalid organization ID" }, { status: 400 })
     }
 
-    const scopedOrganizationId = role === "HEAD_OFFICE"
-      ? userOrgId
-      : Number.isInteger(requestedOrgId) && requestedOrgId > 0
-        ? requestedOrgId
-        : undefined
+    const scopedOrganizationId = (() => {
+      if (role === "HEAD_OFFICE") {
+        return userOrgId
+      }
+      if (Number.isInteger(requestedOrgId) && requestedOrgId > 0) {
+        return requestedOrgId
+      }
+      return undefined
+    })()
 
     if (!scopedOrganizationId) {
       return NextResponse.json({ error: "Select an organization to view quantity budgets" }, { status: 400 })
@@ -116,8 +120,8 @@ export async function GET(req: NextRequest) {
         startDate = firstQuantityBudget.length > 0
           ? new Date(`${firstQuantityBudget[0].period}-01T00:00:00.000Z`)
           : new Date(`${currentBudgetPeriod()}-01T00:00:00.000Z`)
-      } else if (!startDate) {
-        startDate = new Date(`${currentBudgetPeriod()}-01T00:00:00.000Z`)
+      } else {
+        startDate ??= new Date(`${currentBudgetPeriod()}-01T00:00:00.000Z`)
       }
 
       if (!startDateParam) startDate.setHours(0, 0, 0, 0)
@@ -281,11 +285,15 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: "Invalid organization ID" }, { status: 400 })
     }
 
-    const scopedOrganizationId = role === "HEAD_OFFICE"
-      ? userOrgId
-      : Number.isInteger(requestedOrgId) && requestedOrgId > 0
-        ? requestedOrgId
-        : undefined
+    const scopedOrganizationId = (() => {
+      if (role === "HEAD_OFFICE") {
+        return userOrgId
+      }
+      if (Number.isInteger(requestedOrgId) && requestedOrgId > 0) {
+        return requestedOrgId
+      }
+      return undefined
+    })()
 
     if (!scopedOrganizationId) {
       return NextResponse.json({ error: "Select an organization before resetting quantity budgets" }, { status: 400 })

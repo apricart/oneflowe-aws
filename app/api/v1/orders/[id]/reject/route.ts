@@ -30,7 +30,7 @@ export async function POST(
   if (!parsedBody.success) return error(validationMessage(parsedBody.error), 400)
   const input = parsedBody.data
 
-  let queuedNotifications: QueuedOrderNotifications = { eventKeys: [], recipientCount: 0 }
+  let queuedNotifications: QueuedOrderNotifications
   let decidedOrder: { organizationId: number | null; branchId: number } | null = null
   try {
     const decisionResult = await db.transaction(async (tx) => {

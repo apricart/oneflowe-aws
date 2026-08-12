@@ -1,3 +1,4 @@
+import { stringifyPrimitive } from "@/lib/stringify-primitive"
 import { desc, eq, inArray } from "drizzle-orm"
 import { error, ok, requireApiRole } from "@/lib/api"
 import { db } from "@/lib/db"
@@ -54,7 +55,7 @@ const toJsonText = (value: unknown) => {
   try {
     return JSON.stringify(value)
   } catch {
-    return String(value)
+    return stringifyPrimitive(value)
   }
 }
 
@@ -444,7 +445,15 @@ export async function GET(
           Phone: user.phone || "-",
           "Employee ID": user.employeeId || "-",
           Role: user.role || "-",
-          Status: user.deletedAt ? "Deleted" : user.isActive ? "Active" : "Inactive",
+          Status: (() => {
+            if (user.deletedAt) {
+              return "Deleted"
+            }
+            if (user.isActive) {
+              return "Active"
+            }
+            return "Inactive"
+          })(),
           "MFA Enabled": toYesNo(user.mfaEnabled),
           "Imprest Holder": user.imprestHolder || "-",
           "Contact Person": user.contactPerson || "-",

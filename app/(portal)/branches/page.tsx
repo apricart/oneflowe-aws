@@ -1,24 +1,24 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
-import { useBranches, useUsers } from "@/lib/hooks/use-api"
+import { useEffect,useMemo,useState } from "react"
+import { useBranches,useUsers } from "@/lib/hooks/use-api"
 import { fetcher } from "@/lib/fetcher"
 import { useAppContext } from "@/components/context/app-context"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card,CardContent,CardHeader,CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet"
+import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from "@/components/ui/table"
+import { Sheet,SheetContent,SheetTitle } from "@/components/ui/sheet"
 import { cn } from "@/lib/utils"
 import {
-  Building2, Users, RefreshCcw, Search, Boxes, UserCog, Sparkles,
-  ShieldCheck, ChevronLeft, ChevronRight, AlertCircle, LayoutGrid, List,
-  MapPin, CalendarDays, Hash, Layers, X, Phone,
+  Building2,Users,RefreshCcw,Search,Boxes,UserCog,Sparkles,
+  ShieldCheck,ChevronLeft,ChevronRight,AlertCircle,LayoutGrid,List,
+  MapPin,CalendarDays,Hash,Layers,Phone
 } from "lucide-react"
-import { motion, AnimatePresence } from "framer-motion"
+import { motion,AnimatePresence } from "framer-motion"
 import { useRouter } from "next/navigation"
 import { HeadOfficeCreateBranchDialog } from "@/components/organizations/head-office-create-branch-dialog"
 
@@ -126,8 +126,8 @@ export default function BranchesPage() {
       return `${url}${separator}refresh=${Date.now()}`
     }
 
-    const branchUrl = `/api/v1/branches${organizationId ? `?organizationId=${organizationId}` : ""}`
-    const usersUrl = `/api/v1/users${organizationId ? `?organizationId=${organizationId}` : ""}`
+    const branchUrl = `/api/v1/branches${organizationId ? ("?organizationId=" + String(organizationId)) : ""}`
+    const usersUrl = `/api/v1/users${organizationId ? ("?organizationId=" + String(organizationId)) : ""}`
 
     setManualRefreshing(true)
     try {
@@ -330,7 +330,9 @@ export default function BranchesPage() {
               )}
 
               <AnimatePresence mode="wait">
-                {viewMode === "grid" ? (
+                {(() => {
+                  if (viewMode === "grid") {
+                    return (
                   <motion.div
                     key="grid-view"
                     initial={{ opacity: 0, y: 10 }}
@@ -338,11 +340,15 @@ export default function BranchesPage() {
                     exit={{ opacity: 0, scale: 0.98 }}
                     transition={{ duration: 0.2 }}
                   >
-                    {filteredBranches.length === 0 ? (
+                    {(() => {
+                      if (filteredBranches.length === 0) {
+                        return (
                       <div className="rounded-2xl border border-dashed p-10 text-center text-sm text-muted-foreground">
                         No branches match your filters.
                       </div>
-                    ) : (
+                    )
+                      }
+                      return (
                       <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
                         {paginatedBranches.map((branch, idx) => {
                           const admin = adminByBranch[String(branch.id)]
@@ -423,12 +429,13 @@ export default function BranchesPage() {
                                 )}
                               </div>
 
-                              <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between relative z-10" onClick={(e) => e.stopPropagation()}>
+                              <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between relative z-10">
                                 <Button
                                   variant="ghost"
                                   size="sm"
                                   className="h-10 px-4 gap-2 rounded-xl text-xs font-bold text-slate-600 hover:text-blue-600 hover:bg-blue-50 dark:text-slate-400 dark:hover:text-blue-400 dark:hover:bg-blue-900/20 transition-all"
-                                  onClick={() => {
+                                  onClick={(event) => {
+                                    event.stopPropagation()
                                     setBranchId(String(branch.id))
                                     router.push("/users")
                                   }}
@@ -447,18 +454,32 @@ export default function BranchesPage() {
                                       : "text-emerald-600 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/30"
                                   )}
                                   disabled={!!updatingBranchId}
-                                  onClick={() => { void handleStatusToggle(branch.id, branch.status) }}
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    void handleStatusToggle(branch.id, branch.status)
+                                  }}
                                 >
-                                  {isUpdatingThisBranch ? "Updating" : isActive ? "Deactivate" : "Activate"}
+                                  {(() => {
+                                    if (isUpdatingThisBranch) {
+                                      return "Updating"
+                                    }
+                                    if (isActive) {
+                                      return "Deactivate"
+                                    }
+                                    return "Activate"
+                                  })()}
                                 </Button>
                               </div>
                             </motion.div>
                           )
                         })}
                       </div>
-                    )}
+                    )
+                    })()}
                   </motion.div>
-                ) : (
+                )
+                  }
+                  return (
                   <motion.div
                     key="table-view"
                     initial={{ opacity: 0, y: 10 }}
@@ -467,11 +488,15 @@ export default function BranchesPage() {
                     transition={{ duration: 0.2 }}
                     className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden bg-white dark:bg-slate-900 shadow-sm"
                   >
-                    {filteredBranches.length === 0 ? (
+                    {(() => {
+                      if (filteredBranches.length === 0) {
+                        return (
                       <div className="p-10 text-center text-sm text-muted-foreground">
                         No branches match your filters.
                       </div>
-                    ) : (
+                    )
+                      }
+                      return (
                       <Table>
                         <TableHeader>
                           <TableRow className="bg-slate-50/50 dark:bg-slate-800/50 hover:bg-slate-50/50">
@@ -557,13 +582,14 @@ export default function BranchesPage() {
                                     {isActive ? "Active" : "Inactive"}
                                   </Badge>
                                 </TableCell>
-                                <TableCell className="text-right pr-6" onClick={(e) => e.stopPropagation()}>
+                                <TableCell className="text-right pr-6">
                                   <div className="flex items-center justify-end gap-2">
                                     <Button
                                       variant="ghost"
                                       size="sm"
                                       className="h-8 px-3 gap-1.5 rounded-lg text-xs font-bold text-slate-600 hover:text-blue-600 hover:bg-blue-50 dark:text-slate-400 dark:hover:text-blue-400 dark:hover:bg-blue-900/20 transition-all"
-                                      onClick={() => {
+                                      onClick={(event) => {
+                                        event.stopPropagation()
                                         setBranchId(String(branch.id))
                                         router.push("/users")
                                       }}
@@ -582,9 +608,20 @@ export default function BranchesPage() {
                                           : "text-emerald-600 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/30"
                                       )}
                                       disabled={!!updatingBranchId}
-                                      onClick={() => { void handleStatusToggle(branch.id, branch.status) }}
+                                      onClick={(event) => {
+                                        event.stopPropagation()
+                                        void handleStatusToggle(branch.id, branch.status)
+                                      }}
                                     >
-                                      {isUpdatingThisBranch ? "Updating..." : isActive ? "Deactivate" : "Activate"}
+                                      {(() => {
+                                        if (isUpdatingThisBranch) {
+                                          return "Updating..."
+                                        }
+                                        if (isActive) {
+                                          return "Deactivate"
+                                        }
+                                        return "Activate"
+                                      })()}
                                     </Button>
                                   </div>
                                 </TableCell>
@@ -593,9 +630,11 @@ export default function BranchesPage() {
                           })}
                         </TableBody>
                       </Table>
-                    )}
+                    )
+                    })()}
                   </motion.div>
-                )}
+                )
+                })()}
               </AnimatePresence>
             </>
           )}
@@ -609,7 +648,6 @@ export default function BranchesPage() {
             const admin = adminByBranch[String(viewingBranch.id)]
             const isActive = (viewingBranch.status || "active").toLowerCase() === "active"
             const isUpdatingThisBranch = updatingBranchId === viewingBranch.id
-            const fullAddress = [viewingBranch.address, viewingBranch.city, viewingBranch.province].filter(Boolean).join(", ")
 
             return (
               <div className="flex flex-col h-full font-sans">
@@ -761,7 +799,15 @@ export default function BranchesPage() {
                     )}
                     onClick={() => { void handleStatusToggle(viewingBranch.id, viewingBranch.status) }}
                   >
-                    {isUpdatingThisBranch ? "Updating..." : isActive ? "Deactivate Branch" : "Activate Branch"}
+                    {(() => {
+                      if (isUpdatingThisBranch) {
+                        return "Updating..."
+                      }
+                      if (isActive) {
+                        return "Deactivate Branch"
+                      }
+                      return "Activate Branch"
+                    })()}
                   </Button>
                 </div>
               </div>
@@ -773,12 +819,12 @@ export default function BranchesPage() {
   )
 }
 
-function StatCard({ label, value, icon, variant }: {
+function StatCard({ label, value, icon, variant }: Readonly<{
   label: string
   value: string | number
   icon: React.ReactNode
   variant: "blue" | "green" | "red" | "amber" | "purple"
-}) {
+}>) {
   const variants = {
     blue: "bg-gradient-to-br from-blue-50/80 to-indigo-50/80 border-blue-100/50 text-blue-700 dark:from-blue-900/20 dark:to-indigo-900/20 dark:border-blue-800/30 dark:text-blue-400",
     green: "bg-gradient-to-br from-emerald-50/80 to-teal-50/80 border-emerald-100/50 text-emerald-700 dark:from-emerald-900/20 dark:to-teal-900/20 dark:border-emerald-800/30 dark:text-emerald-400",

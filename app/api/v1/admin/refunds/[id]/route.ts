@@ -31,7 +31,7 @@ export async function PATCH(
     }
 
     const { id } = await params
-    const refundId = parseInt(id, 10)
+    const refundId = Number.parseInt(id, 10)
     if (!Number.isFinite(refundId) || refundId <= 0) {
       return NextResponse.json({ error: "Invalid refund ID" }, { status: 400 })
     }

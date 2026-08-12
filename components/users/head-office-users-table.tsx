@@ -1,29 +1,29 @@
 "use client"
-import { useEffect, useState, useMemo } from "react"
+import { useEffect,useState,useMemo } from "react"
 import { jsonFetcher } from "@/lib/fetcher"
 import { Button } from "@/components/ui/button"
-import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "@/components/ui/table"
+import { Table,TableHeader,TableRow,TableHead,TableBody,TableCell } from "@/components/ui/table"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
+import { Dialog,DialogContent,DialogDescription,DialogHeader,DialogTitle,DialogFooter } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Checkbox } from "@/components/ui/checkbox"
+import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from "@/components/ui/command"
-import { Edit, Trash2, Search, User, Mail, Phone, Shield, ShieldCheck, Building2, MapPin, AlertCircle, CheckCircle, ChevronLeft, ChevronRight, RefreshCw, Power, Eye, EyeOff, Upload, FileText, Table as TableIcon, FileJson, Info, MoreHorizontal, ShieldAlert, KeyRound, UserMinus, UserCheck, Calendar, LayoutGrid, List, Check, ChevronsUpDown } from "lucide-react"
+import { Popover,PopoverContent,PopoverTrigger } from "@/components/ui/popover"
+import { Command,CommandInput,CommandList,CommandEmpty,CommandGroup,CommandItem } from "@/components/ui/command"
+import { Edit,Trash2,Search,User,Mail,Phone,ShieldCheck,Building2,MapPin,AlertCircle,CheckCircle,ChevronLeft,ChevronRight,RefreshCw,Eye,EyeOff,Upload,FileText,Table as TableIcon,FileJson,MoreHorizontal,KeyRound,Calendar,LayoutGrid,List,Check,ChevronsUpDown } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { motion, AnimatePresence } from "framer-motion"
+import { motion,AnimatePresence } from "framer-motion"
 import { Switch } from "@/components/ui/switch"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger, SheetFooter } from "@/components/ui/sheet"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { PremiumAlert, type AlertType } from "@/components/premium/premium-alert"
+import { DropdownMenu,DropdownMenuContent,DropdownMenuItem,DropdownMenuLabel,DropdownMenuSeparator,DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { Sheet,SheetContent,SheetDescription,SheetHeader,SheetTitle,SheetFooter } from "@/components/ui/sheet"
+import { Avatar,AvatarFallback } from "@/components/ui/avatar"
+import { PremiumAlert,type AlertType } from "@/components/premium/premium-alert"
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
 import * as XLSX from "xlsx"
 import { handleError } from "@/lib/error-handler"
+import { isValidEmailAddress } from "@/lib/validation/email"
 import {
   createCsv,
   sanitizeSpreadsheetRecords,
@@ -57,6 +57,25 @@ type HeadOfficeUsersTableProps = {
   onUserUpdate: () => void
 }
 
+type EditFormState = {
+  firstName: string
+  lastName: string
+  email: string
+  username: string
+  phone: string
+  role: string
+  organizationId: string
+  branchId: string
+  mfaEnabled: boolean
+  isActive: boolean
+  password: string
+  confirmPassword: string
+  employeeId: string
+  imprestHolder: string
+  contactPerson: string
+  address: string
+}
+
 const normalizeSearchValue = (value: string | null | undefined) =>
   (value || "").toLowerCase().trim().replace(/\s+/g, " ")
 
@@ -84,7 +103,307 @@ const userMatchesSearch = (user: UserRow, rawQuery: string) => {
   )
 }
 
-export function HeadOfficeUsersTable({ users, branches, organizations, userRole, onUserUpdate }: HeadOfficeUsersTableProps) {
+const validateEditForm = (
+  form: EditFormState,
+  usernameAvailable: boolean | null,
+) => {
+  const errors: Record<string, string> = {}
+  const username = form.username.trim()
+  if (!username) errors.username = "Username is required"
+  else if (username.length < 3) errors.username = "Username must be at least 3 characters"
+  else if (usernameAvailable === false) errors.username = "This username is already taken"
+
+  if (!form.email.trim()) errors.email = "Email is required"
+  else if (!isValidEmailAddress(form.email)) errors.email = "Please enter a valid email"
+
+  if (form.phone && !/^\d+$/.test(form.phone)) {
+    errors.phone = "Phone number must contain only digits"
+  } else if (form.phone && (form.phone.length < 7 || form.phone.length > 15)) {
+    errors.phone = "Phone number must be between 7 and 15 digits"
+  }
+  return errors
+}
+
+const getPasswordValidationError = (form: EditFormState, resetEnabled: boolean) => {
+  if (!resetEnabled || !form.password) return null
+  if (form.password !== form.confirmPassword) return "Passwords do not match"
+  if (form.password.length < 12) return "Password must be at least 12 characters"
+  const meetsComplexity = /[A-Z]/.test(form.password)
+    && /[a-z]/.test(form.password)
+    && /\d/.test(form.password)
+    && /[^a-zA-Z0-9]/.test(form.password)
+  return meetsComplexity
+    ? null
+    : "Password must include uppercase, lowercase, number, and special character"
+}
+
+const addChangedValue = (
+  body: Record<string, unknown>,
+  key: string,
+  nextValue: unknown,
+  currentValue: unknown,
+) => {
+  if (nextValue !== currentValue) body[key] = nextValue
+}
+
+const buildUserUpdate = (form: EditFormState, user: UserRow, includePassword: boolean) => {
+  const body: Record<string, unknown> = {}
+  addChangedValue(body, "firstName", form.firstName.trim(), (user.firstName || "").trim())
+  addChangedValue(body, "lastName", form.lastName.trim(), (user.lastName || "").trim())
+  addChangedValue(body, "email", form.email.trim(), (user.email || "").trim())
+  addChangedValue(body, "username", form.username.trim().toLowerCase(), (user.username || "").trim().toLowerCase())
+  addChangedValue(body, "phone", form.phone.trim() || null, user.phone?.trim() || null)
+  addChangedValue(body, "role", form.role, user.role || "")
+  addChangedValue(body, "organizationId", form.organizationId ? Number.parseInt(form.organizationId) : null, user.organizationId ?? null)
+  addChangedValue(body, "branchId", form.branchId ? Number.parseInt(form.branchId) : null, user.branchId ?? null)
+  addChangedValue(body, "mfaEnabled", form.mfaEnabled, Boolean(user.mfaEnabled))
+  addChangedValue(body, "isActive", form.isActive, user.isActive)
+  addChangedValue(body, "employeeId", form.employeeId.trim() || null, user.employeeId?.trim() || null)
+  addChangedValue(body, "imprestHolder", form.imprestHolder.trim() || null, user.imprestHolder?.trim() || null)
+  addChangedValue(body, "contactPerson", form.contactPerson.trim() || null, user.contactPerson?.trim() || null)
+  addChangedValue(body, "address", form.address.trim() || null, user.address?.trim() || null)
+  if (includePassword && form.password) body.password = form.password
+  return body
+}
+
+const splitUserUpdate = (body: Record<string, unknown>) => {
+  const accessKeys = new Set(["role", "organizationId", "branchId", "mfaEnabled", "isActive"])
+  const accessBody: Record<string, unknown> = {}
+  const profileBody: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(body)) {
+    const target = accessKeys.has(key) ? accessBody : profileBody
+    target[key] = value
+  }
+  return { accessBody, profileBody }
+}
+
+const submitUserUpdates = async (userId: string, body: Record<string, unknown>) => {
+  const { accessBody, profileBody } = splitUserUpdate(body)
+  if (Object.keys(accessBody).length > 0) {
+    await jsonFetcher(`/api/v1/users/${userId}/access`, {
+      method: "PATCH",
+      body: JSON.stringify(accessBody),
+    })
+  }
+  if (Object.keys(profileBody).length > 0) {
+    await jsonFetcher(`/api/v1/users/${userId}`, {
+      method: "PATCH",
+      body: JSON.stringify(profileBody),
+    })
+  }
+}
+
+type PasswordResetFieldsProps = {
+  form: EditFormState
+  setForm: (form: EditFormState) => void
+  enabled: boolean
+  setEnabled: (enabled: boolean) => void
+  showPassword: boolean
+  setShowPassword: (visible: boolean) => void
+  showConfirmation: boolean
+  setShowConfirmation: (visible: boolean) => void
+}
+
+const PasswordVisibilityIcon = ({ visible }: Readonly<{ visible: boolean }>) => (
+  visible
+    ? <EyeOff className="h-4 w-4 text-muted-foreground" />
+    : <Eye className="h-4 w-4 text-muted-foreground" />
+)
+
+const FieldError = ({ message }: Readonly<{ message?: string }>) => (
+  message ? <p className="text-xs text-red-600">{message}</p> : null
+)
+
+const AccountStatusBadge = ({ active }: Readonly<{ active: boolean }>) => (
+  <Badge variant="outline" className={cn(
+    "font-semibold",
+    active
+      ? "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-400 dark:border-emerald-800"
+      : "bg-red-50 text-red-700 border-red-200 dark:bg-red-950/30 dark:text-red-400 dark:border-red-800",
+  )}>
+    {active ? "Active" : "Inactive"}
+  </Badge>
+)
+
+const MfaStatusBadge = ({ enabled }: Readonly<{ enabled: boolean }>) => (
+  enabled
+    ? (
+      <Badge className="bg-indigo-100 text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-950/50 dark:text-indigo-400 border-transparent">
+        <ShieldCheck className="mr-1.5 h-3.5 w-3.5" />
+        MFA Enabled
+      </Badge>
+    )
+    : <Badge variant="outline" className="text-slate-400 border-slate-200 dark:border-slate-800">MFA Disabled</Badge>
+)
+
+const StatusActionContent = ({ active, loading }: Readonly<{ active: boolean; loading: boolean }>) => (
+  <>
+    <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+    {active ? "Deactivate" : "Activate"}
+  </>
+)
+
+function PasswordResetFields({
+  form,
+  setForm,
+  enabled,
+  setEnabled,
+  showPassword,
+  setShowPassword,
+  showConfirmation,
+  setShowConfirmation,
+}: Readonly<PasswordResetFieldsProps>) {
+  const toggleReset = () => {
+    setEnabled(!enabled)
+    if (enabled) setForm({ ...form, password: "", confirmPassword: "" })
+  }
+  const passwordError = form.password ? getPasswordValidationError(form, true) : null
+
+  return (
+    <div className="space-y-4 pt-4 border-t">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold">Password Reset</h3>
+        <Button type="button" variant="outline" size="sm" onClick={toggleReset}>
+          {enabled ? "Cancel" : "Reset Password"}
+        </Button>
+      </div>
+      {enabled && (
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="password">New Password *</Label>
+            <div className="relative">
+              <Input
+                id="password"
+                type={showPassword ? "text" : "password"}
+                value={form.password}
+                onChange={(event) => setForm({ ...form, password: event.target.value })}
+                placeholder="Enter password (min 12 chars, mixed case, symbols)"
+                className="pr-10"
+                autoComplete="new-password"
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+                onClick={() => setShowPassword(!showPassword)}
+              >
+                <PasswordVisibilityIcon visible={showPassword} />
+              </Button>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="confirmPassword">Confirm Password *</Label>
+            <div className="relative">
+              <Input
+                id="confirmPassword"
+                type={showConfirmation ? "text" : "password"}
+                value={form.confirmPassword}
+                onChange={(event) => setForm({ ...form, confirmPassword: event.target.value })}
+                placeholder="Confirm new password"
+                className="pr-10"
+                autoComplete="new-password"
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+                onClick={() => setShowConfirmation(!showConfirmation)}
+              >
+                <PasswordVisibilityIcon visible={showConfirmation} />
+              </Button>
+            </div>
+            {passwordError && <p className="text-sm text-red-600">{passwordError}</p>}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+type RoleAssignmentFieldsProps = {
+  form: EditFormState
+  setForm: (form: EditFormState) => void
+  branches: any[]
+  branchOpen: boolean
+  setBranchOpen: (open: boolean) => void
+}
+
+function RoleAssignmentFields({
+  form,
+  setForm,
+  branches,
+  branchOpen,
+  setBranchOpen,
+}: Readonly<RoleAssignmentFieldsProps>) {
+  const needsBranch = form.role === "BRANCH_ADMIN" || form.role === "ORDER_PORTAL"
+  const organizationId = form.organizationId ? Number.parseInt(form.organizationId) : null
+  const selectedBranchId = Number.parseInt(form.branchId)
+  const selectedBranchName = branches.find((branch) => branch.id === selectedBranchId)?.name
+  const availableBranches = branches.filter(
+    (branch) => organizationId === null || branch.organizationId === organizationId,
+  )
+
+  return (
+    <div className="space-y-4">
+      <h3 className="text-sm font-semibold">Role & Assignment</h3>
+      <div className="space-y-2">
+        <Label htmlFor="role">Role *</Label>
+        <Select disabled value={form.role} onValueChange={(role) => setForm({ ...form, role, branchId: "" })}>
+          <SelectTrigger><SelectValue placeholder="Select role" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="HEAD_OFFICE">Head Office</SelectItem>
+            <SelectItem value="BRANCH_ADMIN">Branch Admin</SelectItem>
+            <SelectItem value="ORDER_PORTAL">Order Portal User</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      {needsBranch && (
+        <div className="space-y-2">
+          <Label htmlFor="branch">Branch Assignment *</Label>
+          <Popover open={branchOpen} onOpenChange={setBranchOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                variant="outline"
+                role="combobox"
+                className={cn("w-full justify-between", !form.branchId && "text-muted-foreground")}
+              >
+                {selectedBranchName || "Select branch"}
+                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-[200px] p-0">
+              <Command>
+                <CommandInput placeholder="Search branches..." />
+                <CommandList>
+                  <CommandEmpty>No branch found.</CommandEmpty>
+                  <CommandGroup>
+                    {availableBranches.map((branch) => (
+                      <CommandItem
+                        key={branch.id}
+                        value={branch.name}
+                        onSelect={() => {
+                          setForm({ ...form, branchId: String(branch.id) })
+                          setBranchOpen(false)
+                        }}
+                      >
+                        <Check className={cn("mr-2 h-4 w-4", branch.id === selectedBranchId ? "opacity-100" : "opacity-0")} />
+                        {branch.name}
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+            </PopoverContent>
+          </Popover>
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function HeadOfficeUsersTable({ users, branches, organizations, userRole, onUserUpdate }: Readonly<HeadOfficeUsersTableProps>) {
   const PAGE_SIZE = 20
   const [viewMode, setViewMode] = useState<"grid" | "table">("table")
   const [searchQuery, setSearchQuery] = useState("")
@@ -119,7 +438,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
     loading: false,
     suggestions: []
   })
-  const [editForm, setEditForm] = useState({
+  const [editForm, setEditForm] = useState<EditFormState>({
     firstName: "",
     lastName: "",
     email: "",
@@ -327,105 +646,24 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
   const saveUser = async () => {
     if (!editingUser) return
 
-    const nextErrors: Record<string, string> = {}
-    if (!editForm.username.trim()) {
-      nextErrors.username = "Username is required"
-    } else if (editForm.username.trim().length < 3) {
-      nextErrors.username = "Username must be at least 3 characters"
-    } else if (editUsernameStatus.available === false) {
-      nextErrors.username = "This username is already taken"
-    }
-    if (!editForm.email.trim()) {
-      nextErrors.email = "Email is required"
-    } else if (!/\S+@\S+\.\S+/.test(editForm.email)) {
-      nextErrors.email = "Please enter a valid email"
-    }
-    if (editForm.phone && !/^\d+$/.test(editForm.phone)) {
-      nextErrors.phone = "Phone number must contain only digits"
-    } else if (editForm.phone && (editForm.phone.length < 7 || editForm.phone.length > 15)) {
-      nextErrors.phone = "Phone number must be between 7 and 15 digits"
-    }
+    const nextErrors = validateEditForm(editForm, editUsernameStatus.available)
     if (Object.keys(nextErrors).length > 0) {
       setEditErrors(nextErrors)
       showEditFeedback("Please fix the errors before saving.", "warning")
       return
     }
 
-    // Validate password if reset is enabled
-    if (showPasswordReset && editForm.password) {
-      if (editForm.password !== editForm.confirmPassword) {
-        showEditFeedback("Passwords do not match", "warning")
-        return
-      }
-      if (editForm.password.length < 12) {
-        showEditFeedback("Password must be at least 12 characters", "warning")
-        return
-      }
-      if (!/[A-Z]/.test(editForm.password) || !/[a-z]/.test(editForm.password) || !/\d/.test(editForm.password) || !/[^a-zA-Z0-9]/.test(editForm.password)) {
-        showEditFeedback("Password must include uppercase, lowercase, number, and special character", "warning")
-        return
-      }
+    const passwordError = getPasswordValidationError(editForm, showPasswordReset)
+    if (passwordError) {
+      showEditFeedback(passwordError, "warning")
+      return
     }
 
     setSubmittingUserId(editingUser.id)
     try {
       setEditErrors({})
-      const body: any = {}
-
-      const nextFirstName = editForm.firstName.trim()
-      const nextLastName = editForm.lastName.trim()
-      const nextEmail = editForm.email.trim()
-      const nextUsername = editForm.username.trim().toLowerCase()
-      const nextPhone = editForm.phone.trim() || null
-      const nextOrganizationId = editForm.organizationId ? parseInt(editForm.organizationId) : null
-      const nextBranchId = editForm.branchId ? parseInt(editForm.branchId) : null
-      const nextEmployeeId = editForm.employeeId.trim() || null
-      const nextImprestHolder = editForm.imprestHolder.trim() || null
-      const nextContactPerson = editForm.contactPerson.trim() || null
-      const nextAddress = editForm.address.trim() || null
-
-      if (nextFirstName !== (editingUser.firstName || "").trim()) body.firstName = nextFirstName
-      if (nextLastName !== (editingUser.lastName || "").trim()) body.lastName = nextLastName
-      if (nextEmail !== (editingUser.email || "").trim()) body.email = nextEmail
-      if (nextUsername !== ((editingUser.username || "").trim().toLowerCase())) body.username = nextUsername
-      if (nextPhone !== (editingUser.phone?.trim() || null)) body.phone = nextPhone
-      if (editForm.role !== (editingUser.role || "")) body.role = editForm.role
-      if (nextOrganizationId !== (editingUser.organizationId ?? null)) body.organizationId = nextOrganizationId
-      if (nextBranchId !== (editingUser.branchId ?? null)) body.branchId = nextBranchId
-      if (editForm.mfaEnabled !== Boolean(editingUser.mfaEnabled)) body.mfaEnabled = editForm.mfaEnabled
-      if (editForm.isActive !== editingUser.isActive) body.isActive = editForm.isActive
-      if (nextEmployeeId !== (editingUser.employeeId?.trim() || null)) body.employeeId = nextEmployeeId
-      if (nextImprestHolder !== (editingUser.imprestHolder?.trim() || null)) body.imprestHolder = nextImprestHolder
-      if (nextContactPerson !== (editingUser.contactPerson?.trim() || null)) body.contactPerson = nextContactPerson
-      if (nextAddress !== (editingUser.address?.trim() || null)) body.address = nextAddress
-
-      // Include password if password reset is enabled
-      if (showPasswordReset && editForm.password) {
-        body.password = editForm.password
-      }
-
-      const accessBody: Record<string, unknown> = {}
-      const profileBody: Record<string, unknown> = {}
-      for (const [key, value] of Object.entries(body)) {
-        if (["role", "organizationId", "branchId", "mfaEnabled", "isActive"].includes(key)) {
-          accessBody[key] = value
-        } else {
-          profileBody[key] = value
-        }
-      }
-
-      if (Object.keys(accessBody).length > 0) {
-        await jsonFetcher(`/api/v1/users/${editingUser.id}/access`, {
-          method: "PATCH",
-          body: JSON.stringify(accessBody)
-        })
-      }
-      if (Object.keys(profileBody).length > 0) {
-        await jsonFetcher(`/api/v1/users/${editingUser.id}`, {
-          method: "PATCH",
-          body: JSON.stringify(profileBody)
-        })
-      }
+      const body = buildUserUpdate(editForm, editingUser, showPasswordReset)
+      await submitUserUpdates(editingUser.id, body)
 
       onUserUpdate()
       closeEditDialog()
@@ -461,7 +699,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
     const nextIsActive = !user.isActive
     setStatusSubmittingUserId(user.id)
     setViewingUser(prev => (
-      prev && prev.id === user.id
+      prev?.id === user.id
         ? { ...prev, isActive: nextIsActive }
         : prev
     ))
@@ -473,7 +711,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
       onUserUpdate()
     } catch (error: any) {
       setViewingUser(prev => (
-        prev && prev.id === user.id
+        prev?.id === user.id
           ? { ...prev, isActive: user.isActive }
           : prev
       ))
@@ -520,11 +758,11 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
     const url = URL.createObjectURL(blob)
     const link = document.createElement("a")
     link.setAttribute("href", url)
-    link.setAttribute("download", `users-export-${new Date().getTime()}.csv`)
+    link.setAttribute("download", `users-export-${Date.now()}.csv`)
     link.style.visibility = "hidden"
     document.body.appendChild(link)
     link.click()
-    document.body.removeChild(link)
+    link.remove()
   }
 
   const exportToExcel = () => {
@@ -543,7 +781,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
     const worksheet = XLSX.utils.json_to_sheet(sanitizeSpreadsheetRecords(data))
     const workbook = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(workbook, worksheet, "Users")
-    XLSX.writeFile(workbook, `users-export-${new Date().getTime()}.xlsx`)
+    XLSX.writeFile(workbook, `users-export-${Date.now()}.xlsx`)
   }
 
   const exportToPDF = () => {
@@ -576,7 +814,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
       styles: { fontSize: 8 }
     })
 
-    doc.save(`users-export-${new Date().getTime()}.pdf`)
+    doc.save(`users-export-${Date.now()}.pdf`)
   }
 
   return (
@@ -653,7 +891,9 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
       </div>
 
       <AnimatePresence mode="wait">
-        {viewMode === "grid" ? (
+        {(() => {
+          if (viewMode === "grid") {
+            return (
           <motion.div
             key="grid-view"
             initial={{ opacity: 0, y: 10 }}
@@ -662,7 +902,9 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
             transition={{ duration: 0.2 }}
             className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4"
           >
-            {filteredUsers.length === 0 ? (
+            {(() => {
+              if (filteredUsers.length === 0) {
+                return (
               <div className="col-span-full border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-2xl p-16 flex flex-col items-center justify-center text-center bg-slate-50/50 dark:bg-slate-900/50 hover:bg-slate-50 dark:hover:bg-slate-900 transition-colors">
                 <div className="h-20 w-20 rounded-full bg-white dark:bg-slate-950 shadow-sm flex items-center justify-center mb-5 ring-1 ring-slate-200 dark:ring-slate-800">
                    <User className="h-8 w-8 text-slate-400" />
@@ -670,7 +912,9 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
                 <p className="text-lg font-semibold text-slate-900 dark:text-slate-100">No users found</p>
                 <p className="text-sm text-slate-500 dark:text-slate-400 mt-2 max-w-sm">We couldn't find any users matching your current search or role filters. Try adjusting them to see more results.</p>
               </div>
-            ) : (
+            )
+              }
+              return (
               paginatedUsers.map((user, idx) => (
                 <motion.div 
                   initial={{ opacity: 0, scale: 0.95 }}
@@ -728,9 +972,12 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
                   </div>
                 </motion.div>
               ))
-            )}
+            )
+            })()}
           </motion.div>
-        ) : (
+        )
+          }
+          return (
           <motion.div
             key="table-view"
             initial={{ opacity: 0, y: 10 }}
@@ -750,7 +997,9 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredUsers.length === 0 ? (
+                {(() => {
+                  if (filteredUsers.length === 0) {
+                    return (
                   <TableRow>
                     <TableCell colSpan={6} className="text-center py-20">
                       <div className="flex flex-col items-center gap-3 text-muted-foreground">
@@ -762,7 +1011,9 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
                       </div>
                     </TableCell>
                   </TableRow>
-                ) : (
+                )
+                  }
+                  return (
                   paginatedUsers.map((user, idx) => (
                     <motion.tr 
                       initial={{ opacity: 0, x: -10 }}
@@ -821,11 +1072,13 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
                       </TableCell>
                     </motion.tr>
                   ))
-                )}
+                )
+                })()}
               </TableBody>
             </Table>
           </motion.div>
-        )}
+        )
+        })()}
       </AnimatePresence>
 
       {/* Pagination and Info */}
@@ -880,14 +1133,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
                     </AvatarFallback>
                   </Avatar>
                   <div className="flex gap-2">
-                    <Badge variant="outline" className={cn(
-                      "font-semibold",
-                      viewingUser.isActive 
-                        ? "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-400 dark:border-emerald-800"
-                        : "bg-red-50 text-red-700 border-red-200 dark:bg-red-950/30 dark:text-red-400 dark:border-red-800"
-                    )}>
-                      {viewingUser.isActive ? "Active" : "Inactive"}
-                    </Badge>
+                    <AccountStatusBadge active={viewingUser.isActive} />
                   </div>
                 </div>
                 <div className="mt-4 space-y-1">
@@ -917,16 +1163,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
                   <div className="space-y-1">
                     <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Security Status</p>
                     <div className="flex items-center gap-2">
-                      {viewingUser.mfaEnabled ? (
-                        <Badge className="bg-indigo-100 text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-950/50 dark:text-indigo-400 border-transparent">
-                          <ShieldCheck className="mr-1.5 h-3.5 w-3.5" />
-                          MFA Enabled
-                        </Badge>
-                      ) : (
-                        <Badge variant="outline" className="text-slate-400 border-slate-200 dark:border-slate-800">
-                           MFA Disabled
-                        </Badge>
-                      )}
+                      <MfaStatusBadge enabled={Boolean(viewingUser.mfaEnabled)} />
                     </div>
                   </div>
                 </div>
@@ -1029,13 +1266,15 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
                   <Button 
                     variant="outline" 
                     className="gap-2 border-slate-200 dark:border-slate-800 text-indigo-600 dark:text-indigo-400 h-10 shadow-sm"
-                    disabled={viewingUser ? statusSubmittingUserId === viewingUser.id : false}
+                    disabled={statusSubmittingUserId === viewingUser.id}
                     onClick={() => {
                         if (viewingUser) toggleUserStatus(viewingUser)
                     }}
                   >
-                    <RefreshCw className={cn("h-4 w-4", viewingUser && statusSubmittingUserId === viewingUser.id && "animate-spin")} />
-                    {viewingUser.isActive ? "Deactivate" : "Activate"}
+                    <StatusActionContent
+                      active={viewingUser.isActive}
+                      loading={statusSubmittingUserId === viewingUser.id}
+                    />
                   </Button>
                   <Button 
                     variant="destructive" 
@@ -1146,9 +1385,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
                   autoComplete="off"
                   className={editErrors.email ? "border-red-500" : ""}
                 />
-                {editErrors.email && (
-                  <p className="text-xs text-red-600">{editErrors.email}</p>
-                )}
+                <FieldError message={editErrors.email} />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="edit-username">Username *</Label>
@@ -1177,18 +1414,27 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
                     className={editErrors.username ? "border-red-500 pr-10" : "pr-10"}
                   />
                   <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                    {editUsernameStatus.loading ? (
+                    {(() => {
+                      if (editUsernameStatus.loading) {
+                        return (
                       <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-                    ) : editUsernameStatus.available === true ? (
+                    )
+                      }
+                      if (editUsernameStatus.available === true) {
+                        return (
                       <CheckCircle className="h-4 w-4 text-green-500" />
-                    ) : editUsernameStatus.available === false ? (
+                    )
+                      }
+                      if (editUsernameStatus.available === false) {
+                        return (
                       <AlertCircle className="h-4 w-4 text-red-500" />
-                    ) : null}
+                    )
+                      }
+                      return null
+                    })()}
                   </div>
                 </div>
-                {editErrors.username && (
-                  <p className="text-xs text-red-600">{editErrors.username}</p>
-                )}
+                <FieldError message={editErrors.username} />
                 {editUsernameStatus.available === false && editUsernameStatus.suggestions.length > 0 && (
                   <div className="mt-2 space-y-1">
                     <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">Suggested Lookups:</p>
@@ -1232,9 +1478,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
                   placeholder="Enter phone number"
                   className={editErrors.phone ? "border-red-500" : ""}
                 />
-                {editErrors.phone && (
-                  <p className="text-xs text-red-600">{editErrors.phone}</p>
-                )}
+                <FieldError message={editErrors.phone} />
               </div>
               {/* New Fields: Employee #, Imprest Holder, Contact Person */}
               <div className="grid grid-cols-2 gap-4">
@@ -1255,9 +1499,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
                     placeholder="Enter employee number"
                     className={editErrors.employeeId ? "border-red-500" : ""}
                   />
-                  {editErrors.employeeId && (
-                    <p className="text-xs text-red-600">{editErrors.employeeId}</p>
-                  )}
+                  <FieldError message={editErrors.employeeId} />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="edit-contactPerson">Contact Person</Label>
@@ -1290,78 +1532,13 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
               </div>
             </div>
 
-            {/* Role and Assignment */}
-            <div className="space-y-4">
-              <h3 className="text-sm font-semibold">Role & Assignment</h3>
-              <div className="space-y-2">
-                <Label htmlFor="role">Role *</Label>
-                <Select disabled value={editForm.role} onValueChange={value => setEditForm({ ...editForm, role: value, branchId: "" })}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select role" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="HEAD_OFFICE">Head Office</SelectItem>
-                    <SelectItem value="BRANCH_ADMIN">Branch Admin</SelectItem>
-                    <SelectItem value="ORDER_PORTAL">Order Portal User</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {(editForm.role === "BRANCH_ADMIN" || editForm.role === "ORDER_PORTAL") && (
-                <div className="space-y-2">
-                  <Label htmlFor="branch">Branch Assignment *</Label>
-                  <Popover open={branchOpen} onOpenChange={setBranchOpen}>
-                    <PopoverTrigger asChild>
-                      <Button
-                        variant="outline"
-                        role="combobox"
-                        className={cn(
-                          "w-full justify-between",
-                          !editForm.branchId && "text-muted-foreground"
-                        )}
-                      >
-                        {editForm.branchId
-                          ? branches.find((b) => b.id === parseInt(editForm.branchId))?.name
-                          : "Select branch"}
-                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-[200px] p-0">
-                      <Command>
-                        <CommandInput placeholder="Search branches..." />
-                        <CommandList>
-                          <CommandEmpty>No branch found.</CommandEmpty>
-                          <CommandGroup>
-                            {branches
-                              .filter(branch => !editForm.organizationId || branch.organizationId === parseInt(editForm.organizationId))
-                              .map((branch) => (
-                                <CommandItem
-                                  key={branch.id}
-                                  value={branch.name}
-                                  onSelect={() => {
-                                    setEditForm({ ...editForm, branchId: String(branch.id) })
-                                    setBranchOpen(false)
-                                  }}
-                                >
-                                  <Check
-                                    className={cn(
-                                      "mr-2 h-4 w-4",
-                                      branch.id === parseInt(editForm.branchId)
-                                        ? "opacity-100"
-                                        : "opacity-0"
-                                    )}
-                                  />
-                                  {branch.name}
-                                </CommandItem>
-                              ))}
-                          </CommandGroup>
-                        </CommandList>
-                      </Command>
-                    </PopoverContent>
-                  </Popover>
-                </div>
-              )}
-            </div>
+            <RoleAssignmentFields
+              form={editForm}
+              setForm={setEditForm}
+              branches={branches}
+              branchOpen={branchOpen}
+              setBranchOpen={setBranchOpen}
+            />
 
             {/* Security & Access */}
             <div className="space-y-4">
@@ -1404,92 +1581,16 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
               </div>
             </div>
 
-            {/* Password Reset */}
-            <div className="space-y-4 pt-4 border-t">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-semibold">Password Reset</h3>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setShowPasswordReset(!showPasswordReset)
-                    if (showPasswordReset) {
-                      setEditForm({ ...editForm, password: "", confirmPassword: "" })
-                    }
-                  }}
-                >
-                  {showPasswordReset ? "Cancel" : "Reset Password"}
-                </Button>
-              </div>
-              {showPasswordReset && (
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="password">New Password *</Label>
-                    <div className="relative">
-                      <Input
-                        id="password"
-                        type={showPassword ? "text" : "password"}
-                        value={editForm.password}
-                        onChange={e => setEditForm({ ...editForm, password: e.target.value })}
-                        placeholder="Enter password (min 12 chars, mixed case, symbols)"
-                        className="pr-10"
-                        autoComplete="new-password"
-                      />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
-                        onClick={() => setShowPassword(!showPassword)}
-                      >
-                        {showPassword ? (
-                          <EyeOff className="h-4 w-4 text-muted-foreground" />
-                        ) : (
-                          <Eye className="h-4 w-4 text-muted-foreground" />
-                        )}
-                      </Button>
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="confirmPassword">Confirm Password *</Label>
-                    <div className="relative">
-                      <Input
-                        id="confirmPassword"
-                        type={showConfirmPassword ? "text" : "password"}
-                        value={editForm.confirmPassword}
-                        onChange={e => setEditForm({ ...editForm, confirmPassword: e.target.value })}
-                        placeholder="Confirm new password"
-                        className="pr-10"
-                        autoComplete="new-password"
-                      />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
-                        onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                      >
-                        {showConfirmPassword ? (
-                          <EyeOff className="h-4 w-4 text-muted-foreground" />
-                        ) : (
-                          <Eye className="h-4 w-4 text-muted-foreground" />
-                        )}
-                      </Button>
-                    </div>
-                    {editForm.password && editForm.confirmPassword && editForm.password !== editForm.confirmPassword && (
-                      <p className="text-sm text-red-600">Passwords do not match</p>
-                    )}
-                    {editForm.password && editForm.password.length > 0 && editForm.password.length < 12 && (
-                      <p className="text-sm text-red-600">Password must be at least 12 characters</p>
-                    )}
-                    {editForm.password && editForm.password.length >= 12 && (!/[A-Z]/.test(editForm.password) || !/[a-z]/.test(editForm.password) || !/\d/.test(editForm.password) || !/[^a-zA-Z0-9]/.test(editForm.password)) && (
-                      <p className="text-sm text-red-600">Password must include uppercase, lowercase, number, and special character</p>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
+            <PasswordResetFields
+              form={editForm}
+              setForm={setEditForm}
+              enabled={showPasswordReset}
+              setEnabled={setShowPasswordReset}
+              showPassword={showPassword}
+              setShowPassword={setShowPassword}
+              showConfirmation={showConfirmPassword}
+              setShowConfirmation={setShowConfirmPassword}
+            />
           </div>
 
           <DialogFooter>

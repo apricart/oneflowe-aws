@@ -14,11 +14,11 @@ interface StatusFilterProps {
     onChange: (status: DashboardStatus) => void
 }
 
-export function StatusFilter({ value, onChange }: StatusFilterProps) {
+export function StatusFilter({ value, onChange }: Readonly<StatusFilterProps>) {
     return (
         <div className="flex items-center gap-1.5 flex-wrap">
             {options.map(opt => (
-                <button
+                <button type="button"
                     key={opt.id}
                     onClick={() => onChange(opt.id)}
                     className={`

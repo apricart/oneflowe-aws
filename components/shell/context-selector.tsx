@@ -1,136 +1,44 @@
 "use client"
 
-import { useState } from "react"
-import { Building2, GitBranch, RotateCcw, ChevronDown } from "lucide-react"
+import { useAppContext } from "@/components/context/app-context"
 import { Button } from "@/components/ui/button"
 import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
+Command,
+CommandEmpty,
+CommandGroup,
+CommandInput,
+CommandItem,
+CommandList,
 } from "@/components/ui/command"
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
+Popover,
+PopoverContent,
+PopoverTrigger,
 } from "@/components/ui/popover"
-import { Check } from "lucide-react"
-import { useAppContext } from "@/components/context/app-context"
-import useSWR from "swr"
 import { cn } from "@/lib/utils"
+import { Building2,Check,ChevronDown,GitBranch,RotateCcw } from "lucide-react"
+import { useState } from "react"
+import useSWR from "swr"
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json())
 
-export function ContextSelector() {
-  const {
-    organizationId,
-    branchId,
-    branchIds,
-    userRole,
-    userOrgId,
-    userBranchId,
-    setOrganizationId,
-    setBranchId,
-    resetContext,
-    isInitialized,
-  } = useAppContext()
+function SuperAdminContextControls(props: {
+  organizations: any[]
+  branches: any[]
+  organizationId: string | null
+  branchId: string | null
+  orgOpen: boolean
+  branchOpen: boolean
+  orgsLoading: boolean
+  branchesLoading: boolean
+  setOrganizationId: (id: string | null) => void
+  setBranchId: (id: string | null) => void
+  setOrgOpen: (open: boolean) => void
+  setBranchOpen: (open: boolean) => void
+  resetContext: () => void
+}) {
+  const { organizations, branches, organizationId, branchId, orgOpen, branchOpen, orgsLoading, branchesLoading, setOrganizationId, setBranchId, setOrgOpen, setBranchOpen, resetContext } = props
 
-  const [orgOpen, setOrgOpen] = useState(false)
-  const [branchOpen, setBranchOpen] = useState(false)
-
-  // Fetch organizations
-  const { data: orgsData, isLoading: orgsLoading } = useSWR(
-    "/api/v1/organizations",
-    fetcher
-  )
-
-  // Read-only roles should always use their assigned scope, even while the
-  // client context is being restored after a full page load.
-  const scopedOrganizationId =
-    userRole === "BRANCH_ADMIN" && userOrgId
-      ? String(userOrgId)
-      : organizationId
-  const scopedBranchId =
-    userRole === "BRANCH_ADMIN" && userBranchId
-      ? String(userBranchId)
-      : branchId
-
-  // Fetch branches (filtered by selected organization)
-  const { data: branchesData, isLoading: branchesLoading } = useSWR(
-    scopedOrganizationId ? `/api/v1/branches?organizationId=${scopedOrganizationId}` : null,
-    fetcher
-  )
-
-  const organizations = (orgsData?.items || []).filter((org: any) => org.status === "active")
-  const branches = (branchesData?.items || []).filter((branch: any) => branch.status === "active")
-  const listedBranch = branches.find((branch: any) => branch.id.toString() === scopedBranchId)
-
-  // The collection request can be unavailable during a route reload. Resolve
-  // the assigned branch directly so its real name still reaches the breadcrumb.
-  const { data: assignedBranchData, isLoading: assignedBranchLoading } = useSWR(
-    userRole === "BRANCH_ADMIN" && scopedBranchId && !branchesLoading && !listedBranch
-      ? `/api/v1/branches/${scopedBranchId}`
-      : null,
-    fetcher
-  )
-
-  // Don't render until initialized
-  if (!isInitialized) return null
-
-  // Branch Admin & Head Office: show read-only breadcrumb
-  if (userRole === "BRANCH_ADMIN" || userRole === "HEAD_OFFICE") {
-    const org = organizations.find((o: any) => o.id.toString() === scopedOrganizationId)
-    const branch = listedBranch || assignedBranchData?.item
-
-    // Handle label for HO with multiple branches
-    let branchLabel: string
-    if (userRole === "BRANCH_ADMIN") {
-      branchLabel = branch?.name
-        || (branchesLoading || assignedBranchLoading ? "Loading branch..." : "Assigned Branch")
-    } else {
-      branchLabel = "Global Overview"
-      if (branchIds.length > 1) {
-        branchLabel = `${branchIds.length} Branches`
-      } else if (branch) {
-        branchLabel = branch.name
-      } else if (branchIds.length === 1) {
-        const singleBranch = branches.find((b: any) => b.id.toString() === branchIds[0])
-        branchLabel = singleBranch?.name || "1 Branch"
-      }
-    }
-
-    return (
-      <div className="flex items-center gap-2 px-3 py-1.5 rounded-md border bg-muted/50 text-xs animate-in fade-in duration-300">
-        {org && (
-          <div className="flex items-center gap-1.5 flex-shrink-0">
-            <Building2 className="h-4 w-4 text-blue-600" />
-            <span className="font-bold text-slate-700 dark:text-slate-200">{org.name}</span>
-          </div>
-        )}
-        {org && (
-          <span className="text-slate-400 font-medium mx-1">/</span>
-        )}
-        <div className="flex items-center gap-1.5 overflow-hidden">
-          <GitBranch className={`h-4 w-4 ${(branch || branchIds.length > 0) ? "text-indigo-600" : "text-slate-400"}`} />
-          <span className={`font-semibold truncate ${(branch || branchIds.length > 0) ? "text-slate-700 dark:text-slate-200" : "text-slate-500 italic"}`}>
-            {branchLabel}
-          </span>
-        </div>
-      </div>
-    )
-  }
-
-  // Super Admin: show interactable selectors
   const selectedOrg = organizations.find((o: any) => o.id.toString() === organizationId)
   const selectedBranch = branches.find((b: any) => b.id.toString() === branchId)
 
@@ -221,11 +129,15 @@ export function ContextSelector() {
                 <div className="flex items-center gap-2.5 truncate mr-2">
                     <GitBranch className={cn("h-4 w-4 shrink-0", branchId ? "text-indigo-600" : "text-slate-400")} />
                     <span className="truncate">
-                      {branchesLoading
-                        ? "Loading..."
-                        : !organizationId
-                          ? "Select Organization"
-                          : selectedBranch?.name || "All Branches"}
+                      {(() => {
+                        if (branchesLoading) {
+                          return "Loading..."
+                        }
+                        if (!organizationId) {
+                          return "Select Organization"
+                        }
+                        return selectedBranch?.name || "All Branches"
+                      })()}
                     </span>
                 </div>
                 <ChevronDown className={cn("h-3.5 w-3.5 shrink-0 opacity-50 transition-transform duration-200", branchOpen && "rotate-180")} />
@@ -287,6 +199,149 @@ export function ContextSelector() {
         </Button>
       )}
     </div>
+  )
+}
+
+function readOnlyBranchLabel(options: {
+  userRole: string | null
+  branch: any
+  branches: any[]
+  branchIds: string[]
+  branchesLoading: boolean
+  assignedBranchLoading: boolean
+}): string {
+  const { userRole, branch, branches, branchIds, branchesLoading, assignedBranchLoading } = options
+  if (userRole === "BRANCH_ADMIN") {
+    return branch?.name || (branchesLoading || assignedBranchLoading ? "Loading branch..." : "Assigned Branch")
+  }
+  if (branchIds.length > 1) return `${branchIds.length} Branches`
+  if (branch) return branch.name
+  if (branchIds.length === 1) {
+    return branches.find((item: any) => item.id.toString() === branchIds[0])?.name || "1 Branch"
+  }
+  return "Global Overview"
+}
+
+function ReadOnlyContextBreadcrumb(props: {
+  organization: any
+  branch: any
+  branches: any[]
+  branchIds: string[]
+  userRole: string | null
+  branchesLoading: boolean
+  assignedBranchLoading: boolean
+}) {
+  const { organization, branch, branches, branchIds, userRole, branchesLoading, assignedBranchLoading } = props
+  const branchLabel = readOnlyBranchLabel({ userRole, branch, branches, branchIds, branchesLoading, assignedBranchLoading })
+  const hasBranchScope = Boolean(branch) || branchIds.length > 0
+  return (
+    <div className="flex items-center gap-2 px-3 py-1.5 rounded-md border bg-muted/50 text-xs animate-in fade-in duration-300">
+      {organization && (
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          <Building2 className="h-4 w-4 text-blue-600" />
+          <span className="font-bold text-slate-700 dark:text-slate-200">{organization.name}</span>
+        </div>
+      )}
+      {organization && <span className="text-slate-400 font-medium mx-1">/</span>}
+      <div className="flex items-center gap-1.5 overflow-hidden">
+        <GitBranch className={`h-4 w-4 ${hasBranchScope ? "text-indigo-600" : "text-slate-400"}`} />
+        <span className={`font-semibold truncate ${hasBranchScope ? "text-slate-700 dark:text-slate-200" : "text-slate-500 italic"}`}>
+          {branchLabel}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+export function ContextSelector() {
+  const {
+    organizationId,
+    branchId,
+    branchIds,
+    userRole,
+    userOrgId,
+    userBranchId,
+    setOrganizationId,
+    setBranchId,
+    resetContext,
+    isInitialized,
+  } = useAppContext()
+
+  const [orgOpen, setOrgOpen] = useState(false)
+  const [branchOpen, setBranchOpen] = useState(false)
+
+  // Fetch organizations
+  const { data: orgsData, isLoading: orgsLoading } = useSWR(
+    "/api/v1/organizations",
+    fetcher
+  )
+
+  // Read-only roles should always use their assigned scope, even while the
+  // client context is being restored after a full page load.
+  const scopedOrganizationId =
+    userRole === "BRANCH_ADMIN" && userOrgId
+      ? String(userOrgId)
+      : organizationId
+  const scopedBranchId =
+    userRole === "BRANCH_ADMIN" && userBranchId
+      ? String(userBranchId)
+      : branchId
+
+  // Fetch branches (filtered by selected organization)
+  const { data: branchesData, isLoading: branchesLoading } = useSWR(
+    scopedOrganizationId ? `/api/v1/branches?organizationId=${scopedOrganizationId}` : null,
+    fetcher
+  )
+
+  const organizations = (orgsData?.items || []).filter((org: any) => org.status === "active")
+  const branches = (branchesData?.items || []).filter((branch: any) => branch.status === "active")
+  const listedBranch = branches.find((branch: any) => branch.id.toString() === scopedBranchId)
+
+  // The collection request can be unavailable during a route reload. Resolve
+  // the assigned branch directly so its real name still reaches the breadcrumb.
+  const { data: assignedBranchData, isLoading: assignedBranchLoading } = useSWR(
+    userRole === "BRANCH_ADMIN" && scopedBranchId && !branchesLoading && !listedBranch
+      ? `/api/v1/branches/${scopedBranchId}`
+      : null,
+    fetcher
+  )
+
+  // Don't render until initialized
+  if (!isInitialized) return null
+
+  // Branch Admin & Head Office: show read-only breadcrumb
+  if (userRole === "BRANCH_ADMIN" || userRole === "HEAD_OFFICE") {
+    const org = organizations.find((o: any) => o.id.toString() === scopedOrganizationId)
+    const branch = listedBranch || assignedBranchData?.item
+    return (
+      <ReadOnlyContextBreadcrumb
+        organization={org}
+        branch={branch}
+        branches={branches}
+        branchIds={branchIds}
+        userRole={userRole}
+        branchesLoading={branchesLoading}
+        assignedBranchLoading={assignedBranchLoading}
+      />
+    )
+  }
+
+  return (
+    <SuperAdminContextControls
+      organizations={organizations}
+      branches={branches}
+      organizationId={organizationId}
+      branchId={branchId}
+      orgOpen={orgOpen}
+      branchOpen={branchOpen}
+      orgsLoading={orgsLoading}
+      branchesLoading={branchesLoading}
+      setOrganizationId={setOrganizationId}
+      setBranchId={setBranchId}
+      setOrgOpen={setOrgOpen}
+      setBranchOpen={setBranchOpen}
+      resetContext={resetContext}
+    />
   )
 }
 

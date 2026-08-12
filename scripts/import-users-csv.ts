@@ -12,24 +12,22 @@
  */
 
 import * as dotenv from "dotenv"
-import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "fs"
-import { basename, dirname, extname, resolve } from "path"
+import { existsSync,mkdirSync,readFileSync,statSync,unlinkSync,writeFileSync } from "node:fs"
+import { basename,dirname,extname,resolve } from "node:path"
 import * as XLSX from "xlsx"
 import { sanitizeSpreadsheetRecords } from "../lib/spreadsheet"
-import { inArray, or, sql, type SQL } from "drizzle-orm"
+import { inArray,or,sql,type SQL } from "drizzle-orm"
 import {
   normalizeImportKey,
   normalizeImportText,
   normalizePhoneKey,
   parseUserImportRecords,
-  resolveImportBranch,
-  type ImportableUserRole,
-  type ParsedUserImportRow,
+  resolveImportBranch,type ParsedUserImportRow,
   type UserImportIssue,
   type UserImportRecord,
-  type UserImportUsernameFormat,
+  type UserImportUsernameFormat
 } from "../lib/user-import"
-import { generateImportPassword, hashImportPassword } from "../lib/password-cli"
+import { generateImportPassword,hashImportPassword } from "../lib/password-cli"
 
 dotenv.config({ path: ".env.local" })
 dotenv.config()
@@ -212,7 +210,7 @@ function loadOverrides(filePath?: string): OverrideConfig | null {
   }
   for (const [source, target] of Object.entries(parsed.branchOverrides)) {
     if (!normalizeImportText(source) || typeof target !== "string" || !normalizeImportText(target)) {
-      throw new Error("Every branch override must map a non-empty source name to a non-empty database branch name.")
+      throw new TypeError("Every branch override must map a non-empty source name to a non-empty database branch name.")
     }
   }
   const rawDomains = (parsed as Partial<OverrideConfig>).allowedEmailDomains ?? []

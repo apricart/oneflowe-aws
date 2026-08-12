@@ -12,7 +12,7 @@ interface YearPickerProps {
 export function YearPicker({
     selectedYear,
     onYearChange,
-}: YearPickerProps) {
+}: Readonly<YearPickerProps>) {
     const currentYear = new Date().getFullYear()
     // Generate years from 2022 to current year + 1
     const years = React.useMemo(() => {

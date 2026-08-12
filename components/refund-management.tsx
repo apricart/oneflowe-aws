@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState,useMemo } from "react"
 import useSWR from "swr"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -9,16 +9,16 @@ import { Label } from "@/components/ui/label"
 import { useToast } from "@/hooks/use-toast"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { AlertTriangle, TrendingDown, Clock, CheckCircle, Ban } from "lucide-react"
+import { AlertTriangle,Clock,CheckCircle } from "lucide-react"
 import { Checkbox } from "@/components/ui/checkbox"
-import { calculateLineCents, formatQuantity, parseQuantity, roundQuantity, sanitizeQuantityStep } from "@/lib/quantity"
+import { calculateLineCents,formatQuantity,parseQuantity,roundQuantity,sanitizeQuantityStep } from "@/lib/quantity"
 import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
 } from "@/components/ui/table"
 import { isOrderPortalRefundEligible } from "@/lib/business-rules"
 
@@ -40,6 +40,55 @@ interface RefundManagementProps {
 
 const fetcher = (url: string) => fetch(url).then(r => r.json())
 
+type RefundAvailabilityInput = {
+    pricesHidden: boolean
+    quantityOnlyRefundAvailable: boolean
+    remainingQuantity: number
+    remainingAmount: number
+    orderStatus: string
+    orderItemCount: number
+    totalApproved: number
+    orderTotalCents: number | null
+    requesterRole?: string
+    orderFulfillmentStatus?: string | null
+    allowRefundRequest: boolean
+    isWithinRefundWindow: boolean
+}
+
+const getHasRefundCapacity = (input: RefundAvailabilityInput) => (
+    input.pricesHidden
+        ? input.quantityOnlyRefundAvailable && input.remainingQuantity > 0
+        : input.remainingAmount > 0
+)
+
+const getFullyRefundedState = (input: RefundAvailabilityInput) => (
+    input.pricesHidden
+        ? input.orderStatus.toUpperCase() === "REFUNDED"
+            || (input.orderItemCount > 0 && input.remainingQuantity <= 0)
+        : input.orderTotalCents !== null && input.totalApproved >= input.orderTotalCents
+)
+
+const getRefundAvailability = (input: RefundAvailabilityInput) => {
+    const isOrderApproved = ["APPROVED", "FULFILLED", "REFUNDED"].includes(input.orderStatus.toUpperCase())
+    const isOrderPortal = input.requesterRole === "ORDER_PORTAL"
+    const meetsOrderPortalDeliveryRequirement = !isOrderPortal
+        || isOrderPortalRefundEligible(input.orderStatus, input.orderFulfillmentStatus)
+    const hasRefundCapacity = getHasRefundCapacity(input)
+    return {
+        quantityOnlyRefundAvailable: input.quantityOnlyRefundAvailable,
+        hasRefundCapacity,
+        isFullyRefunded: getFullyRefundedState(input),
+        isOrderApproved,
+        isOrderPortal,
+        meetsOrderPortalDeliveryRequirement,
+        canRefund: input.allowRefundRequest
+            && isOrderApproved
+            && meetsOrderPortalDeliveryRequirement
+            && hasRefundCapacity
+            && input.isWithinRefundWindow,
+    }
+}
+
 export function RefundManagement({
     orderId,
     orderTotalCents,
@@ -54,7 +103,7 @@ export function RefundManagement({
     refundedAt,
     refundReason,
     onRefundSuccess
-}: RefundManagementProps) {
+}: Readonly<RefundManagementProps>) {
     const { toast } = useToast()
     const [reason, setReason] = useState("")
     const [reasonError, setReasonError] = useState("")
@@ -87,15 +136,22 @@ export function RefundManagement({
     // Use API data if available, otherwise construct from order props if refunded
     const apiRefunds = refundsData?.refunds || []
 
-    const effectiveRefunds = apiRefunds.length > 0 ? apiRefunds :
-        (refundAmountCents && refundAmountCents > 0) ? [{
+    const effectiveRefunds = (() => {
+      if (apiRefunds.length > 0) {
+        return apiRefunds
+      }
+      if ((refundAmountCents && refundAmountCents > 0)) {
+        return [{
             id: 'legacy',
             amountCents: refundAmountCents,
             reason: refundReason || "Refunded externally",
             status: 'APPROVED',
             createdAt: refundedAt || new Date().toISOString(),
             processedByUser: { fullName: 'Admin' }
-        }] : []
+        }]
+      }
+      return []
+    })()
 
     const totalApproved = effectiveRefunds
         .filter((r: any) => r.status === 'APPROVED' || r.status === 'COMPLETED')
@@ -156,23 +212,28 @@ export function RefundManagement({
         }, { ordered: 0, refunded: 0, requested: 0, remaining: 0 })
     }, [orderItems, refundedQuantities, requestedQuantities])
 
-    const quantityOnlyRefundAvailable = refundsData?.quantityOnlyRefundAvailable !== false
-    const hasRefundCapacity = pricesHidden
-        ? quantityOnlyRefundAvailable && quantitySummary.remaining > 0
-        : remainingRefundable > 0
-    const isFullyRefunded = pricesHidden
-        ? orderStatus.toUpperCase() === "REFUNDED" || (orderItems.length > 0 && quantitySummary.remaining <= 0)
-        : orderTotalCents !== null && totalApproved >= orderTotalCents
-
-    const isOrderApproved = ["APPROVED", "FULFILLED", "REFUNDED"].includes(orderStatus.toUpperCase())
-    const isOrderPortal = requesterRole === "ORDER_PORTAL"
-    const meetsOrderPortalDeliveryRequirement = !isOrderPortal
-        || isOrderPortalRefundEligible(orderStatus, orderFulfillmentStatus)
-    const canRefund = allowRefundRequest
-        && isOrderApproved
-        && meetsOrderPortalDeliveryRequirement
-        && hasRefundCapacity
-        && isWithinRefundWindow
+    const {
+        quantityOnlyRefundAvailable,
+        hasRefundCapacity,
+        isFullyRefunded,
+        isOrderApproved,
+        isOrderPortal,
+        meetsOrderPortalDeliveryRequirement,
+        canRefund,
+    } = getRefundAvailability({
+        pricesHidden,
+        quantityOnlyRefundAvailable: refundsData?.quantityOnlyRefundAvailable !== false,
+        remainingQuantity: quantitySummary.remaining,
+        remainingAmount: remainingRefundable,
+        orderStatus,
+        orderItemCount: orderItems.length,
+        totalApproved,
+        orderTotalCents,
+        requesterRole,
+        orderFulfillmentStatus,
+        allowRefundRequest,
+        isWithinRefundWindow,
+    })
 
     const handleItemToggle = (itemId: number, maxRefundableQty: number) => {
         setSelectedItems(prev => {
@@ -222,7 +283,7 @@ export function RefundManagement({
         [selectedItems]
     )
 
-    const handleSubmit = async (e: React.FormEvent) => {
+    const handleSubmit = async (e: React.SubmitEvent<HTMLFormElement>) => {
         e.preventDefault()
 
         if (!allowRefundRequest) return
@@ -401,7 +462,9 @@ export function RefundManagement({
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
-                                        {orderItems.length > 0 ? (
+                                        {(() => {
+                                          if (orderItems.length > 0) {
+                                            return (
                                             orderItems.map((item: any) => {
                                                 const refundedQty = refundedQuantities[item.id] || 0
                                                 const requestedQty = requestedQuantities[item.id] || 0
@@ -451,7 +514,9 @@ export function RefundManagement({
                                                             {formatQuantity(remainingQty)}
                                                         </TableCell>
                                                         <TableCell>
-                                                            {isSelected ? (
+                                                            {(() => {
+                                                              if (isSelected) {
+                                                                return (
                                                                 <Input
                                                                     type="number"
                                                                     min={step}
@@ -461,13 +526,16 @@ export function RefundManagement({
                                                                     onChange={(e) => handleQuantityChange(item.id, parseQuantity(e.target.value), effectiveMaxQty)}
                                                                     className="h-8 w-20 text-center mx-auto"
                                                                 />
-                                                            ) : (
+                                                            )
+                                                              }
+                                                              return (
                                                                 <div className="text-center text-muted-foreground">
                                                                     {isFullyRefundedItem ? (
                                                                         <Badge variant="secondary" className="text-[10px]">Refunded</Badge>
                                                                     ) : "-"}
                                                                 </div>
-                                                            )}
+                                                            )
+                                                            })()}
                                                         </TableCell>
                                                         {!pricesHidden && <TableCell className="text-right font-medium text-red-600">
                                                             {isSelected
@@ -478,13 +546,16 @@ export function RefundManagement({
                                                     </TableRow>
                                                 )
                                             })
-                                        ) : (
+                                        )
+                                          }
+                                          return (
                                             <TableRow>
                                                 <TableCell colSpan={pricesHidden ? 4 : 6} className="text-center h-24 text-muted-foreground">
                                                     Loading items...
                                                 </TableCell>
                                             </TableRow>
-                                        )}
+                                        )
+                                        })()}
                                     </TableBody>
                                 </Table>
                             </div>
@@ -556,20 +627,36 @@ export function RefundManagement({
 
             {/* Refunds History */}
             <div className="space-y-2">
-                {effectiveRefunds.length === 0 ? (
+                {(() => {
+                  if (effectiveRefunds.length === 0) {
+                    return (
                     <p className="text-sm text-muted-foreground italic">No refunds recorded for this order.</p>
-                ) : (
+                )
+                  }
+                  return (
                     effectiveRefunds.map((refund: any) => (
                         <div key={refund.id} className="flex flex-col p-3 bg-slate-50 dark:bg-slate-800 rounded-lg border gap-3">
                             <div className="flex items-center justify-between w-full">
                                 <div className="flex items-center gap-3">
-                                    <div className={`p-2 rounded-full ${refund.status === 'APPROVED' ? 'bg-green-100 text-green-600 dark:bg-green-900/30' :
-                                        refund.status === 'REJECTED' ? 'bg-red-100 text-red-600 dark:bg-red-900/30' :
-                                            'bg-yellow-100 text-yellow-600 dark:bg-yellow-900/30'
+                                    <div className={`p-2 rounded-full ${(() => {
+                                      if (refund.status === 'APPROVED') {
+                                        return 'bg-green-100 text-green-600 dark:bg-green-900/30'
+                                      }
+                                      if (refund.status === 'REJECTED') {
+                                        return 'bg-red-100 text-red-600 dark:bg-red-900/30'
+                                      }
+                                      return 'bg-yellow-100 text-yellow-600 dark:bg-yellow-900/30'
+                                    })()
                                         }`}>
-                                        {refund.status === 'APPROVED' ? <CheckCircle className="h-4 w-4" /> :
-                                            refund.status === 'REJECTED' ? <AlertTriangle className="h-4 w-4" /> :
-                                                <Clock className="h-4 w-4" />}
+                                        {(() => {
+                                          if (refund.status === 'APPROVED') {
+                                            return <CheckCircle className="h-4 w-4" />
+                                          }
+                                          if (refund.status === 'REJECTED') {
+                                            return <AlertTriangle className="h-4 w-4" />
+                                          }
+                                          return <Clock className="h-4 w-4" />
+                                        })()}
                                     </div>
                                     <div>
                                         <p className="font-medium text-sm">
@@ -589,10 +676,18 @@ export function RefundManagement({
                                 </div>
                                 <div className="flex items-center gap-2">
                                     <Badge variant="outline" className={
-                                        refund.status === 'APPROVED' ? 'text-green-600 border-green-200' :
-                                            refund.status === 'REJECTED' ? 'text-red-600 border-red-200' :
-                                                refund.status === 'SUPERSEDED' ? 'text-slate-500 border-slate-200' :
-                                                    'text-yellow-600 border-yellow-200'
+                                        (() => {
+                                          if (refund.status === 'APPROVED') {
+                                            return 'text-green-600 border-green-200'
+                                          }
+                                          if (refund.status === 'REJECTED') {
+                                            return 'text-red-600 border-red-200'
+                                          }
+                                          if (refund.status === 'SUPERSEDED') {
+                                            return 'text-slate-500 border-slate-200'
+                                          }
+                                          return 'text-yellow-600 border-yellow-200'
+                                        })()
                                     }>
                                         {refund.status}
                                     </Badge>
@@ -622,7 +717,8 @@ export function RefundManagement({
                             }
                         </div>
                     ))
-                )}
+                )
+                })()}
             </div>
         </div>
     )

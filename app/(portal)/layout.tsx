@@ -7,7 +7,7 @@ import { OrgBranchProvider } from "@/components/context/org-branch-context"
 import { Toaster } from "@/components/ui/toaster"
 import { SessionGuard } from "@/components/shell/session-guard"
 
-export default function PortalLayout({ children }: { children: ReactNode }) {
+export default function PortalLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
     <AppContextProvider>
       <OrgBranchProvider>

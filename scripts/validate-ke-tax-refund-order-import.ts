@@ -2,9 +2,9 @@
 
 /** Read-only post-import validation for K-Electric legacy orders 43 and 44. */
 
-import { createHash } from "crypto"
-import { readFileSync, writeFileSync } from "fs"
-import { resolve } from "path"
+import { createHash } from "node:crypto"
+import { readFileSync, writeFileSync } from "node:fs"
+import { resolve } from "node:path"
 import type { PoolClient } from "pg"
 import * as dotenv from "dotenv"
 
@@ -127,7 +127,7 @@ async function main() {
       ? await rows(client, "select id, status, source_manifest, counts from legacy_import_batches where id = $1 and organization_id = $2", [batchIds[0], KE_ORGANIZATION.id])
       : []
     const batch = batchRows[0]
-    if (!batch || batch.status !== "COMPLETED") errors.push("Import batch is missing or not completed")
+    if (batch?.status !== "COMPLETED") errors.push("Import batch is missing or not completed")
     if (batch?.source_manifest?.digest !== expectedManifestDigest) errors.push("Import batch source manifest digest mismatch")
     if (JSON.stringify(batch?.source_manifest?.approvedNonFinalLegacyOrderIds) !== JSON.stringify([44])) {
       errors.push("Import batch does not contain the exact order-44 status approval")

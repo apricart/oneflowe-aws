@@ -1,7 +1,8 @@
 #!/usr/bin/env tsx
+import { stringifyPrimitive } from "../lib/stringify-primitive"
 
-import { readFileSync } from "fs"
-import { resolve } from "path"
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
 import * as XLSX from "xlsx"
 
 type Row = Record<string, any>
@@ -18,7 +19,7 @@ function readJson<T>(path: string): T {
 }
 
 function normalizeText(value: unknown): string {
-  return String(value ?? "")
+  return stringifyPrimitive(value)
     .normalize("NFKC")
     .replace(/[\u2018\u2019]/g, "'")
     .replace(/[\u2013\u2014]/g, "-")
@@ -29,9 +30,13 @@ function normalizeText(value: unknown): string {
 
 function normalizeProductName(value: unknown): string {
   return normalizeText(value)
-    .replace(/\s*\(\s*/g, " (")
-    .replace(/\s*\)\s*/g, ")")
-    .replace(/\s*-\s*/g, "-")
+    .replaceAll(" (", "(")
+    .replaceAll("( ", "(")
+    .replaceAll("(", " (")
+    .replaceAll(" )", ")")
+    .replaceAll(") ", ")")
+    .replaceAll(" -", "-")
+    .replaceAll("- ", "-")
 }
 
 function normalizeBranch(value: unknown): string {
@@ -40,13 +45,13 @@ function normalizeBranch(value: unknown): string {
 }
 
 function dateKey(value: unknown): string {
-  const date = new Date(String(value ?? ""))
+  const date = new Date(stringifyPrimitive(value))
   return Number.isNaN(date.getTime()) ? "INVALID_DATE" : date.toISOString().slice(0, 10)
 }
 
 function toCents(value: unknown): number {
   const number = Number(value ?? 0)
-  if (!Number.isFinite(number)) throw new Error(`Invalid monetary value: ${String(value)}`)
+  if (!Number.isFinite(number)) throw new Error(`Invalid monetary value: ${stringifyPrimitive(value)}`)
   return Math.round((number + Number.EPSILON) * 100)
 }
 
@@ -95,7 +100,7 @@ function addSheet(
   for (let rowIndex = 1; rowIndex <= rows.length; rowIndex += 1) {
     for (const columnIndex of moneyColumns) {
       const cell = sheet[XLSX.utils.encode_cell({ r: rowIndex, c: columnIndex })]
-      if (cell && cell.t === "n") cell.z = "#,##0.00;[Red]-#,##0.00"
+      if (cell?.t === "n") cell.z = "#,##0.00;[Red]-#,##0.00"
     }
   }
   XLSX.utils.book_append_sheet(workbook, sheet, name)
@@ -104,7 +109,7 @@ function addSheet(
 function main() {
   const remaining = readJson<{ categories: Array<{ code: string; legacyOrderIds: number[] }> }>(REMAINING_REPORT)
   const category = remaining.categories.find((item) => item.code === "ITEM_SUBTOTAL_MISMATCH")
-  if (!category || category.legacyOrderIds.length !== 19) throw new Error("Expected exactly 19 subtotal-mismatch IDs")
+  if (category?.legacyOrderIds.length !== 19) throw new Error("Expected exactly 19 subtotal-mismatch IDs")
   const mismatchIds = [...category.legacyOrderIds].map(Number).sort((a, b) => a - b)
   const mismatchSet = new Set(mismatchIds)
 
@@ -131,7 +136,7 @@ function main() {
     const name = normalizeProductName(row.Name)
     const quantity = Number(row.Item_Qty)
     const revenueCents = toCents(row.SaleRevenue)
-    if (!name || !(quantity > 0) || revenueCents < 0) continue
+    if (!name || quantity <= 0 || revenueCents < 0) continue
     const effectivePrice = Math.round(revenueCents / quantity)
     const day = dateKey(row.OrderCreatedDT)
     addCandidate(summaryExact, `${normalizeBranch(row.Location)}|${day}|${name}`, effectivePrice)
@@ -211,11 +216,15 @@ function main() {
     const changedPriceLines = evidence.filter((item) => item.priceCents !== toCents(item.line.UnitPrice)).length
     const resolvedDifferenceCents = resolvedSubtotalCents - headerSubtotalCents
     const rawDifferenceCents = rawLineSubtotalCents - headerSubtotalCents
-    const mainReason = rawMatches
-      ? "The order export's own lines match the header, but one or more unit prices conflict with independent product-summary/price-history evidence. The importer will not choose one source by guesswork."
-      : resolvedSubtotalCents === rawLineSubtotalCents
-        ? "The exported item quantities × unit prices do not add up to the order header subtotal."
-        : "The raw item arithmetic and the independently reconstructed price evidence both conflict with the order header subtotal."
+    const mainReason = (() => {
+      if (rawMatches) {
+        return "The order export's own lines match the header, but one or more unit prices conflict with independent product-summary/price-history evidence. The importer will not choose one source by guesswork."
+      }
+      if (resolvedSubtotalCents === rawLineSubtotalCents) {
+        return "The exported item quantities × unit prices do not add up to the order header subtotal."
+      }
+      return "The raw item arithmetic and the independently reconstructed price evidence both conflict with the order header subtotal."
+    })()
 
     orderSummaryRows.push({
       "Legacy Order ID": legacyOrderId,
@@ -261,13 +270,18 @@ function main() {
         "Resolved Line Total PKR": asMoney(resolvedTotalCents),
         "Line Difference vs Raw PKR": asMoney(resolvedTotalCents - rawTotalCents),
         "Price Changed": priceChanged ? "YES - REVIEW" : "No",
-        "Resolution Method": item.candidates.size === 1
-          ? "One consensus value across usable evidence"
-          : orderPricingMethod === "SINGLE_RESIDUAL_FOR_ONE_MISSING_PRICE" && missing.includes(index)
-            ? "Calculated as the sole residual needed for the header"
-            : missing.includes(index)
-              ? "Raw UnitPrice fallback because multiple items lacked one consensus value"
-              : "Consensus evidence",
+        "Resolution Method": (() => {
+          if (item.candidates.size === 1) {
+            return "One consensus value across usable evidence"
+          }
+          if (orderPricingMethod === "SINGLE_RESIDUAL_FOR_ONE_MISSING_PRICE" && missing.includes(index)) {
+            return "Calculated as the sole residual needed for the header"
+          }
+          if (missing.includes(index)) {
+            return "Raw UnitPrice fallback because multiple items lacked one consensus value"
+          }
+          return "Consensus evidence"
+        })(),
         "Usable Consensus Values PKR": [...item.candidates].sort((a, b) => a - b).map((value) => asMoney(value)).join(" | ") || "None",
         "Product Summary Same Branch/Day PKR": valuesLabel(summaryExact, item.exactKey),
         "Price History Same Branch/Day PKR": valuesLabel(historyExact, item.exactKey),

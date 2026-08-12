@@ -1,4 +1,5 @@
 #!/usr/bin/env tsx
+import { stringifyPrimitive } from "../lib/stringify-primitive"
 /**
  * Import fully reconciled K-Electric historical orders that contain refunds.
  *
@@ -8,9 +9,9 @@
  * invoice-sequence, notification, user, branch, or product records.
  */
 
-import { createHash } from "crypto"
-import { existsSync, readFileSync, writeFileSync } from "fs"
-import { resolve } from "path"
+import { createHash } from "node:crypto"
+import { existsSync, readFileSync, writeFileSync } from "node:fs"
+import { resolve } from "node:path"
 import type { PoolClient } from "pg"
 import * as dotenv from "dotenv"
 
@@ -205,7 +206,7 @@ function uniqueBy<T>(values: T[], key: (value: T) => string): T | undefined {
 }
 
 function validDate(value: unknown): Date | undefined {
-  const date = new Date(String(value ?? ""))
+  const date = new Date(stringifyPrimitive(value))
   return Number.isNaN(date.getTime()) ? undefined : date
 }
 
@@ -400,8 +401,8 @@ function prepareSource(opts: Options) {
     manifestDigest,
     approvedNonFinalLegacyOrderIds,
     createMissingBranchAssignments: opts.createMissingBranchAssignments,
-    prepared: prepared.sort((a, b) => a.legacyOrderId - b.legacyOrderId),
-    excluded: excluded.sort((a, b) => a.legacyOrderId - b.legacyOrderId),
+    prepared: prepared.toSorted((a, b) => a.legacyOrderId - b.legacyOrderId),
+    excluded: excluded.toSorted((a, b) => a.legacyOrderId - b.legacyOrderId),
     sourceCount: reportFile.value.length,
   }
 }
@@ -417,8 +418,7 @@ async function reconcile(
 ): Promise<Reconciliation> {
   const [organization] = await rows(client, "select id, code, name, status from organizations where id = $1", [KE_ORGANIZATION.id])
   const globalErrors: string[] = []
-  if (!organization
-    || organization.code !== KE_ORGANIZATION.code
+  if (organization?.code !== KE_ORGANIZATION.code
     || normalizeText(organization.name) !== normalizeText(KE_ORGANIZATION.name)
     || normalizeText(organization.status) !== "active") {
     globalErrors.push(`K-Electric tenant gate failed for id=${KE_ORGANIZATION.id}, code=${KE_ORGANIZATION.code}`)
@@ -639,8 +639,7 @@ async function reconcile(
     for (const line of order.lines) {
       const mappings = productMappingByName.get(line.normalizedName) ?? []
       const mapping = uniqueBy(mappings, (row) => `${row.global_product_id}:${row.organization_inventory_id}`)
-      if (!mapping
-        || mapping.product_deleted_at !== null
+      if (mapping?.product_deleted_at !== null
         || mapping.inventory_deleted_at !== null
         || mapping.inventory_organization_id !== KE_ORGANIZATION.id) {
         reasons.push(`INVALID_PRODUCT_MAPPING:${line.sourceName}`)
@@ -821,8 +820,7 @@ async function commitOrders(
         returning branch_id, organization_id, organization_inventory_id, is_visible, is_active, deleted_at
       `, [assignment.branchId, KE_ORGANIZATION.id, assignment.organizationInventoryId, opts.actorUserId])
       const row = insertedAssignment.rows[0]
-      if (!row
-        || row.organization_id !== KE_ORGANIZATION.id
+      if (row?.organization_id !== KE_ORGANIZATION.id
         || row.branch_id !== assignment.branchId
         || row.organization_inventory_id !== assignment.organizationInventoryId
         || row.is_visible !== false
@@ -862,7 +860,7 @@ async function commitOrders(
         "Historical refund imported from K-Electric legacy logistics source",
         JSON.stringify(receipt(order)),
       ])
-      if (!createdOrder || createdOrder.organization_id !== KE_ORGANIZATION.id || createdOrder.tid !== `KE-LEGACY-${order.legacyOrderId}`) {
+      if (createdOrder?.organization_id !== KE_ORGANIZATION.id || createdOrder.tid !== `KE-LEGACY-${order.legacyOrderId}`) {
         throw new Error(`Order insert tenant/TID validation failed for ${order.legacyOrderId}`)
       }
 
@@ -885,7 +883,7 @@ async function commitOrders(
           line.unitPriceCents,
           order.createdAt,
         ])
-        if (!createdItem || createdItem.organization_id !== KE_ORGANIZATION.id) throw new Error(`Order item tenant validation failed for ${order.legacyOrderId}`)
+        if (createdItem?.organization_id !== KE_ORGANIZATION.id) throw new Error(`Order item tenant validation failed for ${order.legacyOrderId}`)
         orderItemIdBySourceItemId.set(line.sourceItemId, Number(createdItem.id))
       }
 
@@ -905,7 +903,7 @@ async function commitOrders(
         opts.actorUserId,
         order.refundedAt,
       ])
-      if (!createdRefund || createdRefund.organization_id !== KE_ORGANIZATION.id || createdRefund.order_id !== createdOrder.id) {
+      if (createdRefund?.organization_id !== KE_ORGANIZATION.id || createdRefund.order_id !== createdOrder.id) {
         throw new Error(`Refund tenant/order validation failed for ${order.legacyOrderId}`)
       }
 
@@ -1103,7 +1101,15 @@ async function main() {
     const totalReadyTaxRefundCents = reconciliation.readyOrders.reduce((sum, order) => sum + order.taxRefundCents, 0)
     const report = {
       generatedAt: new Date().toISOString(),
-      mode: opts.commit ? "COMMIT_REQUESTED" : opts.rollbackTest ? "ROLLBACK_TEST_REQUESTED" : "DRY_RUN",
+      mode: (() => {
+        if (opts.commit) {
+          return "COMMIT_REQUESTED"
+        }
+        if (opts.rollbackTest) {
+          return "ROLLBACK_TEST_REQUESTED"
+        }
+        return "DRY_RUN"
+      })(),
       organization: reconciliation.organization,
       configuredActorUserId: reconciliation.configuredActorUserId,
       configuredActorMatchCount: reconciliation.configuredActorMatchCount,

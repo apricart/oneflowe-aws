@@ -1,6 +1,6 @@
-import { mkdirSync, readFileSync, writeFileSync } from "fs"
-import { dirname, relative, resolve } from "path"
-import { pathToFileURL } from "url"
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { dirname, relative, resolve } from "node:path"
+import { pathToFileURL } from "node:url"
 
 type JsonRow = Record<string, unknown>
 
@@ -34,7 +34,7 @@ function subtract(values: Iterable<number>, excluded: Set<number>): number[] {
 }
 
 function stableRow(row: JsonRow): string {
-  return JSON.stringify(Object.keys(row).sort().map((key) => [key, row[key]]))
+  return JSON.stringify(Object.keys(row).sort((a, b) => a.localeCompare(b)).map((key) => [key, row[key]]))
 }
 
 function multisetDifference(left: JsonRow[], right: JsonRow[]): JsonRow[] {
@@ -296,7 +296,9 @@ const summaryOnlyGroups = new Set(
     ].join("|"),
   ),
 )
-const summaryOnlyDates = summaryOnlyRows.map((row) => String(row.OrderCreatedDT)).sort()
+const summaryOnlyDates = summaryOnlyRows
+  .map((row) => String(row.OrderCreatedDT))
+  .sort((a, b) => a.localeCompare(b))
 const summaryOnly = {
   rows: summaryOnlyRows.length,
   pseudoOrderGroups: summaryOnlyGroups.size,
@@ -362,27 +364,20 @@ The known legacy universe contains **${knownLegacyIds.size} unique order IDs**. 
 
 | Exclusive blocker | Orders |
 |---|---:|
-${categories.map((category) => `| ${category.title} | ${category.legacyOrderIds.length} |`).join("\n")}
+${categories.map((category) => ("| " + String(category.title) + " | " + String(category.legacyOrderIds.length) + " |")).join("\n")}
 | **Total** | **${remainingIds.length}** |
 
 The categories are mutually exclusive: every one of the ${remainingIds.length} remaining legacy IDs appears exactly once.
 
 ## Reasons and exact legacy IDs
 
-${categories.map((category) => `### ${category.title} — ${category.legacyOrderIds.length}
-
-**Reason:** ${category.reason}
-
-**Needed before import:** ${category.requiredEvidence}
-${category.details ? `\n**Detail:** StatusID/DeliveryStatus breakdown: ${Object.entries(category.details.statusIdDeliveryStatusBreakdown as Record<string, number>).map(([status, count]) => `${status} = ${count}`).join(", ")}.\n` : ""}
-**Legacy order IDs:** ${formatIds(category.legacyOrderIds)}
-`).join("\n")}
+${categories.map((category) => ("### " + String(category.title) + " — " + String(category.legacyOrderIds.length) + "\n\n**Reason:** " + String(category.reason) + "\n\n**Needed before import:** " + String(category.requiredEvidence) + "\n" + String(category.details ? ("\n**Detail:** StatusID/DeliveryStatus breakdown: " + String(Object.entries(category.details.statusIdDeliveryStatusBreakdown as Record<string, number>).map(([status, count]) => (String(status) + " = " + String(count))).join(", ")) + ".\n") : "") + "\n**Legacy order IDs:** " + String(formatIds(category.legacyOrderIds)) + "\n")).join("\n")}
 ## Later summary-only activity is not included in the 166-order count
 
 \`productSummery.json\` contains ${summaryOnly.rows} rows dated ${summaryOnly.dateRange.from} through ${summaryOnly.dateRange.to} that are not present in \`UserProductSummary.json\`. They can be grouped into ${summaryOnly.pseudoOrderGroups} location/user/date/status combinations, but those are only analytical groupings—not authoritative orders.
 
-- Row statuses: ${Object.entries(summaryOnly.rowStatusBreakdown).map(([status, count]) => `${status} ${count}`).join(", ")}.
-- Group statuses: ${Object.entries(summaryOnly.groupStatusBreakdown).map(([status, count]) => `${status} ${count}`).join(", ")}.
+- Row statuses: ${Object.entries(summaryOnly.rowStatusBreakdown).map(([status, count]) => (String(status) + " " + String(count))).join(", ")}.
+- Group statuses: ${Object.entries(summaryOnly.groupStatusBreakdown).map(([status, count]) => (String(status) + " " + String(count))).join(", ")}.
 - They have no legacy order ID, authoritative header, or complete order-level totals, so they cannot be counted or imported as exact orders.
 
 ## Conclusion

@@ -47,10 +47,14 @@ export function getOrderStatusDisplay(
     paymentStatus: shouldShowOrderPaymentStatus(order)
       ? PAYMENT_STATUS_LABELS[normalizePaymentStatus(order.paymentStatus)]
       : null,
-    refundStatus: orderStatus.key === "refunded"
-      ? "Full Refund"
-      : hasPartialRefund(order)
-        ? "Partial Refund"
-        : null,
+    refundStatus: (() => {
+      if (orderStatus.key === "refunded") {
+        return "Full Refund"
+      }
+      if (hasPartialRefund(order)) {
+        return "Partial Refund"
+      }
+      return null
+    })(),
   }
 }

@@ -1,8 +1,8 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect,useState } from "react"
 import { useRouter } from "next/navigation"
-import { motion, AnimatePresence } from "framer-motion"
+import { motion,AnimatePresence } from "framer-motion"
 import {
   Package,
   CheckCircle,
@@ -13,30 +13,23 @@ import {
   List,
   MapPin,
   Building2,
-  Calendar as CalendarIcon,
-  Check,
-  X,
-  CreditCard,
+  Calendar as CalendarIcon,CreditCard,
   Building,
   AlertTriangle,
-  FileCheck,
-  Lock,
-  Share2,
-  Copy,
+  FileCheck,Copy,
   Send,
   Truck,
   Banknote,
   ChevronDown,
   Loader2,
-  User,
+  User
 } from "lucide-react"
 import { format } from "date-fns"
 import { toast } from "@/hooks/use-toast"
-import { cn, formatPKR } from "@/lib/utils"
+import { cn,formatPKR } from "@/lib/utils"
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import {
   Sheet,
   SheetContent,
@@ -53,11 +46,10 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog"
 import { ReceiptIconButton } from "@/components/receipts/receipt-icon-button"
-import { ColumnSelector, type ColumnDef, useColumnSelector } from "@/components/reports/column-selector"
-import { Separator } from "@/components/ui/separator"
+import { ColumnSelector,type ColumnDef,useColumnSelector } from "@/components/reports/column-selector"
 import { isInvoiceAvailableForOrder } from "@/lib/invoice-availability"
-import { getOrderDerivedStatus, hasPartialRefund, type DerivedOrderStatusKey, type OrderStatusContext } from "@/lib/order-status"
-import { calculateLineCents, formatQuantity } from "@/lib/quantity"
+import { getOrderDerivedStatus,hasPartialRefund,type DerivedOrderStatusKey,type OrderStatusContext } from "@/lib/order-status"
+import { calculateLineCents,formatQuantity } from "@/lib/quantity"
 import {
   FULFILLMENT_STATUS_LABELS,
   getNextFulfillmentStatus,
@@ -75,7 +67,6 @@ import {
   shouldShowOrderPaymentStatus,
 } from "@/lib/order-status-display"
 
-type OrderItem = any // Avoiding strict type definition for speed, will rely on usage
 type OrderTableColumn = ColumnDef & { width: number }
 
 const ORDER_TABLE_COLUMNS: OrderTableColumn[] = [
@@ -116,7 +107,7 @@ type OrderDetails = {
 }
 
 type OrdersDirectoryProps = {
-  orders: OrderItem[]
+  orders: any[]
   statusContext?: OrderStatusContext
   userRole: string | undefined
   isSuperAdmin: boolean
@@ -126,6 +117,20 @@ type OrdersDirectoryProps = {
   showCostCenterId?: boolean
   pricesHidden?: boolean
   onUpdate: () => void
+}
+
+function EmptyOrdersState({ compact = false }: Readonly<{ compact?: boolean }>) {
+  return (
+    <div className={cn("flex flex-col items-center justify-center gap-3 text-center", compact ? "py-16" : "p-16")}>
+      <div className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-dashed border-slate-200 dark:border-slate-700">
+        <Package className="h-10 w-10 text-slate-300 dark:text-slate-600" />
+      </div>
+      <div className="space-y-1">
+        <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">No orders found</p>
+        <p className="text-xs font-medium text-slate-400 dark:text-slate-500">No order data is available for the selected filters.</p>
+      </div>
+    </div>
+  )
 }
 
 export function OrdersDirectory({
@@ -139,10 +144,10 @@ export function OrdersDirectory({
   showCostCenterId,
   pricesHidden = false,
   onUpdate
-}: OrdersDirectoryProps) {
+}: Readonly<OrdersDirectoryProps>) {
   const router = useRouter()
   const [viewMode, setViewMode] = useState<"grid" | "table">("table")
-  const [viewingOrder, setViewingOrder] = useState<OrderItem | null>(null)
+  const [viewingOrder, setViewingOrder] = useState<any>(null)
 
   // Modals for actions
   const [actionType, setActionType] = useState<"approve" | "reject" | "fulfill" | null>(null)
@@ -271,7 +276,7 @@ export function OrdersDirectory({
     }
   }
 
-  const openFullDetails = (order: OrderItem) => {
+  const openFullDetails = (order: any) => {
     router.push(`/orders/${order.id}#refund-details`)
   }
 
@@ -383,18 +388,6 @@ export function OrdersDirectory({
       setIsUpdatingProgress(false)
     }
   }
-
-  const EmptyOrdersState = ({ compact = false }: { compact?: boolean }) => (
-    <div className={cn("flex flex-col items-center justify-center gap-3 text-center", compact ? "py-16" : "p-16")}>
-      <div className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-dashed border-slate-200 dark:border-slate-700">
-        <Package className="h-10 w-10 text-slate-300 dark:text-slate-600" />
-      </div>
-      <div className="space-y-1">
-        <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">No orders found</p>
-        <p className="text-xs font-medium text-slate-400 dark:text-slate-500">No order data is available for the selected filters.</p>
-      </div>
-    </div>
-  )
 
   // Handlers
   const executeAction = async () => {
@@ -543,7 +536,9 @@ export function OrdersDirectory({
       </div>
 
       <AnimatePresence mode="wait">
-        {viewMode === "grid" ? (
+        {(() => {
+          if (viewMode === "grid") {
+            return (
           <motion.div
             key="grid"
             initial={{ opacity: 0, y: 10 }}
@@ -636,7 +631,9 @@ export function OrdersDirectory({
               )
             })}
           </motion.div>
-        ) : (
+        )
+          }
+          return (
           <motion.div
             key="table"
             initial={{ opacity: 0, y: 10 }}
@@ -721,7 +718,9 @@ export function OrdersDirectory({
                         ) : <span className="text-slate-300 dark:text-slate-600">—</span>}
                       </td>}
                       {isTableColumnVisible("refundStatus") && <td className="px-4 py-5 text-center">
-                        {statusDisplay.refundStatus ? (
+                        {(() => {
+                          if (statusDisplay.refundStatus) {
+                            return (
                           <Badge
                             variant="outline"
                             className={cn(
@@ -733,7 +732,10 @@ export function OrdersDirectory({
                           >
                             {statusDisplay.refundStatus}
                           </Badge>
-                        ) : <span className="text-slate-300 dark:text-slate-600">—</span>}
+                        )
+                          }
+                          return <span className="text-slate-300 dark:text-slate-600">—</span>
+                        })()}
                       </td>}
                       {isTableColumnVisible("orderDate") && <td className="whitespace-nowrap px-4 py-5 text-xs font-medium text-slate-500">
                         {format(new Date(order.createdAt), "dd MMM yyyy")}
@@ -760,7 +762,8 @@ export function OrdersDirectory({
               </tbody>
             </table>
           </motion.div>
-        )}
+        )
+        })()}
       </AnimatePresence>
 
       {/* Spatial Detail Drawer (Order Action Sheet) - Adorable Theme */}
@@ -1023,7 +1026,15 @@ export function OrdersDirectory({
                         )}
                       >
                         <Banknote className={cn("mr-2 h-4 w-4", isUpdatingPayment && "animate-pulse")} />
-                        {isUpdatingPayment ? "Updating..." : isPaid ? "Mark as Unpaid" : "Mark as Paid"}
+                        {(() => {
+                          if (isUpdatingPayment) {
+                            return "Updating..."
+                          }
+                          if (isPaid) {
+                            return "Mark as Unpaid"
+                          }
+                          return "Mark as Paid"
+                        })()}
                       </Button>
                     )
                   })()
@@ -1055,7 +1066,9 @@ export function OrdersDirectory({
                     <div className="w-full space-y-3">
                       {(() => {
                         const nextStatus = getNextFulfillmentStatus(viewingOrder.fulfillmentStatus)
-                        return nextStatus ? (
+                        return (() => {
+                          if (nextStatus) {
+                            return (
                           <Button
                             type="button"
                             disabled={isUpdatingProgress}
@@ -1065,7 +1078,10 @@ export function OrdersDirectory({
                             <Truck className={cn("mr-2 h-4 w-4", isUpdatingProgress && "animate-pulse")} />
                             {isUpdatingProgress ? "Updating..." : `Mark ${FULFILLMENT_STATUS_LABELS[nextStatus]}`}
                           </Button>
-                        ) : null
+                        )
+                          }
+                          return null
+                        })()
                       })()}
                       <Button onClick={() => setActionType("fulfill")} className="w-full h-12 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold shadow-lg shadow-indigo-600/20">
                         <CheckCircle className="mr-2 h-4 w-4" />
@@ -1136,9 +1152,15 @@ export function OrdersDirectory({
               onClick={executeAction}
               disabled={isProcessing || (actionType === 'reject' && !rejectReason) || (actionType === 'fulfill' && !fulfillToken)}
               className={cn("h-11 rounded-xl font-bold px-6 text-white shadow-lg",
-                actionType === 'reject' ? "bg-rose-600 hover:bg-rose-500 shadow-rose-600/20" :
-                  actionType === 'approve' ? "bg-emerald-600 hover:bg-emerald-500 shadow-emerald-600/20" :
-                    "bg-indigo-600 hover:bg-indigo-500 shadow-indigo-600/20"
+                (() => {
+                  if (actionType === 'reject') {
+                    return "bg-rose-600 hover:bg-rose-500 shadow-rose-600/20"
+                  }
+                  if (actionType === 'approve') {
+                    return "bg-emerald-600 hover:bg-emerald-500 shadow-emerald-600/20"
+                  }
+                  return "bg-indigo-600 hover:bg-indigo-500 shadow-indigo-600/20"
+                })()
               )}
             >
               {isProcessing ? "Processing..." : `Confirm ${actionType}`}
@@ -1202,15 +1224,15 @@ function OrderDetailsDisclosure({
   error,
   onToggle,
   onRetry,
-}: {
-  order: OrderItem
+}: Readonly<{
+  order: any
   details: OrderDetails | null
   expanded: boolean
   loading: boolean
   error: string | null
   onToggle: () => void
   onRetry: () => void
-}) {
+}>) {
   const detailLines = details?.orderItems || []
   const profileName =
     details?.receiptData?.buyerName ||
@@ -1293,14 +1315,19 @@ function OrderDetailsDisclosure({
               className="overflow-hidden"
             >
               <div className="mx-4 border-t border-slate-100 pb-4 pt-4 dark:border-slate-800">
-                {loading ? (
+                {(() => {
+                  if (loading) {
+                    return (
                   <div className="flex min-h-32 flex-col items-center justify-center gap-2 text-slate-400">
                     <Loader2 className="h-5 w-5 animate-spin text-indigo-500" />
                     <p className="text-[10px] font-bold uppercase tracking-wider">
                       Loading order details
                     </p>
                   </div>
-                ) : error ? (
+                )
+                  }
+                  if (error) {
+                    return (
                   <div className="flex min-h-32 flex-col items-center justify-center gap-3 rounded-2xl bg-rose-50/60 px-4 text-center dark:bg-rose-950/20">
                     <p className="text-xs font-semibold text-rose-600 dark:text-rose-300">
                       {error}
@@ -1315,7 +1342,10 @@ function OrderDetailsDisclosure({
                       Try Again
                     </Button>
                   </div>
-                ) : details ? (
+                )
+                  }
+                  if (details) {
+                    return (
                   <div className="space-y-5">
                     <div className="grid grid-cols-2 gap-3">
                       <div className="min-w-0 rounded-2xl border border-indigo-100/60 bg-indigo-50/30 p-3 dark:border-indigo-900/40 dark:bg-indigo-950/20">
@@ -1374,7 +1404,9 @@ function OrderDetailsDisclosure({
                         Transaction Breakdown
                       </h4>
                       <div className="overflow-hidden rounded-2xl border border-slate-200/60 bg-white/50 dark:border-slate-800/60 dark:bg-slate-900/50">
-                        {detailLines.length > 0 ? (
+                        {(() => {
+                          if (detailLines.length > 0) {
+                            return (
                           <>
                             <div className="divide-y divide-slate-100 dark:divide-slate-800">
                               {detailLines.map((line) => (
@@ -1435,15 +1467,21 @@ function OrderDetailsDisclosure({
                               </div>
                             </div>
                           </>
-                        ) : (
+                        )
+                          }
+                          return (
                           <p className="p-6 text-center text-[10px] font-medium text-slate-400">
                             No product lines are available for this order.
                           </p>
-                        )}
+                        )
+                        })()}
                       </div>
                     </div>
                   </div>
-                ) : null}
+                )
+                  }
+                  return null
+                })()}
               </div>
             </motion.div>
           )}

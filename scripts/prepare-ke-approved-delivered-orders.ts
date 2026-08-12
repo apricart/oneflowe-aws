@@ -1,4 +1,5 @@
 #!/usr/bin/env tsx
+import { stringifyPrimitive } from "../lib/stringify-primitive"
 
 import { createHash } from "node:crypto"
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
@@ -24,12 +25,12 @@ const REPORT_ROOT = resolve(OUTPUT_ROOT, "reports")
 
 function cents(value: unknown): number {
   const result = Math.round((Number(value ?? 0) + Number.EPSILON) * 100)
-  if (!Number.isSafeInteger(result)) throw new Error(`Invalid money value: ${String(value)}`)
+  if (!Number.isSafeInteger(result)) throw new Error(`Invalid money value: ${stringifyPrimitive(value)}`)
   return result
 }
 
 function normalize(value: unknown): string {
-  return String(value ?? "").normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase()
+  return stringifyPrimitive(value).normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase()
 }
 
 function sheetRows(path: string, sheetName: string): Row[] {
@@ -241,8 +242,8 @@ function main() {
     items: sales.length,
     subtotalCents: sales.reduce((sum, row) => sum + cents(row.UnitPrice) * Number(row.ItemQuantity), 0),
     taxCents: headers.reduce((sum, header) => {
-      const lines = sales.filter((line) => Number(line.ID) === Number(header.ID))
-      return sum + cents(lines[0]?.Tax)
+      const line = sales.find((candidate) => Number(candidate.ID) === Number(header.ID))
+      return sum + cents(line?.Tax)
     }, 0),
     totalCents: headers.reduce((sum, header) => sum + cents(header.GrandTotal), 0),
     policy: "USER_APPROVED_NONFINAL_NONREFUND_ORDERS_AS_FULFILLED_DELIVERED",

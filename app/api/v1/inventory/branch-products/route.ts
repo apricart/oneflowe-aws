@@ -31,11 +31,11 @@ export async function GET(req: NextRequest) {
     // Access control: users can only view their own organization's branches
     // BRANCH_ADMIN can only view their own branch
     if (userRole === "BRANCH_ADMIN") {
-      if (userBranchId !== parseInt(branchId) || userOrgId !== parseInt(organizationId)) {
+      if (userBranchId !== Number.parseInt(branchId) || userOrgId !== Number.parseInt(organizationId)) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 })
       }
     } else if (userRole === "HEAD_OFFICE") {
-      if (userOrgId !== parseInt(organizationId)) {
+      if (userOrgId !== Number.parseInt(organizationId)) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 })
       }
     }
@@ -75,7 +75,7 @@ export async function GET(req: NextRequest) {
           organizationProducts,
           and(
             eq(organizationProducts.globalProductId, globalProducts.id),
-            eq(organizationProducts.organizationId, parseInt(organizationId)),
+            eq(organizationProducts.organizationId, Number.parseInt(organizationId)),
             eq(organizationProducts.isEnabled, true)
           )
         )
@@ -83,7 +83,7 @@ export async function GET(req: NextRequest) {
           branchProducts,
           and(
             eq(branchProducts.globalProductId, globalProducts.id),
-            eq(branchProducts.branchId, parseInt(branchId))
+            eq(branchProducts.branchId, Number.parseInt(branchId))
           )
         )
         .where(eq(globalProducts.status, "active"))
@@ -135,8 +135,10 @@ export async function PUT(req: NextRequest) {
       conditions.push(eq(branchProducts.organizationId, Number(userOrgId)))
     } else if (userRole === "BRANCH_ADMIN") {
       if (!userOrgId || !userBranchId) return NextResponse.json({ error: "Organization and branch context required" }, { status: 400 })
-      conditions.push(eq(branchProducts.organizationId, Number(userOrgId)))
-      conditions.push(eq(branchProducts.branchId, Number(userBranchId)))
+      conditions.push(
+        eq(branchProducts.organizationId, Number(userOrgId)),
+        eq(branchProducts.branchId, Number(userBranchId)),
+      )
     }
 
     // Update branch product with ownership check in WHERE clause

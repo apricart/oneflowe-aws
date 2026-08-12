@@ -83,8 +83,11 @@ function main() {
 
   const preAssignmentIds = new Set((pre.branchInventory as Row[]).map((row) => String(row.id)))
   const newAssignments = (post.branchInventory as Row[]).filter((row) => !preAssignmentIds.has(String(row.id)))
-  const expectedAssignmentPairs = ["133:198", "133:201", "133:219", "133:237"].sort()
-  const actualAssignmentPairs = newAssignments.map((row) => `${row.branch_id}:${row.organization_inventory_id}`).sort()
+  const expectedAssignmentPairs = ["133:198", "133:201", "133:219", "133:237"]
+    .sort((a, b) => a.localeCompare(b))
+  const actualAssignmentPairs = newAssignments
+    .map((row) => `${row.branch_id}:${row.organization_inventory_id}`)
+    .sort((a, b) => a.localeCompare(b))
   check(same(actualAssignmentPairs, expectedAssignmentPairs), `New branch assignment pairs mismatch: ${actualAssignmentPairs.join(",")}`)
   check(newAssignments.every((row) => Number(row.organization_id) === 10 && row.is_active === false && row.is_visible === false && row.deleted_at == null), "New branch assignment safety mismatch")
 

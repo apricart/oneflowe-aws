@@ -1,9 +1,9 @@
-import { NextRequest, NextResponse } from "next/server"
+import { NextRequest,NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
-import { organizationInventory, globalProducts } from "@/db/schema"
-import { eq, and, isNull, sql } from "drizzle-orm"
+import { organizationInventory } from "@/db/schema"
+import { and,isNull,sql } from "drizzle-orm"
 
 // POST /api/v1/admin/cleanup-inventory - Run cleanup script
 export async function POST(req: NextRequest) {

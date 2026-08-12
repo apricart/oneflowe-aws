@@ -1,4 +1,5 @@
 #!/usr/bin/env tsx
+import { stringifyPrimitive } from "../lib/stringify-primitive"
 
 /**
  * Convert the independently captured current-missing-order audit into the
@@ -9,9 +10,9 @@
  * statuses, and timestamps all reconcile exactly.
  */
 
-import { createHash } from "crypto"
-import { existsSync, readFileSync, writeFileSync } from "fs"
-import { resolve } from "path"
+import { createHash } from "node:crypto"
+import { existsSync, readFileSync, writeFileSync } from "node:fs"
+import { resolve } from "node:path"
 
 import { KE_ORGANIZATION, toCents } from "../lib/legacy-import/ke-electric"
 import { buildRefundBreakdownCents } from "../lib/refund-breakdown"
@@ -36,7 +37,7 @@ function sha256(value: Buffer | string): string {
 }
 
 function validDate(value: unknown): boolean {
-  return !Number.isNaN(new Date(String(value ?? "")).getTime())
+  return !Number.isNaN(new Date(stringifyPrimitive(value)).getTime())
 }
 
 function main() {

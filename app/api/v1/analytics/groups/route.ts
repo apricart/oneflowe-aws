@@ -31,17 +31,17 @@ export async function GET(req: NextRequest) {
         const compareMonthsRaw = searchParams.get("compareMonths")
         const compareYearsRaw = searchParams.get("compareYears")
 
-        const parsedMonths = monthsRaw ? monthsRaw.split(',').map(Number).filter((n: any) => !isNaN(n) && n >= 1 && n <= 12) : []
-        const parsedYears = yearsRaw ? yearsRaw.split(',').map(Number).filter((n: any) => !isNaN(n) && n > 2000) : []
-        const parsedCompMonths = compareMonthsRaw ? compareMonthsRaw.split(',').map(Number).filter((n: any) => !isNaN(n) && n >= 1 && n <= 12) : []
-        const parsedCompYears = compareYearsRaw ? compareYearsRaw.split(',').map(Number).filter((n: any) => !isNaN(n) && n > 2000) : []
+        const parsedMonths = monthsRaw ? monthsRaw.split(',').map(Number).filter((n: any) => !Number.isNaN(n) && n >= 1 && n <= 12) : []
+        const parsedYears = yearsRaw ? yearsRaw.split(',').map(Number).filter((n: any) => !Number.isNaN(n) && n > 2000) : []
+        const parsedCompMonths = compareMonthsRaw ? compareMonthsRaw.split(',').map(Number).filter((n: any) => !Number.isNaN(n) && n >= 1 && n <= 12) : []
+        const parsedCompYears = compareYearsRaw ? compareYearsRaw.split(',').map(Number).filter((n: any) => !Number.isNaN(n) && n > 2000) : []
 
         const summaryOnly = searchParams.get("summaryOnly") === "true"
         const trendOnly = searchParams.get("trendOnly") === "true"
         const allTime = searchParams.get("allTime") === "true"
 
         if (orgIdParam && role === "SUPER_ADMIN") {
-            const parsedOrgId = parseInt(orgIdParam)
+            const parsedOrgId = Number.parseInt(orgIdParam)
             if (Number.isFinite(parsedOrgId)) orgId = parsedOrgId
         }
 
@@ -53,8 +53,8 @@ export async function GET(req: NextRequest) {
             pricesHidden ? redactAnalyticsPrices({ ...payload, pricesHidden: true }) : payload
         )
 
-        const parsedGroupIds = groupIdsParam ? groupIdsParam.split(',').map(Number).filter(id => !isNaN(id)) : []
-        const parsedBranchIds = branchIdsParam ? branchIdsParam.split(',').map(Number).filter(id => !isNaN(id)) : []
+        const parsedGroupIds = groupIdsParam ? groupIdsParam.split(',').map(Number).filter(id => !Number.isNaN(id)) : []
+        const parsedBranchIds = branchIdsParam ? branchIdsParam.split(',').map(Number).filter(id => !Number.isNaN(id)) : []
         const nonDeletedGroupCondition = sql`${groups.status} != 'deleted'`
 
         // ━━━ Mode: All Time (Year Selection) ━━━
@@ -81,10 +81,10 @@ export async function GET(req: NextRequest) {
         const orderConditions: any[] = [REVENUE_ELIGIBLE_FILTER]
         
         if (parsedMonths.length > 0) {
-            orderConditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedMonths, sql`, `)})`)
+            orderConditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedMonths, sql.raw(", "))})`)
         }
         if (parsedYears.length > 0) {
-            orderConditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedYears, sql`, `)})`)
+            orderConditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedYears, sql.raw(", "))})`)
         }
 
         if (parsedMonths.length === 0 && parsedYears.length === 0) {
@@ -125,7 +125,7 @@ export async function GET(req: NextRequest) {
         }
         groupConditions.push(nonDeletedGroupCondition)
         if (parsedGroupIds.length > 0) {
-            groupConditions.push(sql`${groups.id} IN (${sql.join(parsedGroupIds, sql`, `)})`)
+            groupConditions.push(sql`${groups.id} IN (${sql.join(parsedGroupIds, sql.raw(", "))})`)
         }
 
         // ━━━ Mode: Trend Only (Bar Chart) ━━━
@@ -143,8 +143,8 @@ export async function GET(req: NextRequest) {
                     orderWhere,
                     orgId ? eq(groups.organizationId, orgId) : undefined,
                     nonDeletedGroupCondition,
-                    parsedGroupIds.length > 0 ? sql`${groups.id} IN (${sql.join(parsedGroupIds, sql`, `)})` : undefined,
-                    parsedBranchIds.length > 0 ? sql`${branches.id} IN (${sql.join(parsedBranchIds, sql`, `)})` : undefined
+                    parsedGroupIds.length > 0 ? sql`${groups.id} IN (${sql.join(parsedGroupIds, sql.raw(", "))})` : undefined,
+                    parsedBranchIds.length > 0 ? sql`${branches.id} IN (${sql.join(parsedBranchIds, sql.raw(", "))})` : undefined
                 ))
                 .groupBy(sql`TO_CHAR(${orders.createdAt}, 'YYYY-MM')`)
                 .orderBy(sql`TO_CHAR(${orders.createdAt}, 'YYYY-MM')`)
@@ -174,13 +174,13 @@ export async function GET(req: NextRequest) {
                         REVENUE_ELIGIBLE_FILTER,
                         orgId ? eq(groups.organizationId, orgId) : undefined,
                         nonDeletedGroupCondition,
-                        parsedGroupIds.length > 0 ? sql`${groups.id} IN (${sql.join(parsedGroupIds, sql`, `)})` : undefined,
-                        parsedBranchIds.length > 0 ? sql`${branches.id} IN (${sql.join(parsedBranchIds, sql`, `)})` : undefined,
+                        parsedGroupIds.length > 0 ? sql`${groups.id} IN (${sql.join(parsedGroupIds, sql.raw(", "))})` : undefined,
+                        parsedBranchIds.length > 0 ? sql`${branches.id} IN (${sql.join(parsedBranchIds, sql.raw(", "))})` : undefined,
                         (() => {
                             const compCond: any[] = []
                             if (parsedCompMonths.length > 0 || parsedCompYears.length > 0) {
-                                if (parsedCompMonths.length > 0) compCond.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedCompMonths, sql`, `)})`)
-                                if (parsedCompYears.length > 0) compCond.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedCompYears, sql`, `)})`)
+                                if (parsedCompMonths.length > 0) compCond.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedCompMonths, sql.raw(", "))})`)
+                                if (parsedCompYears.length > 0) compCond.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedCompYears, sql.raw(", "))})`)
                             } else {
                                 compCond.push(gte(orders.createdAt, prevStart), lte(orders.createdAt, prevEnd))
                             }
@@ -250,10 +250,10 @@ export async function GET(req: NextRequest) {
                 refundConditions.push(inArray(branches.id, parsedBranchIds))
             }
             if (parsedMonths.length > 0) {
-                refundConditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedMonths, sql`, `)})`)
+                refundConditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedMonths, sql.raw(", "))})`)
             }
             if (parsedYears.length > 0) {
-                refundConditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedYears, sql`, `)})`)
+                refundConditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedYears, sql.raw(", "))})`)
             }
             if (parsedMonths.length === 0 && parsedYears.length === 0) {
                 if (startDate) {
@@ -453,13 +453,13 @@ export async function GET(req: NextRequest) {
                     REVENUE_ELIGIBLE_FILTER,
                     orgId ? eq(branches.organizationId, orgId) : undefined,
                     nonDeletedGroupCondition,
-                    parsedGroupIds.length > 0 ? sql`${groups.id} IN (${sql.join(parsedGroupIds, sql`, `)})` : undefined,
-                    parsedBranchIds.length > 0 ? sql`${branches.id} IN (${sql.join(parsedBranchIds, sql`, `)})` : undefined,
+                    parsedGroupIds.length > 0 ? sql`${groups.id} IN (${sql.join(parsedGroupIds, sql.raw(", "))})` : undefined,
+                    parsedBranchIds.length > 0 ? sql`${branches.id} IN (${sql.join(parsedBranchIds, sql.raw(", "))})` : undefined,
                     (() => {
                         const compCond: any[] = []
                         if (parsedCompMonths.length > 0 || parsedCompYears.length > 0) {
-                            if (parsedCompMonths.length > 0) compCond.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedCompMonths, sql`, `)})`)
-                            if (parsedCompYears.length > 0) compCond.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedCompYears, sql`, `)})`)
+                            if (parsedCompMonths.length > 0) compCond.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedCompMonths, sql.raw(", "))})`)
+                            if (parsedCompYears.length > 0) compCond.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedCompYears, sql.raw(", "))})`)
                         } else {
                             compCond.push(gte(orders.createdAt, prevStart), lte(orders.createdAt, prevEnd))
                         }
@@ -471,13 +471,13 @@ export async function GET(req: NextRequest) {
                 sql`COALESCE(${orders.refundAmountCents}, 0) > 0`,
                 nonDeletedGroupCondition,
                 orgId ? eq(branches.organizationId, orgId) : undefined,
-                parsedGroupIds.length > 0 ? sql`${groups.id} IN (${sql.join(parsedGroupIds, sql`, `)})` : undefined,
-                parsedBranchIds.length > 0 ? sql`${branches.id} IN (${sql.join(parsedBranchIds, sql`, `)})` : undefined,
+                parsedGroupIds.length > 0 ? sql`${groups.id} IN (${sql.join(parsedGroupIds, sql.raw(", "))})` : undefined,
+                parsedBranchIds.length > 0 ? sql`${branches.id} IN (${sql.join(parsedBranchIds, sql.raw(", "))})` : undefined,
                 (() => {
                     const compCond: any[] = []
                     if (parsedCompMonths.length > 0 || parsedCompYears.length > 0) {
-                        if (parsedCompMonths.length > 0) compCond.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedCompMonths, sql`, `)})`)
-                        if (parsedCompYears.length > 0) compCond.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedCompYears, sql`, `)})`)
+                        if (parsedCompMonths.length > 0) compCond.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedCompMonths, sql.raw(", "))})`)
+                        if (parsedCompYears.length > 0) compCond.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedCompYears, sql.raw(", "))})`)
                     } else {
                         compCond.push(gte(orders.createdAt, prevStart), lte(orders.createdAt, prevEnd))
                     }

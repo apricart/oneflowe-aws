@@ -1,17 +1,15 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { useEffect,useState } from "react"
+import { Card,CardContent,CardDescription,CardHeader,CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Select,SelectContent,SelectGroup,SelectItem,SelectLabel,SelectTrigger,SelectValue } from "@/components/ui/select"
 import { Button } from "@/components/ui/button"
-import { Upload, Package, Check } from "lucide-react"
-import { Badge } from "@/components/ui/badge"
+import { Upload,Package } from "lucide-react"
 import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/hooks/use-toast"
-import { formatPKR } from "@/lib/utils"
 import { useRouter } from "next/navigation"
-import useSWR, { useSWRConfig } from "swr"
+import useSWR,{ useSWRConfig } from "swr"
 import { fetcher } from "@/lib/fetcher"
 
 type GlobalProduct = {
@@ -74,7 +72,61 @@ type NextProductCodeResponse = {
 
 const NEXT_PRODUCT_CODE_ENDPOINT = "/api/v1/admin/global-inventory/next-code"
 
-export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: ProductFormProps) {
+const getProductValidationError = (productData: ProductFormState) => {
+  const requiredValues = [
+    productData.productCode,
+    productData.name,
+    productData.basePrice,
+    productData.unit,
+    productData.stockQuantity,
+  ]
+  if (requiredValues.some((value) => !value)) {
+    return "Product code, name, price, unit, and stock quantity are required"
+  }
+  if (!productData.subcategoryId) return "Please select a category and subcategory"
+
+  const discountValues = [
+    productData.discountType,
+    productData.discountValue,
+    productData.discountStartAt,
+    productData.discountEndAt,
+  ]
+  if (productData.discountActive && discountValues.some((value) => !value)) {
+    return "All discount fields (Type, Value, Start, End) are required when discount is active"
+  }
+  return null
+}
+
+const getProductPayload = (
+  productData: ProductFormState,
+  initialProduct?: GlobalProduct | null,
+) => ({
+  ...productData,
+  id: initialProduct?.id,
+  basePrice: Number.parseFloat(productData.basePrice),
+  stockQuantity: Number.parseFloat(productData.stockQuantity) || 0,
+  allowDecimalQuantity: productData.allowDecimalQuantity,
+  quantityStep: 1,
+  categoryId: productData.subcategoryId ? Number.parseInt(productData.subcategoryId) : null,
+  metadata: {
+    ...initialProduct?.metadata,
+    parentCategoryId: Number.parseInt(productData.categoryId),
+  },
+  discountType: productData.discountType || null,
+  discountValue: productData.discountValue ? Number.parseInt(productData.discountValue) : null,
+  discountStartAt: productData.discountStartAt || null,
+  discountEndAt: productData.discountEndAt || null,
+  discountActive: Boolean(productData.discountActive),
+})
+
+const getSaveErrorMessage = (status: number, fallback?: string) => {
+  if (status === 413) {
+    return "The image is too large to save. Please use a smaller image or remove it and try again."
+  }
+  return fallback || "Failed to save product"
+}
+
+export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Readonly<ProductFormProps>) {
   const { toast } = useToast()
   const router = useRouter()
   const { mutate: mutateSWRCache } = useSWRConfig()
@@ -167,27 +219,7 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Produ
   )
   const subcategories = subcategoriesData?.items || []
 
-  const discountEnabled = productData.discountActive || !!productData.discountType
 
-  const handleDiscountToggle = (checked: boolean) => {
-    setProductData((prev) => {
-      if (checked) {
-        return {
-          ...prev,
-          discountActive: true,
-          discountType: prev.discountType || "percent",
-        }
-      }
-      return {
-        ...prev,
-        discountActive: false,
-        discountType: "",
-        discountValue: "",
-        discountStartAt: "",
-        discountEndAt: "",
-      }
-    })
-  }
 
   // Compress/resize image using canvas to keep Base64 data URLs small
   const compressImage = (file: File, maxDim = 1200, quality = 0.7): Promise<File> => {
@@ -302,81 +334,29 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Produ
   }
 
   const handleSubmitProduct = async () => {
-    if (!productData.productCode || !productData.name || !productData.basePrice || !productData.unit || !productData.stockQuantity) {
+    const validationError = getProductValidationError(productData)
+    if (validationError) {
       toast({
         title: "Validation Error",
-        description: "Product code, name, price, unit, and stock quantity are required",
+        description: validationError,
         variant: "destructive",
       })
       return
-    }
-
-    if (!productData.subcategoryId) {
-      toast({
-        title: "Validation Error",
-        description: "Please select a category and subcategory",
-        variant: "destructive",
-      })
-      return
-    }
-
-    if (productData.discountActive) {
-      if (!productData.discountType || !productData.discountValue || !productData.discountStartAt || !productData.discountEndAt) {
-        toast({
-          title: "Validation Error",
-          description: "All discount fields (Type, Value, Start, End) are required when discount is active",
-          variant: "destructive",
-        })
-        return
-      }
     }
 
     try {
       const method = mode === "edit" ? "PUT" : "POST"
-      const metadata: Record<string, any> = {
-        ...(initialProduct?.metadata || {}),
-        parentCategoryId: parseInt(productData.categoryId), // Store parent category in metadata
-      }
-
       const response = await fetch(`/api/v1/admin/global-inventory`, {
         method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...productData,
-          id: initialProduct?.id,
-          basePrice: parseFloat(productData.basePrice),
-          stockQuantity: parseFloat(productData.stockQuantity) || 0,
-          allowDecimalQuantity: productData.allowDecimalQuantity,
-          quantityStep: 1,
-          categoryId: productData.subcategoryId ? parseInt(productData.subcategoryId) : null, // Save subcategory as categoryId
-          metadata,
-          discountType: productData.discountType || null,
-          discountValue: productData.discountValue ? parseInt(productData.discountValue) : null,
-          discountStartAt: productData.discountStartAt || null,
-          discountEndAt: productData.discountEndAt || null,
-          discountActive: !!productData.discountActive,
-        }),
+        body: JSON.stringify(getProductPayload(productData, initialProduct)),
       })
 
       // Handle non-JSON responses (e.g. Vercel 413 Request Entity Too Large returns HTML)
-      let result: any
-      try {
-        result = await response.json()
-      } catch {
-        // Response was not valid JSON
-        if (response.status === 413) {
-          toast({
-            title: "Error",
-            description: "The image is too large to save. Please use a smaller image or remove it and try again.",
-            variant: "destructive",
-          })
-        } else {
-          toast({
-            title: "Error",
-            description: `Server error (${response.status}). Please try again.`,
-            variant: "destructive",
-          })
-        }
+      const result: any = await response.json().catch(() => null)
+      if (!result) {
+        const fallback = `Server error (${response.status}). Please try again.`
+        toast({ title: "Error", description: getSaveErrorMessage(response.status, fallback), variant: "destructive" })
         return
       }
 
@@ -388,17 +368,15 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Produ
         if (mode === "create") {
           await mutateSWRCache(NEXT_PRODUCT_CODE_ENDPOINT)
         }
-        onSuccess ? onSuccess() : router.push("/global-inventory")
-      } else {
-        // Detailed error message from backend
-        let errorMessage = result.error || "Failed to save product"
-        if (response.status === 413) {
-          errorMessage = "The image is too large to save. Please use a smaller image or remove it and try again."
+        if (onSuccess) {
+          onSuccess()
+        } else {
+          router.push("/global-inventory")
         }
-
+      } else {
         toast({
           title: "Error",
-          description: errorMessage,
+          description: getSaveErrorMessage(response.status, result.error),
           variant: "destructive",
         })
       }
@@ -426,8 +404,9 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Produ
           <CardContent className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <div>
-                <label className="block text-sm font-medium mb-1">Product Code <span className="text-destructive">*</span></label>
+                <label htmlFor="product-code" className="block text-sm font-medium mb-1">Product Code <span className="text-destructive">*</span></label>
                 <Input
+                  id="product-code"
                   value={productData.productCode ?? ""}
                   onChange={(e) => setProductData({ ...productData, productCode: e.target.value })}
                   placeholder="PRD-001"
@@ -436,8 +415,9 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Produ
                 <p className="mt-1 text-xs text-muted-foreground">Avoid spaces; use dashes.</p>
               </div>
               <div>
-                <label className="block text-sm font-medium mb-1">Name <span className="text-destructive">*</span></label>
+                <label htmlFor="product-name" className="block text-sm font-medium mb-1">Name <span className="text-destructive">*</span></label>
                 <Input
+                  id="product-name"
                   value={productData.name ?? ""}
                   onChange={(e) => setProductData({ ...productData, name: e.target.value })}
                   placeholder="Product name"
@@ -446,9 +426,9 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Produ
                 <p className="mt-1 text-xs text-muted-foreground">Visible everywhere.</p>
               </div>
               <div>
-                <label className="block text-sm font-medium mb-1">Status</label>
+                <label htmlFor="product-status" className="block text-sm font-medium mb-1">Status</label>
                 <Select value={productData.status} onValueChange={(value) => setProductData({ ...productData, status: value })}>
-                  <SelectTrigger className="w-full">
+                  <SelectTrigger id="product-status" className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -461,12 +441,12 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Produ
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
-                <label className="block text-sm font-medium mb-1">Category <span className="text-destructive">*</span></label>
+                <label htmlFor="product-category" className="block text-sm font-medium mb-1">Category <span className="text-destructive">*</span></label>
                 <Select
                   value={productData.categoryId}
                   onValueChange={(value) => setProductData({ ...productData, categoryId: value, subcategoryId: "" })}
                 >
-                  <SelectTrigger className="w-full">
+                  <SelectTrigger id="product-category" className="w-full">
                     <SelectValue placeholder={categoriesLoading ? "Loading..." : "Select a category"} />
                   </SelectTrigger>
                   <SelectContent>
@@ -489,22 +469,27 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Produ
                 </Select>
               </div>
               <div>
-                <label className="block text-sm font-medium mb-1">Subcategory <span className="text-destructive">*</span></label>
+                <label htmlFor="product-subcategory" className="block text-sm font-medium mb-1">Subcategory <span className="text-destructive">*</span></label>
                 <Select
                   value={productData.subcategoryId}
                   onValueChange={(value) => setProductData({ ...productData, subcategoryId: value })}
                   disabled={!productData.categoryId || subcategories.length === 0}
                 >
-                  <SelectTrigger className="w-full">
+                  <SelectTrigger id="product-subcategory" className="w-full">
                     <SelectValue
                       placeholder={
-                        !productData.categoryId
-                          ? "Select category first"
-                          : subcategoriesLoading
-                            ? "Loading..."
-                            : subcategories.length === 0
-                              ? "No subcategories"
-                              : "Select subcategory"
+                        (() => {
+                          if (!productData.categoryId) {
+                            return "Select category first"
+                          }
+                          if (subcategoriesLoading) {
+                            return "Loading..."
+                          }
+                          if (subcategories.length === 0) {
+                            return "No subcategories"
+                          }
+                          return "Select subcategory"
+                        })()
                       }
                     />
                   </SelectTrigger>
@@ -519,8 +504,9 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Produ
               </div>
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Description</label>
+              <label htmlFor="product-description" className="block text-sm font-medium mb-1">Description</label>
               <textarea
+                id="product-description"
                 value={productData.description ?? ""}
                 onChange={(e) => setProductData({ ...productData, description: e.target.value })}
                 className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -539,8 +525,9 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Produ
           <CardContent className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <div>
-                <label className="block text-sm font-medium mb-1">Base Price <span className="text-destructive">*</span></label>
+                <label htmlFor="product-base-price" className="block text-sm font-medium mb-1">Base Price <span className="text-destructive">*</span></label>
                 <Input
+                  id="product-base-price"
                   type="number"
                   step="0.01"
                   value={productData.basePrice ?? ""}
@@ -551,8 +538,9 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Produ
                 <p className="mt-1 text-xs text-muted-foreground">In PKR</p>
               </div>
               <div>
-                <label className="block text-sm font-medium mb-1">Unit <span className="text-destructive">*</span></label>
+                <label htmlFor="product-unit" className="block text-sm font-medium mb-1">Unit <span className="text-destructive">*</span></label>
                 <Input
+                  id="product-unit"
                   value={productData.unit ?? ""}
                   onChange={(e) => setProductData({ ...productData, unit: e.target.value })}
                   placeholder="ltr / kg / box"
@@ -561,8 +549,9 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Produ
                 <p className="mt-1 text-xs text-muted-foreground">Measurement</p>
               </div>
               <div>
-                <label className="block text-sm font-medium mb-1">Stock Quantity <span className="text-destructive">*</span></label>
+                <label htmlFor="product-stock-quantity" className="block text-sm font-medium mb-1">Stock Quantity <span className="text-destructive">*</span></label>
                 <Input
+                  id="product-stock-quantity"
                   type="number"
                   min="0"
                   step={productData.allowDecimalQuantity ? "any" : "1"}
@@ -664,9 +653,9 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Produ
             <CardContent className="space-y-4">
               <div className="grid gap-4 md:grid-cols-2">
                 <div>
-                  <label className="block text-sm font-medium mb-1">Discount Type {discountEnabled && "*"}</label>
+                  <label htmlFor="product-discount-type" className="block text-sm font-medium mb-1">Discount Type {discountEnabled && "*"}</label>
                   <Select value={productData.discountType || "percent"} onValueChange={(value) => setProductData({ ...productData, discountType: value })}>
-                    <SelectTrigger className="w-full">
+                    <SelectTrigger id="product-discount-type" className="w-full">
                       <SelectValue placeholder="Select type" />
                     </SelectTrigger>
                     <SelectContent>
@@ -676,8 +665,9 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Produ
                   </Select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1">Discount Value {discountEnabled && "*"}</label>
+                  <label htmlFor="product-discount-value" className="block text-sm font-medium mb-1">Discount Value {discountEnabled && "*"}</label>
                   <Input
+                    id="product-discount-value"
                     type="number"
                     step={productData.discountType === "flat" ? "1" : "0.01"}
                     placeholder={productData.discountType === "flat" ? "Enter amount in PKR" : "Enter percentage"}
@@ -687,8 +677,9 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Produ
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1">Discount Start {discountEnabled && "*"}</label>
+                  <label htmlFor="product-discount-start" className="block text-sm font-medium mb-1">Discount Start {discountEnabled && "*"}</label>
                   <Input
+                    id="product-discount-start"
                     type="datetime-local"
                     value={productData.discountStartAt ?? ""}
                     onChange={(e) => setProductData({ ...productData, discountStartAt: e.target.value })}
@@ -696,8 +687,9 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Produ
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1">Discount End {discountEnabled && "*"}</label>
+                  <label htmlFor="product-discount-end" className="block text-sm font-medium mb-1">Discount End {discountEnabled && "*"}</label>
                   <Input
+                    id="product-discount-end"
                     type="datetime-local"
                     value={productData.discountEndAt ?? ""}
                     onChange={(e) => setProductData({ ...productData, discountEndAt: e.target.value })}

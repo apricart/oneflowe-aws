@@ -1,13 +1,128 @@
 import type { NextAuthOptions } from "next-auth"
 import Credentials from "next-auth/providers/credentials"
 import { db } from "@/lib/db"
-import { users, roles, mfaCodes, employeeCredentials, organizations, branches } from "@/db/schema"
-import { eq, and, gt, isNull, sql, or } from "drizzle-orm"
+import { users,roles,employeeCredentials,organizations,branches } from "@/db/schema"
+import { eq,and,isNull,sql,or } from "drizzle-orm"
 import { verifyPassword } from "@/lib/password"
-import { checkMfaCooldown, verifyOTP, clearDailyCount } from "@/lib/mfa"
+import { verifyOTP,clearDailyCount } from "@/lib/mfa"
 import { compare } from "bcryptjs"
-import { getSessionValidationCache, setSessionValidationCache } from "@/lib/session-validation-cache"
+import { getSessionValidationCache,setSessionValidationCache } from "@/lib/session-validation-cache"
 import { env } from "@/lib/server/env"
+
+type SessionDbUser = {
+  isActive: boolean
+  deletedAt: Date | null
+  sessionVersion: number
+  orgStatus: string | null
+  branchStatus: string | null
+}
+
+function assignTokenToSessionUser(session: any, token: any): void {
+  Object.assign(session.user, {
+    id: token.sub,
+    role: token.role,
+    organizationId: token.organizationId,
+    branchId: token.branchId,
+    fullName: token.fullName,
+    username: token.username,
+    isEmployee: token.isEmployee,
+    employeeId: token.employeeId,
+    mustChangePassword: token.mustChangePassword ?? false,
+  })
+}
+
+async function loadSessionDbUser(
+  userId: string,
+  isEmployee: boolean,
+  orgJoinCondition: any,
+  branchJoinCondition: any,
+): Promise<SessionDbUser | null> {
+  if (isEmployee) {
+    const numericId = Number.parseInt(userId.replace("emp_", ""), 10)
+    const [employee] = await db
+      .select({
+        isActive: employeeCredentials.isActive,
+        deletedAt: sql<Date | null>`NULL`,
+        sessionVersion: employeeCredentials.sessionVersion,
+        orgStatus: organizations.status,
+        branchStatus: branches.status,
+      })
+      .from(employeeCredentials)
+      .leftJoin(organizations, orgJoinCondition)
+      .leftJoin(branches, branchJoinCondition)
+      .where(eq(employeeCredentials.id, numericId))
+      .limit(1)
+    return employee as SessionDbUser | null
+  }
+
+  const [user] = await db
+    .select({
+      isActive: users.isActive,
+      deletedAt: users.deletedAt,
+      sessionVersion: users.sessionVersion,
+      orgStatus: organizations.status,
+      branchStatus: branches.status,
+    })
+    .from(users)
+    .leftJoin(organizations, orgJoinCondition)
+    .leftJoin(branches, branchJoinCondition)
+    .where(eq(users.id, userId))
+    .limit(1)
+  return user as SessionDbUser | null
+}
+
+function invalidSessionReason(
+  dbUser: SessionDbUser | null,
+  token: any,
+  isEmployee: boolean,
+  tokenOrgId: number | null,
+  tokenBranchId: number | null,
+): string | null {
+  if (!dbUser || !dbUser.isActive || (dbUser.deletedAt && !isEmployee) || dbUser.sessionVersion !== token.sessionVersion) {
+    return "Status/Version mismatch"
+  }
+  if (tokenOrgId && dbUser.orgStatus?.toLowerCase() !== 'active') return "Org deactivated"
+  if (tokenBranchId && dbUser.branchStatus?.toLowerCase() !== 'active') return "Branch deactivated"
+  return null
+}
+
+async function validateSessionAgainstDatabase(session: any, token: any): Promise<any> {
+  try {
+    const userId = token.sub as string
+    if (!userId) return session
+
+    const isEmployee = token.isEmployee === true
+    const tokenOrgId = token.organizationId ? Number(token.organizationId) : null
+    const tokenBranchId = token.branchId ? Number(token.branchId) : null
+    const tokenSessionVersion = typeof token.sessionVersion === "number" ? token.sessionVersion : null
+    const cachedValidation = await getSessionValidationCache(userId)
+    if (
+      cachedValidation &&
+      cachedValidation.sv === tokenSessionVersion &&
+      cachedValidation.org === tokenOrgId &&
+      cachedValidation.br === tokenBranchId
+    ) {
+      return session
+    }
+
+    const dbUser = await loadSessionDbUser(
+      userId,
+      isEmployee,
+      tokenOrgId ? eq(organizations.id, tokenOrgId) : sql`false`,
+      tokenBranchId ? eq(branches.id, tokenBranchId) : sql`false`,
+    )
+    const invalidReason = invalidSessionReason(dbUser, token, isEmployee, tokenOrgId, tokenBranchId)
+    if (invalidReason) {
+      console.log(`[Auth] Invaliding session for user ${userId}: ${invalidReason}`)
+      return null
+    }
+
+    await setSessionValidationCache(userId, { sv: tokenSessionVersion, org: tokenOrgId, br: tokenBranchId })
+  } catch (error) {
+    console.error("[Auth] Session validation error:", error)
+  }
+  return session
+}
 
 export const authOptions: NextAuthOptions = {
   secret: env.NEXTAUTH_SECRET,
@@ -422,123 +537,9 @@ export const authOptions: NextAuthOptions = {
       return token
     },
     async session({ session, token }) {
-      if (session.user) {
-        // Essential session assignments (always run)
-        (session.user as any).id = token.sub
-          ; (session.user as any).role = (token as any).role
-          ; (session.user as any).organizationId = (token as any).organizationId
-          ; (session.user as any).branchId = (token as any).branchId
-          ; (session.user as any).fullName = (token as any).fullName
-          ; (session.user as any).username = (token as any).username
-          ; (session.user as any).isEmployee = (token as any).isEmployee
-          ; (session.user as any).employeeId = (token as any).employeeId
-          ; (session.user as any).mustChangePassword = (token as any).mustChangePassword ?? false
-
-        // Bank-grade security: Verify user is still active and not deleted on every session check
-        // This ensures that password resets, deletions, or deactivations kick users out immediately
-        try {
-          const isEmployee = token.isEmployee === true
-          const userId = token.sub as string
-
-          if (!userId) return session
-
-          // Org/branch status is validated against the token's org/branch (not the user row),
-          // matching the previous per-table lookups. Left joins keep this a single round-trip:
-          // an unmatched join yields NULL status, which fails the 'active' check below.
-          const tokenOrgId = token.organizationId ? Number(token.organizationId) : null
-          const tokenBranchId = token.branchId ? Number(token.branchId) : null
-          const tokenSessionVersion =
-            typeof token.sessionVersion === "number" ? token.sessionVersion : null
-
-          // Fast path: this exact tuple (user, sessionVersion, org, branch) was
-          // validated against the DB within the cache TTL. Only positive results
-          // are ever cached, and user-level security changes (deactivate, delete,
-          // password reset) proactively invalidate the entry — see
-          // lib/session-validation-cache.ts for the propagation guarantees.
-          const cachedValidation = await getSessionValidationCache(userId)
-          if (
-            cachedValidation &&
-            cachedValidation.sv === tokenSessionVersion &&
-            cachedValidation.org === tokenOrgId &&
-            cachedValidation.br === tokenBranchId
-          ) {
-            return session
-          }
-
-          const orgJoinCondition = tokenOrgId ? eq(organizations.id, tokenOrgId) : sql`false`
-          const branchJoinCondition = tokenBranchId ? eq(branches.id, tokenBranchId) : sql`false`
-
-          let dbUser: {
-            isActive: boolean
-            deletedAt: Date | null
-            sessionVersion: number
-            orgStatus: string | null
-            branchStatus: string | null
-          } | null = null
-
-          if (isEmployee) {
-            // Employee ID in token sub is "emp_123", we need the numeric ID for DB lookup
-            const numericId = parseInt(userId.replace("emp_", ""), 10)
-            const [emp] = await db
-              .select({
-                isActive: employeeCredentials.isActive,
-                deletedAt: sql<Date | null>`NULL`,
-                sessionVersion: employeeCredentials.sessionVersion,
-                orgStatus: organizations.status,
-                branchStatus: branches.status,
-              })
-              .from(employeeCredentials)
-              .leftJoin(organizations, orgJoinCondition)
-              .leftJoin(branches, branchJoinCondition)
-              .where(eq(employeeCredentials.id, numericId))
-              .limit(1)
-            dbUser = emp as any
-          } else {
-            const [u] = await db
-              .select({
-                isActive: users.isActive,
-                deletedAt: users.deletedAt,
-                sessionVersion: users.sessionVersion,
-                orgStatus: organizations.status,
-                branchStatus: branches.status,
-              })
-              .from(users)
-              .leftJoin(organizations, orgJoinCondition)
-              .leftJoin(branches, branchJoinCondition)
-              .where(eq(users.id, userId))
-              .limit(1)
-            dbUser = u as any
-          }
-
-          if (!dbUser || !dbUser.isActive || (dbUser.deletedAt && !isEmployee) || dbUser.sessionVersion !== token.sessionVersion) {
-            console.log(`[Auth] Invaliding session for user ${userId}: Status/Version mismatch`)
-            return null as any
-          }
-
-          // Also check for organization and branch status in session check
-          if (tokenOrgId && dbUser.orgStatus?.toLowerCase() !== 'active') {
-            console.log(`[Auth] Invaliding session for user ${userId}: Org deactivated`)
-            return null as any
-          }
-
-          if (tokenBranchId && dbUser.branchStatus?.toLowerCase() !== 'active') {
-            console.log(`[Auth] Invaliding session for user ${userId}: Branch deactivated`)
-            return null as any
-          }
-
-          // All checks passed — cache the validated tuple (positive result only)
-          await setSessionValidationCache(userId, {
-            sv: tokenSessionVersion,
-            org: tokenOrgId,
-            br: tokenBranchId,
-          })
-        } catch (err) {
-          console.error("[Auth] Session validation error:", err)
-          // On DB error, we allow the session to continue but log the error
-          // This prevents a DB hiccup from locking everyone out
-        }
-      }
-      return session
+      if (!session.user) return session
+      assignTokenToSessionUser(session, token)
+      return validateSessionAgainstDatabase(session, token)
     },
   },
   pages: {

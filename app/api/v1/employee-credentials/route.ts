@@ -1,20 +1,40 @@
-import { ok, error, readJson, requireApiRole } from "@/lib/api"
+import { ok,error,readJson } from "@/lib/api"
 import { db } from "@/lib/db"
-import { employeeCredentials, auditLogs } from "@/db/schema"
-import { and, eq } from "drizzle-orm"
+import { employeeCredentials,auditLogs } from "@/db/schema"
+import { and,eq } from "drizzle-orm"
 import { hash } from "bcryptjs"
-import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth-options";
-import { getRequestScope } from "@/lib/auth";
-import { assertUniqueUserFields, normalizeEmail, UserUniqueFieldError } from "@/lib/user-uniqueness";
-import { invalidateSessionValidationCache } from "@/lib/session-validation-cache";
+import { NextRequest } from 'next/server'
+import { getRequestScope } from "@/lib/auth"
+import { assertUniqueUserFields,normalizeEmail,UserUniqueFieldError } from "@/lib/user-uniqueness"
+import { invalidateSessionValidationCache } from "@/lib/session-validation-cache"
 import {
   employeeCredentialCreateSchema,
   employeeCredentialUpdateSchema,
   validationMessage,
-} from "@/lib/server/mutation-validation";
-import { withRateLimit } from "@/lib/rate-limiter";
+} from "@/lib/server/mutation-validation"
+import { withRateLimit } from "@/lib/rate-limiter"
+
+type ExistingCredential = typeof employeeCredentials.$inferSelect
+
+async function prepareCredentialSecurityUpdate(
+  credential: ExistingCredential,
+  credentialId: number,
+  email: string | undefined,
+  password: string | undefined,
+) {
+  if (email && email !== credential.email) {
+    await assertUniqueUserFields({ email }, undefined, credentialId)
+  }
+  const passwordHash = password ? await hash(password, 10) : undefined
+  const securityChange = Boolean(password)
+  return {
+    passwordHash,
+    securityChange,
+    sessionVersion: securityChange
+      ? (credential.sessionVersion || 0) + 1
+      : credential.sessionVersion || 0,
+  }
+}
 
 async function POST(req: NextRequest) {
   try {
@@ -26,7 +46,7 @@ async function POST(req: NextRequest) {
 
     // Get user scope with proper role and organization/branch info
     const scope = await getRequestScope()
-    if (!scope || scope.role !== "BRANCH_ADMIN") {
+    if (scope?.role !== "BRANCH_ADMIN") {
       return error("Not a branch admin", 403)
     }
 
@@ -87,7 +107,7 @@ async function GET(req: NextRequest) {
   try {
     // Get user scope with proper role and organization/branch info
     const scope = await getRequestScope()
-    if (!scope || scope.role !== "BRANCH_ADMIN") {
+    if (scope?.role !== "BRANCH_ADMIN") {
       return error("Not a branch admin", 403)
     }
 
@@ -135,14 +155,14 @@ async function PUT(req: NextRequest) {
     const { id, isActive, firstName, lastName, password } = parsedBody.data
     const email = parsedBody.data.email !== undefined ? normalizeEmail(parsedBody.data.email) : undefined
 
-    const credId = typeof id === 'number' ? id : parseInt(id, 10)
-    if (isNaN(credId)) {
+    const credId = typeof id === 'number' ? id : Number.parseInt(id, 10)
+    if (Number.isNaN(credId)) {
       return error("Invalid ID format", 400)
     }
 
     // Get user scope with proper role and organization/branch info
     const scope = await getRequestScope()
-    if (!scope || scope.role !== "BRANCH_ADMIN") {
+    if (scope?.role !== "BRANCH_ADMIN") {
       return error("Not a branch admin", 403)
     }
 
@@ -169,22 +189,12 @@ async function PUT(req: NextRequest) {
       return error("Credential not found", 404)
     }
 
-    // Handle email update
-    if (email && email !== cred.email) {
-      await assertUniqueUserFields({ email }, undefined, credId)
-    }
-
-    // Handle password update
-    let passwordHash: string | undefined
-    if (password) {
-      passwordHash = await hash(password, 10)
-    }
-
-    // Only password changes should invalidate the current session.
-    const securityChange = !!password
-    const nextVersion = securityChange
-      ? (cred.sessionVersion || 0) + 1
-      : (cred.sessionVersion || 0)
+    const { passwordHash, securityChange, sessionVersion } = await prepareCredentialSecurityUpdate(
+      cred,
+      credId,
+      email,
+      password,
+    )
 
     const [updated] = await db
       .update(employeeCredentials)
@@ -194,7 +204,7 @@ async function PUT(req: NextRequest) {
         lastName,
         email: email && email !== cred.email ? email : undefined,
         passwordHash,
-        sessionVersion: nextVersion,
+        sessionVersion,
       })
       .where(eq(employeeCredentials.id, credId))
       .returning()
@@ -225,7 +235,7 @@ async function DELETE(req: NextRequest) {
 
     // Get user scope with proper role and organization/branch info
     const scope = await getRequestScope()
-    if (!scope || scope.role !== "BRANCH_ADMIN") {
+    if (scope?.role !== "BRANCH_ADMIN") {
       return error("Not a branch admin", 403)
     }
 
@@ -235,8 +245,8 @@ async function DELETE(req: NextRequest) {
       return error("Branch admin must be assigned to a branch", 403)
     }
 
-    const credId = parseInt(id, 10)
-    if (isNaN(credId)) {
+    const credId = Number.parseInt(id, 10)
+    if (Number.isNaN(credId)) {
       return error("Invalid ID format", 400)
     }
 

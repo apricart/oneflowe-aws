@@ -3,25 +3,19 @@
 import * as React from "react"
 import { useRouter } from "next/navigation"
 import {
-  Command,
   CommandDialog,
   CommandEmpty,
   CommandGroup,
   CommandInput,
   CommandItem,
-  CommandList,
-  CommandSeparator,
+  CommandList
 } from "@/components/ui/command"
 import {
-  Building2,
   Home,
   Settings,
   Users,
   Package,
-  BarChart3,
-  Shield,
-  Search,
-  Zap,
+  BarChart3,Search
 } from "lucide-react"
 import useSWR from "swr"
 import { useSession } from "next-auth/react"
@@ -34,8 +28,6 @@ export function CommandPalette() {
   const { data: orgsData } = useSWR("/api/v1/organizations")
   const { data: branchesData } = useSWR("/api/v1/branches")
 
-  const organizations = orgsData?.items || []
-  const branches = branchesData?.items || []
 
   React.useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -56,7 +48,7 @@ export function CommandPalette() {
 
   return (
     <>
-      <button
+      <button type="button"
         onClick={() => setOpen(true)}
         className="inline-flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground border rounded-md hover:bg-accent hover:text-accent-foreground transition-colors"
       >

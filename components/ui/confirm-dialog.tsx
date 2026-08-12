@@ -11,7 +11,7 @@ export function ConfirmDialog({
   cancelText = "Cancel",
   onConfirm,
   onOpenChange,
-}: {
+}: Readonly<{
   open: boolean
   title?: string
   description?: string
@@ -19,7 +19,7 @@ export function ConfirmDialog({
   cancelText?: string
   onConfirm: () => void
   onOpenChange: (v: boolean) => void
-}) {
+}>) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>

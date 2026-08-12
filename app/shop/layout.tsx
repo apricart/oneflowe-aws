@@ -13,9 +13,9 @@ export const metadata = {
 
 export default function ShopLayout({
   children,
-}: {
+}: Readonly<{
   children: React.ReactNode
-}) {
+}>) {
   return (
     <AppContextProvider>
       <SessionGuard>

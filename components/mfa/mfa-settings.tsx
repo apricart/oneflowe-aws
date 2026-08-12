@@ -1,20 +1,19 @@
 "use client"
 
-import React, { useState, useEffect } from "react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
+import { useState,useEffect } from "react"
+import { Card,CardContent,CardDescription,CardHeader,CardTitle } from "@/components/ui/card"
 import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/hooks/use-toast"
 import { handleError } from "@/lib/error-handler"
 import { jsonFetcher } from "@/lib/fetcher"
 import { MFAVerificationDialog } from "./mfa-verification-dialog"
-import { Shield, ShieldCheck, ShieldOff, AlertTriangle, CheckCircle } from "lucide-react"
+import { Shield,ShieldCheck,ShieldOff,AlertTriangle,CheckCircle } from "lucide-react"
 
 interface MFASettingsProps {
   username?: string
 }
 
-export function MFASettings({ username }: MFASettingsProps) {
+export function MFASettings({ username }: Readonly<MFASettingsProps>) {
   const [mfaEnabled, setMfaEnabled] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [isToggling, setIsToggling] = useState(false)
@@ -46,23 +45,9 @@ export function MFASettings({ username }: MFASettingsProps) {
     }
   }
 
-  const handleToggle = (enabled: boolean) => {
-    if (enabled) {
-      // For enabling MFA, we don't need OTP verification
-      setPendingAction('enable')
-      handleVerificationSuccess('') // Pass empty string since OTP is not needed
-    } else {
-      // For disabling MFA, we don't need OTP verification
-      setPendingAction('disable')
-      handleVerificationSuccess('') // Pass empty string since OTP is not needed
-    }
-  }
-
-  const handleVerificationSuccess = async (otpCode?: string) => {
-    if (!pendingAction) return
-
+  const applyMfaAction = async (action: 'enable' | 'disable', otpCode?: string) => {
     console.log("MFA Settings - Verification success:", {
-      action: pendingAction,
+      action,
       otpCode: otpCode ? "***" : "undefined",
       otpCodeType: typeof otpCode,
       otpCodeLength: otpCode ? otpCode.length : 0
@@ -72,7 +57,7 @@ export function MFASettings({ username }: MFASettingsProps) {
     try {
       const response = await jsonFetcher<any>("/api/v1/mfa/toggle", {
         method: "POST",
-        body: JSON.stringify({ action: pendingAction, otpCode })
+        body: JSON.stringify({ action, otpCode })
       })
 
       if (response.error) {
@@ -97,6 +82,22 @@ export function MFASettings({ username }: MFASettingsProps) {
       setIsToggling(false)
       setShowVerification(false)
       setPendingAction(null)
+    }
+  }
+
+  const enableMfa = () => {
+    setPendingAction('enable')
+    void applyMfaAction('enable')
+  }
+
+  const disableMfa = () => {
+    setPendingAction('disable')
+    void applyMfaAction('disable')
+  }
+
+  const handleVerificationSuccess = async (otpCode?: string) => {
+    if (pendingAction) {
+      await applyMfaAction(pendingAction, otpCode)
     }
   }
 
@@ -156,7 +157,7 @@ export function MFASettings({ username }: MFASettingsProps) {
             </div>
             <Switch
               checked={mfaEnabled}
-              onCheckedChange={handleToggle}
+              onCheckedChange={mfaEnabled ? disableMfa : enableMfa}
               disabled={isToggling}
             />
           </div>

@@ -1,15 +1,15 @@
 "use client"
 
-import { useEffect, useState, useMemo, useCallback } from "react"
-import { motion, AnimatePresence } from "framer-motion"
-import useSWR from "swr"
-import { formatPKR, cn } from "@/lib/utils"
-import { format } from "date-fns"
 import { fetcher } from "@/lib/fetcher"
 import {
-    FULFILLMENT_STATUS_LABELS,
-    normalizeFulfillmentStatus,
+FULFILLMENT_STATUS_LABELS,
+normalizeFulfillmentStatus,
 } from "@/lib/fulfillment-status"
+import { cn,formatPKR } from "@/lib/utils"
+import { format } from "date-fns"
+import { AnimatePresence,motion } from "framer-motion"
+import { useCallback,useEffect,useMemo,useState } from "react"
+import useSWR from "swr"
 
 const formatDuration = (mins: number) => {
     if (mins <= 0) return "0m"
@@ -35,23 +35,35 @@ const getDeliveryStatusColor = (status?: string | null) => {
     }
 }
 
-import {
-    Sheet,
-    SheetContent,
-    SheetTitle,
-} from "@/components/ui/sheet"
-import { ScrollArea } from "@/components/ui/scroll-area"
-import {
-    Loader2, AlertCircle, CheckCircle2, Package, TrendingUp, TrendingDown,
-    Award, Box, ChevronRight, ArrowDownAZ, ArrowDown01, RotateCcw, Truck,
-    User, Clock, Info, Search, CalendarDays
-} from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import {
+Sheet,
+SheetContent,
+SheetTitle,
+} from "@/components/ui/sheet"
+import {
+Activity,
+AlertCircle,
+Box,
+CalendarDays,
+CheckCircle2,
+ChevronRight,
+Clock,Info,
+Loader2,
+Package,
+RotateCcw,
+Search,
+TrendingDown,
+TrendingUp,
+Truck,
+User
+} from "lucide-react"
 
-import { GlobalDateFilter, getPresetRange, type FilterPreset } from "@/components/dashboard/global-date-filter"
-import type { DateRange } from "@/lib/hooks/use-sales-performance"
 import { useAppContext } from "@/components/context/app-context"
+import { GlobalDateFilter,getPresetRange,type FilterPreset,type GlobalDateFilterChange } from "@/components/dashboard/global-date-filter"
+import type { DateRange } from "@/lib/hooks/use-sales-performance"
 
 export type DrillDownType = "REVENUE" | "REJECTED" | "FULFILLED" | "ORDERS" | "REFUNDED" | "PENDING" | "APPROVED" | "PARTIAL" | "DELIVERED" | "NOT_DELIVERED"
 
@@ -76,7 +88,7 @@ interface DrillDownSheetProps {
 const normalizeMonthsForApi = (selectedMonths?: number[]) => {
     if (!selectedMonths || selectedMonths.length === 0) return []
 
-    const isLegacyZeroBased = selectedMonths.some(month => month === 0)
+    const isLegacyZeroBased = selectedMonths.includes(0)
     const normalized = selectedMonths
         .map(month => isLegacyZeroBased ? month + 1 : month)
         .filter(month => Number.isInteger(month) && month >= 1 && month <= 12)
@@ -164,7 +176,64 @@ const BIInsightCard = ({ title, value, subvalue, icon: Icon, trend, colorClass }
     </motion.div>
 )
 
-import { Activity } from "lucide-react"
+function addComparisonParams(params: URLSearchParams, options: {
+    localCompareRange: DateRange | null
+    compareMonths: number[]
+    compareYears: number[]
+}): void {
+    const { localCompareRange, compareMonths, compareYears } = options
+    params.set("compare", "true")
+    if (localCompareRange) {
+        params.set("compareStartDate", localCompareRange.startDate.toISOString())
+        params.set("compareEndDate", localCompareRange.endDate.toISOString())
+    }
+    const apiCompareMonths = normalizeMonthsForApi(compareMonths)
+    if (apiCompareMonths.length > 0) params.set("compareMonths", apiCompareMonths.join(","))
+    if (compareYears.length > 0) params.set("compareYears", compareYears.join(","))
+}
+
+function buildDrillDownUrl(options: {
+    isOpen: boolean
+    type: DrillDownSheetProps["type"]
+    organizationId?: string | null
+    branchId?: string | null
+    branchIds?: string[]
+    localDateRange: DateRange | null
+    refundType: "all" | "full" | "partial"
+    months: number[]
+    years: number[]
+    compareMonths: number[]
+    compareYears: number[]
+    compare?: boolean
+    localCompareRange: DateRange | null
+}): string | null {
+    const { isOpen, type, organizationId, branchId, branchIds, localDateRange, refundType, months, years, compareMonths, compareYears, compare, localCompareRange } = options
+    if (!isOpen || !type) return null
+    const params = new URLSearchParams({ type })
+    if (localDateRange) {
+        params.set("startDate", localDateRange.startDate.toISOString())
+        params.set("endDate", localDateRange.endDate.toISOString())
+    }
+    const apiMonths = normalizeMonthsForApi(months)
+    if (apiMonths.length > 0) params.set("months", apiMonths.join(","))
+    if (years.length > 0) params.set("years", years.join(","))
+    if (compare) {
+        addComparisonParams(params, { localCompareRange, compareMonths, compareYears })
+    }
+    if (type === "REFUNDED") params.set("refundType", refundType)
+    if (organizationId && organizationId !== "null") params.set("organizationId", organizationId)
+    if (branchIds?.length) params.set("branchIds", branchIds.join(","))
+    else if (branchId && branchId !== "null") params.set("branchId", branchId)
+    return `/api/v1/analytics/drill-down?${params.toString()}`
+}
+
+function isBuyerRole(role: string | null): boolean {
+    return ["HEAD_OFFICE", "BRANCH_ADMIN"].includes(role ?? "")
+}
+
+function drillDownConfig(type: DrillDownSheetProps["type"]) {
+    return type ? TYPE_CONFIG[type] : null
+}
 
 export function DrillDownSheet({
     isOpen,
@@ -182,9 +251,9 @@ export function DrillDownSheet({
     years: parentYears,
     compareMonths: parentCompareMonths,
     compareYears: parentCompareYears
-}: DrillDownSheetProps): React.ReactElement | null {
+}: Readonly<DrillDownSheetProps>): React.ReactElement | null {
     const { userRole } = useAppContext()
-    const isBuyer = userRole === "HEAD_OFFICE" || userRole === "BRANCH_ADMIN"
+    const isBuyer = isBuyerRole(userRole)
 
     const [localDateRange, setLocalDateRange] = useState<DateRange | null>(getPresetRange("all"))
     const [localCompareRange, setLocalCompareRange] = useState<DateRange | null>(null)
@@ -213,37 +282,10 @@ export function DrillDownSheet({
         }
     }, [isOpen, type, defaultDateRange, compareRange, parentActivePreset, parentMonths, parentYears, parentCompareMonths, parentCompareYears])
 
-    const url = useMemo(() => {
-        if (!isOpen || !type) return null
-        const params = new URLSearchParams()
-        params.set("type", type)
-        if (localDateRange) {
-            params.set("startDate", localDateRange.startDate.toISOString())
-            params.set("endDate", localDateRange.endDate.toISOString())
-        }
-        const apiMonths = normalizeMonthsForApi(months)
-        if (apiMonths.length > 0) params.set("months", apiMonths.join(","))
-        if (years.length > 0) params.set("years", years.join(","))
-
-        if (compare) {
-            params.set("compare", "true")
-            if (localCompareRange) {
-                params.set("compareStartDate", localCompareRange.startDate.toISOString())
-                params.set("compareEndDate", localCompareRange.endDate.toISOString())
-            }
-            const apiCompareMonths = normalizeMonthsForApi(compareMonths)
-            if (apiCompareMonths.length > 0) params.set("compareMonths", apiCompareMonths.join(","))
-            if (compareYears.length > 0) params.set("compareYears", compareYears.join(","))
-        }
-        if (type === "REFUNDED") params.set("refundType", refundType)
-        if (organizationId && organizationId !== "null") params.set("organizationId", organizationId)
-        if (branchIds && branchIds.length > 0) {
-            params.set("branchIds", branchIds.join(","))
-        } else if (branchId && branchId !== "null") {
-            params.set("branchId", branchId)
-        }
-        return `/api/v1/analytics/drill-down?${params.toString()}`
-    }, [isOpen, type, organizationId, branchId, branchIds, localDateRange, refundType, months, years, compareMonths, compareYears, compare, localCompareRange])
+    const url = useMemo(() => buildDrillDownUrl({
+        isOpen, type, organizationId, branchId, branchIds, localDateRange, refundType,
+        months, years, compareMonths, compareYears, compare, localCompareRange,
+    }), [isOpen, type, organizationId, branchId, branchIds, localDateRange, refundType, months, years, compareMonths, compareYears, compare, localCompareRange])
 
     const { data, isLoading } = useSWR<{ items: any[], summary: any, comparison: any, total: number }>(url, fetcher, {
         revalidateOnFocus: false
@@ -268,7 +310,7 @@ export function DrillDownSheet({
     }, [data?.items, searchQuery])
     const summary = data?.summary || {}
     const comparison = data?.comparison || null
-    const config = type ? TYPE_CONFIG[type] : null
+    const config = drillDownConfig(type)
 
     const getTrend = useCallback((current: number, prev: number) => {
         if (!prev || prev === 0) return null
@@ -278,16 +320,7 @@ export function DrillDownSheet({
         return `${isUp ? '+' : ''}${percentage.toFixed(1)}%`
     }, [])
 
-    const handleDateChange = useCallback((
-        range: DateRange | null,
-        preset: FilterPreset,
-        compareMode?: boolean,
-        compRange?: DateRange | null,
-        m?: number[],
-        y?: number[],
-        cm?: number[],
-        cy?: number[]
-    ) => {
+    const handleDateChange = useCallback(({ range, preset, compare: compareMode, compareRange: compRange, months: m, years: y, compareMonths: cm, compareYears: cy }: GlobalDateFilterChange) => {
         setLocalDateRange(range)
         setActivePreset(preset)
         if (compRange !== undefined) setLocalCompareRange(compRange)
@@ -375,7 +408,15 @@ export function DrillDownSheet({
                                     <BIInsightCard
                                         title="Refunded Orders"
                                         value={refundType === "full" ? (summary.refundedOrdersCount || 0) : (summary.refundRelatedOrdersCount || 0)}
-                                        subvalue={refundType === "partial" ? "Partially Refunded" : refundType === "all" ? "Refunded Transactions" : "Completely Refunded"}
+                                        subvalue={(() => {
+                                          if (refundType === "partial") {
+                                            return "Partially Refunded"
+                                          }
+                                          if (refundType === "all") {
+                                            return "Refunded Transactions"
+                                          }
+                                          return "Completely Refunded"
+                                        })()}
                                         icon={RotateCcw}
                                         colorClass="border-rose-50 dark:border-rose-950/20"
                                     />
@@ -411,12 +452,17 @@ export function DrillDownSheet({
 
                 <ScrollArea className="flex-1">
                     <div className="p-6 pt-2">
-                        {isLoading ? (
+                        {(() => {
+                          if (isLoading) {
+                            return (
                             <div className="flex flex-col items-center justify-center py-32 text-slate-400">
                                 <Loader2 className="w-8 h-8 animate-spin text-indigo-500 mb-4" />
                                 <p className="text-sm font-medium opacity-60">Loading financial data...</p>
                             </div>
-                        ) : items.length === 0 ? (
+                        )
+                          }
+                          if (items.length === 0) {
+                            return (
                             <div className="flex flex-col items-center justify-center py-20 text-center grayscale opacity-50">
                                 <div className="w-24 h-24 rounded-full bg-slate-100 dark:bg-slate-900 flex items-center justify-center mb-6">
                                     <Search className="w-10 h-10 text-slate-400" />
@@ -431,7 +477,9 @@ export function DrillDownSheet({
                                     }
                                 </p>
                             </div>
-                        ) : (
+                        )
+                          }
+                          return (
                             <div className="space-y-4">
                                 <div className="flex items-center justify-between px-2 mb-2 text-slate-400">
                                     <span className="text-[10px] font-bold uppercase tracking-widest ">Transaction History</span>
@@ -456,9 +504,15 @@ export function DrillDownSheet({
                                                     <div className="flex items-center gap-4">
                                                         <div className={cn(
                                                             "w-11 h-11 rounded-2xl flex items-center justify-center font-bold transition-transform group-hover:scale-105",
-                                                            item.status === 'FULFILLED' ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40" :
-                                                                item.status === 'REJECTED' ? "bg-rose-50 text-rose-600 dark:bg-rose-950/40" :
-                                                                    "bg-amber-50 text-amber-600 dark:bg-amber-950/40"
+                                                            (() => {
+                                                              if (item.status === 'FULFILLED') {
+                                                                return "bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40"
+                                                              }
+                                                              if (item.status === 'REJECTED') {
+                                                                return "bg-rose-50 text-rose-600 dark:bg-rose-950/40"
+                                                              }
+                                                              return "bg-amber-50 text-amber-600 dark:bg-amber-950/40"
+                                                            })()
                                                         )}>
                                                             {idx + 1}
                                                         </div>
@@ -546,8 +600,8 @@ export function DrillDownSheet({
                                                                 <h4 className="text-[9px] font-bold uppercase tracking-widest text-indigo-500">Transaction Breakdown</h4>
                                                                 <div className="overflow-hidden rounded-2xl border border-slate-200/60 dark:border-slate-800/60 bg-white/50 dark:bg-slate-900/50">
                                                                     <div className="divide-y divide-slate-100 dark:divide-slate-800">
-                                                                        {item.items?.map((prod: any, pIdx: number) => (
-                                                                            <div key={pIdx} className="p-4 flex justify-between items-start gap-4 hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors group/item">
+                                                                        {item.items?.map((prod: any) => (
+                                                                            <div key={prod.id ?? prod.productCode ?? prod.name} className="p-4 flex justify-between items-start gap-4 hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors group/item">
                                                                                 <div className="flex-1 min-w-0">
                                                                                     <p className="font-semibold text-slate-900 dark:text-white leading-tight truncate text-[12px]">{prod.name}</p>
                                                                                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5">
@@ -633,8 +687,15 @@ export function DrillDownSheet({
                                                                             </div>
                                                                             <Badge className={cn(
                                                                                 "font-bold text-[9px] px-2.5 py-0.5 border-none shadow-none",
-                                                                                item.status === 'FULFILLED' ? "bg-emerald-500 text-white" :
-                                                                                    item.status === 'REJECTED' ? "bg-rose-500 text-white" : "bg-amber-500 text-white"
+                                                                                (() => {
+                                                                                  if (item.status === 'FULFILLED') {
+                                                                                    return "bg-emerald-500 text-white"
+                                                                                  }
+                                                                                  if (item.status === 'REJECTED') {
+                                                                                    return "bg-rose-500 text-white"
+                                                                                  }
+                                                                                  return "bg-amber-500 text-white"
+                                                                                })()
                                                                             )}>
                                                                                 {item.status}
                                                                             </Badge>
@@ -650,7 +711,8 @@ export function DrillDownSheet({
                                     ))}
                                 </div>
                             </div>
-                        )}
+                        )
+                        })()}
                     </div>
                 </ScrollArea>
                 <div className="p-4 bg-white/50 dark:bg-slate-900/50 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between shrink-0">

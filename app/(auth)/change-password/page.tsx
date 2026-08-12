@@ -13,7 +13,7 @@ import { Eye, EyeOff, ShieldAlert } from "lucide-react"
 
 export default function ChangePasswordPage() {
   const router = useRouter()
-  const { data: session, status } = useSession()
+  const { status } = useSession()
   const { toast } = useToast()
   const [newPassword, setNewPassword] = useState("")
   const [confirmPassword, setConfirmPassword] = useState("")
@@ -32,7 +32,7 @@ export default function ChangePasswordPage() {
     }
   }, [status, router])
 
-  async function onSubmit(e: React.FormEvent) {
+  async function onSubmit(e: React.SubmitEvent<HTMLFormElement>) {
     e.preventDefault()
     setFormError(null)
 

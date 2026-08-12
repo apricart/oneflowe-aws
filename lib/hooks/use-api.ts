@@ -28,7 +28,7 @@ export function useBranches(organizationId?: string, groupIds?: string) {
   const qs = new URLSearchParams()
   if (organizationId) qs.set('organizationId', organizationId)
   if (groupIds) qs.set('groupIds', groupIds)
-  const url = `/api/v1/branches${qs.toString() ? `?${qs.toString()}` : ''}`
+  const url = `/api/v1/branches${qs.toString() ? ("?" + String(qs.toString())) : ''}`
   return useAPI<{ items: any[] }>(url)
 }
 
@@ -36,7 +36,7 @@ export function useGlobalProducts(organizationId?: string, groupIds?: string) {
   const qs = new URLSearchParams()
   if (organizationId) qs.set('organizationId', organizationId)
   if (groupIds) qs.set('groupIds', groupIds)
-  const url = `/api/v1/inventory/organization-products${qs.toString() ? `?${qs.toString()}` : ''}`
+  const url = `/api/v1/inventory/organization-products${qs.toString() ? ("?" + String(qs.toString())) : ''}`
   return useAPI<{ items: any[] }>(url)
 }
 
@@ -97,7 +97,7 @@ export function useOrders(params?: { organizationId?: string; branchId?: string;
   if (orgId) qs.set('organizationId', orgId)
   if (brId) qs.set('branchId', brId)
   if (params?.status) qs.set('status', params.status)
-  const url = `/api/v1/orders${qs.toString() ? `?${qs.toString()}` : ''}`
+  const url = `/api/v1/orders${qs.toString() ? ("?" + String(qs.toString())) : ''}`
   return useAPI<{ items: any[] }>(url)
 }
 
@@ -117,6 +117,6 @@ export function useAuditLogs(params?: { limit?: number; entity?: string; action?
   if (params?.limit) qs.set('limit', params.limit.toString())
   if (params?.entity) qs.set('entity', params.entity)
   if (params?.action) qs.set('action', params.action)
-  const url = `/api/v1/audit-logs${qs.toString() ? `?${qs.toString()}` : ''}`
+  const url = `/api/v1/audit-logs${qs.toString() ? ("?" + String(qs.toString())) : ''}`
   return useAPI<{ data: any[] }>(url)
 }

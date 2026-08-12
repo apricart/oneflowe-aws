@@ -1,4 +1,5 @@
 #!/usr/bin/env tsx
+import { stringifyPrimitive } from "../lib/stringify-primitive"
 
 import { createHash } from "node:crypto"
 import { readFileSync, writeFileSync } from "node:fs"
@@ -24,7 +25,7 @@ function readJson<T>(path: string): T {
 }
 
 function normalizeText(value: unknown): string {
-  return String(value ?? "")
+  return stringifyPrimitive(value)
     .normalize("NFKC")
     .replace(/[\u2018\u2019]/g, "'")
     .replace(/[\u2013\u2014]/g, "-")
@@ -35,14 +36,18 @@ function normalizeText(value: unknown): string {
 
 function normalizeProductName(value: unknown): string {
   return normalizeText(value)
-    .replace(/\s*\(\s*/g, " (")
-    .replace(/\s*\)\s*/g, ")")
-    .replace(/\s*-\s*/g, "-")
+    .replaceAll(" (", "(")
+    .replaceAll("( ", "(")
+    .replaceAll("(", " (")
+    .replaceAll(" )", ")")
+    .replaceAll(") ", ")")
+    .replaceAll(" -", "-")
+    .replaceAll("- ", "-")
 }
 
 function dateKey(value: unknown): string {
-  const raw = String(value ?? "")
-  const match = raw.match(/^(\d{4}-\d{2}-\d{2})/)
+  const raw = stringifyPrimitive(value)
+  const match = /^(\d{4}-\d{2}-\d{2})/.exec(raw)
   if (match) return match[1]
   const parsed = new Date(raw)
   if (Number.isNaN(parsed.getTime())) throw new Error(`Invalid date: ${raw}`)
@@ -51,7 +56,7 @@ function dateKey(value: unknown): string {
 
 function toCents(value: unknown): number {
   const parsed = Number(value ?? 0)
-  if (!Number.isFinite(parsed)) throw new Error(`Invalid monetary value: ${String(value)}`)
+  if (!Number.isFinite(parsed)) throw new Error(`Invalid monetary value: ${stringifyPrimitive(value)}`)
   return Math.round((parsed + Number.EPSILON) * 100)
 }
 
@@ -152,7 +157,7 @@ function addSheet(workbook: XLSX.WorkBook, name: string, rows: Row[], moneyHeade
   for (let rowIndex = 1; rowIndex <= rows.length; rowIndex += 1) {
     for (const columnIndex of moneyColumns) {
       const cell = sheet[XLSX.utils.encode_cell({ r: rowIndex, c: columnIndex })]
-      if (cell && cell.t === "n") cell.z = "#,##0.00;[Red]-#,##0.00"
+      if (cell?.t === "n") cell.z = "#,##0.00;[Red]-#,##0.00"
     }
   }
   XLSX.utils.book_append_sheet(workbook, sheet, name)
@@ -161,7 +166,7 @@ function addSheet(workbook: XLSX.WorkBook, name: string, rows: Row[], moneyHeade
 async function main() {
   const remaining = readJson<{ categories: Array<{ code: string; legacyOrderIds: number[] }> }>(REMAINING_REPORT)
   const category = remaining.categories.find((item) => item.code === "ITEM_SUBTOTAL_MISMATCH")
-  if (!category || category.legacyOrderIds.length !== 19) throw new Error("Expected exactly 19 subtotal-mismatch IDs")
+  if (category?.legacyOrderIds.length !== 19) throw new Error("Expected exactly 19 subtotal-mismatch IDs")
   const mismatchIds = [...category.legacyOrderIds].map(Number).sort((a, b) => a - b)
   const mismatchSet = new Set(mismatchIds)
   const sourceLines = readJson<Row[]>(ORDER_LINES).filter((row) => mismatchSet.has(Number(row.ID)))
@@ -303,20 +308,33 @@ async function main() {
 
     const changedPriceLines = evidence.filter((item) => item.historyPriceCents != null && item.historyPriceCents !== item.rawPriceCents).length
     const renamedItemLines = evidence.filter((item) => normalizeProductName(item.line.ItemDetails) !== normalizeProductName(item.detailItem.Name)).length
-    const classification = historyMatchesHeader
-      ? "RECONCILED_BY_LIVE_DETAIL_AND_EXACT_HISTORY"
-      : historySubtotalCents == null
-        ? detailMatchesHeader ? "LIVE_DETAIL_RECONCILES; HISTORY_INCOMPLETE" : "LIVE_HISTORY_INCOMPLETE_OR_AMBIGUOUS"
-        : rawMatchesHeader
-          ? "RAW_ORDER_LINES_MATCH; LIVE_HISTORY_DIFFERS"
-          : "COMPLETE_LIVE_HISTORY_STILL_MISMATCHES"
-    const explanation = historyMatchesHeader
-      ? `Confirmed price-change/versioning case: the live order-detail item IDs/names were joined to the exact branch/date Item Price History. Those dated prices add to the header subtotal. ${changedPriceLines} exported line price(s) and ${renamedItemLines} exported item name(s) differ from the live historical/detail evidence.`
-      : historySubtotalCents == null
-        ? `The live detail line totals ${detailMatchesHeader ? "do" : "do not"} add to the header, but the exact live price-history report did not return one unique dated price for ${unresolved.length} detail item(s).`
-        : rawMatchesHeader
-          ? "The order export's own line prices already add to the header. The live history snapshot differs, so historical price data should not replace the prices stored on this order."
-          : "Even the complete exact-date, exact-branch live history does not add to the header subtotal; price history alone does not resolve this order."
+    const classification = (() => {
+      if (historyMatchesHeader) {
+        return "RECONCILED_BY_LIVE_DETAIL_AND_EXACT_HISTORY"
+      }
+      if (historySubtotalCents == null) {
+        if (detailMatchesHeader) {
+          return "LIVE_DETAIL_RECONCILES; HISTORY_INCOMPLETE"
+        }
+        return "LIVE_HISTORY_INCOMPLETE_OR_AMBIGUOUS"
+      }
+      if (rawMatchesHeader) {
+        return "RAW_ORDER_LINES_MATCH; LIVE_HISTORY_DIFFERS"
+      }
+      return "COMPLETE_LIVE_HISTORY_STILL_MISMATCHES"
+    })()
+    const explanation = (() => {
+      if (historyMatchesHeader) {
+        return `Confirmed price-change/versioning case: the live order-detail item IDs/names were joined to the exact branch/date Item Price History. Those dated prices add to the header subtotal. ${changedPriceLines} exported line price(s) and ${renamedItemLines} exported item name(s) differ from the live historical/detail evidence.`
+      }
+      if (historySubtotalCents == null) {
+        return `The live detail line totals ${detailMatchesHeader ? "do" : "do not"} add to the header, but the exact live price-history report did not return one unique dated price for ${unresolved.length} detail item(s).`
+      }
+      if (rawMatchesHeader) {
+        return "The order export's own line prices already add to the header. The live history snapshot differs, so historical price data should not replace the prices stored on this order."
+      }
+      return "Even the complete exact-date, exact-branch live history does not add to the header subtotal; price history alone does not resolve this order."
+    })()
 
     orderRows.push({
       "Legacy Order ID": legacyOrderId,
@@ -371,11 +389,25 @@ async function main() {
         "Price Difference PKR": money(historyDiff),
         "Unique History Prices Found": item.values.length,
         "All History Prices PKR": item.values.map((value) => (value / 100).toFixed(2)).join(" | ") || "None",
-        "Price Changed vs Exported Line": historyDiff === 0 ? "No" : historyDiff == null ? "Unknown" : "YES",
+        "Price Changed vs Exported Line": (() => {
+          if (historyDiff === 0) {
+            return "No"
+          }
+          if (historyDiff == null) {
+            return "Unknown"
+          }
+          return "YES"
+        })(),
         "Detail Total Equals History x Quantity": item.historyLineTotalCents === item.detailLineTotalCents ? "YES" : "No",
-        "Evidence Status": item.values.length === 1
-          ? "Live ItemID/name -> exact branch/date history; export row aligned by position and identical quantity"
-          : item.values.length === 0 ? "No exact live-history match for detail item name" : "Ambiguous exact live-history matches",
+        "Evidence Status": (() => {
+          if (item.values.length === 1) {
+            return "Live ItemID/name -> exact branch/date history; export row aligned by position and identical quantity"
+          }
+          if (item.values.length === 0) {
+            return "No exact live-history match for detail item name"
+          }
+          return "Ambiguous exact live-history matches"
+        })(),
       })
     }
   }

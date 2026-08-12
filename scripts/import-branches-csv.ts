@@ -13,8 +13,8 @@
  * email address, or time value — those mark the end of the address field.
  */
 
-import { readFileSync, statSync } from "fs"
-import { resolve } from "path"
+import { readFileSync, statSync } from "node:fs"
+import { resolve } from "node:path"
 import * as dotenv from "dotenv"
 
 dotenv.config({ path: ".env.local" })

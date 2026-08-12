@@ -20,6 +20,56 @@ import {
   HIDE_ORDER_PORTAL_PRICES_SETTING_KEY,
 } from "@/lib/price-visibility"
 
+type OrganizationCreateInput = ReturnType<typeof organizationCreateSchema.parse>
+
+function validateOrganizationFields(body: OrganizationCreateInput) {
+  if (!body?.name || typeof body.name !== "string") {
+    return { response: error("Organization name is required and must be a string", 400) }
+  }
+  if (!body?.code || typeof body.code !== "string") {
+    return { response: error("Organization code is required and must be a string", 400) }
+  }
+
+  const name = body.name.trim()
+  const code = body.code.trim().toUpperCase()
+  if (name.length < 2 || name.length > 100) {
+    return { response: error("Organization name must be between 2 and 100 characters", 400) }
+  }
+  if (code.length < 2 || code.length > 20) {
+    return { response: error("Organization code must be between 2 and 20 characters", 400) }
+  }
+  if (!/^[A-Z0-9_]+$/.test(code)) {
+    return { response: error("Organization code must contain only uppercase letters, numbers, and underscores", 400) }
+  }
+
+  const validStatuses = ["active", "inactive", "suspended"]
+  const status = body.status ? String(body.status).toLowerCase() : "active"
+  if (!validStatuses.includes(status)) {
+    return { response: error(`Status must be one of: ${validStatuses.join(", ")}`, 400) }
+  }
+
+  const budgetAllocationMode = String(body.budgetAllocationMode ?? DEFAULT_BUDGET_ALLOCATION_MODE)
+  if (!isBudgetAllocationMode(budgetAllocationMode)) {
+    return { response: error("Budget allocation mode must be either money or quantity", 400) }
+  }
+
+  const priceVisibility = body.priceVisibility && typeof body.priceVisibility === "object"
+    ? body.priceVisibility
+    : {}
+  const hideBranchAdminPrices = priceVisibility.hideBranchAdminPrices ?? false
+  const hideOrderPortalPrices = priceVisibility.hideOrderPortalPrices ?? false
+  if (typeof hideBranchAdminPrices !== "boolean") {
+    return { response: error("hideBranchAdminPrices must be a boolean", 400) }
+  }
+  if (typeof hideOrderPortalPrices !== "boolean") {
+    return { response: error("hideOrderPortalPrices must be a boolean", 400) }
+  }
+
+  return {
+    values: { name, code, status, budgetAllocationMode, hideBranchAdminPrices, hideOrderPortalPrices },
+  }
+}
+
 /**
  * GET /api/v1/organizations - List organizations
  */
@@ -37,11 +87,15 @@ export async function GET() {
     }
 
     // SUPER_ADMIN sees all, others see only their organization
-    const where = scope.role === "SUPER_ADMIN"
-      ? undefined as any
-      : scope.organizationId
-        ? eq(orgsTable.id, Number(scope.organizationId))
-        : undefined as any
+    const where = (() => {
+      if (scope.role === "SUPER_ADMIN") {
+        return undefined as any
+      }
+      if (scope.organizationId) {
+        return eq(orgsTable.id, Number(scope.organizationId))
+      }
+      return undefined as any
+    })()
 
     // Validate organizationId for non-SUPER_ADMIN users
     if (scope.role !== "SUPER_ADMIN" && !scope.organizationId) {
@@ -111,65 +165,16 @@ export async function POST(req: Request) {
     const scope = await getRequestScope()
     if (!scope?.userId) return error("Invalid session data", 401)
 
-    // Validate required fields
-    if (!body?.name || typeof body.name !== 'string') {
-      return error("Organization name is required and must be a string", 400)
-    }
-
-    if (!body?.code || typeof body.code !== 'string') {
-      return error("Organization code is required and must be a string", 400)
-    }
-
-    // Validate field lengths
-    const name = String(body.name).trim()
-    const code = String(body.code).trim().toUpperCase()
-
-    if (name.length < 2 || name.length > 100) {
-      return error("Organization name must be between 2 and 100 characters", 400)
-    }
-
-    if (code.length < 2 || code.length > 20) {
-      return error("Organization code must be between 2 and 20 characters", 400)
-    }
-
-    // Validate code format (alphanumeric and underscores only)
-    if (!/^[A-Z0-9_]+$/.test(code)) {
-      return error("Organization code must contain only uppercase letters, numbers, and underscores", 400)
-    }
-
-    // Validate status if provided
-    const validStatuses = ['active', 'inactive', 'suspended']
-    const status = body.status ? String(body.status).toLowerCase() : 'active'
-
-    if (!validStatuses.includes(status)) {
-      return error(`Status must be one of: ${validStatuses.join(', ')}`, 400)
-    }
-
-    const budgetAllocationMode = body.budgetAllocationMode === undefined
-      ? DEFAULT_BUDGET_ALLOCATION_MODE
-      : String(body.budgetAllocationMode)
-
-    if (!isBudgetAllocationMode(budgetAllocationMode)) {
-      return error("Budget allocation mode must be either money or quantity", 400)
-    }
-
-    const priceVisibility = body.priceVisibility && typeof body.priceVisibility === "object"
-      ? body.priceVisibility
-      : {}
-    const hideBranchAdminPrices = priceVisibility.hideBranchAdminPrices === undefined
-      ? false
-      : priceVisibility.hideBranchAdminPrices
-    const hideOrderPortalPrices = priceVisibility.hideOrderPortalPrices === undefined
-      ? false
-      : priceVisibility.hideOrderPortalPrices
-
-    if (typeof hideBranchAdminPrices !== "boolean") {
-      return error("hideBranchAdminPrices must be a boolean", 400)
-    }
-
-    if (typeof hideOrderPortalPrices !== "boolean") {
-      return error("hideOrderPortalPrices must be a boolean", 400)
-    }
+    const validated = validateOrganizationFields(body)
+    if (validated.response) return validated.response
+    const {
+      name,
+      code,
+      status,
+      budgetAllocationMode,
+      hideBranchAdminPrices,
+      hideOrderPortalPrices,
+    } = validated.values!
 
     // Check for duplicate name
     const existingName = await db

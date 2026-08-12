@@ -4,8 +4,8 @@
  */
 
 import { db } from "@/lib/db"
-import { organizationInventory, branchInventory, globalProducts, organizations, branches } from "@/db/schema"
-import { eq, and, isNull, ne } from "drizzle-orm"
+import { organizationInventory,branchInventory,globalProducts,organizations,branches } from "@/db/schema"
+import { eq,and,isNull } from "drizzle-orm"
 
 /**
  * Validate that an organization exists and is active
@@ -126,14 +126,11 @@ export async function validateUserOrganizationAccess(
   userId: string,
   organizationId: number
 ): Promise<boolean> {
-  try {
-    // This would typically check user roles and organization membership
-    // For now, we'll assume the session middleware handles this
-    return true
-  } catch (error) {
-    console.error("Error validating user organization access:", error)
-    return false
-  }
+  // Access is enforced by the session middleware; retain parameters for the
+  // validation API that will replace this compatibility function.
+  void userId
+  void organizationId
+  return true
 }
 
 /**
@@ -144,14 +141,12 @@ export async function validateUserBranchAccess(
   branchId: number,
   organizationId: number
 ): Promise<boolean> {
-  try {
-    // This would typically check user roles and branch membership
-    // For now, we'll assume the session middleware handles this
-    return true
-  } catch (error) {
-    console.error("Error validating user branch access:", error)
-    return false
-  }
+  // Access is enforced by the session middleware; retain parameters for the
+  // validation API that will replace this compatibility function.
+  void userId
+  void branchId
+  void organizationId
+  return true
 }
 
 /**
@@ -209,6 +204,54 @@ export async function checkDuplicateBranchAssignment(
 /**
  * Validate assignment data before creation
  */
+type AssignmentValidationData = {
+  organizationId?: number
+  branchId?: number
+  globalProductId?: number
+  organizationInventoryId?: number
+  userId?: string
+}
+
+async function organizationValidationError(data: AssignmentValidationData): Promise<string | null> {
+  if (!data.organizationId) return null
+  return await validateOrganization(data.organizationId) ? null : "Invalid organization ID"
+}
+
+async function branchValidationError(data: AssignmentValidationData): Promise<string | null> {
+  if (!data.branchId || !data.organizationId) return null
+  return await validateBranch(data.branchId, data.organizationId)
+    ? null
+    : "Invalid branch ID or branch does not belong to organization"
+}
+
+async function productValidationError(data: AssignmentValidationData): Promise<string | null> {
+  if (!data.globalProductId) return null
+  return await validateGlobalProduct(data.globalProductId)
+    ? null
+    : "Invalid global product ID or product is not active"
+}
+
+async function organizationInventoryValidationError(data: AssignmentValidationData): Promise<string | null> {
+  if (!data.organizationInventoryId || !data.organizationId) return null
+  return await validateOrganizationInventory(data.organizationInventoryId, data.organizationId)
+    ? null
+    : "Invalid organization inventory ID or access denied"
+}
+
+async function duplicateOrganizationValidationError(data: AssignmentValidationData): Promise<string | null> {
+  if (!data.organizationId || !data.globalProductId) return null
+  return await checkDuplicateOrganizationAssignment(data.organizationId, data.globalProductId)
+    ? "Product is already assigned to this organization"
+    : null
+}
+
+async function duplicateBranchValidationError(data: AssignmentValidationData): Promise<string | null> {
+  if (!data.branchId || !data.organizationInventoryId) return null
+  return await checkDuplicateBranchAssignment(data.branchId, data.organizationInventoryId)
+    ? "Product is already assigned to this branch"
+    : null
+}
+
 export async function validateAssignmentData(data: {
   organizationId?: number
   branchId?: number
@@ -216,55 +259,16 @@ export async function validateAssignmentData(data: {
   organizationInventoryId?: number
   userId?: string
 }): Promise<{ valid: boolean; errors: string[] }> {
-  const errors: string[] = []
-
   try {
-    // Validate organization
-    if (data.organizationId) {
-      const orgValid = await validateOrganization(data.organizationId)
-      if (!orgValid) {
-        errors.push("Invalid organization ID")
-      }
-    }
-
-    // Validate branch
-    if (data.branchId && data.organizationId) {
-      const branchValid = await validateBranch(data.branchId, data.organizationId)
-      if (!branchValid) {
-        errors.push("Invalid branch ID or branch does not belong to organization")
-      }
-    }
-
-    // Validate global product
-    if (data.globalProductId) {
-      const productValid = await validateGlobalProduct(data.globalProductId)
-      if (!productValid) {
-        errors.push("Invalid global product ID or product is not active")
-      }
-    }
-
-    // Validate organization inventory
-    if (data.organizationInventoryId && data.organizationId) {
-      const orgInvValid = await validateOrganizationInventory(data.organizationInventoryId, data.organizationId)
-      if (!orgInvValid) {
-        errors.push("Invalid organization inventory ID or access denied")
-      }
-    }
-
-    // Check for duplicates
-    if (data.organizationId && data.globalProductId) {
-      const isDuplicate = await checkDuplicateOrganizationAssignment(data.organizationId, data.globalProductId)
-      if (isDuplicate) {
-        errors.push("Product is already assigned to this organization")
-      }
-    }
-
-    if (data.branchId && data.organizationInventoryId) {
-      const isDuplicate = await checkDuplicateBranchAssignment(data.branchId, data.organizationInventoryId)
-      if (isDuplicate) {
-        errors.push("Product is already assigned to this branch")
-      }
-    }
+    const results = await Promise.all([
+      organizationValidationError(data),
+      branchValidationError(data),
+      productValidationError(data),
+      organizationInventoryValidationError(data),
+      duplicateOrganizationValidationError(data),
+      duplicateBranchValidationError(data),
+    ])
+    const errors = results.filter((message): message is string => Boolean(message))
 
     return {
       valid: errors.length === 0,

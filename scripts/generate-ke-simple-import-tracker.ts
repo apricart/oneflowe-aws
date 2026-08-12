@@ -22,7 +22,15 @@ function autoWidth(rows: Row[], headers: string[]): XLSX.ColInfo[] {
       const text = value instanceof Date ? value.toISOString() : String(value ?? "")
       return Math.max(maximum, text.length)
     }, header.length)
-    const maximumWidth = header === "Comment" ? 70 : header === "Missing Required Values" ? 60 : 34
+    const maximumWidth = (() => {
+      if (header === "Comment") {
+        return 70
+      }
+      if (header === "Missing Required Values") {
+        return 60
+      }
+      return 34
+    })()
     return { wch: Math.min(Math.max(width + 2, 12), maximumWidth) }
   })
 }

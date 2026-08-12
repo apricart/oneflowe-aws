@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 
-import { existsSync, readFileSync } from "fs"
-import { resolve } from "path"
+import { existsSync, readFileSync } from "node:fs"
+import { resolve } from "node:path"
 import * as dotenv from "dotenv"
 
 dotenv.config({ path: ".env.local", quiet: true })
@@ -108,7 +108,7 @@ async function main() {
     assert(boundaryMismatches.length === 0, `Budget period boundary mismatch for: ${boundaryMismatches.map((row: any) => row.name).join(", ")}`)
 
     const audit = auditResult.rows[0]
-    assert(audit && audit.organization_id === ORG_ID && audit.action === "KE_BRANCH_BUDGET_IMPORT" && audit.entity === "budgets", "Import audit log mismatch")
+    assert(audit?.organization_id === ORG_ID && audit.action === "KE_BRANCH_BUDGET_IMPORT" && audit.entity === "budgets", "Import audit log mismatch")
     assert(audit.metadata?.planSha256 === report.planSha256, "Audit plan checksum mismatch")
 
     console.log(JSON.stringify({

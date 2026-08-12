@@ -24,7 +24,7 @@ export function PremiumAlert({
     isVisible,
     onClose,
     placement = "fixed",
-}: PremiumAlertProps) {
+}: Readonly<PremiumAlertProps>) {
     useEffect(() => {
         if (!isVisible) return
 
@@ -100,7 +100,7 @@ export function PremiumAlert({
                             </p>
                         </div>
 
-                        <button
+                        <button type="button"
                             onClick={(event) => {
                                 event.preventDefault()
                                 event.stopPropagation()

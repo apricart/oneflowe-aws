@@ -1,12 +1,12 @@
-import { NextRequest, NextResponse } from "next/server"
+import { NextRequest,NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
-import { organizationInventory, globalProducts, categories, auditLogs } from "@/db/schema"
-import { eq, and, like, ilike, or, desc, sql, isNull, SQL, ne, inArray } from "drizzle-orm"
+import { organizationInventory,globalProducts,categories,auditLogs } from "@/db/schema"
+import { eq,and,ilike,or,desc,sql,isNull,SQL,inArray } from "drizzle-orm"
 import { alias } from "drizzle-orm/pg-core"
 import { cascadeOrgStatusChange } from "@/lib/inventory-cascade"
-import { getCached, invalidateByPrefix, scopedCacheKey, CACHE_TTL } from "@/lib/cache-utils"
+import { getCached,invalidateByPrefix,scopedCacheKey,CACHE_TTL } from "@/lib/cache-utils"
 import { normalizeSafeImageUrl } from "@/lib/security"
 
 // GET /api/v1/head-office/organization-inventory - List products in organization inventory
@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
       const { searchParams } = new URL(req.url)
       const orgIdParam = searchParams.get("organizationId")
       if (orgIdParam) {
-        organizationId = parseInt(orgIdParam)
+        organizationId = Number.parseInt(orgIdParam)
       }
     }
     if (!organizationId) {
@@ -51,7 +51,7 @@ export async function GET(req: NextRequest) {
 
     return getCached(cacheKey, async () => {
       const conditions: (SQL | undefined)[] = [
-        eq(organizationInventory.organizationId, parseInt(organizationId)),
+        eq(organizationInventory.organizationId, Number.parseInt(organizationId)),
         isNull(organizationInventory.deletedAt),
         isNull(globalProducts.deletedAt),
         eq(globalProducts.status, "active"),
@@ -75,7 +75,7 @@ export async function GET(req: NextRequest) {
         )
       }
       if (category && category !== 'all') {
-        const catId = parseInt(category)
+        const catId = Number.parseInt(category)
         const subCatsList = await db.select({ id: categories.id })
           .from(categories)
           .where(eq(categories.parentId, catId))
@@ -88,7 +88,7 @@ export async function GET(req: NextRequest) {
         }
       }
       if (subCategory && subCategory !== 'all') {
-        conditions.push(eq(globalProducts.categoryId, parseInt(subCategory)))
+        conditions.push(eq(globalProducts.categoryId, Number.parseInt(subCategory)))
       }
 
       const whereClause = and(...conditions)
@@ -166,7 +166,7 @@ export async function PUT(req: NextRequest) {
     // For Super Admin, get from request body if available
     let organizationId = (session.user as any).organizationId
     if (body.organizationId) {
-      organizationId = parseInt(body.organizationId)
+      organizationId = Number.parseInt(body.organizationId)
     }
     if (!organizationId) {
       return NextResponse.json({ error: "Organization not found in session" }, { status: 400 })
@@ -227,7 +227,7 @@ export async function PUT(req: NextRequest) {
       .where(
         and(
           eq(organizationInventory.id, inventoryId),
-          eq(organizationInventory.organizationId, parseInt(organizationId)),
+          eq(organizationInventory.organizationId, Number.parseInt(organizationId)),
           isNull(organizationInventory.deletedAt)
         )
       )
@@ -252,7 +252,7 @@ export async function PUT(req: NextRequest) {
       .where(
         and(
           eq(organizationInventory.id, inventoryId),
-          eq(organizationInventory.organizationId, parseInt(organizationId))
+          eq(organizationInventory.organizationId, Number.parseInt(organizationId))
         )
       )
       .returning()
@@ -273,7 +273,7 @@ export async function PUT(req: NextRequest) {
         entity: "OrganizationInventory",
         entityId: id.toString(),
         metadata: {
-          organizationInventoryId: parseInt(id),
+          organizationInventoryId: Number.parseInt(id),
           isActive,
           branchUpdates: cascadeResult.updatedCount,
           affectedBranches: cascadeResult.affectedBranches,

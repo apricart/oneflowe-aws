@@ -1,3 +1,4 @@
+import { stringifyPrimitive } from "./stringify-primitive"
 type ReceiptItem = {
   quantity?: number | string | null
 }
@@ -18,7 +19,7 @@ export type ReceiptRefundItem = {
 }
 
 export const toDisplayNameCase = (value: unknown) =>
-  String(value ?? "")
+  stringifyPrimitive(value)
     .toLowerCase()
     .replace(/\b[a-z]/g, (character) => character.toUpperCase())
 

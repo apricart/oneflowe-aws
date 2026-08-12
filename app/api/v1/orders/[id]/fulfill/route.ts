@@ -9,6 +9,19 @@ import { moveHeldQuantityBudgetToUsedForOrder } from "@/lib/server/product-quant
 import { orderSelectColumns, updateOrderFulfillmentStatusColumn } from "@/lib/order-select"
 import { fulfillmentSchema, validationMessage } from "@/lib/server/mutation-validation"
 
+function fulfillmentTransitionResponse(transitionError: any) {
+  if (transitionError?.message === "ORDER_TRANSITION_CONFLICT") {
+    return error("Order was already fulfilled or otherwise changed", 409)
+  }
+  if (["BUDGET_LEDGER_INVARIANT", "QUANTITY_BUDGET_LEDGER_INVARIANT"].includes(transitionError?.message)) {
+    return error("Order budget hold is inconsistent; fulfilment was not applied", 409)
+  }
+  if (transitionError?.message === "FULFILLMENT_MIGRATION_MISSING") {
+    return error("Fulfillment progress migration has not been applied", 503)
+  }
+  return null
+}
+
 export async function POST(
   req: Request,
   props: { params: Promise<{ id: string }> }
@@ -106,15 +119,8 @@ export async function POST(
       await moveHeldQuantityBudgetToUsedForOrder(tx, fulfilledOrder)
     })
   } catch (transitionError: any) {
-    if (transitionError?.message === "ORDER_TRANSITION_CONFLICT") {
-      return error("Order was already fulfilled or otherwise changed", 409)
-    }
-    if (["BUDGET_LEDGER_INVARIANT", "QUANTITY_BUDGET_LEDGER_INVARIANT"].includes(transitionError?.message)) {
-      return error("Order budget hold is inconsistent; fulfilment was not applied", 409)
-    }
-    if (transitionError?.message === "FULFILLMENT_MIGRATION_MISSING") {
-      return error("Fulfillment progress migration has not been applied", 503)
-    }
+    const response = fulfillmentTransitionResponse(transitionError)
+    if (response) return response
     throw transitionError
   }
 

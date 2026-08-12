@@ -1,3 +1,4 @@
+import { stringifyPrimitive } from "../lib/stringify-primitive"
 import { createHash } from "node:crypto"
 import { readdirSync, readFileSync, statSync } from "node:fs"
 import { basename, relative, resolve } from "node:path"
@@ -37,7 +38,7 @@ function assert(condition: unknown, message: string): asserts condition {
 }
 
 function normalizeText(value: unknown): string {
-  return String(value ?? "")
+  return stringifyPrimitive(value)
     .normalize("NFKC")
     .replace(/[\u2018\u2019]/g, "'")
     .replace(/[\u2013\u2014]/g, "-")
@@ -47,7 +48,8 @@ function normalizeText(value: unknown): string {
 }
 
 function normalizeUser(value: unknown): string {
-  return normalizeText(value).replace(/\s+-\s*$/, "").trim()
+  const normalized = normalizeText(value)
+  return normalized.endsWith(" -") ? normalized.slice(0, -2).trim() : normalized
 }
 
 function normalizeBranch(value: unknown): string {
@@ -57,9 +59,13 @@ function normalizeBranch(value: unknown): string {
 
 function normalizeItem(value: unknown): string {
   return normalizeText(value)
-    .replace(/\s*\(\s*/g, " (")
-    .replace(/\s*\)\s*/g, ")")
-    .replace(/\s*-\s*/g, "-")
+    .replaceAll(" (", "(")
+    .replaceAll("( ", "(")
+    .replaceAll("(", " (")
+    .replaceAll(" )", ")")
+    .replaceAll(") ", ")")
+    .replaceAll(" -", "-")
+    .replaceAll("- ", "-")
 }
 
 function asNumber(value: unknown): number | null {
@@ -70,13 +76,13 @@ function asNumber(value: unknown): number | null {
 
 function dateKey(value: unknown): string {
   if (!value) return ""
-  const date = value instanceof Date ? value : new Date(String(value))
+  const date = value instanceof Date ? value : new Date(stringifyPrimitive(value))
   return Number.isNaN(date.getTime()) ? "" : date.toISOString().slice(0, 10)
 }
 
 function asDate(value: unknown): Date | null {
   if (!value) return null
-  const date = value instanceof Date ? value : new Date(String(value))
+  const date = value instanceof Date ? value : new Date(stringifyPrimitive(value))
   return Number.isNaN(date.getTime()) ? null : date
 }
 
@@ -86,7 +92,9 @@ function cents(value: unknown): number | null {
 }
 
 function joinUnique(values: unknown[]): string {
-  return [...new Set(values.map((value) => String(value ?? "").trim()).filter(Boolean))].sort().join(", ")
+  return [...new Set(values.map((value) => stringifyPrimitive(value).trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b))
+    .join(", ")
 }
 
 function readJson<T>(path: string): T {
@@ -133,7 +141,7 @@ function autoWidth(rows: JsonRow[], headers: string[]): XLSX.ColInfo[] {
   return headers.map((header) => {
     const maximum = rows.reduce((width, row) => {
       const value = row[header]
-      const text = value instanceof Date ? value.toISOString() : String(value ?? "")
+      const text = value instanceof Date ? value.toISOString() : stringifyPrimitive(value)
       return Math.max(width, text.length)
     }, header.length)
     return { wch: Math.min(Math.max(maximum + 2, 11), header === "Comment" ? 70 : 48) }
@@ -192,7 +200,6 @@ function fileAuditRow(root: string, path: string): JsonRow {
   const stat = statSync(path)
   const extension = path.toLowerCase().split(".").pop() ?? ""
   let structure = "Binary/supporting file"
-  let rows: string | number = ""
   let role = "Supporting evidence"
   let linkQuality = "See role/comment"
 
@@ -205,7 +212,6 @@ function fileAuditRow(root: string, path: string): JsonRow {
     structure = Array.isArray(parsed)
       ? `JSON array (${parsed.length} rows)`
       : `JSON object (${Object.keys(parsed).join(", ")})`
-    rows = Array.isArray(parsed) ? parsed.length : 1
   } else if (extension === "xls" || extension === "xlsx") {
     const workbook = XLSX.readFile(path, { cellDates: false })
     const sheetCounts = workbook.SheetNames.map((sheetName) => {
@@ -214,7 +220,6 @@ function fileAuditRow(root: string, path: string): JsonRow {
       return `${sheetName}: ${sheetRows}`
     })
     structure = `Workbook (${sheetCounts.join("; ")})`
-    rows = sheetCounts.join("; ")
   } else if (extension === "md") {
     structure = "Markdown documentation"
   }
@@ -436,7 +441,6 @@ async function main() {
     const id = Number(row["Legacy Order ID"])
     return !liveImportedIds.has(id) && !liveOrderIdByLegacyId.has(id)
   })
-  const selectedIds = new Set(selectedOrderRows.map((row) => Number(row["Legacy Order ID"])))
 
   const branchByNormalizedName = new Map<string, JsonRow[]>()
   for (const branch of branches) {
@@ -606,11 +610,15 @@ async function main() {
     const creatorResolution = resolveCreator(order, branchResolution.row)
     const exactItems = itemsByOrderId.get(id) ?? []
     const candidates = exactItems.length === 0 ? candidateSummaryRows(order) : []
-    const sourceItems: Array<{ source: "EXACT" | "CANDIDATE" | "MISSING"; row: JsonRow }> = exactItems.length > 0
-      ? exactItems.map((row) => ({ source: "EXACT" as const, row }))
-      : candidates.length > 0
-        ? candidates.map((row) => ({ source: "CANDIDATE" as const, row }))
-        : [{ source: "MISSING" as const, row: {} }]
+    const sourceItems: Array<{ source: "EXACT" | "CANDIDATE" | "MISSING"; row: JsonRow }> = (() => {
+      if (exactItems.length > 0) {
+        return exactItems.map((row) => ({ source: "EXACT" as const, row }))
+      }
+      if (candidates.length > 0) {
+        return candidates.map((row) => ({ source: "CANDIDATE" as const, row }))
+      }
+      return [{ source: "MISSING" as const, row: {} }]
+    })()
 
     const itemMissing = new Set<string>()
     let allProductsResolved = true
@@ -621,9 +629,33 @@ async function main() {
     const fullRefund = Boolean(refund && orderGrandTotal !== null && Math.abs(grossRefund - orderGrandTotal) < 0.005)
 
     sourceItems.forEach(({ source, row }, lineIndex) => {
-      const itemName = source === "EXACT" ? row.Item : source === "CANDIDATE" ? row.Name : null
-      const quantity = source === "EXACT" ? asNumber(row.Quantity) : source === "CANDIDATE" ? asNumber(row.Item_Qty) : null
-      const rawPrice = source === "EXACT" ? asNumber(row["Raw Unit Price (JSON)"]) : source === "CANDIDATE" ? asNumber(row.UnitPrice) : null
+      const itemName = (() => {
+        if (source === "EXACT") {
+          return row.Item
+        }
+        if (source === "CANDIDATE") {
+          return row.Name
+        }
+        return null
+      })()
+      const quantity = (() => {
+        if (source === "EXACT") {
+          return asNumber(row.Quantity)
+        }
+        if (source === "CANDIDATE") {
+          return asNumber(row.Item_Qty)
+        }
+        return null
+      })()
+      const rawPrice = (() => {
+        if (source === "EXACT") {
+          return asNumber(row["Raw Unit Price (JSON)"])
+        }
+        if (source === "CANDIDATE") {
+          return asNumber(row.UnitPrice)
+        }
+        return null
+      })()
       const candidateRevenue = source === "CANDIDATE" ? asNumber(row.SaleRevenue) : null
       const effectivePrice = source === "CANDIDATE" && quantity && candidateRevenue !== null
         ? candidateRevenue / quantity
@@ -663,12 +695,24 @@ async function main() {
         ? Math.round(effectivePrice * 100)
         : REQUIRED
       const lineTotal = quantity !== null && effectivePrice !== null ? quantity * effectivePrice : REQUIRED
-      const refundedQuantity = refund
-        ? fullRefund && quantity !== null ? quantity : REQUIRED
-        : NOT_APPLICABLE
-      const refundedAmount = refund
-        ? fullRefund && lineTotal !== REQUIRED ? lineTotal : REQUIRED
-        : NOT_APPLICABLE
+      const refundedQuantity = (() => {
+        if (refund) {
+          if (fullRefund && quantity !== null) {
+            return quantity
+          }
+          return REQUIRED
+        }
+        return NOT_APPLICABLE
+      })()
+      const refundedAmount = (() => {
+        if (refund) {
+          if (fullRefund && lineTotal !== REQUIRED) {
+            return lineTotal
+          }
+          return REQUIRED
+        }
+        return NOT_APPLICABLE
+      })()
 
       productRows.push({
         "Legacy Order ID": id,
@@ -678,20 +722,33 @@ async function main() {
         "Branch / Location": order["Branch / Location"] ?? REQUIRED,
         "DB Branch ID": branchResolution.row?.id ?? REQUIRED,
         "Blocker Code": category.code,
-        "Refund Classification": refund ? (fullRefund ? "FULL" : "PARTIAL") : "NONE",
+        "Refund Classification": (() => {
+          if (refund) {
+            return (fullRefund ? "FULL" : "PARTIAL")
+          }
+          return "NONE"
+        })(),
         "Line Number": lineIndex + 1,
-        "Product Evidence Type": source === "EXACT"
-          ? `Exact legacy-ID item row (${row["Line Source"] ?? "compiled sales source"})`
-          : source === "CANDIDATE"
-            ? "Candidate summary row - no legacy order ID"
-            : "Missing item evidence",
+        "Product Evidence Type": (() => {
+          if (source === "EXACT") {
+            return `Exact legacy-ID item row (${row["Line Source"] ?? "compiled sales source"})`
+          }
+          if (source === "CANDIDATE") {
+            return "Candidate summary row - no legacy order ID"
+          }
+          return "Missing item evidence"
+        })(),
         "Exact Link Confirmation": source === "EXACT" ? "Confirmed" : REQUIRED,
         "Product Name": itemName ?? REQUIRED,
-        "Source Product / SKU": source === "EXACT"
-          ? (row["GroupWise Item Code"] || "Not supplied")
-          : source === "CANDIDATE"
-            ? (row.SKU || row.Barcode || "Not supplied")
-            : "Not supplied",
+        "Source Product / SKU": (() => {
+          if (source === "EXACT") {
+            return (row["GroupWise Item Code"] || "Not supplied")
+          }
+          if (source === "CANDIDATE") {
+            return (row.SKU || row.Barcode || "Not supplied")
+          }
+          return "Not supplied"
+        })(),
         "Quantity": quantity ?? REQUIRED,
         "Source Unit Price PKR": rawPrice ?? REQUIRED,
         "Source Sale Revenue PKR": candidateRevenue ?? (lineTotal === REQUIRED ? REQUIRED : lineTotal),
@@ -702,22 +759,30 @@ async function main() {
         "DB Organization Inventory ID": organizationInventoryId ?? REQUIRED,
         "DB Product Code": dbProduct?.product_code ?? REQUIRED,
         "DB Product Mapping Status": productResolution.status,
-        "DB Branch Inventory Assignment": !branchResolution.row || !organizationInventoryId
-          ? REQUIRED
-          : branchInventoryExists
-            ? "Exists"
-            : "Create historical inactive assignment during import",
+        "DB Branch Inventory Assignment": (() => {
+          if (!branchResolution.row || !organizationInventoryId) {
+            return REQUIRED
+          }
+          if (branchInventoryExists) {
+            return "Exists"
+          }
+          return "Create historical inactive assignment during import"
+        })(),
         "Candidate Corroborated by UserProductSummary": source === "CANDIDATE"
           ? candidateCorroboration(row)
           : NOT_APPLICABLE,
         "Refunded Quantity": refundedQuantity,
         "Refund Item Amount PKR": refundedAmount,
         "Missing Required Product Values": missing.size > 0 ? [...missing].join("; ") : "None",
-        "Comment": source === "EXACT"
-          ? `Exact ID-linked item evidence. ${productResolution.status}.`
-          : source === "CANDIDATE"
-            ? "The product summary has no legacy order ID. Confirm that this row belongs to this exact order before importing it."
-            : "No item row was found in the supplied exact or candidate reports; all product fields must be supplied.",
+        "Comment": (() => {
+          if (source === "EXACT") {
+            return `Exact ID-linked item evidence. ${productResolution.status}.`
+          }
+          if (source === "CANDIDATE") {
+            return "The product summary has no legacy order ID. Confirm that this row belongs to this exact order before importing it."
+          }
+          return "No item row was found in the supplied exact or candidate reports; all product fields must be supplied."
+        })(),
       })
     })
 
@@ -809,26 +874,37 @@ async function main() {
       "Confirmation that LastUpdateDT is the refund timestamp",
       "Status immediately before refund",
     ].includes(value))
-    const readiness = missing.size === 0
-      ? "READY FOR GUARDED PREFLIGHT"
-      : onlyPolicyMissing
-        ? "CONDITIONAL - POLICY CONFIRMATION REQUIRED"
-        : "BLOCKED - REQUIRED VALUES MISSING"
+    const readiness = (() => {
+      if (missing.size === 0) {
+        return "READY FOR GUARDED PREFLIGHT"
+      }
+      if (onlyPolicyMissing) {
+        return "CONDITIONAL - POLICY CONFIRMATION REQUIRED"
+      }
+      return "BLOCKED - REQUIRED VALUES MISSING"
+    })()
 
     const commentParts = [
       category.reason,
       `Needed: ${category.requiredEvidence}`,
-      resolution.exactItems.length > 0
-        ? `${resolution.exactItems.length} exact ID-linked item row(s) available.`
-        : resolution.candidates.length > 0
-          ? `${resolution.candidates.length} candidate summary item row(s) found, but they have no legacy order ID.`
-          : "No product/item evidence was found.",
+      (() => {
+        if (resolution.exactItems.length > 0) {
+          return `${resolution.exactItems.length} exact ID-linked item row(s) available.`
+        }
+        if (resolution.candidates.length > 0) {
+          return `${resolution.candidates.length} candidate summary item row(s) found, but they have no legacy order ID.`
+        }
+        return "No product/item evidence was found."
+      })(),
       resolution.branchAssignmentsToCreate > 0
         ? `${resolution.branchAssignmentsToCreate} KE branch-product assignment(s) would need historical inactive creation.`
         : "No new branch-product assignment identified from resolved rows.",
-      refund
-        ? `${fullRefund ? "Full" : "Partial"} refund evidence: PKR ${grossRefund.toFixed(2)}. Standard refund APIs must not be used because they would alter current budgets/quantities.`
-        : "No refund evidence for this order.",
+      (() => {
+        if (refund) {
+          return `${fullRefund ? "Full" : "Partial"} refund evidence: PKR ${grossRefund.toFixed(2)}. Standard refund APIs must not be used because they would alter current budgets/quantities.`
+        }
+        return "No refund evidence for this order."
+      })(),
     ]
 
     return {
@@ -875,7 +951,12 @@ async function main() {
       "Candidate Summary Product Rows": resolution.candidates.length,
       "Product Mapping Status": resolution.allProductsResolved ? "All resolved" : REQUIRED,
       "Refund Evidence": refund ? "Yes" : "No",
-      "Refund Classification": refund ? (fullRefund ? "FULL" : "PARTIAL") : "NONE",
+      "Refund Classification": (() => {
+        if (refund) {
+          return (fullRefund ? "FULL" : "PARTIAL")
+        }
+        return "NONE"
+      })(),
       "Refund Amount Before Tax PKR": refund ? Number(refund.RefundAmount || 0) : NOT_APPLICABLE,
       "Refund Tax PKR": refund ? Number(refund.TaxRefund || 0) : NOT_APPLICABLE,
       "Total Refund PKR": refund ? grossRefund : NOT_APPLICABLE,
@@ -1038,8 +1119,8 @@ async function main() {
   assert(new Set(validatedOrders.map((row) => Number(row["Legacy Order ID"]))).size === selectedOrderRows.length, "Validated order IDs are not unique")
   assert(validatedOrders.every((row) => !isCancelledOrder(row)), "Cancelled order leaked into Import Review")
   assert(new Set(validatedProducts.map((row) => Number(row["Legacy Order ID"]))).size === selectedOrderRows.length, "Every selected order must have a product or Required placeholder row")
-  assert(validatedOrders.every((row) => Object.prototype.hasOwnProperty.call(row, "Comment")), "Order review is missing Comment column")
-  assert(validatedProducts.every((row) => Object.prototype.hasOwnProperty.call(row, "Comment")), "Product review is missing Comment column")
+  assert(validatedOrders.every((row) => Object.hasOwn(row, "Comment")), "Order review is missing Comment column")
+  assert(validatedProducts.every((row) => Object.hasOwn(row, "Comment")), "Product review is missing Comment column")
 
   console.log(JSON.stringify({
     status: "PASS",

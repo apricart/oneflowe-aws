@@ -29,11 +29,15 @@ function parseDatabaseUrl(
     password: parsed.password ? decodeURIComponent(parsed.password) : '',
     // Preserve the existing Supabase pooler behavior. Other production
     // databases must present a certificate trusted by the Node.js runtime.
-    ssl: isSupabase
-      ? { rejectUnauthorized: false }
-      : nodeEnv === 'production'
-        ? { rejectUnauthorized: true }
-        : false,
+    ssl: (() => {
+      if (isSupabase) {
+        return { rejectUnauthorized: false }
+      }
+      if (nodeEnv === 'production') {
+        return { rejectUnauthorized: true }
+      }
+      return false
+    })(),
   }
 }
 

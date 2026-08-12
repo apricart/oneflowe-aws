@@ -27,7 +27,7 @@ interface ReceiptContentProps {
     onClose?: () => void
 }
 
-export function ReceiptContent({ orderId, standalone = false, onClose }: ReceiptContentProps) {
+export function ReceiptContent({ orderId, standalone = false, onClose }: Readonly<ReceiptContentProps>) {
     const { toast } = useToast()
     const [isDownloading, setIsDownloading] = useState(false)
 
@@ -50,7 +50,7 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Receipt
             document.body.appendChild(a)
             a.click()
             window.URL.revokeObjectURL(url)
-            document.body.removeChild(a)
+            a.remove()
 
             toast({ title: "Success", description: "Invoice downloaded successfully" })
         } catch (error: any) {
@@ -413,15 +413,21 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Receipt
                         <div className="detail-row">
                             <span className="detail-label">Status:</span>
                             <span className={`detail-value px-1.5 rounded text-[10px] uppercase ${
-                                statusKey === "fulfilled" 
-                                    ? "text-emerald-600 bg-emerald-50" 
-                                    : statusKey === "partially_fulfilled" || statusKey === "partially_refunded"
-                                    ? "text-indigo-600 bg-indigo-50"
-                                    : statusKey === "approved"
-                                    ? "text-blue-600 bg-blue-50"
-                                    : statusKey === "pending"
-                                    ? "text-amber-600 bg-amber-50"
-                                    : "text-rose-600 bg-rose-50"
+                                (() => {
+                                  if (statusKey === "fulfilled") {
+                                    return "text-emerald-600 bg-emerald-50"
+                                  }
+                                  if (statusKey === "partially_fulfilled" || statusKey === "partially_refunded") {
+                                    return "text-indigo-600 bg-indigo-50"
+                                  }
+                                  if (statusKey === "approved") {
+                                    return "text-blue-600 bg-blue-50"
+                                  }
+                                  if (statusKey === "pending") {
+                                    return "text-amber-600 bg-amber-50"
+                                  }
+                                  return "text-rose-600 bg-rose-50"
+                                })()
                             }`}>
                                 {receiptData.status || "PENDING"}
                             </span>
@@ -456,13 +462,13 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Receipt
                         </tr>
                     </thead>
                     <tbody>
-                        {receiptData?.items?.map((cat: any, i: number) => (
-                            <React.Fragment key={i}>
+                        {receiptData?.items?.map((cat: any) => (
+                            <React.Fragment key={cat.mainCategoryName || cat.categoryName}>
                                 <tr className="cat-row">
                                     <td colSpan={pricesHidden ? 3 : 5}>{cat.mainCategoryName || cat.categoryName}</td>
                                 </tr>
-                                {(cat.subCategories || [{ subCategoryName: "", items: cat.items }]).map((sub: any, si: number) => (
-                                    <React.Fragment key={`${i}-${si}`}>
+                                {(cat.subCategories || [{ subCategoryName: "", items: cat.items }]).map((sub: any) => (
+                                    <React.Fragment key={`${cat.mainCategoryName || cat.categoryName}-${sub.subCategoryName || "uncategorized"}`}>
                                         {sub.subCategoryName && (
                                             <tr className="subcat-row">
                                                 <td colSpan={pricesHidden ? 3 : 5}><ChevronRight className="inline h-3 w-3 mr-1" /> {sub.subCategoryName}</td>
@@ -471,7 +477,7 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Receipt
                                         {sub.items?.map((item: any, ii: number) => {
                                             serialCounter++
                                             return (
-                                                <tr key={`${i}-${si}-${ii}`}>
+                                                <tr key={`${cat.mainCategoryName || cat.categoryName}-${sub.subCategoryName || "uncategorized"}-${item.description || "item"}-${ii}`}>
                                                     <td className="text-center text-slate-400 font-medium">{serialCounter}</td>
                                                     <td className="text-slate-800 font-medium">{item.description}</td>
                                                     <td className="text-center tabular-nums text-slate-600">{formatQuantity(item.quantity)}</td>

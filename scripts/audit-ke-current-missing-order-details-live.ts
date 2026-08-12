@@ -1,7 +1,8 @@
 #!/usr/bin/env tsx
+import { stringifyPrimitive } from "../lib/stringify-primitive"
 
 import { createHash } from "node:crypto"
-import { readFileSync, writeFileSync } from "node:fs"
+import { writeFileSync } from "node:fs"
 import { resolve } from "node:path"
 import * as XLSX from "xlsx"
 
@@ -12,11 +13,18 @@ const INPUT = resolve("updatedReports/ke-current-missing-orders-excluding-cancel
 const OUTPUT = resolve("updatedReports/ke-current-missing-orders-live-detail-audit-2026-08-04.json")
 
 function normalize(value: unknown): string {
-  return String(value ?? "").normalize("NFKC").replace(/[\u2018\u2019]/g, "'").replace(/[\u2013\u2014]/g, "-").replace(/\s+/g, " ").trim().toLowerCase()
+  return stringifyPrimitive(value).normalize("NFKC").replace(/[\u2018\u2019]/g, "'").replace(/[\u2013\u2014]/g, "-").replace(/\s+/g, " ").trim().toLowerCase()
 }
 
 function normalizeProduct(value: unknown): string {
-  return normalize(value).replace(/\s*\(\s*/g, " (").replace(/\s*\)\s*/g, ")").replace(/\s*-\s*/g, "-")
+  return normalize(value)
+    .replaceAll(" (", "(")
+    .replaceAll("( ", "(")
+    .replaceAll("(", " (")
+    .replaceAll(" )", ")")
+    .replaceAll(") ", ")")
+    .replaceAll(" -", "-")
+    .replaceAll("- ", "-")
 }
 
 function numberOrNull(value: unknown): number | null {
@@ -35,7 +43,7 @@ function dateKey(value: unknown): string | null {
     if (!parsed) return null
     return `${parsed.y}-${String(parsed.m).padStart(2, "0")}-${String(parsed.d).padStart(2, "0")}`
   }
-  const match = String(value ?? "").match(/^(\d{4}-\d{2}-\d{2})/)
+  const match = /^(\d{4}-\d{2}-\d{2})/.exec(stringifyPrimitive(value))
   return match?.[1] ?? null
 }
 
@@ -57,7 +65,11 @@ async function request(pathname: string, init: RequestInit = {}): Promise<{ ok: 
     })
     const text = await response.text()
     let data: any = text
-    try { data = text ? JSON.parse(text) : null } catch {}
+    try {
+      data = text ? JSON.parse(text) : null
+    } catch (error) {
+      console.warn(`Unable to parse response from ${url}:`, error)
+    }
     return { ok: response.ok, status: response.status, durationMs: Date.now() - started, data }
   } finally {
     clearTimeout(timer)

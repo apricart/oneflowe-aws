@@ -1,5 +1,5 @@
 import bcrypt from "bcryptjs"
-import { randomInt } from "crypto"
+import { randomInt } from "node:crypto"
 import { env } from "@/lib/server/env"
 
 const MIN_PASSWORD_LENGTH = 12
@@ -226,8 +226,8 @@ export function needsRehash(hash: string): boolean {
       return true
     }
 
-    const rounds = parseInt(parts[2])
-    if (isNaN(rounds)) {
+    const rounds = Number.parseInt(parts[2])
+    if (Number.isNaN(rounds)) {
       return true
     }
 

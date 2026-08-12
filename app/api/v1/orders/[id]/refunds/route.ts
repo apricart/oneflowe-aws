@@ -72,7 +72,7 @@ export async function GET(
 
     const params = await props.params
     const { id } = params
-    const orderId = parseInt(id)
+    const orderId = Number.parseInt(id)
     if (!Number.isFinite(orderId)) return NextResponse.json({ error: "Invalid order ID" }, { status: 400 })
 
     // Get order details first to check permissions
@@ -186,7 +186,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ error: "Invalid order ID format" }, { status: 400 })
     }
 
-    const orderId = parseInt(id, 10)
+    const orderId = Number.parseInt(id, 10)
     if (!Number.isFinite(orderId) || orderId <= 0) {
       return NextResponse.json({ error: "Invalid order ID" }, { status: 400 })
     }
@@ -486,7 +486,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       const newApprovedTotal = liveApprovedTotal + (userRole === "SUPER_ADMIN" ? totalRefundAmount : 0)
       const liveOrderStatus = String(lockedOrder.status || "").toUpperCase()
       const isFullRefund = newApprovedTotal >= Number(lockedOrder.totalCents)
-      const refundType = isFullRefund ? "FULL" : "PARTIAL"
 
       if (userRole === "SUPER_ADMIN") {
         // Super Admin: approve/process refund and adjust budgets

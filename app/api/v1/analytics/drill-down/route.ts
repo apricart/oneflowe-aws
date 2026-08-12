@@ -34,10 +34,10 @@ export async function GET(req: NextRequest) {
     const compareMonthsRaw = searchParams.get("compareMonths")
     const compareYearsRaw = searchParams.get("compareYears")
 
-    const parsedMonths = monthsRaw ? monthsRaw.split(',').map(Number).filter((n: any) => !isNaN(n) && n >= 1 && n <= 12) : []
-    const parsedYears = yearsRaw ? yearsRaw.split(',').map(Number).filter((n: any) => !isNaN(n) && n > 2000) : []
-    const parsedCompMonths = compareMonthsRaw ? compareMonthsRaw.split(',').map(Number).filter((n: any) => !isNaN(n) && n >= 1 && n <= 12) : []
-    const parsedCompYears = compareYearsRaw ? compareYearsRaw.split(',').map(Number).filter((n: any) => !isNaN(n) && n > 2000) : []
+    const parsedMonths = monthsRaw ? monthsRaw.split(',').map(Number).filter((n: any) => !Number.isNaN(n) && n >= 1 && n <= 12) : []
+    const parsedYears = yearsRaw ? yearsRaw.split(',').map(Number).filter((n: any) => !Number.isNaN(n) && n > 2000) : []
+    const parsedCompMonths = compareMonthsRaw ? compareMonthsRaw.split(',').map(Number).filter((n: any) => !Number.isNaN(n) && n >= 1 && n <= 12) : []
+    const parsedCompYears = compareYearsRaw ? compareYearsRaw.split(',').map(Number).filter((n: any) => !Number.isNaN(n) && n > 2000) : []
     const refundType = searchParams.get("refundType")?.toLowerCase() // all, full, partial
     const sortColumn = resolveDrillDownSortColumn(searchParams.get("sortBy"))
     if (!type || !["REVENUE", "REJECTED", "FULFILLED", "ORDERS", "REFUNDED", "PENDING", "APPROVED", "PARTIAL", "DELIVERED", "NOT_DELIVERED"].includes(type)) {
@@ -99,10 +99,10 @@ export async function GET(req: NextRequest) {
     // SECURITY: Only allow branchIds for SUPER_ADMIN or validated HEAD_OFFICE requests
     if (branchIdsParam) {
         if (role === "SUPER_ADMIN") {
-            branchIds = branchIdsParam.split(",").map((n: any) => Number(n)).filter((n: any) => !isNaN(n) && n > 0)
+            branchIds = branchIdsParam.split(",").map(Number).filter((n: any) => !Number.isNaN(n) && n > 0)
         } else if (role === "HEAD_OFFICE") {
             // Verify all requested branches belong to the user's organization
-            const requestedBranchIds = branchIdsParam.split(",").map((n: any) => Number(n)).filter((n: any) => !isNaN(n) && n > 0)
+            const requestedBranchIds = branchIdsParam.split(",").map(Number).filter((n: any) => !Number.isNaN(n) && n > 0)
             if (organizationId && requestedBranchIds.length > 0) {
                 try {
                     const validBranches = await db
@@ -139,10 +139,10 @@ export async function GET(req: NextRequest) {
     }
 
     if (parsedMonths.length > 0) {
-        conditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedMonths, sql`, `)})`)
+        conditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedMonths, sql.raw(", "))})`)
     }
     if (parsedYears.length > 0) {
-        conditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedYears, sql`, `)})`)
+        conditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedYears, sql.raw(", "))})`)
     }
 
     if (parsedMonths.length === 0 && parsedYears.length === 0) {
@@ -394,8 +394,8 @@ export async function GET(req: NextRequest) {
         const peakHourRange = sortedHours.length > 0 ? `${sortedHours[0][0]}:00 - ${Number(sortedHours[0][0]) + 1}:00` : "N/A"
 
         const sortedBranches = Object.entries(branchStats).map(([id, s]) => ({ id, ...s }))
-        const topBranch = sortedBranches.sort((a, b) => b.total - a.total)[0]?.name || "N/A"
-        const problematicBranch = sortedBranches.sort((a, b) => (b.refunds / (b.total || 1)) - (a.refunds / (a.total || 1)))[0]?.name || "N/A"
+        const topBranch = sortedBranches.toSorted((a, b) => b.total - a.total)[0]?.name || "N/A"
+        const problematicBranch = sortedBranches.toSorted((a, b) => (b.refunds / (b.total || 1)) - (a.refunds / (a.total || 1)))[0]?.name || "N/A"
 
         const summary = {
             grossRevenue: grossTotal,
@@ -418,7 +418,6 @@ export async function GET(req: NextRequest) {
         const formattedData = rawData.slice(0, 100).map(order => {
             const gross = (order.totalCents || 0) / 100
             const refund = (order.refundAmountCents || 0) / 100
-            const status = (order.status || "").toUpperCase()
             const netValue = (gross - refund)
 
             const created = new Date(order.createdAt!)
@@ -482,11 +481,10 @@ export async function GET(req: NextRequest) {
             (() => {
                 const compCond: any[] = []
                 if (parsedCompMonths.length > 0 || parsedCompYears.length > 0) {
-                    if (parsedCompMonths.length > 0) compCond.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedCompMonths, sql`, `)})`)
-                    if (parsedCompYears.length > 0) compCond.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedCompYears, sql`, `)})`)
+                    if (parsedCompMonths.length > 0) compCond.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedCompMonths, sql.raw(", "))})`)
+                    if (parsedCompYears.length > 0) compCond.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedCompYears, sql.raw(", "))})`)
                 } else if (prevStart && prevEnd) {
-                    compCond.push(gte(orders.createdAt, prevStart))
-                    compCond.push(lte(orders.createdAt, prevEnd))
+                    compCond.push(gte(orders.createdAt, prevStart), lte(orders.createdAt, prevEnd))
                 }
                 if (compCond.length > 0) compConditions.push(and(...compCond))
             })()

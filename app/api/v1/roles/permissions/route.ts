@@ -22,7 +22,7 @@ export async function GET(req: NextRequest) {
     const permissions = await db
       .select()
       .from(rolePermissions)
-      .where(eq(rolePermissions.roleId, parseInt(roleId)))
+      .where(eq(rolePermissions.roleId, Number.parseInt(roleId)))
 
     return ok({ data: permissions })
   }
@@ -76,6 +76,7 @@ export async function POST(req: NextRequest) {
 
     return ok({ data: newPermission })
   } catch (error: any) {
+    console.error("Failed to create permission:", error)
     return err("Failed to create permission", 500)
   }
 }
@@ -139,6 +140,7 @@ export async function PUT(req: NextRequest) {
 
     return ok({ message: "Permissions updated successfully" })
   } catch (error: any) {
+    console.error("Failed to update permissions:", error)
     return err("Failed to update permissions", 500)
   }
 }
@@ -155,7 +157,7 @@ export async function DELETE(req: NextRequest) {
       return err("Permission id is required", 400)
     }
 
-    await db.delete(rolePermissions).where(eq(rolePermissions.id, parseInt(id)))
+    await db.delete(rolePermissions).where(eq(rolePermissions.id, Number.parseInt(id)))
 
     // Log the action
     await db.insert(auditLogs).values({
@@ -166,6 +168,7 @@ export async function DELETE(req: NextRequest) {
 
     return ok({ message: "Permission deleted successfully" })
   } catch (error: any) {
+    console.error("Failed to delete permission:", error)
     return err("Failed to delete permission", 500)
   }
 }

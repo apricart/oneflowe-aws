@@ -93,7 +93,7 @@ export async function PATCH(
             ne(branches.id, Number(id))
           ))
         const currentHasExternalIdentity = Boolean(currentBranch.externalSource && currentBranch.externalId)
-        const duplicate = duplicateCandidates.find((candidate) => {
+        const duplicateExists = duplicateCandidates.some((candidate) => {
           if (!currentHasExternalIdentity) return true
           const isDistinctSiblingFromSameSource = Boolean(
             candidate.externalSource === currentBranch.externalSource
@@ -103,7 +103,7 @@ export async function PATCH(
           )
           return !isDistinctSiblingFromSameSource
         })
-        if (duplicate) {
+        if (duplicateExists) {
           return error("A branch with this name already exists in this organization.", 409)
         }
       }

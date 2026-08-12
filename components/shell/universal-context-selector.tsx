@@ -11,7 +11,15 @@ import { useAppContext } from "@/components/context/app-context"
 export function UniversalContextSelector() {
   const { organizationId, branchId, setOrganizationId, setBranchId } = useAppContext()
   // Calculate level based on context
-  const level = branchId ? "BRANCH" : organizationId ? "ORGANIZATION" : "GLOBAL"
+  const level = (() => {
+    if (branchId) {
+      return "BRANCH"
+    }
+    if (organizationId) {
+      return "ORGANIZATION"
+    }
+    return "GLOBAL"
+  })()
   const { data: orgRes } = useOrganizations()
   const { data: branchRes } = useBranches(organizationId || undefined)
   const orgs = (orgRes?.items || []).filter((o: any) => o.status === "active")
@@ -92,7 +100,15 @@ export function UniversalContextSelector() {
       </div>
 
       <Button size="sm" variant="secondary" className="hidden md:inline-flex">
-        {level === "BRANCH" ? "Branch Mode" : level === "ORGANIZATION" ? "Org Mode" : "Global"}
+        {(() => {
+          if (level === "BRANCH") {
+            return "Branch Mode"
+          }
+          if (level === "ORGANIZATION") {
+            return "Org Mode"
+          }
+          return "Global"
+        })()}
       </Button>
 
       <ConfirmDialog

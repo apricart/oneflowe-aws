@@ -2,16 +2,16 @@
 
 import * as React from "react"
 import {
-    AlertDialog,
-    AlertDialogAction,
-    AlertDialogCancel,
-    AlertDialogContent,
-    AlertDialogDescription,
-    AlertDialogFooter,
-    AlertDialogHeader,
-    AlertDialogTitle,
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { AlertCircle, HelpCircle, AlertTriangle, Info, CheckCircle2 } from "lucide-react"
+import { AlertCircle,AlertTriangle,Info,CheckCircle2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 type ConfirmType = "danger" | "warning" | "info" | "success"
@@ -38,7 +38,7 @@ export function PremiumConfirmDialog({
     cancelText = "Cancel",
     type = "info",
     isLoading = false,
-}: PremiumConfirmProps) {
+}: Readonly<PremiumConfirmProps>) {
 
     const iconConfig = {
         danger: {

@@ -1,10 +1,10 @@
 import { ReceiptContent } from "@/components/receipts/receipt-content"
 
-export default async function InvoicePage({ params }: { params: Promise<{ orderId: string }> }) {
+export default async function InvoicePage({ params }: Readonly<{ params: Promise<{ orderId: string }> }>) {
     const { orderId: orderIdParam } = await params
-    const orderId = parseInt(orderIdParam)
+    const orderId = Number.parseInt(orderIdParam)
 
-    if (isNaN(orderId)) {
+    if (Number.isNaN(orderId)) {
         return (
             <div className="flex items-center justify-center min-h-screen">
                 <p className="text-lg font-semibold text-slate-600">Invalid Order ID</p>

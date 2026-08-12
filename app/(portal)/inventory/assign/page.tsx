@@ -1,20 +1,19 @@
 "use client"
 
-import { useState, useMemo, useEffect } from "react"
-import useSWR from "swr"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { formatPKR } from "@/lib/utils"
-import { Search, Package, Sparkles, Check, Edit, Plus, Building2, RefreshCw } from "lucide-react"
-import { useToast } from "@/hooks/use-toast"
 import { useAppContext } from "@/components/context/app-context"
-import { cn } from "@/lib/utils"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Card,CardContent,CardHeader,CardTitle } from "@/components/ui/card"
+import { Dialog,DialogContent,DialogFooter,DialogHeader,DialogTitle } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from "@/components/ui/select"
+import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from "@/components/ui/table"
+import { Tabs,TabsContent,TabsList,TabsTrigger } from "@/components/ui/tabs"
+import { useToast } from "@/hooks/use-toast"
+import { cn,formatPKR } from "@/lib/utils"
+import { Building2,Check,Edit,Package,Plus,RefreshCw,Search } from "lucide-react"
+import { useMemo,useState } from "react"
+import useSWR from "swr"
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json())
 
@@ -147,8 +146,8 @@ export default function AssignProductPage() {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     productIds: [selectedProduct.id],
-                    organizationId: parseInt(selectedOrgId),
-                    customPrice: parseFloat(price),
+                    organizationId: Number.parseInt(selectedOrgId),
+                    customPrice: Number.parseFloat(price),
                     isActive: isActive,
                 }),
             })
@@ -182,7 +181,7 @@ export default function AssignProductPage() {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     id: selectedAssignment.id,
-                    customPrice: parseFloat(price),
+                    customPrice: Number.parseFloat(price),
                     isActive: isActive,
                 }),
             })
@@ -315,13 +314,18 @@ export default function AssignProductPage() {
                                             </TableRow>
                                         </TableHeader>
                                         <TableBody>
-                                            {productsLoading ? (
+                                            {(() => {
+                                              if (productsLoading) {
+                                                return (
                                                 <TableRow>
                                                     <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
                                                         Loading products...
                                                     </TableCell>
                                                 </TableRow>
-                                            ) : filteredNotAssigned.length === 0 ? (
+                                            )
+                                              }
+                                              if (filteredNotAssigned.length === 0) {
+                                                return (
                                                 <TableRow>
                                                     <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
                                                         {allProducts.length === 0 && hasActiveSearchOrFilters
@@ -329,7 +333,9 @@ export default function AssignProductPage() {
                                                             : "Product is already assigned. Please check assigned product tab."}
                                                     </TableCell>
                                                 </TableRow>
-                                            ) : (
+                                            )
+                                              }
+                                              return (
                                                 filteredNotAssigned.map((product) => (
                                                     <TableRow key={product.id} className="hover:bg-muted/40">
                                                         <TableCell>
@@ -370,7 +376,8 @@ export default function AssignProductPage() {
                                                         </TableCell>
                                                     </TableRow>
                                                 ))
-                                            )}
+                                            )
+                                            })()}
                                         </TableBody>
                                     </Table>
                                 </div>
@@ -391,19 +398,26 @@ export default function AssignProductPage() {
                                             </TableRow>
                                         </TableHeader>
                                         <TableBody>
-                                            {assignmentsLoading ? (
+                                            {(() => {
+                                              if (assignmentsLoading) {
+                                                return (
                                                 <TableRow>
                                                     <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
                                                         Loading assignments...
                                                     </TableCell>
                                                 </TableRow>
-                                            ) : filteredAssigned.length === 0 ? (
+                                            )
+                                              }
+                                              if (filteredAssigned.length === 0) {
+                                                return (
                                                 <TableRow>
                                                     <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
                                                         No products assigned yet.
                                                     </TableCell>
                                                 </TableRow>
-                                            ) : (
+                                            )
+                                              }
+                                              return (
                                                 filteredAssigned.map((assignment) => (
                                                     <TableRow key={assignment.id} className="hover:bg-muted/40">
                                                         <TableCell>
@@ -453,7 +467,8 @@ export default function AssignProductPage() {
                                                         </TableCell>
                                                     </TableRow>
                                                 ))
-                                            )}
+                                            )
+                                            })()}
                                         </TableBody>
                                     </Table>
                                 </div>
@@ -482,8 +497,9 @@ export default function AssignProductPage() {
                             </div>
                         )}
                         <div>
-                            <label className="block text-sm font-medium mb-2">Custom Price (PKR)</label>
+                            <label htmlFor="assign-custom-price" className="block text-sm font-medium mb-2">Custom Price (PKR)</label>
                             <Input
+                                id="assign-custom-price"
                                 type="number"
                                 step="0.01"
                                 placeholder="Enter custom price"
@@ -496,10 +512,11 @@ export default function AssignProductPage() {
                         </div>
                         <div className="flex items-center justify-between p-3 border rounded-lg">
                             <div className="space-y-0.5">
-                                <label className="text-sm font-medium">Active Status</label>
+                                <label htmlFor="assign-active-status" className="text-sm font-medium">Active Status</label>
                                 <p className="text-xs text-muted-foreground">Make product visible to organization</p>
                             </div>
                             <input
+                                id="assign-active-status"
                                 type="checkbox"
                                 checked={isActive}
                                 onChange={(e) => setIsActive(e.target.checked)}
@@ -535,8 +552,9 @@ export default function AssignProductPage() {
                             </div>
                         )}
                         <div>
-                            <label className="block text-sm font-medium mb-2">Custom Price (PKR)</label>
+                            <label htmlFor="edit-custom-price" className="block text-sm font-medium mb-2">Custom Price (PKR)</label>
                             <Input
+                                id="edit-custom-price"
                                 type="number"
                                 step="0.01"
                                 placeholder="Enter custom price"
@@ -546,10 +564,11 @@ export default function AssignProductPage() {
                         </div>
                         <div className="flex items-center justify-between p-3 border rounded-lg">
                             <div className="space-y-0.5">
-                                <label className="text-sm font-medium">Active Status</label>
+                                <label htmlFor="edit-active-status" className="text-sm font-medium">Active Status</label>
                                 <p className="text-xs text-muted-foreground">Toggle organization-level visibility</p>
                             </div>
                             <input
+                                id="edit-active-status"
                                 type="checkbox"
                                 checked={isActive}
                                 onChange={(e) => setIsActive(e.target.checked)}
@@ -571,12 +590,12 @@ export default function AssignProductPage() {
     )
 }
 
-function StatCard({ label, value, icon, variant }: { 
+function StatCard({ label, value, icon, variant }: Readonly<{
     label: string; 
     value: string | number; 
     icon: React.ReactNode;
     variant: 'blue' | 'green' | 'red' | 'amber' | 'purple'
-}) {
+}>) {
     const variants = {
         blue: "bg-gradient-to-br from-blue-50/80 to-indigo-50/80 border-blue-100/50 text-blue-700 dark:from-blue-900/20 dark:to-indigo-900/20 dark:border-blue-800/30 dark:text-blue-400",
         green: "bg-gradient-to-br from-emerald-50/80 to-teal-50/80 border-emerald-100/50 text-emerald-700 dark:from-emerald-900/20 dark:to-teal-900/20 dark:border-emerald-800/30 dark:text-emerald-400",

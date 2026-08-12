@@ -63,13 +63,22 @@ export function KPICard({
     comparisonLabel,
     subtitle,
     isLoading = false,
-}: KPICardProps) {
+}: Readonly<KPICardProps>) {
     const colors = colorMap[colorScheme]
     const chartData = trendData?.map((v, i) => ({ value: v, index: i })) || []
 
-    const TrendIcon = trend !== undefined
-        ? trend > 0 ? TrendingUp : trend < 0 ? TrendingDown : Minus
-        : null
+    const TrendIcon = (() => {
+      if (trend !== undefined) {
+        if (trend > 0) {
+          return TrendingUp
+        }
+        if (trend < 0) {
+          return TrendingDown
+        }
+        return Minus
+      }
+      return null
+    })()
 
     return (
         <Card className={cn(
@@ -98,9 +107,15 @@ export function KPICard({
                                 <div className="flex items-center gap-1.5 mt-1.5">
                                     <div className={cn(
                                         "flex items-center gap-0.5 px-2 py-0.5 rounded-md text-[10px] font-black shadow-sm tracking-tight",
-                                        trend > 0 ? "bg-emerald-500/10 text-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-400" :
-                                            trend < 0 ? "bg-rose-500/10 text-rose-600 dark:bg-rose-500/20 dark:text-rose-400" :
-                                                "bg-slate-500/10 text-slate-600 dark:bg-slate-500/20 dark:text-slate-400"
+                                        (() => {
+                                          if (trend > 0) {
+                                            return "bg-emerald-500/10 text-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-400"
+                                          }
+                                          if (trend < 0) {
+                                            return "bg-rose-500/10 text-rose-600 dark:bg-rose-500/20 dark:text-rose-400"
+                                          }
+                                          return "bg-slate-500/10 text-slate-600 dark:bg-slate-500/20 dark:text-slate-400"
+                                        })()
                                     )}>
                                         {TrendIcon && <TrendIcon className="h-2 w-2" />}
                                         {Math.abs(trend).toFixed(1)}%

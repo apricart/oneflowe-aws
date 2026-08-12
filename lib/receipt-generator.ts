@@ -1,6 +1,6 @@
 import { db } from "@/lib/db"
-import { branches, categories, globalProducts, orderItems, organizations } from "@/db/schema"
-import { eq, inArray } from "drizzle-orm"
+import { branches,categories,globalProducts,organizations } from "@/db/schema"
+import { eq,inArray } from "drizzle-orm"
 import { formatBranchAddress } from "@/lib/branch-address"
 import { calculateLineCents } from "@/lib/quantity"
 
@@ -215,7 +215,7 @@ function groupItemsHierarchically(
 
         result.push({
             mainCategoryName: mainName,
-            subCategories: subCats.sort((a, b) => a.subCategoryName.localeCompare(b.subCategoryName)),
+            subCategories: subCats.toSorted((a, b) => a.subCategoryName.localeCompare(b.subCategoryName)),
             total: mainTotal
         })
     })

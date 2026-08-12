@@ -14,6 +14,96 @@ import {
   resolveBranchCreationAccess,
 } from "@/lib/server/branch-creation-access"
 
+type BranchCreateInput = ReturnType<typeof branchCreateSchema.parse>
+type RequestScope = NonNullable<Awaited<ReturnType<typeof getRequestScope>>>
+
+function parseOrganizationIds(raw: string | undefined) {
+  if (!raw) return { ids: [] as number[] }
+  const ids: number[] = []
+  for (const value of raw.split(",").map((id) => id.trim())) {
+    if (!/^\d+$/.test(value)) return { ids, response: error("Invalid organization ID format", 400) }
+    const id = Number(value)
+    if (id <= 0) return { ids, response: error("Organization ID must be positive", 400) }
+    ids.push(id)
+  }
+  return { ids }
+}
+
+const parseGroupIds = (raw: string | undefined) => (
+  raw
+    ? raw.split(",").map((id) => Number(id.trim())).filter((id) => !Number.isNaN(id) && id > 0)
+    : []
+)
+
+const getScopedOrganizationIds = (scope: RequestScope, requestedIds: number[]) => {
+  if (scope.role === "SUPER_ADMIN") return requestedIds.length > 0 ? requestedIds : undefined
+  return scope.organizationId ? [scope.organizationId] : undefined
+}
+
+const getBranchQueryCondition = (
+  organizationIds: number[] | undefined,
+  groupIds: number[],
+  branchId: number | null | undefined,
+) => and(
+  organizationIds?.length
+    ? organizationIds.length === 1
+      ? eq(branchesTable.organizationId, organizationIds[0])
+      : inArray(branchesTable.organizationId, organizationIds)
+    : undefined,
+  groupIds.length > 0 ? inArray(branchesTable.groupId, groupIds) : undefined,
+  branchId ? eq(branchesTable.id, branchId) : undefined,
+)
+
+function validateBranchFields(body: BranchCreateInput) {
+  const values = {
+    name: String(body.name || "").trim(),
+    province: String(body.province || "").trim(),
+    city: String(body.city || "").trim(),
+    address: String(body.address || "").trim(),
+    costCenterId: String(body.costCenterId || "").trim(),
+    status: body.status ? String(body.status).toLowerCase() : "active",
+  }
+  if (values.name.length < 2 || values.name.length > 100) {
+    return { response: error("Branch name must be between 2 and 100 characters", 400) }
+  }
+  if (values.province.length < 2 || values.province.length > 100) {
+    return { response: error("Branch province must be between 2 and 100 characters", 400) }
+  }
+  if (values.city.length < 2 || values.city.length > 100) {
+    return { response: error("Branch city must be between 2 and 100 characters", 400) }
+  }
+  if (values.address.length < 5 || values.address.length > 500) {
+    return { response: error("Branch address must be between 5 and 500 characters", 400) }
+  }
+  if (values.costCenterId.length > 128) {
+    return { response: error("Cost center ID must be 128 characters or less", 400) }
+  }
+  if (!["active", "inactive"].includes(values.status)) {
+    return { response: error("Status must be one of: active, inactive", 400) }
+  }
+  return { values }
+}
+
+function getBranchConstraintResponse(exception: any) {
+  const databaseError = exception?.cause ?? exception
+  const databaseCode = databaseError?.code ?? exception?.code
+  const databaseConstraint = databaseError?.constraint ?? exception?.constraint
+  if (databaseCode === "23505") {
+    const nameConstraints = new Set([
+      "branches_org_name_normalized_uq",
+      "branches_org_name_normalized_unmapped_uq",
+      "branches_org_name_exact_uq",
+      "branches_org_name_identity_guard",
+    ])
+    return nameConstraints.has(databaseConstraint)
+      ? error("A branch with this name already exists in this organization.", 409)
+      : error("Branch with this code already exists in this organization", 409)
+  }
+  return databaseCode === "23503"
+    ? error("Referenced organization does not exist", 404)
+    : null
+}
+
 /**
  * GET /api/v1/branches - List branches with access control
  */
@@ -28,26 +118,12 @@ export async function GET(req: Request) {
     const shouldRefresh = searchParams.has("refresh")
 
     // Validate organization ID parameter (supports single or comma-separated)
-    const orgIds: number[] = []
-    if (organizationIdRaw) {
-      const ids = organizationIdRaw.split(',').map(id => id.trim())
-      for (const id of ids) {
-        if (!/^\d+$/.test(id)) {
-          return error("Invalid organization ID format", 400)
-        }
-        const n = Number(id)
-        if (n <= 0) {
-          return error("Organization ID must be positive", 400)
-        }
-        orgIds.push(n)
-      }
-    }
+    const organizationIds = parseOrganizationIds(organizationIdRaw)
+    if (organizationIds.response) return organizationIds.response
+    const orgIds = organizationIds.ids
 
     // Validate group IDs parameter
-    let groupIds: number[] = []
-    if (groupIdsRaw) {
-      groupIds = groupIdsRaw.split(',').map(id => Number(id.trim())).filter(id => !isNaN(id) && id > 0)
-    }
+    const groupIds = parseGroupIds(groupIdsRaw)
 
     const scope = await getRequestScope()
 
@@ -58,9 +134,7 @@ export async function GET(req: Request) {
     }
 
     // Determine which organizations to query based on role
-    const scopedOrgIds = scope.role === "SUPER_ADMIN"
-      ? orgIds.length ? orgIds : undefined
-      : (scope.organizationId ? [scope.organizationId] : undefined)
+    const scopedOrgIds = getScopedOrganizationIds(scope, orgIds)
 
     const scopedBranchId = scope.role === "BRANCH_ADMIN"
       ? scope.branchId
@@ -106,15 +180,7 @@ export async function GET(req: Request) {
           )`,
         })
         .from(branchesTable)
-        .where(and(
-          scopedOrgIds && scopedOrgIds.length > 0 
-            ? (scopedOrgIds.length === 1 
-                ? eq(branchesTable.organizationId, scopedOrgIds[0]) 
-                : inArray(branchesTable.organizationId, scopedOrgIds))
-            : undefined,
-          groupIds.length > 0 ? inArray(branchesTable.groupId, groupIds) : undefined,
-          scopedBranchId ? eq(branchesTable.id, scopedBranchId) : undefined
-        ))
+        .where(getBranchQueryCondition(scopedOrgIds, groupIds, scopedBranchId))
         .orderBy(desc(branchesTable.createdAt))
         .limit(500)
 
@@ -162,38 +228,9 @@ export async function POST(req: Request) {
     if (!access.allowed) return error(access.message, access.status)
     const organizationId = access.organizationId
 
-    // Validate field format and length
-    const name = String(body.name || "").trim()
-    if (name.length < 2 || name.length > 100) {
-      return error("Branch name must be between 2 and 100 characters", 400)
-    }
-
-    const province = String(body.province || "").trim()
-    if (province.length < 2 || province.length > 100) {
-      return error("Branch province must be between 2 and 100 characters", 400)
-    }
-
-    const city = String(body.city || "").trim()
-    if (city.length < 2 || city.length > 100) {
-      return error("Branch city must be between 2 and 100 characters", 400)
-    }
-
-    const address = String(body.address || "").trim()
-    if (address.length < 5 || address.length > 500) {
-      return error("Branch address must be between 5 and 500 characters", 400)
-    }
-
-    const costCenterId = String(body.costCenterId || "").trim()
-    if (costCenterId.length > 128) {
-      return error("Cost center ID must be 128 characters or less", 400)
-    }
-
-    // Validate status
-    const validStatuses = ['active', 'inactive']
-    const status = body.status ? String(body.status).toLowerCase() : 'active'
-    if (!validStatuses.includes(status)) {
-      return error(`Status must be one of: ${validStatuses.join(', ')}`, 400)
-    }
+    const validated = validateBranchFields(body)
+    if (validated.response) return validated.response
+    const { name, province, city, address, costCenterId, status } = validated.values!
 
     const creation = await db.transaction(async (tx) => {
       // Branch codes are based on the current branch count. Serialize creation
@@ -293,26 +330,8 @@ export async function POST(req: Request) {
     }, { status: 201 })
 
   } catch (e: any) {
-    const databaseError = e?.cause ?? e
-    const databaseCode = databaseError?.code ?? e?.code
-    const databaseConstraint = databaseError?.constraint ?? e?.constraint
-
-    // Handle database constraint violations
-    if (databaseCode === '23505') { // Unique violation
-      if ([
-        "branches_org_name_normalized_uq",
-        "branches_org_name_normalized_unmapped_uq",
-        "branches_org_name_exact_uq",
-        "branches_org_name_identity_guard",
-      ].includes(databaseConstraint)) {
-        return error("A branch with this name already exists in this organization.", 409)
-      }
-      return error("Branch with this code already exists in this organization", 409)
-    }
-
-    if (databaseCode === '23503') { // Foreign key violation
-      return error("Referenced organization does not exist", 404)
-    }
+    const constraintResponse = getBranchConstraintResponse(e)
+    if (constraintResponse) return constraintResponse
 
     logError(e, 'BRANCHES_POST')
     const { status, ...errorBody } = handleError(e, 'BRANCHES_POST')

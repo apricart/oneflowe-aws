@@ -1,3 +1,4 @@
+import { stringifyPrimitive } from "../stringify-primitive"
 import "server-only"
 
 import { sendAppEmail } from "@/lib/email/ses"
@@ -20,7 +21,7 @@ export type OrderLifecycleEmailPayload = {
   rejectionReason?: string | null
 }
 
-const escapeHtml = (value: unknown) => String(value ?? "")
+const escapeHtml = (value: unknown) => stringifyPrimitive(value)
   .replace(/&/g, "&amp;")
   .replace(/</g, "&lt;")
   .replace(/>/g, "&gt;")
@@ -47,27 +48,49 @@ export function buildOrderLifecycleEmail(
   const approverRoleLabel = payload.approvedByRole === "HEAD_OFFICE"
     ? "Head Office"
     : "Branch Admin"
-  const heading = isCreated
-    ? "New order awaiting approval"
-    : isAdminApproval
-      ? `Order approved by ${approverRoleLabel}`
-    : isApproved
-      ? "Your order was approved"
-      : "Your order was rejected"
-  const accent = isCreated ? "#d97706" : isApproved || isAdminApproval ? "#059669" : "#dc2626"
-  const intro = isCreated
-    ? "An Order Portal user submitted a new order that requires your approval."
-    : isAdminApproval
-      ? `${approverRoleLabel} approved an order. It is ready for Super Admin review.`
-    : isApproved
-      ? "An authorized administrator approved your order."
-      : "An authorized administrator rejected your order."
+  const heading = (() => {
+    if (isCreated) {
+      return "New order awaiting approval"
+    }
+    if (isAdminApproval) {
+      return `Order approved by ${approverRoleLabel}`
+    }
+    if (isApproved) {
+      return "Your order was approved"
+    }
+    return "Your order was rejected"
+  })()
+  const accent = (() => {
+    if (isCreated) {
+      return "#d97706"
+    }
+    if (isApproved || isAdminApproval) {
+      return "#059669"
+    }
+    return "#dc2626"
+  })()
+  const intro = (() => {
+    if (isCreated) {
+      return "An Order Portal user submitted a new order that requires your approval."
+    }
+    if (isAdminApproval) {
+      return `${approverRoleLabel} approved an order. It is ready for Super Admin review.`
+    }
+    if (isApproved) {
+      return "An authorized administrator approved your order."
+    }
+    return "An authorized administrator rejected your order."
+  })()
   const actionLabel = isCreated || isAdminApproval ? "Review order" : "View my orders"
-  const subject = isCreated
-    ? `Order ${payload.tid} is awaiting approval`
-    : isAdminApproval
-      ? `Order ${payload.tid} was approved by ${approverRoleLabel}`
-    : `Order ${payload.tid} was ${isApproved ? "approved" : "rejected"}`
+  const subject = (() => {
+    if (isCreated) {
+      return `Order ${payload.tid} is awaiting approval`
+    }
+    if (isAdminApproval) {
+      return `Order ${payload.tid} was approved by ${approverRoleLabel}`
+    }
+    return `Order ${payload.tid} was ${isApproved ? "approved" : "rejected"}`
+  })()
 
   const rejectionBlock = template === "ORDER_REJECTED" && payload.rejectionReason
     ? `<div style="margin-top:20px;padding:14px;border-radius:10px;background:#fef2f2;color:#991b1b;font-size:14px;line-height:1.5;"><strong>Reason:</strong> ${escapeHtml(payload.rejectionReason)}</div>`

@@ -1,21 +1,20 @@
 "use client"
-import { useEffect, useMemo, useState } from "react"
-import { useRouter } from "next/navigation"
-import useSWR from "swr"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Badge } from "@/components/ui/badge"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Button } from "@/components/ui/button"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { formatPKR, cn } from "@/lib/utils"
-import { Search, Package, Sparkles, Plus, Edit, Trash2, Building2, AlertTriangle, Loader2, RefreshCw, CheckCircle, XCircle } from "lucide-react"
-import { ProductForm } from "@/components/global-inventory/product-form"
-import { useToast } from "@/hooks/use-toast"
-import { useDebounce } from "@/hooks/use-debounce"
-import { Loader } from "lucide-react"
 import { GlobalInventoryExport } from "@/components/admin/global-inventory-export"
+import { ProductForm } from "@/components/global-inventory/product-form"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Card,CardContent,CardHeader,CardTitle } from "@/components/ui/card"
+import { Dialog,DialogContent,DialogHeader,DialogTitle } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from "@/components/ui/select"
+import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from "@/components/ui/table"
+import { useDebounce } from "@/hooks/use-debounce"
+import { useToast } from "@/hooks/use-toast"
+import { cn,formatPKR } from "@/lib/utils"
+import { AlertTriangle,CheckCircle,Edit,Loader,Package,Plus,RefreshCw,Search,Trash2,XCircle } from "lucide-react"
+import { useRouter } from "next/navigation"
+import { useEffect,useMemo,useState } from "react"
+import useSWR from "swr"
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json())
 const PAGE_SIZE = 50
@@ -179,6 +178,7 @@ export default function GlobalInventoryView() {
                 })
             }
         } catch (error) {
+            console.error("Failed to process the inventory request:", error)
             toast({
                 title: "Error",
                 description: "Failed to process request",
@@ -344,13 +344,18 @@ export default function GlobalInventoryView() {
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {isLoading ? (
+                                {(() => {
+                                  if (isLoading) {
+                                    return (
                                     <TableRow>
                                         <TableCell colSpan={7} className="py-10 text-center text-sm text-muted-foreground">
                                             Loading global inventory…
                                         </TableCell>
                                     </TableRow>
-                                ) : paginatedProducts.length === 0 ? (
+                                )
+                                  }
+                                  if (paginatedProducts.length === 0) {
+                                    return (
                                     <TableRow>
                                         <TableCell colSpan={7} className="py-10 text-center text-sm text-muted-foreground">
                                             {(debouncedSearch || categoryFilter || subCategoryFilter || (statusFilter && statusFilter !== "all"))
@@ -358,7 +363,9 @@ export default function GlobalInventoryView() {
                                                 : "No products found. Create your first global product to get started."}
                                         </TableCell>
                                     </TableRow>
-                                ) : (
+                                )
+                                  }
+                                  return (
                                     paginatedProducts.map((product) => (
                                         <TableRow key={product.id} className="hover:bg-muted/40">
                                             <TableCell className="max-w-[280px]">
@@ -431,7 +438,8 @@ export default function GlobalInventoryView() {
                                             </TableCell>
                                         </TableRow>
                                     ))
-                                )}
+                                )
+                                })()}
                             </TableBody>
                         </Table>
                     </div>
@@ -555,13 +563,13 @@ export default function GlobalInventoryView() {
     )
 }
 
-function StatCard({ label, value, icon, variant, isLoading = false }: {
+function StatCard({ label, value, icon, variant, isLoading = false }: Readonly<{
     label: string;
     value: string | number;
     icon: React.ReactNode;
     variant: 'blue' | 'green' | 'red' | 'amber' | 'purple'
     isLoading?: boolean
-}) {
+}>) {
     const variants = {
         blue: "bg-gradient-to-br from-blue-50/80 to-indigo-50/80 border-blue-100/50 text-blue-700 dark:from-blue-900/20 dark:to-indigo-900/20 dark:border-blue-800/30 dark:text-blue-400",
         green: "bg-gradient-to-br from-emerald-50/80 to-teal-50/80 border-emerald-100/50 text-emerald-700 dark:from-emerald-900/20 dark:to-teal-900/20 dark:border-emerald-800/30 dark:text-emerald-400",

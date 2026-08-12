@@ -1,8 +1,8 @@
 import { getServerSession } from "next-auth"
 import type { Role } from "./rbac"
 import { db } from "@/lib/db"
-import { sessions, users } from "@/db/schema"
-import { and, eq } from "drizzle-orm"
+import { sessions,users } from "@/db/schema"
+import { and,eq } from "drizzle-orm"
 import { authOptions } from "./auth-options"
 import { logError } from "@/lib/global-logger"
 import { env } from "@/lib/server/env"
@@ -17,7 +17,7 @@ export type CurrentUser = {
   mustChangePassword: boolean
 }
 
-import { cookies, headers } from 'next/headers'
+import { headers } from 'next/headers'
 import type { Session } from "next-auth"
 
 // ── Per-request memoization of session resolution ──
@@ -228,7 +228,7 @@ export async function isSessionInactive(lastActivity: Date | null | undefined): 
     }
 
     // Validate last activity is a valid date
-    if (!(lastActivity instanceof Date) || isNaN(lastActivity.getTime())) {
+    if (!(lastActivity instanceof Date) || Number.isNaN(lastActivity.getTime())) {
       console.error('[Auth] Invalid lastActivity date')
       return true
     }
@@ -296,7 +296,7 @@ function logErrorOnly(error: any, context: string, meta?: any) {
     const message = error instanceof Error ? error.message : String(error)
     console.error(`[Auth] Error in ${context}:`, { message, ...meta })
   } catch (e) {
-    console.error(`[Auth] Error in ${context}`)
+    console.error(`[Auth] Error in ${context}; logging the original error also failed:`, e)
   }
 }
 

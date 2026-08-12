@@ -1,23 +1,18 @@
 "use client"
-import React, { useState, useMemo } from "react"
-import { Card, CardContent } from "@/components/ui/card"
+import { useState,useMemo } from "react"
+import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from "@/components/ui/table"
 import { Switch } from "@/components/ui/switch"
 import {
   Package,
   Search,
-  RefreshCw,
-  Eye,
-  EyeOff,
-  AlertCircle,
+  RefreshCw,AlertCircle,
   Check,
   X,
-  Filter,
-  Layers,
-  LayoutGrid,
+  Filter,LayoutGrid,
   Box,
   ChevronRight,
   Info
@@ -31,9 +26,9 @@ import {
 } from "@/components/ui/select"
 import useSWR from "swr"
 import { useToast } from "@/hooks/use-toast"
-import { cn, formatPKR } from "@/lib/utils"
+import { cn,formatPKR } from "@/lib/utils"
 import { BankingKPICard } from "@/components/dashboard/banking-kpi-card"
-import { motion, AnimatePresence } from "framer-motion"
+import { motion,AnimatePresence } from "framer-motion"
 
 const fetcher = (url: string) => fetch(url).then(res => res.json())
 
@@ -62,14 +57,14 @@ interface BranchProduct {
 export default function BranchAdminInventory({
   organizationId,
   branchId
-}: {
+}: Readonly<{
   organizationId: number
   branchId: number
-}) {
+}>) {
   const { toast } = useToast()
   const [searchQuery, setSearchQuery] = useState("")
   const [categoryFilter, setCategoryFilter] = useState<string>("all")
-  const [visibilityFilter, setVisibilityFilter] = useState("all")
+  const [visibilityFilter] = useState("all")
 
   // Fetch categories
   const { data: categoriesData } = useSWR<{ items: { id: number; name: string }[] }>("/api/v1/categories", fetcher)

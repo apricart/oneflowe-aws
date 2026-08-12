@@ -1,7 +1,7 @@
 "use client"
 
 import { Drawer } from "vaul"
-import { X, FileText, Copy, Check, LayoutDashboard, Info } from "lucide-react"
+import { X,Copy,Check,LayoutDashboard,Info } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { useState } from "react"
@@ -22,7 +22,7 @@ interface ExpandableRowDrawerProps {
     fields: DetailField[]
 }
 
-export function ExpandableRowDrawer({ open, onClose, title, subtitle, fields }: ExpandableRowDrawerProps) {
+export function ExpandableRowDrawer({ open, onClose, title, subtitle, fields }: Readonly<ExpandableRowDrawerProps>) {
     const [copiedField, setCopiedField] = useState<string | null>(null)
 
     const handleCopy = (label: string, value: string | number | React.ReactNode) => {
@@ -77,10 +77,10 @@ export function ExpandableRowDrawer({ open, onClose, title, subtitle, fields }: 
                     {/* Body */}
                     <div className="flex-1 overflow-y-auto p-8 space-y-8 scrollbar-hide">
                         <div className="space-y-4">
-                            {fields.map((field, idx) => {
+                            {fields.map((field) => {
                                 if (field.type === "section") {
                                     return (
-                                        <div key={idx} className="pt-6 pb-2 first:pt-0">
+                                        <div key={field.key ?? `section-${field.label}`} className="pt-6 pb-2 first:pt-0">
                                             <div className="flex items-center gap-2 mb-4">
                                                 <div className="h-4 w-1 bg-indigo-500 rounded-full" />
                                                 <h4 className="text-[12px] font-black uppercase tracking-[0.15em] text-slate-900 dark:text-white">
@@ -94,7 +94,7 @@ export function ExpandableRowDrawer({ open, onClose, title, subtitle, fields }: 
 
                                 return (
                                     <div
-                                        key={idx}
+                                        key={field.key ?? `field-${field.label}`}
                                         className="group relative flex items-center justify-between gap-6 p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800/50 hover:border-indigo-500/30 hover:shadow-lg hover:shadow-indigo-500/5 transition-all duration-300"
                                     >
                                         <div className="flex-1 min-w-0">
@@ -120,7 +120,7 @@ export function ExpandableRowDrawer({ open, onClose, title, subtitle, fields }: 
 
                                         <div className="shrink-0 flex items-center gap-2">
                                             {(typeof field.value === "string" || typeof field.value === "number") && (
-                                                <button
+                                                <button type="button"
                                                     onClick={() => handleCopy(field.label, field.value)}
                                                     className="opacity-0 group-hover:opacity-100 transition-all p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-indigo-500"
                                                 >

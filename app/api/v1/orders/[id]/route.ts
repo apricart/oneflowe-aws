@@ -21,6 +21,53 @@ import { db } from "@/lib/db"
 import { canOrderPortalEditOrder } from "@/lib/order-edit-policy"
 import { orderSelectColumns } from "@/lib/order-select"
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
+
+type CurrentOrderUser = NonNullable<Awaited<ReturnType<typeof getCurrentUser>>>
+
+const isValidOrderPortalActor = (
+  user: Awaited<ReturnType<typeof getCurrentUser>>,
+  scope: Awaited<ReturnType<typeof getRequestScope>>,
+): user is CurrentOrderUser => (
+  user != null
+  && user.id === scope?.userId
+  && user.role === "ORDER_PORTAL"
+  && scope?.role === "ORDER_PORTAL"
+  && Boolean(scope.organizationId)
+  && Boolean(scope.branchId)
+)
+
+const getOrderEditResultResponse = (result: any, pricesHidden: boolean) => {
+  if (result.kind === "not-found") return error("Order not found", 404)
+  if (result.kind === "forbidden") return error("Forbidden", 403)
+  if (result.kind === "invalid-state") {
+    return error(`Only pending orders can be edited. This order is ${result.status}.`, 409)
+  }
+  return ok({
+    message: "Order updated successfully",
+    order: pricesHidden
+      ? { ...result.order, subtotalCents: null, taxCents: null, totalCents: null }
+      : result.order,
+  })
+}
+
+const getOrderEditErrorResponse = (editError: any) => {
+  const message = String(editError?.message || "")
+  const normalizedMessage = message.toLowerCase()
+  if (message === "ORDER_EDIT_CONFLICT") {
+    return error("Order was already approved, rejected, or otherwise changed", 409)
+  }
+  if (["BUDGET_LEDGER_INVARIANT", "QUANTITY_BUDGET_LEDGER_INVARIANT", "STOCK_LEDGER_INVARIANT"].includes(message)) {
+    return error("Order reservations are inconsistent; the order was not changed", 409)
+  }
+  const isCustomerError = message.startsWith("Insufficient stock")
+    || message.startsWith("Budget not configured")
+    || message.includes("Insufficient budget")
+    || normalizedMessage.includes("quantity budget")
+    || normalizedMessage.includes("no longer")
+    || normalizedMessage.includes("pricing is unavailable")
+    || normalizedMessage.includes("quantity for")
+  return isCustomerError ? error(message, 400) : null
+}
 import { canViewFulfillmentToken } from "@/lib/fulfillment-token-access"
 import { getCurrentUser, getRequestScope } from "@/lib/auth"
 import { calculateLineCents, formatQuantity, roundQuantity, validateProductQuantity } from "@/lib/quantity"
@@ -161,15 +208,7 @@ export async function PUT(
   const orderId = Number(id)
 
   if (!Number.isInteger(orderId) || orderId <= 0) return error("Invalid order ID", 400)
-  if (
-    !user
-    || !scope
-    || user.id !== scope.userId
-    || user.role !== "ORDER_PORTAL"
-    || scope.role !== "ORDER_PORTAL"
-    || !scope.organizationId
-    || !scope.branchId
-  ) {
+  if (!isValidOrderPortalActor(user, scope)) {
     return error("Unauthorized", 401)
   }
 
@@ -187,8 +226,8 @@ export async function PUT(
     return error("Quantities must be greater than zero", 400)
   }
 
-  const organizationId = scope.organizationId
-  const branchId = scope.branchId
+  const organizationId = scope!.organizationId!
+  const branchId = scope!.branchId!
   const budgetAllocationMode = await getBudgetAllocationModeForOrganization(organizationId)
   const pricesHidden = await shouldHidePricesForRole(user.role, organizationId)
 
@@ -213,8 +252,7 @@ export async function PUT(
         .limit(1)
 
       if (
-        !actor
-        || actor.role !== "ORDER_PORTAL"
+        actor?.role !== "ORDER_PORTAL"
         || actor.organizationId !== organizationId
         || actor.branchId !== branchId
       ) {
@@ -336,7 +374,7 @@ export async function PUT(
         if (!inventoryItem) throw new Error("An inventory item is no longer available")
 
         const product = productById.get(inventoryItem.globalProductId)
-        if (!product || product.status !== "active" || product.deletedAt) {
+        if (product?.status !== "active" || product.deletedAt) {
           throw new Error("A product is no longer available")
         }
 
@@ -588,39 +626,10 @@ export async function PUT(
       return { kind: "updated", order: updatedOrder } as const
     })
 
-    if (result.kind === "not-found") return error("Order not found", 404)
-    if (result.kind === "forbidden") return error("Forbidden", 403)
-    if (result.kind === "invalid-state") {
-      return error(`Only pending orders can be edited. This order is ${result.status}.`, 409)
-    }
-
-    return ok({
-      message: "Order updated successfully",
-      order: pricesHidden
-        ? { ...result.order, subtotalCents: null, taxCents: null, totalCents: null }
-        : result.order,
-    })
+    return getOrderEditResultResponse(result, pricesHidden)
   } catch (editError: any) {
-    const message = String(editError?.message || "")
-    const normalizedMessage = message.toLowerCase()
-
-    if (message === "ORDER_EDIT_CONFLICT") {
-      return error("Order was already approved, rejected, or otherwise changed", 409)
-    }
-    if (["BUDGET_LEDGER_INVARIANT", "QUANTITY_BUDGET_LEDGER_INVARIANT", "STOCK_LEDGER_INVARIANT"].includes(message)) {
-      return error("Order reservations are inconsistent; the order was not changed", 409)
-    }
-    if (
-      message.startsWith("Insufficient stock")
-      || message.startsWith("Budget not configured")
-      || message.includes("Insufficient budget")
-      || normalizedMessage.includes("quantity budget")
-      || normalizedMessage.includes("no longer")
-      || normalizedMessage.includes("pricing is unavailable")
-      || normalizedMessage.includes("quantity for")
-    ) {
-      return error(message, 400)
-    }
+    const response = getOrderEditErrorResponse(editError)
+    if (response) return response
 
     console.error("Order PUT error", editError)
     return error("Internal Server Error", 500)

@@ -11,7 +11,7 @@ const POST_PATH = resolve("backups/ke-import-state-2026-08-04-post-reviewed-7-or
 const NORMAL_SOURCE = resolve("updatedReports/ke-current-missing-safe-candidates-2026-08-04/reports/sales-report.json")
 const OUTPUT = resolve("updatedReports/ke-current-missing-safe-candidates-2026-08-04/current-production-post-validation.json")
 const IDS = [250, 520, 765, 1164, 1165, 1177, 1187]
-const NORMAL_IDS = [250, 765, 1164, 1165, 1177, 1187]
+const NORMAL_IDS = new Set([250, 765, 1164, 1165, 1177, 1187])
 const NORMAL_BATCH_ID = "f89cfe76-a500-4603-aa32-8b9e7c12f254"
 const REFUND_BATCH_ID = "3cf300c9-d97a-4fe1-8adf-278e713a8679"
 
@@ -101,7 +101,7 @@ function main() {
       check(inventory?.organization_id === 10 && Number(inventory.global_product_id) === Number(item.global_product_id), `Organization inventory mismatch for ${legacyId}`)
       check(branchInventoryPairs.has(`${order.branch_id}:${item.organization_inventory_id}`), `Branch assignment missing for ${legacyId}`)
     }
-    if (NORMAL_IDS.includes(legacyId)) {
+    if (NORMAL_IDS.has(legacyId)) {
       const source = expectedNormalMoney.get(legacyId)!
       check(order.status === "FULFILLED" && order.fulfillment_status === "DELIVERED" && order.refunded_at == null, `Normal status mismatch for ${legacyId}`)
       check(items.length === expectedNormalLines.get(legacyId), `Normal item count mismatch for ${legacyId}`)

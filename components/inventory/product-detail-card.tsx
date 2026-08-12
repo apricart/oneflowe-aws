@@ -41,10 +41,9 @@ export function ProductDetailCard({
   onEdit,
   onToggleVisibility,
   className
-}: ProductDetailCardProps) {
+}: Readonly<ProductDetailCardProps>) {
   const effectiveName = product.customName || product.productName
   const effectivePrice = product.customPrice || product.basePrice
-  const effectiveImage = product.customImageUrl || product.productImageUrl
   const effectiveDescription = product.customDescription || product.description
 
 

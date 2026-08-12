@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card,CardContent,CardDescription,CardHeader,CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -9,20 +9,17 @@ import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/hooks/use-toast"
-import { 
-  Settings, 
-  Plus, 
-  Trash2, 
+import {
+  Settings,
+  Plus,
+  Trash2,
   Save,
   Building2,
-  Mail,
-  Phone,
-  Globe,
-  DollarSign,
+  Mail,DollarSign,
   Clock,
-  Shield,
+  Shield
 } from "lucide-react"
-import useSWR, { mutate } from "swr"
+import useSWR from "swr"
 import {
   Dialog,
   DialogContent,
@@ -32,13 +29,6 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 
 const SETTING_CATEGORIES = {
   general: { icon: Settings, label: "General", color: "blue" },
@@ -144,11 +134,11 @@ function SettingEditor({
   setting,
   currentValue,
   onSave,
-}: {
+}: Readonly<{
   setting: SettingDef
   currentValue: any
   onSave: (key: string, value: any) => void
-}) {
+}>) {
   const [localValue, setLocalValue] = useState(
     currentValue ?? setting.defaultValue
   )
@@ -234,6 +224,7 @@ export function OrganizationSettingsManager() {
       
       mutateSettings()
     } catch (error) {
+      console.error("Failed to save organization setting:", error)
       toast({
         title: "Error",
         description: "Failed to save setting",
@@ -257,6 +248,7 @@ export function OrganizationSettingsManager() {
       
       mutateSettings()
     } catch (error) {
+      console.error("Failed to delete organization setting:", error)
       toast({
         title: "Error",
         description: "Failed to delete setting",
@@ -300,7 +292,7 @@ export function OrganizationSettingsManager() {
         <CardContent>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             {organizations.map((org: any) => (
-              <button
+              <button type="button"
                 key={org.id}
                 onClick={() => setSelectedOrg(org.id)}
                 className={`p-4 rounded-lg border-2 transition-all text-left ${

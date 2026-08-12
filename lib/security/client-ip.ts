@@ -5,10 +5,10 @@ export function parseIpAddress(value: string | null): string | null {
   const trimmed = value.trim()
   if (isIP(trimmed)) return trimmed
 
-  const bracketedIpv6 = trimmed.match(/^\[([0-9a-f:]+)\](?::\d+)?$/i)
+  const bracketedIpv6 = /^\[([0-9a-f:]+)\](?::\d+)?$/i.exec(trimmed)
   if (bracketedIpv6 && isIP(bracketedIpv6[1])) return bracketedIpv6[1]
 
-  const ipv4WithPort = trimmed.match(/^((?:\d{1,3}\.){3}\d{1,3})(?::\d+)?$/)
+  const ipv4WithPort = /^((?:\d{1,3}\.){3}\d{1,3})(?::\d+)?$/.exec(trimmed)
   if (ipv4WithPort && isIP(ipv4WithPort[1])) return ipv4WithPort[1]
 
   return null

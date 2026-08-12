@@ -166,8 +166,8 @@ export async function GET(req: NextRequest) {
             .leftJoin(groups, eq(branches.groupId, groups.id))
             .where(
                 and(
-                    eq(branchInventory.organizationInventoryId, parseInt(organizationInventoryId)),
-                    eq(branchInventory.organizationId, parseInt(organizationId)),
+                    eq(branchInventory.organizationInventoryId, Number.parseInt(organizationInventoryId)),
+                    eq(branchInventory.organizationId, Number.parseInt(organizationId)),
                     isNull(branchInventory.deletedAt)
                 )
             )

@@ -1,11 +1,39 @@
 "use client"
-import { useOrganizations, useBranches } from "@/lib/hooks/use-api"
+import { useAppContext } from "@/components/context/app-context"
+import { BranchExcelExportButton } from "@/components/organizations/branch-excel-export-button"
+import { BranchListExcelExportButton } from "@/components/organizations/branch-list-excel-export-button"
+import { OrganizationExcelExportButton } from "@/components/organizations/organization-excel-export-button"
+import { OrganizationListExcelExportButton } from "@/components/organizations/organization-list-excel-export-button"
+import { PremiumAlert,type AlertType } from "@/components/premium/premium-alert"
+import { PremiumConfirmDialog } from "@/components/premium/premium-confirm-dialog"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Card,CardContent,CardHeader,CardTitle } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Dialog,DialogContent,DialogDescription,DialogFooter,DialogHeader,DialogTitle,DialogTrigger } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
+import { Textarea } from "@/components/ui/textarea"
 import {
-  DEFAULT_ORDER_APPROVER_ROLE,
-  ORDER_APPROVER_ROLE_LABELS,
-  parseOrderApproverRole,
-  type OrderApproverRole,
+BUDGET_ALLOCATION_MODE_SETTING_KEY,
+parseBudgetAllocationMode,
+type BudgetAllocationMode,
+} from "@/lib/budget-allocation-mode"
+import { formatCountLabel } from "@/lib/count-label"
+import { useBranches,useOrganizations } from "@/lib/hooks/use-api"
+import {
+DEFAULT_ORDER_APPROVER_ROLE,
+ORDER_APPROVER_ROLE_LABELS,
+parseOrderApproverRole,
+type OrderApproverRole,
 } from "@/lib/order-approver-role"
+import { cn } from "@/lib/utils"
+import { Building2,GitBranch,Loader,Pencil,Save,Search,Trash2 } from "lucide-react"
+import { useSession } from "next-auth/react"
+import { ReactNode,useEffect,useMemo,useRef,useState } from "react"
 type Organization = {
   id: number
   name: string
@@ -25,36 +53,6 @@ type Branch = {
   costCenterId?: string | null
   status?: "active" | "inactive"
 }
-import { Button } from "@/components/ui/button"
-import { Loader2, Pencil, Trash2, Building2, GitBranch, Save } from "lucide-react"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Checkbox } from "@/components/ui/checkbox"
-import { cn } from "@/lib/utils"
-import { formatCountLabel } from "@/lib/count-label"
-import { Badge } from "@/components/ui/badge"
-import { ReactNode, useEffect, useMemo, useRef, useState } from "react"
-import { useAppContext } from "@/components/context/app-context"
-import { useSession } from "next-auth/react"
-import { PremiumConfirmDialog } from "@/components/premium/premium-confirm-dialog"
-import { PremiumAlert, type AlertType } from "@/components/premium/premium-alert"
-import { ScrollArea } from "@/components/ui/scroll-area"
-import { Search } from "lucide-react"
-import { Switch } from "@/components/ui/switch"
-import {
-  BUDGET_ALLOCATION_MODE_SETTING_KEY,
-  type BudgetAllocationMode,
-  parseBudgetAllocationMode,
-} from "@/lib/budget-allocation-mode"
-import { Loader } from "lucide-react";
-import { OrganizationExcelExportButton } from "@/components/organizations/organization-excel-export-button"
-import { OrganizationListExcelExportButton } from "@/components/organizations/organization-list-excel-export-button"
-import { BranchExcelExportButton } from "@/components/organizations/branch-excel-export-button"
-import { BranchListExcelExportButton } from "@/components/organizations/branch-list-excel-export-button"
 
 const LEGACY_HIDE_PRICES_SETTING_KEY = "hide_prices_for_branch_and_order_portal"
 const HIDE_BRANCH_ADMIN_PRICES_SETTING_KEY = "hide_prices_for_branch_admin"
@@ -650,7 +648,7 @@ function BranchesTable({
   onDelete,
   onRefresh,
   onEdit,
-}: {
+}: Readonly<{
   items: Branch[]
   organizations: Organization[]
   showCompanyColumn?: boolean
@@ -658,7 +656,7 @@ function BranchesTable({
   onDelete: (id: string, name: string) => void
   onRefresh: () => Promise<void>
   onEdit: (id: string, payload: Partial<Branch>) => Promise<void>
-}) {
+}>) {
   const orgById = useMemo(() => Object.fromEntries(organizations.map((o) => [o.id, o])), [organizations])
 
   async function edit(id: string, payload: Partial<Branch>) {
@@ -702,7 +700,12 @@ function BranchesTable({
                     {(b.province || b.city || b.address) && (
                       <p className="mt-1 truncate text-xs font-medium text-slate-500 dark:text-slate-400">
                         {[b.province, b.city].filter(Boolean).join(", ")}
-                        {b.address ? `${b.province || b.city ? " • " : ""}${b.address}` : ""}
+                        {(() => {
+                          if (b.address) {
+                            return `${b.province || b.city ? " • " : ""}${b.address}`
+                          }
+                          return ""
+                        })()}
                       </p>
                     )}
                   </div>
@@ -784,7 +787,7 @@ function OrganizationListItem({
   status,
   badgeLabel,
   budgetAllocationMode,
-}: {
+}: Readonly<{
   title: string
   subtitle: string
   onClick: () => void
@@ -793,7 +796,7 @@ function OrganizationListItem({
   status?: boolean
   badgeLabel?: string
   budgetAllocationMode?: BudgetAllocationMode
-}) {
+}>) {
   const initials = title
     .split(" ")
     .filter(Boolean)
@@ -806,39 +809,31 @@ function OrganizationListItem({
     : null
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={onClick}
-      suppressHydrationWarning
-      onKeyDown={(event) => {
-        if (
-          event.target instanceof HTMLElement &&
-          (event.target.tagName === "INPUT" || event.target.tagName === "TEXTAREA" || event.target.tagName === "BUTTON")
-        ) {
-          return
-        }
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault()
-          onClick()
-        }
-      }}
+    <article
       className={cn(
-        "group w-full rounded-[1.25rem] border-2 p-4 text-left transition-all duration-300 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-indigo-500/20",
+        "group w-full rounded-[1.25rem] border-2 p-4 text-left transition-all duration-300",
         isActive
           ? "border-indigo-500/30 bg-indigo-50 shadow-[0_4px_20px_rgba(79,70,229,0.08)] dark:border-indigo-500/40 dark:bg-indigo-500/10"
           : "border-transparent bg-slate-50/50 hover:bg-white hover:border-slate-200 hover:shadow-lg hover:shadow-slate-200/40 dark:bg-slate-950/40 dark:hover:bg-slate-800/60 dark:hover:border-slate-700 dark:hover:shadow-none"
       )}
     >
-      <div className="flex flex-wrap items-start gap-4 sm:flex-nowrap sm:items-center">
+      <button
+        type="button"
+        onClick={onClick}
+        className="flex w-full flex-wrap items-start gap-4 rounded-xl text-left outline-none focus-visible:ring-4 focus-visible:ring-indigo-500/20 sm:flex-nowrap sm:items-center"
+      >
         <div
           className={cn(
             "flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl text-[13px] font-semibold transition-all duration-500",
-            isActive
-              ? "bg-gradient-to-br from-indigo-600 to-indigo-700 text-white shadow-lg shadow-indigo-600/30 scale-110 rotate-3"
-              : badgeLabel === "Global"
-                ? "bg-slate-900 text-white shadow-md dark:bg-white dark:text-slate-900"
-                : "bg-white text-slate-600 border border-slate-100 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700 group-hover:scale-105"
+            (() => {
+              if (isActive) {
+                return "bg-gradient-to-br from-indigo-600 to-indigo-700 text-white shadow-lg shadow-indigo-600/30 scale-110 rotate-3"
+              }
+              if (badgeLabel === "Global") {
+                return "bg-slate-900 text-white shadow-md dark:bg-white dark:text-slate-900"
+              }
+              return "bg-white text-slate-600 border border-slate-100 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700 group-hover:scale-105"
+            })()
           )}
         >
           {badgeLabel === "Global" ? "∞" : initials || "?"}
@@ -872,7 +867,9 @@ function OrganizationListItem({
                 {BUDGET_ALLOCATION_MODE_LABELS[normalizedBudgetAllocationMode]}
               </Badge>
             )}
-            {typeof status === "boolean" ? (
+            {(() => {
+              if (typeof status === "boolean") {
+                return (
               <Badge variant={status ? "outline" : "secondary"} className={cn(
                 "text-[9px] uppercase font-semibold tracking-widest px-2 py-0.5 rounded-md",
                 status
@@ -881,27 +878,30 @@ function OrganizationListItem({
               )}>
                 {status ? "Active" : "Inactive"}
               </Badge>
-            ) : badgeLabel ? (
+            )
+              }
+              if (badgeLabel) {
+                return (
               <Badge variant="secondary" className="text-[9px] uppercase font-semibold tracking-widest px-2 py-0.5 bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 rounded-md border-transparent shadow-none">
                 {badgeLabel}
               </Badge>
-            ) : null}
+            )
+              }
+              return null
+            })()}
           </div>
-          {children && (
-            <div
-              className="flex min-w-[72px] items-center justify-end gap-1"
-              onClick={(event) => event.stopPropagation()}
-            >
-              {children}
-            </div>
-          )}
         </div>
-      </div>
-    </div>
+      </button>
+      {children && (
+        <div className="mt-2 flex min-w-[72px] items-center justify-end gap-1">
+          {children}
+        </div>
+      )}
+    </article>
   )
 }
 
-function HeroStat({ label, value, helper, icon }: { label: string; value: string | number; helper?: string; icon?: ReactNode }) {
+function HeroStat({ label, value, helper, icon }: Readonly<{ label: string; value: string | number; helper?: string; icon?: ReactNode }>) {
   return (
     <div className="min-w-[180px] rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur-2xl shadow-[0_8px_32px_0_rgba(31,38,135,0.07)] dark:shadow-[0_8px_32px_0_rgba(0,0,0,0.3)] transition-all duration-300 hover:bg-white/[0.08] hover:border-white/20 group">
       <div className="flex flex-col gap-4">
@@ -926,13 +926,13 @@ function CompactStatCard({
   icon,
   gradient,
   iconBadge,
-}: {
+}: Readonly<{
   label: string
   value: string | number
   icon: ReactNode
   gradient: string
   iconBadge: string
-}) {
+}>) {
   return (
     <Card className={cn("border rounded-2xl shadow-sm transition-all duration-300 hover:shadow-md hover:-translate-y-0.5", gradient)}>
       <CardContent className="p-5 flex items-center justify-between">
@@ -952,7 +952,7 @@ function CompactStatCard({
   )
 }
 
-function SummaryStat({ label, value, icon, helper }: { label: string; value: string | number; icon?: ReactNode; helper?: string }) {
+function SummaryStat({ label, value, icon, helper }: Readonly<{ label: string; value: string | number; icon?: ReactNode; helper?: string }>) {
   return (
     <div className="relative overflow-hidden group flex flex-col justify-between rounded-2xl border border-slate-200/50 dark:border-slate-800/50 bg-white dark:bg-slate-950 p-6 shadow-sm transition-all duration-300 hover:shadow-md hover:border-indigo-500/20">
       <div className="absolute top-0 right-0 p-3 opacity-5 group-hover:opacity-10 transition-opacity translate-x-1/4 -translate-y-1/4">
@@ -987,14 +987,14 @@ function CreateOrgDialog({
   showFeedback,
   variant,
   className,
-}: {
+}: Readonly<{
   open: boolean
   onOpenChange: (v: boolean) => void
   onCreated: (item: Organization) => void
   showFeedback: (msg: string, type: AlertType) => void
-  variant?: React.ComponentProps<typeof Button>["variant"]
+  variant?: NonNullable<React.ComponentProps<typeof Button>["variant"]>
   className?: string
-}) {
+}>) {
   const [name, setName] = useState("")
   const [code, setCode] = useState("")
   const [status, setStatus] = useState<boolean>(true)
@@ -1233,15 +1233,15 @@ function CreateBranchDialog({
   showFeedback,
   variant,
   className,
-}: {
+}: Readonly<{
   organizations: Organization[]
   open: boolean
   onOpenChange: (v: boolean) => void
   onCreated: (item: Branch) => void
   showFeedback: (msg: string, type: AlertType) => void
-  variant?: React.ComponentProps<typeof Button>["variant"]
+  variant?: NonNullable<React.ComponentProps<typeof Button>["variant"]>
   className?: string
-}) {
+}>) {
   const [orgId, setOrgId] = useState<string | undefined>(undefined)
   const [name, setName] = useState("")
   const [province, setProvince] = useState("")
@@ -1428,11 +1428,11 @@ function EditOrgDialog({
   org,
   isSuperAdmin,
   onSave,
-}: {
+}: Readonly<{
   org: Organization
   isSuperAdmin: boolean
   onSave: (payload: Partial<Organization>, priceVisibility?: PriceVisibilitySettings) => Promise<boolean>
-}) {
+}>) {
   const [open, setOpen] = useState(false)
   const [name, setName] = useState(org.name)
   const [code, setCode] = useState(org.code)
@@ -1671,7 +1671,7 @@ function EditOrgDialog({
   )
 }
 
-function EditBranchDialog({ branch, onSave }: { branch: Branch; onSave: (payload: Partial<Branch>) => void }) {
+function EditBranchDialog({ branch, onSave }: Readonly<{ branch: Branch; onSave: (payload: Partial<Branch>) => void }>) {
   const [open, setOpen] = useState(false)
   const [name, setName] = useState(branch.name)
   const [code, setCode] = useState(branch.code)

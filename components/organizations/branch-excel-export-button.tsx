@@ -24,7 +24,7 @@ export function BranchExcelExportButton({
   branch,
   onSuccess,
   onError,
-}: BranchExcelExportButtonProps) {
+}: Readonly<BranchExcelExportButtonProps>) {
   const [isExporting, setIsExporting] = useState(false)
 
   const handleExport = async (event: MouseEvent<HTMLButtonElement>) => {

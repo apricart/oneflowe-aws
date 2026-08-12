@@ -1,4 +1,5 @@
 #!/usr/bin/env tsx
+import { stringifyPrimitive } from "../lib/stringify-primitive"
 /**
  * Safely imports authoritative, delivered K-Electric legacy orders.
  *
@@ -20,9 +21,9 @@
  * and item snapshots, while explicitly leaving those live ledgers unchanged.
  */
 
-import { createHash, randomBytes } from "crypto"
-import { existsSync, readFileSync, writeFileSync } from "fs"
-import { resolve } from "path"
+import { createHash, randomBytes } from "node:crypto"
+import { existsSync, readFileSync, writeFileSync } from "node:fs"
+import { resolve } from "node:path"
 import * as dotenv from "dotenv"
 import {
   KE_ORGANIZATION,
@@ -38,6 +39,11 @@ import {
 
 dotenv.config({ path: ".env.local" })
 dotenv.config()
+
+function stripTrailingRoleSeparator(value: string): string {
+  const normalized = value.trim()
+  return normalized.endsWith(" -") ? normalized.slice(0, -2).trim() : normalized
+}
 
 interface Options {
   commit: boolean
@@ -177,7 +183,7 @@ function loadOverrides(path: string | undefined): {
 }
 
 function canonicalKeProductCodeNumber(value: unknown): number | undefined {
-  const match = /^prd--(\d+)$/i.exec(String(value ?? "").trim())
+  const match = /^prd--(\d+)$/i.exec(stringifyPrimitive(value).trim())
   if (!match) return undefined
   const number = Number(match[1])
   return Number.isSafeInteger(number) && number > 0 ? number : undefined
@@ -246,8 +252,7 @@ async function main() {
     status: schema.organizations.status,
   }).from(schema.organizations).where(eq(schema.organizations.id, KE_ORGANIZATION.id)).limit(1)
 
-  if (!organization
-    || organization.code !== KE_ORGANIZATION.code
+  if (organization?.code !== KE_ORGANIZATION.code
     || normalizeText(organization.name) !== normalizeText(KE_ORGANIZATION.name)
     || normalizeText(organization.status) !== "active") {
     throw new Error(`Tenant safety gate failed for K-Electric id=${KE_ORGANIZATION.id}, code=${KE_ORGANIZATION.code}`)
@@ -371,8 +376,7 @@ async function main() {
     const orgInventory = anyOrgInventoryById.get(mapping.organizationInventoryId)
     const valid = Boolean(
       product
-      && orgInventory
-      && orgInventory.organizationId === KE_ORGANIZATION.id
+      && orgInventory?.organizationId === KE_ORGANIZATION.id
       && orgInventory.globalProductId === mapping.globalProductId
       && orgInventory.deletedAt === null,
     )
@@ -406,13 +410,11 @@ async function main() {
   for (const mapping of existingUserMappings) {
     const user = dbUserById.get(mapping.userId)
     const branch = dbBranches.find((row) => row.id === mapping.branchId)
-    if (!user
-      || user.organizationId !== KE_ORGANIZATION.id
+    if (user?.organizationId !== KE_ORGANIZATION.id
       || user.branchId !== mapping.branchId
       || user.roleName !== "ORDER_PORTAL"
       || user.deletedAt !== null
-      || !branch
-      || branch.organizationId !== KE_ORGANIZATION.id) {
+      || branch?.organizationId !== KE_ORGANIZATION.id) {
       mappingErrors.push(`legacy user ${mapping.legacyOrderTakerId} / branch ${mapping.branchId}: mapping references a missing, deleted, wrong-role, or cross-tenant user`)
       continue
     }
@@ -474,7 +476,7 @@ async function main() {
         userErrors.push(`order ${order.legacyOrderId}: proposed historical username ${username} already belongs to user ${existingUsername.id} in organization ${existingUsername.organizationId}`)
         continue
       }
-      const sourceName = String(order.sourceHeader.UserDetails || order.userName).trim().replace(/\s+-\s*$/, "")
+      const sourceName = stripTrailingRoleSeparator(String(order.sourceHeader.UserDetails || order.userName))
       const existingPlan = historicalUserPlansByKey.get(mappingKey)
       if (existingPlan && normalizeText(existingPlan.sourceName) !== normalizeText(sourceName)) {
         userErrors.push(`order ${order.legacyOrderId}: legacy user ${legacyOrderTakerId} has conflicting names "${existingPlan.sourceName}" and "${sourceName}" in ${branch.name}`)
@@ -516,7 +518,7 @@ async function main() {
       key,
       legacyOrderTakerId,
       branchId: branch.id,
-      sourceName: String(order.sourceHeader.UserDetails || order.userName).trim().replace(/\s+-\s*$/, ""),
+      sourceName: stripTrailingRoleSeparator(String(order.sourceHeader.UserDetails || order.userName)),
       userId: user.id,
       kind,
     }
@@ -693,7 +695,15 @@ async function main() {
 
   console.log("\nK-Electric legacy import preflight")
   console.log("----------------------------------")
-  console.log(`Mode                     : ${opts.commit ? "COMMIT REQUESTED" : opts.rollbackTest ? "ROLLBACK TEST REQUESTED" : "DRY RUN (read-only)"}`)
+  console.log(`Mode                     : ${(() => {
+    if (opts.commit) {
+      return "COMMIT REQUESTED"
+    }
+    if (opts.rollbackTest) {
+      return "ROLLBACK TEST REQUESTED"
+    }
+    return "DRY RUN (read-only)"
+  })()}`)
   console.log(`Organization verified    : ${organization.name} (id=${organization.id}, code=${organization.code})`)
   console.log(`Manifest confirmation    : ${digest}`)
   console.log(`Ledger migration present : ${ledgerInstalled}`)
@@ -731,7 +741,15 @@ async function main() {
   if (opts.outputPath) {
     writeFileSync(opts.outputPath, JSON.stringify({
       generatedAt: new Date().toISOString(),
-      mode: opts.commit ? "COMMIT_REQUESTED" : opts.rollbackTest ? "ROLLBACK_TEST_REQUESTED" : "DRY_RUN",
+      mode: (() => {
+        if (opts.commit) {
+          return "COMMIT_REQUESTED"
+        }
+        if (opts.rollbackTest) {
+          return "ROLLBACK_TEST_REQUESTED"
+        }
+        return "DRY_RUN"
+      })(),
       organization,
       manifestDigest: digest,
       manifest: confirmationManifest,
@@ -772,7 +790,7 @@ async function main() {
     .innerJoin(schema.roles, eq(schema.users.roleId, schema.roles.id))
     .where(and(eq(schema.users.id, opts.actorUserId), eq(schema.users.isActive, true), isNull(schema.users.deletedAt)))
     .limit(1)
-  if (!actor[0] || actor[0].roleName !== "SUPER_ADMIN") throw new Error("Actor must be an active SUPER_ADMIN")
+  if (actor[0]?.roleName !== "SUPER_ADMIN") throw new Error("Actor must be an active SUPER_ADMIN")
 
   const [orderPortalRole] = await db.select({ id: schema.roles.id })
     .from(schema.roles)

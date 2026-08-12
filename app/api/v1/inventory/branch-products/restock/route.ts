@@ -1,9 +1,4 @@
-import { NextRequest, NextResponse } from "next/server"
-import { getServerSession } from "next-auth"
-import { authOptions } from "@/lib/auth-options"
-import { db } from "@/lib/db"
-import { branchProducts, auditLogs } from "@/db/schema"
-import { eq } from "drizzle-orm"
+import { NextRequest,NextResponse } from "next/server"
 
 // POST /api/v1/inventory/branch-products/restock - Deprecated: stock is global-only
 export async function POST(req: NextRequest) {

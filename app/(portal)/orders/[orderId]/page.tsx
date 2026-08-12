@@ -1,7 +1,6 @@
 "use client"
 
-import Link from "next/link"
-import { useParams, useRouter } from "next/navigation"
+import { useParams,useRouter } from "next/navigation"
 import useSWR from "swr"
 import { useSession } from "next-auth/react"
 import { useState } from "react"
@@ -16,12 +15,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { cn, formatPKR } from "@/lib/utils"
-import { calculateLineCents, formatQuantity } from "@/lib/quantity"
+import { cn,formatPKR } from "@/lib/utils"
+import { calculateLineCents,formatQuantity } from "@/lib/quantity"
 import { buildStatusTimeline } from "@/lib/order-utils"
-import { getOrderDerivedStatus, hasPartialRefund } from "@/lib/order-status"
-import { PAYMENT_STATUS_LABELS, normalizePaymentStatus } from "@/lib/payment-status"
-import { ArrowLeft, Clock, TrendingDown, CheckCircle, RefreshCw, Package, Ban, Copy, User, XCircle } from "lucide-react"
+import { getOrderDerivedStatus,hasPartialRefund } from "@/lib/order-status"
+import { PAYMENT_STATUS_LABELS,normalizePaymentStatus } from "@/lib/payment-status"
+import { ArrowLeft,Clock,TrendingDown,CheckCircle,RefreshCw,Package,Ban,Copy,User,XCircle } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { RefundManagement } from "@/components/refund-management"
 
@@ -31,7 +30,6 @@ import { RefundManagement } from "@/components/refund-management"
 
 
 import { formatDistanceToNow } from "date-fns"
-import Image from "next/image"
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
 
@@ -74,14 +72,22 @@ type OrderDetail = {
   pricesHidden?: boolean
 }
 
+function numericOrderId(orderId: string | string[] | undefined): number | null {
+  const rawId = Array.isArray(orderId) ? orderId[0] : orderId
+  return rawId && /^\d+$/.test(rawId) ? Number(rawId) : null
+}
+
+function canRequestRefund(role: string | undefined): boolean {
+  return ["HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL"].includes(role ?? "")
+}
+
 export default function SuperAdminOrderDetailsPage() {
   const params = useParams<{ orderId: string }>()
   const router = useRouter()
   const { data: session } = useSession()
   const { toast } = useToast()
   const userRole = (session?.user as any)?.role
-  const rawId = Array.isArray(params?.orderId) ? params?.orderId[0] : params?.orderId
-  const numericId = rawId && /^\d+$/.test(rawId) ? Number(rawId) : null
+  const numericId = numericOrderId(params?.orderId)
   const [decision, setDecision] = useState<"approve" | "reject" | null>(null)
   const [rejectionReason, setRejectionReason] = useState("")
   const [isDeciding, setIsDeciding] = useState(false)
@@ -90,7 +96,7 @@ export default function SuperAdminOrderDetailsPage() {
   const isSuperAdmin = userRole === "SUPER_ADMIN"
   const isHeadOffice = userRole === "HEAD_OFFICE"
   const isBranchAdmin = userRole === "BRANCH_ADMIN"
-  const canRequestRefundFromOrderReview = isHeadOffice || isBranchAdmin || userRole === "ORDER_PORTAL"
+  const canRequestRefundFromOrderReview = canRequestRefund(userRole)
 
   const { data, error, isLoading, mutate } = useSWR<{
     item: OrderDetail & { orderItems: OrderItem[] }
@@ -117,7 +123,6 @@ export default function SuperAdminOrderDetailsPage() {
   ].filter(Boolean).join(" · ")
 
   // Hide items that have been fully refunded
-  const visibleItems = orderItems.filter(item => (item.quantityRefunded || 0) < item.quantity)
 
   const submitDecision = async () => {
     if (!order || !decision) return
@@ -158,7 +163,15 @@ export default function SuperAdminOrderDetailsPage() {
 
   if (isLoading) return <div className="p-8 text-center text-slate-500 font-medium">Loading order details...</div>
 
-  const roleLabel = isSuperAdmin ? "SUPER ADMIN" : isHeadOffice ? "HEAD OFFICE" : "BRANCH ADMIN"
+  const roleLabel = (() => {
+    if (isSuperAdmin) {
+      return "SUPER ADMIN"
+    }
+    if (isHeadOffice) {
+      return "HEAD OFFICE"
+    }
+    return "BRANCH ADMIN"
+  })()
 
   return (
     <div className="space-y-6">
@@ -168,7 +181,7 @@ export default function SuperAdminOrderDetailsPage() {
             <p className="text-xs tracking-[0.2em] text-slate-500 dark:text-slate-400 font-bold mb-1">{roleLabel} · ORDERS</p>
             <h1 className="text-3xl font-semibold text-slate-900 dark:text-white">Order overview</h1>
             <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
-              Watch approvals, fulfillment, and refund indicators for order #{rawId}.
+              Watch approvals, fulfillment, and refund indicators for order #{params.orderId}.
             </p>
           </div>
           <div className="flex gap-2">
@@ -295,97 +308,7 @@ export default function SuperAdminOrderDetailsPage() {
       )}
 
       {/* Refund Information Card */}
-      {!pricesHidden && order && (order.refundAmountCents && order.refundAmountCents > 0) && (
-        <Card id="refund-details" className="scroll-mt-6 border-yellow-200 dark:border-yellow-800 bg-yellow-50/50 dark:bg-yellow-950/20 p-6">
-          <div className="flex items-start gap-4">
-            <div className="rounded-full bg-yellow-100 dark:bg-yellow-900 p-2 text-yellow-600 dark:text-yellow-400">
-              <TrendingDown className="h-5 w-5" />
-            </div>
-            <div className="flex-1 space-y-3">
-              <div>
-                <h3 className="text-sm font-semibold text-yellow-900 dark:text-yellow-100">Refund Information</h3>
-                <p className="text-xs text-yellow-700 dark:text-yellow-300">
-                  {order.status.toLowerCase() === "refunded"
-                    ? "This order has been fully refunded"
-                    : "This order has been partially refunded"}
-                </p>
-              </div>
-
-              <div className="grid gap-3 md:grid-cols-2">
-                <div className="rounded-lg border border-yellow-200 dark:border-yellow-800 bg-white dark:bg-slate-900 p-3">
-                  <p className="text-xs uppercase text-yellow-700 dark:text-yellow-300">Refunded Amount</p>
-                  <p className="text-lg font-bold text-yellow-900 dark:text-yellow-200">
-                    {formatPKR(order.refundAmountCents / 100)}
-                  </p>
-                </div>
-
-                {order.status.toLowerCase() !== "refunded" && order.totalCents !== null && (
-                  <div className="rounded-lg border border-yellow-200 dark:border-yellow-800 bg-white dark:bg-slate-900 p-3">
-                    <p className="text-xs uppercase text-yellow-700 dark:text-yellow-300">Remaining Balance</p>
-                    <p className="text-lg font-bold text-yellow-900 dark:text-yellow-200">
-                      {formatPKR((order.totalCents - order.refundAmountCents) / 100)}
-                    </p>
-                  </div>
-                )}
-
-                {order.statusAtRefund && (
-                  <div className="rounded-lg border border-yellow-200 dark:border-yellow-800 bg-white dark:bg-slate-900 p-3">
-                    <p className="text-xs uppercase text-yellow-700 dark:text-yellow-300">Status Before Refund</p>
-                    <p className="text-lg font-bold text-yellow-900 dark:text-yellow-200 uppercase">
-                      {order.statusAtRefund}
-                    </p>
-                  </div>
-                )}
-
-                {order.refundedAt && (
-                  <div className="rounded-lg border border-yellow-200 dark:border-yellow-800 bg-white dark:bg-slate-900 p-3">
-                    <p className="text-xs uppercase text-yellow-700 dark:text-yellow-300">Refunded At</p>
-                    <p className="text-sm font-semibold text-yellow-900 dark:text-yellow-200">
-                      {formatDistanceToNow(new Date(order.refundedAt), { addSuffix: true })}
-                    </p>
-                  </div>
-                )}
-              </div>
-
-              {order.refundReason && (
-                <div className="rounded-lg border border-yellow-200 dark:border-yellow-800 bg-white dark:bg-slate-900 p-3">
-                  <p className="text-xs uppercase text-yellow-700 dark:text-yellow-300 mb-1">Refund Reason</p>
-                  <p className="text-sm text-slate-700 dark:text-slate-300">{order.refundReason}</p>
-                </div>
-              )}
-
-              {/* Itemized Refund Details */}
-              {orderItems.some(item => (item.quantityRefunded || 0) > 0) && (
-                <div className="rounded-lg border border-yellow-200 dark:border-yellow-800 bg-white dark:bg-slate-900 overflow-hidden">
-                  <div className="px-3 py-2 border-b border-yellow-100 dark:border-yellow-900 bg-yellow-50/50 dark:bg-yellow-900/20">
-                    <p className="text-xs font-bold text-yellow-800 dark:text-yellow-200 uppercase tracking-wider">Refunded Items Detail</p>
-                  </div>
-                  <div className="divide-y divide-yellow-100 dark:divide-yellow-900">
-                    {orderItems
-                      .filter(item => (item.quantityRefunded || 0) > 0)
-                      .map(item => (
-                        <div key={item.id} className="p-3 flex justify-between items-center text-xs">
-                          <div>
-                            <p className="font-semibold text-slate-900 dark:text-white">{item.productName}</p>
-                            <p className="text-muted-foreground mt-0.5">
-                                    {formatQuantity(item.quantityRefunded)} {item.unit}
-                              {item.priceCents !== null && <> @ {formatPKR(item.priceCents / 100)}</>}
-                            </p>
-                          </div>
-                          <div className="text-right">
-                            {item.priceCents !== null && <p className="font-bold text-red-600 dark:text-red-400">
-                              - {formatPKR((calculateLineCents(item.priceCents, item.quantityRefunded || 0)) / 100)}
-                            </p>}
-                          </div>
-                        </div>
-                      ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </Card>
-      )}
+      {order?.refundAmountCents}
 
       {!numericId && (
         <Card className="p-6 text-sm text-muted-foreground">
@@ -590,22 +513,38 @@ export default function SuperAdminOrderDetailsPage() {
                       <li key={step.key} className="flex gap-3">
                         <div className="flex flex-col items-center">
                           <div
-                            className={`flex h-8 w-8 items-center justify-center rounded-full border ${isComplete
-                              ? "border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300"
-                              : isCurrent
-                                ? "border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300"
-                                : isSkipped
-                                  ? "border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-400 dark:text-slate-500 border-dashed"
-                                  : "border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-400 dark:text-slate-400"
+                            className={`flex h-8 w-8 items-center justify-center rounded-full border ${(() => {
+                              if (isComplete) {
+                                return "border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300"
+                              }
+                              if (isCurrent) {
+                                return "border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300"
+                              }
+                              if (isSkipped) {
+                                return "border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-400 dark:text-slate-500 border-dashed"
+                              }
+                              return "border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-400 dark:text-slate-400"
+                            })()
                               }`}
                           >
-                            {isComplete ? (
+                            {(() => {
+                              if (isComplete) {
+                                return (
                               <CheckCircle className="h-4 w-4" />
-                            ) : isSkipped ? (
+                            )
+                              }
+                              if (isSkipped) {
+                                return (
                               <Ban className="h-4 w-4" />
-                            ) : isCurrent ? (
+                            )
+                              }
+                              if (isCurrent) {
+                                return (
                               <Clock className="h-4 w-4" />
-                            ) : null}
+                            )
+                              }
+                              return null
+                            })()}
                           </div>
                           {!isLast && (
                             <div
@@ -680,7 +619,15 @@ export default function SuperAdminOrderDetailsPage() {
               onClick={submitDecision}
               className={decision === "reject" ? "bg-rose-600 text-white hover:bg-rose-500" : "bg-emerald-600 text-white hover:bg-emerald-500"}
             >
-              {isDeciding ? "Processing..." : decision === "approve" ? "Approve order" : "Reject order"}
+              {(() => {
+                if (isDeciding) {
+                  return "Processing..."
+                }
+                if (decision === "approve") {
+                  return "Approve order"
+                }
+                return "Reject order"
+              })()}
             </Button>
           </DialogFooter>
         </DialogContent>
