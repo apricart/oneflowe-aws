@@ -22,8 +22,13 @@ import { canOrderPortalEditOrder } from "@/lib/order-edit-policy"
 import { orderSelectColumns } from "@/lib/order-select"
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
 
-const isValidOrderPortalActor = (user: any, scope: Awaited<ReturnType<typeof getRequestScope>>) => (
-  Boolean(user)
+type CurrentOrderUser = NonNullable<Awaited<ReturnType<typeof getCurrentUser>>>
+
+const isValidOrderPortalActor = (
+  user: Awaited<ReturnType<typeof getCurrentUser>>,
+  scope: Awaited<ReturnType<typeof getRequestScope>>,
+): user is CurrentOrderUser => (
+  user != null
   && user.id === scope?.userId
   && user.role === "ORDER_PORTAL"
   && scope?.role === "ORDER_PORTAL"

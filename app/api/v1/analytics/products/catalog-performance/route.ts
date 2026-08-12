@@ -53,8 +53,8 @@ async function salesBranches(branchIds: number[], userOrgId: number | null): Pro
 function addCatalogDateConditions(conditions: any[], options: {
     months: number[]
     years: number[]
-    startDate: Date | null
-    endDate: Date | null
+    startDate: Date | null | undefined
+    endDate: Date | null | undefined
 }): void {
     const { months, years, startDate, endDate } = options
     if (months.length > 0) conditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(months, sql.raw(", "))})`)

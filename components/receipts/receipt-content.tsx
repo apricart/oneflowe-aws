@@ -477,7 +477,7 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
                                         {sub.items?.map((item: any, ii: number) => {
                                             serialCounter++
                                             return (
-                                                <tr key={`${i}-${si}-${ii}`}>
+                                                <tr key={`${cat.mainCategoryName || cat.categoryName}-${sub.subCategoryName || "uncategorized"}-${item.description || "item"}-${ii}`}>
                                                     <td className="text-center text-slate-400 font-medium">{serialCounter}</td>
                                                     <td className="text-slate-800 font-medium">{item.description}</td>
                                                     <td className="text-center tabular-nums text-slate-600">{formatQuantity(item.quantity)}</td>

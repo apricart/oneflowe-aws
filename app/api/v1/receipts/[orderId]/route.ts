@@ -5,7 +5,7 @@ import { db } from "@/lib/db"
 import { branches, orders, refunds, refundItems, orderItems, users } from "@/db/schema"
 import { and, eq } from "drizzle-orm"
 import { shouldHidePricesForRole, redactReceiptPrices } from "@/lib/price-visibility"
-import { aggregateReceiptRefundItems, getReceiptNetTotal } from "@/lib/receipt-display"
+import { aggregateReceiptRefundItems, getReceiptNetTotal, type ReceiptRefundItem } from "@/lib/receipt-display"
 import { getOrderDerivedStatus } from "@/lib/order-status"
 import { formatBranchAddress } from "@/lib/branch-address"
 import { isInvoiceAvailableForOrder } from "@/lib/invoice-availability"
@@ -163,7 +163,7 @@ export async function GET(
         )
         const totalApprovedRefundAmount = (order.refundAmountCents || 0) / 100
         const refundedItems = aggregateReceiptRefundItems(
-            approvedRefunds.flatMap((refund) => refund.items.map((item) => ({
+            approvedRefunds.flatMap((refund) => refund.items.map((item: ReceiptRefundItem) => ({
                 productName: item.productName,
                 quantity: item.quantity,
                 amount: item.amount,

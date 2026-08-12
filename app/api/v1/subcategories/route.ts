@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { categories, globalProducts } from "@/db/schema"
-import { eq, and, ilike, desc, sql, isNotNull } from "drizzle-orm"
+import { eq, and, ilike, desc, sql, isNotNull, inArray } from "drizzle-orm"
 import { getCached, invalidateByPrefix, CACHE_TTL } from "@/lib/cache-utils"
 
 // GET /api/v1/subcategories - List subcategories
@@ -77,7 +77,7 @@ export async function GET(req: NextRequest) {
         parentCategories = await db
           .select({ id: categories.id, name: categories.name })
           .from(categories)
-          .where(sql`${categories.id} IN (${sql.join(parentIds.map(id => sqlString(id)), sql.raw(", "))})`)
+          .where(inArray(categories.id, parentIds))
       }
 
       const parentMap = new Map(parentCategories.map(c => [c.id, c.name]))

@@ -162,7 +162,7 @@ export const config = {
      * - favicon.ico (favicon file)
      * - Static file extensions (manifest.json, images, etc.)
      */
-    String.raw`/((?!api|_next/static|_next/image|favicon.ico|.*\.(?:svg|png|jpg|jpeg|gif|webp|json|ico)$).*)`,
+    "/((?!api|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|json|ico)$).*)",
     "/dashboard",
     "/dashboard/:path*",
     "/organizations/:path*",

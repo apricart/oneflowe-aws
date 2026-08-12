@@ -1,7 +1,7 @@
 "use client"
 
 import { useAppContext } from "@/components/context/app-context"
-import { FilterPreset,GlobalDateFilter } from "@/components/dashboard/global-date-filter"
+import { type FilterPreset,GlobalDateFilter,type GlobalDateFilterChange } from "@/components/dashboard/global-date-filter"
 import { BranchFilter } from "@/components/reports/branch-filter"
 import { GroupFilter } from "@/components/reports/group-filter"
 import { KPICard } from "@/components/reports/kpi-card"
