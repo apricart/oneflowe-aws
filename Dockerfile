@@ -2,7 +2,7 @@ FROM node:20.19-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY vendor ./vendor
-RUN npm ci
+RUN npm ci --ignore-scripts
 
 FROM node:20.19-alpine AS builder
 WORKDIR /app
