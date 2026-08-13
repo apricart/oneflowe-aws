@@ -229,14 +229,7 @@ export async function PUT(req: NextRequest) {
     if (!organizationId) {
       return NextResponse.json({ error: "Organization not found in session" }, { status: 400 })
     }
-    const {
-      id,
-      isActive,
-      customName,
-      customPrice,
-      customDescription,
-      customImageUrl
-    } = body
+    const { id, isActive } = body
 
     const validated = validateOrganizationInventoryUpdate(body)
     if (validated.error) return NextResponse.json({ error: validated.error }, { status: 400 })

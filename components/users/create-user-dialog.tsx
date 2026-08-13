@@ -35,7 +35,13 @@ type CreateUserDialogProps = {
   onSuccess?: () => void
 }
 
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+function isValidEmail(value: string) {
+  const atIndex = value.indexOf("@")
+  if (atIndex <= 0 || atIndex !== value.lastIndexOf("@") || /\s/.test(value)) return false
+
+  const dotIndex = value.indexOf(".", atIndex + 1)
+  return dotIndex > atIndex + 1 && dotIndex < value.length - 1
+}
 
 function getUsernameStatusIcon(status: { available: boolean | null; loading: boolean }) {
   if (status.loading) {
@@ -91,7 +97,7 @@ type CreateUserForm = ReturnType<typeof getInitialCreateUserForm>
 
 function getEmailError(value: string) {
   if (!value.trim()) return "Email is required"
-  return EMAIL_PATTERN.test(value) ? undefined : "Please enter a valid email"
+  return isValidEmail(value) ? undefined : "Please enter a valid email"
 }
 
 function getUsernameError(value: string) {
@@ -437,6 +443,7 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
 
   const handleDialogOpenChange = (nextOpen: boolean) => {
     if (nextOpen) {
+      setFeedback({ message: "", type: "info", visible: false })
       setOpen(true)
       return
     }
@@ -484,7 +491,7 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
 
           <div className="space-y-6 py-4">
             {/* Progress Steps */}
-            {(() => (
+            {(
             <div className="flex items-center justify-center space-x-4">
               <div className={`flex items-center gap-2 ${step >= 1 ? 'text-blue-600' : 'text-muted-foreground'}`}>
                 <div className={`h-8 w-8 rounded-full flex items-center justify-center text-sm font-medium ${step >= 1 ? 'bg-blue-100 text-blue-600' : 'bg-muted'
@@ -510,10 +517,10 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                 <span className="text-sm font-medium">Security</span>
               </div>
             </div>
-            ))()}
+            )}
 
             {/* Step 1: Basic Information */}
-            {step === 1 && (() => (
+            {step === 1 && (
               <div className="space-y-4">
                 <h3 className="text-sm font-semibold">Basic Information</h3>
                 <div className="grid grid-cols-2 gap-4">
@@ -749,10 +756,10 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                   />
                 </div>
               </div>
-            ))()}
+            )}
 
             {/* Step 2: Role & Assignment */}
-            {step === 2 && (() => (
+            {step === 2 && (
               <div className="space-y-4">
                 <h3 className="text-sm font-semibold">Role & Assignment</h3>
 
@@ -930,10 +937,10 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                   </Card>
                 )}
               </div>
-            ))()}
+            )}
 
             {/* Step 3: Security Settings */}
-            {step === 3 && (() => (
+            {step === 3 && (
               <div className="space-y-4">
                 <h3 className="text-sm font-semibold">Security Settings</h3>
                 <div className="space-y-4">
@@ -991,10 +998,10 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                   </div>
                 </Card>
               </div>
-            ))()}
+            )}
           </div>
 
-          {(() => (
+          {(
           <DialogFooter>
             <Button variant="outline" onClick={() => handleDialogOpenChange(false)}>
               Cancel
@@ -1039,7 +1046,7 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
               </Button>
             )}
           </DialogFooter>
-          ))()}
+          )}
         </DialogContent>
       </Dialog>
       <AlertDialog

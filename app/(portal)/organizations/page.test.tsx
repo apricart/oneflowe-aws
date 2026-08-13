@@ -51,7 +51,7 @@ describe("OrganizationsPage organization selection", () => {
     expect(screen.getByText("0002 • 1 branch")).toBeTruthy()
     expect(screen.queryByText(/1 branches/i)).toBeNull()
 
-    const panacloudItem = screen.getByText("Panacloud").closest('[role="button"]')
+    const panacloudItem = screen.getByRole("button", { name: /Panacloud 0002/ })
     expect(panacloudItem).not.toBeNull()
     expect(panacloudItem?.className).toContain("border-transparent")
 

@@ -52,7 +52,7 @@ Vitest is configured for focused unit and security tests (`npm test`).
 
 ### Role-Based Routing
 
-Middleware (`middleware.ts`) enforces routing by role at the edge:
+The request proxy (`proxy.ts`) enforces routing by role:
 - `ORDER_PORTAL` users → only `/shop/*`
 - All other roles → `/dashboard` and portal pages; redirected away from `/shop`
 - Four roles: `SUPER_ADMIN`, `HEAD_OFFICE`, `BRANCH_ADMIN`, `ORDER_PORTAL`

@@ -15,15 +15,6 @@ import {
 } from "@/lib/server/mutation-validation"
 import { parseQuantity,sanitizeQuantityStep,validateProductQuantity } from "@/lib/quantity"
 
-// Increase body size limit to handle Base64-encoded product images
-export const config = {
-  api: {
-    bodyParser: {
-      sizeLimit: '8mb',
-    },
-  },
-}
-
 async function getProductImagesResponse(searchParams: URLSearchParams) {
   if (searchParams.get("imagesOnly") !== "true") return null
 

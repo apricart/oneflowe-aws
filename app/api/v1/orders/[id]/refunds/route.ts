@@ -80,7 +80,12 @@ function indexPreviousRefunds(rows: any[]) {
   const approved = new Map<number, number>()
   const pending = new Map<number, number>()
   rows.forEach((row) => {
-    const target = ["APPROVED", "COMPLETED"].includes(row.status) ? approved : row.status === "PENDING" ? pending : null
+    let target: Map<number, number> | null = null
+    if (["APPROVED", "COMPLETED"].includes(row.status)) {
+      target = approved
+    } else if (row.status === "PENDING") {
+      target = pending
+    }
     if (target) target.set(row.orderItemId, (target.get(row.orderItemId) || 0) + row.quantity)
   })
   return { approved, pending }

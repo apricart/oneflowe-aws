@@ -116,9 +116,10 @@ const budgetBranchSelection = {
 }
 
 function buildBudgetBranchScope(role: string, organizationId: number | null, groupIds: number[], branchIds: number[]) {
-  const organizationCondition = role === "SUPER_ADMIN" && !organizationId
-    ? undefined
-    : organizationId ? eq(branches.organizationId, organizationId) : undefined
+  let organizationCondition
+  if (!(role === "SUPER_ADMIN" && !organizationId) && organizationId) {
+    organizationCondition = eq(branches.organizationId, organizationId)
+  }
   return and(
     eq(branches.status, "active"),
     organizationCondition,
@@ -311,9 +312,15 @@ async function handleAllMoneyBudgets(context: any) {
       return NextResponse.json({ error: "Organization context required for HEAD_OFFICE users" }, { status: 400 })
     }
     const branchScope = buildBudgetBranchScope(context.role, context.organizationId, context.groupIds, context.branchIds)
-    const rows = context.period
-      ? await loadCurrentMoneyBudgets(branchScope, /^\d{4}-\d{2}$/.test(context.period) ? context.period : new Date().toISOString().slice(0, 7))
-      : await loadAggregatedMoneyBudgets({ ...context, branchScope })
+    let rows
+    if (context.period) {
+      const period = /^\d{4}-\d{2}$/.test(context.period)
+        ? context.period
+        : new Date().toISOString().slice(0, 7)
+      rows = await loadCurrentMoneyBudgets(branchScope, period)
+    } else {
+      rows = await loadAggregatedMoneyBudgets({ ...context, branchScope })
+    }
     return NextResponse.json({ budgets: await withBudgetAllocationModes(rows) })
   } catch (caughtError) {
     logError(caughtError, "BUDGETS_GET_ALL")

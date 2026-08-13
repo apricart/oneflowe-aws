@@ -83,7 +83,7 @@ function handleApiRequest(req: NextRequest, pathname: string, response: NextResp
   return withSecurityHeaders(response, pathname)
 }
 
-export async function middleware(req: NextRequest) {
+export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl
   const response = NextResponse.next()
 
@@ -162,7 +162,7 @@ export const config = {
      * - favicon.ico (favicon file)
      * - Static file extensions (manifest.json, images, etc.)
      */
-    "/((?!api|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|json|ico)$).*)",
+    "/((?!api|_next/static|_next/image|favicon.ico|.*[.](?:svg|png|jpg|jpeg|gif|webp|json|ico)$).*)",
     "/dashboard",
     "/dashboard/:path*",
     "/organizations/:path*",

@@ -3,9 +3,6 @@ const nextConfig = {
   
   // Security: Remove X-Powered-By header
   poweredByHeader: false,
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
   typescript: {
     // ignoreBuildErrors: false,
   },

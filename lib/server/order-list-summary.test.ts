@@ -34,6 +34,7 @@ describe("order-list summary contract", () => {
 
     expect(route).toContain("const summaryConditions = [...conditions]")
     expect(route).toContain("conditions.push(inArray(orders.status, requestedStatuses))")
-    expect(route).toContain(".where(summaryConditions.length ? and(...summaryConditions) : undefined)")
+    expect(route).toContain("const summaryCondition = summaryConditions.length ? and(...summaryConditions) : undefined")
+    expect(route).toContain(".where(summaryCondition)")
   })
 })

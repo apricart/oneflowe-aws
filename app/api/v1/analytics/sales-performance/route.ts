@@ -11,6 +11,7 @@ import { parseEndDateParam,parseStartDateParam } from "@/lib/date-range-params"
 
 const allowedRoles = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"] as const
 type Role = typeof allowedRoles[number]
+type SalesGranularity = "hourly" | "daily" | "monthly" | "yearly"
 
 function parseNumberList(value: string | null, isValid = (number: number) => number > 0) {
     return value ? value.split(",").map(Number).filter((number) => !Number.isNaN(number) && isValid(number)) : []
@@ -49,12 +50,16 @@ function resolveSalesGranularity(
     months: number[],
     years: number[],
     differenceInDays: number,
-): "hourly" | "daily" | "monthly" | "yearly" {
+): SalesGranularity {
     if (["hourly", "daily", "monthly", "yearly"].includes(forced || "")) {
         return forced as "hourly" | "daily" | "monthly" | "yearly"
     }
-    if (months.length > 0) return months.length > 1 || years.length > 1 ? "monthly" : "daily"
-    if (years.length > 0) return years.length > 1 ? "yearly" : "monthly"
+    if (months.length > 0) {
+        return months.length > 1 || years.length > 1 ? "monthly" : "daily"
+    }
+    if (years.length > 0) {
+        return years.length > 1 ? "yearly" : "monthly"
+    }
     if (differenceInDays <= 1) return "hourly"
     if (differenceInDays <= 32) return "daily"
     if (differenceInDays <= 400) return "monthly"
@@ -302,7 +307,12 @@ export async function GET(req: NextRequest) {
         groupId = Number(groupIdParam)
     }
 
-    const groupIds = groupIdsParam ? parseNumberList(groupIdsParam) : groupId ? [groupId] : []
+    let groupIds: number[] = []
+    if (groupIdsParam) {
+        groupIds = parseNumberList(groupIdsParam)
+    } else if (groupId) {
+        groupIds = [groupId]
+    }
 
     // Date range - default to today
     const now = new Date()
@@ -340,8 +350,6 @@ export async function GET(req: NextRequest) {
     })
 
     const fetchData = async () => {
-        const dashboardCreatedAt = sql`(${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi'`
-
         const upperStatus = statusParam?.toUpperCase()
         const salesContext = {
             organizationIds,
