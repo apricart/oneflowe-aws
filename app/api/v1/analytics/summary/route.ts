@@ -13,36 +13,165 @@ import {
     resolveAnalyticsOrganizationIds,
 } from "@/lib/server/analytics-scope"
 
+function parseNumberList(value: string | null, isValid = (number: number) => number > 0) {
+    return value ? value.split(",").map(Number).filter((number) => !Number.isNaN(number) && isValid(number)) : []
+}
+
+async function loadSummaryUserContext(userId: string, fallbackRole: string) {
+    try {
+        const [user] = await db.select({
+            branchId: users.branchId,
+            organizationId: users.organizationId,
+            roleName: roles.name,
+        }).from(users).leftJoin(roles, eq(users.roleId, roles.id)).where(eq(users.id, userId)).limit(1)
+        return {
+            role: user?.roleName || fallbackRole,
+            branchId: user?.branchId || null,
+            organizationId: user?.organizationId || null,
+        }
+    } catch (caughtError) {
+        console.error("Failed to fetch user context", caughtError)
+        return { role: fallbackRole, branchId: null, organizationId: null }
+    }
+}
+
+function addSummarySearchCondition(conditions: any[], search: string | null) {
+    const normalized = search?.trim() || ""
+    if (!normalized) return null
+    if (normalized.length > 100) return "Search query must be at most 100 characters"
+    const escaped = normalized.replace(/[\\%_]/g, String.raw`\$&`)
+    const pattern = `%${escaped}%`
+    conditions.push(or(
+        ilike(orders.tid, pattern),
+        sql`CAST(${orders.createdByUserId} AS text) ILIKE ${pattern}`,
+        sql`EXISTS (
+            SELECT 1 FROM ${users} AS report_users
+            WHERE report_users.id = ${orders.createdByUserId}
+            AND (report_users.full_name ILIKE ${pattern} OR report_users.employee_id ILIKE ${pattern})
+        )`,
+    ))
+    return null
+}
+
+function addSummaryStatusCondition(conditions: any[], status: string | null) {
+    if (!status || status.toLowerCase() === "all") return
+    conditions.push(status.toUpperCase() === "REJECTED"
+        ? sql`UPPER(${orders.status}) IN ('REJECTED', 'CANCELLED')`
+        : eq(sql`UPPER(${orders.status})`, status.toUpperCase()))
+}
+
+function addSelectedSummaryScope(conditions: any[], context: any) {
+    const scopedOrganizationIds = context.organizationIds
+    if (scopedOrganizationIds.length > 0) conditions.push(inArray(orders.organizationId, scopedOrganizationIds))
+    if (context.branchIds.length > 0) conditions.push(inArray(orders.branchId, context.branchIds))
+    else if (context.branchId && !["all", "null"].includes(context.branchId)) conditions.push(eq(orders.branchId, Number(context.branchId)))
+    if (context.groupIds.length > 0) conditions.push(inArray(branches.groupId, context.groupIds))
+    else if (context.groupId && !["all", "null"].includes(context.groupId)) conditions.push(eq(branches.groupId, Number(context.groupId)))
+}
+
+function addSummaryScopeConditions(conditions: any[], context: any) {
+    if (context.role === "SUPER_ADMIN") {
+        addSelectedSummaryScope(conditions, context)
+        return null
+    }
+    if (context.role === "HEAD_OFFICE") {
+        if (context.organizationIds.length > 0) addSelectedSummaryScope(conditions, context)
+        return null
+    }
+    if (["BRANCH_ADMIN", "BRANCH_MANAGER"].includes(context.role)) {
+        if (!context.currentBranchId) return "Branch context missing"
+        conditions.push(eq(orders.branchId, context.currentBranchId))
+        return null
+    }
+    return "Access denied"
+}
+
+function addSummaryDateConditions(conditions: any[], context: any) {
+    if (context.months.length > 0) {
+        conditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(context.months, sql.raw(", "))})`)
+    }
+    if (context.years.length > 0) {
+        conditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(context.years, sql.raw(", "))})`)
+    }
+    if (context.months.length > 0 || context.years.length > 0) return
+    const start = context.startDate ? parseStartDateParam(context.startDate) : null
+    const end = context.endDate ? parseEndDateParam(context.endDate) : null
+    if (start) conditions.push(gte(orders.createdAt, start))
+    if (end) conditions.push(lte(orders.createdAt, end))
+}
+
+function resolveSummaryGroupIds(groupIdsRaw: string | null, groupId: string | null) {
+    if (groupIdsRaw) return parseNumberList(groupIdsRaw)
+    return groupId && groupId !== "all" ? [Number(groupId)] : []
+}
+
+function buildSummaryResponse(pricesHidden: boolean, payload: any) {
+    return NextResponse.json(pricesHidden ? redactAnalyticsPrices({ ...payload, pricesHidden }) : { ...payload, pricesHidden })
+}
+
+function buildComparisonConditions(baseConditions: any[], context: any) {
+    const conditions = baseConditions.filter((condition) => {
+        const serialized = stringifyPrimitive(condition)
+        return !serialized.includes("createdAt") && !serialized.includes("created_at")
+            && !serialized.includes("EXTRACT(MONTH") && !serialized.includes("EXTRACT(YEAR")
+    })
+    addSummaryDateConditions(conditions, {
+        months: context.months,
+        years: context.years,
+        startDate: context.explicitStart,
+        endDate: context.explicitEnd,
+    })
+    if (context.months.length > 0 || context.years.length > 0 || (context.explicitStart && context.explicitEnd)) return conditions
+    if (context.primaryStart && context.primaryEnd && context.primaryMonths.length === 0 && context.primaryYears.length === 0) {
+        const start = parseStartDateParam(context.primaryStart) || new Date(context.primaryStart)
+        const end = parseEndDateParam(context.primaryEnd) || new Date(context.primaryEnd)
+        const duration = end.getTime() - start.getTime()
+        conditions.push(gte(orders.createdAt, new Date(start.getTime() - duration - 1)), lte(orders.createdAt, new Date(start.getTime() - 1)))
+    }
+    return conditions
+}
+
+async function loadSummaryComparison(baseConditions: any[], context: any) {
+    if (!context.enabled) return null
+    const whereClause = and(...buildComparisonConditions(baseConditions, context))
+    const [summaryRows, itemRows] = await Promise.all([
+        db.select({
+            totalSales: metricExpressions.revenue,
+            orderCount: metricExpressions.orderVolume,
+            refundedCount: sql<number>`COALESCE(COUNT(CASE WHEN UPPER(${orders.status}) = 'REFUNDED' THEN 1 END), 0)`.mapWith(Number),
+            rejectedCount: sql<number>`COALESCE(COUNT(CASE WHEN UPPER(${orders.status}) IN ('REJECTED', 'CANCELLED') THEN 1 END), 0)`.mapWith(Number),
+            approvedCount: sql<number>`COALESCE(COUNT(CASE WHEN UPPER(${orders.status}) = 'APPROVED' THEN 1 END), 0)`.mapWith(Number),
+        }).from(orders).leftJoin(branches, eq(orders.branchId, branches.id)).where(whereClause),
+        db.select({ totalItemsSold: sum(orderItems.quantity) }).from(orderItems)
+            .innerJoin(orders, eq(orderItems.orderId, orders.id)).leftJoin(branches, eq(orders.branchId, branches.id)).where(whereClause),
+    ])
+    return {
+        totalSales: summaryRows[0]?.totalSales || 0,
+        totalOrders: summaryRows[0]?.orderCount || 0,
+        refundedCount: summaryRows[0]?.refundedCount || 0,
+        rejectedCount: summaryRows[0]?.rejectedCount || 0,
+        approvedCount: summaryRows[0]?.approvedCount || 0,
+        totalItemsSold: Number(itemRows[0]?.totalItemsSold) || 0,
+    }
+}
+
+async function loadSummaryYears(whereClause: any) {
+    const rows = await db.select({ year: sql<number>`EXTRACT(YEAR FROM ${orders.createdAt})::int` })
+        .from(orders).leftJoin(branches, eq(orders.branchId, branches.id)).where(whereClause)
+        .groupBy(sql`EXTRACT(YEAR FROM ${orders.createdAt})`).orderBy(desc(sql`EXTRACT(YEAR FROM ${orders.createdAt})`))
+    return rows.map(({ year }) => year)
+}
+
 export async function GET(req: NextRequest) {
     const session = await getServerSession(authOptions)
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
     const userId = (session.user as any).id
 
-    // Fetch user context
-    let roleName = (session.user as any).role
-    let currentUserBranchId = null
-    let currentUserOrgId = null
-
-    try {
-        const currentUserData = await db.select({
-            branchId: users.branchId,
-            organizationId: users.organizationId,
-            roleName: roles.name
-        })
-            .from(users)
-            .leftJoin(roles, eq(users.roleId, roles.id))
-            .where(eq(users.id, userId))
-            .limit(1)
-
-        if (currentUserData.length > 0) {
-            roleName = currentUserData[0].roleName || roleName
-            currentUserBranchId = currentUserData[0].branchId
-            currentUserOrgId = currentUserData[0].organizationId
-        }
-    } catch (e) {
-        console.error("Failed to fetch user context", e)
-    }
+    const userContext = await loadSummaryUserContext(userId, (session.user as any).role)
+    const roleName = userContext.role
+    const currentUserBranchId = userContext.branchId
+    const currentUserOrgId = userContext.organizationId
 
     const url = new URL(req.url)
     const startDate = url.searchParams.get("startDate")
@@ -60,16 +189,8 @@ export async function GET(req: NextRequest) {
     const compareEndDateParam = url.searchParams.get("compareEndDate")
 
     // Parsing branchIds
-    const parsedBranchIds = branchIdsRaw
-        ? branchIdsRaw.split(",").map(Number).filter(id => !Number.isNaN(id) && id > 0)
-        : []
-
-    const parsedGroupIds = (() => {
-      if (groupIdsRaw) {
-        return groupIdsRaw.split(",").map(Number).filter(id => !Number.isNaN(id) && id > 0)
-      }
-      return (groupId && groupId !== "all" ? [Number(groupId)] : [])
-    })()
+    const parsedBranchIds = parseNumberList(branchIdsRaw)
+    const parsedGroupIds = resolveSummaryGroupIds(groupIdsRaw, groupId)
 
     const page = Math.min(Math.max(Math.trunc(Number(url.searchParams.get("page"))) || 1, 1), 10_000)
     const requestedLimit = Math.trunc(Number(url.searchParams.get("limit"))) || 50
@@ -86,45 +207,18 @@ export async function GET(req: NextRequest) {
         organizationId,
     })
 
-    const parsedMonths = monthsRaw ? monthsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n >= 1 && n <= 12) : []
-    const parsedYears = yearsRaw ? yearsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n > 2000) : []
-    const parsedCompMonths = compareMonthsRaw ? compareMonthsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n >= 1 && n <= 12) : []
-    const parsedCompYears = compareYearsRaw ? compareYearsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n > 2000) : []
+    const parsedMonths = parseNumberList(monthsRaw, (number) => number >= 1 && number <= 12)
+    const parsedYears = parseNumberList(yearsRaw, (number) => number > 2000)
+    const parsedCompMonths = parseNumberList(compareMonthsRaw, (number) => number >= 1 && number <= 12)
+    const parsedCompYears = parseNumberList(compareYearsRaw, (number) => number > 2000)
 
-    const conditions = []
+    const conditions: any[] = []
 
-    if (searchParam) {
-        const normalizedQuery = searchParam.trim()
-        if (normalizedQuery.length > 100) {
-            return NextResponse.json({ error: "Search query must be at most 100 characters" }, { status: 400 })
-        }
-        if (normalizedQuery) {
-            const escapedQuery = normalizedQuery.replace(/[\\%_]/g, String.raw`\$&`)
-            const searchPattern = `%${escapedQuery}%`
-            conditions.push(or(
-                ilike(orders.tid, searchPattern),
-                sql`CAST(${orders.createdByUserId} AS text) ILIKE ${searchPattern}`,
-                sql`EXISTS (
-                    SELECT 1
-                    FROM ${users} AS report_users
-                    WHERE report_users.id = ${orders.createdByUserId}
-                    AND (
-                        report_users.full_name ILIKE ${searchPattern}
-                        OR report_users.employee_id ILIKE ${searchPattern}
-                    )
-                )`,
-            ))
-        }
-    }
+    const searchError = addSummarySearchCondition(conditions, searchParam)
+    if (searchError) return NextResponse.json({ error: searchError }, { status: 400 })
 
     // Status filter
-    if (statusParam && statusParam.toLowerCase() !== "all") {
-        if (statusParam.toUpperCase() === "REJECTED") {
-            conditions.push(sql`UPPER(${orders.status}) IN ('REJECTED', 'CANCELLED')`)
-        } else {
-            conditions.push(eq(sql`UPPER(${orders.status})`, statusParam.toUpperCase()))
-        }
-    }
+    addSummaryStatusCondition(conditions, statusParam)
 
     // Security: RBAC
     const normalizedRole = (roleName || "").toUpperCase().replace(/\s+/g, '_')
@@ -134,61 +228,22 @@ export async function GET(req: NextRequest) {
         requestedOrganizationIds,
     })
     const pricesHidden = await shouldHidePricesForRole(normalizedRole, currentUserOrgId)
-    const respond = (payload: any) => NextResponse.json(pricesHidden ? redactAnalyticsPrices({ ...payload, pricesHidden }) : { ...payload, pricesHidden })
+    const respond = (payload: any) => buildSummaryResponse(pricesHidden, payload)
     console.log(`[Summary API] User: ${userId}, Role: ${normalizedRole}, Params: Branch=${branchId}, Org=${organizationId}, Group=${groupId}`)
 
-    if (normalizedRole === "SUPER_ADMIN") {
-        if (scopedOrganizationIds.length > 0) conditions.push(inArray(orders.organizationId, scopedOrganizationIds))
-        if (parsedBranchIds.length > 0) {
-            conditions.push(inArray(orders.branchId, parsedBranchIds))
-        } else if (branchId && branchId !== "all" && branchId !== "null") {
-            conditions.push(eq(orders.branchId, Number(branchId)))
-        }
-        if (parsedGroupIds.length > 0) {
-            conditions.push(inArray(branches.groupId, parsedGroupIds))
-        } else if (groupId && groupId !== "all" && groupId !== "null") {
-            conditions.push(eq(branches.groupId, Number(groupId)))
-        }
-    } else if (normalizedRole === "HEAD_OFFICE") {
-        if (scopedOrganizationIds.length > 0) {
-            conditions.push(inArray(orders.organizationId, scopedOrganizationIds))
-            if (parsedBranchIds.length > 0) {
-                conditions.push(inArray(orders.branchId, parsedBranchIds))
-            } else if (branchId && branchId !== "all" && branchId !== "null") {
-                conditions.push(eq(orders.branchId, Number(branchId)))
-            }
-            if (parsedGroupIds.length > 0) {
-                conditions.push(inArray(branches.groupId, parsedGroupIds))
-            } else if (groupId && groupId !== "all" && groupId !== "null") {
-                conditions.push(eq(branches.groupId, Number(groupId)))
-            }
-        }
-    } else if (normalizedRole === "BRANCH_ADMIN" || normalizedRole === "BRANCH_MANAGER") {
-        if (!currentUserBranchId) {
-            return NextResponse.json({ error: "Branch context missing" }, { status: 403 })
-        }
-        conditions.push(eq(orders.branchId, currentUserBranchId))
-    } else {
-        return NextResponse.json({ error: "Access denied" }, { status: 403 })
-    }
+    const scopeError = addSummaryScopeConditions(conditions, {
+        role: normalizedRole,
+        organizationIds: scopedOrganizationIds,
+        branchIds: parsedBranchIds,
+        branchId,
+        groupIds: parsedGroupIds,
+        groupId,
+        currentBranchId: currentUserBranchId,
+    })
+    if (scopeError) return NextResponse.json({ error: scopeError }, { status: 403 })
 
     // Date Filtering - Inclusive
-    if (startDate && !monthsRaw && !yearsRaw) {
-        const start = parseStartDateParam(startDate)
-        if (start) conditions.push(gte(orders.createdAt, start))
-    }
-    if (endDate && !monthsRaw && !yearsRaw) {
-        const end = parseEndDateParam(endDate)
-        if (end) conditions.push(lte(orders.createdAt, end))
-    }
-
-    // Advanced Multi-Select Date Filtering (Months / Years arrays)
-    if (parsedMonths.length > 0) {
-        conditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedMonths, sql.raw(", "))})`)
-    }
-    if (parsedYears.length > 0) {
-        conditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedYears, sql.raw(", "))})`)
-    }
+    addSummaryDateConditions(conditions, { months: parsedMonths, years: parsedYears, startDate, endDate })
 
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined
 
@@ -254,91 +309,19 @@ export async function GET(req: NextRequest) {
         })
     }
 
-    if (url.searchParams.get("allTime") === "true") {
-        const distinctYears = await db
-            .select({ year: sql<number>`EXTRACT(YEAR FROM ${orders.createdAt})::int` })
-            .from(orders)
-            .leftJoin(branches, eq(orders.branchId, branches.id))
-            .where(whereClause)
-            .groupBy(sql`EXTRACT(YEAR FROM ${orders.createdAt})`)
-            .orderBy(desc(sql`EXTRACT(YEAR FROM ${orders.createdAt})`))
+    if (url.searchParams.get("allTime") === "true") return respond({ years: await loadSummaryYears(whereClause) })
 
-        return respond({ years: distinctYears.map(({ year }) => year) })
-    }
-
-    // COMPARISON LOGIC
-    let comparisonSummary = null
-    const hasCompareArrays = parsedCompMonths.length > 0 || parsedCompYears.length > 0
-    const hasPrimaryDates = startDate && endDate
-    
-    if (compare && (hasPrimaryDates || compareStartDateParam || hasCompareArrays)) {
-        // Correctly filter out createdAt conditions to avoid overlapping periods
-        const compConditions = conditions.filter(c => {
-            const str = stringifyPrimitive(c);
-            return !str.includes("createdAt") && !str.includes("created_at") && !str.includes("EXTRACT(MONTH") && !str.includes("EXTRACT(YEAR");
-        })
-
-        if (parsedCompMonths.length > 0) {
-            compConditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedCompMonths, sql.raw(", "))})`)
-        }
-        if (parsedCompYears.length > 0) {
-            compConditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedCompYears, sql.raw(", "))})`)
-        }
-
-        // Apply fallback standard dates if NO custom arrays were provided for Period B
-        if (!hasCompareArrays) {
-            let prevStart: Date
-            let prevEnd: Date
-            if (compareStartDateParam && compareEndDateParam) {
-                prevStart = parseStartDateParam(compareStartDateParam) || new Date(compareStartDateParam)
-                prevEnd = parseEndDateParam(compareEndDateParam) || new Date(compareEndDateParam)
-            } else if (startDate && endDate && parsedMonths.length === 0 && parsedYears.length === 0) {
-                const start = parseStartDateParam(startDate) || new Date(startDate)
-                const end = parseEndDateParam(endDate) || new Date(endDate)
-                const duration = end.getTime() - start.getTime()
-                prevStart = new Date(start.getTime() - duration - 1)
-                prevEnd = new Date(start.getTime() - 1)
-            } else {
-                // If it's a primary array query without fallback dates, we don't apply any date boundaries implicitly
-                prevStart = new Date(0)
-                prevEnd = new Date(0)
-            }
-
-            if (prevStart.getTime() !== 0) {
-                compConditions.push(gte(orders.createdAt, prevStart), lte(orders.createdAt, prevEnd))
-            }
-        }
-
-        const compWhere = compConditions.length > 0 ? and(...compConditions) : undefined
-
-        const compSummaryResult = await db.select({
-            totalSales: metricExpressions.revenue,
-            orderCount: metricExpressions.orderVolume,
-            refundedCount: sql<number>`COALESCE(COUNT(CASE WHEN UPPER(${orders.status}) = 'REFUNDED' THEN 1 END), 0)`.mapWith(Number),
-            rejectedCount: sql<number>`COALESCE(COUNT(CASE WHEN UPPER(${orders.status}) IN ('REJECTED', 'CANCELLED') THEN 1 END), 0)`.mapWith(Number),
-            approvedCount: sql<number>`COALESCE(COUNT(CASE WHEN UPPER(${orders.status}) = 'APPROVED' THEN 1 END), 0)`.mapWith(Number),
-        })
-            .from(orders)
-            .leftJoin(branches, eq(orders.branchId, branches.id))
-            .where(compWhere)
-
-        const compItemsResult = await db.select({
-            totalItemsSold: sum(orderItems.quantity)
-        })
-            .from(orderItems)
-            .innerJoin(orders, eq(orderItems.orderId, orders.id))
-            .leftJoin(branches, eq(orders.branchId, branches.id))
-            .where(compWhere)
-
-        comparisonSummary = {
-            totalSales: compSummaryResult[0]?.totalSales || 0,
-            totalOrders: compSummaryResult[0]?.orderCount || 0,
-            refundedCount: compSummaryResult[0]?.refundedCount || 0,
-            rejectedCount: compSummaryResult[0]?.rejectedCount || 0,
-            approvedCount: compSummaryResult[0]?.approvedCount || 0,
-            totalItemsSold: Number(compItemsResult[0]?.totalItemsSold) || 0
-        }
-    }
+    const comparisonSummary = await loadSummaryComparison(conditions, {
+        enabled: compare && Boolean(startDate || compareStartDateParam || parsedCompMonths.length > 0 || parsedCompYears.length > 0),
+        months: parsedCompMonths,
+        years: parsedCompYears,
+        explicitStart: compareStartDateParam,
+        explicitEnd: compareEndDateParam,
+        primaryStart: startDate,
+        primaryEnd: endDate,
+        primaryMonths: parsedMonths,
+        primaryYears: parsedYears,
+    })
     console.log(`[Summary API] Final where clause established. Filtering logic active.`)
 
     const isFilteredByStatus = statusParam && statusParam.toLowerCase() !== "all"

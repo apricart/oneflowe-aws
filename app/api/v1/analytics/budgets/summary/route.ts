@@ -20,6 +20,175 @@ const parseNumberList = (value: string | null) =>
         ? value.split(",").map(Number).filter(id => !Number.isNaN(id) && id > 0)
         : []
 
+function resolveAllowedBudgetOrganization(userRole: string, userOrgId: number | null, requested: string | null) {
+    return userRole === "SUPER_ADMIN" && requested ? Number(requested) : userOrgId
+}
+
+async function resolveBudgetBranchIds(context: any) {
+    let branchIds = context.branchIdsParam
+        ? parseNumberList(context.branchIdsParam)
+        : context.branchIdParam && context.branchIdParam !== "all"
+            ? [Number(context.branchIdParam)]
+            : []
+    if (branchIds.length === 0 && ["BRANCH_ADMIN", "BRANCH_MANAGER", "ORDER_PORTAL"].includes(context.userRole)) {
+        branchIds = [context.userBranchId]
+    } else if (branchIds.length === 0 && context.allowedOrgId) {
+        const rows = await db.select({ id: branches.id }).from(branches).where(eq(branches.organizationId, context.allowedOrgId))
+        branchIds = rows.map((branch) => branch.id)
+    } else if (branchIds.length === 0 && context.userRole === "SUPER_ADMIN") {
+        const rows = await db.select({ id: branches.id }).from(branches)
+        branchIds = rows.map((branch) => branch.id)
+    }
+    if (context.groupIds.length === 0) return branchIds
+    const conditions = [
+        inArray(branches.groupId, context.groupIds),
+        branchIds.length > 0 ? inArray(branches.id, branchIds) : undefined,
+        context.allowedOrgId ? eq(branches.organizationId, context.allowedOrgId) : undefined,
+    ].filter(Boolean) as any
+    const scoped = await db.select({ id: branches.id }).from(branches).where(and(...conditions))
+    return scoped.map((branch) => branch.id)
+}
+
+async function resolveBudgetStartDate(context: any) {
+    if (context.startDateParam) return parseStartDateParam(context.startDateParam) || new Date(context.startDateParam)
+    const query = db.select({ period: budgets.period }).from(budgets)
+    const firstBudget = context.preset === "all"
+        ? await query.where(inArray(budgets.branchId, context.branchIds)).orderBy(asc(budgets.period)).limit(1)
+        : await query.where(context.allowedOrgId
+            ? eq(budgets.organizationId, context.allowedOrgId)
+            : isNotNull(budgets.organizationId)).orderBy(asc(budgets.period)).limit(1)
+    if (firstBudget.length > 0) return new Date(`${firstBudget[0].period}-01`)
+    const start = new Date()
+    start.setDate(1)
+    return start
+}
+
+function buildRecordLookup<T extends { branchId: number; period: string }>(records: T[]) {
+    const lookup: Record<number, Record<string, T>> = {}
+    records.forEach((record) => {
+        lookup[record.branchId] ??= {}
+        lookup[record.branchId][record.period] = record
+    })
+    return lookup
+}
+
+function getBudgetSpending(record: any, orderSpending: any, useOrderScopedSpending: boolean) {
+    if (useOrderScopedSpending) {
+        return { spent: orderSpending?.spentCents || 0, held: orderSpending?.heldCents || 0 }
+    }
+    return { spent: record?.amountSpentCents || 0, held: record?.amountHeldCents || 0 }
+}
+
+function calculateBudgetTotals(branchList: any[], periods: string[], budgetLookup: any, spendingLookup: any = {}, scoped = false) {
+    const totals = { allocated: 0, spent: 0, held: 0, credited: 0 }
+    branchList.forEach((branch) => periods.forEach((period) => {
+        const record = budgetLookup[branch.id]?.[period]
+        const spending = getBudgetSpending(record, spendingLookup[branch.id]?.[period], scoped)
+        totals.allocated += record?.amountAllocatedCents || 0
+        totals.spent += spending.spent
+        totals.held += spending.held
+        totals.credited += record?.amountCreditedCents || 0
+    }))
+    return totals
+}
+
+function formatBudgetChart(chartDataMap: Record<string, any>, granularity: string) {
+    const data = Object.values(chartDataMap).sort((left, right) => left.period.localeCompare(right.period))
+    if (granularity !== "yearly") {
+        return data.map((period) => ({
+            date: period.period,
+            branches: Object.entries(period.branches).map(([branchId, values]: [string, any]) => ({ branchId, ...values })),
+        }))
+    }
+    const yearly: Record<string, any> = {}
+    data.forEach((period) => {
+        const year = period.period.slice(0, 4)
+        yearly[year] ??= { date: year, branches: {} }
+        Object.entries(period.branches).forEach(([branchId, values]: [string, any]) => {
+            const aggregate = yearly[year].branches[branchId]
+            yearly[year].branches[branchId] = aggregate
+                ? {
+                    ...aggregate,
+                    baseline: aggregate.baseline + values.baseline,
+                    addon: aggregate.addon + values.addon,
+                    spent: aggregate.spent + values.spent,
+                }
+                : { ...values }
+        })
+    })
+    return Object.values(yearly).map((year: any) => ({
+        date: year.date,
+        branches: Object.entries(year.branches).map(([branchId, values]: [string, any]) => ({ branchId, ...values })),
+    }))
+}
+
+function buildBudgetChart(branchList: any[], periods: string[], budgetLookup: any, spendingLookup: any, scoped: boolean, granularity: string) {
+    const chart: Record<string, any> = Object.fromEntries(periods.map((period) => [period, { period, branches: {} }]))
+    branchList.forEach((branch) => periods.forEach((period) => {
+        const record = budgetLookup[branch.id]?.[period]
+        const spending = getBudgetSpending(record, spendingLookup[branch.id]?.[period], scoped)
+        chart[period].branches[branch.id] = {
+            branchName: branch.name,
+            baseline: record?.amountAllocatedCents || 0,
+            addon: record?.amountCreditedCents || 0,
+            spent: spending.spent + spending.held,
+        }
+    }))
+    return formatBudgetChart(chart, granularity)
+}
+
+function buildBranchBreakdown(branchList: any[], periods: string[], budgetLookup: any, spendingLookup: any, scoped: boolean) {
+    return branchList.map((branch) => {
+        const totals = calculateBudgetTotals([branch], periods, budgetLookup, spendingLookup, scoped)
+        return {
+            branchId: branch.id,
+            branchName: branch.name,
+            allocated: totals.allocated,
+            spent: totals.spent + totals.held,
+            held: totals.held,
+            credited: totals.credited,
+            remaining: totals.allocated + totals.credited - totals.spent - totals.held,
+            baselineAmount: totals.allocated,
+        }
+    })
+}
+
+async function loadActiveBudgetBranches(branchIds: number[], allowedOrgId: number | null) {
+    const selection = {
+        id: branches.id,
+        name: branches.name,
+        baselineBudgetCents: branches.baselineBudgetCents,
+        organizationId: branches.organizationId,
+    }
+    if (branchIds.length > 0) {
+        return db.select(selection).from(branches).where(inArray(branches.id, branchIds))
+    }
+    if (allowedOrgId) {
+        return db.select(selection).from(branches).where(and(
+            eq(branches.organizationId, allowedOrgId),
+            eq(branches.status, "active"),
+        ))
+    }
+    return []
+}
+
+async function loadOrderScopedSpending(context: any) {
+    if (!context.enabled) return []
+    const conditions = [
+        inArray(orders.branchId, context.branchIds),
+        context.hasExplicitRange ? gte(orders.createdAt, context.startDate) : undefined,
+        context.hasExplicitRange ? lte(orders.createdAt, context.endDate) : undefined,
+        context.months.length > 0 ? sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(context.months, sql.raw(", "))})` : undefined,
+        context.years.length > 0 ? sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(context.years, sql.raw(", "))})` : undefined,
+    ].filter(Boolean) as any
+    return db.select({
+        branchId: orders.branchId,
+        period: sql<string>`TO_CHAR(${orders.createdAt}, 'YYYY-MM')`,
+        spentCents: sql<number>`COALESCE(SUM(CASE WHEN UPPER(${orders.status}) IN ('FULFILLED', 'PARTIAL', 'PARTIALLY_FULFILLED') THEN GREATEST(0, ${orders.totalCents} - COALESCE(${orders.refundAmountCents}, 0)) ELSE 0 END), 0)`.mapWith(Number),
+        heldCents: sql<number>`COALESCE(SUM(CASE WHEN UPPER(${orders.status}) IN ('PENDING', 'APPROVED') THEN GREATEST(0, ${orders.totalCents} - COALESCE(${orders.refundAmountCents}, 0)) ELSE 0 END), 0)`.mapWith(Number),
+    }).from(orders).where(and(...conditions)).groupBy(orders.branchId, sql`TO_CHAR(${orders.createdAt}, 'YYYY-MM')`)
+}
+
 export async function GET(req: NextRequest) {
     try {
         const session = await getServerSession(authOptions)
@@ -42,92 +211,24 @@ export async function GET(req: NextRequest) {
         const granularity = url.searchParams.get("granularity") || "monthly" // daily, monthly, yearly
 
         // 1. RBAC Check and Branch/Org Resolution
-        let allowedOrgId = userOrgId
-        if (userRole === "SUPER_ADMIN" && organizationIdParam) {
-            allowedOrgId = Number(organizationIdParam)
-        }
+        const allowedOrgId = resolveAllowedBudgetOrganization(userRole, userOrgId, organizationIdParam)
         const pricesHidden = await shouldHidePricesForRole(userRole, allowedOrgId || userOrgId)
         const respond = (payload: any) => NextResponse.json(
             pricesHidden ? redactAnalyticsPrices({ ...payload, pricesHidden: true }) : payload
         )
 
-        let branchIds: number[] = []
-        if (branchIdsParam) {
-            branchIds = branchIdsParam.split(",").map(Number).filter(id => !Number.isNaN(id) && id > 0)
-        } else if (branchIdParam && branchIdParam !== "all") {
-            branchIds = [Number(branchIdParam)]
-        } else if (userRole === "BRANCH_ADMIN" || userRole === "BRANCH_MANAGER" || userRole === "ORDER_PORTAL") {
-            branchIds = [userBranchId]
-        } else if (allowedOrgId) {
-            // Fetch all branches for this org
-            const b = await db.select({ id: branches.id }).from(branches).where(eq(branches.organizationId, allowedOrgId))
-            branchIds = b.map(br => br.id)
-        } else if (userRole === "SUPER_ADMIN") {
-            // Global summary for Super Admin
-            const b = await db.select({ id: branches.id }).from(branches)
-            branchIds = b.map(br => br.id)
-        }
+        const branchIds = await resolveBudgetBranchIds({
+            branchIdsParam, branchIdParam, userRole, userBranchId, allowedOrgId, groupIds,
+        })
 
-        if (groupIds.length > 0) {
-            const groupBranchConditions = [
-                inArray(branches.groupId, groupIds),
-                branchIds.length > 0 ? inArray(branches.id, branchIds) : undefined,
-                allowedOrgId ? eq(branches.organizationId, allowedOrgId) : undefined
-            ].filter(Boolean) as any
-
-            const scopedBranches = await db
-                .select({ id: branches.id })
-                .from(branches)
-                .where(and(...groupBranchConditions))
-
-            branchIds = scopedBranches.map(branch => branch.id)
-
-            if (branchIds.length === 0) {
-                return respond(emptyBudgetSummary)
-            }
-        }
+        if (groupIds.length > 0 && branchIds.length === 0) return respond(emptyBudgetSummary)
 
         if (branchIds.length === 0) {
             return NextResponse.json({ error: "No branches selected" }, { status: 400 })
         }
 
         // 2. Date/Period parsing
-        let startDate: Date;
-        if (preset === "all") {
-            const firstBudget = await db.select({ period: budgets.period })
-                .from(budgets)
-                .where(inArray(budgets.branchId, branchIds))
-                .orderBy(asc(budgets.period))
-                .limit(1)
-
-            if (firstBudget.length > 0) {
-                startDate = new Date(firstBudget[0].period + "-01")
-            } else {
-                startDate = new Date()
-                startDate.setDate(1)
-            }
-        } else if (startDateParam) {
-            startDate = parseStartDateParam(startDateParam) || new Date(startDateParam)
-        } else {
-            // Default: "All Time" should start from the first budget record in the system
-            const firstBudget = await db.select({ period: budgets.period })
-                .from(budgets)
-                .where(
-                    allowedOrgId 
-                        ? eq(budgets.organizationId, allowedOrgId)
-                        : isNotNull(budgets.organizationId)
-                )
-                .orderBy(asc(budgets.period))
-                .limit(1)
-            
-            if (firstBudget.length > 0) {
-                // period is 'YYYY-MM'
-                startDate = new Date(firstBudget[0].period + "-01")
-            } else {
-                startDate = new Date()
-                startDate.setDate(1)
-            }
-        }
+        const startDate = await resolveBudgetStartDate({ startDateParam, preset, branchIds, allowedOrgId })
         const endDate = parseEndDateParam(endDateParam) || new Date()
 
         if (!startDateParam) startDate.setHours(0, 0, 0, 0)
@@ -145,34 +246,7 @@ export async function GET(req: NextRequest) {
         }
 
         // 3. Fetch All Relevant Branches with Baselines
-        let activeBranches: any[] = []
-        if (branchIds.length > 0) {
-            activeBranches = await db
-                .select({
-                    id: branches.id,
-                    name: branches.name,
-                    baselineBudgetCents: branches.baselineBudgetCents,
-                    organizationId: branches.organizationId
-                })
-                .from(branches)
-                .where(inArray(branches.id, branchIds))
-        } else if (allowedOrgId) {
-            // Default to all active branches for the organization context
-            activeBranches = await db
-                .select({
-                    id: branches.id,
-                    name: branches.name,
-                    baselineBudgetCents: branches.baselineBudgetCents,
-                    organizationId: branches.organizationId
-                })
-                .from(branches)
-                .where(
-                    and(
-                        eq(branches.organizationId, allowedOrgId),
-                        eq(branches.status, 'active')
-                    )
-                )
-        }
+        const activeBranches = await loadActiveBudgetBranches(branchIds, allowedOrgId)
 
         if (activeBranches.length === 0) {
             return respond(emptyBudgetSummary)
@@ -201,77 +275,29 @@ export async function GET(req: NextRequest) {
             )
 
         // Create a lookup for budget records: branchId -> period -> record
-        const budgetLookup: Record<number, Record<string, any>> = {}
-        budgetRecords.forEach(r => {
-            if (!budgetLookup[r.branchId]) budgetLookup[r.branchId] = {}
-            budgetLookup[r.branchId][r.period] = r
-        })
+        const budgetLookup = buildRecordLookup(budgetRecords)
 
         const useOrderScopedSpending = preset !== "all" && Boolean(
             startDateParam || endDateParam || months.length > 0 || years.length > 0
         )
-        const orderSpendingConditions = [
-            inArray(orders.branchId, actualBranchIds),
-            startDateParam || endDateParam ? gte(orders.createdAt, startDate) : undefined,
-            startDateParam || endDateParam ? lte(orders.createdAt, endDate) : undefined,
-            months.length > 0 ? sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(months, sql.raw(", "))})` : undefined,
-            years.length > 0 ? sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(years, sql.raw(", "))})` : undefined,
-        ].filter(Boolean)
-
-        const orderScopedSpendingRows = useOrderScopedSpending
-            ? await db
-                .select({
-                    branchId: orders.branchId,
-                    period: sql<string>`TO_CHAR(${orders.createdAt}, 'YYYY-MM')`,
-                    spentCents: sql<number>`COALESCE(SUM(CASE WHEN UPPER(${orders.status}) IN ('FULFILLED', 'PARTIAL', 'PARTIALLY_FULFILLED') THEN GREATEST(0, ${orders.totalCents} - COALESCE(${orders.refundAmountCents}, 0)) ELSE 0 END), 0)`.mapWith(Number),
-                    heldCents: sql<number>`COALESCE(SUM(CASE WHEN UPPER(${orders.status}) IN ('PENDING', 'APPROVED') THEN GREATEST(0, ${orders.totalCents} - COALESCE(${orders.refundAmountCents}, 0)) ELSE 0 END), 0)`.mapWith(Number),
-                })
-                .from(orders)
-                .where(and(...orderSpendingConditions))
-                .groupBy(orders.branchId, sql`TO_CHAR(${orders.createdAt}, 'YYYY-MM')`)
-            : []
-
-        const orderSpendingLookup: Record<number, Record<string, typeof orderScopedSpendingRows[number]>> = {}
-        orderScopedSpendingRows.forEach(row => {
-            if (!orderSpendingLookup[row.branchId]) orderSpendingLookup[row.branchId] = {}
-            orderSpendingLookup[row.branchId][row.period] = row
+        const orderScopedSpendingRows = await loadOrderScopedSpending({
+            enabled: useOrderScopedSpending,
+            branchIds: actualBranchIds,
+            hasExplicitRange: Boolean(startDateParam || endDateParam),
+            startDate,
+            endDate,
+            months,
+            years,
         })
 
-        let totalAllocated = 0
-        let totalSpent = 0
-        let totalHeld = 0
-        let totalCredited = 0
-
-        // Calculate period totals from actual budget rows only. Missing months should not
-        // invent budget from the branch baseline in this report.
-        activeBranches.forEach(branch => {
-            periodList.forEach(period => {
-                const record = budgetLookup[branch.id]?.[period]
-                const orderSpending = orderSpendingLookup[branch.id]?.[period]
-                
-                totalSpent += (() => {
-                  if (useOrderScopedSpending) {
-                    return (orderSpending?.spentCents || 0)
-                  }
-                  if (record) {
-                    return (record.amountSpentCents || 0)
-                  }
-                  return 0
-                })()
-                totalHeld += (() => {
-                  if (useOrderScopedSpending) {
-                    return (orderSpending?.heldCents || 0)
-                  }
-                  if (record) {
-                    return (record.amountHeldCents || 0)
-                  }
-                  return 0
-                })()
-
-                totalAllocated += record?.amountAllocatedCents || 0
-                totalCredited += record?.amountCreditedCents || 0
-            })
-        })
+        const orderSpendingLookup = buildRecordLookup(orderScopedSpendingRows)
+        const currentTotals = calculateBudgetTotals(activeBranches, periodList, budgetLookup, orderSpendingLookup, useOrderScopedSpending)
+        const {
+            allocated: totalAllocated,
+            spent: totalSpent,
+            held: totalHeld,
+            credited: totalCredited,
+        } = currentTotals
 
         const totalRemaining = (totalAllocated + totalCredited) - (totalSpent + totalHeld)
 
@@ -316,27 +342,14 @@ export async function GET(req: NextRequest) {
             )
         )
 
-        let prevTotalAllocated = 0
-        let prevTotalSpent = 0
-        let prevTotalHeld = 0
-        let prevTotalCredited = 0
-
-        const prevBudgetLookup: Record<number, Record<string, typeof prevBudgetRecords[number]>> = {}
-        prevBudgetRecords.forEach(record => {
-            if (!prevBudgetLookup[record.branchId]) prevBudgetLookup[record.branchId] = {}
-            prevBudgetLookup[record.branchId][record.period] = record
-        })
-
-        activeBranches.forEach(branch => {
-            prevPeriodList.forEach(period => {
-                const record = prevBudgetLookup[branch.id]?.[period]
-
-                prevTotalAllocated += record?.amountAllocatedCents || 0
-                prevTotalSpent += record?.amountSpentCents || 0
-                prevTotalHeld += record?.amountHeldCents || 0
-                prevTotalCredited += record?.amountCreditedCents || 0
-            })
-        })
+        const prevBudgetLookup = buildRecordLookup(prevBudgetRecords)
+        const previousTotals = calculateBudgetTotals(activeBranches, prevPeriodList, prevBudgetLookup)
+        const {
+            allocated: prevTotalAllocated,
+            spent: prevTotalSpent,
+            held: prevTotalHeld,
+            credited: prevTotalCredited,
+        } = previousTotals
 
         const prevTotalRemaining = (prevTotalAllocated + prevTotalCredited) - (prevTotalSpent + prevTotalHeld)
 
@@ -348,127 +361,12 @@ export async function GET(req: NextRequest) {
         const spentGrowth = prevTotalExpenditure > 0 ? ((currentTotalExpenditure - prevTotalExpenditure) / prevTotalExpenditure) * 100 : 0
         const allocationGrowth = prevTotalAllocated > 0 ? ((totalAllocated - prevTotalAllocated) / prevTotalAllocated) * 100 : 0
 
-        // 6. Unified Chart Data (Allocation + Spending)
-        const chartDataMap: Record<string, any> = {}
-
-        // Initialize map with all periods in range
-        periodList.forEach(p => {
-            chartDataMap[p] = { period: p, branches: {} }
-        })
-
-        // Add allocation data (considering ALL branches for ALL periods)
-        activeBranches.forEach(branch => {
-            periodList.forEach(period => {
-                if (!chartDataMap[period]) return
-                
-                const record = budgetLookup[branch.id]?.[period]
-                const baseline = record?.amountAllocatedCents || 0
-                const addon = record?.amountCreditedCents || 0
-                const orderSpending = orderSpendingLookup[branch.id]?.[period]
-                const spent = (() => {
-                  if (useOrderScopedSpending) {
-                    return (orderSpending?.spentCents || 0)
-                  }
-                  if (record) {
-                    return (record.amountSpentCents || 0)
-                  }
-                  return 0
-                })()
-                const held = (() => {
-                  if (useOrderScopedSpending) {
-                    return (orderSpending?.heldCents || 0)
-                  }
-                  if (record) {
-                    return (record.amountHeldCents || 0)
-                  }
-                  return 0
-                })()
-                
-                if (!chartDataMap[period].branches[branch.id]) {
-                    chartDataMap[period].branches[branch.id] = { branchName: branch.name, baseline: 0, addon: 0, spent: 0 }
-                }
-                chartDataMap[period].branches[branch.id].baseline += baseline
-                chartDataMap[period].branches[branch.id].addon += addon
-                chartDataMap[period].branches[branch.id].spent += (spent + held)
-            })
-        })
-
-        // Spending data is now already populated from budget records in the previous loop
-
-        // Format for response based on granularity
-        let finalChartData = Object.values(chartDataMap).sort((a, b) => a.period.localeCompare(b.period))
-
-        if (granularity === "yearly") {
-            const yearlyMap: Record<string, any> = {}
-            finalChartData.forEach(d => {
-                const year = d.period.slice(0, 4)
-                if (!yearlyMap[year]) yearlyMap[year] = { date: year, branches: {} }
-                Object.entries(d.branches).forEach(([bid, bdata]: [string, any]) => {
-                    if (!yearlyMap[year].branches[bid]) {
-                        yearlyMap[year].branches[bid] = { ...bdata }
-                    } else {
-                        yearlyMap[year].branches[bid].baseline += bdata.baseline
-                        yearlyMap[year].branches[bid].addon += bdata.addon
-                        yearlyMap[year].branches[bid].spent += bdata.spent
-                    }
-                })
-            })
-            finalChartData = Object.values(yearlyMap).map(d => ({
-                date: d.date,
-                branches: Object.entries(d.branches).map(([id, data]: [string, any]) => ({ branchId: id, ...data }))
-            }))
-        } else {
-            finalChartData = finalChartData.map(d => ({
-                date: d.period,
-                branches: Object.entries(d.branches).map(([id, data]: [string, any]) => ({ branchId: id, ...data }))
-            }))
-        }
-
-        // 7. Branch Breakdown (Including all selected branches)
-        const branchBreakdown = activeBranches.map(branch => {
-            let allocated = 0
-            let spent = 0
-            let held = 0
-            let credited = 0
-
-            periodList.forEach(period => {
-                const record = budgetLookup[branch.id]?.[period]
-                const orderSpending = orderSpendingLookup[branch.id]?.[period]
-                
-                spent += (() => {
-                  if (useOrderScopedSpending) {
-                    return (orderSpending?.spentCents || 0)
-                  }
-                  if (record) {
-                    return (record.amountSpentCents || 0)
-                  }
-                  return 0
-                })()
-                held += (() => {
-                  if (useOrderScopedSpending) {
-                    return (orderSpending?.heldCents || 0)
-                  }
-                  if (record) {
-                    return (record.amountHeldCents || 0)
-                  }
-                  return 0
-                })()
-                allocated += record?.amountAllocatedCents || 0
-                credited += record?.amountCreditedCents || 0
-            })
-
-            return {
-                branchId: branch.id,
-                branchName: branch.name,
-                allocated,
-                spent: spent + held, // Treat all purchases as spent for reporting
-                held,
-                credited,
-                remaining: (allocated + credited) - (spent + held),
-                baselineAmount: allocated
-            }
-        })
-
+        const finalChartData = buildBudgetChart(
+            activeBranches, periodList, budgetLookup, orderSpendingLookup, useOrderScopedSpending, granularity,
+        )
+        const branchBreakdown = buildBranchBreakdown(
+            activeBranches, periodList, budgetLookup, orderSpendingLookup, useOrderScopedSpending,
+        )
         return respond({
             summary: {
                 totalAllocated,

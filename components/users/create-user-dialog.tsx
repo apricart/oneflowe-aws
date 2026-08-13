@@ -12,9 +12,8 @@ import { Textarea } from "@/components/ui/textarea"
 import { Card } from "@/components/ui/card"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command"
-import { UserPlus, Mail, Phone, Shield, Building2, MapPin, AlertCircle, CheckCircle, Plus, Eye, EyeOff, ChevronsUpDown, Check } from "lucide-react"
+import { UserPlus, Shield, Building2, MapPin, AlertCircle, CheckCircle, Eye, EyeOff, ChevronsUpDown, Check } from "lucide-react"
 import { useAppContext } from "@/components/context/app-context"
-import { useToast } from "@/hooks/use-toast"
 import { handleError } from "@/lib/error-handler"
 import { cn } from "../../lib/utils"
 import { Badge } from "@/components/ui/badge"
@@ -34,6 +33,33 @@ import {
 
 type CreateUserDialogProps = {
   onSuccess?: () => void
+}
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+function getUsernameStatusIcon(status: { available: boolean | null; loading: boolean }) {
+  if (status.loading) {
+    return <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+  }
+  if (status.available === true) return <CheckCircle className="h-4 w-4 text-green-500" />
+  if (status.available === false) return <AlertCircle className="h-4 w-4 text-red-500" />
+  return null
+}
+
+function getOrganizationContextLabel(organizationId: string, isInitialized: boolean, organizationName: string) {
+  if (organizationId) return organizationName
+  return isInitialized ? "No Organization Found" : "Loading..."
+}
+
+function getBranchSelectorLabel(branchId: string, organizationId: string, branchName: string) {
+  if (branchId) return branchName
+  return organizationId ? "Search branches..." : "Select organization first"
+}
+
+function getRoleLabel(role: string) {
+  if (role === "HEAD_OFFICE") return "Head Office User"
+  if (role === "BRANCH_ADMIN") return "Branch Admin User"
+  return "Order Portal User"
 }
 
 function getInitialCreateUserForm(
@@ -61,7 +87,83 @@ function getInitialCreateUserForm(
   }
 }
 
-export function CreateUserDialog({ onSuccess }: CreateUserDialogProps) {
+type CreateUserForm = ReturnType<typeof getInitialCreateUserForm>
+
+function getEmailError(value: string) {
+  if (!value.trim()) return "Email is required"
+  return EMAIL_PATTERN.test(value) ? undefined : "Please enter a valid email"
+}
+
+function getUsernameError(value: string) {
+  if (!value.trim()) return "Username is required"
+  return value.length < 3 ? "Username must be at least 3 characters" : undefined
+}
+
+function getPhoneError(value: string) {
+  if (!value) return undefined
+  if (!/^\d+$/.test(value)) return "Phone number must contain only digits"
+  return value.length < 7 || value.length > 15
+    ? "Phone number must be between 7 and 15 digits"
+    : undefined
+}
+
+function hasRequiredPasswordCharacters(password: string) {
+  return /[A-Z]/.test(password)
+    && /[a-z]/.test(password)
+    && /\d/.test(password)
+    && /[^a-zA-Z0-9]/.test(password)
+}
+
+function getPasswordError(password: string) {
+  if (!password) return "This field is required"
+  if (password.length < 12) return "Use at least 12 characters"
+  return hasRequiredPasswordCharacters(password)
+    ? undefined
+    : "It must include uppercase, lowercase, number, and special character"
+}
+
+function getBasicUserErrors(form: CreateUserForm, usernameAvailable: boolean | null) {
+  const errors: Record<string, string> = {}
+  if (!form.firstName.trim()) errors.firstName = "First name is required"
+  if (!form.lastName.trim()) errors.lastName = "Last name is required"
+
+  const usernameError = getUsernameError(form.username)
+  if (usernameError) errors.username = usernameError
+  if (usernameAvailable === false) errors.username = "This username is already taken"
+
+  const emailError = getEmailError(form.email)
+  if (emailError) errors.email = emailError
+  const phoneError = getPhoneError(form.phone)
+  if (phoneError) errors.phone = phoneError
+  if (form.employeeId && !form.employeeId.trim()) errors.employeeId = "Employee number cannot be blank"
+
+  const passwordError = getPasswordError(form.password)
+  if (passwordError) errors.password = passwordError
+  return errors
+}
+
+function getAssignmentErrors(form: CreateUserForm) {
+  const errors: Record<string, string> = {}
+  if (!form.role) errors.role = "Role is required"
+  const needsOrganization = ["HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL"].includes(form.role)
+  if (needsOrganization && !form.organizationId) {
+    errors.organizationId = "Organization is required for this role"
+  }
+  const needsBranch = ["BRANCH_ADMIN", "ORDER_PORTAL"].includes(form.role)
+  if (needsBranch && !form.branchId) {
+    errors.branchId = "Branch assignment is required for Branch Admin and Order Portal roles"
+  }
+  return errors
+}
+
+function getCreateUserErrors(form: CreateUserForm, usernameAvailable: boolean | null) {
+  return {
+    ...getBasicUserErrors(form, usernameAvailable),
+    ...getAssignmentErrors(form),
+  }
+}
+
+export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>) {
   const [open, setOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [step, setStep] = useState(1)
@@ -70,7 +172,6 @@ export function CreateUserDialog({ onSuccess }: CreateUserDialogProps) {
   const [branchSearch, setBranchSearch] = useState("")
   const [discardConfirmationOpen, setDiscardConfirmationOpen] = useState(false)
   const { organizationId, branchId, userRole, isInitialized } = useAppContext()
-  const { toast } = useToast()
 
   const initialForm = useMemo(
     () => getInitialCreateUserForm(organizationId, branchId, userRole),
@@ -160,36 +261,13 @@ export function CreateUserDialog({ onSuccess }: CreateUserDialogProps) {
 
   const validateField = (name: string, value: string) => {
     const newErrors = { ...errors }
+    let fieldError: string | undefined
+    if (name === "email") fieldError = getEmailError(value)
+    if (name === "username") fieldError = getUsernameError(value)
+    if (name === "phone") fieldError = getPhoneError(value)
 
-    if (name === "email") {
-      if (!value.trim()) {
-        newErrors.email = "Email is required"
-      } else if (!/\S+@\S+\.\S+/.test(value)) {
-        newErrors.email = "Please enter a valid email"
-      } else {
-        delete newErrors.email
-      }
-    }
-
-    if (name === "username") {
-      if (!value.trim()) {
-        newErrors.username = "Username is required"
-      } else if (value.length < 3) {
-        newErrors.username = "Username must be at least 3 characters"
-      } else {
-        delete newErrors.username
-      }
-    }
-
-    if (name === "phone") {
-      if (value && !/^\d+$/.test(value)) {
-        newErrors.phone = "Phone number must contain only digits"
-      } else if (value && (value.length < 7 || value.length > 15)) {
-        newErrors.phone = "Phone number must be between 7 and 15 digits"
-      } else {
-        delete newErrors.phone
-      }
-    }
+    if (fieldError) newErrors[name] = fieldError
+    else delete newErrors[name]
 
     setErrors(newErrors)
   }
@@ -246,43 +324,8 @@ export function CreateUserDialog({ onSuccess }: CreateUserDialogProps) {
 
   // Validate form
   const validateForm = (autoJump = false) => {
-    const newErrors: Record<string, string> = {}
     console.debug("[DEBUG] Validating form:", form)
-
-    if (!form.firstName.trim()) newErrors.firstName = "First name is required"
-    if (!form.lastName.trim()) newErrors.lastName = "Last name is required"
-    if (!form.username.trim()) newErrors.username = "Username is required"
-    if (usernameStatus.available === false) newErrors.username = "This username is already taken"
-    if (!form.email.trim()) {
-      newErrors.email = "Email is required"
-    } else if (!/\S+@\S+\.\S+/.test(form.email)) {
-      newErrors.email = "Please enter a valid email"
-    }
-
-    if (form.phone && !/^\d+$/.test(form.phone)) {
-      newErrors.phone = "Phone number must contain only digits"
-    } else if (form.phone && (form.phone.length < 7 || form.phone.length > 15)) {
-      newErrors.phone = "Phone number must be between 7 and 15 digits"
-    }
-    if (form.employeeId && !form.employeeId.trim()) {
-      newErrors.employeeId = "Employee number cannot be blank"
-    }
-
-    if (!form.password) newErrors.password = "Password is required"
-    if (form.password) {
-      if (form.password.length < 12) {
-        newErrors.password = "Password must be at least 12 characters"
-      } else if (!/[A-Z]/.test(form.password) || !/[a-z]/.test(form.password) || !/\d/.test(form.password) || !/[^a-zA-Z0-9]/.test(form.password)) {
-        newErrors.password = "Password must include uppercase, lowercase, number, and special character"
-      }
-    }
-    if (!form.role) newErrors.role = "Role is required"
-    if ((form.role === "HEAD_OFFICE" || form.role === "BRANCH_ADMIN" || form.role === "ORDER_PORTAL") && !form.organizationId) {
-      newErrors.organizationId = "Organization is required for this role"
-    }
-    if ((form.role === "BRANCH_ADMIN" || form.role === "ORDER_PORTAL") && !form.branchId) {
-      newErrors.branchId = "Branch assignment is required for Branch Admin and Order Portal roles"
-    }
+    const newErrors = getCreateUserErrors(form, usernameStatus.available)
 
     setErrors(newErrors)
     const isValid = Object.keys(newErrors).length === 0
@@ -323,8 +366,8 @@ export function CreateUserDialog({ onSuccess }: CreateUserDialogProps) {
           password: form.password,
           phone: form.phone.trim() || null,
           role: form.role,
-          organizationId: form.organizationId ? parseInt(form.organizationId) : null,
-          branchId: (form.role === "BRANCH_ADMIN" || form.role === "ORDER_PORTAL") && form.branchId ? parseInt(form.branchId) : null,
+          organizationId: form.organizationId ? Number.parseInt(form.organizationId) : null,
+          branchId: (form.role === "BRANCH_ADMIN" || form.role === "ORDER_PORTAL") && form.branchId ? Number.parseInt(form.branchId) : null,
           mfaEnabled: form.mfaEnabled,
           isActive: form.isActive,
           employeeId: form.employeeId.trim() || null,
@@ -381,14 +424,14 @@ export function CreateUserDialog({ onSuccess }: CreateUserDialogProps) {
   // Get selected organization name
   const getSelectedOrganizationName = () => {
     if (!form.organizationId) return ""
-    const org = organizations.find((o: any) => o.id === parseInt(form.organizationId))
+    const org = organizations.find((o: any) => o.id === Number.parseInt(form.organizationId))
     return org?.name || ""
   }
 
   // Get selected branch name
   const getSelectedBranchName = () => {
     if (!form.branchId) return ""
-    const branch = branches.find((b: any) => b.id === parseInt(form.branchId))
+    const branch = branches.find((b: any) => b.id === Number.parseInt(form.branchId))
     return branch?.name || ""
   }
 
@@ -441,6 +484,7 @@ export function CreateUserDialog({ onSuccess }: CreateUserDialogProps) {
 
           <div className="space-y-6 py-4">
             {/* Progress Steps */}
+            {(() => (
             <div className="flex items-center justify-center space-x-4">
               <div className={`flex items-center gap-2 ${step >= 1 ? 'text-blue-600' : 'text-muted-foreground'}`}>
                 <div className={`h-8 w-8 rounded-full flex items-center justify-center text-sm font-medium ${step >= 1 ? 'bg-blue-100 text-blue-600' : 'bg-muted'
@@ -466,9 +510,10 @@ export function CreateUserDialog({ onSuccess }: CreateUserDialogProps) {
                 <span className="text-sm font-medium">Security</span>
               </div>
             </div>
+            ))()}
 
             {/* Step 1: Basic Information */}
-            {step === 1 && (
+            {step === 1 && (() => (
               <div className="space-y-4">
                 <h3 className="text-sm font-semibold">Basic Information</h3>
                 <div className="grid grid-cols-2 gap-4">
@@ -540,13 +585,7 @@ export function CreateUserDialog({ onSuccess }: CreateUserDialogProps) {
                       className={errors.username ? 'border-red-500 pr-10' : 'pr-10'}
                     />
                     <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                      {usernameStatus.loading ? (
-                        <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-                      ) : usernameStatus.available === true ? (
-                        <CheckCircle className="h-4 w-4 text-green-500" />
-                      ) : usernameStatus.available === false ? (
-                        <AlertCircle className="h-4 w-4 text-red-500" />
-                      ) : null}
+                      {getUsernameStatusIcon(usernameStatus)}
                     </div>
                   </div>
                   {errors.username && (
@@ -617,7 +656,7 @@ export function CreateUserDialog({ onSuccess }: CreateUserDialogProps) {
                             return next
                           })
                         } else if (val.length > 0) {
-                          setErrors(prev => ({ ...prev, password: "Password must be at least 12 characters" }))
+                          setErrors(prev => ({ ...prev, password: "Use at least 12 characters" }))
                         }
                       }}
                       placeholder="Enter password (min 12 chars, mixed case, symbols)"
@@ -710,10 +749,10 @@ export function CreateUserDialog({ onSuccess }: CreateUserDialogProps) {
                   />
                 </div>
               </div>
-            )}
+            ))()}
 
             {/* Step 2: Role & Assignment */}
-            {step === 2 && (
+            {step === 2 && (() => (
               <div className="space-y-4">
                 <h3 className="text-sm font-semibold">Role & Assignment</h3>
 
@@ -757,7 +796,7 @@ export function CreateUserDialog({ onSuccess }: CreateUserDialogProps) {
                         <span className="font-medium">Organization:</span>
                       </div>
                       <span className={form.organizationId ? "text-muted-foreground" : "text-amber-600 font-medium"}>
-                        {form.organizationId ? getSelectedOrganizationName() : (isInitialized ? "No Organization Found" : "Loading...")}
+                        {getOrganizationContextLabel(form.organizationId, isInitialized, getSelectedOrganizationName())}
                       </span>
                     </div>
                     {!form.organizationId && isInitialized && (
@@ -805,9 +844,7 @@ export function CreateUserDialog({ onSuccess }: CreateUserDialogProps) {
                             errors.branchId && "border-red-500"
                           )}
                         >
-                          {form.branchId
-                            ? getSelectedBranchName()
-                            : (form.organizationId ? "Search branches..." : "Select organization first")}
+                          {getBranchSelectorLabel(form.branchId, form.organizationId, getSelectedBranchName())}
                           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                         </Button>
                       </PopoverTrigger>
@@ -865,7 +902,7 @@ export function CreateUserDialog({ onSuccess }: CreateUserDialogProps) {
                       </div>
                       <div className="flex-1 space-y-1">
                         <p className="text-sm font-medium">
-                          {form.role === "HEAD_OFFICE" ? "Head Office User" : form.role === "BRANCH_ADMIN" ? "Branch Admin User" : "Order Portal User"}
+                          {getRoleLabel(form.role)}
                         </p>
                         <div className="text-xs text-muted-foreground space-y-1">
                           {form.organizationId && (
@@ -893,10 +930,10 @@ export function CreateUserDialog({ onSuccess }: CreateUserDialogProps) {
                   </Card>
                 )}
               </div>
-            )}
+            ))()}
 
             {/* Step 3: Security Settings */}
-            {step === 3 && (
+            {step === 3 && (() => (
               <div className="space-y-4">
                 <h3 className="text-sm font-semibold">Security Settings</h3>
                 <div className="space-y-4">
@@ -954,9 +991,10 @@ export function CreateUserDialog({ onSuccess }: CreateUserDialogProps) {
                   </div>
                 </Card>
               </div>
-            )}
+            ))()}
           </div>
 
+          {(() => (
           <DialogFooter>
             <Button variant="outline" onClick={() => handleDialogOpenChange(false)}>
               Cancel
@@ -1001,6 +1039,7 @@ export function CreateUserDialog({ onSuccess }: CreateUserDialogProps) {
               </Button>
             )}
           </DialogFooter>
+          ))()}
         </DialogContent>
       </Dialog>
       <AlertDialog

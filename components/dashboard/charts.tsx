@@ -775,9 +775,18 @@ function salesPerformanceBaseTheme(isDark: boolean) {
 
 function salesPerformanceMetricTheme(isDark: boolean, activeMetric: 'revenue' | 'orders') {
   const isRevenue = activeMetric === 'revenue'
+  let series: string
+  let activeDotStroke: string
+  if (isRevenue) {
+    series = isDark ? "#34d399" : "#10b981"
+    activeDotStroke = isDark ? "#10b981" : "#ffffff"
+  } else {
+    series = isDark ? "#60a5fa" : "#3b82f6"
+    activeDotStroke = isDark ? "#3b82f6" : "#ffffff"
+  }
   return {
-    series: isRevenue ? (isDark ? "#34d399" : "#10b981") : (isDark ? "#60a5fa" : "#3b82f6"),
-    activeDotStroke: isRevenue ? (isDark ? "#10b981" : "#ffffff") : (isDark ? "#3b82f6" : "#ffffff"),
+    series,
+    activeDotStroke,
     shadowClass: isRevenue ? 'rgba(16,185,129,0.5)' : 'rgba(59,130,246,0.5)',
     axisWidth: isRevenue ? 100 : 55,
   }
@@ -791,7 +800,8 @@ function salesPerfTooltipModel(data: any, activeMetric: string, isBuyer: boolean
   const isRevenue = activeMetric === 'revenue'
   const currentValue = isRevenue ? sales : orders
   const previousValue = isRevenue ? compSales : compOrders
-  const metricLabel = isRevenue ? (isBuyer ? 'Purchased' : 'Revenue') : 'Orders'
+  let metricLabel = 'Orders'
+  if (isRevenue) metricLabel = isBuyer ? 'Purchased' : 'Revenue'
   const formatValue = (value: number) => isRevenue ? `â‚¨ ${value.toLocaleString()}` : value.toLocaleString()
   const changePercent = hasComparison && previousValue > 0
     ? ((currentValue - previousValue) / previousValue) * 100

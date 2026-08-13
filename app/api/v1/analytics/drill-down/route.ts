@@ -10,6 +10,312 @@ import { resolveDrillDownSortColumn } from "@/lib/server/drill-down-sort"
 
 const allowedRoles = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"] as const
 
+function parseNumberList(value: string | null, isValid = (number: number) => number > 0) {
+    return value ? value.split(",").map(Number).filter((number) => !Number.isNaN(number) && isValid(number)) : []
+}
+
+async function verifyHeadOfficeBranch(organizationId: number | null, requestedBranchId: number) {
+    if (!organizationId || !requestedBranchId) return { branchId: null }
+    try {
+        const [branch] = await db.select({ id: branches.id }).from(branches).where(and(
+            eq(branches.id, requestedBranchId),
+            eq(branches.organizationId, organizationId),
+        )).limit(1)
+        if (branch) return { branchId: requestedBranchId }
+        console.warn(`[Security] Head Office user tried to access branch ${requestedBranchId} outside their org ${organizationId}`)
+        return { error: "Access denied: Branch not found in your organization" }
+    } catch (caughtError) {
+        console.error("[Security] Error verifying branch access for Head Office:", caughtError)
+        return { error: "Access verification failed" }
+    }
+}
+
+async function resolveDrillDownScope(role: string, scope: any, context: any) {
+    if (role === "BRANCH_ADMIN") {
+        return { organizationId: scope?.organizationId ?? null, branchId: scope?.branchId ?? null }
+    }
+    if (role === "SUPER_ADMIN") {
+        return {
+            organizationId: context.organizationId ? Number(context.organizationId) : null,
+            branchId: context.branchId ? Number(context.branchId) : null,
+        }
+    }
+    if (role !== "HEAD_OFFICE") {
+        console.warn(`[Security] Unknown role ${role} attempting to access drill-down API`)
+        return { error: "Access denied: Invalid user role" }
+    }
+    const organizationId = scope?.organizationId ?? null
+    if (!context.branchId) return { organizationId, branchId: null }
+    const result = await verifyHeadOfficeBranch(organizationId, Number(context.branchId))
+    return { organizationId, ...result }
+}
+
+async function resolveDrillDownBranchIds(role: string, organizationId: number | null, value: string | null) {
+    const requested = parseNumberList(value)
+    if (requested.length === 0 || role === "BRANCH_ADMIN") return { branchIds: [] }
+    if (role === "SUPER_ADMIN") return { branchIds: requested }
+    if (role !== "HEAD_OFFICE" || !organizationId) return { branchIds: [] }
+    try {
+        const valid = await db.select({ id: branches.id }).from(branches).where(and(
+            inArray(branches.id, requested),
+            eq(branches.organizationId, organizationId),
+        ))
+        const branchIds = valid.map((branch) => branch.id)
+        const invalid = requested.filter((id) => !branchIds.includes(id))
+        if (invalid.length > 0) console.warn(`[Security] Head Office user tried to access invalid branches: ${invalid.join(",")}, in org ${organizationId}`)
+        return { branchIds }
+    } catch (caughtError) {
+        console.error("[Security] Error verifying branchIds for Head Office:", caughtError)
+        return { error: "Access verification failed", branchIds: [] }
+    }
+}
+
+function addDrillDownScopeConditions(conditions: any[], context: any) {
+    if (context.organizationId) conditions.push(eq(orders.organizationId, context.organizationId))
+    if (context.branchIds.length > 0) conditions.push(inArray(orders.branchId, context.branchIds))
+    else if (context.branchId) conditions.push(eq(orders.branchId, context.branchId))
+}
+
+function addDrillDownDateConditions(conditions: any[], context: any) {
+    if (context.months.length > 0) conditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(context.months, sql.raw(", "))})`)
+    if (context.years.length > 0) conditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(context.years, sql.raw(", "))})`)
+    if (context.months.length > 0 || context.years.length > 0) return
+    const start = context.startDate ? parseStartDateParam(context.startDate) : null
+    const end = context.endDate ? parseEndDateParam(context.endDate) : null
+    if (start) conditions.push(gte(orders.createdAt, start))
+    if (end) conditions.push(lte(orders.createdAt, end))
+}
+
+function addRefundTypeCondition(conditions: any[], refundType: string | undefined) {
+    if (refundType === "full") {
+        conditions.push(eq(sql`UPPER(${orders.status})`, "REFUNDED"))
+    } else if (refundType === "partial") {
+        conditions.push(and(
+            gt(sql`COALESCE(${orders.refundAmountCents}, 0)`, 0),
+            sql`UPPER(${orders.status}) <> 'REFUNDED'`,
+        ))
+    } else {
+        conditions.push(or(eq(sql`UPPER(${orders.status})`, "REFUNDED"), gt(sql`COALESCE(${orders.refundAmountCents}, 0)`, 0)))
+    }
+}
+
+function addDrillDownTypeCondition(conditions: any[], type: string, refundType?: string) {
+    const exactStatusTypes = ["PENDING", "APPROVED"]
+    if (type === "REVENUE") conditions.push(sql`UPPER(${orders.status}) IN ('FULFILLED', 'APPROVED', 'PARTIAL', 'PARTIALLY_FULFILLED')`)
+    else if (type === "FULFILLED") conditions.push(and(eq(sql`UPPER(${orders.status})`, "FULFILLED"), eq(sql`COALESCE(${orders.refundAmountCents}, 0)`, 0)))
+    else if (type === "REJECTED") conditions.push(or(eq(sql`UPPER(${orders.status})`, "REJECTED"), eq(sql`UPPER(${orders.status})`, "CANCELLED")))
+    else if (type === "ORDERS") conditions.push(sql`UPPER(${orders.status}) IN ('PENDING', 'APPROVED', 'FULFILLED', 'REFUNDED', 'REJECTED', 'CANCELLED', 'PARTIAL', 'PARTIALLY_FULFILLED')`)
+    else if (type === "REFUNDED") addRefundTypeCondition(conditions, refundType)
+    else if (type === "PARTIAL") conditions.push(or(
+        and(eq(sql`UPPER(${orders.status})`, "FULFILLED"), gt(sql`COALESCE(${orders.refundAmountCents}, 0)`, 0)),
+        inArray(sql`UPPER(${orders.status})`, ["PARTIAL", "PARTIALLY_FULFILLED"]),
+    ))
+    else if (exactStatusTypes.includes(type)) conditions.push(eq(sql`UPPER(${orders.status})`, type))
+    else if (type === "DELIVERED") conditions.push(eq(sql`UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED'))`, "DELIVERED"))
+    else if (type === "NOT_DELIVERED") conditions.push(sql`UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED')) <> 'DELIVERED'`)
+}
+
+async function loadDrillDownItemMaps(orderIds: number[]) {
+    if (orderIds.length === 0) return { detailedItems: {}, itemCounts: {} }
+    const [items, counts] = await Promise.all([
+        db.select({
+            id: orderItems.id,
+            orderId: orderItems.orderId,
+            productName: orderItems.productName,
+            productCode: orderItems.productCode,
+            quantity: orderItems.quantity,
+            priceCents: orderItems.priceCents,
+            refundQuantity: sql<number>`CASE WHEN UPPER(${refunds.status}) IN ('APPROVED', 'COMPLETED') THEN COALESCE(${refundItems.quantity}, 0) ELSE 0 END`.mapWith(Number),
+            refundAmountCents: sql<number>`CASE WHEN UPPER(${refunds.status}) IN ('APPROVED', 'COMPLETED') THEN COALESCE(${refundItems.amountCents}, 0) ELSE 0 END`.mapWith(Number),
+        }).from(orderItems).leftJoin(refundItems, eq(orderItems.id, refundItems.orderItemId))
+            .leftJoin(refunds, eq(refundItems.refundId, refunds.id)).where(inArray(orderItems.orderId, orderIds.slice(0, 100))),
+        db.select({
+            orderId: orderItems.orderId,
+            totalQty: sql<number>`COALESCE(sum(COALESCE(${orderItems.quantity}, 0)), 0)::numeric`.mapWith(Number),
+        }).from(orderItems).where(inArray(orderItems.orderId, orderIds)).groupBy(orderItems.orderId),
+    ])
+    const detailedItems: Record<number, any[]> = {}
+    items.forEach((item) => {
+        if (!item.orderId) return
+        detailedItems[item.orderId] ??= []
+        const existing = detailedItems[item.orderId].find((candidate) => candidate.id === item.id)
+        if (existing) {
+            existing.quantity = Math.max(Number(existing.quantity) || 0, Number(item.quantity) || 0)
+            existing.refundQuantity += item.refundQuantity
+            existing.refundAmount += item.refundAmountCents / 100
+        } else {
+            detailedItems[item.orderId].push({
+                id: item.id,
+                name: item.productName,
+                productCode: item.productCode,
+                quantity: item.quantity,
+                price: item.priceCents / 100,
+                refundQuantity: item.refundQuantity,
+                refundAmount: item.refundAmountCents / 100,
+            })
+        }
+    })
+    return {
+        detailedItems,
+        itemCounts: Object.fromEntries(counts.filter((row) => row.orderId).map((row) => [row.orderId, row.totalQty || 0])),
+    }
+}
+
+function updateDrillDownBranchStats(stats: any, order: any, status: string, total: number, refund: number) {
+    if (!order.branchId) return
+    stats[order.branchId] ??= { name: order.branchName || "Unknown", total: 0, refunds: 0, count: 0 }
+    const branch = stats[order.branchId]
+    branch.count++
+    if (!["FULFILLED", "REFUNDED"].includes(status)) return
+    branch.total += total
+    if (status === "REFUNDED") branch.refunds += refund
+}
+
+function calculateDrillDownSummary(rawData: any[], itemCounts: Record<number, number>) {
+    const totals = {
+        gross: 0, refunds: 0, rejected: 0, discount: 0, processingSeconds: 0, processingCount: 0,
+        items: 0, fulfilled: 0, refundedOrders: 0, refundRelated: 0, refundedValue: 0,
+    }
+    const branchStats: Record<number, any> = {}
+    const hourly: Record<number, number> = {}
+    rawData.forEach((order) => {
+        const total = (order.totalCents || 0) / 100
+        const refund = (order.refundAmountCents || 0) / 100
+        const status = (order.status || "").toUpperCase()
+        totals.items += itemCounts[order.id] || 0
+        if (["FULFILLED", "APPROVED", "PARTIAL", "PARTIALLY_FULFILLED"].includes(status)) {
+            totals.gross += total
+            totals.refunds += refund
+            if (["FULFILLED", "PARTIAL", "PARTIALLY_FULFILLED"].includes(status)) totals.fulfilled++
+        }
+        if (status === "REFUNDED") totals.refundedOrders++
+        if (refund > 0) { totals.refundRelated++; totals.refundedValue += refund }
+        if (["REJECTED", "CANCELLED"].includes(status)) totals.rejected += total
+        totals.discount += order.receiptData?.discount || 0
+        if (order.createdAt) {
+            const hour = new Date(order.createdAt).getHours()
+            hourly[hour] = (hourly[hour] || 0) + total
+        }
+        if (order.createdAt && order.fulfilledAt) {
+            const elapsed = new Date(order.fulfilledAt).getTime() - new Date(order.createdAt).getTime()
+            if (elapsed >= 0) { totals.processingSeconds += Math.round(elapsed / 1000); totals.processingCount++ }
+        }
+        updateDrillDownBranchStats(branchStats, order, status, total, refund)
+    })
+    const peak = Object.entries(hourly).sort((left, right) => right[1] - left[1])[0]?.[0]
+    const branchList = Object.entries(branchStats).map(([id, values]: [string, any]) => ({ id, ...values }))
+    return {
+        grossRevenue: totals.gross,
+        netRevenue: totals.gross - totals.refunds,
+        refundRate: totals.gross > 0 ? totals.refunds / totals.gross * 100 : 0,
+        leakage: totals.rejected + totals.discount,
+        discountImpact: totals.discount,
+        avgProcessingTime: totals.processingCount > 0 ? Math.round(totals.processingSeconds / totals.processingCount / 60) : 0,
+        totalItems: totals.items,
+        fulfilledOrderCount: totals.fulfilled,
+        refundedOrdersCount: totals.refundedOrders,
+        refundRelatedOrdersCount: totals.refundRelated,
+        refundedValue: totals.refundedValue,
+        peakPeriod: peak ? `${peak}:00 - ${Number(peak) + 1}:00` : "N/A",
+        topBranch: branchList.toSorted((left, right) => right.total - left.total)[0]?.name || "N/A",
+        problematicBranch: branchList.toSorted((left, right) => right.refunds / (right.total || 1) - left.refunds / (left.total || 1))[0]?.name || "N/A",
+    }
+}
+
+function formatDrillDownRows(rawData: any[], itemCounts: any, detailedItems: any) {
+    return rawData.slice(0, 100).map((order) => {
+        const gross = (order.totalCents || 0) / 100
+        const refund = (order.refundAmountCents || 0) / 100
+        const fulfilled = order.fulfilledAt ? new Date(order.fulfilledAt) : null
+        const preparationTime = fulfilled
+            ? `${Math.round((fulfilled.getTime() - new Date(order.createdAt).getTime()) / 60000)} mins`
+            : "N/A"
+        return {
+            id: order.id,
+            tid: order.tid,
+            status: order.status,
+            fulfillmentStatus: order.fulfillmentStatus,
+            date: order.createdAt,
+            approvedAt: order.approvedAt,
+            branchName: order.branchName,
+            organizationName: order.organizationName || order.receiptData?.organizationName,
+            netValue: gross - refund,
+            grossValue: gross,
+            refundAmount: refund,
+            skuCount: itemCounts[order.id] || 0,
+            customerLevel: order.id % 5 === 0 ? "VIP" : "Regular",
+            preparationTime,
+            buyerName: order.receiptData?.buyerName || order.creatorName || "Walk-in Customer",
+            buyerPhone: order.receiptData?.buyerPhone || order.creatorPhone || "N/A",
+            creatorName: order.creatorName,
+            creatorEmployeeId: order.creatorEmployeeId,
+            items: detailedItems[order.id] || [],
+        }
+    })
+}
+
+function resolveDrillDownComparisonRange(context: any) {
+    if (context.explicitStart && context.explicitEnd) {
+        return {
+            start: parseStartDateParam(context.explicitStart) || new Date(context.explicitStart),
+            end: parseEndDateParam(context.explicitEnd) || new Date(context.explicitEnd),
+        }
+    }
+    const start = parseStartDateParam(context.startDate) || new Date(context.startDate)
+    const end = parseEndDateParam(context.endDate) || new Date(context.endDate)
+    const duration = end.getTime() - start.getTime()
+    return { start: new Date(start.getTime() - duration - 1), end: new Date(start.getTime() - 1) }
+}
+
+function calculateDrillDownComparison(data: any[], itemCount: number) {
+    const totals = data.reduce((aggregate, order) => {
+        const gross = (order.totalCents || 0) / 100
+        const refund = (order.refundAmountCents || 0) / 100
+        const status = (order.status || "").toUpperCase()
+        if (["FULFILLED", "APPROVED", "PARTIAL", "PARTIALLY_FULFILLED"].includes(status)) {
+            aggregate.gross += gross
+            aggregate.refund += refund
+        } else if (status === "REFUNDED") aggregate.refund += refund
+        else if (["REJECTED", "CANCELLED"].includes(status)) aggregate.rejected += gross
+        aggregate.discount += order.receiptData?.discount || 0
+        return aggregate
+    }, { gross: 0, refund: 0, rejected: 0, discount: 0 })
+    return {
+        grossRevenue: totals.gross,
+        netRevenue: totals.gross - totals.refund,
+        totalItems: itemCount,
+        totalOrders: data.length,
+        leakage: totals.rejected + totals.discount,
+    }
+}
+
+async function loadDrillDownComparison(context: any) {
+    if (!context.enabled) return null
+    const conditions: any[] = []
+    addDrillDownScopeConditions(conditions, context)
+    addDrillDownDateConditions(conditions, {
+        months: context.months,
+        years: context.years,
+        startDate: context.range.start.toISOString(),
+        endDate: context.range.end.toISOString(),
+    })
+    addDrillDownTypeCondition(conditions, context.type)
+    const data = await db.select({
+        id: orders.id,
+        status: orders.status,
+        totalCents: orders.totalCents,
+        refundAmountCents: orders.refundAmountCents,
+        createdAt: orders.createdAt,
+        fulfilledAt: orders.fulfilledAt,
+        receiptData: orders.receiptData,
+    }).from(orders).where(and(...conditions))
+    const orderIds = data.map((order) => order.id)
+    const [countRow] = orderIds.length > 0
+        ? await db.select({ value: sql<number>`count(${orderItems.id})` }).from(orderItems).where(inArray(orderItems.orderId, orderIds))
+        : [{ value: 0 }]
+    return calculateDrillDownComparison(data, Number(countRow?.value || 0))
+}
+
 // BI Analytics Drill-down API - Robust & Parity Sync
 export async function GET(req: NextRequest) {
     const err = await requireApiRole(allowedRoles as any)
@@ -34,177 +340,34 @@ export async function GET(req: NextRequest) {
     const compareMonthsRaw = searchParams.get("compareMonths")
     const compareYearsRaw = searchParams.get("compareYears")
 
-    const parsedMonths = monthsRaw ? monthsRaw.split(',').map(Number).filter((n: any) => !Number.isNaN(n) && n >= 1 && n <= 12) : []
-    const parsedYears = yearsRaw ? yearsRaw.split(',').map(Number).filter((n: any) => !Number.isNaN(n) && n > 2000) : []
-    const parsedCompMonths = compareMonthsRaw ? compareMonthsRaw.split(',').map(Number).filter((n: any) => !Number.isNaN(n) && n >= 1 && n <= 12) : []
-    const parsedCompYears = compareYearsRaw ? compareYearsRaw.split(',').map(Number).filter((n: any) => !Number.isNaN(n) && n > 2000) : []
+    const parsedMonths = parseNumberList(monthsRaw, (number) => number >= 1 && number <= 12)
+    const parsedYears = parseNumberList(yearsRaw, (number) => number > 2000)
+    const parsedCompMonths = parseNumberList(compareMonthsRaw, (number) => number >= 1 && number <= 12)
+    const parsedCompYears = parseNumberList(compareYearsRaw, (number) => number > 2000)
     const refundType = searchParams.get("refundType")?.toLowerCase() // all, full, partial
     const sortColumn = resolveDrillDownSortColumn(searchParams.get("sortBy"))
     if (!type || !["REVENUE", "REJECTED", "FULFILLED", "ORDERS", "REFUNDED", "PENDING", "APPROVED", "PARTIAL", "DELIVERED", "NOT_DELIVERED"].includes(type)) {
         return error("Invalid or missing drill-down type")
     }
 
-    let organizationId: number | null = null
-    let branchId: number | null = null
-    let branchIds: number[] = []
-
-    // SECURITY: Enforce strict data isolation based on user role
-    if (role === "BRANCH_ADMIN") {
-        // Branch Admin can only see their own branch
-        organizationId = scope?.organizationId ?? null
-        branchId = scope?.branchId ?? null
-        // IGNORE URL PARAMETERS for security
-    } else if (role === "HEAD_OFFICE") {
-        // Head Office can see all branches in their organization, but not other organizations
-        organizationId = scope?.organizationId ?? null
-        // Only allow branch filtering within their organization
-        if (branchIdParam && branchIdParam !== "null" && branchIdParam !== "0") {
-            const requestedBranchId = Number(branchIdParam)
-            // Verify this branch belongs to their organization
-            if (organizationId && requestedBranchId) {
-                try {
-                    const [branchCheck] = await db
-                        .select({ id: branches.id })
-                        .from(branches)
-                        .where(and(eq(branches.id, requestedBranchId), eq(branches.organizationId, organizationId)))
-                        .limit(1)
-                    
-                    if (branchCheck) {
-                        branchId = requestedBranchId
-                    } else {
-                        console.warn(`[Security] Head Office user tried to access branch ${requestedBranchId} outside their org ${organizationId}`)
-                        return error("Access denied: Branch not found in your organization")
-                    }
-                } catch (err) {
-                    console.error("[Security] Error verifying branch access for Head Office:", err)
-                    return error("Access verification failed")
-                }
-            }
-        }
-        // IGNORE organizationId parameter for security
-    } else if (role === "SUPER_ADMIN") {
-        // Super Admin can see everything (intended)
-        if (orgIdParam && orgIdParam !== "null" && orgIdParam !== "0" && orgIdParam !== "undefined") {
-            organizationId = Number(orgIdParam)
-        }
-        if (branchIdParam && branchIdParam !== "null" && branchIdParam !== "0") {
-            branchId = Number(branchIdParam)
-        }
-    } else {
-        // Unknown role - deny access
-        console.warn(`[Security] Unknown role ${role} attempting to access drill-down API`)
-        return error("Access denied: Invalid user role")
-    }
-
-    // SECURITY: Only allow branchIds for SUPER_ADMIN or validated HEAD_OFFICE requests
-    if (branchIdsParam) {
-        if (role === "SUPER_ADMIN") {
-            branchIds = branchIdsParam.split(",").map(Number).filter((n: any) => !Number.isNaN(n) && n > 0)
-        } else if (role === "HEAD_OFFICE") {
-            // Verify all requested branches belong to the user's organization
-            const requestedBranchIds = branchIdsParam.split(",").map(Number).filter((n: any) => !Number.isNaN(n) && n > 0)
-            if (organizationId && requestedBranchIds.length > 0) {
-                try {
-                    const validBranches = await db
-                        .select({ id: branches.id })
-                        .from(branches)
-                        .where(and(
-                            inArray(branches.id, requestedBranchIds),
-                            eq(branches.organizationId, organizationId)
-                        ))
-                    
-                    branchIds = validBranches.map(b => b.id)
-                    
-                    // Check if any requested branches were invalid
-                    const invalidBranches = requestedBranchIds.filter((id: number) => !branchIds.includes(id))
-                    if (invalidBranches.length > 0) {
-                        console.warn(`[Security] Head Office user tried to access invalid branches: ${invalidBranches.join(',')}, in org ${organizationId}`)
-                    }
-                } catch (err) {
-                    console.error("[Security] Error verifying branchIds for Head Office:", err)
-                    return error("Access verification failed")
-                }
-            }
-        }
-        // BRANCH_ADMIN and others: IGNORE branchIds parameter for security
-    }
+    const normalizedOrgParam = orgIdParam && !["null", "0", "undefined"].includes(orgIdParam) ? orgIdParam : null
+    const normalizedBranchParam = branchIdParam && !["null", "0"].includes(branchIdParam) ? branchIdParam : null
+    const resolvedScope = await resolveDrillDownScope(role, scope, {
+        organizationId: normalizedOrgParam,
+        branchId: normalizedBranchParam,
+    })
+    if (resolvedScope.error) return error(resolvedScope.error)
+    const organizationId = resolvedScope.organizationId ?? null
+    const branchId = resolvedScope.branchId ?? null
+    const resolvedBranches = await resolveDrillDownBranchIds(role, organizationId, branchIdsParam)
+    if (resolvedBranches.error) return error(resolvedBranches.error)
+    const branchIds = resolvedBranches.branchIds
 
     const conditions: any[] = []
 
-    if (organizationId) conditions.push(eq(orders.organizationId, organizationId))
-    if (branchIds.length > 0) {
-        conditions.push(inArray(orders.branchId, branchIds))
-    } else if (branchId) {
-        conditions.push(eq(orders.branchId, branchId))
-    }
-
-    if (parsedMonths.length > 0) {
-        conditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedMonths, sql.raw(", "))})`)
-    }
-    if (parsedYears.length > 0) {
-        conditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedYears, sql.raw(", "))})`)
-    }
-
-    if (parsedMonths.length === 0 && parsedYears.length === 0) {
-        if (startDateParam) {
-            const start = parseStartDateParam(startDateParam)
-            if (start) conditions.push(gte(orders.createdAt, start))
-        }
-        if (endDateParam) {
-            const end = parseEndDateParam(endDateParam)
-            if (end) conditions.push(lte(orders.createdAt, end))
-        }
-    }
-
-    // Apply type-specific filters
-    if (type === "REVENUE") {
-        // Revenue Drill-down: must match REVENUE_ELIGIBLE_FILTER
-        conditions.push(sql`UPPER(${orders.status}) IN ('FULFILLED', 'APPROVED', 'PARTIAL', 'PARTIALLY_FULFILLED')`)
-    } else if (type === "FULFILLED") {
-        conditions.push(
-            and(
-                eq(sql`UPPER(${orders.status})`, "FULFILLED"),
-                eq(sql`COALESCE(${orders.refundAmountCents}, 0)`, 0)
-            )
-        )
-    } else if (type === "REJECTED") {
-        conditions.push(or(eq(sql`UPPER(${orders.status})`, "REJECTED"), eq(sql`UPPER(${orders.status})`, "CANCELLED")))
-    } else if (type === "ORDERS") {
-        conditions.push(sql`UPPER(${orders.status}) IN ('PENDING', 'APPROVED', 'FULFILLED', 'REFUNDED', 'REJECTED', 'CANCELLED', 'PARTIAL', 'PARTIALLY_FULFILLED')`)
-    } else if (type === "REFUNDED") {
-        if (refundType === "full") {
-            conditions.push(eq(sql`UPPER(${orders.status})`, "REFUNDED"))
-        } else if (refundType === "partial") {
-            conditions.push(and(
-                gt(sql`COALESCE(${orders.refundAmountCents}, 0)`, 0),
-                sql`UPPER(${orders.status}) <> 'REFUNDED'`
-            ))
-        } else {
-            conditions.push(or(
-                eq(sql`UPPER(${orders.status})`, "REFUNDED"),
-                gt(sql`COALESCE(${orders.refundAmountCents}, 0)`, 0)
-            ))
-        }
-    } else if (type === "PARTIAL") {
-        conditions.push(
-            or(
-                and(eq(sql`UPPER(${orders.status})`, "FULFILLED"), gt(sql`COALESCE(${orders.refundAmountCents}, 0)`, 0)),
-                inArray(sql`UPPER(${orders.status})`, ["PARTIAL", "PARTIALLY_FULFILLED"])
-            )
-        )
-    } else if (type === "PENDING") {
-        conditions.push(eq(sql`UPPER(${orders.status})`, "PENDING"))
-    } else if (type === "APPROVED") {
-        conditions.push(eq(sql`UPPER(${orders.status})`, "APPROVED"))
-    } else if (type === "DELIVERED") {
-        conditions.push(
-            eq(sql`UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED'))`, "DELIVERED")
-        )
-    } else if (type === "NOT_DELIVERED") {
-        conditions.push(
-            sql`UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED')) <> 'DELIVERED'`
-        )
-    }
+    addDrillDownScopeConditions(conditions, { organizationId, branchIds, branchId })
+    addDrillDownDateConditions(conditions, { months: parsedMonths, years: parsedYears, startDate: startDateParam, endDate: endDateParam })
+    addDrillDownTypeCondition(conditions, type, refundType)
 
     try {
         const whereClause = conditions.length > 0 ? and(...conditions) : undefined
@@ -238,333 +401,27 @@ export async function GET(req: NextRequest) {
             .orderBy(desc(sortColumn))
             .limit(1000) // Increase limit for aggregation accuracy
 
-        // Fetch order items & refunds in bulk for the top 100 display items
-        const orderIds = rawData.map(o => o.id)
-        const displayOrderIds = orderIds.slice(0, 100)
-        let detailedItemsMap: Record<number, any[]> = {}
-        if (displayOrderIds.length > 0) {
-            const allItems = await db.select({
-                id: orderItems.id,
-                orderId: orderItems.orderId,
-                productName: orderItems.productName,
-                productCode: orderItems.productCode,
-                quantity: orderItems.quantity,
-                priceCents: orderItems.priceCents,
-                refundQuantity: sql<number>`
-                    CASE
-                        WHEN UPPER(${refunds.status}) IN ('APPROVED', 'COMPLETED') THEN COALESCE(${refundItems.quantity}, 0)
-                        ELSE 0
-                    END
-                `.mapWith(Number),
-                refundAmountCents: sql<number>`
-                    CASE
-                        WHEN UPPER(${refunds.status}) IN ('APPROVED', 'COMPLETED') THEN COALESCE(${refundItems.amountCents}, 0)
-                        ELSE 0
-                    END
-                `.mapWith(Number)
-            })
-                .from(orderItems)
-                .leftJoin(refundItems, eq(orderItems.id, refundItems.orderItemId))
-                .leftJoin(refunds, eq(refundItems.refundId, refunds.id))
-                .where(inArray(orderItems.orderId, displayOrderIds))
-
-            detailedItemsMap = allItems.reduce((acc, curr) => {
-                if (curr.orderId) {
-                    if (!acc[curr.orderId]) acc[curr.orderId] = []
-                    
-                    const existing = acc[curr.orderId].find(i => i.id === curr.id)
-                    if (existing) {
-                        existing.quantity = Math.max(Number(existing.quantity) || 0, Number(curr.quantity) || 0)
-                        existing.refundQuantity += curr.refundQuantity
-                        existing.refundAmount += curr.refundAmountCents / 100
-                    } else {
-                        acc[curr.orderId].push({
-                            id: curr.id,
-                            name: curr.productName,
-                            productCode: curr.productCode,
-                            quantity: curr.quantity,
-                            price: curr.priceCents / 100,
-                            refundQuantity: curr.refundQuantity,
-                            refundAmount: curr.refundAmountCents / 100
-                        })
-                    }
-                }
-                return acc
-            }, {} as Record<number, any[]>)
-        }
-
-        // Fetch counts for ALL returned orders for correct aggregation
-        let itemCounts: Record<number, number> = {}
-        if (orderIds.length > 0) {
-            const counts = await db.select({
-                orderId: orderItems.orderId,
-                totalQty: sql<number>`COALESCE(sum(COALESCE(${orderItems.quantity}, 0)), 0)::numeric`.mapWith(Number)
-            })
-                .from(orderItems)
-                .where(inArray(orderItems.orderId, orderIds))
-                .groupBy(orderItems.orderId)
-
-            itemCounts = counts.reduce((acc, curr) => {
-                if (curr.orderId) acc[curr.orderId] = curr.totalQty || 0
-                return acc
-            }, {} as Record<number, number>)
-        }
-
-        // BI Calculation
-        let grossTotal = 0
-        let refundTotal = 0
-        let rejectedTotal = 0
-        let discountTotal = 0
-        let totalProcessingSeconds = 0
-        let processingCount = 0
-        const branchStats: Record<number, { name: string, total: number, refunds: number, count: number }> = {}
-        const hourlyDistribution: Record<number, number> = {}
-
-        let totalItems = 0
-        let fulfilledOrderCount = 0
-        let refundedOrdersCount = 0
-        let refundRelatedOrdersCount = 0
-        let refundedValue = 0
-        rawData.forEach(order => {
-            totalItems += (itemCounts[order.id] || 0)
-            const total = (order.totalCents || 0) / 100
-            const refund = (order.refundAmountCents || 0) / 100
-            const status = (order.status || "").toUpperCase()
-            const disc = (order.receiptData?.discount || 0)
-
-            // ALIGNED WITH metric-utils.ts: net revenue only comes from THESE statuses
-            if (['FULFILLED', 'APPROVED', 'PARTIAL', 'PARTIALLY_FULFILLED'].includes(status)) {
-                grossTotal += total
-                refundTotal += refund
-                
-                // Fulfilled Orders in dashboard: FULFILLED + PARTIAL
-                if (['FULFILLED', 'PARTIAL', 'PARTIALLY_FULFILLED'].includes(status)) {
-                    fulfilledOrderCount++
-                }
-            }
-
-            // Refunded Orders in dashboard: strictly completely REFUNDED status
-            if (status === 'REFUNDED') {
-                refundedOrdersCount++
-            }
-            if (refund > 0) {
-                refundRelatedOrdersCount++
-                refundedValue += refund
-            }
-
-            if (status === "REJECTED" || status === "CANCELLED") {
-                rejectedTotal += total
-            }
-
-            discountTotal += disc
-
-            // Peak Period
-            if (order.createdAt) {
-                const hour = new Date(order.createdAt).getHours()
-                hourlyDistribution[hour] = (hourlyDistribution[hour] || 0) + total
-            }
-
-            // Efficiency
-            if (order.createdAt && order.fulfilledAt) {
-                const start = new Date(order.createdAt).getTime()
-                const end = new Date(order.fulfilledAt).getTime()
-                if (end >= start) {
-                    const diffSeconds = Math.round((end - start) / 1000)
-                    totalProcessingSeconds += diffSeconds
-                    processingCount++
-                }
-            }
-
-            // Branch Ranking
-            if (order.branchId) {
-                if (!branchStats[order.branchId]) {
-                    branchStats[order.branchId] = { name: order.branchName || "Unknown", total: 0, refunds: 0, count: 0 }
-                }
-                const b = branchStats[order.branchId]
-                b.count++
-                if (status === "FULFILLED" || status === "REFUNDED") {
-                    b.total += total
-                    if (status === "REFUNDED") b.refunds += refund
-                }
-            }
+        const orderIds = rawData.map((order) => order.id)
+        const { detailedItems, itemCounts } = await loadDrillDownItemMaps(orderIds)
+        const summary = calculateDrillDownSummary(rawData, itemCounts)
+        const formattedData = formatDrillDownRows(rawData, itemCounts, detailedItems)
+        const comparisonEnabled = searchParams.get("compare") === "true" && Boolean(startDateParam && endDateParam)
+        const comparisonRange = comparisonEnabled ? resolveDrillDownComparisonRange({
+            explicitStart: compareStartDateParam,
+            explicitEnd: compareEndDateParam,
+            startDate: startDateParam,
+            endDate: endDateParam,
+        }) : null
+        const comparisonSummary = await loadDrillDownComparison({
+            enabled: comparisonEnabled,
+            organizationId,
+            branchIds,
+            branchId,
+            months: parsedCompMonths,
+            years: parsedCompYears,
+            range: comparisonRange,
+            type,
         })
-
-        // Formatting Summary
-        const sortedHours = Object.entries(hourlyDistribution).sort((a, b) => b[1] - a[1])
-        const peakHourRange = sortedHours.length > 0 ? `${sortedHours[0][0]}:00 - ${Number(sortedHours[0][0]) + 1}:00` : "N/A"
-
-        const sortedBranches = Object.entries(branchStats).map(([id, s]) => ({ id, ...s }))
-        const topBranch = sortedBranches.toSorted((a, b) => b.total - a.total)[0]?.name || "N/A"
-        const problematicBranch = sortedBranches.toSorted((a, b) => (b.refunds / (b.total || 1)) - (a.refunds / (a.total || 1)))[0]?.name || "N/A"
-
-        const summary = {
-            grossRevenue: grossTotal,
-            netRevenue: grossTotal - refundTotal,
-            refundRate: grossTotal > 0 ? (refundTotal / grossTotal) * 100 : 0,
-            leakage: rejectedTotal + discountTotal,
-            discountImpact: discountTotal,
-            avgProcessingTime: processingCount > 0 ? Math.round(totalProcessingSeconds / processingCount / 60) : 0,
-            totalItems,
-            fulfilledOrderCount,
-            refundedOrdersCount,
-            refundRelatedOrdersCount,
-            refundedValue,
-            peakPeriod: peakHourRange,
-            topBranch,
-            problematicBranch
-        }
-
-        // Format data and return actual requested UI fields
-        const formattedData = rawData.slice(0, 100).map(order => {
-            const gross = (order.totalCents || 0) / 100
-            const refund = (order.refundAmountCents || 0) / 100
-            const netValue = (gross - refund)
-
-            const created = new Date(order.createdAt!)
-            const fulfilled = order.fulfilledAt ? new Date(order.fulfilledAt) : null
-
-            let prepTimeStr = "N/A"
-            if (created && fulfilled) {
-                const diffMins = Math.round((fulfilled.getTime() - created.getTime()) / 60000)
-                prepTimeStr = `${diffMins} mins`
-            }
-
-            return {
-                id: order.id,
-                tid: order.tid,
-                status: order.status,
-                fulfillmentStatus: order.fulfillmentStatus,
-                date: order.createdAt,
-                approvedAt: order.approvedAt,
-                branchName: order.branchName,
-                organizationName: order.organizationName || order.receiptData?.organizationName,
-                netValue,
-                grossValue: gross,
-                refundAmount: refund,
-                skuCount: itemCounts[order.id] || 0,
-                customerLevel: (order.id % 5 === 0) ? "VIP" : "Regular",
-                preparationTime: prepTimeStr,
-                buyerName: order.receiptData?.buyerName || order.creatorName || "Walk-in Customer",
-                buyerPhone: order.receiptData?.buyerPhone || order.creatorPhone || "N/A",
-                creatorName: order.creatorName,
-                creatorEmployeeId: order.creatorEmployeeId,
-                items: detailedItemsMap[order.id] || []
-            }
-        })
-
-        // COMPARISON LOGIC
-        let comparisonSummary = null
-        if (searchParams.get("compare") === "true" && startDateParam && endDateParam) {
-            let prevStart: Date
-            let prevEnd: Date
-            
-            if (compareStartDateParam && compareEndDateParam) {
-                prevStart = parseStartDateParam(compareStartDateParam) || new Date(compareStartDateParam)
-                prevEnd = parseEndDateParam(compareEndDateParam) || new Date(compareEndDateParam)
-            } else {
-                const start = parseStartDateParam(startDateParam) || new Date(startDateParam)
-                const end = parseEndDateParam(endDateParam) || new Date(endDateParam)
-                const duration = end.getTime() - start.getTime()
-                prevStart = new Date(start.getTime() - duration - 1)
-                prevEnd = new Date(start.getTime() - 1)
-            }
-
-            // Correctly filter out createdAt conditions by rebuilding them
-            const compConditions: any[] = []
-            if (organizationId) compConditions.push(eq(orders.organizationId, organizationId))
-            if (branchIds.length > 0) {
-                compConditions.push(inArray(orders.branchId, branchIds))
-            } else if (branchId) {
-                compConditions.push(eq(orders.branchId, branchId))
-            }
-
-            (() => {
-                const compCond: any[] = []
-                if (parsedCompMonths.length > 0 || parsedCompYears.length > 0) {
-                    if (parsedCompMonths.length > 0) compCond.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedCompMonths, sql.raw(", "))})`)
-                    if (parsedCompYears.length > 0) compCond.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedCompYears, sql.raw(", "))})`)
-                } else if (prevStart && prevEnd) {
-                    compCond.push(gte(orders.createdAt, prevStart), lte(orders.createdAt, prevEnd))
-                }
-                if (compCond.length > 0) compConditions.push(and(...compCond))
-            })()
-
-            // Re-apply type-specific filters
-            if (type === "REVENUE") {
-                compConditions.push(sql`UPPER(${orders.status}) IN ('FULFILLED', 'APPROVED', 'PARTIAL', 'PARTIALLY_FULFILLED')`)
-            } else if (type === "FULFILLED") {
-                compConditions.push(eq(sql`UPPER(${orders.status})`, "FULFILLED"))
-            } else if (type === "REJECTED") {
-                compConditions.push(sql`UPPER(${orders.status}) IN ('REJECTED', 'CANCELLED')`)
-            } else if (type === "ORDERS") {
-                compConditions.push(sql`UPPER(${orders.status}) IN ('PENDING', 'APPROVED', 'FULFILLED', 'REFUNDED', 'REJECTED', 'CANCELLED', 'PARTIAL', 'PARTIALLY_FULFILLED')`)
-            } else if (type === "REFUNDED") {
-                compConditions.push(or(
-                    eq(sql`UPPER(${orders.status})`, "REFUNDED"),
-                    gt(sql`COALESCE(${orders.refundAmountCents}, 0)`, 0)
-                ))
-            } else if (type === "PENDING") {
-                compConditions.push(eq(sql`UPPER(${orders.status})`, "PENDING"))
-            } else if (type === "APPROVED") {
-                compConditions.push(eq(sql`UPPER(${orders.status})`, "APPROVED"))
-            } else if (type === "DELIVERED") {
-                compConditions.push(
-                    eq(sql`UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED'))`, "DELIVERED")
-                )
-            } else if (type === "NOT_DELIVERED") {
-                compConditions.push(
-                    sql`UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED')) <> 'DELIVERED'`
-                )
-            }
-
-            const compWhere = and(...compConditions)
-            const compData = await db.select({
-                id: orders.id,
-                status: orders.status,
-                totalCents: orders.totalCents,
-                refundAmountCents: orders.refundAmountCents,
-                createdAt: orders.createdAt,
-                fulfilledAt: orders.fulfilledAt,
-                receiptData: orders.receiptData,
-            })
-                .from(orders)
-                .where(compWhere)
-
-            const compOrderIds = compData.map(o => o.id)
-            let compItemCount = 0
-            if (compOrderIds.length > 0) {
-                const countsArr = await db.select({
-                    val: sql<number>`count(${orderItems.id})`
-                })
-                    .from(orderItems)
-                    .where(inArray(orderItems.orderId, compOrderIds))
-                compItemCount = Number(countsArr[0]?.val || 0)
-            }
-
-            let compGross = 0; let compRefund = 0; let compRejected = 0; let compDisc = 0
-            compData.forEach(o => {
-                const g = (o.totalCents || 0) / 100
-                const r = (o.refundAmountCents || 0) / 100
-                const s = (o.status || "").toUpperCase()
-                if (['FULFILLED', 'APPROVED', 'PARTIAL', 'PARTIALLY_FULFILLED'].includes(s)) { 
-                    compGross += g; compRefund += r 
-                } else if (s === 'REFUNDED') {
-                    compRefund += r
-                } else if (s === "REJECTED" || s === "CANCELLED") {
-                    compRejected += g
-                }
-                compDisc += (o.receiptData?.discount || 0)
-            })
-
-            comparisonSummary = {
-                grossRevenue: compGross,
-                netRevenue: compGross - compRefund,
-                totalItems: compItemCount,
-                totalOrders: compData.length,
-                leakage: compRejected + compDisc
-            }
-        }
-
         const payload = { items: formattedData, summary, comparison: comparisonSummary, total: rawData.length, pricesHidden }
         return ok(pricesHidden ? redactAnalyticsPrices(payload) : payload)
     } catch (e) {

@@ -9,6 +9,64 @@ import { cascadeOrgStatusChange } from "@/lib/inventory-cascade"
 import { getCached,invalidateByPrefix,scopedCacheKey,CACHE_TTL } from "@/lib/cache-utils"
 import { normalizeSafeImageUrl } from "@/lib/security"
 
+function validateOrganizationInventoryUpdate(body: any) {
+  const inventoryId = Number(body.id)
+  if (!Number.isInteger(inventoryId) || inventoryId <= 0) return { error: "Inventory ID is required" }
+  if (body.isActive !== undefined && typeof body.isActive !== "boolean") return { error: "isActive must be a boolean" }
+  if (body.customName !== undefined && body.customName !== null && (typeof body.customName !== "string" || body.customName.length > 255)) {
+    return { error: "customName must be at most 255 characters" }
+  }
+  if (body.customDescription !== undefined && body.customDescription !== null
+    && (typeof body.customDescription !== "string" || body.customDescription.length > 10_000)) {
+    return { error: "customDescription must be at most 10,000 characters" }
+  }
+  const customImageUrl = normalizeSafeImageUrl(body.customImageUrl)
+  if (body.customImageUrl && !customImageUrl) {
+    return { error: "Image URL must be a same-origin path, HTTPS URL, or supported raster data URL" }
+  }
+  let customPrice: number | null | undefined
+  if (body.customPrice === null || body.customPrice === "") customPrice = null
+  else if (body.customPrice !== undefined) {
+    const parsedPrice = Number(body.customPrice)
+    customPrice = Math.round(parsedPrice * 100)
+    if (!Number.isFinite(parsedPrice) || parsedPrice < 0 || !Number.isSafeInteger(customPrice)) {
+      return { error: "customPrice must be a non-negative amount" }
+    }
+  }
+  return { inventoryId, customImageUrl, customPrice }
+}
+
+function buildOrganizationInventoryUpdate(body: any, validated: any) {
+  return {
+    updatedAt: new Date(),
+    isActive: body.isActive,
+    customName: body.customName !== undefined ? body.customName || null : undefined,
+    customPrice: body.customPrice !== undefined ? validated.customPrice : undefined,
+    customDescription: body.customDescription !== undefined ? body.customDescription || null : undefined,
+    customImageUrl: body.customImageUrl !== undefined ? validated.customImageUrl : undefined,
+  }
+}
+
+async function cascadeOrganizationInventoryStatus(inventoryId: number, isActive: boolean, previousStatus: boolean, userId: string) {
+  if (isActive === previousStatus) return
+  const cascadeResult = await cascadeOrgStatusChange(inventoryId, isActive, userId, "HEAD_OFFICE")
+  await db.insert(auditLogs).values({
+    userId,
+    action: "CASCADE_UPDATE",
+    entity: "OrganizationInventory",
+    entityId: String(inventoryId),
+    metadata: {
+      organizationInventoryId: inventoryId,
+      isActive,
+      branchUpdates: cascadeResult.updatedCount,
+      affectedBranches: cascadeResult.affectedBranches,
+      performedByRole: "HEAD_OFFICE",
+    },
+  })
+  await invalidateByPrefix('org-inv')
+  await invalidateByPrefix('branch-inv')
+}
+
 // GET /api/v1/head-office/organization-inventory - List products in organization inventory
 export async function GET(req: NextRequest) {
   try {
@@ -180,43 +238,9 @@ export async function PUT(req: NextRequest) {
       customImageUrl
     } = body
 
-    const inventoryId = Number(id)
-    if (!Number.isInteger(inventoryId) || inventoryId <= 0) {
-      return NextResponse.json({ error: "Inventory ID is required" }, { status: 400 })
-    }
-    if (isActive !== undefined && typeof isActive !== "boolean") {
-      return NextResponse.json({ error: "isActive must be a boolean" }, { status: 400 })
-    }
-    if (customName !== undefined && customName !== null && (typeof customName !== "string" || customName.length > 255)) {
-      return NextResponse.json({ error: "customName must be at most 255 characters" }, { status: 400 })
-    }
-    if (
-      customDescription !== undefined &&
-      customDescription !== null &&
-      (typeof customDescription !== "string" || customDescription.length > 10_000)
-    ) {
-      return NextResponse.json({ error: "customDescription must be at most 10,000 characters" }, { status: 400 })
-    }
-
-    const normalizedCustomImageUrl = normalizeSafeImageUrl(customImageUrl)
-    if (customImageUrl && !normalizedCustomImageUrl) {
-      return NextResponse.json({
-        error: "Image URL must be a same-origin path, HTTPS URL, or supported raster data URL",
-      }, { status: 400 })
-    }
-
-    let customPriceCents: number | null | undefined
-    if (customPrice !== undefined) {
-      if (customPrice === null || customPrice === "") {
-        customPriceCents = null
-      } else {
-        const parsedPrice = Number(customPrice)
-        customPriceCents = Math.round(parsedPrice * 100)
-        if (!Number.isFinite(parsedPrice) || parsedPrice < 0 || !Number.isSafeInteger(customPriceCents)) {
-          return NextResponse.json({ error: "customPrice must be a non-negative amount" }, { status: 400 })
-        }
-      }
-    }
+    const validated = validateOrganizationInventoryUpdate(body)
+    if (validated.error) return NextResponse.json({ error: validated.error }, { status: 400 })
+    const inventoryId = validated.inventoryId!
 
     // Check if inventory item exists and get current status
     const [existingItem] = await db.select({
@@ -237,15 +261,7 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: "Inventory item not found or access denied" }, { status: 404 })
     }
 
-    const updateData: any = {
-      updatedAt: new Date()
-    }
-
-    if (isActive !== undefined) updateData.isActive = isActive
-    if (customName !== undefined) updateData.customName = customName || null
-    if (customPrice !== undefined) updateData.customPrice = customPriceCents
-    if (customDescription !== undefined) updateData.customDescription = customDescription || null
-    if (customImageUrl !== undefined) updateData.customImageUrl = normalizedCustomImageUrl
+    const updateData = buildOrganizationInventoryUpdate(body, validated)
 
     const [updatedInventory] = await db.update(organizationInventory)
       .set(updateData)
@@ -258,32 +274,8 @@ export async function PUT(req: NextRequest) {
       .returning()
 
     // If isActive status changed, cascade to branches
-    if (isActive !== undefined && isActive !== existingItem.isActive) {
-      const cascadeResult = await cascadeOrgStatusChange(
-        inventoryId,
-        isActive,
-        (session.user as any).id,
-        "HEAD_OFFICE"
-      )
-
-      // Log the cascade update
-      await db.insert(auditLogs).values({
-        userId: (session.user as any).id,
-        action: "CASCADE_UPDATE",
-        entity: "OrganizationInventory",
-        entityId: id.toString(),
-        metadata: {
-          organizationInventoryId: Number.parseInt(id),
-          isActive,
-          branchUpdates: cascadeResult.updatedCount,
-          affectedBranches: cascadeResult.affectedBranches,
-          performedByRole: "HEAD_OFFICE"
-        },
-      })
-
-      // Invalidate both organization and branch inventory caches
-      await invalidateByPrefix('org-inv')
-      await invalidateByPrefix('branch-inv')
+    if (isActive !== undefined) {
+      await cascadeOrganizationInventoryStatus(inventoryId, isActive, existingItem.isActive, (session.user as any).id)
     }
 
     // Log the update

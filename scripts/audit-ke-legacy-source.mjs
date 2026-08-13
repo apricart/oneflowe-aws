@@ -87,7 +87,7 @@ function parseHttpCalls(source, script) {
 }
 
 function parseTemplate(templateUrl, source) {
-  const strip = (value) => value.replace(/<[^>]+>/g, " ").replaceAll("&nbsp;", " ").replace(/\s+/g, " ").trim()
+  const strip = (value) => value.replace(/<[^>\r\n]*>/g, " ").replaceAll("&nbsp;", " ").replace(/\s+/g, " ").trim()
   return {
     templateUrl,
     titleCandidates: unique([
@@ -96,7 +96,7 @@ function parseTemplate(templateUrl, source) {
     ]).filter(Boolean).slice(0, 80),
     tableHeaders: unique(matchAll(source, /<th[^>]*>([\s\S]*?)<\/th>/gi).map(strip)).filter(Boolean),
     modelBindings: unique(matchAll(source, /ng-model\s*=\s*["']([^"']+)["']/gi)),
-    repeatedCollections: unique(matchAll(source, /ng-repeat\s*=\s*["'][^"']+\s+in\s+([^"'\s|]+)/gi)),
+    repeatedCollections: unique(matchAll(source, /ng-repeat\s*=\s*["'][^"'\s]+\s+in\s+([^"'\s|]+)/gi)),
     bytes: Buffer.byteLength(source),
   }
 }
@@ -122,7 +122,9 @@ async function authenticate() {
 
   const verifyPath = `api/Login/VerifyUser/${encodeURIComponent(email)}/null`
   const verified = JSON.parse((await request(verifyPath, { method: "POST" })).text)
-  const rows = Array.isArray(verified) ? verified : verified ? [verified] : []
+  let rows = []
+  if (Array.isArray(verified)) rows = verified
+  else if (verified) rows = [verified]
   return {
     attempted: true,
     success: rows.length > 0,
@@ -205,6 +207,6 @@ async function main() {
 try {
   await main()
 } catch (error) {
-  console.error(error.stack || error.message)
+  console.error("Legacy source audit failed")
   process.exitCode = 1
 }

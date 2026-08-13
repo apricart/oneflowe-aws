@@ -7,6 +7,57 @@ import { and,desc,eq,gte,lte } from "drizzle-orm"
 import { redactAnalyticsPrices,shouldHidePricesForRole } from "@/lib/price-visibility"
 import { parseEndDateParam,parseStartDateParam } from "@/lib/date-range-params"
 
+function getSuperAdminConditions(requestedOrganizationId: string | null, requestedBranchId: string | null) {
+    const conditions: any[] = []
+    if (requestedOrganizationId && requestedOrganizationId !== "all") {
+        conditions.push(eq(orders.organizationId, Number(requestedOrganizationId)))
+    }
+    if (requestedBranchId && requestedBranchId !== "all") {
+        conditions.push(eq(orders.branchId, Number(requestedBranchId)))
+    }
+    return { conditions }
+}
+
+function getHeadOfficeConditions(organizationId: number | null | undefined, requestedBranchId: string | null) {
+    const conditions: any[] = []
+    if (!organizationId) return { conditions, error: "Organization not found" }
+    conditions.push(eq(orders.organizationId, organizationId))
+    if (requestedBranchId && requestedBranchId !== "all") {
+        conditions.push(eq(orders.branchId, Number(requestedBranchId)))
+    }
+    return { conditions }
+}
+
+function getBranchConditions(branchId: number | null | undefined) {
+    if (!branchId) return { conditions: [], error: "Branch not assigned" }
+    return { conditions: [eq(orders.branchId, branchId)] }
+}
+
+function getAccessConditions(role: string, context: {
+    organizationId: number | null | undefined
+    branchId: number | null | undefined
+    requestedOrganizationId: string | null
+    requestedBranchId: string | null
+}): { conditions: any[]; error?: string } {
+    if (role === "SUPER_ADMIN") {
+        return getSuperAdminConditions(context.requestedOrganizationId, context.requestedBranchId)
+    }
+    if (role === "HEAD_OFFICE") {
+        return getHeadOfficeConditions(context.organizationId, context.requestedBranchId)
+    }
+    if (["BRANCH_ADMIN", "BRANCH_MANAGER", "ORDER_PORTAL"].includes(role)) {
+        return getBranchConditions(context.branchId)
+    }
+    return { conditions: [], error: "Forbidden" }
+}
+
+function addDateConditions(conditions: any[], startDate: string | null, endDate: string | null) {
+    const start = parseStartDateParam(startDate)
+    const end = parseEndDateParam(endDate)
+    if (start) conditions.push(gte(orders.createdAt, start))
+    if (end) conditions.push(lte(orders.createdAt, end))
+}
+
 export async function GET(req: NextRequest) {
     try {
         const session = await getServerSession(authOptions)
@@ -28,43 +79,18 @@ export async function GET(req: NextRequest) {
             branchId: users.branchId
         }).from(users).where(eq(users.id, userId)).limit(1)
 
-        const conditions = []
-
-        // 1. Role-Based Access Control
-        if (role === "SUPER_ADMIN") {
-            if (organizationIdParam && organizationIdParam !== "all") {
-                conditions.push(eq(orders.organizationId, Number(organizationIdParam)))
-            }
-            if (branchIdParam && branchIdParam !== "all") {
-                conditions.push(eq(orders.branchId, Number(branchIdParam)))
-            }
-        } else if (role === "HEAD_OFFICE") {
-            const orgId = currentUser?.organizationId
-            if (!orgId) return NextResponse.json({ error: "Organization not found" }, { status: 403 })
-
-            conditions.push(eq(orders.organizationId, orgId))
-
-            if (branchIdParam && branchIdParam !== "all") {
-                conditions.push(eq(orders.branchId, Number(branchIdParam)))
-            }
-        } else if (role === "BRANCH_ADMIN" || role === "BRANCH_MANAGER" || role === "ORDER_PORTAL") {
-            const bId = currentUser?.branchId
-            if (!bId) return NextResponse.json({ error: "Branch not assigned" }, { status: 403 })
-            conditions.push(eq(orders.branchId, bId))
-        } else {
-            return NextResponse.json({ error: "Forbidden" }, { status: 403 })
-        }
+        const access = getAccessConditions(role, {
+            organizationId: currentUser?.organizationId,
+            branchId: currentUser?.branchId,
+            requestedOrganizationId: organizationIdParam,
+            requestedBranchId: branchIdParam,
+        })
+        if (access.error) return NextResponse.json({ error: access.error }, { status: 403 })
+        const conditions = access.conditions
         const pricesHidden = await shouldHidePricesForRole(role, currentUser?.organizationId)
 
         // 2. Date Filtering
-        if (startDate) {
-            const start = parseStartDateParam(startDate)
-            if (start) conditions.push(gte(orders.createdAt, start))
-        }
-        if (endDate) {
-            const end = parseEndDateParam(endDate)
-            if (end) conditions.push(lte(orders.createdAt, end))
-        }
+        addDateConditions(conditions, startDate, endDate)
 
         // 3. Execution - Granular Details (Not Aggregated)
         const data = await db

@@ -43,7 +43,7 @@ function serializeEnvironmentValue(name, value) {
 
   // Next.js expands unescaped dollar signs while loading .env files. Escape
   // them so a secret containing "$" survives the build/runtime handoff.
-  const escapedValue = value.replaceAll('$', '\\$')
+  const escapedValue = value.replaceAll('$', String.raw`\$`)
 
   // Keep ordinary URLs, tokens, and numeric settings unquoted. Use a delimiter
   // only when dotenv would otherwise trim or treat part of the value as a

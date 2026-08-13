@@ -6,7 +6,6 @@ import { cn } from "@/lib/utils"
 import { Popover,PopoverContent,PopoverTrigger } from "@/components/ui/popover"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Checkbox } from "@/components/ui/checkbox"
 
 interface Item {
     id: string | number
@@ -170,34 +169,22 @@ export function MultiSelectFilter({
                             filteredItems.map((item) => {
                                 const isChecked = draft.includes(item.id)
                                 return (
-                                    <div
+                                    <label
                                         key={item.id}
-                                        role="checkbox"
-                                        aria-checked={isChecked}
-                                        tabIndex={0}
                                         className={cn(
                                             "flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-all",
                                             isChecked ? "bg-indigo-50/50 dark:bg-indigo-900/10 text-indigo-700 dark:text-indigo-300" : "hover:bg-slate-50 dark:hover:bg-slate-800/50 text-slate-600 dark:text-slate-400"
                                         )}
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            toggleItem(item.id);
-                                        }}
-                                        onKeyDown={(event) => {
-                                            if (event.key === "Enter" || event.key === " ") {
-                                                event.preventDefault()
-                                                event.stopPropagation()
-                                                toggleItem(item.id)
-                                            }
-                                        }}
+                                        onClick={(event) => event.stopPropagation()}
                                     >
-                                        <Checkbox
+                                        <input
+                                            type="checkbox"
                                             checked={isChecked}
-                                            onCheckedChange={() => {}}
-                                            className="h-4 w-4 rounded border-slate-300 dark:border-slate-600 data-[state=checked]:bg-indigo-600 pointer-events-none"
+                                            onChange={() => toggleItem(item.id)}
+                                            className="h-4 w-4 rounded border-slate-300 accent-indigo-600 dark:border-slate-600"
                                         />
                                         <span className="text-xs font-bold truncate uppercase">{item.label}</span>
-                                    </div>
+                                    </label>
                                 )
                             })
                         )

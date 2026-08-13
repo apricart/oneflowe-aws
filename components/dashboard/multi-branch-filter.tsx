@@ -170,20 +170,16 @@ export function MultiBranchFilter({ organizationId, selectedBranchIds, onChange 
                               return (
                                 <div className="space-y-1">
                                     {filteredBranches.map((branch) => (
-                                        <div
+                                        <label
                                             key={branch.id}
-                                            role="checkbox"
-                                            aria-checked={selectedBranchIds.includes(String(branch.id))}
-                                            tabIndex={0}
                                             className="flex items-center gap-3 p-3 rounded-xl transition-all duration-200 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700/50"
-                                            onClick={() => toggle(String(branch.id))}
-                                            onKeyDown={(event) => {
-                                                if (event.key === "Enter" || event.key === " ") {
-                                                    event.preventDefault()
-                                                    toggle(String(branch.id))
-                                                }
-                                            }}
                                         >
+                                            <input
+                                                type="checkbox"
+                                                className="sr-only"
+                                                checked={selectedBranchIds.includes(String(branch.id))}
+                                                onChange={() => toggle(String(branch.id))}
+                                            />
                                             {/* Checkbox */}
                                             <div className={`
                                                 flex-shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center transition-all duration-200
@@ -206,7 +202,7 @@ export function MultiBranchFilter({ organizationId, selectedBranchIds, onChange 
                                             `}>
                                                 {branch.name}
                                             </span>
-                                        </div>
+                                        </label>
                                     ))}
                                 </div>
                             )

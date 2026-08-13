@@ -413,7 +413,7 @@ workbookArchive["xl/styles.xml"] = strToU8(`<?xml version="1.0" encoding="UTF-8"
 </styleSheet>`)
 
 function styleCellTag(match, column, rowText, attributes, styleIndex) {
-  const cleanedAttributes = attributes.replace(/\s+s="[^"]*"/, "")
+  const cleanedAttributes = attributes.replace(/(?:^|\s)s="[^"]*"/, "")
   return `<c r="${column}${rowText}"${cleanedAttributes} s="${styleIndex}">`
 }
 

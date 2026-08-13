@@ -6,6 +6,88 @@ import { and, eq, ne, sql } from "drizzle-orm"
 import { getRequestScope } from "@/lib/auth"
 import { branchUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
 
+async function hasDuplicateBranchName(currentBranch: any, branchId: number, requestedName: unknown) {
+  if (requestedName === undefined) return false
+  const newName = String(requestedName).trim()
+  if (!newName) return false
+  const duplicateCandidates = await db
+    .select({
+      id: branches.id,
+      name: branches.name,
+      externalSource: branches.externalSource,
+      externalId: branches.externalId,
+    })
+    .from(branches)
+    .where(and(
+      eq(branches.organizationId, currentBranch.organizationId),
+      sql`lower(btrim(${branches.name})) = ${newName.toLowerCase()}`,
+      ne(branches.id, branchId),
+    ))
+  const currentHasExternalIdentity = Boolean(currentBranch.externalSource && currentBranch.externalId)
+  return duplicateCandidates.some((candidate) => {
+    if (!currentHasExternalIdentity) return true
+    const isDistinctSiblingFromSameSource = candidate.externalSource === currentBranch.externalSource
+      && candidate.externalId
+      && candidate.externalId !== currentBranch.externalId
+      && candidate.name.trim() !== newName
+    return !isDistinctSiblingFromSameSource
+  })
+}
+
+function getTextFieldUpdate(value: unknown, minimumLength: number, maximumLength: number, label: string) {
+  const normalized = String(value || "").trim()
+  if (normalized && (normalized.length < minimumLength || normalized.length > maximumLength)) {
+    return { error: `${label} must be between ${minimumLength} and ${maximumLength} characters` }
+  }
+  return { value: normalized || null }
+}
+
+function buildBranchPatch(body: any) {
+  const patch: any = {}
+  if (body.name !== undefined) patch.name = String(body.name)
+  const fields = [
+    ["province", 2, 100, "Branch province"],
+    ["city", 2, 100, "Branch city"],
+    ["address", 5, 500, "Branch address"],
+  ] as const
+  for (const [key, minimum, maximum, label] of fields) {
+    if (body[key] === undefined) continue
+    const result = getTextFieldUpdate(body[key], minimum, maximum, label)
+    if (result.error) return { patch, error: result.error }
+    patch[key] = result.value
+  }
+  if (body.costCenterId !== undefined) {
+    const costCenterId = String(body.costCenterId || "").trim()
+    if (costCenterId.length > 128) return { patch, error: "Cost center ID must be 128 characters or less" }
+    patch.costCenterId = costCenterId || null
+  }
+  if (body.status !== undefined) {
+    const normalized = String(body.status).toLowerCase()
+    const validStatuses = ['active', 'inactive', 'suspended']
+    if (!validStatuses.includes(normalized)) {
+      return { patch, error: `Status must be one of: ${validStatuses.join(', ')}` }
+    }
+    patch.status = normalized
+  }
+  if (body.groupId !== undefined) patch.groupId = body.groupId === null ? null : Number(body.groupId)
+  patch.updatedAt = new Date()
+  return { patch }
+}
+
+async function validateBranchGroup(groupId: number | null | undefined, organizationId: number) {
+  if (!groupId) return true
+  const [group] = await db
+    .select({ id: groups.id })
+    .from(groups)
+    .where(and(
+      eq(groups.id, groupId),
+      eq(groups.organizationId, organizationId),
+      ne(groups.status, "deleted"),
+    ))
+    .limit(1)
+  return Boolean(group)
+}
+
 export async function GET(
   _: Request,
   props: { params: Promise<{ id: string }> }
@@ -76,92 +158,15 @@ export async function PATCH(
       }
     }
 
-    if (body.name !== undefined) {
-      const newName = String(body.name).trim()
-      if (newName) {
-        const duplicateCandidates = await db
-          .select({
-            id: branches.id,
-            name: branches.name,
-            externalSource: branches.externalSource,
-            externalId: branches.externalId,
-          })
-          .from(branches)
-          .where(and(
-            eq(branches.organizationId, currentBranch.organizationId),
-            sql`lower(btrim(${branches.name})) = ${newName.toLowerCase()}`,
-            ne(branches.id, Number(id))
-          ))
-        const currentHasExternalIdentity = Boolean(currentBranch.externalSource && currentBranch.externalId)
-        const duplicateExists = duplicateCandidates.some((candidate) => {
-          if (!currentHasExternalIdentity) return true
-          const isDistinctSiblingFromSameSource = Boolean(
-            candidate.externalSource === currentBranch.externalSource
-            && candidate.externalId
-            && candidate.externalId !== currentBranch.externalId
-            && candidate.name.trim() !== newName,
-          )
-          return !isDistinctSiblingFromSameSource
-        })
-        if (duplicateExists) {
-          return error("A branch with this name already exists in this organization.", 409)
-        }
-      }
+    if (await hasDuplicateBranchName(currentBranch, Number(id), body.name)) {
+      return error("A branch with this name already exists in this organization.", 409)
     }
-
-    if (body.groupId) {
-      const [group] = await db
-        .select({ id: groups.id })
-        .from(groups)
-        .where(and(
-          eq(groups.id, body.groupId),
-          eq(groups.organizationId, currentBranch.organizationId),
-          ne(groups.status, "deleted"),
-        ))
-        .limit(1)
-      if (!group) return error("Group does not belong to this organization", 400)
+    if (!await validateBranchGroup(body.groupId, currentBranch.organizationId)) {
+      return error("Group does not belong to this organization", 400)
     }
-
-    const patch: any = {}
-    if (body.name !== undefined) patch.name = String(body.name)
-    if (body.province !== undefined) {
-      const province = String(body.province || "").trim()
-      if (province && (province.length < 2 || province.length > 100)) {
-        return error("Branch province must be between 2 and 100 characters", 400)
-      }
-      patch.province = province || null
-    }
-    if (body.city !== undefined) {
-      const city = String(body.city || "").trim()
-      if (city && (city.length < 2 || city.length > 100)) {
-        return error("Branch city must be between 2 and 100 characters", 400)
-      }
-      patch.city = city || null
-    }
-    if (body.address !== undefined) {
-      const address = String(body.address || "").trim()
-      if (address && (address.length < 5 || address.length > 500)) {
-        return error("Branch address must be between 5 and 500 characters", 400)
-      }
-      patch.address = address || null
-    }
-    if (body.costCenterId !== undefined) {
-      const costCenterId = String(body.costCenterId || "").trim()
-      if (costCenterId.length > 128) {
-        return error("Cost center ID must be 128 characters or less", 400)
-      }
-      patch.costCenterId = costCenterId || null
-    }
-    if (body.status !== undefined) {
-      const normalized = String(body.status).toLowerCase()
-      const validStatuses = ['active', 'inactive', 'suspended']
-      if (!validStatuses.includes(normalized)) {
-        return error(`Status must be one of: ${validStatuses.join(', ')}`, 400)
-      }
-      patch.status = normalized
-    }
-    if (body.groupId !== undefined) patch.groupId = body.groupId === null ? null : Number(body.groupId)
-    patch.updatedAt = new Date()
+    const patchResult = buildBranchPatch(body)
+    if (patchResult.error) return error(patchResult.error, 400)
+    const patch = patchResult.patch
     const [item] = await db.update(branches).set(patch).where(eq(branches.id, Number(id))).returning()
 
     // Invalidate branches and groups cache so GET returns fresh data immediately

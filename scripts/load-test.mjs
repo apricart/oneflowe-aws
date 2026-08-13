@@ -3,8 +3,13 @@ import { randomInt } from "node:crypto"
 import { dirname, resolve } from "node:path"
 import { performance } from "node:perf_hooks"
 
-const targetUrl = String(process.env.LOAD_TARGET_URL || "https://oneflowe.apricart.com")
-  .replace(/\/+$/, "")
+function stripTrailingSlashes(value) {
+  let end = value.length
+  while (end > 0 && value[end - 1] === "/") end -= 1
+  return value.slice(0, end)
+}
+
+const targetUrl = stripTrailingSlashes(String(process.env.LOAD_TARGET_URL || "https://oneflowe.apricart.com"))
 const branchAdminUsername = String(process.env.LOAD_BA_USERNAME || "").trim()
 const orderPortalUsername = String(process.env.LOAD_OP_USERNAME || "").trim()
 const password = String(process.env.LOAD_PASSWORD || "")
@@ -111,7 +116,20 @@ function parseStages(raw) {
 
 function splitSetCookieHeader(header) {
   if (!header) return []
-  return header.split(/,(?=\s*[^;,=]+=[^;,]+)/g)
+  const cookies = []
+  let current = ""
+  for (const segment of header.split(",")) {
+    const trimmed = segment.trimStart()
+    const startsCookie = /^[^;=\s]+=[^;,]*/.test(trimmed)
+    if (current && startsCookie) {
+      cookies.push(current)
+      current = trimmed
+    } else {
+      current += current ? `,${segment}` : segment
+    }
+  }
+  if (current) cookies.push(current)
+  return cookies
 }
 
 function sleep(ms) {
@@ -515,7 +533,7 @@ async function main() {
     currentPhase = "cooldown"
     stopping = true
     desiredVus = 0
-    await Promise.allSettled([...workers.values()])
+    await Promise.allSettled(workers.values())
   }
 
   const testEnded = performance.now()
@@ -565,9 +583,11 @@ async function main() {
   )
 }
 
-main().catch((error) => {
+try {
+  await main()
+} catch (error) {
   stopping = true
   desiredVus = 0
   process.stderr.write(`Load test failed: ${safeErrorName(error)}: ${String(error?.message || error)}\n`)
   process.exitCode = 1
-})
+}

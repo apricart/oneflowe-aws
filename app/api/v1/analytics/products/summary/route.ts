@@ -21,6 +21,73 @@ function parseNumericId(value: string | null, paramName: string): number | null 
     return parsed
 }
 
+function getSuperAdminSummaryConditions(organizationId: number | null, branchId: number | null, groupId: number | null) {
+    const conditions: any[] = []
+    if (organizationId) conditions.push(eq(orders.organizationId, organizationId))
+    if (branchId) conditions.push(eq(orders.branchId, branchId))
+    if (groupId) conditions.push(eq(branches.groupId, groupId))
+    return conditions
+}
+
+function getHeadOfficeSummaryConditions(userOrganizationId: number | null | undefined, branchId: number | null, groupId: number | null) {
+    if (!userOrganizationId) throw new Error("No organization assigned to user")
+    const conditions: any[] = [eq(orders.organizationId, userOrganizationId)]
+    if (branchId) conditions.push(eq(orders.branchId, branchId))
+    if (groupId) conditions.push(eq(branches.groupId, groupId))
+    return conditions
+}
+
+function getRoleSummaryConditions(role: string, context: {
+    userOrganizationId: number | null | undefined
+    userBranchId: number | null | undefined
+    organizationId: number | null
+    branchId: number | null
+    groupId: number | null
+}) {
+    if (role === "SUPER_ADMIN") {
+        return getSuperAdminSummaryConditions(context.organizationId, context.branchId, context.groupId)
+    }
+    if (role === "HEAD_OFFICE") {
+        return getHeadOfficeSummaryConditions(context.userOrganizationId, context.branchId, context.groupId)
+    }
+    if (!["BRANCH_ADMIN", "BRANCH_MANAGER", "ORDER_PORTAL"].includes(role)) {
+        throw new Error("Insufficient permissions")
+    }
+    if (!context.userBranchId) throw new Error("No branch assigned to user")
+    return [eq(orders.branchId, context.userBranchId)]
+}
+
+function buildProductSummaryConditions({
+    role,
+    userOrganizationId,
+    userBranchId,
+    organizationId,
+    branchId,
+    groupId,
+    startDate,
+    endDate,
+}: {
+    role: string
+    userOrganizationId: number | null | undefined
+    userBranchId: number | null | undefined
+    organizationId: number | null
+    branchId: number | null
+    groupId: number | null
+    startDate: Date | null | undefined
+    endDate: Date | null | undefined
+}) {
+    const conditions = getRoleSummaryConditions(role, {
+        userOrganizationId,
+        userBranchId,
+        organizationId,
+        branchId,
+        groupId,
+    })
+    if (startDate) conditions.push(gte(orders.createdAt, startDate))
+    if (endDate) conditions.push(lte(orders.createdAt, endDate))
+    return conditions
+}
+
 export async function GET(req: NextRequest) {
     try {
         const session = await getServerSession(authOptions)
@@ -79,34 +146,16 @@ export async function GET(req: NextRequest) {
         })
 
         const fetchData = async () => {
-            const conditions = []
-
-            if (role === "SUPER_ADMIN") {
-                if (organizationId) conditions.push(eq(orders.organizationId, organizationId))
-                if (branchId) conditions.push(eq(orders.branchId, branchId))
-                if (groupId) conditions.push(eq(branches.groupId, groupId))
-            } else if (role === "HEAD_OFFICE") {
-                if (!userOrgId) {
-                    throw new Error("No organization assigned to user")
-                }
-                conditions.push(eq(orders.organizationId, userOrgId))
-                if (branchId) conditions.push(eq(orders.branchId, branchId))
-                if (groupId) conditions.push(eq(branches.groupId, groupId))
-            } else if (role === "BRANCH_ADMIN" || role === "BRANCH_MANAGER" || role === "ORDER_PORTAL") {
-                if (!userBranchId) {
-                    throw new Error("No branch assigned to user")
-                }
-                conditions.push(eq(orders.branchId, userBranchId))
-            } else {
-                throw new Error("Insufficient permissions")
-            }
-
-            if (startDate) {
-                conditions.push(gte(orders.createdAt, startDate))
-            }
-            if (endDate) {
-                conditions.push(lte(orders.createdAt, endDate))
-            }
+            const conditions = buildProductSummaryConditions({
+                role,
+                userOrganizationId: userOrgId,
+                userBranchId,
+                organizationId,
+                branchId,
+                groupId,
+                startDate,
+                endDate,
+            })
 
             const data = await db
                 .select({

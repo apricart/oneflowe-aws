@@ -133,6 +133,7 @@
     "dotenv": "^17.2.3",
     "drizzle-kit": "0.31.10",
     "eslint": "10.8.0",
+    "eslint-plugin-sonarjs": "4.2.0",
     "eslint-plugin-react-hooks": "7.1.1",
     "globals": "17.8.0",
     "jsdom": "^28.1.0",

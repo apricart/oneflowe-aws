@@ -57,6 +57,191 @@ function assertRefundQuantitiesAvailable(
     }
 }
 
+function validateAdminRefundRequest(input: any) {
+    if (!input.orderId || !Number.isFinite(input.orderId) || input.orderId <= 0) return "Valid order ID is required"
+    if (input.refundRequestId !== undefined && (!Number.isInteger(input.refundRequestId) || input.refundRequestId <= 0)) {
+        return "Valid refund request ID is required"
+    }
+    if (!Array.isArray(input.items) || input.items.length === 0) return "At least one item must be selected for refund"
+    for (const item of input.items) {
+        if (!item.itemId || !Number.isFinite(item.itemId) || item.itemId <= 0) return "Invalid item ID in refund items"
+        if (!item.quantity || !Number.isFinite(item.quantity) || item.quantity <= 0) return "Refund quantity must be positive"
+    }
+    if (input.reason !== undefined && input.reason !== null) {
+        if (typeof input.reason !== "string") return "Reason must be a string"
+        if (input.reason.trim().length > 500) return "Reason must not exceed 500 characters"
+    }
+    return null
+}
+
+async function loadRefundOrder(orderId: number) {
+    const [order] = await db
+        .select({
+            id: orders.id,
+            tid: orders.tid,
+            organizationId: orders.organizationId,
+            branchId: orders.branchId,
+            status: orders.status,
+            totalCents: orders.totalCents,
+            subtotalCents: orders.subtotalCents,
+            taxCents: orders.taxCents,
+            statusAtRefund: orders.statusAtRefund,
+            refundedAt: orders.refundedAt,
+            refundAmountCents: orders.refundAmountCents,
+            refundReason: orders.refundReason,
+            createdAt: orders.createdAt,
+        })
+        .from(orders)
+        .where(eq(orders.id, orderId))
+        .limit(1)
+    return order
+}
+
+async function loadPendingRefundRequest(refundRequestId: number | undefined, order: any) {
+    if (!refundRequestId) return null
+    const [pendingRequest] = await db
+        .select({ id: refunds.id, reason: refunds.reason, refundNumber: refunds.refundNumber })
+        .from(refunds)
+        .where(and(
+            eq(refunds.id, refundRequestId),
+            eq(refunds.orderId, order.id),
+            eq(refunds.organizationId, order.organizationId),
+            eq(refunds.status, "PENDING"),
+        ))
+        .limit(1)
+    return pendingRequest
+}
+
+function getRefundEligibilityError(order: any) {
+    const currentStatus = String(order.status || "").toUpperCase()
+    if (!isRefundEligibleOrderStatus(currentStatus)) {
+        return `Order in ${currentStatus || "unknown"} state is not eligible for a refund.`
+    }
+    const orderDate = new Date(order.createdAt || new Date())
+    const now = new Date()
+    if (orderDate.getMonth() === now.getMonth() && orderDate.getFullYear() === now.getFullYear()) return null
+    const orderMonthName = orderDate.toLocaleString('default', { month: 'long', year: 'numeric' })
+    return `Refunds are only allowed for orders in the current month. This order is from ${orderMonthName}.`
+}
+
+async function loadRefundOrderItems(orderId: number) {
+    return db
+        .select({
+            id: orderItems.id,
+            organizationId: orderItems.organizationId,
+            organizationInventoryId: orderItems.organizationInventoryId,
+            orderId: orderItems.orderId,
+            globalProductId: orderItems.globalProductId,
+            productName: orderItems.productName,
+            productCode: orderItems.productCode,
+            unit: orderItems.unit,
+            quantity: orderItems.quantity,
+            priceCents: orderItems.priceCents,
+            createdAt: orderItems.createdAt,
+            allowDecimalQuantity: globalProducts.allowDecimalQuantity,
+            quantityStep: globalProducts.quantityStep,
+        })
+        .from(orderItems)
+        .leftJoin(globalProducts, eq(orderItems.globalProductId, globalProducts.id))
+        .where(eq(orderItems.orderId, orderId))
+}
+
+async function loadApprovedQuantities(orderId: number) {
+    const rows = await db
+        .select({ refundId: refundItems.refundId, orderItemId: refundItems.orderItemId, quantity: refundItems.quantity })
+        .from(refundItems)
+        .innerJoin(refunds, eq(refunds.id, refundItems.refundId))
+        .where(and(
+            eq(refunds.orderId, orderId),
+            or(eq(refunds.status, "APPROVED"), eq(refunds.status, "COMPLETED"), eq(refunds.status, "PENDING")),
+        ))
+    const records = await db.select({ id: refunds.id, status: refunds.status }).from(refunds).where(eq(refunds.orderId, orderId))
+    const statuses = new Map(records.map((record) => [record.id, record.status]))
+    const approved = new Map<number, number>()
+    for (const row of rows) {
+        if (!["APPROVED", "COMPLETED"].includes(statuses.get(row.refundId) || "")) continue
+        approved.set(row.orderItemId, (approved.get(row.orderItemId) || 0) + row.quantity)
+    }
+    return approved
+}
+
+function calculateRefundDetails(items: any[], orderItemsById: Map<number, any>, approvedQuantities: Map<number, number>) {
+    const details: any[] = []
+    let total = 0
+    for (const requestedItem of items) {
+        const orderItem = orderItemsById.get(requestedItem.itemId)
+        if (!orderItem) return { error: `Item ID ${requestedItem.itemId} not found in this order` }
+        const validation = validateProductQuantity(requestedItem.quantity, {
+            allowDecimalQuantity: orderItem.allowDecimalQuantity,
+            quantityStep: orderItem.quantityStep,
+            label: `Refund quantity for ${orderItem.productName}`,
+        })
+        if (!validation.ok) return { error: validation.error }
+        const approved = approvedQuantities.get(requestedItem.itemId) || 0
+        const remaining = orderItem.quantity - approved
+        if (validation.quantity > remaining) {
+            return { error: `Refund quantity (${formatQuantity(validation.quantity)}) exceeds remaining quantity (${formatQuantity(remaining)}) for item: ${orderItem.productName} (Approved: ${formatQuantity(approved)})` }
+        }
+        const itemTotal = calculateLineCents(orderItem.priceCents, validation.quantity)
+        total += itemTotal
+        details.push({
+            itemId: requestedItem.itemId,
+            productName: orderItem.productName,
+            quantity: validation.quantity,
+            priceCents: orderItem.priceCents,
+            totalCents: itemTotal,
+        })
+    }
+    if (!Number.isSafeInteger(total) || total <= 0) return { error: "Selected items do not have a positive refundable amount" }
+    return { details, total }
+}
+
+async function prepareAdminRefund(input: any) {
+    const inputError = validateAdminRefundRequest(input)
+    if (inputError) return { response: NextResponse.json({ error: inputError }, { status: 400 }) }
+    const order = await loadRefundOrder(input.orderId)
+    if (!order) return { response: NextResponse.json({ error: "Order not found" }, { status: 404 }) }
+    const pendingRequest = await loadPendingRefundRequest(input.refundRequestId, order)
+    if (input.refundRequestId && !pendingRequest) {
+        return { response: NextResponse.json({
+            error: "This refund request is no longer pending or does not belong to this order and organization.",
+        }, { status: 409 }) }
+    }
+    const eligibilityError = getRefundEligibilityError(order)
+    if (eligibilityError) return { response: NextResponse.json({ error: eligibilityError }, { status: 400 }) }
+    const orderItems = await loadRefundOrderItems(input.orderId)
+    if (orderItems.length === 0) {
+        return { response: NextResponse.json({ error: "No items found for this order" }, { status: 404 }) }
+    }
+    const orderItemsById = new Map(orderItems.map((item) => [item.id, item]))
+    const approvedQuantities = await loadApprovedQuantities(input.orderId)
+    const calculation = calculateRefundDetails(input.items, orderItemsById, approvedQuantities)
+    if (calculation.error) {
+        return { response: NextResponse.json({ error: calculation.error }, { status: 400 }) }
+    }
+    const approvedTotal = await db
+        .select({ amount: refunds.amountCents })
+        .from(refunds)
+        .where(and(
+            eq(refunds.orderId, input.orderId),
+            or(eq(refunds.status, "APPROVED"), eq(refunds.status, "COMPLETED")),
+        ))
+        .then((rows) => rows.reduce((sum, row) => sum + (row.amount || 0), 0))
+    const total = calculation.total!
+    if (total > (order.totalCents || 0) - approvedTotal) {
+        return { response: NextResponse.json({
+            error: `Total refund amount (PKR ${(total / 100).toFixed(2)}) exceeds remaining capacity (Total: ${((order.totalCents || 0) / 100).toFixed(2)}, Approved: ${(approvedTotal / 100).toFixed(2)}).`,
+        }, { status: 400 }) }
+    }
+    return {
+        order,
+        pendingRequest,
+        orderItemsById,
+        details: calculation.details!,
+        total,
+    }
+}
+
 /**
  * GET /api/v1/admin/refunds/search?q=<order_tid_or_id>
  * Search for an order by TID or internal ID (Super Admin only)
@@ -305,258 +490,14 @@ export async function POST(req: NextRequest) {
         if (!parsedBody.success) {
             return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
         }
-        const { orderId, items, reason, refundRequestId } = parsedBody.data
-
-        // ===== INPUT VALIDATION =====
-
-        // Validate orderId
-        if (!orderId || !Number.isFinite(orderId) || orderId <= 0) {
-            return NextResponse.json({ error: "Valid order ID is required" }, { status: 400 })
-        }
-
-        if (refundRequestId !== undefined && (!Number.isInteger(refundRequestId) || refundRequestId <= 0)) {
-            return NextResponse.json({ error: "Valid refund request ID is required" }, { status: 400 })
-        }
-
-        // Validate items array
-        if (!Array.isArray(items) || items.length === 0) {
-            return NextResponse.json({ error: "At least one item must be selected for refund" }, { status: 400 })
-        }
-
-        // Validate each item
-        for (const item of items) {
-            if (!item.itemId || !Number.isFinite(item.itemId) || item.itemId <= 0) {
-                return NextResponse.json({ error: "Invalid item ID in refund items" }, { status: 400 })
-            }
-            if (!item.quantity || !Number.isFinite(item.quantity) || item.quantity <= 0) {
-                return NextResponse.json({ error: "Refund quantity must be positive" }, { status: 400 })
-            }
-        }
-
-        // Validate reason
-        if (reason !== undefined && reason !== null) {
-            if (typeof reason !== "string") {
-                return NextResponse.json({ error: "Reason must be a string" }, { status: 400 })
-            }
-            if (reason.trim().length > 500) {
-                return NextResponse.json({ error: "Reason must not exceed 500 characters" }, { status: 400 })
-            }
-        }
-
-        // ===== FETCH ORDER =====
-        const [orderData] = await db
-            .select({
-                id: orders.id,
-                tid: orders.tid,
-                organizationId: orders.organizationId,
-                branchId: orders.branchId,
-                status: orders.status,
-                totalCents: orders.totalCents,
-                subtotalCents: orders.subtotalCents,
-                taxCents: orders.taxCents,
-                statusAtRefund: orders.statusAtRefund,
-                refundedAt: orders.refundedAt,
-                refundAmountCents: orders.refundAmountCents,
-                refundReason: orders.refundReason,
-                createdAt: orders.createdAt,
-            })
-            .from(orders)
-            .where(eq(orders.id, orderId))
-            .limit(1)
-
-        if (!orderData) {
-            return NextResponse.json({ error: "Order not found" }, { status: 404 })
-        }
-
-        const [pendingRefundRequest] = refundRequestId
-            ? await db
-                .select({
-                    id: refunds.id,
-                    reason: refunds.reason,
-                    refundNumber: refunds.refundNumber,
-                })
-                .from(refunds)
-                .where(and(
-                    eq(refunds.id, refundRequestId),
-                    eq(refunds.orderId, orderData.id),
-                    eq(refunds.organizationId, orderData.organizationId!),
-                    eq(refunds.status, "PENDING"),
-                ))
-                .limit(1)
-            : []
-
-        if (refundRequestId && !pendingRefundRequest) {
-            return NextResponse.json({
-                error: "This refund request is no longer pending or does not belong to this order and organization."
-            }, { status: 409 })
-        }
-
-        // ===== STATUS VALIDATION =====
-        const currentStatus = String(orderData.status || "").toUpperCase()
-
-        // No longer blocking PENDING orders as per user request
-
-        if (!isRefundEligibleOrderStatus(currentStatus)) {
-            return NextResponse.json({
-                error: `Order in ${currentStatus || "unknown"} state is not eligible for a refund.`
-            }, { status: 400 })
-        }
-
-        // ===== VALIDATE REFUND PERIOD (SAME MONTH ONLY) =====
-        const orderDate = new Date(orderData.createdAt || new Date())
-        const now = new Date()
-        const isSameMonth = orderDate.getMonth() === now.getMonth()
-        const isSameYear = orderDate.getFullYear() === now.getFullYear()
-
-        if (!isSameMonth || !isSameYear) {
-            const orderMonthName = orderDate.toLocaleString('default', { month: 'long', year: 'numeric' })
-            return NextResponse.json({
-                error: `Refunds are only allowed for orders in the current month. This order is from ${orderMonthName}.`
-            }, { status: 403 })
-        }
-
-        // ===== FETCH ORDER ITEMS & VALIDATE QUANTITIES =====
-        const orderItemsData = await db
-            .select({
-                id: orderItems.id,
-                organizationId: orderItems.organizationId,
-                organizationInventoryId: orderItems.organizationInventoryId,
-                orderId: orderItems.orderId,
-                globalProductId: orderItems.globalProductId,
-                productName: orderItems.productName,
-                productCode: orderItems.productCode,
-                unit: orderItems.unit,
-                quantity: orderItems.quantity,
-                priceCents: orderItems.priceCents,
-                createdAt: orderItems.createdAt,
-                allowDecimalQuantity: globalProducts.allowDecimalQuantity,
-                quantityStep: globalProducts.quantityStep,
-            })
-            .from(orderItems)
-            .leftJoin(globalProducts, eq(orderItems.globalProductId, globalProducts.id))
-            .where(eq(orderItems.orderId, orderId))
-
-        if (orderItemsData.length === 0) {
-            return NextResponse.json({ error: "No items found for this order" }, { status: 404 })
-        }
-
-        // Create a map for quick lookup
-        const orderItemsMap = new Map(orderItemsData.map(item => [item.id, item]))
-
-        // Fetch already refunded items to calculate remaining quantity
-        const refundedItemsData = await db
-            .select({
-                refundId: refundItems.refundId, // Added to link to refund status
-                orderItemId: refundItems.orderItemId,
-                quantity: refundItems.quantity,
-            })
-            .from(refundItems)
-            .innerJoin(refunds, eq(refunds.id, refundItems.refundId))
-            .where(and(
-                eq(refunds.orderId, orderId),
-                or(
-                    eq(refunds.status, "APPROVED"),
-                    eq(refunds.status, "COMPLETED"),
-                    eq(refunds.status, "PENDING")
-                )
-            ))
-
-        // Fetch refund records with status to distinguish
-        const refundRecords = await db
-            .select({
-                id: refunds.id,
-                status: refunds.status,
-            })
-            .from(refunds)
-            .where(eq(refunds.orderId, orderId))
-
-        const refundStatusMap = new Map(refundRecords.map(r => [r.id, r.status]))
-
-        const approvedQuantityMap = new Map<number, number>()
-        const pendingQuantityMap = new Map<number, number>()
-
-        for (const record of refundedItemsData) {
-            const status = refundStatusMap.get(record.refundId)
-            if (status === "APPROVED" || status === "COMPLETED") {
-                const current = approvedQuantityMap.get(record.orderItemId) || 0
-                approvedQuantityMap.set(record.orderItemId, current + record.quantity)
-            } else if (status === "PENDING") {
-                const current = pendingQuantityMap.get(record.orderItemId) || 0
-                pendingQuantityMap.set(record.orderItemId, current + record.quantity)
-            }
-        }
-
-        let totalRefundAmount = 0
-        const refundDetails: Array<{
-            itemId: number
-            productName: string
-            quantity: number
-            priceCents: number
-            totalCents: number
-        }> = []
-
-        // Validate each refund item and calculate total
-        for (const refundItem of items) {
-            const orderItem = orderItemsMap.get(refundItem.itemId)
-
-            if (!orderItem) {
-                return NextResponse.json({
-                    error: `Item ID ${refundItem.itemId} not found in this order`
-                }, { status: 400 })
-            }
-
-            const quantityValidation = validateProductQuantity(refundItem.quantity, {
-                allowDecimalQuantity: orderItem.allowDecimalQuantity,
-                quantityStep: orderItem.quantityStep,
-                label: `Refund quantity for ${orderItem.productName}`,
-            })
-            if (!quantityValidation.ok) {
-                return NextResponse.json({ error: quantityValidation.error }, { status: 400 })
-            }
-
-            const approvedQty = approvedQuantityMap.get(refundItem.itemId) || 0
-            const remainingQty = orderItem.quantity - approvedQty
-
-            // Validate quantity doesn't exceed remaining amount
-            if (quantityValidation.quantity > remainingQty) {
-                return NextResponse.json({
-                    error: `Refund quantity (${formatQuantity(quantityValidation.quantity)}) exceeds remaining quantity (${formatQuantity(remainingQty)}) for item: ${orderItem.productName} (Approved: ${formatQuantity(approvedQty)})`
-                }, { status: 400 })
-            }
-
-            const itemTotal = calculateLineCents(orderItem.priceCents, quantityValidation.quantity)
-            totalRefundAmount += itemTotal
-
-            refundDetails.push({
-                itemId: refundItem.itemId,
-                productName: orderItem.productName,
-                quantity: quantityValidation.quantity,
-                priceCents: orderItem.priceCents,
-                totalCents: itemTotal
-            })
-        }
-
-        if (!Number.isSafeInteger(totalRefundAmount) || totalRefundAmount <= 0) {
-            return NextResponse.json({ error: "Selected items do not have a positive refundable amount" }, { status: 400 })
-        }
-
-        // ===== VALIDATE REFUND AMOUNT =====
-        const orderTotal = orderData.totalCents || 0
-        const approvedTotal = await db
-            .select({ amount: refunds.amountCents })
-            .from(refunds)
-            .where(and(eq(refunds.orderId, orderId), or(eq(refunds.status, "APPROVED"), eq(refunds.status, "COMPLETED"))))
-            .then(res => res.reduce((sum, r) => sum + (r.amount || 0), 0))
-
-
-        const remainingRefundable = orderTotal - approvedTotal
-
-        if (totalRefundAmount > remainingRefundable) {
-            return NextResponse.json({
-                error: `Total refund amount (PKR ${(totalRefundAmount / 100).toFixed(2)}) exceeds remaining capacity (Total: ${(orderTotal / 100).toFixed(2)}, Approved: ${(approvedTotal / 100).toFixed(2)}).`
-            }, { status: 400 })
-        }
-
+        const { orderId, reason } = parsedBody.data
+        const preparation = await prepareAdminRefund(parsedBody.data)
+        if (preparation.response) return preparation.response
+        const orderData = preparation.order!
+        const pendingRefundRequest = preparation.pendingRequest
+        const orderItemsMap = preparation.orderItemsById!
+        const refundDetails = preparation.details!
+        const totalRefundAmount = preparation.total!
         const effectiveReason = resolveAdminRefundReason(reason, pendingRefundRequest?.reason)
 
         // ===== PROCESS REFUND IN TRANSACTION =====

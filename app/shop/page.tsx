@@ -116,8 +116,9 @@ interface OrderItem {
 }
 
 type RefundState = "none" | "partial" | "full"
+type RefundableOrder = Pick<Order, "status" | "totalCents" | "refundAmountCents" | "orderItems">
 
-const getRefundState = (order: Pick<Order, "status" | "totalCents" | "refundAmountCents" | "orderItems">): RefundState => {
+const getRefundState = (order: RefundableOrder): RefundState => {
   if ((order.status || "").toLowerCase() === "refunded") return "full"
 
   if (order.orderItems?.length) {
@@ -134,10 +135,10 @@ const getRefundState = (order: Pick<Order, "status" | "totalCents" | "refundAmou
   return refundAmount >= order.totalCents ? "full" : "partial"
 }
 
-const isRefundRelatedOrder = (order: Pick<Order, "status" | "totalCents" | "refundAmountCents" | "orderItems">) =>
+const isRefundRelatedOrder = (order: RefundableOrder) =>
   getRefundState(order) !== "none"
 
-const isActiveOrder = (order: Pick<Order, "status" | "totalCents" | "refundAmountCents" | "orderItems">) =>
+const isActiveOrder = (order: RefundableOrder) =>
   getRefundState(order) === "none"
 
 const getProductStep = (product: Pick<Product, "allowDecimalQuantity" | "quantityStep">) =>
@@ -153,6 +154,22 @@ const clampProductQuantity = (product: Pick<Product, "stock" | "allowDecimalQuan
   const clamped = Math.min(Math.max(roundQuantity(quantity), minQuantity), maxStock)
   const stepped = Math.round(clamped / step) * step
   return roundQuantity(Math.min(Math.max(stepped, minQuantity), maxStock))
+}
+
+function isAuthorizedForOrderPortal(user: any) {
+  const role = user?.role
+  return ["BRANCH_ADMIN", "HEAD_OFFICE", "SUPER_ADMIN", "ORDER_PORTAL"].includes(role) || Boolean(user?.isEmployee)
+}
+
+function buildShopResourceUrls(context: any) {
+  if (!context.branchId) return { inventory: null, budgets: null }
+  const scoped = context.needsParams
+    ? `branchId=${context.branchId}${context.organizationId ? `&organizationId=${context.organizationId}` : ""}`
+    : ""
+  return {
+    inventory: `/api/v1/branch/inventory?visibility=visible&includeQuantityBudget=true${scoped ? `&${scoped}` : ""}`,
+    budgets: `/api/v1/budgets${scoped ? `?${scoped}` : ""}`,
+  }
 }
 
 export default function OrderPortalPage() {
@@ -201,20 +218,7 @@ export default function OrderPortalPage() {
       return
     }
 
-    if (status === "authenticated") {
-      const userRole = (session?.user as any)?.role
-      const isEmployee = (session?.user as any)?.isEmployee
-      const isAdmin = userRole === "BRANCH_ADMIN" || userRole === "HEAD_OFFICE" || userRole === "SUPER_ADMIN"
-      const isOrderPortal = userRole === "ORDER_PORTAL"
-
-      // Allow admin users, employees, and order portal users
-      if (isAdmin || isEmployee || isOrderPortal) {
-        return // User is authorized, allow access
-      }
-
-      // Redirect unauthorized users
-      window.location.replace("/")
-    }
+    if (status === "authenticated" && !isAuthorizedForOrderPortal(session?.user)) window.location.replace("/")
   }, [status, session, router])
 
   const userRole = (session?.user as any)?.role
@@ -235,28 +239,13 @@ export default function OrderPortalPage() {
   const needsContextParams = (isAdmin && !((session?.user as any)?.branchId)) || isEmployee || isOrderPortal
 
   // Build API URLs using context
-  const branchInventoryUrl = (() => {
-    if (activeBranchId) {
-      return `/api/v1/branch/inventory?visibility=visible&includeQuantityBudget=true${(() => {
-        if (needsContextParams) {
-          return ("&branchId=" + String(activeBranchId) + String(activeOrgId ? ("&organizationId=" + String(activeOrgId)) : ""))
-        }
-        return ""
-      })()}`
-    }
-    return null
-  })()
-  const budgetsUrl = (() => {
-    if (activeBranchId) {
-      return `/api/v1/budgets${(() => {
-        if (needsContextParams) {
-          return ("?branchId=" + String(activeBranchId) + String(activeOrgId ? ("&organizationId=" + String(activeOrgId)) : ""))
-        }
-        return ""
-      })()}`
-    }
-    return null
-  })()
+  const resourceUrls = buildShopResourceUrls({
+    branchId: activeBranchId,
+    organizationId: activeOrgId,
+    needsParams: needsContextParams,
+  })
+  const branchInventoryUrl = resourceUrls.inventory
+  const budgetsUrl = resourceUrls.budgets
 
   const { data: inventoryData, mutate: mutateBranchInventory, error: inventoryError } = useSWR<any>(
     branchInventoryUrl,
