@@ -1,9 +1,8 @@
 "use client"
 import React,{ Suspense,useState,useMemo,useEffect,useCallback } from "react"
-import { useRouter,useSearchParams } from "next/navigation"
+import { useSearchParams } from "next/navigation"
 import useSWR from "swr"
 import { useSession } from "next-auth/react"
-import { useToast } from "@/hooks/use-toast"
 import { useDebounce } from "@/hooks/use-debounce"
 import { Card,CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -14,14 +13,12 @@ import {
   PaginationContent,
   PaginationItem,
 } from "@/components/ui/pagination"
-import { Dialog,DialogContent,DialogHeader,DialogTitle,DialogFooter } from "@/components/ui/dialog"
 import {
   Package,
   Search,
   Filter,
   CheckCircle,
   Clock,
-  AlertTriangle,
   TrendingDown,RefreshCw,XCircle,ChevronLeft,
   ChevronRight
 } from "lucide-react"
@@ -99,7 +96,6 @@ function OrdersManagementContent() {
   const searchParams = useSearchParams()
   const requestedStatusFilter = getOrderStatusFilter(searchParams.get("status"))
   const { data: session } = useSession()
-  const { toast } = useToast()
   const {
     organizationId,
     branchId,
@@ -119,27 +115,9 @@ function OrdersManagementContent() {
   const [selectedYears, setSelectedYears] = useState<number[]>([])
   const [statusFilter, setStatusFilter] = useState<OrderStatusFilter>(requestedStatusFilter)
   const [splitFilter, setSplitFilter] = useState<OrderSplitFilter>("all")
-  const [, setSelectedOrder] = useState<OrderItem | null>(null)
-  const [, setShowApprovalDialog] = useState(false)
-  const [, setShowRejectDialog] = useState(false)
-  const [rejectReason, setRejectReason] = useState("")
-  const [, setIsProcessing] = useState(false)
-
   // Local Hierarchical Filter State
   const [reportBranchIds, setReportBranchIds] = useState<string[]>([])
   const [reportGroupIds, setReportGroupIds] = useState<string[]>([])
-
-  // Approval token state (shown once after approval)
-  const [, setShowTokenDialog] = useState(false)
-  const [, setApprovalToken] = useState<string | null>(null)
-
-  // Fulfillment token state (Super Admin must enter to fulfill)
-  const [, setShowFulfillDialog] = useState(false)
-  const [fulfillToken, setFulfillToken] = useState("")
-
-  // Error dialog state
-  const [showErrorDialog, setShowErrorDialog] = useState(false)
-  const [errorMessage, setErrorMessage] = useState("")
 
   useEffect(() => {
     setCurrentPage(1)
@@ -378,7 +356,7 @@ function OrdersManagementContent() {
             <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400 shadow-inner">
               <Package className="h-5 w-5" />
             </span>
-            Order Intelligence
+            <span>Order Intelligence</span>
           </h1>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1 sm:ml-[3.25rem]">
             {isBranchAdmin ? "Review orders placed from your branch's Order Portal." : `Monitor approvals and fulfillment pipelines across ${scopeText.toLowerCase()}.`}
@@ -646,34 +624,6 @@ function OrdersManagementContent() {
         </Card>
       </section>
 
-      {/* Professional Error Dialog */}
-      <Dialog open={showErrorDialog} onOpenChange={setShowErrorDialog}>
-        <DialogContent className="max-w-md border-0 shadow-2xl bg-white/90 dark:bg-slate-900/95 backdrop-blur-xl rounded-[2rem]">
-          <DialogHeader className="text-center pb-2">
-            <div className="mx-auto w-16 h-16 rounded-[1.5rem] bg-amber-500/10 flex items-center justify-center mb-4">
-              <AlertTriangle className="h-8 w-8 text-amber-500" />
-            </div>
-            <DialogTitle className="text-xl font-black text-slate-900 dark:text-slate-100 tracking-tight">
-              Attention Required
-            </DialogTitle>
-          </DialogHeader>
-
-          <div className="py-4">
-            <p className="text-center text-slate-600 dark:text-slate-400 leading-relaxed font-medium">
-              {errorMessage}
-            </p>
-          </div>
-
-          <DialogFooter className="sm:justify-center">
-            <Button
-              onClick={() => setShowErrorDialog(false)}
-              className="w-full sm:w-auto px-8 h-12 rounded-xl font-bold bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-100 dark:text-slate-900"
-            >
-              Understood
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </main>
   )
 }

@@ -44,15 +44,20 @@ const getBranchQueryCondition = (
   organizationIds: number[] | undefined,
   groupIds: number[],
   branchId: number | null | undefined,
-) => and(
-  organizationIds?.length
-    ? organizationIds.length === 1
-      ? eq(branchesTable.organizationId, organizationIds[0])
-      : inArray(branchesTable.organizationId, organizationIds)
-    : undefined,
-  groupIds.length > 0 ? inArray(branchesTable.groupId, groupIds) : undefined,
-  branchId ? eq(branchesTable.id, branchId) : undefined,
-)
+) => {
+  let organizationCondition
+  if (organizationIds?.length === 1) {
+    organizationCondition = eq(branchesTable.organizationId, organizationIds[0])
+  } else if (organizationIds && organizationIds.length > 1) {
+    organizationCondition = inArray(branchesTable.organizationId, organizationIds)
+  }
+
+  return and(
+    organizationCondition,
+    groupIds.length > 0 ? inArray(branchesTable.groupId, groupIds) : undefined,
+    branchId ? eq(branchesTable.id, branchId) : undefined,
+  )
+}
 
 function validateBranchFields(body: BranchCreateInput) {
   const values = {

@@ -20,7 +20,7 @@ import { calculateLineCents,formatQuantity } from "@/lib/quantity"
 import { buildStatusTimeline } from "@/lib/order-utils"
 import { getOrderDerivedStatus,hasPartialRefund } from "@/lib/order-status"
 import { PAYMENT_STATUS_LABELS,normalizePaymentStatus } from "@/lib/payment-status"
-import { ArrowLeft,Clock,TrendingDown,CheckCircle,RefreshCw,Package,Ban,Copy,User,XCircle } from "lucide-react"
+import { ArrowLeft,Clock,CheckCircle,RefreshCw,Package,Ban,Copy,User,XCircle } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { RefundManagement } from "@/components/refund-management"
 
@@ -95,7 +95,6 @@ export default function SuperAdminOrderDetailsPage() {
 
   const isSuperAdmin = userRole === "SUPER_ADMIN"
   const isHeadOffice = userRole === "HEAD_OFFICE"
-  const isBranchAdmin = userRole === "BRANCH_ADMIN"
   const canRequestRefundFromOrderReview = canRequestRefund(userRole)
 
   const { data, error, isLoading, mutate } = useSWR<{

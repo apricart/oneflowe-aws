@@ -7,6 +7,120 @@ import { and, eq, gte, lte, inArray, desc, sql } from "drizzle-orm"
 import { redactAnalyticsPrices, shouldHidePricesForRole } from "@/lib/price-visibility"
 import { parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
 
+function parseNumberList(value: string | null, isValid = (number: number) => number > 0) {
+    return value
+        ? value.split(',').map(Number).filter((number) => !Number.isNaN(number) && isValid(number))
+        : []
+}
+
+async function resolveProductBranchIds({
+    requestedBranchIds,
+    groupIds,
+    userRole,
+    userBranchId,
+    organizationIds,
+    userOrganizationId,
+}: {
+    requestedBranchIds: number[]
+    groupIds: number[]
+    userRole: string
+    userBranchId: number
+    organizationIds: number[]
+    userOrganizationId: number
+}) {
+    if (requestedBranchIds.length > 0) return requestedBranchIds
+    if (groupIds.length > 0) {
+        const rows = await db.select({ id: branches.id }).from(branches).where(inArray(branches.groupId, groupIds))
+        return rows.map((branch) => branch.id)
+    }
+    if (["BRANCH_ADMIN", "BRANCH_MANAGER", "ORDER_PORTAL"].includes(userRole)) return [userBranchId]
+    if (organizationIds.length > 0) {
+        const rows = await db.select({ id: branches.id }).from(branches).where(inArray(branches.organizationId, organizationIds))
+        return rows.map((branch) => branch.id)
+    }
+    if (userOrganizationId) {
+        const rows = await db.select({ id: branches.id }).from(branches).where(eq(branches.organizationId, userOrganizationId))
+        return rows.map((branch) => branch.id)
+    }
+    const rows = await db.select({ id: branches.id }).from(branches)
+    return rows.map((branch) => branch.id)
+}
+
+function buildUserProductConditions({
+    branchIds,
+    userIds,
+    months,
+    years,
+    startDate,
+    endDate,
+}: {
+    branchIds: number[]
+    userIds: string[]
+    months: number[]
+    years: number[]
+    startDate: Date | null | undefined
+    endDate: Date | null | undefined
+}) {
+    const conditions: any[] = [
+        inArray(orders.branchId, branchIds),
+        sql`UPPER(${orders.status}) IN ('FULFILLED', 'APPROVED', 'PARTIAL', 'PARTIALLY_FULFILLED')`,
+    ]
+    if (userIds.length > 0) conditions.push(inArray(orders.createdByUserId, userIds))
+    if (months.length > 0) {
+        conditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(months, sql.raw(", "))})`)
+    }
+    if (years.length > 0) {
+        conditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(years, sql.raw(", "))})`)
+    }
+    if (months.length > 0 || years.length > 0) return conditions
+    if (startDate) conditions.push(gte(orders.createdAt, startDate))
+    if (endDate) conditions.push(lte(orders.createdAt, endDate))
+    return conditions
+}
+
+function addProductToUserMap(userMap: Map<string, any>, row: any) {
+    if (!userMap.has(row.userId)) {
+        userMap.set(row.userId, {
+            userId: row.userId,
+            userName: row.userName,
+            totalProductsSold: 0,
+            totalProductRevenueCents: 0,
+            fulfilledProductsSold: 0,
+            fulfilledProductRevenueCents: 0,
+            refundedProductsSold: 0,
+            refundedProductRevenueCents: 0,
+            products: [],
+        })
+    }
+    const user = userMap.get(row.userId)
+    user.totalProductsSold += row.totalQuantity
+    user.totalProductRevenueCents += row.revenueCents
+    user.fulfilledProductsSold += row.fulfilledQuantity || 0
+    user.fulfilledProductRevenueCents += row.fulfilledRevenueCents || 0
+    user.refundedProductsSold += row.refundedQuantity || 0
+    user.refundedProductRevenueCents += row.refundedRevenueCents || 0
+    user.products.push({
+        productId: row.productId,
+        productName: row.productName,
+        categoryName: row.categoryName || 'Uncategorized',
+        quantity: row.totalQuantity,
+        revenueCents: row.revenueCents,
+        fulfilledQuantity: row.fulfilledQuantity || 0,
+        fulfilledRevenueCents: row.fulfilledRevenueCents || 0,
+        refundedQuantity: row.refundedQuantity || 0,
+        refundedRevenueCents: row.refundedRevenueCents || 0,
+    })
+}
+
+function groupUserProducts(results: any[]) {
+    const userMap = new Map<string, any>()
+    results.forEach((row) => addProductToUserMap(userMap, row))
+    const data = Array.from(userMap.values())
+    data.forEach((user) => user.products.sort((a: any, b: any) => b.revenueCents - a.revenueCents))
+    data.sort((a, b) => b.totalProductRevenueCents - a.totalProductRevenueCents)
+    return data
+}
+
 export async function GET(req: NextRequest) {
     try {
         const session = await getServerSession(authOptions)
@@ -24,42 +138,22 @@ export async function GET(req: NextRequest) {
         const organizationIdsParam = url.searchParams.get("organizationIds")
         const branchIdsParam = url.searchParams.get("branchIds")
 
-        const monthsRaw = url.searchParams.get("months")
-        const yearsRaw = url.searchParams.get("years")
         const userIdsRaw = url.searchParams.get("userIds")
-        const groupIdsRaw = url.searchParams.get("groupIds")
-
-        const parsedMonths = monthsRaw ? monthsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n >= 1 && n <= 12) : []
-        const parsedYears = yearsRaw ? yearsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n > 2000) : []
+        const parsedMonths = parseNumberList(url.searchParams.get("months"), (number) => number >= 1 && number <= 12)
+        const parsedYears = parseNumberList(url.searchParams.get("years"), (number) => number > 2000)
         const userIds = userIdsRaw ? userIdsRaw.split(',').filter(id => id.length > 5) : []
-        const groupIds = groupIdsRaw ? groupIdsRaw.split(',').map(Number).filter(n => !Number.isNaN(n)) : []
+        const groupIds = parseNumberList(url.searchParams.get("groupIds"), () => true)
 
         // RBAC & Filter Context Parsing
-        let organizationIds: number[] = []
-        if (organizationIdsParam) {
-            organizationIds = organizationIdsParam.split(",").map(Number).filter(id => !Number.isNaN(id) && id > 0)
-        } else if (userOrgId) {
-            organizationIds = [userOrgId]
-        }
-
-        let branchIds: number[] = []
-        if (branchIdsParam) {
-            branchIds = branchIdsParam.split(",").map(Number).filter(id => !Number.isNaN(id) && id > 0)
-        } else if (groupIds.length > 0) {
-            const b = await db.select({ id: branches.id }).from(branches).where(inArray(branches.groupId, groupIds))
-            branchIds = b.map(br => br.id)
-        } else if (userRole === "BRANCH_ADMIN" || userRole === "BRANCH_MANAGER" || userRole === "ORDER_PORTAL") {
-            branchIds = [userBranchId]
-        } else if (organizationIds.length > 0) {
-            const b = await db.select({ id: branches.id }).from(branches).where(inArray(branches.organizationId, organizationIds))
-            branchIds = b.map(br => br.id)
-        } else if (userOrgId) {
-            const b = await db.select({ id: branches.id }).from(branches).where(eq(branches.organizationId, userOrgId))
-            branchIds = b.map(br => br.id)
-        } else {
-            const b = await db.select({ id: branches.id }).from(branches)
-            branchIds = b.map(br => br.id)
-        }
+        const organizationIds = organizationIdsParam ? parseNumberList(organizationIdsParam) : [userOrgId].filter(Boolean)
+        const branchIds = await resolveProductBranchIds({
+            requestedBranchIds: parseNumberList(branchIdsParam),
+            groupIds,
+            userRole,
+            userBranchId,
+            organizationIds,
+            userOrganizationId: userOrgId,
+        })
 
         if (branchIds.length === 0) {
             return NextResponse.json({ error: "No branches resolved" }, { status: 400 })
@@ -68,27 +162,14 @@ export async function GET(req: NextRequest) {
         const startDate = parseStartDateParam(startDateParam)
         const endDate = parseEndDateParam(endDateParam)
 
-        const baseConditions: any[] = [
-            inArray(orders.branchId, branchIds),
-            // Only count products that actually generated revenue / were successfully ordered
-            sql`UPPER(${orders.status}) IN ('FULFILLED', 'APPROVED', 'PARTIAL', 'PARTIALLY_FULFILLED')`
-        ]
-        
-        if (userIds.length > 0) {
-            baseConditions.push(inArray(orders.createdByUserId, userIds))
-        }
-        
-        if (parsedMonths.length > 0) {
-            baseConditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedMonths, sql.raw(", "))})`)
-        }
-        if (parsedYears.length > 0) {
-            baseConditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedYears, sql.raw(", "))})`)
-        }
-
-        if (parsedMonths.length === 0 && parsedYears.length === 0) {
-            if (startDate) baseConditions.push(gte(orders.createdAt, startDate))
-            if (endDate) baseConditions.push(lte(orders.createdAt, endDate))
-        }
+        const baseConditions = buildUserProductConditions({
+            branchIds,
+            userIds,
+            months: parsedMonths,
+            years: parsedYears,
+            startDate,
+            endDate,
+        })
 
         // Pre-aggregate refunds to prevent SQL Fan-out join issues
         const preAggRefunds = db.select({
@@ -126,53 +207,7 @@ export async function GET(req: NextRequest) {
 
         const results = await q
 
-        // Transform into a user-centric structure
-        const userMap = new Map<string, any>()
-        
-        results.forEach(row => {
-            if (!userMap.has(row.userId)) {
-                userMap.set(row.userId, {
-                    userId: row.userId,
-                    userName: row.userName,
-                    totalProductsSold: 0,
-                    totalProductRevenueCents: 0,
-                    fulfilledProductsSold: 0,
-                    fulfilledProductRevenueCents: 0,
-                    refundedProductsSold: 0,
-                    refundedProductRevenueCents: 0,
-                    products: []
-                })
-            }
-            const user = userMap.get(row.userId)
-            
-            user.totalProductsSold += row.totalQuantity
-            user.totalProductRevenueCents += row.revenueCents
-            user.fulfilledProductsSold += row.fulfilledQuantity || 0
-            user.fulfilledProductRevenueCents += row.fulfilledRevenueCents || 0
-            user.refundedProductsSold += row.refundedQuantity || 0
-            user.refundedProductRevenueCents += row.refundedRevenueCents || 0
-            
-            user.products.push({
-                productId: row.productId,
-                productName: row.productName,
-                categoryName: row.categoryName || 'Uncategorized',
-                quantity: row.totalQuantity,
-                revenueCents: row.revenueCents,
-                fulfilledQuantity: row.fulfilledQuantity || 0,
-                fulfilledRevenueCents: row.fulfilledRevenueCents || 0,
-                refundedQuantity: row.refundedQuantity || 0,
-                refundedRevenueCents: row.refundedRevenueCents || 0
-            })
-        })
-
-        const data = Array.from(userMap.values()).map(user => {
-            // Sort each user's products by revenue descending
-            user.products.sort((a: any, b: any) => b.revenueCents - a.revenueCents)
-            return user
-        })
-        
-        // Sort final user list by total revenue
-        data.sort((a, b) => b.totalProductRevenueCents - a.totalProductRevenueCents)
+        const data = groupUserProducts(results)
 
         return respond({ data })
     } catch (error: any) {

@@ -43,8 +43,6 @@ export default function RemoveFromBranchPage() {
     const [selectedGroup, setSelectedGroup] = useState<string>("")
     const [saving, setSaving] = useState(false)
 
-    const { userRole } = useAppContext()
-
     const selectedOrgId = contextOrgId || localOrgId
     const showOrgSelector = !contextOrgId
 

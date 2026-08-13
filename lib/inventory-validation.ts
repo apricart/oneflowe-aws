@@ -123,13 +123,11 @@ export async function validateBranchInventory(
  * Validate that a user has access to an organization
  */
 export async function validateUserOrganizationAccess(
-  userId: string,
-  organizationId: number
+  _userId: string,
+  _organizationId: number
 ): Promise<boolean> {
   // Access is enforced by the session middleware; retain parameters for the
   // validation API that will replace this compatibility function.
-  void userId
-  void organizationId
   return true
 }
 
@@ -137,15 +135,12 @@ export async function validateUserOrganizationAccess(
  * Validate that a user has access to a branch
  */
 export async function validateUserBranchAccess(
-  userId: string,
-  branchId: number,
-  organizationId: number
+  _userId: string,
+  _branchId: number,
+  _organizationId: number
 ): Promise<boolean> {
   // Access is enforced by the session middleware; retain parameters for the
   // validation API that will replace this compatibility function.
-  void userId
-  void branchId
-  void organizationId
   return true
 }
 

@@ -77,6 +77,331 @@ import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allo
 import { orderUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
 import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
 
+async function lockOrderEditAccess(tx: any, context: any) {
+  const { userId, organizationId, branchId, orderId } = context
+  const user = { id: userId }
+  const [actor] = await tx.select({
+    id: users.id,
+    role: roles.name,
+    organizationId: users.organizationId,
+    branchId: users.branchId,
+  }).from(users).innerJoin(roles, eq(users.roleId, roles.id)).where(and(
+    eq(users.id, user.id),
+    eq(users.isActive, true),
+    isNull(users.deletedAt),
+  )).limit(1)
+  if (actor?.role !== "ORDER_PORTAL"
+    || actor.organizationId !== organizationId
+    || actor.branchId !== branchId) return { kind: "forbidden" } as const
+
+  const [existingOrder] = await tx.select().from(orders).where(and(
+    eq(orders.id, orderId),
+    eq(orders.createdByUserId, user.id),
+    eq(orders.organizationId, organizationId),
+    eq(orders.branchId, branchId),
+  )).for("update").limit(1)
+  if (!existingOrder) return { kind: "not-found" } as const
+
+  const [orderBranch] = await tx.select({ organizationId: branches.organizationId })
+    .from(branches).where(eq(branches.id, existingOrder.branchId)).for("share").limit(1)
+  const canEdit = canOrderPortalEditOrder({
+    actorRole: actor.role,
+    actorUserId: actor.id,
+    actorOrganizationId: actor.organizationId,
+    actorBranchId: actor.branchId,
+    orderStatus: existingOrder.status,
+    orderCreatedByUserId: existingOrder.createdByUserId,
+    orderOrganizationId: existingOrder.organizationId,
+    orderBranchId: existingOrder.branchId,
+    branchOrganizationId: orderBranch?.organizationId,
+  })
+  if (!canEdit && String(existingOrder.status).toUpperCase() !== "PENDING") {
+    return { kind: "invalid-state", status: existingOrder.status } as const
+  }
+  if (!canEdit) return { kind: "forbidden" } as const
+  return { actor, existingOrder }
+}
+
+function indexExistingOrderQuantities(existingItems: any[]) {
+  const byProduct = new Map<number, number>()
+  const byInventory = new Map<number, number>()
+  for (const item of existingItems) {
+    byProduct.set(item.globalProductId, roundQuantity((byProduct.get(item.globalProductId) || 0) + Number(item.quantity)))
+    if (item.organizationInventoryId) {
+      byInventory.set(item.organizationInventoryId, roundQuantity((byInventory.get(item.organizationInventoryId) || 0) + Number(item.quantity)))
+    }
+  }
+  return { byProduct, byInventory }
+}
+
+async function loadOrderEditInventory(tx: any, context: any) {
+  const existingItems = await tx.select().from(orderItems)
+    .where(eq(orderItems.orderId, context.orderId)).for("update")
+  const requestedInventoryIds = context.normalizedItems.map((item: any) => item.organizationInventoryId)
+  const assignedInventory = await tx.select({ organizationInventoryId: branchInventory.organizationInventoryId })
+    .from(branchInventory).where(and(
+      eq(branchInventory.branchId, context.branchId),
+      eq(branchInventory.organizationId, context.organizationId),
+      eq(branchInventory.isActive, true),
+      eq(branchInventory.isVisible, true),
+      isNull(branchInventory.deletedAt),
+      inArray(branchInventory.organizationInventoryId, requestedInventoryIds),
+    )).for("update")
+  if (assignedInventory.length !== requestedInventoryIds.length) {
+    throw new Error("Some items are no longer available for this branch")
+  }
+  const inventoryRows = await tx.select().from(organizationInventory).where(and(
+    eq(organizationInventory.organizationId, context.organizationId),
+    eq(organizationInventory.isActive, true),
+    isNull(organizationInventory.deletedAt),
+    inArray(organizationInventory.id, requestedInventoryIds),
+  )).for("update")
+  if (inventoryRows.length !== requestedInventoryIds.length) {
+    throw new Error("Some items are no longer active for this organization")
+  }
+  const allGlobalProductIds = Array.from(new Set([
+    ...inventoryRows.map((item: any) => item.globalProductId),
+    ...existingItems.map((item: any) => item.globalProductId),
+  ]))
+  const productRows = await tx.select().from(globalProducts)
+    .where(inArray(globalProducts.id, allGlobalProductIds)).for("update")
+  return {
+    existingItems,
+    allGlobalProductIds,
+    inventoryById: new Map(inventoryRows.map((item: any) => [item.id, item])),
+    productById: new Map(productRows.map((product: any) => [product.id, product])),
+    oldQuantities: indexExistingOrderQuantities(existingItems),
+  }
+}
+
+function calculateEditedItems(normalizedItems: any[], inventoryData: any) {
+  let subtotalCents = 0
+  const items = normalizedItems.map((requestedItem) => {
+    const inventoryItem: any = inventoryData.inventoryById.get(requestedItem.organizationInventoryId)
+    if (!inventoryItem) throw new Error("An inventory item is no longer available")
+    const product: any = inventoryData.productById.get(inventoryItem.globalProductId)
+    if (product?.status !== "active" || product.deletedAt) throw new Error("A product is no longer available")
+    const validation = validateProductQuantity(requestedItem.quantity, {
+      allowDecimalQuantity: product.allowDecimalQuantity,
+      quantityStep: product.quantityStep,
+      label: `Quantity for ${product.name}`,
+    })
+    if (!validation.ok) throw new Error(validation.error)
+    const priceCents = inventoryItem.customPrice ?? product.basePrice
+    if (!Number.isSafeInteger(priceCents) || priceCents < 0) throw new Error(`Pricing is unavailable for ${product.name}`)
+    const availableStock = Number(product.stockQuantity) + (inventoryData.oldQuantities.byProduct.get(product.id) || 0)
+    if (validation.quantity > availableStock) {
+      throw new Error(`Insufficient stock for ${product.name}. Available: ${formatQuantity(availableStock)}, Requested: ${formatQuantity(validation.quantity)}`)
+    }
+    subtotalCents += calculateLineCents(priceCents, validation.quantity)
+    return {
+      organizationInventoryId: inventoryItem.id,
+      globalProductId: product.id,
+      quantity: validation.quantity,
+      priceCents,
+      productName: product.name,
+      productCode: product.productCode,
+      unit: product.unit,
+    }
+  })
+  if (!Number.isSafeInteger(subtotalCents) || subtotalCents < 0) throw new Error("Calculated order total is invalid")
+  return { items, subtotalCents, taxCents: 0, totalCents: subtotalCents }
+}
+
+async function lockAndValidateOrderBudget(tx: any, context: any) {
+  const orderPeriod = context.existingOrder.createdAt
+    ? new Date(context.existingOrder.createdAt).toISOString().slice(0, 7)
+    : new Date().toISOString().slice(0, 7)
+  const [lockedBudget] = await tx.select().from(budgets).where(and(
+    eq(budgets.organizationId, context.organizationId),
+    eq(budgets.branchId, context.branchId),
+    eq(budgets.period, orderPeriod),
+  )).for("update").limit(1)
+  if (!lockedBudget) throw new Error(`Budget not configured for order period (${orderPeriod})`)
+  if (lockedBudget.amountHeldCents < context.existingOrder.totalCents) throw new Error("BUDGET_LEDGER_INVARIANT")
+  const available = lockedBudget.amountAllocatedCents + lockedBudget.amountCreditedCents
+    - lockedBudget.amountSpentCents - lockedBudget.amountHeldCents + context.existingOrder.totalCents
+  if (context.totalCents > available) {
+    throw new Error(context.pricesHidden
+      ? "Insufficient budget. Please contact head office."
+      : `Insufficient budget. Required: ${(context.totalCents / 100).toFixed(2)} PKR, Available: ${(available / 100).toFixed(2)} PKR`)
+  }
+  return { lockedBudget, orderPeriod }
+}
+
+function validateQuantityBudget(context: any) {
+  const previous = context.previousQuantity
+  const next = context.nextQuantity
+  const row = context.row
+  if (next > 0 && context.mode === "quantity" && (!row || row.allocatedQuantity + row.creditedQuantity <= 0)) {
+    throw new Error(`Quantity budget is not allocated for ${context.productName}. Please select an allocated product.`)
+  }
+  if (!row) return
+  if (row.heldQuantity < previous) throw new Error("QUANTITY_BUDGET_LEDGER_INVARIANT")
+  const available = row.allocatedQuantity + row.creditedQuantity - row.usedQuantity - row.heldQuantity + previous
+  if (next > available) {
+    throw new Error(`Insufficient quantity budget for ${context.productName}. Available: ${formatQuantity(available)}, Requested: ${formatQuantity(next)}`)
+  }
+}
+
+async function lockOrderQuantityBudgets(tx: any, context: any) {
+  const nextByInventory = new Map(context.calculatedItems.map((item: any) => [item.organizationInventoryId, item.quantity]))
+  const inventoryIds = Array.from(new Set([
+    ...context.oldByInventory.keys(),
+    ...nextByInventory.keys(),
+  ])) as number[]
+  const rows = inventoryIds.length > 0 ? await tx.select().from(productQuantityBudgets).where(and(
+    eq(productQuantityBudgets.organizationId, context.organizationId),
+    eq(productQuantityBudgets.branchId, context.branchId),
+    eq(productQuantityBudgets.period, context.orderPeriod),
+    inArray(productQuantityBudgets.organizationInventoryId, inventoryIds),
+  )).for("update") : []
+  const rowByInventory = new Map(rows.map((row: any) => [row.organizationInventoryId, row]))
+  for (const inventoryId of inventoryIds) {
+    const productName = context.calculatedItems.find((item: any) => item.organizationInventoryId === inventoryId)?.productName || "this product"
+    validateQuantityBudget({
+      previousQuantity: context.oldByInventory.get(inventoryId) || 0,
+      nextQuantity: nextByInventory.get(inventoryId) || 0,
+      row: rowByInventory.get(inventoryId),
+      mode: context.mode,
+      productName,
+    })
+  }
+  return { rows, nextByInventory }
+}
+
+async function updateOrderQuantityBudgets(tx: any, context: any) {
+  for (const row of context.rows) {
+    const previous = context.oldByInventory.get(row.organizationInventoryId) || 0
+    const next = context.nextByInventory.get(row.organizationInventoryId) || 0
+    if (previous === next) continue
+    await tx.update(productQuantityBudgets).set({
+      heldQuantity: roundQuantity(row.heldQuantity - previous + next),
+      updatedByUserId: context.userId,
+      updatedAt: new Date(),
+    }).where(eq(productQuantityBudgets.id, row.id))
+  }
+}
+
+async function updateOrderStock(tx: any, context: any) {
+  const nextByProduct = new Map<number, number>()
+  for (const item of context.calculatedItems) {
+    nextByProduct.set(item.globalProductId, roundQuantity((nextByProduct.get(item.globalProductId) || 0) + item.quantity))
+  }
+  for (const productId of context.productIds) {
+    const product: any = context.productById.get(productId)
+    if (!product) throw new Error("A previously ordered product could not be reconciled")
+    const previousQuantity = context.oldByProduct.get(productId) || 0
+    const nextQuantity = nextByProduct.get(productId) || 0
+    const nextStock = roundQuantity(Number(product.stockQuantity) + previousQuantity - nextQuantity)
+    if (nextStock < 0) throw new Error("STOCK_LEDGER_INVARIANT")
+    if (previousQuantity === nextQuantity) continue
+    await tx.update(globalProducts).set({ stockQuantity: nextStock, updatedAt: new Date() })
+      .where(eq(globalProducts.id, productId))
+  }
+}
+
+async function regenerateEditedOrderReceipt(tx: any, context: any) {
+  try {
+    const receiptData = await generateReceiptData({
+      orderId: context.orderId,
+      orderTid: context.existingOrder.tid,
+      status: "PENDING",
+      organizationId: context.organizationId,
+      branchId: context.branchId,
+      orderItemsData: context.calculatedItems,
+      subtotalCents: context.subtotalCents,
+      taxCents: context.taxCents,
+      totalCents: context.totalCents,
+      discountCents: 0,
+      deliveryChargesCents: 0,
+    })
+    const previousReceipt = context.existingOrder.receiptData as any
+    receiptData.invoiceNumber = previousReceipt?.invoiceNumber || context.existingOrder.tid
+    receiptData.date = previousReceipt?.date || receiptData.date
+    await tx.update(orders).set({ receiptData: receiptData as any }).where(eq(orders.id, context.orderId))
+  } catch (receiptError) {
+    console.error("Receipt regeneration failed during order edit", receiptError)
+    await tx.update(orders).set({ receiptData: null }).where(eq(orders.id, context.orderId))
+  }
+}
+
+async function persistEditedOrder(tx: any, context: any) {
+  const { lockedBudget, existingOrder, totalCents } = context
+  const [updatedOrder] = await tx.update(orders).set({
+    subtotalCents: context.subtotalCents,
+    taxCents: context.taxCents,
+    totalCents: context.totalCents,
+    ...(context.notes !== undefined ? { notes: context.notes || null } : {}),
+    updatedAt: new Date(),
+  }).where(and(
+    eq(orders.id, context.orderId),
+    eq(orders.createdByUserId, context.userId),
+    eq(orders.organizationId, context.organizationId),
+    eq(orders.branchId, context.branchId),
+    sql`UPPER(${orders.status}) = 'PENDING'`,
+  )).returning(orderSelectColumns)
+  if (!updatedOrder) throw new Error("ORDER_EDIT_CONFLICT")
+  await tx.update(budgets).set({
+    amountHeldCents: lockedBudget.amountHeldCents - existingOrder.totalCents + totalCents,
+    updatedAt: new Date(),
+  }).where(eq(budgets.id, lockedBudget.id))
+  await updateOrderQuantityBudgets(tx, context)
+  await updateOrderStock(tx, context)
+  await tx.delete(orderItems).where(eq(orderItems.orderId, context.orderId))
+  await tx.insert(orderItems).values(context.calculatedItems.map((item: any) => ({
+    ...item,
+    orderId: context.orderId,
+    organizationId: context.organizationId,
+  })))
+  await regenerateEditedOrderReceipt(tx, context)
+  await tx.insert(auditLogs).values({
+    userId: context.userId,
+    organizationId: context.organizationId,
+    branchId: context.branchId,
+    action: "ORDER_EDITED",
+    entity: "order",
+    entityId: String(context.orderId),
+    metadata: {
+      tid: context.existingOrder.tid,
+      actorRole: context.actor.role,
+      previousTotalCents: context.existingOrder.totalCents,
+      totalCents: context.totalCents,
+      previousItemCount: context.existingItems.length,
+      itemCount: context.calculatedItems.length,
+    },
+  })
+  return { kind: "updated", order: updatedOrder } as const
+}
+
+async function processOrderEditTransaction(tx: any, context: any) {
+  const access = await lockOrderEditAccess(tx, context)
+  if ("kind" in access) return access
+  const inventory = await loadOrderEditInventory(tx, context)
+  const calculated = calculateEditedItems(context.normalizedItems, inventory)
+  const budget = await lockAndValidateOrderBudget(tx, { ...context, ...access, ...calculated })
+  const quantityBudgets = await lockOrderQuantityBudgets(tx, {
+    ...context,
+    orderPeriod: budget.orderPeriod,
+    calculatedItems: calculated.items,
+    oldByInventory: inventory.oldQuantities.byInventory,
+  })
+  return persistEditedOrder(tx, {
+    ...context,
+    ...access,
+    ...calculated,
+    calculatedItems: calculated.items,
+    existingItems: inventory.existingItems,
+    productIds: inventory.allGlobalProductIds,
+    productById: inventory.productById,
+    oldByProduct: inventory.oldQuantities.byProduct,
+    oldByInventory: inventory.oldQuantities.byInventory,
+    lockedBudget: budget.lockedBudget,
+    rows: quantityBudgets.rows,
+    nextByInventory: quantityBudgets.nextByInventory,
+  })
+}
+
 export async function GET(
   _: Request,
   props: { params: Promise<{ id: string }> },
@@ -232,399 +557,17 @@ export async function PUT(
   const pricesHidden = await shouldHidePricesForRole(user.role, organizationId)
 
   try {
-    const result = await db.transaction(async (tx) => {
-      // Revalidate the actor from the database so a stale session cannot edit
-      // after a role, tenant, branch, or activation change.
-      const [actor] = await tx
-        .select({
-          id: users.id,
-          role: roles.name,
-          organizationId: users.organizationId,
-          branchId: users.branchId,
-        })
-        .from(users)
-        .innerJoin(roles, eq(users.roleId, roles.id))
-        .where(and(
-          eq(users.id, user.id),
-          eq(users.isActive, true),
-          isNull(users.deletedAt),
-        ))
-        .limit(1)
+    const result = await db.transaction((tx) => processOrderEditTransaction(tx, {
+      orderId,
+      userId: user.id,
+      organizationId,
+      branchId,
+      normalizedItems,
+      mode: budgetAllocationMode,
+      pricesHidden,
+      notes: parsedBody.data.notes,
+    }))
 
-      if (
-        actor?.role !== "ORDER_PORTAL"
-        || actor.organizationId !== organizationId
-        || actor.branchId !== branchId
-      ) {
-        return { kind: "forbidden" } as const
-      }
-
-      // This row lock serializes an edit with approval/rejection. The scoped
-      // predicates intentionally make another tenant's or user's order look
-      // absent rather than revealing that it exists.
-      const [existingOrder] = await tx
-        .select()
-        .from(orders)
-        .where(and(
-          eq(orders.id, orderId),
-          eq(orders.createdByUserId, user.id),
-          eq(orders.organizationId, organizationId),
-          eq(orders.branchId, branchId),
-        ))
-        .for("update")
-        .limit(1)
-
-      if (!existingOrder) return { kind: "not-found" } as const
-
-      const [orderBranch] = await tx
-        .select({ organizationId: branches.organizationId })
-        .from(branches)
-        .where(eq(branches.id, existingOrder.branchId))
-        .for("share")
-        .limit(1)
-
-      if (!canOrderPortalEditOrder({
-        actorRole: actor.role,
-        actorUserId: actor.id,
-        actorOrganizationId: actor.organizationId,
-        actorBranchId: actor.branchId,
-        orderStatus: existingOrder.status,
-        orderCreatedByUserId: existingOrder.createdByUserId,
-        orderOrganizationId: existingOrder.organizationId,
-        orderBranchId: existingOrder.branchId,
-        branchOrganizationId: orderBranch?.organizationId,
-      })) {
-        if (String(existingOrder.status).toUpperCase() !== "PENDING") {
-          return { kind: "invalid-state", status: existingOrder.status } as const
-        }
-        return { kind: "forbidden" } as const
-      }
-
-      const existingItems = await tx
-        .select()
-        .from(orderItems)
-        .where(eq(orderItems.orderId, orderId))
-        .for("update")
-
-      const requestedInventoryIds = normalizedItems.map((item) => item.organizationInventoryId)
-
-      const assignedInventory = await tx
-        .select({ organizationInventoryId: branchInventory.organizationInventoryId })
-        .from(branchInventory)
-        .where(and(
-          eq(branchInventory.branchId, branchId),
-          eq(branchInventory.organizationId, organizationId),
-          eq(branchInventory.isActive, true),
-          eq(branchInventory.isVisible, true),
-          isNull(branchInventory.deletedAt),
-          inArray(branchInventory.organizationInventoryId, requestedInventoryIds),
-        ))
-        .for("update")
-
-      if (assignedInventory.length !== requestedInventoryIds.length) {
-        throw new Error("Some items are no longer available for this branch")
-      }
-
-      const inventoryRows = await tx
-        .select()
-        .from(organizationInventory)
-        .where(and(
-          eq(organizationInventory.organizationId, organizationId),
-          eq(organizationInventory.isActive, true),
-          isNull(organizationInventory.deletedAt),
-          inArray(organizationInventory.id, requestedInventoryIds),
-        ))
-        .for("update")
-
-      if (inventoryRows.length !== requestedInventoryIds.length) {
-        throw new Error("Some items are no longer active for this organization")
-      }
-
-      const inventoryById = new Map(inventoryRows.map((item) => [item.id, item]))
-      const requestedGlobalProductIds = inventoryRows.map((item) => item.globalProductId)
-      const allGlobalProductIds = Array.from(new Set([
-        ...requestedGlobalProductIds,
-        ...existingItems.map((item) => item.globalProductId),
-      ]))
-      const productRows = await tx
-        .select()
-        .from(globalProducts)
-        .where(inArray(globalProducts.id, allGlobalProductIds))
-        .for("update")
-      const productById = new Map(productRows.map((product) => [product.id, product]))
-
-      const oldQuantityByGlobalProductId = new Map<number, number>()
-      const oldQuantityByInventoryId = new Map<number, number>()
-      for (const item of existingItems) {
-        oldQuantityByGlobalProductId.set(
-          item.globalProductId,
-          roundQuantity((oldQuantityByGlobalProductId.get(item.globalProductId) || 0) + Number(item.quantity)),
-        )
-        if (item.organizationInventoryId) {
-          oldQuantityByInventoryId.set(
-            item.organizationInventoryId,
-            roundQuantity((oldQuantityByInventoryId.get(item.organizationInventoryId) || 0) + Number(item.quantity)),
-          )
-        }
-      }
-
-      let subtotalCents = 0
-      const calculatedItems = normalizedItems.map((requestedItem) => {
-        const inventoryItem = inventoryById.get(requestedItem.organizationInventoryId)
-        if (!inventoryItem) throw new Error("An inventory item is no longer available")
-
-        const product = productById.get(inventoryItem.globalProductId)
-        if (product?.status !== "active" || product.deletedAt) {
-          throw new Error("A product is no longer available")
-        }
-
-        const quantityValidation = validateProductQuantity(requestedItem.quantity, {
-          allowDecimalQuantity: product.allowDecimalQuantity,
-          quantityStep: product.quantityStep,
-          label: `Quantity for ${product.name}`,
-        })
-        if (!quantityValidation.ok) throw new Error(quantityValidation.error)
-
-        const priceCents = inventoryItem.customPrice ?? product.basePrice
-        if (!Number.isSafeInteger(priceCents) || priceCents < 0) {
-          throw new Error(`Pricing is unavailable for ${product.name}`)
-        }
-
-        const availableStock = Number(product.stockQuantity)
-          + (oldQuantityByGlobalProductId.get(product.id) || 0)
-        if (quantityValidation.quantity > availableStock) {
-          throw new Error(
-            `Insufficient stock for ${product.name}. Available: ${formatQuantity(availableStock)}, Requested: ${formatQuantity(quantityValidation.quantity)}`,
-          )
-        }
-
-        subtotalCents += calculateLineCents(priceCents, quantityValidation.quantity)
-        return {
-          organizationInventoryId: inventoryItem.id,
-          globalProductId: product.id,
-          quantity: quantityValidation.quantity,
-          priceCents,
-          productName: product.name,
-          productCode: product.productCode,
-          unit: product.unit,
-        }
-      })
-
-      const taxCents = 0
-      const totalCents = subtotalCents + taxCents
-      if (!Number.isSafeInteger(totalCents) || totalCents < 0) {
-        throw new Error("Calculated order total is invalid")
-      }
-
-      const orderPeriod = existingOrder.createdAt
-        ? new Date(existingOrder.createdAt).toISOString().slice(0, 7)
-        : new Date().toISOString().slice(0, 7)
-      const [lockedBudget] = await tx
-        .select()
-        .from(budgets)
-        .where(and(
-          eq(budgets.organizationId, organizationId),
-          eq(budgets.branchId, branchId),
-          eq(budgets.period, orderPeriod),
-        ))
-        .for("update")
-        .limit(1)
-
-      if (!lockedBudget) throw new Error(`Budget not configured for order period (${orderPeriod})`)
-      if (lockedBudget.amountHeldCents < existingOrder.totalCents) {
-        throw new Error("BUDGET_LEDGER_INVARIANT")
-      }
-
-      const moneyAvailable = lockedBudget.amountAllocatedCents
-        + lockedBudget.amountCreditedCents
-        - lockedBudget.amountSpentCents
-        - lockedBudget.amountHeldCents
-        + existingOrder.totalCents
-      if (totalCents > moneyAvailable) {
-        throw new Error(pricesHidden
-          ? "Insufficient budget. Please contact head office."
-          : `Insufficient budget. Required: ${(totalCents / 100).toFixed(2)} PKR, Available: ${(moneyAvailable / 100).toFixed(2)} PKR`)
-      }
-
-      const newQuantityByInventoryId = new Map(
-        calculatedItems.map((item) => [item.organizationInventoryId, item.quantity]),
-      )
-      const allQuantityInventoryIds = Array.from(new Set([
-        ...oldQuantityByInventoryId.keys(),
-        ...newQuantityByInventoryId.keys(),
-      ]))
-      const quantityBudgetRows = allQuantityInventoryIds.length > 0
-        ? await tx
-          .select()
-          .from(productQuantityBudgets)
-          .where(and(
-            eq(productQuantityBudgets.organizationId, organizationId),
-            eq(productQuantityBudgets.branchId, branchId),
-            eq(productQuantityBudgets.period, orderPeriod),
-            inArray(productQuantityBudgets.organizationInventoryId, allQuantityInventoryIds),
-          ))
-          .for("update")
-        : []
-      const quantityBudgetByInventoryId = new Map(
-        quantityBudgetRows.map((row) => [row.organizationInventoryId, row]),
-      )
-
-      for (const organizationInventoryId of allQuantityInventoryIds) {
-        const previousQuantity = oldQuantityByInventoryId.get(organizationInventoryId) || 0
-        const nextQuantity = newQuantityByInventoryId.get(organizationInventoryId) || 0
-        const quantityBudget = quantityBudgetByInventoryId.get(organizationInventoryId)
-
-        if (
-          nextQuantity > 0
-          && budgetAllocationMode === "quantity"
-          && (!quantityBudget || quantityBudget.allocatedQuantity + quantityBudget.creditedQuantity <= 0)
-        ) {
-          const productName = calculatedItems.find(
-            (item) => item.organizationInventoryId === organizationInventoryId,
-          )?.productName || "this product"
-          throw new Error(`Quantity budget is not allocated for ${productName}. Please select an allocated product.`)
-        }
-
-        // Money-budget organizations legitimately have no quantity ledger row.
-        if (!quantityBudget) continue
-        if (quantityBudget.heldQuantity < previousQuantity) {
-          throw new Error("QUANTITY_BUDGET_LEDGER_INVARIANT")
-        }
-
-        const quantityAvailable = quantityBudget.allocatedQuantity
-          + quantityBudget.creditedQuantity
-          - quantityBudget.usedQuantity
-          - quantityBudget.heldQuantity
-          + previousQuantity
-        if (nextQuantity > quantityAvailable) {
-          const productName = calculatedItems.find(
-            (item) => item.organizationInventoryId === organizationInventoryId,
-          )?.productName || "this product"
-          throw new Error(
-            `Insufficient quantity budget for ${productName}. Available: ${formatQuantity(quantityAvailable)}, Requested: ${formatQuantity(nextQuantity)}`,
-          )
-        }
-      }
-
-      // A second status predicate documents and enforces the lifecycle guard at
-      // the actual write point, even though the row remains locked above.
-      const [updatedOrder] = await tx
-        .update(orders)
-        .set({
-          subtotalCents,
-          taxCents,
-          totalCents,
-          ...(parsedBody.data.notes !== undefined
-            ? { notes: parsedBody.data.notes || null }
-            : {}),
-          updatedAt: new Date(),
-        })
-        .where(and(
-          eq(orders.id, orderId),
-          eq(orders.createdByUserId, user.id),
-          eq(orders.organizationId, organizationId),
-          eq(orders.branchId, branchId),
-          sql`UPPER(${orders.status}) = 'PENDING'`,
-        ))
-        .returning(orderSelectColumns)
-
-      if (!updatedOrder) throw new Error("ORDER_EDIT_CONFLICT")
-
-      await tx
-        .update(budgets)
-        .set({
-          amountHeldCents: lockedBudget.amountHeldCents - existingOrder.totalCents + totalCents,
-          updatedAt: new Date(),
-        })
-        .where(eq(budgets.id, lockedBudget.id))
-
-      for (const row of quantityBudgetRows) {
-        const previousQuantity = oldQuantityByInventoryId.get(row.organizationInventoryId) || 0
-        const nextQuantity = newQuantityByInventoryId.get(row.organizationInventoryId) || 0
-        if (previousQuantity === nextQuantity) continue
-
-        await tx
-          .update(productQuantityBudgets)
-          .set({
-            heldQuantity: roundQuantity(row.heldQuantity - previousQuantity + nextQuantity),
-            updatedByUserId: user.id,
-            updatedAt: new Date(),
-          })
-          .where(eq(productQuantityBudgets.id, row.id))
-      }
-
-      const newQuantityByGlobalProductId = new Map<number, number>()
-      for (const item of calculatedItems) {
-        newQuantityByGlobalProductId.set(
-          item.globalProductId,
-          roundQuantity((newQuantityByGlobalProductId.get(item.globalProductId) || 0) + item.quantity),
-        )
-      }
-      for (const globalProductId of allGlobalProductIds) {
-        const product = productById.get(globalProductId)
-        if (!product) throw new Error("A previously ordered product could not be reconciled")
-        const previousQuantity = oldQuantityByGlobalProductId.get(globalProductId) || 0
-        const nextQuantity = newQuantityByGlobalProductId.get(globalProductId) || 0
-        const nextStock = roundQuantity(Number(product.stockQuantity) + previousQuantity - nextQuantity)
-        if (nextStock < 0) throw new Error("STOCK_LEDGER_INVARIANT")
-        if (previousQuantity === nextQuantity) continue
-
-        await tx
-          .update(globalProducts)
-          .set({ stockQuantity: nextStock, updatedAt: new Date() })
-          .where(eq(globalProducts.id, globalProductId))
-      }
-
-      await tx.delete(orderItems).where(eq(orderItems.orderId, orderId))
-      await tx.insert(orderItems).values(calculatedItems.map((item) => ({
-        ...item,
-        orderId,
-        organizationId,
-      })))
-
-      try {
-        const receiptData = await generateReceiptData({
-          orderId,
-          orderTid: existingOrder.tid,
-          status: "PENDING",
-          organizationId,
-          branchId,
-          orderItemsData: calculatedItems,
-          subtotalCents,
-          taxCents,
-          totalCents,
-          discountCents: 0,
-          deliveryChargesCents: 0,
-        })
-        const previousReceipt = existingOrder.receiptData as any
-        receiptData.invoiceNumber = previousReceipt?.invoiceNumber || existingOrder.tid
-        receiptData.date = previousReceipt?.date || receiptData.date
-        await tx.update(orders).set({ receiptData: receiptData as any }).where(eq(orders.id, orderId))
-      } catch (receiptError) {
-        console.error("Receipt regeneration failed during order edit", receiptError)
-        // Never retain a receipt snapshot for the previous item set.
-        await tx.update(orders).set({ receiptData: null }).where(eq(orders.id, orderId))
-      }
-
-      await tx.insert(auditLogs).values({
-        userId: user.id,
-        organizationId,
-        branchId,
-        action: "ORDER_EDITED",
-        entity: "order",
-        entityId: String(orderId),
-        metadata: {
-          tid: existingOrder.tid,
-          actorRole: actor.role,
-          previousTotalCents: existingOrder.totalCents,
-          totalCents,
-          previousItemCount: existingItems.length,
-          itemCount: calculatedItems.length,
-        },
-      })
-
-      return { kind: "updated", order: updatedOrder } as const
-    })
 
     return getOrderEditResultResponse(result, pricesHidden)
   } catch (editError: any) {

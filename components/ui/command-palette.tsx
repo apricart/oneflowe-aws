@@ -17,7 +17,6 @@ import {
   Package,
   BarChart3,Search
 } from "lucide-react"
-import useSWR from "swr"
 import { useSession } from "next-auth/react"
 
 export function CommandPalette() {
@@ -25,9 +24,6 @@ export function CommandPalette() {
   const router = useRouter()
   const { data: session } = useSession()
   const role = (session?.user as any)?.role || "BRANCH_ADMIN"
-  const { data: orgsData } = useSWR("/api/v1/organizations")
-  const { data: branchesData } = useSWR("/api/v1/branches")
-
 
   React.useEffect(() => {
     const down = (e: KeyboardEvent) => {

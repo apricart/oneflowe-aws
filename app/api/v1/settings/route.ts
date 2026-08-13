@@ -52,6 +52,59 @@ async function invalidateSettingCaches(key: string) {
   }
 }
 
+function getSettingAccessError(scope: Awaited<ReturnType<typeof getRequestScope>>, organizationId: number, key: string) {
+  if (isPriceVisibilitySettingKey(key) && scope?.role !== "SUPER_ADMIN") {
+    return "Only Super Admin can modify price visibility"
+  }
+  if (scope?.role === "HEAD_OFFICE" && organizationId !== scope.organizationId) {
+    return "Forbidden: Cannot modify settings for other organizations"
+  }
+  if (key === BUDGET_ALLOCATION_MODE_SETTING_KEY && scope?.role !== "SUPER_ADMIN") {
+    return "Only Super Admin can set budget allocation mode"
+  }
+  return null
+}
+
+function getNumericSettingError(key: string, value: unknown) {
+  if (key === "tax_rate" && (typeof value !== "number" || value < 0 || value > 1)) {
+    return "tax_rate must be a number between 0 and 1"
+  }
+  if (key === "order_approval_threshold" && (typeof value !== "number" || value < 0)) {
+    return "order_approval_threshold must be a non-negative number"
+  }
+  if (key === "session_timeout_minutes" && (typeof value !== "number" || value < 1 || value > 1440)) {
+    return "session_timeout_minutes must be between 1 and 1440 (24 hours)"
+  }
+  if (key === "low_stock_threshold" && (typeof value !== "number" || value < 0)) {
+    return "low_stock_threshold must be a non-negative number"
+  }
+  return null
+}
+
+function getTypedSettingError(key: string, value: unknown) {
+  const booleanSetting = ['auto_approve_orders', 'require_mfa', 'enable_notifications'].includes(key)
+    || isPriceVisibilitySettingKey(key)
+  if (booleanSetting && typeof value !== "boolean") return `${key} must be a boolean`
+  if (key === "default_currency" && (typeof value !== "string" || value.length !== 3)) {
+    return "default_currency must be a 3-letter currency code"
+  }
+  if (key === BUDGET_ALLOCATION_MODE_SETTING_KEY && !isBudgetAllocationMode(value)) {
+    return "budget_allocation_mode must be either money or quantity"
+  }
+  return null
+}
+
+function getSettingValidationError(organizationId: number, key: string, value: unknown) {
+  if (!organizationId) return "organizationId is required"
+  if (!key || typeof key !== "string") return "key is required and must be a string"
+  if (typeof organizationId !== "number" || organizationId <= 0) return "organizationId must be a positive number"
+  if (!isValidSettingKey(key)) {
+    return `Invalid setting key: ${key}. Must be one of: ${Array.from(VALID_SETTING_KEYS).join(', ')}`
+  }
+  if (value === undefined) return "value is required"
+  return getNumericSettingError(key, value) || getTypedSettingError(key, value)
+}
+
 /**
  * GET /api/v1/settings - Fetch organization settings
  */
@@ -117,72 +170,12 @@ export async function POST(req: NextRequest) {
     if (!parsedBody.success) return err(validationMessage(parsedBody.error), 400)
     const { organizationId, key, value } = parsedBody.data
 
-    // Validate required fields
-    if (!organizationId) {
-      return err("organizationId is required", 400)
-    }
-
     // BOLA: HEAD_OFFICE must only modify their own org's settings
     const scope = await getRequestScope()
-    if (isPriceVisibilitySettingKey(key) && scope?.role !== "SUPER_ADMIN") {
-      return err("Only Super Admin can modify price visibility", 403)
-    }
-
-    if (scope?.role === "HEAD_OFFICE" && Number(organizationId) !== scope.organizationId) {
-      return err("Forbidden: Cannot modify settings for other organizations", 403)
-    }
-
-    if (key === BUDGET_ALLOCATION_MODE_SETTING_KEY && scope?.role !== "SUPER_ADMIN") {
-      return err("Only Super Admin can set budget allocation mode", 403)
-    }
-
-    if (!key || typeof key !== 'string') {
-      return err("key is required and must be a string", 400)
-    }
-
-    // Validate organization ID
-    if (typeof organizationId !== 'number' || organizationId <= 0) {
-      return err("organizationId must be a positive number", 400)
-    }
-
-    // Validate setting key
-    if (!isValidSettingKey(key)) {
-      return err(`Invalid setting key: ${key}. Must be one of: ${Array.from(VALID_SETTING_KEYS).join(', ')}`, 400)
-    }
-
-    // Validate value is not undefined
-    if (value === undefined) {
-      return err("value is required", 400)
-    }
-
-    // Type validation based on key
-    if (key === 'tax_rate' && (typeof value !== 'number' || value < 0 || value > 1)) {
-      return err("tax_rate must be a number between 0 and 1", 400)
-    }
-
-    if (key === 'order_approval_threshold' && (typeof value !== 'number' || value < 0)) {
-      return err("order_approval_threshold must be a non-negative number", 400)
-    }
-
-    if (key === 'session_timeout_minutes' && (typeof value !== 'number' || value < 1 || value > 1440)) {
-      return err("session_timeout_minutes must be between 1 and 1440 (24 hours)", 400)
-    }
-
-    if (key === 'low_stock_threshold' && (typeof value !== 'number' || value < 0)) {
-      return err("low_stock_threshold must be a non-negative number", 400)
-    }
-
-    if ((['auto_approve_orders', 'require_mfa', 'enable_notifications'].includes(key) || isPriceVisibilitySettingKey(key)) && typeof value !== 'boolean') {
-      return err(`${key} must be a boolean`, 400)
-    }
-
-    if (key === 'default_currency' && (typeof value !== 'string' || value.length !== 3)) {
-      return err("default_currency must be a 3-letter currency code", 400)
-    }
-
-    if (key === BUDGET_ALLOCATION_MODE_SETTING_KEY && !isBudgetAllocationMode(value)) {
-      return err("budget_allocation_mode must be either money or quantity", 400)
-    }
+    const accessError = getSettingAccessError(scope, organizationId, key)
+    if (accessError) return err(accessError, 403)
+    const validationError = getSettingValidationError(organizationId, key, value)
+    if (validationError) return err(validationError, 400)
 
     // Check if setting already exists
     const existing = await db

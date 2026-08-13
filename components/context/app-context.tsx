@@ -71,10 +71,13 @@ function initializeRoleContext(options: {
 export function AppContextProvider({ children }: Readonly<{ children: ReactNode }>) {
   const { data: session, status } = useSession()
 
-  const [organizationId, setOrganizationIdState] = useState<string | null>(null)
-  const [branchId, setBranchIdState] = useState<string | null>(null)
-  const [branchIds, setBranchIdsState] = useState<string[]>([])
+  const [organizationIdState, setOrganizationIdState] = useState<string | null>(null)
+  const [branchIdState, setBranchIdState] = useState<string | null>(null)
+  const [branchIdsState, setBranchIdsState] = useState<string[]>([])
   const [isInitialized, setIsInitialized] = useState(false)
+  const organizationId = organizationIdState
+  const branchId = branchIdState
+  const branchIds = branchIdsState
 
   // Get user info from session
   const userRole = (session?.user as any)?.role || null

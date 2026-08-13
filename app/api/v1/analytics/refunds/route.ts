@@ -30,6 +30,77 @@ const parsePositiveIds = (value: string | null) => value
     ? Array.from(new Set(value.split(",").map(Number).filter((id) => Number.isInteger(id) && id > 0)))
     : []
 
+function getRefundAccessConditions(
+    role: string,
+    organizationIds: number[],
+    requestedBranchIds: number[],
+    groupIds: number[],
+    assignedBranchId: unknown,
+): { conditions: any[]; error?: string } {
+    const scopedOrganizationIds = organizationIds
+    const conditions: any[] = []
+    if (role === "SUPER_ADMIN") {
+        if (scopedOrganizationIds.length > 0) conditions.push(inArray(orders.organizationId, scopedOrganizationIds))
+        if (requestedBranchIds.length > 0) conditions.push(inArray(orders.branchId, requestedBranchIds))
+        if (groupIds.length > 0) conditions.push(inArray(branches.groupId, groupIds))
+        return { conditions }
+    }
+    if (role === "HEAD_OFFICE") {
+        if (scopedOrganizationIds.length === 0) return { conditions, error: "Organization context missing" }
+        conditions.push(inArray(orders.organizationId, scopedOrganizationIds))
+        if (requestedBranchIds.length > 0) conditions.push(inArray(orders.branchId, requestedBranchIds))
+        if (groupIds.length > 0) conditions.push(inArray(branches.groupId, groupIds))
+        return { conditions }
+    }
+    const branchId = Number(assignedBranchId)
+    if (!Number.isInteger(branchId) || branchId <= 0) return { conditions, error: "Branch context missing" }
+    conditions.push(eq(orders.branchId, branchId))
+    return { conditions }
+}
+
+function addRefundFilters(conditions: any[], filters: {
+    startDate: string | null
+    endDate: string | null
+    status?: string
+    refundType?: string
+    query?: string
+}) {
+    const start = parseStartDateParam(filters.startDate)
+    const end = parseEndDateParam(filters.endDate)
+    if (start) conditions.push(gte(refunds.createdAt, start))
+    if (end) conditions.push(lte(refunds.createdAt, end))
+    if (filters.status && filters.status !== "ALL") {
+        conditions.push(eq(sql`UPPER(${refunds.status})`, filters.status))
+    }
+    if (filters.refundType === "FULL") {
+        conditions.push(gte(refunds.amountCents, orders.totalCents))
+    } else if (filters.refundType === "PARTIAL") {
+        conditions.push(sql`${refunds.amountCents} < ${orders.totalCents}`)
+    }
+    if (!filters.query) return
+    const escapedQuery = filters.query.replace(/[\\%_]/g, String.raw`\$&`)
+    const pattern = `%${escapedQuery}%`
+    conditions.push(or(
+        ilike(refunds.refundNumber, pattern),
+        ilike(orders.tid, pattern),
+        ilike(refunds.reason, pattern),
+        ilike(orders.refundReason, pattern),
+        ilike(requestedByUsers.fullName, pattern),
+        ilike(requestedByUsers.employeeId, pattern),
+        ilike(processedByUsers.fullName, pattern),
+    ))
+}
+
+function groupRefundItems(itemRows: any[]) {
+    const itemsByRefund = new Map<number, typeof itemRows>()
+    itemRows.forEach((item) => {
+        const existing = itemsByRefund.get(item.refundId) || []
+        existing.push(item)
+        itemsByRefund.set(item.refundId, existing)
+    })
+    return itemsByRefund
+}
+
 /**
  * GET /api/v1/analytics/refunds
  * Paginated, role-scoped refund records for the Refund Report.
@@ -78,61 +149,22 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ error: "Search query must be at most 100 characters" }, { status: 400 })
         }
 
-        const conditions: any[] = []
         const scopedOrganizationIds = resolveAnalyticsOrganizationIds({
             role,
             userOrganizationId: currentUser?.organizationId ?? sessionUser.organizationId,
             requestedOrganizationIds,
         })
 
-        if (role === "SUPER_ADMIN") {
-            if (scopedOrganizationIds.length > 0) conditions.push(inArray(orders.organizationId, scopedOrganizationIds))
-            if (branchIds.length > 0) conditions.push(inArray(orders.branchId, branchIds))
-            if (groupIds.length > 0) conditions.push(inArray(branches.groupId, groupIds))
-        } else if (role === "HEAD_OFFICE") {
-            if (scopedOrganizationIds.length === 0) {
-                return NextResponse.json({ error: "Organization context missing" }, { status: 403 })
-            }
-            conditions.push(inArray(orders.organizationId, scopedOrganizationIds))
-            if (branchIds.length > 0) conditions.push(inArray(orders.branchId, branchIds))
-            if (groupIds.length > 0) conditions.push(inArray(branches.groupId, groupIds))
-        } else {
-            const branchId = Number(currentUser?.branchId ?? sessionUser.branchId)
-            if (!Number.isInteger(branchId) || branchId <= 0) {
-                return NextResponse.json({ error: "Branch context missing" }, { status: 403 })
-            }
-            conditions.push(eq(orders.branchId, branchId))
-        }
-
-        if (startDate) {
-            const start = parseStartDateParam(startDate)
-            if (start) conditions.push(gte(refunds.createdAt, start))
-        }
-        if (endDate) {
-            const end = parseEndDateParam(endDate)
-            if (end) conditions.push(lte(refunds.createdAt, end))
-        }
-        if (status && status !== "ALL") {
-            conditions.push(eq(sql`UPPER(${refunds.status})`, status))
-        }
-        if (refundType === "FULL") {
-            conditions.push(gte(refunds.amountCents, orders.totalCents))
-        } else if (refundType === "PARTIAL") {
-            conditions.push(sql`${refunds.amountCents} < ${orders.totalCents}`)
-        }
-        if (query) {
-            const escapedQuery = query.replace(/[\\%_]/g, String.raw`\$&`)
-            const pattern = `%${escapedQuery}%`
-            conditions.push(or(
-                ilike(refunds.refundNumber, pattern),
-                ilike(orders.tid, pattern),
-                ilike(refunds.reason, pattern),
-                ilike(orders.refundReason, pattern),
-                ilike(requestedByUsers.fullName, pattern),
-                ilike(requestedByUsers.employeeId, pattern),
-                ilike(processedByUsers.fullName, pattern),
-            ))
-        }
+        const access = getRefundAccessConditions(
+            role,
+            scopedOrganizationIds,
+            branchIds,
+            groupIds,
+            currentUser?.branchId ?? sessionUser.branchId,
+        )
+        if (access.error) return NextResponse.json({ error: access.error }, { status: 403 })
+        const conditions = access.conditions
+        addRefundFilters(conditions, { startDate, endDate, status, refundType, query })
 
         const whereClause = conditions.length > 0 ? and(...conditions) : undefined
         const pricesHidden = await shouldHidePricesForRole(
@@ -243,12 +275,7 @@ export async function GET(req: NextRequest) {
                 .orderBy(refundItems.id)
             : []
 
-        const itemsByRefund = new Map<number, typeof itemRows>()
-        itemRows.forEach((item) => {
-            const existing = itemsByRefund.get(item.refundId) || []
-            existing.push(item)
-            itemsByRefund.set(item.refundId, existing)
-        })
+        const itemsByRefund = groupRefundItems(itemRows)
 
         const items = refundRows.map((refund) => ({
             ...refund,

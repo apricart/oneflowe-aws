@@ -53,7 +53,7 @@ describe('sanitizeInput', () => {
 
     it('truncates long input', () => {
         const longString = 'a'.repeat(10005)
-        expect(sanitizeInput(longString).length).toBe(10000)
+        expect(sanitizeInput(longString)).toHaveLength(10000)
     })
 })
 

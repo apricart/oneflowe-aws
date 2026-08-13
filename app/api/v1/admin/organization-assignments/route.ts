@@ -53,7 +53,8 @@ const resolveCustomPrice = (override: any, fallback: unknown) => {
   if (override?.customPrice !== undefined && override.customPrice !== null) {
     return Math.round(Number.parseFloat(override.customPrice) * 100)
   }
-  return fallback ? Math.round(Number.parseFloat(String(fallback)) * 100) : null
+  if (!fallback || (typeof fallback !== "string" && typeof fallback !== "number")) return null
+  return Math.round(Number.parseFloat(String(fallback)) * 100)
 }
 
 type AssignmentDefaults = {
@@ -472,9 +473,6 @@ export async function PUT(req: NextRequest) {
     const {
       id,
       isActive,
-      customName,
-      customPrice,
-      customDescription,
       customImageUrl
     } = body
 

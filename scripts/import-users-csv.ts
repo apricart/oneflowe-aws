@@ -206,7 +206,7 @@ function loadOverrides(filePath?: string): OverrideConfig | null {
     throw new Error("Override JSON must contain organization and branchOverrides.")
   }
   if (typeof parsed.branchOverrides !== "object" || Array.isArray(parsed.branchOverrides)) {
-    throw new Error("branchOverrides must be an object of source-name to database-name mappings.")
+    throw new TypeError("branchOverrides must be an object of source-name to database-name mappings.")
   }
   for (const [source, target] of Object.entries(parsed.branchOverrides)) {
     if (!normalizeImportText(source) || typeof target !== "string" || !normalizeImportText(target)) {

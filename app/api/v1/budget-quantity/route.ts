@@ -42,6 +42,203 @@ const parseNumberList = (value: string | null) =>
     ? value.split(",").map(Number).filter((id) => Number.isInteger(id) && id > 0)
     : []
 
+function resolveQuantityBudgetOrganizationId(role: string, userOrganizationId: number | undefined, requestedOrganizationId: number) {
+  if (role === "HEAD_OFFICE") return userOrganizationId
+  return Number.isInteger(requestedOrganizationId) && requestedOrganizationId > 0 ? requestedOrganizationId : undefined
+}
+
+async function resolveQuantityBudgetPeriods(context: any) {
+  if (context.period && periodPattern.test(context.period)) return [context.period]
+  const requestedStart = parseStartDateParam(context.startDate)
+  const end = parseEndDateParam(context.endDate) || new Date()
+  let start = requestedStart
+  if (context.preset === "all") {
+    const [first] = await db.select({ period: productQuantityBudgets.period }).from(productQuantityBudgets)
+      .where(eq(productQuantityBudgets.organizationId, context.organizationId)).orderBy(productQuantityBudgets.period).limit(1)
+    start = new Date(`${first?.period || currentBudgetPeriod()}-01T00:00:00.000Z`)
+  } else start ??= new Date(`${currentBudgetPeriod()}-01T00:00:00.000Z`)
+  if (!context.startDate) start.setHours(0, 0, 0, 0)
+  if (!context.endDate) end.setHours(23, 59, 59, 999)
+  if (["today", "3d", "7d", "monthly", "thisMonth"].includes(context.preset)) return [getAppMonthPeriod(end)]
+  const periods = buildAppMonthPeriods(start, end, context.months, context.years)
+  return periods.length > 0 ? periods : [currentBudgetPeriod()]
+}
+
+function summarizeQuantityProducts(rows: any[]) {
+  const byKey = new Map<string, any>()
+  rows.forEach((row) => {
+    const key = `${row.branchId}:${row.organizationInventoryId}`
+    const existing = byKey.get(key) || {
+      quantityBudgetId: row.quantityBudgetId,
+      organizationId: row.organizationId,
+      branchId: row.branchId,
+      organizationInventoryId: row.organizationInventoryId,
+      globalProductId: row.globalProductId,
+      productCode: row.productCode,
+      productName: row.customName || row.globalProductName || `Product ${row.globalProductId}`,
+      unit: row.unit,
+      baseQuantity: 0,
+      addonQuantity: 0,
+      totalQuantity: 0,
+      spentQuantity: 0,
+      remainingQuantity: 0,
+    }
+    existing.baseQuantity += row.baseQuantity
+    existing.addonQuantity += row.addonQuantity
+    existing.totalQuantity = existing.baseQuantity + existing.addonQuantity
+    existing.spentQuantity += row.usedQuantity + row.heldQuantity
+    existing.remainingQuantity = existing.totalQuantity - existing.spentQuantity
+    byKey.set(key, existing)
+  })
+  return [...byKey.values()]
+}
+
+function summarizeQuantityBranches(products: any[]) {
+  const byId = new Map<number, any>()
+  products.forEach((product) => {
+    const summary = byId.get(product.branchId) || {
+      branchId: product.branchId, baseQuantity: 0, addonQuantity: 0, totalQuantity: 0,
+      spentQuantity: 0, remainingQuantity: 0, productCount: 0,
+    }
+    summary.baseQuantity += product.baseQuantity
+    summary.addonQuantity += product.addonQuantity
+    summary.totalQuantity += product.totalQuantity
+    summary.spentQuantity += product.spentQuantity
+    summary.remainingQuantity += product.remainingQuantity
+    summary.productCount++
+    byId.set(product.branchId, summary)
+  })
+  return [...byId.values()]
+}
+
+function validateQuantityAllocationItems(items: QuantityAllocationRequestItem[]) {
+  if (items.length === 0) return "At least one product quantity allocation is required"
+  if (items.length > 100) return "Too many allocation lines in one request"
+  for (const item of items) {
+    if (!isPositiveId(item.branchInventoryId)) return "Each item requires a valid branchInventoryId"
+    const quantity = parseQuantity(item.quantity)
+    if (!Number.isFinite(quantity) || quantity <= 0) return "Each quantity must be a positive number"
+    item.quantity = quantity
+  }
+  const ids = items.map((item) => item.branchInventoryId)
+  return new Set(ids).size === ids.length ? null : "Each product can only appear once in a quantity allocation"
+}
+
+function buildQuantityAllocationLines(products: any[], items: QuantityAllocationRequestItem[]) {
+  const quantities = new Map(items.map((item) => [item.branchInventoryId, item.quantity]))
+  return products.map((product) => {
+    const quantity = quantities.get(product.branchInventoryId) || 0
+    const priceCents = product.customPrice ?? product.basePrice
+    if (!Number.isFinite(priceCents) || priceCents <= 0) throw new Error(`Pricing is unavailable for ${product.customName || product.productName}`)
+    const validation = validateProductQuantity(quantity, {
+      allowDecimalQuantity: product.allowDecimalQuantity,
+      quantityStep: product.quantityStep,
+      label: `Quantity for ${product.customName || product.productName}`,
+    })
+    if (!validation.ok) throw new Error(validation.error)
+    return { ...product, quantity: validation.quantity, priceCents, amountCents: calculateLineCents(priceCents, validation.quantity) }
+  })
+}
+
+function getMonthlyBaselineAmount(lines: any[], existingRows: any[], allocationType: AllocationType, totalAmount: number) {
+  if (allocationType !== "monthly") return totalAmount
+  const selected = new Map(lines.map((line) => [line.organizationInventoryId, line.amountCents]))
+  const existing = new Map(existingRows.map((row) => [row.organizationInventoryId, row]))
+  const ids = new Set([...existingRows.map((row) => row.organizationInventoryId), ...lines.map((line) => line.organizationInventoryId)])
+  return [...ids].reduce((total, id) => total + (selected.get(id) ?? existing.get(id)?.amountAllocatedCents ?? 0), 0)
+}
+
+function validateQuantityBudgetSession(session: any) {
+  if (!session?.user) return { error: "Unauthorized", status: 401 }
+  const role = session.user.role
+  const rawOrganizationId = session.user.organizationId
+  const organizationId = Number.isFinite(Number(rawOrganizationId)) ? Number(rawOrganizationId) : undefined
+  if (!["HEAD_OFFICE", "SUPER_ADMIN"].includes(role)) return { error: "Forbidden", status: 403 }
+  if (role === "HEAD_OFFICE" && !organizationId) return { error: "Organization context required", status: 400 }
+  return { role, organizationId, userId: session.user.id }
+}
+
+function getQuantityResetErrorResponse(caughtError: any) {
+  if (caughtError?.message === "QUANTITY_BUDGET_RESET_HAS_COMMITMENTS") {
+    return NextResponse.json({ error: "Cannot reset quantity budgets while orders are held or spent in the selected period" }, { status: 409 })
+  }
+  return NextResponse.json({ error: "Failed to reset quantity budgets" }, { status: 500 })
+}
+
+function validateAllocationTotal(totalAmountCents: number) {
+  if (!Number.isSafeInteger(totalAmountCents) || totalAmountCents < 0) return "Calculated allocation amount is invalid"
+  if (totalAmountCents > Number.MAX_SAFE_INTEGER / 2) return "Allocation amount exceeds maximum allowed value"
+  return null
+}
+
+function getQuantityAllocationErrorResponse(caughtError: any) {
+  const message = caughtError?.message || "Internal Server Error"
+  const isValidationError = message.startsWith("Validation Failed")
+    || message.includes("cannot be lower")
+    || message.includes("Pricing is unavailable")
+  return NextResponse.json({ error: isValidationError ? message : "Internal Server Error" }, { status: isValidationError ? 400 : 500 })
+}
+
+async function upsertQuantityBudgetLine(tx: any, context: any) {
+  const existing = context.existingByInventoryId.get(context.line.organizationInventoryId)
+  const usedOrHeld = (existing?.usedQuantity || 0) + (existing?.heldQuantity || 0)
+  const proposedTotal = context.type === "monthly"
+    ? context.line.quantity + (existing?.creditedQuantity || 0)
+    : (existing?.allocatedQuantity || 0) + (existing?.creditedQuantity || 0) + context.line.quantity
+  if (proposedTotal < usedOrHeld) {
+    throw new Error(`Quantity allocation for ${context.line.customName || context.line.productName} cannot be lower than already used or held quantity (${formatQuantity(usedOrHeld)}).`)
+  }
+  const [quantityBudget] = await tx.insert(productQuantityBudgets).values({
+    organizationId: context.branch.organizationId,
+    branchId: context.branch.id,
+    organizationInventoryId: context.line.organizationInventoryId,
+    globalProductId: context.line.globalProductId,
+    period: context.period,
+    allocatedQuantity: context.type === "monthly" ? context.line.quantity : 0,
+    creditedQuantity: context.type === "addon" ? context.line.quantity : 0,
+    amountAllocatedCents: context.type === "monthly" ? context.line.amountCents : 0,
+    amountCreditedCents: context.type === "addon" ? context.line.amountCents : 0,
+    createdByUserId: context.userId,
+    updatedByUserId: context.userId,
+  }).onConflictDoUpdate({
+    target: [productQuantityBudgets.branchId, productQuantityBudgets.organizationInventoryId, productQuantityBudgets.period],
+    set: context.type === "monthly" ? {
+      allocatedQuantity: context.line.quantity,
+      amountAllocatedCents: context.line.amountCents,
+      globalProductId: context.line.globalProductId,
+      updatedByUserId: context.userId,
+      updatedAt: new Date(),
+    } : {
+      creditedQuantity: sql`${productQuantityBudgets.creditedQuantity} + ${context.line.quantity}`,
+      amountCreditedCents: sql`${productQuantityBudgets.amountCreditedCents} + ${context.line.amountCents}`,
+      globalProductId: context.line.globalProductId,
+      updatedByUserId: context.userId,
+      updatedAt: new Date(),
+    },
+  }).returning()
+  await tx.insert(productQuantityBudgetAllocations).values({
+    quantityBudgetId: quantityBudget.id,
+    budgetId: context.moneyBudget.id,
+    organizationId: context.branch.organizationId,
+    branchId: context.branch.id,
+    organizationInventoryId: context.line.organizationInventoryId,
+    globalProductId: context.line.globalProductId,
+    period: context.period,
+    allocationType: context.type,
+    quantity: context.line.quantity,
+    priceCents: context.line.priceCents,
+    amountCents: context.line.amountCents,
+    createdByUserId: context.userId,
+    metadata: {
+      branchInventoryId: context.line.branchInventoryId,
+      productName: context.line.customName || context.line.productName,
+      productCode: context.line.productCode,
+      unit: context.line.unit,
+    },
+  })
+  return quantityBudget
+}
+
 export async function GET(req: NextRequest) {
   try {
     const session = await getServerSession(authOptions)
@@ -74,15 +271,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Invalid organization ID" }, { status: 400 })
     }
 
-    const scopedOrganizationId = (() => {
-      if (role === "HEAD_OFFICE") {
-        return userOrgId
-      }
-      if (Number.isInteger(requestedOrgId) && requestedOrgId > 0) {
-        return requestedOrgId
-      }
-      return undefined
-    })()
+    const scopedOrganizationId = resolveQuantityBudgetOrganizationId(role, userOrgId, requestedOrgId)
 
     if (!scopedOrganizationId) {
       return NextResponse.json({ error: "Select an organization to view quantity budgets" }, { status: 400 })
@@ -100,39 +289,15 @@ export async function GET(req: NextRequest) {
     const parsedYears = parseNumberList(yearsParam)
       .filter((year) => year >= 2000 && year <= 2100)
 
-    let periodList: string[]
-    if (periodParam && periodPattern.test(periodParam)) {
-      periodList = [periodParam]
-    } else {
-      const requestedStartDate = parseStartDateParam(startDateParam)
-      const requestedEndDate = parseEndDateParam(endDateParam)
-      let startDate = requestedStartDate
-      const endDate = requestedEndDate || new Date()
-
-      if (presetParam === "all") {
-        const firstQuantityBudget = await db
-          .select({ period: productQuantityBudgets.period })
-          .from(productQuantityBudgets)
-          .where(eq(productQuantityBudgets.organizationId, scopedOrganizationId))
-          .orderBy(productQuantityBudgets.period)
-          .limit(1)
-
-        startDate = firstQuantityBudget.length > 0
-          ? new Date(`${firstQuantityBudget[0].period}-01T00:00:00.000Z`)
-          : new Date(`${currentBudgetPeriod()}-01T00:00:00.000Z`)
-      } else {
-        startDate ??= new Date(`${currentBudgetPeriod()}-01T00:00:00.000Z`)
-      }
-
-      if (!startDateParam) startDate.setHours(0, 0, 0, 0)
-      if (!endDateParam) endDate.setHours(23, 59, 59, 999)
-
-      periodList = buildAppMonthPeriods(startDate, endDate, parsedMonths, parsedYears)
-      if (["today", "3d", "7d", "monthly", "thisMonth"].includes(presetParam)) {
-        periodList = [getAppMonthPeriod(endDate)]
-      }
-      if (periodList.length === 0) periodList = [currentBudgetPeriod()]
-    }
+    const periodList = await resolveQuantityBudgetPeriods({
+      period: periodParam,
+      startDate: startDateParam,
+      endDate: endDateParam,
+      preset: presetParam,
+      months: parsedMonths,
+      years: parsedYears,
+      organizationId: scopedOrganizationId,
+    })
 
     const quantityRows = await db
       .select({
@@ -168,83 +333,12 @@ export async function GET(req: NextRequest) {
         branchIds.length > 0 ? inArray(productQuantityBudgets.branchId, branchIds) : undefined,
       ))
 
-    const productSummaryByKey = new Map<string, {
-      quantityBudgetId: number
-      organizationId: number
-      branchId: number
-      organizationInventoryId: number
-      globalProductId: number
-      productCode?: string | null
-      productName: string
-      unit?: string | null
-      baseQuantity: number
-      addonQuantity: number
-      totalQuantity: number
-      spentQuantity: number
-      remainingQuantity: number
-    }>()
-
-    for (const row of quantityRows) {
-      const key = `${row.branchId}:${row.organizationInventoryId}`
-      const existing = productSummaryByKey.get(key) || {
-        quantityBudgetId: row.quantityBudgetId,
-        organizationId: row.organizationId,
-        branchId: row.branchId,
-        organizationInventoryId: row.organizationInventoryId,
-        globalProductId: row.globalProductId,
-        productCode: row.productCode,
-        productName: row.customName || row.globalProductName || `Product ${row.globalProductId}`,
-        unit: row.unit,
-        baseQuantity: 0,
-        addonQuantity: 0,
-        totalQuantity: 0,
-        spentQuantity: 0,
-        remainingQuantity: 0,
-      }
-      existing.baseQuantity += row.baseQuantity
-      existing.addonQuantity += row.addonQuantity
-      existing.totalQuantity = existing.baseQuantity + existing.addonQuantity
-      existing.spentQuantity += row.usedQuantity + row.heldQuantity
-      existing.remainingQuantity = existing.totalQuantity - existing.spentQuantity
-      productSummaryByKey.set(key, existing)
-    }
-
-    const products = Array.from(productSummaryByKey.values())
-
-    const branchSummaryById = new Map<number, {
-      branchId: number
-      baseQuantity: number
-      addonQuantity: number
-      totalQuantity: number
-      spentQuantity: number
-      remainingQuantity: number
-      productCount: number
-    }>()
-
-    for (const product of products) {
-      const summary = branchSummaryById.get(product.branchId) || {
-        branchId: product.branchId,
-        baseQuantity: 0,
-        addonQuantity: 0,
-        totalQuantity: 0,
-        spentQuantity: 0,
-        remainingQuantity: 0,
-        productCount: 0,
-      }
-
-      summary.baseQuantity += product.baseQuantity
-      summary.addonQuantity += product.addonQuantity
-      summary.totalQuantity += product.totalQuantity
-      summary.spentQuantity += product.spentQuantity
-      summary.remainingQuantity += product.remainingQuantity
-      summary.productCount += 1
-      branchSummaryById.set(product.branchId, summary)
-    }
+    const products = summarizeQuantityProducts(quantityRows)
 
     return NextResponse.json({
       period: periodList.length === 1 ? periodList[0] : undefined,
       periods: periodList,
-      branches: Array.from(branchSummaryById.values()),
+      branches: summarizeQuantityBranches(products),
       products,
     })
   } catch (error: any) {
@@ -256,22 +350,9 @@ export async function GET(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   try {
     const session = await getServerSession(authOptions)
-    if (!session?.user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-    }
-
-    const role = (session.user as any).role
-    const userId = (session.user as any).id
-    const rawUserOrgId = (session.user as any).organizationId
-    const userOrgId = Number.isFinite(Number(rawUserOrgId)) ? Number(rawUserOrgId) : undefined
-
-    if (role !== "HEAD_OFFICE" && role !== "SUPER_ADMIN") {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
-    }
-
-    if (role === "HEAD_OFFICE" && !userOrgId) {
-      return NextResponse.json({ error: "Organization context required" }, { status: 400 })
-    }
+    const access = validateQuantityBudgetSession(session)
+    if (access.error) return NextResponse.json({ error: access.error }, { status: access.status })
+    const { role, userId, organizationId: userOrgId } = access
 
     const rawBody = await req.json().catch(() => ({}))
     const parsedBody = quantityBudgetResetSchema.safeParse(rawBody)
@@ -285,15 +366,7 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: "Invalid organization ID" }, { status: 400 })
     }
 
-    const scopedOrganizationId = (() => {
-      if (role === "HEAD_OFFICE") {
-        return userOrgId
-      }
-      if (Number.isInteger(requestedOrgId) && requestedOrgId > 0) {
-        return requestedOrgId
-      }
-      return undefined
-    })()
+    const scopedOrganizationId = resolveQuantityBudgetOrganizationId(role, userOrgId, requestedOrgId)
 
     if (!scopedOrganizationId) {
       return NextResponse.json({ error: "Select an organization before resetting quantity budgets" }, { status: 400 })
@@ -440,30 +513,16 @@ export async function DELETE(req: NextRequest) {
     })
   } catch (error: any) {
     console.error("[BudgetQuantity] Reset failed:", error)
-    if (error?.message === "QUANTITY_BUDGET_RESET_HAS_COMMITMENTS") {
-      return NextResponse.json({
-        error: "Cannot reset quantity budgets while orders are held or spent in the selected period",
-      }, { status: 409 })
-    }
-    return NextResponse.json({ error: "Failed to reset quantity budgets" }, { status: 500 })
+    return getQuantityResetErrorResponse(error)
   }
 }
 
 export async function POST(req: NextRequest) {
   try {
     const session = await getServerSession(authOptions)
-    if (!session?.user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-    }
-
-    const role = (session.user as any).role
-    const userId = (session.user as any).id
-    const rawUserOrgId = (session.user as any).organizationId
-    const userOrgId = Number.isFinite(Number(rawUserOrgId)) ? Number(rawUserOrgId) : undefined
-
-    if (role !== "HEAD_OFFICE" && role !== "SUPER_ADMIN") {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
-    }
+    const access = validateQuantityBudgetSession(session)
+    if (access.error) return NextResponse.json({ error: access.error }, { status: access.status })
+    const { role, userId, organizationId: userOrgId } = access
 
     const rawBody = await req.json().catch(() => null)
     if (!rawBody) {
@@ -484,29 +543,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "branchId must be a positive number" }, { status: 400 })
     }
 
-    if (!Array.isArray(items) || items.length === 0) {
-      return NextResponse.json({ error: "At least one product quantity allocation is required" }, { status: 400 })
-    }
-
-    if (items.length > 100) {
-      return NextResponse.json({ error: "Too many allocation lines in one request" }, { status: 400 })
-    }
-
-    for (const item of items) {
-      if (!isPositiveId(item.branchInventoryId)) {
-        return NextResponse.json({ error: "Each item requires a valid branchInventoryId" }, { status: 400 })
-      }
-      const parsedQuantity = parseQuantity(item.quantity)
-      if (!Number.isFinite(parsedQuantity) || parsedQuantity <= 0) {
-        return NextResponse.json({ error: "Each quantity must be a positive number" }, { status: 400 })
-      }
-      item.quantity = parsedQuantity
-    }
-
+    const itemValidationError = validateQuantityAllocationItems(items)
+    if (itemValidationError) return NextResponse.json({ error: itemValidationError }, { status: 400 })
     const branchInventoryIds = items.map((item) => item.branchInventoryId)
-    if (new Set(branchInventoryIds).size !== branchInventoryIds.length) {
-      return NextResponse.json({ error: "Each product can only appear once in a quantity allocation" }, { status: 400 })
-    }
 
     const [branch] = await db.select().from(branches).where(eq(branches.id, branchId)).limit(1)
     if (!branch) {
@@ -559,49 +598,17 @@ export async function POST(req: NextRequest) {
       }, { status: 400 })
     }
 
-    const quantityByBranchInventoryId = new Map(
-      items.map((item) => [item.branchInventoryId, item.quantity])
-    )
-
-    const allocationLines = assignedProducts.map((product) => {
-      const quantity = quantityByBranchInventoryId.get(product.branchInventoryId) || 0
-      const priceCents = product.customPrice ?? product.basePrice
-
-      if (!Number.isFinite(priceCents) || priceCents <= 0) {
-        throw new Error(`Pricing is unavailable for ${product.customName || product.productName}`)
-      }
-
-      const quantityValidation = validateProductQuantity(quantity, {
-        allowDecimalQuantity: product.allowDecimalQuantity,
-        quantityStep: product.quantityStep,
-        label: `Quantity for ${product.customName || product.productName}`,
-      })
-      if (!quantityValidation.ok) throw new Error(quantityValidation.error)
-
-      return {
-        ...product,
-        quantity: quantityValidation.quantity,
-        priceCents,
-        amountCents: calculateLineCents(priceCents, quantityValidation.quantity),
-      }
-    })
+    const allocationLines = buildQuantityAllocationLines(assignedProducts, items)
 
     const totalAmountCents = allocationLines.reduce((sum, line) => sum + line.amountCents, 0)
     const totalQuantity = allocationLines.reduce((sum, line) => sum + line.quantity, 0)
 
-    if (!Number.isSafeInteger(totalAmountCents) || totalAmountCents < 0) {
-      return NextResponse.json({ error: "Calculated allocation amount is invalid" }, { status: 400 })
-    }
-
-    if (totalAmountCents > Number.MAX_SAFE_INTEGER / 2) {
-      return NextResponse.json({ error: "Allocation amount exceeds maximum allowed value" }, { status: 400 })
-    }
+    const totalValidationError = validateAllocationTotal(totalAmountCents)
+    if (totalValidationError) return NextResponse.json({ error: totalValidationError }, { status: 400 })
 
     const period = currentBudgetPeriod()
 
     const result = await db.transaction(async (tx) => {
-      const selectedOrganizationInventoryIds = allocationLines.map((line) => line.organizationInventoryId)
-
       // Match checkout's lock order: money budget first, then product budgets.
       await tx.insert(budgets).values({
         organizationId: branch.organizationId,
@@ -633,22 +640,7 @@ export async function POST(req: NextRequest) {
         existingQuantityRows.map((row) => [row.organizationInventoryId, row])
       )
 
-      const monthlyAmountByOrgInvId = new Map(
-        allocationLines.map((line) => [line.organizationInventoryId, line.amountCents])
-      )
-
-      const monthlyBaselineAmountCents = type === "monthly"
-        ? Array.from(new Set([
-          ...existingQuantityRows.map((row) => row.organizationInventoryId),
-          ...selectedOrganizationInventoryIds,
-        ])).reduce((sum, organizationInventoryId) => {
-          const updatedAmount = monthlyAmountByOrgInvId.get(organizationInventoryId)
-          if (updatedAmount !== undefined) return sum + updatedAmount
-
-          const existing = existingQuantityByOrgInvId.get(organizationInventoryId)
-          return sum + (existing?.amountAllocatedCents || 0)
-        }, 0)
-        : totalAmountCents
+      const monthlyBaselineAmountCents = getMonthlyBaselineAmount(allocationLines, existingQuantityRows, type, totalAmountCents)
 
       const currentSpent = (existingBudget?.amountSpentCents || 0) + (existingBudget?.amountHeldCents || 0)
       const oldAllocated = existingBudget?.amountAllocatedCents ?? branch.baselineBudgetCents ?? 0
@@ -699,81 +691,17 @@ export async function POST(req: NextRequest) {
       }
 
       const quantityBudgetRows = []
-
       for (const line of allocationLines) {
-        const existing = existingQuantityByOrgInvId.get(line.organizationInventoryId)
-        const currentUsedOrHeld = (existing?.usedQuantity || 0) + (existing?.heldQuantity || 0)
-        const proposedQuantityTotal = type === "monthly"
-          ? line.quantity + (existing?.creditedQuantity || 0)
-          : (existing?.allocatedQuantity || 0) + (existing?.creditedQuantity || 0) + line.quantity
-
-        if (proposedQuantityTotal < currentUsedOrHeld) {
-          throw new Error(`Quantity allocation for ${line.customName || line.productName} cannot be lower than already used or held quantity (${formatQuantity(currentUsedOrHeld)}).`)
-        }
-
-        const [quantityBudget] = await tx
-          .insert(productQuantityBudgets)
-          .values({
-            organizationId: branch.organizationId,
-            branchId: branch.id,
-            organizationInventoryId: line.organizationInventoryId,
-            globalProductId: line.globalProductId,
-            period,
-            allocatedQuantity: type === "monthly" ? line.quantity : 0,
-            creditedQuantity: type === "addon" ? line.quantity : 0,
-            amountAllocatedCents: type === "monthly" ? line.amountCents : 0,
-            amountCreditedCents: type === "addon" ? line.amountCents : 0,
-            createdByUserId: userId,
-            updatedByUserId: userId,
-          })
-          .onConflictDoUpdate({
-            target: [
-              productQuantityBudgets.branchId,
-              productQuantityBudgets.organizationInventoryId,
-              productQuantityBudgets.period,
-            ],
-            set: type === "monthly"
-              ? {
-                allocatedQuantity: line.quantity,
-                amountAllocatedCents: line.amountCents,
-                globalProductId: line.globalProductId,
-                updatedByUserId: userId,
-                updatedAt: new Date(),
-              }
-              : {
-                creditedQuantity: sql`${productQuantityBudgets.creditedQuantity} + ${line.quantity}`,
-                amountCreditedCents: sql`${productQuantityBudgets.amountCreditedCents} + ${line.amountCents}`,
-                globalProductId: line.globalProductId,
-                updatedByUserId: userId,
-                updatedAt: new Date(),
-              },
-          })
-          .returning()
-
-        await tx.insert(productQuantityBudgetAllocations).values({
-          quantityBudgetId: quantityBudget.id,
-          budgetId: moneyBudget.id,
-          organizationId: branch.organizationId,
-          branchId: branch.id,
-          organizationInventoryId: line.organizationInventoryId,
-          globalProductId: line.globalProductId,
+        quantityBudgetRows.push(await upsertQuantityBudgetLine(tx, {
+          line,
+          existingByInventoryId: existingQuantityByOrgInvId,
+          type,
+          branch,
           period,
-          allocationType: type,
-          quantity: line.quantity,
-          priceCents: line.priceCents,
-          amountCents: line.amountCents,
-          createdByUserId: userId,
-          metadata: {
-            branchInventoryId: line.branchInventoryId,
-            productName: line.customName || line.productName,
-            productCode: line.productCode,
-            unit: line.unit,
-          },
-        })
-
-        quantityBudgetRows.push(quantityBudget)
+          userId,
+          moneyBudget,
+        }))
       }
-
       await tx.insert(auditLogs).values({
         userId,
         organizationId: branch.organizationId,
@@ -822,10 +750,6 @@ export async function POST(req: NextRequest) {
     })
   } catch (error: any) {
     console.error("[BudgetQuantity] Allocation failed:", error)
-    const message = error?.message || "Internal Server Error"
-    const status = message.startsWith("Validation Failed") || message.includes("cannot be lower") || message.includes("Pricing is unavailable")
-      ? 400
-      : 500
-    return NextResponse.json({ error: status === 400 ? message : "Internal Server Error" }, { status })
+    return getQuantityAllocationErrorResponse(error)
   }
 }

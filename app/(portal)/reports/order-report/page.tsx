@@ -337,7 +337,6 @@ export default function OrderReportPage() {
 
     // ━━━ DATA PROCESSING ━━━
     const summary = globalData?.summary || { totalSales: 0, totalRefunds: 0, totalTax: 0, totalSubtotal: 0, orderCount: 0, totalOrderCount: 0 }
-    const comparison = globalData?.comparison
     const chartOrders = chartData?.orders || []
     const reportOrders = reportData?.orders || []
     const totalReportOrders = Number(reportData?.pagination?.total || 0)
@@ -372,13 +371,6 @@ export default function OrderReportPage() {
             setCurrentPage(totalReportPages)
         }
     }, [currentPage, reportData?.pagination, totalReportPages])
-
-    const getTrend = (current: number, prev: number) => {
-        if (!prev || prev === 0) return null
-        const diff = ((current - prev) / prev) * 100
-        return { value: Math.abs(diff).toFixed(1), isUp: diff > 0, isDown: diff < 0 }
-    }
-
 
     // ━━━ CHART TREND DATA: Normalized X-Axis ━━━
     const chartTrendData = useMemo(() => {

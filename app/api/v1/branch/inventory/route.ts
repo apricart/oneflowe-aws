@@ -10,6 +10,98 @@ import { coalesceInFlight,getCached,invalidateByPrefix,scopedCacheKey,CACHE_TTL 
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
 
+function parseOptionalId(value: unknown) {
+  if (!value) return null
+  return typeof value === "string" ? Number.parseInt(value) : Number(value)
+}
+
+function resolveInventoryContext(
+  userRole: string,
+  sessionOrganizationId: unknown,
+  sessionBranchId: unknown,
+  searchParams: URLSearchParams,
+): { organizationId?: number; branchId?: number; error?: string; status?: number } {
+  let organizationId = parseOptionalId(sessionOrganizationId)
+  let branchId = parseOptionalId(sessionBranchId)
+  if (["BRANCH_ADMIN", "EMPLOYEE", "ORDER_PORTAL"].includes(userRole)) {
+    if (!organizationId || !branchId) {
+      return { error: "Organization or branch not found in session", status: 400 }
+    }
+    return { organizationId, branchId }
+  }
+  if (!["HEAD_OFFICE", "SUPER_ADMIN"].includes(userRole)) {
+    return { error: "Forbidden - Access denied", status: 403 }
+  }
+  const branchIdParam = searchParams.get("branchId")
+  const organizationIdParam = searchParams.get("organizationId")
+  if (!branchIdParam) return { error: "branchId parameter required for admin users", status: 400 }
+  branchId = Number.parseInt(branchIdParam)
+  if (!Number.isFinite(branchId)) return { error: "Invalid branch ID", status: 400 }
+  if (organizationIdParam) organizationId = Number.parseInt(organizationIdParam)
+  if (!organizationId) return { error: "Organization context not found", status: 400 }
+  if (!Number.isFinite(organizationId)) return { error: "Invalid organization ID", status: 400 }
+  return { organizationId, branchId }
+}
+
+async function buildInventoryConditions({
+  organizationId,
+  branchId,
+  quantityBudgetCatalogActive,
+  currentPeriod,
+  search,
+  category,
+  subCategory,
+}: {
+  organizationId: number
+  branchId: number
+  quantityBudgetCatalogActive: boolean
+  currentPeriod: string
+  search: string
+  category: string
+  subCategory: string
+}) {
+  const conditions: (SQL | undefined)[] = [
+    eq(branchInventory.branchId, branchId),
+    eq(branchInventory.organizationId, organizationId),
+    eq(branchInventory.isActive, true),
+    eq(branchInventory.isVisible, true),
+    isNull(branchInventory.deletedAt),
+    eq(globalProducts.status, "active"),
+    eq(organizationInventory.isActive, true),
+    isNull(organizationInventory.deletedAt),
+    isNull(globalProducts.deletedAt),
+  ]
+  if (quantityBudgetCatalogActive) {
+    conditions.push(sql`EXISTS (
+      SELECT 1 FROM ${productQuantityBudgets}
+      WHERE ${productQuantityBudgets.organizationId} = ${organizationId}
+        AND ${productQuantityBudgets.branchId} = ${branchId}
+        AND ${productQuantityBudgets.period} = ${currentPeriod}
+        AND ${productQuantityBudgets.organizationInventoryId} = ${branchInventory.organizationInventoryId}
+        AND (${productQuantityBudgets.allocatedQuantity} + ${productQuantityBudgets.creditedQuantity}) > 0
+    )`)
+  }
+  if (search) {
+    conditions.push(or(
+      ilike(globalProducts.name, `%${search}%`),
+      ilike(globalProducts.productCode, `%${search}%`),
+      ilike(organizationInventory.customName, `%${search}%`),
+    ))
+  }
+  if (category && category !== "all") {
+    const categoryId = Number.parseInt(category)
+    const subcategories = await db.select({ id: categories.id })
+      .from(categories)
+      .where(eq(categories.parentId, categoryId))
+    const ids = subcategories.map((subcategory) => subcategory.id)
+    conditions.push(ids.length > 0 ? inArray(globalProducts.categoryId, ids) : eq(globalProducts.categoryId, -1))
+  }
+  if (subCategory && subCategory !== "all") {
+    conditions.push(eq(globalProducts.categoryId, Number.parseInt(subCategory)))
+  }
+  return conditions
+}
+
 // GET /api/v1/branch/inventory - List products in branch inventory
 export async function GET(req: NextRequest) {
   try {
@@ -22,49 +114,16 @@ export async function GET(req: NextRequest) {
     }
 
     const userRole = (session.user as any).role
-    let organizationId = (session.user as any).organizationId
-    let branchId = (session.user as any).branchId
-
-    if (branchId && typeof branchId === "string") branchId = Number.parseInt(branchId)
-    if (organizationId && typeof organizationId === "string") organizationId = Number.parseInt(organizationId)
-
     const { searchParams } = new URL(req.url)
-
-    // Allow BRANCH_ADMIN to access their own inventory
-    // Allow EMPLOYEE to access their assigned branch inventory
-    // Allow ORDER_PORTAL to access their assigned branch inventory
-    // Allow HEAD_OFFICE and SUPER_ADMIN to access if they provide branchId param
-    if (userRole === "BRANCH_ADMIN" || userRole === "EMPLOYEE" || userRole === "ORDER_PORTAL") {
-      // BRANCH_ADMIN, EMPLOYEE, and ORDER_PORTAL use their own branch
-      if (!organizationId || !branchId) {
-        return NextResponse.json({ error: "Organization or branch not found in session" }, { status: 400 })
-      }
-    } else if (userRole === "HEAD_OFFICE" || userRole === "SUPER_ADMIN") {
-      // Admin users need to specify branchId in query params
-      const branchIdParam = searchParams.get("branchId")
-      const orgIdParam = searchParams.get("organizationId")
-
-      if (!branchIdParam) {
-        return NextResponse.json({ error: "branchId parameter required for admin users" }, { status: 400 })
-      }
-
-      branchId = Number.parseInt(branchIdParam)
-      if (!Number.isFinite(branchId)) {
-        return NextResponse.json({ error: "Invalid branch ID" }, { status: 400 })
-      }
-
-      // Use organizationId from query param if provided (from context selector), otherwise use session
-      if (orgIdParam) {
-        organizationId = Number.parseInt(orgIdParam)
-        if (!Number.isFinite(organizationId)) {
-          return NextResponse.json({ error: "Invalid organization ID" }, { status: 400 })
-        }
-      } else if (!organizationId) {
-        return NextResponse.json({ error: "Organization context not found" }, { status: 400 })
-      }
-    } else {
-      return NextResponse.json({ error: "Forbidden - Access denied" }, { status: 403 })
-    }
+    const context = resolveInventoryContext(
+      userRole,
+      (session.user as any).organizationId,
+      (session.user as any).branchId,
+      searchParams,
+    )
+    if (context.error) return NextResponse.json({ error: context.error }, { status: context.status })
+    const organizationId = context.organizationId!
+    const branchId = context.branchId!
 
     const searchRaw = searchParams.get("search") || ""
     const search = searchRaw ? escapeLikePattern(searchRaw) : "" // Sanitize LIKE patterns
@@ -76,7 +135,7 @@ export async function GET(req: NextRequest) {
     const limitNum = Math.max(1, Number.parseInt(searchParams.get("limit") || "50") || 50)
     const offset = (pageNum - 1) * limitNum
 
-    const orgIdNum = typeof organizationId === "string" ? Number.parseInt(organizationId) : Number(organizationId)
+    const orgIdNum = Number(organizationId)
 
     if (Number.isNaN(orgIdNum)) {
       return NextResponse.json({ error: "Invalid organization ID" }, { status: 400 })
@@ -111,60 +170,15 @@ export async function GET(req: NextRequest) {
       : { active: false }
     const quantityBudgetCatalogActive = quantityBudgetCatalogState.active
 
-    // Build conditions - products must be in branchInventory for this branch
-    const conditions: (SQL | undefined)[] = [
-      eq(branchInventory.branchId, branchId),
-      eq(branchInventory.organizationId, orgIdNum),
-      eq(branchInventory.isActive, true),
-      eq(branchInventory.isVisible, true),
-      isNull(branchInventory.deletedAt),
-      // Only show globally active products
-      eq(globalProducts.status, "active"),
-      // Only show products that are active at the organization level
-      eq(organizationInventory.isActive, true),
-      isNull(organizationInventory.deletedAt),
-      isNull(globalProducts.deletedAt),
-    ]
-
-    if (quantityBudgetCatalogActive) {
-      conditions.push(sql`EXISTS (
-        SELECT 1
-        FROM ${productQuantityBudgets}
-        WHERE ${productQuantityBudgets.organizationId} = ${orgIdNum}
-          AND ${productQuantityBudgets.branchId} = ${branchId}
-          AND ${productQuantityBudgets.period} = ${currentPeriod}
-          AND ${productQuantityBudgets.organizationInventoryId} = ${branchInventory.organizationInventoryId}
-          AND (${productQuantityBudgets.allocatedQuantity} + ${productQuantityBudgets.creditedQuantity}) > 0
-      )`)
-    }
-
-    if (search) {
-      conditions.push(
-        or(
-          ilike(globalProducts.name, `%${search}%`),
-          ilike(globalProducts.productCode, `%${search}%`),
-          ilike(organizationInventory.customName, `%${search}%`)
-        )
-      )
-    }
-    if (category && category !== 'all') {
-      const catId = Number.parseInt(category)
-      // Find all subcategories for this parent
-      const subCatsList = await db.select({ id: categories.id })
-        .from(categories)
-        .where(eq(categories.parentId, catId))
-
-      const subCatIds = subCatsList.map(sc => sc.id)
-      if (subCatIds.length > 0) {
-        conditions.push(inArray(globalProducts.categoryId, subCatIds))
-      } else {
-        // If parent has no children, it might be assigned directly? Or match nothing
-        conditions.push(eq(globalProducts.categoryId, -1))
-      }
-    }
-    if (subCategory && subCategory !== 'all') {
-      conditions.push(eq(globalProducts.categoryId, Number.parseInt(subCategory)))
-    }
+    const conditions = await buildInventoryConditions({
+      organizationId: orgIdNum,
+      branchId,
+      quantityBudgetCatalogActive,
+      currentPeriod,
+      search,
+      category,
+      subCategory,
+    })
     const whereClause = and(...conditions)
 
     const cacheKey = scopedCacheKey('branch-inv', { branchId, orgId: orgIdNum, role: userRole }, {

@@ -42,13 +42,17 @@ async function requestJson(pathname, { method = "GET", allowAuthPost = false } =
   } catch {
     data = text
   }
+  let responseError = null
+  if (!response.ok) {
+    responseError = typeof data === "string" ? data.slice(0, 240) : JSON.stringify(data).slice(0, 240)
+  }
   return {
     ok: response.ok,
     status: response.status,
     durationMs: Date.now() - startedAt,
     bytes: Buffer.byteLength(text),
     data,
-    error: response.ok ? null : (typeof data === "string" ? data.slice(0, 240) : JSON.stringify(data).slice(0, 240)),
+    error: responseError,
   }
 }
 
@@ -132,12 +136,17 @@ function dateRange(rows, key) {
   }
 }
 
+function valueType(value) {
+  if (value == null) return "null"
+  return Array.isArray(value) ? "array" : typeof value
+}
+
 function shape(rows) {
   const fields = new Map()
   for (const row of rows) {
     if (!row || typeof row !== "object" || Array.isArray(row)) continue
     for (const [key, value] of Object.entries(row)) {
-      const type = value == null ? "null" : Array.isArray(value) ? "array" : typeof value
+      const type = valueType(value)
       if (!fields.has(key)) fields.set(key, { types: new Map(), present: 0, nulls: 0, emptyStrings: 0 })
       const profile = fields.get(key)
       profile.present += 1
@@ -153,6 +162,11 @@ function shape(rows) {
     nulls: value.nulls,
     emptyStrings: value.emptyStrings,
   }]))
+}
+
+function resultRowCount(data) {
+  if (Array.isArray(data)) return data.length
+  return data == null ? 0 : 1
 }
 
 function genericSummary(result) {
@@ -173,7 +187,7 @@ function genericSummary(result) {
     status: result.status,
     durationMs: result.durationMs,
     bytes: result.bytes,
-    rowCount: Array.isArray(result.data) ? result.data.length : result.data == null ? 0 : 1,
+    rowCount: resultRowCount(result.data),
     fields: rows.length ? shape(rows) : {},
     error: result.error,
   }

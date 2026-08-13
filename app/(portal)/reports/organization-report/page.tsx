@@ -81,6 +81,24 @@ const getDefaultDateRange = (): DateRange => ({
 const ALL_MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
+function setOrganizationListParam(params: URLSearchParams, key: string, values: Array<string | number>) {
+    if (values.length > 0) params.set(key, values.join(","))
+}
+
+function buildOrganizationQueryParams(context: any) {
+    const params = new URLSearchParams()
+    if (context.dateRange) {
+        params.set("startDate", context.dateRange.startDate.toISOString())
+        params.set("endDate", context.dateRange.endDate.toISOString())
+    }
+    setOrganizationListParam(params, "organizationIds", context.organizationIds)
+    setOrganizationListParam(params, "branchIds", context.branchIds)
+    setOrganizationListParam(params, "months", context.months)
+    setOrganizationListParam(params, "years", context.years)
+    if (context.compare) params.set("compare", "true")
+    return params
+}
+
 const formatTrendPeriodLabel = (period: string) => {
     const [year, month, day] = period.split("-")
     const monthIndex = month ? Number(month) - 1 : -1
@@ -142,7 +160,7 @@ export default function OrganizationReportPage() {
 
     // Branch/Organization Scope
     const [selectedOrgIds] = useState<string[]>([])
-    const [selectedBranchIds, setSelectedBranchIds] = useState<string[]>([])
+    const selectedBranchIds: string[] = []
 
     // ━━━ TIER 1: GLOBAL SUMMARY DATA ━━━
     // Page-level selections take precedence when present; otherwise inherit the
@@ -158,16 +176,14 @@ export default function OrganizationReportPage() {
         contextBranchIds,
     })
 
-    const globalQueryParams = new URLSearchParams()
-    if (dateRange) {
-        globalQueryParams.set("startDate", dateRange.startDate.toISOString())
-        globalQueryParams.set("endDate", dateRange.endDate.toISOString())
-    }
-    if (effectiveGlobalOrgIds.length > 0) globalQueryParams.set("organizationIds", effectiveGlobalOrgIds.join(","))
-    if (effectiveGlobalBranchIds.length > 0) globalQueryParams.set("branchIds", effectiveGlobalBranchIds.join(","))
-    if (selectedMonths.length > 0) globalQueryParams.set("months", selectedMonths.join(","))
-    if (selectedYears.length > 0) globalQueryParams.set("years", selectedYears.join(","))
-    if (compare) globalQueryParams.set("compare", "true")
+    const globalQueryParams = buildOrganizationQueryParams({
+        dateRange,
+        organizationIds: effectiveGlobalOrgIds,
+        branchIds: effectiveGlobalBranchIds,
+        months: selectedMonths,
+        years: selectedYears,
+        compare,
+    })
 
     // Fetches are deferred until the org/branch context has hydrated, and
     // keepPreviousData keeps the current numbers on screen during filter changes
@@ -180,10 +196,10 @@ export default function OrganizationReportPage() {
     const [chartOrgIds, setChartOrgIds] = useState<string[]>([])
 
     const chartQueryParams = new URLSearchParams(globalQueryParams.toString())
-    if (chartMonths.length > 0) chartQueryParams.set("months", chartMonths.join(","))
-    if (chartYears.length > 0) chartQueryParams.set("years", chartYears.join(","))
-    if (chartBranchIds.length > 0) chartQueryParams.set("branchIds", chartBranchIds.join(","))
-    if (chartOrgIds.length > 0) chartQueryParams.set("organizationIds", chartOrgIds.join(","))
+    setOrganizationListParam(chartQueryParams, "months", chartMonths)
+    setOrganizationListParam(chartQueryParams, "years", chartYears)
+    setOrganizationListParam(chartQueryParams, "branchIds", chartBranchIds)
+    setOrganizationListParam(chartQueryParams, "organizationIds", chartOrgIds)
 
     const { data: chartData, isLoading: isChartLoading, mutate: mutateChart } = useSWR<any>(isInitialized ? `/api/v1/analytics/organization-stats?${chartQueryParams.toString()}` : null, fetcher, { keepPreviousData: true })
 
@@ -196,11 +212,11 @@ export default function OrganizationReportPage() {
     const [reportSearch, setReportSearch] = useState("")
 
     const reportQueryParams = new URLSearchParams(globalQueryParams.toString())
-    if (reportMonths.length > 0) reportQueryParams.set("months", reportMonths.join(","))
-    if (reportYears.length > 0) reportQueryParams.set("years", reportYears.join(","))
-    if (reportGroupIds.length > 0) reportQueryParams.set("groupIds", reportGroupIds.join(","))
-    if (reportBranchIds.length > 0) reportQueryParams.set("branchIds", reportBranchIds.join(","))
-    if (reportOrgIds.length > 0) reportQueryParams.set("organizationIds", reportOrgIds.join(","))
+    setOrganizationListParam(reportQueryParams, "months", reportMonths)
+    setOrganizationListParam(reportQueryParams, "years", reportYears)
+    setOrganizationListParam(reportQueryParams, "groupIds", reportGroupIds)
+    setOrganizationListParam(reportQueryParams, "branchIds", reportBranchIds)
+    setOrganizationListParam(reportQueryParams, "organizationIds", reportOrgIds)
 
     const { data: reportData, isLoading: isReportLoading, mutate: mutateReport } = useSWR<any>(isInitialized ? `/api/v1/analytics/organization-stats?${reportQueryParams.toString()}` : null, fetcher, { keepPreviousData: true })
 

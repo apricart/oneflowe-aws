@@ -19,6 +19,65 @@ import {
 } from "@/lib/server/user-access-policy"
 import { USER_MANAGEMENT_ROLES } from "@/lib/user-management-access"
 
+function getTargetAccessError(scope: NonNullable<Awaited<ReturnType<typeof getRequestScope>>>, target: any, targetRole: any) {
+  if (!canManageUser(scope.role, targetRole)) {
+    return "You cannot manage a user at this privilege level"
+  }
+  if (scope.role === "HEAD_OFFICE" && (
+    !scope.organizationId || target.organizationId !== scope.organizationId
+  )) {
+    return "You can only manage users in your organization"
+  }
+  return null
+}
+
+async function getAssignmentError({
+  scope,
+  nextRole,
+  nextOrganizationId,
+  nextBranchId,
+}: {
+  scope: NonNullable<Awaited<ReturnType<typeof getRequestScope>>>
+  nextRole: string
+  nextOrganizationId: number | null
+  nextBranchId: number | null
+}) {
+  if (nextOrganizationId && !canUseOrganization(scope.role, scope.organizationId, nextOrganizationId)) {
+    return "Tenant reassignment is not permitted"
+  }
+  if (!nextOrganizationId) return "An organization is required for this role"
+  const [organization] = await db
+    .select({ id: organizations.id })
+    .from(organizations)
+    .where(eq(organizations.id, nextOrganizationId))
+    .limit(1)
+  if (!organization) return "Invalid organization"
+  if (nextRole === "HEAD_OFFICE") {
+    return nextBranchId === null ? null : "Head Office users cannot be assigned to a branch"
+  }
+  if (!["BRANCH_ADMIN", "ORDER_PORTAL"].includes(nextRole)) return null
+  if (!nextBranchId) return "A branch is required for this role"
+  const [branch] = await db
+    .select({ id: branches.id })
+    .from(branches)
+    .where(and(
+      eq(branches.id, nextBranchId),
+      eq(branches.organizationId, nextOrganizationId),
+    ))
+    .limit(1)
+  return branch ? null : "Branch does not belong to the selected organization"
+}
+
+async function resolveRoleId(inputRole: string | undefined, nextRole: string) {
+  if (inputRole === undefined) return undefined
+  const [role] = await db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(eq(roles.name, nextRole))
+    .limit(1)
+  return role?.id ?? null
+}
+
 /**
  * Administrative access changes are intentionally isolated from profile edits.
  * This route is the only HTTP operation allowed to change a user's role,
@@ -65,15 +124,8 @@ export async function PATCH(
   if (!parsedTargetRole.success) return error("Target user has an invalid role", 409)
   const targetRole = parsedTargetRole.data
 
-  if (!canManageUser(scope.role, targetRole)) {
-    return error("You cannot manage a user at this privilege level", 403)
-  }
-
-  if (scope.role === "HEAD_OFFICE" && (
-    !scope.organizationId || target.organizationId !== scope.organizationId
-  )) {
-    return error("You can only manage users in your organization", 403)
-  }
+  const targetAccessError = getTargetAccessError(scope, target, targetRole)
+  if (targetAccessError) return error(targetAccessError, 403)
 
   const nextRole = input.role ?? targetRole
   if (input.role !== undefined && !canAssignRole(scope.role, nextRole)) {
@@ -87,48 +139,11 @@ export async function PATCH(
     ? input.branchId
     : target.branchId
 
-  if (nextOrganizationId && !canUseOrganization(scope.role, scope.organizationId, nextOrganizationId)) {
-    return error("Tenant reassignment is not permitted", 403)
-  }
-
-  if (!nextOrganizationId) {
-    return error("An organization is required for this role", 400)
-  }
-
-  const [organization] = await db
-    .select({ id: organizations.id })
-    .from(organizations)
-    .where(eq(organizations.id, nextOrganizationId))
-    .limit(1)
-  if (!organization) return error("Invalid organization", 400)
-
-  if (nextRole === "HEAD_OFFICE") {
-    if (nextBranchId !== null) {
-      return error("Head Office users cannot be assigned to a branch", 400)
-    }
-  } else if (nextRole === "BRANCH_ADMIN" || nextRole === "ORDER_PORTAL") {
-    if (!nextBranchId) return error("A branch is required for this role", 400)
-    const [branch] = await db
-      .select({ id: branches.id })
-      .from(branches)
-      .where(and(
-        eq(branches.id, nextBranchId),
-        eq(branches.organizationId, nextOrganizationId),
-      ))
-      .limit(1)
-    if (!branch) return error("Branch does not belong to the selected organization", 400)
-  }
-
-  let nextRoleId: number | undefined
-  if (input.role !== undefined) {
-    const [role] = await db
-      .select({ id: roles.id })
-      .from(roles)
-      .where(eq(roles.name, nextRole))
-      .limit(1)
-    if (!role) return error("Invalid role", 400)
-    nextRoleId = role.id
-  }
+  const assignmentError = await getAssignmentError({ scope, nextRole, nextOrganizationId, nextBranchId })
+  if (assignmentError) return error(assignmentError, 400)
+  const resolvedRoleId = await resolveRoleId(input.role, nextRole)
+  if (resolvedRoleId === null) return error("Invalid role", 400)
+  const nextRoleId = resolvedRoleId
 
   const [updated] = await db.transaction(async (tx) => {
     const [updatedUser] = await tx

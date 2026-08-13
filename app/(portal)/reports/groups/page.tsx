@@ -52,6 +52,31 @@ type DateRange = { startDate: Date; endDate: Date }
 
 const ALL_MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 
+function setListQueryParam(params: URLSearchParams, key: string, values: Array<string | number>) {
+    if (values.length > 0) params.set(key, values.join(","))
+}
+
+function buildGroupsQueryParams(context: any) {
+    const params = new URLSearchParams()
+    if (context.dateRange) {
+        params.set("startDate", context.dateRange.startDate.toISOString())
+        params.set("endDate", context.dateRange.endDate.toISOString())
+    }
+    if (context.organizationId) params.set("organizationId", context.organizationId)
+    setListQueryParam(params, "groupIds", context.groupIds)
+    setListQueryParam(params, "branchIds", context.branchIds)
+    setListQueryParam(params, "months", context.months)
+    setListQueryParam(params, "years", context.years)
+    if (context.compare) params.set("compare", "true")
+    if (context.compareRange) {
+        params.set("compareStartDate", context.compareRange.startDate.toISOString())
+        params.set("compareEndDate", context.compareRange.endDate.toISOString())
+    }
+    setListQueryParam(params, "compareMonths", context.compareMonths)
+    setListQueryParam(params, "compareYears", context.compareYears)
+    return params
+}
+
 export default function GroupsReportPage() {
     const router = useRouter()
     const searchParams = useSearchParams()
@@ -102,23 +127,18 @@ export default function GroupsReportPage() {
     }, [contextOrgId, role])
 
     // ━━━ TIER 1: GLOBAL SUMMARY DATA ━━━
-    const globalQueryParams = new URLSearchParams()
-    if (dateRange) {
-        globalQueryParams.set("startDate", dateRange.startDate.toISOString())
-        globalQueryParams.set("endDate", dateRange.endDate.toISOString())
-    }
-    if (effectiveOrganizationId) globalQueryParams.set("organizationId", effectiveOrganizationId)
-    if (selectedGroupIds.length > 0) globalQueryParams.set("groupIds", selectedGroupIds.join(","))
-    if (selectedBranchIds.length > 0) globalQueryParams.set("branchIds", selectedBranchIds.join(","))
-    if (selectedMonths.length > 0) globalQueryParams.set("months", selectedMonths.join(","))
-    if (selectedYears.length > 0) globalQueryParams.set("years", selectedYears.join(","))
-    if (compare) globalQueryParams.set("compare", "true")
-    if (compareRange) {
-        globalQueryParams.set("compareStartDate", compareRange.startDate.toISOString())
-        globalQueryParams.set("compareEndDate", compareRange.endDate.toISOString())
-    }
-    if (compareMonths.length > 0) globalQueryParams.set("compareMonths", compareMonths.join(","))
-    if (compareYears.length > 0) globalQueryParams.set("compareYears", compareYears.join(","))
+    const globalQueryParams = buildGroupsQueryParams({
+        dateRange,
+        organizationId: effectiveOrganizationId,
+        groupIds: selectedGroupIds,
+        branchIds: selectedBranchIds,
+        months: selectedMonths,
+        years: selectedYears,
+        compare,
+        compareRange,
+        compareMonths,
+        compareYears,
+    })
 
     // Fetches are deferred until the org context has hydrated, and
     // keepPreviousData keeps the current numbers on screen during filter changes
@@ -129,20 +149,19 @@ export default function GroupsReportPage() {
     const [chartYears, setChartYears] = useState<number[]>([])
     
     const chartQueryParams = new URLSearchParams(globalQueryParams.toString())
-    if (chartMonths.length > 0) chartQueryParams.set("months", chartMonths.join(","))
-    if (chartYears.length > 0) chartQueryParams.set("years", chartYears.join(","))
+    setListQueryParam(chartQueryParams, "months", chartMonths)
+    setListQueryParam(chartQueryParams, "years", chartYears)
     
     const { data: chartData, isLoading: isChartLoading, mutate: mutateChart } = useSWR<any>(isInitialized ? `/api/v1/analytics/groups?trendOnly=true&${chartQueryParams.toString()}` : null, fetcher, { keepPreviousData: true })
 
     // ━━━ TIER 3: REPORT (TABLE) ━━━
     const [reportMonths, setReportMonths] = useState<number[]>([])
     const [reportYears, setReportYears] = useState<number[]>([])
-    const [, setReportOrgIds] = useState<string[]>([])
     const [reportSearch, setReportSearch] = useState("")
 
     const reportQueryParams = new URLSearchParams(globalQueryParams.toString())
-    if (reportMonths.length > 0) reportQueryParams.set("months", reportMonths.join(","))
-    if (reportYears.length > 0) reportQueryParams.set("years", reportYears.join(","))
+    setListQueryParam(reportQueryParams, "months", reportMonths)
+    setListQueryParam(reportQueryParams, "years", reportYears)
 
     const { data: reportData, isLoading: isReportLoading, mutate: mutateReport } = useSWR<any>(isInitialized ? `/api/v1/analytics/groups?${reportQueryParams.toString()}` : null, fetcher, { keepPreviousData: true })
 
@@ -215,7 +234,6 @@ export default function GroupsReportPage() {
         setSelectedOrgIds(defaultOrgIds)
         setSelectedGroupIds([])
         setSelectedBranchIds([])
-        setReportOrgIds([])
         setReportMonths(activePreset === "all" ? [...ALL_MONTHS] : [])
         setReportYears(activePreset === "all" ? [...allYears] : [])
         setReportSearch("")
