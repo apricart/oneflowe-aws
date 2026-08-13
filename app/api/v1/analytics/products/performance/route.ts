@@ -18,7 +18,7 @@ import { aliasedTable,and,eq,exists,gte,ilike,inArray,lte,or,sql } from "drizzle
 import { getServerSession } from "next-auth"
 import { NextResponse,type NextRequest } from "next/server"
 
-const PERFORMANCE_STATUSES = ['FULFILLED', 'REFUNDED', 'APPROVED', 'PARTIAL', 'PARTIALLY_FULFILLED']
+const PERFORMANCE_STATUSES = new Set(['FULFILLED', 'REFUNDED', 'APPROVED', 'PARTIAL', 'PARTIALLY_FULFILLED'])
 
 function parseNumberList(value: string | null, isValid = (number: number) => number > 0) {
     return value
@@ -60,9 +60,12 @@ async function resolveProductBranches({
     })
     if (groupIds.length === 0) return branchIds
 
-    const organizationCondition = organizationIds.length > 0
+    let organizationCondition = organizationIds.length > 0
         ? inArray(branches.organizationId, organizationIds)
-        : userOrganizationId ? eq(branches.organizationId, userOrganizationId) : undefined
+        : undefined
+    if (organizationIds.length === 0 && userOrganizationId) {
+        organizationCondition = eq(branches.organizationId, userOrganizationId)
+    }
     const groupBranches = await db.select({ id: branches.id })
         .from(branches)
         .where(and(inArray(branches.groupId, groupIds), organizationCondition))
@@ -207,7 +210,7 @@ function aggregateProductRows(productMap: Record<number, any>, rows: any[], refu
         if (!product) return
         product.totalOrders.add(row.orderId)
         product.qtyOrdered += row.qtyOrdered
-        if (!PERFORMANCE_STATUSES.includes((row.status || "").toUpperCase())) return
+        if (!PERFORMANCE_STATUSES.has((row.status || "").toUpperCase())) return
         const refundedCount = refundQuantities[row.orderItemId] || 0
         const fulfilledCount = Math.max(0, row.qtyOrdered - refundedCount)
         product.qtyRefunded += refundedCount
@@ -263,7 +266,7 @@ function summarizeComparison(rows: any[], refundQuantities: Record<number, numbe
     const productMap: Record<number, { qtyFulfilled: number; revenueGeneratedCents: number }> = {}
     const uniqueProducts = new Set<number>()
     rows.forEach((row) => {
-        if (!row.globalProductId || !PERFORMANCE_STATUSES.includes((row.status || "").toUpperCase())) return
+        if (!row.globalProductId || !PERFORMANCE_STATUSES.has((row.status || "").toUpperCase())) return
         const refunded = refundQuantities[row.orderItemId] || 0
         const fulfilled = Math.max(0, row.qtyOrdered - refunded)
         totals.totalRefunds += refunded
@@ -315,7 +318,7 @@ function buildProductTrend(rows: any[], refundQuantities: Record<number, number>
         const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
         trend[key] ||= { date: key, revenue: 0, compareRevenue: 0, qtyOrdered: 0, qtyFulfilled: 0, qtyRefunded: 0 }
         trend[key].qtyOrdered += row.qtyOrdered
-        if (!PERFORMANCE_STATUSES.includes((row.status || "").toUpperCase())) return
+        if (!PERFORMANCE_STATUSES.has((row.status || "").toUpperCase())) return
         const refunded = refundQuantities[row.orderItemId] || 0
         const fulfilled = Math.max(0, row.qtyOrdered - refunded)
         trend[key].qtyRefunded += refunded

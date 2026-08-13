@@ -144,6 +144,44 @@ const isActiveOrder = (order: RefundableOrder) =>
 const getProductStep = (product: Pick<Product, "allowDecimalQuantity" | "quantityStep">) =>
   sanitizeQuantityStep(Boolean(product.allowDecimalQuantity), product.quantityStep ?? 1)
 
+const getProductDefaultQuantity = (product: Product, productStep: number) => {
+  if ((product.stock || 0) <= 0) return 0
+  return product.allowDecimalQuantity ? 1 : productStep
+}
+
+function ProductCartActionContent({
+  isModified,
+  itemInCart,
+  selectionQuantity,
+}: Readonly<{
+  isModified: boolean
+  itemInCart?: CartItem
+  selectionQuantity: number
+}>) {
+  if (isModified) {
+    return (
+      <>
+        <RefreshCw className="h-4 w-4" />
+        <span>{itemInCart ? "Update Cart" : `Add ${formatQuantity(selectionQuantity)} to Cart`}</span>
+      </>
+    )
+  }
+  if (itemInCart) {
+    return (
+      <>
+        <ShoppingBag className="h-4 w-4" />
+        <span>Open Cart</span>
+      </>
+    )
+  }
+  return (
+    <>
+      <Plus className="h-4 w-4" />
+      <span>Add to Cart</span>
+    </>
+  )
+}
+
 const clampProductQuantity = (product: Pick<Product, "stock" | "allowDecimalQuantity" | "quantityStep">, quantity: number) => {
   const maxStock = product.stock ?? 999
   if (product.allowDecimalQuantity) {
@@ -163,12 +201,16 @@ function isAuthorizedForOrderPortal(user: any) {
 
 function buildShopResourceUrls(context: any) {
   if (!context.branchId) return { inventory: null, budgets: null }
-  const scoped = context.needsParams
-    ? `branchId=${context.branchId}${context.organizationId ? `&organizationId=${context.organizationId}` : ""}`
-    : ""
+  let scoped = ""
+  if (context.needsParams) {
+    scoped = `branchId=${context.branchId}`
+    if (context.organizationId) scoped += `&organizationId=${context.organizationId}`
+  }
+  const inventoryScope = scoped ? `&${scoped}` : ""
+  const budgetScope = scoped ? `?${scoped}` : ""
   return {
-    inventory: `/api/v1/branch/inventory?visibility=visible&includeQuantityBudget=true${scoped ? `&${scoped}` : ""}`,
-    budgets: `/api/v1/budgets${scoped ? `?${scoped}` : ""}`,
+    inventory: `/api/v1/branch/inventory?visibility=visible&includeQuantityBudget=true${inventoryScope}`,
+    budgets: `/api/v1/budgets${budgetScope}`,
   }
 }
 
@@ -557,6 +599,63 @@ export default function OrderPortalPage() {
     setCart(remainingItems)
     if (remainingItems.length === 0) {
       setShowCart(false)
+    }
+  }
+
+  const clearCardQuantity = (productId: number) => {
+    setCardQuantities(previous => {
+      const { [productId]: _removed, ...remaining } = previous
+      return remaining
+    })
+  }
+
+  const changeCardQuantity = (product: Product, quantity: number, direction: -1 | 1) => {
+    const maximumStock = product.stock || 999
+    const step = product.allowDecimalQuantity ? 1 : getProductStep(product)
+    const nextQuantity = roundQuantity(quantity + direction * step)
+
+    if (direction > 0 && quantity >= maximumStock) {
+      toast({ title: "Max stock reached", variant: "destructive" })
+      return
+    }
+
+    setCardQuantities(previous => ({
+      ...previous,
+      [product.id]: Math.max(0, Math.min(maximumStock, nextQuantity)),
+    }))
+  }
+
+  const setCardQuantityFromInput = (productId: number, value: string) => {
+    const parsedValue = Number.parseFloat(value)
+    setCardQuantities(previous => ({
+      ...previous,
+      [productId]: Number.isFinite(parsedValue) && parsedValue >= 0 ? roundQuantity(parsedValue) : 0,
+    }))
+  }
+
+  const clearProductSelection = (product: Product, itemInCart?: CartItem) => {
+    if (itemInCart) {
+      removeFromCart(product.id)
+      toast({ title: `${product.name} removed from cart` })
+    }
+    clearCardQuantity(product.id)
+  }
+
+  const submitProductSelection = (
+    product: Product,
+    itemInCart: CartItem | undefined,
+    selectionQuantity: number,
+    productStep: number,
+    isModified: boolean,
+  ) => {
+    if (isModified) {
+      if (itemInCart) updateQty(product.id, selectionQuantity)
+      else addToCart(product, selectionQuantity)
+      clearCardQuantity(product.id)
+    } else if (itemInCart) {
+      setShowCart(true)
+    } else {
+      addToCart(product, productStep)
     }
   }
 
@@ -1438,9 +1537,7 @@ export default function OrderPortalPage() {
             </div>
 
             {/* Products Grid */}
-            {(() => {
-              if (isLoadingInventory) {
-                return (
+            {isLoadingInventory && (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                 {Array.from({ length: pageSize }, (_, position) => `product-loading-${position + 1}`).map((skeletonKey) => (
                   <Card key={skeletonKey} className="overflow-hidden h-full flex flex-col dark:bg-slate-900 dark:border-slate-800">
@@ -1454,27 +1551,19 @@ export default function OrderPortalPage() {
                   </Card>
                 ))}
               </div>
-            )
-              }
-              if (filteredProducts.length === 0) {
-                return (
+            )}
+            {!isLoadingInventory && filteredProducts.length === 0 && (
               <div className="text-center py-16">
                 <Package className="h-12 w-12 text-muted-foreground mx-auto mb-4 opacity-50" />
                 <p className="text-lg font-medium text-muted-foreground">No products found</p>
               </div>
-            )
-              }
-              return (
+            )}
+            {!isLoadingInventory && filteredProducts.length > 0 && (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                 {paginatedProducts.map(product => {
                   const itemInCart = cart.find(i => i.id === product.id)
                   const productStep = getProductStep(product)
-                  const defaultQty = (() => {
-                    if ((product.stock || 0) > 0) {
-                      return (product.allowDecimalQuantity ? 1 : productStep)
-                    }
-                    return 0
-                  })()
+                  const defaultQty = getProductDefaultQuantity(product, productStep)
                   const selectionQty = cardQuantities[product.id] ?? itemInCart?.quantity ?? defaultQty
                   const isModified = selectionQty !== (itemInCart?.quantity || 0)
 
@@ -1624,13 +1713,7 @@ export default function OrderPortalPage() {
                                 <Button
                                   onClick={(e) => {
                                     e.stopPropagation()
-                                    if (selectionQty > 0) {
-                                      const step = product.allowDecimalQuantity ? 1 : productStep
-                                      setCardQuantities(prev => ({
-                                        ...prev,
-                                        [product.id]: Math.max(0, roundQuantity(selectionQty - step))
-                                      }))
-                                    }
+                                    if (selectionQty > 0) changeCardQuantity(product, selectionQty, -1)
                                   }}
                                   variant="ghost"
                                   size="icon"
@@ -1639,9 +1722,7 @@ export default function OrderPortalPage() {
                                 >
                                   <Minus className="h-3.5 w-3.5" />
                                 </Button>
-                                {(() => {
-                                  if (product.allowDecimalQuantity) {
-                                    return (
+                                {product.allowDecimalQuantity ? (
                                   <input
                                     type="number"
                                     step="any"
@@ -1650,11 +1731,7 @@ export default function OrderPortalPage() {
                                     value={selectionQty || ""}
                                     onChange={(e) => {
                                       e.stopPropagation()
-                                      const val = Number.parseFloat(e.target.value)
-                                      setCardQuantities(prev => ({
-                                        ...prev,
-                                        [product.id]: Number.isFinite(val) && val >= 0 ? roundQuantity(val) : 0,
-                                      }))
+                                      setCardQuantityFromInput(product.id, e.target.value)
                                     }}
                                     onClick={(e) => e.stopPropagation()}
                                     onFocus={(e) => e.stopPropagation()}
@@ -1662,27 +1739,15 @@ export default function OrderPortalPage() {
                                     disabled={product.stock === 0}
                                     placeholder="0"
                                   />
-                                )
-                                  }
-                                  return (
+                                ) : (
                                   <span className="w-8 text-center text-xs font-bold text-slate-900 dark:text-white">
                                     {formatQuantity(selectionQty)}
                                   </span>
-                                )
-                                })()}
+                                )}
                                 <Button
                                   onClick={(e) => {
                                     e.stopPropagation()
-                                    const maxStock = product.stock || 999
-                                    if (selectionQty < maxStock) {
-                                      const step = product.allowDecimalQuantity ? 1 : productStep
-                                      setCardQuantities(prev => ({
-                                        ...prev,
-                                        [product.id]: Math.min(maxStock, roundQuantity(selectionQty + step))
-                                      }))
-                                    } else {
-                                      toast({ title: "Max stock reached", variant: "destructive" })
-                                    }
+                                    changeCardQuantity(product, selectionQty, 1)
                                   }}
                                   variant="ghost"
                                   size="icon"
@@ -1698,14 +1763,7 @@ export default function OrderPortalPage() {
                                 <Button
                                   onClick={(e) => {
                                     e.stopPropagation()
-                                    if (itemInCart) {
-                                      removeFromCart(product.id)
-                                      toast({ title: `${product.name} removed from cart` })
-                                    }
-                                    setCardQuantities(prev => {
-                                      const { [product.id]: _, ...rest } = prev
-                                      return rest
-                                    })
+                                    clearProductSelection(product, itemInCart)
                                   }}
                                   variant="ghost"
                                   size="icon"
@@ -1733,50 +1791,17 @@ export default function OrderPortalPage() {
                             <Button
                               onClick={(e) => {
                                 e.stopPropagation()
-                                if (isModified) {
-                                  if (itemInCart) {
-                                    updateQty(product.id, selectionQty)
-                                  } else {
-                                    addToCart(product, selectionQty)
-                                  }
-                                  setCardQuantities(prev => {
-                                    const { [product.id]: _, ...rest } = prev
-                                    return rest
-                                  })
-                                } else if (itemInCart) {
-                                  setShowCart(true)
-                                } else {
-                                  addToCart(product, productStep)
-                                }
+                                submitProductSelection(product, itemInCart, selectionQty, productStep, isModified)
                               }}
                               size="sm"
                               disabled={product.stock === 0 || (selectionQty === 0 && !itemInCart)}
                               className={`w-full gap-2 shadow-sm ${itemInCart && !isModified ? 'bg-green-600 hover:bg-green-700' : ''}`}
                             >
-                              {(() => {
-                                if (isModified) {
-                                  return (
-                                <>
-                                  <RefreshCw className="h-4 w-4" />
-                                  <span>{itemInCart ? 'Update Cart' : `Add ${formatQuantity(selectionQty)} to Cart`}</span>
-                                </>
-                              )
-                                }
-                                if (itemInCart) {
-                                  return (
-                                <>
-                                  <ShoppingBag className="h-4 w-4" />
-                                  <span>Open Cart</span>
-                                </>
-                              )
-                                }
-                                return (
-                                <>
-                                  <Plus className="h-4 w-4" />
-                                  <span>Add to Cart</span>
-                                </>
-                              )
-                              })()}
+                              <ProductCartActionContent
+                                isModified={isModified}
+                                itemInCart={itemInCart}
+                                selectionQuantity={selectionQty}
+                              />
                             </Button>
                           </div>
                         </div>
@@ -1785,8 +1810,7 @@ export default function OrderPortalPage() {
                   );
                 })}
               </div>
-            )
-            })()}
+            )}
 
             {/* Pagination controls */}
             {filteredProducts.length > 0 && (

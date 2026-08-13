@@ -8,7 +8,8 @@ import { branchUpdateSchema, validationMessage } from "@/lib/server/mutation-val
 
 async function hasDuplicateBranchName(currentBranch: any, branchId: number, requestedName: unknown) {
   if (requestedName === undefined) return false
-  const newName = String(requestedName).trim()
+  if (typeof requestedName !== "string") return false
+  const newName = requestedName.trim()
   if (!newName) return false
   const duplicateCandidates = await db
     .select({
@@ -35,7 +36,7 @@ async function hasDuplicateBranchName(currentBranch: any, branchId: number, requ
 }
 
 function getTextFieldUpdate(value: unknown, minimumLength: number, maximumLength: number, label: string) {
-  const normalized = String(value || "").trim()
+  const normalized = typeof value === "string" ? value.trim() : ""
   if (normalized && (normalized.length < minimumLength || normalized.length > maximumLength)) {
     return { error: `${label} must be between ${minimumLength} and ${maximumLength} characters` }
   }

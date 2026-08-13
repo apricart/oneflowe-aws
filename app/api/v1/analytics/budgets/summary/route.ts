@@ -25,11 +25,12 @@ function resolveAllowedBudgetOrganization(userRole: string, userOrgId: number | 
 }
 
 async function resolveBudgetBranchIds(context: any) {
-    let branchIds = context.branchIdsParam
-        ? parseNumberList(context.branchIdsParam)
-        : context.branchIdParam && context.branchIdParam !== "all"
-            ? [Number(context.branchIdParam)]
-            : []
+    let branchIds: number[] = []
+    if (context.branchIdsParam) {
+        branchIds = parseNumberList(context.branchIdsParam)
+    } else if (context.branchIdParam && context.branchIdParam !== "all") {
+        branchIds = [Number(context.branchIdParam)]
+    }
     if (branchIds.length === 0 && ["BRANCH_ADMIN", "BRANCH_MANAGER", "ORDER_PORTAL"].includes(context.userRole)) {
         branchIds = [context.userBranchId]
     } else if (branchIds.length === 0 && context.allowedOrgId) {
@@ -52,11 +53,12 @@ async function resolveBudgetBranchIds(context: any) {
 async function resolveBudgetStartDate(context: any) {
     if (context.startDateParam) return parseStartDateParam(context.startDateParam) || new Date(context.startDateParam)
     const query = db.select({ period: budgets.period }).from(budgets)
+    const organizationCondition = context.allowedOrgId
+        ? eq(budgets.organizationId, context.allowedOrgId)
+        : isNotNull(budgets.organizationId)
     const firstBudget = context.preset === "all"
         ? await query.where(inArray(budgets.branchId, context.branchIds)).orderBy(asc(budgets.period)).limit(1)
-        : await query.where(context.allowedOrgId
-            ? eq(budgets.organizationId, context.allowedOrgId)
-            : isNotNull(budgets.organizationId)).orderBy(asc(budgets.period)).limit(1)
+        : await query.where(organizationCondition).orderBy(asc(budgets.period)).limit(1)
     if (firstBudget.length > 0) return new Date(`${firstBudget[0].period}-01`)
     const start = new Date()
     start.setDate(1)

@@ -28,9 +28,10 @@ function parseNumberList(value: string | null, isValid = (number: number) => !Nu
 
 function parseBranchFilters(searchParams: URLSearchParams, userRole: string, userOrganizationId: number | null) {
     const requestedOrganizationId = searchParams.get("organizationId")
-    const organizationId = userRole === "SUPER_ADMIN"
-        ? requestedOrganizationId ? Number.parseInt(requestedOrganizationId) : null
-        : userOrganizationId
+    let organizationId = userOrganizationId
+    if (userRole === "SUPER_ADMIN") {
+        organizationId = requestedOrganizationId ? Number.parseInt(requestedOrganizationId) : null
+    }
     const isMonth = (number: number) => !Number.isNaN(number) && number >= 1 && number <= 12
     const isYear = (number: number) => !Number.isNaN(number) && number > 2000
     return {

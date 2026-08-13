@@ -199,7 +199,9 @@ function getOrderListSummaryTotal(statusFilter: string, summaryRow: any) {
 }
 
 function parseScopedNumericId(value: unknown) {
-  return value && /^\d+$/.test(String(value)) ? Number(value) : undefined
+  if (!value) return undefined
+  if (typeof value !== "string" && typeof value !== "number") return undefined
+  return /^\d+$/.test(String(value)) ? Number(value) : undefined
 }
 
 function getBudgetError(total: number, available: number, pricesHidden: boolean) {
@@ -448,7 +450,9 @@ function getOrderReplayResponse(existingOrder: any, requestFingerprint: string, 
 }
 
 function resolveOrderTenant(role: string, sessionOrganizationId: unknown, requestedOrganizationId: number | undefined) {
-  const organizationId = sessionOrganizationId ? Number.parseInt(String(sessionOrganizationId)) : Number.NaN
+  const organizationId = typeof sessionOrganizationId === "string" || typeof sessionOrganizationId === "number"
+    ? Number.parseInt(String(sessionOrganizationId))
+    : Number.NaN
   if (role === "SUPER_ADMIN" && requestedOrganizationId && Number.isFinite(requestedOrganizationId)) {
     return { organizationId: requestedOrganizationId }
   }
@@ -736,7 +740,7 @@ export async function GET(req: NextRequest) {
         })
         .from(orders)
         .leftJoin(branches, eq(orders.branchId, branches.id))
-        .where(summaryConditions.length ? and(...summaryConditions) : undefined)
+        .where(summaryCondition)
 
     // Sanitize items: Only show approvalToken to authorized roles
     const filtered = sanitizeOrderListItems(items, {

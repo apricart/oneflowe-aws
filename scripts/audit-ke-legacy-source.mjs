@@ -87,7 +87,7 @@ function parseHttpCalls(source, script) {
 }
 
 function parseTemplate(templateUrl, source) {
-  const strip = (value) => value.replace(/<[^>\r\n]*>/g, " ").replaceAll("&nbsp;", " ").replace(/\s+/g, " ").trim()
+  const strip = (value) => value.replace(/<[^<>\r\n]*>/g, " ").replaceAll("&nbsp;", " ").replace(/\s+/g, " ").trim()
   return {
     templateUrl,
     titleCandidates: unique([

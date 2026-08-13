@@ -175,7 +175,6 @@ export function MultiSelectFilter({
                                             "flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-all",
                                             isChecked ? "bg-indigo-50/50 dark:bg-indigo-900/10 text-indigo-700 dark:text-indigo-300" : "hover:bg-slate-50 dark:hover:bg-slate-800/50 text-slate-600 dark:text-slate-400"
                                         )}
-                                        onClick={(event) => event.stopPropagation()}
                                     >
                                         <input
                                             type="checkbox"
