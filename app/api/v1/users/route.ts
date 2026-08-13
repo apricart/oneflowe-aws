@@ -12,6 +12,7 @@ import { userCreateSchema,validationMessage } from "@/lib/server/mutation-valida
 import { canAssignRole } from "@/lib/server/user-access-policy"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { USER_MANAGEMENT_ROLES } from "@/lib/user-management-access"
+import type { SystemRole } from "@/lib/server/mutation-validation"
 
 function getLoginUrl(requestUrl: string): string {
   const configuredUrl = process.env.NEXTAUTH_URL?.trim()
@@ -25,6 +26,101 @@ function getLoginUrl(requestUrl: string): string {
   }
 
   return new URL("/login", requestUrl).toString()
+}
+
+async function validateUserAssignment(
+  currentUserRole: SystemRole | undefined,
+  scopeOrganizationId: number | null | undefined,
+  role: SystemRole,
+  organizationId: number | null,
+  branchId: number | null,
+) {
+  if (!currentUserRole || !canAssignRole(currentUserRole, role)) {
+    return { message: "You cannot assign this role", status: 403 }
+  }
+  if (currentUserRole === "HEAD_OFFICE" && organizationId !== scopeOrganizationId) {
+    return { message: "You can only create users within your own organization", status: 403 }
+  }
+  if (role === "HEAD_OFFICE" && !organizationId) {
+    return { message: "organizationId required for HEAD_OFFICE", status: 400 }
+  }
+  if (["BRANCH_ADMIN", "ORDER_PORTAL"].includes(role) && (!organizationId || !branchId)) {
+    return { message: "organizationId and branchId required for BRANCH_ADMIN and ORDER_PORTAL", status: 400 }
+  }
+  if (organizationId) {
+    const [organization] = await db
+      .select({ id: organizations.id })
+      .from(organizations)
+      .where(eq(organizations.id, organizationId))
+      .limit(1)
+    if (!organization) return { message: "Invalid organization", status: 400 }
+  }
+  if (branchId) {
+    const [branch] = await db
+      .select({ organizationId: branches.organizationId })
+      .from(branches)
+      .where(eq(branches.id, branchId))
+      .limit(1)
+    if (branch?.organizationId !== organizationId) {
+      return { message: "Branch does not belong to the selected organization", status: 400 }
+    }
+  }
+  return null
+}
+
+async function usernameExists(username: string) {
+  const [[user], [employee]] = await Promise.all([
+    db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.username, username)).limit(1),
+    db.select({ id: employeeCredentials.id }).from(employeeCredentials).where(eq(employeeCredentials.username, username)).limit(1),
+  ])
+  return Boolean(user || employee)
+}
+
+async function writeUserCreationAudit(createdUser: any, scope: any, role: string, organizationId: number | null, branchId: number | null) {
+  try {
+    const headersList = await headers()
+    const forwardedFor = headersList.get("x-forwarded-for")
+    await db.insert(systemLogs).values({
+      userId: scope?.userId,
+      userRole: scope?.role,
+      organizationId: scope?.organizationId,
+      branchId: branchId || undefined,
+      action: "USER_CREATE",
+      resourceType: "user",
+      resourceId: String(createdUser.id),
+      details: {
+        createdUserEmail: createdUser.email,
+        createdUserUsername: createdUser.username,
+        createdUserRole: role,
+        createdUserOrgId: organizationId,
+        createdUserBranchId: branchId,
+      },
+      ipAddress: forwardedFor ? forwardedFor.split(',')[0] : "unknown",
+      userAgent: headersList.get("user-agent"),
+      success: true,
+    })
+  } catch (auditError) {
+    console.error("[DEBUG] Failed to write audit log:", auditError)
+  }
+}
+
+function handleUserCreationError(caughtError: any) {
+  if (caughtError instanceof UserUniqueFieldError) return error(caughtError.message, 400)
+  const errorCode = String(caughtError.code || caughtError.cause?.code || "")
+  const errorMessage = String(caughtError.message || "").toLowerCase()
+  const detail = String(caughtError.detail || caughtError.cause?.detail || "").toLowerCase()
+  if (errorCode === '23505' || errorMessage.includes('unique constraint') || detail.includes('already exists')) {
+    if (detail.includes('username')) return error("Username already exists. Please choose a different username.", 400)
+    if (detail.includes('employee_id')) return error("Internal ID (Employee ID) already exists.", 400)
+    if (detail.includes('email')) return error("Email address already exists.", 400)
+    if (detail.includes('phone')) return error("Phone number already exists.", 400)
+    return error("Unique field conflict: " + detail, 400)
+  }
+  if (errorMessage.includes("invalid password") || errorMessage.includes("must contain")) {
+    return error(caughtError.message, 400)
+  }
+  console.error("[USERS_API] Unexpected error creating user:", caughtError)
+  return error(caughtError.message || "Failed to create user", 500)
 }
 
 
@@ -134,47 +230,14 @@ export async function POST(req: Request) {
     if (rateLimit) return rateLimit
   }
 
-  if (!currentUserRole || !canAssignRole(currentUserRole, role)) {
-    console.error("[SECURITY] Role assignment denied:", { role, currentUserRole })
-    return error("You cannot assign this role", 403)
-  }
-
-  // Additional validation for HEAD_OFFICE users
-  if (currentUserRole === "HEAD_OFFICE") {
-    // HEAD_OFFICE can only create users within their own organization
-    if (organizationId !== scope?.organizationId) {
-      return error("You can only create users within your own organization", 403)
-    }
-  }
-
-  if (role === "HEAD_OFFICE") {
-    if (!organizationId) return error("organizationId required for HEAD_OFFICE", 400)
-  }
-  if (role === "BRANCH_ADMIN" || role === "ORDER_PORTAL") {
-    if (!organizationId || !branchId) {
-      return error("organizationId and branchId required for BRANCH_ADMIN and ORDER_PORTAL", 400)
-    }
-  }
-
-  if (organizationId) {
-    const [organization] = await db
-      .select({ id: organizations.id })
-      .from(organizations)
-      .where(eq(organizations.id, organizationId))
-      .limit(1)
-    if (!organization) return error("Invalid organization", 400)
-  }
-
-  if (branchId) {
-    const [branch] = await db
-      .select({ id: branches.id, organizationId: branches.organizationId })
-      .from(branches)
-      .where(eq(branches.id, branchId))
-      .limit(1)
-    if (branch?.organizationId !== organizationId) {
-      return error("Branch does not belong to the selected organization", 400)
-    }
-  }
+  const assignmentError = await validateUserAssignment(
+    currentUserRole as SystemRole | undefined,
+    scope?.organizationId,
+    role,
+    organizationId,
+    branchId,
+  )
+  if (assignmentError) return error(assignmentError.message, assignmentError.status)
 
   const [roleRow] = await db.select().from(rolesTable).where(eq(rolesTable.name, role)).limit(1)
   if (!roleRow) {
@@ -191,19 +254,7 @@ export async function POST(req: Request) {
     console.log("[USERS_API] Password hashed successfully")
 
     // Username uniqueness is enforced by DB unique index and the check-username API
-    const [existingUsernameUser] = await db
-      .select({ id: usersTable.id })
-      .from(usersTable)
-      .where(eq(usersTable.username, username))
-      .limit(1)
-
-    const [existingUsernameEmp] = await db
-      .select({ id: employeeCredentials.id })
-      .from(employeeCredentials)
-      .where(eq(employeeCredentials.username, username))
-      .limit(1)
-
-    if (existingUsernameUser || existingUsernameEmp) {
+    if (await usernameExists(username)) {
       return error("Username already exists. Please choose a different username.", 400)
     }
 
@@ -235,35 +286,7 @@ export async function POST(req: Request) {
 
     const createdUser = item
 
-    // Audit Log
-    try {
-      const headersList = await headers()
-      const userAgent = headersList.get("user-agent")
-      const forwardedFor = headersList.get("x-forwarded-for")
-      const ip = forwardedFor ? forwardedFor.split(',')[0] : "unknown"
-
-      await db.insert(systemLogs).values({
-        userId: scope?.userId,
-        userRole: currentUserRole,
-        organizationId: scope?.organizationId,
-        branchId: branchId || undefined,
-        action: "USER_CREATE",
-        resourceType: "user",
-        resourceId: String(createdUser.id),
-        details: {
-          createdUserEmail: createdUser.email,
-          createdUserUsername: createdUser.username,
-          createdUserRole: role,
-          createdUserOrgId: organizationId,
-          createdUserBranchId: branchId
-        },
-        ipAddress: ip,
-        userAgent: userAgent,
-        success: true
-      })
-    } catch (logErr) {
-      console.error("[DEBUG] Failed to write audit log:", logErr)
-    }
+    await writeUserCreationAudit(createdUser, scope, role, organizationId, branchId)
 
     // Send welcome email with credentials (non-blocking — never fail user creation over email)
     const loginUrl = getLoginUrl(req.url)
@@ -276,31 +299,7 @@ export async function POST(req: Request) {
 
     const { passwordHash: _passwordHash, ...safeCreatedUser } = createdUser
     return ok({ item: safeCreatedUser }, { status: 201 })
-  } catch (err: any) {
-    if (err instanceof UserUniqueFieldError) {
-      return error(err.message, 400)
-    }
-
-    // Catch validation errors from password hashing or unique constraints
-    const errorCode = String(err.code || err.cause?.code || "")
-    const errorMsg = String(err.message || "").toLowerCase()
-    const detail = String(err.detail || err.cause?.detail || "").toLowerCase()
-
-    if (errorCode === '23505' || errorMsg.includes('unique constraint') || detail.includes('already exists')) {
-      if (detail.includes('username')) return error("Username already exists. Please choose a different username.", 400)
-      if (detail.includes('employee_id')) return error("Internal ID (Employee ID) already exists.", 400)
-      if (detail.includes('email')) return error("Email address already exists.", 400)
-      if (detail.includes('phone')) return error("Phone number already exists.", 400)
-      return error("Unique field conflict: " + detail, 400)
-    }
-
-    // Pass through validation errors as 400
-    if (errorMsg.includes("invalid password") || errorMsg.includes("must contain")) {
-      return error(err.message, 400)
-    }
-
-    // Only log actual unexpected errors
-    console.error("[USERS_API] Unexpected error creating user:", err)
-    return error(err.message || "Failed to create user", 500)
+  } catch (caughtError: any) {
+    return handleUserCreationError(caughtError)
   }
 }

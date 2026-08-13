@@ -13,6 +13,254 @@ import {
     resolveAnalyticsOrganizationIds,
 } from "@/lib/server/analytics-scope"
 
+type RefundQuantity = { qty: number; amount: number }
+
+function parseNumberList(value: string | null, isValid = (number: number) => number > 0) {
+    return value
+        ? value.split(",").map(Number).filter((number) => !Number.isNaN(number) && isValid(number))
+        : []
+}
+
+function getRequestedOrganizationIds(organizationIds: string | null, organizationId: string | null) {
+    if (organizationIds) return organizationIds.split(",").map(Number)
+    return organizationId ? [Number(organizationId)] : []
+}
+
+async function getScopedBranchIds({
+    userRole,
+    userBranchId,
+    requestedBranchIds,
+    scopedOrganizationIds,
+    groupIds,
+}: {
+    userRole: string
+    userBranchId: unknown
+    requestedBranchIds: number[]
+    scopedOrganizationIds: number[]
+    groupIds: number[]
+}) {
+    let allowedBranchQuery = db.select({ id: branches.id }).from(branches)
+    if (scopedOrganizationIds.length > 0) {
+        allowedBranchQuery = allowedBranchQuery
+            .where(inArray(branches.organizationId, scopedOrganizationIds)) as any
+    }
+
+    const allowedBranches = await allowedBranchQuery
+    let branchIds = resolveAnalyticsBranchIds({
+        role: userRole,
+        userBranchId,
+        requestedBranchIds,
+        allowedBranchIds: allowedBranches.map((branch) => branch.id),
+    })
+
+    if (groupIds.length === 0) return branchIds
+
+    const groupBranches = await db
+        .select({ id: branches.id })
+        .from(branches)
+        .where(and(
+            inArray(branches.groupId, groupIds),
+            scopedOrganizationIds.length > 0
+                ? inArray(branches.organizationId, scopedOrganizationIds)
+                : undefined,
+        ))
+    const groupBranchIds = new Set(groupBranches.map((branch) => branch.id))
+    branchIds = branchIds.filter((branchId) => groupBranchIds.has(branchId))
+    return branchIds
+}
+
+function addPeriodConditions(
+    conditions: any[],
+    months: number[],
+    years: number[],
+    startDate: Date | null | undefined,
+    endDate: Date | null | undefined,
+) {
+    if (months.length > 0) {
+        conditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(months, sql.raw(", "))})`)
+    }
+    if (years.length > 0) {
+        conditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(years, sql.raw(", "))})`)
+    }
+    if (months.length > 0 || years.length > 0) return
+    if (startDate) conditions.push(gte(orders.createdAt, startDate))
+    if (endDate) conditions.push(lte(orders.createdAt, endDate))
+}
+
+function buildItemizedConditions({
+    branchIds,
+    months,
+    years,
+    startDate,
+    endDate,
+    productIds,
+    scopedOrganizationIds,
+    searchTerm,
+}: {
+    branchIds: number[]
+    months: number[]
+    years: number[]
+    startDate: Date | null | undefined
+    endDate: Date | null | undefined
+    productIds: number[]
+    scopedOrganizationIds: number[]
+    searchTerm: string
+}) {
+    const conditions: any[] = [
+        inArray(orders.branchId, branchIds),
+        inArray(orders.status, ['FULFILLED', 'APPROVED', 'REFUNDED', 'PENDING', 'REJECTED', 'CANCELLED']),
+    ]
+    addPeriodConditions(conditions, months, years, startDate, endDate)
+    if (productIds.length > 0) conditions.push(inArray(orderItems.globalProductId, productIds))
+    if (scopedOrganizationIds.length > 0) conditions.push(inArray(orders.organizationId, scopedOrganizationIds))
+    if (!searchTerm) return conditions
+
+    conditions.push(or(
+        ilike(orderItems.productName, `%${searchTerm}%`),
+        ilike(orderItems.productCode, `%${searchTerm}%`),
+        ilike(globalProducts.name, `%${searchTerm}%`),
+        ilike(globalProducts.productCode, `%${searchTerm}%`),
+        ilike(users.fullName, `%${searchTerm}%`),
+        ilike(users.email, `%${searchTerm}%`),
+        ilike(users.employeeId, `%${searchTerm}%`),
+        ilike(orders.tid, `%${searchTerm}%`),
+        ilike(branches.name, `%${searchTerm}%`),
+        ilike(organizations.name, `%${searchTerm}%`),
+        ilike(groups.name, `%${searchTerm}%`),
+    ))
+    return conditions
+}
+
+async function getRefundQuantities(orderItemIds: number[]) {
+    if (orderItemIds.length === 0) return {} as Record<number, RefundQuantity>
+
+    const refundRows = await db
+        .select({
+            orderItemId: refundItems.orderItemId,
+            qty: refundItems.quantity,
+            amount: refundItems.amountCents,
+        })
+        .from(refundItems)
+        .innerJoin(refunds, eq(refundItems.refundId, refunds.id))
+        .where(and(
+            inArray(refundItems.orderItemId, orderItemIds),
+            inArray(sql`UPPER(${refunds.status})`, ['APPROVED', 'COMPLETED']),
+        ))
+
+    return refundRows.reduce((acc, current) => {
+        if (!current.orderItemId) return acc
+        acc[current.orderItemId] = {
+            qty: (acc[current.orderItemId]?.qty || 0) + current.qty,
+            amount: (acc[current.orderItemId]?.amount || 0) + (current.amount || 0),
+        }
+        return acc
+    }, {} as Record<number, RefundQuantity>)
+}
+
+function getFulfilmentValues(row: any, refundData: RefundQuantity, totalItemValue: number) {
+    const valueRefundedCents = Math.min(totalItemValue, refundData.amount || (refundData.qty * row.priceCents))
+    const effectiveRefundedQty = Math.min(row.qtyOrdered, refundData.qty)
+    const values = {
+        qtyDelivered: row.qtyOrdered,
+        valueFulfilledCents: 0,
+        valueRejectedCents: 0,
+        valuePendingCents: 0,
+        valueRefundedCents,
+    }
+
+    if (['FULFILLED', 'REFUNDED', 'APPROVED'].includes(row.status)) {
+        values.qtyDelivered = Math.max(0, row.qtyOrdered - effectiveRefundedQty)
+        values.valueFulfilledCents = Math.max(0, totalItemValue - valueRefundedCents)
+    } else if (['REJECTED', 'CANCELLED'].includes(row.status)) {
+        values.valueRejectedCents = totalItemValue
+        values.qtyDelivered = 0
+    } else if (row.status === 'PENDING') {
+        values.valuePendingCents = totalItemValue
+        values.qtyDelivered = 0
+    }
+    return values
+}
+
+function flattenItemizedRow(row: any, refundQuantities: Record<number, RefundQuantity>) {
+    const refundData = refundQuantities[row.orderItemId] || { qty: 0, amount: 0 }
+    const totalItemValue = row.qtyOrdered * row.priceCents
+    const values = getFulfilmentValues(row, refundData, totalItemValue)
+    return {
+        id: row.orderItemId,
+        tid: row.tid,
+        orderId: row.orderId,
+        status: row.status,
+        orderCreatedAt: row.orderCreatedAt,
+        userId: row.userId,
+        employeeId: row.employeeId || row.userId.split('-')[0],
+        userName: row.userName || row.userEmail?.split('@')[0],
+        userEmail: row.userEmail,
+        organizationName: row.organizationName || 'N/A',
+        group: row.groupName,
+        branchName: row.branchName,
+        itemCode: row.itemCode || 'Unknown',
+        itemCategory: row.categoryName || 'Uncategorized',
+        itemDetails: row.itemName,
+        unit: row.itemUnit,
+        unitRateCents: row.priceCents,
+        qtyOrdered: row.qtyOrdered,
+        priceCents: row.priceCents,
+        subtotalCents: totalItemValue,
+        refundAmountCents: values.valueRefundedCents,
+        netTotalCents: ['REJECTED', 'CANCELLED'].includes(row.status) ? 0 : values.valueFulfilledCents,
+        ...values,
+        valueDeliveredCents: values.valueFulfilledCents,
+    }
+}
+
+function getPreviousRange(startDate: string, endDate: string, compareStart: string | null, compareEnd: string | null) {
+    if (compareStart && compareEnd) {
+        return {
+            start: parseStartDateParam(compareStart) || new Date(compareStart),
+            end: parseEndDateParam(compareEnd) || new Date(compareEnd),
+        }
+    }
+    const start = parseStartDateParam(startDate) || new Date(startDate)
+    const end = parseEndDateParam(endDate) || new Date(endDate)
+    const duration = end.getTime() - start.getTime()
+    return {
+        start: new Date(start.getTime() - duration - 1),
+        end: new Date(start.getTime() - 1),
+    }
+}
+
+async function getComparisonSummary({
+    branchIds,
+    months,
+    years,
+    range,
+}: {
+    branchIds: number[]
+    months: number[]
+    years: number[]
+    range: { start: Date; end: Date }
+}) {
+    const dateConditions: any[] = []
+    addPeriodConditions(dateConditions, months, years, range.start, range.end)
+    const comparisonRows = await db
+        .select({
+            id: orders.id,
+            status: orders.status,
+            totalCents: orders.totalCents,
+            refundAmountCents: orders.refundAmountCents,
+        })
+        .from(orders)
+        .where(and(inArray(orders.branchId, branchIds), and(...dateConditions)))
+    const fulfilled = comparisonRows.filter((row) => ['FULFILLED', 'REFUNDED', 'APPROVED'].includes(row.status || ""))
+    const rejected = comparisonRows.filter((row) => ['REJECTED', 'CANCELLED'].includes(row.status || ""))
+    return {
+        totalOrders: comparisonRows.length,
+        totalRevenue: fulfilled.reduce((sum, row) => sum + ((row.totalCents || 0) - (row.refundAmountCents || 0)), 0),
+        totalRejected: rejected.reduce((sum, row) => sum + (row.totalCents || 0), 0),
+        totalRefunded: comparisonRows.reduce((sum, row) => sum + (row.refundAmountCents || 0), 0),
+    }
+}
+
 export async function GET(req: NextRequest) {
     try {
         const session = await getServerSession(authOptions)
@@ -34,7 +282,6 @@ export async function GET(req: NextRequest) {
         const productIdsParam = url.searchParams.get("productIds")
         const organizationIdsParam = url.searchParams.get("organizationIds")
         const organizationIdParam = url.searchParams.get("organizationId")
-        const groupIdsParam = url.searchParams.get("groupIds")
         const limit = Math.min(Math.max(Math.trunc(Number(url.searchParams.get("limit"))) || 5000, 1), 5000)
         const searchTermRaw = (url.searchParams.get("searchTerm") || "").trim()
         if (searchTermRaw.length > 100) {
@@ -42,22 +289,13 @@ export async function GET(req: NextRequest) {
         }
         const searchTerm = searchTermRaw ? escapeLikePattern(searchTermRaw) : ""
 
-        const monthsRaw = url.searchParams.get("months")
-        const yearsRaw = url.searchParams.get("years")
-        const compareMonthsRaw = url.searchParams.get("compareMonths")
-        const compareYearsRaw = url.searchParams.get("compareYears")
-
-        const parsedMonths = monthsRaw ? monthsRaw.split(',').map(Number).filter((n: any) => !Number.isNaN(n) && n >= 1 && n <= 12) : []
-        const parsedYears = yearsRaw ? yearsRaw.split(',').map(Number).filter((n: any) => !Number.isNaN(n) && n > 2000) : []
-        const parsedCompMonths = compareMonthsRaw ? compareMonthsRaw.split(',').map(Number).filter((n: any) => !Number.isNaN(n) && n >= 1 && n <= 12) : []
-        const parsedCompYears = compareYearsRaw ? compareYearsRaw.split(',').map(Number).filter((n: any) => !Number.isNaN(n) && n > 2000) : []
-
-        const requestedOrganizationIds = (() => {
-          if (organizationIdsParam) {
-            return organizationIdsParam.split(",").map(Number)
-          }
-          return (organizationIdParam ? [Number(organizationIdParam)] : [])
-        })()
+        const isMonth = (number: number) => number >= 1 && number <= 12
+        const isYear = (number: number) => number > 2000
+        const parsedMonths = parseNumberList(url.searchParams.get("months"), isMonth)
+        const parsedYears = parseNumberList(url.searchParams.get("years"), isYear)
+        const parsedCompMonths = parseNumberList(url.searchParams.get("compareMonths"), isMonth)
+        const parsedCompYears = parseNumberList(url.searchParams.get("compareYears"), isYear)
+        const requestedOrganizationIds = getRequestedOrganizationIds(organizationIdsParam, organizationIdParam)
         const scopedOrganizationIds = resolveAnalyticsOrganizationIds({
             role: userRole,
             userOrganizationId: userOrgId,
@@ -68,38 +306,13 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ error: "Organization not assigned" }, { status: 403 })
         }
 
-        let allowedBranchQuery = db.select({ id: branches.id }).from(branches)
-        if (scopedOrganizationIds.length > 0) {
-            allowedBranchQuery = allowedBranchQuery
-                .where(inArray(branches.organizationId, scopedOrganizationIds)) as any
-        }
-        const allowedBranches = await allowedBranchQuery
-        const requestedBranchIds = branchIdsParam
-            ? branchIdsParam.split(",").map(Number)
-            : []
-        let branchIds = resolveAnalyticsBranchIds({
-            role: userRole,
+        const branchIds = await getScopedBranchIds({
+            userRole,
             userBranchId,
-            requestedBranchIds,
-            allowedBranchIds: allowedBranches.map((branch) => branch.id),
+            requestedBranchIds: parseNumberList(branchIdsParam),
+            scopedOrganizationIds,
+            groupIds: parseNumberList(url.searchParams.get("groupIds")),
         })
-
-        if (groupIdsParam && groupIdsParam.trim() !== "") {
-            const groupIds = groupIdsParam.split(",").map(Number).filter(id => !Number.isNaN(id) && id > 0)
-            if (groupIds.length > 0) {
-                const groupBranches = await db
-                    .select({ id: branches.id })
-                    .from(branches)
-                    .where(and(
-                        inArray(branches.groupId, groupIds),
-                        scopedOrganizationIds.length > 0
-                            ? inArray(branches.organizationId, scopedOrganizationIds)
-                            : undefined,
-                    ))
-                const groupBranchIds = new Set(groupBranches.map((branch) => branch.id))
-                branchIds = branchIds.filter((branchId) => groupBranchIds.has(branchId))
-            }
-        }
 
         if (branchIds.length === 0) {
             const responseStatus = isBranchScopedAnalyticsRole(userRole) ? 403 : 400
@@ -109,46 +322,16 @@ export async function GET(req: NextRequest) {
         const startDate = parseStartDateParam(startDateParam)
         const endDate = parseEndDateParam(endDateParam)
 
-        const baseConditions: any[] = [
-            inArray(orders.branchId, branchIds),
-            inArray(orders.status, ['FULFILLED', 'APPROVED', 'REFUNDED', 'PENDING', 'REJECTED', 'CANCELLED'])
-        ]
-
-        if (parsedMonths.length > 0) {
-            baseConditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedMonths, sql.raw(", "))})`)
-        }
-        if (parsedYears.length > 0) {
-            baseConditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedYears, sql.raw(", "))})`)
-        }
-
-        if (parsedMonths.length === 0 && parsedYears.length === 0) {
-            if (startDate) baseConditions.push(gte(orders.createdAt, startDate))
-            if (endDate) baseConditions.push(lte(orders.createdAt, endDate))
-        }
-
-        if (productIdsParam && productIdsParam.trim() !== "") {
-            const productIds = productIdsParam.split(",").map(Number).filter(id => !Number.isNaN(id) && id > 0)
-            if (productIds.length > 0) baseConditions.push(inArray(orderItems.globalProductId, productIds))
-        }
-        if (scopedOrganizationIds.length > 0) {
-            baseConditions.push(inArray(orders.organizationId, scopedOrganizationIds))
-        }
-        if (searchTerm) {
-            const searchCondition = or(
-                ilike(orderItems.productName, `%${searchTerm}%`),
-                ilike(orderItems.productCode, `%${searchTerm}%`),
-                ilike(globalProducts.name, `%${searchTerm}%`),
-                ilike(globalProducts.productCode, `%${searchTerm}%`),
-                ilike(users.fullName, `%${searchTerm}%`),
-                ilike(users.email, `%${searchTerm}%`),
-                ilike(users.employeeId, `%${searchTerm}%`),
-                ilike(orders.tid, `%${searchTerm}%`),
-                ilike(branches.name, `%${searchTerm}%`),
-                ilike(organizations.name, `%${searchTerm}%`),
-                ilike(groups.name, `%${searchTerm}%`),
-            )
-            if (searchCondition) baseConditions.push(searchCondition)
-        }
+        const baseConditions = buildItemizedConditions({
+            branchIds,
+            months: parsedMonths,
+            years: parsedYears,
+            startDate,
+            endDate,
+            productIds: parseNumberList(productIdsParam),
+            scopedOrganizationIds,
+            searchTerm,
+        })
 
         // Find all order items matching filters
         const q = db
@@ -186,143 +369,17 @@ export async function GET(req: NextRequest) {
 
         const results = await q
 
-        // Get refund data for calculating exact valid quantities
-        const validOrderItemIds = results.map(r => r.orderItemId)
-        let refundQuantities: Record<number, { qty: number; amount: number }> = {}
+        const refundQuantities = await getRefundQuantities(results.map((row) => row.orderItemId))
+        const flattened = results.map((row) => flattenItemizedRow(row, refundQuantities))
 
-        if (validOrderItemIds.length > 0) {
-            const refundsObj = await db
-                .select({
-                    orderItemId: refundItems.orderItemId,
-                    qty: refundItems.quantity,
-                    amount: refundItems.amountCents,
-                })
-                .from(refundItems)
-                .innerJoin(refunds, eq(refundItems.refundId, refunds.id))
-                .where(and(
-                    inArray(refundItems.orderItemId, validOrderItemIds),
-                    inArray(sql`UPPER(${refunds.status})`, ['APPROVED', 'COMPLETED']),
-                ))
-
-            refundQuantities = refundsObj.reduce((acc, curr) => {
-                if (curr.orderItemId) {
-                    acc[curr.orderItemId] = {
-                        qty: (acc[curr.orderItemId]?.qty || 0) + curr.qty,
-                        amount: (acc[curr.orderItemId]?.amount || 0) + (curr.amount || 0)
-                    }
-                }
-                return acc
-            }, {} as Record<number, { qty: number, amount: number }>)
-        }
-
-        const flattened = results.map(row => {
-            const refundData = refundQuantities[row.orderItemId] || { qty: 0, amount: 0 }
-            const totalItemValue = row.qtyOrdered * row.priceCents
-
-            // Cap refunds at item total to prevent "Refund > Subtotal" errors
-            const valueRefundedCents = Math.min(totalItemValue, refundData.amount || (refundData.qty * row.priceCents))
-            const effectiveRefundedQty = Math.min(row.qtyOrdered, refundData.qty)
-
-            let qtyDelivered = row.qtyOrdered
-            let valueFulfilledCents = 0
-            let valueRejectedCents = 0
-            let valuePendingCents = 0
-
-            if (row.status === 'FULFILLED' || row.status === 'REFUNDED' || row.status === 'APPROVED') {
-                qtyDelivered = Math.max(0, row.qtyOrdered - effectiveRefundedQty)
-                valueFulfilledCents = Math.max(0, totalItemValue - valueRefundedCents)
-            } else if (row.status === 'REJECTED' || row.status === 'CANCELLED') {
-                valueRejectedCents = totalItemValue
-                qtyDelivered = 0
-            } else if (row.status === 'PENDING') {
-                valuePendingCents = totalItemValue
-                qtyDelivered = 0
-            }
-
-            return {
-                id: row.orderItemId,
-                tid: row.tid,
-                orderId: row.orderId,
-                status: row.status,
-                orderCreatedAt: row.orderCreatedAt,
-                userId: row.userId,
-                employeeId: row.employeeId || row.userId.split('-')[0],
-                userName: row.userName || row.userEmail?.split('@')[0],
-                userEmail: row.userEmail,
-                organizationName: row.organizationName || 'N/A',
-                group: row.groupName,
-                branchName: row.branchName,
-                itemCode: row.itemCode || 'Unknown',
-                itemCategory: row.categoryName || 'Uncategorized',
-                itemDetails: row.itemName,
-                unit: row.itemUnit,
-                unitRateCents: row.priceCents,
-                qtyOrdered: row.qtyOrdered,
-                qtyDelivered: qtyDelivered,
-                priceCents: row.priceCents,
-                subtotalCents: totalItemValue,
-                refundAmountCents: valueRefundedCents,
-                netTotalCents: (row.status === 'REJECTED' || row.status === 'CANCELLED') ? 0 : valueFulfilledCents,
-                valueFulfilledCents,
-                valueDeliveredCents: valueFulfilledCents,
-                valueRefundedCents,
-                valueRejectedCents,
-                valuePendingCents
-            }
-        })
-
-        // COMPARISON logic for overall KPIs
-        let comparisonSummary = null
-        if (compare && startDateParam && endDateParam) {
-            let prevStart: Date
-            let prevEnd: Date
-
-            if (compareStartDateParam && compareEndDateParam) {
-                prevStart = parseStartDateParam(compareStartDateParam) || new Date(compareStartDateParam)
-                prevEnd = parseEndDateParam(compareEndDateParam) || new Date(compareEndDateParam)
-            } else {
-                const start = parseStartDateParam(startDateParam) || new Date(startDateParam)
-                const end = parseEndDateParam(endDateParam) || new Date(endDateParam)
-                const duration = end.getTime() - start.getTime()
-                prevStart = new Date(start.getTime() - duration - 1)
-                prevEnd = new Date(start.getTime() - 1)
-            }
-
-            const compResults = await db
-                .select({
-                    id: orders.id,
-                    status: orders.status,
-                    totalCents: orders.totalCents,
-                    refundAmountCents: orders.refundAmountCents
-                })
-                .from(orders)
-                .where(
-                    and(
-                        inArray(orders.branchId, branchIds),
-                        (() => {
-                            const compCond: any[] = []
-                            if (parsedCompMonths.length > 0 || parsedCompYears.length > 0) {
-                                if (parsedCompMonths.length > 0) compCond.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedCompMonths, sql.raw(", "))})`)
-                                if (parsedCompYears.length > 0) compCond.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedCompYears, sql.raw(", "))})`)
-                            } else {
-                                if (prevStart) compCond.push(gte(orders.createdAt, prevStart))
-                                if (prevEnd) compCond.push(lte(orders.createdAt, prevEnd))
-                            }
-                            return and(...compCond)
-                        })()
-                    )
-                )
-
-            const compFulfilled = compResults.filter(r => ['FULFILLED', 'REFUNDED', 'APPROVED'].includes(r.status || ""))
-            const compRejected = compResults.filter(r => ['REJECTED', 'CANCELLED'].includes(r.status || ""))
-
-            comparisonSummary = {
-                totalOrders: compResults.length,
-                totalRevenue: compFulfilled.reduce((sum, r) => sum + ((r.totalCents || 0) - (r.refundAmountCents || 0)), 0),
-                totalRejected: compRejected.reduce((sum, r) => sum + (r.totalCents || 0), 0),
-                totalRefunded: compResults.reduce((sum, r) => sum + (r.refundAmountCents || 0), 0)
-            }
-        }
+        const comparisonSummary = compare && startDateParam && endDateParam
+            ? await getComparisonSummary({
+                branchIds,
+                months: parsedCompMonths,
+                years: parsedCompYears,
+                range: getPreviousRange(startDateParam, endDateParam, compareStartDateParam, compareEndDateParam),
+            })
+            : null
 
         return respond({
             data: flattened,

@@ -61,7 +61,7 @@ async function request(pathname: string, init: RequestInit = {}): Promise<{ ok: 
       ...init,
       signal: controller.signal,
       redirect: "follow",
-      headers: { Accept: "application/json, text/plain, */*", ...(init.headers ?? {}) },
+      headers: { Accept: "application/json, text/plain, */*", ...init.headers },
     })
     const text = await response.text()
     let data: any = text

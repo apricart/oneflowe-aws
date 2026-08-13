@@ -4,7 +4,6 @@ import { useState,useEffect,useCallback } from "react"
 import { Columns3 } from "lucide-react"
 import { Popover,PopoverContent,PopoverTrigger } from "@/components/ui/popover"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
 import { cn } from "@/lib/utils"
 
 export interface ColumnDef {
@@ -114,18 +113,8 @@ export function ColumnSelector({ columns, storageKey, onChange, visibleKeys }: R
                     {columns.map((col) => {
                         const isActive = visibleKeys.includes(col.key)
                         return (
-                            <div
+                            <label
                                 key={col.key}
-                                role="checkbox"
-                                aria-checked={isActive}
-                                tabIndex={0}
-                                onClick={() => handleToggle(col.key)}
-                                onKeyDown={(event) => {
-                                    if (event.key === "Enter" || event.key === " ") {
-                                        event.preventDefault()
-                                        handleToggle(col.key)
-                                    }
-                                }}
                                 className={cn(
                                     "w-full flex items-center gap-3 px-3 py-2 rounded-md text-xs font-medium transition-colors cursor-pointer",
                                     isActive
@@ -133,13 +122,14 @@ export function ColumnSelector({ columns, storageKey, onChange, visibleKeys }: R
                                         : "text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/50"
                                 )}
                             >
-                                <Checkbox
+                                <input
+                                    type="checkbox"
                                     checked={isActive}
-                                    onCheckedChange={() => handleToggle(col.key)}
-                                    className="h-4 w-4 border-slate-300 dark:border-slate-600 data-[state=checked]:bg-indigo-600 data-[state=checked]:border-indigo-600"
+                                    onChange={() => handleToggle(col.key)}
+                                    className="h-4 w-4 rounded border-slate-300 accent-indigo-600 dark:border-slate-600"
                                 />
                                 <span className="truncate">{col.label}</span>
-                            </div>
+                            </label>
                         )
                     })}
                 </div>

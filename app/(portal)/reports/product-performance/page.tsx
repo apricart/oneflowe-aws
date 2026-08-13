@@ -58,10 +58,9 @@ import { MultiBranchFilter } from "@/components/dashboard/multi-branch-filter"
 import { BranchFilter } from "@/components/reports/branch-filter"
 import { GroupFilter } from "@/components/reports/group-filter"
 import { MultiSelectFilter } from "@/components/reports/multi-select-filter"
-import { useGlobalProducts,useOrganizations } from "@/lib/hooks/use-api"
+import { useOrganizations } from "@/lib/hooks/use-api"
 
 import type { ColumnDef } from "@/components/reports/column-selector"
-import { ExpandableRowDrawer,type DetailField } from "@/components/reports/expandable-row-drawer"
 import { KPICard } from "@/components/reports/kpi-card"
 import { OrganizationFilter } from "@/components/reports/organization-filter"
 import { ProductFilter } from "@/components/reports/product-filter"
@@ -136,9 +135,6 @@ export default function ProductPerformancePage() {
 
     const [searchTerm, setSearchTerm] = useState("")
     const [reportSearchTerm, setReportSearchTerm] = useState("")
-    const [, setGeneratedDate] = useState("")
-    const [selectedRow, setSelectedRow] = useState<any>(null)
-    const [drawerOpen, setDrawerOpen] = useState(false)
     const tabFromUrl = (searchParams.get("tab") as "analytics" | "reports") || "analytics"
     const [activeTab, setActiveTab] = useState<"analytics" | "reports">(tabFromUrl)
 
@@ -147,7 +143,6 @@ export default function ProductPerformancePage() {
             setActiveTab(tabFromUrl)
         }
     }, [tabFromUrl])
-    const [, setExpandedRow] = useState<string | null>(null)
 
     const { data: session, status: sessionStatus } = useSession()
     const role = (session?.user as any)?.role as Role
@@ -158,7 +153,6 @@ export default function ProductPerformancePage() {
     const kpiRevenueLabel = isBuyer ? "Total Purchased" : "Total Revenue"
     const chartTitleLabel = isBuyer ? "Top Products by Purchase" : "Top Products by Revenue"
     const tableRevenueHeader = isBuyer ? "Purchased" : "Revenue"
-    const drawerRevenueLabel = isBuyer ? "Amount Purchased" : "Revenue Generated"
     const exportRevenueHeader = isBuyer ? "Purchased" : "Revenue"
     const barChartLegendLabel = isBuyer ? "PURCHASED" : "REVENUE"
     const revenueShortLabel = isBuyer ? "Purchased" : "Revenue"
@@ -290,7 +284,6 @@ export default function ProductPerformancePage() {
     const availableOrgs = orgsData?.items || []
 
     // Products for filter display names
-    const { data: productsData } = useGlobalProducts(organizationId ? String(organizationId) : undefined)
 
 
 
@@ -506,7 +499,6 @@ export default function ProductPerformancePage() {
         setReportOrganizationIds([])
         setReportSearchTerm("")
         setTopProductsRankBy("netValue")
-        setExpandedRow(null)
         handleDateChange({ range: null, preset: "all" })
         mutateLedger()
         mutateTopProducts()
@@ -514,8 +506,6 @@ export default function ProductPerformancePage() {
 
     useEffect(() => {
         setHasMounted(true)
-        setGeneratedDate(new Date().toLocaleString())
-
         if (!startFromUrl && !endFromUrl && selectedMonths.length === 0 && selectedYears.length === 0) {
             handleDateChange({ range: null, preset: "all" })
         }
@@ -555,7 +545,6 @@ export default function ProductPerformancePage() {
     )
 
     const totalRevenue = products.reduce((sum: number, p: any) => sum + (p.revenueGeneratedCents || 0), 0)
-    const totalOrdered = products.reduce((sum: number, p: any) => sum + (p.qtyOrdered || 0), 0)
     const totalVolume = products.reduce((sum: number, p: any) => sum + (p.qtyFulfilled || 0), 0)
     const totalRefunds = products.reduce((sum: number, p: any) => sum + (p.qtyRefunded || 0), 0)
     const totalRefundLoss = products.reduce((sum: number, p: any) => sum + (p.refundLossCents || 0), 0)
@@ -653,37 +642,6 @@ export default function ProductPerformancePage() {
       return (isPriceCustom ? "Price" : "Base Price")
     })()
 
-
-    const getDrawerFields = (item: any): DetailField[] => [
-        { key: "s2", label: "Product Details", value: "", type: "section" },
-        {
-            key: "status", label: "Status", value: (
-                <Badge className={cn(
-                    "border-none text-[10px] uppercase font-black tracking-widest px-2.5 py-0.5",
-                    (() => {
-                      if (item.status === "active") {
-                        return "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
-                      }
-                      if (item.status === "inactive") {
-                        return "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
-                      }
-                      return "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
-                    })()
-                )}>
-                    {item.status}
-                </Badge>
-            )
-        },
-        { key: "productCode", label: "Product Code", value: item.productCode || "-", type: "mono" },
-        { key: "productName", label: "Product Name", value: item.productName || "-" },
-        { key: "category", label: "Category", value: item.categoryName || "-" },
-        ...(!pricesHidden ? [{ key: "price", label: priceLabel, value: formatPKR((item.unitPriceCents || item.basePriceCents) / 100), type: "currency" as const }] : []),
-        { key: "unit", label: "Unit", value: item.unit || "unit" },
-        { key: "s3", label: pricesHidden ? "Quantities" : "Quantities & Revenue", value: "", type: "section" },
-        { key: "qtyOrdered", label: "Qty Ordered", value: String(item.qtyOrdered || 0) },
-        { key: "qtyFulfilled", label: "Qty Fulfilled", value: String(item.qtyFulfilled || 0) },
-        ...(!pricesHidden ? [{ key: "revenue", label: drawerRevenueLabel, value: formatPKR(item.revenueGeneratedCents / 100), type: "currency" as const }] : []),
-    ]
 
     const handleExport = (format: 'csv' | 'excel' | 'pdf') => {
         const isReports = activeTab === "reports"
@@ -1553,12 +1511,6 @@ export default function ProductPerformancePage() {
                 </Tabs>
             </div>
 
-            <ExpandableRowDrawer
-                open={drawerOpen} onClose={() => setDrawerOpen(false)}
-                title={selectedRow?.productName || "Product Transaction"}
-                subtitle={`${selectedRow?.branchName} • ${selectedRow?.productCode}`}
-                fields={selectedRow ? getDrawerFields(selectedRow) : []}
-            />
         </div>
     )
 }

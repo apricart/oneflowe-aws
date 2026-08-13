@@ -22,7 +22,7 @@ import useSWR from "swr"
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json())
 
-function SuperAdminContextControls(props: {
+function SuperAdminContextControls(props: Readonly<{
   organizations: any[]
   branches: any[]
   organizationId: string | null
@@ -36,7 +36,7 @@ function SuperAdminContextControls(props: {
   setOrgOpen: (open: boolean) => void
   setBranchOpen: (open: boolean) => void
   resetContext: () => void
-}) {
+}>) {
   const { organizations, branches, organizationId, branchId, orgOpen, branchOpen, orgsLoading, branchesLoading, setOrganizationId, setBranchId, setOrgOpen, setBranchOpen, resetContext } = props
 
   const selectedOrg = organizations.find((o: any) => o.id.toString() === organizationId)
@@ -222,7 +222,7 @@ function readOnlyBranchLabel(options: {
   return "Global Overview"
 }
 
-function ReadOnlyContextBreadcrumb(props: {
+function ReadOnlyContextBreadcrumb(props: Readonly<{
   organization: any
   branch: any
   branches: any[]
@@ -230,7 +230,7 @@ function ReadOnlyContextBreadcrumb(props: {
   userRole: string | null
   branchesLoading: boolean
   assignedBranchLoading: boolean
-}) {
+}>) {
   const { organization, branch, branches, branchIds, userRole, branchesLoading, assignedBranchLoading } = props
   const branchLabel = readOnlyBranchLabel({ userRole, branch, branches, branchIds, branchesLoading, assignedBranchLoading })
   const hasBranchScope = Boolean(branch) || branchIds.length > 0

@@ -132,7 +132,7 @@ interface BudgetChartTooltipProps {
     branches: BudgetChartBranch[]
 }
 
-function BudgetChartTooltip({ active, payload, label, branches }: BudgetChartTooltipProps) {
+function BudgetChartTooltip({ active, payload, label, branches }: Readonly<BudgetChartTooltipProps>) {
     if (!active || !payload?.length) {
         return null
     }
@@ -226,13 +226,10 @@ export default function BudgetSummaryPage() {
         organizationId,
         branchId: contextBranchId,
         branchIds: contextBranchIds,
-        setBranchIds: setContextBranchIds,
         isInitialized
     } = useAppContext()
 
     const [searchTerm, setSearchTerm] = useState("")
-    const [, setGeneratedDate] = useState("")
-
     // Chart-local filters — default state
     const [chartYears, setChartYears] = useState<number[]>([]) // Will be initialized by useEffect
     const [chartMonths, setChartMonths] = useState<number[]>([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
@@ -418,8 +415,6 @@ export default function BudgetSummaryPage() {
 
     useEffect(() => {
         setHasMounted(true)
-        setGeneratedDate(new Date().toLocaleString())
-
         // If no explicit preset/dates, force "All Time" filter
         if (!startFromUrl && !endFromUrl && !searchParams.has("preset")) {
             handleDateChange({ range: null, preset: "all" })
@@ -469,7 +464,6 @@ export default function BudgetSummaryPage() {
 
 
     const summary = pageData?.summary || { totalAllocated: 0, totalSpent: 0, totalHeld: 0, totalCredited: 0, totalRemaining: 0 }
-    const categories = pageData?.categories || []
     const branchBreakdown = pageData?.branchBreakdown || []
 
 

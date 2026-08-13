@@ -12,6 +12,257 @@ import { parseEndDateParam,parseStartDateParam } from "@/lib/date-range-params"
 const allowedRoles = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"] as const
 type Role = typeof allowedRoles[number]
 
+function parseNumberList(value: string | null, isValid = (number: number) => number > 0) {
+    return value ? value.split(",").map(Number).filter((number) => !Number.isNaN(number) && isValid(number)) : []
+}
+
+async function resolveSalesScope(role: Role | undefined, scope: any, searchParams: URLSearchParams) {
+    if (role === "BRANCH_ADMIN") {
+        return { organizationId: scope?.organizationId ?? null, branchId: scope?.branchId ?? null }
+    }
+    if (role === "SUPER_ADMIN") {
+        return {
+            organizationId: Number(searchParams.get("organizationId")) || null,
+            branchId: Number(searchParams.get("branchId")) || null,
+        }
+    }
+    if (role !== "HEAD_OFFICE") return { error: "Access denied: Invalid user role" }
+    const organizationId = scope?.organizationId ?? null
+    const branchId = Number(searchParams.get("branchId")) || null
+    if (!branchId) return { organizationId, branchId: null }
+    try {
+        const [allowedBranch] = await db.select({ id: branches.id }).from(branches).where(and(
+            eq(branches.id, branchId),
+            eq(branches.organizationId, organizationId),
+        )).limit(1)
+        return allowedBranch
+            ? { organizationId, branchId }
+            : { error: "Access denied: Branch not found in your organization" }
+    } catch (caughtError) {
+        console.error("[Security] Error verifying branch access for Head Office:", caughtError)
+        return { error: "Access verification failed" }
+    }
+}
+
+function resolveSalesGranularity(
+    forced: string | null,
+    months: number[],
+    years: number[],
+    differenceInDays: number,
+): "hourly" | "daily" | "monthly" | "yearly" {
+    if (["hourly", "daily", "monthly", "yearly"].includes(forced || "")) {
+        return forced as "hourly" | "daily" | "monthly" | "yearly"
+    }
+    if (months.length > 0) return months.length > 1 || years.length > 1 ? "monthly" : "daily"
+    if (years.length > 0) return years.length > 1 ? "yearly" : "monthly"
+    if (differenceInDays <= 1) return "hourly"
+    if (differenceInDays <= 32) return "daily"
+    if (differenceInDays <= 400) return "monthly"
+    return "yearly"
+}
+
+function addSalesStatusCondition(conditions: any[], status: string | undefined) {
+    if (!status || status === "ALL") return
+    if (status === "REJECTED") {
+        conditions.push(or(eq(sql`UPPER(${orders.status})`, "REJECTED"), eq(sql`UPPER(${orders.status})`, "CANCELLED")))
+    } else if (status === "FULFILLED") {
+        conditions.push(inArray(sql`UPPER(${orders.status})`, ["FULFILLED", "PARTIAL", "PARTIALLY_FULFILLED"]))
+    } else if (status === "DELIVERED") {
+        conditions.push(eq(sql`UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED'))`, "DELIVERED"))
+    } else if (status === "NOT_DELIVERED") {
+        conditions.push(sql`UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED')) <> 'DELIVERED'`)
+    } else {
+        conditions.push(eq(sql`UPPER(${orders.status})`, status))
+    }
+}
+
+function addSalesScopeConditions(conditions: any[], scope: any) {
+    if (scope.organizationIds.length > 0) conditions.push(inArray(orders.organizationId, scope.organizationIds))
+    else if (scope.organizationId) conditions.push(eq(orders.organizationId, scope.organizationId))
+    if (scope.branchIds.length > 0) conditions.push(inArray(orders.branchId, scope.branchIds))
+    else if (scope.branchId) conditions.push(eq(orders.branchId, scope.branchId))
+    if (scope.groupIds.length > 0) conditions.push(inArray(branches.groupId, scope.groupIds))
+    else if (scope.groupId) conditions.push(eq(branches.groupId, scope.groupId))
+}
+
+function getSalesDateExpressions(granularity: "hourly" | "daily" | "monthly" | "yearly") {
+    if (granularity === "hourly") return {
+        date: sql`date_trunc('hour', (${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi')`,
+        label: sql<string>`TO_CHAR((${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi', 'HH12:MI AM')`,
+    }
+    if (granularity === "daily") return {
+        date: sql`date_trunc('day', (${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi')`,
+        label: sql<string>`TO_CHAR((${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi', 'DD Mon')`,
+    }
+    if (granularity === "monthly") return {
+        date: sql`date_trunc('month', (${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi')`,
+        label: sql<string>`TO_CHAR((${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi', 'Mon YYYY')`,
+    }
+    return {
+        date: sql`date_trunc('year', (${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi')`,
+        label: sql<string>`TO_CHAR((${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi', 'YYYY')`,
+    }
+}
+
+function buildSalesConditions(context: any, includeStatus = true) {
+    const conditions: any[] = []
+    const dashboardCreatedAt = sql`(${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi'`
+    if (context.months.length === 0 && context.years.length === 0) {
+        conditions.push(gte(orders.createdAt, context.startDate), lte(orders.createdAt, context.endDate))
+    }
+    if (context.months.length > 0) {
+        conditions.push(sql`EXTRACT(MONTH FROM ${dashboardCreatedAt}) IN (${sql.join(context.months, sql.raw(", "))})`)
+    }
+    if (context.years.length > 0) {
+        conditions.push(sql`EXTRACT(YEAR FROM ${dashboardCreatedAt}) IN (${sql.join(context.years, sql.raw(", "))})`)
+    }
+    if (includeStatus) addSalesStatusCondition(conditions, context.status)
+    addSalesScopeConditions(conditions, context)
+    return conditions
+}
+
+async function loadSalesSeries(whereClause: any, dateExpr: any, labelExpr: any) {
+    const eligible = sql`UPPER(${orders.status}) IN ('FULFILLED', 'APPROVED', 'PARTIAL', 'PARTIALLY_FULFILLED')`
+    const [seriesRows, quantityRows, refundRows] = await Promise.all([
+        db.select({
+            bucket: dateExpr,
+            label: labelExpr,
+            totalSales: metricExpressions.revenue,
+            netSales: metricExpressions.revenue,
+            orderCount: sql<number>`COALESCE(COUNT(1), 0)`.mapWith(Number),
+        }).from(orders).leftJoin(branches, eq(orders.branchId, branches.id)).where(whereClause)
+            .groupBy(dateExpr, labelExpr).orderBy(dateExpr),
+        db.select({
+            label: labelExpr,
+            grossQuantity: sql<number>`COALESCE(SUM(CASE WHEN ${eligible} THEN COALESCE(${orderItems.quantity}, 0) ELSE 0 END), 0)`.mapWith(Number),
+        }).from(orders).leftJoin(branches, eq(orders.branchId, branches.id))
+            .leftJoin(orderItems, eq(orderItems.orderId, orders.id)).where(whereClause)
+            .groupBy(dateExpr, labelExpr).orderBy(dateExpr),
+        db.select({
+            label: labelExpr,
+            refundedQuantity: sql<number>`COALESCE(SUM(CASE WHEN ${eligible} THEN COALESCE(${refundItems.quantity}, 0) ELSE 0 END), 0)`.mapWith(Number),
+        }).from(orders).leftJoin(branches, eq(orders.branchId, branches.id))
+            .leftJoin(refunds, and(eq(refunds.orderId, orders.id), eq(sql`UPPER(${refunds.status})`, "APPROVED")))
+            .leftJoin(refundItems, eq(refundItems.refundId, refunds.id)).where(whereClause)
+            .groupBy(dateExpr, labelExpr).orderBy(dateExpr),
+    ])
+    const quantities = new Map(quantityRows.map((row) => [String(row.label), Number(row.grossQuantity || 0)]))
+    const refunded = new Map(refundRows.map((row) => [String(row.label), Number(row.refundedQuantity || 0)]))
+    return seriesRows.map((row) => ({
+        label: row.label,
+        sales: (row.totalSales || 0) / 100,
+        netSales: (row.netSales || 0) / 100,
+        orders: Number(row.orderCount || 0),
+        itemQuantity: Math.max(0, (quantities.get(String(row.label)) || 0) - (refunded.get(String(row.label)) || 0)),
+    }))
+}
+
+function summarizeSalesSeries(seriesData: any[]) {
+    const totalSales = seriesData.reduce((sum, row) => sum + row.sales, 0)
+    const totalNetSales = seriesData.reduce((sum, row) => sum + row.netSales, 0)
+    const totalOrders = seriesData.reduce((sum, row) => sum + row.orders, 0)
+    const totalItemsSold = seriesData.reduce((sum, row) => sum + row.itemQuantity, 0)
+    const activePeriods = seriesData.filter((row) => row.sales > 0)
+    const activeQuantityPeriods = seriesData.filter((row) => row.itemQuantity > 0)
+    return {
+        totalSales,
+        totalNetSales,
+        totalOrders,
+        totalItemsSold,
+        avgSales: activePeriods.length > 0 ? totalSales / activePeriods.length : 0,
+        avgItemsSold: activeQuantityPeriods.length > 0 ? totalItemsSold / activeQuantityPeriods.length : 0,
+        peakPeriod: seriesData.length > 0 ? seriesData.reduce((max, row) => row.sales > max.sales ? row : max, seriesData[0]) : null,
+        peakQuantityPeriod: seriesData.length > 0 ? seriesData.reduce((max, row) => row.itemQuantity > max.itemQuantity ? row : max, seriesData[0]) : null,
+    }
+}
+
+function buildComparisonDateConditions(context: any) {
+    const conditions: any[] = []
+    const dashboardCreatedAt = sql`(${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi'`
+    if (context.months.length > 0) {
+        conditions.push(sql`EXTRACT(MONTH FROM ${dashboardCreatedAt}) IN (${sql.join(context.months, sql.raw(", "))})`)
+    }
+    if (context.years.length > 0) {
+        conditions.push(sql`EXTRACT(YEAR FROM ${dashboardCreatedAt}) IN (${sql.join(context.years, sql.raw(", "))})`)
+    }
+    if (context.months.length > 0 || context.years.length > 0) return conditions
+
+    if (context.explicitStart && context.explicitEnd) {
+        const start = parseStartDateParam(context.explicitStart) || new Date(context.explicitStart)
+        const end = parseEndDateParam(context.explicitEnd) || new Date(context.explicitEnd)
+        conditions.push(gte(orders.createdAt, start), lte(orders.createdAt, end))
+    } else if (context.primaryMonths.length === 0 && context.primaryYears.length === 0) {
+        const duration = context.primaryEnd.getTime() - context.primaryStart.getTime()
+        conditions.push(
+            gte(orders.createdAt, new Date(context.primaryStart.getTime() - duration - 1)),
+            lte(orders.createdAt, new Date(context.primaryStart.getTime() - 1)),
+        )
+    }
+    return conditions
+}
+
+function addComparisonStatusCondition(conditions: any[], status: string | undefined) {
+    if (!status || status === "ALL") return
+    if (status === "REJECTED") {
+        conditions.push(or(eq(sql`UPPER(${orders.status})`, "REJECTED"), eq(sql`UPPER(${orders.status})`, "CANCELLED")))
+    } else if (status === "DELIVERED") {
+        conditions.push(eq(sql`UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED'))`, "DELIVERED"))
+    } else if (status === "NOT_DELIVERED") {
+        conditions.push(sql`UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED')) <> 'DELIVERED'`)
+    } else {
+        conditions.push(eq(sql`UPPER(${orders.status})`, status))
+    }
+}
+
+function buildComparisonConditions(context: any) {
+    const dateConditions = buildComparisonDateConditions(context)
+    const filtered = [...dateConditions]
+    const allStatuses = [...dateConditions]
+    addComparisonStatusCondition(filtered, context.status)
+    addSalesScopeConditions(filtered, context)
+    addSalesScopeConditions(allStatuses, context)
+    return { filtered, allStatuses }
+}
+
+async function loadComparisonStatusCounts(whereClause: any) {
+    const [counts] = await db.select({
+        fulfilledCount: metricExpressions.fulfilledCount,
+        partialCount: metricExpressions.partialCount,
+        fulfilledNetSales: metricExpressions.revenue,
+        refundedCount: metricExpressions.refundedCount,
+        rejectedCount: metricExpressions.rejectedCount,
+        approvedCount: metricExpressions.approvedCount,
+        pendingCount: sql<number>`COALESCE(COUNT(CASE WHEN UPPER(${orders.status}) = 'PENDING' THEN 1 END), 0)`.mapWith(Number),
+        deliveredCount: sql<number>`COALESCE(COUNT(CASE WHEN UPPER(${orders.status}) = 'APPROVED' AND UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED')) = 'DELIVERED' THEN 1 END), 0)`.mapWith(Number),
+        notDeliveredCount: sql<number>`COALESCE(COUNT(CASE WHEN UPPER(${orders.status}) = 'APPROVED' AND UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED')) <> 'DELIVERED' THEN 1 END), 0)`.mapWith(Number),
+    }).from(orders).leftJoin(branches, eq(orders.branchId, branches.id)).where(whereClause)
+    return counts
+}
+
+async function loadSalesComparison(context: any) {
+    if (!context.enabled) return null
+    const { filtered, allStatuses } = buildComparisonConditions(context)
+    const seriesData = await loadSalesSeries(and(...filtered), context.dateExpression, context.labelExpression)
+    const summary = summarizeSalesSeries(seriesData)
+    const counts = await loadComparisonStatusCounts(and(...allStatuses))
+    return {
+        totalSales: summary.totalSales,
+        totalNetSales: summary.totalNetSales,
+        totalOrders: summary.totalOrders,
+        totalItemsSold: summary.totalItemsSold,
+        fulfilledCount: counts?.fulfilledCount || 0,
+        partialCount: counts?.partialCount || 0,
+        fulfilledNetSales: (counts?.fulfilledNetSales || 0) / 100,
+        refundedCount: counts?.refundedCount || 0,
+        rejectedCount: counts?.rejectedCount || 0,
+        approvedCount: counts?.approvedCount || 0,
+        pendingCount: counts?.pendingCount || 0,
+        deliveredCount: counts?.deliveredCount || 0,
+        notDeliveredCount: counts?.notDeliveredCount || 0,
+        seriesData,
+    }
+}
+
 export async function GET(req: NextRequest) {
     const err = await requireApiRole(allowedRoles as any)
     if (err) return err
@@ -20,8 +271,6 @@ export async function GET(req: NextRequest) {
     const role = scope?.role as Role | undefined
 
     const { searchParams } = new URL(req.url)
-    const orgIdParam = searchParams.get("organizationId")
-    const branchIdParam = searchParams.get("branchId")
     const branchIdsParam = searchParams.get("branchIds") // comma-separated
     const organizationIdsParam = searchParams.get("organizationIds") // comma-separated
     const groupIdParam = searchParams.get("groupId")
@@ -34,88 +283,26 @@ export async function GET(req: NextRequest) {
 
     const monthsRaw = searchParams.get("months")
     const yearsRaw = searchParams.get("years")
-    const compareMonthsRaw = searchParams.get("compareMonths")
-    const compareYearsRaw = searchParams.get("compareYears")
-
-    const parsedMonths = monthsRaw ? monthsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n >= 1 && n <= 12) : []
-    const parsedYears = yearsRaw ? yearsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n > 2000) : []
-    const parsedCompMonths = compareMonthsRaw ? compareMonthsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n >= 1 && n <= 12) : []
-    const parsedCompYears = compareYearsRaw ? compareYearsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n > 2000) : []
+    const parsedMonths = parseNumberList(monthsRaw, (number) => number >= 1 && number <= 12)
+    const parsedYears = parseNumberList(yearsRaw, (number) => number > 2000)
+    const parsedCompMonths = parseNumberList(searchParams.get("compareMonths"), (number) => number >= 1 && number <= 12)
+    const parsedCompYears = parseNumberList(searchParams.get("compareYears"), (number) => number > 2000)
     const includeStatusCounts = searchParams.get("includeStatusCounts") === "true"
 
-    let organizationId: number | null = null
-    let branchId: number | null = null
     let groupId: number | null = null
-    let groupIds: number[] = []
-    let branchIds: number[] = []
-    let organizationIds: number[] = []
-
-    // SECURITY: Enforce strict data isolation based on user role
-    if (role === "BRANCH_ADMIN") {
-        // Branch Admin can only see their own branch
-        organizationId = scope?.organizationId ?? null
-        branchId = scope?.branchId ?? null
-        // IGNORE URL PARAMETERS for security
-    } else if (role === "HEAD_OFFICE") {
-        // Head Office can see all branches in their organization, but not other organizations
-        organizationId = scope?.organizationId ?? null
-        // Only allow branch filtering within their organization
-        if (branchIdParam && branchIdParam !== "null" && branchIdParam !== "0") {
-            const requestedBranchId = Number(branchIdParam)
-            // Verify this branch belongs to their organization
-            if (organizationId && requestedBranchId) {
-                try {
-                    const [branchCheck] = await db
-                        .select({ id: branches.id })
-                        .from(branches)
-                        .where(and(eq(branches.id, requestedBranchId), eq(branches.organizationId, organizationId)))
-                        .limit(1)
-                    
-                    if (branchCheck) {
-                        branchId = requestedBranchId
-                    } else {
-                        console.warn(`[Security] Head Office user tried to access branch ${requestedBranchId} outside their org ${organizationId}`)
-                        return error("Access denied: Branch not found in your organization")
-                    }
-                } catch (err) {
-                    console.error("[Security] Error verifying branch access for Head Office:", err)
-                    return error("Access verification failed")
-                }
-            }
-        }
-        // IGNORE organizationId parameter for security
-    } else if (role === "SUPER_ADMIN") {
-        // Super Admin can see everything (intended)
-        if (orgIdParam && orgIdParam !== "null" && orgIdParam !== "0") {
-            organizationId = Number(orgIdParam)
-        }
-        if (branchIdParam && branchIdParam !== "null" && branchIdParam !== "0") {
-            branchId = Number(branchIdParam)
-        }
-    } else {
-        // Unknown role - deny access
-        console.warn(`[Security] Unknown role ${role} attempting to access sales-performance API`)
-        return error("Access denied: Invalid user role")
-    }
+    const resolvedScope = await resolveSalesScope(role, scope, searchParams)
+    if (resolvedScope.error) return error(resolvedScope.error)
+    const organizationId = resolvedScope.organizationId ?? null
+    const branchId = resolvedScope.branchId ?? null
     const pricesHidden = await shouldHidePricesForRole(role, scope?.organizationId)
-
-    if (branchIdsParam) {
-        branchIds = branchIdsParam.split(",").map(Number).filter(n => !Number.isNaN(n) && n > 0)
-    }
-
-    if (organizationIdsParam) {
-        organizationIds = organizationIdsParam.split(",").map(Number).filter(n => !Number.isNaN(n) && n > 0)
-    }
+    const branchIds = parseNumberList(branchIdsParam)
+    const organizationIds = parseNumberList(organizationIdsParam)
 
     if (groupIdParam && groupIdParam !== "null" && groupIdParam !== "0") {
         groupId = Number(groupIdParam)
     }
 
-    if (groupIdsParam) {
-        groupIds = groupIdsParam.split(",").map(Number).filter(n => !Number.isNaN(n) && n > 0)
-    } else if (groupId) {
-        groupIds = [groupId]
-    }
+    const groupIds = groupIdsParam ? parseNumberList(groupIdsParam) : groupId ? [groupId] : []
 
     // Date range - default to today
     const now = new Date()
@@ -131,32 +318,7 @@ export async function GET(req: NextRequest) {
     const diffMs = endDate.getTime() - startDate.getTime()
     const diffDays = diffMs / (1000 * 60 * 60 * 24)
     
-    const forcedGranularity = searchParams.get("granularity") as "hourly" | "daily" | "monthly" | "yearly" | null
-    const isValidGranularity = ["hourly", "daily", "monthly", "yearly"].includes(forcedGranularity || "")
-
-    let granularity: "hourly" | "daily" | "monthly" | "yearly"
-    if (isValidGranularity) {
-        granularity = forcedGranularity!
-    } else if (parsedMonths.length > 0) {
-        // Multi-select months: if multiple months or years, use monthly, otherwise daily for that specific month
-        granularity = (parsedMonths.length > 1 || parsedYears.length > 1) ? "monthly" : "daily"
-    } else if (parsedYears.length > 0) {
-        // Multi-select years: if multiple years, use yearly, otherwise monthly for that specific year
-        granularity = parsedYears.length > 1 ? "yearly" : "monthly"
-    } else {
-        granularity = (() => {
-          if (diffDays <= 1) {
-            return "hourly"
-          }
-          if (diffDays <= 32) {
-            return "daily"
-          }
-          if (diffDays <= 400) {
-            return "monthly"
-          }
-          return "yearly"
-        })()
-    }
+    const granularity = resolveSalesGranularity(searchParams.get("granularity"), parsedMonths, parsedYears, diffDays)
 
     const cacheKey = generateCacheKey("sales-perf", {
         role, organizationId, branchId,
@@ -180,85 +342,39 @@ export async function GET(req: NextRequest) {
     const fetchData = async () => {
         const dashboardCreatedAt = sql`(${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi'`
 
-        // Build base conditions
-        const conditions: any[] = []
-
-        // Primary Date filter logic (Fallback to bounds only if exact disjoint sets not sent)
-        if (!monthsRaw && !yearsRaw) {
-            conditions.push(gte(orders.createdAt, startDate), lte(orders.createdAt, endDate))
-        }
-
-        // Advanced Multi-Select Date Filtering (Months / Years arrays)
-        if (parsedMonths.length > 0) {
-            conditions.push(sql`EXTRACT(MONTH FROM ${dashboardCreatedAt}) IN (${sql.join(parsedMonths, sql.raw(", "))})`)
-        }
-        if (parsedYears.length > 0) {
-            conditions.push(sql`EXTRACT(YEAR FROM ${dashboardCreatedAt}) IN (${sql.join(parsedYears, sql.raw(", "))})`)
-        }
-
-        // Status filter: normalize to uppercase for comparison
         const upperStatus = statusParam?.toUpperCase()
-        if (upperStatus && upperStatus !== "ALL") {
-            if (upperStatus === "REJECTED") {
-                conditions.push(or(eq(sql`UPPER(${orders.status})`, "REJECTED"), eq(sql`UPPER(${orders.status})`, "CANCELLED")))
-            } else if (upperStatus === "FULFILLED") {
-                // FULFILLED = all fulfilled orders including partially refunded ones
-                conditions.push(
-                    inArray(sql`UPPER(${orders.status})`, ["FULFILLED", "PARTIAL", "PARTIALLY_FULFILLED"])
-                )
-            } else if (upperStatus === "DELIVERED") {
-                conditions.push(
-                    eq(sql`UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED'))`, "DELIVERED")
-                )
-            } else if (upperStatus === "NOT_DELIVERED") {
-                conditions.push(
-                    sql`UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED')) <> 'DELIVERED'`
-                )
-            } else {
-                conditions.push(eq(sql`UPPER(${orders.status})`, upperStatus))
-            }
+        const salesContext = {
+            organizationIds,
+            organizationId,
+            branchIds,
+            branchId,
+            groupIds,
+            groupId,
+            months: parsedMonths,
+            years: parsedYears,
+            startDate,
+            endDate,
+            status: upperStatus,
         }
-
-        // Scope filters
-        if (organizationIds.length > 0) {
-            conditions.push(inArray(orders.organizationId, organizationIds))
-        } else if (organizationId) {
-            conditions.push(eq(orders.organizationId, organizationId))
-        }
-
-        if (branchIds.length > 0) {
-            conditions.push(inArray(orders.branchId, branchIds))
-        } else if (branchId) {
-            conditions.push(eq(orders.branchId, branchId))
-        }
-
-        if (groupIds.length > 0) {
-            conditions.push(inArray(branches.groupId, groupIds))
-        } else if (groupId) {
-            conditions.push(eq(branches.groupId, groupId))
-        }
+        const conditions = buildSalesConditions(salesContext)
 
         const whereClause = and(...conditions)
         const revenueEligibleStatus = sql`UPPER(${orders.status}) IN ('FULFILLED', 'APPROVED', 'PARTIAL', 'PARTIALLY_FULFILLED')`
 
         // ── Series data ──
-        let dateExpr: any
-        let labelExpr: any
+        const { date: dateExpr, label: labelExpr } = getSalesDateExpressions(granularity)
 
-        if (granularity === "hourly") {
-            dateExpr = sql`date_trunc('hour', (${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi')`
-            labelExpr = sql<string>`TO_CHAR((${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi', 'HH12:MI AM')`
-        } else if (granularity === "daily") {
-            dateExpr = sql`date_trunc('day', (${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi')`
-            labelExpr = sql<string>`TO_CHAR((${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi', 'DD Mon')`
-        } else if (granularity === "monthly") {
-            dateExpr = sql`date_trunc('month', (${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi')`
-            labelExpr = sql<string>`TO_CHAR((${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi', 'Mon YYYY')`
-        } else {
-            dateExpr = sql`date_trunc('year', (${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi')`
-            labelExpr = sql<string>`TO_CHAR((${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi', 'YYYY')`
-        }
-
+        const {
+            seriesData,
+            totalSales,
+            totalNetSales,
+            totalOrders,
+            totalItemsSold,
+            avgSales,
+            avgItemsSold,
+            peakPeriod,
+            peakQuantityPeriod,
+        } = await (async () => {
         const seriesRows = await db
             .select({
                 bucket: dateExpr,
@@ -333,8 +449,21 @@ export async function GET(req: NextRequest) {
           }
           return null
         })()
+        return {
+            seriesData,
+            totalSales,
+            totalNetSales,
+            totalOrders,
+            totalItemsSold,
+            avgSales,
+            avgItemsSold,
+            peakPeriod,
+            peakQuantityPeriod,
+        }
+        })()
 
         // ── Branch breakdown ──
+        const branchSales = await (async () => {
         const branchConditions: any[] = [...conditions] // Apply primary date matrices 
         
         if (statusParam && statusParam !== "all") {
@@ -383,16 +512,17 @@ export async function GET(req: NextRequest) {
             .orderBy(desc(metricExpressions.revenue))
             .limit(20)
 
-        const branchSales = branchRows.map(r => ({
+        return branchRows.map(r => ({
             branchId: r.branchId,
             branchName: r.branchName || "Unnamed",
             sales: (r.totalSales || 0) / 100,
             netSales: (r.totalNetSales || 0) / 100,
             orders: Number(r.orderCount || 0),
         }))
+        })()
 
         // ── Organization breakdown (Super Admin only, when no org is selected) ──
-        let organizationSales: any[] = []
+        const organizationSales = await (async () => {
         if (role === "SUPER_ADMIN" && !organizationId) {
             const orgRows = await db
                 .select({
@@ -408,7 +538,7 @@ export async function GET(req: NextRequest) {
                 .orderBy(desc(metricExpressions.revenue))
                 .limit(20)
 
-            organizationSales = orgRows.map(r => ({
+            return orgRows.map(r => ({
                 organizationId: r.organizationId,
                 organizationName: r.organizationName || "Unnamed",
                 sales: (r.totalSales || 0) / 100,
@@ -416,181 +546,33 @@ export async function GET(req: NextRequest) {
                 orders: Number(r.orderCount || 0),
             }))
         }
+        return []
+        })()
 
         // ── Comparison Logic ──
-        let comparison: any = null
-        const hasCompareArrays = parsedCompMonths.length > 0 || parsedCompYears.length > 0
-        const hasPrimaryDates = startDate && endDate
-
-        if (searchParams.get("compare") === "true" && (hasPrimaryDates || compareStartDateParam || hasCompareArrays)) {
-            const compConditions: any[] = []
-
-            if (parsedCompMonths.length > 0) {
-                compConditions.push(sql`EXTRACT(MONTH FROM ${dashboardCreatedAt}) IN (${sql.join(parsedCompMonths, sql.raw(", "))})`)
-            }
-            if (parsedCompYears.length > 0) {
-                compConditions.push(sql`EXTRACT(YEAR FROM ${dashboardCreatedAt}) IN (${sql.join(parsedCompYears, sql.raw(", "))})`)
-            }
-
-            if (!hasCompareArrays) {
-                let prevStart: Date
-                let prevEnd: Date
-                if (compareStartDateParam && compareEndDateParam) {
-                    prevStart = parseStartDateParam(compareStartDateParam) || new Date(compareStartDateParam)
-                    prevEnd = parseEndDateParam(compareEndDateParam) || new Date(compareEndDateParam)
-                } else if (startDate && endDate && parsedMonths.length === 0 && parsedYears.length === 0) {
-                    const start = startDate
-                    const end = endDate
-                    const duration = end.getTime() - start.getTime()
-                    prevStart = new Date(start.getTime() - duration - 1)
-                    prevEnd = new Date(start.getTime() - 1)
-                } else {
-                    prevStart = new Date(0)
-                    prevEnd = new Date(0)
-                }
-
-                if (prevStart.getTime() !== 0) {
-                    compConditions.push(gte(orders.createdAt, prevStart), lte(orders.createdAt, prevEnd))
-                }
-            }
-
-            const compAllStatusConditions: any[] = [...compConditions]
-
-            if (upperStatus && upperStatus !== "ALL") {
-                if (upperStatus === "REJECTED") {
-                    compConditions.push(or(eq(sql`UPPER(${orders.status})`, "REJECTED"), eq(sql`UPPER(${orders.status})`, "CANCELLED")))
-                } else if (upperStatus === "DELIVERED") {
-                    compConditions.push(
-                        eq(sql`UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED'))`, "DELIVERED")
-                    )
-                } else if (upperStatus === "NOT_DELIVERED") {
-                    compConditions.push(
-                        sql`UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED')) <> 'DELIVERED'`
-                    )
-                } else {
-                    compConditions.push(eq(sql`UPPER(${orders.status})`, upperStatus))
-                }
-            }
-
-            if (organizationIds.length > 0) {
-                compConditions.push(inArray(orders.organizationId, organizationIds))
-                compAllStatusConditions.push(inArray(orders.organizationId, organizationIds))
-            } else if (organizationId) {
-                compConditions.push(eq(orders.organizationId, organizationId))
-                compAllStatusConditions.push(eq(orders.organizationId, organizationId))
-            }
-            if (branchIds.length > 0) {
-                compConditions.push(inArray(orders.branchId, branchIds))
-                compAllStatusConditions.push(inArray(orders.branchId, branchIds))
-            } else if (branchId) {
-                compConditions.push(eq(orders.branchId, branchId))
-                compAllStatusConditions.push(eq(orders.branchId, branchId))
-            }
-            if (groupIds.length > 0) {
-                compConditions.push(inArray(branches.groupId, groupIds))
-                compAllStatusConditions.push(inArray(branches.groupId, groupIds))
-            } else if (groupId) {
-                compConditions.push(eq(branches.groupId, groupId))
-                compAllStatusConditions.push(eq(branches.groupId, groupId))
-            }
-
-            const compWhere = compConditions.length > 0 ? and(...compConditions) : undefined
-
-            // Series for comparison
-            const compSeriesRows = await db
-                .select({
-                    bucket: dateExpr,
-                    label: labelExpr,
-                    totalSales: metricExpressions.revenue,
-                    totalNetSales: metricExpressions.revenue,
-                    orderCount: sql<number>`COALESCE(COUNT(1), 0)`.mapWith(Number),
-                })
-                .from(orders)
-                .leftJoin(branches, eq(orders.branchId, branches.id))
-                .where(compWhere)
-                .groupBy(dateExpr, labelExpr)
-                .orderBy(dateExpr)
-
-            const compSeriesQuantityRows = await db
-                .select({
-                    bucket: dateExpr,
-                    label: labelExpr,
-                    grossQuantity: sql<number>`COALESCE(SUM(CASE WHEN ${revenueEligibleStatus} THEN COALESCE(${orderItems.quantity}, 0) ELSE 0 END), 0)`.mapWith(Number),
-                })
-                .from(orders)
-                .leftJoin(branches, eq(orders.branchId, branches.id))
-                .leftJoin(orderItems, eq(orderItems.orderId, orders.id))
-                .where(compWhere)
-                .groupBy(dateExpr, labelExpr)
-                .orderBy(dateExpr)
-
-            const compSeriesRefundQuantityRows = await db
-                .select({
-                    bucket: dateExpr,
-                    label: labelExpr,
-                    refundedQuantity: sql<number>`COALESCE(SUM(CASE WHEN ${revenueEligibleStatus} THEN COALESCE(${refundItems.quantity}, 0) ELSE 0 END), 0)`.mapWith(Number),
-                })
-                .from(orders)
-                .leftJoin(branches, eq(orders.branchId, branches.id))
-                .leftJoin(refunds, and(eq(refunds.orderId, orders.id), eq(sql`UPPER(${refunds.status})`, "APPROVED")))
-                .leftJoin(refundItems, eq(refundItems.refundId, refunds.id))
-                .where(compWhere)
-                .groupBy(dateExpr, labelExpr)
-                .orderBy(dateExpr)
-
-            const compGrossQuantityByLabel = new Map(compSeriesQuantityRows.map((r) => [String(r.label), Number(r.grossQuantity || 0)]))
-            const compRefundedQuantityByLabel = new Map(compSeriesRefundQuantityRows.map((r) => [String(r.label), Number(r.refundedQuantity || 0)]))
-
-            const compSeriesData = compSeriesRows.map(r => ({
-                label: r.label,
-                sales: (r.totalSales || 0) / 100,
-                netSales: (r.totalNetSales || 0) / 100,
-                orders: Number(r.orderCount || 0),
-                itemQuantity: Math.max(0, (compGrossQuantityByLabel.get(String(r.label)) || 0) - (compRefundedQuantityByLabel.get(String(r.label)) || 0)),
-            }))
-
-            const compTotalSales = compSeriesData.reduce((s, r) => s + r.sales, 0)
-            const compTotalNetSales = compSeriesData.reduce((s, r) => s + r.netSales, 0)
-            const compTotalOrders = compSeriesData.reduce((s, r) => s + r.orders, 0)
-            const compTotalItemsSold = compSeriesData.reduce((s, r) => s + r.itemQuantity, 0)
-
-            // Aggregated counts for all statuses (for KPI comparison)
-            const compAllWhere = compAllStatusConditions.length > 0 ? and(...compAllStatusConditions) : undefined
-            const compStatusCounts = await db.select({
-                fulfilledCount: metricExpressions.fulfilledCount,
-                partialCount: metricExpressions.partialCount,
-                fulfilledNetSales: metricExpressions.revenue,
-                refundedCount: metricExpressions.refundedCount,
-                rejectedCount: metricExpressions.rejectedCount,
-                approvedCount: metricExpressions.approvedCount,
-                pendingCount: sql<number>`COALESCE(COUNT(CASE WHEN UPPER(${orders.status}) = 'PENDING' THEN 1 END), 0)`.mapWith(Number),
-                deliveredCount: sql<number>`COALESCE(COUNT(CASE WHEN UPPER(${orders.status}) = 'APPROVED' AND UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED')) = 'DELIVERED' THEN 1 END), 0)`.mapWith(Number),
-                notDeliveredCount: sql<number>`COALESCE(COUNT(CASE WHEN UPPER(${orders.status}) = 'APPROVED' AND UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED')) <> 'DELIVERED' THEN 1 END), 0)`.mapWith(Number),
-            })
-                .from(orders)
-                .leftJoin(branches, eq(orders.branchId, branches.id))
-                .where(compAllWhere)
-
-            comparison = {
-                totalSales: compTotalSales,
-                totalNetSales: compTotalNetSales,
-                totalOrders: compTotalOrders,
-                totalItemsSold: compTotalItemsSold,
-                fulfilledCount: compStatusCounts[0]?.fulfilledCount || 0,
-                partialCount: compStatusCounts[0]?.partialCount || 0,
-                fulfilledNetSales: (compStatusCounts[0]?.fulfilledNetSales || 0) / 100,
-                refundedCount: compStatusCounts[0]?.refundedCount || 0,
-                rejectedCount: compStatusCounts[0]?.rejectedCount || 0,
-                approvedCount: compStatusCounts[0]?.approvedCount || 0,
-                pendingCount: compStatusCounts[0]?.pendingCount || 0,
-                deliveredCount: compStatusCounts[0]?.deliveredCount || 0,
-                notDeliveredCount: compStatusCounts[0]?.notDeliveredCount || 0,
-                seriesData: compSeriesData
-            }
-        }
+        const comparison = await loadSalesComparison({
+            enabled: searchParams.get("compare") === "true" && Boolean(startDate || compareStartDateParam || parsedCompMonths.length > 0 || parsedCompYears.length > 0),
+            months: parsedCompMonths,
+            years: parsedCompYears,
+            explicitStart: compareStartDateParam,
+            explicitEnd: compareEndDateParam,
+            primaryStart: startDate,
+            primaryEnd: endDate,
+            primaryMonths: parsedMonths,
+            primaryYears: parsedYears,
+            status: upperStatus,
+            organizationIds,
+            organizationId,
+            branchIds,
+            branchId,
+            groupIds,
+            groupId,
+            dateExpression: dateExpr,
+            labelExpression: labelExpr,
+        })
 
         // ── Status counts (single query, replaces 6 separate per-status API calls) ──
-        let statusCounts: {
+        const statusCounts = await (async (): Promise<{
             pendingCount: number
             approvedCount: number
             fulfilledCount: number
@@ -599,7 +581,7 @@ export async function GET(req: NextRequest) {
             rejectedCount: number
             deliveredCount: number
             notDeliveredCount: number
-        } | null = null
+        } | null> => {
 
         if (includeStatusCounts && (!statusParam || statusParam.toUpperCase() === "ALL")) {
             const [counts] = await db.select({
@@ -617,7 +599,7 @@ export async function GET(req: NextRequest) {
             .where(whereClause)
 
             if (counts) {
-                statusCounts = {
+                return {
                     pendingCount: counts.pendingCount,
                     approvedCount: counts.approvedCount,
                     fulfilledCount: counts.fulfilledCount,
@@ -629,6 +611,8 @@ export async function GET(req: NextRequest) {
                 }
             }
         }
+        return null
+        })()
 
         return {
             granularity,

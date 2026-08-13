@@ -2,7 +2,7 @@
 import { useState,useEffect,Suspense } from "react"
 import type React from "react"
 
-import { useRouter,useSearchParams } from "next/navigation"
+import { useSearchParams } from "next/navigation"
 import { signIn,getSession } from "next-auth/react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"

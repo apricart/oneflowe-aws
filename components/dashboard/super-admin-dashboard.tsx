@@ -4,7 +4,7 @@ import { useMemo,useState,useCallback,useEffect } from "react"
 import { motion } from "framer-motion"
 import useSWR from "swr"
 import { fetcher } from "@/lib/fetcher"
-import { useOrganizations,useBranches,useUsers } from "@/lib/hooks/use-api"
+import { useOrganizations } from "@/lib/hooks/use-api"
 import { useSalesPerformance,type DateRange } from "@/lib/hooks/use-sales-performance"
 import { Card,CardContent } from "@/components/ui/card"
 import { NotificationRail } from "@/components/notifications/notification-center"
@@ -144,15 +144,7 @@ export function SuperAdminDashboard() {
   }
 
   const { data: orgsData } = useOrganizations()
-  const { data: usersData } = useUsers(organizationId || undefined)
-  const { data: branchesData } = useBranches(organizationId || undefined)
-
   const orgs = orgsData?.items || []
-  const branchesRaw = branchesData?.items || []
-  const usersRaw = usersData?.items || []
-
-  const branchesInScope = branchId ? branchesRaw.filter(b => b.id?.toString() === branchId) : branchesRaw
-  const usersInScope = branchId ? usersRaw.filter(u => u.branchId?.toString() === branchId) : usersRaw
 
   // Initialize chartYears with all available years on first load
   useEffect(() => {

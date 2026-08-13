@@ -4,7 +4,6 @@ import { useMemo,useState,useCallback,useEffect } from "react"
 import { motion } from "framer-motion"
 import useSWR from "swr"
 import { fetcher } from "@/lib/fetcher"
-import { useBranches } from "@/lib/hooks/use-api"
 import { useSalesPerformance,type DateRange } from "@/lib/hooks/use-sales-performance"
 import { Card,CardContent } from "@/components/ui/card"
 import { NotificationRail } from "@/components/notifications/notification-center"
@@ -123,7 +122,6 @@ export function HeadOfficeDashboard() {
     setIsDrillDownOpen(true)
   }
 
-  const { data: branchesData } = useBranches(organizationId || undefined)
 
   // Sales performance data for KPIs (Global Filter)
   const { data: perfData, isLoading: isLoadingPerf } = useSalesPerformance({

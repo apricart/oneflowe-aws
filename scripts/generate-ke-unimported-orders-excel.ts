@@ -688,11 +688,11 @@ async function main() {
       "Presence: Prior Orders": oldHeader ? "Yes" : "No",
       "Presence: Prior Sales": oldLines.length > 0 ? "Yes" : "No",
       "Lookup Key": [
-        `Branch=${branch}`,
-        `OrderNo=${identitySource.OrderNo ?? ""}`,
-        `TransactionNo=${identitySource.TransactionNo ?? ""}`,
+        `Branch=${stringifyPrimitive(branch)}`,
+        `OrderNo=${stringifyPrimitive(identitySource.OrderNo)}`,
+        `TransactionNo=${stringifyPrimitive(identitySource.TransactionNo)}`,
         `Date=${dateKey(identitySource.CreatedOn ?? identitySource.OrderCreatedDT)}`,
-        `User=${identitySource.UserDetails ?? firstLine?.UserDetails ?? ""}`,
+        `User=${stringifyPrimitive(identitySource.UserDetails ?? firstLine?.UserDetails)}`,
       ].join(" | "),
     }
   })

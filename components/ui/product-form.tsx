@@ -31,12 +31,6 @@ interface Product {
   }>
 }
 
-interface Category {
-  id: number
-  name: string
-  parentId: number | null
-}
-
 interface Modifier {
   id: number
   name: string
@@ -94,18 +88,6 @@ export function ProductForm({
     product ? null : NEXT_PRODUCT_CODE_ENDPOINT,
     fetcher,
     { revalidateOnFocus: false, revalidateOnMount: true, dedupingInterval: 0 }
-  )
-
-  // Fetch categories
-  const { data: categoriesData } = useSWR<{ items: Category[] }>(
-    `/api/v1/categories?type=parent`,
-    fetcher
-  )
-
-  // Fetch subcategories based on selected category
-  const { data: subCategoriesData } = useSWR<{ items: Category[] }>(
-    formData.categoryId ? `/api/v1/subcategories?parentId=${formData.categoryId}` : null,
-    fetcher
   )
 
   // Fetch modifiers

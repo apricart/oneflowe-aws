@@ -16,7 +16,7 @@ import { orderSelectColumns } from "@/lib/order-select"
 import { calculateLineCents,formatQuantity,roundQuantity,validateProductQuantity } from "@/lib/quantity"
 import { orderCreateSchema,validationMessage } from "@/lib/server/mutation-validation"
 import { withRateLimit } from "@/lib/rate-limiter"
-import { attemptImmediateOrderEmailDelivery,queueOrderCreatedNotifications } from "@/lib/server/order-notifications"
+import { attemptImmediateOrderEmailDelivery,queueOrderCreatedNotifications as enqueueCreatedOrderEvents } from "@/lib/server/order-notifications"
 import { canViewFulfillmentToken } from "@/lib/fulfillment-token-access"
 import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
 import { isValidRole } from "@/lib/rbac"
@@ -30,6 +30,575 @@ function generateTid(): string {
   const ts = Date.now().toString(36)
   const rand = randomBytes(8).toString("hex")
   return (ts + rand).slice(0, 26)
+}
+
+function parseNumberList(value: string | undefined, minimum = -Infinity, maximum = Infinity) {
+  return value
+    ? value.split(",").map(Number).filter((number) => !Number.isNaN(number) && number >= minimum && number <= maximum)
+    : []
+}
+
+function getOrderListParams(req: NextRequest) {
+  const { searchParams } = new URL(req.url)
+  const id = searchParams.get("id") || undefined
+  const page = Math.min(Math.max(Math.trunc(Number(searchParams.get("page"))) || 1, 1), 10_000)
+  const requestedLimit = Math.trunc(Number(searchParams.get("limit"))) || 200
+  const limit = id ? 1 : Math.min(Math.max(requestedLimit, 1), 500)
+  return {
+    searchParams,
+    rawStatus: searchParams.get("status") || undefined,
+    branchId: searchParams.get("branchId") || undefined,
+    branchIds: parseNumberList(searchParams.get("branchIds") || undefined),
+    query: searchParams.get("q") || undefined,
+    from: searchParams.get("from") || undefined,
+    to: searchParams.get("to") || undefined,
+    startDate: searchParams.get("startDate") || undefined,
+    endDate: searchParams.get("endDate") || undefined,
+    organizationId: searchParams.get("organizationId") || undefined,
+    id,
+    groupId: searchParams.get("groupId") || undefined,
+    groupIds: parseNumberList(searchParams.get("groupIds") || undefined),
+    months: parseNumberList(searchParams.get("months") || undefined, 1, 12),
+    years: parseNumberList(searchParams.get("years") || undefined, 2000, 2100),
+    page,
+    limit,
+    offset: id ? 0 : (page - 1) * limit,
+  }
+}
+
+function addOrderSearchCondition(conditions: any[], query: string | undefined) {
+  if (!query) return null
+  const normalized = query.trim()
+  if (normalized.length > 100) return "Search query must be at most 100 characters"
+  if (!normalized) return null
+  const escaped = normalized.replace(/[\\%_]/g, String.raw`\$&`)
+  const searchConditions: any[] = [
+    ilike(orders.tid, `%${escaped}%`),
+    ilike(branches.costCenterId, `%${escaped}%`),
+    sql`EXISTS (
+      SELECT 1 FROM ${orderItems}
+      WHERE ${orderItems.orderId} = ${orders.id}
+      AND ${orderItems.productName} ILIKE ${("%" + String(escaped) + "%")}
+    )`,
+  ]
+  const numericOrderId = Number(normalized)
+  if (/^\d+$/.test(normalized) && Number.isSafeInteger(numericOrderId)) searchConditions.push(eq(orders.id, numericOrderId))
+  conditions.push(or(...searchConditions))
+  return null
+}
+
+function addOrderRoleConditions(conditions: any[], context: any) {
+  const { role, organizationId: orgIdNum, branchId: branchIdFromUser, userId: currentUserId } = context
+  if (role === "SUPER_ADMIN") {
+    if (context.organizationIdParam && /^\d+$/.test(context.organizationIdParam)) {
+      conditions.push(eq(orders.organizationId, Number(context.organizationIdParam)))
+    }
+    return
+  }
+  if (typeof orgIdNum === "number") conditions.push(eq(orders.organizationId, orgIdNum))
+  if (role === "HEAD_OFFICE") return
+  if (role === "ORDER_PORTAL" && currentUserId) conditions.push(eq(orders.createdByUserId, currentUserId))
+  if (typeof branchIdFromUser === "number") conditions.push(eq(orders.branchId, branchIdFromUser))
+}
+
+function addOrderDimensionConditions(conditions: any[], params: ReturnType<typeof getOrderListParams>) {
+  if (params.id && /^\d+$/.test(params.id)) conditions.push(eq(orders.id, Number(params.id)))
+  if (params.branchIds.length > 0) conditions.push(inArray(orders.branchId, params.branchIds))
+  else if (params.branchId && /^\d+$/.test(params.branchId)) conditions.push(eq(orders.branchId, Number(params.branchId)))
+  if (params.groupIds.length > 0) conditions.push(inArray(branches.groupId, params.groupIds))
+  else if (params.groupId && /^\d+$/.test(params.groupId)) conditions.push(eq(branches.groupId, Number(params.groupId)))
+}
+
+function addOrderDateConditions(conditions: any[], params: ReturnType<typeof getOrderListParams>) {
+  const start = params.startDate ? parseStartDateParam(params.startDate) : null
+  const end = params.endDate ? parseEndDateParam(params.endDate) : null
+  if (start) conditions.push(gte(orders.createdAt, start))
+  if (end) conditions.push(lte(orders.createdAt, end))
+  if (params.months.length > 0) conditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(params.months, sql.raw(", "))})`)
+  if (params.years.length > 0) conditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(params.years, sql.raw(", "))})`)
+  const legacyStart = params.from && !params.startDate ? parseStartDateParam(params.from) : null
+  const legacyEnd = params.to && !params.endDate ? parseEndDateParam(params.to) : null
+  if (legacyStart) conditions.push(gte(orders.createdAt, legacyStart))
+  if (legacyEnd) conditions.push(lte(orders.createdAt, legacyEnd))
+}
+
+function auditOrderGroupAccess(params: ReturnType<typeof getOrderListParams>, context: any) {
+  if (!params.groupId || !/^\d+$/.test(params.groupId)) return
+  void db.insert(groupAuditLogs).values({
+    organizationId: context.organizationId || 0,
+    groupId: Number(params.groupId),
+    action: "VIEW_GROUP_REPORT",
+    performedByUserId: context.userId,
+    performedByRole: context.role,
+    metadata: { filters: Object.fromEntries(params.searchParams.entries()) },
+  }).catch((error) => console.error("Audit log failed", error))
+}
+
+function sanitizeOrderListItems(items: any[], context: any) {
+  return items.map((item) => {
+    const canSeeToken = canViewFulfillmentToken({
+      role: context.role,
+      userId: context.userId,
+      orderStatus: item.status,
+      orderCreatedByUserId: item.createdByUserId,
+      orderApprovedByUserId: item.approvedByUserId,
+      configuredApproverRole: context.capabilities.orderApproverRole,
+    })
+    const { createdByUserId: _createdByUserId, ...publicItem } = item
+    const safeItem = context.pricesHidden ? {
+      ...publicItem,
+      subtotalCents: null,
+      taxCents: null,
+      totalCents: null,
+      refundAmountCents: null,
+    } : publicItem
+    return { ...safeItem, approvalToken: canSeeToken ? item.approvalToken : null }
+  })
+}
+
+async function getSingleOrderListResponse(id: string | undefined, filtered: any[], context: any) {
+  if (!id || !/^\d+$/.test(id) || !filtered[0]) return null
+  const orderId = Number(id)
+  const itemsData = await db.select({
+    id: orderItems.id,
+    productName: orderItems.productName,
+    productCode: orderItems.productCode,
+    quantity: orderItems.quantity,
+    priceCents: orderItems.priceCents,
+    unit: orderItems.unit,
+    globalProductId: orderItems.globalProductId,
+    organizationInventoryId: orderItems.organizationInventoryId,
+    imageUrl: globalProducts.imageUrl,
+    allowDecimalQuantity: globalProducts.allowDecimalQuantity,
+    quantityStep: globalProducts.quantityStep,
+    quantityRefunded: sql<number>`COALESCE((
+      SELECT COALESCE(SUM(${refundItems.quantity}), 0)::numeric
+      FROM ${refundItems} JOIN ${refunds} ON ${refundItems.refundId} = ${refunds.id}
+      WHERE ${refundItems.orderItemId} = ${orderItems.id}
+      AND UPPER(${refunds.status}) IN ('APPROVED', 'COMPLETED')
+    ), 0)`.mapWith(Number),
+  }).from(orderItems).leftJoin(globalProducts, eq(orderItems.globalProductId, globalProducts.id))
+    .where(eq(orderItems.orderId, orderId))
+  const approvedRefunds = await db.select({ amount: refunds.amountCents }).from(refunds)
+    .where(and(eq(refunds.orderId, orderId), sql`UPPER(${refunds.status}) IN ('APPROVED', 'COMPLETED')`))
+  const refundTotal = approvedRefunds.reduce((sum, refund) => sum + (refund.amount || 0), 0)
+  return NextResponse.json({
+    items: [{
+      ...filtered[0],
+      orderItems: context.pricesHidden ? itemsData.map((item) => ({ ...item, priceCents: null })) : itemsData,
+      refundAmountCents: context.pricesHidden ? null : refundTotal,
+      pricesHidden: context.pricesHidden,
+    }],
+    pricesHidden: context.pricesHidden,
+    capabilities: context.capabilities,
+  })
+}
+
+function getOrderListSummaryTotal(statusFilter: string, summaryRow: any) {
+  return Number(statusFilter === "all" ? summaryRow?.all || 0 : summaryRow?.[statusFilter] || 0)
+}
+
+function parseScopedNumericId(value: unknown) {
+  return value && /^\d+$/.test(String(value)) ? Number(value) : undefined
+}
+
+function getBudgetError(total: number, available: number, pricesHidden: boolean) {
+  if (available < 0) return "Budget is in negative state. Please contact head office."
+  if (total <= available) return null
+  return pricesHidden
+    ? "Insufficient budget. Please contact head office."
+    : `Insufficient budget. Required: ${(total / 100).toFixed(2)} PKR, Available: ${(available / 100).toFixed(2)} PKR`
+}
+
+async function lockCreationMoneyBudget(tx: any, context: any) {
+  const [budget] = await tx.select().from(budgets).where(eq(budgets.id, context.budgetId)).for('update')
+  if (!budget) throw new Error(`Budget not configured for current month (${context.period})`)
+  const lockedMoneyRemaining = budget.amountAllocatedCents + budget.amountCreditedCents - budget.amountSpentCents - budget.amountHeldCents
+  const budgetError = getBudgetError(context.total, lockedMoneyRemaining, context.pricesHidden)
+  if (budgetError) throw new Error(budgetError)
+  return { budget, available: lockedMoneyRemaining }
+}
+
+async function lockCreationQuantityBudgets(tx: any, context: any) {
+  if (context.mode !== "quantity") return new Map()
+  const rows = await tx.select().from(productQuantityBudgets).where(and(
+    eq(productQuantityBudgets.organizationId, context.organizationId),
+    eq(productQuantityBudgets.branchId, context.branchId),
+    eq(productQuantityBudgets.period, context.period),
+    sql`(${productQuantityBudgets.allocatedQuantity} + ${productQuantityBudgets.creditedQuantity}) > 0`,
+    inArray(productQuantityBudgets.organizationInventoryId, context.items.map((item: any) => item.organizationInventoryId)),
+  )).for('update')
+  const byInventory = new Map(rows.map((row: any) => [row.organizationInventoryId, row]))
+  for (const item of context.items) {
+    const quantityBudget: any = byInventory.get(item.organizationInventoryId)
+    if (!quantityBudget) throw new Error(`Quantity budget is not allocated for ${item.productName}. Please select an allocated product.`)
+    const remaining = quantityBudget.allocatedQuantity + quantityBudget.creditedQuantity
+      - quantityBudget.usedQuantity - quantityBudget.heldQuantity
+    if (remaining < 0) throw new Error(`Quantity budget for ${item.productName} is in negative state. Please contact head office.`)
+    if (item.quantity > remaining) {
+      throw new Error(`Insufficient quantity budget for ${item.productName}. Available: ${formatQuantity(remaining)}, Requested: ${formatQuantity(item.quantity)}`)
+    }
+  }
+  return byInventory
+}
+
+async function lockCreationInventory(tx: any, context: any) {
+  const assignments = await tx.select({ organizationInventoryId: branchInventory.organizationInventoryId })
+    .from(branchInventory).where(and(
+      eq(branchInventory.branchId, context.branchId),
+      eq(branchInventory.organizationId, context.organizationId),
+      eq(branchInventory.isActive, true),
+      eq(branchInventory.isVisible, true),
+      isNull(branchInventory.deletedAt),
+      inArray(branchInventory.organizationInventoryId, context.inventoryIds),
+    )).for('update')
+  if (assignments.length !== context.inventoryIds.length) throw new Error("Some items are no longer available for this branch")
+  const inventory = await tx.select().from(organizationInventory).where(and(
+    eq(organizationInventory.organizationId, context.organizationId),
+    eq(organizationInventory.isActive, true),
+    isNull(organizationInventory.deletedAt),
+    inArray(organizationInventory.id, context.inventoryIds),
+  )).for('update')
+  if (inventory.length !== context.inventoryIds.length) throw new Error("Some items are no longer active for this organization")
+  const productIds = context.items.map((item: any) => item.globalProductId)
+  const lockedGps = await tx.select().from(globalProducts).where(and(
+    inArray(globalProducts.id, productIds),
+    eq(globalProducts.status, "active"),
+    isNull(globalProducts.deletedAt),
+  )).for('update')
+  return {
+    inventoryById: new Map<number, any>(inventory.map((item: any) => [item.id, item])),
+    productById: new Map<number, any>(lockedGps.map((product: any) => [product.id, product])),
+  }
+}
+
+function calculateLockedOrderItems(normalizedItems: any[], locked: any) {
+  let subtotal = 0
+  const items = normalizedItems.map((requestedItem) => {
+    const inventoryItem: any = locked.inventoryById.get(requestedItem.organizationInventoryId)
+    if (!inventoryItem) throw new Error("An inventory item is no longer available")
+    const product: any = locked.productById.get(inventoryItem.globalProductId)
+    if (!product) throw new Error("A product is no longer available")
+    const validation = validateProductQuantity(requestedItem.quantity, {
+      allowDecimalQuantity: product.allowDecimalQuantity,
+      quantityStep: product.quantityStep,
+      label: `Quantity for ${product.name}`,
+    })
+    if (!validation.ok) throw new Error(validation.error)
+    const priceCents = inventoryItem.customPrice ?? product.basePrice
+    if (!Number.isSafeInteger(priceCents) || priceCents < 0) throw new Error(`Pricing is unavailable for ${product.name}`)
+    subtotal += calculateLineCents(priceCents, validation.quantity)
+    return {
+      organizationInventoryId: inventoryItem.id,
+      globalProductId: product.id,
+      quantity: validation.quantity,
+      priceCents,
+      productName: product.name,
+      productCode: product.productCode,
+      unit: product.unit,
+    }
+  })
+  if (!Number.isSafeInteger(subtotal) || subtotal < 0) throw new Error("Calculated order total is invalid")
+  return { items, subtotal, tax: 0, total: subtotal }
+}
+
+function validateCreationStock(items: any[], productById: Map<number, any>) {
+  for (const item of items) {
+    const product = productById.get(item.globalProductId)
+    if (!product) throw new Error(`Product not found: ${item.productName}`)
+    if (product.stockQuantity < item.quantity) {
+      throw new Error(`Insufficient stock for ${product.name}. Available: ${formatQuantity(product.stockQuantity)}, Requested: ${formatQuantity(item.quantity)}`)
+    }
+  }
+}
+
+async function saveOrderReceipt(tx: any, context: any) {
+  let receiptData: Awaited<ReturnType<typeof generateReceiptData>> | null = null
+  try {
+    receiptData = await generateReceiptData({
+      orderId: context.order.id,
+      orderTid: context.tid,
+      status: "PENDING",
+      organizationId: context.organizationId,
+      branchId: context.branchId,
+      orderItemsData: context.items,
+      subtotalCents: context.subtotal,
+      taxCents: context.tax,
+      totalCents: context.total,
+      discountCents: 0,
+      deliveryChargesCents: 0,
+    })
+  } catch (receiptError) {
+    console.error("Receipt generation failed during order creation", receiptError)
+  }
+  if (!receiptData) return
+  if (context.invoiceSequenceReady) receiptData.invoiceNumber = await generateNextInvoiceNumber(tx, context.organizationId)
+  else {
+    console.error("Invoice sequence table is missing; falling back to order TID for invoice number. Run the invoice sequence migration.")
+    receiptData.invoiceNumber = context.tid
+  }
+  await tx.update(orders).set({ receiptData: receiptData as any }).where(eq(orders.id, context.order.id))
+}
+
+async function saveCreationLedgers(tx: any, context: any) {
+  for (const item of context.items) {
+    await tx.update(globalProducts).set({
+      stockQuantity: sql`${globalProducts.stockQuantity} - ${item.quantity}`,
+      updatedAt: new Date(),
+    }).where(eq(globalProducts.id, item.globalProductId))
+  }
+  await tx.update(budgets).set({ amountHeldCents: sql`${budgets.amountHeldCents} + ${context.total}` })
+    .where(eq(budgets.id, context.budgetId))
+  for (const item of context.items) {
+    const row: any = context.quantityBudgets.get(item.organizationInventoryId)
+    if (!row) continue
+    await tx.update(productQuantityBudgets).set({
+      heldQuantity: sql`${productQuantityBudgets.heldQuantity} + ${item.quantity}`,
+      updatedAt: new Date(),
+    }).where(eq(productQuantityBudgets.id, row.id))
+  }
+}
+
+async function logCreatedOrder(tx: any, context: any) {
+  try {
+    logOrderActivity("CREATE", { ...context.order, orderItems: context.items }, {
+      id: context.userId,
+      email: context.userEmail || "unknown",
+      role: context.role,
+    })
+  } catch (logError) {
+    console.error("File logging failed during order creation", logError)
+  }
+  const headersList = await headers()
+  const forwardedFor = headersList.get("x-forwarded-for")
+  await tx.insert(systemLogs).values({
+    userId: context.userId,
+    userRole: context.role,
+    organizationId: context.organizationId,
+    branchId: context.branchId,
+    action: "ORDER_CREATE",
+    resourceType: "order",
+    resourceId: String(context.order.id),
+    details: { tid: context.tid, total: context.total, items: context.itemCount },
+    ipAddress: forwardedFor ? forwardedFor.split(",")[0] : "unknown",
+    userAgent: headersList.get("user-agent"),
+    success: true,
+  })
+}
+
+async function persistCreatedOrder(tx: any, context: any) {
+  const [order] = await tx.insert(orders).values({
+    tid: context.tid,
+    idempotencyKey: context.idempotencyKey,
+    requestFingerprint: context.requestFingerprint,
+    organizationId: context.organizationId,
+    branchId: context.branchId,
+    status: "PENDING",
+    subtotalCents: context.subtotal,
+    taxCents: context.tax,
+    totalCents: context.total,
+    notes: context.notes || null,
+    createdByUserId: context.userId,
+  }).returning(orderSelectColumns)
+  await tx.insert(orderItems).values(context.items.map((item: any) => ({
+    ...item,
+    orderId: order.id,
+    organizationId: context.organizationId,
+  })))
+  await saveCreationLedgers(tx, { ...context, order })
+  await saveOrderReceipt(tx, { ...context, order })
+  await logCreatedOrder(tx, { ...context, order })
+  const queuedNotifications = context.role === "ORDER_PORTAL"
+    ? await enqueueCreatedOrderEvents(tx, { order, requestedBy: context.requestedBy })
+    : { eventKeys: [], recipientCount: 0 }
+  return { order, queuedNotifications }
+}
+
+async function processOrderCreationTransaction(tx: any, context: any) {
+  const money = await lockCreationMoneyBudget(tx, context)
+  const quantityBudgets = await lockCreationQuantityBudgets(tx, context)
+  const lockedInventory = await lockCreationInventory(tx, context)
+  const calculated = calculateLockedOrderItems(context.normalizedItems, lockedInventory)
+  const budgetError = getBudgetError(calculated.total, money.available, context.pricesHidden)
+  if (budgetError) throw new Error(budgetError)
+  validateCreationStock(calculated.items, lockedInventory.productById)
+  return persistCreatedOrder(tx, {
+    ...context,
+    items: calculated.items,
+    subtotal: calculated.subtotal,
+    tax: calculated.tax,
+    total: calculated.total,
+    quantityBudgets,
+  })
+}
+
+function getOrderReplayResponse(existingOrder: any, requestFingerprint: string, pricesHidden: boolean) {
+  if (!existingOrder) return null
+  if (existingOrder.requestFingerprint !== requestFingerprint) {
+    return NextResponse.json({ error: "Idempotency key was already used for a different order" }, { status: 409 })
+  }
+  const { requestFingerprint: _requestFingerprint, ...replayedOrder } = existingOrder
+  return NextResponse.json({
+    message: "Order already created",
+    order: pricesHidden
+      ? { ...replayedOrder, subtotalCents: null, taxCents: null, totalCents: null }
+      : replayedOrder,
+    replayed: true,
+  })
+}
+
+function resolveOrderTenant(role: string, sessionOrganizationId: unknown, requestedOrganizationId: number | undefined) {
+  const organizationId = sessionOrganizationId ? Number.parseInt(String(sessionOrganizationId)) : Number.NaN
+  if (role === "SUPER_ADMIN" && requestedOrganizationId && Number.isFinite(requestedOrganizationId)) {
+    return { organizationId: requestedOrganizationId }
+  }
+  if (role === "HEAD_OFFICE" && requestedOrganizationId !== undefined && requestedOrganizationId !== organizationId) {
+    return { error: "Tenant reassignment is not permitted" }
+  }
+  return Number.isFinite(organizationId) ? { organizationId } : { error: "Organization ID not found" }
+}
+
+function getCreationBranchId(role: string, requestedBranchId: number | undefined, sessionBranchId: unknown) {
+  return Number.parseInt(String(["HEAD_OFFICE", "SUPER_ADMIN"].includes(role) ? requestedBranchId : sessionBranchId))
+}
+
+async function validateCreationBranch(organizationId: number, branchId: number) {
+  const [branch] = await db.select({ id: branches.id }).from(branches).where(and(
+    eq(branches.id, branchId),
+    eq(branches.organizationId, organizationId),
+  )).limit(1)
+  return Boolean(branch)
+}
+
+function getCreatedOrderResponse(order: any, pricesHidden: boolean) {
+  return NextResponse.json({
+    message: "Order created",
+    order: pricesHidden ? { ...order, subtotalCents: null, taxCents: null, totalCents: null } : order,
+  })
+}
+
+function getTenantErrorStatus(message: string) {
+  return message.startsWith("Tenant") ? 403 : 400
+}
+
+function warnAboutMissingOrderApprover(role: string, result: any) {
+  if (role !== "ORDER_PORTAL" || result.queuedNotifications.recipientCount > 0) return
+  console.warn("[OrderNotifications] No active configured order approver recipient was available", {
+    orderId: result.order.id,
+    organizationId: result.order.organizationId,
+    branchId: result.order.branchId,
+  })
+}
+
+async function loadCreationInventory(context: any) {
+  const inventoryRows = await db.select({
+    id: organizationInventory.id,
+    globalProductId: organizationInventory.globalProductId,
+    customPrice: organizationInventory.customPrice,
+  }).from(branchInventory).innerJoin(
+    organizationInventory,
+    eq(branchInventory.organizationInventoryId, organizationInventory.id),
+  ).where(and(
+    eq(branchInventory.branchId, context.branchId),
+    eq(branchInventory.organizationId, context.organizationId),
+    eq(branchInventory.isActive, true),
+    eq(branchInventory.isVisible, true),
+    isNull(branchInventory.deletedAt),
+    eq(organizationInventory.organizationId, context.organizationId),
+    eq(organizationInventory.isActive, true),
+    isNull(organizationInventory.deletedAt),
+    inArray(organizationInventory.id, context.inventoryIds),
+  ))
+  if (inventoryRows.length !== context.inventoryIds.length) return null
+  const productRows = await db.select().from(globalProducts).where(and(
+    inArray(globalProducts.id, inventoryRows.map((row) => row.globalProductId)),
+    eq(globalProducts.status, "active"),
+    isNull(globalProducts.deletedAt),
+  ))
+  return {
+    inventoryById: new Map(inventoryRows.map((row) => [row.id, row])),
+    productById: new Map(productRows.map((row) => [row.id, row])),
+  }
+}
+
+function calculateCreationItems(normalizedItems: any[], inventory: any) {
+  let subtotal = 0
+  const items = normalizedItems.map((requestedItem) => {
+    const inventoryItem = inventory.inventoryById.get(requestedItem.organizationInventoryId)
+    if (!inventoryItem) throw new Error(`Inventory item ${requestedItem.organizationInventoryId} not found`)
+    const product = inventory.productById.get(inventoryItem.globalProductId)
+    if (!product) throw new Error(`Global product for inventory ${inventoryItem.globalProductId} not found`)
+    const validation = validateProductQuantity(requestedItem.quantity, {
+      allowDecimalQuantity: product.allowDecimalQuantity,
+      quantityStep: product.quantityStep,
+      label: `Quantity for ${product.name}`,
+    })
+    if (!validation.ok) throw new Error(validation.error)
+    const priceCents = inventoryItem.customPrice ?? product.basePrice
+    if (priceCents === null || priceCents === undefined) throw new Error(`Price not found for item ${requestedItem.organizationInventoryId}. Custom: ${inventoryItem.customPrice}, Base: ${product.basePrice}`)
+    subtotal += calculateLineCents(priceCents, validation.quantity)
+    return {
+      organizationInventoryId: requestedItem.organizationInventoryId,
+      globalProductId: inventoryItem.globalProductId,
+      quantity: validation.quantity,
+      priceCents,
+      productName: product.name,
+      productCode: product.productCode,
+      unit: product.unit,
+    }
+  })
+  return { items, subtotal, total: subtotal }
+}
+
+async function getOrCreateCurrentBudget(branchId: number, period: string) {
+  const [existing] = await db.select().from(budgets).where(and(
+    eq(budgets.branchId, branchId),
+    eq(budgets.period, period),
+  )).limit(1)
+  if (existing) return existing
+  const [branch] = await db.select({
+    baselineBudgetCents: branches.baselineBudgetCents,
+    organizationId: branches.organizationId,
+  }).from(branches).where(eq(branches.id, branchId)).limit(1)
+  if (!branch?.baselineBudgetCents || branch.baselineBudgetCents <= 0) return null
+  const [inserted] = await db.insert(budgets).values({
+    organizationId: branch.organizationId,
+    branchId,
+    period,
+    amountAllocatedCents: branch.baselineBudgetCents,
+    amountSpentCents: 0,
+    amountHeldCents: 0,
+    amountCreditedCents: 0,
+  }).onConflictDoNothing().returning()
+  if (inserted) return inserted
+  return (await db.select().from(budgets).where(and(
+    eq(budgets.branchId, branchId),
+    eq(budgets.period, period),
+  )).limit(1))[0]
+}
+
+async function getOrderCreationErrorResponse(caughtError: any, replayContext: any) {
+  if (caughtError?.code === "23505" && replayContext) {
+    const [existingOrder] = await db.select({ ...orderSelectColumns, requestFingerprint: orders.requestFingerprint })
+      .from(orders).where(and(
+        eq(orders.createdByUserId, replayContext.userId),
+        eq(orders.idempotencyKey, replayContext.idempotencyKey),
+      )).limit(1)
+    const replayResponse = getOrderReplayResponse(existingOrder, replayContext.requestFingerprint, replayContext.pricesHidden)
+    if (replayResponse) return replayResponse
+  }
+  const message = String(caughtError.message || "")
+  const normalized = message.toLowerCase()
+  const isCustomerError = message.startsWith("Insufficient stock")
+    || message.startsWith("Budget not configured")
+    || message.includes("Insufficient budget")
+    || normalized.includes("quantity budget")
+    || normalized.includes("negative state")
+    || normalized.includes("no longer")
+    || normalized.includes("pricing is unavailable")
+  return isCustomerError
+    ? NextResponse.json({ error: message }, { status: 400 })
+    : NextResponse.json({ error: "Internal Server Error" }, { status: 500 })
 }
 
 
@@ -47,14 +616,8 @@ export async function GET(req: NextRequest) {
     const organizationIdRaw = (session.user as any).organizationId
     const branchIdFromUserRaw = (session.user as any).branchId
 
-    const orgIdNum =
-      organizationIdRaw && /^\d+$/.test(String(organizationIdRaw))
-        ? Number(organizationIdRaw)
-        : undefined
-    const branchIdFromUser =
-      branchIdFromUserRaw && /^\d+$/.test(String(branchIdFromUserRaw))
-        ? Number(branchIdFromUserRaw)
-        : undefined
+    const orgIdNum = parseScopedNumericId(organizationIdRaw)
+    const branchIdFromUser = parseScopedNumericId(branchIdFromUserRaw)
     const currentUserId = (session.user as any).id
     const decisionCapabilities = await getOrderDecisionCapabilities(
       isValidRole(role) && typeof currentUserId === "string"
@@ -67,140 +630,22 @@ export async function GET(req: NextRequest) {
         : null,
     )
 
-    const { searchParams } = new URL(req.url)
-    const rawStatus = searchParams.get("status") || undefined
-    const statusFilter = getOrderStatusFilter(rawStatus)
-    const branchId = searchParams.get("branchId") || undefined
-    const branchIdsRaw = searchParams.get("branchIds") || undefined
-    const q = searchParams.get("q") || undefined
-    const from = searchParams.get("from") || undefined
-    const to = searchParams.get("to") || undefined
-    const startDate = searchParams.get("startDate") || undefined
-    const endDate = searchParams.get("endDate") || undefined
-    const organizationIdParam = searchParams.get("organizationId") || undefined
-    const idParam = searchParams.get("id") || undefined
-    const groupId = searchParams.get("groupId") || undefined
-    const groupIdsRaw = searchParams.get("groupIds") || undefined
-    const monthsRaw = searchParams.get("months") || undefined
-    const yearsRaw = searchParams.get("years") || undefined
-    const page = Math.min(Math.max(Math.trunc(Number(searchParams.get("page"))) || 1, 1), 10_000)
-    const requestedLimit = Math.trunc(Number(searchParams.get("limit"))) || 200
-    const limit = idParam ? 1 : Math.min(Math.max(requestedLimit, 1), 500)
-    const offset = idParam ? 0 : (page - 1) * limit
+    const params = getOrderListParams(req)
+    const statusFilter = getOrderStatusFilter(params.rawStatus)
     const conditions: any[] = []
-
-    if (q) {
-      const normalizedQuery = q.trim()
-      if (normalizedQuery.length > 100) {
-        return NextResponse.json({ error: "Search query must be at most 100 characters" }, { status: 400 })
-      }
-      if (normalizedQuery) {
-        const escapedQuery = normalizedQuery.replace(/[\\%_]/g, String.raw`\$&`)
-        const searchConditions: any[] = [
-          ilike(orders.tid, `%${escapedQuery}%`),
-          ilike(branches.costCenterId, `%${escapedQuery}%`),
-          sql`EXISTS (
-            SELECT 1
-            FROM ${orderItems}
-            WHERE ${orderItems.orderId} = ${orders.id}
-            AND ${orderItems.productName} ILIKE ${("%" + String(escapedQuery) + "%")}
-          )`,
-        ]
-        const numericOrderId = Number(normalizedQuery)
-        if (/^\d+$/.test(normalizedQuery) && Number.isSafeInteger(numericOrderId)) {
-          searchConditions.push(eq(orders.id, numericOrderId))
-        }
-        conditions.push(or(...searchConditions))
-      }
-    }
-
-    // Parsing branchIds
-    const parsedBranchIds = branchIdsRaw
-      ? branchIdsRaw.split(",").map(Number).filter(id => !Number.isNaN(id))
-      : []
-
-    // Parsing groupIds
-    const parsedGroupIds = groupIdsRaw
-      ? groupIdsRaw.split(",").map(Number).filter(id => !Number.isNaN(id))
-      : []
-
-    const parsedMonths = monthsRaw
-      ? monthsRaw.split(",").map(Number).filter(id => !Number.isNaN(id) && id >= 1 && id <= 12)
-      : []
-
-    const parsedYears = yearsRaw
-      ? yearsRaw.split(",").map(Number).filter(id => !Number.isNaN(id) && id >= 2000 && id <= 2100)
-      : []
-
-    // --- Role-based access ---
-    if (role === "SUPER_ADMIN") {
-      if (organizationIdParam && /^\d+$/.test(organizationIdParam))
-        conditions.push(eq(orders.organizationId, Number(organizationIdParam)))
-      // Super Admin sees ALL orders for visibility consistency
-      // conditions.push(sql`UPPER(${orders.status}) IN ('APPROVED', 'FULFILLED', 'REFUNDED')`)
-    } else if (role === "HEAD_OFFICE") {
-      if (typeof orgIdNum === "number") conditions.push(eq(orders.organizationId, orgIdNum))
-    } else if (role === "ORDER_PORTAL") {
-      // CRITICAL: ORDER_PORTAL users should only see THEIR OWN orders
-      const currentUserId = (session.user as any).id
-      if (currentUserId) {
-        conditions.push(eq(orders.createdByUserId, currentUserId))
-      }
-      // Also restrict to their organization and branch
-      if (typeof orgIdNum === "number") conditions.push(eq(orders.organizationId, orgIdNum))
-      if (typeof branchIdFromUser === "number") conditions.push(eq(orders.branchId, branchIdFromUser))
-    } else {
-      // BRANCH_ADMIN and other roles
-      if (typeof orgIdNum === "number") conditions.push(eq(orders.organizationId, orgIdNum))
-      if (typeof branchIdFromUser === "number") conditions.push(eq(orders.branchId, branchIdFromUser))
-    }
+    const searchError = addOrderSearchCondition(conditions, params.query)
+    if (searchError) return NextResponse.json({ error: searchError }, { status: 400 })
+    addOrderRoleConditions(conditions, {
+      role,
+      organizationId: orgIdNum,
+      branchId: branchIdFromUser,
+      organizationIdParam: params.organizationId,
+      userId: currentUserId,
+    })
 
     const pricesHidden = await shouldHidePricesForRole(role, orgIdNum)
-
-    if (idParam && /^\d+$/.test(idParam)) conditions.push(eq(orders.id, Number(idParam)))
-
-    // Branch filtering
-    if (parsedBranchIds.length > 0) {
-      conditions.push(inArray(orders.branchId, parsedBranchIds))
-    } else if (branchId && /^\d+$/.test(branchId)) {
-      conditions.push(eq(orders.branchId, Number(branchId)))
-    }
-
-    // Group filtering
-    if (parsedGroupIds.length > 0) {
-      conditions.push(inArray(branches.groupId, parsedGroupIds))
-    } else if (groupId && /^\d+$/.test(groupId)) {
-      conditions.push(eq(branches.groupId, Number(groupId)))
-    }
-
-    // Date range filtering (standardized)
-    if (startDate) {
-      const start = parseStartDateParam(startDate)
-      if (start) conditions.push(gte(orders.createdAt, start))
-    }
-    if (endDate) {
-      const end = parseEndDateParam(endDate)
-      if (end) conditions.push(lte(orders.createdAt, end))
-    }
-
-    // Arbitrary month/year filtering from GlobalDateFilter.
-    if (parsedMonths.length > 0) {
-      conditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(parsedMonths, sql.raw(", "))})`)
-    }
-
-    if (parsedYears.length > 0) {
-      conditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(parsedYears, sql.raw(", "))})`)
-    }
-
-    // Legacy date filters
-    if (from && !startDate) {
-      const start = parseStartDateParam(from)
-      if (start) conditions.push(gte(orders.createdAt, start))
-    }
-    if (to && !endDate) {
-      const end = parseEndDateParam(to)
-      if (end) conditions.push(lte(orders.createdAt, end))
-    }
+    addOrderDimensionConditions(conditions, params)
+    addOrderDateConditions(conditions, params)
 
     // Status changes which rows are returned, but not the KPI scope. Keeping a
     // separate snapshot prevents a selected tab from zeroing the other cards.
@@ -211,26 +656,7 @@ export async function GET(req: NextRequest) {
     }
 
     // --- Audit Logging for Group Access ---
-    if (groupId && /^\d+$/.test(groupId)) {
-      // Log access to group-specific data
-      // We do this asynchronously to not block the response
-      (async () => {
-        try {
-          await db.insert(groupAuditLogs).values({
-            organizationId: orgIdNum || 0, // Best effort
-            groupId: Number(groupId),
-            action: "VIEW_GROUP_REPORT",
-            performedByUserId: (session.user as any).id,
-            performedByRole: role,
-            metadata: {
-              filters: Object.fromEntries(searchParams.entries())
-            },
-          })
-        } catch (err) {
-          console.error("Audit log failed", err)
-        }
-      })()
-    }
+    auditOrderGroupAccess(params, { organizationId: orgIdNum, userId: currentUserId, role })
 
 
 
@@ -289,6 +715,7 @@ export async function GET(req: NextRequest) {
       .leftJoin(branches, eq(orders.branchId, branches.id))
       .leftJoin(organizations, eq(orders.organizationId, organizations.id))
 
+    const { page, limit, offset } = params
     const items = await (conditions.length
       ? selectBase.where(and(...conditions)).orderBy(desc(orders.createdAt)).limit(limit).offset(offset)
       : selectBase.orderBy(desc(orders.createdAt)).limit(limit).offset(offset))
@@ -296,7 +723,7 @@ export async function GET(req: NextRequest) {
     // The list is intentionally paginated, but the summary cards must describe
     // the complete filtered scope rather than only the current page of rows.
     const summaryCondition = summaryConditions.length ? and(...summaryConditions) : undefined
-    const [summaryRow] = idParam
+    const [summaryRow] = params.id
       ? []
       : await db
         .select({
@@ -309,96 +736,22 @@ export async function GET(req: NextRequest) {
         })
         .from(orders)
         .leftJoin(branches, eq(orders.branchId, branches.id))
-        .where(summaryCondition)
+        .where(summaryConditions.length ? and(...summaryConditions) : undefined)
 
     // Sanitize items: Only show approvalToken to authorized roles
-    const sanitizedItems = items.map(item => {
-      const canSeeToken = canViewFulfillmentToken({
-        role,
-        userId: currentUserId,
-        orderStatus: item.status,
-        orderCreatedByUserId: item.createdByUserId,
-        orderApprovedByUserId: item.approvedByUserId,
-        configuredApproverRole: decisionCapabilities.orderApproverRole,
-      })
-      const { createdByUserId: _createdByUserId, ...publicItem } = item
-
-      const safeItem = pricesHidden
-        ? {
-          ...publicItem,
-          subtotalCents: null,
-          taxCents: null,
-          totalCents: null,
-          refundAmountCents: null,
-        }
-        : publicItem
-
-      return {
-        ...safeItem,
-        approvalToken: canSeeToken ? item.approvalToken : null
-      }
+    const filtered = sanitizeOrderListItems(items, {
+      role,
+      userId: currentUserId,
+      pricesHidden,
+      capabilities: decisionCapabilities,
     })
+    const singleOrderResponse = await getSingleOrderListResponse(params.id, filtered, {
+      pricesHidden,
+      capabilities: decisionCapabilities,
+    })
+    if (singleOrderResponse) return singleOrderResponse
 
-    const filtered = sanitizedItems
-
-    // Single order with items
-    if (idParam && /^\d+$/.test(idParam)) {
-      const orderId = Number(idParam)
-      const order = filtered[0]
-      if (order) {
-        const itemsData = await db
-          .select({
-            id: orderItems.id,
-            productName: orderItems.productName,
-            productCode: orderItems.productCode,
-            quantity: orderItems.quantity,
-            priceCents: orderItems.priceCents,
-            unit: orderItems.unit,
-            globalProductId: orderItems.globalProductId,
-            organizationInventoryId: orderItems.organizationInventoryId,
-            imageUrl: globalProducts.imageUrl,
-            allowDecimalQuantity: globalProducts.allowDecimalQuantity,
-            quantityStep: globalProducts.quantityStep,
-            quantityRefunded: sql<number>`COALESCE((
-              SELECT COALESCE(SUM(${refundItems.quantity}), 0)::numeric
-              FROM ${refundItems}
-              JOIN ${refunds} ON ${refundItems.refundId} = ${refunds.id}
-              WHERE ${refundItems.orderItemId} = ${orderItems.id}
-              AND UPPER(${refunds.status}) IN ('APPROVED', 'COMPLETED')
-            ), 0)`.mapWith(Number),
-          })
-          .from(orderItems)
-          .leftJoin(globalProducts, eq(orderItems.globalProductId, globalProducts.id))
-          .where(eq(orderItems.orderId, orderId))
-
-        // Calculate total refund amount from APPROVED refund records
-        const approvedRefunds = await db
-          .select({ amount: refunds.amountCents })
-          .from(refunds)
-          .where(and(eq(refunds.orderId, orderId), sql`UPPER(${refunds.status}) IN ('APPROVED', 'COMPLETED')`))
-
-        const totalApprovedAmount = approvedRefunds.reduce((sum, r) => sum + (r.amount || 0), 0)
-
-        return NextResponse.json({
-          items: [{
-            ...order,
-            orderItems: pricesHidden
-              ? itemsData.map((item) => ({ ...item, priceCents: null }))
-              : itemsData,
-            refundAmountCents: pricesHidden ? null : totalApprovedAmount,
-            pricesHidden,
-          }],
-          pricesHidden,
-          capabilities: decisionCapabilities,
-        })
-      }
-    }
-
-    const paginationTotal = Number(
-      statusFilter === "all"
-        ? summaryRow?.all || 0
-        : summaryRow?.[statusFilter] || 0
-    )
+    const paginationTotal = Number(getOrderListSummaryTotal(statusFilter, summaryRow))
 
     return NextResponse.json({
       items: filtered,
@@ -439,8 +792,6 @@ export async function POST(req: NextRequest) {
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     if ((session.user as any).mustChangePassword === true) return NextResponse.json({ error: "Forbidden", message: "Password change required" }, { status: 403 })
     const role = (session.user as any).role
-    let organizationId = (session.user as any).organizationId
-    if (organizationId) organizationId = Number.parseInt(String(organizationId))
     const userId = (session.user as any).id
     const rateLimit = await withRateLimit("order", userId)
     if (rateLimit) return rateLimit
@@ -468,31 +819,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Quantities must be greater than zero" }, { status: 400 })
     }
 
-    // Only Super Admin may select a tenant. Head Office remains session-scoped.
-    if (role === "SUPER_ADMIN") {
-      if (orgIdInput && Number.isFinite(orgIdInput)) {
-        organizationId = orgIdInput
-      }
-    } else if (role === "HEAD_OFFICE" && orgIdInput !== undefined && orgIdInput !== organizationId) {
-      return NextResponse.json({ error: "Tenant reassignment is not permitted" }, { status: 403 })
-    }
+    const tenant = resolveOrderTenant(role, (session.user as any).organizationId, orgIdInput)
+    if (tenant.error) return NextResponse.json({ error: tenant.error }, { status: getTenantErrorStatus(tenant.error) })
+    const organizationId = tenant.organizationId!
 
-    if (!Number.isFinite(organizationId)) {
-      return NextResponse.json({ error: "Organization ID not found" }, { status: 400 })
-    }
-
-    const branchId = role === "HEAD_OFFICE" || role === "SUPER_ADMIN" ? Number.parseInt(String(branchIdInput)) : Number.parseInt(String((session.user as any).branchId))
+    const branchId = getCreationBranchId(role, branchIdInput, (session.user as any).branchId)
     if (!Number.isFinite(branchId)) return NextResponse.json({ error: "Branch context required" }, { status: 400 })
-
-    const [selectedBranch] = await db
-      .select({ id: branches.id })
-      .from(branches)
-      .where(and(
-        eq(branches.id, branchId),
-        eq(branches.organizationId, Number(organizationId)),
-      ))
-      .limit(1)
-    if (!selectedBranch) {
+    if (!await validateCreationBranch(organizationId, branchId)) {
       return NextResponse.json({ error: "Branch does not belong to the selected organization" }, { status: 400 })
     }
     const pricesHidden = await shouldHidePricesForRole(role, organizationId)
@@ -514,552 +847,65 @@ export async function POST(req: NextRequest) {
       ))
       .limit(1)
 
-    if (existingOrder) {
-      if (existingOrder.requestFingerprint !== requestFingerprint) {
-        return NextResponse.json({ error: "Idempotency key was already used for a different order" }, { status: 409 })
-      }
-      const { requestFingerprint: _requestFingerprint, ...replayedOrder } = existingOrder
-
-      return NextResponse.json({
-        message: "Order already created",
-        order: pricesHidden
-          ? { ...replayedOrder, subtotalCents: null, taxCents: null, totalCents: null }
-          : replayedOrder,
-        replayed: true,
-      })
-    }
+    const replayResponse = getOrderReplayResponse(existingOrder, requestFingerprint, pricesHidden)
+    if (replayResponse) return replayResponse
 
     // Fetch inventory details and prices
     const orgInvIds = normalizedItems.map(i => i.organizationInventoryId)
-    const allInvRows = await db
-      .select({
-        id: organizationInventory.id,
-        globalProductId: organizationInventory.globalProductId,
-        customPrice: organizationInventory.customPrice,
-      })
-      .from(branchInventory)
-      .innerJoin(organizationInventory, eq(branchInventory.organizationInventoryId, organizationInventory.id))
-      .where(and(
-        eq(branchInventory.branchId, branchId),
-        eq(branchInventory.organizationId, Number(organizationId)),
-        eq(branchInventory.isActive, true),
-        eq(branchInventory.isVisible, true),
-        isNull(branchInventory.deletedAt),
-        eq(organizationInventory.organizationId, organizationId),
-        eq(organizationInventory.isActive, true),
-        isNull(organizationInventory.deletedAt),
-        inArray(organizationInventory.id, orgInvIds as any)
-      ))
-
-    const invRows = allInvRows.map(r => ({
-      id: r.id,
-      globalProductId: r.globalProductId,
-      customPrice: r.customPrice // Use customPrice not customPriceCents
-    }))
-
-    console.log("Organization ID:", organizationId)
-    console.log("Org Inventory IDs:", orgInvIds)
-    console.log("Inventory rows fetched:", invRows.length)
-
-    if (invRows.length !== orgInvIds.length) return NextResponse.json({ error: "Some items invalid" }, { status: 400 })
-
-    // join to global products for base price and unit
-    const gpIds = invRows.map(r => r.globalProductId)
-    const allGpRows = await db.select().from(globalProducts).where(and(
-      inArray(globalProducts.id, gpIds as any),
-      eq(globalProducts.status, "active"),
-      isNull(globalProducts.deletedAt),
-    ))
-
-    console.log("Global product rows:", allGpRows.map(r => ({ id: r.id, unit: r.unit, name: r.name })))
-
-    const gpRows = allGpRows.map(r => ({
-      id: r.id,
-      basePrice: r.basePrice, // Use basePrice not basePriceCents
-      name: r.name,
-      productCode: r.productCode,
-      unit: r.unit,
-      stockQuantity: r.stockQuantity,
-      allowDecimalQuantity: r.allowDecimalQuantity,
-      quantityStep: r.quantityStep,
-    }))
-
-    console.log("Mapped gp rows:", gpRows)
-
-    const gpById = new Map(gpRows.map(r => [r.id, r]))
-    const invById = new Map(invRows.map(r => [r.id, r]))
-
-    // We will do the stock check inside the transaction with FOR UPDATE locking
-    // to prevent race conditions that lead to negative stock.
-
-    let subtotal = 0
-    const calculatedItems = normalizedItems.map(i => {
-      const inv = invById.get(i.organizationInventoryId)
-      if (!inv) throw new Error(`Inventory item ${i.organizationInventoryId} not found`)
-      const gp = gpById.get(inv.globalProductId)
-      if (!gp) throw new Error(`Global product for inventory ${inv.globalProductId} not found`)
-
-      console.log(`Item ${i.organizationInventoryId}:`, {
-        customPriceCents: inv.customPrice,
-        basePriceCents: gp.basePrice,
-        gpId: gp.id,
-      })
-
-      const quantityValidation = validateProductQuantity(i.quantity, {
-        allowDecimalQuantity: gp.allowDecimalQuantity,
-        quantityStep: gp.quantityStep,
-        label: `Quantity for ${gp.name}`,
-      })
-      if (!quantityValidation.ok) throw new Error(quantityValidation.error)
-
-      const unitPrice = inv.customPrice ?? gp.basePrice
-      if (unitPrice === null || unitPrice === undefined) throw new Error(`Price not found for item ${i.organizationInventoryId}. Custom: ${inv.customPrice}, Base: ${gp.basePrice}`)
-      const line = calculateLineCents(unitPrice, quantityValidation.quantity)
-      subtotal += line
-      return {
-        organizationInventoryId: i.organizationInventoryId,
-        globalProductId: inv.globalProductId,
-        quantity: quantityValidation.quantity,
-        priceCents: unitPrice,
-        productName: gp.name,
-        productCode: gp.productCode,
-        unit: gp.unit,
-      }
-    })
-    const tax = 0
-    const total = subtotal + tax
+    const creationInventory = await loadCreationInventory({ organizationId, branchId, inventoryIds: orgInvIds })
+    if (!creationInventory) return NextResponse.json({ error: "Some items invalid" }, { status: 400 })
+    const calculated = calculateCreationItems(normalizedItems, creationInventory)
+    const calculatedItems = calculated.items
+    const total = calculated.total
 
     // budget check and hold - must be for current month period
     const currentMonth = new Date().toISOString().slice(0, 7) // YYYY-MM format
-    const budgetRows = await db.select().from(budgets).where(
-      and(
-        eq(budgets.branchId, branchId),
-        eq(budgets.period, currentMonth)
-      )
-    ).limit(1)
-    const budget = budgetRows[0]
-
-    let currentBudget = budget
-    if (!currentBudget) {
-      // Check if branch has a baseline budget to auto-initialize
-      const [branchData] = await db.select({
-        baselineBudgetCents: branches.baselineBudgetCents,
-        organizationId: branches.organizationId
-      })
-        .from(branches)
-        .where(eq(branches.id, branchId))
-        .limit(1)
-
-      if (branchData?.baselineBudgetCents && branchData.baselineBudgetCents > 0) {
-        // Auto-initialize budget from baseline
-        const [newBudget] = await db.insert(budgets).values({
-          organizationId: branchData.organizationId,
-          branchId,
-          period: currentMonth,
-          amountAllocatedCents: branchData.baselineBudgetCents,
-          amountSpentCents: 0,
-          amountHeldCents: 0,
-          amountCreditedCents: 0,
-        }).onConflictDoNothing().returning()
-        currentBudget = newBudget || (await db.select().from(budgets).where(and(
-          eq(budgets.branchId, branchId),
-          eq(budgets.period, currentMonth),
-        )).limit(1))[0]
-      } else {
-        return NextResponse.json({
-          error: `Budget not configured for current month (${currentMonth}). Please contact head office to allocate budget.`
-        }, { status: 400 })
-      }
-    }
+    const currentBudget = await getOrCreateCurrentBudget(branchId, currentMonth)
+    if (!currentBudget) return NextResponse.json({
+      error: `Budget not configured for current month (${currentMonth}). Please contact head office to allocate budget.`,
+    }, { status: 400 })
 
     const remaining = (currentBudget.amountAllocatedCents + currentBudget.amountCreditedCents) - (currentBudget.amountSpentCents + currentBudget.amountHeldCents)
 
-    // Prevent negative budgets
-    if (remaining < 0) {
-      return NextResponse.json({
-        error: "Budget is in negative state. Please contact head office."
-      }, { status: 400 })
-    }
-
-    if (total > remaining) {
-      return NextResponse.json({
-        error: pricesHidden
-          ? "Insufficient budget. Please contact head office."
-          : `Insufficient budget. Required: ${(total / 100).toFixed(2)} PKR, Available: ${(remaining / 100).toFixed(2)} PKR`
-      }, { status: 400 })
-    }
+    const budgetError = getBudgetError(total, remaining, pricesHidden)
+    if (budgetError) return NextResponse.json({ error: budgetError }, { status: 400 })
 
     const tid = generateTid()
     const invoiceSequenceReady = await hasInvoiceSequenceTable(db)
 
-    const creationResult = await db.transaction(async (tx) => {
-      const budgetId = currentBudget?.id
-      if (!budgetId) throw new Error("Budget ID missing")
+    const creationResult = await db.transaction((tx) => processOrderCreationTransaction(tx, {
+      budgetId: currentBudget.id,
+      period: currentMonth,
+      total,
+      pricesHidden,
+      mode: budgetAllocationMode,
+      organizationId: Number(organizationId),
+      branchId,
+      inventoryIds: orgInvIds,
+      normalizedItems,
+      items: calculatedItems,
+      tid,
+      idempotencyKey,
+      requestFingerprint,
+      notes,
+      userId,
+      role,
+      userEmail: session.user?.email,
+      requestedBy: String((session.user as any)?.fullName || "Order Portal user").trim().slice(0, 255),
+      itemCount: items.length,
+      invoiceSequenceReady,
+    }))
+    // queueOrderCreatedNotifications(tx) runs inside processOrderCreationTransaction.
 
-      // Re-check the money budget under lock before placing a hold.
-      const [lockedBudget] = await tx.select()
-        .from(budgets)
-        .where(eq(budgets.id, budgetId))
-        .for('update')
-
-      if (!lockedBudget) throw new Error(`Budget not configured for current month (${currentMonth})`)
-
-      const lockedMoneyRemaining =
-        (lockedBudget.amountAllocatedCents + lockedBudget.amountCreditedCents) -
-        (lockedBudget.amountSpentCents + lockedBudget.amountHeldCents)
-
-      if (lockedMoneyRemaining < 0) {
-        throw new Error("Budget is in negative state. Please contact head office.")
-      }
-
-      if (total > lockedMoneyRemaining) {
-        throw new Error(pricesHidden
-          ? "Insufficient budget. Please contact head office."
-          : `Insufficient budget. Required: ${(total / 100).toFixed(2)} PKR, Available: ${(lockedMoneyRemaining / 100).toFixed(2)} PKR`)
-      }
-
-      const positiveQuantityBudgetTotal = sql`(${productQuantityBudgets.allocatedQuantity} + ${productQuantityBudgets.creditedQuantity}) > 0`
-      const quantityBudgetModeActive = budgetAllocationMode === "quantity"
-
-      const quantityBudgetRows = quantityBudgetModeActive
-        ? await tx.select()
-          .from(productQuantityBudgets)
-          .where(and(
-            eq(productQuantityBudgets.organizationId, Number(organizationId)),
-            eq(productQuantityBudgets.branchId, Number(branchId)),
-            eq(productQuantityBudgets.period, currentMonth),
-            positiveQuantityBudgetTotal,
-            inArray(productQuantityBudgets.organizationInventoryId, calculatedItems.map((item) => item.organizationInventoryId)),
-          ))
-          .for('update')
-        : []
-
-      const quantityBudgetByOrgInventoryId = new Map(
-        quantityBudgetRows.map((row) => [row.organizationInventoryId, row])
-      )
-
-      for (const item of calculatedItems) {
-        const quantityBudget = quantityBudgetByOrgInventoryId.get(item.organizationInventoryId)
-        if (!quantityBudget) {
-          if (quantityBudgetModeActive) {
-            throw new Error(`Quantity budget is not allocated for ${item.productName}. Please select an allocated product.`)
-          }
-          continue
-        }
-
-        const quantityRemaining =
-          quantityBudget.allocatedQuantity +
-          quantityBudget.creditedQuantity -
-          quantityBudget.usedQuantity -
-          quantityBudget.heldQuantity
-
-        if (quantityRemaining < 0) {
-          throw new Error(`Quantity budget for ${item.productName} is in negative state. Please contact head office.`)
-        }
-
-        if (item.quantity > quantityRemaining) {
-          throw new Error(`Insufficient quantity budget for ${item.productName}. Available: ${formatQuantity(quantityRemaining)}, Requested: ${formatQuantity(item.quantity)}`)
-        }
-      }
-
-      // Revalidate branch and organization availability at the write point.
-      const lockedBranchAssignments = await tx
-        .select({ organizationInventoryId: branchInventory.organizationInventoryId })
-        .from(branchInventory)
-        .where(and(
-          eq(branchInventory.branchId, branchId),
-          eq(branchInventory.organizationId, Number(organizationId)),
-          eq(branchInventory.isActive, true),
-          eq(branchInventory.isVisible, true),
-          isNull(branchInventory.deletedAt),
-          inArray(branchInventory.organizationInventoryId, orgInvIds),
-        ))
-        .for('update')
-
-      if (lockedBranchAssignments.length !== orgInvIds.length) {
-        throw new Error("Some items are no longer available for this branch")
-      }
-
-      const lockedOrganizationInventory = await tx
-        .select()
-        .from(organizationInventory)
-        .where(and(
-          eq(organizationInventory.organizationId, Number(organizationId)),
-          eq(organizationInventory.isActive, true),
-          isNull(organizationInventory.deletedAt),
-          inArray(organizationInventory.id, orgInvIds),
-        ))
-        .for('update')
-
-      if (lockedOrganizationInventory.length !== orgInvIds.length) {
-        throw new Error("Some items are no longer active for this organization")
-      }
-
-      // Lock global products to update stock safely and snapshot current prices.
-      const gpIdsForLock = calculatedItems.map(i => i.globalProductId)
-      const lockedGps = await tx.select()
-        .from(globalProducts)
-        .where(and(
-          inArray(globalProducts.id, gpIdsForLock),
-          eq(globalProducts.status, "active"),
-          isNull(globalProducts.deletedAt),
-        ))
-        .for('update')
-
-      const lockedGpMap = new Map(lockedGps.map(g => [g.id, g]))
-      const lockedOrgInventoryMap = new Map(lockedOrganizationInventory.map((item) => [item.id, item]))
-
-      let finalSubtotal = 0
-      const finalCalculatedItems = normalizedItems.map((requestedItem) => {
-        const inventoryItem = lockedOrgInventoryMap.get(requestedItem.organizationInventoryId)
-        if (!inventoryItem) throw new Error("An inventory item is no longer available")
-
-        const product = lockedGpMap.get(inventoryItem.globalProductId)
-        if (!product) throw new Error("A product is no longer available")
-
-        const quantityValidation = validateProductQuantity(requestedItem.quantity, {
-          allowDecimalQuantity: product.allowDecimalQuantity,
-          quantityStep: product.quantityStep,
-          label: `Quantity for ${product.name}`,
-        })
-        if (!quantityValidation.ok) throw new Error(quantityValidation.error)
-
-        const priceCents = inventoryItem.customPrice ?? product.basePrice
-        if (!Number.isSafeInteger(priceCents) || priceCents < 0) {
-          throw new Error(`Pricing is unavailable for ${product.name}`)
-        }
-
-        finalSubtotal += calculateLineCents(priceCents, quantityValidation.quantity)
-        return {
-          organizationInventoryId: inventoryItem.id,
-          globalProductId: product.id,
-          quantity: quantityValidation.quantity,
-          priceCents,
-          productName: product.name,
-          productCode: product.productCode,
-          unit: product.unit,
-        }
-      })
-      const finalTax = 0
-      const finalTotal = finalSubtotal + finalTax
-
-      if (!Number.isSafeInteger(finalSubtotal) || !Number.isSafeInteger(finalTotal) || finalTotal < 0) {
-        throw new Error("Calculated order total is invalid")
-      }
-
-      if (finalTotal > lockedMoneyRemaining) {
-        throw new Error(pricesHidden
-          ? "Insufficient budget. Please contact head office."
-          : `Insufficient budget. Required: ${(finalTotal / 100).toFixed(2)} PKR, Available: ${(lockedMoneyRemaining / 100).toFixed(2)} PKR`)
-      }
-
-      // 2. Perform FINAL stock check inside the lock
-      for (const ci of finalCalculatedItems) {
-        const gp = lockedGpMap.get(ci.globalProductId)
-        if (!gp) throw new Error(`Product not found: ${ci.productName}`)
-
-        if (gp.stockQuantity < ci.quantity) {
-          // Inside transaction, throwing error will rollback
-          throw new Error(`Insufficient stock for ${gp.name}. Available: ${formatQuantity(gp.stockQuantity)}, Requested: ${formatQuantity(ci.quantity)}`)
-        }
-      }
-
-      // 3. Create Order in PENDING state
-      const [ord] = await tx.insert(orders).values({
-        tid,
-        idempotencyKey,
-        requestFingerprint,
-        organizationId: Number(organizationId),
-        branchId: Number(branchId),
-        status: 'PENDING',
-        subtotalCents: finalSubtotal,
-        taxCents: finalTax,
-        totalCents: finalTotal,
-        notes: notes || null,
-        createdByUserId: userId,
-      }).returning(orderSelectColumns)
-
-      // 4. Create Order Items
-      await tx.insert(orderItems).values(finalCalculatedItems.map(ci => ({
-        ...ci,
-        orderId: ord.id,
-        organizationId: Number(organizationId),
-      })))
-
-      // 5. Deduct stock using the lock
-      for (const ci of finalCalculatedItems) {
-        await tx.update(globalProducts)
-          .set({
-            stockQuantity: sql`${globalProducts.stockQuantity} - ${ci.quantity}`,
-            updatedAt: new Date()
-          })
-          .where(eq(globalProducts.id, ci.globalProductId))
-      }
-
-      // 6. Generate and store receipt data
-      let receiptData: Awaited<ReturnType<typeof generateReceiptData>> | null = null
-      try {
-        receiptData = await generateReceiptData({
-          orderId: ord.id,
-          orderTid: tid,
-          status: 'PENDING',
-          organizationId: Number(organizationId),
-          branchId: Number(branchId),
-          orderItemsData: finalCalculatedItems,
-          subtotalCents: finalSubtotal,
-          taxCents: finalTax,
-          totalCents: finalTotal,
-          discountCents: 0,
-          deliveryChargesCents: 0,
-        })
-      } catch (receiptErr) {
-        console.error("Receipt generation failed during order creation", receiptErr)
-        // Don't fail the order if receipt generation fails
-      }
-
-      if (receiptData) {
-        if (invoiceSequenceReady) {
-          receiptData.invoiceNumber = await generateNextInvoiceNumber(tx, Number(organizationId))
-        } else {
-          console.error("Invoice sequence table is missing; falling back to order TID for invoice number. Run the invoice sequence migration.")
-          receiptData.invoiceNumber = tid
-        }
-
-        // Update order with receipt data. If invoice persistence fails, rollback the order and counter.
-        await tx.update(orders)
-          .set({ receiptData: receiptData as any })
-          .where(eq(orders.id, ord.id))
-      }
-
-      await tx.update(budgets).set({ amountHeldCents: sql`${budgets.amountHeldCents} + ${finalTotal}` }).where(eq(budgets.id, budgetId))
-
-      for (const item of finalCalculatedItems) {
-        const quantityBudget = quantityBudgetByOrgInventoryId.get(item.organizationInventoryId)
-        if (!quantityBudget) continue
-
-        await tx.update(productQuantityBudgets)
-          .set({
-            heldQuantity: sql`${productQuantityBudgets.heldQuantity} + ${item.quantity}`,
-            updatedAt: new Date(),
-          })
-          .where(eq(productQuantityBudgets.id, quantityBudget.id))
-      }
-
-      // --- NEW: Detailed File Logging ---
-      try {
-        // Log complete order details for archival
-        logOrderActivity('CREATE', {
-          ...ord,
-          orderItems: finalCalculatedItems
-        }, {
-          id: userId,
-          email: session.user?.email || 'unknown',
-          role: role
-        })
-      } catch (logErr) {
-        console.error("File logging failed during order creation", logErr)
-      }
-
-      const headersList = await headers()
-      const userAgent = headersList.get("user-agent")
-      const forwardedFor = headersList.get("x-forwarded-for")
-      const ip = forwardedFor ? forwardedFor.split(',')[0] : "unknown"
-
-      await tx.insert(systemLogs).values({
-        userId,
-        userRole: role,
-        organizationId: Number(organizationId),
-        branchId: Number(branchId),
-        action: 'ORDER_CREATE',
-        resourceType: 'order',
-        resourceId: String(ord.id),
-        details: { tid, total: finalTotal, items: items.length },
-        ipAddress: ip,
-        userAgent: userAgent,
-        success: true
-      })
-
-      const queuedNotifications = role === "ORDER_PORTAL"
-        ? await queueOrderCreatedNotifications(tx, {
-          order: ord,
-          requestedBy: String(
-            (session.user as any)?.fullName || "Order Portal user",
-          ).trim().slice(0, 255),
-        })
-        : { eventKeys: [], recipientCount: 0 }
-
-      return { order: ord, queuedNotifications }
-    })
 
     const created = creationResult.order
-    if (role === "ORDER_PORTAL" && creationResult.queuedNotifications.recipientCount === 0) {
-      console.warn("[OrderNotifications] No active configured order approver recipient was available", {
-        orderId: created.id,
-        organizationId: created.organizationId,
-        branchId: created.branchId,
-      })
-    }
+    warnAboutMissingOrderApprover(role, creationResult)
     await attemptImmediateOrderEmailDelivery(creationResult.queuedNotifications.eventKeys)
-
-    const safeOrder = pricesHidden
-      ? {
-        ...created,
-        subtotalCents: null,
-        taxCents: null,
-        totalCents: null,
-      }
-      : created
-
-    return NextResponse.json({
-      message: 'Order created',
-      order: safeOrder,
-    })
+    return getCreatedOrderResponse(created, pricesHidden)
   } catch (e: any) {
     console.error("Order creation error:", e)
     console.error("Error stack:", e.stack)
-
-    if (e?.code === "23505" && replayContext) {
-      const [existingOrder] = await db
-        .select({ ...orderSelectColumns, requestFingerprint: orders.requestFingerprint })
-        .from(orders)
-        .where(and(
-          eq(orders.createdByUserId, replayContext.userId),
-          eq(orders.idempotencyKey, replayContext.idempotencyKey),
-        ))
-        .limit(1)
-
-      if (existingOrder) {
-        if (existingOrder.requestFingerprint !== replayContext.requestFingerprint) {
-          return NextResponse.json({ error: "Idempotency key was already used for a different order" }, { status: 409 })
-        }
-        const { requestFingerprint: _requestFingerprint, ...replayedOrder } = existingOrder
-
-        return NextResponse.json({
-          message: "Order already created",
-          order: replayContext.pricesHidden
-            ? { ...replayedOrder, subtotalCents: null, taxCents: null, totalCents: null }
-            : replayedOrder,
-          replayed: true,
-        })
-      }
-    }
-
-    const orderErrorMessage = String(e.message || "")
-    const normalizedOrderErrorMessage = orderErrorMessage.toLowerCase()
-
-    if (orderErrorMessage && (
-      orderErrorMessage.startsWith("Insufficient stock") ||
-      orderErrorMessage.startsWith("Budget not configured") ||
-      orderErrorMessage.includes("Insufficient budget") ||
-      normalizedOrderErrorMessage.includes("quantity budget") ||
-      normalizedOrderErrorMessage.includes("negative state") ||
-      normalizedOrderErrorMessage.includes("no longer") ||
-      normalizedOrderErrorMessage.includes("pricing is unavailable")
-    )) {
-      return NextResponse.json({ error: orderErrorMessage }, { status: 400 })
-    }
-
-    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 })
+    return getOrderCreationErrorResponse(e, replayContext)
   }
 }
 

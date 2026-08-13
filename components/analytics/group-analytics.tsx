@@ -456,7 +456,7 @@ export function GroupAnalytics({ role }: Readonly<{ role: string }>) {
                                     </div>
                                     <div>
                                         <CardTitle className="text-2xl font-black text-slate-900 dark:text-white flex items-center gap-2">
-                                            Independent Branches
+                                            <span>Independent Branches</span>
                                             <span className="inline-flex h-2 w-2 rounded-full bg-indigo-500 animate-pulse"></span>
                                         </CardTitle>
                                         <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">Branches operating independently without group assignment</p>

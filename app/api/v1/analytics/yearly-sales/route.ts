@@ -38,10 +38,6 @@ export async function GET(req: NextRequest) {
   // Convert to UTC for database (subtract 5 hours)
   const yearStart = new Date(yearStartPK.getTime() - pakistanOffset)
 
-  // Year end in Pakistan timezone (December 31st, 23:59:59 PK time)
-  const yearEndPK = new Date(Date.UTC(year, 11, 31, 23, 59, 59, 999))
-  // Convert to UTC for database
-
   // Next year start in Pakistan timezone
   const nextYearStartPK = new Date(Date.UTC(year + 1, 0, 1, 0, 0, 0, 0))
   const nextYearStart = new Date(nextYearStartPK.getTime() - pakistanOffset)

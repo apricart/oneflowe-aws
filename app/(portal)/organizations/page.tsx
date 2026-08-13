@@ -819,8 +819,12 @@ function OrganizationListItem({
     >
       <button
         type="button"
+        role="button"
         onClick={onClick}
-        className="flex w-full flex-wrap items-start gap-4 rounded-xl text-left outline-none focus-visible:ring-4 focus-visible:ring-indigo-500/20 sm:flex-nowrap sm:items-center"
+        className={cn(
+          "flex w-full flex-wrap items-start gap-4 rounded-xl text-left outline-none focus-visible:ring-4 focus-visible:ring-indigo-500/20 sm:flex-nowrap sm:items-center",
+          isActive ? "border-indigo-500/30" : "border-transparent",
+        )}
       >
         <div
           className={cn(

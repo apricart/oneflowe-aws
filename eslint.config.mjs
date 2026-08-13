@@ -1,10 +1,12 @@
 import eslint from "@eslint/js";
+import { defineConfig } from "eslint/config";
 import nextPlugin from "@next/eslint-plugin-next";
 import reactHooks from "eslint-plugin-react-hooks";
+import sonarjs from "eslint-plugin-sonarjs";
 import globals from "globals";
 import tseslint from "typescript-eslint";
 
-export default tseslint.config(
+export default defineConfig(
   {
     ignores: [
       ".next/**",
@@ -31,6 +33,7 @@ export default tseslint.config(
     plugins: {
       "@next/next": nextPlugin,
       "react-hooks": reactHooks,
+      sonarjs,
     },
     rules: {
       ...nextPlugin.configs.recommended.rules,
@@ -48,6 +51,19 @@ export default tseslint.config(
       "preserve-caught-error": "warn",
       "react-hooks/rules-of-hooks": "warn",
       "react-hooks/exhaustive-deps": "warn",
+      "sonarjs/cognitive-complexity": ["warn", 15],
+    },
+  },
+  {
+    files: ["scripts/**/*.{js,mjs,cjs,ts,tsx}", "lib/legacy-import/**/*.{js,mjs,cjs,ts,tsx}"],
+    rules: {
+      "sonarjs/cognitive-complexity": "off",
+    },
+  },
+  {
+    files: ["app/(portal)/reports/**/page.tsx", "app/shop/page.tsx"],
+    rules: {
+      "sonarjs/cognitive-complexity": "off",
     },
   },
 );

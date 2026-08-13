@@ -34,7 +34,7 @@ function CalendarRoot({
   return <div data-slot="calendar" ref={rootRef} className={cn(className)} {...props} />
 }
 
-function CalendarChevron({ className, orientation, ...props }: CalendarChevronProps) {
+function CalendarChevron({ className, orientation, ...props }: Readonly<CalendarChevronProps>) {
   if (orientation === 'left') {
     return <ChevronLeftIcon className={cn('size-4', className)} {...props} />
   }
@@ -46,7 +46,7 @@ function CalendarChevron({ className, orientation, ...props }: CalendarChevronPr
   return <ChevronDownIcon className={cn('size-4', className)} {...props} />
 }
 
-function CalendarWeekNumber({ children, ...props }: React.TdHTMLAttributes<HTMLTableCellElement>) {
+function CalendarWeekNumber({ children, ...props }: Readonly<React.TdHTMLAttributes<HTMLTableCellElement>>) {
   return (
     <td {...props}>
       <div className="flex size-(--cell-size) items-center justify-center text-center">
@@ -66,7 +66,7 @@ function Calendar({
   components,
   ...props
 }: React.ComponentProps<typeof DayPicker> & {
-  buttonVariant?: React.ComponentProps<typeof Button>['variant']
+  buttonVariant?: NonNullable<React.ComponentProps<typeof Button>['variant']>
 }) {
   const defaultClassNames = getDefaultClassNames()
 

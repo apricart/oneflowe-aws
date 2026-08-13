@@ -8,6 +8,126 @@ import { metricExpressions } from "@/lib/metric-utils"
 import { parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
 import { shouldIncludeHeadOfficeUsers } from "@/lib/organization-report-scope"
 
+function parseNumberList(value: string | null, requirePositive = false) {
+    return value
+        ? value.split(",").map(Number).filter((number) => !Number.isNaN(number) && (!requirePositive || number > 0))
+        : []
+}
+
+function buildBranchConditions(searchParams: URLSearchParams, userRole: string, userOrganizationId: number | null) {
+    const conditions: any[] = []
+    if (userRole !== "SUPER_ADMIN" && userOrganizationId) {
+        conditions.push(eq(branches.organizationId, userOrganizationId))
+    }
+    const organizationIds = parseNumberList(searchParams.get("organizationIds"))
+    const organizationId = searchParams.get("organizationId")
+    if (organizationIds.length > 0) {
+        conditions.push(inArray(branches.organizationId, organizationIds))
+    } else if (organizationId && !["all", "0"].includes(organizationId)) {
+        conditions.push(eq(branches.organizationId, Number(organizationId)))
+    }
+    const branchIds = parseNumberList(searchParams.get("branchIds"))
+    const groupIds = parseNumberList(searchParams.get("groupIds"), true)
+    if (branchIds.length > 0) conditions.push(inArray(branches.id, branchIds))
+    if (groupIds.length > 0) conditions.push(inArray(branches.groupId, groupIds))
+    const status = searchParams.get("status")
+    if (status && status !== "all") conditions.push(eq(branches.status, status))
+    return conditions
+}
+
+function addOrderDateConditions(conditions: any[], start: string | null, end: string | null, months: number[], years: number[]) {
+    if (months.length > 0) {
+        conditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(months, sql.raw(", "))})`)
+    }
+    if (years.length > 0) {
+        conditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(years, sql.raw(", "))})`)
+    }
+    if (months.length > 0 || years.length > 0) return
+    const startBoundary = parseStartDateParam(start)
+    const endBoundary = parseEndDateParam(end)
+    if (startBoundary) conditions.push(gte(orders.createdAt, startBoundary))
+    if (endBoundary) conditions.push(lte(orders.createdAt, endBoundary))
+}
+
+function createOrganizationSummary(branch: any, compare: boolean) {
+    return {
+        organizationId: branch.organizationId || 0,
+        organizationName: branch.organizationName || "Unknown Organization",
+        organizationStatus: branch.organizationStatus || "active",
+        branchCount: 0,
+        activeBranchCount: 0,
+        inactiveBranchCount: 0,
+        totalUserCount: 0,
+        activeUserCount: 0,
+        revenue: 0,
+        orderCount: 0,
+        fulfilledCount: 0,
+        refundedCount: 0,
+        refundedRevenue: 0,
+        comparison: compare ? { revenue: 0, orderCount: 0, fulfilledCount: 0, refundedCount: 0 } : null,
+    }
+}
+
+function addMetric(summary: any, metric: any) {
+    if (!metric) return
+    summary.revenue += (metric.revenueCents || 0) / 100
+    summary.orderCount += metric.orderCount || 0
+    summary.fulfilledCount += metric.fulfilledCount || 0
+    summary.refundedCount += metric.refundedCount || 0
+    summary.refundedRevenue += (metric.refundedRevenueCents || 0) / 100
+}
+
+function addComparisonMetric(summary: any, metric: any) {
+    if (!metric || !summary.comparison) return
+    summary.comparison.revenue += (metric.revenueCents || 0) / 100
+    summary.comparison.orderCount += metric.orderCount || 0
+    summary.comparison.fulfilledCount += metric.fulfilledCount || 0
+    summary.comparison.refundedCount += metric.refundedCount || 0
+}
+
+function aggregateOrganizations(branchStats: any[], metrics: any[], comparisonMetrics: any[], compare: boolean) {
+    const organizationMap: Record<number, any> = {}
+    branchStats.forEach((branch) => {
+        const organizationId = branch.organizationId || 0
+        organizationMap[organizationId] ||= createOrganizationSummary(branch, compare)
+        const summary = organizationMap[organizationId]
+        summary.branchCount++
+        summary.activeBranchCount += branch.branchStatus === "active" ? 1 : 0
+        summary.inactiveBranchCount += branch.branchStatus === "active" ? 0 : 1
+        summary.totalUserCount += branch.totalUserCount
+        summary.activeUserCount += branch.activeUserCount
+        addMetric(summary, metrics.find((metric) => metric.branchId === branch.branchId))
+        addComparisonMetric(summary, comparisonMetrics.find((metric) => metric.branchId === branch.branchId))
+    })
+    return organizationMap
+}
+
+function addHeadOfficeUsers(organizationMap: Record<number, any>, rows: any[]) {
+    rows.forEach((row) => {
+        if (row.organizationId == null || !organizationMap[row.organizationId]) return
+        organizationMap[row.organizationId].totalUserCount += row.totalUserCount
+        organizationMap[row.organizationId].activeUserCount += row.activeUserCount
+    })
+}
+
+function getTrendGrouping(
+    forcedGranularity: string | null,
+    months: number[],
+    years: number[],
+    start: string | null,
+    end: string | null,
+) {
+    const monthly = sql`TO_CHAR((${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi', 'YYYY-MM')`
+    const yearly = sql`TO_CHAR((${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi', 'YYYY')`
+    const daily = sql`TO_CHAR((${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi', 'YYYY-MM-DD')`
+    if (forcedGranularity === "yearly") return yearly
+    if (forcedGranularity === "daily") return daily
+    if (forcedGranularity === "monthly") return monthly
+    if (months.length > 0) return months.length > 1 || years.length > 1 ? monthly : daily
+    if (years.length > 0) return years.length > 1 ? yearly : monthly
+    return start || end ? monthly : yearly
+}
+
 export async function GET(req: NextRequest) {
     const session = await getServerSession(authOptions)
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
@@ -19,58 +139,18 @@ export async function GET(req: NextRequest) {
     const compareStartDateParam = url.searchParams.get("compareStartDate")
     const compareEndDateParam = url.searchParams.get("compareEndDate")
     
-    const orgIdsParam = url.searchParams.get("organizationIds")
-    const orgIdParam = url.searchParams.get("organizationId")
     const groupIdsParam = url.searchParams.get("groupIds")
     const branchIdsParam = url.searchParams.get("branchIds")
-    const statusParam = url.searchParams.get("status") // branch status
 
-    const monthsRaw = url.searchParams.get("months")
-    const yearsRaw = url.searchParams.get("years")
-    const compareMonthsRaw = url.searchParams.get("compareMonths")
-    const compareYearsRaw = url.searchParams.get("compareYears")
-
-    const parsedMonths = monthsRaw ? monthsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n >= 1 && n <= 12) : []
-    const parsedYears = yearsRaw ? yearsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n > 2000) : []
-    const parsedCompMonths = compareMonthsRaw ? compareMonthsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n >= 1 && n <= 12) : []
-    const parsedCompYears = compareYearsRaw ? compareYearsRaw.split(',').map(Number).filter(n => !Number.isNaN(n) && n > 2000) : []
+    const parsedMonths = parseNumberList(url.searchParams.get("months"), true).filter((number) => number <= 12)
+    const parsedYears = parseNumberList(url.searchParams.get("years"), true).filter((number) => number > 2000)
+    const parsedCompMonths = parseNumberList(url.searchParams.get("compareMonths"), true).filter((number) => number <= 12)
+    const parsedCompYears = parseNumberList(url.searchParams.get("compareYears"), true).filter((number) => number > 2000)
 
     const userRole = (session.user as any).role || ""
     const userOrgId = (session.user as any).organizationId
 
-    const branchConditions = []
-    
-    // RBAC: If not super admin, must filter by user's organization
-    if (userRole !== "SUPER_ADMIN" && userOrgId) {
-        branchConditions.push(eq(branches.organizationId, userOrgId))
-    }
-
-    if (orgIdsParam) {
-        const ids = orgIdsParam.split(",").map(Number).filter(n => !Number.isNaN(n))
-        if (ids.length > 0) {
-            branchConditions.push(inArray(branches.organizationId, ids))
-        }
-    } else if (orgIdParam && orgIdParam !== "all" && orgIdParam !== "0") {
-        branchConditions.push(eq(branches.organizationId, Number(orgIdParam)))
-    }
-    
-    if (branchIdsParam) {
-        const ids = branchIdsParam.split(",").map(Number).filter(n => !Number.isNaN(n))
-        if (ids.length > 0) {
-            branchConditions.push(inArray(branches.id, ids))
-        }
-    }
-
-    if (groupIdsParam) {
-        const ids = groupIdsParam.split(",").map(Number).filter(n => !Number.isNaN(n) && n > 0)
-        if (ids.length > 0) {
-            branchConditions.push(inArray(branches.groupId, ids))
-        }
-    }
-    
-    if (statusParam && statusParam !== "all") {
-        branchConditions.push(eq(branches.status, statusParam))
-    }
+    const branchConditions = buildBranchConditions(url.searchParams, userRole, userOrgId)
 
     // 1. Fetch Branches with Org info and User counts
     const branchStats = await db.select({
@@ -118,23 +198,7 @@ export async function GET(req: NextRequest) {
         
         const conditions: any[] = [inArray(orders.branchId, branchIdsInScope)]
         
-        // Date filtering logic
-        if (mArray.length > 0) {
-            conditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(mArray, sql.raw(", "))})`)
-        }
-        if (yArray.length > 0) {
-            conditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(yArray, sql.raw(", "))})`)
-        }
-        
-        // Fallback to explicit dates if no arrays provided
-        if (mArray.length === 0 && yArray.length === 0 && start && end) {
-            const startBoundary = parseStartDateParam(start)
-            const endBoundary = parseEndDateParam(end)
-            if (startBoundary) conditions.push(gte(orders.createdAt, startBoundary))
-            if (endBoundary) conditions.push(lte(orders.createdAt, endBoundary))
-        } else if (mArray.length === 0 && yArray.length === 0 && !start && !end) {
-            // No filters provided (All Time implies no conditions on createdAt)
-        }
+        addOrderDateConditions(conditions, start, end, mArray, yArray)
 
         return await db.select({
             branchId: orders.branchId,
@@ -155,115 +219,17 @@ export async function GET(req: NextRequest) {
         compare ? fetchMetrics(compareStartDateParam, compareEndDateParam, parsedCompMonths, parsedCompYears) : Promise.resolve([])
     ])
 
-    // 3. Aggregate data by Organization for the Table
-    const orgMap: Record<number, any> = {}
-
-    branchStats.forEach(b => {
-        const orgId = b.organizationId || 0
-        if (!orgMap[orgId]) {
-            orgMap[orgId] = {
-                organizationId: orgId,
-                organizationName: b.organizationName || "Unknown Organization",
-                organizationStatus: b.organizationStatus || "active",
-                branchCount: 0,
-                activeBranchCount: 0,
-                inactiveBranchCount: 0,
-                totalUserCount: 0,
-                activeUserCount: 0,
-                revenue: 0,
-                orderCount: 0,
-                fulfilledCount: 0,
-                refundedCount: 0,
-                refundedRevenue: 0,
-                comparison: compare ? {
-                    revenue: 0,
-                    orderCount: 0,
-                    fulfilledCount: 0,
-                    refundedCount: 0
-                } : null
-            }
-        }
-
-        const org = orgMap[orgId]
-        org.branchCount++
-        if (b.branchStatus === 'active') org.activeBranchCount++
-        else org.inactiveBranchCount++
-
-        org.totalUserCount += b.totalUserCount
-        org.activeUserCount += b.activeUserCount
-
-        const mA = metricsA.find(m => m.branchId === b.branchId)
-        if (mA) {
-            org.revenue += (mA.revenueCents || 0) / 100
-            org.orderCount += (mA.orderCount || 0)
-            org.fulfilledCount += (mA.fulfilledCount || 0)
-            org.refundedCount += (mA.refundedCount || 0)
-            org.refundedRevenue += (mA.refundedRevenueCents || 0) / 100
-        }
-
-        if (compare) {
-            const mB = metricsB.find(m => m.branchId === b.branchId)
-            if (mB) {
-                org.comparison.revenue += (mB.revenueCents || 0) / 100
-                org.comparison.orderCount += (mB.orderCount || 0)
-                org.comparison.fulfilledCount += (mB.fulfilledCount || 0)
-                org.comparison.refundedCount += (mB.refundedCount || 0)
-            }
-        }
-    })
-
-    // Add head office users into each org's totals
-    headOfficeUserRows.forEach(ho => {
-        if (ho.organizationId != null && orgMap[ho.organizationId]) {
-            orgMap[ho.organizationId].totalUserCount += ho.totalUserCount
-            orgMap[ho.organizationId].activeUserCount += ho.activeUserCount
-        }
-    })
-
+    const orgMap = aggregateOrganizations(branchStats, metricsA, metricsB, compare)
+    addHeadOfficeUsers(orgMap, headOfficeUserRows)
     const results = Object.values(orgMap)
 
     const forcedGranularity = url.searchParams.get("granularity") as "daily" | "monthly" | "yearly" | null
-    const isValidGranularity = ["daily", "monthly", "yearly"].includes(forcedGranularity || "")
-
     // 4. Fetch Trend Data for Charts (Keep grouped by date)
     const fetchTrend = async (start: string | null, end: string | null, mArray: number[] = [], yArray: number[] = []) => {
         if (branchIdsInScope.length === 0) return []
         const conditions: any[] = [inArray(orders.branchId, branchIdsInScope)]
-        
-        let grouping = sql`TO_CHAR((${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi', 'YYYY-MM')`
-        
-        if (isValidGranularity) {
-            if (forcedGranularity === "yearly") {
-                grouping = sql`TO_CHAR((${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi', 'YYYY')`
-            } else if (forcedGranularity === "daily") {
-                grouping = sql`TO_CHAR((${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi', 'YYYY-MM-DD')`
-            }
-        } else if (mArray.length > 0) {
-            // Month filter active
-            const isMonthly = mArray.length > 1 || yArray.length > 1
-            grouping = isMonthly 
-                ? sql`TO_CHAR((${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi', 'YYYY-MM')`
-                : sql`TO_CHAR((${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi', 'YYYY-MM-DD')`
-        } else if (yArray.length > 0) {
-            // Year filter active
-            const isYearly = yArray.length > 1
-            grouping = isYearly 
-                ? sql`TO_CHAR((${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi', 'YYYY')`
-                : sql`TO_CHAR((${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi', 'YYYY-MM')`
-        } else if (!start && !end) {
-            // "All Time" default
-            grouping = sql`TO_CHAR((${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi', 'YYYY')`
-        }
-
-        if (mArray.length > 0) conditions.push(sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(mArray, sql.raw(", "))})`)
-        if (yArray.length > 0) conditions.push(sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(yArray, sql.raw(", "))})`)
-        
-        if (mArray.length === 0 && yArray.length === 0 && start && end) {
-            const startBoundary = parseStartDateParam(start)
-            const endBoundary = parseEndDateParam(end)
-            if (startBoundary) conditions.push(gte(orders.createdAt, startBoundary))
-            if (endBoundary) conditions.push(lte(orders.createdAt, endBoundary))
-        }
+        const grouping = getTrendGrouping(forcedGranularity, mArray, yArray, start, end)
+        addOrderDateConditions(conditions, start, end, mArray, yArray)
 
         return await db.select({
             period: grouping,

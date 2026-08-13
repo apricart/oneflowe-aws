@@ -62,7 +62,7 @@ describe("SessionGuard", () => {
     )
 
     expect(authMocks.signOut).not.toHaveBeenCalled()
-    expect(screen.queryByText("Unsaved form remains mounted")).not.toBeNull()
+    expect(screen.getByText("Unsaved form remains mounted")).not.toBeNull()
     expect(screen.getByRole("status").textContent).toContain(
       "Your work remains open",
     )
