@@ -1,0 +1,14 @@
+# Snyk policy for verified false positives in the vendored SheetJS release.
+version: v1.25.0
+ignore:
+  SNYK-JS-XLSX-5457926:
+    - 'xlsx@0.20.3':
+        reason: 'False positive: SheetJS fixed CVE-2023-30533 in 0.19.3; this repository vendors the authoritative 0.20.3 release.'
+        expires: 2027-08-13T00:00:00.000Z
+        created: 2026-08-13T00:00:00.000Z
+  SNYK-JS-XLSX-6252523:
+    - 'xlsx@0.20.3':
+        reason: 'False positive: SheetJS fixed CVE-2024-22363 in 0.20.2; this repository vendors the authoritative 0.20.3 release.'
+        expires: 2027-08-13T00:00:00.000Z
+        created: 2026-08-13T00:00:00.000Z
+patch: {}

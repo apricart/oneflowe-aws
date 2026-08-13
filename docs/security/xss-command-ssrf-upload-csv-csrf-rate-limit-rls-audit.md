@@ -62,7 +62,7 @@ Normal JSX text rendering remains protected by React's escaping. No rich-text or
 
 ### Content Security Policy
 
-`middleware.ts` now sets:
+`proxy.ts` now sets:
 
 - `default-src 'self'`
 - `object-src 'none'`
@@ -211,14 +211,11 @@ The three HTTP import paths validate the complete input before mutation and then
 
 Administrative branch import was also wrapped in a transaction. Existing local operator scripts retain their dry-run/confirmation workflows and now have input size/row caps.
 
-### Remaining spreadsheet dependency risk
+### Spreadsheet dependency verification
 
-The npm `xlsx` package has two high-severity advisories and no fixed npm release:
+The public npm registry's stale `xlsx@0.18.5` release is affected by prototype-pollution and regular-expression denial-of-service advisories. This repository instead pins and verifies the authoritative SheetJS `0.20.3` archive in `vendor/`; SheetJS fixed the issues in `0.19.3` and `0.20.2`, respectively.
 
-- Prototype pollution below 0.19.3.
-- Regular-expression denial of service below 0.20.2.
-
-Current browser usage writes application-generated workbooks rather than parsing attacker workbooks. Untrusted parsing is limited to local administrative CLI operations with file size/row caps. The preferred follow-up is to migrate XLS/XLSX parsing and writing to a maintained library or require CSV-only imports, then remove `xlsx`.
+Snyk currently treats every `xlsx` version as affected because the fixed releases are distributed through the SheetJS CDN rather than the public npm registry. The repository-level `.snyk` policy suppresses only those two false positives for `xlsx@0.20.3`, with an annual review date. Browser usage writes application-generated workbooks, and local administrative parsing retains file-size and row caps.
 
 ## Prompt 10 — CSRF and session security
 
@@ -380,7 +377,15 @@ No role, grant, ownership, policy, or RLS change was applied to the live databas
 
 ## Dependency audit
 
-Targeted upgrades applied:
+Follow-up remediation applied on 2026-08-13:
+
+- Next.js, `@next/env`, and `@next/eslint-plugin-next` 15.5.22 → 16.3.0. The 16.1.7 version recommended by the original Snyk scan was superseded because newer advisories require 16.3.0.
+- The removed Next.js `eslint` configuration was deleted, `middleware.ts` migrated to the Next 16 `proxy.ts` convention, and the obsolete Pages Router body-parser configuration was removed from the App Router handler.
+- The authoritative SheetJS `0.20.3` archive and its checksum were reverified. Snyk's two `xlsx` findings are documented false positives for issues fixed in `0.19.3` and `0.20.2`; `.snyk` scopes the exceptions to `xlsx@0.20.3` and expires them for annual review.
+- `npm audit --audit-level=low` reports zero vulnerabilities.
+- Type checking, the 354-test unit suite, and a Next.js production build pass.
+
+Earlier targeted upgrades recorded by this audit included:
 
 - Next.js 15.2.8 → 15.5.20.
 - `@next/env` 15.2.8 → 15.5.20.
@@ -390,34 +395,15 @@ Targeted upgrades applied:
 - NextAuth 4.24.13 → 4.24.14.
 - Sharp 0.33.5 added directly for upload decoding/re-encoding.
 
-After these upgrades, `npm audit --omit=dev` reports:
-
-- 0 critical.
-- 3 high.
-- 6 moderate.
-- 1 low.
-- 10 total production findings.
-
-Remaining groups:
-
-- `xlsx` and its Lodash path: high; no fixed npm `xlsx` release.
-- Nodemailer through the NextAuth/Auth.js v4 dependency path: high; a clean fix requires testing a newer Auth.js architecture/dependency stack.
-- Next.js/PostCSS: moderate findings remain with no clean non-breaking npm-audit resolution on the current React 18/Next 15 architecture.
-- Auth.js cookie/UUID/transitive findings: low/moderate; migration requires authentication regression testing.
-- DOMPurify through PDF dependencies: moderate; current application does not expose HTML sanitization or jsPDF active-content methods, but the transitive package should continue to be updated.
-
-Do not run `npm audit fix --force` without a dedicated Next/Auth/React migration branch and full authentication, PDF, report, and browser regression testing.
-
 ## Remaining risk and follow-up priority
 
 1. **Critical deployment priority:** stage and complete the restricted database role/RLS context integration. The current role bypasses all database row isolation.
-2. **High:** replace `xlsx` or make administrative imports CSV-only.
-3. **High:** plan a tested Auth.js dependency migration so the legacy NextAuth transitive advisories can be removed.
-4. **High:** monitor Next.js security releases and plan a Next 16/React 19 compatibility migration if no patched supported 15.x release addresses the remaining audit range.
-5. **Medium:** remove CSP `unsafe-inline` through nonce/hash-compatible theme and style handling.
-6. **Medium:** add recent re-authentication/step-up MFA for destructive super-admin operations.
-7. **Medium:** configure an isolated integration database and run the six skipped concurrency tests.
-8. **Medium:** verify `RATE_LIMIT_TRUST_PROXY_HOPS`, Redis fail-closed behavior, and alerts in the real CDN/load-balancer topology.
-9. **Low/medium:** decide whether remote HTTPS product images should be restricted to a CDN allowlist.
-10. **Low/medium:** add formal idempotency keys for refund and other retry-prone financial mutations.
+2. **Maintenance:** revalidate the vendored SheetJS checksum and the two version-scoped Snyk exceptions before their annual expiry.
+3. **Maintenance:** continue monitoring Next.js and Auth.js security releases.
+4. **Medium:** remove CSP `unsafe-inline` through nonce/hash-compatible theme and style handling.
+5. **Medium:** add recent re-authentication/step-up MFA for destructive super-admin operations.
+6. **Medium:** configure an isolated integration database and run the six skipped concurrency tests.
+7. **Medium:** verify `RATE_LIMIT_TRUST_PROXY_HOPS`, Redis fail-closed behavior, and alerts in the real CDN/load-balancer topology.
+8. **Low/medium:** decide whether remote HTTPS product images should be restricted to a CDN allowlist.
+9. **Low/medium:** add formal idempotency keys for refund and other retry-prone financial mutations.
 
