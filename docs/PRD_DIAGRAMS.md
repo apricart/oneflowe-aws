@@ -234,7 +234,7 @@ graph TD
 
     subgraph OneFlowe["OneFlowe Platform (Next.js 15 App Router)"]
         Web["Web Application\n/dashboard /shop /api/v1"]
-        Auth["NextAuth.js\nJWT Sessions (8h)"]
+        Auth["NextAuth.js\nJWT + Revocation Registry\nIdle 1-15m + Absolute 8h"]
         MW["Edge Middleware\nRole Routing + Security Headers"]
     end
 

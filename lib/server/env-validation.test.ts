@@ -26,7 +26,72 @@ describe('server environment validation', () => {
     expect(Object.isFrozen(result)).toBe(true)
     expect(result.PGPOOL_MAX).toBe(20)
     expect(result.BCRYPT_ROUNDS).toBe(12)
+    expect(result.INACTIVITY_TIMEOUT_MINUTES).toBe(15)
     expect(result.SES_ENABLED).toBe(false)
+  })
+
+  it('enforces the global idle-timeout security bounds', () => {
+    expect(
+      parseServerEnv({
+        ...validRuntimeEnv(),
+        INACTIVITY_TIMEOUT_MINUTES: '1',
+      }).INACTIVITY_TIMEOUT_MINUTES,
+    ).toBe(1)
+    expect(
+      parseServerEnv({
+        ...validRuntimeEnv(),
+        INACTIVITY_TIMEOUT_MINUTES: '15',
+      }).INACTIVITY_TIMEOUT_MINUTES,
+    ).toBe(15)
+
+    expect(
+      parseServerEnv({
+        ...validRuntimeEnv(),
+        INACTIVITY_TIMEOUT_MINUTES: '0',
+      }).INACTIVITY_TIMEOUT_MINUTES,
+    ).toBe(1)
+    expect(
+      parseServerEnv({
+        ...validRuntimeEnv(),
+        INACTIVITY_TIMEOUT_MINUTES: '1440',
+      }).INACTIVITY_TIMEOUT_MINUTES,
+    ).toBe(15)
+
+    for (const invalidValue of ['1441', '1.5', '', 'not-a-number']) {
+      expect(() =>
+        parseServerEnv({
+          ...validRuntimeEnv(),
+          INACTIVITY_TIMEOUT_MINUTES: invalidValue,
+        }),
+      ).toThrow(/INACTIVITY_TIMEOUT_MINUTES/)
+    }
+  })
+
+  it('caps the positive session-validation cache at thirty seconds', () => {
+    expect(
+      parseServerEnv({
+        ...validRuntimeEnv(),
+        SESSION_VALIDATION_CACHE_TTL_SECONDS: '0',
+      }).SESSION_VALIDATION_CACHE_TTL_SECONDS,
+    ).toBe(0)
+    expect(
+      parseServerEnv({
+        ...validRuntimeEnv(),
+        SESSION_VALIDATION_CACHE_TTL_SECONDS: '30',
+      }).SESSION_VALIDATION_CACHE_TTL_SECONDS,
+    ).toBe(30)
+    expect(
+      parseServerEnv({
+        ...validRuntimeEnv(),
+        SESSION_VALIDATION_CACHE_TTL_SECONDS: '300',
+      }).SESSION_VALIDATION_CACHE_TTL_SECONDS,
+    ).toBe(30)
+    expect(() =>
+      parseServerEnv({
+        ...validRuntimeEnv(),
+        SESSION_VALIDATION_CACHE_TTL_SECONDS: '301',
+      }),
+    ).toThrow(/SESSION_VALIDATION_CACHE_TTL_SECONDS/)
   })
 
   it('rejects missing and whitespace-only required values', () => {

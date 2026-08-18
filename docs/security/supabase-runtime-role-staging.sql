@@ -55,6 +55,13 @@ GRANT USAGE, CREATE ON SCHEMA public TO oneflowe_migrator;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO oneflowe_runtime;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO oneflowe_runtime;
 
+-- Ensure tables/sequences created later by the role running this template do
+-- not silently become inaccessible to the NOBYPASSRLS application role.
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO oneflowe_runtime;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT USAGE, SELECT ON SEQUENCES TO oneflowe_runtime;
+
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO oneflowe_migrator;
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO oneflowe_migrator;
 
@@ -338,6 +345,31 @@ CREATE POLICY oneflowe_owner_isolation ON public.sessions
     oneflowe_rls.owner_allowed(user_id::text)
     OR oneflowe_rls.auth_bootstrap()
   );
+
+DROP POLICY IF EXISTS oneflowe_auth_session_owner ON public.auth_sessions;
+DROP POLICY IF EXISTS oneflowe_auth_session_insert ON public.auth_sessions;
+DROP POLICY IF EXISTS oneflowe_auth_session_select ON public.auth_sessions;
+DROP POLICY IF EXISTS oneflowe_auth_session_update ON public.auth_sessions;
+DROP POLICY IF EXISTS oneflowe_auth_session_delete ON public.auth_sessions;
+
+-- Bootstrap may create the just-authenticated browser session, but it cannot
+-- enumerate, mutate, or delete existing sessions.
+CREATE POLICY oneflowe_auth_session_insert ON public.auth_sessions
+  FOR INSERT TO oneflowe_runtime
+  WITH CHECK (
+    oneflowe_rls.owner_allowed(subject_id)
+    OR oneflowe_rls.auth_bootstrap()
+  );
+CREATE POLICY oneflowe_auth_session_select ON public.auth_sessions
+  FOR SELECT TO oneflowe_runtime
+  USING (oneflowe_rls.owner_allowed(subject_id));
+CREATE POLICY oneflowe_auth_session_update ON public.auth_sessions
+  FOR UPDATE TO oneflowe_runtime
+  USING (oneflowe_rls.owner_allowed(subject_id))
+  WITH CHECK (oneflowe_rls.owner_allowed(subject_id));
+CREATE POLICY oneflowe_auth_session_delete ON public.auth_sessions
+  FOR DELETE TO oneflowe_runtime
+  USING (oneflowe_rls.owner_allowed(subject_id));
 
 -- Authentication bootstrap permits only reads of credential/role records.
 DROP POLICY IF EXISTS oneflowe_auth_bootstrap_select ON public.users;

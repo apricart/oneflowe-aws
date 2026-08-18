@@ -7,11 +7,73 @@ import {
   isKnownBodyTooLarge,
   requestBodyLimitForPath,
 } from "@/lib/edge/request-security"
+import { getSessionNonIdleExpirationReason } from "@/lib/session-policy"
 
-const protectedPrefixes = ["/dashboard", "/organizations", "/users", "/orders", "/inventory", "/budgets", "/reports", "/settings", "/branches", "/shop", "/change-password"]
+const protectedPrefixes = [
+  "/branches",
+  "/branch-inventory",
+  "/budgets",
+  "/budget-by-quantity",
+  "/change-password",
+  "/dashboard",
+  "/employee-management",
+  "/groups",
+  "/inventory",
+  "/invoices",
+  "/orders",
+  "/organizations",
+  "/products",
+  "/receipts",
+  "/refunds",
+  "/reports",
+  "/settings",
+  "/shop",
+  "/users",
+]
+const SESSION_COOKIE_NAMES = [
+  "next-auth.session-token",
+  "__Secure-next-auth.session-token",
+]
+
+function pathMatchesPrefix(pathname: string, prefix: string): boolean {
+  return pathname === prefix || pathname.startsWith(`${prefix}/`)
+}
+
+function expiredSessionRedirect(req: NextRequest): NextResponse {
+  const url = new URL("/login", req.url || "http://localhost")
+  url.searchParams.set("reason", "session-expired")
+  const response = NextResponse.redirect(url)
+
+  const cookiesToDelete = new Set(SESSION_COOKIE_NAMES)
+  for (const cookie of req.cookies.getAll()) {
+    if (
+      SESSION_COOKIE_NAMES.some(
+        (baseName) =>
+          cookie.name === baseName || cookie.name.startsWith(`${baseName}.`),
+      )
+    ) {
+      cookiesToDelete.add(cookie.name)
+    }
+  }
+
+  for (const cookieName of cookiesToDelete) {
+    response.cookies.set({
+      name: cookieName,
+      value: "",
+      expires: new Date(0),
+      maxAge: 0,
+      httpOnly: true,
+      sameSite: "lax",
+      path: "/",
+      secure: cookieName.startsWith("__Secure-"),
+    })
+  }
+
+  return response
+}
 
 /**
- * Inject bank-grade security headers into every response
+ * Inject application security headers into every response
  */
 function withSecurityHeaders(response: NextResponse, pathname: string = ""): NextResponse {
   // HSTS — force HTTPS for 1 year + subdomains
@@ -51,7 +113,10 @@ function withSecurityHeaders(response: NextResponse, pathname: string = ""): Nex
   response.headers.delete("X-Powered-By")
 
   // Browsing Cache (Browser Caching)
-  if (pathname.startsWith("/api/v1/")) {
+  if (
+    pathname.startsWith("/api/v1/") ||
+    protectedPrefixes.some((prefix) => pathMatchesPrefix(pathname, prefix))
+  ) {
     response.headers.set("Cache-Control", "private, no-store, max-age=0")
   }
 
@@ -92,7 +157,9 @@ export async function proxy(req: NextRequest) {
   }
 
   const isPublicPath = ["/login"].includes(pathname)
-  const needsAuth = protectedPrefixes.some((p) => pathname.startsWith(p)) && !isPublicPath
+  const needsAuth = protectedPrefixes.some((prefix) =>
+    pathMatchesPrefix(pathname, prefix),
+  ) && !isPublicPath
 
   if (!needsAuth) return withSecurityHeaders(response, pathname)
 
@@ -103,6 +170,19 @@ export async function proxy(req: NextRequest) {
     const url = new URL(loginPath, req.url || "http://localhost")
     const redirectRes = NextResponse.redirect(url)
     return withSecurityHeaders(redirectRes, pathname)
+  }
+
+  // The server-side registry is the single authority for mutable idle time.
+  // Edge middleware validates only immutable structure/absolute expiry so a
+  // committed activity update cannot be contradicted by a lost cookie response.
+  const expirationReason = getSessionNonIdleExpirationReason(token)
+  if (expirationReason) {
+    logger("middleware", {
+      reason: "session_expired",
+      expirationReason,
+      path: pathname,
+    })
+    return withSecurityHeaders(expiredSessionRedirect(req), pathname)
   }
 
   const role = (token as any).role as string | undefined

@@ -19,6 +19,12 @@ import {
   HIDE_BRANCH_ADMIN_PRICES_SETTING_KEY,
   HIDE_ORDER_PORTAL_PRICES_SETTING_KEY,
 } from "@/lib/price-visibility"
+import {
+  invalidateOrganizationNetworkPolicyCache,
+  replaceOrganizationAllowedIps,
+  resolvePrivateNetworkLoginRows,
+} from "@/lib/server/network-policy"
+import { formatAllowlistEntry } from "@/lib/security/ip-allowlist"
 
 type OrganizationCreateInput = ReturnType<typeof organizationCreateSchema.parse>
 
@@ -176,6 +182,12 @@ export async function POST(req: Request) {
       hideOrderPortalPrices,
     } = validated.values!
 
+    // Absent means "not restricted", so existing callers that never send this
+    // field keep creating unrestricted organizations.
+    const privateNetworkLogin = body.privateNetworkLogin ?? { enabled: false, entries: [] }
+    const resolvedNetworkRows = resolvePrivateNetworkLoginRows(privateNetworkLogin)
+    if (!resolvedNetworkRows.ok) return error(resolvedNetworkRows.message, 400)
+
     // Check for duplicate name
     const existingName = await db
       .select({ id: orgsTable.id })
@@ -206,8 +218,15 @@ export async function POST(req: Request) {
           code,
           status,
           orderApproverRole: body.orderApproverRole,
+          privateNetworkLoginEnabled: privateNetworkLogin.enabled,
         })
         .returning()
+
+      await replaceOrganizationAllowedIps(tx, {
+        organizationId: createdOrganization.id,
+        rows: resolvedNetworkRows.rows,
+        actorUserId: scope.userId,
+      })
 
       await tx.insert(organizationSettings).values([
         {
@@ -236,6 +255,8 @@ export async function POST(req: Request) {
         metadata: {
           orderApproverRole: body.orderApproverRole,
           budgetAllocationMode,
+          privateNetworkLoginEnabled: privateNetworkLogin.enabled,
+          allowedNetworks: resolvedNetworkRows.rows.map(formatAllowlistEntry),
         },
       })
 
@@ -245,6 +266,7 @@ export async function POST(req: Request) {
     // Invalidate organizations cache
     await invalidateByPrefix('organizations')
     await invalidateByPrefix('settings')
+    await invalidateOrganizationNetworkPolicyCache()
 
     return ok({
       item: {

@@ -169,6 +169,62 @@ function getCreateUserErrors(form: CreateUserForm, usernameAvailable: boolean | 
   }
 }
 
+type UsernameStatus = {
+  available: boolean | null
+  loading: boolean
+  suggestions: string[]
+}
+
+function useUsernameAvailability(
+  username: string,
+  setUsernameStatus: React.Dispatch<React.SetStateAction<UsernameStatus>>,
+  setErrors: React.Dispatch<React.SetStateAction<Record<string, string>>>,
+) {
+  useEffect(() => {
+    const normalizedUsername = username.trim().toLowerCase()
+    if (normalizedUsername.length < 3) {
+      setUsernameStatus({ available: null, loading: false, suggestions: [] })
+      setErrors(previous => {
+        if (previous.username !== "This username is already taken") return previous
+        const next = { ...previous }
+        delete next.username
+        return next
+      })
+      return
+    }
+
+    let isCurrent = true
+    const timer = setTimeout(async () => {
+      setUsernameStatus(previous => ({ ...previous, loading: true }))
+      try {
+        const response = await fetch(`/api/v1/users/check-username?username=${normalizedUsername}`)
+        const data = await response.json()
+        if (!isCurrent) return
+
+        setUsernameStatus({
+          available: data.available ?? false,
+          suggestions: data.suggestions ?? [],
+          loading: false,
+        })
+        setErrors(previous => {
+          const next = { ...previous }
+          if (data.available === false) next.username = "This username is already taken"
+          else if (next.username === "This username is already taken") delete next.username
+          return next
+        })
+      } catch (caughtError) {
+        console.error("Failed to check username:", caughtError)
+        if (isCurrent) setUsernameStatus(previous => ({ ...previous, loading: false }))
+      }
+    }, 500)
+
+    return () => {
+      isCurrent = false
+      clearTimeout(timer)
+    }
+  }, [setErrors, setUsernameStatus, username])
+}
+
 export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>) {
   const [open, setOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -194,11 +250,7 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
     [form, initialForm],
   )
 
-  const [usernameStatus, setUsernameStatus] = useState<{
-    available: boolean | null
-    loading: boolean
-    suggestions: string[]
-  }>({
+  const [usernameStatus, setUsernameStatus] = useState<UsernameStatus>({
     available: null,
     loading: false,
     suggestions: []
@@ -214,6 +266,8 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
     type: "info",
     visible: false
   })
+
+  useUsernameAvailability(form.username, setUsernameStatus, setErrors)
 
   // The endpoint scopes non-Super Admins to their assigned organization.
   // Fetch it for every role so the read-only assignment summary has a name.
@@ -277,56 +331,6 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
 
     setErrors(newErrors)
   }
-
-  // Real-time username check
-  useEffect(() => {
-    const username = form.username.trim().toLowerCase()
-    if (username.length < 3) {
-      setUsernameStatus({ available: null, loading: false, suggestions: [] })
-      setErrors(prev => {
-        if (prev.username !== "This username is already taken") return prev
-        const next = { ...prev }
-        delete next.username
-        return next
-      })
-      return
-    }
-
-    let isCurrent = true
-    const timer = setTimeout(async () => {
-      setUsernameStatus(prev => ({ ...prev, loading: true }))
-      try {
-        const res = await fetch(`/api/v1/users/check-username?username=${username}`)
-        const data = await res.json()
-        if (!isCurrent) return
-
-        setUsernameStatus({
-          available: data.available ?? false,
-          suggestions: data.suggestions ?? [],
-          loading: false
-        })
-
-        setErrors(prev => {
-          const next = { ...prev }
-          if (data.available === false) {
-            next.username = "This username is already taken"
-          } else if (next.username === "This username is already taken") {
-            delete next.username
-          }
-          return next
-        })
-      } catch (err) {
-        console.error("Failed to check username:", err)
-        if (!isCurrent) return
-        setUsernameStatus(prev => ({ ...prev, loading: false }))
-      }
-    }, 500)
-
-    return () => {
-      isCurrent = false
-      clearTimeout(timer)
-    }
-  }, [form.username])
 
   // Validate form
   const validateForm = (autoJump = false) => {

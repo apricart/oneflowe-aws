@@ -43,7 +43,7 @@ Vitest is configured for focused unit and security tests (`npm test`).
 - **Framework**: Next.js 15 App Router (TypeScript)
 - **UI**: shadcn/ui (New York style) + Radix UI + Tailwind CSS 4
 - **Database**: PostgreSQL via Drizzle ORM (schema at `db/schema.ts`, migrations in `drizzle/`)
-- **Auth**: NextAuth.js with credentials provider — 8-hour JWT sessions
+- **Auth**: NextAuth.js credentials provider — encrypted JWT cookies backed by a per-browser revocation registry, with a 1-15-minute tenant idle timeout and fixed 8-hour absolute lifetime
 - **Cache/MFA**: Redis via Upstash
 - **Storage**: AWS S3
 - **Email**: Nodemailer (SMTP)

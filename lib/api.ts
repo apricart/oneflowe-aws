@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server"
-import { getCurrentUser } from "@/lib/auth"
+import { getCurrentUser, getSharedServerSession } from "@/lib/auth"
 import type { Role } from "@/lib/rbac"
 import { requireRole, isValidRole } from "@/lib/rbac"
+import { isSessionValidationUnavailablePayload } from "@/lib/session-response"
 
 /**
  * Return a successful JSON response
@@ -141,6 +142,20 @@ export async function requireApiRole(allowed: Role[]) {
       return NextResponse.json(
         { error: "Invalid server configuration" },
         { status: 500 }
+      )
+    }
+
+    const session = await getSharedServerSession()
+    if (isSessionValidationUnavailablePayload(session)) {
+      return NextResponse.json(
+        { error: "Session validation temporarily unavailable" },
+        {
+          status: 503,
+          headers: {
+            "Cache-Control": "private, no-store, max-age=0",
+            "Retry-After": "5",
+          },
+        },
       )
     }
 

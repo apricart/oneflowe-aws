@@ -3,8 +3,11 @@ import { describe, expect, it, vi } from "vitest"
 import {
   probeSession,
   probeSessionWithRetry,
+  renewSessionActivity,
   SESSION_CHECK_PATH,
+  SESSION_CSRF_PATH,
 } from "@/lib/session-probe"
+import { SESSION_ACTIVITY_UPDATE_MARKER } from "@/lib/session-policy"
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -136,5 +139,68 @@ describe("session probe", () => {
     })
     expect(serverFetch).toHaveBeenCalledTimes(3)
     expect(malformedFetch).toHaveBeenCalledTimes(3)
+  })
+
+  it("renews activity only through a CSRF-protected session update", async () => {
+    const session = {
+      user: {
+        id: "user-4",
+        role: "ORDER_PORTAL",
+        organizationId: 31,
+        branchId: 8,
+      },
+      expires: "2026-07-28T12:15:00.000Z",
+      idleTimeoutMinutes: 15,
+    }
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ csrfToken: "csrf-token" }))
+      .mockResolvedValueOnce(jsonResponse(session))
+
+    const result = await renewSessionActivity({ fetchImpl })
+
+    expect(result).toEqual({ kind: "authenticated", session })
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      1,
+      SESSION_CSRF_PATH,
+      expect.objectContaining({
+        cache: "no-store",
+        credentials: "same-origin",
+      }),
+    )
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      2,
+      SESSION_CHECK_PATH,
+      expect.objectContaining({
+        method: "POST",
+        cache: "no-store",
+        credentials: "same-origin",
+        body: JSON.stringify({
+          csrfToken: "csrf-token",
+          data: { activity: SESSION_ACTIVITY_UPDATE_MARKER },
+        }),
+      }),
+    )
+  })
+
+  it("never treats a failed CSRF or empty update response as renewal", async () => {
+    const failedCsrfFetch = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ error: "unavailable" }, 503))
+    const invalidSessionFetch = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ csrfToken: "csrf-token" }))
+      .mockResolvedValueOnce(jsonResponse({}))
+
+    await expect(
+      renewSessionActivity({ fetchImpl: failedCsrfFetch }),
+    ).resolves.toEqual({
+      kind: "indeterminate",
+      reason: "http",
+      status: 503,
+    })
+    await expect(
+      renewSessionActivity({ fetchImpl: invalidSessionFetch }),
+    ).resolves.toEqual({ kind: "invalid", status: 200 })
   })
 })

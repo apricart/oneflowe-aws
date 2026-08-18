@@ -90,13 +90,6 @@ export function AppContextProvider({ children }: Readonly<{ children: ReactNode 
 
     if (!session) {
       setIsInitialized(true)
-      if (typeof window !== "undefined") {
-        const path = window.location.pathname
-        if (!path.includes("/login") && !path.includes("/auth/")) {
-          const loginPath = "/login"
-          window.location.replace(loginPath)
-        }
-      }
       return
     }
 

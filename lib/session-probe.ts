@@ -1,4 +1,7 @@
+import { SESSION_ACTIVITY_UPDATE_MARKER } from "@/lib/session-policy"
+
 export const SESSION_CHECK_PATH = "/api/auth/session"
+export const SESSION_CSRF_PATH = "/api/auth/csrf"
 export const SESSION_CHECK_ATTEMPTS = 3
 export const SESSION_CHECK_BACKOFF_MS = 1_000
 export const SESSION_CHECK_TIMEOUT_MS = 8_000
@@ -6,6 +9,7 @@ export const SESSION_CHECK_TIMEOUT_MS = 8_000
 export type SessionPayload = {
   user?: Record<string, unknown> | null
   expires?: string
+  idleTimeoutMinutes?: number
   [key: string]: unknown
 }
 
@@ -47,6 +51,52 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function isDefinitivelyEmptySession(value: unknown): boolean {
   return value === null || (isObject(value) && Object.keys(value).length === 0)
+}
+
+async function classifySessionResponse(
+  response: Response,
+): Promise<SessionProbeResult> {
+  // A 401 from the session endpoint definitively means there is no usable
+  // session. Other non-2xx responses can be transient infrastructure errors.
+  if (response.status === 401) {
+    return { kind: "invalid", status: response.status }
+  }
+
+  if (!response.ok) {
+    return {
+      kind: "indeterminate",
+      reason: "http",
+      status: response.status,
+    }
+  }
+
+  let payload: unknown
+  try {
+    payload = await response.json()
+  } catch {
+    return {
+      kind: "indeterminate",
+      reason: "malformed",
+      status: response.status,
+    }
+  }
+
+  if (isDefinitivelyEmptySession(payload)) {
+    return { kind: "invalid", status: response.status }
+  }
+
+  if (isObject(payload) && isObject(payload.user)) {
+    return {
+      kind: "authenticated",
+      session: payload as SessionPayload,
+    }
+  }
+
+  return {
+    kind: "indeterminate",
+    reason: "malformed",
+    status: response.status,
+  }
 }
 
 async function abortableSleep(
@@ -106,51 +156,92 @@ export async function probeSession({
       signal: controller.signal,
     })
 
-    // A 401 from the session endpoint definitively means there is no usable
-    // session. Other non-2xx responses can be transient infrastructure errors.
-    if (response.status === 401) {
-      return { kind: "invalid", status: response.status }
-    }
-
-    if (!response.ok) {
-      return {
-        kind: "indeterminate",
-        reason: "http",
-        status: response.status,
-      }
-    }
-
-    let payload: unknown
-    try {
-      payload = await response.json()
-    } catch {
-      return {
-        kind: "indeterminate",
-        reason: "malformed",
-        status: response.status,
-      }
-    }
-
-    if (isDefinitivelyEmptySession(payload)) {
-      return { kind: "invalid", status: response.status }
-    }
-
-    if (isObject(payload) && isObject(payload.user)) {
-      return {
-        kind: "authenticated",
-        session: payload as SessionPayload,
-      }
-    }
-
-    // A non-empty but unexpected payload must not revoke a user session.
-    return {
-      kind: "indeterminate",
-      reason: "malformed",
-      status: response.status,
-    }
+    return classifySessionResponse(response)
   } catch {
     if (signal?.aborted) return { kind: "cancelled" }
 
+    return {
+      kind: "indeterminate",
+      reason: timedOut ? "timeout" : "network",
+    }
+  } finally {
+    clearTimeout(timeoutId)
+    signal?.removeEventListener("abort", handleExternalAbort)
+  }
+}
+
+/**
+ * Advances the signed idle deadline through NextAuth's CSRF-protected session
+ * update flow. This deliberately avoids `useSession().update()`: that API puts
+ * the global SessionProvider into a loading state and can make unrelated pages
+ * flicker during periodic activity synchronization.
+ */
+export async function renewSessionActivity({
+  fetchImpl = globalThis.fetch,
+  signal,
+  timeoutMs = SESSION_CHECK_TIMEOUT_MS,
+}: ProbeSessionOptions = {}): Promise<SessionProbeResult> {
+  if (signal?.aborted) return { kind: "cancelled" }
+
+  const controller = new AbortController()
+  let timedOut = false
+  const handleExternalAbort = () => controller.abort()
+  signal?.addEventListener("abort", handleExternalAbort, { once: true })
+
+  const timeoutId = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeoutMs)
+
+  try {
+    const csrfResponse = await fetchImpl(SESSION_CSRF_PATH, {
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    })
+
+    if (!csrfResponse.ok) {
+      return {
+        kind: "indeterminate",
+        reason: "http",
+        status: csrfResponse.status,
+      }
+    }
+
+    let csrfPayload: unknown
+    try {
+      csrfPayload = await csrfResponse.json()
+    } catch {
+      return { kind: "indeterminate", reason: "malformed" }
+    }
+
+    const csrfToken =
+      isObject(csrfPayload) && typeof csrfPayload.csrfToken === "string"
+        ? csrfPayload.csrfToken
+        : null
+    if (!csrfToken) {
+      return { kind: "indeterminate", reason: "malformed" }
+    }
+
+    const response = await fetchImpl(SESSION_CHECK_PATH, {
+      method: "POST",
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        csrfToken,
+        data: { activity: SESSION_ACTIVITY_UPDATE_MARKER },
+      }),
+      signal: controller.signal,
+    })
+
+    return classifySessionResponse(response)
+  } catch {
+    if (signal?.aborted) return { kind: "cancelled" }
     return {
       kind: "indeterminate",
       reason: timedOut ? "timeout" : "network",
