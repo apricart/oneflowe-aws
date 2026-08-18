@@ -512,7 +512,10 @@ export default function OrganizationsPage() {
                         <EditOrgDialog
                           org={org}
                           isSuperAdmin={userRole === "SUPER_ADMIN"}
-                          onSave={(payload, priceVisibility) => editOrganization(String(org.id), payload, priceVisibility)}
+                          // Forwarded as a rest spread so a newly added argument cannot be
+                          // silently dropped here: omitting one skips its save step while the
+                          // dialog still reports success.
+                          onSave={(...args) => editOrganization(String(org.id), ...args)}
                         />
                         <OrganizationExcelExportButton
                           organization={org}
