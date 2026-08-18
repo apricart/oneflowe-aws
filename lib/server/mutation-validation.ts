@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { ORDER_APPROVER_ROLES } from "@/lib/order-approver-role"
 import { MAX_BUSINESS_QUANTITY, isUniquePositiveIdList } from "@/lib/business-rules"
+import { MAX_ALLOWLIST_ENTRIES } from "@/lib/security/ip-allowlist"
 import {
   MAX_STORED_IMAGE_URL_LENGTH,
   normalizeSafeImageUrl,
@@ -113,6 +114,22 @@ export const supplierUpdateSchema = supplierCreateSchema.omit({
   message: "At least one supplier field is required",
 })
 
+/**
+ * Shape only. The address text itself is parsed by the shared allowlist parser
+ * so the UI, this schema, and the login matcher can never disagree about what a
+ * given entry means.
+ */
+export const privateNetworkLoginSchema = z.object({
+  enabled: z.boolean(),
+  entries: z.array(z.object({
+    value: z.string().trim().min(1).max(64),
+    label: nullableText(120).optional(),
+  }).strict()).max(MAX_ALLOWLIST_ENTRIES),
+}).strict().refine((input) => !input.enabled || input.entries.length > 0, {
+  message: "Add at least one IP address before enabling private network login",
+  path: ["entries"],
+})
+
 export const organizationCreateSchema = z.object({
   name: z.string().trim().min(2).max(100),
   code: z.string().trim().min(2).max(20).regex(/^\w+$/),
@@ -123,6 +140,7 @@ export const organizationCreateSchema = z.object({
     hideBranchAdminPrices: z.boolean().optional(),
     hideOrderPortalPrices: z.boolean().optional(),
   }).strict().optional(),
+  privateNetworkLogin: privateNetworkLoginSchema.optional(),
 }).strict()
 
 export const organizationUpdateSchema = z.object({

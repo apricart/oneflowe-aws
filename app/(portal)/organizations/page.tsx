@@ -4,6 +4,13 @@ import { BranchExcelExportButton } from "@/components/organizations/branch-excel
 import { BranchListExcelExportButton } from "@/components/organizations/branch-list-excel-export-button"
 import { OrganizationExcelExportButton } from "@/components/organizations/organization-excel-export-button"
 import { OrganizationListExcelExportButton } from "@/components/organizations/organization-list-excel-export-button"
+import {
+PrivateNetworkLoginFields,
+createNetworkEntryDraft,
+privateNetworkDraftError,
+toPrivateNetworkLoginPayload,
+type PrivateNetworkEntryDraft,
+} from "@/components/organizations/private-network-login-fields"
 import { PremiumAlert,type AlertType } from "@/components/premium/premium-alert"
 import { PremiumConfirmDialog } from "@/components/premium/premium-confirm-dialog"
 import { Badge } from "@/components/ui/badge"
@@ -276,7 +283,12 @@ export default function OrganizationsPage() {
     }
   }
 
-  async function editOrganization(id: string, payload: Partial<Organization>, priceVisibility?: PriceVisibilitySettings): Promise<boolean> {
+  async function editOrganization(
+    id: string,
+    payload: Partial<Organization>,
+    priceVisibility?: PriceVisibilitySettings,
+    privateNetworkLogin?: ReturnType<typeof toPrivateNetworkLoginPayload>,
+  ): Promise<boolean> {
     try {
       const res = await fetch(`/api/v1/organizations/${id}`, {
         method: "PATCH",
@@ -310,6 +322,18 @@ export default function OrganizationsPage() {
           })
           const settingsData = await settingsRes.json()
           if (!settingsRes.ok) throw new Error(settingsData.error || "Failed to update price visibility setting")
+        }
+      }
+
+      if (privateNetworkLogin) {
+        const networkRes = await fetch(`/api/v1/organizations/${id}/network-policy`, {
+          method: "PUT",
+          body: JSON.stringify(privateNetworkLogin),
+          headers: { "Content-Type": "application/json" },
+        })
+        const networkData = await networkRes.json()
+        if (!networkRes.ok) {
+          throw new Error(networkData.error || "Failed to update private network login")
         }
       }
 
@@ -1005,8 +1029,12 @@ function CreateOrgDialog({
   const [orderApproverRole, setOrderApproverRole] = useState<OrderApproverRole>(DEFAULT_ORDER_APPROVER_ROLE)
   const [hideBranchAdminPrices, setHideBranchAdminPrices] = useState(false)
   const [hideOrderPortalPrices, setHideOrderPortalPrices] = useState(false)
+  const [privateNetworkEnabled, setPrivateNetworkEnabled] = useState(false)
+  const [networkEntries, setNetworkEntries] = useState<PrivateNetworkEntryDraft[]>([])
   const [confirmModeOpen, setConfirmModeOpen] = useState(false)
   const [saving, setSaving] = useState(false)
+
+  const networkError = privateNetworkDraftError(privateNetworkEnabled, networkEntries)
 
   async function createCompany() {
     setSaving(true)
@@ -1023,6 +1051,10 @@ function CreateOrgDialog({
             hideBranchAdminPrices,
             hideOrderPortalPrices,
           },
+          privateNetworkLogin: toPrivateNetworkLoginPayload(
+            privateNetworkEnabled,
+            networkEntries,
+          ),
         }),
         headers: { "Content-Type": "application/json" }
       })
@@ -1037,6 +1069,8 @@ function CreateOrgDialog({
       setOrderApproverRole(DEFAULT_ORDER_APPROVER_ROLE)
       setHideBranchAdminPrices(false)
       setHideOrderPortalPrices(false)
+      setPrivateNetworkEnabled(false)
+      setNetworkEntries([])
       setConfirmModeOpen(false)
       onCreated(data.item)
     } catch (e: any) {
@@ -1047,7 +1081,7 @@ function CreateOrgDialog({
   }
 
   function submit() {
-    if (!name || !code || saving) return
+    if (!name || !code || saving || networkError) return
     setConfirmModeOpen(true)
   }
 
@@ -1198,13 +1232,21 @@ function CreateOrgDialog({
                   />
                 </div>
               </div>
+              <PrivateNetworkLoginFields
+                idPrefix="create"
+                enabled={privateNetworkEnabled}
+                entries={networkEntries}
+                disabled={saving}
+                onEnabledChange={setPrivateNetworkEnabled}
+                onEntriesChange={setNetworkEntries}
+              />
             </div>
           </div>
           <DialogFooter>
             <Button
               onClick={submit}
               className="gap-2 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100 disabled:shadow-none"
-              disabled={!name || !code || saving}
+              disabled={!name || !code || saving || Boolean(networkError)}
             >
               <Save className="h-4 w-4" />
               Save Company
@@ -1434,7 +1476,11 @@ function EditOrgDialog({
 }: Readonly<{
   org: Organization
   isSuperAdmin: boolean
-  onSave: (payload: Partial<Organization>, priceVisibility?: PriceVisibilitySettings) => Promise<boolean>
+  onSave: (
+    payload: Partial<Organization>,
+    priceVisibility?: PriceVisibilitySettings,
+    privateNetworkLogin?: ReturnType<typeof toPrivateNetworkLoginPayload>,
+  ) => Promise<boolean>
 }>) {
   const [open, setOpen] = useState(false)
   const [name, setName] = useState(org.name)
@@ -1448,8 +1494,16 @@ function EditOrgDialog({
   )
   const [hideBranchAdminPrices, setHideBranchAdminPrices] = useState(false)
   const [hideOrderPortalPrices, setHideOrderPortalPrices] = useState(false)
+  const [privateNetworkEnabled, setPrivateNetworkEnabled] = useState(false)
+  const [networkEntries, setNetworkEntries] = useState<PrivateNetworkEntryDraft[]>([])
+  const [loadingNetwork, setLoadingNetwork] = useState(false)
+  const [networkLoadFailed, setNetworkLoadFailed] = useState(false)
   const [loadingSettings, setLoadingSettings] = useState(false)
   const [saving, setSaving] = useState(false)
+
+  const networkError = networkLoadFailed
+    ? null
+    : privateNetworkDraftError(privateNetworkEnabled, networkEntries)
 
   useEffect(() => {
     setName(org.name)
@@ -1487,6 +1541,45 @@ function EditOrgDialog({
       })
       .finally(() => {
         if (!cancelled) setLoadingSettings(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [open, isSuperAdmin, org.id])
+
+  useEffect(() => {
+    if (!open || !isSuperAdmin) return
+
+    let cancelled = false
+    setLoadingNetwork(true)
+    setNetworkLoadFailed(false)
+    fetch(`/api/v1/organizations/${org.id}/network-policy`)
+      .then(async (res) => {
+        if (!res.ok) throw new Error("Failed to load private network login settings")
+        return res.json()
+      })
+      .then((data) => {
+        if (cancelled) return
+        const loaded = Array.isArray(data?.entries) ? data.entries : []
+        setPrivateNetworkEnabled(data?.enabled === true)
+        setNetworkEntries(
+          loaded.map((item: any) =>
+            createNetworkEntryDraft(String(item?.value ?? ""), String(item?.label ?? "")),
+          ),
+        )
+      })
+      .catch(() => {
+        // Never let a failed read become an empty draft that a later save would
+        // write back — that would silently switch a tenant's restriction off.
+        if (!cancelled) {
+          setNetworkLoadFailed(true)
+          setPrivateNetworkEnabled(false)
+          setNetworkEntries([])
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingNetwork(false)
       })
 
     return () => {
@@ -1634,6 +1727,23 @@ function EditOrgDialog({
                     disabled={loadingSettings || saving}
                   />
                 </div>
+                {networkLoadFailed ? (
+                  <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 dark:border-amber-700 dark:bg-amber-950/40">
+                    <p className="text-xs font-medium text-amber-900 dark:text-amber-100">
+                      Private network login settings could not be loaded. They are left
+                      unchanged when you save. Close and reopen this dialog to retry.
+                    </p>
+                  </div>
+                ) : (
+                  <PrivateNetworkLoginFields
+                    idPrefix={`edit-${org.id}`}
+                    enabled={privateNetworkEnabled}
+                    entries={networkEntries}
+                    disabled={loadingNetwork || saving}
+                    onEnabledChange={setPrivateNetworkEnabled}
+                    onEntriesChange={setNetworkEntries}
+                  />
+                )}
               </div>
             )}
           </div>
@@ -1641,7 +1751,14 @@ function EditOrgDialog({
         <DialogFooter>
           <Button
             className="gap-2"
-            disabled={saving || loadingSettings || !name.trim() || !code.trim()}
+            disabled={
+              saving ||
+              loadingSettings ||
+              loadingNetwork ||
+              !name.trim() ||
+              !code.trim() ||
+              Boolean(networkError)
+            }
             onClick={async () => {
               setSaving(true)
               try {
@@ -1657,6 +1774,9 @@ function EditOrgDialog({
                       hideBranchAdminPrices,
                       hideOrderPortalPrices,
                     }
+                    : undefined,
+                  isSuperAdmin && !networkLoadFailed
+                    ? toPrivateNetworkLoginPayload(privateNetworkEnabled, networkEntries)
                     : undefined
                 )
                 if (saved) setOpen(false)

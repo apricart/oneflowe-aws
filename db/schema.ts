@@ -26,6 +26,12 @@ export const organizations = pgTable(
     orderApproverRole: varchar("order_approver_role", { length: 32 })
       .notNull()
       .default("BRANCH_ADMIN"),
+    // When enabled, members of this tenant may only authenticate from an
+    // address in organizationAllowedIps. Defaults to false so every existing
+    // organization keeps unrestricted login until a Super Admin opts in.
+    privateNetworkLoginEnabled: boolean("private_network_login_enabled")
+      .notNull()
+      .default(false),
     logoUrl: varchar("logo_url", { length: 512 }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
@@ -348,6 +354,49 @@ export const organizationSettings = pgTable(
   (t) => [
     index("org_settings_org_idx").on(t.organizationId),
     uniqueIndex("organization_settings_org_key_uq").on(t.organizationId, t.key),
+    check(
+      "organization_settings_session_timeout_bounds_ck",
+      sql`${t.key} <> 'session_timeout_minutes' OR CASE WHEN jsonb_typeof(${t.value}) = 'number' AND (${t.value} #>> '{}') ~ '^[0-9]+$' THEN (${t.value} #>> '{}')::numeric BETWEEN 1 AND 15 ELSE FALSE END`,
+    ),
+  ],
+)
+
+/**
+ * Addresses and CIDR ranges a tenant may authenticate from, used only when
+ * organizations.private_network_login_enabled is true. Rows are stored already
+ * masked to their network address with an explicit prefix length, so login
+ * matching is a pure prefix comparison and one network cannot be recorded
+ * under two different spellings.
+ */
+export const organizationAllowedIps = pgTable(
+  "organization_allowed_ips",
+  {
+    id: serial("id").primaryKey(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id, { onDelete: "cascade" })
+      .notNull(),
+    // Wide enough for a full uncompressed IPv6 address.
+    ipAddress: varchar("ip_address", { length: 45 }).notNull(),
+    prefixLength: integer("prefix_length").notNull(),
+    label: varchar("label", { length: 120 }),
+    createdBy: uuid("created_by"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    index("organization_allowed_ips_org_idx").on(t.organizationId),
+    uniqueIndex("organization_allowed_ips_org_network_uq").on(
+      t.organizationId,
+      t.ipAddress,
+      t.prefixLength,
+    ),
+    check(
+      "organization_allowed_ips_prefix_length_ck",
+      sql`${t.prefixLength} >= 0 AND ${t.prefixLength} <= 128`,
+    ),
+    check(
+      "organization_allowed_ips_address_nonempty_ck",
+      sql`length(trim(${t.ipAddress})) > 0`,
+    ),
   ],
 )
 
@@ -667,6 +716,35 @@ export const sessions = pgTable(
     index("sessions_user_idx").on(t.userId),
     index("sessions_expires_idx").on(t.expiresAt),
     index("sessions_org_idx").on(t.organizationId),
+  ],
+)
+
+// Server-side registry for JWT-backed browser sessions. Unlike the legacy
+// refresh-token table above, the subject is a string so both UUID users and
+// employee principals (`emp_<id>`) receive independent, revocable sessions.
+export const authSessions = pgTable(
+  "auth_sessions",
+  {
+    id: uuid("id").primaryKey(),
+    subjectId: varchar("subject_id", { length: 128 }).notNull(),
+    organizationId: integer("organization_id").references(() => organizations.id, {
+      onDelete: "cascade",
+    }),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    lastActivityAt: timestamp("last_activity_at", { withTimezone: true }).notNull(),
+    absoluteExpiresAt: timestamp("absolute_expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("auth_sessions_subject_idx").on(t.subjectId),
+    index("auth_sessions_org_idx").on(t.organizationId),
+    index("auth_sessions_absolute_expiry_idx").on(t.absoluteExpiresAt),
+    check("auth_sessions_subject_nonempty_ck", sql`length(trim(${t.subjectId})) > 0`),
+    check(
+      "auth_sessions_time_order_ck",
+      sql`${t.startedAt} <= ${t.lastActivityAt} AND ${t.lastActivityAt} <= ${t.absoluteExpiresAt}`,
+    ),
   ],
 )
 

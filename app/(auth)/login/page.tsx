@@ -78,6 +78,9 @@ function getLoginErrorMessage(errorCode: string) {
   if (errorCode === "USER_INACTIVE") {
     return "Your account has been deactivated. Please contact support."
   }
+  if (errorCode === "NETWORK_RESTRICTED") {
+    return "Please log in from your organization's network."
+  }
   if (errorCode === "AUTH_DATABASE_ERROR") {
     return "We couldn't reach the authentication service. Please try again or contact support."
   }
@@ -113,7 +116,11 @@ function LoginForm() {
   const [password, setPassword] = useState("")
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(() =>
+    searchParams.get("reason") === "session-expired"
+      ? "Your session expired. Please sign in again."
+      : null,
+  )
   const [mfaRequired, setMfaRequired] = useState(false)
   const [isEmployee, setIsEmployee] = useState(false)
   const [pendingUser, setPendingUser] = useState<{ username: string; password: string } | null>(null)

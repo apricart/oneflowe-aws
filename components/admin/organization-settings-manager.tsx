@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Card,CardContent,CardDescription,CardHeader,CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -29,6 +29,11 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
+import {
+  SESSION_IDLE_TIMEOUT_MINUTES_DEFAULT,
+  SESSION_IDLE_TIMEOUT_MINUTES_MAX,
+  SESSION_IDLE_TIMEOUT_MINUTES_MIN,
+} from "@/lib/session-policy"
 
 const SETTING_CATEGORIES = {
   general: { icon: Settings, label: "General", color: "blue" },
@@ -100,8 +105,8 @@ const PREDEFINED_SETTINGS = [
     label: "Session Timeout (minutes)",
     type: "number",
     category: "security",
-    defaultValue: "60",
-    description: "User session timeout duration",
+    defaultValue: SESSION_IDLE_TIMEOUT_MINUTES_DEFAULT,
+    description: `Idle timeout (${SESSION_IDLE_TIMEOUT_MINUTES_MIN}-${SESSION_IDLE_TIMEOUT_MINUTES_MAX} minutes; absolute lifetime remains 8 hours)`,
   },
   {
     key: "low_stock_threshold",
@@ -143,6 +148,13 @@ function SettingEditor({
     currentValue ?? setting.defaultValue
   )
 
+  // Settings arrive asynchronously and this editor is reused while switching
+  // tenants. Never let a default or a previous tenant's value remain in the
+  // control after the authoritative value changes.
+  useEffect(() => {
+    setLocalValue(currentValue ?? setting.defaultValue)
+  }, [currentValue, setting.defaultValue])
+
   return (
     <div className="p-4 rounded-lg border bg-card">
       <div className="flex items-start justify-between gap-4">
@@ -170,9 +182,29 @@ function SettingEditor({
                 type={setting.type}
                 value={localValue}
                 onChange={(e) => setLocalValue(e.target.value)}
+                min={
+                  setting.key === "session_timeout_minutes"
+                    ? SESSION_IDLE_TIMEOUT_MINUTES_MIN
+                    : undefined
+                }
+                max={
+                  setting.key === "session_timeout_minutes"
+                    ? SESSION_IDLE_TIMEOUT_MINUTES_MAX
+                    : undefined
+                }
                 className="w-48"
               />
-              <Button size="sm" onClick={() => onSave(setting.key, localValue)}>
+              <Button
+                size="sm"
+                onClick={() =>
+                  onSave(
+                    setting.key,
+                    setting.key === "session_timeout_minutes"
+                      ? Number(localValue)
+                      : localValue,
+                  )
+                }
+              >
                 <Save className="h-4 w-4" />
               </Button>
             </div>
@@ -338,7 +370,7 @@ export function OrganizationSettingsManager() {
                   <div className="grid gap-4">
                     {categorySettings.map((setting) => (
                       <SettingEditor
-                        key={setting.key}
+                        key={`${selectedOrg}:${setting.key}`}
                         setting={setting}
                         currentValue={getSettingValue(setting.key)}
                         onSave={handleSaveSetting}
