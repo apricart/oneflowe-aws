@@ -9,7 +9,20 @@ import {
   canMakeOrderDecision,
   isOrderApproverRole,
   type OrderApproverRole,
+  type OrderDecisionRole,
 } from "@/lib/order-approver-role"
+import {
+  GROUP_USER_ROLE,
+  isGroupApproverRole,
+  resolveScopedBranchIds,
+} from "@/lib/server/multi-branch-scope"
+
+/** Roles permitted to reach an order decision at all. */
+const ORDER_DECISION_ROLES = ["BRANCH_ADMIN", "HEAD_OFFICE", GROUP_USER_ROLE]
+
+function canAttemptOrderDecision(role: unknown): boolean {
+  return typeof role === "string" && ORDER_DECISION_ROLES.includes(role)
+}
 
 export type OrderDecisionCapabilities = {
   canApproveOrders: boolean
@@ -22,6 +35,8 @@ export type OrderDecisionAuthorization =
     ok: true
     order: typeof orders.$inferSelect
     configuredApproverRole: OrderApproverRole
+    /** The role that actually decided — GROUP_USER, or the configured role. */
+    decisionRole: OrderDecisionRole
   }
   | {
     ok: false
@@ -37,7 +52,7 @@ export async function authorizeOrderDecision(
   tx: any,
   input: { orderId: number; scope: RequestScope },
 ): Promise<OrderDecisionAuthorization> {
-  if (input.scope.role !== "BRANCH_ADMIN" && input.scope.role !== "HEAD_OFFICE") {
+  if (!canAttemptOrderDecision(input.scope.role)) {
     return { ok: false, reason: "forbidden" }
   }
 
@@ -93,6 +108,12 @@ export async function authorizeOrderDecision(
     .where(eq(branches.id, order.branchId))
     .limit(1)
 
+  // Read the assignments inside the same transaction as the status change, so
+  // a concurrent scope edit cannot be observed half-applied.
+  const actorScopedBranchIds = isGroupApproverRole(input.scope.role)
+    ? await resolveScopedBranchIds(tx, input.scope.userId)
+    : null
+
   if (!branch || !canMakeOrderDecision({
     actorRole: input.scope.role,
     actorOrganizationId: actor.organizationId,
@@ -101,6 +122,7 @@ export async function authorizeOrderDecision(
     orderOrganizationId: order.organizationId,
     orderBranchId: order.branchId,
     branchOrganizationId: branch.organizationId,
+    actorScopedBranchIds,
   })) {
     return { ok: false, reason: "forbidden" }
   }
@@ -109,6 +131,9 @@ export async function authorizeOrderDecision(
     ok: true,
     order,
     configuredApproverRole: organization.orderApproverRole,
+    decisionRole: isGroupApproverRole(input.scope.role)
+      ? GROUP_USER_ROLE
+      : organization.orderApproverRole,
   }
 }
 
@@ -122,7 +147,7 @@ export async function getOrderDecisionCapabilities(
   }
 
   if (!scope?.organizationId) return denied
-  if (scope.role !== "BRANCH_ADMIN" && scope.role !== "HEAD_OFFICE") return denied
+  if (!canAttemptOrderDecision(scope.role)) return denied
 
   const [actor] = await db
     .select({
@@ -155,6 +180,18 @@ export async function getOrderDecisionCapabilities(
 
   if (!organization || !isOrderApproverRole(organization.orderApproverRole)) {
     return denied
+  }
+
+  // A GROUP_USER decides for its assigned branches regardless of which role the
+  // tenant configured as its standard approver, so it is resolved separately.
+  if (isGroupApproverRole(scope.role)) {
+    const scopedBranchIds = await resolveScopedBranchIds(db, scope.userId)
+    const allowedForGroupUser = scopedBranchIds.length > 0
+    return {
+      canApproveOrders: allowedForGroupUser,
+      canRejectOrders: allowedForGroupUser,
+      orderApproverRole: organization.orderApproverRole,
+    }
   }
 
   let allowed = organization.orderApproverRole === scope.role

@@ -13,7 +13,7 @@ export async function POST(
   req: Request,
   props: { params: Promise<{ id: string }> }
 ) {
-  const err = await requireApiRole(["BRANCH_ADMIN", "HEAD_OFFICE"])
+  const err = await requireApiRole(["BRANCH_ADMIN", "HEAD_OFFICE", "GROUP_USER"])
   if (err) return err
 
   const params = await props.params

@@ -515,6 +515,31 @@ export const ROLE_TEMPLATES = {
       Permission.SETTINGS_VIEW,
     ],
   },
+  GROUP_USER: {
+    name: "Group User",
+    description: "Approves and manages orders on behalf of multiple branches",
+    permissions: [
+      Permission.INVENTORY_VIEW,
+      Permission.ORDER_CREATE,
+      Permission.ORDER_VIEW,
+      Permission.ORDER_APPROVE,
+      Permission.ORDER_REJECT,
+      Permission.FINANCE_VIEW_BUDGETS,
+      Permission.REPORTS_VIEW_BRANCH,
+      Permission.GROUP_VIEW,
+    ],
+  },
+  GROUP_ORDER_PORTAL: {
+    name: "Group Order Portal User",
+    description: "Places and manages orders on behalf of multiple branches",
+    permissions: [
+      Permission.INVENTORY_VIEW,
+      Permission.ORDER_CREATE,
+      Permission.ORDER_VIEW,
+      Permission.FINANCE_VIEW_BUDGETS,
+      Permission.GROUP_VIEW,
+    ],
+  },
   ORDER_PORTAL: {
     name: "Order Portal User",
     description: "Restricted access for placing orders only",

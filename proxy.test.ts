@@ -117,6 +117,26 @@ describe("session policy proxy enforcement", () => {
     ["BRANCH_ADMIN", "/organizations", "/login"],
     ["SUPER_ADMIN", "/organizations", null],
     ["HEAD_OFFICE", "/branches", null],
+    // Group Order Portal is confined to its own area, and its area is closed
+    // to everyone else.
+    ["GROUP_ORDER_PORTAL", "/dashboard", "/group-portal"],
+    ["GROUP_ORDER_PORTAL", "/shop", "/group-portal"],
+    ["GROUP_ORDER_PORTAL", "/organizations", "/group-portal"],
+    ["GROUP_ORDER_PORTAL", "/group-portal", null],
+    ["GROUP_USER", "/dashboard", "/group-portal"],
+    ["GROUP_USER", "/shop", "/group-portal"],
+    ["GROUP_USER", "/organizations", "/group-portal"],
+    ["GROUP_USER", "/orders", "/group-portal"],
+    ["GROUP_USER", "/group-portal", null],
+    // The multi-branch ordering workspace is exclusive to the requesting role.
+    ["GROUP_ORDER_PORTAL", "/group-portal/bulk-order", null],
+    ["GROUP_USER", "/group-portal/bulk-order", "/group-portal"],
+    ["SUPER_ADMIN", "/group-portal/bulk-order", "/dashboard"],
+    ["ORDER_PORTAL", "/group-portal/bulk-order", "/shop"],
+    ["SUPER_ADMIN", "/group-portal", "/dashboard"],
+    ["HEAD_OFFICE", "/group-portal", "/dashboard"],
+    ["BRANCH_ADMIN", "/group-portal", "/dashboard"],
+    ["ORDER_PORTAL", "/group-portal", "/shop"],
   ])(
     "preserves %s routing for %s",
     async (role, path, redirectedPath) => {

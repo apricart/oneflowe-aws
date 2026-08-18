@@ -17,7 +17,7 @@ export type OrderLifecycleEmailPayload = {
   branchName: string
   requestedBy?: string | null
   approvedBy?: string | null
-  approvedByRole?: "BRANCH_ADMIN" | "HEAD_OFFICE" | null
+  approvedByRole?: "BRANCH_ADMIN" | "HEAD_OFFICE" | "GROUP_USER" | null
   rejectionReason?: string | null
 }
 
@@ -45,9 +45,11 @@ export function buildOrderLifecycleEmail(
   const isCreated = template === "ORDER_CREATED"
   const isAdminApproval = template === "ORDER_APPROVED_ADMIN"
   const isApproved = template === "ORDER_APPROVED"
-  const approverRoleLabel = payload.approvedByRole === "HEAD_OFFICE"
-    ? "Head Office"
-    : "Branch Admin"
+  const approverRoleLabel = (() => {
+    if (payload.approvedByRole === "HEAD_OFFICE") return "Head Office"
+    if (payload.approvedByRole === "GROUP_USER") return "Group User"
+    return "Branch Admin"
+  })()
   const heading = (() => {
     if (isCreated) {
       return "New order awaiting approval"

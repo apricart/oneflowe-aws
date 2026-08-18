@@ -65,7 +65,28 @@ function getBranchSelectorLabel(branchId: string, organizationId: string, branch
 function getRoleLabel(role: string) {
   if (role === "HEAD_OFFICE") return "Head Office User"
   if (role === "BRANCH_ADMIN") return "Branch Admin User"
+  if (role === "GROUP_ORDER_PORTAL") return "Group Order Portal User"
+  if (role === "GROUP_USER") return "Group User"
   return "Order Portal User"
+}
+
+// Roles pinned to exactly one branch. The group roles are deliberately
+// excluded: their reach comes from the group/branch assignments instead.
+const SINGLE_BRANCH_ROLES = ["BRANCH_ADMIN", "ORDER_PORTAL"]
+
+// Roles whose reach is defined by group and branch assignments.
+const MULTI_BRANCH_ROLES = ["GROUP_ORDER_PORTAL", "GROUP_USER"]
+
+function isSingleBranchRole(role: string) {
+  return SINGLE_BRANCH_ROLES.includes(role)
+}
+
+function usesMultiBranchScope(role: string) {
+  return MULTI_BRANCH_ROLES.includes(role)
+}
+
+function toggleId(current: string[], id: string) {
+  return current.includes(id) ? current.filter((value) => value !== id) : [...current, id]
 }
 
 function getInitialCreateUserForm(
@@ -83,6 +104,10 @@ function getInitialCreateUserForm(
     role: "",
     organizationId: organizationId || "",
     branchId: userRole === "BRANCH_ADMIN" ? branchId || "" : "",
+    // Group Order Portal only — the groups and the individual branches this
+    // user may order on behalf of.
+    groupIds: [] as string[],
+    branchIds: [] as string[],
     mfaEnabled: false,
     isActive: true,
     employeeId: "",
@@ -151,15 +176,41 @@ function getBasicUserErrors(form: CreateUserForm, usernameAvailable: boolean | n
 function getAssignmentErrors(form: CreateUserForm) {
   const errors: Record<string, string> = {}
   if (!form.role) errors.role = "Role is required"
-  const needsOrganization = ["HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL"].includes(form.role)
+  const needsOrganization = ["HEAD_OFFICE", ...SINGLE_BRANCH_ROLES, ...MULTI_BRANCH_ROLES].includes(form.role)
   if (needsOrganization && !form.organizationId) {
     errors.organizationId = "Organization is required for this role"
   }
-  const needsBranch = ["BRANCH_ADMIN", "ORDER_PORTAL"].includes(form.role)
-  if (needsBranch && !form.branchId) {
+  if (isSingleBranchRole(form.role) && !form.branchId) {
     errors.branchId = "Branch assignment is required for Branch Admin and Order Portal roles"
   }
+  if (
+    usesMultiBranchScope(form.role)
+    && form.groupIds.length === 0
+    && form.branchIds.length === 0
+  ) {
+    errors.groupScope = "Assign at least one group or one branch"
+  }
   return errors
+}
+
+/** Whether the Role & Assignment step has everything the chosen role needs. */
+function isAssignmentStepComplete(form: CreateUserForm) {
+  if (!form.role) return false
+  if (isSingleBranchRole(form.role)) return Boolean(form.branchId)
+  if (usesMultiBranchScope(form.role)) {
+    return form.groupIds.length > 0 || form.branchIds.length > 0
+  }
+  return true
+}
+
+/** Field-wise comparison; the scope lists are compared by length, not identity. */
+function hasFormChanged(form: CreateUserForm, initialForm: CreateUserForm) {
+  return (Object.keys(initialForm) as Array<keyof CreateUserForm>).some((field) => {
+    const next = form[field]
+    const initial = initialForm[field]
+    if (Array.isArray(next) && Array.isArray(initial)) return next.length !== initial.length
+    return next !== initial
+  })
 }
 
 function getCreateUserErrors(form: CreateUserForm, usernameAvailable: boolean | null) {
@@ -242,13 +293,7 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
 
   const [form, setForm] = useState(() => initialForm)
 
-  const isDirty = useMemo(
-    () =>
-      (Object.keys(initialForm) as Array<keyof typeof initialForm>).some(
-        (field) => form[field] !== initialForm[field],
-      ),
-    [form, initialForm],
-  )
+  const isDirty = useMemo(() => hasFormChanged(form, initialForm), [form, initialForm])
 
   const [usernameStatus, setUsernameStatus] = useState<UsernameStatus>({
     available: null,
@@ -282,8 +327,17 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
     jsonFetcher
   )
 
+  // Groups are only needed while configuring a Group Order Portal user.
+  const { data: groupsData } = useSWR(
+    usesMultiBranchScope(form.role) && form.organizationId
+      ? `/api/v1/groups?organizationId=${form.organizationId}`
+      : null,
+    jsonFetcher
+  )
+
   const organizations = (organizationsData as any)?.items || []
   const branches = (branchesData as any)?.items || []
+  const groups = (groupsData as any)?.groups || []
 
   // Initialize form when dialog opens
   useEffect(() => {
@@ -344,7 +398,7 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
     if (!isValid && autoJump) {
       if (newErrors.firstName || newErrors.lastName || newErrors.email || newErrors.password || newErrors.phone || newErrors.employeeId) {
         setStep(1)
-      } else if (newErrors.role || newErrors.organizationId || newErrors.branchId) {
+      } else if (newErrors.role || newErrors.organizationId || newErrors.branchId || newErrors.groupScope) {
         setStep(2)
       }
     }
@@ -377,7 +431,9 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
           phone: form.phone.trim() || null,
           role: form.role,
           organizationId: form.organizationId ? Number.parseInt(form.organizationId) : null,
-          branchId: (form.role === "BRANCH_ADMIN" || form.role === "ORDER_PORTAL") && form.branchId ? Number.parseInt(form.branchId) : null,
+          branchId: isSingleBranchRole(form.role) && form.branchId ? Number.parseInt(form.branchId) : null,
+          groupIds: usesMultiBranchScope(form.role) ? form.groupIds.map(Number) : [],
+          branchIds: usesMultiBranchScope(form.role) ? form.branchIds.map(Number) : [],
           mfaEnabled: form.mfaEnabled,
           isActive: form.isActive,
           employeeId: form.employeeId.trim() || null,
@@ -773,7 +829,7 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                     <Label htmlFor="organization">Organization *</Label>
                     <Select
                       value={form.organizationId}
-                      onValueChange={value => setForm({ ...form, organizationId: value, branchId: "" })}
+                      onValueChange={value => setForm({ ...form, organizationId: value, branchId: "", groupIds: [], branchIds: [] })}
                     >
                       <SelectTrigger name="organizationId" className={errors.organizationId ? 'border-red-500' : ''}>
                         <SelectValue placeholder="Select organization" />
@@ -821,7 +877,7 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                 {/* Role Selector */}
                 <div className="space-y-2">
                   <Label htmlFor="role">Role *</Label>
-                  <Select value={form.role} onValueChange={value => setForm({ ...form, role: value, branchId: "" })}>
+                  <Select value={form.role} onValueChange={value => setForm({ ...form, role: value, branchId: "", groupIds: [], branchIds: [] })}>
                     <SelectTrigger name="role" className={errors.role ? 'border-red-500' : ''}>
                       <SelectValue placeholder="Select role" />
                     </SelectTrigger>
@@ -831,6 +887,8 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                       )}
                       <SelectItem value="BRANCH_ADMIN">Branch Admin</SelectItem>
                       <SelectItem value="ORDER_PORTAL">Order Portal User</SelectItem>
+                      <SelectItem value="GROUP_ORDER_PORTAL">Group Order Portal User</SelectItem>
+                      <SelectItem value="GROUP_USER">Group User</SelectItem>
                     </SelectContent>
                   </Select>
                   {errors.role && (
@@ -839,7 +897,7 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                 </div>
 
                 {/* Branch Selector - Only for Branch Admin and Order Portal */}
-                {(form.role === "BRANCH_ADMIN" || form.role === "ORDER_PORTAL") && (
+                {isSingleBranchRole(form.role) && (
                   <div className="space-y-2">
                     <Label htmlFor="branch">Branch Assignment *</Label>
                     <Popover open={branchOpen} onOpenChange={setBranchOpen}>
@@ -904,6 +962,51 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                   </div>
                 )}
 
+                {/* Group & branch scope - for the group-based roles */}
+                {usesMultiBranchScope(form.role) && (
+                  <div className="space-y-4">
+                    <MultiAssignSelector
+                      id="groupIds"
+                      label="Groups"
+                      placeholder="Search groups..."
+                      emptyLabel="No group found."
+                      disabledLabel="Select organization first"
+                      disabled={!form.organizationId}
+                      options={groups.map((group: any) => ({
+                        id: String(group.id),
+                        label: group.name,
+                        hint: typeof group.branchCount === "number" ? `${group.branchCount} branches` : undefined,
+                      }))}
+                      selectedIds={form.groupIds}
+                      onToggle={id => setForm({ ...form, groupIds: toggleId(form.groupIds, id) })}
+                      onClear={() => setForm({ ...form, groupIds: [] })}
+                      helpText="Every branch in a selected group is included automatically, including branches added to the group later."
+                    />
+
+                    <MultiAssignSelector
+                      id="branchIds"
+                      label="Additional branches"
+                      placeholder="Search branches..."
+                      emptyLabel="No branch found."
+                      disabledLabel="Select organization first"
+                      disabled={!form.organizationId}
+                      options={branches.map((branch: any) => ({
+                        id: String(branch.id),
+                        label: branch.name,
+                        hint: branch.city || undefined,
+                      }))}
+                      selectedIds={form.branchIds}
+                      onToggle={id => setForm({ ...form, branchIds: toggleId(form.branchIds, id) })}
+                      onClear={() => setForm({ ...form, branchIds: [] })}
+                      helpText="Individually assigned branches, added on top of the selected groups."
+                    />
+
+                    {errors.groupScope && (
+                      <p className="text-xs text-red-600">{errors.groupScope}</p>
+                    )}
+                  </div>
+                )}
+
                 {/* Assignment Summary */}
                 {form.role && (
                   <Card className="p-4 bg-muted/50">
@@ -922,7 +1025,7 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                               <span>Organization: {getSelectedOrganizationName()}</span>
                             </div>
                           )}
-                          {(form.role === "BRANCH_ADMIN" || form.role === "ORDER_PORTAL") && form.branchId && (
+                          {isSingleBranchRole(form.role) && form.branchId && (
                             <div className="flex items-center gap-1">
                               <MapPin className="h-3 w-3" />
                               <span>Branch: {getSelectedBranchName()}</span>
@@ -931,8 +1034,26 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                           {form.role === "HEAD_OFFICE" && (
                             <p>Can manage organization-wide settings and create branch admins</p>
                           )}
-                          {(form.role === "BRANCH_ADMIN" || form.role === "ORDER_PORTAL") && !form.branchId && (
+                          {isSingleBranchRole(form.role) && !form.branchId && (
                             <p className="text-amber-600">Please select a branch assignment</p>
+                          )}
+                          {form.role === "GROUP_USER" && (
+                            <p>Can approve and reject orders for every branch in scope</p>
+                          )}
+                          {usesMultiBranchScope(form.role) && (
+                            <div className="flex items-center gap-1">
+                              <MapPin className="h-3 w-3" />
+                              <span>
+                                {form.groupIds.length} group{form.groupIds.length === 1 ? "" : "s"}
+                                {" + "}
+                                {form.branchIds.length} branch{form.branchIds.length === 1 ? "" : "es"}
+                              </span>
+                            </div>
+                          )}
+                          {usesMultiBranchScope(form.role)
+                            && form.groupIds.length === 0
+                            && form.branchIds.length === 0 && (
+                            <p className="text-amber-600">Assign at least one group or one branch</p>
                           )}
                         </div>
                       </div>
@@ -1028,14 +1149,13 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                     else validateForm(); // show errors
                   } else if (step === 2) {
                     // Check step 2 fields
-                    const step2Valid = form.role && ((form.role !== "BRANCH_ADMIN" && form.role !== "ORDER_PORTAL") || form.branchId);
-                    if (step2Valid) setStep(3);
+                    if (isAssignmentStepComplete(form)) setStep(3);
                     else validateForm(); // show errors
                   }
                 }}
                 disabled={
                   (step === 1 && (!form.firstName.trim() || !form.lastName.trim() || !form.username.trim() || !form.email.trim() || !form.password || usernameStatus.available === false)) ||
-                  (step === 2 && (!form.role || ((form.role === "BRANCH_ADMIN" || form.role === "ORDER_PORTAL") && !form.branchId)))
+                  (step === 2 && !isAssignmentStepComplete(form))
                 }
               >
                 Next
@@ -1075,5 +1195,136 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
         </AlertDialogContent>
       </AlertDialog>
     </>
+  )
+}
+
+type AssignOption = {
+  id: string
+  label: string
+  hint?: string
+}
+
+/**
+ * Searchable multi-select used for the Group Order Portal scope. Selection is
+ * additive and every chosen item stays visible as a removable chip, so an
+ * administrator can always see the full reach they are granting.
+ */
+function MultiAssignSelector({
+  id,
+  label,
+  placeholder,
+  emptyLabel,
+  disabledLabel,
+  disabled,
+  options,
+  selectedIds,
+  onToggle,
+  onClear,
+  helpText,
+}: Readonly<{
+  id: string
+  label: string
+  placeholder: string
+  emptyLabel: string
+  disabledLabel: string
+  disabled: boolean
+  options: AssignOption[]
+  selectedIds: string[]
+  onToggle: (id: string) => void
+  onClear: () => void
+  helpText: string
+}>) {
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState("")
+
+  const selectedSet = new Set(selectedIds)
+  const selectedOptions = options.filter((option) => selectedSet.has(option.id))
+
+  const triggerLabel = (() => {
+    if (disabled) return disabledLabel
+    if (selectedIds.length === 0) return placeholder
+    return `${selectedIds.length} selected`
+  })()
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <Label htmlFor={id}>{label}</Label>
+        {selectedIds.length > 0 && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2 text-xs text-muted-foreground"
+            onClick={onClear}
+          >
+            Clear
+          </Button>
+        )}
+      </div>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            id={id}
+            name={id}
+            variant="outline"
+            role="combobox"
+            aria-expanded={open}
+            disabled={disabled}
+            className={cn(
+              "w-full justify-between font-normal",
+              selectedIds.length === 0 && "text-muted-foreground",
+            )}
+          >
+            {triggerLabel}
+            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+          <Command>
+            <CommandInput placeholder={placeholder} value={search} onValueChange={setSearch} />
+            <CommandList>
+              <CommandEmpty>{emptyLabel}</CommandEmpty>
+              <CommandGroup>
+                {options.map((option) => (
+                  <CommandItem
+                    key={option.id}
+                    value={`${option.label}__${option.id}`}
+                    onSelect={() => onToggle(option.id)}
+                  >
+                    <Check
+                      className={cn(
+                        "mr-2 h-4 w-4",
+                        selectedSet.has(option.id) ? "opacity-100" : "opacity-0",
+                      )}
+                    />
+                    <span className="flex-1">{option.label}</span>
+                    {option.hint && (
+                      <span className="ml-2 text-xs text-muted-foreground">{option.hint}</span>
+                    )}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
+      {selectedOptions.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {selectedOptions.map((option) => (
+            <Badge
+              key={option.id}
+              variant="secondary"
+              className="cursor-pointer gap-1"
+              onClick={() => onToggle(option.id)}
+            >
+              {option.label}
+              <span aria-hidden="true">×</span>
+            </Badge>
+          ))}
+        </div>
+      )}
+      <p className="text-[10px] text-muted-foreground">{helpText}</p>
+    </div>
   )
 }

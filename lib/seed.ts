@@ -27,7 +27,7 @@ const DEFAULT_SETTINGS = [
 async function seed() {
   console.log('Starting database seed...')
 
-  const roleNames = ['SUPER_ADMIN', 'HEAD_OFFICE', 'BRANCH_ADMIN', 'ORDER_PORTAL'] as const
+  const roleNames = ['SUPER_ADMIN', 'HEAD_OFFICE', 'GROUP_USER', 'BRANCH_ADMIN', 'GROUP_ORDER_PORTAL', 'ORDER_PORTAL'] as const
   for (const roleName of roleNames) {
     const [existingRole] = await db
       .select()

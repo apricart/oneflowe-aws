@@ -24,8 +24,11 @@ describe("order approver implementation contracts", () => {
 
     expect(policy).toContain('.for("share")')
     expect(policy).toContain("branch.organizationId")
-    expect(approve).toContain('requireApiRole(["BRANCH_ADMIN", "HEAD_OFFICE"])')
-    expect(reject).toContain('requireApiRole(["BRANCH_ADMIN", "HEAD_OFFICE"])')
+    expect(approve).toContain('requireApiRole(["BRANCH_ADMIN", "HEAD_OFFICE", "GROUP_USER"])')
+    expect(reject).toContain('requireApiRole(["BRANCH_ADMIN", "HEAD_OFFICE", "GROUP_USER"])')
+    // A GROUP_USER's reach is read inside the deciding transaction, never from
+    // the request, so a stale or forged scope cannot authorize a decision.
+    expect(policy).toContain("resolveScopedBranchIds(tx, input.scope.userId)")
     expect(approve.indexOf("authorizeOrderDecision(tx")).toBeGreaterThan(approve.indexOf("db.transaction"))
     expect(reject.indexOf("authorizeOrderDecision(tx")).toBeGreaterThan(reject.indexOf("db.transaction"))
     expect(approve).not.toContain('"SUPER_ADMIN"]')

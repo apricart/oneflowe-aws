@@ -105,6 +105,8 @@ function redirectAuthenticatedUser(session: any, callbackUrl: string | null): vo
     window.location.replace("/change-password")
   } else if (["ORDER_PORTAL", "EMPLOYEE"].includes(session.user?.role)) {
     window.location.replace("/shop")
+  } else if (["GROUP_ORDER_PORTAL", "GROUP_USER"].includes(session.user?.role)) {
+    window.location.replace("/group-portal")
   } else {
     window.location.replace(safeInternalRedirectPath(callbackUrl))
   }
@@ -200,6 +202,8 @@ function LoginForm() {
         window.location.replace("/change-password")
       } else if (userRole === "ORDER_PORTAL" || userRole === "EMPLOYEE") {
         window.location.replace("/shop")
+      } else if (userRole === "GROUP_ORDER_PORTAL" || userRole === "GROUP_USER") {
+        window.location.replace("/group-portal")
       } else {
         const cb = searchParams.get("callbackUrl")
         const targetUrl = safeInternalRedirectPath(cb)
