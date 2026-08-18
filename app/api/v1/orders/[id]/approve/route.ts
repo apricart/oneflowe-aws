@@ -16,7 +16,7 @@ export async function POST(
   req: Request,
   props: { params: Promise<{ id: string }> }
 ) {
-  const err = await requireApiRole(["BRANCH_ADMIN", "HEAD_OFFICE"])
+  const err = await requireApiRole(["BRANCH_ADMIN", "HEAD_OFFICE", "GROUP_USER"])
   if (err) return err
 
   const params = await props.params
@@ -64,7 +64,7 @@ export async function POST(
     const superAdminNotifications = await queueSuperAdminApprovalNotifications(tx, {
       order: ord,
       approvedByUserId: user.id,
-      approvedByRole: authorization.configuredApproverRole,
+      approvedByRole: authorization.decisionRole,
     })
 
     await tx.insert(auditLogs).values({
@@ -77,6 +77,7 @@ export async function POST(
       metadata: {
         tid: ord.tid,
         actorRole: user.role,
+        decisionRole: authorization.decisionRole,
         configuredApproverRole: authorization.configuredApproverRole,
       },
     })

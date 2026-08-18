@@ -198,7 +198,7 @@ export function isValidRole(role: string | undefined | null): role is Role {
     return false
   }
 
-  const validRoles: Role[] = ['SUPER_ADMIN', 'HEAD_OFFICE', 'BRANCH_ADMIN', 'ORDER_PORTAL']
+  const validRoles: Role[] = ['SUPER_ADMIN', 'HEAD_OFFICE', 'GROUP_USER', 'BRANCH_ADMIN', 'GROUP_ORDER_PORTAL', 'ORDER_PORTAL']
   return validRoles.includes(role as Role)
 }
 

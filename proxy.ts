@@ -17,6 +17,7 @@ const protectedPrefixes = [
   "/change-password",
   "/dashboard",
   "/employee-management",
+  "/group-portal",
   "/groups",
   "/inventory",
   "/invoices",
@@ -148,6 +149,47 @@ function handleApiRequest(req: NextRequest, pathname: string, response: NextResp
   return withSecurityHeaders(response, pathname)
 }
 
+const ADMIN_PORTAL_ROLES = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"]
+
+// Both group-based roles work across many branches and share one workspace
+// area, kept separate from the admin shell and from the single-branch /shop.
+const GROUP_PORTAL_ROLES = ["GROUP_ORDER_PORTAL", "GROUP_USER"]
+
+// The multi-branch ordering workspace inside that area. Only the requesting
+// role may reach it; GROUP_USER approves orders but does not raise them.
+const GROUP_ORDERING_PREFIX = "/group-portal/bulk-order"
+
+/**
+ * The portal each role is confined to, or null when the path is already inside
+ * it. Each restricted role owns exactly one area and is redirected home from
+ * everywhere else; /change-password stays reachable so a forced password change
+ * can complete.
+ *
+ * ORDER_PORTAL -> /shop and the group roles -> /group-portal are mutually
+ * exclusive: neither can reach the other's area or the admin shell.
+ */
+function rolePortalRedirect(role: string | undefined, pathname: string): string | null {
+  if (pathname.startsWith("/change-password")) return null
+
+  if (role === "ORDER_PORTAL") {
+    return pathname.startsWith("/shop") ? null : "/shop"
+  }
+  if (role && GROUP_PORTAL_ROLES.includes(role)) {
+    if (!pathname.startsWith("/group-portal")) return "/group-portal"
+    // Within the shared area, ordering stays exclusive to the requesting role.
+    return pathname.startsWith(GROUP_ORDERING_PREFIX) && role !== "GROUP_ORDER_PORTAL"
+      ? "/group-portal"
+      : null
+  }
+  if (role && ADMIN_PORTAL_ROLES.includes(role)) {
+    // Strict separation: administrators belong in the dashboard shell only.
+    return pathname.startsWith("/shop") || pathname.startsWith("/group-portal")
+      ? "/dashboard"
+      : null
+  }
+  return null
+}
+
 export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl
   const response = NextResponse.next()
@@ -198,16 +240,9 @@ export async function proxy(req: NextRequest) {
   }
 
   // Role-based routing enforcement
-  // 1. ORDER_PORTAL users can ONLY access /shop (allow /change-password when mustChangePassword is set)
-  if (role === "ORDER_PORTAL" && !pathname.startsWith("/shop") && !pathname.startsWith("/change-password")) {
-    const url = new URL("/shop", req.url || "http://localhost")
-    const redirectRes = NextResponse.redirect(url)
-    return withSecurityHeaders(redirectRes, pathname)
-  }
-
-  // 2. Admin users cannot access /shop — strict separation
-  if (role && ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"].includes(role) && pathname.startsWith("/shop")) {
-    const url = new URL("/dashboard", req.url || "http://localhost")
+  const roleRedirect = rolePortalRedirect(role, pathname)
+  if (roleRedirect) {
+    const url = new URL(roleRedirect, req.url || "http://localhost")
     const redirectRes = NextResponse.redirect(url)
     return withSecurityHeaders(redirectRes, pathname)
   }
@@ -255,6 +290,8 @@ export const config = {
     "/settings/:path*",
     "/shop",
     "/shop/:path*",
+    "/group-portal",
+    "/group-portal/:path*",
     "/change-password",
     "/change-password/:path*",
     "/api/v1/:path*",

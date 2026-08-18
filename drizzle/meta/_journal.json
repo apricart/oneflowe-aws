@@ -295,6 +295,27 @@
       "when": 1786968000000,
       "tag": "20260817120000_add_organization_private_network_login",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1787054400000,
+      "tag": "20260818120000_add_group_order_portal_scope",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1787058000000,
+      "tag": "20260818130000_add_group_user_role",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1787061600000,
+      "tag": "20260818140000_add_group_orders",
+      "breakpoints": true
     }
   ]
 }

@@ -32,7 +32,7 @@ describe("order lifecycle notification security contracts", () => {
     expect(service).toContain("eq(roles.name, input.approvedByRole)")
     expect(service).toContain('template: "ORDER_APPROVED_ADMIN"')
     expect(service).toContain('row.recipientRole === "SUPER_ADMIN"')
-    expect(approval).toContain("approvedByRole: authorization.configuredApproverRole")
+    expect(approval).toContain("approvedByRole: authorization.decisionRole")
     expect(approval).toContain("queueSuperAdminApprovalNotifications(tx")
   })
 
