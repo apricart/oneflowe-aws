@@ -456,6 +456,30 @@ export const groupOrderCreateSchema = z.object({
 }).strict()
 
 /**
+ * Bounds one bulk approve/reject request. Each order is decided in its own
+ * transaction, so this caps how many transactions a single call may open.
+ */
+export const MAX_BULK_DECISION_ORDERS = 100
+
+/**
+ * A GROUP_USER deciding one order or a whole group order in a single request.
+ *
+ * The ids are only a *request*; every one of them is re-authorized individually
+ * against the caller's live branch scope before anything is written, so a
+ * forged id simply comes back as a per-order "forbidden" result.
+ */
+export const groupOrderDecisionSchema = z.object({
+  decision: z.enum(["approve", "reject"]),
+  orderIds: z.array(positiveId)
+    .min(1)
+    .max(MAX_BULK_DECISION_ORDERS)
+    .refine(isUniquePositiveIdList, { message: "Duplicate orders are not allowed" }),
+  // Required by the route when the decision is a rejection; kept optional here
+  // so the message can name the decision rather than the field.
+  reason: z.string().trim().min(1).max(2_000).optional(),
+}).strict()
+
+/**
  * A saved draft holds selections only. It is never trusted for pricing or
  * availability: submission re-resolves both from the database.
  */

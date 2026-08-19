@@ -239,14 +239,22 @@ describe("group order portal access contracts", () => {
 
   it("gates every ordering endpoint on the one requesting role", () => {
     const gate = source("lib/server/group-order-access.ts")
-    expect(gate).toContain("requireApiRole([GROUP_ORDER_PORTAL_ROLE])")
+    // The file also holds the approver gate, so the ordering gate is isolated
+    // before being asserted on: the two must never share an allowlist.
+    const orderingGate = gate.slice(
+      gate.indexOf("export async function requireGroupOrderPortal"),
+      gate.indexOf("export type GroupApproverActor"),
+    )
+    expect(orderingGate).not.toHaveLength(0)
+
+    expect(orderingGate).toContain("requireApiRole([GROUP_ORDER_PORTAL_ROLE])")
     // The approver role shares the branch-assignment mechanism but must not be
     // able to raise orders through this surface. It may be named in prose, never
-    // as a role the allowlist imports or accepts.
-    expect(gate).not.toContain('"GROUP_USER"')
-    expect(gate).not.toContain("GROUP_USER_ROLE")
+    // as a role this allowlist accepts.
+    expect(orderingGate).not.toContain('"GROUP_USER"')
+    expect(orderingGate).not.toContain("GROUP_USER_ROLE")
     // A user without a tenant has no scope, and that must not read as "all".
-    expect(gate).toContain("if (!scope.organizationId)")
+    expect(orderingGate).toContain("if (!scope.organizationId)")
 
     for (const path of routes) {
       const route = source(path)
@@ -316,8 +324,10 @@ describe("group order portal access contracts", () => {
     const proxySource = source("proxy.ts")
     const layout = source("app/group-portal/bulk-order/layout.tsx")
 
-    expect(proxySource).toContain('const GROUP_ORDERING_PREFIX = "/group-portal/bulk-order"')
-    expect(proxySource).toContain('role !== "GROUP_ORDER_PORTAL"')
+    // Each workspace inside the shared group area belongs to exactly one role.
+    expect(proxySource).toContain('{ prefix: "/group-portal/bulk-order", role: "GROUP_ORDER_PORTAL" }')
+    expect(proxySource).toContain('{ prefix: "/group-portal/approvals", role: "GROUP_USER" }')
+    expect(proxySource).toContain("exclusiveArea && exclusiveArea.role !== role")
     expect(layout).toContain("!== GROUP_ORDER_PORTAL_ROLE) redirect(\"/group-portal\")")
   })
 
