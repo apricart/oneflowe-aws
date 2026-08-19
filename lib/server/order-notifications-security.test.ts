@@ -26,27 +26,31 @@ describe("order lifecycle notification security contracts", () => {
 
   it("notifies global Super Admins after either configured approver role approves", () => {
     const service = source("lib/server/order-notifications.ts")
-    const approval = source("app/api/v1/orders/[id]/approve/route.ts")
+    // The approve transition lives in the shared decision service that both the
+    // single-order route and the multi-branch bulk endpoint call.
+    const decisionService = source("lib/server/order-decision-service.ts")
     expect(service).toContain("queueSuperAdminApprovalNotifications")
     expect(service).toContain('eq(roles.name, "SUPER_ADMIN")')
     expect(service).toContain("eq(roles.name, input.approvedByRole)")
     expect(service).toContain('template: "ORDER_APPROVED_ADMIN"')
     expect(service).toContain('row.recipientRole === "SUPER_ADMIN"')
-    expect(approval).toContain("approvedByRole: authorization.decisionRole")
-    expect(approval).toContain("queueSuperAdminApprovalNotifications(tx")
+    expect(decisionService).toContain("approvedByRole: authorization.decisionRole")
+    expect(decisionService).toContain("queueSuperAdminApprovalNotifications(tx")
   })
 
   it("queues lifecycle events inside the winning business transaction", () => {
     const createRoute = source("app/api/v1/orders/route.ts")
-    const approveRoute = source("app/api/v1/orders/[id]/approve/route.ts")
-    const rejectRoute = source("app/api/v1/orders/[id]/reject/route.ts")
+    const decisionService = source("lib/server/order-decision-service.ts")
+
+    const approveBody = decisionService.slice(decisionService.indexOf("export async function approveOrder"))
+    const rejectBody = decisionService.slice(decisionService.indexOf("export async function rejectOrder"))
 
     expect(createRoute).toContain('role === "ORDER_PORTAL"')
     expect(createRoute.indexOf("queueOrderCreatedNotifications(tx")).toBeGreaterThan(createRoute.indexOf("db.transaction"))
-    expect(approveRoute.indexOf("queueOrderDecisionNotification(tx")).toBeGreaterThan(approveRoute.indexOf("tx.update(orders)"))
-    expect(rejectRoute.indexOf("queueOrderDecisionNotification(tx")).toBeGreaterThan(rejectRoute.indexOf("tx.update(orders)"))
-    expect(approveRoute).toContain("UPPER(${orders.status}) = 'PENDING'")
-    expect(rejectRoute).toContain("UPPER(${orders.status}) = 'PENDING'")
+    expect(approveBody.indexOf("queueOrderDecisionNotification(tx")).toBeGreaterThan(approveBody.indexOf("tx.update(orders)"))
+    expect(rejectBody.indexOf("queueOrderDecisionNotification(tx")).toBeGreaterThan(rejectBody.indexOf("tx.update(orders)"))
+    expect(approveBody).toContain("UPPER(${orders.status}) = 'PENDING'")
+    expect(rejectBody).toContain("UPPER(${orders.status}) = 'PENDING'")
   })
 
   it("deduplicates both notification and email events at the database boundary", () => {

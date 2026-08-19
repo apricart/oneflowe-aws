@@ -8,14 +8,37 @@ import { ADMIN_OPERATIONS_EMAIL } from "@/lib/email/recipients"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { canViewFulfillmentToken } from "@/lib/fulfillment-token-access"
 import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
+import { GROUP_USER_ROLE, canUseScopedBranch } from "@/lib/server/multi-branch-scope"
 
 const TOKEN_EMAIL_RECIPIENT = ADMIN_OPERATIONS_EMAIL
+
+/**
+ * Branch authorization for this endpoint.
+ *
+ * `verifyResourceAccess` compares the order's branch against the single branch
+ * pinned on the user row, which is exactly right for BRANCH_ADMIN and
+ * ORDER_PORTAL and is left untouched for them. A GROUP_USER has no single
+ * branch — its reach is a resolved set of assignments — so it is checked
+ * against that set instead, with the tenant re-asserted explicitly first.
+ */
+async function hasBranchAccessForTokenEmail(
+  role: string,
+  userId: string,
+  actorOrganizationId: number | null,
+  order: { organizationId: number; branchId: number },
+): Promise<boolean> {
+  if (role !== GROUP_USER_ROLE) {
+    return verifyResourceAccess(order.organizationId, order.branchId)
+  }
+  if (!actorOrganizationId || actorOrganizationId !== order.organizationId) return false
+  return canUseScopedBranch(userId, order.branchId)
+}
 
 export async function POST(
   _req: Request,
   props: { params: Promise<{ id: string }> }
 ) {
-  const roleError = await requireApiRole(["HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL"])
+  const roleError = await requireApiRole(["HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "ORDER_PORTAL"])
   if (roleError) return roleError
 
   const user = await getCurrentUser()
@@ -57,10 +80,20 @@ export async function POST(
     return error("Forbidden: Invalid order tenant scope", 403)
   }
 
-  const hasAccess = await verifyResourceAccess(order.organizationId, order.branchId)
+  const scope = await getRequestScope()
+  if (!scope || scope.userId !== user.id || scope.role !== user.role) {
+    return error("Unauthorized", 401)
+  }
+
+  const hasAccess = await hasBranchAccessForTokenEmail(
+    user.role,
+    user.id,
+    scope.organizationId,
+    { organizationId: order.organizationId, branchId: order.branchId },
+  )
   if (!hasAccess) return error("Forbidden: You do not have access to this order", 403)
 
-  const capabilities = await getOrderDecisionCapabilities(await getRequestScope())
+  const capabilities = await getOrderDecisionCapabilities(scope)
   const canShareToken = canViewFulfillmentToken({
     role: user.role,
     userId: user.id,

@@ -16,7 +16,9 @@ describe("concurrency protection contracts", () => {
   })
 
   it("uses a single-winner compare-and-set for simultaneous approval and fulfilment", () => {
-    const approval = source("app/api/v1/orders/[id]/approve/route.ts")
+    // The approve transition lives in the shared decision service, so the same
+    // single-winner guard covers single-order and bulk multi-branch decisions.
+    const approval = source("lib/server/order-decision-service.ts")
     const fulfilment = source("app/api/v1/orders/[id]/fulfill/route.ts")
     expect(approval).toContain("UPPER(${orders.status}) = 'PENDING'")
     expect(approval).toContain(".returning({ id: orders.id })")

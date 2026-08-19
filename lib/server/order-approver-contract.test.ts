@@ -19,6 +19,10 @@ describe("order approver implementation contracts", () => {
 
   it("authorizes approve and reject inside their winning transaction", () => {
     const policy = source("lib/server/order-decision-policy.ts")
+    // Both transitions live in one service; every caller — the single-order
+    // routes and the multi-branch bulk endpoint — reaches them through it, so
+    // no surface can re-implement the authorization step.
+    const service = source("lib/server/order-decision-service.ts")
     const approve = source("app/api/v1/orders/[id]/approve/route.ts")
     const reject = source("app/api/v1/orders/[id]/reject/route.ts")
 
@@ -29,21 +33,30 @@ describe("order approver implementation contracts", () => {
     // A GROUP_USER's reach is read inside the deciding transaction, never from
     // the request, so a stale or forged scope cannot authorize a decision.
     expect(policy).toContain("resolveScopedBranchIds(tx, input.scope.userId)")
-    expect(approve.indexOf("authorizeOrderDecision(tx")).toBeGreaterThan(approve.indexOf("db.transaction"))
-    expect(reject.indexOf("authorizeOrderDecision(tx")).toBeGreaterThan(reject.indexOf("db.transaction"))
-    expect(approve).not.toContain('"SUPER_ADMIN"]')
-    expect(reject).not.toContain('"SUPER_ADMIN"]')
+
+    const approveBody = service.slice(service.indexOf("export async function approveOrder"))
+    const rejectBody = service.slice(service.indexOf("export async function rejectOrder"))
+    expect(approveBody.indexOf("authorizeOrderDecision(tx")).toBeGreaterThan(approveBody.indexOf("db.transaction"))
+    expect(rejectBody.indexOf("authorizeOrderDecision(tx")).toBeGreaterThan(rejectBody.indexOf("db.transaction"))
+
+    // The routes must delegate rather than carry their own transition.
+    for (const route of [approve, reject]) {
+      expect(route).not.toContain("db.transaction")
+      expect(route).not.toContain('"SUPER_ADMIN"]')
+    }
   })
 
   it("serializes approver configuration changes and audits both policy and decisions", () => {
     const organization = source("app/api/v1/organizations/[id]/route.ts")
-    const approve = source("app/api/v1/orders/[id]/approve/route.ts")
-    const reject = source("app/api/v1/orders/[id]/reject/route.ts")
+    const service = source("lib/server/order-decision-service.ts")
 
     expect(organization).toContain('.for("update")')
     expect(organization).toContain('"UPDATE_ORDER_APPROVER_ROLE"')
-    expect(approve).toContain('"ORDER_APPROVED"')
-    expect(reject).toContain('"ORDER_REJECTED"')
+    expect(service).toContain('"ORDER_APPROVED"')
+    expect(service).toContain('"ORDER_REJECTED"')
+    // Every decision records the role that actually decided, so a GROUP_USER
+    // action is never filed under the tenant's configured approver role.
+    expect(service).toContain("decisionRole: authorization.decisionRole")
   })
 
   it("keeps fulfillment and fulfillment progress Super Admin-only", () => {

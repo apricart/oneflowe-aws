@@ -155,9 +155,15 @@ const ADMIN_PORTAL_ROLES = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"]
 // area, kept separate from the admin shell and from the single-branch /shop.
 const GROUP_PORTAL_ROLES = ["GROUP_ORDER_PORTAL", "GROUP_USER"]
 
-// The multi-branch ordering workspace inside that area. Only the requesting
-// role may reach it; GROUP_USER approves orders but does not raise them.
-const GROUP_ORDERING_PREFIX = "/group-portal/bulk-order"
+// Areas inside the shared group area that belong to exactly one of the two
+// group roles. The ordering workspace is the requester's alone and the approval
+// workspace is the approver's alone, so neither role can reach the other's:
+// GROUP_ORDER_PORTAL raises orders it cannot decide, and GROUP_USER decides
+// orders it cannot raise.
+const GROUP_EXCLUSIVE_AREAS: ReadonlyArray<{ prefix: string; role: string }> = [
+  { prefix: "/group-portal/bulk-order", role: "GROUP_ORDER_PORTAL" },
+  { prefix: "/group-portal/approvals", role: "GROUP_USER" },
+]
 
 /**
  * The portal each role is confined to, or null when the path is already inside
@@ -176,10 +182,11 @@ function rolePortalRedirect(role: string | undefined, pathname: string): string 
   }
   if (role && GROUP_PORTAL_ROLES.includes(role)) {
     if (!pathname.startsWith("/group-portal")) return "/group-portal"
-    // Within the shared area, ordering stays exclusive to the requesting role.
-    return pathname.startsWith(GROUP_ORDERING_PREFIX) && role !== "GROUP_ORDER_PORTAL"
-      ? "/group-portal"
-      : null
+    // Within the shared area, each workspace stays exclusive to its own role.
+    const exclusiveArea = GROUP_EXCLUSIVE_AREAS.find((area) =>
+      pathMatchesPrefix(pathname, area.prefix),
+    )
+    return exclusiveArea && exclusiveArea.role !== role ? "/group-portal" : null
   }
   if (role && ADMIN_PORTAL_ROLES.includes(role)) {
     // Strict separation: administrators belong in the dashboard shell only.

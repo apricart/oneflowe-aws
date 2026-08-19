@@ -61,16 +61,28 @@ export default function GroupPortalPage() {
           </Button>
         </div>
 
-        {/* The ordering workspace belongs to GROUP_ORDER_PORTAL alone. GROUP_USER
-            shares this landing page but decides orders through the standard
-            order screens, so it is shown its approval reach instead. */}
+        {/* Each workspace belongs to exactly one role: GROUP_ORDER_PORTAL raises
+            group orders, GROUP_USER decides them. This landing page is shared,
+            so it offers whichever workspace the signed-in role owns. */}
         {scope?.canApproveOrders ? (
-          <Card className="rounded-2xl border-amber-200 bg-amber-50/60 dark:border-amber-900/60 dark:bg-amber-950/20">
-            <CardContent className="space-y-2 p-5 text-sm text-slate-700 dark:text-slate-300">
-              <p className="flex items-center gap-2 font-medium">
-                <ShieldCheck className="h-4 w-4" />
-                You can approve and reject orders for every branch in scope.
-              </p>
+          <Card className="rounded-2xl border-emerald-100 bg-gradient-to-tr from-emerald-50 to-teal-50 dark:border-emerald-900/60 dark:from-emerald-950/40 dark:to-teal-950/30">
+            <CardContent className="flex flex-col items-start justify-between gap-4 p-5 sm:flex-row sm:items-center">
+              <div>
+                <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900 dark:text-slate-100">
+                  <ShieldCheck className="h-4 w-4" />
+                  Review orders awaiting you
+                </h2>
+                <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                  Approve or reject orders across every branch in your scope — one at a time, or a
+                  whole group order at once.
+                </p>
+              </div>
+              <Button asChild className="shrink-0 gap-2">
+                <Link href="/group-portal/approvals">
+                  Open approvals
+                  <ArrowRight className="h-4 w-4" />
+                </Link>
+              </Button>
             </CardContent>
           </Card>
         ) : (
@@ -133,7 +145,7 @@ export default function GroupPortalPage() {
                 <CardHeader className="pb-3">
                   <CardTitle className="flex items-center gap-2 text-base">
                     <Building2 className="h-4 w-4" />
-                    Branches you can order for
+                    {scope?.canApproveOrders ? "Branches you can approve for" : "Branches you can order for"}
                     <Badge variant="secondary">{branches.length}</Badge>
                   </CardTitle>
                 </CardHeader>
