@@ -9,11 +9,20 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const LOG_DIR = path.join(process.cwd(), 'logs')
-const SYSTEM_LOG_FILE = path.join(LOG_DIR, 'system-audit.log')
-const ERROR_LOG_FILE = path.join(LOG_DIR, 'error.log')
-const INVENTORY_LOG_FILE = path.join(LOG_DIR, 'inventory-audit.log')
+const SYSTEM_LOG_FILE = 'system-audit.log'
+const ERROR_LOG_FILE = 'error.log'
+const INVENTORY_LOG_FILE = 'inventory-audit.log'
 const MAX_LOG_SIZE = 10 * 1024 * 1024 // 10MB
 const MAX_LOG_FILES = 5
+
+type LogFileName =
+    | typeof SYSTEM_LOG_FILE
+    | typeof ERROR_LOG_FILE
+    | typeof INVENTORY_LOG_FILE
+
+function resolveLogFile(logFileName: LogFileName): string {
+    return path.join(LOG_DIR, logFileName)
+}
 
 export interface LogEntry {
     event: string
@@ -95,8 +104,10 @@ function ensureLogDirectory(): void {
 /**
  * Rotate log file if it exceeds max size
  */
-function rotateLogFile(logFile: string): void {
+function rotateLogFile(logFileName: LogFileName): void {
     try {
+        const logFile = resolveLogFile(logFileName)
+
         if (!fs.existsSync(logFile)) {
             return
         }
@@ -108,8 +119,8 @@ function rotateLogFile(logFile: string): void {
 
         // Rotate logs
         for (let i = MAX_LOG_FILES - 1; i > 0; i--) {
-            const oldFile = `${logFile}.${i}`
-            const newFile = `${logFile}.${i + 1}`
+            const oldFile = path.join(LOG_DIR, `${logFileName}.${i}`)
+            const newFile = path.join(LOG_DIR, `${logFileName}.${i + 1}`)
             if (fs.existsSync(oldFile)) {
                 fs.renameSync(oldFile, newFile)
             }
@@ -124,11 +135,11 @@ function rotateLogFile(logFile: string): void {
 /**
  * Write log entry to file
  */
-function writeLog(logFile: string, content: string): void {
+function writeLog(logFileName: LogFileName, content: string): void {
     try {
         ensureLogDirectory()
-        rotateLogFile(logFile)
-        fs.appendFileSync(logFile, content, 'utf-8')
+        rotateLogFile(logFileName)
+        fs.appendFileSync(resolveLogFile(logFileName), content, 'utf-8')
     } catch (error) {
         console.error('[Logger] Failed to write log:', error)
     }
@@ -314,9 +325,9 @@ export function logFulfillmentAttempt(
 export function getLogStats(): { systemLogSize: number; errorLogSize: number; inventoryLogSize: number } | null {
     try {
         return {
-            systemLogSize: fs.existsSync(SYSTEM_LOG_FILE) ? fs.statSync(SYSTEM_LOG_FILE).size : 0,
-            errorLogSize: fs.existsSync(ERROR_LOG_FILE) ? fs.statSync(ERROR_LOG_FILE).size : 0,
-            inventoryLogSize: fs.existsSync(INVENTORY_LOG_FILE) ? fs.statSync(INVENTORY_LOG_FILE).size : 0
+            systemLogSize: fs.existsSync(resolveLogFile(SYSTEM_LOG_FILE)) ? fs.statSync(resolveLogFile(SYSTEM_LOG_FILE)).size : 0,
+            errorLogSize: fs.existsSync(resolveLogFile(ERROR_LOG_FILE)) ? fs.statSync(resolveLogFile(ERROR_LOG_FILE)).size : 0,
+            inventoryLogSize: fs.existsSync(resolveLogFile(INVENTORY_LOG_FILE)) ? fs.statSync(resolveLogFile(INVENTORY_LOG_FILE)).size : 0
         }
     } catch (error) {
         console.error('[Logger] Failed to get log stats:', error)
