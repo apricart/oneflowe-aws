@@ -10,7 +10,7 @@ const portal = readFileSync(resolve(process.cwd(), "app/shop/page.tsx"), "utf8")
 
 describe("order edit security contract", () => {
   it("allows the fast single-order read only for the portal user's own order", () => {
-    expect(route).toContain('"BRANCH_ADMIN", "ORDER_PORTAL"')
+    expect(route).toContain('"BRANCH_ADMIN", "GROUP_USER", "ORDER_PORTAL"')
     expect(route).toContain('currentRole === "ORDER_PORTAL" && item.createdByUserId !== currentUserId')
   })
 

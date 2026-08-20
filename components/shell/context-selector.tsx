@@ -214,6 +214,13 @@ function readOnlyBranchLabel(options: {
   if (userRole === "BRANCH_ADMIN") {
     return branch?.name || (branchesLoading || assignedBranchLoading ? "Loading branch..." : "Assigned Branch")
   }
+  // The approver has a set of branches rather than one, and the branch list it
+  // receives is already narrowed to that set by the server.
+  if (userRole === "GROUP_USER") {
+    if (branchesLoading) return "Loading branches..."
+    if (branches.length === 1) return branches[0]?.name || "1 Assigned Branch"
+    return branches.length > 0 ? `${branches.length} Assigned Branches` : "No Assigned Branches"
+  }
   if (branchIds.length > 1) return `${branchIds.length} Branches`
   if (branch) return branch.name
   if (branchIds.length === 1) {
@@ -221,6 +228,13 @@ function readOnlyBranchLabel(options: {
   }
   return "Global Overview"
 }
+
+/**
+ * Roles pinned to a scope they cannot change. The approver is here because its
+ * reach comes from branch assignments rather than a selection, so offering it
+ * the administrator's organization picker would be misleading.
+ */
+const READ_ONLY_CONTEXT_ROLES = new Set(["BRANCH_ADMIN", "GROUP_USER"])
 
 function ReadOnlyContextBreadcrumb(props: Readonly<{
   organization: any
@@ -233,7 +247,9 @@ function ReadOnlyContextBreadcrumb(props: Readonly<{
 }>) {
   const { organization, branch, branches, branchIds, userRole, branchesLoading, assignedBranchLoading } = props
   const branchLabel = readOnlyBranchLabel({ userRole, branch, branches, branchIds, branchesLoading, assignedBranchLoading })
-  const hasBranchScope = Boolean(branch) || branchIds.length > 0
+  const hasBranchScope = Boolean(branch)
+    || branchIds.length > 0
+    || (userRole === "GROUP_USER" && branches.length > 0)
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 rounded-md border bg-muted/50 text-xs animate-in fade-in duration-300">
       {organization && (
@@ -279,7 +295,7 @@ export function ContextSelector() {
   // Read-only roles should always use their assigned scope, even while the
   // client context is being restored after a full page load.
   const scopedOrganizationId =
-    userRole === "BRANCH_ADMIN" && userOrgId
+    READ_ONLY_CONTEXT_ROLES.has(userRole ?? "") && userOrgId
       ? String(userOrgId)
       : organizationId
   const scopedBranchId =
@@ -309,8 +325,9 @@ export function ContextSelector() {
   // Don't render until initialized
   if (!isInitialized) return null
 
-  // Branch Admin & Head Office: show read-only breadcrumb
-  if (userRole === "BRANCH_ADMIN" || userRole === "HEAD_OFFICE") {
+  // Branch Admin, Head Office and the group approver: read-only breadcrumb.
+  // None of them may re-point the shell at another tenant or branch.
+  if (READ_ONLY_CONTEXT_ROLES.has(userRole ?? "") || userRole === "HEAD_OFFICE") {
     const org = organizations.find((o: any) => o.id.toString() === scopedOrganizationId)
     const branch = listedBranch || assignedBranchData?.item
     return (

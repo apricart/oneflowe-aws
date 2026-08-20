@@ -81,7 +81,7 @@ function validateOrganizationFields(body: OrganizationCreateInput) {
  */
 export async function GET() {
   try {
-    const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL"])
+    const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "ORDER_PORTAL"])
     if (err) return err
 
     const scope = await getRequestScope()

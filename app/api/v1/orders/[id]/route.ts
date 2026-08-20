@@ -69,13 +69,42 @@ const getOrderEditErrorResponse = (editError: any) => {
   return isCustomerError ? error(message, 400) : null
 }
 import { canViewFulfillmentToken } from "@/lib/fulfillment-token-access"
-import { getCurrentUser, getRequestScope } from "@/lib/auth"
+import { getCurrentUser, getRequestScope, type RequestScope } from "@/lib/auth"
 import { calculateLineCents, formatQuantity, roundQuantity, validateProductQuantity } from "@/lib/quantity"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { generateReceiptData } from "@/lib/receipt-generator"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
 import { orderUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
 import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
+import { GROUP_USER_ROLE, canUseScopedBranch } from "@/lib/server/multi-branch-scope"
+
+/**
+ * Branch authorization for reading one order.
+ *
+ * `verifyResourceAccess` compares the order's branch against the single branch
+ * pinned on the user row, which is exactly right for SUPER_ADMIN, HEAD_OFFICE,
+ * BRANCH_ADMIN and ORDER_PORTAL and is left untouched for them. A GROUP_USER
+ * has no single branch — its reach is the set of branches an administrator
+ * assigned it — so it is checked against that resolved set instead, with the
+ * tenant re-asserted explicitly first. An empty assignment set denies access
+ * rather than widening to the organization.
+ */
+async function hasBranchAccessForOrderRead(
+  role: unknown,
+  userId: unknown,
+  scope: RequestScope | null,
+  order: { organizationId: number; branchId: number },
+): Promise<boolean> {
+  const { verifyResourceAccess } = await import("@/lib/auth")
+  if (role !== GROUP_USER_ROLE) {
+    return verifyResourceAccess(order.organizationId, order.branchId)
+  }
+  if (typeof userId !== "string" || !scope || scope.userId !== userId || scope.role !== role) {
+    return false
+  }
+  if (!scope.organizationId || scope.organizationId !== order.organizationId) return false
+  return canUseScopedBranch(userId, order.branchId)
+}
 
 async function lockOrderEditAccess(tx: any, context: any) {
   const { userId, organizationId, branchId, orderId } = context
@@ -406,7 +435,7 @@ export async function GET(
   _: Request,
   props: { params: Promise<{ id: string }> },
 ) {
-  const authError = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL"])
+  const authError = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "ORDER_PORTAL"])
   if (authError) return authError
 
   const { id } = await props.params
@@ -443,8 +472,11 @@ export async function GET(
       : error("Forbidden: Invalid order tenant scope", 403)
   }
 
-  const { verifyResourceAccess } = await import("@/lib/auth")
-  const hasAccess = await verifyResourceAccess(item.organizationId, item.branchId)
+  const requestScope = await getRequestScope()
+  const hasAccess = await hasBranchAccessForOrderRead(currentRole, currentUserId, requestScope, {
+    organizationId: item.organizationId,
+    branchId: item.branchId,
+  })
   if (!hasAccess) {
     return currentRole === "ORDER_PORTAL"
       ? error("Not found", 404)
@@ -454,7 +486,7 @@ export async function GET(
   if (currentRole === "ORDER_PORTAL" && item.createdByUserId !== currentUserId) {
     return error("Not found", 404)
   }
-  const capabilities = await getOrderDecisionCapabilities(await getRequestScope())
+  const capabilities = await getOrderDecisionCapabilities(requestScope)
   const pricesHidden = await shouldHidePricesForRole(currentRole, item.organizationId)
   const {
     approvalToken,

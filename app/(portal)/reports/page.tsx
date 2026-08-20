@@ -96,8 +96,22 @@ export default function ReportsPage() {
     setHasMounted(true)
   }, [])
 
+  // The approver reads the same five reports a Branch Admin does. Its sidebar
+  // and `proxy.ts` allow exactly this set, so the hub must not offer a card the
+  // role cannot open.
+  // Matched on href rather than title: the sidebar and `proxy.ts` allow exactly
+  // these destinations, so the hub must not offer a card the role cannot open.
+  const groupUserReportHrefs = new Set([
+    "/reports/order-report",
+    "/reports/refund-report",
+    "/reports/product-performance",
+    "/reports/user-report",
+    "/reports/branch-reports",
+  ])
+
   const displayReportCards = reportCards
     .filter(card => {
+      if (role === "GROUP_USER") return groupUserReportHrefs.has(card.href)
       if (role === "BRANCH_ADMIN") {
         if (card.title === "Groups Report" || card.title === "Organization Report") {
           return false

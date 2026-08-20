@@ -324,10 +324,11 @@ describe("group order portal access contracts", () => {
     const proxySource = source("proxy.ts")
     const layout = source("app/group-portal/bulk-order/layout.tsx")
 
-    // Each workspace inside the shared group area belongs to exactly one role.
-    expect(proxySource).toContain('{ prefix: "/group-portal/bulk-order", role: "GROUP_ORDER_PORTAL" }')
-    expect(proxySource).toContain('{ prefix: "/group-portal/approvals", role: "GROUP_USER" }')
-    expect(proxySource).toContain("exclusiveArea && exclusiveArea.role !== role")
+    // The requester owns /group-portal and reaches nothing else: not the admin
+    // shell, not the approver's queue, not the single-branch /shop.
+    expect(proxySource).toContain('const GROUP_ORDER_PORTAL_HOME = "/group-portal"')
+    expect(proxySource).toContain('if (role === "GROUP_ORDER_PORTAL") {')
+    expect(proxySource).toContain("return pathname.startsWith(GROUP_ORDER_PORTAL_HOME) ? null : GROUP_ORDER_PORTAL_HOME")
     expect(layout).toContain("!== GROUP_ORDER_PORTAL_ROLE) redirect(\"/group-portal\")")
   })
 

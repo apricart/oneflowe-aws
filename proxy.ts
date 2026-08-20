@@ -10,6 +10,7 @@ import {
 import { getSessionNonIdleExpirationReason } from "@/lib/session-policy"
 
 const protectedPrefixes = [
+  "/approvals",
   "/branches",
   "/branch-inventory",
   "/budgets",
@@ -151,19 +152,22 @@ function handleApiRequest(req: NextRequest, pathname: string, response: NextResp
 
 const ADMIN_PORTAL_ROLES = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"]
 
-// Both group-based roles work across many branches and share one workspace
-// area, kept separate from the admin shell and from the single-branch /shop.
-const GROUP_PORTAL_ROLES = ["GROUP_ORDER_PORTAL", "GROUP_USER"]
+/**
+ * The approver works inside the admin shell so it gets the same sidebar and
+ * topbar, but it is not an administrator: it may reach only the approval queue,
+ * the reports its branch assignments scope, and settings. Every other shell
+ * area — organizations, users, inventory, budgets, branches — stays closed, and
+ * this allowlist fails closed for anything not named in it.
+ */
+const GROUP_USER_HOME = "/approvals"
+const GROUP_USER_AREAS = ["/approvals", "/reports", "/settings"]
 
-// Areas inside the shared group area that belong to exactly one of the two
-// group roles. The ordering workspace is the requester's alone and the approval
-// workspace is the approver's alone, so neither role can reach the other's:
-// GROUP_ORDER_PORTAL raises orders it cannot decide, and GROUP_USER decides
-// orders it cannot raise.
-const GROUP_EXCLUSIVE_AREAS: ReadonlyArray<{ prefix: string; role: string }> = [
-  { prefix: "/group-portal/bulk-order", role: "GROUP_ORDER_PORTAL" },
-  { prefix: "/group-portal/approvals", role: "GROUP_USER" },
-]
+// The approval area belongs to the approver alone; an administrator that lands
+// on it is sent back to its own dashboard.
+const APPROVALS_AREA = "/approvals"
+
+// The multi-branch ordering workspace is the requester's own area.
+const GROUP_ORDER_PORTAL_HOME = "/group-portal"
 
 /**
  * The portal each role is confined to, or null when the path is already inside
@@ -180,17 +184,22 @@ function rolePortalRedirect(role: string | undefined, pathname: string): string 
   if (role === "ORDER_PORTAL") {
     return pathname.startsWith("/shop") ? null : "/shop"
   }
-  if (role && GROUP_PORTAL_ROLES.includes(role)) {
-    if (!pathname.startsWith("/group-portal")) return "/group-portal"
-    // Within the shared area, each workspace stays exclusive to its own role.
-    const exclusiveArea = GROUP_EXCLUSIVE_AREAS.find((area) =>
-      pathMatchesPrefix(pathname, area.prefix),
-    )
-    return exclusiveArea && exclusiveArea.role !== role ? "/group-portal" : null
+  if (role === "GROUP_USER") {
+    return GROUP_USER_AREAS.some((prefix) => pathMatchesPrefix(pathname, prefix))
+      ? null
+      : GROUP_USER_HOME
+  }
+  if (role === "GROUP_ORDER_PORTAL") {
+    // The requester keeps its own workspace and never reaches the admin shell,
+    // the approver's queue, or the single-branch /shop.
+    return pathname.startsWith(GROUP_ORDER_PORTAL_HOME) ? null : GROUP_ORDER_PORTAL_HOME
   }
   if (role && ADMIN_PORTAL_ROLES.includes(role)) {
-    // Strict separation: administrators belong in the dashboard shell only.
-    return pathname.startsWith("/shop") || pathname.startsWith("/group-portal")
+    // Strict separation: administrators belong in the dashboard shell only, and
+    // the approval queue is not theirs.
+    return pathname.startsWith("/shop")
+      || pathname.startsWith("/group-portal")
+      || pathMatchesPrefix(pathname, APPROVALS_AREA)
       ? "/dashboard"
       : null
   }
@@ -297,6 +306,8 @@ export const config = {
     "/settings/:path*",
     "/shop",
     "/shop/:path*",
+    "/approvals",
+    "/approvals/:path*",
     "/group-portal",
     "/group-portal/:path*",
     "/change-password",

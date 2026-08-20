@@ -2,7 +2,7 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { Home,Building2,Users,Package,Boxes,Wallet,BarChart3,Settings,FolderTree,ChevronDown } from "lucide-react"
+import { Home,Building2,Users,Package,Boxes,Wallet,BarChart3,Settings,FolderTree,ChevronDown,ClipboardCheck } from "lucide-react"
 import Image from "next/image"
 import { useState } from "react"
 
@@ -88,6 +88,29 @@ const getNavigationByRole = (role: string) => {
       ...baseNav,
       { href: "/orders", label: "Orders", icon: Package },
       { href: "/branch-inventory", label: "Inventory", icon: Boxes },
+      {
+        href: "/reports",
+        label: "Reports",
+        icon: BarChart3,
+        subItems: [
+          { href: "/reports/order-report", label: "Order Report" },
+          { href: "/reports/refund-report", label: "Refund Report" },
+          { href: "/reports/product-performance", label: "Product Report" },
+          { href: "/reports/user-report", label: "User Report" },
+          { href: "/reports/branch-reports", label: "Branch Report" },
+        ]
+      },
+      { href: "/settings", label: "Settings", icon: Settings },
+    ]
+  }
+
+  // The approver shares the shell but not the administrator's reach: it gets
+  // its own queue plus the reports its branch assignments scope, and no
+  // dashboard, inventory, user or organization entries. `proxy.ts` enforces the
+  // same allowlist, so a hand-typed URL cannot reach anything omitted here.
+  if (role === "GROUP_USER") {
+    return [
+      { href: "/approvals", label: "Approvals", icon: ClipboardCheck },
       {
         href: "/reports",
         label: "Reports",
