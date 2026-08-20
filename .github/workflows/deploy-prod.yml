@@ -41,11 +41,10 @@ jobs:
         with:
           args: >
             -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
-            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
-
-      # ---- Trivy filesystem/dependency scan ----
-      - name: Trivy filesystem scan (JSON)
-        continue-on-error: true
+   
+   
+   
+   -error: true
         uses: aquasecurity/trivy-action@2736533278103862a861f4a35ebac3e97854d956 # master
         with:
           scan-type: fs

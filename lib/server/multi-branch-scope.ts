@@ -267,6 +267,50 @@ export async function resolveScopedBranchIds(
   return rows.map((row: { id: number }) => row.id)
 }
 
+/**
+ * The groups a multi-branch user reaches: those it was assigned directly, plus
+ * the groups its individually assigned branches belong to.
+ *
+ * Used for filter lists only — every read is still restricted by the branch
+ * scope above, so this can narrow what a user is offered but never widen what
+ * it can retrieve. An empty result means no groups, never all groups.
+ */
+export async function resolveScopedGroupIds(
+  client: DbClient,
+  userId: string,
+): Promise<number[]> {
+  const rows = await client
+    .selectDistinct({ id: groups.id })
+    .from(groups)
+    // Both routes to a group re-assert the tenant the assignment was written
+    // under, matching how the branch scope is resolved.
+    .leftJoin(
+      userGroupAssignments,
+      and(
+        eq(userGroupAssignments.groupId, groups.id),
+        eq(userGroupAssignments.userId, userId),
+        eq(userGroupAssignments.organizationId, groups.organizationId),
+      ),
+    )
+    .leftJoin(branches, eq(branches.groupId, groups.id))
+    .leftJoin(
+      userBranchAssignments,
+      and(
+        eq(userBranchAssignments.branchId, branches.id),
+        eq(userBranchAssignments.userId, userId),
+        eq(userBranchAssignments.organizationId, branches.organizationId),
+      ),
+    )
+    .where(
+      or(
+        sql`${userGroupAssignments.id} IS NOT NULL`,
+        sql`${userBranchAssignments.id} IS NOT NULL`,
+      ),
+    )
+
+  return rows.map((row: { id: number }) => row.id)
+}
+
 /** True when the user may act on the given branch. Never true without an assignment. */
 export async function canUseScopedBranch(
   userId: string,

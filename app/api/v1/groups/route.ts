@@ -3,9 +3,10 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { groups, groupAuditLogs, branches, organizations } from "@/db/schema"
-import { and, eq, sql } from "drizzle-orm"
+import { and, eq, inArray, sql } from "drizzle-orm"
 import { getCached, invalidateByPrefix, scopedCacheKey, CACHE_TTL } from "@/lib/cache-utils"
 import { groupCreateSchema, validationMessage } from "@/lib/server/mutation-validation"
+import { resolveScopedGroupIds, usesMultiBranchScope } from "@/lib/server/multi-branch-scope"
 
 export async function GET(req: NextRequest) {
     try {
@@ -29,7 +30,19 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ error: "Organization ID required" }, { status: 400 })
         }
 
-        const cacheKey = scopedCacheKey('groups', { orgId: orgId })
+        // A multi-branch role picks filters from the groups it was actually
+        // assigned branches in. The analytics endpoints intersect with the same
+        // assignments regardless, so this only keeps the filter list honest; an
+        // empty set yields no groups rather than the whole tenant.
+        const assignedGroupIds = usesMultiBranchScope(role)
+            ? await resolveScopedGroupIds(db, (session.user as any).id)
+            : null
+
+        const cacheKey = scopedCacheKey(
+            'groups',
+            { orgId: orgId },
+            { assignedGroupIds: assignedGroupIds?.join(',') },
+        )
 
         const allGroups = await getCached(cacheKey, async () => {
             return db
@@ -54,6 +67,9 @@ export async function GET(req: NextRequest) {
                 .where(
                     and(
                         orgId ? eq(groups.organizationId, orgId) : undefined,
+                        assignedGroupIds
+                            ? inArray(groups.id, assignedGroupIds.length > 0 ? assignedGroupIds : [-1])
+                            : undefined,
                         sql`${groups.status} != 'deleted'`
                     )
                 )

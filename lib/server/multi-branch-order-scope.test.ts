@@ -60,10 +60,30 @@ describe("group user decision surface", () => {
 
     expect(approve).toContain('"GROUP_USER"')
     expect(reject).toContain('"GROUP_USER"')
-    // Fulfillment stays Super Admin-only and order editing keeps its existing
-    // allowlist; neither gains the new role.
+    // Fulfillment stays Super Admin-only; it never gains the new role.
     expect(fulfill).not.toContain("GROUP_USER")
-    expect(detail).not.toContain("GROUP_USER")
+  })
+
+  it("lets the approver read one order but never write to it", () => {
+    const detail = source("app/api/v1/orders/[id]/route.ts")
+
+    // Reading a single order is how the approver opens the detail drawer, so
+    // the role is on the GET allowlist only.
+    expect(detail).toContain('requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "ORDER_PORTAL"])')
+    // Editing stays with the requester and deletion with the Super Admin.
+    expect(detail).toContain('requireApiRole(["ORDER_PORTAL"])')
+    expect(detail).toContain('requireApiRole(["SUPER_ADMIN"])')
+  })
+
+  it("checks that read against the approver's assignments, not a single branch", () => {
+    const detail = source("app/api/v1/orders/[id]/route.ts")
+
+    // Every other role keeps the original single-branch check untouched.
+    expect(detail).toContain("if (role !== GROUP_USER_ROLE) {")
+    expect(detail).toContain("return verifyResourceAccess(order.organizationId, order.branchId)")
+    // The approver is checked against its resolved assignments, tenant first.
+    expect(detail).toContain("if (!scope.organizationId || scope.organizationId !== order.organizationId) return false")
+    expect(detail).toContain("canUseScopedBranch(userId, order.branchId)")
   })
 
   it("never lets the ordering-only group role decide", () => {

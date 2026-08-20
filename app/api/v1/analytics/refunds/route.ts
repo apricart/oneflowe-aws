@@ -18,6 +18,8 @@ import {
 } from "@/db/schema"
 import { parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
 import { redactAnalyticsPrices, shouldHidePricesForRole } from "@/lib/price-visibility"
+import { resolveMultiBranchAnalyticsIds } from "@/lib/server/analytics-scope"
+import { loadAnalyticsAssignedBranchIds } from "@/lib/server/analytics-branch-scope"
 import {
     parseRequestedOrganizationIds,
     resolveAnalyticsOrganizationIds,
@@ -30,32 +32,86 @@ const parsePositiveIds = (value: string | null) => value
     ? Array.from(new Set(value.split(",").map(Number).filter((id) => Number.isInteger(id) && id > 0)))
     : []
 
-function getRefundAccessConditions(
-    role: string,
-    organizationIds: number[],
+type RefundAccess = { conditions: any[]; error?: string }
+
+type RefundAccessInput = {
+    role: string
+    organizationIds: number[]
+    requestedBranchIds: number[]
+    groupIds: number[]
+    assignedBranchId: unknown
+    assignedBranchIds: number[] | null
+}
+
+/** The optional branch and group narrowing shared by the tenant-wide roles. */
+function addRefundBranchAndGroupFilters(
+    conditions: any[],
     requestedBranchIds: number[],
     groupIds: number[],
-    assignedBranchId: unknown,
-): { conditions: any[]; error?: string } {
-    const scopedOrganizationIds = organizationIds
+) {
+    if (requestedBranchIds.length > 0) conditions.push(inArray(orders.branchId, requestedBranchIds))
+    if (groupIds.length > 0) conditions.push(inArray(branches.groupId, groupIds))
+}
+
+function getSuperAdminRefundAccess(input: RefundAccessInput): RefundAccess {
     const conditions: any[] = []
-    if (role === "SUPER_ADMIN") {
-        if (scopedOrganizationIds.length > 0) conditions.push(inArray(orders.organizationId, scopedOrganizationIds))
-        if (requestedBranchIds.length > 0) conditions.push(inArray(orders.branchId, requestedBranchIds))
-        if (groupIds.length > 0) conditions.push(inArray(branches.groupId, groupIds))
-        return { conditions }
+    if (input.organizationIds.length > 0) {
+        conditions.push(inArray(orders.organizationId, input.organizationIds))
     }
-    if (role === "HEAD_OFFICE") {
-        if (scopedOrganizationIds.length === 0) return { conditions, error: "Organization context missing" }
-        conditions.push(inArray(orders.organizationId, scopedOrganizationIds))
-        if (requestedBranchIds.length > 0) conditions.push(inArray(orders.branchId, requestedBranchIds))
-        if (groupIds.length > 0) conditions.push(inArray(branches.groupId, groupIds))
-        return { conditions }
+    addRefundBranchAndGroupFilters(conditions, input.requestedBranchIds, input.groupIds)
+    return { conditions }
+}
+
+function getHeadOfficeRefundAccess(input: RefundAccessInput): RefundAccess {
+    const conditions: any[] = []
+    if (input.organizationIds.length === 0) {
+        return { conditions, error: "Organization context missing" }
     }
-    const branchId = Number(assignedBranchId)
-    if (!Number.isInteger(branchId) || branchId <= 0) return { conditions, error: "Branch context missing" }
+    conditions.push(inArray(orders.organizationId, input.organizationIds))
+    addRefundBranchAndGroupFilters(conditions, input.requestedBranchIds, input.groupIds)
+    return { conditions }
+}
+
+/**
+ * A multi-branch role has no single branch of its own; it is pinned to the
+ * branches assigned to it, narrowed further by any branch the report asked for.
+ * An empty assignment set denies rather than falling through to a wider scope.
+ *
+ * Returns `null` when the role is not multi-branch, so the caller falls back to
+ * the single-branch rule every other tenant role already used.
+ */
+function getMultiBranchRefundAccess(input: RefundAccessInput): RefundAccess | null {
+    const multiBranchIds = resolveMultiBranchAnalyticsIds({
+        role: input.role,
+        assignedBranchIds: input.assignedBranchIds,
+        requestedBranchIds: input.requestedBranchIds,
+    })
+    if (multiBranchIds === null) return null
+
+    const conditions: any[] = []
+    if (multiBranchIds.length === 0) return { conditions, error: "Branch context missing" }
+    if (input.organizationIds.length > 0) {
+        conditions.push(inArray(orders.organizationId, input.organizationIds))
+    }
+    conditions.push(inArray(orders.branchId, multiBranchIds))
+    if (input.groupIds.length > 0) conditions.push(inArray(branches.groupId, input.groupIds))
+    return { conditions }
+}
+
+function getSingleBranchRefundAccess(input: RefundAccessInput): RefundAccess {
+    const conditions: any[] = []
+    const branchId = Number(input.assignedBranchId)
+    if (!Number.isInteger(branchId) || branchId <= 0) {
+        return { conditions, error: "Branch context missing" }
+    }
     conditions.push(eq(orders.branchId, branchId))
     return { conditions }
+}
+
+function getRefundAccessConditions(input: RefundAccessInput): RefundAccess {
+    if (input.role === "SUPER_ADMIN") return getSuperAdminRefundAccess(input)
+    if (input.role === "HEAD_OFFICE") return getHeadOfficeRefundAccess(input)
+    return getMultiBranchRefundAccess(input) ?? getSingleBranchRefundAccess(input)
 }
 
 function addRefundFilters(conditions: any[], filters: {
@@ -125,7 +181,7 @@ export async function GET(req: NextRequest) {
         const role = String(currentUser?.roleName || sessionUser.role || "")
             .toUpperCase()
             .replace(/\s+/g, "_")
-        if (!["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "BRANCH_MANAGER"].includes(role)) {
+        if (!["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "BRANCH_MANAGER", "GROUP_USER"].includes(role)) {
             return NextResponse.json({ error: "Access denied" }, { status: 403 })
         }
 
@@ -155,13 +211,14 @@ export async function GET(req: NextRequest) {
             requestedOrganizationIds,
         })
 
-        const access = getRefundAccessConditions(
+        const access = getRefundAccessConditions({
             role,
-            scopedOrganizationIds,
-            branchIds,
+            organizationIds: scopedOrganizationIds,
+            requestedBranchIds: branchIds,
             groupIds,
-            currentUser?.branchId ?? sessionUser.branchId,
-        )
+            assignedBranchId: currentUser?.branchId ?? sessionUser.branchId,
+            assignedBranchIds: await loadAnalyticsAssignedBranchIds(role, sessionUser.id),
+        })
         if (access.error) return NextResponse.json({ error: access.error }, { status: 403 })
         const conditions = access.conditions
         addRefundFilters(conditions, { startDate, endDate, status, refundType, query })

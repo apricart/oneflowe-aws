@@ -78,6 +78,7 @@ const ALL_COLUMNS: ColumnDef[] = [
     { key: "tid", label: "Transaction ID", defaultVisible: true },
     { key: "organizationName", label: "Org", defaultVisible: true },
     { key: "group", label: "Group", defaultVisible: true },
+    { key: "groupOrderReference", label: "Group Order ID", defaultVisible: true },
     { key: "branchName", label: "Branch", defaultVisible: true },
     { key: "status", label: "Status", defaultVisible: true },
     { key: "quantityOrdered", label: "Qty Ordered", defaultVisible: true },
@@ -127,6 +128,11 @@ export default function OrderReportPage() {
     const [activeTab, setActiveTab] = useState("analytics")
     const [reportSearch, setReportSearch] = useState("")
     const debouncedReportSearch = useDebounce(reportSearch.trim(), 300)
+    // Group orders are the approver's unit of work, so only that role is
+    // offered the filter and the column that goes with it.
+    const showsGroupOrders = role === "GROUP_USER"
+    const [groupOrderFilter, setGroupOrderFilter] = useState("")
+    const debouncedGroupOrderFilter = useDebounce(groupOrderFilter.trim(), 300)
     const [statusFilter, setStatusFilter] = useState<StatusFilter>("all")
     const [currentPage, setCurrentPage] = useState(1)
     const [isExporting, setIsExporting] = useState(false)
@@ -268,6 +274,9 @@ export default function OrderReportPage() {
     if (reportYears.length > 0) reportParams.set("years", reportYears.join(","))
     if (statusFilter !== "all") reportParams.set("status", statusFilter)
     if (debouncedReportSearch) reportParams.set("q", debouncedReportSearch)
+    if (showsGroupOrders && debouncedGroupOrderFilter) {
+        reportParams.set("groupOrderRef", debouncedGroupOrderFilter)
+    }
     reportParams.set("page", currentPage.toString())
     reportParams.set("limit", ORDER_REPORT_PAGE_SIZE.toString())
     reportParams.set("ordersOnly", "true")
@@ -313,6 +322,7 @@ export default function OrderReportPage() {
     const resetReportFilters = useCallback(() => {
         setStatusFilter("all")
         setReportSearch("")
+        setGroupOrderFilter("")
         setReportMonths([])
         setReportYears([])
         setReportOrgIds([])
@@ -524,6 +534,7 @@ export default function OrderReportPage() {
             const financialColumns = new Set(["subtotalValue", "refundValue", "netTotalValue"])
             const activeColumns = ALL_COLUMNS.filter(c => {
                 if (role === "BRANCH_ADMIN" && (c.key === "group" || c.key === "branchName")) return false;
+                if (!showsGroupOrders && c.key === "groupOrderReference") return false;
                 if (role !== "SUPER_ADMIN" && c.key === "organizationName") return false;
                 if (pricesHidden && financialColumns.has(c.key)) return false;
                 return isVisible(c.key);
@@ -543,6 +554,7 @@ export default function OrderReportPage() {
                     case "tid": return order.tid || "-"
                     case "organizationName": return order.organizationName || "N/A"
                     case "group": return order.groupName || "-"
+                    case "groupOrderReference": return order.groupOrderReference || "-"
                     case "branchName": return order.branchName || "-"
                     case "status": return getOrderDerivedStatus({ status: order.status }).label || "-"
                     case "quantityOrdered": return order.quantityOrdered || 0
@@ -923,6 +935,21 @@ export default function OrderReportPage() {
                                         />
                                     </>
                                 )}
+                                {showsGroupOrders && (
+                                    <div className="relative">
+                                        <Layers className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                                        <Input
+                                            value={groupOrderFilter}
+                                            onChange={(event) => {
+                                                setGroupOrderFilter(event.target.value)
+                                                setCurrentPage(1)
+                                            }}
+                                            placeholder="Group Order ID"
+                                            aria-label="Filter by group order ID"
+                                            className="h-11 w-48 rounded-xl border-slate-200 bg-white pl-9 text-[11px] font-bold shadow-sm dark:border-slate-800 dark:bg-slate-950"
+                                        />
+                                    </div>
+                                )}
                                 <ColumnSelector columns={ALL_COLUMNS} storageKey="order-report-v2" visibleKeys={visibleKeys} onChange={setVisibleKeys} />
                                 <Button
                                     type="button"
@@ -962,6 +989,7 @@ export default function OrderReportPage() {
                                         {isVisible("employeeId") && <col className="w-[125px]" />}
                                         {isVisible("organizationName") && role === "SUPER_ADMIN" && <col className="w-[145px]" />}
                                         {isVisible("group") && role !== "BRANCH_ADMIN" && <col className="w-[155px]" />}
+                                        {isVisible("groupOrderReference") && showsGroupOrders && <col className="w-[175px]" />}
                                         {isVisible("branchName") && role !== "BRANCH_ADMIN" && <col className="w-[180px]" />}
                                         {isVisible("status") && <col className="w-[135px]" />}
                                         {isVisible("quantityOrdered") && <col className="w-[90px]" />}
@@ -986,6 +1014,7 @@ export default function OrderReportPage() {
                                             {isVisible("employeeId") && <TableHead className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">Employee #</TableHead>}
                                             {isVisible("organizationName") && role === "SUPER_ADMIN" && <TableHead className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">Org</TableHead>}
                                             {isVisible("group") && role !== "BRANCH_ADMIN" && <TableHead className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">Group</TableHead>}
+                                            {isVisible("groupOrderReference") && showsGroupOrders && <TableHead className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500"><div className="flex items-center gap-1.5"><Layers className="h-3 w-3 shrink-0" /> Group Order</div></TableHead>}
                                             {isVisible("branchName") && role !== "BRANCH_ADMIN" && <TableHead className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500"><div className="flex items-center gap-1.5"><Store className="h-3 w-3 shrink-0" /> Branch</div></TableHead>}
                                             {isVisible("status") && <TableHead className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500 text-center">Status</TableHead>}
                                             {isVisible("quantityOrdered") && <TableHead className="h-14 px-2 text-center text-[9px] font-black uppercase leading-tight tracking-wide text-slate-500 whitespace-normal">Qty Ordered</TableHead>}
@@ -1043,6 +1072,7 @@ export default function OrderReportPage() {
                                                     )}
                                                     {isVisible("organizationName") && role === "SUPER_ADMIN" && <TableCell className="px-3 2xl:px-4 py-5 whitespace-normal break-words text-[10px] font-bold text-slate-500 uppercase tracking-tighter" title={order.organizationName || "N/A"}>{order.organizationName || "N/A"}</TableCell>}
                                                     {isVisible("group") && role !== "BRANCH_ADMIN" && <TableCell className="px-3 2xl:px-4 py-5 whitespace-normal break-words text-[10px] font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-wide tabular-nums" title={order.groupName || "-"}>{order.groupName || "-"}</TableCell>}
+                                                    {isVisible("groupOrderReference") && showsGroupOrders && <TableCell className="px-3 2xl:px-4 py-5 whitespace-normal break-words font-mono text-[10px] font-bold text-slate-600 dark:text-slate-300 tabular-nums" title={order.groupOrderReference || "-"}>{order.groupOrderReference || "-"}</TableCell>}
                                                     {isVisible("branchName") && role !== "BRANCH_ADMIN" && <TableCell className="px-3 2xl:px-4 py-5 whitespace-normal break-words text-[11px] font-black text-slate-700 dark:text-slate-300 uppercase tracking-tighter" title={order.branchName}>{order.branchName}</TableCell>}
                                                     {isVisible("status") && (
                                                         <TableCell className="px-2 2xl:px-3 py-5 text-center">

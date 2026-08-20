@@ -3,15 +3,18 @@ import { NextResponse, type NextRequest } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
-import { orders, users, roles, branches, organizations, groups, orderItems, refunds, refundItems } from "@/db/schema"
+import { orders, users, roles, branches, organizations, groups, groupOrders, orderItems, refunds, refundItems } from "@/db/schema"
 import { and, desc, eq, gte, ilike, lte, or, sql, sum, count, inArray } from "drizzle-orm"
 import { metricExpressions } from "@/lib/metric-utils"
+import { escapeLikePattern } from "@/lib/utils"
 import { redactAnalyticsPrices, shouldHidePricesForRole } from "@/lib/price-visibility"
 import { parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
 import {
+    isMultiBranchAnalyticsRole,
     parseRequestedOrganizationIds,
     resolveAnalyticsOrganizationIds,
 } from "@/lib/server/analytics-scope"
+import { loadAnalyticsAssignedBranchIds } from "@/lib/server/analytics-branch-scope"
 
 function parseNumberList(value: string | null, isValid = (number: number) => number > 0) {
     return value ? value.split(",").map(Number).filter((number) => !Number.isNaN(number) && isValid(number)) : []
@@ -53,6 +56,40 @@ function addSummarySearchCondition(conditions: any[], search: string | null) {
     return null
 }
 
+/**
+ * Narrows the report to one group order, matched on the human-facing reference
+ * (for example `GRP-9445434D4F`).
+ *
+ * Written as a subquery on `orders.groupOrderId` rather than a join because the
+ * same condition list feeds the KPI, chart and table queries, which join only
+ * the branch table. The lookup is pinned to the organizations already resolved
+ * for the caller, so a reference belonging to another tenant matches nothing.
+ */
+function addSummaryGroupOrderCondition(
+    conditions: any[],
+    reference: string | null,
+    scopedOrganizationIds: number[],
+) {
+    const normalized = reference?.trim() || ""
+    if (!normalized) return null
+    if (normalized.length > 64) return "Group order ID must be at most 64 characters"
+
+    const pattern = `%${escapeLikePattern(normalized)}%`
+    conditions.push(inArray(
+        orders.groupOrderId,
+        db
+            .select({ id: groupOrders.id })
+            .from(groupOrders)
+            .where(and(
+                ilike(groupOrders.reference, pattern),
+                scopedOrganizationIds.length > 0
+                    ? inArray(groupOrders.organizationId, scopedOrganizationIds)
+                    : undefined,
+            )),
+    ))
+    return null
+}
+
 function addSummaryStatusCondition(conditions: any[], status: string | null) {
     if (!status || status.toLowerCase() === "all") return
     conditions.push(status.toUpperCase() === "REJECTED"
@@ -81,6 +118,17 @@ function addSummaryScopeConditions(conditions: any[], context: any) {
     if (["BRANCH_ADMIN", "BRANCH_MANAGER"].includes(context.role)) {
         if (!context.currentBranchId) return "Branch context missing"
         conditions.push(eq(orders.branchId, context.currentBranchId))
+        return null
+    }
+    // A multi-branch role is pinned to the branches assigned to it. The tenant
+    // is re-asserted alongside, so a stale assignment cannot reach another
+    // organization's orders, and an empty set denies rather than widens.
+    if (isMultiBranchAnalyticsRole(context.role)) {
+        if (!context.assignedBranchIds?.length) return "Branch context missing"
+        if (context.organizationIds.length > 0) {
+            conditions.push(inArray(orders.organizationId, context.organizationIds))
+        }
+        conditions.push(inArray(orders.branchId, context.assignedBranchIds))
         return null
     }
     return "Access denied"
@@ -231,8 +279,10 @@ export async function GET(req: NextRequest) {
     const respond = (payload: any) => buildSummaryResponse(pricesHidden, payload)
     console.log(`[Summary API] User: ${userId}, Role: ${normalizedRole}, Params: Branch=${branchId}, Org=${organizationId}, Group=${groupId}`)
 
+    const assignedBranchIds = await loadAnalyticsAssignedBranchIds(normalizedRole, userId)
     const scopeError = addSummaryScopeConditions(conditions, {
         role: normalizedRole,
+        assignedBranchIds,
         organizationIds: scopedOrganizationIds,
         branchIds: parsedBranchIds,
         branchId,
@@ -241,6 +291,13 @@ export async function GET(req: NextRequest) {
         currentBranchId: currentUserBranchId,
     })
     if (scopeError) return NextResponse.json({ error: scopeError }, { status: 403 })
+
+    const groupOrderError = addSummaryGroupOrderCondition(
+        conditions,
+        url.searchParams.get("groupOrderRef"),
+        scopedOrganizationIds,
+    )
+    if (groupOrderError) return NextResponse.json({ error: groupOrderError }, { status: 400 })
 
     // Date Filtering - Inclusive
     addSummaryDateConditions(conditions, { months: parsedMonths, years: parsedYears, startDate, endDate })
@@ -258,6 +315,11 @@ export async function GET(req: NextRequest) {
         branchId: orders.branchId,
         branchName: branches.name,
         groupName: groups.name,
+        groupOrderReference: sql<string | null>`(
+            SELECT ${groupOrders.reference}
+            FROM ${groupOrders}
+            WHERE ${groupOrders.id} = ${orders.groupOrderId}
+        )`,
         organizationName: organizations.name,
         createdAt: orders.createdAt,
         fulfilledAt: orders.fulfilledAt,

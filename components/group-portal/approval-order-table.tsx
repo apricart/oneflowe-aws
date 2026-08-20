@@ -9,6 +9,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { useToast } from "@/hooks/use-toast"
 import { cn, formatPKR } from "@/lib/utils"
 
+import { ApprovalOrderSheet } from "./approval-order-sheet"
 import {
   type ApprovalOrder,
   STATUS_STYLES,
@@ -33,6 +34,9 @@ type Props = Readonly<{
  * the fulfilment token and the hand-off to the admin operations mailbox, which
  * is the same step a Branch Admin performs before a Super Admin marks the order
  * delivered.
+ *
+ * Selecting a row opens the shared order detail drawer, the same panel every
+ * other role sees when it opens one of its own orders.
  */
 export function ApprovalOrderTable({
   orders,
@@ -41,6 +45,8 @@ export function ApprovalOrderTable({
   onDecide,
   busy,
 }: Props) {
+  const [viewingOrder, setViewingOrder] = useState<ApprovalOrder | null>(null)
+
   if (orders.length === 0) {
     return (
       <p className="px-4 py-6 text-center text-sm text-slate-500 dark:text-slate-400">
@@ -50,6 +56,7 @@ export function ApprovalOrderTable({
   }
 
   return (
+    <>
     <div className="overflow-x-auto">
       <table className="w-full min-w-[52rem] border-collapse text-sm">
         <caption className="sr-only">
@@ -76,12 +83,21 @@ export function ApprovalOrderTable({
               selected={selectedIds.has(order.id)}
               onToggleSelection={onToggleSelection}
               onDecide={onDecide}
+              onView={setViewingOrder}
               busy={busy}
             />
           ))}
         </tbody>
       </table>
     </div>
+
+    <ApprovalOrderSheet
+      order={viewingOrder}
+      onClose={() => setViewingOrder(null)}
+      onDecide={onDecide}
+      busy={busy}
+    />
+    </>
   )
 }
 
@@ -90,12 +106,14 @@ function OrderRow({
   selected,
   onToggleSelection,
   onDecide,
+  onView,
   busy,
 }: Readonly<{
   order: ApprovalOrder
   selected: boolean
   onToggleSelection: (orderId: number) => void
   onDecide: (orderIds: number[], decision: "approve" | "reject") => void
+  onView: (order: ApprovalOrder) => void
   busy: boolean
 }>) {
   const status = normalizeStatus(order.status)
@@ -103,8 +121,13 @@ function OrderRow({
 
   return (
     <>
-      <tr className="border-b border-slate-100 align-middle last:border-0 dark:border-slate-800/70">
-        <td className="px-3 py-3">
+      <tr
+        onClick={() => onView(order)}
+        className="cursor-pointer border-b border-slate-100 align-middle transition-colors last:border-0 hover:bg-slate-50 dark:border-slate-800/70 dark:hover:bg-slate-800/40"
+      >
+        {/* The controls inside the row act on the order directly, so they must
+            not also open the drawer behind them. */}
+        <td className="px-3 py-3" onClick={(event) => event.stopPropagation()}>
           {pending ? (
             <Checkbox
               checked={selected}
@@ -121,7 +144,16 @@ function OrderRow({
           )}
         </td>
         <td className="px-3 py-3">
-          <span className="font-mono text-xs text-slate-600 dark:text-slate-300">{order.tid}</span>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation()
+              onView(order)
+            }}
+            className="rounded font-mono text-xs text-indigo-600 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-indigo-400"
+          >
+            {order.tid}
+          </button>
           <span className="block text-[11px] text-slate-400">{formatDateTime(order.createdAt)}</span>
         </td>
         <td className="px-3 py-3 text-slate-600 dark:text-slate-300">{order.itemCount}</td>
@@ -136,7 +168,7 @@ function OrderRow({
             {status}
           </Badge>
         </td>
-        <td className="px-3 py-3">
+        <td className="px-3 py-3" onClick={(event) => event.stopPropagation()}>
           {pending ? (
             <div className="flex items-center justify-end gap-2">
               <Button

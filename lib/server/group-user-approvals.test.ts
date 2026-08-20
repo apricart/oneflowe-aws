@@ -215,10 +215,16 @@ describe("group user approval surface contracts", () => {
 
   it("confines the approval workspace to the approver in the proxy and the server layout", () => {
     const proxySource = source("proxy.ts")
-    const layout = source("app/group-portal/approvals/layout.tsx")
+    const layout = source("app/(portal)/approvals/layout.tsx")
 
-    expect(proxySource).toContain('{ prefix: "/group-portal/approvals", role: "GROUP_USER" }')
-    expect(layout).toContain('!== GROUP_USER_ROLE) redirect("/group-portal")')
+    // The approver works inside the shared shell, but only in the areas its
+    // role has; everything else redirects back to its own queue.
+    expect(proxySource).toContain('const GROUP_USER_HOME = "/approvals"')
+    expect(proxySource).toContain('const GROUP_USER_AREAS = ["/approvals", "/reports", "/settings"]')
+    expect(proxySource).toContain("GROUP_USER_AREAS.some((prefix) => pathMatchesPrefix(pathname, prefix))")
+    // The queue is the approver's alone: an administrator is sent away from it.
+    expect(proxySource).toContain("pathMatchesPrefix(pathname, APPROVALS_AREA)")
+    expect(layout).toContain('!== GROUP_USER_ROLE) redirect("/dashboard")')
   })
 
   it("leaves the requester's ordering surface unable to decide orders", () => {
