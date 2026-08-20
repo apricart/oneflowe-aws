@@ -132,14 +132,14 @@ jobs:
             exit 1
           fi
 
-          REMOTE_COMMANDS=$(jq -cn \
+          REMOTE_SCRIPT=$(jq -nr \
             --arg region "$DEPLOY_AWS_REGION" \
             --arg registry "$ECR_REGISTRY" \
             --arg repository "$ECR_REPOSITORY_URL" \
             --arg commit "$GITHUB_SHA" \
-            '{
-              commands: [
-                "set -eu",
+            '[
+                "#!/bin/bash",
+                "set -Eeuo pipefail",
                 "echo \"[deploy] Checking staging host and runtime configuration\"",
                 "cd /home/ubuntu/app",
                 "test -f docker-compose.yml",
@@ -153,9 +153,16 @@ jobs:
                 ("sudo grep -Fq \"image: " + $repository + ":test-" + $commit + "\" docker-compose.yml"),
                 "echo \"[deploy] Starting the Compose app service\"",
                 "sudo docker compose up -d app",
-                "attempt=0; while [ \"$attempt\" -lt 18 ]; do container_id=$(sudo docker compose ps -a -q app); if [ -n \"$container_id\" ]; then state=$(sudo docker inspect --format \"{{.State.Status}}\" \"$container_id\"); echo \"[deploy] app state: $state (health attempt $((attempt + 1))/18)\"; if [ \"$state\" = \"running\" ] && sudo docker exec \"$container_id\" node -e \"fetch(\\\"http://127.0.0.1:3000/api/v1/health\\\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"; then echo \"[deploy] Staging app is running and healthy\"; exit 0; fi; fi; attempt=$((attempt + 1)); sleep 5; done; echo \"[deploy] App did not become healthy; Compose status and recent logs follow\" >&2; sudo docker compose ps -a >&2 || true; sudo docker compose logs --no-color --tail=200 app >&2 || true; exit 21"
-              ]
-            }')
+                "attempt=0; while [ \"$attempt\" -lt 18 ]; do container_id=$(sudo docker compose ps -a -q app); running_id=$(sudo docker compose ps --status running -q app); echo \"[deploy] health attempt $((attempt + 1))/18\"; if [ -n \"$container_id\" ] && [ \"$container_id\" = \"$running_id\" ] && sudo docker exec \"$container_id\" node -e \"fetch(\\\"http://127.0.0.1:3000/api/v1/health\\\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"; then echo \"[deploy] Staging app is running and healthy\"; exit 0; fi; attempt=$((attempt + 1)); sleep 5; done; echo \"[deploy] App did not become healthy; Compose status and recent logs follow\" >&2; sudo docker compose ps -a >&2 || true; sudo docker compose logs --no-color --tail=200 app >&2 || true; exit 21"
+              ] | join("\n")')
+
+          # Validate the exact script locally, then encode it so SSM cannot
+          # interpret shell or Go-template syntax as document parameters.
+          printf '%s\n' "$REMOTE_SCRIPT" | /bin/bash -n
+          REMOTE_SCRIPT_BASE64=$(printf '%s\n' "$REMOTE_SCRIPT" | base64 --wrap=0)
+          REMOTE_COMMANDS=$(jq -cn \
+            --arg payload "$REMOTE_SCRIPT_BASE64" \
+            '{commands: [("echo \"[ssm] Launching staging deployment script\"; printf %s " + $payload + " | base64 --decode | /bin/bash")]}')
 
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids "$STAGING_EC2_INSTANCE_ID" \
