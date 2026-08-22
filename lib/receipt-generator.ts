@@ -6,12 +6,19 @@ import { calculateLineCents } from "@/lib/quantity"
 
 export interface ReceiptData {
     invoiceNumber: string
+    /**
+     * The buyer's own purchase order reference, when they supplied one. Absent
+     * on orders raised without a purchase order, and on every order placed
+     * before the field existed.
+     */
+    poNumber?: string
     date: string
     status: string
     buyerName: string
     buyerAddress: string
     buyerPhone?: string
     organizationName: string
+    organizationNtn?: string
     organizationContact?: string
     items: Array<{
         mainCategoryName: string
@@ -25,6 +32,11 @@ export interface ReceiptData {
                 tax: number
                 total: number
                 unit: string
+                /** Unit price excluding tax. */
+                netRate?: number
+                /** Line value excluding tax. */
+                netAmount?: number
+                taxPercent?: number
             }>
             subtotal: number
         }>
@@ -139,6 +151,7 @@ export async function generateReceiptData(params: {
         buyerName: branch.name,
         buyerAddress: formatBranchAddress(branch),
         organizationName: org.name,
+        organizationNtn: org.ntnNumber || undefined,
         items: groupedItems,
         subtotal: subtotalCents / 100,
         discount: discountCents / 100,
@@ -186,14 +199,27 @@ function groupItemsHierarchically(
         const subGroups = groups.get(mainCatName)!
         if (!subGroups.has(subCatName)) subGroups.set(subCatName, [])
 
+        const grossCents = calculateLineCents(item.priceCents, item.quantity)
+        const taxCents = Number(item.taxCents || 0)
+
         subGroups.get(subCatName)!.push({
             id: idx + 1,
             description: item.productName + (item.productCode ? ` (${item.productCode})` : ""),
             quantity: item.quantity,
             rate: item.priceCents / 100,
-            tax: 0,
-            total: calculateLineCents(item.priceCents, item.quantity) / 100,
+            // Rate and total are the gross, tax-inclusive amounts the branch
+            // pays; this is the portion of that total which is tax, not an
+            // addition to it.
+            tax: taxCents / 100,
+            total: grossCents / 100,
             unit: item.unit,
+            // The invoice prints values excluding tax, so the net figures are
+            // recorded alongside the gross ones rather than derived at print
+            // time — an invoice must keep showing the figures it was issued
+            // with even if a rate changes later.
+            netRate: item.quantity > 0 ? (grossCents - taxCents) / 100 / item.quantity : 0,
+            netAmount: (grossCents - taxCents) / 100,
+            taxPercent: Number(item.taxRateBp || 0) / 100,
         })
     })
 

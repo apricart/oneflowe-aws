@@ -409,6 +409,243 @@ const generateRefundRequestEmailHTML = (details: RefundRequestEmailDetails) => {
   `
 }
 
+export type GroupRefundRequestEmailBranch = {
+  tid: string
+  branchName: string
+  refundNumber: string
+  amountCents: number
+  itemCount: number
+}
+
+export type GroupRefundRequestEmailDetails = {
+  to: string | string[]
+  reference: string
+  requestedBy: string
+  organizationId: number
+  totalAmountCents: number
+  branches: GroupRefundRequestEmailBranch[]
+}
+
+const generateGroupRefundRequestEmailHTML = (details: GroupRefundRequestEmailDetails) => {
+  const branchRows = details.branches.map((branch) => `
+    <tr>
+      <td style="padding: 10px 0; border-bottom: 1px solid #e2e8f0; color: #334155; font-size: 14px; font-weight: 700;">${escapeHtml(branch.branchName)}<br><span style="color: #94a3b8; font-size: 12px; font-weight: 500;">${escapeHtml(branch.tid)} &middot; ${escapeHtml(branch.refundNumber)}</span></td>
+      <td style="padding: 10px 0; border-bottom: 1px solid #e2e8f0; color: #475569; font-size: 14px; text-align: right;">${escapeHtml(String(branch.itemCount))}</td>
+      <td style="padding: 10px 0; border-bottom: 1px solid #e2e8f0; color: #dc2626; font-size: 14px; font-weight: 800; text-align: right;">PKR ${escapeHtml((branch.amountCents / 100).toFixed(2))}</td>
+    </tr>
+  `).join("")
+
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Group Refund Request</title>
+    </head>
+    <body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #f8fafc;">
+      <table role="presentation" style="width: 100%; border-collapse: collapse;">
+        <tr>
+          <td style="padding: 32px 0;">
+            <table role="presentation" style="width: 100%; max-width: 640px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0;">
+              <tr>
+                <td style="background-color: #dc2626; padding: 30px;">
+                  <h1 style="margin: 0; color: #ffffff; font-size: 24px; font-weight: 900;">Group Refund Request</h1>
+                  <p style="margin: 8px 0 0; color: #fecaca; font-size: 12px; font-weight: 700; letter-spacing: 2px;">AWAITING SUPER ADMIN REVIEW</p>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding: 30px;">
+                  <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                    <tr><td style="color: #64748b; font-size: 13px; font-weight: 700;">Group order</td><td style="text-align: right; color: #1e293b; font-size: 13px; font-weight: 800;">${escapeHtml(details.reference)}</td></tr>
+                    <tr><td style="padding-top: 8px; color: #64748b; font-size: 13px; font-weight: 700;">Requested by</td><td style="padding-top: 8px; text-align: right; color: #1e293b; font-size: 13px; font-weight: 800;">${escapeHtml(details.requestedBy)}</td></tr>
+                    <tr><td style="padding-top: 8px; color: #64748b; font-size: 13px; font-weight: 700;">Branch orders</td><td style="padding-top: 8px; text-align: right; color: #1e293b; font-size: 13px; font-weight: 800;">${escapeHtml(String(details.branches.length))}</td></tr>
+                    <tr><td style="padding-top: 8px; color: #64748b; font-size: 13px; font-weight: 700;">Total requested</td><td style="padding-top: 8px; text-align: right; color: #dc2626; font-size: 16px; font-weight: 900;">PKR ${escapeHtml((details.totalAmountCents / 100).toFixed(2))}</td></tr>
+                  </table>
+                  <p style="margin: 26px 0 8px; color: #64748b; font-size: 12px; font-weight: 800; letter-spacing: 2px;">BRANCH BREAKDOWN</p>
+                  <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                      <tr>
+                        <th style="padding-bottom: 8px; border-bottom: 2px solid #e2e8f0; color: #64748b; font-size: 11px; text-align: left; text-transform: uppercase;">Branch</th>
+                        <th style="padding-bottom: 8px; border-bottom: 2px solid #e2e8f0; color: #64748b; font-size: 11px; text-align: right; text-transform: uppercase;">Items</th>
+                        <th style="padding-bottom: 8px; border-bottom: 2px solid #e2e8f0; color: #64748b; font-size: 11px; text-align: right; text-transform: uppercase;">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>${branchRows}</tbody>
+                  </table>
+                  <p style="margin: 24px 0 0; color: #64748b; font-size: 12px;">Each branch order carries its own refund request and is approved or rejected individually in the refunds queue.</p>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+  `
+}
+
+/**
+ * One message for a whole Group Order Portal refund submission.
+ *
+ * A group refund can touch dozens of branch orders at once; sending the
+ * per-order refund email for each of them would bury the request rather than
+ * report it. The individual refunds still exist as ordinary rows in the admin
+ * queue, so nothing is lost by summarizing them here.
+ */
+export type GroupOrderTokensEmailEntry = {
+  tid: string
+  branchName: string
+  token: string
+  items: Array<{ productName: string; productCode: string | null; quantity: number; unit: string }>
+}
+
+export type GroupOrderTokensEmailDetails = {
+  to: string | string[]
+  reference: string
+  groupName: string
+  sharedBy: string
+  entries: GroupOrderTokensEmailEntry[]
+}
+
+const generateGroupOrderTokensEmailHTML = (details: GroupOrderTokensEmailDetails) => {
+  const branchBlocks = details.entries.map((entry) => {
+    const itemRows = entry.items.map((item) => `
+      <tr>
+        <td style="padding: 6px 0; border-bottom: 1px solid #f1f5f9; color: #334155; font-size: 13px;">${escapeHtml(item.productCode ? (String(item.productCode) + " - " + String(item.productName)) : item.productName)}</td>
+        <td style="padding: 6px 0; border-bottom: 1px solid #f1f5f9; color: #4f46e5; font-size: 13px; font-weight: 800; text-align: right;">${escapeHtml((String(formatQuantity(item.quantity)) + String(item.unit ? (" " + String(item.unit)) : "")))}</td>
+      </tr>
+    `).join("")
+
+    return `
+      <tr>
+        <td style="padding: 0 0 18px;">
+          <table role="presentation" style="width: 100%; border-collapse: collapse; border: 1px solid #e2e8f0; border-radius: 12px;">
+            <tr>
+              <td style="padding: 16px;">
+                <p style="margin: 0; color: #0f172a; font-size: 15px; font-weight: 800;">${escapeHtml(entry.branchName)}</p>
+                <p style="margin: 2px 0 12px; color: #94a3b8; font-size: 12px; font-weight: 600;">${escapeHtml(entry.tid)}</p>
+                <div style="padding: 12px; background-color: #eef2ff; border: 1px solid #c7d2fe; border-radius: 10px; color: #4338ca; font-family: 'Courier New', monospace; font-size: 24px; font-weight: 900; letter-spacing: 5px; text-align: center;">
+                  ${escapeHtml(entry.token)}
+                </div>
+                <table role="presentation" style="width: 100%; margin-top: 14px; border-collapse: collapse; border-top: 1px solid #e2e8f0;">
+                  <tbody>${itemRows}</tbody>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    `
+  }).join("")
+
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Group Order Fulfillment Tokens</title>
+    </head>
+    <body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #f8fafc;">
+      <table role="presentation" style="width: 100%; border-collapse: collapse;">
+        <tr>
+          <td style="padding: 32px 0;">
+            <table role="presentation" style="width: 100%; max-width: 640px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0;">
+              <tr>
+                <td style="background-color: #4f46e5; padding: 30px;">
+                  <h1 style="margin: 0; color: #ffffff; font-size: 24px; font-weight: 900;">Group Order Fulfillment Tokens</h1>
+                  <p style="margin: 8px 0 0; color: #c7d2fe; font-size: 12px; font-weight: 700; letter-spacing: 2px;">SHARE WITH SUPER ADMIN</p>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding: 30px;">
+                  <table role="presentation" style="width: 100%; border-collapse: collapse; margin-bottom: 24px;">
+                    <tr><td style="color: #64748b; font-size: 13px; font-weight: 700;">Group order</td><td style="text-align: right; color: #1e293b; font-size: 13px; font-weight: 800;">${escapeHtml(details.reference)}</td></tr>
+                    <tr><td style="padding-top: 8px; color: #64748b; font-size: 13px; font-weight: 700;">Group</td><td style="padding-top: 8px; text-align: right; color: #1e293b; font-size: 13px; font-weight: 800;">${escapeHtml(details.groupName)}</td></tr>
+                    <tr><td style="padding-top: 8px; color: #64748b; font-size: 13px; font-weight: 700;">Shared by</td><td style="padding-top: 8px; text-align: right; color: #1e293b; font-size: 13px; font-weight: 800;">${escapeHtml(details.sharedBy)}</td></tr>
+                    <tr><td style="padding-top: 8px; color: #64748b; font-size: 13px; font-weight: 700;">Branch orders</td><td style="padding-top: 8px; text-align: right; color: #1e293b; font-size: 13px; font-weight: 800;">${escapeHtml(String(details.entries.length))}</td></tr>
+                  </table>
+                  <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                    <tbody>${branchBlocks}</tbody>
+                  </table>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+  `
+}
+
+/**
+ * Every fulfilment token for one group order, in one message.
+ *
+ * A group order approves into one branch order per branch, each with its own
+ * token. Sending them separately would mean dozens of near-identical emails for
+ * a single hand-off, so they are collected here — the administrator gets one
+ * message holding everything needed to mark the whole group order delivered.
+ */
+export async function sendGroupOrderTokensEmail(
+  details: GroupOrderTokensEmailDetails,
+): Promise<void> {
+  await sendAppEmail({
+    fromName: "OneFlowe Orders",
+    to: details.to,
+    subject: `Fulfillment tokens for group order ${details.reference}`,
+    html: generateGroupOrderTokensEmailHTML(details),
+    text: [
+      "OneFlowe group order fulfillment tokens",
+      `Group order: ${details.reference}`,
+      `Group: ${details.groupName}`,
+      `Shared by: ${details.sharedBy}`,
+      "",
+      ...details.entries.map((entry) => `${entry.branchName} (${entry.tid}): ${entry.token}`),
+    ].join("\n"),
+    tags: [
+      { name: "type", value: "group_order_tokens" },
+      { name: "reference", value: sanitizeEmailTagValue(details.reference) },
+    ],
+  })
+}
+
+export async function sendGroupRefundRequestEmail(
+  details: GroupRefundRequestEmailDetails,
+): Promise<boolean> {
+  try {
+    if (!validateSesConfig()) return false
+
+    await sendAppEmail({
+      fromName: "OneFlowe Refunds",
+      to: details.to,
+      subject: `Group refund request for ${details.reference}`,
+      html: generateGroupRefundRequestEmailHTML(details),
+      text: [
+        "OneFlowe group refund request submitted",
+        `Group order: ${details.reference}`,
+        `Requested by: ${details.requestedBy}`,
+        `Branch orders: ${details.branches.length}`,
+        `Total: PKR ${(details.totalAmountCents / 100).toFixed(2)}`,
+        ...details.branches.map(
+          (branch) => `  ${branch.branchName} (${branch.tid}) — PKR ${(branch.amountCents / 100).toFixed(2)}`,
+        ),
+      ].join("\n"),
+      tags: [
+        { name: "type", value: "group_refund_request" },
+        { name: "reference", value: sanitizeEmailTagValue(details.reference) },
+      ],
+    })
+
+    return true
+  } catch (error) {
+    console.error("[Email] Failed to send group refund request email:", error)
+    logError(error, "EMAIL_SEND_GROUP_REFUND_REQUEST", { reference: details.reference })
+    return false
+  }
+}
+
 export async function sendRefundRequestEmail(details: RefundRequestEmailDetails): Promise<boolean> {
   try {
     if (!validateSesConfig()) return false

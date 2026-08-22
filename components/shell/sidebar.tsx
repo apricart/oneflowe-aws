@@ -117,6 +117,7 @@ const getNavigationByRole = (role: string) => {
         icon: BarChart3,
         subItems: [
           { href: "/reports/order-report", label: "Order Report" },
+          { href: "/reports/group-orders", label: "Group Order Report" },
           { href: "/reports/refund-report", label: "Refund Report" },
           { href: "/reports/product-performance", label: "Product Report" },
           { href: "/reports/user-report", label: "User Report" },

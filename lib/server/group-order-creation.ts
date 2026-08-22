@@ -22,6 +22,8 @@ import { db } from "@/lib/db"
 import { generateNextInvoiceNumber, hasInvoiceSequenceTable } from "@/lib/invoice-number"
 import { calculateLineCents, formatQuantity, roundQuantity, validateProductQuantity } from "@/lib/quantity"
 import { generateReceiptData } from "@/lib/receipt-generator"
+import { resolveTaxRateBp, splitInclusiveCents } from "@/lib/tax"
+import { getOrganizationTaxRateBp } from "@/lib/server/tax-rate"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
 import {
   UNGROUPED_BUCKET_NAME,
@@ -76,6 +78,7 @@ export type GroupOrderSubmission = {
   reference: string
   createdAt: Date | null
   notes: string | null
+  poNumber: string | null
   groupId: number | null
   groupName: string
   requestedBranchCount: number
@@ -147,12 +150,14 @@ export function groupOrderFingerprint(input: {
   organizationId: number
   groupId: number | null
   notes: string | null
+  poNumber: string | null
   plans: BranchPlan[]
 }): string {
   const canonical = {
     organizationId: input.organizationId,
     groupId: input.groupId,
     notes: input.notes || null,
+    poNumber: input.poNumber || null,
     branches: input.plans.map((plan) => ({
       branchId: plan.branch.id,
       items: plan.items,
@@ -235,13 +240,21 @@ async function getOrCreateBranchBudget(branchId: number, period: string) {
 }
 
 type LockedCatalogue = {
-  inventoryById: Map<number, { id: number; globalProductId: number; customPrice: number | null }>
+  inventoryById: Map<number, {
+    id: number
+    globalProductId: number
+    customPrice: number | null
+    /** The tenant's own name for the product, when it set one. */
+    customName: string | null
+  }>
   productById: Map<number, {
     id: number
     name: string
     productCode: string | null
     unit: string
     basePrice: number
+    /** Basis points; NULL means the product follows the organization rate. */
+    taxRateBp: number | null
     stockQuantity: number
     allowDecimalQuantity: boolean | null
     quantityStep: number | null
@@ -278,6 +291,7 @@ async function lockBranchCatalogue(
       id: organizationInventory.id,
       globalProductId: organizationInventory.globalProductId,
       customPrice: organizationInventory.customPrice,
+      customName: organizationInventory.customName,
     })
     .from(organizationInventory)
     .where(and(
@@ -298,6 +312,7 @@ async function lockBranchCatalogue(
       productCode: globalProducts.productCode,
       unit: globalProducts.unit,
       basePrice: globalProducts.basePrice,
+      taxRateBp: globalProducts.taxRateBp,
       stockQuantity: globalProducts.stockQuantity,
       allowDecimalQuantity: globalProducts.allowDecimalQuantity,
       quantityStep: globalProducts.quantityStep,
@@ -321,6 +336,8 @@ type PricedLine = {
   globalProductId: number
   quantity: number
   priceCents: number
+  taxRateBp: number
+  taxCents: number
   productName: string
   productCode: string | null
   unit: string
@@ -330,42 +347,62 @@ type PricedLine = {
 function priceLockedLines(
   requested: Array<{ organizationInventoryId: number; quantity: number }>,
   locked: LockedCatalogue,
-): { items: PricedLine[]; total: number } {
+  orgTaxRateBp: number,
+): { items: PricedLine[]; subtotal: number; tax: number; total: number } {
   let subtotal = 0
+  let tax = 0
+  let total = 0
   const items = requested.map((line) => {
     const inventoryItem = locked.inventoryById.get(line.organizationInventoryId)
     if (!inventoryItem) throw new Error("An inventory item is no longer available")
     const product = locked.productById.get(inventoryItem.globalProductId)
     if (!product) throw new Error("A product is no longer available")
 
+    // The catalogue and the price refresh both show the tenant's own name for a
+    // product, so the order snapshot has to record that same name — otherwise
+    // the line the user reviewed is filed under a different name on the order,
+    // the receipt, and every refund screen that reads it back.
+    const productName = inventoryItem.customName || product.name
+
     const validation = validateProductQuantity(line.quantity, {
       allowDecimalQuantity: Boolean(product.allowDecimalQuantity),
       quantityStep: product.quantityStep ?? undefined,
-      label: `Quantity for ${product.name}`,
+      label: `Quantity for ${productName}`,
+      // The group portal's quantity control snaps to this same grid, so this
+      // can only reject a payload that did not come from the workspace.
+      enforceStep: true,
     })
     if (!validation.ok) throw new Error(validation.error)
 
     const priceCents = inventoryItem.customPrice ?? product.basePrice
     if (!Number.isSafeInteger(priceCents) || priceCents < 0) {
-      throw new Error(`Pricing is unavailable for ${product.name}`)
+      throw new Error(`Pricing is unavailable for ${productName}`)
     }
-    subtotal += calculateLineCents(priceCents, validation.quantity)
+    // Prices are tax-inclusive, so this split records how much of the gross
+    // line amount is tax without changing what the branch is charged.
+    const taxRateBp = resolveTaxRateBp(product.taxRateBp, orgTaxRateBp)
+    const lineSplit = splitInclusiveCents(calculateLineCents(priceCents, validation.quantity), taxRateBp)
+    subtotal += lineSplit.netCents
+    tax += lineSplit.taxCents
+    total += lineSplit.grossCents
 
     return {
       organizationInventoryId: inventoryItem.id,
       globalProductId: product.id,
       quantity: validation.quantity,
       priceCents,
-      productName: product.name,
+      taxRateBp,
+      taxCents: lineSplit.taxCents,
+      productName,
       productCode: product.productCode,
       unit: product.unit,
     }
   })
 
-  if (!Number.isSafeInteger(subtotal) || subtotal < 0) {
+  if (!Number.isSafeInteger(total) || total < 0) {
     throw new Error("Calculated order total is invalid")
   }
-  return { items, total: subtotal }
+  return { items, subtotal, tax, total }
 }
 
 function assertStockAvailable(items: PricedLine[], locked: LockedCatalogue): void {
@@ -374,7 +411,7 @@ function assertStockAvailable(items: PricedLine[], locked: LockedCatalogue): voi
     if (!product) throw new Error(`Product not found: ${item.productName}`)
     if (product.stockQuantity < item.quantity) {
       throw new Error(
-        `Insufficient stock for ${product.name}. Available: ${formatQuantity(product.stockQuantity)}, Requested: ${formatQuantity(item.quantity)}`,
+        `Insufficient stock for ${item.productName}. Available: ${formatQuantity(product.stockQuantity)}, Requested: ${formatQuantity(item.quantity)}`,
       )
     }
   }
@@ -469,7 +506,10 @@ async function attachReceipt(
     organizationId: number
     branchId: number
     items: PricedLine[]
+    subtotal: number
+    tax: number
     total: number
+    poNumber: string | null
     invoiceSequenceReady: boolean
   },
 ) {
@@ -482,8 +522,8 @@ async function attachReceipt(
       organizationId: context.organizationId,
       branchId: context.branchId,
       orderItemsData: context.items,
-      subtotalCents: context.total,
-      taxCents: 0,
+      subtotalCents: context.subtotal,
+      taxCents: context.tax,
       totalCents: context.total,
       discountCents: 0,
       deliveryChargesCents: 0,
@@ -493,6 +533,9 @@ async function attachReceipt(
   }
   if (!receiptData) return
 
+  // The buyer's own reference, recorded with the invoice so a reissue prints
+  // what was agreed rather than the invoice number over again.
+  if (context.poNumber) receiptData.poNumber = context.poNumber
   receiptData.invoiceNumber = context.invoiceSequenceReady
     ? await generateNextInvoiceNumber(tx, context.organizationId)
     : context.tid
@@ -505,6 +548,7 @@ type BranchCreationContext = {
   groupOrderId: number
   reference: string
   notes: string | null
+  poNumber: string | null
   period: string
   mode: string
   actor: { userId: string; role: string; ipAddress: string; userAgent: string | null }
@@ -525,6 +569,7 @@ async function createBranchOrder(context: BranchCreationContext): Promise<GroupO
   const branchId = plan.branch.id
   const inventoryIds = plan.items.map((item) => item.organizationInventoryId)
 
+  const orgTaxRateBp = await getOrganizationTaxRateBp(organizationId)
   const budget = await getOrCreateBranchBudget(branchId, context.period)
   if (!budget) {
     return {
@@ -548,7 +593,7 @@ async function createBranchOrder(context: BranchCreationContext): Promise<GroupO
         - lockedBudget.amountSpentCents - lockedBudget.amountHeldCents
 
       const locked = await lockBranchCatalogue(tx, { organizationId, branchId, inventoryIds })
-      const priced = priceLockedLines(plan.items, locked)
+      const priced = priceLockedLines(plan.items, locked, orgTaxRateBp)
 
       const shortfall = budgetShortfallMessage(priced.total, available)
       if (shortfall) throw new Error(shortfall)
@@ -575,10 +620,11 @@ async function createBranchOrder(context: BranchCreationContext): Promise<GroupO
           branchId,
           groupOrderId: context.groupOrderId,
           status: "PENDING",
-          subtotalCents: priced.total,
-          taxCents: 0,
+          subtotalCents: priced.subtotal,
+          taxCents: priced.tax,
           totalCents: priced.total,
           notes: context.notes,
+          poNumber: context.poNumber,
           createdByUserId: context.actor.userId,
         })
         .returning({ id: orders.id, tid: orders.tid, totalCents: orders.totalCents })
@@ -602,7 +648,10 @@ async function createBranchOrder(context: BranchCreationContext): Promise<GroupO
         organizationId,
         branchId,
         items: priced.items,
+        subtotal: priced.subtotal,
+        tax: priced.tax,
         total: priced.total,
+        poNumber: context.poNumber,
         invoiceSequenceReady: context.invoiceSequenceReady,
       })
 
@@ -659,6 +708,7 @@ export type CreateGroupOrderInput = {
   organizationId: number
   entries: GroupOrderEntry[]
   notes: string | null
+  poNumber: string | null
   idempotencyKey: string
   actor: { userId: string; role: string; ipAddress: string; userAgent: string | null }
 }
@@ -687,6 +737,7 @@ export async function createGroupOrder(
     organizationId: input.organizationId,
     groupId: input.scope.group.id,
     notes: input.notes,
+    poNumber: input.poNumber,
     plans,
   })
 
@@ -709,6 +760,7 @@ export async function createGroupOrder(
         idempotencyKey: input.idempotencyKey,
         requestFingerprint: fingerprint,
         notes: input.notes,
+        poNumber: input.poNumber,
         requestedBranchCount: plans.length,
       })
       .returning()
@@ -743,6 +795,7 @@ export async function createGroupOrder(
       groupOrderId: envelope.id,
       reference: envelope.reference,
       notes: childNotes,
+      poNumber: envelope.poNumber,
       period,
       mode,
       actor: input.actor,
@@ -776,6 +829,7 @@ export async function createGroupOrder(
       reference: envelope.reference,
       createdAt: envelope.createdAt,
       notes: envelope.notes,
+      poNumber: envelope.poNumber,
       groupId: input.scope.group.id,
       groupName: input.scope.group.name,
       requestedBranchCount: plans.length,
@@ -887,6 +941,7 @@ async function describeSubmission(
     reference: envelope.reference,
     createdAt: envelope.createdAt,
     notes: envelope.notes,
+    poNumber: envelope.poNumber,
     groupId: envelope.groupId,
     groupName: group?.name ?? UNGROUPED_BUCKET_NAME,
     requestedBranchCount: envelope.requestedBranchCount,

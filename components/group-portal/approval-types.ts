@@ -12,8 +12,14 @@ export type ApprovalOrder = {
   branchName: string
   branchCostCenterId: string | null
   status: string
+  /** Set once refunded; decides whether a refunded row still offers its invoice. */
+  statusAtRefund: string | null
   fulfillmentStatus: string
   totalCents: number
+  /**
+   * Units ordered across the whole order. Both approval views report the same
+   * figure, so the column means one thing wherever it appears.
+   */
   itemCount: number
   createdAt: string | null
   approvedAt: string | null

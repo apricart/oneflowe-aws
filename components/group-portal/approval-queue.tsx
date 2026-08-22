@@ -276,6 +276,7 @@ export function ApprovalQueue() {
               onSelectAllPending={selectAllPending}
               onDecide={requestDecision}
               busy={busy}
+              onRefresh={() => { void mutate() }}
             />
           ))}
         </div>

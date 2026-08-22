@@ -35,6 +35,12 @@ import { getRequestScope } from "@/lib/auth"
 
 type OrganizationUpdateInput = ReturnType<typeof organizationUpdateSchema.parse>
 
+// Optional field: an empty (or explicitly null) value clears it, so a wrong
+// NTN can be removed without leaving an empty string behind.
+function normalizeNtnNumber(value: string | null) {
+  return value === null ? null : value.trim() || null
+}
+
 async function buildOrganizationPatch(body: OrganizationUpdateInput, organizationId: number) {
   const patch: Record<string, unknown> = {}
   if (body.name !== undefined) {
@@ -54,6 +60,9 @@ async function buildOrganizationPatch(body: OrganizationUpdateInput, organizatio
       .limit(1)
     if (exists.length > 0) return { response: error(`Organization with code '${code}' already exists`, 400) }
     patch.code = code
+  }
+  if (body.ntnNumber !== undefined) {
+    patch.ntnNumber = normalizeNtnNumber(body.ntnNumber)
   }
   if (body.status !== undefined) {
     const status = String(body.status).toLowerCase()

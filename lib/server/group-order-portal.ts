@@ -23,6 +23,25 @@ import { resolveScopedBranchIds } from "@/lib/server/multi-branch-scope"
 export const UNGROUPED_BUCKET_ID = null
 export const UNGROUPED_BUCKET_NAME = "Unassigned branches"
 
+/**
+ * Branch states that take a branch out of service.
+ *
+ * `branches.status` is the tenant's own lifecycle flag: deleting a branch soft
+ * deletes it to `inactive`, and an administrator can also suspend one. Neither
+ * may be ordered for. A branch that carries no status at all predates the
+ * column and is treated as in service, which is what every other branch read in
+ * the application already assumes.
+ */
+const OUT_OF_SERVICE_BRANCH_STATUSES = ["inactive", "suspended", "deleted"]
+
+const branchIsInService = sql`(
+  ${branches.status} IS NULL
+  OR LOWER(${branches.status}) NOT IN (${sql.join(
+    OUT_OF_SERVICE_BRANCH_STATUSES.map((status) => sql`${status}`),
+    sql`, `,
+  )})
+)`
+
 /** Bounds on one submission. Keeps a single request's work predictable. */
 export const MAX_BRANCHES_PER_SUBMISSION = 100
 export const MAX_ENTRIES_PER_SUBMISSION = 50
@@ -47,6 +66,12 @@ export type ScopedGroup = {
  * The branches this user may order for, as they exist right now, restricted to
  * the user's own organization. Returns an empty array for any user without
  * assignments.
+ *
+ * A branch an administrator has deactivated or suspended is not orderable and
+ * is left out here, which is what removes it from the group wizard, the
+ * catalogue, and the price refresh in one place. Orders already raised against
+ * such a branch are untouched: they keep their approval, refund, and reporting
+ * paths, all of which resolve the branch scope separately.
  */
 export async function loadScopedBranches(
   userId: string,
@@ -71,7 +96,7 @@ export async function loadScopedBranches(
     .where(and(
       inArray(branches.id, scopedBranchIds),
       eq(branches.organizationId, organizationId),
-      sql`${branches.status} IS DISTINCT FROM 'deleted'`,
+      branchIsInService,
     ))
     .orderBy(asc(branches.name))
 }

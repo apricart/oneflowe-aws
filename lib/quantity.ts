@@ -30,12 +30,39 @@ export const sanitizeQuantityStep = (allowDecimalQuantity: boolean, value: unkno
   return roundQuantity(step)
 }
 
+/**
+ * Snap a quantity onto a product's own step grid.
+ *
+ * Entry controls use this so a typed value is corrected as it is committed
+ * rather than accepted and refused later. A positive input never snaps to zero:
+ * zero means "remove this line" to every caller, and silently deleting a line
+ * the user was editing is worse than rounding it.
+ */
+export const snapQuantityToStep = (quantity: unknown, step: number) => {
+  const parsed = parseQuantity(quantity)
+  const normalizedStep = roundQuantity(step)
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0
+  if (!Number.isFinite(normalizedStep) || normalizedStep <= 0) return parsed
+
+  return roundQuantity(Math.max(1, Math.round(parsed / normalizedStep)) * normalizedStep)
+}
+
 export const validateProductQuantity = (
   quantity: unknown,
   options: {
     allowDecimalQuantity?: boolean | null
     quantityStep?: number | null
     label?: string
+    /**
+     * Hold a decimal product to its configured step as well.
+     *
+     * Off by default so every caller that predates this option keeps its exact
+     * behaviour: tightening the rule everywhere at once would start refusing
+     * quantities the application has always accepted. A caller opts in only
+     * where its entry surface already snaps to the same grid, so the rule can
+     * reject nothing that surface could have produced.
+     */
+    enforceStep?: boolean
   } = {},
 ) => {
   const parsed = parseQuantity(quantity)
@@ -50,7 +77,7 @@ export const validateProductQuantity = (
     return { ok: false as const, quantity: parsed, error: `${label} must be a whole number for this product.` }
   }
 
-  if (!options.allowDecimalQuantity && !isValidQuantityStep(parsed, step)) {
+  if ((!options.allowDecimalQuantity || options.enforceStep) && !isValidQuantityStep(parsed, step)) {
     return { ok: false as const, quantity: parsed, error: `${label} must be in increments of ${formatQuantity(step)}.` }
   }
 

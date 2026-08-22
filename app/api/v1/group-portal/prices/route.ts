@@ -53,6 +53,10 @@ export async function GET(req: NextRequest) {
       name: sql<string>`COALESCE(${organizationInventory.customName}, ${globalProducts.name})`,
       unit: globalProducts.unit,
       priceCents: sql<number>`COALESCE(${organizationInventory.customPrice}, ${globalProducts.basePrice})`.mapWith(Number),
+      // The quantity rules travel with the line so a resumed draft can still be
+      // adjusted on the review step without the catalogue on screen.
+      allowDecimalQuantity: globalProducts.allowDecimalQuantity,
+      quantityStep: globalProducts.quantityStep,
     })
     .from(branchInventory)
     .innerJoin(organizationInventory, eq(branchInventory.organizationInventoryId, organizationInventory.id))

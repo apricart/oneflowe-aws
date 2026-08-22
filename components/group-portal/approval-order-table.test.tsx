@@ -22,6 +22,7 @@ const pendingOrder: ApprovalOrder = {
   branchName: "Airport Branch",
   branchCostCenterId: "0001",
   status: "PENDING",
+  statusAtRefund: null,
   fulfillmentStatus: "NOT_STARTED",
   totalCents: 71000,
   itemCount: 3,

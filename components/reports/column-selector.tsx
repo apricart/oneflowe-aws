@@ -19,30 +19,75 @@ interface ColumnSelectorProps {
     visibleKeys: string[]
 }
 
+/**
+ * The persisted shape of a column preference.
+ *
+ * `known` records the columns that existed when the preference was written, so
+ * a column added to a report later can be told apart from one the user chose to
+ * hide. Without it a saved preference silently suppresses every new column for
+ * everyone who had already opened the report once.
+ */
+type StoredColumnPreference = { visible: string[]; known: string[] }
+
+const asKeyList = (value: unknown): string[] =>
+    Array.isArray(value) ? value.filter((key): key is string => typeof key === "string") : []
+
+function readStoredPreference(storageKey: string): StoredColumnPreference | null {
+    if (typeof window === "undefined") return null
+    try {
+        const saved = localStorage.getItem(`col-selector-${storageKey}`)
+        if (!saved) return null
+        const parsed = JSON.parse(saved)
+        // Legacy payload: a bare array of visible keys. The column set it was
+        // written against is unrecoverable, so the saved keys stand in for it
+        // and anything absent counts as added since.
+        if (Array.isArray(parsed)) {
+            const visible = asKeyList(parsed)
+            return { visible, known: visible }
+        }
+        if (parsed && typeof parsed === "object") {
+            return { visible: asKeyList(parsed.visible), known: asKeyList(parsed.known) }
+        }
+    } catch { }
+    return null
+}
+
+function resolveVisibleKeys(columns: ColumnDef[], storageKey: string): string[] {
+    const defaultVisible = columns.filter(c => c.defaultVisible !== false).map(c => c.key)
+    const stored = readStoredPreference(storageKey)
+    if (!stored) return defaultVisible
+
+    const validKeys = new Set(columns.map(c => c.key))
+    const savedVisible = stored.visible.filter(key => validKeys.has(key))
+    if (savedVisible.length === 0) return defaultVisible
+
+    // A column the preference never saw has never been offered to this user, so
+    // it takes its own default rather than being treated as deliberately hidden.
+    const known = new Set(stored.known)
+    const savedSet = new Set(savedVisible)
+    const restored = columns
+        .filter(c => !known.has(c.key) && c.defaultVisible !== false && !savedSet.has(c.key))
+        .map(c => c.key)
+
+    return restored.length > 0 ? [...savedVisible, ...restored] : savedVisible
+}
+
 export function useColumnSelector(columns: ColumnDef[], storageKey: string) {
     const defaultVisible = columns.filter(c => c.defaultVisible !== false).map(c => c.key)
-    const validKeys = new Set(columns.map(c => c.key))
+    // Joined rather than compared by identity so the persistence effect below
+    // does not re-run on every render for callers that inline their column list.
+    const knownSignature = columns.map(c => c.key).join(",")
 
-    const [visibleKeys, setVisibleKeys] = useState<string[]>(() => {
-        if (typeof window === "undefined") return defaultVisible
-        try {
-            const saved = localStorage.getItem(`col-selector-${storageKey}`)
-            if (saved) {
-                const parsed = JSON.parse(saved)
-                if (Array.isArray(parsed)) {
-                    const validSaved = parsed.filter(k => validKeys.has(k))
-                    if (validSaved.length > 0) return validSaved
-                }
-            }
-        } catch { }
-        return defaultVisible
-    })
+    const [visibleKeys, setVisibleKeys] = useState<string[]>(() => resolveVisibleKeys(columns, storageKey))
 
     useEffect(() => {
         try {
-            localStorage.setItem(`col-selector-${storageKey}`, JSON.stringify(visibleKeys))
+            localStorage.setItem(
+                `col-selector-${storageKey}`,
+                JSON.stringify({ visible: visibleKeys, known: knownSignature.split(",").filter(Boolean) }),
+            )
         } catch { }
-    }, [visibleKeys, storageKey])
+    }, [visibleKeys, storageKey, knownSignature])
 
     const toggleColumn = useCallback((key: string) => {
         setVisibleKeys(prev => {

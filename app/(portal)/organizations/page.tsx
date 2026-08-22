@@ -45,6 +45,7 @@ type Organization = {
   id: number
   name: string
   code: string
+  ntnNumber?: string | null
   status?: "active" | "inactive"
   budgetAllocationMode?: BudgetAllocationMode
   orderApproverRole?: OrderApproverRole
@@ -1027,6 +1028,7 @@ function CreateOrgDialog({
 }>) {
   const [name, setName] = useState("")
   const [code, setCode] = useState("")
+  const [ntnNumber, setNtnNumber] = useState("")
   const [status, setStatus] = useState<boolean>(true)
   const [budgetAllocationMode, setBudgetAllocationMode] = useState<BudgetAllocationMode>("money")
   const [orderApproverRole, setOrderApproverRole] = useState<OrderApproverRole>(DEFAULT_ORDER_APPROVER_ROLE)
@@ -1047,6 +1049,8 @@ function CreateOrgDialog({
         body: JSON.stringify({
           name,
           code,
+          // Optional: only sent when filled in, so a blank field stays absent.
+          ...(ntnNumber.trim() ? { ntnNumber: ntnNumber.trim() } : {}),
           status: status ? "active" : "inactive",
           budgetAllocationMode,
           orderApproverRole,
@@ -1067,6 +1071,7 @@ function CreateOrgDialog({
       showFeedback("Company created successfully.", "success")
       setName("")
       setCode("")
+      setNtnNumber("")
       setStatus(true)
       setBudgetAllocationMode("money")
       setOrderApproverRole(DEFAULT_ORDER_APPROVER_ROLE)
@@ -1128,6 +1133,17 @@ function CreateOrgDialog({
                   />
                   <p className="text-xs text-muted-foreground">Short & unique ID used in reports and APIs.</p>
                 </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="ntn-number">NTN number (optional)</Label>
+                <Input
+                  id="ntn-number"
+                  value={ntnNumber}
+                  onChange={(e) => setNtnNumber(e.target.value)}
+                  placeholder="1234567-8"
+                  disabled={saving}
+                />
+                <p className="text-xs text-muted-foreground">Tax registration number. Leave blank if not applicable.</p>
               </div>
               <div className="space-y-2">
                 <Label>Budget allocation model</Label>
@@ -1488,6 +1504,7 @@ function EditOrgDialog({
   const [open, setOpen] = useState(false)
   const [name, setName] = useState(org.name)
   const [code, setCode] = useState(org.code)
+  const [ntnNumber, setNtnNumber] = useState(org.ntnNumber ?? "")
   const [status, setStatus] = useState<boolean>(isActiveStatus(org.status))
   const [budgetAllocationMode, setBudgetAllocationMode] = useState<BudgetAllocationMode>(
     parseBudgetAllocationMode(org.budgetAllocationMode)
@@ -1511,10 +1528,11 @@ function EditOrgDialog({
   useEffect(() => {
     setName(org.name)
     setCode(org.code)
+    setNtnNumber(org.ntnNumber ?? "")
     setStatus(isActiveStatus(org.status))
     setBudgetAllocationMode(parseBudgetAllocationMode(org.budgetAllocationMode))
     setOrderApproverRole(parseOrderApproverRole(org.orderApproverRole))
-  }, [org.name, org.code, org.status, org.budgetAllocationMode, org.orderApproverRole])
+  }, [org.name, org.code, org.ntnNumber, org.status, org.budgetAllocationMode, org.orderApproverRole])
 
   useEffect(() => {
     if (!open || !isSuperAdmin) return
@@ -1620,6 +1638,17 @@ function EditOrgDialog({
                 <Label htmlFor="ecode">Code</Label>
                 <Input id="ecode" value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} disabled={saving} />
               </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="entn">NTN number (optional)</Label>
+              <Input
+                id="entn"
+                value={ntnNumber}
+                onChange={(e) => setNtnNumber(e.target.value)}
+                placeholder="1234567-8"
+                disabled={saving}
+              />
+              <p className="text-xs text-muted-foreground">Tax registration number. Clear the field to remove it.</p>
             </div>
             <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
               <div>
@@ -1769,6 +1798,8 @@ function EditOrgDialog({
                   {
                     name,
                     code,
+                    // Optional: an emptied field clears the stored value.
+                    ntnNumber: ntnNumber.trim() || null,
                     status: status ? "active" : "inactive",
                     ...(isSuperAdmin ? { budgetAllocationMode, orderApproverRole } : {}),
                   },

@@ -24,6 +24,8 @@ type Props = Readonly<{
   onSelectAllPending: (orderIds: number[], selectAll: boolean) => void
   onDecide: (orderIds: number[], decision: "approve" | "reject") => void
   busy: boolean
+  /** Reload the queue after a hand-off settles an order into FULFILLED. */
+  onRefresh?: () => void
 }>
 
 /**
@@ -43,6 +45,7 @@ export function ApprovalGroupCard({
   onSelectAllPending,
   onDecide,
   busy,
+  onRefresh,
 }: Props) {
   const pendingOrders = item.orders.filter(isPending)
   const pendingIds = pendingOrders.map((order) => order.id)
@@ -145,6 +148,7 @@ export function ApprovalGroupCard({
             onToggleSelection={onToggleSelection}
             onDecide={onDecide}
             busy={busy}
+            onRefresh={onRefresh}
           />
         )}
 

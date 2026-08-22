@@ -5,6 +5,8 @@ import { requireGroupOrderPortal } from "@/lib/server/group-order-access"
 import {
   CATALOG_PAGE_SIZE_DEFAULT,
   CATALOG_PAGE_SIZE_MAX,
+  GROUP_CATALOG_SORTS,
+  type GroupCatalogSort,
   loadGroupCatalog,
 } from "@/lib/server/group-order-catalog"
 import { resolveSubmissionScope } from "@/lib/server/group-order-portal"
@@ -33,6 +35,15 @@ function parseBranchIds(value: string | null): number[] {
 /** `groupId=null` (or omitted) selects the ungrouped bucket. */
 function parseGroupId(value: string | null): number | null {
   return parsePositiveInt(value) ?? null
+}
+
+/**
+ * Match the requested sort against the allowlist. An unknown value falls back
+ * to the default rather than being forwarded, so nothing from the query string
+ * can reach the ORDER BY clause.
+ */
+function parseSort(value: string | null): GroupCatalogSort | undefined {
+  return GROUP_CATALOG_SORTS.find((sort) => sort === value)
 }
 
 /**
@@ -66,6 +77,7 @@ export async function GET(req: NextRequest) {
     search,
     categoryId: parsePositiveInt(searchParams.get("category")),
     subCategoryId: parsePositiveInt(searchParams.get("subCategory")),
+    sort: parseSort(searchParams.get("sort")),
     page: parsePositiveInt(searchParams.get("page")) ?? 1,
     limit: Math.min(requestedLimit, CATALOG_PAGE_SIZE_MAX),
   })

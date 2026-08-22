@@ -2,6 +2,9 @@ import { eq, and, inArray } from "drizzle-orm"
 import { organizationSettings } from "@/db/schema"
 import { coalesceInFlight, scopedCacheKey } from "@/lib/cache-utils"
 import { db } from "@/lib/db"
+// Re-exported so existing callers keep importing it from here, while the rule
+// itself lives in a database-free module that can be unit-tested directly.
+export { redactReceiptPrices } from "@/lib/receipt-redaction"
 
 export const LEGACY_HIDE_PRICES_SETTING_KEY = "hide_prices_for_branch_and_order_portal"
 export const HIDE_BRANCH_ADMIN_PRICES_SETTING_KEY = "hide_prices_for_branch_admin"
@@ -56,43 +59,6 @@ export async function shouldHidePricesForRole(role: unknown, organizationId: unk
 
   const legacySetting = settings.find((setting) => setting.key === LEGACY_HIDE_PRICES_SETTING_KEY)
   return legacySetting?.value === true
-}
-
-function redactReceiptItems(items: any[] | undefined) {
-  if (!Array.isArray(items)) return items
-
-  return items.map((category) => ({
-    ...category,
-    items: Array.isArray(category.items)
-      ? category.items.map((item: any) => ({ ...item, rate: null, total: null }))
-      : category.items,
-    subCategories: Array.isArray(category.subCategories)
-      ? category.subCategories.map((subCategory: any) => ({
-        ...subCategory,
-        items: Array.isArray(subCategory.items)
-          ? subCategory.items.map((item: any) => ({ ...item, rate: null, total: null }))
-          : subCategory.items,
-      }))
-      : category.subCategories,
-  }))
-}
-
-export function redactReceiptPrices(receiptData: any) {
-  if (!receiptData) return receiptData
-
-  return {
-    ...receiptData,
-    subtotal: null,
-    tax: null,
-    discount: null,
-    deliveryCharges: null,
-    refund: null,
-    totalAmount: null,
-    refundedItems: Array.isArray(receiptData.refundedItems)
-      ? receiptData.refundedItems.map((item: any) => ({ ...item, amount: null }))
-      : receiptData.refundedItems,
-    items: redactReceiptItems(receiptData.items),
-  }
 }
 
 const ANALYTICS_MONEY_KEYS = new Set([

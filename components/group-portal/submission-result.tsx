@@ -1,6 +1,6 @@
 "use client"
 
-import { AlertTriangle, CheckCircle2, Copy, Plus } from "lucide-react"
+import { AlertTriangle, CheckCircle2, Copy, History, Plus } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -21,9 +21,11 @@ import type { GroupOrderSubmission } from "./types"
 export function SubmissionResult({
   submission,
   onStartAnother,
+  onViewOrders,
 }: Readonly<{
   submission: GroupOrderSubmission
   onStartAnother: () => void
+  onViewOrders?: () => void
 }>) {
   const { toast } = useToast()
 
@@ -69,6 +71,12 @@ export function SubmissionResult({
                 {created.length} order{created.length === 1 ? "" : "s"} created
                 {created.length > 0 && <> · {formatPKR(totalCents / 100)} combined</>}
               </p>
+              {created.length > 0 && (
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Each one is now waiting on that branch&apos;s approver. Follow them under
+                  {" "}My group orders.
+                </p>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -154,10 +162,19 @@ export function SubmissionResult({
         </Card>
       )}
 
-      <Button type="button" className="gap-2" onClick={onStartAnother}>
-        <Plus className="h-4 w-4" />
-        Start another group order
-      </Button>
+      {/* Both of the things a user wants next: order again, or go and track this one. */}
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <Button type="button" className="gap-2" onClick={onStartAnother}>
+          <Plus className="h-4 w-4" />
+          Start another group order
+        </Button>
+        {onViewOrders && (
+          <Button type="button" variant="outline" className="gap-2" onClick={onViewOrders}>
+            <History className="h-4 w-4" />
+            Track this group order
+          </Button>
+        )}
+      </div>
     </div>
   )
 }
