@@ -21,6 +21,9 @@ describe("order delivery date contracts", () => {
   it("records delivery only through existing authorized, tenant-scoped transitions", () => {
     const progressRoute = source("app/api/v1/orders/[id]/fulfillment-status/route.ts")
     const directFulfilment = source("app/api/v1/orders/[id]/fulfill/route.ts")
+    // The transition itself moved into the shared fulfilment service, which the
+    // route and the token hand-off both call.
+    const fulfilmentService = source("lib/server/order-fulfillment.ts")
     const orderSelect = source("lib/order-select.ts")
 
     expect(progressRoute).toContain('requireApiRole(["SUPER_ADMIN"])')
@@ -31,7 +34,8 @@ describe("order delivery date contracts", () => {
 
     expect(directFulfilment).toContain('requireApiRole(["SUPER_ADMIN"])')
     expect(directFulfilment).toContain("verifyResourceAccess(ord.organizationId, ord.branchId)")
-    expect(directFulfilment).toContain("deliveredAt: fulfilledAt")
+    expect(fulfilmentService).toContain("deliveredAt: fulfilledAt")
+    expect(fulfilmentService).toContain('updateOrderFulfillmentStatusColumn(tx, orderId, "DELIVERED")')
   })
 
   it("uses deliveredAt for the waiting window without changing order-list scoping", () => {

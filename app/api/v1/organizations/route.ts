@@ -71,8 +71,11 @@ function validateOrganizationFields(body: OrganizationCreateInput) {
     return { response: error("hideOrderPortalPrices must be a boolean", 400) }
   }
 
+  // Optional field: blank input is stored as NULL rather than an empty string.
+  const ntnNumber = body.ntnNumber ? body.ntnNumber.trim() || null : null
+
   return {
-    values: { name, code, status, budgetAllocationMode, hideBranchAdminPrices, hideOrderPortalPrices },
+    values: { name, code, ntnNumber, status, budgetAllocationMode, hideBranchAdminPrices, hideOrderPortalPrices },
   }
 }
 
@@ -176,6 +179,7 @@ export async function POST(req: Request) {
     const {
       name,
       code,
+      ntnNumber,
       status,
       budgetAllocationMode,
       hideBranchAdminPrices,
@@ -216,6 +220,7 @@ export async function POST(req: Request) {
         .values({
           name,
           code,
+          ntnNumber,
           status,
           orderApproverRole: body.orderApproverRole,
           privateNetworkLoginEnabled: privateNetworkLogin.enabled,

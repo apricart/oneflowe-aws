@@ -1,15 +1,17 @@
 "use client"
 
 import { useState } from "react"
-import { Check, Copy, Mail, ShieldCheck, X } from "lucide-react"
+import { Check, X } from "lucide-react"
 
+import { ReceiptIconButton } from "@/components/receipts/receipt-icon-button"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import { useToast } from "@/hooks/use-toast"
+import { formatQuantity } from "@/lib/quantity"
 import { cn, formatPKR } from "@/lib/utils"
 
 import { ApprovalOrderSheet } from "./approval-order-sheet"
+import { TokenHandoff } from "./token-handoff"
 import {
   type ApprovalOrder,
   STATUS_STYLES,
@@ -24,6 +26,8 @@ type Props = Readonly<{
   onToggleSelection: (orderId: number) => void
   onDecide: (orderIds: number[], decision: "approve" | "reject") => void
   busy: boolean
+  /** Reload the queue after a hand-off settles an order into FULFILLED. */
+  onRefresh?: () => void
 }>
 
 /**
@@ -44,6 +48,7 @@ export function ApprovalOrderTable({
   onToggleSelection,
   onDecide,
   busy,
+  onRefresh,
 }: Props) {
   const [viewingOrder, setViewingOrder] = useState<ApprovalOrder | null>(null)
 
@@ -69,7 +74,7 @@ export function ApprovalOrderTable({
             </th>
             <th scope="col" className="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Branch</th>
             <th scope="col" className="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Order</th>
-            <th scope="col" className="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Items</th>
+            <th scope="col" className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">Units</th>
             <th scope="col" className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">Total</th>
             <th scope="col" className="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Status</th>
             <th scope="col" className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">Action</th>
@@ -85,6 +90,7 @@ export function ApprovalOrderTable({
               onDecide={onDecide}
               onView={setViewingOrder}
               busy={busy}
+              onRefresh={onRefresh}
             />
           ))}
         </tbody>
@@ -108,6 +114,7 @@ function OrderRow({
   onDecide,
   onView,
   busy,
+  onRefresh,
 }: Readonly<{
   order: ApprovalOrder
   selected: boolean
@@ -115,6 +122,7 @@ function OrderRow({
   onDecide: (orderIds: number[], decision: "approve" | "reject") => void
   onView: (order: ApprovalOrder) => void
   busy: boolean
+  onRefresh?: () => void
 }>) {
   const status = normalizeStatus(order.status)
   const pending = isPending(order)
@@ -156,7 +164,9 @@ function OrderRow({
           </button>
           <span className="block text-[11px] text-slate-400">{formatDateTime(order.createdAt)}</span>
         </td>
-        <td className="px-3 py-3 text-slate-600 dark:text-slate-300">{order.itemCount}</td>
+        <td className="px-3 py-3 text-right tabular-nums text-slate-600 dark:text-slate-300">
+          {formatQuantity(order.itemCount)}
+        </td>
         <td className="px-3 py-3 text-right font-semibold text-slate-900 dark:text-slate-100">
           {formatPKR(order.totalCents / 100)}
         </td>
@@ -194,9 +204,20 @@ function OrderRow({
               </Button>
             </div>
           ) : (
-            <p className="text-right text-xs text-slate-400">
-              {status === "APPROVED" ? formatDateTime(order.approvedAt) : "—"}
-            </p>
+            // A decided order can no longer be acted on, so this cell carries
+            // the decision time and the invoice, which the endpoints release
+            // only once the order was approved.
+            <div className="flex items-center justify-end gap-2">
+              <p className="text-xs text-slate-400">
+                {status === "APPROVED" ? formatDateTime(order.approvedAt) : "—"}
+              </p>
+              <ReceiptIconButton
+                orderId={order.id}
+                orderStatus={order.status}
+                statusAtRefund={order.statusAtRefund}
+                variant="outline"
+              />
+            </div>
           )}
         </td>
       </tr>
@@ -214,110 +235,15 @@ function OrderRow({
         <tr className="border-b border-slate-100 dark:border-slate-800/70">
           <td />
           <td colSpan={6} className="px-3 pb-3">
-            <TokenHandoff orderId={order.id} tid={order.tid} token={order.approvalToken} />
+            <TokenHandoff
+              orderId={order.id}
+              tid={order.tid}
+              token={order.approvalToken}
+              onFulfilled={onRefresh}
+            />
           </td>
         </tr>
       )}
     </>
-  )
-}
-
-/**
- * The fulfilment token and its hand-off to admin operations.
- *
- * The token is the credential a Super Admin needs to mark the order delivered,
- * so it is only ever displayed for an order this approver has access to and
- * that is already approved.
- */
-function TokenHandoff({
-  orderId,
-  tid,
-  token,
-}: Readonly<{ orderId: number; tid: string; token: string }>) {
-  const { toast } = useToast()
-  const [sending, setSending] = useState(false)
-  const [sent, setSent] = useState(false)
-
-  const copyToken = async () => {
-    try {
-      await navigator.clipboard.writeText(token)
-      toast({ title: "Token copied", description: `Fulfilment token for ${tid}` })
-    } catch {
-      toast({
-        title: "Could not copy",
-        description: "Copy the token manually from the field.",
-        variant: "destructive",
-      })
-    }
-  }
-
-  const sendToken = async () => {
-    setSending(true)
-    try {
-      const res = await fetch(`/api/v1/orders/${orderId}/send-token-email`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-      })
-      const payload = await res.json().catch(() => ({}))
-
-      if (!res.ok) {
-        toast({
-          title: "Token email not sent",
-          description: payload?.error || "Please try again.",
-          variant: "destructive",
-        })
-        return
-      }
-
-      setSent(true)
-      toast({
-        title: "Token sent to admin",
-        description: `${tid} — the admin can now mark this order delivered.`,
-      })
-    } catch {
-      toast({
-        title: "Token email not sent",
-        description: "Check your connection and try again.",
-        variant: "destructive",
-      })
-    } finally {
-      setSending(false)
-    }
-  }
-
-  return (
-    <div className="flex flex-col gap-2 rounded-xl border border-emerald-200 bg-emerald-50/60 p-3 dark:border-emerald-900/60 dark:bg-emerald-950/20 sm:flex-row sm:items-center sm:justify-between">
-      <div className="flex min-w-0 items-center gap-2">
-        <ShieldCheck className="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
-        <div className="min-w-0">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
-            Fulfilment token
-          </p>
-          <p className="truncate font-mono text-sm font-semibold text-slate-900 dark:text-slate-100">
-            {token}
-          </p>
-        </div>
-      </div>
-      <div className="flex shrink-0 items-center gap-2">
-        <Button type="button" size="sm" variant="outline" className="h-8 gap-1 rounded-lg" onClick={copyToken}>
-          <Copy className="h-3.5 w-3.5" />
-          Copy
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          className="h-8 gap-1 rounded-lg"
-          onClick={sendToken}
-          disabled={sending}
-        >
-          <Mail className="h-3.5 w-3.5" />
-          {(() => {
-            if (sending) return "Sending…"
-            return sent ? "Sent to admin" : "Email to admin"
-          })()}
-        </Button>
-      </div>
-    </div>
   )
 }

@@ -7,6 +7,13 @@ type FulfillmentTokenAccessInput = {
   configuredApproverRole?: string | null
 }
 
+/**
+ * The two roles that raise orders rather than decide them. Both see a token
+ * only for their own approved order, which is strictly narrower than any
+ * administrator branch above.
+ */
+const REQUESTER_ROLES = new Set(["ORDER_PORTAL", "GROUP_ORDER_PORTAL"])
+
 export function canViewFulfillmentToken({
   role,
   userId,
@@ -38,8 +45,13 @@ export function canViewFulfillmentToken({
     return String(orderStatus || "").toUpperCase() === "APPROVED"
   }
 
+  // The requester roles reach a token only through an order they raised
+  // themselves, and only once it is approved. GROUP_ORDER_PORTAL raises orders
+  // across a set of assigned branches rather than one pinned branch, so — as
+  // with GROUP_USER above — the branch scope is enforced by the caller; the
+  // creator comparison here is what keeps one requester out of another's token.
   return Boolean(
-    role === "ORDER_PORTAL" &&
+    REQUESTER_ROLES.has(String(role ?? "")) &&
     String(orderStatus || "").toUpperCase() === "APPROVED" &&
     userId &&
     orderCreatedByUserId === userId

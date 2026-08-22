@@ -98,62 +98,68 @@ describe("OrderPortalPage data refresh policy", () => {
   })
 })
 
-describe("OrderPortalPage cart dialog", () => {
-  beforeEach(() => {
-    mocks.useSWR.mockReset().mockImplementation((url: string | null) => {
-      if (url?.startsWith("/api/v1/branch/inventory?")) {
-        return {
-          data: {
-            items: [{
-              organizationInventoryId: 101,
-              productName: "Test product",
-              productCode: "TEST-101",
-              basePrice: 1_000,
-              unit: "item",
-              stockQuantity: 10,
-            }],
-          },
-          mutate: vi.fn(),
-        }
-      }
-      if (url?.startsWith("/api/v1/budgets")) {
-        return {
-          data: {
-            remainingCents: 10_000,
-            amountAllocatedCents: 10_000,
-            amountCreditedCents: 0,
-          },
-          mutate: vi.fn(),
-        }
-      }
+/** A signed-in Order Portal user browsing a one-product branch catalogue. */
+function mockStockedShop(user: Record<string, unknown> = {}) {
+  mocks.useSWR.mockReset().mockImplementation((url: string | null) => {
+    if (url?.startsWith("/api/v1/branch/inventory?")) {
       return {
-        data: { items: [] },
+        data: {
+          items: [{
+            organizationInventoryId: 101,
+            productName: "Test product",
+            productCode: "TEST-101",
+            basePrice: 1_000,
+            unit: "item",
+            stockQuantity: 10,
+          }],
+        },
         mutate: vi.fn(),
       }
-    })
-    mocks.useSession.mockReset().mockReturnValue({
-      data: {
-        user: {
-          role: "ORDER_PORTAL",
-          organizationId: 1,
-          branchId: 2,
+    }
+    if (url?.startsWith("/api/v1/budgets")) {
+      return {
+        data: {
+          remainingCents: 10_000,
+          amountAllocatedCents: 10_000,
+          amountCreditedCents: 0,
         },
+        mutate: vi.fn(),
+      }
+    }
+    return {
+      data: { items: [] },
+      mutate: vi.fn(),
+    }
+  })
+  mocks.useSession.mockReset().mockReturnValue({
+    data: {
+      user: {
+        role: "ORDER_PORTAL",
+        organizationId: 1,
+        branchId: 2,
+        ...user,
       },
-      status: "authenticated",
-    })
-    mocks.signOut.mockReset()
-    mocks.useRouter.mockReset().mockReturnValue({})
-    mocks.useToast.mockReset().mockReturnValue({ toast: vi.fn() })
-    mocks.useAppContext.mockReset().mockReturnValue({
-      branchId: null,
-      organizationId: null,
-    })
-    mocks.useOrganizations.mockReset().mockReturnValue({
-      data: { items: [{ id: 1, name: "Test organization" }] },
-    })
-    mocks.useBranches.mockReset().mockReturnValue({
-      data: { items: [{ id: 2, name: "Test branch" }] },
-    })
+    },
+    status: "authenticated",
+  })
+  mocks.signOut.mockReset()
+  mocks.useRouter.mockReset().mockReturnValue({})
+  mocks.useToast.mockReset().mockReturnValue({ toast: vi.fn() })
+  mocks.useAppContext.mockReset().mockReturnValue({
+    branchId: null,
+    organizationId: null,
+  })
+  mocks.useOrganizations.mockReset().mockReturnValue({
+    data: { items: [{ id: 1, name: "Test organization" }] },
+  })
+  mocks.useBranches.mockReset().mockReturnValue({
+    data: { items: [{ id: 2, name: "Test branch" }] },
+  })
+}
+
+describe("OrderPortalPage cart dialog", () => {
+  beforeEach(() => {
+    mockStockedShop()
   })
 
   afterEach(() => {
@@ -175,5 +181,80 @@ describe("OrderPortalPage cart dialog", () => {
       expect(screen.queryByRole("dialog")).toBeNull()
       expect(document.querySelector('[data-slot="dialog-overlay"][data-state="open"]')).toBeNull()
     })
+  })
+})
+
+describe("OrderPortalPage cart persistence", () => {
+  const savedCartKey = "oneflowe.shop-cart.v1:7:2"
+
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    cleanup()
+    localStorage.clear()
+  })
+
+  it("brings the cart back after a reload", async () => {
+    localStorage.setItem(savedCartKey, JSON.stringify([{ id: 101, quantity: 2 }]))
+    mockStockedShop({ id: "7" })
+
+    render(<OrderPortalPage />)
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Open Cart" })).toBeTruthy()
+    })
+  })
+
+  it("saves the cart as items are added", async () => {
+    mockStockedShop({ id: "7" })
+
+    render(<OrderPortalPage />)
+    fireEvent.click(screen.getByRole("button", { name: /Add .* to Cart/ }))
+
+    await waitFor(() => {
+      expect(JSON.parse(localStorage.getItem(savedCartKey) || "null")).toEqual([
+        { id: 101, quantity: 1 },
+      ])
+    })
+  })
+
+  it("clears the saved cart once its items are removed", async () => {
+    localStorage.setItem(savedCartKey, JSON.stringify([{ id: 101, quantity: 2 }]))
+    mockStockedShop({ id: "7" })
+
+    render(<OrderPortalPage />)
+    fireEvent.click(await screen.findByRole("button", { name: "Open Cart" }))
+    fireEvent.click(screen.getByTitle("Remove"))
+
+    await waitFor(() => {
+      expect(localStorage.getItem(savedCartKey)).toBeNull()
+    })
+  })
+
+  it("never restores another user's saved cart", async () => {
+    localStorage.setItem(savedCartKey, JSON.stringify([{ id: 101, quantity: 2 }]))
+    mockStockedShop({ id: "8" })
+
+    render(<OrderPortalPage />)
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Add .* to Cart/ })).toBeTruthy()
+    })
+    expect(screen.queryByRole("button", { name: "Open Cart" })).toBeNull()
+    expect(localStorage.getItem(savedCartKey)).toBe(JSON.stringify([{ id: 101, quantity: 2 }]))
+  })
+
+  it("leaves a saved cart alone for a session with no user id", async () => {
+    localStorage.setItem(savedCartKey, JSON.stringify([{ id: 101, quantity: 2 }]))
+    mockStockedShop()
+
+    render(<OrderPortalPage />)
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Add .* to Cart/ })).toBeTruthy()
+    })
+    expect(localStorage.getItem(savedCartKey)).toBe(JSON.stringify([{ id: 101, quantity: 2 }]))
   })
 })

@@ -2,16 +2,33 @@
 
 import { useState } from "react"
 import useSWR from "swr"
-import { AlertTriangle, ChevronDown, ChevronRight, Layers } from "lucide-react"
+import { AlertTriangle, ChevronDown, ChevronRight, Layers, Mail, RotateCcw } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
+import { ReceiptIconButton } from "@/components/receipts/receipt-icon-button"
 import { ListSkeleton } from "@/components/ui/skeleton"
+import { useToast } from "@/hooks/use-toast"
 import { fetcher } from "@/lib/fetcher"
 import { cn, formatPKR } from "@/lib/utils"
 
+import { GroupRefundDialog } from "./group-refund-dialog"
+import { TokenHandoff } from "./token-handoff"
 import type { GroupOrderHistoryItem } from "./types"
+
+/**
+ * A branch order is worth offering a refund on once it has been delivered —
+ * the same point at which the single-branch Order Portal opens its own refund
+ * form. The server decides what is actually refundable; this only governs
+ * whether the button is worth showing.
+ */
+function hasDeliveredOrder(item: GroupOrderHistoryItem): boolean {
+  return item.orders.some(
+    (order) => order.status.toUpperCase() === "FULFILLED"
+      && order.fulfillmentStatus.toUpperCase() === "DELIVERED",
+  )
+}
 
 type HistoryResponse = {
   items: GroupOrderHistoryItem[]
@@ -42,8 +59,9 @@ function formatDate(value: string | null): string {
 export function GroupOrderHistory() {
   const [page, setPage] = useState(1)
   const [expanded, setExpanded] = useState<number | null>(null)
+  const [refundTarget, setRefundTarget] = useState<{ id: number; reference: string } | null>(null)
 
-  const { data, error, isLoading } = useSWR<HistoryResponse>(
+  const { data, error, isLoading, mutate } = useSWR<HistoryResponse>(
     `/api/v1/group-portal/orders?page=${page}`,
     fetcher,
     { revalidateOnFocus: true },
@@ -127,6 +145,21 @@ export function GroupOrderHistory() {
                 : <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-slate-400" />}
             </button>
 
+            {hasDeliveredOrder(item) && (
+              <div className="flex justify-end border-t border-slate-100 px-4 py-2 dark:border-slate-800/70">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 gap-1.5 rounded-lg"
+                  onClick={() => setRefundTarget({ id: item.id, reference: item.reference })}
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Request refund
+                </Button>
+              </div>
+            )}
+
             {isOpen && (
               <div className="border-t border-slate-200 p-4 dark:border-slate-800">
                 {item.notes && (
@@ -143,6 +176,7 @@ export function GroupOrderHistory() {
                         <th scope="col" className="pb-2 text-right font-medium">Items</th>
                         <th scope="col" className="pb-2 text-right font-medium">Total</th>
                         <th scope="col" className="pb-2 text-right font-medium">Status</th>
+                        <th scope="col" className="pb-2 text-right font-medium">Invoice</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -169,11 +203,56 @@ export function GroupOrderHistory() {
                               </span>
                             )}
                           </td>
+                          {/* Renders only once the order is approved; the
+                              invoice endpoints re-check the same rule. */}
+                          <td className="py-2 text-right">
+                            <ReceiptIconButton
+                              orderId={order.id}
+                              orderStatus={order.status}
+                              statusAtRefund={order.statusAtRefund}
+                              variant="outline"
+                            />
+                          </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
+
+                {/* An approved order carries the credential the administrator
+                    needs to mark it delivered. The server only returns a token
+                    for an approved order this user raised, so a row without one
+                    simply shows nothing here. */}
+                {(() => {
+                  const tokenOrders = item.orders.filter((order) => order.approvalToken)
+                  if (tokenOrders.length === 0) return null
+                  return (
+                    <div className="mt-3 space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                          Fulfilment tokens — the admin needs these to mark the orders delivered
+                        </p>
+                        {tokenOrders.length > 1 && (
+                          <SendAllTokensButton
+                            groupOrderId={item.id}
+                            count={tokenOrders.length}
+                            onFulfilled={() => { void mutate() }}
+                          />
+                        )}
+                      </div>
+                      {tokenOrders.map((order) => (
+                        <TokenHandoff
+                          key={order.id}
+                          orderId={order.id}
+                          tid={order.tid}
+                          token={order.approvalToken as string}
+                          branchName={order.branchName}
+                          onFulfilled={() => { void mutate() }}
+                        />
+                      ))}
+                    </div>
+                  )
+                })()}
 
                 {item.failures.length > 0 && (
                   <div className="mt-3 rounded-xl border border-rose-100 bg-rose-50/50 p-3 dark:border-rose-900/50 dark:bg-rose-950/20">
@@ -214,6 +293,89 @@ export function GroupOrderHistory() {
           </Button>
         </div>
       )}
+
+      <GroupRefundDialog
+        groupOrderId={refundTarget?.id ?? null}
+        reference={refundTarget?.reference ?? ""}
+        open={refundTarget !== null}
+        onClose={() => setRefundTarget(null)}
+        onSubmitted={() => { void mutate() }}
+      />
     </div>
+  )
+}
+
+/**
+ * Hand every token in one group order to admin operations in a single message.
+ *
+ * The per-branch buttons above stay: sometimes one branch needs re-sending on
+ * its own. This exists because a group order routinely approves into a dozen or
+ * more branch orders, and sending those one at a time would both bury the
+ * administrator and exhaust the shared email rate limit part-way through.
+ */
+function SendAllTokensButton({
+  groupOrderId,
+  count,
+  onFulfilled,
+}: Readonly<{
+  groupOrderId: number
+  count: number
+  /** Called once the hand-off has settled at least one order, so history can refresh. */
+  onFulfilled?: () => void
+}>) {
+  const { toast } = useToast()
+  const [sending, setSending] = useState(false)
+  const [sent, setSent] = useState(false)
+
+  const sendAll = async () => {
+    setSending(true)
+    try {
+      const res = await fetch(`/api/v1/group-portal/orders/${groupOrderId}/tokens`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      })
+      const payload = await res.json().catch(() => ({}))
+
+      if (!res.ok) {
+        toast({
+          title: "Tokens not sent",
+          description: payload?.error || "Please try again.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      setSent(true)
+      toast({
+        title: payload?.fulfilledCount ? "Tokens sent — orders fulfilled" : "Tokens sent to admin",
+        description: payload?.message || `${count} tokens shared in one email.`,
+      })
+      if (payload?.fulfilledCount) onFulfilled?.()
+    } catch {
+      toast({
+        title: "Tokens not sent",
+        description: "Check your connection and try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="outline"
+      className="h-7 gap-1.5 rounded-lg text-xs"
+      onClick={sendAll}
+      disabled={sending}
+    >
+      <Mail className="h-3.5 w-3.5" />
+      {(() => {
+        if (sending) return "Sending…"
+        return sent ? "All tokens sent" : `Email all ${count} to admin`
+      })()}
+    </Button>
   )
 }

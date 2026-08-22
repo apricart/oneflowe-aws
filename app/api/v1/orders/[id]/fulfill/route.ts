@@ -1,22 +1,22 @@
 import { ok, error, readJson, requireApiRole } from "@/lib/api"
 import { db } from "@/lib/db"
-import { orders, budgets } from "@/db/schema"
-import { eq, and, gte, sql } from "drizzle-orm"
+import { orders } from "@/db/schema"
+import { eq } from "drizzle-orm"
 import { getCurrentUser } from "@/lib/auth"
 import { verifyApprovalToken } from "@/lib/approval-token"
 import { logFulfillmentAttempt } from "@/lib/global-logger"
-import { moveHeldQuantityBudgetToUsedForOrder } from "@/lib/server/product-quantity-budget-ledger"
-import { orderSelectColumns, updateOrderFulfillmentStatusColumn } from "@/lib/order-select"
+import { orderSelectColumns } from "@/lib/order-select"
+import { fulfillApprovedOrder, type OrderFulfillmentOutcome } from "@/lib/server/order-fulfillment"
 import { fulfillmentSchema, validationMessage } from "@/lib/server/mutation-validation"
 
-function fulfillmentTransitionResponse(transitionError: any) {
-  if (transitionError?.message === "ORDER_TRANSITION_CONFLICT") {
+function fulfillmentOutcomeResponse(outcome: OrderFulfillmentOutcome) {
+  if (outcome === "conflict") {
     return error("Order was already fulfilled or otherwise changed", 409)
   }
-  if (["BUDGET_LEDGER_INVARIANT", "QUANTITY_BUDGET_LEDGER_INVARIANT"].includes(transitionError?.message)) {
+  if (outcome === "ledger-conflict") {
     return error("Order budget hold is inconsistent; fulfilment was not applied", 409)
   }
-  if (transitionError?.message === "FULFILLMENT_MIGRATION_MISSING") {
+  if (outcome === "migration-missing") {
     return error("Fulfillment progress migration has not been applied", 503)
   }
   return null
@@ -73,56 +73,15 @@ export async function POST(
     return error("Invalid approval token - fulfillment denied", 403)
   }
 
-  try {
-    await db.transaction(async (tx) => {
-      // Claim the transition so only one simultaneous fulfilment can move ledgers.
-      const fulfilledAt = new Date()
-      const [fulfilledOrder] = await tx.update(orders).set({
-        status: "FULFILLED",
-        deliveredAt: fulfilledAt,
-        fulfilledAt,
-        fulfilledByUserId: user.id,
-        updatedAt: fulfilledAt,
-      }).where(and(
-        eq(orders.id, orderId),
-        sql`UPPER(${orders.status}) = 'APPROVED'`,
-      )).returning(orderSelectColumns)
+  const outcome = await fulfillApprovedOrder({
+    orderId,
+    organizationId: ord.organizationId,
+    branchId: ord.branchId,
+    fulfilledByUserId: user.id,
+  })
 
-      if (!fulfilledOrder) throw new Error("ORDER_TRANSITION_CONFLICT")
-      const migrationReady = await updateOrderFulfillmentStatusColumn(tx, orderId, "DELIVERED")
-      if (!migrationReady) throw new Error("FULFILLMENT_MIGRATION_MISSING")
-
-      // 2. Move budget from held to spent
-      const orderMonth = fulfilledOrder.createdAt
-        ? new Date(fulfilledOrder.createdAt).toISOString().slice(0, 7)
-        : new Date().toISOString().slice(0, 7)
-
-      const [budget] = await tx.select().from(budgets).where(
-        and(
-          eq(budgets.branchId, fulfilledOrder.branchId),
-          eq(budgets.period, orderMonth)
-        )
-      ).limit(1)
-
-      if (budget) {
-        const [movedBudget] = await tx.update(budgets).set({
-          amountHeldCents: sql`${budgets.amountHeldCents} - ${fulfilledOrder.totalCents}`,
-          amountSpentCents: sql`${budgets.amountSpentCents} + ${fulfilledOrder.totalCents}`,
-          updatedAt: new Date(),
-        }).where(and(
-          eq(budgets.id, budget.id),
-          gte(budgets.amountHeldCents, fulfilledOrder.totalCents),
-        )).returning({ id: budgets.id })
-        if (!movedBudget) throw new Error("BUDGET_LEDGER_INVARIANT")
-      }
-
-      await moveHeldQuantityBudgetToUsedForOrder(tx, fulfilledOrder)
-    })
-  } catch (transitionError: any) {
-    const response = fulfillmentTransitionResponse(transitionError)
-    if (response) return response
-    throw transitionError
-  }
+  const failure = fulfillmentOutcomeResponse(outcome)
+  if (failure) return failure
 
   return ok({ message: "Order fulfilled successfully" })
 }

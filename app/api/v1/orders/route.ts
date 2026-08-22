@@ -14,6 +14,8 @@ import { parseEndDateParam,parseStartDateParam } from "@/lib/date-range-params"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
 import { orderSelectColumns } from "@/lib/order-select"
 import { calculateLineCents,formatQuantity,roundQuantity,validateProductQuantity } from "@/lib/quantity"
+import { resolveTaxRateBp,splitInclusiveCents } from "@/lib/tax"
+import { getOrganizationTaxRateBp } from "@/lib/server/tax-rate"
 import { orderCreateSchema,validationMessage } from "@/lib/server/mutation-validation"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { attemptImmediateOrderEmailDelivery,queueOrderCreatedNotifications as enqueueCreatedOrderEvents } from "@/lib/server/order-notifications"
@@ -306,8 +308,10 @@ async function lockCreationInventory(tx: any, context: any) {
   }
 }
 
-function calculateLockedOrderItems(normalizedItems: any[], locked: any) {
+function calculateLockedOrderItems(normalizedItems: any[], locked: any, orgTaxRateBp: number) {
   let subtotal = 0
+  let tax = 0
+  let total = 0
   const items = normalizedItems.map((requestedItem) => {
     const inventoryItem: any = locked.inventoryById.get(requestedItem.organizationInventoryId)
     if (!inventoryItem) throw new Error("An inventory item is no longer available")
@@ -321,19 +325,28 @@ function calculateLockedOrderItems(normalizedItems: any[], locked: any) {
     if (!validation.ok) throw new Error(validation.error)
     const priceCents = inventoryItem.customPrice ?? product.basePrice
     if (!Number.isSafeInteger(priceCents) || priceCents < 0) throw new Error(`Pricing is unavailable for ${product.name}`)
-    subtotal += calculateLineCents(priceCents, validation.quantity)
+    // Catalogue prices are tax-inclusive, so the line amount is the gross the
+    // branch pays and the split below only records how much of it is tax. The
+    // order total stays exactly the sum of these gross amounts.
+    const taxRateBp = resolveTaxRateBp(product.taxRateBp, orgTaxRateBp)
+    const line = splitInclusiveCents(calculateLineCents(priceCents, validation.quantity), taxRateBp)
+    subtotal += line.netCents
+    tax += line.taxCents
+    total += line.grossCents
     return {
       organizationInventoryId: inventoryItem.id,
       globalProductId: product.id,
       quantity: validation.quantity,
       priceCents,
+      taxRateBp,
+      taxCents: line.taxCents,
       productName: product.name,
       productCode: product.productCode,
       unit: product.unit,
     }
   })
-  if (!Number.isSafeInteger(subtotal) || subtotal < 0) throw new Error("Calculated order total is invalid")
-  return { items, subtotal, tax: 0, total: subtotal }
+  if (!Number.isSafeInteger(total) || total < 0) throw new Error("Calculated order total is invalid")
+  return { items, subtotal, tax, total }
 }
 
 function validateCreationStock(items: any[], productById: Map<number, any>) {
@@ -366,6 +379,9 @@ async function saveOrderReceipt(tx: any, context: any) {
     console.error("Receipt generation failed during order creation", receiptError)
   }
   if (!receiptData) return
+  // Snapshot the buyer's own reference beside the invoice number so a reissued
+  // invoice prints exactly what was agreed when the order was placed.
+  if (context.poNumber) receiptData.poNumber = context.poNumber
   if (context.invoiceSequenceReady) receiptData.invoiceNumber = await generateNextInvoiceNumber(tx, context.organizationId)
   else {
     console.error("Invoice sequence table is missing; falling back to order TID for invoice number. Run the invoice sequence migration.")
@@ -432,6 +448,7 @@ async function persistCreatedOrder(tx: any, context: any) {
     taxCents: context.tax,
     totalCents: context.total,
     notes: context.notes || null,
+    poNumber: context.poNumber || null,
     createdByUserId: context.userId,
   }).returning(orderSelectColumns)
   await tx.insert(orderItems).values(context.items.map((item: any) => ({
@@ -452,7 +469,8 @@ async function processOrderCreationTransaction(tx: any, context: any) {
   const money = await lockCreationMoneyBudget(tx, context)
   const quantityBudgets = await lockCreationQuantityBudgets(tx, context)
   const lockedInventory = await lockCreationInventory(tx, context)
-  const calculated = calculateLockedOrderItems(context.normalizedItems, lockedInventory)
+  const orgTaxRateBp = await getOrganizationTaxRateBp(context.organizationId)
+  const calculated = calculateLockedOrderItems(context.normalizedItems, lockedInventory, orgTaxRateBp)
   const budgetError = getBudgetError(calculated.total, money.available, context.pricesHidden)
   if (budgetError) throw new Error(budgetError)
   validateCreationStock(calculated.items, lockedInventory.productById)
@@ -847,7 +865,7 @@ export async function POST(req: NextRequest) {
     if (!parsedBody.success) {
       return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
     }
-    const { items, branchId: branchIdInput, organizationId: orgIdInput, notes } = parsedBody.data
+    const { items, branchId: branchIdInput, organizationId: orgIdInput, notes, poNumber } = parsedBody.data
 
     const normalizedItems = items.map((item) => ({
       organizationInventoryId: item.organizationInventoryId,
@@ -874,6 +892,7 @@ export async function POST(req: NextRequest) {
       organizationId: Number(organizationId),
       branchId,
       notes,
+      poNumber,
       items: normalizedItems,
     })
     replayContext = { userId, idempotencyKey, requestFingerprint, pricesHidden }
@@ -928,6 +947,7 @@ export async function POST(req: NextRequest) {
       idempotencyKey,
       requestFingerprint,
       notes,
+      poNumber,
       userId,
       role,
       userEmail: session.user?.email,
@@ -962,12 +982,14 @@ function orderRequestFingerprint(input: {
   organizationId: number
   branchId: number
   notes?: string
+  poNumber?: string
   items: Array<{ organizationInventoryId: number; quantity: number }>
 }) {
   const canonical = {
     organizationId: input.organizationId,
     branchId: input.branchId,
     notes: input.notes || null,
+    poNumber: input.poNumber || null,
     items: input.items.slice().sort((a, b) => a.organizationInventoryId - b.organizationInventoryId),
   }
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex")

@@ -18,12 +18,21 @@ describe("concurrency protection contracts", () => {
   it("uses a single-winner compare-and-set for simultaneous approval and fulfilment", () => {
     // The approve transition lives in the shared decision service, so the same
     // single-winner guard covers single-order and bulk multi-branch decisions.
+    // The fulfil transition now lives in its own service for the same reason:
+    // the Super Admin route and the token hand-off share one claim.
     const approval = source("lib/server/order-decision-service.ts")
-    const fulfilment = source("app/api/v1/orders/[id]/fulfill/route.ts")
+    const fulfilment = source("lib/server/order-fulfillment.ts")
+    const fulfilRoute = source("app/api/v1/orders/[id]/fulfill/route.ts")
     expect(approval).toContain("UPPER(${orders.status}) = 'PENDING'")
     expect(approval).toContain(".returning({ id: orders.id })")
     expect(fulfilment).toContain("UPPER(${orders.status}) = 'APPROVED'")
     expect(fulfilment).toContain("ORDER_TRANSITION_CONFLICT")
+    // The claim also re-asserts the tenant and branch the caller authorized.
+    expect(fulfilment).toContain("eq(orders.organizationId, organizationId)")
+    expect(fulfilment).toContain("eq(orders.branchId, branchId)")
+    // No caller reimplements the transition; every one delegates to the service.
+    expect(fulfilRoute).toContain("fulfillApprovedOrder({")
+    expect(fulfilRoute).not.toContain('status: "FULFILLED"')
   })
 
   it("locks and revalidates simultaneous refunds before changing money or quantity ledgers", () => {

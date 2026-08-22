@@ -17,9 +17,18 @@ import { ShoppingBag,Search,Plus,Minus,Trash2,Home,CheckCircle,Clock,AlertTriang
 import { Skeleton } from "@/components/ui/skeleton"
 import { RefundManagement } from "@/components/refund-management"
 import { getOrderDerivedStatus } from "@/lib/order-status"
+import { formatCountLabel } from "@/lib/count-label"
+import { MAX_PO_NUMBER_LENGTH, PO_NUMBER_HINT, normalizePoNumberInput } from "@/lib/purchase-order"
 import { ReceiptIconButton } from "@/components/receipts/receipt-icon-button"
 import { NotificationBell } from "@/components/notifications/notification-center"
 import { securelySignOut } from "@/lib/session-coordination"
+import {
+  buildShopCartStorageKey,
+  readStoredCartEntries,
+  restoreCartItems,
+  toStoredCartEntries,
+  writeStoredCartEntries,
+} from "@/lib/shop-cart-storage"
 
 const ORDER_STATUS_REFRESH_INTERVAL_MS = 5000
 
@@ -95,6 +104,7 @@ interface Order {
   refundedAt?: string | null
   refundReason?: string | null
   rejectionReason?: string | null
+  poNumber?: string | null
   statusAtRefund?: string | null
   approvalToken?: string | null
   orderItems?: OrderItem[]
@@ -223,6 +233,8 @@ export default function OrderPortalPage() {
   const [cart, setCart] = useState<CartItem[]>([])
   const [showCart, setShowCart] = useState(false)
   const [showCheckout, setShowCheckout] = useState(false)
+  /** The buyer's own purchase order reference for this order. Optional. */
+  const [poNumber, setPoNumber] = useState("")
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null)
   const [showProductDetail, setShowProductDetail] = useState(false)
   const [tempQuantity, setTempQuantity] = useState(1)
@@ -357,9 +369,21 @@ export default function OrderPortalPage() {
       if (!response.ok) throw new Error(data.error || "Failed to send token email")
 
       toast({
-        title: "Token sent",
-        description: "Fulfillment token emailed to the admin.",
+        title: data?.fulfilled ? "Token sent — order fulfilled" : "Token sent",
+        description: data?.fulfilled
+          ? "Fulfillment token emailed to the admin. Your order is now marked fulfilled."
+          : "Fulfillment token emailed to the admin.",
       })
+
+      // Sending the token settles the order, so the open detail and the order
+      // list behind it are refreshed rather than left showing it as approved.
+      if (data?.fulfilled) {
+        setSelectedOrder((current) => (
+          current ? { ...current, status: "FULFILLED" } : current
+        ))
+        void mutateOrders()
+        void mutateBudget()
+      }
     } catch (error) {
       toast({
         title: "Email failed",
@@ -449,6 +473,55 @@ export default function OrderPortalPage() {
 
   const products: Product[] = mappedProducts
   const productsById = useMemo(() => new Map(products.map((product) => [product.id, product])), [products])
+
+  // A refresh, an accidental tab close, or a bounce through login must not
+  // discard what the user has picked, so the cart is mirrored into the browser.
+  const cartStorageKey = buildShopCartStorageKey((session?.user as any)?.id, activeBranchId)
+  const hydratedCartKeyRef = React.useRef<string | null>(null)
+  const isEditingOrder = Boolean(editingOrder)
+
+  // Resume only once the branch catalogue has arrived: a saved line carries a
+  // quantity and nothing else, so it is the live catalogue that supplies its
+  // name, price, and remaining stock. A cart that already holds items is left
+  // untouched — that is the user's current work, and it is what gets written
+  // back below.
+  React.useEffect(() => {
+    if (!cartStorageKey || products.length === 0 || isEditingOrder) return
+    if (hydratedCartKeyRef.current === cartStorageKey) return
+
+    hydratedCartKeyRef.current = cartStorageKey
+    if (cart.length > 0) return
+
+    const restoredCart = restoreCartItems(
+      readStoredCartEntries(cartStorageKey),
+      productsById,
+      clampProductQuantity,
+    )
+    if (restoredCart.length === 0) return
+
+    setCart(restoredCart)
+    toast({
+      title: "Cart restored",
+      description: `${formatCountLabel(restoredCart.length, "item")} from your last visit ${restoredCart.length === 1 ? "is" : "are"} back in your cart.`,
+    })
+  }, [cartStorageKey, products.length, isEditingOrder, productsById, cart.length, toast])
+
+  // Save afterwards, never before: writing ahead of the restore would replace
+  // the saved cart with the empty one every page load starts with.
+  React.useEffect(() => {
+    if (!cartStorageKey) return
+
+    // While an existing order is being edited the cart mirrors that order
+    // instead of a draft of a new one, so there is nothing here worth resuming
+    // — and resuming it as a fresh cart would invite a duplicate order.
+    if (isEditingOrder) {
+      writeStoredCartEntries(cartStorageKey, [])
+      return
+    }
+    if (hydratedCartKeyRef.current !== cartStorageKey) return
+
+    writeStoredCartEntries(cartStorageKey, toStoredCartEntries(cart))
+  }, [cart, cartStorageKey, isEditingOrder])
 
   const filteredProducts = useMemo(() => {
     let filtered = [...products]
@@ -656,6 +729,7 @@ export default function OrderPortalPage() {
     setEditingOrder(null)
     setEditingOriginalQuantities({})
     setCart([])
+    setPoNumber("")
     setShowCart(false)
     setShowCheckout(false)
   }
@@ -726,6 +800,7 @@ export default function OrderPortalPage() {
 
       setEditingOriginalQuantities(originalQuantities)
       setEditingOrder({ ...order, ...freshOrder })
+      setPoNumber(normalizePoNumberInput(freshOrder.poNumber || ""))
       setCart(editableItems.map((item) => ({
         ...item,
         stock: roundQuantity((item.stock || 0) + (originalQuantities[item.id] || 0)),
@@ -745,6 +820,7 @@ export default function OrderPortalPage() {
       setEditingOrder(null)
       setEditingOriginalQuantities({})
       setCart([])
+      setPoNumber("")
       setShowCart(false)
       toast({
         title: "Unable to edit order",
@@ -762,6 +838,7 @@ export default function OrderPortalPage() {
     setIsPlacingOrder(true)
     const idempotencyKey = orderIdempotencyKeyRef.current || crypto.randomUUID()
     if (!editingOrder) orderIdempotencyKeyRef.current = idempotencyKey
+    const trimmedPoNumber = poNumber.trim()
     try {
       const res = await fetch(editingOrder ? `/api/v1/orders/${editingOrder.id}` : "/api/v1/orders", {
         method: editingOrder ? "PUT" : "POST",
@@ -771,6 +848,10 @@ export default function OrderPortalPage() {
         },
         body: JSON.stringify({
           items: cart.map(c => ({ organizationInventoryId: c.id, quantity: c.quantity })),
+          // Optional buyer reference. An empty value is accepted by both
+          // endpoints: it means "no purchase order" on a new order, and clears
+          // one recorded earlier on an edit.
+          poNumber: trimmedPoNumber,
           ...(!editingOrder && isAdmin && activeBranchId && { branchId: activeBranchId, organizationId: activeOrgId }),
         })
       })
@@ -801,6 +882,7 @@ export default function OrderPortalPage() {
           : `TID: ${json.order?.tid}. Your order is now pending approval by the organization's assigned approver.`,
       })
       setCart([])
+      setPoNumber("")
       orderIdempotencyKeyRef.current = null
       setEditingOrder(null)
       setEditingOriginalQuantities({})
@@ -2064,6 +2146,24 @@ export default function OrderPortalPage() {
 
             <div className="h-px bg-slate-200 dark:bg-slate-700" />
 
+            <div className="space-y-1.5">
+              <label htmlFor="order-po-number" className="text-sm font-medium">
+                Purchase order number <span className="text-muted-foreground font-normal">(optional)</span>
+              </label>
+              <Input
+                id="order-po-number"
+                value={poNumber}
+                onChange={(event) => setPoNumber(normalizePoNumberInput(event.target.value))}
+                maxLength={MAX_PO_NUMBER_LENGTH}
+                placeholder="e.g. PO-2026-0148"
+                autoComplete="off"
+                disabled={isPlacingOrder}
+              />
+              <p className="text-xs text-muted-foreground">
+                Your own reference. Printed as P.O.# on the invoice. {PO_NUMBER_HINT}.
+              </p>
+            </div>
+
             {!pricesHidden && <div className="space-y-2 p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
               <div className="flex justify-between font-bold text-lg">
                 <span>Total:</span>
@@ -2296,7 +2396,7 @@ export default function OrderPortalPage() {
                       {isSendingTokenEmail ? "Sending Token..." : "Send Token to Admin"}
                     </Button>
                     <p className="text-xs leading-relaxed text-muted-foreground">
-                      Provide this security token to the Super Admin to mark this order as fulfilled.
+                      Sending this token to the admin marks your order fulfilled. Copy it if you need to hand it over another way.
                     </p>
                   </div>
                 </section>

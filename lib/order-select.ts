@@ -17,6 +17,7 @@ export const orderSelectColumns = {
   taxCents: orders.taxCents,
   totalCents: orders.totalCents,
   notes: orders.notes,
+  poNumber: orders.poNumber,
   createdByUserId: orders.createdByUserId,
   createdAt: orders.createdAt,
   deliveredAt: orders.deliveredAt,

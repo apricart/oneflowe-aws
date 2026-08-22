@@ -1,7 +1,17 @@
 import { z } from "zod"
 import { ORDER_APPROVER_ROLES } from "@/lib/order-approver-role"
 import { MAX_BUSINESS_QUANTITY, isUniquePositiveIdList } from "@/lib/business-rules"
+import {
+  MAX_GROUP_REFUND_REASON_LENGTH,
+  MAX_ITEMS_PER_REFUNDED_ORDER,
+  MAX_ORDERS_PER_GROUP_REFUND,
+} from "@/lib/server/group-refund-rules"
 import { MAX_ALLOWLIST_ENTRIES } from "@/lib/security/ip-allowlist"
+import {
+  MAX_PO_NUMBER_LENGTH,
+  PO_NUMBER_MESSAGE,
+  PO_NUMBER_PATTERN,
+} from "@/lib/purchase-order"
 import {
   MAX_STORED_IMAGE_URL_LENGTH,
   normalizeSafeImageUrl,
@@ -161,9 +171,18 @@ export const privateNetworkLoginSchema = z.object({
   path: ["entries"],
 })
 
+// Optional tax identifier. An empty string is accepted and normalized to null
+// by the route so an operator can clear a wrong value without extra API shape.
+const organizationNtnNumber = z
+  .string()
+  .trim()
+  .max(32)
+  .regex(/^[A-Za-z0-9-]*$/, "NTN number may contain only letters, numbers, and hyphens")
+
 export const organizationCreateSchema = z.object({
   name: z.string().trim().min(2).max(100),
   code: z.string().trim().min(2).max(20).regex(/^\w+$/),
+  ntnNumber: organizationNtnNumber.optional(),
   status: z.enum(["active", "inactive", "suspended"]).optional().default("active"),
   orderApproverRole: z.enum(ORDER_APPROVER_ROLES).optional().default("BRANCH_ADMIN"),
   budgetAllocationMode: z.enum(["money", "quantity"]).optional(),
@@ -177,6 +196,7 @@ export const organizationCreateSchema = z.object({
 export const organizationUpdateSchema = z.object({
   name: z.string().trim().min(2).max(100).optional(),
   code: z.string().trim().min(2).max(20).regex(/^\w+$/).optional(),
+  ntnNumber: organizationNtnNumber.nullable().optional(),
   status: z.enum(["active", "inactive", "suspended"]).optional(),
   orderApproverRole: z.enum(ORDER_APPROVER_ROLES).optional(),
   budgetAllocationMode: z.enum(["money", "quantity"]).optional(),
@@ -187,6 +207,35 @@ export const organizationUpdateSchema = z.object({
 export const orderStatusUpdateSchema = z.object({
   status: z.enum(["APPROVED", "REJECTED", "FULFILLED"]),
 }).strict()
+
+/**
+ * The buyer's own purchase order reference, printed as "P.O.#" on the invoice.
+ * The alphabet and width come from `lib/purchase-order`, which the order forms
+ * use as well, so nothing a portal accepts is refused here and nothing this
+ * refuses can be typed there.
+ *
+ * An empty or blank value means "no purchase order", which is the normal case,
+ * so it is normalised to `undefined` rather than refused.
+ */
+const purchaseOrderNumberValue = z.string()
+  .trim()
+  .max(MAX_PO_NUMBER_LENGTH, `Purchase order number must not exceed ${MAX_PO_NUMBER_LENGTH} characters`)
+  .regex(PO_NUMBER_PATTERN, PO_NUMBER_MESSAGE)
+
+export const optionalPurchaseOrderNumber = z.preprocess(
+  (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+  purchaseOrderNumberValue.optional(),
+)
+
+/**
+ * The same reference on an edit, where an empty value is a real instruction:
+ * it clears a purchase order recorded earlier. Normalised to `null` so the
+ * route can tell "clear it" apart from "leave it alone" (`undefined`).
+ */
+const clearablePurchaseOrderNumber = z.preprocess(
+  (value) => (typeof value === "string" ? value.trim() : value),
+  z.union([purchaseOrderNumberValue, z.literal(""), z.null()]),
+).transform((value) => value || null)
 
 const orderMutationItemsSchema = z.array(z.object({
     organizationInventoryId: positiveId,
@@ -201,11 +250,13 @@ export const orderCreateSchema = z.object({
   organizationId: positiveId.optional(),
   branchId: positiveId.optional(),
   notes: z.string().trim().max(2_000).optional(),
+  poNumber: optionalPurchaseOrderNumber,
 }).strict()
 
 export const orderUpdateSchema = z.object({
   items: orderMutationItemsSchema,
   notes: z.string().trim().max(2_000).optional(),
+  poNumber: clearablePurchaseOrderNumber.optional(),
 }).strict()
 
 export const rejectionSchema = z.object({
@@ -329,6 +380,10 @@ export const globalProductUpdateSchema = z.object({
   categoryId: nullablePositiveId.optional(),
   imageUrl: nullableImageUrl.optional(),
   basePrice: z.number().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+  // Sales-tax rate as a percentage (18 means 18%). Null clears any override so
+  // the product follows its organization's rate. Prices are entered inclusive
+  // of this rate, so it changes how a price is reported, never what is charged.
+  taxRatePercent: z.union([z.number().nonnegative().max(100), z.null()]).optional(),
   unit: z.string().trim().min(1).max(64).optional(),
   status: z.enum(["active", "inactive"]).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
@@ -344,6 +399,10 @@ const globalProductAdminFields = {
   subcategoryId: z.union([z.string(), z.number(), z.null()]).optional(),
   imageUrl: nullableImageUrl.optional(),
   basePrice: z.number().positive().max(Number.MAX_SAFE_INTEGER / 100),
+  // Sales-tax rate as a percentage (18 means 18%). Null clears any override so
+  // the product follows its organization's rate. Prices are entered inclusive
+  // of this rate, so it changes how a price is reported, never what is charged.
+  taxRatePercent: z.union([z.number().nonnegative().max(100), z.null()]).optional(),
   unit: z.string().trim().min(1).max(64).optional(),
   status: z.enum(["active", "inactive"]).optional(),
   stockQuantity: z.coerce.number().nonnegative().optional(),
@@ -453,6 +512,52 @@ export const groupOrderCreateSchema = z.object({
   groupId: z.union([positiveId, z.null()]),
   entries: z.array(groupOrderEntrySchema).min(1).max(MAX_GROUP_ORDER_ENTRIES),
   notes: z.string().trim().max(2_000).optional(),
+  poNumber: optionalPurchaseOrderNumber,
+}).strict()
+
+/**
+ * Group Order Portal refund requests.
+ *
+ * One submission covers many branch orders under a single group order, so the
+ * payload is a list of orders each carrying its own selected lines. It is only
+ * a *request*: every order id, every line id, and every quantity is
+ * re-authorized and re-priced against the caller's own group order before
+ * anything is written, so a forged id comes back as a per-branch "skipped"
+ * result rather than a refund.
+ *
+ * The reason is capped at the width of `refunds.reason` so a long note is
+ * refused with a clear message instead of failing at the database.
+ */
+const groupRefundOrderSchema = z.object({
+  orderId: positiveId,
+  items: z.array(z.object({
+    id: positiveId,
+    quantity: z.coerce.number().positive().max(MAX_BUSINESS_QUANTITY),
+  }).strict())
+    .min(1, "Select at least one item for every branch order")
+    .max(MAX_ITEMS_PER_REFUNDED_ORDER)
+    .refine(
+      (items) => isUniquePositiveIdList(items.map((item) => item.id)),
+      "Each order item can only appear once in a refund",
+    ),
+}).strict()
+
+export const groupRefundRequestSchema = z.object({
+  groupOrderId: positiveId,
+  orders: z.array(groupRefundOrderSchema)
+    .min(1, "Select at least one branch order to refund")
+    .max(MAX_ORDERS_PER_GROUP_REFUND)
+    .refine(
+      (orders) => isUniquePositiveIdList(orders.map((order) => order.orderId)),
+      "Each branch order can only appear once in a refund request",
+    ),
+  reason: z.string()
+    .trim()
+    .min(1, "Refund reason is required")
+    .max(
+      MAX_GROUP_REFUND_REASON_LENGTH,
+      `Refund reason must not exceed ${MAX_GROUP_REFUND_REASON_LENGTH} characters`,
+    ),
 }).strict()
 
 /**
@@ -487,6 +592,7 @@ export const groupOrderDraftSchema = z.object({
   groupId: z.union([positiveId, z.null()]),
   entries: z.array(groupOrderEntrySchema).max(MAX_GROUP_ORDER_ENTRIES),
   notes: z.string().trim().max(2_000).optional(),
+  poNumber: optionalPurchaseOrderNumber,
   /**
    * The step being built but not yet saved, so a refresh mid-selection does not
    * discard it. Unlike a saved entry it may legitimately be empty, which is why

@@ -12,6 +12,7 @@ import {
   isBudgetAllocationMode,
 } from "@/lib/budget-allocation-mode"
 import { PRICE_VISIBILITY_SETTING_KEYS, isPriceVisibilitySettingKey } from "@/lib/price-visibility"
+import { taxRatePercentToBp } from "@/lib/tax"
 import { organizationSettingSchema, validationMessage } from "@/lib/server/mutation-validation"
 import {
   SESSION_IDLE_TIMEOUT_MINUTES_MAX,
@@ -70,8 +71,12 @@ function getSettingAccessError(scope: Awaited<ReturnType<typeof getRequestScope>
 }
 
 function getNumericSettingError(key: string, value: unknown) {
-  if (key === "tax_rate" && (typeof value !== "number" || value < 0 || value > 1)) {
-    return "tax_rate must be a number between 0 and 1"
+  // Entered as a percentage (18 means 18%), matching the field's own label.
+  // It was previously validated as a 0-1 fraction while being described as a
+  // percentage, so anyone typing 18 was rejected and anyone typing 0.18 got a
+  // value that contradicted the UI.
+  if (key === "tax_rate" && taxRatePercentToBp(value) === null) {
+    return "tax_rate must be a percentage between 0 and 100, in whole basis points (e.g. 18 or 17.5)"
   }
   if (key === "order_approval_threshold" && (typeof value !== "number" || value < 0)) {
     return "order_approval_threshold must be a non-negative number"

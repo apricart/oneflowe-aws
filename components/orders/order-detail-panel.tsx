@@ -348,7 +348,9 @@ export function OrderDetailPanel({
                         </Button>
                       )}
                       <p className="text-[9px] font-bold text-slate-400 leading-tight">
-                        Provide this security token to the Super Admin to mark this order as fulfilled.
+                        {onSendToken
+                          ? "Sending this token to the admin marks the order fulfilled. Copy it to hand it over another way."
+                          : "Provide this security token to the Super Admin to mark this order as fulfilled."}
                       </p>
                     </div>
                   </div>

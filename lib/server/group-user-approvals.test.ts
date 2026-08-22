@@ -201,16 +201,26 @@ describe("group user approval surface contracts", () => {
     expect(approvals).toContain("role: GROUP_USER_ROLE,")
   })
 
-  it("scopes the token hand-off to the approver's assignments without widening other roles", () => {
+  it("scopes the token hand-off to assignments without widening the single-branch roles", () => {
     const tokenEmail = source("app/api/v1/orders/[id]/send-token-email/route.ts")
 
-    expect(tokenEmail).toContain('requireApiRole(["HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "ORDER_PORTAL"])')
-    // Every other role keeps the original single-branch check untouched.
-    expect(tokenEmail).toContain("if (role !== GROUP_USER_ROLE) {")
+    // Both group roles reach the hand-off; the single-branch roles are exactly
+    // the ones that were already there.
+    expect(tokenEmail).toContain('"GROUP_USER",')
+    expect(tokenEmail).toContain('"GROUP_ORDER_PORTAL",')
+    expect(tokenEmail).toContain('"HEAD_OFFICE",')
+    expect(tokenEmail).toContain('"BRANCH_ADMIN",')
+    expect(tokenEmail).toContain('"ORDER_PORTAL",')
+    // Every single-branch role keeps the original check untouched.
+    expect(tokenEmail).toContain("if (!usesMultiBranchScope(role)) {")
     expect(tokenEmail).toContain("return verifyResourceAccess(order.organizationId, order.branchId)")
-    // The approver is checked against its resolved assignments, tenant first.
+    // A group role is checked against its resolved assignments, tenant first.
     expect(tokenEmail).toContain("if (!actorOrganizationId || actorOrganizationId !== order.organizationId) return false")
     expect(tokenEmail).toContain("canUseScopedBranch(userId, order.branchId)")
+    // Whether a token may be shared at all is still the one shared policy's
+    // decision, so the requester cannot reach an order it did not raise.
+    expect(tokenEmail).toContain("const canShareToken = canViewFulfillmentToken({")
+    expect(tokenEmail).toContain("orderCreatedByUserId: order.createdByUserId,")
   })
 
   it("confines the approval workspace to the approver in the proxy and the server layout", () => {
@@ -229,10 +239,55 @@ describe("group user approval surface contracts", () => {
 
   it("leaves the requester's ordering surface unable to decide orders", () => {
     const orderingGate = source("lib/server/group-order-access.ts")
-    const bulkOrderLayout = source("app/group-portal/bulk-order/layout.tsx")
+    const storefrontLayout = source("app/group-portal/layout.tsx")
 
     // The ordering gate is unchanged in what it accepts.
     expect(orderingGate).toContain("requireApiRole([GROUP_ORDER_PORTAL_ROLE])")
-    expect(bulkOrderLayout).toContain("!== GROUP_ORDER_PORTAL_ROLE")
+    expect(storefrontLayout).toContain("!== GROUP_ORDER_PORTAL_ROLE")
+    // The approver never lands on the requester's storefront, even by URL.
+    expect(storefrontLayout).toContain("if (role === GROUP_USER_ROLE) redirect(\"/approvals\")")
+  })
+})
+
+describe("group user approval totals", () => {
+  const approvals = source("lib/server/group-order-approvals.ts")
+  const allOrders = source("components/group-portal/approval-all-orders.tsx")
+  const table = source("components/group-portal/approval-order-table.tsx")
+
+  it("counts the same orders the queue beneath the tiles lists", () => {
+    // The tiles counted every order in the approver's branches while the queue
+    // showed only the group-raised ones, so a tile reported a number the list
+    // could not account for.
+    const summary = approvals.slice(
+      approvals.indexOf("export async function getApprovalQueueSummary"),
+      approvals.indexOf("export async function listApprovalQueue"),
+    )
+    expect(summary).toContain("sql`${orders.groupOrderId} IS NOT NULL`")
+    expect(summary).toContain("inArray(orders.branchId, scope.branchIds)")
+    expect(summary).toContain("eq(orders.organizationId, scope.organizationId)")
+  })
+
+  it("still returns nothing at all for an approver with no assignments", () => {
+    expect(approvals).toContain("if (!scope.usable)")
+  })
+
+  it("reports one quantity under the units column, in both views", () => {
+    // The all-orders view read `orderItems.length` from a payload that carries
+    // no such array, so every row showed nothing ordered at all.
+    expect(approvals).toContain("SELECT COALESCE(SUM(${orderItems.quantity}), 0)")
+    expect(allOrders).toContain("itemCount: Number(order.itemCount ?? 0)")
+    expect(allOrders).not.toContain("Array.isArray(order.orderItems)")
+    expect(table).toContain("formatQuantity(order.itemCount)")
+  })
+
+  it("lets the approver reach past the first page of its own branches' orders", () => {
+    expect(allOrders).toContain('params = new URLSearchParams({ page: String(page), limit: String(PAGE_SIZE) })')
+    expect(allOrders).toContain("data?.pagination?.totalPages")
+    expect(allOrders).not.toContain('page: "1"')
+  })
+
+  it("reads the shared, already role-scoped orders endpoint rather than a parallel one", () => {
+    expect(allOrders).toContain("`/api/v1/orders?${params.toString()}`")
+    expect(allOrders).toContain('"/api/v1/group-portal/approvals/decide"')
   })
 })

@@ -1,22 +1,13 @@
-import { redirect } from "next/navigation"
-
-import { OrderPortalLanding } from "@/components/group-portal/order-portal-landing"
-import { getSharedServerSession } from "@/lib/auth"
-import { GROUP_USER_ROLE } from "@/lib/server/multi-branch-scope"
+import { GroupStorefront } from "@/components/group-portal/storefront/group-storefront"
 
 /**
- * The requester's landing page.
+ * The requester's storefront: the side menu of assigned groups and locations,
+ * and the catalogue for whichever of them is selected.
  *
- * `proxy.ts` already sends the approver to its own area inside the portal
- * shell, so this page belongs to GROUP_ORDER_PORTAL alone. The redirect below
- * is defence in depth: if the approver ever reaches this route directly it is
- * returned to its workspace rather than shown the ordering surface.
+ * The role gate lives in the layout above, which refuses every role but
+ * GROUP_ORDER_PORTAL before this page renders. Every endpoint the storefront
+ * calls allowlists that role again on its own.
  */
-export default async function GroupPortalPage() {
-  const session = await getSharedServerSession()
-
-  if (!session?.user) redirect("/login?reason=session-expired")
-  if ((session.user as { role?: string }).role === GROUP_USER_ROLE) redirect("/approvals")
-
-  return <OrderPortalLanding />
+export default function GroupPortalPage() {
+  return <GroupStorefront />
 }

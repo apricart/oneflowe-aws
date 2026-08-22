@@ -170,6 +170,20 @@ const APPROVALS_AREA = "/approvals"
 const GROUP_ORDER_PORTAL_HOME = "/group-portal"
 
 /**
+ * The invoice page is reached from more than one portal — the admin orders
+ * directory and the employee store both link to it — so it is not owned by a
+ * single role's area. Which invoice a caller may actually read is decided by
+ * `lib/server/invoice-access.ts` on the endpoints behind the page, which
+ * enforces organization isolation, branch scope, and per-user ownership; this
+ * allowlist only stops the shell from bouncing the request home first.
+ */
+const INVOICE_AREA = "/invoices"
+
+function isInvoiceArea(pathname: string): boolean {
+  return pathMatchesPrefix(pathname, INVOICE_AREA)
+}
+
+/**
  * The portal each role is confined to, or null when the path is already inside
  * it. Each restricted role owns exactly one area and is redirected home from
  * everywhere else; /change-password stays reachable so a forced password change
@@ -182,17 +196,24 @@ function rolePortalRedirect(role: string | undefined, pathname: string): string 
   if (pathname.startsWith("/change-password")) return null
 
   if (role === "ORDER_PORTAL") {
-    return pathname.startsWith("/shop") ? null : "/shop"
+    // The store links each fulfilled order to its invoice, so the invoice page
+    // stays reachable; everything else still funnels back to /shop.
+    return pathname.startsWith("/shop") || isInvoiceArea(pathname) ? null : "/shop"
   }
   if (role === "GROUP_USER") {
-    return GROUP_USER_AREAS.some((prefix) => pathMatchesPrefix(pathname, prefix))
+    // The approval queue links each approved order to its invoice.
+    return isInvoiceArea(pathname)
+      || GROUP_USER_AREAS.some((prefix) => pathMatchesPrefix(pathname, prefix))
       ? null
       : GROUP_USER_HOME
   }
   if (role === "GROUP_ORDER_PORTAL") {
     // The requester keeps its own workspace and never reaches the admin shell,
-    // the approver's queue, or the single-branch /shop.
-    return pathname.startsWith(GROUP_ORDER_PORTAL_HOME) ? null : GROUP_ORDER_PORTAL_HOME
+    // the approver's queue, or the single-branch /shop. Its order history links
+    // to the invoice page, which is shared by every ordering surface.
+    return pathname.startsWith(GROUP_ORDER_PORTAL_HOME) || isInvoiceArea(pathname)
+      ? null
+      : GROUP_ORDER_PORTAL_HOME
   }
   if (role && ADMIN_PORTAL_ROLES.includes(role)) {
     // Strict separation: administrators belong in the dashboard shell only, and

@@ -22,6 +22,9 @@ export const organizations = pgTable(
     id: serial("id").primaryKey(),
     name: varchar("name", { length: 255 }).notNull(),
     code: varchar("code", { length: 64 }),
+    // Optional tax identifier. Nullable so every existing organization stays
+    // valid without one, and so an operator can clear a wrong value.
+    ntnNumber: varchar("ntn_number", { length: 32 }),
     status: varchar("status", { length: 32 }).default("active"),
     orderApproverRole: varchar("order_approver_role", { length: 32 })
       .notNull()
@@ -451,6 +454,9 @@ export const orders = pgTable(
     taxCents: bigint("tax_cents", { mode: "number" }).notNull().default(0),
     totalCents: bigint("total_cents", { mode: "number" }).notNull().default(0),
     notes: text("notes"),
+    // Buyer-supplied purchase order reference, printed as "P.O.#" on the
+    // invoice. Optional: orders raised without one simply have no PO to print.
+    poNumber: varchar("po_number", { length: 64 }),
     // Set only for orders created through the Group Order Portal's multi-branch
     // submission, which records one ordinary order per branch under a shared
     // envelope. NULL for every order created by any other role or flow, so no
@@ -483,6 +489,8 @@ export const orders = pgTable(
     // Receipt data - complete snapshot for historical accuracy
     receiptData: jsonb("receipt_data").$type<{
       invoiceNumber: string
+      /** Buyer's purchase order reference as supplied when the order was placed. */
+      poNumber?: string
       date: string
       buyerName: string
       buyerAddress: string
@@ -551,6 +559,12 @@ export const orderItems = pgTable(
     unit: varchar("unit", { length: 64 }).notNull(),
     quantity: numeric("quantity", { precision: 12, scale: 3, mode: "number" }).notNull(),
     priceCents: bigint("price_cents", { mode: "number" }).notNull(), // Price at time of order
+    // Tax snapshot. priceCents is gross (tax-inclusive), and taxCents is the
+    // portion of this line's gross amount that is tax at taxRateBp. Recorded at
+    // sale time rather than derived on read, so changing a rate later cannot
+    // restate invoices that have already been issued.
+    taxRateBp: integer("tax_rate_bp"),
+    taxCents: bigint("tax_cents", { mode: "number" }).notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   },
   (t) => [
@@ -560,6 +574,7 @@ export const orderItems = pgTable(
     index("order_items_product_idx").on(t.globalProductId),
     index("order_items_product_order_idx").on(t.globalProductId, t.orderId),
     check("order_items_values_valid_ck", sql`${t.quantity} > 0 AND ${t.quantity} <= 1000000 AND ${t.priceCents} >= 0`),
+    check("order_items_tax_valid_ck", sql`${t.taxCents} >= 0 AND (${t.taxRateBp} IS NULL OR (${t.taxRateBp} >= 0 AND ${t.taxRateBp} <= 10000))`),
   ],
 )
 
@@ -773,6 +788,11 @@ export const globalProducts = pgTable(
     categoryId: integer("category_id").references(() => categories.id),
     imageUrl: text("image_url"),
     basePrice: integer("base_price_cents").notNull().default(0),
+    // Sales-tax rate in basis points (1800 = 18%). Prices above are entered
+    // inclusive of this rate. NULL means the product follows the organization's
+    // tax_rate setting, so changing that default moves every product that has
+    // not been given an explicit rate of its own.
+    taxRateBp: integer("tax_rate_bp"),
     // Global discount configuration
     discountType: varchar("discount_type", { length: 16 }), // percent | flat
     discountValue: integer("discount_value_cents"), // cents for flat, basis points for percent? we will store percent as integer 0-10000 basis points
@@ -800,6 +820,7 @@ export const globalProducts = pgTable(
     index("global_products_cat_status_idx").on(t.categoryId, t.status),
     index("global_products_status_created_idx").on(t.status, t.createdAt),
     check("global_products_values_valid_ck", sql`${t.basePrice} >= 0 AND ${t.stockQuantity} >= 0 AND ${t.quantityStep} > 0 AND COALESCE(${t.discountValue}, 0) >= 0`),
+    check("global_products_tax_rate_valid_ck", sql`${t.taxRateBp} IS NULL OR (${t.taxRateBp} >= 0 AND ${t.taxRateBp} <= 10000)`),
   ],
 )
 
@@ -1470,6 +1491,9 @@ export const groupOrders = pgTable(
     idempotencyKey: varchar("idempotency_key", { length: 128 }).notNull(),
     requestFingerprint: varchar("request_fingerprint", { length: 64 }).notNull(),
     notes: text("notes"),
+    // Buyer-supplied purchase order reference for the whole submission. Copied
+    // onto every branch order created beneath this envelope.
+    poNumber: varchar("po_number", { length: 64 }),
     // Outcome snapshot. Branch orders are created independently, so a
     // submission can succeed for some branches and fail for others; the
     // failures are kept with their reason so the user can correct them.

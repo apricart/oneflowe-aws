@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect,useState } from "react"
+import { useEffect,useMemo,useState } from "react"
 import { Card,CardContent,CardDescription,CardHeader,CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Select,SelectContent,SelectGroup,SelectItem,SelectLabel,SelectTrigger,SelectValue } from "@/components/ui/select"
@@ -11,6 +11,13 @@ import { useToast } from "@/hooks/use-toast"
 import { useRouter } from "next/navigation"
 import useSWR,{ useSWRConfig } from "swr"
 import { fetcher } from "@/lib/fetcher"
+import {
+  DEFAULT_TAX_RATE_BP,
+  resolveTaxRateBp,
+  splitInclusiveCents,
+  taxRateBpToPercent,
+  taxRatePercentToBp,
+} from "@/lib/tax"
 
 type GlobalProduct = {
   id: number
@@ -20,6 +27,8 @@ type GlobalProduct = {
   categoryId?: number
   imageUrl?: string
   basePrice: number
+  /** Basis points; null means the product follows its organization's rate. */
+  taxRateBp?: number | null
   unit: string
   status: string
   stockQuantity?: number
@@ -47,6 +56,8 @@ type ProductFormState = {
   subcategoryId: string
   imageUrl: string
   basePrice: string
+  /** Percentage as typed; blank means "follow the organization rate". */
+  taxRatePercent: string
   unit: string
   status: string
   stockQuantity: string
@@ -104,6 +115,10 @@ const getProductPayload = (
   ...productData,
   id: initialProduct?.id,
   basePrice: Number.parseFloat(productData.basePrice),
+  // Blank clears the override so the product follows its organization's rate.
+  taxRatePercent: productData.taxRatePercent.trim() === ""
+    ? null
+    : Number.parseFloat(productData.taxRatePercent),
   stockQuantity: Number.parseFloat(productData.stockQuantity) || 0,
   allowDecimalQuantity: productData.allowDecimalQuantity,
   quantityStep: 1,
@@ -139,6 +154,7 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Reado
     subcategoryId: "",
     imageUrl: "",
     basePrice: "",
+    taxRatePercent: "",
     unit: "",
     status: "active",
     stockQuantity: "",
@@ -150,6 +166,33 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Reado
     discountEndAt: "",
     discountActive: false,
   })
+
+  /**
+   * Show how the entered price divides, so it is obvious at the point of entry
+   * that the number typed here already contains tax rather than having tax
+   * added to it later.
+   */
+  const priceBreakdown = useMemo(() => {
+    const priceRupees = Number.parseFloat(productData.basePrice)
+    if (!Number.isFinite(priceRupees) || priceRupees < 0) return null
+
+    const typedRate = productData.taxRatePercent.trim() === ""
+      ? null
+      : taxRatePercentToBp(Number.parseFloat(productData.taxRatePercent))
+    const rateBp = resolveTaxRateBp(typedRate, DEFAULT_TAX_RATE_BP)
+    const split = splitInclusiveCents(Math.round(priceRupees * 100), rateBp)
+    const money = (cents: number) => (cents / 100).toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })
+
+    return {
+      net: money(split.netCents),
+      tax: money(split.taxCents),
+      gross: money(split.grossCents),
+      ratePercent: taxRateBpToPercent(rateBp),
+    }
+  }, [productData.basePrice, productData.taxRatePercent])
 
   const { data: nextProductCodeData } = useSWR<NextProductCodeResponse>(
     mode === "create" ? NEXT_PRODUCT_CODE_ENDPOINT : null,
@@ -169,6 +212,9 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Reado
         subcategoryId: initialProduct.categoryId?.toString() || "",
         imageUrl: initialProduct.imageUrl || "",
         basePrice: (initialProduct.basePrice / 100).toFixed(2),
+        taxRatePercent: initialProduct.taxRateBp == null
+          ? ""
+          : String(initialProduct.taxRateBp / 100),
         unit: initialProduct.unit,
         status: initialProduct.status,
         stockQuantity: initialProduct.stockQuantity?.toString() || "",
@@ -535,7 +581,47 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Reado
                   placeholder="0.00"
                   required
                 />
-                <p className="mt-1 text-xs text-muted-foreground">In PKR</p>
+                <p className="mt-1 text-xs text-muted-foreground">In PKR, including sales tax</p>
+              </div>
+              <div>
+                <label htmlFor="product-tax-rate" className="block text-sm font-medium mb-1">Sales Tax Rate</label>
+                <Input
+                  id="product-tax-rate"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  max="100"
+                  value={productData.taxRatePercent ?? ""}
+                  onChange={(e) => setProductData({ ...productData, taxRatePercent: e.target.value })}
+                  placeholder={String(taxRateBpToPercent(DEFAULT_TAX_RATE_BP))}
+                />
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Percent. Leave blank to use the organization default.
+                </p>
+              </div>
+              <div className="sm:col-span-2 lg:col-span-3">
+                <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-800 dark:bg-slate-900/40">
+                  {priceBreakdown ? (
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                      <span className="font-medium text-slate-700 dark:text-slate-200">
+                        Price breaks down as
+                      </span>
+                      <span className="text-muted-foreground">
+                        Net {priceBreakdown.net}
+                      </span>
+                      <span className="text-muted-foreground">
+                        + Tax {priceBreakdown.tax} @ {priceBreakdown.ratePercent}%
+                      </span>
+                      <span className="font-medium text-slate-700 dark:text-slate-200">
+                        = {priceBreakdown.gross}
+                      </span>
+                    </div>
+                  ) : (
+                    <span className="text-muted-foreground">
+                      Enter a price to see how it splits between net value and sales tax.
+                    </span>
+                  )}
+                </div>
               </div>
               <div>
                 <label htmlFor="product-unit" className="block text-sm font-medium mb-1">Unit <span className="text-destructive">*</span></label>

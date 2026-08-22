@@ -71,7 +71,7 @@ export async function POST(req: NextRequest) {
 
   const parsed = groupOrderCreateSchema.safeParse(await readJson(req))
   if (!parsed.success) return error(validationMessage(parsed.error), 400)
-  const { groupId, entries, notes } = parsed.data
+  const { groupId, entries, notes, poNumber } = parsed.data
 
   // Every branch touched by any entry has to be inside the caller's live scope
   // and inside the selected group before any work begins.
@@ -91,6 +91,7 @@ export async function POST(req: NextRequest) {
       organizationId: actor.organizationId,
       entries,
       notes: notes?.trim() || null,
+      poNumber: poNumber?.trim() || null,
       idempotencyKey,
       actor: {
         userId: actor.scope.userId,

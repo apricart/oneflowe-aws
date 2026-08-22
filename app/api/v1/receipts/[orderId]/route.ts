@@ -1,14 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getServerSession } from "next-auth"
-import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
-import { branches, orders, refunds, refundItems, orderItems, users } from "@/db/schema"
+import { branches, organizations, refunds, refundItems, orderItems, users } from "@/db/schema"
 import { and, eq } from "drizzle-orm"
 import { shouldHidePricesForRole, redactReceiptPrices } from "@/lib/price-visibility"
 import { aggregateReceiptRefundItems, getReceiptNetTotal, type ReceiptRefundItem } from "@/lib/receipt-display"
 import { getOrderDerivedStatus } from "@/lib/order-status"
 import { formatBranchAddress } from "@/lib/branch-address"
-import { isInvoiceAvailableForOrder } from "@/lib/invoice-availability"
+import { authorizeInvoiceRequest } from "@/lib/server/invoice-access"
 import { getReceiptUserDisplayName } from "@/lib/receipt-user"
 
 function refundHistoryLine(item: any, pricesHidden: boolean) {
@@ -44,46 +42,20 @@ export async function GET(
     props: { params: Promise<{ orderId: string }> }
 ) {
     try {
-        const session = await getServerSession(authOptions)
-        if (!session?.user) {
-            return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-        }
-
         const params = await props.params
         const orderId = Number.parseInt(params.orderId)
         if (Number.isNaN(orderId)) {
             return NextResponse.json({ error: "Invalid order ID" }, { status: 400 })
         }
 
-        // Fetch order with receipt data
-        const [order] = await db
-            .select()
-            .from(orders)
-            .where(eq(orders.id, orderId))
-            .limit(1)
-
-        if (!order) {
-            return NextResponse.json({ error: "Order not found" }, { status: 404 })
+        // Single authority for authentication, tenant isolation, role access,
+        // per-user ownership, and invoice availability.
+        const access = await authorizeInvoiceRequest(orderId)
+        if (!access.ok) {
+            return NextResponse.json({ error: access.denial.error }, { status: access.denial.status })
         }
+        const { order, role: userRole } = access
 
-        const { verifyResourceAccess } = await import("@/lib/auth")
-        const hasAccess = await verifyResourceAccess(order.organizationId, order.branchId)
-        if (!hasAccess) {
-            return NextResponse.json({ error: "Forbidden: You do not have access to this invoice" }, { status: 403 })
-        }
-
-        if (!isInvoiceAvailableForOrder(order)) {
-            return NextResponse.json(
-                { error: "Invoice is available after the order is approved" },
-                { status: 409 }
-            )
-        }
-
-        if (!order.receiptData) {
-            return NextResponse.json({ error: "Invoice not found" }, { status: 404 })
-        }
-
-        const userRole = (session.user as any).role
         const pricesHidden = await shouldHidePricesForRole(userRole, order.organizationId)
 
         const userIdentityColumns = {
@@ -133,6 +105,21 @@ export async function GET(
             branchAddress = formatBranchAddress(branchDetails)
         }
 
+        let organizationName = ""
+        let organizationNtn = ""
+        if (order.organizationId !== null) {
+            const [organizationDetails] = await db
+                .select({
+                    name: organizations.name,
+                    ntnNumber: organizations.ntnNumber,
+                })
+                .from(organizations)
+                .where(eq(organizations.id, order.organizationId))
+                .limit(1)
+            organizationName = organizationDetails?.name || ""
+            organizationNtn = organizationDetails?.ntnNumber || ""
+        }
+
         // Fetch refund information
         const refundData = await db
             .select({
@@ -178,6 +165,11 @@ export async function GET(
         const finalReceiptData = order.receiptData ? {
             ...(order.receiptData as any),
             buyerAddress: branchAddress,
+            organizationName: (order.receiptData as any)?.organizationName || organizationName || "",
+            organizationNtn: organizationNtn || (order.receiptData as any)?.organizationNtn || "",
+            // The order row is the record of the buyer's purchase order; the
+            // snapshot is the fallback for orders whose row predates the column.
+            poNumber: order.poNumber || (order.receiptData as any)?.poNumber || "",
             placedByName: creatorName,
             placedByPhone: creator?.phone || null,
             approvedByName: approverName,

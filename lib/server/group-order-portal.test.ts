@@ -22,7 +22,14 @@ import {
   MAX_BRANCHES_PER_SUBMISSION,
   UNGROUPED_BUCKET_NAME,
 } from "./group-order-portal"
-import { mergeEntriesIntoBranchPlans, toRequestEntries } from "@/components/group-portal/group-order-plan"
+import {
+  MAX_ENTRY_BRANCHES,
+  applyQuantityToBranchPlans,
+  branchPlansToEntries,
+  mergeEntriesIntoBranchPlans,
+  toRequestEntries,
+  withoutBranchPlan,
+} from "@/components/group-portal/group-order-plan"
 
 const source = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8")
 
@@ -99,26 +106,142 @@ describe("group order entry merge", () => {
   })
 })
 
+describe("group order review edits", () => {
+  const line = (id: number, quantity: number, priceCents = 100) => ({
+    organizationInventoryId: id,
+    quantity,
+    name: `Product ${id}`,
+    unit: "kg",
+    priceCents,
+  })
+
+  /** What each branch ends up receiving, independent of line ordering. */
+  const received = (plans: ReturnType<typeof mergeEntriesIntoBranchPlans>) =>
+    plans.map((plan) => ({
+      branchId: plan.branch.id,
+      items: [...plan.lines]
+        .map((entry) => [entry.organizationInventoryId, entry.quantity] as const)
+        .sort(([left], [right]) => left - right),
+    }))
+
+  const basePlans = () => mergeEntriesIntoBranchPlans([
+    { key: "a", branchIds: [1, 2, 3], lines: [line(10, 4, 250), line(11, 2, 500)] },
+  ], branchesById)
+
+  let keyCounter = 0
+  const nextKey = () => `k${++keyCounter}`
+
+  it("changes one branch without touching the others", () => {
+    const edited = applyQuantityToBranchPlans(basePlans(), 10, 9, 2)
+
+    expect(received(edited)).toEqual([
+      { branchId: 1, items: [[10, 4], [11, 2]] },
+      { branchId: 2, items: [[10, 9], [11, 2]] },
+      { branchId: 3, items: [[10, 4], [11, 2]] },
+    ])
+    // The branch total is re-derived from the edited line, not carried over.
+    expect(edited[1].totalCents).toBe(9 * 250 + 2 * 500)
+  })
+
+  it("removes the line at zero, and the branch once it has nothing left", () => {
+    const withoutOne = applyQuantityToBranchPlans(basePlans(), 10, 0, 2)
+    expect(received(withoutOne)[1]).toEqual({ branchId: 2, items: [[11, 2]] })
+
+    const emptied = applyQuantityToBranchPlans(withoutOne, 11, 0, 2)
+    expect(emptied.map((plan) => plan.branch.id)).toEqual([1, 3])
+  })
+
+  it("applies to every branch that already receives the product, and no others", () => {
+    const plans = mergeEntriesIntoBranchPlans([
+      { key: "a", branchIds: [1, 2], lines: [line(10, 4)] },
+      { key: "b", branchIds: [3], lines: [line(11, 1)] },
+    ], branchesById)
+
+    const applied = applyQuantityToBranchPlans(plans, 10, 7)
+
+    expect(received(applied)).toEqual([
+      { branchId: 1, items: [[10, 7]] },
+      { branchId: 2, items: [[10, 7]] },
+      // Branch 3 never had product 10; applying to all must not introduce it.
+      { branchId: 3, items: [[11, 1]] },
+    ])
+  })
+
+  it("rebuilds entries that merge back into exactly the edited plans", () => {
+    const edited = applyQuantityToBranchPlans(basePlans(), 10, 9, 2)
+    const rebuilt = branchPlansToEntries(edited, nextKey)
+
+    expect(received(mergeEntriesIntoBranchPlans(rebuilt, branchesById))).toEqual(received(edited))
+  })
+
+  it("keeps the payload small by sharing one entry between identical branches", () => {
+    const rebuilt = branchPlansToEntries(applyQuantityToBranchPlans(basePlans(), 10, 9, 2), nextKey)
+
+    // Two shapes only: the branch that was edited, and everyone else.
+    expect(rebuilt).toHaveLength(2)
+    expect(rebuilt.map((entry) => entry.branchIds.length).sort()).toEqual([1, 2])
+  })
+
+  it("chunks branch lists so no rebuilt entry exceeds the server's branch limit", () => {
+    const manyIds = Array.from({ length: MAX_ENTRY_BRANCHES + 25 }, (_, index) => index + 1)
+    const manyBranches = new Map(manyIds.map((id) => [id, branch(id)]))
+    const plans = mergeEntriesIntoBranchPlans(
+      [{ key: "a", branchIds: manyIds, lines: [line(10, 4)] }],
+      manyBranches,
+    )
+
+    const rebuilt = branchPlansToEntries(plans, nextKey)
+
+    expect(rebuilt).toHaveLength(2)
+    expect(rebuilt.every((entry) => entry.branchIds.length <= MAX_ENTRY_BRANCHES)).toBe(true)
+    // Splitting the list must not lose or duplicate a branch.
+    expect(rebuilt.flatMap((entry) => entry.branchIds).sort((a, b) => a - b)).toEqual(manyIds)
+    expect(received(mergeEntriesIntoBranchPlans(rebuilt, manyBranches))).toEqual(received(plans))
+  })
+
+  it("drops one branch from the order without disturbing the rest", () => {
+    const remaining = withoutBranchPlan(basePlans(), 2)
+
+    expect(remaining.map((plan) => plan.branch.id)).toEqual([1, 3])
+    expect(received(remaining)[0]).toEqual({ branchId: 1, items: [[10, 4], [11, 2]] })
+  })
+
+  it("still produces a payload the submission endpoint accepts", () => {
+    const rebuilt = branchPlansToEntries(applyQuantityToBranchPlans(basePlans(), 10, 9, 2), nextKey)
+
+    const parsed = groupOrderCreateSchema.safeParse({
+      groupId: 7,
+      entries: toRequestEntries(rebuilt),
+    })
+
+    expect(parsed.success).toBe(true)
+  })
+})
+
 describe("group order idempotency fingerprint", () => {
   const plans = mergeEntriesByBranch([
     { branchIds: [1, 2], items: [{ organizationInventoryId: 10, quantity: 4 }] },
   ], branchesById)
 
   it("is stable for the same submission", () => {
-    const input = { organizationId: 1, groupId: 7, notes: null, plans }
+    const input = { organizationId: 1, groupId: 7, notes: null, poNumber: null, plans }
     expect(groupOrderFingerprint(input)).toBe(groupOrderFingerprint(input))
   })
 
   it("changes when the branches, items, or tenant change", () => {
-    const base = groupOrderFingerprint({ organizationId: 1, groupId: 7, notes: null, plans })
+    const base = groupOrderFingerprint({ organizationId: 1, groupId: 7, notes: null, poNumber: null, plans })
 
-    expect(groupOrderFingerprint({ organizationId: 2, groupId: 7, notes: null, plans })).not.toBe(base)
-    expect(groupOrderFingerprint({ organizationId: 1, groupId: 8, notes: null, plans })).not.toBe(base)
-    expect(groupOrderFingerprint({ organizationId: 1, groupId: 7, notes: "changed", plans })).not.toBe(base)
+    expect(groupOrderFingerprint({ organizationId: 2, groupId: 7, notes: null, poNumber: null, plans })).not.toBe(base)
+    expect(groupOrderFingerprint({ organizationId: 1, groupId: 8, notes: null, poNumber: null, plans })).not.toBe(base)
+    expect(groupOrderFingerprint({ organizationId: 1, groupId: 7, notes: "changed", poNumber: null, plans })).not.toBe(base)
+    // A different purchase order reference is a different submission, so a
+    // replayed key carrying one is refused rather than answered with the first.
+    expect(groupOrderFingerprint({ organizationId: 1, groupId: 7, notes: null, poNumber: "PO-1", plans })).not.toBe(base)
     expect(groupOrderFingerprint({
       organizationId: 1,
       groupId: 7,
       notes: null,
+      poNumber: null,
       plans: mergeEntriesByBranch([
         { branchIds: [1, 2], items: [{ organizationInventoryId: 10, quantity: 5 }] },
       ], branchesById),
@@ -320,16 +443,22 @@ describe("group order portal access contracts", () => {
     expect(history).toContain("if (!organizationId) return emptyPage")
   })
 
-  it("confines the workspace page to the requesting role in the proxy and the server layout", () => {
+  it("confines the storefront to the requesting role in the proxy and the server layout", () => {
     const proxySource = source("proxy.ts")
-    const layout = source("app/group-portal/bulk-order/layout.tsx")
+    const layout = source("app/group-portal/layout.tsx")
 
     // The requester owns /group-portal and reaches nothing else: not the admin
-    // shell, not the approver's queue, not the single-branch /shop.
+    // shell, not the approver's queue, not the single-branch /shop. The one
+    // addition is the shared invoice page its own history links to, which is
+    // scoped per order by lib/invoice-access-policy rather than by area.
     expect(proxySource).toContain('const GROUP_ORDER_PORTAL_HOME = "/group-portal"')
     expect(proxySource).toContain('if (role === "GROUP_ORDER_PORTAL") {')
-    expect(proxySource).toContain("return pathname.startsWith(GROUP_ORDER_PORTAL_HOME) ? null : GROUP_ORDER_PORTAL_HOME")
-    expect(layout).toContain("!== GROUP_ORDER_PORTAL_ROLE) redirect(\"/group-portal\")")
+    expect(proxySource).toContain("return pathname.startsWith(GROUP_ORDER_PORTAL_HOME) || isInvoiceArea(pathname)")
+    expect(proxySource).toContain(": GROUP_ORDER_PORTAL_HOME")
+    // The gate that used to sit on the retired wizard route now guards the area
+    // itself, and still fails closed: only the requester renders the storefront.
+    expect(layout).toContain("if (role === GROUP_USER_ROLE) redirect(\"/approvals\")")
+    expect(layout).toContain("if (role !== GROUP_ORDER_PORTAL_ROLE) redirect(\"/dashboard\")")
   })
 
   it("leaves the single-branch order endpoint untouched", () => {
@@ -345,5 +474,129 @@ describe("group order portal access contracts", () => {
 describe("group bucketing", () => {
   it("names the bucket for branches that carry no group", () => {
     expect(UNGROUPED_BUCKET_NAME).toBe("Unassigned branches")
+  })
+})
+
+describe("group order branch availability", () => {
+  const portal = source("lib/server/group-order-portal.ts")
+
+  it("keeps a deactivated or suspended branch out of the ordering scope", () => {
+    // The filter used to test for a status of 'deleted'. Branches never carry
+    // that value — deleting one sets 'inactive' — so the clause matched nothing
+    // and a branch an administrator had removed stayed fully orderable while
+    // disappearing from every budget screen.
+    expect(portal).toContain('const OUT_OF_SERVICE_BRANCH_STATUSES = ["inactive", "suspended", "deleted"]')
+    expect(portal).toContain("branchIsInService")
+    expect(portal).not.toContain("${branches.status} IS DISTINCT FROM 'deleted'")
+  })
+
+  it("still resolves the scope from the user's own assignments and tenant", () => {
+    expect(portal).toContain("inArray(branches.id, scopedBranchIds)")
+    expect(portal).toContain("eq(branches.organizationId, organizationId)")
+  })
+
+  it("leaves the group filter alone, where a 'deleted' status is real", () => {
+    // `groups.status` genuinely takes that value; only the branch filter was
+    // testing for a status the application never writes.
+    expect(portal).toContain("${groups.status} IS DISTINCT FROM 'deleted'")
+  })
+
+  it("treats a branch with no status at all as in service", () => {
+    // Rows predating the column must keep working; this is the one case the
+    // filter deliberately lets through.
+    expect(portal).toContain("${branches.status} IS NULL")
+  })
+
+  it("leaves the shared multi-branch resolver alone", () => {
+    // The approver's queue, the report, and the orders endpoint all resolve
+    // their scope here. Filtering by status in this helper would retro-actively
+    // hide orders already raised against a branch that was later deactivated.
+    const scope = source("lib/server/multi-branch-scope.ts")
+    expect(scope).not.toContain("branches.status")
+  })
+})
+
+describe("group order line snapshot", () => {
+  const creation = source("lib/server/group-order-creation.ts")
+
+  it("stores the product name the portal actually displayed", () => {
+    // The catalogue and the price refresh both show the tenant's own name, so
+    // filing the order line under the global name left the user reviewing one
+    // name and receiving another on the order, receipt, and refund screens.
+    expect(creation).toContain("customName: organizationInventory.customName,")
+    expect(creation).toContain("const productName = inventoryItem.customName || product.name")
+    expect(creation).toContain("productName,")
+  })
+
+  it("reports a shortfall under that same name", () => {
+    expect(creation).toContain("`Insufficient stock for ${item.productName}.")
+  })
+
+  it("holds a submitted quantity to the product's step", () => {
+    expect(creation).toContain("enforceStep: true,")
+  })
+
+  it("still prices every line from the locked database rows", () => {
+    expect(creation).toContain("const priceCents = inventoryItem.customPrice ?? product.basePrice")
+    expect(creation).toContain("calculateLineCents(priceCents, validation.quantity)")
+  })
+})
+
+describe("group order draft restore", () => {
+  const draftHook = source("components/group-portal/storefront/use-storefront-draft.ts")
+  const storefront = source("components/group-portal/storefront/group-storefront.tsx")
+
+  it("asks for prices in chunks the endpoint accepts", () => {
+    // A draft may reference more products than one request may carry, and an
+    // oversized request is refused outright.
+    expect(draftHook).toContain("const PRICE_LOOKUP_CHUNK_SIZE = 500")
+    expect(draftHook).toContain("index += PRICE_LOOKUP_CHUNK_SIZE")
+  })
+
+  it("abandons the restore instead of applying it without prices", () => {
+    // A draft holds selections only, so a line the price lookup cannot describe
+    // cannot be rendered. Applying the restore anyway dropped every line, and
+    // the autosave then wrote the emptied cart over the stored draft.
+    expect(draftHook).toContain("setRestoreFailed(true)")
+    expect(draftHook).toContain("Saved group order could not be restored")
+  })
+
+  it("holds the autosave back while a restore is outstanding", () => {
+    expect(draftHook).toContain("if (!hydratedRef.current || restoring || restoreFailed || suspended) return")
+  })
+
+  it("puts a restored quantity back onto the product's current step", () => {
+    // A draft saved before the step was enforced would otherwise submit a
+    // value the server now refuses, failing a branch for something the user
+    // cannot see is wrong.
+    expect(draftHook).toContain("const quantity = snapQuantityToStep(")
+    expect(draftHook).toContain("sanitizeQuantityStep(Boolean(product.allowDecimalQuantity), product.quantityStep ?? 1)")
+  })
+
+  it("offers the user a retry rather than a lost draft", () => {
+    expect(draftHook).toContain("retryDraftRestore")
+    expect(storefront).toContain("Try again")
+  })
+
+  it("waits for the draft before choosing a group on the user's behalf", () => {
+    // Auto-selecting the only group while a saved order was still arriving
+    // would overwrite it with an empty cart.
+    expect(storefront).toContain("draftStatus !== \"ready\"")
+  })
+})
+
+describe("group order quantity entry", () => {
+  const stepper = source("components/group-portal/quantity-stepper.tsx")
+  const review = source("components/group-portal/review-step.tsx")
+
+  it("snaps every committed quantity onto the product's step", () => {
+    expect(stepper).toContain("onChange(snapQuantityToStep(raw, step))")
+    expect(stepper).toContain("snapQuantityToStep(Math.max(0, value - step), step)")
+    expect(stepper).toContain("snapQuantityToStep(value + step, step)")
+  })
+
+  it("rounds a review line total the way the branch total and the server do", () => {
+    expect(review).toContain("formatPKR(calculateLineCents(line.priceCents, line.quantity) / 100)")
+    expect(review).not.toContain("formatPKR((line.priceCents * line.quantity) / 100)")
   })
 })

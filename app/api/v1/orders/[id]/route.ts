@@ -71,6 +71,8 @@ const getOrderEditErrorResponse = (editError: any) => {
 import { canViewFulfillmentToken } from "@/lib/fulfillment-token-access"
 import { getCurrentUser, getRequestScope, type RequestScope } from "@/lib/auth"
 import { calculateLineCents, formatQuantity, roundQuantity, validateProductQuantity } from "@/lib/quantity"
+import { resolveTaxRateBp, splitInclusiveCents } from "@/lib/tax"
+import { getOrganizationTaxRateBp } from "@/lib/server/tax-rate"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { generateReceiptData } from "@/lib/receipt-generator"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
@@ -203,8 +205,10 @@ async function loadOrderEditInventory(tx: any, context: any) {
   }
 }
 
-function calculateEditedItems(normalizedItems: any[], inventoryData: any) {
+function calculateEditedItems(normalizedItems: any[], inventoryData: any, orgTaxRateBp: number) {
   let subtotalCents = 0
+  let taxCents = 0
+  let totalCents = 0
   const items = normalizedItems.map((requestedItem) => {
     const inventoryItem: any = inventoryData.inventoryById.get(requestedItem.organizationInventoryId)
     if (!inventoryItem) throw new Error("An inventory item is no longer available")
@@ -222,19 +226,29 @@ function calculateEditedItems(normalizedItems: any[], inventoryData: any) {
     if (validation.quantity > availableStock) {
       throw new Error(`Insufficient stock for ${product.name}. Available: ${formatQuantity(availableStock)}, Requested: ${formatQuantity(validation.quantity)}`)
     }
-    subtotalCents += calculateLineCents(priceCents, validation.quantity)
+    // Prices are tax-inclusive, so the gross line amount is what the branch
+    // pays and the split only records how much of it is tax. Recomputing rather
+    // than carrying the old figures forward is what keeps an edited order
+    // consistent with the rates in force when it is re-priced.
+    const lineTaxRateBp = resolveTaxRateBp(product.taxRateBp, orgTaxRateBp)
+    const line = splitInclusiveCents(calculateLineCents(priceCents, validation.quantity), lineTaxRateBp)
+    subtotalCents += line.netCents
+    taxCents += line.taxCents
+    totalCents += line.grossCents
     return {
       organizationInventoryId: inventoryItem.id,
       globalProductId: product.id,
       quantity: validation.quantity,
       priceCents,
+      taxRateBp: lineTaxRateBp,
+      taxCents: line.taxCents,
       productName: product.name,
       productCode: product.productCode,
       unit: product.unit,
     }
   })
-  if (!Number.isSafeInteger(subtotalCents) || subtotalCents < 0) throw new Error("Calculated order total is invalid")
-  return { items, subtotalCents, taxCents: 0, totalCents: subtotalCents }
+  if (!Number.isSafeInteger(totalCents) || totalCents < 0) throw new Error("Calculated order total is invalid")
+  return { items, subtotalCents, taxCents, totalCents }
 }
 
 async function lockAndValidateOrderBudget(tx: any, context: any) {
@@ -348,6 +362,13 @@ async function regenerateEditedOrderReceipt(tx: any, context: any) {
     const previousReceipt = context.existingOrder.receiptData as any
     receiptData.invoiceNumber = previousReceipt?.invoiceNumber || context.existingOrder.tid
     receiptData.date = previousReceipt?.date || receiptData.date
+    // The invoice identity survives an edit, and so does the buyer's purchase
+    // order reference: the edited value when one was sent, the recorded one
+    // otherwise.
+    const poNumber = context.poNumber !== undefined
+      ? context.poNumber
+      : (context.existingOrder.poNumber || previousReceipt?.poNumber)
+    if (poNumber) receiptData.poNumber = poNumber
     await tx.update(orders).set({ receiptData: receiptData as any }).where(eq(orders.id, context.orderId))
   } catch (receiptError) {
     console.error("Receipt regeneration failed during order edit", receiptError)
@@ -362,6 +383,7 @@ async function persistEditedOrder(tx: any, context: any) {
     taxCents: context.taxCents,
     totalCents: context.totalCents,
     ...(context.notes !== undefined ? { notes: context.notes || null } : {}),
+    ...(context.poNumber !== undefined ? { poNumber: context.poNumber || null } : {}),
     updatedAt: new Date(),
   }).where(and(
     eq(orders.id, context.orderId),
@@ -407,7 +429,8 @@ async function processOrderEditTransaction(tx: any, context: any) {
   const access = await lockOrderEditAccess(tx, context)
   if ("kind" in access) return access
   const inventory = await loadOrderEditInventory(tx, context)
-  const calculated = calculateEditedItems(context.normalizedItems, inventory)
+  const orgTaxRateBp = await getOrganizationTaxRateBp(context.organizationId)
+  const calculated = calculateEditedItems(context.normalizedItems, inventory, orgTaxRateBp)
   const budget = await lockAndValidateOrderBudget(tx, { ...context, ...access, ...calculated })
   const quantityBudgets = await lockOrderQuantityBudgets(tx, {
     ...context,
@@ -598,6 +621,7 @@ export async function PUT(
       mode: budgetAllocationMode,
       pricesHidden,
       notes: parsedBody.data.notes,
+      poNumber: parsedBody.data.poNumber,
     }))
 
 

@@ -5,6 +5,7 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm"
 import { branches, groupOrders, groups, orderItems, orders, users } from "@/db/schema"
 import { canViewFulfillmentToken } from "@/lib/fulfillment-token-access"
 import { db } from "@/lib/db"
+import { roundQuantity } from "@/lib/quantity"
 import { GROUP_USER_ROLE } from "@/lib/server/multi-branch-scope"
 import { UNGROUPED_BUCKET_NAME } from "@/lib/server/group-order-portal"
 
@@ -35,8 +36,20 @@ export type ApprovalOrder = {
   branchName: string
   branchCostCenterId: string | null
   status: string
+  /**
+   * The status the order held when it was refunded. The invoice survives a
+   * refund of an already-approved order, so the queue needs this to know
+   * whether a refunded row still offers one.
+   */
+  statusAtRefund: string | null
   fulfillmentStatus: string
   totalCents: number
+  /**
+   * Units ordered across the whole order, not the number of distinct lines.
+   * The approver's other view reads the same figure from the shared orders
+   * endpoint, so both of its tabs report one quantity rather than two numbers
+   * under one heading.
+   */
   itemCount: number
   createdAt: Date | null
   approvedAt: Date | null
@@ -109,7 +122,15 @@ export function approverScope(
   return { usable: true, organizationId, branchIds: scopedBranchIds }
 }
 
-/** Headline counts across every branch this approver covers. */
+/**
+ * Headline counts for the group order queue.
+ *
+ * Counted over the same set the queue below them lists — branch orders raised
+ * as part of a group order, inside this approver's branches — so a tile can
+ * never report a number the list underneath it cannot account for. Orders
+ * raised outside a group order are reached through the approver's separate
+ * all-orders view, which carries its own totals.
+ */
 export async function getApprovalQueueSummary(
   organizationId: number | null,
   scopedBranchIds: number[],
@@ -128,6 +149,7 @@ export async function getApprovalQueueSummary(
   const inScope = and(
     eq(orders.organizationId, scope.organizationId),
     inArray(orders.branchId, scope.branchIds),
+    sql`${orders.groupOrderId} IS NOT NULL`,
   )
 
   const [[counts], [pendingGroups]] = await Promise.all([
@@ -146,7 +168,6 @@ export async function getApprovalQueueSummary(
       .from(orders)
       .where(and(
         inScope,
-        sql`${orders.groupOrderId} IS NOT NULL`,
         sql`UPPER(${orders.status}) = 'PENDING'`,
       )),
   ])
@@ -248,6 +269,7 @@ export async function listApprovalQueue({
       branchName: branches.name,
       branchCostCenterId: branches.costCenterId,
       status: orders.status,
+      statusAtRefund: orders.statusAtRefund,
       fulfillmentStatus: orders.fulfillmentStatus,
       totalCents: orders.totalCents,
       createdAt: orders.createdAt,
@@ -255,7 +277,8 @@ export async function listApprovalQueue({
       rejectionReason: orders.rejectionReason,
       approvalToken: orders.approvalToken,
       itemCount: sql<number>`(
-        SELECT COUNT(*)::int FROM ${orderItems} WHERE ${orderItems.orderId} = ${orders.id}
+        SELECT COALESCE(SUM(${orderItems.quantity}), 0)
+        FROM ${orderItems} WHERE ${orderItems.orderId} = ${orders.id}
       )`.mapWith(Number),
     })
     .from(orders)
@@ -280,9 +303,10 @@ export async function listApprovalQueue({
       branchName: row.branchName ?? `Branch ${row.branchId}`,
       branchCostCenterId: row.branchCostCenterId ?? null,
       status: row.status,
+      statusAtRefund: row.statusAtRefund,
       fulfillmentStatus: row.fulfillmentStatus,
       totalCents: row.totalCents,
-      itemCount: row.itemCount,
+      itemCount: roundQuantity(Number(row.itemCount ?? 0)),
       createdAt: row.createdAt,
       approvedAt: row.approvedAt,
       rejectionReason: row.rejectionReason,
