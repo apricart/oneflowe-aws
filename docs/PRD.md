@@ -174,14 +174,15 @@ The system enforces strict tenant isolation: each organization sees only its own
 - Username/email + password login (case-insensitive).
 - Optional 6-digit OTP MFA via email (2-minute expiry, Redis-backed).
 - Separate login flows for admin users and employee credentials.
-- 8-hour JWT sessions; session version tracking enables instant forced logout.
-- On every session check: user active status, org status, branch status, and `sessionVersion` are validated against the database.
+- Encrypted JWT cookies carry immutable session identity and policy claims; a per-browser `auth_sessions` registry is authoritative for monotonic activity, revocation, and the fixed 8-hour absolute lifetime. Tenant idle timeout is 1-15 minutes (15 minutes by default), and passive polling never renews activity.
+- Logout synchronously revokes that browser session before its cookie is cleared. A revocation-store failure returns a retryable `503` and does not claim that logout succeeded.
+- On every session check: user active status, current role, current organization/branch assignments and statuses, and `sessionVersion` are validated against the database (positive results may use the bounded validation cache).
 - `mustChangePassword` flag forces newly created users to set a new password before accessing any other page.
-- Bank-grade security headers injected by middleware (HSTS, CSP, X-Frame-Options, etc.).
+- Security headers are injected by middleware (HSTS, CSP, X-Frame-Options, etc.).
 
 **Acceptance Criteria:**
 - Admin users logging in with MFA enabled must complete OTP verification to access the system.
-- Deactivating an organization or branch immediately terminates active sessions.
+- Deactivating an organization or branch terminates active sessions no later than the bounded session-validation cache window.
 - A new user created with a temporary password must change it on first login.
 
 ---
@@ -436,7 +437,7 @@ The system enforces strict tenant isolation: each organization sees only its own
 **Key Features:**
 - Create and manage organizations with name, code, status, and logo.
 - Create and manage branches: name, province, city, address, admin user, group assignment, baseline budget.
-- Deactivating an org or branch immediately invalidates all user sessions for that scope.
+- Deactivating an org or branch invalidates sessions for that scope no later than the bounded (maximum 30-second) identity-validation cache window; a deterministic rejection durably revokes the affected browser session.
 - Organization settings: configurable key-value store (e.g., budget mode, price visibility).
 
 ---
@@ -618,6 +619,8 @@ The system enforces strict tenant isolation: each organization sees only its own
 
 26. Every session callback validates `sessionVersion` against the DB. Changing a user's password increments `sessionVersion`, immediately invalidating all existing sessions. **Confirmed.**
 27. `mustChangePassword = true` blocks access to all pages except `/change-password`. **Confirmed** (enforced in middleware).
+28. Idle expiry (tenant-configurable from 1-15 minutes) and the fixed 8-hour absolute expiry are enforced by signed policy claims plus the per-browser `auth_sessions` registry before authorization. Registry activity is advanced atomically only for explicit user interaction; passive checks cannot extend either deadline. **Confirmed.**
+29. Logout revokes the exact server-side session ID before clearing the browser cookie. Expiry and deterministic identity/tenant rejection are one-way registry transitions, so later policy or status relaxation cannot revive a rejected session. **Confirmed.**
 
 ---
 
@@ -1036,6 +1039,7 @@ graph TD
 | Audit Log | `audit_logs` | id, userId, orgId, branchId, action, entity, entityId | Business-level audit trail |
 | System Log | `system_logs` | id, userId, userRole, orgId, branchId, action, resourceType, success | Detailed system activity log |
 | Session | `sessions` | id, userId, refreshTokenHash, ipAddress, userAgent, expiresAt | (Exists in schema; JWT is primary mechanism) |
+| Auth Session | `auth_sessions` | id, subjectId, orgId, startedAt, lastActivityAt, absoluteExpiresAt, revokedAt | Per-browser JWT revocation and monotonic idle authority; supports UUID and `emp_<id>` subjects |
 | MFA Code | `mfa_codes` | id, userId, code, type, expiresAt, attempts, isUsed | OTP storage; also Redis-backed |
 | Invoice Sequence | `invoice_sequences` | organizationId, lastValue | Sequential invoice numbering per org |
 | Org Metrics | `org_metrics` | id, orgId, month, totalOrders, totalSpendCents | Aggregated org-level metrics |
@@ -1060,7 +1064,7 @@ graph TD
 - **CSRF:** SameSite cookies via NextAuth JWT sessions. **Recommended.**
 - **Rate limiting:** Redis-backed rate limiter in `lib/rate-limiter.ts` applied to sensitive endpoints. **Confirmed** (file exists).
 - **MFA:** Optional email OTP for all users. **Confirmed.**
-- **Session integrity:** Every JWT callback validates user active status, org/branch status, and session version against DB. **Confirmed.**
+- **Session integrity:** Session resolution validates the per-browser registry, user active status, current role and tenant assignments/statuses, and session version against DB; security-validation errors fail closed. **Confirmed.**
 - **Approval token:** Bcrypt-hashed 10-character token for order fulfillment; plaintext shown only once. **Confirmed.**
 - **SQL injection:** Drizzle ORM parameterized queries; no raw SQL with user input. **Confirmed.**
 - **BOLA protection:** `/orders/[id]/approve` verifies the requesting user has access to the order's org/branch before acting. **Confirmed.**
@@ -1076,14 +1080,14 @@ graph TD
 
 ### Authentication / Authorization
 
-- **JWT sessions:** 8-hour expiry, stored as HTTP-only cookies via NextAuth. **Confirmed.**
+- **JWT sessions:** Fixed 8-hour absolute lifetime plus a server-enforced 1-15-minute idle timeout, stored as HTTP-only cookies via NextAuth and backed by a revocable per-browser registry. Explicit CSRF-protected user activity can renew only the idle deadline. **Confirmed.**
 - **Role-based routing:** Middleware enforces role-to-route restrictions before any page renders. **Confirmed.**
 - **Granular RBAC:** `rolePermissions` table allows fine-grained permission overrides per role. **Confirmed.**
 - **Multi-tenant isolation:** All queries are scoped by `organizationId` and `branchId` at the API layer. **Confirmed.**
 
 ### Reliability
 
-- **Graceful degradation:** If DB validation fails during session check, the session is allowed to continue (avoids locking out all users on DB hiccup). **Confirmed.**
+- **Authentication failure mode:** Identity/session database validation fails closed; transport failures do not manufacture activity renewal, and the client conceals protected content at the known deadline while offline. **Confirmed.**
 - **Receipt data snapshot:** Receipt JSON is stored on the order at creation time, ensuring historical accuracy if prices change. **Confirmed.**
 - **Transaction rollback:** Order creation, approval, and fulfillment are wrapped in DB transactions; any failure rolls back all changes. **Confirmed.**
 

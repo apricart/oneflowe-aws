@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { ORDER_APPROVER_ROLES } from "@/lib/order-approver-role"
 import { MAX_BUSINESS_QUANTITY, isUniquePositiveIdList } from "@/lib/business-rules"
+import { MAX_ALLOWLIST_ENTRIES } from "@/lib/security/ip-allowlist"
 import {
   MAX_STORED_IMAGE_URL_LENGTH,
   normalizeSafeImageUrl,
@@ -9,7 +10,9 @@ import {
 export const systemRoleSchema = z.enum([
   "SUPER_ADMIN",
   "HEAD_OFFICE",
+  "GROUP_USER",
   "BRANCH_ADMIN",
+  "GROUP_ORDER_PORTAL",
   "ORDER_PORTAL",
 ])
 
@@ -28,6 +31,17 @@ const passwordSchema = z.string().min(12).max(128)
   .regex(/\d/, "Password must include a number")
   .regex(/[^a-zA-Z0-9]/, "Password must include a special character")
 
+// Bounded so a single request can never fan out into an unbounded write set.
+export const MAX_ASSIGNED_SCOPE_IDS = 500
+
+// A group order fans out into one order per branch, so the branch count bounds
+// the number of transactions a single submission can open.
+export const MAX_GROUP_ORDER_BRANCHES = 100
+
+const assignedIdList = z.array(positiveId)
+  .max(MAX_ASSIGNED_SCOPE_IDS)
+  .refine(isUniquePositiveIdList, { message: "Duplicate ids are not allowed" })
+
 export const userCreateSchema = z.object({
   firstName: z.string().trim().min(1).max(100),
   lastName: z.string().trim().min(1).max(100),
@@ -45,6 +59,20 @@ export const userCreateSchema = z.object({
   address: nullableText(2_000).optional(),
   mfaEnabled: z.boolean().optional().default(false),
   isActive: z.boolean().optional().default(true),
+  // GROUP_ORDER_PORTAL only. Ignored (and rejected when non-empty) for every
+  // other role, so existing single-branch roles are unaffected.
+  groupIds: assignedIdList.optional().default([]),
+  branchIds: assignedIdList.optional().default([]),
+}).strict()
+
+/**
+ * Replaces the full group/branch scope of a GROUP_ORDER_PORTAL user. Sending
+ * both lists empty is rejected by the route, not here, so the message can name
+ * the role.
+ */
+export const userScopeUpdateSchema = z.object({
+  groupIds: assignedIdList.optional().default([]),
+  branchIds: assignedIdList.optional().default([]),
 }).strict()
 
 export const userProfileUpdateSchema = z.object({
@@ -69,6 +97,10 @@ export const userAccessUpdateSchema = z.object({
   branchId: nullablePositiveId.optional(),
   isActive: z.boolean().optional(),
   mfaEnabled: z.boolean().optional(),
+  // GROUP_ORDER_PORTAL only. Omitting a list leaves it unchanged; sending one
+  // replaces it wholesale.
+  groupIds: assignedIdList.optional(),
+  branchIds: assignedIdList.optional(),
 }).strict().refine((input) => Object.keys(input).length > 0, {
   message: "At least one access field is required",
 })
@@ -113,6 +145,22 @@ export const supplierUpdateSchema = supplierCreateSchema.omit({
   message: "At least one supplier field is required",
 })
 
+/**
+ * Shape only. The address text itself is parsed by the shared allowlist parser
+ * so the UI, this schema, and the login matcher can never disagree about what a
+ * given entry means.
+ */
+export const privateNetworkLoginSchema = z.object({
+  enabled: z.boolean(),
+  entries: z.array(z.object({
+    value: z.string().trim().min(1).max(64),
+    label: nullableText(120).optional(),
+  }).strict()).max(MAX_ALLOWLIST_ENTRIES),
+}).strict().refine((input) => !input.enabled || input.entries.length > 0, {
+  message: "Add at least one IP address before enabling private network login",
+  path: ["entries"],
+})
+
 export const organizationCreateSchema = z.object({
   name: z.string().trim().min(2).max(100),
   code: z.string().trim().min(2).max(20).regex(/^\w+$/),
@@ -123,6 +171,7 @@ export const organizationCreateSchema = z.object({
     hideBranchAdminPrices: z.boolean().optional(),
     hideOrderPortalPrices: z.boolean().optional(),
   }).strict().optional(),
+  privateNetworkLogin: privateNetworkLoginSchema.optional(),
 }).strict()
 
 export const organizationUpdateSchema = z.object({
@@ -379,6 +428,78 @@ export const groupUpdateSchema = z.object({
 export const groupBranchesUpdateSchema = z.object({
   branchIds: z.array(positiveId).max(10_000),
   newlyAddedBranchIds: z.array(positiveId).max(10_000).optional(),
+}).strict()
+
+/**
+ * Group Order Portal submissions.
+ *
+ * One entry is one saved step of the wizard: the branches it applies to and the
+ * items chosen for them. The server merges the entries per branch and creates
+ * one ordinary order per branch, so the bounds here cap how much work a single
+ * request can fan out into.
+ */
+const groupOrderEntrySchema = z.object({
+  branchIds: z.array(positiveId)
+    .min(1, "Select at least one branch for every step")
+    .max(MAX_GROUP_ORDER_BRANCHES)
+    .refine(isUniquePositiveIdList, { message: "Duplicate branches are not allowed" }),
+  items: orderMutationItemsSchema,
+}).strict()
+
+export const MAX_GROUP_ORDER_ENTRIES = 50
+
+export const groupOrderCreateSchema = z.object({
+  // null is the "branches without a group" bucket, which is a real selection.
+  groupId: z.union([positiveId, z.null()]),
+  entries: z.array(groupOrderEntrySchema).min(1).max(MAX_GROUP_ORDER_ENTRIES),
+  notes: z.string().trim().max(2_000).optional(),
+}).strict()
+
+/**
+ * Bounds one bulk approve/reject request. Each order is decided in its own
+ * transaction, so this caps how many transactions a single call may open.
+ */
+export const MAX_BULK_DECISION_ORDERS = 100
+
+/**
+ * A GROUP_USER deciding one order or a whole group order in a single request.
+ *
+ * The ids are only a *request*; every one of them is re-authorized individually
+ * against the caller's live branch scope before anything is written, so a
+ * forged id simply comes back as a per-order "forbidden" result.
+ */
+export const groupOrderDecisionSchema = z.object({
+  decision: z.enum(["approve", "reject"]),
+  orderIds: z.array(positiveId)
+    .min(1)
+    .max(MAX_BULK_DECISION_ORDERS)
+    .refine(isUniquePositiveIdList, { message: "Duplicate orders are not allowed" }),
+  // Required by the route when the decision is a rejection; kept optional here
+  // so the message can name the decision rather than the field.
+  reason: z.string().trim().min(1).max(2_000).optional(),
+}).strict()
+
+/**
+ * A saved draft holds selections only. It is never trusted for pricing or
+ * availability: submission re-resolves both from the database.
+ */
+export const groupOrderDraftSchema = z.object({
+  groupId: z.union([positiveId, z.null()]),
+  entries: z.array(groupOrderEntrySchema).max(MAX_GROUP_ORDER_ENTRIES),
+  notes: z.string().trim().max(2_000).optional(),
+  /**
+   * The step being built but not yet saved, so a refresh mid-selection does not
+   * discard it. Unlike a saved entry it may legitimately be empty, which is why
+   * it does not reuse the submission item schema's minimum.
+   */
+  draftBranchIds: z.array(positiveId).max(MAX_GROUP_ORDER_BRANCHES).optional(),
+  draftItems: z.array(z.object({
+    organizationInventoryId: positiveId,
+    quantity: z.coerce.number().positive().max(MAX_BUSINESS_QUANTITY),
+  }).strict()).max(500).refine(
+    (items) => isUniquePositiveIdList(items.map((item) => item.organizationInventoryId)),
+    "Each product can only appear once",
+  ).optional(),
 }).strict()
 
 export function validationMessage(error: z.ZodError): string {

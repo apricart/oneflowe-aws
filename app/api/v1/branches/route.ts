@@ -13,6 +13,10 @@ import {
   BRANCH_CREATION_ROLES,
   resolveBranchCreationAccess,
 } from "@/lib/server/branch-creation-access"
+import {
+  resolveScopedBranchIds,
+  usesMultiBranchScope,
+} from "@/lib/server/multi-branch-scope"
 
 type BranchCreateInput = ReturnType<typeof branchCreateSchema.parse>
 type RequestScope = NonNullable<Awaited<ReturnType<typeof getRequestScope>>>
@@ -44,6 +48,7 @@ const getBranchQueryCondition = (
   organizationIds: number[] | undefined,
   groupIds: number[],
   branchId: number | null | undefined,
+  assignedBranchIds?: number[] | null,
 ) => {
   let organizationCondition
   if (organizationIds?.length === 1) {
@@ -54,6 +59,10 @@ const getBranchQueryCondition = (
 
   return and(
     organizationCondition,
+    // A multi-branch role only ever lists the branches assigned to it. The
+    // caller refuses an empty assignment set before reaching this point, so
+    // this narrows the query and never removes a restriction.
+    assignedBranchIds ? inArray(branchesTable.id, assignedBranchIds) : undefined,
     groupIds.length > 0 ? inArray(branchesTable.groupId, groupIds) : undefined,
     branchId ? eq(branchesTable.id, branchId) : undefined,
   )
@@ -114,7 +123,7 @@ function getBranchConstraintResponse(exception: any) {
  */
 export async function GET(req: Request) {
   try {
-    const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL"])
+    const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "ORDER_PORTAL"])
     if (err) return err
 
     const { searchParams } = new URL(req.url)
@@ -155,12 +164,28 @@ export async function GET(req: Request) {
       return error("Branch context required", 403)
     }
 
+    // A multi-branch role has no branch of its own; its reach is the resolved
+    // assignment set, and an empty set is refused rather than listing the
+    // tenant. Every other role keeps `null` here and is unaffected.
+    const assignedBranchIds = usesMultiBranchScope(scope.role)
+      ? await resolveScopedBranchIds(db, scope.userId)
+      : null
+    if (assignedBranchIds && assignedBranchIds.length === 0) {
+      return error("Branch context required", 403)
+    }
+    if (assignedBranchIds && !scope.organizationId) {
+      return error("Organization context required", 403)
+    }
+
     const cacheKey = scopedCacheKey(
-      'branches', 
+      'branches',
       { role: scope.role, branchId: scopedBranchId },
-      { 
+      {
         orgIds: scopedOrgIds?.join(','),
-        groupIds: groupIds.join(',')
+        groupIds: groupIds.join(','),
+        // Two approvers in one tenant hold different assignments, so the cache
+        // entry has to be keyed by the resolved set as well as by the role.
+        assignedBranchIds: assignedBranchIds?.join(','),
       }
     )
 
@@ -185,7 +210,7 @@ export async function GET(req: Request) {
           )`,
         })
         .from(branchesTable)
-        .where(getBranchQueryCondition(scopedOrgIds, groupIds, scopedBranchId))
+        .where(getBranchQueryCondition(scopedOrgIds, groupIds, scopedBranchId, assignedBranchIds))
         .orderBy(desc(branchesTable.createdAt))
         .limit(500)
 

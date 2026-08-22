@@ -1,11 +1,11 @@
-export type Role = "SUPER_ADMIN" | "HEAD_OFFICE" | "BRANCH_ADMIN" | "ORDER_PORTAL"
+export type Role = "SUPER_ADMIN" | "HEAD_OFFICE" | "GROUP_USER" | "BRANCH_ADMIN" | "GROUP_ORDER_PORTAL" | "ORDER_PORTAL"
 
 /**
  * Validate if a string is a valid role
  */
 export function isValidRole(role: unknown): role is Role {
   if (typeof role !== 'string') return false
-  const validRoles: Role[] = ['SUPER_ADMIN', 'HEAD_OFFICE', 'BRANCH_ADMIN', 'ORDER_PORTAL']
+  const validRoles: Role[] = ['SUPER_ADMIN', 'HEAD_OFFICE', 'GROUP_USER', 'BRANCH_ADMIN', 'GROUP_ORDER_PORTAL', 'ORDER_PORTAL']
   return validRoles.includes(role as Role)
 }
 
@@ -64,11 +64,17 @@ export function hasRole(current: Role | undefined | null, allowed: Role[]): bool
 /**
  * Role hierarchy levels (higher number = more permissions)
  */
+// Levels are compared only relative to one another, so slotting the two
+// group-based roles into the scale renumbers it without changing any existing
+// pairwise relationship. GROUP_USER sits above BRANCH_ADMIN because it decides
+// orders across many branches rather than one.
 const ROLE_HIERARCHY: Record<Role, number> = {
   'ORDER_PORTAL': 1,
-  'BRANCH_ADMIN': 2,
-  'HEAD_OFFICE': 3,
-  'SUPER_ADMIN': 4
+  'GROUP_ORDER_PORTAL': 2,
+  'BRANCH_ADMIN': 3,
+  'GROUP_USER': 4,
+  'HEAD_OFFICE': 5,
+  'SUPER_ADMIN': 6
 }
 
 /**

@@ -17,7 +17,7 @@ const DEFAULT_SETTINGS = [
   { key: 'auto_approve_orders', value: false },
   { key: 'order_approval_threshold', value: 10000 },
   { key: 'require_mfa', value: false },
-  { key: 'session_timeout_minutes', value: 60 },
+  { key: 'session_timeout_minutes', value: 15 },
   { key: 'low_stock_threshold', value: 10 },
   { key: 'enable_notifications', value: true },
   { key: 'hide_prices_for_branch_admin', value: false },
@@ -27,7 +27,7 @@ const DEFAULT_SETTINGS = [
 async function seed() {
   console.log('Starting database seed...')
 
-  const roleNames = ['SUPER_ADMIN', 'HEAD_OFFICE', 'BRANCH_ADMIN', 'ORDER_PORTAL'] as const
+  const roleNames = ['SUPER_ADMIN', 'HEAD_OFFICE', 'GROUP_USER', 'BRANCH_ADMIN', 'GROUP_ORDER_PORTAL', 'ORDER_PORTAL'] as const
   for (const roleName of roleNames) {
     const [existingRole] = await db
       .select()

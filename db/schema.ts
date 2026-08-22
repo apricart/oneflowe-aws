@@ -26,6 +26,12 @@ export const organizations = pgTable(
     orderApproverRole: varchar("order_approver_role", { length: 32 })
       .notNull()
       .default("BRANCH_ADMIN"),
+    // When enabled, members of this tenant may only authenticate from an
+    // address in organizationAllowedIps. Defaults to false so every existing
+    // organization keeps unrestricted login until a Super Admin opts in.
+    privateNetworkLoginEnabled: boolean("private_network_login_enabled")
+      .notNull()
+      .default(false),
     logoUrl: varchar("logo_url", { length: 512 }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
@@ -348,6 +354,49 @@ export const organizationSettings = pgTable(
   (t) => [
     index("org_settings_org_idx").on(t.organizationId),
     uniqueIndex("organization_settings_org_key_uq").on(t.organizationId, t.key),
+    check(
+      "organization_settings_session_timeout_bounds_ck",
+      sql`${t.key} <> 'session_timeout_minutes' OR CASE WHEN jsonb_typeof(${t.value}) = 'number' AND (${t.value} #>> '{}') ~ '^[0-9]+$' THEN (${t.value} #>> '{}')::numeric BETWEEN 1 AND 15 ELSE FALSE END`,
+    ),
+  ],
+)
+
+/**
+ * Addresses and CIDR ranges a tenant may authenticate from, used only when
+ * organizations.private_network_login_enabled is true. Rows are stored already
+ * masked to their network address with an explicit prefix length, so login
+ * matching is a pure prefix comparison and one network cannot be recorded
+ * under two different spellings.
+ */
+export const organizationAllowedIps = pgTable(
+  "organization_allowed_ips",
+  {
+    id: serial("id").primaryKey(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id, { onDelete: "cascade" })
+      .notNull(),
+    // Wide enough for a full uncompressed IPv6 address.
+    ipAddress: varchar("ip_address", { length: 45 }).notNull(),
+    prefixLength: integer("prefix_length").notNull(),
+    label: varchar("label", { length: 120 }),
+    createdBy: uuid("created_by"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    index("organization_allowed_ips_org_idx").on(t.organizationId),
+    uniqueIndex("organization_allowed_ips_org_network_uq").on(
+      t.organizationId,
+      t.ipAddress,
+      t.prefixLength,
+    ),
+    check(
+      "organization_allowed_ips_prefix_length_ck",
+      sql`${t.prefixLength} >= 0 AND ${t.prefixLength} <= 128`,
+    ),
+    check(
+      "organization_allowed_ips_address_nonempty_ck",
+      sql`length(trim(${t.ipAddress})) > 0`,
+    ),
   ],
 )
 
@@ -402,6 +451,11 @@ export const orders = pgTable(
     taxCents: bigint("tax_cents", { mode: "number" }).notNull().default(0),
     totalCents: bigint("total_cents", { mode: "number" }).notNull().default(0),
     notes: text("notes"),
+    // Set only for orders created through the Group Order Portal's multi-branch
+    // submission, which records one ordinary order per branch under a shared
+    // envelope. NULL for every order created by any other role or flow, so no
+    // existing behaviour reads or depends on it.
+    groupOrderId: integer("group_order_id").references(() => groupOrders.id),
     createdByUserId: uuid("created_by_user_id")
       .references(() => users.id)
       .notNull(),
@@ -467,6 +521,11 @@ export const orders = pgTable(
     index("orders_org_branch_status_idx").on(t.organizationId, t.branchId, t.status),
     index("orders_branch_status_created_idx").on(t.branchId, t.status, t.createdAt),
     index("orders_org_created_idx").on(t.organizationId, t.createdAt),
+    // Partial: only group-portal orders carry the column, so the index stays the
+    // size of that feature rather than the size of the orders table.
+    index("orders_group_order_idx")
+      .on(t.groupOrderId)
+      .where(sql`${t.groupOrderId} IS NOT NULL`),
     uniqueIndex("orders_creator_idempotency_uq").on(t.createdByUserId, t.idempotencyKey),
     check("orders_amounts_nonnegative_ck", sql`${t.subtotalCents} >= 0 AND ${t.taxCents} >= 0 AND ${t.totalCents} >= 0 AND COALESCE(${t.refundAmountCents}, 0) >= 0 AND COALESCE(${t.refundAmountCents}, 0) <= ${t.totalCents}`),
     check("orders_idempotency_pair_ck", sql`(${t.idempotencyKey} IS NULL AND ${t.requestFingerprint} IS NULL) OR (${t.idempotencyKey} IS NOT NULL AND ${t.requestFingerprint} IS NOT NULL)`),
@@ -667,6 +726,35 @@ export const sessions = pgTable(
     index("sessions_user_idx").on(t.userId),
     index("sessions_expires_idx").on(t.expiresAt),
     index("sessions_org_idx").on(t.organizationId),
+  ],
+)
+
+// Server-side registry for JWT-backed browser sessions. Unlike the legacy
+// refresh-token table above, the subject is a string so both UUID users and
+// employee principals (`emp_<id>`) receive independent, revocable sessions.
+export const authSessions = pgTable(
+  "auth_sessions",
+  {
+    id: uuid("id").primaryKey(),
+    subjectId: varchar("subject_id", { length: 128 }).notNull(),
+    organizationId: integer("organization_id").references(() => organizations.id, {
+      onDelete: "cascade",
+    }),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    lastActivityAt: timestamp("last_activity_at", { withTimezone: true }).notNull(),
+    absoluteExpiresAt: timestamp("absolute_expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("auth_sessions_subject_idx").on(t.subjectId),
+    index("auth_sessions_org_idx").on(t.organizationId),
+    index("auth_sessions_absolute_expiry_idx").on(t.absoluteExpiresAt),
+    check("auth_sessions_subject_nonempty_ck", sql`length(trim(${t.subjectId})) > 0`),
+    check(
+      "auth_sessions_time_order_ck",
+      sql`${t.startedAt} <= ${t.lastActivityAt} AND ${t.lastActivityAt} <= ${t.absoluteExpiresAt}`,
+    ),
   ],
 )
 
@@ -1287,4 +1375,145 @@ export const legacyOrderImports = pgTable(
     index("legacy_order_imports_batch_idx").on(t.batchId),
     uniqueIndex("legacy_order_imports_order_idx").on(t.orderId),
   ],
+)
+
+
+// ========================================
+// GROUP ORDER PORTAL SCOPE
+// ========================================
+
+// Groups a GROUP_ORDER_PORTAL user may order on behalf of. The membership is
+// intentionally stored as a group reference rather than a flattened branch
+// list, so branches later added to (or removed from) the group are reflected
+// automatically. Only GROUP_ORDER_PORTAL users ever get rows here; every other
+// role keeps its existing single-branch scope untouched.
+export const userGroupAssignments = pgTable(
+  "user_group_assignments",
+  {
+    id: serial("id").primaryKey(),
+    userId: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    groupId: integer("group_id")
+      .references(() => groups.id, { onDelete: "cascade" })
+      .notNull(),
+    // Denormalized tenant guard: every assignment is pinned to the tenant it
+    // was created under so a cross-tenant row is impossible to write.
+    organizationId: integer("organization_id")
+      .references(() => organizations.id)
+      .notNull(),
+    createdByUserId: uuid("created_by_user_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("user_group_assignments_user_group_uq").on(t.userId, t.groupId),
+    index("user_group_assignments_user_idx").on(t.userId),
+    index("user_group_assignments_group_idx").on(t.groupId),
+    index("user_group_assignments_org_idx").on(t.organizationId),
+  ],
+)
+
+// Individually assigned branches for a GROUP_ORDER_PORTAL user, layered on top
+// of whatever the assigned groups already resolve to.
+export const userBranchAssignments = pgTable(
+  "user_branch_assignments",
+  {
+    id: serial("id").primaryKey(),
+    userId: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    branchId: integer("branch_id")
+      .references(() => branches.id, { onDelete: "cascade" })
+      .notNull(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id)
+      .notNull(),
+    createdByUserId: uuid("created_by_user_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("user_branch_assignments_user_branch_uq").on(t.userId, t.branchId),
+    index("user_branch_assignments_user_idx").on(t.userId),
+    index("user_branch_assignments_branch_idx").on(t.branchId),
+    index("user_branch_assignments_org_idx").on(t.organizationId),
+  ],
+)
+
+// ========================================
+// GROUP ORDERS (multi-branch submissions)
+// ========================================
+
+/**
+ * One submission a Group Order Portal user made for many branches at once.
+ *
+ * The user experiences a single group order; the application still records one
+ * ordinary row in `orders` per branch, linked back here through
+ * `orders.groupOrderId`. Every downstream path — approval, budget, refund,
+ * reporting — therefore keeps operating on normal single-branch orders and is
+ * completely unaffected by this envelope.
+ */
+export const groupOrders = pgTable(
+  "group_orders",
+  {
+    id: serial("id").primaryKey(),
+    // Human-facing tracking id shown to the user (e.g. GRP-8F3K2QWD).
+    reference: varchar("reference", { length: 32 }).notNull(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id)
+      .notNull(),
+    // Nullable so a submission covering branches without a group assignment is
+    // still representable.
+    groupId: integer("group_id").references(() => groups.id),
+    createdByUserId: uuid("created_by_user_id")
+      .references(() => users.id)
+      .notNull(),
+    idempotencyKey: varchar("idempotency_key", { length: 128 }).notNull(),
+    requestFingerprint: varchar("request_fingerprint", { length: 64 }).notNull(),
+    notes: text("notes"),
+    // Outcome snapshot. Branch orders are created independently, so a
+    // submission can succeed for some branches and fail for others; the
+    // failures are kept with their reason so the user can correct them.
+    requestedBranchCount: integer("requested_branch_count").notNull().default(0),
+    createdOrderCount: integer("created_order_count").notNull().default(0),
+    failures: jsonb("failures")
+      .$type<Array<{ branchId: number; branchName: string; reason: string }>>()
+      .notNull()
+      .default([]),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("group_orders_reference_uq").on(t.reference),
+    // Replaying the same Idempotency-Key returns the original submission rather
+    // than creating a second set of branch orders.
+    uniqueIndex("group_orders_creator_idempotency_uq").on(t.createdByUserId, t.idempotencyKey),
+    index("group_orders_org_idx").on(t.organizationId),
+    index("group_orders_creator_created_idx").on(t.createdByUserId, t.createdAt),
+    index("group_orders_group_idx").on(t.groupId),
+  ],
+)
+
+/**
+ * One resumable draft per Group Order Portal user.
+ *
+ * The payload holds selections only — branch ids, inventory ids, quantities.
+ * Prices and availability are always re-resolved on the server at submission
+ * time, so a stale or tampered draft can never carry a stale price into an
+ * order.
+ */
+export const groupOrderDrafts = pgTable(
+  "group_order_drafts",
+  {
+    id: serial("id").primaryKey(),
+    userId: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id)
+      .notNull(),
+    groupId: integer("group_id").references(() => groups.id),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [uniqueIndex("group_order_drafts_user_uq").on(t.userId)],
 )

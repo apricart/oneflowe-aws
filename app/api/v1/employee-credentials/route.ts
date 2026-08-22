@@ -21,12 +21,15 @@ async function prepareCredentialSecurityUpdate(
   credentialId: number,
   email: string | undefined,
   password: string | undefined,
+  isActive: boolean | undefined,
 ) {
   if (email && email !== credential.email) {
     await assertUniqueUserFields({ email }, undefined, credentialId)
   }
   const passwordHash = password ? await hash(password, 10) : undefined
-  const securityChange = Boolean(password)
+  const securityChange =
+    Boolean(password) ||
+    (isActive !== undefined && isActive !== credential.isActive)
   return {
     passwordHash,
     securityChange,
@@ -194,6 +197,7 @@ async function PUT(req: NextRequest) {
       credId,
       email,
       password,
+      isActive,
     )
 
     const [updated] = await db

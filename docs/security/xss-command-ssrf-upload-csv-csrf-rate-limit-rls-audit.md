@@ -231,6 +231,12 @@ Snyk currently treats every `xlsx` version as affected because the fixed release
 - Production uses `__Secure-`/`__Host-` cookie names.
 - NextAuth redirects are constrained to local/same-origin URLs.
 - API responses are no-store.
+- Protected HTML is private/no-store.
+- Signed application claims enforce a tenant idle timeout of 1-15 minutes and a fixed 8-hour absolute lifetime before role/tenant authorization.
+- Every JWT contains an unguessable per-browser session ID backed by `auth_sessions`. The registry owns monotonic last activity and one-way revocation; logout revokes it synchronously before cookie clearing.
+- Registry or identity-validation outages fail closed. The session endpoint and shared API role guard report retryable `503` responses without clearing or rolling the still-signed cookie.
+- Passive session reads do not write cookies or count as activity. Only a CSRF-protected session update caused by explicit keyboard, pointer, touch, wheel, or scroll activity advances the idle deadline.
+- At the locally known deadline, protected content is concealed even when offline while the server remains authoritative.
 - No permissive application CORS policy was found.
 
 ### CSRF test results
@@ -244,6 +250,7 @@ Snyk currently treats every `xlsx` version as affected because the fixed release
 
 - Highly destructive super-admin actions do not require a recent password/MFA re-authentication event. Add step-up authentication for destructive inventory cleanup, user privilege changes, credential operations, and large refunds.
 - The production build requires an HTTPS `NEXTAUTH_URL`; deployment configuration must satisfy this validation.
+- The session registry is operational state and requires normal database backup, monitoring, retention/cleanup, and migration verification. Before production cutover, confirm the runtime database role can `SELECT`, `INSERT`, and `UPDATE` `auth_sessions` under its RLS policy.
 
 ## Prompt 11 — rate limiting and resource exhaustion
 

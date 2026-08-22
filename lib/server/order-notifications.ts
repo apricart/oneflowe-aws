@@ -16,8 +16,11 @@ import { db } from "@/lib/db"
 import { isValidEmailAddress } from "@/lib/validation/email"
 import {
   isOrderApproverRole,
+  isOrderDecisionRole,
   ORDER_APPROVER_ROLE_LABELS,
+  ORDER_DECISION_ROLE_LABELS,
   type OrderApproverRole,
+  type OrderDecisionRole,
 } from "@/lib/order-approver-role"
 
 type OrderEventInput = {
@@ -217,16 +220,22 @@ export async function queueOrderDecisionNotification(tx: any, input: {
 export async function queueSuperAdminApprovalNotifications(tx: any, input: {
   order: OrderEventInput
   approvedByUserId: string
-  approvedByRole: OrderApproverRole
+  approvedByRole: OrderDecisionRole
 }): Promise<QueuedOrderNotifications> {
   const { order } = input
   if (!order.organizationId) return { eventKeys: [], recipientCount: 0 }
 
   const context = await getOrderContext(tx, order)
-  if (context?.orderApproverRole !== input.approvedByRole) {
+  // A GROUP_USER approves on the strength of its own branch assignments, so it
+  // is intentionally not required to match the tenant's configured approver
+  // role. Every other approver still must.
+  const contextMatchesApprover = input.approvedByRole === "GROUP_USER"
+    ? Boolean(context)
+    : context?.orderApproverRole === input.approvedByRole
+  if (!contextMatchesApprover) {
     throw new Error("ORDER_NOTIFICATION_SCOPE_INVALID")
   }
-  const approverLabel = ORDER_APPROVER_ROLE_LABELS[input.approvedByRole]
+  const approverLabel = ORDER_DECISION_ROLE_LABELS[input.approvedByRole]
 
   const [approver] = await tx
     .select({ id: users.id, fullName: users.fullName })
@@ -296,7 +305,7 @@ function parsePayload(value: Record<string, unknown>): OrderLifecycleEmailPayloa
     branchName: value.branchName,
     requestedBy: typeof value.requestedBy === "string" ? value.requestedBy : null,
     approvedBy: typeof value.approvedBy === "string" ? value.approvedBy : null,
-    approvedByRole: isOrderApproverRole(value.approvedByRole) ? value.approvedByRole : null,
+    approvedByRole: isOrderDecisionRole(value.approvedByRole) ? value.approvedByRole : null,
     rejectionReason: typeof value.rejectionReason === "string" ? value.rejectionReason : null,
   }
 }

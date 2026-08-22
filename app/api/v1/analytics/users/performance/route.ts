@@ -2,6 +2,8 @@ import { NextResponse, type NextRequest } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
+import { resolveMultiBranchAnalyticsIds } from "@/lib/server/analytics-scope"
+import { loadAnalyticsAssignedBranchIds } from "@/lib/server/analytics-branch-scope"
 import { orders, users, branches, roles, organizations } from "@/db/schema"
 import { and, eq, gte, lte, inArray, desc, sql } from "drizzle-orm"
 import { metricExpressions } from "@/lib/metric-utils"
@@ -21,6 +23,7 @@ async function resolvePerformanceBranchIds({
     userBranchId,
     organizationIds,
     userOrganizationId,
+    assignedBranchIds,
 }: {
     requestedBranchIds: number[]
     groupIds: number[]
@@ -28,7 +31,24 @@ async function resolvePerformanceBranchIds({
     userBranchId: number
     organizationIds: number[]
     userOrganizationId: number
+    assignedBranchIds: number[] | null
 }) {
+    // A multi-branch role is confined to the branches assigned to it, whatever
+    // the request asked for, so this runs ahead of every other rule. An empty
+    // assignment set yields no branches and the caller refuses the request.
+    const multiBranchIds = resolveMultiBranchAnalyticsIds({
+        role: userRole,
+        assignedBranchIds,
+        requestedBranchIds,
+    })
+    if (multiBranchIds !== null) {
+        if (groupIds.length === 0 || multiBranchIds.length === 0) return multiBranchIds
+        const rows = await db
+            .select({ id: branches.id })
+            .from(branches)
+            .where(and(inArray(branches.groupId, groupIds), inArray(branches.id, multiBranchIds)))
+        return rows.map((branch) => branch.id)
+    }
     if (requestedBranchIds.length > 0) return requestedBranchIds
     if (groupIds.length > 0) {
         const rows = await db.select({ id: branches.id }).from(branches).where(inArray(branches.groupId, groupIds))
@@ -162,6 +182,7 @@ export async function GET(req: NextRequest) {
         // RBAC & Filter Context Parsing
         const organizationIds = organizationIdsParam ? parseNumberList(organizationIdsParam) : [userOrgId].filter(Boolean)
         const branchIds = await resolvePerformanceBranchIds({
+            assignedBranchIds: await loadAnalyticsAssignedBranchIds(userRole, (session.user as any).id),
             requestedBranchIds: parseNumberList(branchIdsParam),
             groupIds,
             userRole,

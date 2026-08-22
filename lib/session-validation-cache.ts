@@ -19,12 +19,13 @@ import { env } from "@/lib/server/env"
 export const SESSION_VALIDATION_CACHE_TTL = env.SESSION_VALIDATION_CACHE_TTL_SECONDS
 
 // The exact tuple the session callback validated. A cached entry only counts
-// as a hit when every field matches the incoming token, so a sessionVersion
-// bump or org/branch reassignment can never be masked by a stale entry.
+// as a hit when every field matches the incoming token, so a sessionVersion,
+// role, organization, or branch change cannot be masked by an unrelated entry.
 export type SessionValidationEntry = {
     sv: number | null
     org: number | null
     br: number | null
+    role: string
 }
 
 function cacheKey(userId: string): string {

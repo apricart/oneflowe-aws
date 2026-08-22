@@ -11,7 +11,9 @@ describe("refund report contract", () => {
     )
 
     expect(route).toContain('eq(orders.branchId, branchId)')
-    expect(route).toContain('inArray(orders.organizationId, scopedOrganizationIds)')
+    // Every role but the Super Admin is pinned to the tenant already resolved
+    // for it, whichever branch rule then applies.
+    expect(route).toContain('inArray(orders.organizationId, input.organizationIds)')
     expect(route).toContain('searchParams.get("refundType")')
     expect(route).toContain('searchParams.get("status")')
     expect(route).toContain("NULLIF(BTRIM(${refunds.reason}), '')")
@@ -38,7 +40,8 @@ describe("refund report contract", () => {
     const sidebar = readFileSync(resolve(process.cwd(), "components/shell/sidebar.tsx"), "utf8")
     const reportsHub = readFileSync(resolve(process.cwd(), "app/(portal)/reports/page.tsx"), "utf8")
 
-    expect(sidebar.match(/href: "\/reports\/refund-report"/g)).toHaveLength(3)
+    // SUPER_ADMIN, HEAD_OFFICE, BRANCH_ADMIN and GROUP_USER each link it.
+    expect(sidebar.match(/href: "\/reports\/refund-report"/g)).toHaveLength(4)
     expect(reportsHub).toContain('href: "/reports/refund-report"')
   })
 

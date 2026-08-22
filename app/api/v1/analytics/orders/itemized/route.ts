@@ -12,6 +12,7 @@ import {
     resolveAnalyticsBranchIds,
     resolveAnalyticsOrganizationIds,
 } from "@/lib/server/analytics-scope"
+import { loadAnalyticsAssignedBranchIds } from "@/lib/server/analytics-branch-scope"
 
 type RefundQuantity = { qty: number; amount: number }
 
@@ -32,12 +33,14 @@ async function getScopedBranchIds({
     requestedBranchIds,
     scopedOrganizationIds,
     groupIds,
+    assignedBranchIds,
 }: {
     userRole: string
     userBranchId: unknown
     requestedBranchIds: number[]
     scopedOrganizationIds: number[]
     groupIds: number[]
+    assignedBranchIds: number[] | null
 }) {
     let allowedBranchQuery = db.select({ id: branches.id }).from(branches)
     if (scopedOrganizationIds.length > 0) {
@@ -51,6 +54,7 @@ async function getScopedBranchIds({
         userBranchId,
         requestedBranchIds,
         allowedBranchIds: allowedBranches.map((branch) => branch.id),
+        assignedBranchIds,
     })
 
     if (groupIds.length === 0) return branchIds
@@ -312,6 +316,7 @@ export async function GET(req: NextRequest) {
             requestedBranchIds: parseNumberList(branchIdsParam),
             scopedOrganizationIds,
             groupIds: parseNumberList(url.searchParams.get("groupIds")),
+            assignedBranchIds: await loadAnalyticsAssignedBranchIds(userRole, (session.user as any).id),
         })
 
         if (branchIds.length === 0) {

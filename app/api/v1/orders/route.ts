@@ -19,6 +19,7 @@ import { withRateLimit } from "@/lib/rate-limiter"
 import { attemptImmediateOrderEmailDelivery,queueOrderCreatedNotifications as enqueueCreatedOrderEvents } from "@/lib/server/order-notifications"
 import { canViewFulfillmentToken } from "@/lib/fulfillment-token-access"
 import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
+import { resolveScopedBranchIds,usesMultiBranchScope } from "@/lib/server/multi-branch-scope"
 import { isValidRole } from "@/lib/rbac"
 import { metricExpressions } from "@/lib/metric-utils"
 import { getOrderStatusesForFilter,getOrderStatusFilter } from "@/lib/order-status"
@@ -87,18 +88,49 @@ function addOrderSearchCondition(conditions: any[], query: string | undefined) {
   return null
 }
 
+// Matches no rows. Used wherever a role reaches the end of the scoping ladder
+// without an explicit scope, so the absence of a filter can never mean "all".
+const DENY_ALL_ORDERS = sql`false`
+
+function addSuperAdminOrderScope(conditions: any[], organizationIdParam: unknown) {
+  if (typeof organizationIdParam === "string" && /^\d+$/.test(organizationIdParam)) {
+    conditions.push(eq(orders.organizationId, Number(organizationIdParam)))
+  }
+}
+
+/**
+ * Roles whose reach is a set of branches rather than one. The scope is resolved
+ * from their assignments before the query runs; an empty set means no access,
+ * never organization-wide access.
+ */
+function addMultiBranchOrderScope(conditions: any[], scopedBranchIds: unknown) {
+  const branchIds: number[] = Array.isArray(scopedBranchIds) ? scopedBranchIds : []
+  conditions.push(branchIds.length === 0 ? DENY_ALL_ORDERS : inArray(orders.branchId, branchIds))
+}
+
 function addOrderRoleConditions(conditions: any[], context: any) {
   const { role, organizationId: orgIdNum, branchId: branchIdFromUser, userId: currentUserId } = context
   if (role === "SUPER_ADMIN") {
-    if (context.organizationIdParam && /^\d+$/.test(context.organizationIdParam)) {
-      conditions.push(eq(orders.organizationId, Number(context.organizationIdParam)))
-    }
+    addSuperAdminOrderScope(conditions, context.organizationIdParam)
     return
   }
-  if (typeof orgIdNum === "number") conditions.push(eq(orders.organizationId, orgIdNum))
+
+  conditions.push(typeof orgIdNum === "number"
+    ? eq(orders.organizationId, orgIdNum)
+    : DENY_ALL_ORDERS)
   if (role === "HEAD_OFFICE") return
+
+  if (usesMultiBranchScope(role)) {
+    addMultiBranchOrderScope(conditions, context.scopedBranchIds)
+    return
+  }
+
   if (role === "ORDER_PORTAL" && currentUserId) conditions.push(eq(orders.createdByUserId, currentUserId))
-  if (typeof branchIdFromUser === "number") conditions.push(eq(orders.branchId, branchIdFromUser))
+  // Fail closed: any remaining role must be pinned to its own branch. Without
+  // this a branch-less role would otherwise fall through to the whole tenant.
+  conditions.push(typeof branchIdFromUser === "number"
+    ? eq(orders.branchId, branchIdFromUser)
+    : DENY_ALL_ORDERS)
 }
 
 function addOrderDimensionConditions(conditions: any[], params: ReturnType<typeof getOrderListParams>) {
@@ -639,12 +671,16 @@ export async function GET(req: NextRequest) {
     const conditions: any[] = []
     const searchError = addOrderSearchCondition(conditions, params.query)
     if (searchError) return NextResponse.json({ error: searchError }, { status: 400 })
+    const scopedBranchIds = usesMultiBranchScope(role) && typeof currentUserId === "string"
+      ? await resolveScopedBranchIds(db, currentUserId)
+      : null
     addOrderRoleConditions(conditions, {
       role,
       organizationId: orgIdNum,
       branchId: branchIdFromUser,
       organizationIdParam: params.organizationId,
       userId: currentUserId,
+      scopedBranchIds,
     })
 
     const pricesHidden = await shouldHidePricesForRole(role, orgIdNum)

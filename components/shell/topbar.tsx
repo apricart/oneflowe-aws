@@ -3,7 +3,7 @@ import { useAppContext } from "@/components/context/app-context"
 import { MultiBranchFilter } from "@/components/dashboard/multi-branch-filter"
 import { NotificationBell } from "@/components/notifications/notification-center"
 import { ContextSelector } from "@/components/shell/context-selector"
-import { MANUAL_SIGN_OUT_EVENT } from "@/components/shell/session-guard"
+import { securelySignOut } from "@/lib/session-coordination"
 import { Button } from "@/components/ui/button"
 import {
 DropdownMenu,
@@ -14,7 +14,7 @@ DropdownMenuSeparator,
 DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { BarChart3,LogOut,Moon,Settings as SettingsIcon,Sun } from "lucide-react"
-import { signOut,useSession } from "next-auth/react"
+import { useSession } from "next-auth/react"
 import { useTheme } from "next-themes"
 import Image from "next/image"
 import Link from "next/link"
@@ -23,18 +23,10 @@ import { useEffect,useState } from "react"
 
 async function logout() {
   try {
-    localStorage.removeItem('theme')
-    localStorage.removeItem('ctx.organizationId')
-    localStorage.removeItem('ctx.branchId')
-    window.dispatchEvent(new Event(MANUAL_SIGN_OUT_EVENT))
-
-    await signOut({
-      redirect: true,
-      callbackUrl: "/login"
-    })
+    await securelySignOut({ callbackUrl: "/login" })
   } catch (error) {
-    console.warn("Sign-out request failed; redirecting to login:", error)
-    window.location.replace("/login")
+    console.warn("Secure sign-out request failed:", error)
+    window.alert("Logout could not be completed securely. Please retry.")
   }
 }
 

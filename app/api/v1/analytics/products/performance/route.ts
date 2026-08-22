@@ -13,6 +13,7 @@ isBranchScopedAnalyticsRole,
 resolveAnalyticsBranchIds,
 resolveAnalyticsOrganizationIds,
 } from "@/lib/server/analytics-scope"
+import { loadAnalyticsAssignedBranchIds } from "@/lib/server/analytics-branch-scope"
 import { escapeLikePattern } from "@/lib/utils"
 import { aliasedTable,and,eq,exists,gte,ilike,inArray,lte,or,sql } from "drizzle-orm"
 import { getServerSession } from "next-auth"
@@ -39,6 +40,7 @@ async function resolveProductBranches({
     organizationIds,
     requestedBranchIds,
     groupIds,
+    assignedBranchIds,
 }: {
     role: string
     userBranchId: unknown
@@ -46,6 +48,7 @@ async function resolveProductBranches({
     organizationIds: number[]
     requestedBranchIds: number[]
     groupIds: number[]
+    assignedBranchIds: number[] | null
 }) {
     let allowedBranchQuery = db.select({ id: branches.id }).from(branches)
     if (organizationIds.length > 0) {
@@ -57,6 +60,7 @@ async function resolveProductBranches({
         userBranchId,
         requestedBranchIds,
         allowedBranchIds: allowedBranches.map((branch) => branch.id),
+        assignedBranchIds,
     })
     if (groupIds.length === 0) return branchIds
 
@@ -384,6 +388,7 @@ export async function GET(req: NextRequest) {
         const branchIds = await resolveProductBranches({
             role: userRole,
             userBranchId,
+            assignedBranchIds: await loadAnalyticsAssignedBranchIds(userRole, (session.user as any).id),
             userOrganizationId: userOrgId,
             organizationIds: parsedOrgIds,
             requestedBranchIds: parseNumberList(branchIdsParam),

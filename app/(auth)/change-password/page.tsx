@@ -1,8 +1,7 @@
 "use client"
-import { useState, useEffect } from "react"
+import { useState } from "react"
 import type React from "react"
-import { useRouter } from "next/navigation"
-import { signOut, useSession } from "next-auth/react"
+import { useSession } from "next-auth/react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
@@ -10,9 +9,9 @@ import { Spinner } from "@/components/ui/skeleton"
 import { useToast } from "@/hooks/use-toast"
 import Image from "next/image"
 import { Eye, EyeOff, ShieldAlert } from "lucide-react"
+import { securelySignOut } from "@/lib/session-coordination"
 
 export default function ChangePasswordPage() {
-  const router = useRouter()
   const { status } = useSession()
   const { toast } = useToast()
   const [newPassword, setNewPassword] = useState("")
@@ -22,16 +21,7 @@ export default function ChangePasswordPage() {
   const [loading, setLoading] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
 
-  // Redirect to login if unauthenticated. Middleware handles the mustChangePassword gate —
-  // do NOT redirect to /shop or /dashboard here; doing so races with the JWT check in
-  // middleware and causes an infinite redirect loop (change-password ↔ shop/dashboard).
-  useEffect(() => {
-    if (status === "loading") return
-    if (status === "unauthenticated") {
-      router.replace("/login")
-    }
-  }, [status, router])
-
+  // SessionGuard owns resilient authentication verification and redirect.
   async function onSubmit(e: React.SubmitEvent<HTMLFormElement>) {
     e.preventDefault()
     setFormError(null)
@@ -62,7 +52,7 @@ export default function ChangePasswordPage() {
       })
 
       // Session is now invalid (sessionVersion bumped). Sign out cleanly.
-      await signOut({ redirect: true, callbackUrl: "/login" })
+      await securelySignOut({ callbackUrl: "/login" })
     } catch {
       setFormError("An unexpected error occurred. Please try again.")
     } finally {

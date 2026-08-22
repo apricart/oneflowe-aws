@@ -1,5 +1,6 @@
 "use client"
 import { useEffect,useState,useMemo } from "react"
+import useSWR from "swr"
 import { jsonFetcher } from "@/lib/fetcher"
 import { Button } from "@/components/ui/button"
 import { Table,TableHeader,TableRow,TableHead,TableBody,TableCell } from "@/components/ui/table"
@@ -328,6 +329,62 @@ type RoleAssignmentFieldsProps = {
   branches: any[]
   branchOpen: boolean
   setBranchOpen: (open: boolean) => void
+  userId?: string
+}
+
+// Roles whose reach is defined by group and branch assignments.
+const MULTI_BRANCH_ROLES = ["GROUP_ORDER_PORTAL", "GROUP_USER"]
+
+type GroupScopeResponse = {
+  item?: {
+    groups: { id: number; name: string }[]
+    branches: { id: number; name: string }[]
+    effectiveBranchIds: number[]
+  }
+}
+
+/**
+ * Read-only summary of a group-based user's reach. Editing it is not wired into
+ * this dialog yet; it is shown so an administrator can confirm what a user was
+ * granted at creation time.
+ */
+function GroupOrderPortalScopeSummary({ userId }: Readonly<{ userId?: string }>) {
+  const { data, error } = useSWR<GroupScopeResponse>(
+    userId ? `/api/v1/users/${userId}/scope` : null,
+    jsonFetcher,
+  )
+
+  const scope = data?.item
+
+  return (
+    <div className="space-y-2 rounded-md border bg-muted/50 p-3">
+      <p className="text-sm font-medium">Branch access</p>
+      {(() => {
+        if (error) {
+          return <p className="text-xs text-red-600">Branch access could not be loaded.</p>
+        }
+        if (!scope) {
+          return <p className="text-xs text-muted-foreground">Loading branch access...</p>
+        }
+        return (
+          <div className="space-y-1.5 text-xs text-muted-foreground">
+            <p>
+              <span className="font-medium">Groups:</span>{" "}
+              {scope.groups.length > 0 ? scope.groups.map((group) => group.name).join(", ") : "None"}
+            </p>
+            <p>
+              <span className="font-medium">Individual branches:</span>{" "}
+              {scope.branches.length > 0 ? scope.branches.map((branch) => branch.name).join(", ") : "None"}
+            </p>
+            <p>
+              <span className="font-medium">Total branches in scope:</span>{" "}
+              {scope.effectiveBranchIds.length}
+            </p>
+          </div>
+        )
+      })()}
+    </div>
+  )
 }
 
 function RoleAssignmentFields({
@@ -336,6 +393,7 @@ function RoleAssignmentFields({
   branches,
   branchOpen,
   setBranchOpen,
+  userId,
 }: Readonly<RoleAssignmentFieldsProps>) {
   const needsBranch = form.role === "BRANCH_ADMIN" || form.role === "ORDER_PORTAL"
   const organizationId = form.organizationId ? Number.parseInt(form.organizationId) : null
@@ -356,9 +414,12 @@ function RoleAssignmentFields({
             <SelectItem value="HEAD_OFFICE">Head Office</SelectItem>
             <SelectItem value="BRANCH_ADMIN">Branch Admin</SelectItem>
             <SelectItem value="ORDER_PORTAL">Order Portal User</SelectItem>
+            <SelectItem value="GROUP_ORDER_PORTAL">Group Order Portal User</SelectItem>
+            <SelectItem value="GROUP_USER">Group User</SelectItem>
           </SelectContent>
         </Select>
       </div>
+      {MULTI_BRANCH_ROLES.includes(form.role) && <GroupOrderPortalScopeSummary userId={userId} />}
       {needsBranch && (
         <div className="space-y-2">
           <Label htmlFor="branch">Branch Assignment *</Label>
@@ -733,6 +794,10 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
         return <Badge className="bg-purple-100 text-purple-800">Super Admin</Badge>
       case "ORDER_PORTAL":
         return <Badge className="bg-orange-100 text-orange-800">Order Portal</Badge>
+      case "GROUP_ORDER_PORTAL":
+        return <Badge className="bg-teal-100 text-teal-800">Group Order Portal</Badge>
+      case "GROUP_USER":
+        return <Badge className="bg-cyan-100 text-cyan-800">Group User</Badge>
       default:
         return <Badge variant="outline">{role}</Badge>
     }
@@ -840,6 +905,8 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
             <SelectItem value="HEAD_OFFICE">Head Office</SelectItem>
             <SelectItem value="BRANCH_ADMIN">Branch Admin</SelectItem>
             <SelectItem value="ORDER_PORTAL">Order Portal User</SelectItem>
+            <SelectItem value="GROUP_ORDER_PORTAL">Group Order Portal User</SelectItem>
+            <SelectItem value="GROUP_USER">Group User</SelectItem>
           </SelectContent>
         </Select>
 
@@ -1538,6 +1605,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
               branches={branches}
               branchOpen={branchOpen}
               setBranchOpen={setBranchOpen}
+              userId={editingUser?.id}
             />
 
             {/* Security & Access */}

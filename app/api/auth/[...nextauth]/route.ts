@@ -3,6 +3,8 @@ import { authOptions } from "@/lib/auth-options"
 import { NextRequest, NextResponse } from "next/server"
 import { checkRateLimit, getClientIdentifier, resetRateLimit } from "@/lib/rate-limiter"
 import { createHash } from "node:crypto"
+import { hardenSessionEndpointResponse } from "@/lib/session-response"
+import { revokeAuthSessionFromToken } from "@/lib/server/auth-session-store"
 
 const handler = NextAuth(authOptions)
 
@@ -71,6 +73,7 @@ function sanitizeAuthCallbackError(error: string | null): string | null {
         "ORGANIZATION_INACTIVE",
         "BRANCH_INACTIVE",
         "USER_INACTIVE",
+        "NETWORK_RESTRICTED",
     ])
 
     if (safeErrors.has(error)) return error
@@ -106,8 +109,56 @@ async function sanitizeNextAuthCallbackResponse(response: Response): Promise<Res
     }
 }
 
-// GET requests pass through (session checks, CSRF token)
-export { handler as GET }
+// Passive session reads must never rewrite the JWT cookie. NextAuth normally
+// re-signs it on every GET /session; with mutable idle claims that creates a
+// cross-tab race where a slower stale read can overwrite a newer activity
+// update. Sign-in and CSRF-protected activity POSTs remain cookie-writing paths.
+export async function GET(req: NextRequest, context: any) {
+    const response = await handler(req, context)
+    const url = new URL(req.url || "http://localhost")
+    if (!url.pathname.endsWith("/session")) return response
+
+    return hardenSessionEndpointResponse(response, { allowCookieWrite: false })
+}
+
+async function handleServerRevokingSignOut(
+    req: NextRequest,
+    context: any,
+): Promise<Response> {
+    let revocationError: unknown = null
+    const signOutHandler = NextAuth({
+        ...authOptions,
+        events: {
+            ...authOptions.events,
+            async signOut(message: any) {
+                try {
+                    await revokeAuthSessionFromToken(message?.token)
+                    await authOptions.events?.signOut?.(message)
+                } catch (error) {
+                    revocationError = error
+                    throw error
+                }
+            },
+        },
+    })
+
+    const response = await signOutHandler(req, context)
+    if (!revocationError) return response
+
+    console.error("[Auth] Server-side session revocation failed:", revocationError)
+    return NextResponse.json(
+        {
+            error: "Logout could not be completed securely. Please retry.",
+        },
+        {
+            status: 503,
+            headers: {
+                "Cache-Control": "private, no-store, max-age=0",
+                "Retry-After": "5",
+            },
+        },
+    )
+}
 
 // POST requests (login attempts) are rate-limited
 export async function POST(req: NextRequest, context: any) {
@@ -140,5 +191,12 @@ export async function POST(req: NextRequest, context: any) {
         return sanitizedResponse
     }
 
-    return handler(req, context)
+    if (url.pathname.endsWith("/signout")) {
+        return handleServerRevokingSignOut(req, context)
+    }
+
+    const response = await handler(req, context)
+    if (!url.pathname.endsWith("/session")) return response
+
+    return hardenSessionEndpointResponse(response, { allowCookieWrite: true })
 }

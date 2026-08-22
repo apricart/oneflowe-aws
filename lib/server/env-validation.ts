@@ -83,6 +83,24 @@ function optionalInteger(name: string, minimum: number, maximum: number, fallbac
   )
 }
 
+function optionalLegacyClampedInteger(
+  name: string,
+  acceptedMinimum: number,
+  acceptedMaximum: number,
+  effectiveMinimum: number,
+  effectiveMaximum: number,
+  fallback: number,
+) {
+  return optionalInteger(
+    name,
+    acceptedMinimum,
+    acceptedMaximum,
+    fallback,
+  ).transform((value) =>
+    Math.min(effectiveMaximum, Math.max(effectiveMinimum, value)),
+  )
+}
+
 const databaseRuntimeShape = {
   DATABASE_URL: postgresUrl('DATABASE_URL'),
   PGPOOL_MAX: optionalInteger('PGPOOL_MAX', 1, 100, 20),
@@ -115,16 +133,23 @@ const serverEnvSchema = z
     CRON_SECRET: requiredSecret('CRON_SECRET'),
 
     BCRYPT_ROUNDS: optionalInteger('BCRYPT_ROUNDS', 10, 15, 12),
-    INACTIVITY_TIMEOUT_MINUTES: optionalInteger(
+    // Accept the former deployment range during a blue/green cutover, but
+    // normalize it immediately to the stricter runtime policy. This prevents
+    // an old secret-store value from taking the new fleet down at startup.
+    INACTIVITY_TIMEOUT_MINUTES: optionalLegacyClampedInteger(
       'INACTIVITY_TIMEOUT_MINUTES',
       0,
-      1_440,
-      30,
+      1440,
+      1,
+      15,
+      15,
     ),
-    SESSION_VALIDATION_CACHE_TTL_SECONDS: optionalInteger(
+    SESSION_VALIDATION_CACHE_TTL_SECONDS: optionalLegacyClampedInteger(
       'SESSION_VALIDATION_CACHE_TTL_SECONDS',
       0,
       300,
+      0,
+      30,
       30,
     ),
     RATE_LIMIT_TRUST_PROXY_HOPS: optionalInteger(

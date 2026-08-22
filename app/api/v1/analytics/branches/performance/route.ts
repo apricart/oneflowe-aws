@@ -6,6 +6,8 @@ import { orders, branches, organizations, groups } from "@/db/schema"
 import { and, eq, gte, lte, inArray, desc, sql } from "drizzle-orm"
 import { metricExpressions, REVENUE_ELIGIBLE_FILTER } from "@/lib/metric-utils"
 import { redactAnalyticsPrices, shouldHidePricesForRole } from "@/lib/price-visibility"
+import { resolveMultiBranchAnalyticsIds } from "@/lib/server/analytics-scope"
+import { loadAnalyticsAssignedBranchIds } from "@/lib/server/analytics-branch-scope"
 import { parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
 
 type BranchPerformanceFilters = {
@@ -191,7 +193,23 @@ export async function GET(req: NextRequest) {
             pricesHidden ? redactAnalyticsPrices({ ...payload, pricesHidden }) : { ...payload, pricesHidden },
         )
         const searchParams = new URL(req.url).searchParams
-        const filters = parseBranchFilters(searchParams, userRole, userOrganizationId)
+        const requestedFilters = parseBranchFilters(searchParams, userRole, userOrganizationId)
+
+        // A multi-branch role reports on the branches assigned to it and on
+        // nothing else, so its assignments replace whatever branch filter the
+        // request carried. An empty assignment set is refused, never widened.
+        const assignedBranchIds = resolveMultiBranchAnalyticsIds({
+            role: userRole,
+            assignedBranchIds: await loadAnalyticsAssignedBranchIds(userRole, (session.user as any).id),
+            requestedBranchIds: requestedFilters.branchIds,
+        })
+        if (assignedBranchIds?.length === 0) {
+            return NextResponse.json({ error: "Branch context missing" }, { status: 403 })
+        }
+        const filters = assignedBranchIds
+            ? { ...requestedFilters, branchIds: assignedBranchIds }
+            : requestedFilters
+
         const conditions = getScopeConditions(filters)
         if (searchParams.get("allTime") === "true") return respond(await getAvailableYears(conditions))
 

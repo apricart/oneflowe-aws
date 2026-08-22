@@ -2,9 +2,11 @@ import type { SystemRole } from "@/lib/server/mutation-validation"
 
 const ROLE_LEVEL: Record<SystemRole, number> = {
   ORDER_PORTAL: 1,
-  BRANCH_ADMIN: 2,
-  HEAD_OFFICE: 3,
-  SUPER_ADMIN: 4,
+  GROUP_ORDER_PORTAL: 2,
+  BRANCH_ADMIN: 3,
+  GROUP_USER: 4,
+  HEAD_OFFICE: 5,
+  SUPER_ADMIN: 6,
 }
 
 /**

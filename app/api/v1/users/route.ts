@@ -13,6 +13,12 @@ import { canAssignRole } from "@/lib/server/user-access-policy"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { USER_MANAGEMENT_ROLES } from "@/lib/user-management-access"
 import type { SystemRole } from "@/lib/server/mutation-validation"
+import {
+  usesMultiBranchScope,
+  rejectScopeForSingleBranchRole,
+  replaceMultiBranchScope,
+  validateMultiBranchScope,
+} from "@/lib/server/multi-branch-scope"
 
 function getLoginUrl(requestUrl: string): string {
   const configuredUrl = process.env.NEXTAUTH_URL?.trim()
@@ -28,25 +34,31 @@ function getLoginUrl(requestUrl: string): string {
   return new URL("/login", requestUrl).toString()
 }
 
-async function validateUserAssignment(
-  currentUserRole: SystemRole | undefined,
-  scopeOrganizationId: number | null | undefined,
+/** Which organization/branch fields the requested role requires or forbids. */
+function getRoleShapeError(
   role: SystemRole,
   organizationId: number | null,
   branchId: number | null,
 ) {
-  if (!currentUserRole || !canAssignRole(currentUserRole, role)) {
-    return { message: "You cannot assign this role", status: 403 }
-  }
-  if (currentUserRole === "HEAD_OFFICE" && organizationId !== scopeOrganizationId) {
-    return { message: "You can only create users within your own organization", status: 403 }
-  }
   if (role === "HEAD_OFFICE" && !organizationId) {
     return { message: "organizationId required for HEAD_OFFICE", status: 400 }
   }
   if (["BRANCH_ADMIN", "ORDER_PORTAL"].includes(role) && (!organizationId || !branchId)) {
     return { message: "organizationId and branchId required for BRANCH_ADMIN and ORDER_PORTAL", status: 400 }
   }
+  // A group-based user is not pinned to one branch — its reach comes from the
+  // group/branch assignments validated separately.
+  if (usesMultiBranchScope(role)) {
+    if (!organizationId) return { message: "organizationId is required for this role", status: 400 }
+    if (branchId) {
+      return { message: "Group-based users are not assigned a single branch", status: 400 }
+    }
+  }
+  return null
+}
+
+/** Confirm the referenced tenant rows exist and belong together. */
+async function getTenantReferenceError(organizationId: number | null, branchId: number | null) {
   if (organizationId) {
     const [organization] = await db
       .select({ id: organizations.id })
@@ -66,6 +78,23 @@ async function validateUserAssignment(
     }
   }
   return null
+}
+
+async function validateUserAssignment(
+  currentUserRole: SystemRole | undefined,
+  scopeOrganizationId: number | null | undefined,
+  role: SystemRole,
+  organizationId: number | null,
+  branchId: number | null,
+) {
+  if (!currentUserRole || !canAssignRole(currentUserRole, role)) {
+    return { message: "You cannot assign this role", status: 403 }
+  }
+  if (currentUserRole === "HEAD_OFFICE" && organizationId !== scopeOrganizationId) {
+    return { message: "You can only create users within your own organization", status: 403 }
+  }
+  return getRoleShapeError(role, organizationId, branchId)
+    ?? await getTenantReferenceError(organizationId, branchId)
 }
 
 async function usernameExists(username: string) {
@@ -221,6 +250,8 @@ export async function POST(req: Request) {
   const employeeId = normalizeOptionalText(input.employeeId)
   const organizationId = input.organizationId
   const branchId = input.branchId
+  const groupIds = input.groupIds ?? []
+  const assignedBranchIds = input.branchIds ?? []
   // Get the current user's role to determine what roles they can create
   const scope = await getRequestScope()
   const currentUserRole = scope?.role
@@ -238,6 +269,18 @@ export async function POST(req: Request) {
     branchId,
   )
   if (assignmentError) return error(assignmentError.message, assignmentError.status)
+
+  const strayScopeError = rejectScopeForSingleBranchRole(role, groupIds, assignedBranchIds)
+  if (strayScopeError) return error(strayScopeError.message, strayScopeError.status)
+
+  if (usesMultiBranchScope(role)) {
+    const scopeError = await validateMultiBranchScope({
+      organizationId,
+      groupIds,
+      branchIds: assignedBranchIds,
+    })
+    if (scopeError) return error(scopeError.message, scopeError.status)
+  }
 
   const [roleRow] = await db.select().from(rolesTable).where(eq(rolesTable.name, role)).limit(1)
   if (!roleRow) {
@@ -260,29 +303,45 @@ export async function POST(req: Request) {
 
     await assertUniqueUserFields({ email, phone, employeeId })
 
-    const [item] = await db
-      .insert(usersTable)
-      .values({
-        email,
-        username,
-        passwordHash,
-        roleId: roleRow.id,
-        firstName,
-        lastName,
-        phone,
-        mfaEnabled: input.mfaEnabled,
-        isActive: input.isActive,
-        organizationId,
-        branchId,
-        fullName: `${firstName} ${lastName}`,
-        employeeId,
-        imprestHolder: input.imprestHolder ?? null,
-        contactPerson: input.contactPerson ?? null,
-        location: input.location ?? null,
-        address: input.address ?? null,
-        mustChangePassword: true,
-      })
-      .returning()
+    const [item] = await db.transaction(async (tx) => {
+      const [created] = await tx
+        .insert(usersTable)
+        .values({
+          email,
+          username,
+          passwordHash,
+          roleId: roleRow.id,
+          firstName,
+          lastName,
+          phone,
+          mfaEnabled: input.mfaEnabled,
+          isActive: input.isActive,
+          organizationId,
+          branchId,
+          fullName: `${firstName} ${lastName}`,
+          employeeId,
+          imprestHolder: input.imprestHolder ?? null,
+          contactPerson: input.contactPerson ?? null,
+          location: input.location ?? null,
+          address: input.address ?? null,
+          mustChangePassword: true,
+        })
+        .returning()
+
+      // Only the group role writes assignment rows; every other role leaves
+      // both tables untouched, exactly as before this feature existed.
+      if (usesMultiBranchScope(role) && organizationId) {
+        await replaceMultiBranchScope(tx, {
+          userId: created.id,
+          organizationId,
+          groupIds,
+          branchIds: assignedBranchIds,
+          createdByUserId: scope?.userId ?? null,
+        })
+      }
+
+      return [created]
+    })
 
     const createdUser = item
 

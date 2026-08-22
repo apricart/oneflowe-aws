@@ -18,6 +18,13 @@ import {
   isSelfAccessChange,
 } from "@/lib/server/user-access-policy"
 import { USER_MANAGEMENT_ROLES } from "@/lib/user-management-access"
+import {
+  clearMultiBranchScope,
+  getMultiBranchScopeIds,
+  usesMultiBranchScope,
+  replaceMultiBranchScope,
+  validateMultiBranchScope,
+} from "@/lib/server/multi-branch-scope"
 
 function getTargetAccessError(scope: NonNullable<Awaited<ReturnType<typeof getRequestScope>>>, target: any, targetRole: any) {
   if (!canManageUser(scope.role, targetRole)) {
@@ -55,6 +62,13 @@ async function getAssignmentError({
   if (nextRole === "HEAD_OFFICE") {
     return nextBranchId === null ? null : "Head Office users cannot be assigned to a branch"
   }
+  // The group role draws its reach from group/branch assignments, so a single
+  // pinned branch would be meaningless and is rejected outright.
+  if (usesMultiBranchScope(nextRole)) {
+    return nextBranchId === null
+      ? null
+      : "Group Order Portal users are not assigned a single branch"
+  }
   if (!["BRANCH_ADMIN", "ORDER_PORTAL"].includes(nextRole)) return null
   if (!nextBranchId) return "A branch is required for this role"
   const [branch] = await db
@@ -76,6 +90,72 @@ async function resolveRoleId(inputRole: string | undefined, nextRole: string) {
     .where(eq(roles.name, nextRole))
     .limit(1)
   return role?.id ?? null
+}
+
+type ScopeWrite =
+  | { action: "none" }
+  | { action: "clear" }
+  | { action: "replace"; organizationId: number; groupIds: number[]; branchIds: number[] }
+
+/**
+ * Decide what happens to the multi-branch scope for this access change.
+ * Assignments only ever exist for GROUP_ORDER_PORTAL, so moving off the role
+ * clears them and every other role path is a no-op — which is why this cannot
+ * alter the behaviour of any pre-existing role.
+ */
+async function resolveNextScope({
+  targetUserId,
+  targetRole,
+  nextRole,
+  nextOrganizationId,
+  inputGroupIds,
+  inputBranchIds,
+  organizationChanged,
+}: {
+  targetUserId: string
+  targetRole: string
+  nextRole: string
+  nextOrganizationId: number | null
+  inputGroupIds: number[] | undefined
+  inputBranchIds: number[] | undefined
+  organizationChanged: boolean
+}): Promise<ScopeWrite | { message: string; status: number }> {
+  if (!usesMultiBranchScope(nextRole)) {
+    if ((inputGroupIds?.length ?? 0) > 0 || (inputBranchIds?.length ?? 0) > 0) {
+      return {
+        message: "Group and branch assignments apply only to the Group Order Portal role",
+        status: 400,
+      }
+    }
+    return { action: usesMultiBranchScope(targetRole) ? "clear" : "none" }
+  }
+
+  const listsSupplied = inputGroupIds !== undefined || inputBranchIds !== undefined
+  const becomingGroupRole = !usesMultiBranchScope(targetRole)
+  // An untouched scope is left exactly as it is. Revalidating it on every
+  // unrelated access edit (an isActive toggle, say) would let an unrelated
+  // later change — a deleted group, for instance — block that edit.
+  if (!listsSupplied && !organizationChanged && !becomingGroupRole) {
+    return { action: "none" }
+  }
+
+  const existing = await getMultiBranchScopeIds(targetUserId)
+  const groupIds = inputGroupIds ?? existing.groupIds
+  const branchIds = inputBranchIds ?? existing.branchIds
+
+  const scopeError = await validateMultiBranchScope({
+    organizationId: nextOrganizationId,
+    groupIds,
+    branchIds,
+  })
+  if (scopeError) return scopeError
+
+  return {
+    action: "replace",
+    organizationId: nextOrganizationId as number,
+    groupIds,
+    branchIds,
+  }
 }
 
 /**
@@ -141,6 +221,19 @@ export async function PATCH(
 
   const assignmentError = await getAssignmentError({ scope, nextRole, nextOrganizationId, nextBranchId })
   if (assignmentError) return error(assignmentError, 400)
+
+  const scopeResolution = await resolveNextScope({
+    targetUserId,
+    targetRole,
+    nextRole,
+    nextOrganizationId,
+    inputGroupIds: input.groupIds,
+    inputBranchIds: input.branchIds,
+    organizationChanged: nextOrganizationId !== target.organizationId,
+  })
+  if ("message" in scopeResolution) {
+    return error(scopeResolution.message, scopeResolution.status)
+  }
   const resolvedRoleId = await resolveRoleId(input.role, nextRole)
   if (resolvedRoleId === null) return error("Invalid role", 400)
   const nextRoleId = resolvedRoleId
@@ -166,6 +259,18 @@ export async function PATCH(
         isActive: users.isActive,
         mfaEnabled: users.mfaEnabled,
       })
+
+    if (scopeResolution.action === "clear") {
+      await clearMultiBranchScope(tx, targetUserId)
+    } else if (scopeResolution.action === "replace") {
+      await replaceMultiBranchScope(tx, {
+        userId: targetUserId,
+        organizationId: scopeResolution.organizationId,
+        groupIds: scopeResolution.groupIds,
+        branchIds: scopeResolution.branchIds,
+        createdByUserId: scope.userId,
+      })
+    }
 
     await tx.delete(sessions).where(eq(sessions.userId, targetUserId))
     await tx.insert(systemLogs).values({

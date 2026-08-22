@@ -3,8 +3,7 @@ import React,{ useMemo,useState } from "react"
 import { formatPKR,cn } from "@/lib/utils"
 import { calculateLineCents,formatQuantity,parseQuantity,roundQuantity,sanitizeQuantityStep } from "@/lib/quantity"
 import useSWR from "swr"
-import { useSession,signOut } from "next-auth/react"
-import { useRouter } from "next/navigation"
+import { useSession } from "next-auth/react"
 import { useToast } from "@/hooks/use-toast"
 import { useOrganizations,useBranches } from "@/lib/hooks/use-api"
 import { useAppContext } from "@/components/context/app-context"
@@ -20,7 +19,7 @@ import { RefundManagement } from "@/components/refund-management"
 import { getOrderDerivedStatus } from "@/lib/order-status"
 import { ReceiptIconButton } from "@/components/receipts/receipt-icon-button"
 import { NotificationBell } from "@/components/notifications/notification-center"
-import { MANUAL_SIGN_OUT_EVENT } from "@/components/shell/session-guard"
+import { securelySignOut } from "@/lib/session-coordination"
 
 const ORDER_STATUS_REFRESH_INTERVAL_MS = 5000
 
@@ -216,7 +215,6 @@ function buildShopResourceUrls(context: any) {
 
 export default function OrderPortalPage() {
   const { data: session, status } = useSession()
-  const router = useRouter()
   const { toast } = useToast()
   const { branchId: contextBranchId, organizationId: contextOrgId } = useAppContext()
 
@@ -255,13 +253,8 @@ export default function OrderPortalPage() {
       return
     }
 
-    if (status === "unauthenticated") {
-      window.location.replace("/login")
-      return
-    }
-
     if (status === "authenticated" && !isAuthorizedForOrderPortal(session?.user)) window.location.replace("/")
-  }, [status, session, router])
+  }, [status, session])
 
   const userRole = (session?.user as any)?.role
   const isEmployee = (session?.user as any)?.isEmployee
@@ -646,8 +639,8 @@ export default function OrderPortalPage() {
     itemInCart: CartItem | undefined,
     selectionQuantity: number,
     productStep: number,
-    isModified: boolean,
   ) => {
+    const isModified = selectionQuantity !== (itemInCart?.quantity || 0)
     if (isModified) {
       if (itemInCart) updateQty(product.id, selectionQuantity)
       else addToCart(product, selectionQuantity)
@@ -970,14 +963,10 @@ export default function OrderPortalPage() {
             <Button
               onClick={async () => {
                 const targetUrl = "/login"
-                window.dispatchEvent(new Event(MANUAL_SIGN_OUT_EVENT))
                 try {
-                  await signOut({
-                    redirect: true,
-                    callbackUrl: targetUrl
-                  })
+                  await securelySignOut({ callbackUrl: targetUrl })
                 } catch {
-                  window.location.replace(targetUrl)
+                  window.alert("Logout could not be completed securely. Please retry.")
                 }
               }}
               variant="ghost"
@@ -1791,7 +1780,7 @@ export default function OrderPortalPage() {
                             <Button
                               onClick={(e) => {
                                 e.stopPropagation()
-                                submitProductSelection(product, itemInCart, selectionQty, productStep, isModified)
+                                submitProductSelection(product, itemInCart, selectionQty, productStep)
                               }}
                               size="sm"
                               disabled={product.stock === 0 || (selectionQty === 0 && !itemInCart)}

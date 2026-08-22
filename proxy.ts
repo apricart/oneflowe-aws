@@ -7,11 +7,75 @@ import {
   isKnownBodyTooLarge,
   requestBodyLimitForPath,
 } from "@/lib/edge/request-security"
+import { getSessionNonIdleExpirationReason } from "@/lib/session-policy"
 
-const protectedPrefixes = ["/dashboard", "/organizations", "/users", "/orders", "/inventory", "/budgets", "/reports", "/settings", "/branches", "/shop", "/change-password"]
+const protectedPrefixes = [
+  "/approvals",
+  "/branches",
+  "/branch-inventory",
+  "/budgets",
+  "/budget-by-quantity",
+  "/change-password",
+  "/dashboard",
+  "/employee-management",
+  "/group-portal",
+  "/groups",
+  "/inventory",
+  "/invoices",
+  "/orders",
+  "/organizations",
+  "/products",
+  "/receipts",
+  "/refunds",
+  "/reports",
+  "/settings",
+  "/shop",
+  "/users",
+]
+const SESSION_COOKIE_NAMES = [
+  "next-auth.session-token",
+  "__Secure-next-auth.session-token",
+]
+
+function pathMatchesPrefix(pathname: string, prefix: string): boolean {
+  return pathname === prefix || pathname.startsWith(`${prefix}/`)
+}
+
+function expiredSessionRedirect(req: NextRequest): NextResponse {
+  const url = new URL("/login", req.url || "http://localhost")
+  url.searchParams.set("reason", "session-expired")
+  const response = NextResponse.redirect(url)
+
+  const cookiesToDelete = new Set(SESSION_COOKIE_NAMES)
+  for (const cookie of req.cookies.getAll()) {
+    if (
+      SESSION_COOKIE_NAMES.some(
+        (baseName) =>
+          cookie.name === baseName || cookie.name.startsWith(`${baseName}.`),
+      )
+    ) {
+      cookiesToDelete.add(cookie.name)
+    }
+  }
+
+  for (const cookieName of cookiesToDelete) {
+    response.cookies.set({
+      name: cookieName,
+      value: "",
+      expires: new Date(0),
+      maxAge: 0,
+      httpOnly: true,
+      sameSite: "lax",
+      path: "/",
+      secure: cookieName.startsWith("__Secure-"),
+    })
+  }
+
+  return response
+}
 
 /**
- * Inject bank-grade security headers into every response
+ * Inject application security headers into every response
  */
 function withSecurityHeaders(response: NextResponse, pathname: string = ""): NextResponse {
   // HSTS — force HTTPS for 1 year + subdomains
@@ -51,7 +115,10 @@ function withSecurityHeaders(response: NextResponse, pathname: string = ""): Nex
   response.headers.delete("X-Powered-By")
 
   // Browsing Cache (Browser Caching)
-  if (pathname.startsWith("/api/v1/")) {
+  if (
+    pathname.startsWith("/api/v1/") ||
+    protectedPrefixes.some((prefix) => pathMatchesPrefix(pathname, prefix))
+  ) {
     response.headers.set("Cache-Control", "private, no-store, max-age=0")
   }
 
@@ -83,6 +150,62 @@ function handleApiRequest(req: NextRequest, pathname: string, response: NextResp
   return withSecurityHeaders(response, pathname)
 }
 
+const ADMIN_PORTAL_ROLES = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"]
+
+/**
+ * The approver works inside the admin shell so it gets the same sidebar and
+ * topbar, but it is not an administrator: it may reach only the approval queue,
+ * the reports its branch assignments scope, and settings. Every other shell
+ * area — organizations, users, inventory, budgets, branches — stays closed, and
+ * this allowlist fails closed for anything not named in it.
+ */
+const GROUP_USER_HOME = "/approvals"
+const GROUP_USER_AREAS = ["/approvals", "/reports", "/settings"]
+
+// The approval area belongs to the approver alone; an administrator that lands
+// on it is sent back to its own dashboard.
+const APPROVALS_AREA = "/approvals"
+
+// The multi-branch ordering workspace is the requester's own area.
+const GROUP_ORDER_PORTAL_HOME = "/group-portal"
+
+/**
+ * The portal each role is confined to, or null when the path is already inside
+ * it. Each restricted role owns exactly one area and is redirected home from
+ * everywhere else; /change-password stays reachable so a forced password change
+ * can complete.
+ *
+ * ORDER_PORTAL -> /shop and the group roles -> /group-portal are mutually
+ * exclusive: neither can reach the other's area or the admin shell.
+ */
+function rolePortalRedirect(role: string | undefined, pathname: string): string | null {
+  if (pathname.startsWith("/change-password")) return null
+
+  if (role === "ORDER_PORTAL") {
+    return pathname.startsWith("/shop") ? null : "/shop"
+  }
+  if (role === "GROUP_USER") {
+    return GROUP_USER_AREAS.some((prefix) => pathMatchesPrefix(pathname, prefix))
+      ? null
+      : GROUP_USER_HOME
+  }
+  if (role === "GROUP_ORDER_PORTAL") {
+    // The requester keeps its own workspace and never reaches the admin shell,
+    // the approver's queue, or the single-branch /shop.
+    return pathname.startsWith(GROUP_ORDER_PORTAL_HOME) ? null : GROUP_ORDER_PORTAL_HOME
+  }
+  if (role && ADMIN_PORTAL_ROLES.includes(role)) {
+    // Strict separation: administrators belong in the dashboard shell only, and
+    // the approval queue is not theirs.
+    return pathname.startsWith("/shop")
+      || pathname.startsWith("/group-portal")
+      || pathMatchesPrefix(pathname, APPROVALS_AREA)
+      ? "/dashboard"
+      : null
+  }
+  return null
+}
+
 export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl
   const response = NextResponse.next()
@@ -92,7 +215,9 @@ export async function proxy(req: NextRequest) {
   }
 
   const isPublicPath = ["/login"].includes(pathname)
-  const needsAuth = protectedPrefixes.some((p) => pathname.startsWith(p)) && !isPublicPath
+  const needsAuth = protectedPrefixes.some((prefix) =>
+    pathMatchesPrefix(pathname, prefix),
+  ) && !isPublicPath
 
   if (!needsAuth) return withSecurityHeaders(response, pathname)
 
@@ -103,6 +228,19 @@ export async function proxy(req: NextRequest) {
     const url = new URL(loginPath, req.url || "http://localhost")
     const redirectRes = NextResponse.redirect(url)
     return withSecurityHeaders(redirectRes, pathname)
+  }
+
+  // The server-side registry is the single authority for mutable idle time.
+  // Edge middleware validates only immutable structure/absolute expiry so a
+  // committed activity update cannot be contradicted by a lost cookie response.
+  const expirationReason = getSessionNonIdleExpirationReason(token)
+  if (expirationReason) {
+    logger("middleware", {
+      reason: "session_expired",
+      expirationReason,
+      path: pathname,
+    })
+    return withSecurityHeaders(expiredSessionRedirect(req), pathname)
   }
 
   const role = (token as any).role as string | undefined
@@ -118,16 +256,9 @@ export async function proxy(req: NextRequest) {
   }
 
   // Role-based routing enforcement
-  // 1. ORDER_PORTAL users can ONLY access /shop (allow /change-password when mustChangePassword is set)
-  if (role === "ORDER_PORTAL" && !pathname.startsWith("/shop") && !pathname.startsWith("/change-password")) {
-    const url = new URL("/shop", req.url || "http://localhost")
-    const redirectRes = NextResponse.redirect(url)
-    return withSecurityHeaders(redirectRes, pathname)
-  }
-
-  // 2. Admin users cannot access /shop — strict separation
-  if (role && ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"].includes(role) && pathname.startsWith("/shop")) {
-    const url = new URL("/dashboard", req.url || "http://localhost")
+  const roleRedirect = rolePortalRedirect(role, pathname)
+  if (roleRedirect) {
+    const url = new URL(roleRedirect, req.url || "http://localhost")
     const redirectRes = NextResponse.redirect(url)
     return withSecurityHeaders(redirectRes, pathname)
   }
@@ -175,6 +306,10 @@ export const config = {
     "/settings/:path*",
     "/shop",
     "/shop/:path*",
+    "/approvals",
+    "/approvals/:path*",
+    "/group-portal",
+    "/group-portal/:path*",
     "/change-password",
     "/change-password/:path*",
     "/api/v1/:path*",

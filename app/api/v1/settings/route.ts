@@ -13,6 +13,10 @@ import {
 } from "@/lib/budget-allocation-mode"
 import { PRICE_VISIBILITY_SETTING_KEYS, isPriceVisibilitySettingKey } from "@/lib/price-visibility"
 import { organizationSettingSchema, validationMessage } from "@/lib/server/mutation-validation"
+import {
+  SESSION_IDLE_TIMEOUT_MINUTES_MAX,
+  SESSION_IDLE_TIMEOUT_MINUTES_MIN,
+} from "@/lib/session-policy"
 
 // Valid setting keys
 const VALID_SETTING_KEYS = new Set([
@@ -72,8 +76,16 @@ function getNumericSettingError(key: string, value: unknown) {
   if (key === "order_approval_threshold" && (typeof value !== "number" || value < 0)) {
     return "order_approval_threshold must be a non-negative number"
   }
-  if (key === "session_timeout_minutes" && (typeof value !== "number" || value < 1 || value > 1440)) {
-    return "session_timeout_minutes must be between 1 and 1440 (24 hours)"
+  if (
+    key === "session_timeout_minutes" &&
+    (
+      typeof value !== "number" ||
+      !Number.isInteger(value) ||
+      value < SESSION_IDLE_TIMEOUT_MINUTES_MIN ||
+      value > SESSION_IDLE_TIMEOUT_MINUTES_MAX
+    )
+  ) {
+    return `session_timeout_minutes must be an integer between ${SESSION_IDLE_TIMEOUT_MINUTES_MIN} and ${SESSION_IDLE_TIMEOUT_MINUTES_MAX}`
   }
   if (key === "low_stock_threshold" && (typeof value !== "number" || value < 0)) {
     return "low_stock_threshold must be a non-negative number"
@@ -203,8 +215,13 @@ export async function POST(req: NextRequest) {
         action: existing.length > 0 ? "UPDATE_SETTING" : "CREATE_SETTING",
         entity: "organization_settings",
         entityId: saved.id.toString(),
+        userId: scope?.userId,
         organizationId,
-        metadata: { key, value },
+        metadata: {
+          key,
+          value,
+          previousValue: existing[0]?.value ?? null,
+        },
       })
 
       return saved
@@ -234,6 +251,7 @@ export async function DELETE(req: NextRequest) {
   if (authErr) return authErr
 
   try {
+    const scope = await getRequestScope()
     const { searchParams } = req.nextUrl
     const idParam = searchParams.get("id")
 
@@ -269,8 +287,9 @@ export async function DELETE(req: NextRequest) {
         action: "DELETE_SETTING",
         entity: "organization_settings",
         entityId: id.toString(),
+        userId: scope?.userId,
         organizationId: deleted.organizationId,
-        metadata: { key: deleted.key }
+        metadata: { key: deleted.key, previousValue: deleted.value }
       })
     } catch (auditError) {
       // Log but don't fail the request

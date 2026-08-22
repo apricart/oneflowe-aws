@@ -1,14 +1,11 @@
 import { getServerSession } from "next-auth"
 import type { Role } from "./rbac"
 import { db } from "@/lib/db"
-import { sessions,users } from "@/db/schema"
-import { and,eq } from "drizzle-orm"
+import { users } from "@/db/schema"
+import { eq } from "drizzle-orm"
 import { authOptions } from "./auth-options"
 import { logError } from "@/lib/global-logger"
-import { env } from "@/lib/server/env"
 import { coalesceInFlight } from "@/lib/cache-utils"
-
-const INACTIVITY_TIMEOUT_MIN = env.INACTIVITY_TIMEOUT_MINUTES
 
 export type CurrentUser = {
   id: string
@@ -192,68 +189,6 @@ async function loadRequestScope(): Promise<RequestScope | null> {
 }
 
 /**
- * Touch session to update last activity timestamp
- * @param userId - User ID to update session for
- */
-export async function touchSession(userId: string): Promise<void> {
-  try {
-    // Validate user ID
-    if (!userId || typeof userId !== 'string') {
-      console.error('[Auth] Invalid user ID for touch session')
-      return
-    }
-
-    await db
-      .update(sessions)
-      .set({ lastActivityAt: new Date() })
-      .where(and(eq(sessions.userId, userId)))
-
-  } catch (error) {
-    logError(error, 'TOUCH_SESSION', { userId })
-    // Don't throw - session touch failures shouldn't break the app
-  }
-}
-
-/**
- * Check if session is inactive based on last activity
- * @param lastActivity - Last activity timestamp
- * @returns Promise<boolean> indicating if session is inactive
- */
-export async function isSessionInactive(lastActivity: Date | null | undefined): Promise<boolean> {
-  try {
-    // Handle null or undefined input
-    if (!lastActivity) {
-      console.warn('[Auth] No last activity provided, considering session inactive')
-      return true
-    }
-
-    // Validate last activity is a valid date
-    if (!(lastActivity instanceof Date) || Number.isNaN(lastActivity.getTime())) {
-      console.error('[Auth] Invalid lastActivity date')
-      return true
-    }
-
-    const now = Date.now()
-    const lastActivityTime = lastActivity.getTime()
-
-    // Validate we're not dealing with future dates (clock skew)
-    if (lastActivityTime > now + 60000) { // Allow 1 minute clock skew
-      console.warn('[Auth] Last activity is in the future, possible clock skew')
-      return true
-    }
-
-    const diffMin = (now - lastActivityTime) / 60000
-    const timeoutMin = Math.max(INACTIVITY_TIMEOUT_MIN, 1) // Minimum 1 minute
-
-    return diffMin > timeoutMin
-  } catch (error) {
-    logError(error, 'IS_SESSION_INACTIVE', { lastActivity })
-    // On error, consider session inactive for security
-    return true
-  }
-}
-
-/**
  * Validate role is a valid system role
  * @param role - Role string to validate
  * @returns boolean indicating if role is valid
@@ -263,7 +198,7 @@ export function isValidRole(role: string | undefined | null): role is Role {
     return false
   }
 
-  const validRoles: Role[] = ['SUPER_ADMIN', 'HEAD_OFFICE', 'BRANCH_ADMIN', 'ORDER_PORTAL']
+  const validRoles: Role[] = ['SUPER_ADMIN', 'HEAD_OFFICE', 'GROUP_USER', 'BRANCH_ADMIN', 'GROUP_ORDER_PORTAL', 'ORDER_PORTAL']
   return validRoles.includes(role as Role)
 }
 
