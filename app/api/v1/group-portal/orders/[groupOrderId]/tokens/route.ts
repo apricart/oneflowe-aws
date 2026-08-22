@@ -1,0 +1,111 @@
+import { error, ok } from "@/lib/api"
+import { getCurrentUser } from "@/lib/auth"
+import { sendGroupOrderTokensEmail } from "@/lib/email"
+import { ADMIN_OPERATIONS_EMAIL } from "@/lib/email/recipients"
+import { tokenHandoffMessage } from "@/lib/order-token-handoff"
+import { withRateLimit } from "@/lib/rate-limiter"
+import { requireGroupOrderPortal } from "@/lib/server/group-order-access"
+import { fulfillOrdersAfterTokenHandoff } from "@/lib/server/order-fulfillment"
+import {
+  loadShareableGroupTokens,
+  recordGroupTokenHandoff,
+} from "@/lib/server/group-order-tokens"
+
+export const dynamic = "force-dynamic"
+
+/**
+ * Hand every fulfilment token for one group order to admin operations at once.
+ *
+ * This is the group-scale form of `/api/v1/orders/[id]/send-token-email`, which
+ * stays exactly as it was for every role that uses it. It grants no additional
+ * reach: each token released here belongs to an approved order this same user
+ * created, in their own tenant, at a branch still in their live assignments,
+ * decided by the same `canViewFulfillmentToken` policy — this route simply
+ * collects them rather than making the user send twenty separate emails and
+ * exhaust the shared email budget after the fifth.
+ *
+ * The recipient is the configured admin operations mailbox and is never taken
+ * from the request, so this cannot be used to send tokens anywhere else.
+ */
+export async function POST(
+  _req: Request,
+  props: { params: Promise<{ groupOrderId: string }> },
+) {
+  const { actor, response } = await requireGroupOrderPortal()
+  if (response) return response
+
+  const rateLimited = await withRateLimit("email", actor.scope.userId)
+  if (rateLimited) return rateLimited
+
+  const { groupOrderId } = await props.params
+  if (!/^\d+$/.test(groupOrderId)) return error("Invalid group order ID", 400)
+
+  const parsedId = Number(groupOrderId)
+  if (!Number.isSafeInteger(parsedId) || parsedId <= 0) return error("Invalid group order ID", 400)
+
+  if (!ADMIN_OPERATIONS_EMAIL) {
+    return error("No admin operations mailbox is configured for token hand-off", 400)
+  }
+
+  const bundle = await loadShareableGroupTokens({
+    userId: actor.scope.userId,
+    organizationId: actor.organizationId,
+    groupOrderId: parsedId,
+  })
+  if (!bundle) return error("Group order not found", 404)
+
+  if (bundle.entries.length === 0) {
+    return error("No approved order in this group order has a fulfilment token to share", 400)
+  }
+
+  const user = await getCurrentUser()
+
+  try {
+    await sendGroupOrderTokensEmail({
+      to: ADMIN_OPERATIONS_EMAIL,
+      reference: bundle.reference,
+      groupName: bundle.groupName,
+      sharedBy: String(user?.email || "A group order portal user"),
+      entries: bundle.entries.map((entry) => ({
+        tid: entry.tid,
+        branchName: entry.branchName,
+        token: entry.token,
+        items: entry.items,
+      })),
+    })
+  } catch (emailError) {
+    const message = emailError instanceof Error
+      ? `${emailError.name}: ${emailError.message}`
+      : String(emailError)
+    return error(`Failed to send token email through AWS SES: ${message}`, 400)
+  }
+
+  // Every token in this message has now reached the administrator, so each of
+  // those orders is settled — the same transition the single-order hand-off
+  // applies, run once per branch order inside its own transaction.
+  const fulfilledOrderIds = await fulfillOrdersAfterTokenHandoff(bundle.entries.map((entry) => ({
+    orderId: entry.orderId,
+    organizationId: bundle.organizationId,
+    branchId: entry.branchId,
+    status: entry.status,
+    fulfilledByUserId: actor.scope.userId,
+  })))
+
+  await recordGroupTokenHandoff({
+    userId: actor.scope.userId,
+    organizationId: actor.organizationId,
+    bundle,
+    recipient: ADMIN_OPERATIONS_EMAIL,
+    fulfilledOrderIds,
+  })
+
+  return ok({
+    message: tokenHandoffMessage({
+      sentCount: bundle.entries.length,
+      fulfilledCount: fulfilledOrderIds.size,
+    }),
+    recipient: ADMIN_OPERATIONS_EMAIL,
+    sentCount: bundle.entries.length,
+    fulfilledCount: fulfilledOrderIds.size,
+  })
+}

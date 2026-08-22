@@ -1,6 +1,6 @@
 import "server-only"
 
-import { and, asc, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm"
+import { and, asc, desc, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm"
 
 import {
   branchInventory,
@@ -31,6 +31,20 @@ import { escapeLikePattern } from "@/lib/utils"
 export const CATALOG_PAGE_SIZE_DEFAULT = 48
 export const CATALOG_PAGE_SIZE_MAX = 100
 
+/**
+ * The orders the storefront may ask for. The route matches an incoming value
+ * against this list rather than passing it through, so nothing a client sends
+ * can reach the ORDER BY clause.
+ */
+export const GROUP_CATALOG_SORTS = ["name", "price-low", "price-high"] as const
+export type GroupCatalogSort = (typeof GROUP_CATALOG_SORTS)[number]
+
+/** One chip on the storefront's category ribbon. */
+export type GroupCatalogCategory = {
+  id: number
+  name: string
+}
+
 export type GroupCatalogItem = {
   organizationInventoryId: number
   globalProductId: number
@@ -56,6 +70,8 @@ export type GroupCatalogPage = {
   /** Products stocked at some but not all selected branches, hence not offered. */
   excludedProductCount: number
   quantityBudgetActive: boolean
+  /** Every category the orderable set contains, for the category ribbon. */
+  categoryFacets: GroupCatalogCategory[]
 }
 
 type CatalogQuery = {
@@ -64,6 +80,7 @@ type CatalogQuery = {
   search?: string
   categoryId?: number
   subCategoryId?: number
+  sort?: GroupCatalogSort
   page: number
   limit: number
 }
@@ -200,6 +217,56 @@ async function loadMinimumRemainingQuantities(
   return new Map(rows.map((row) => [row.organizationInventoryId, Math.max(row.remaining, 0)]))
 }
 
+/**
+ * The ORDER BY for a chosen sort.
+ *
+ * Display name is always the final term so two products at the same price keep
+ * a stable position between pages — without it, paging a price-sorted list can
+ * show the same product twice and hide another entirely.
+ */
+function catalogOrderBy(
+  sort: GroupCatalogSort | undefined,
+  displayName: SQL<string>,
+  price: SQL<number>,
+): SQL[] {
+  if (sort === "price-low") return [asc(price) as SQL, asc(displayName) as SQL]
+  if (sort === "price-high") return [desc(price) as SQL, asc(displayName) as SQL]
+  return [asc(displayName) as SQL]
+}
+
+/**
+ * The categories present in the orderable set for these branches.
+ *
+ * Deliberately built from the branch and budget conditions alone, without the
+ * caller's search or category filter: the ribbon has to stay still while it is
+ * being used, and a chip that disappeared the moment it was clicked would be
+ * unusable. A product is counted only when it is covered at every selected
+ * branch, matching the rule the item list itself applies.
+ */
+async function loadCategoryFacets(
+  unfilteredWhere: SQL | undefined,
+  branchCount: number,
+): Promise<GroupCatalogCategory[]> {
+  const covered = db
+    .select({
+      categoryId: globalProducts.categoryId,
+      covered: sql<number>`COUNT(DISTINCT ${branchInventory.branchId})`.as("covered"),
+    })
+    .from(branchInventory)
+    .innerJoin(organizationInventory, eq(branchInventory.organizationInventoryId, organizationInventory.id))
+    .innerJoin(globalProducts, eq(organizationInventory.globalProductId, globalProducts.id))
+    .where(unfilteredWhere)
+    .groupBy(organizationInventory.id, globalProducts.categoryId)
+    .as("covered_products")
+
+  return db
+    .selectDistinct({ id: categories.id, name: categories.name })
+    .from(covered)
+    .innerJoin(categories, eq(categories.id, covered.categoryId))
+    .where(sql`${covered.covered} = ${branchCount}`)
+    .orderBy(asc(categories.name))
+}
+
 export async function loadGroupCatalog(query: CatalogQuery): Promise<GroupCatalogPage> {
   const { organizationId, branchIds } = query
   const period = currentPeriod()
@@ -209,13 +276,14 @@ export async function loadGroupCatalog(query: CatalogQuery): Promise<GroupCatalo
   const filters = await searchAndCategoryConditions(query)
   const budgetFilter = quantityBudgetCondition(organizationId, quantityBudgetBranchIds, period)
 
-  const where = and(
+  const scopeConditions = [
     ...assignmentConditions(organizationId, branchIds),
-    ...filters,
     ...(budgetFilter ? [budgetFilter] : []),
-  )
+  ]
+  const where = and(...scopeConditions, ...filters)
 
   const displayName = sql<string>`COALESCE(${organizationInventory.customName}, ${globalProducts.name})`
+  const priceCents = sql<number>`COALESCE(${organizationInventory.customPrice}, ${globalProducts.basePrice})`
 
   const rows = await db
     .select({
@@ -226,7 +294,7 @@ export async function loadGroupCatalog(query: CatalogQuery): Promise<GroupCatalo
       description: sql<string | null>`COALESCE(${organizationInventory.customDescription}, ${globalProducts.description})`,
       imageUrl: sql<string | null>`COALESCE(${organizationInventory.customImageUrl}, ${globalProducts.imageUrl})`,
       unit: globalProducts.unit,
-      priceCents: sql<number>`COALESCE(${organizationInventory.customPrice}, ${globalProducts.basePrice})`.mapWith(Number),
+      priceCents: priceCents.mapWith(Number),
       stockQuantity: sql<number>`${globalProducts.stockQuantity}`.mapWith(Number),
       allowDecimalQuantity: globalProducts.allowDecimalQuantity,
       quantityStep: globalProducts.quantityStep,
@@ -240,7 +308,7 @@ export async function loadGroupCatalog(query: CatalogQuery): Promise<GroupCatalo
     .groupBy(organizationInventory.id, globalProducts.id, categories.name)
     // A product qualifies only when it is assigned at every selected branch.
     .having(sql`COUNT(DISTINCT ${branchInventory.branchId}) = ${branchCount}`)
-    .orderBy(asc(displayName))
+    .orderBy(...catalogOrderBy(query.sort, displayName, priceCents))
     .limit(query.limit)
     .offset((query.page - 1) * query.limit)
 
@@ -265,12 +333,15 @@ export async function loadGroupCatalog(query: CatalogQuery): Promise<GroupCatalo
     })
     .from(coverage)
 
-  const minimumRemaining = await loadMinimumRemainingQuantities(
-    organizationId,
-    quantityBudgetBranchIds,
-    period,
-    rows.map((row) => row.organizationInventoryId),
-  )
+  const [minimumRemaining, categoryFacets] = await Promise.all([
+    loadMinimumRemainingQuantities(
+      organizationId,
+      quantityBudgetBranchIds,
+      period,
+      rows.map((row) => row.organizationInventoryId),
+    ),
+    loadCategoryFacets(and(...scopeConditions), branchCount),
+  ])
 
   return {
     items: rows.map((row) => ({
@@ -293,5 +364,6 @@ export async function loadGroupCatalog(query: CatalogQuery): Promise<GroupCatalo
     limit: query.limit,
     excludedProductCount: Number(coverageRow?.excluded ?? 0),
     quantityBudgetActive: quantityBudgetBranchIds.length > 0,
+    categoryFacets,
   }
 }

@@ -7,8 +7,10 @@ import { sendOrderTokenEmail } from "@/lib/email"
 import { ADMIN_OPERATIONS_EMAIL } from "@/lib/email/recipients"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { canViewFulfillmentToken } from "@/lib/fulfillment-token-access"
+import { isTokenHandoffEligible, tokenHandoffMessage } from "@/lib/order-token-handoff"
 import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
-import { GROUP_USER_ROLE, canUseScopedBranch } from "@/lib/server/multi-branch-scope"
+import { fulfillOrdersAfterTokenHandoff } from "@/lib/server/order-fulfillment"
+import { canUseScopedBranch, usesMultiBranchScope } from "@/lib/server/multi-branch-scope"
 
 const TOKEN_EMAIL_RECIPIENT = ADMIN_OPERATIONS_EMAIL
 
@@ -17,9 +19,11 @@ const TOKEN_EMAIL_RECIPIENT = ADMIN_OPERATIONS_EMAIL
  *
  * `verifyResourceAccess` compares the order's branch against the single branch
  * pinned on the user row, which is exactly right for BRANCH_ADMIN and
- * ORDER_PORTAL and is left untouched for them. A GROUP_USER has no single
- * branch — its reach is a resolved set of assignments — so it is checked
- * against that set instead, with the tenant re-asserted explicitly first.
+ * ORDER_PORTAL and is left untouched for them. The group-based roles have no
+ * single branch — their reach is a resolved set of assignments — so they are
+ * checked against that set instead, with the tenant re-asserted explicitly
+ * first. GROUP_ORDER_PORTAL additionally has to be the order's creator, which
+ * `canViewFulfillmentToken` enforces below.
  */
 async function hasBranchAccessForTokenEmail(
   role: string,
@@ -27,18 +31,41 @@ async function hasBranchAccessForTokenEmail(
   actorOrganizationId: number | null,
   order: { organizationId: number; branchId: number },
 ): Promise<boolean> {
-  if (role !== GROUP_USER_ROLE) {
+  if (!usesMultiBranchScope(role)) {
     return verifyResourceAccess(order.organizationId, order.branchId)
   }
   if (!actorOrganizationId || actorOrganizationId !== order.organizationId) return false
   return canUseScopedBranch(userId, order.branchId)
 }
 
+/**
+ * What the caller is told once the token has left.
+ *
+ * The order is reported as it actually stands: a hand-off that could not settle
+ * its order — one someone else already fulfilled, or one whose budget hold no
+ * longer adds up — still delivered the token, and says so rather than claiming
+ * a fulfilment that did not happen.
+ */
+function tokenHandoffResponse(orderStatus: string, fulfilled: boolean) {
+  return ok({
+    message: tokenHandoffMessage({ sentCount: 1, fulfilledCount: fulfilled ? 1 : 0 }),
+    recipient: TOKEN_EMAIL_RECIPIENT,
+    fulfilled,
+    status: fulfilled ? "FULFILLED" : orderStatus,
+  })
+}
+
 export async function POST(
   _req: Request,
   props: { params: Promise<{ id: string }> }
 ) {
-  const roleError = await requireApiRole(["HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "ORDER_PORTAL"])
+  const roleError = await requireApiRole([
+    "HEAD_OFFICE",
+    "BRANCH_ADMIN",
+    "GROUP_USER",
+    "GROUP_ORDER_PORTAL",
+    "ORDER_PORTAL",
+  ])
   if (roleError) return roleError
 
   const user = await getCurrentUser()
@@ -104,7 +131,7 @@ export async function POST(
   })
   if (!canShareToken) return error("Forbidden: You do not have access to this fulfillment token", 403)
 
-  if (String(order.status || "").toUpperCase() !== "APPROVED") {
+  if (!isTokenHandoffEligible(order.status)) {
     return error("Token email can only be sent for approved orders", 400)
   }
 
@@ -141,6 +168,18 @@ export async function POST(
     return error(`Failed to send token email through AWS SES: ${emailErrorMessage}`, 400)
   }
 
+  // The token has reached the administrator, so the order is settled. The
+  // transition runs on the order this request already authorized, under the
+  // same tenant and branch, and never fails a hand-off that did go out.
+  const fulfilledOrderIds = await fulfillOrdersAfterTokenHandoff([{
+    orderId: order.id,
+    organizationId: order.organizationId,
+    branchId: order.branchId,
+    status: order.status,
+    fulfilledByUserId: user.id,
+  }])
+  const fulfilled = fulfilledOrderIds.has(order.id)
+
   await db.insert(auditLogs).values({
     userId: user.id,
     organizationId: order.organizationId,
@@ -151,11 +190,9 @@ export async function POST(
     metadata: {
       tid: order.tid,
       recipient: TOKEN_EMAIL_RECIPIENT,
+      fulfilled,
     },
   })
 
-  return ok({
-    message: "Token email sent successfully",
-    recipient: TOKEN_EMAIL_RECIPIENT,
-  })
+  return tokenHandoffResponse(order.status, fulfilled)
 }

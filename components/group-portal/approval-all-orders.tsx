@@ -1,8 +1,8 @@
 "use client"
 
-import { useCallback, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import useSWR from "swr"
-import { Package, RefreshCw, Search } from "lucide-react"
+import { ChevronLeft, ChevronRight, Package, RefreshCw, Search } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -24,15 +24,22 @@ type OrdersResponse = {
     branchName?: string | null
     branchCostCenterId?: string | null
     status: string
+    statusAtRefund?: string | null
     fulfillmentStatus?: string | null
     totalCents: number
     createdAt: string
     approvedAt?: string | null
     rejectionReason?: string | null
     approvalToken?: string | null
-    orderItems?: unknown[]
+    /**
+     * Units ordered, summed by the orders endpoint. It is a `numeric` total, so
+     * the driver may hand it over as a string; it is never an array of lines,
+     * which is what this view used to read it as — and why every row showed no
+     * items at all.
+     */
+    itemCount?: number | string | null
   }>
-  pagination?: { total: number; totalPages: number }
+  pagination?: { page: number; limit: number; total: number; totalPages: number; hasMore: boolean }
 }
 
 const PAGE_SIZE = 25
@@ -55,16 +62,25 @@ const STATUS_TABS: Array<[string, string]> = [
 export function ApprovalAllOrders() {
   const { toast } = useToast()
   const [status, setStatus] = useState("pending")
+  const [page, setPage] = useState(1)
   const [search, setSearch] = useState("")
   const debouncedSearch = useDebounce(search.trim(), 300)
   const [busy, setBusy] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
 
   const endpoint = useMemo(() => {
-    const params = new URLSearchParams({ page: "1", limit: String(PAGE_SIZE) })
+    const params = new URLSearchParams({ page: String(page), limit: String(PAGE_SIZE) })
     if (status !== "all") params.set("status", status)
     if (debouncedSearch) params.set("q", debouncedSearch)
     return `/api/v1/orders?${params.toString()}`
+  }, [debouncedSearch, page, status])
+
+  // A filter or a search describes a different set of orders, so the page the
+  // user was on no longer means anything and would otherwise strand them on an
+  // empty page of results.
+  useEffect(() => {
+    setPage(1)
+    setSelectedIds(new Set())
   }, [debouncedSearch, status])
 
   const { data, error, isLoading, isValidating, mutate } = useSWR<OrdersResponse>(
@@ -81,9 +97,10 @@ export function ApprovalAllOrders() {
       branchName: order.branchName ?? `Branch ${order.branchId}`,
       branchCostCenterId: order.branchCostCenterId ?? null,
       status: order.status,
+      statusAtRefund: order.statusAtRefund ?? null,
       fulfillmentStatus: order.fulfillmentStatus ?? "",
       totalCents: order.totalCents,
-      itemCount: Array.isArray(order.orderItems) ? order.orderItems.length : 0,
+      itemCount: Number(order.itemCount ?? 0),
       createdAt: order.createdAt,
       approvedAt: order.approvedAt ?? null,
       rejectionReason: order.rejectionReason ?? null,
@@ -91,6 +108,9 @@ export function ApprovalAllOrders() {
     })),
     [data],
   )
+
+  const total = Number(data?.pagination?.total ?? 0)
+  const totalPages = Math.max(1, Number(data?.pagination?.totalPages ?? 1))
 
   const toggleSelection = useCallback((orderId: number) => {
     setSelectedIds((current) => {
@@ -161,10 +181,7 @@ export function ApprovalAllOrders() {
               size="sm"
               variant={status === value ? "secondary" : "ghost"}
               aria-pressed={status === value}
-              onClick={() => {
-                setStatus(value)
-                setSelectedIds(new Set())
-              }}
+              onClick={() => setStatus(value)}
               className={cn(
                 "h-8 shrink-0 rounded-lg px-3 text-xs font-bold",
                 status === value
@@ -214,10 +231,44 @@ export function ApprovalAllOrders() {
               onToggleSelection={toggleSelection}
               onDecide={decide}
               busy={busy}
+              onRefresh={() => { void mutate() }}
             />
           </OrdersBody>
         </CardContent>
       </Card>
+
+      {/* Without this the view silently showed only the first page, so an
+          approver with more than a page of orders could not reach the rest. */}
+      {totalPages > 1 && (
+        <nav aria-label="Order pages" className="flex items-center justify-between gap-3">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 gap-1 rounded-full text-xs"
+            disabled={page <= 1 || isLoading}
+            onClick={() => setPage((current) => Math.max(1, current - 1))}
+          >
+            <ChevronLeft className="h-3.5 w-3.5" />
+            Previous
+          </Button>
+          <span className="text-xs text-slate-500 dark:text-slate-400">
+            Page {page} of {totalPages}
+            {total > 0 && <> · {total} order{total === 1 ? "" : "s"}</>}
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 gap-1 rounded-full text-xs"
+            disabled={page >= totalPages || isLoading}
+            onClick={() => setPage((current) => current + 1)}
+          >
+            Next
+            <ChevronRight className="h-3.5 w-3.5" />
+          </Button>
+        </nav>
+      )}
     </div>
   )
 }

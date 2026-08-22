@@ -77,17 +77,17 @@ import {
 type OrderTableColumn = ColumnDef & { width: number }
 
 const ORDER_TABLE_COLUMNS: OrderTableColumn[] = [
-  { key: "tid", label: "TID", width: 190 },
-  { key: "branch", label: "Branch", width: 190 },
-  { key: "costCenter", label: "Cost Center", width: 125 },
+  { key: "tid", label: "TID", width: 240 },
+  { key: "branch", label: "Branch", width: 180 },
+  { key: "costCenter", label: "Cost Center", width: 110 },
   { key: "orderStatus", label: "Order Status", width: 150 },
-  { key: "progress", label: "Progress", width: 150 },
+  { key: "progress", label: "Progress", width: 130 },
   { key: "paymentStatus", label: "Payment", width: 120 },
-  { key: "refundStatus", label: "Refund", width: 150 },
-  { key: "orderDate", label: "Order Date", width: 135 },
-  { key: "approvalDate", label: "Approval Date", width: 140 },
-  { key: "deliveryDate", label: "Delivery Date", width: 140 },
-  { key: "amount", label: "Amount", width: 125 },
+  { key: "refundStatus", label: "Refund", width: 130 },
+  { key: "orderDate", label: "Order Date", width: 120 },
+  { key: "approvalDate", label: "Approval Date", width: 130 },
+  { key: "deliveryDate", label: "Delivery Date", width: 130 },
+  { key: "amount", label: "Amount", width: 130 },
 ]
 
 type OrdersDirectoryProps = {
@@ -421,9 +421,20 @@ export function OrdersDirectory({
       if (!res.ok) throw new Error(data.error || "Failed to send token email")
 
       toast({
-        title: "Token sent",
-        description: "Fulfillment token emailed to the admin.",
+        title: data?.fulfilled ? "Token sent — order fulfilled" : "Token sent",
+        description: data?.fulfilled
+          ? "Fulfillment token emailed to the admin. The order is now marked fulfilled."
+          : "Fulfillment token emailed to the admin.",
       })
+
+      // The hand-off settles the order, so the open panel and the list behind
+      // it have to show the order in its new state rather than as approved.
+      if (data?.fulfilled) {
+        setViewingOrder((current: any) => (
+          current ? { ...current, status: "FULFILLED" } : current
+        ))
+        onUpdate()
+      }
     } catch (err: any) {
       toast({
         title: "Email Failed",
@@ -624,12 +635,12 @@ export function OrdersDirectory({
                       className="group border-b border-slate-50 dark:border-slate-800/50 hover:bg-slate-50/80 dark:hover:bg-slate-800/30 cursor-pointer transition-colors"
                     >
                       {isTableColumnVisible("tid") && <td className="py-5 pl-6 pr-4">
-                        <span className="font-mono text-xs font-bold text-slate-700 dark:text-slate-300 group-hover:text-indigo-600 transition-colors uppercase tracking-wider">{order.tid}</span>
+                        <span className="block truncate font-mono text-xs font-bold text-slate-700 dark:text-slate-300 group-hover:text-indigo-600 transition-colors uppercase tracking-wider" title={order.tid}>{order.tid}</span>
                       </td>}
                       {isTableColumnVisible("branch") && <td className="px-4 py-5">
                         <div className="flex items-center gap-2">
                           <Building2 className="h-3.5 w-3.5 shrink-0 text-indigo-500 opacity-60" />
-                          <span className="truncate font-medium text-slate-600 dark:text-slate-400" title={order.branchName || `#${order.branchId}`}>
+                          <span className="min-w-0 truncate font-medium text-slate-600 dark:text-slate-400" title={order.branchName || `#${order.branchId}`}>
                             {order.branchName || `#${order.branchId}`}
                           </span>
                         </div>

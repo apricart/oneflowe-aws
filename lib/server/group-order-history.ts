@@ -4,6 +4,8 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm"
 
 import { branches, groupOrders, groups, orderItems, orders } from "@/db/schema"
 import { db } from "@/lib/db"
+import { canViewFulfillmentToken } from "@/lib/fulfillment-token-access"
+import { GROUP_ORDER_PORTAL_ROLE } from "@/lib/server/multi-branch-scope"
 import { UNGROUPED_BUCKET_NAME } from "@/lib/server/group-order-portal"
 
 /**
@@ -25,12 +27,24 @@ export type GroupOrderChild = {
   branchId: number
   branchName: string
   status: string
+  /**
+   * The status the order held when it was refunded. The invoice stays available
+   * after a refund of an already-approved order, so this is what tells the
+   * requester's history whether to offer the invoice for a refunded row.
+   */
+  statusAtRefund: string | null
   fulfillmentStatus: string
   totalCents: number
   itemCount: number
   createdAt: Date | null
   approvedAt: Date | null
   rejectionReason: string | null
+  /**
+   * The credential a Super Admin needs to mark this order delivered. Present
+   * only while `canViewFulfillmentToken` allows it for the requester who raised
+   * the order — never for a pending, rejected, or another user's order.
+   */
+  approvalToken: string | null
 }
 
 export type GroupOrderHistoryItem = {
@@ -38,6 +52,7 @@ export type GroupOrderHistoryItem = {
   reference: string
   createdAt: Date | null
   notes: string | null
+  poNumber: string | null
   groupId: number | null
   groupName: string
   requestedBranchCount: number
@@ -92,6 +107,7 @@ export async function listGroupOrders({
         reference: groupOrders.reference,
         createdAt: groupOrders.createdAt,
         notes: groupOrders.notes,
+        poNumber: groupOrders.poNumber,
         groupId: groupOrders.groupId,
         groupName: groups.name,
         requestedBranchCount: groupOrders.requestedBranchCount,
@@ -122,11 +138,14 @@ export async function listGroupOrders({
       branchId: orders.branchId,
       branchName: branches.name,
       status: orders.status,
+      statusAtRefund: orders.statusAtRefund,
       fulfillmentStatus: orders.fulfillmentStatus,
       totalCents: orders.totalCents,
       createdAt: orders.createdAt,
       approvedAt: orders.approvedAt,
       rejectionReason: orders.rejectionReason,
+      approvalToken: orders.approvalToken,
+      createdByUserId: orders.createdByUserId,
       itemCount: sql<number>`(
         SELECT COUNT(*)::int FROM ${orderItems} WHERE ${orderItems.orderId} = ${orders.id}
       )`.mapWith(Number),
@@ -152,12 +171,25 @@ export async function listGroupOrders({
       branchId: row.branchId,
       branchName: row.branchName ?? `Branch ${row.branchId}`,
       status: row.status,
+      statusAtRefund: row.statusAtRefund,
       fulfillmentStatus: row.fulfillmentStatus,
       totalCents: row.totalCents,
       itemCount: row.itemCount,
       createdAt: row.createdAt,
       approvedAt: row.approvedAt,
       rejectionReason: row.rejectionReason,
+      // The query above already pins every row to this user and tenant; the
+      // shared policy is still consulted so the token cannot leak from an order
+      // that is not approved, and so this surface keeps moving in step with
+      // every other one that shows a token.
+      approvalToken: canViewFulfillmentToken({
+        role: GROUP_ORDER_PORTAL_ROLE,
+        userId,
+        orderStatus: row.status,
+        orderCreatedByUserId: row.createdByUserId,
+      })
+        ? row.approvalToken
+        : null,
     })
     childrenByEnvelope.set(row.groupOrderId, bucket)
   }
@@ -169,6 +201,7 @@ export async function listGroupOrders({
       reference: envelope.reference,
       createdAt: envelope.createdAt,
       notes: envelope.notes,
+      poNumber: envelope.poNumber,
       groupId: envelope.groupId,
       groupName: envelope.groupName ?? UNGROUPED_BUCKET_NAME,
       requestedBranchCount: envelope.requestedBranchCount,

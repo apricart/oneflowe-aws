@@ -11,7 +11,7 @@ import {
   Sparkles,
   ArrowRight,
   Building2,
-  FolderTree,ShoppingBag,
+  FolderTree,Layers,ShoppingBag,
   Loader2
 } from "lucide-react"
 
@@ -86,6 +86,23 @@ const reportCards = [
   },
 ]
 
+/**
+ * Reports that exist only for the multi-branch approver.
+ *
+ * Kept out of `reportCards` so no other role is offered a destination its own
+ * routing and endpoints refuse — the group order report reads the approver's
+ * assigned-branch scope, which no other role has.
+ */
+const groupUserOnlyReportCards = [
+  {
+    title: "Group Order Report",
+    description: "Orders rolled up by group order ID and by group, across your assigned branches",
+    href: "/reports/group-orders",
+    icon: Layers,
+    gradient: "from-indigo-500 to-violet-500",
+  },
+]
+
 export default function ReportsPage() {
   const { data: session } = useSession()
   const role = (session?.user as any)?.role
@@ -103,13 +120,20 @@ export default function ReportsPage() {
   // these destinations, so the hub must not offer a card the role cannot open.
   const groupUserReportHrefs = new Set([
     "/reports/order-report",
+    "/reports/group-orders",
     "/reports/refund-report",
     "/reports/product-performance",
     "/reports/user-report",
     "/reports/branch-reports",
   ])
 
-  const displayReportCards = reportCards
+  // The approver-only cards are appended for that role alone, so every other
+  // role sees exactly the hub it saw before.
+  const availableReportCards = role === "GROUP_USER"
+    ? [...reportCards, ...groupUserOnlyReportCards]
+    : reportCards
+
+  const displayReportCards = availableReportCards
     .filter(card => {
       if (role === "GROUP_USER") return groupUserReportHrefs.has(card.href)
       if (role === "BRANCH_ADMIN") {

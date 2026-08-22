@@ -5,6 +5,7 @@ import { db } from "@/lib/db"
 import { globalProducts, auditLogs } from "@/db/schema"
 import { eq, and, ne } from "drizzle-orm"
 import { globalProductUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
+import { taxRatePercentToBp } from "@/lib/tax"
 
 // GET /api/v1/inventory/global-products/[id] - Get single product
 export async function GET(
@@ -59,7 +60,7 @@ export async function PUT(
       return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
     }
     const input = parsedBody.data
-    const { productCode, name, description, categoryId, imageUrl, basePrice, unit, status, metadata } = input
+    const { productCode, name, description, categoryId, imageUrl, basePrice, taxRatePercent, unit, status, metadata } = input
 
     // Check if product code already exists
     if (productCode) {
@@ -96,6 +97,11 @@ export async function PUT(
         categoryId,
         imageUrl,
         basePrice,
+        // Left untouched unless the caller sent the field, so an update that
+        // does not mention tax cannot silently clear a product's override.
+        ...(taxRatePercent === undefined
+          ? {}
+          : { taxRateBp: taxRatePercent === null ? null : taxRatePercentToBp(taxRatePercent) }),
         unit,
         status,
         metadata,

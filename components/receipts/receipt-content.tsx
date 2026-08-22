@@ -1,13 +1,22 @@
 "use client"
 
-import React, { useState } from "react"
+import { useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Download, X, Printer, FileText, CheckCircle2, ChevronRight } from "lucide-react"
+import { Download, X, Printer } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import useSWR from "swr"
 import Image from "next/image"
 import { getReceiptItemQuantity, toDisplayNameCase } from "@/lib/receipt-display"
+import { INVOICE_ISSUER } from "@/lib/invoice-issuer"
+import { formatInvoiceDisplayDate, getInvoicePoNumber } from "@/lib/invoice-format"
 import { formatQuantity } from "@/lib/quantity"
+import {
+    buildInvoiceLines,
+    buildInvoiceTotals,
+    formatInvoiceMoney,
+    formatInvoiceQuantity,
+    formatInvoiceTaxPercent,
+} from "@/lib/invoice-lines"
 import { safeFilenamePart } from "@/lib/security"
 
 const fetcher = async (url: string) => {
@@ -19,6 +28,14 @@ const fetcher = async (url: string) => {
     }
 
     return body
+}
+
+function getStatusBadgeClass(statusKey: string) {
+    if (statusKey === "fulfilled") return "text-emerald-600 bg-emerald-50"
+    if (statusKey === "partially_fulfilled" || statusKey === "partially_refunded") return "text-indigo-600 bg-indigo-50"
+    if (statusKey === "approved") return "text-blue-600 bg-blue-50"
+    if (statusKey === "pending") return "text-amber-600 bg-amber-50"
+    return "text-rose-600 bg-rose-50"
 }
 
 interface ReceiptContentProps {
@@ -97,10 +114,11 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
         )
     }
 
-    let serialCounter = 0
     const itemQuantity = getReceiptItemQuantity(receiptData.items)
     const refundedItems = Array.isArray(receiptData.refundedItems) ? receiptData.refundedItems : []
     const refundAmount = Number(receiptData.refund || 0)
+    const invoiceLines = buildInvoiceLines(receiptData)
+    const invoiceTotals = buildInvoiceTotals(receiptData, invoiceLines, refundAmount)
     const statusKey = String(receiptData.statusKey || receiptData.status || "PENDING").toLowerCase()
 
     return (
@@ -120,95 +138,111 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
                     position: relative;
                 }
 
-                .official-header {
-                    display: grid;
-                    grid-template-columns: 1fr 1fr;
+                /* Masthead: issuer identity on the left, document title on the right */
+                .invoice-masthead {
+                    display: flex;
                     align-items: flex-start;
-                    border-bottom: 2px solid #e2e8f0;
-                    padding-bottom: 24px;
-                    margin-bottom: 30px;
+                    justify-content: space-between;
+                    gap: 24px;
+                    padding-bottom: 20px;
                 }
 
-                .org-info {
-                    text-align: right;
-                    font-size: 11px;
-                    color: #64748b;
-                    line-height: 1.6;
+                .masthead-identity {
+                    display: flex;
+                    align-items: flex-start;
+                    gap: 18px;
                 }
 
-                .invoice-meta {
-                    text-align: right;
-                    font-family: 'Outfit', sans-serif;
-                }
-
-                .invoice-meta h1 {
-                    font-size: 22px;
+                .issuer-name {
+                    font-size: 15px;
                     font-weight: 800;
                     color: #0f172a;
-                    margin-bottom: 4px;
-                    letter-spacing: -0.02em;
+                    letter-spacing: -0.01em;
+                    margin: 0 0 4px;
                 }
 
-                .meta-item {
-                    font-size: 13px;
-                    color: #1e293b;
-                    margin-bottom: 2px;
-                }
-
-                .meta-label {
-                    font-weight: 700;
-                    text-transform: uppercase;
+                .issuer-line {
+                    font-size: 10.5px;
                     color: #64748b;
-                    margin-right: 8px;
-                    font-size: 11px;
+                    line-height: 1.5;
+                    margin: 0;
                 }
 
-                .detail-grid {
+                .masthead-title {
+                    font-size: 30px;
+                    font-weight: 300;
+                    letter-spacing: 0.08em;
+                    color: #334155;
+                    white-space: nowrap;
+                    padding-top: 4px;
+                }
+
+                /* Bordered party grid: invoice meta, then Bill To / Delivery To */
+                .invoice-parties {
                     display: grid;
-                    grid-template-columns: 1fr 1fr 1fr;
-                    gap: 16px;
+                    grid-template-columns: 1fr 1fr;
+                    border: 1px solid #cbd5e1;
+                    border-bottom: none;
                     margin-bottom: 24px;
                 }
 
-                .detail-section {
-                    border: 1px solid #f1f5f9;
-                    background: #fbfcfd;
-                    border-radius: 8px;
-                    padding: 12px;
+                .party-cell {
+                    padding: 10px 12px;
+                    border-bottom: 1px solid #cbd5e1;
                 }
 
-                .section-title {
+                .party-head {
+                    background: #f1f5f9;
+                    padding: 6px 12px;
+                    border-bottom: 1px solid #cbd5e1;
                     font-size: 10px;
                     font-weight: 800;
                     text-transform: uppercase;
-                    color: #64748b;
-                    border-bottom: 1px solid #e2e8f0;
-                    margin-bottom: 8px;
-                    padding-bottom: 4px;
-                    display: flex;
-                    align-items: center;
-                    gap: 6px;
+                    letter-spacing: 0.08em;
+                    color: #475569;
                 }
 
-                .detail-row {
-                    display: flex;
-                    justify-content: space-between;
-                    font-size: 11px;
+                .party-right {
+                    border-left: 1px solid #cbd5e1;
+                }
+
+                .meta-line {
+                    display: grid;
+                    grid-template-columns: 88px 10px 1fr;
+                    align-items: baseline;
+                    font-size: 11.5px;
                     margin-bottom: 4px;
                 }
 
-                .detail-label {
-                    color: #94a3b8;
-                    font-weight: 500;
+                .meta-key {
+                    color: #64748b;
+                    font-weight: 600;
                 }
 
-                .detail-value {
-                    color: #1e293b;
+                .meta-value {
+                    color: #0f172a;
                     font-weight: 700;
+                    overflow-wrap: anywhere;
                 }
 
-                .billed-to-section .detail-value {
-                    text-align: right;
+                .party-name {
+                    font-size: 13px;
+                    font-weight: 700;
+                    color: #0f172a;
+                    margin: 0 0 4px;
+                }
+
+                .party-line {
+                    font-size: 11px;
+                    color: #334155;
+                    line-height: 1.6;
+                    margin: 0;
+                    overflow-wrap: anywhere;
+                }
+
+                .party-label {
+                    color: #64748b;
+                    font-weight: 600;
                 }
 
                 /* Enhanced Table Styles */
@@ -233,24 +267,6 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
                     padding: 8px 12px;
                     font-size: 12px;
                     border-bottom: 1px solid #f1f5f9;
-                }
-
-                .cat-row td {
-                    background: #f8fafc;
-                    font-weight: 800;
-                    font-size: 10px;
-                    text-transform: uppercase;
-                    color: #475569;
-                    border-top: 1px solid #e2e8f0;
-                    letter-spacing: 0.1em;
-                }
-
-                .subcat-row td {
-                    font-weight: 600;
-                    font-size: 10px;
-                    color: #94a3b8;
-                    padding-left: 24px;
-                    background: #fafbfc;
                 }
 
                 .summary-block {
@@ -323,172 +339,134 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
 
             {/* Official Invoice Content */}
             <div className="official-invoice">
-                {/* Header */}
-                <div className="official-header">
-                    <div className="col-span-2 flex justify-center">
+                {/* Masthead */}
+                <div className="invoice-masthead">
+                    <div className="masthead-identity">
                         <Image
                             src="/apricart-logo-blue.png"
-                            alt="OneFlowe Logo"
-                            width={180}
-                            height={50}
-                            className="object-contain"
+                            alt={INVOICE_ISSUER.name}
+                            width={150}
+                            height={42}
+                            className="object-contain shrink-0"
                             priority
                         />
+                        <div>
+                            <p className="issuer-name">{INVOICE_ISSUER.name}</p>
+                            {INVOICE_ISSUER.addressLines.map((line) => (
+                                <p key={line} className="issuer-line">{line}</p>
+                            ))}
+                            <p className="issuer-line">NTN: {INVOICE_ISSUER.ntn}</p>
+                            <p className="issuer-line">STRN: {INVOICE_ISSUER.strn}</p>
+                        </div>
                     </div>
-                    <div className="mt-4">
-                        <p className="text-[11px] font-bold text-slate-800 uppercase tracking-tight">From:</p>
-                        <p className="text-[12px] font-medium text-slate-600">{"Apricart E-Store Pvt Ltd"}</p>
+                    <div className="masthead-title">INVOICE</div>
+                </div>
+
+                {/* Invoice meta and parties */}
+                <div className="invoice-parties">
+                    <div className="party-cell">
+                        <div className="meta-line">
+                            <span className="meta-key">Invoice#</span>
+                            <span className="meta-key">:</span>
+                            <span className="meta-value">{receiptData.invoiceNumber || "N/A"}</span>
+                        </div>
+                        <div className="meta-line">
+                            <span className="meta-key">Invoice Date</span>
+                            <span className="meta-key">:</span>
+                            <span className="meta-value">{formatInvoiceDisplayDate(receiptData.date) || "N/A"}</span>
+                        </div>
+                        <div className="meta-line">
+                            <span className="meta-key">P.O.#</span>
+                            <span className="meta-key">:</span>
+                            <span className="meta-value">{getInvoicePoNumber(receiptData)}</span>
+                        </div>
                     </div>
 
-                    {/* <div className="invoice-meta">
-                        <h1>INVOICE#: {receiptData.invoiceNumber}</h1>
-                        <div className="meta-item">
-                            <span className="meta-label">DATE:</span>
-                            <span className="font-semibold">{receiptData.date}</span>
-                        </div>
-                        <div className="meta-item">
-                            <span className="meta-label">Contact No:</span>
-                            <span className="font-semibold">{receiptData.organizationContact || "0333-3182410"}</span>
-                        </div>
-
-                        <div className="mt-6">
-                            <div className="meta-item">
-                                <span className="meta-label">BUYER NAME:</span>
-                                <span className="font-bold uppercase">{receiptData.buyerName}</span>
-                            </div>
-                            <div className="meta-item flex justify-end gap-1 max-w-[300px] ml-auto">
-                                <span className="meta-label whitespace-nowrap">Deliver to:</span>
-                                <span className="font-medium text-[11px] leading-tight text-slate-600">
-                                    {receiptData.buyerAddress || "—"}
+                    <div className="party-cell party-right">
+                        <div className="meta-line">
+                            <span className="meta-key">Status</span>
+                            <span className="meta-key">:</span>
+                            <span>
+                                <span className={`inline-block rounded px-1.5 text-[10px] font-bold uppercase ${getStatusBadgeClass(statusKey)}`}>
+                                    {receiptData.status || "PENDING"}
                                 </span>
+                            </span>
+                        </div>
+                        <div className="meta-line">
+                            <span className="meta-key">Total Items</span>
+                            <span className="meta-key">:</span>
+                            <span className="meta-value">{itemQuantity}</span>
+                        </div>
+                        {!pricesHidden && (
+                            <div className="meta-line">
+                                <span className="meta-key">Subtotal</span>
+                                <span className="meta-key">:</span>
+                                <span className="meta-value">PKR {Number(receiptData.subtotal).toLocaleString()}</span>
                             </div>
-                        </div>
-                    </div> */}
-                </div>
-
-                {/* Detail Grid */}
-                <div className="detail-grid">
-                    <div className="detail-section billed-to-section">
-                        <div className="section-title">
-                            <FileText className="h-3 w-3" /> Billed To
-                        </div>
-                        <div className="detail-row">
-                            <span className="detail-label">Name:</span>
-                            <span className="detail-value">{receiptData.buyerName}</span>
-                        </div>
-                        <div className="detail-row">
-                            <span className="detail-label">Address:</span>
-                            <span className="detail-value max-w-[140px]">{toDisplayNameCase(receiptData.buyerAddress || "—")}</span>
-                        </div>
-                        <div className="detail-row">
-                            <span className="detail-label">Initiator:</span>
-                            <span className="detail-value truncate max-w-[140px]">
-                                {toDisplayNameCase(receiptData.placedByName || "N/A")}
-                            </span>
-                        </div>
-                        <div className="detail-row">
-                            <span className="detail-label">Approver:</span>
-                            <span className="detail-value truncate max-w-[140px]">
-                                {toDisplayNameCase(receiptData.approvedByName || "N/A")}
-                            </span>
-                        </div>
-                        <div className="detail-row">
-                            <span className="detail-label">Phone:</span>
-                            <span className="detail-value">{receiptData.placedByPhone || receiptData.buyerPhone || "N/A"}</span>
-                        </div>
+                        )}
                     </div>
 
-                    <div className="detail-section">
-                        <div className="section-title">
-                            <CheckCircle2 className="h-3 w-3" /> Order Details
-                        </div>
-                        <div className="detail-row">
-                            <span className="detail-label">Invoice #:</span>
-                            <span className="detail-value">{receiptData.invoiceNumber}</span>
-                        </div>
-                        <div className="detail-row">
-                            <span className="detail-label">Date:</span>
-                            <span className="detail-value">{receiptData.date}</span>
-                        </div>
-                        <div className="detail-row">
-                            <span className="detail-label">Status:</span>
-                            <span className={`detail-value px-1.5 rounded text-[10px] uppercase ${
-                                (() => {
-                                  if (statusKey === "fulfilled") {
-                                    return "text-emerald-600 bg-emerald-50"
-                                  }
-                                  if (statusKey === "partially_fulfilled" || statusKey === "partially_refunded") {
-                                    return "text-indigo-600 bg-indigo-50"
-                                  }
-                                  if (statusKey === "approved") {
-                                    return "text-blue-600 bg-blue-50"
-                                  }
-                                  if (statusKey === "pending") {
-                                    return "text-amber-600 bg-amber-50"
-                                  }
-                                  return "text-rose-600 bg-rose-50"
-                                })()
-                            }`}>
-                                {receiptData.status || "PENDING"}
-                            </span>
-                        </div>
+                    <div className="party-head">Bill To</div>
+                    <div className="party-head party-right">Delivery To</div>
+
+                    <div className="party-cell">
+                        <p className="party-name">{receiptData.organizationName || receiptData.buyerName || "N/A"}</p>
+                        {receiptData.organizationNtn && (
+                            <p className="party-line">NTN: {receiptData.organizationNtn}</p>
+                        )}
                     </div>
 
-                    <div className="detail-section">
-                        <div className="section-title">
-                            <FileText className="h-3 w-3" /> Quick Summary
-                        </div>
-                        <div className="detail-row">
-                            <span className="detail-label">Items:</span>
-                            <span className="detail-value">{itemQuantity}</span>
-                        </div>
-                        {!pricesHidden && <div className="detail-row">
-                            <span className="detail-label">Subtotal:</span>
-                            <span className="detail-value">PKR {Number(receiptData.subtotal).toLocaleString()}</span>
-                        </div>}
-
+                    <div className="party-cell party-right">
+                        <p className="party-name">{receiptData.buyerName || "N/A"}</p>
+                        {receiptData.organizationName && (
+                            <p className="party-line">{receiptData.organizationName}</p>
+                        )}
+                        <p className="party-line">
+                            <span className="party-label">Address:</span>{" "}
+                            {toDisplayNameCase(receiptData.buyerAddress || "—")}
+                        </p>
+                        <p className="party-line">
+                            <span className="party-label">Phone:</span>{" "}
+                            {receiptData.placedByPhone || receiptData.buyerPhone || "N/A"}
+                        </p>
+                        <p className="party-line">
+                            <span className="party-label">Initiator:</span>{" "}
+                            {toDisplayNameCase(receiptData.placedByName || "N/A")}
+                        </p>
+                        <p className="party-line">
+                            <span className="party-label">Approver:</span>{" "}
+                            {toDisplayNameCase(receiptData.approvedByName || "N/A")}
+                        </p>
                     </div>
                 </div>
 
-                {/* Items Table with Categories */}
+                {/* Items */}
                 <table className="items-table">
                     <thead>
                         <tr>
-                            <th className="w-12 text-center">#</th>
-                            <th>Description</th>
-                            <th className="text-center w-20">Qty</th>
-                            {!pricesHidden && <th className="text-right w-24">Price</th>}
-                            {!pricesHidden && <th className="text-right w-28">Total</th>}
+                            <th className="w-10 text-center">#</th>
+                            <th>Item &amp; Description</th>
+                            <th className="text-center w-24">Qty</th>
+                            {!pricesHidden && <th className="text-right w-24">Rate</th>}
+                            {!pricesHidden && <th className="text-right w-16">Tax %</th>}
+                            {!pricesHidden && <th className="text-right w-24">Tax</th>}
+                            {!pricesHidden && <th className="text-right w-28">Amount</th>}
                         </tr>
                     </thead>
                     <tbody>
-                        {receiptData?.items?.map((cat: any) => (
-                            <React.Fragment key={cat.mainCategoryName || cat.categoryName}>
-                                <tr className="cat-row">
-                                    <td colSpan={pricesHidden ? 3 : 5}>{cat.mainCategoryName || cat.categoryName}</td>
-                                </tr>
-                                {(cat.subCategories || [{ subCategoryName: "", items: cat.items }]).map((sub: any) => (
-                                    <React.Fragment key={`${cat.mainCategoryName || cat.categoryName}-${sub.subCategoryName || "uncategorized"}`}>
-                                        {sub.subCategoryName && (
-                                            <tr className="subcat-row">
-                                                <td colSpan={pricesHidden ? 3 : 5}><ChevronRight className="inline h-3 w-3 mr-1" /> {sub.subCategoryName}</td>
-                                            </tr>
-                                        )}
-                                        {sub.items?.map((item: any, ii: number) => {
-                                            serialCounter++
-                                            return (
-                                                <tr key={`${cat.mainCategoryName || cat.categoryName}-${sub.subCategoryName || "uncategorized"}-${item.description || "item"}-${ii}`}>
-                                                    <td className="text-center text-slate-400 font-medium">{serialCounter}</td>
-                                                    <td className="text-slate-800 font-medium">{item.description}</td>
-                                                    <td className="text-center tabular-nums text-slate-600">{formatQuantity(item.quantity)}</td>
-                                                    {!pricesHidden && <td className="text-right tabular-nums text-slate-600">{Number(item.rate).toLocaleString()}</td>}
-                                                    {!pricesHidden && <td className="text-right tabular-nums font-bold text-slate-900">{Number(item.total).toLocaleString()}</td>}
-                                                </tr>
-                                            )
-                                        })}
-                                    </React.Fragment>
-                                ))}
-                            </React.Fragment>
+                        {invoiceLines.map((line) => (
+                            <tr key={`${line.serial}-${line.description}`}>
+                                <td className="text-center text-slate-400 font-medium">{line.serial}</td>
+                                <td className="text-slate-800 font-medium">{line.description}</td>
+                                <td className="text-center tabular-nums text-slate-600">
+                                    {formatInvoiceQuantity(line.quantity)}
+                                    {line.unit && <span className="ml-1 text-[9px] text-slate-400">{line.unit}</span>}
+                                </td>
+                                {!pricesHidden && <td className="text-right tabular-nums text-slate-600">{formatInvoiceMoney(line.rate)}</td>}
+                                {!pricesHidden && <td className="text-right tabular-nums text-slate-500">{formatInvoiceTaxPercent(line.taxPercent)}</td>}
+                                {!pricesHidden && <td className="text-right tabular-nums text-slate-600">{formatInvoiceMoney(line.tax)}</td>}
+                                {!pricesHidden && <td className="text-right tabular-nums font-bold text-slate-900">{formatInvoiceMoney(line.amount)}</td>}
+                            </tr>
                         ))}
                     </tbody>
                 </table>
@@ -497,29 +475,35 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
                 {!pricesHidden && <div className="summary-block">
                     <div className="summary-table">
                         <div className="summary-row">
-                            <span className="text-slate-400 font-medium">Subtotal Amount</span>
-                            <span className="font-bold text-slate-700">PKR {Number(receiptData.subtotal).toLocaleString()}</span>
+                            <span className="text-slate-400 font-medium">Sub Total</span>
+                            <span className="font-bold text-slate-700">{formatInvoiceMoney(invoiceTotals.subTotal)}</span>
                         </div>
                         <div className="summary-row">
-                            <span className="text-slate-400 font-medium">Tax & Processing</span>
-                            <span className="font-bold text-slate-700">PKR {Number(receiptData.tax).toLocaleString()}</span>
+                            <span className="text-slate-400 font-medium">{invoiceTotals.taxLabel}</span>
+                            <span className="font-bold text-slate-700">{formatInvoiceMoney(invoiceTotals.taxAmount)}</span>
                         </div>
-                        <div className="summary-row">
-                            <span className="text-slate-400 font-medium">Platform Discount</span>
-                            <span className="font-bold text-red-500">-PKR {Number(receiptData.discount).toLocaleString()}</span>
-                        </div>
-                        {receiptData.deliveryCharges > 0 && (
+                        {invoiceTotals.discount > 0 && (
+                            <div className="summary-row">
+                                <span className="text-slate-400 font-medium">Platform Discount</span>
+                                <span className="font-bold text-red-500">-{formatInvoiceMoney(invoiceTotals.discount)}</span>
+                            </div>
+                        )}
+                        {invoiceTotals.deliveryCharges > 0 && (
                             <div className="summary-row">
                                 <span className="text-slate-400 font-medium">Delivery Charges</span>
-                                <span className="font-bold text-slate-700">PKR {Number(receiptData.deliveryCharges).toLocaleString()}</span>
+                                <span className="font-bold text-slate-700">{formatInvoiceMoney(invoiceTotals.deliveryCharges)}</span>
                             </div>
                         )}
                         {refundAmount > 0 && (
                             <div className="summary-row">
                                 <span className="text-slate-400 font-medium">Refunded</span>
-                                <span className="font-bold text-red-500">-PKR {refundAmount.toLocaleString()}</span>
+                                <span className="font-bold text-red-500">-{formatInvoiceMoney(refundAmount)}</span>
                             </div>
                         )}
+                        <div className="summary-row">
+                            <span className="text-slate-400 font-medium">Rounding</span>
+                            <span className="font-bold text-slate-700">{formatInvoiceMoney(invoiceTotals.rounding)}</span>
+                        </div>
                         {refundedItems.length > 0 && (
                             <div className="mt-3 rounded-md border border-red-100 bg-red-50/60 p-3">
                                 <p className="mb-2 text-[10px] font-black uppercase tracking-widest text-red-500">Refunded Items</p>
@@ -535,8 +519,8 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
                         )}
 
                         <div className="payable-hightlight">
-                            <span className="payable-label">Total Payable</span>
-                            <span className="payable-value">PKR {Number(receiptData.totalAmount).toLocaleString()}</span>
+                            <span className="payable-label">Total</span>
+                            <span className="payable-value">PKR {formatInvoiceMoney(invoiceTotals.total)}</span>
                         </div>
                     </div>
                 </div>}

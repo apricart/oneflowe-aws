@@ -13,7 +13,7 @@ import { ROLE_TEMPLATES, type Permission } from '@/lib/permissions'
 
 const DEFAULT_SETTINGS = [
   { key: 'default_currency', value: 'PKR' },
-  { key: 'tax_rate', value: 0 },
+  { key: 'tax_rate', value: 18 }, // percent; every catalogue price is entered inclusive of it
   { key: 'auto_approve_orders', value: false },
   { key: 'order_approval_threshold', value: 10000 },
   { key: 'require_mfa', value: false },

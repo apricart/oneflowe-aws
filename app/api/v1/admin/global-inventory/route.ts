@@ -14,6 +14,7 @@ import {
   validationMessage,
 } from "@/lib/server/mutation-validation"
 import { parseQuantity,sanitizeQuantityStep,validateProductQuantity } from "@/lib/quantity"
+import { isHistoricalOnlyProduct, taxRatePercentToBp } from "@/lib/tax"
 
 async function getProductImagesResponse(searchParams: URLSearchParams) {
   if (searchParams.get("imagesOnly") !== "true") return null
@@ -53,6 +54,7 @@ async function getSingleProductResponse(searchParams: URLSearchParams) {
       categoryId: globalProducts.categoryId,
       imageUrl: globalProducts.imageUrl,
       basePrice: globalProducts.basePrice,
+      taxRateBp: globalProducts.taxRateBp,
       unit: globalProducts.unit,
       status: globalProducts.status,
       stockQuantity: globalProducts.stockQuantity,
@@ -194,6 +196,7 @@ export async function GET(req: NextRequest) {
         categoryId: globalProducts.categoryId,
         imageUrl: lite ? sql<string | null>`NULL` : globalProducts.imageUrl,
         basePrice: globalProducts.basePrice,
+      taxRateBp: globalProducts.taxRateBp,
         unit: globalProducts.unit,
         status: globalProducts.status,
         stockQuantity: globalProducts.stockQuantity,
@@ -304,6 +307,7 @@ export async function POST(req: NextRequest) {
       categoryId,
       imageUrl,
       basePrice,
+      taxRatePercent,
       unit,
       status = "active",
       stockQuantity = 0,
@@ -358,6 +362,9 @@ export async function POST(req: NextRequest) {
         categoryId: categoryId ?? null,
         imageUrl: imageUrl || null,
         basePrice: Math.round(basePrice * 100), // Convert to cents
+        // Null leaves the product following its organization's rate, which is
+        // what the great majority of the catalogue does.
+        taxRateBp: taxRatePercent == null ? null : taxRatePercentToBp(taxRatePercent),
         unit: unit || "unit",
         status,
         stockQuantity: normalizedStockQuantity,
@@ -395,13 +402,16 @@ export async function POST(req: NextRequest) {
 }
 
 function applyBasicProductUpdates(updateData: Record<string, any>, input: Record<string, any>) {
-  const { productCode, name, description, categoryId, imageUrl, basePrice, unit, status, metadata } = input
+  const { productCode, name, description, categoryId, imageUrl, basePrice, taxRatePercent, unit, status, metadata } = input
   if (productCode !== undefined) updateData.productCode = productCode
   if (name !== undefined) updateData.name = name
   if (description !== undefined) updateData.description = description
   if (categoryId !== undefined) updateData.categoryId = categoryId
   if (imageUrl !== undefined) updateData.imageUrl = imageUrl
   if (basePrice !== undefined) updateData.basePrice = Math.round(basePrice * 100)
+  if (taxRatePercent !== undefined) {
+    updateData.taxRateBp = taxRatePercent === null ? null : taxRatePercentToBp(taxRatePercent)
+  }
   if (unit !== undefined) updateData.unit = unit
   if (status !== undefined) updateData.status = status
   if (metadata !== undefined) updateData.metadata = metadata
@@ -445,6 +455,20 @@ function applyQuantityUpdates(
   if (!stockValidation.ok && parsedStock !== 0) return stockValidation.error
   updateData.stockQuantity = Math.max(0, parsedStock || 0)
   return null
+}
+
+/**
+ * Legacy products imported for historical records carry prices that *exclude*
+ * sales tax, unlike the rest of the catalogue. They are imported inactive and
+ * order creation only reads active products, so today they are unreachable.
+ * Activating one would drop a net-priced product into a system that treats
+ * every price as gross, understating both the price base and the tax on every
+ * order containing it — silently, because nothing else would look wrong.
+ */
+function getHistoricalProductActivationError(status: unknown, existingProduct: Record<string, any>) {
+  if (status !== "active" || existingProduct.status === "active") return null
+  if (!isHistoricalOnlyProduct(existingProduct.metadata)) return null
+  return "This product was imported for historical records only and its price excludes sales tax. Restate the price to include tax before activating it."
 }
 
 function buildGlobalProductUpdateData(input: Record<string, any>, existingProduct: Record<string, any>) {
@@ -550,6 +574,7 @@ export async function PUT(req: NextRequest) {
       categoryId,
       imageUrl,
       basePrice,
+      taxRatePercent,
       unit,
       status,
       stockQuantity,
@@ -591,10 +616,12 @@ export async function PUT(req: NextRequest) {
     const [existingProduct] = await db.select({
       id: globalProducts.id,
       status: globalProducts.status,
+      metadata: globalProducts.metadata,
       name: globalProducts.name,
       description: globalProducts.description,
       imageUrl: globalProducts.imageUrl,
       basePrice: globalProducts.basePrice,
+      taxRateBp: globalProducts.taxRateBp,
       allowDecimalQuantity: globalProducts.allowDecimalQuantity,
       quantityStep: globalProducts.quantityStep,
     })
@@ -607,10 +634,13 @@ export async function PUT(req: NextRequest) {
     }
 
     const productInput = {
-      productCode, name, description, categoryId, imageUrl, basePrice, unit, status,
+      productCode, name, description, categoryId, imageUrl, basePrice, taxRatePercent, unit, status,
       stockQuantity, allowDecimalQuantity, quantityStep, metadata, discountType,
       discountValue, discountStartAt, discountEndAt, discountActive,
     }
+    const activationError = getHistoricalProductActivationError(status, existingProduct)
+    if (activationError) return NextResponse.json({ error: activationError }, { status: 400 })
+
     const { updateData, stockError } = buildGlobalProductUpdateData(productInput, existingProduct)
     if (stockError) return NextResponse.json({ error: stockError }, { status: 400 })
 

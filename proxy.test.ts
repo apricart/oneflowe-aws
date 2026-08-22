@@ -155,6 +155,23 @@ describe("session policy proxy enforcement", () => {
     ["HEAD_OFFICE", "/group-portal", "/dashboard"],
     ["BRANCH_ADMIN", "/group-portal", "/dashboard"],
     ["ORDER_PORTAL", "/group-portal", "/shop"],
+    // The invoice page is shared: the store links to it and the admin orders
+    // directory links to it, so neither role is bounced home from it. Which
+    // invoice each may actually read is enforced by the invoice endpoints.
+    ["ORDER_PORTAL", "/invoices/42", null],
+    ["SUPER_ADMIN", "/invoices/42", null],
+    ["HEAD_OFFICE", "/invoices/42", null],
+    ["BRANCH_ADMIN", "/invoices/42", null],
+    // The store role gains the invoice page and nothing else.
+    ["ORDER_PORTAL", "/orders", "/shop"],
+    ["ORDER_PORTAL", "/reports", "/shop"],
+    // The group roles read invoices from their own surfaces too: the approval
+    // queue and the group order history both link to the shared page.
+    ["GROUP_USER", "/invoices/42", null],
+    ["GROUP_ORDER_PORTAL", "/invoices/42", null],
+    // The rest of each area stays exactly as closed as before.
+    ["GROUP_USER", "/orders", "/approvals"],
+    ["GROUP_ORDER_PORTAL", "/orders", "/group-portal"],
   ])(
     "preserves %s routing for %s",
     async (role, path, redirectedPath) => {

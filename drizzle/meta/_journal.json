@@ -316,6 +316,27 @@
       "when": 1787061600000,
       "tag": "20260818140000_add_group_orders",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1787400000000,
+      "tag": "20260822120000_add_organization_ntn_number",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1787403600000,
+      "tag": "20260822130000_add_inclusive_tax_rates",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1787486400000,
+      "tag": "20260823120000_add_purchase_order_number",
+      "breakpoints": true
     }
   ]
 }
