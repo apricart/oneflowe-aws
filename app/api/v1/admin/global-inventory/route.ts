@@ -464,11 +464,43 @@ function applyQuantityUpdates(
  * Activating one would drop a net-priced product into a system that treats
  * every price as gross, understating both the price base and the tax on every
  * order containing it — silently, because nothing else would look wrong.
+ *
+ * Activation is therefore allowed only when the admin explicitly confirms the
+ * stored price now includes tax. Inferring that from a price edit was tried and
+ * is wrong: an admin who restates the price in one save and activates in the
+ * next leaves the second request with nothing to detect, locking the row out
+ * for good. The confirmation is a statement about the price as it now stands,
+ * so it works whenever the restatement happened.
  */
-function getHistoricalProductActivationError(status: unknown, existingProduct: Record<string, any>) {
+function getHistoricalProductActivationError(
+  status: unknown,
+  existingProduct: Record<string, any>,
+  input: Record<string, any>,
+) {
   if (status !== "active" || existingProduct.status === "active") return null
   if (!isHistoricalOnlyProduct(existingProduct.metadata)) return null
-  return "This product was imported for historical records only and its price excludes sales tax. Restate the price to include tax before activating it."
+  if (input.confirmTaxInclusivePrice === true) return null
+  return "This product was imported for historical records only and its price excludes sales tax. Set the tax-inclusive price, then confirm it includes tax to activate it."
+}
+
+/**
+ * Drop the legacy marker once the price has been restated, and strip it from
+ * whatever metadata the client echoed back: the edit form resends the stored
+ * object verbatim, so trusting the caller here would re-flag the row on the
+ * very save that fixed it.
+ */
+function clearHistoricalOnlyFlag(
+  updateData: Record<string, any>,
+  input: Record<string, any>,
+  existingProduct: Record<string, any>,
+) {
+  const source = (input.metadata ?? existingProduct.metadata ?? {}) as Record<string, unknown>
+  const { historicalOnly, ...retained } = source
+  updateData.metadata = {
+    ...retained,
+    historicalNetPriceCents: existingProduct.basePrice,
+    historicalPriceRestatedAt: new Date().toISOString(),
+  }
 }
 
 function buildGlobalProductUpdateData(input: Record<string, any>, existingProduct: Record<string, any>) {
@@ -586,6 +618,7 @@ export async function PUT(req: NextRequest) {
       discountStartAt,
       discountEndAt,
       discountActive,
+      confirmTaxInclusivePrice,
     } = parsedBody.data
 
     if (!id) {
@@ -637,12 +670,17 @@ export async function PUT(req: NextRequest) {
       productCode, name, description, categoryId, imageUrl, basePrice, taxRatePercent, unit, status,
       stockQuantity, allowDecimalQuantity, quantityStep, metadata, discountType,
       discountValue, discountStartAt, discountEndAt, discountActive,
+      confirmTaxInclusivePrice,
     }
-    const activationError = getHistoricalProductActivationError(status, existingProduct)
+    const activationError = getHistoricalProductActivationError(status, existingProduct, productInput)
     if (activationError) return NextResponse.json({ error: activationError }, { status: 400 })
 
     const { updateData, stockError } = buildGlobalProductUpdateData(productInput, existingProduct)
     if (stockError) return NextResponse.json({ error: stockError }, { status: 400 })
+
+    if (isHistoricalOnlyProduct(existingProduct.metadata) && confirmTaxInclusivePrice === true) {
+      clearHistoricalOnlyFlag(updateData, productInput, existingProduct)
+    }
 
     const [updatedProduct] = await db.update(globalProducts)
       .set(updateData)

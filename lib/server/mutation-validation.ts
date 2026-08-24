@@ -414,6 +414,10 @@ const globalProductAdminFields = {
   discountStartAt: z.union([z.string().trim().max(64), z.null()]).optional(),
   discountEndAt: z.union([z.string().trim().max(64), z.null()]).optional(),
   discountActive: z.boolean().optional(),
+  // Acknowledgement that a legacy import's net price has been restated as a
+  // gross one. Only read when activating a historical-only product; it records
+  // a claim about the price being saved, and is never persisted as-is.
+  confirmTaxInclusivePrice: z.boolean().optional(),
 }
 
 const globalProductAdminBaseSchema = z.object(globalProductAdminFields)
