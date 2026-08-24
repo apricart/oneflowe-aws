@@ -4,18 +4,72 @@ on:
   push:
     branches:
       - test
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: oneflowe-staging-deployment
+  cancel-in-progress: false
+
 jobs:
   scan-and-deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 35
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # Report-only scan. It will not block deployment.
+      # This uses the open-source CLI rather than gitleaks-action, which exits
+      # 1 on organization-owned repositories unless a paid GITLEAKS_LICENSE
+      # secret is configured. Known false positives live in .gitleaksignore.
+      - name: Scan repository history for committed secrets
+        continue-on-error: true
+        env:
+          GITLEAKS_VERSION: 8.28.0
+        run: |
+          set -Eeuo pipefail
+
+          curl \
+            --fail \
+            --show-error \
+            --silent \
+            --location \
+            --output "$RUNNER_TEMP/gitleaks.tar.gz" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+
+          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
+
+          "$RUNNER_TEMP/gitleaks" git . \
+            --no-banner \
+            --redact \
+            --exit-code 0 \
+            --report-format json \
+            --report-path gitleaks-report.json
+
+          # Findings do not fail the run, so surface them where they are seen.
+          LEAK_COUNT=$(jq 'length' gitleaks-report.json)
+
+          echo "Secret scan findings: $LEAK_COUNT"
+
+          if [ "$LEAK_COUNT" -gt 0 ]; then
+            {
+              echo "### Secret scan: $LEAK_COUNT potential secret(s)"
+              echo
+              echo "Rotate anything real. Record a verified false positive as"
+              echo "its fingerprint in .gitleaksignore."
+              echo
+
+              jq -r \
+                '.[] | "- \(.File) line \(.StartLine) - \(.RuleID)"' \
+                gitleaks-report.json
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -26,8 +80,17 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
-      # ---- SonarCloud scan (report only, never blocks) ----
-      - name: SonarCloud Scan
+      - name: Run unit tests
+        run: npm test
+
+      - name: Run TypeScript checks
+        run: npm run typecheck
+
+      - name: Run lint
+        run: npm run lint
+
+      # Report-only scan. It will not block deployment.
+      - name: SonarCloud scan
         continue-on-error: true
         uses: SonarSource/sonarqube-scan-action@689fb39b34b9aa95ebc5f8f119343ddd51542402 # v4
         env:
@@ -37,8 +100,8 @@ jobs:
             -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
             -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
 
-      # ---- Trivy filesystem/dependency scan (report only) ----
-      - name: Trivy filesystem scan
+      # Report-only scan. It will not block deployment.
+      - name: Trivy filesystem scan (JSON)
         continue-on-error: true
         uses: aquasecurity/trivy-action@2736533278103862a861f4a35ebac3e97854d956 # master
         with:
@@ -49,7 +112,8 @@ jobs:
           format: json
           output: trivy-fs-report.json
 
-      - name: Trivy filesystem scan (readable table, for the report bundle)
+      # Report-only scan. It will not block deployment.
+      - name: Trivy filesystem scan (table)
         continue-on-error: true
         uses: aquasecurity/trivy-action@2736533278103862a861f4a35ebac3e97854d956 # master
         with:
@@ -60,8 +124,8 @@ jobs:
           format: table
           output: trivy-fs-report.txt
 
-      # ---- Snyk scan (report only) ----
-      - name: Snyk Scan
+      # Report-only scan. It will not block deployment.
+      - name: Snyk scan
         continue-on-error: true
         uses: snyk/actions/node@12140f4059e244892ae643824a95459a102120dd # master
         env:
@@ -69,7 +133,6 @@ jobs:
         with:
           args: --json-file-output=snyk-report.json
 
-      # ---- Build the Docker image ----
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
@@ -81,13 +144,55 @@ jobs:
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64 # v2
 
+      # Makes rerunning the same workflow safe when ECR tags are immutable.
+      # Uses describe-images, the same call deploy-prod already relies on, so
+      # this needs no IAM change. Any error is treated as "not present", which
+      # falls through to the build and lets the push report the real problem.
+      - name: Check whether immutable image already exists
+        id: ecr-image
+        shell: bash
+        env:
+          DEPLOY_AWS_REGION: ${{ secrets.DEPLOY_AWS_REGION }}
+          ECR_REPOSITORY_URL: ${{ secrets.ECR_REPOSITORY_URL }}
+        run: |
+          set -Eeuo pipefail
+
+          IMAGE_TAG="test-${GITHUB_SHA}"
+          REPOSITORY_NAME="${ECR_REPOSITORY_URL#*/}"
+
+          if aws ecr describe-images \
+            --repository-name "$REPOSITORY_NAME" \
+            --image-ids "imageTag=$IMAGE_TAG" \
+            --region "$DEPLOY_AWS_REGION" \
+            >/dev/null 2>&1; then
+            echo "Image $IMAGE_TAG already exists; this is a safe workflow rerun."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Image $IMAGE_TAG does not exist and will be built."
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build image
+        if: ${{ steps.ecr-image.outputs.exists != 'true' }}
         env:
           ECR_REPOSITORY_URL: ${{ secrets.ECR_REPOSITORY_URL }}
         run: |
-          docker build -t "${ECR_REPOSITORY_URL}:test-${GITHUB_SHA}" .
+          set -Eeuo pipefail
+          docker build --pull \
+            -t "${ECR_REPOSITORY_URL}:test-${GITHUB_SHA}" \
+            .
 
-      # ---- Trivy image scan (report only, the built image itself) ----
+      # On a workflow rerun, pull the existing immutable image so Trivy
+      # can scan the exact image that will be deployed.
+      - name: Pull existing immutable image for scanning
+        if: ${{ steps.ecr-image.outputs.exists == 'true' }}
+        env:
+          ECR_REPOSITORY_URL: ${{ secrets.ECR_REPOSITORY_URL }}
+        run: |
+          set -Eeuo pipefail
+          docker pull "${ECR_REPOSITORY_URL}:test-${GITHUB_SHA}"
+
+      # Report-only scan. It will not block deployment.
       - name: Trivy image scan
         continue-on-error: true
         uses: aquasecurity/trivy-action@2736533278103862a861f4a35ebac3e97854d956 # master
@@ -98,103 +203,280 @@ jobs:
           format: table
           output: trivy-image-report.txt
 
-      # ---- Upload all reports as downloadable artifacts ----
       - name: Upload scan reports
-        if: always()
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: scan-reports-test-${{ github.sha }}
           path: |
+            gitleaks-report.json
             trivy-fs-report.json
             trivy-fs-report.txt
             trivy-image-report.txt
             snyk-report.json
           if-no-files-found: warn
           retention-days: 30
+          overwrite: true
 
-      # ---- Push to ECR (always runs now, regardless of scan findings) ----
-      - name: Push image to ECR
+      # Skip this step on a safe rerun because the immutable image exists.
+      - name: Push immutable image to ECR
+        if: ${{ steps.ecr-image.outputs.exists != 'true' }}
         env:
           ECR_REPOSITORY_URL: ${{ secrets.ECR_REPOSITORY_URL }}
         run: |
+          set -Eeuo pipefail
           docker push "${ECR_REPOSITORY_URL}:test-${GITHUB_SHA}"
 
-      # ---- Deploy to staging via SSM, then wait for and verify the result ----
-      - name: Deploy to staging
+      - name: Deploy to staging through SSM
         env:
           DEPLOY_AWS_REGION: ${{ secrets.DEPLOY_AWS_REGION }}
           ECR_REPOSITORY_URL: ${{ secrets.ECR_REPOSITORY_URL }}
           STAGING_EC2_INSTANCE_ID: ${{ secrets.STAGING_EC2_INSTANCE_ID }}
         run: |
+          set -Eeuo pipefail
+
           ECR_REGISTRY="${ECR_REPOSITORY_URL%%/*}"
+
           if [ "$ECR_REGISTRY" = "$ECR_REPOSITORY_URL" ]; then
-            echo "ECR_REPOSITORY_URL must include both the registry host and repository name" >&2
+            echo "ECR_REPOSITORY_URL must include the registry host and repository name" >&2
             exit 1
           fi
 
-          REMOTE_SCRIPT=$(jq -nr \
-            --arg region "$DEPLOY_AWS_REGION" \
-            --arg registry "$ECR_REGISTRY" \
-            --arg repository "$ECR_REPOSITORY_URL" \
-            --arg commit "$GITHUB_SHA" \
-            '[
-                "#!/bin/bash",
-                "set -Eeuo pipefail",
-                "echo \"[deploy] Checking staging host and runtime configuration\"",
-                "cd /home/ubuntu/app",
-                "test -f docker-compose.yml",
-                "test -f .env.production",
-                "if ! sudo grep -Eq \"^[[:space:]]*NEXTAUTH_URL=[[:space:]]*[^[:alnum:]]*https://\" .env.production; then echo \"[deploy] NEXTAUTH_URL in /home/ubuntu/app/.env.production must use the public staging HTTPS URL\" >&2; exit 20; fi",
-                "echo \"[deploy] Authenticating Docker to ECR\"",
-                ("aws ecr get-login-password --region " + $region + " | sudo docker login --username AWS --password-stdin " + $registry),
-                "echo \"[deploy] Pulling the immutable staging image\"",
-                ("sudo docker pull " + $repository + ":test-" + $commit),
-                ("sudo sed -i -E \"s|^[[:space:]]*image:[[:space:]]*.*oneflowe-app:.*$|    image: " + $repository + ":test-" + $commit + "|\" docker-compose.yml"),
-                ("sudo grep -Fq \"image: " + $repository + ":test-" + $commit + "\" docker-compose.yml"),
-                "echo \"[deploy] Starting the Compose app service\"",
-                "sudo docker compose up -d app",
-                "attempt=0; while [ \"$attempt\" -lt 18 ]; do container_id=$(sudo docker compose ps -a -q app); running_id=$(sudo docker compose ps --status running -q app); echo \"[deploy] health attempt $((attempt + 1))/18\"; if [ -n \"$container_id\" ] && [ \"$container_id\" = \"$running_id\" ] && sudo docker exec \"$container_id\" node -e \"fetch(\\\"http://127.0.0.1:3000/api/v1/health\\\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"; then echo \"[deploy] Staging app is running and healthy\"; exit 0; fi; attempt=$((attempt + 1)); sleep 5; done; echo \"[deploy] App did not become healthy; Compose status and recent logs follow\" >&2; sudo docker compose ps -a >&2 || true; sudo docker compose logs --no-color --tail=200 app >&2 || true; exit 21"
-              ] | join("\n")')
+          REMOTE_BODY=$(cat <<'REMOTE_SCRIPT'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
 
-          # Validate the exact script locally, then encode it so SSM cannot
-          # interpret shell or Go-template syntax as document parameters.
+          APP_DIR="/home/ubuntu/app"
+          COMPOSE_FILE="$APP_DIR/docker-compose.yml"
+          BACKUP_FILE="$APP_DIR/docker-compose.yml.before-deploy"
+          NEW_IMAGE="${DEPLOY_REPOSITORY}:test-${DEPLOY_COMMIT}"
+          ROLLBACK_ENABLED=false
+
+          rollback_on_error() {
+            status=$?
+            trap - EXIT
+
+            if [ "$status" -ne 0 ] &&
+               [ "$ROLLBACK_ENABLED" = true ] &&
+               [ -f "$BACKUP_FILE" ]; then
+              echo "[rollback] Deployment failed; restoring the previous Compose configuration" >&2
+
+              set +e
+
+              sudo cp "$BACKUP_FILE" "$COMPOSE_FILE"
+              cd "$APP_DIR"
+
+              sudo docker compose up -d app
+              sleep 10
+
+              sudo docker compose ps -a >&2
+              sudo docker compose logs \
+                --no-color \
+                --tail=100 \
+                app >&2
+            fi
+
+            exit "$status"
+          }
+
+          trap rollback_on_error EXIT
+
+          echo "[deploy] Validating staging host configuration"
+
+          cd "$APP_DIR"
+
+          test -f "$COMPOSE_FILE"
+          test -f .env.production
+
+          if ! sudo grep -Eq \
+            '^[[:space:]]*NEXTAUTH_URL=[[:space:]]*[^[:alnum:]]*https://' \
+            .env.production; then
+            echo "[deploy] NEXTAUTH_URL must use the public staging HTTPS URL" >&2
+            exit 20
+          fi
+
+          echo "[deploy] Current filesystem usage"
+
+          df -h /
+          sudo docker system df || true
+
+          AVAILABLE_KB=$(df -Pk / | awk 'NR == 2 {print $4}')
+
+          # If less than 6 GiB is available, clean unused data before pulling.
+          # Docker will protect images referenced by existing containers.
+          if [ "$AVAILABLE_KB" -lt 6291456 ]; then
+            echo "[deploy] Less than 6 GiB is free; removing unused images and build cache"
+
+            sudo docker image prune -a -f
+            sudo docker builder prune -a -f
+          fi
+
+          AVAILABLE_KB=$(df -Pk / | awk 'NR == 2 {print $4}')
+
+          # Do not risk filling the disk and breaking Docker or SSM again.
+          if [ "$AVAILABLE_KB" -lt 5242880 ]; then
+            echo "[deploy] Less than 5 GiB remains after cleanup; refusing to pull a new image" >&2
+
+            df -h / >&2
+            sudo docker system df >&2 || true
+
+            exit 22
+          fi
+
+          echo "[deploy] Saving rollback configuration"
+
+          sudo cp "$COMPOSE_FILE" "$BACKUP_FILE"
+          ROLLBACK_ENABLED=true
+
+          echo "[deploy] Authenticating Docker to ECR"
+
+          aws ecr get-login-password \
+            --region "$DEPLOY_REGION" |
+            sudo docker login \
+              --username AWS \
+              --password-stdin \
+              "$DEPLOY_REGISTRY"
+
+          echo "[deploy] Pulling $NEW_IMAGE"
+
+          sudo docker pull "$NEW_IMAGE"
+
+          echo "[deploy] Updating Compose to the immutable image"
+
+          sudo sed -i -E \
+            "s|^[[:space:]]*image:[[:space:]]*.*oneflowe-app:.*$|    image: $NEW_IMAGE|" \
+            "$COMPOSE_FILE"
+
+          sudo grep -Fq \
+            "image: $NEW_IMAGE" \
+            "$COMPOSE_FILE"
+
+          echo "[deploy] Starting the new application container"
+
+          sudo docker compose up -d app
+
+          DEPLOYMENT_HEALTHY=false
+
+          for attempt in $(seq 1 18); do
+            container_id=$(sudo docker compose ps -a -q app)
+            running_id=$(sudo docker compose ps --status running -q app)
+
+            echo "[deploy] Health attempt ${attempt}/18"
+
+            if [ -n "$container_id" ] &&
+               [ "$container_id" = "$running_id" ] &&
+               sudo docker exec "$container_id" node -e \
+                 "fetch('http://127.0.0.1:3000/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"; then
+              DEPLOYMENT_HEALTHY=true
+              break
+            fi
+
+            sleep 5
+          done
+
+          if [ "$DEPLOYMENT_HEALTHY" != true ]; then
+            echo "[deploy] New application did not become healthy" >&2
+
+            sudo docker compose ps -a >&2 || true
+            sudo docker compose logs \
+              --no-color \
+              --tail=200 \
+              app >&2 || true
+
+            # Exiting here activates rollback_on_error.
+            exit 21
+          fi
+
+          echo "[deploy] Staging application is running and healthy"
+
+          # The new application is healthy, so rollback is no longer required.
+          ROLLBACK_ENABLED=false
+          sudo rm -f "$BACKUP_FILE"
+
+          echo "[deploy] Removing Docker data no longer needed by the healthy deployment"
+
+          # Do not add --volumes. Application volumes must remain protected.
+          sudo docker container prune -f || true
+          sudo docker image prune -a -f || true
+          sudo docker builder prune -a -f || true
+
+          echo "[deploy] Final host status"
+
+          df -h /
+          sudo docker system df || true
+          sudo docker compose ps -a
+
+          trap - EXIT
+          exit 0
+          REMOTE_SCRIPT
+          )
+
+          REMOTE_SCRIPT=$(printf \
+            'DEPLOY_REGION=%q\nDEPLOY_REGISTRY=%q\nDEPLOY_REPOSITORY=%q\nDEPLOY_COMMIT=%q\n' \
+            "$DEPLOY_AWS_REGION" \
+            "$ECR_REGISTRY" \
+            "$ECR_REPOSITORY_URL" \
+            "$GITHUB_SHA")
+
+          REMOTE_SCRIPT+=$'\n'
+          REMOTE_SCRIPT+="$REMOTE_BODY"
+
+          # Validate the generated remote script before sending it to EC2.
           printf '%s\n' "$REMOTE_SCRIPT" | /bin/bash -n
-          REMOTE_SCRIPT_BASE64=$(printf '%s\n' "$REMOTE_SCRIPT" | base64 --wrap=0)
+
+          # Base64 prevents SSM and shell interpolation from changing the script.
+          REMOTE_SCRIPT_BASE64=$(printf '%s\n' "$REMOTE_SCRIPT" |
+            base64 --wrap=0)
+
           REMOTE_COMMANDS=$(jq -cn \
             --arg payload "$REMOTE_SCRIPT_BASE64" \
-            '{commands: [("echo \"[ssm] Launching staging deployment script\"; printf %s " + $payload + " | base64 --decode | /bin/bash")]}')
+            '{
+              commands: [
+                (
+                  "echo \"[ssm] Launching staging deployment script\"; printf %s "
+                  + $payload
+                  + " | base64 --decode | /bin/bash"
+                )
+              ]
+            }')
 
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids "$STAGING_EC2_INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
             --parameters "$REMOTE_COMMANDS" \
             --region "$DEPLOY_AWS_REGION" \
+            --timeout-seconds 600 \
             --comment "Deploy test-${GITHUB_SHA} to staging" \
-            --query "Command.CommandId" \
+            --query 'Command.CommandId' \
             --output text)
 
           echo "SSM Command ID: $COMMAND_ID"
-          echo "Waiting for deployment to complete..."
+          echo "Waiting for staging deployment to complete"
 
           INVOCATION=""
           STATUS=""
+
           for attempt in $(seq 1 120); do
             if CURRENT_INVOCATION=$(aws ssm get-command-invocation \
               --command-id "$COMMAND_ID" \
               --instance-id "$STAGING_EC2_INSTANCE_ID" \
               --region "$DEPLOY_AWS_REGION" \
-              --output json 2>&1); then
+              --output json 2>/dev/null); then
+
               INVOCATION="$CURRENT_INVOCATION"
               STATUS=$(jq -r '.Status' <<<"$INVOCATION")
+
               case "$STATUS" in
                 Success|Failed|TimedOut|Cancelled)
                   break
                   ;;
               esac
             fi
+
             if [ $((attempt % 6)) -eq 0 ]; then
-              echo "Still waiting for SSM deployment (status: ${STATUS:-not available})..."
+              echo "Still waiting for SSM deployment (status: ${STATUS:-not available})"
             fi
+
             sleep 5
           done
 
@@ -207,15 +489,59 @@ jobs:
 
           if [ "$STATUS" != "Success" ]; then
             echo "=== SSM INVOCATION ==="
-            jq '{Status, StatusDetails, ResponseCode, ExecutionElapsedTime, ExecutionStartDateTime, ExecutionEndDateTime}' <<<"$INVOCATION"
+
+            jq '{
+              Status,
+              StatusDetails,
+              ResponseCode,
+              ExecutionElapsedTime,
+              ExecutionStartDateTime,
+              ExecutionEndDateTime
+            }' <<<"$INVOCATION"
+
             echo "=== STDOUT ==="
-            STDOUT=$(jq -r '.StandardOutputContent // empty' <<<"$INVOCATION")
-            if [ -n "$STDOUT" ]; then printf '%s\n' "$STDOUT"; else echo "<empty: the SSM agent may not have started the script; check ResponseCode above>"; fi
+
+            STDOUT=$(jq -r \
+              '.StandardOutputContent // empty' \
+              <<<"$INVOCATION")
+
+            if [ -n "$STDOUT" ]; then
+              printf '%s\n' "$STDOUT"
+            else
+              echo "<empty: SSM may not have started the script>"
+            fi
+
             echo "=== STDERR ==="
-            STDERR=$(jq -r '.StandardErrorContent // empty' <<<"$INVOCATION")
-            if [ -n "$STDERR" ]; then printf '%s\n' "$STDERR"; else echo "<empty>"; fi
-            echo "Deployment failed - see output above"
+
+            STDERR=$(jq -r \
+              '.StandardErrorContent // empty' \
+              <<<"$INVOCATION")
+
+            if [ -n "$STDERR" ]; then
+              printf '%s\n' "$STDERR"
+            else
+              echo "<empty>"
+            fi
+
             exit 1
           fi
 
-          echo "Deployment succeeded and container confirmed running"
+          echo "Deployment succeeded and the staging container is healthy"
+
+      # Optional complete-path check through the staging domain, ALB and WAF.
+      # Add a GitHub repository variable called STAGING_HEALTH_URL to enable it.
+      - name: Verify public staging endpoint
+        if: ${{ vars.STAGING_HEALTH_URL != '' }}
+        env:
+          STAGING_HEALTH_URL: ${{ vars.STAGING_HEALTH_URL }}
+        run: |
+          set -Eeuo pipefail
+
+          curl \
+            --fail \
+            --show-error \
+            --silent \
+            --retry 5 \
+            --retry-delay 5 \
+            --retry-all-errors \
+            "$STAGING_HEALTH_URL"

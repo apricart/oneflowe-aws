@@ -1,0 +1,8 @@
+# Findings verified as false positives. Each line is a gitleaks fingerprint.
+# Re-verify before adding anything here: a real credential in git history
+# stays there after deletion and must be rotated, not ignored.
+
+# lib/approval-token.ts declares TOKEN_CHARS, the character alphabet used to
+# generate approval tokens. It omits look-alike characters (0/O, 1/I/L) and is
+# public by design, but its 5.0 entropy trips the generic-api-key rule.
+f5575e5ec24e75a3ed937a43fc4f89c674755ffb:lib/approval-token.ts:generic-api-key:12
