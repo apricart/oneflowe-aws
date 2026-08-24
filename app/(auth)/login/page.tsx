@@ -81,6 +81,9 @@ function getLoginErrorMessage(errorCode: string) {
   if (errorCode === "NETWORK_RESTRICTED") {
     return "Please log in from your organization's network."
   }
+  if (errorCode === "ACCOUNT_LOCKED") {
+    return "Too many failed sign-in attempts. This account is temporarily locked. Please try again later or contact support."
+  }
   if (errorCode === "AUTH_DATABASE_ERROR") {
     return "We couldn't reach the authentication service. Please try again or contact support."
   }

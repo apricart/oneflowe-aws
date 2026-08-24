@@ -421,7 +421,7 @@ The system enforces strict tenant isolation: each organization sees only its own
 - Welcome email sent automatically on creation with temporary password.
 - `mustChangePassword` flag forces first-login password change.
 - Soft-delete: users have a `deletedAt` timestamp; their data is preserved.
-- `sessionVersion` incremented on password change or manual session invalidation — instantly kicks the user out.
+- `sessionVersion` is incremented on password change or manual session invalidation. Cache eviction is attempted immediately; if eviction is unavailable, enforcement occurs no later than the configured validation-cache window (maximum 30 seconds).
 - MFA enable/disable per user.
 - Employee credentials (for `/shop`) managed separately per branch by BRANCH_ADMIN.
 
@@ -514,7 +514,7 @@ The system enforces strict tenant isolation: each organization sees only its own
 - As any user, I want to log in with my username/email and password, so that I can access the system.
 - As any user with MFA enabled, I want to receive a one-time code via email and enter it after my password, so that my account is protected by two factors.
 - As a newly created user, I want to be forced to change my temporary password on first login, so that my account is secure from the start.
-- As a user, I want my session to be automatically invalidated if my account is deactivated or my password is changed, so that unauthorized access is prevented immediately.
+- As a user, I want my session to be automatically invalidated if my account is deactivated or my password is changed, so that unauthorized access is prevented promptly—normally as soon as cache eviction completes and, if eviction is unavailable, no later than the configured validation-cache window (maximum 30 seconds).
 
 ### Order Portal (Employee / ORDER_PORTAL)
 
@@ -617,7 +617,7 @@ The system enforces strict tenant isolation: each organization sees only its own
 
 ### Sessions and Security
 
-26. Every session callback validates `sessionVersion` against the DB. Changing a user's password increments `sessionVersion`, immediately invalidating all existing sessions. **Confirmed.**
+26. Every session callback validates `sessionVersion` against the DB. Changing a user's password increments `sessionVersion`; cache eviction is attempted immediately, with enforcement bounded by the configured validation-cache window (maximum 30 seconds) if eviction is unavailable. **Confirmed.**
 27. `mustChangePassword = true` blocks access to all pages except `/change-password`. **Confirmed** (enforced in middleware).
 28. Idle expiry (tenant-configurable from 1-15 minutes) and the fixed 8-hour absolute expiry are enforced by signed policy claims plus the per-browser `auth_sessions` registry before authorization. Registry activity is advanced atomically only for explicit user interaction; passive checks cannot extend either deadline. **Confirmed.**
 29. Logout revokes the exact server-side session ID before clearing the browser cookie. Expiry and deterministic identity/tenant rejection are one-way registry transitions, so later policy or status relaxation cannot revive a rejected session. **Confirmed.**
@@ -1015,7 +1015,7 @@ graph TD
 | Branch | `branches` | id, organizationId, name, province, city, adminUserId, groupId, baselineBudgetCents, status | Branch belongs to one org |
 | User | `users` | id (UUID), email, username, passwordHash, roleId, orgId, branchId, isActive, mfaEnabled, mustChangePassword, sessionVersion, deletedAt | Admin users; soft-delete |
 | Employee Credential | `employee_credentials` | id, branchId, orgId, username, email, passwordHash, mfaEnabled, isActive, sessionVersion | Order Portal users; managed by Branch Admin |
-| Role | `roles` | id, name, permissions (jsonb) | SUPER_ADMIN, HEAD_OFFICE, BRANCH_ADMIN, ORDER_PORTAL |
+| Role | `roles` | id, name, permissions (jsonb) | SUPER_ADMIN, HEAD_OFFICE, GROUP_USER, BRANCH_ADMIN, GROUP_ORDER_PORTAL, ORDER_PORTAL |
 | Role Permission | `role_permissions` | id, roleId, permissionKey, allowed | Granular permission flags per role |
 | Global Product | `global_products` | id, productCode, name, categoryId, imageUrl, basePrice, discountType/Value/Active, unit, stockQuantity, allowDecimalQuantity, quantityStep, status | Master catalog; single stock source |
 | Organization Inventory | `organization_inventory` | id, orgId, globalProductId, customName, customPrice, customDescription, isActive | Products assigned to an org |

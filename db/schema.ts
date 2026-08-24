@@ -153,6 +153,11 @@ export const users = pgTable(
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
     sessionVersion: integer("session_version").notNull().default(1),
     mustChangePassword: boolean("must_change_password").notNull().default(false),
+    // Per-account brute-force lockout. Keyed on the account rather than the
+    // client address, so rotating source addresses cannot reset the budget.
+    failedLoginAttempts: integer("failed_login_attempts").notNull().default(0),
+    lastFailedLoginAt: timestamp("last_failed_login_at", { withTimezone: true }),
+    lockoutUntil: timestamp("lockout_until", { withTimezone: true }),
   },
   (t) => [
     uniqueIndex("users_username_idx").on(t.username),
@@ -1175,6 +1180,9 @@ export const employeeCredentials = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
     deactivatedAt: timestamp("deactivated_at", { withTimezone: true }),
     sessionVersion: integer("session_version").notNull().default(1),
+    failedLoginAttempts: integer("failed_login_attempts").notNull().default(0),
+    lastFailedLoginAt: timestamp("last_failed_login_at", { withTimezone: true }),
+    lockoutUntil: timestamp("lockout_until", { withTimezone: true }),
   },
   (t) => [
     uniqueIndex("employee_creds_username_uq").on(t.username),

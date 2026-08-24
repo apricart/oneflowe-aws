@@ -230,7 +230,7 @@ OneFlowe and all external systems it depends on.
 
 ```mermaid
 graph TD
-    Users["Users\n(Admin / Branch Admin /\nEmployee / ORDER_PORTAL)"]
+    Users["Users\n(Admin / Branch Admin / Employee /\nORDER_PORTAL / GROUP_USER / GROUP_ORDER_PORTAL)"]
 
     subgraph OneFlowe["OneFlowe Platform (Next.js 15 App Router)"]
         Web["Web Application\n/dashboard /shop /api/v1"]

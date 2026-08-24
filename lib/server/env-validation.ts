@@ -1,4 +1,10 @@
 import { z } from 'zod'
+import {
+  LOCKOUT_DURATION_MINUTES_MAX,
+  LOCKOUT_DURATION_MINUTES_MIN,
+  LOCKOUT_THRESHOLD_MAX,
+  LOCKOUT_THRESHOLD_MIN,
+} from '@/lib/auth-lockout-policy'
 
 const PLACEHOLDER_VALUES = new Set([
   'admin123',
@@ -133,6 +139,14 @@ const serverEnvSchema = z
     CRON_SECRET: requiredSecret('CRON_SECRET'),
 
     BCRYPT_ROUNDS: optionalInteger('BCRYPT_ROUNDS', 10, 15, 12),
+    // Selects WHERE bcrypt executes, never what it computes: every backend
+    // produces and accepts the same digests, so no stored password is
+    // affected. 'bcryptjs' forces the legacy in-process backend as a
+    // rollback lever. Validated rather than free-form so a typo fails at
+    // startup instead of silently leaving the default in place.
+    PASSWORD_HASHER: z
+      .enum(['auto', 'native', 'bcryptjs'])
+      .default('auto'),
     // Accept the former deployment range during a blue/green cutover, but
     // normalize it immediately to the stricter runtime policy. This prevents
     // an old secret-store value from taking the new fleet down at startup.
@@ -157,6 +171,23 @@ const serverEnvSchema = z
       1,
       5,
       1,
+    ),
+
+    // Per-account lockout bounds. The accepted ranges deliberately exclude
+    // values weaker than PCI DSS 8.3.4 (at most ten attempts, at least a
+    // thirty-minute lockout), so a misconfigured secret store cannot relax
+    // the control the way a plain default would.
+    AUTH_LOCKOUT_THRESHOLD: optionalInteger(
+      'AUTH_LOCKOUT_THRESHOLD',
+      LOCKOUT_THRESHOLD_MIN,
+      LOCKOUT_THRESHOLD_MAX,
+      5,
+    ),
+    AUTH_LOCKOUT_DURATION_MINUTES: optionalInteger(
+      'AUTH_LOCKOUT_DURATION_MINUTES',
+      LOCKOUT_DURATION_MINUTES_MIN,
+      LOCKOUT_DURATION_MINUTES_MAX,
+      30,
     ),
 
     ORDER_TOKEN_ADMIN_EMAIL: z

@@ -5,6 +5,7 @@ import { checkRateLimit, getClientIdentifier, resetRateLimit } from "@/lib/rate-
 import { createHash } from "node:crypto"
 import { hardenSessionEndpointResponse } from "@/lib/session-response"
 import { revokeAuthSessionFromToken } from "@/lib/server/auth-session-store"
+import { recordAuthAuditEvent } from "@/lib/server/auth-audit"
 
 const handler = NextAuth(authOptions)
 
@@ -74,6 +75,7 @@ function sanitizeAuthCallbackError(error: string | null): string | null {
         "BRANCH_INACTIVE",
         "USER_INACTIVE",
         "NETWORK_RESTRICTED",
+        "ACCOUNT_LOCKED",
     ])
 
     if (safeErrors.has(error)) return error
@@ -109,6 +111,23 @@ async function sanitizeNextAuthCallbackResponse(response: Response): Promise<Res
     }
 }
 
+// Errors raised only after the password has been verified. Anything else --
+// including a lockout, which is refused before the password is ever checked --
+// leaves the brute-force budget consumed.
+const CREDENTIALS_VERIFIED_ERRORS = new Set([
+    "MFA_REQUIRED",
+    "ORGANIZATION_INACTIVE",
+    "BRANCH_INACTIVE",
+    "USER_INACTIVE",
+    "NETWORK_RESTRICTED",
+])
+
+function provesValidCredentials(callbackError: string | null): boolean {
+    if (!callbackError) return false
+    const safeError = sanitizeAuthCallbackError(callbackError)
+    return safeError !== null && CREDENTIALS_VERIFIED_ERRORS.has(safeError)
+}
+
 // Passive session reads must never rewrite the JWT cookie. NextAuth normally
 // re-signs it on every GET /session; with mutable idle claims that creates a
 // cross-tab race where a slower stale read can overwrite a newer activity
@@ -133,6 +152,16 @@ async function handleServerRevokingSignOut(
             async signOut(message: any) {
                 try {
                     await revokeAuthSessionFromToken(message?.token)
+                    await recordAuthAuditEvent({
+                        action: "AUTH_SESSION_REVOKED",
+                        subjectId: message?.token?.sub ?? null,
+                        email: message?.token?.email ?? null,
+                        role: message?.token?.role ?? null,
+                        organizationId: message?.token?.organizationId ?? null,
+                        branchId: message?.token?.branchId ?? null,
+                        success: true,
+                        details: { trigger: "signout" },
+                    })
                     await authOptions.events?.signOut?.(message)
                 } catch (error) {
                     revocationError = error
@@ -184,7 +213,7 @@ export async function POST(req: NextRequest, context: any) {
 
         // Valid credentials should not consume the brute-force login budget.
         // MFA_REQUIRED is a successful first factor and continues in the MFA flow.
-        if ((response.ok && !callbackError) || (callbackError && sanitizeAuthCallbackError(callbackError) !== "CredentialsSignin")) {
+        if ((response.ok && !callbackError) || provesValidCredentials(callbackError)) {
             await resetRateLimit(identifier, "login")
         }
 

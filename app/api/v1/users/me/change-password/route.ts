@@ -39,6 +39,10 @@ export async function POST(req: Request) {
       passwordHash,
       mustChangePassword: false,
       sessionVersion: (dbUser.sessionVersion || 0) + 1,
+      // A completed password change releases any brute-force lockout counters
+      // left over from failed attempts against the old password.
+      failedLoginAttempts: 0,
+      lockoutUntil: null,
       updatedAt: new Date(),
     }).where(eq(users.id, currentUser.id))
 
