@@ -16,22 +16,23 @@ This change is a security cutover, not a rolling-compatible application update. 
 2. Apply, in order:
    - `20260815120000_enforce_session_timeout_bounds.sql`
    - `20260815121000_create_auth_sessions.sql`
-3. Using the exact production runtime database role and transaction context, prove `INSERT`, `SELECT`, and `UPDATE` access to a disposable `auth_sessions` row, then roll back that verification transaction.
-4. Deploy the new fleet atomically and keep old instances drained.
-5. Expect every pre-cutover session to be redirected to sign in once. This is intentional; silently granting legacy JWTs a new lifetime would weaken the control.
+3. Using the exact production runtime database role and transaction context, prove `INSERT`, `SELECT`, `UPDATE`, and `DELETE` access to a disposable `auth_sessions` row, then roll back that verification transaction. If RLS is active, also prove that missing context and a wrong subject/tenant are denied, and that bootstrap context can insert a new session but cannot read, update, or delete an existing session.
+4. Against an isolated PostgreSQL instance matching production, run real transaction-level concurrency cases for advance-versus-revoke (revocation wins), exact idle/absolute boundaries, out-of-order activity updates (monotonic), and independent session IDs for one subject. SQL-shape unit tests are not sufficient evidence for this gate.
+5. Deploy the new fleet atomically and keep old instances drained.
+6. Expect every pre-cutover session to be redirected to sign in once. This is intentional; silently granting legacy JWTs a new lifetime would weaken the control.
 
 ## Smoke checks
 
-- Sign in and sign out as SUPER_ADMIN, HEAD_OFFICE, BRANCH_ADMIN, ORDER_PORTAL, and an employee principal; include MFA-enabled flows.
+- Sign in and sign out as SUPER_ADMIN, HEAD_OFFICE, BRANCH_ADMIN, ORDER_PORTAL, GROUP_USER, GROUP_ORDER_PORTAL, and an employee principal; include MFA-enabled flows.
 - Confirm each login creates a distinct registry row, and logout sets only that row's `revoked_at` before clearing the cookie.
 - Confirm copied/replayed cookies from a logged-out browser are rejected by a protected page and API.
 - Confirm explicit interaction renews activity, passive `/api/auth/session` reads do not emit `Set-Cookie`, exact idle expiry is rejected, and the eight-hour deadline never moves.
-- Confirm a tenant timeout decrease applies immediately and a later increase cannot revive an already expired row.
+- Confirm a tenant timeout decrease is normally visible immediately and, if cache invalidation is unavailable, is enforced no later than the 30-second session-policy cache bound. Confirm a later increase cannot revive an already expired row.
 - Confirm organization/branch/employee deactivation rejects the affected session, while other tenants and roles continue normally.
 - Simulate registry unavailability in a non-production environment: protected content must remain concealed, activity must not advance, session/API checks must return retryable unavailable responses, and logout must not claim success.
 
 ## Monitoring and rollback
 
-Monitor authentication `503`s, registry query latency/errors, login failures by principal type, session-expiry reasons, and `auth_sessions` growth. Registry records contain no token material, but they are security state and need an approved retention/cleanup schedule.
+Monitor authentication `503`s, registry query latency/errors, login failures by principal type, session-expiry reasons, and `auth_sessions` growth. Registry records contain no token material, but they are security state. Before cutover, approve a retention period and owner, schedule and alert a cleanup job that removes only revoked or absolutely expired rows older than that period, and verify that structured lifecycle logs reach an access-controlled durable sink with approved retention and alert thresholds.
 
-If rollback is required, drain the new fleet before starting the old one. **Rotate `NEXTAUTH_SECRET` (or apply an equivalent global token-version cutover) before any old node accepts traffic.** Old code does not consult `auth_sessions`; without a secret rotation it would accept a still-signed cookie that the new registry had revoked, including a copied post-logout token. The registry table is additive and may remain, but decide explicitly whether to remove the new timeout constraint before restoring an old settings API. All users must sign in again after either direction of rollback; do not attempt to translate or grandfather JWTs between session models.
+If rollback is required, drain the new fleet before starting the old one. **Rotate `NEXTAUTH_SECRET` (or apply an equivalent global token-version cutover that the old revision is already proven to enforce) before any old node accepts traffic.** Old code does not consult `auth_sessions`; without a secret rotation it would accept a still-signed cookie that the new registry had revoked, including a copied post-logout token. The registry table is additive and may remain, but decide explicitly whether to remove the new timeout constraint before restoring an old settings API. All users must sign in again after either direction of rollback; do not attempt to translate or grandfather JWTs between session models.

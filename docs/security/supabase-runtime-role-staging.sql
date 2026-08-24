@@ -15,6 +15,13 @@
 -- Authentication lookups must run in a short transaction with:
 --   select set_config('oneflowe.auth_bootstrap', 'on', true);
 -- Do not use session-level SET because pooled connections are reused.
+--
+-- IMPORTANT: this template predates the complete current role and table set.
+-- It is not approved for runtime use until every current role (including
+-- EMPLOYEE, GROUP_USER, and GROUP_ORDER_PORTAL), every tenant-owned table, and
+-- negative cross-tenant/bootstrap cases have explicit reviewed policies and
+-- integration tests. The session-timeout rollout runbook deliberately blocks
+-- switching DATABASE_URL to this NOBYPASSRLS role in the current release.
 
 BEGIN;
 

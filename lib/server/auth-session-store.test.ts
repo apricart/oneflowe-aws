@@ -105,8 +105,7 @@ describe("auth session registry", () => {
     )
   })
 
-  it("returns the authoritative live activity timestamp", async () => {
-    mockUpdateReturning([])
+  it("returns the authoritative live activity timestamp without writing", async () => {
     mockSelectRows([row({ lastActivityAt: new Date(START + 60_000) })])
 
     const result = await validateAuthSessionRecord(
@@ -122,17 +121,18 @@ describe("auth session registry", () => {
         sessionIdleTimeoutMinutes: 5,
       }),
     })
+    // A passive session read must never reach the write path: it would take a
+    // row lock and a write transaction on every authenticated request.
+    expect(mocks.update).not.toHaveBeenCalled()
   })
 
   it("persists expiry as a one-way revocation", async () => {
-    const update = mockUpdateReturning([
-      row({ lastActivityAt: new Date(START), revokedAt: new Date(START + 5 * 60_000) }),
-    ])
+    mockSelectRows([row({ lastActivityAt: new Date(START) })])
+    const update = mockUpdateReturning([])
 
     await expect(
       validateAuthSessionRecord(identity, 5, START + 5 * 60_000),
     ).resolves.toEqual({ kind: "invalid", reason: "idle_timeout" })
-    expect(mocks.select).not.toHaveBeenCalled()
     const whereSql = compile(update.where.mock.calls[0][0])
     expect(whereSql).toContain('"auth_sessions"."id" = $1')
     expect(whereSql).toContain('"auth_sessions"."subject_id" = $2')
@@ -141,6 +141,34 @@ describe("auth session registry", () => {
     expect(whereSql).toContain(
       '"auth_sessions"."last_activity_at" + ($4 * INTERVAL \'1 minute\') <= $5',
     )
+  })
+
+  it("reports the absolute deadline ahead of the tenant idle rule", async () => {
+    mockSelectRows([
+      row({
+        lastActivityAt: new Date(START),
+        absoluteExpiresAt: new Date(START + 8 * 60 * 60_000),
+      }),
+    ])
+    mockUpdateReturning([])
+
+    await expect(
+      validateAuthSessionRecord(identity, 5, START + 8 * 60 * 60_000),
+    ).resolves.toEqual({ kind: "invalid", reason: "absolute_timeout" })
+  })
+
+  it("rejects an already revoked row without writing to it again", async () => {
+    mockSelectRows([
+      row({
+        lastActivityAt: new Date(START),
+        revokedAt: new Date(START + 60_000),
+      }),
+    ])
+
+    await expect(
+      validateAuthSessionRecord(identity, 5, START + 5 * 60_000),
+    ).resolves.toEqual({ kind: "invalid", reason: "invalid_policy" })
+    expect(mocks.update).not.toHaveBeenCalled()
   })
 
   it("atomically advances a live record and uses its monotonic result", async () => {
@@ -178,7 +206,7 @@ describe("auth session registry", () => {
   })
 
   it("distinguishes a registry outage from an invalid session", async () => {
-    mocks.update.mockImplementation(() => {
+    mocks.select.mockImplementation(() => {
       throw new Error("database unavailable")
     })
 

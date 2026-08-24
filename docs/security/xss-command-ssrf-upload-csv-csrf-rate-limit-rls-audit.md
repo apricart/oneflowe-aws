@@ -2,6 +2,8 @@
 
 Date: 2026-07-16
 
+Status note (2026-08-23): This is a point-in-time audit. The table/policy counts, database-role observations, dependency versions, build result, and test totals below are historical evidence from 2026-07-16 and must not be presented as current production metadata. The session-control section was updated after the original audit; its current local verification is 12 focused files/152 tests, while the full suite reports 108 passed files/946 passed tests, with TypeScript, targeted lint, and Drizzle schema validation passing. A fresh production metadata/RLS/runtime-role audit is still required before any restricted-role cutover.
+
 Scope: stored/reflected XSS, command injection, SSRF, file uploads, CSV/formula injection, CSRF, rate limiting/resource exhaustion, and Supabase/PostgreSQL runtime roles and row-level security.
 
 ## Executive summary
@@ -250,7 +252,7 @@ Snyk currently treats every `xlsx` version as affected because the fixed release
 
 - Highly destructive super-admin actions do not require a recent password/MFA re-authentication event. Add step-up authentication for destructive inventory cleanup, user privilege changes, credential operations, and large refunds.
 - The production build requires an HTTPS `NEXTAUTH_URL`; deployment configuration must satisfy this validation.
-- The session registry is operational state and requires normal database backup, monitoring, retention/cleanup, and migration verification. Before production cutover, confirm the runtime database role can `SELECT`, `INSERT`, and `UPDATE` `auth_sessions` under its RLS policy.
+- The session registry is operational state and requires normal database backup, monitoring, approved retention/cleanup, durable access-controlled lifecycle-log retention, and migration verification. Before production cutover, confirm the runtime database role can `INSERT`, `SELECT`, `UPDATE`, and `DELETE` `auth_sessions`; where RLS is active, also prove missing-context, cross-subject, cross-tenant, and bootstrap-escalation attempts are denied.
 
 ## Prompt 11 — rate limiting and resource exhaustion
 

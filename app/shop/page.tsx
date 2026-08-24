@@ -13,8 +13,23 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Dialog,DialogContent,DialogHeader,DialogTitle,DialogFooter,DialogDescription } from "@/components/ui/dialog"
-import { ShoppingBag,Search,Plus,Minus,Trash2,Home,CheckCircle,Clock,AlertTriangle,DollarSign,Zap,Package,TrendingDown,Grid,LogOut,ArrowRight,ArrowLeft,Calendar,MapPin,RefreshCw,Building2,Copy,Send,Pencil,Loader2 } from "lucide-react"
+import { ShoppingBag,Search,Plus,Minus,Trash2,Home,CheckCircle,Clock,AlertTriangle,DollarSign,Zap,Package,TrendingDown,Grid,LogOut,ArrowRight,ArrowLeft,Calendar,MapPin,RefreshCw,Building2,Copy,Send,Pencil,Loader2,ArrowDownUp,X,SlidersHorizontal } from "lucide-react"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from "@/components/ui/select"
+import { CategoryFilter } from "@/components/shop/category-filter"
+import { CategoryRibbon } from "@/components/shop/category-ribbon"
+import {
+  ALL_CATEGORIES,
+  ALL_CATEGORIES_SELECTION,
+  buildCategoryTree,
+  findCategoryForSubCategory,
+  formatSelectionLabel,
+  isDefaultSelection,
+  listSubCategories,
+  matchesCategorySelection,
+  normalizeSelection,
+  type CategorySelection,
+} from "@/lib/shop-category-filter"
 import { RefundManagement } from "@/components/refund-management"
 import { getOrderDerivedStatus } from "@/lib/order-status"
 import { formatCountLabel } from "@/lib/count-label"
@@ -41,6 +56,13 @@ const SHOP_RESOURCE_SWR_OPTIONS = {
 } as const
 
 const fetcher = (url: string) => fetch(url, { cache: "no-store" }).then(r => r.json())
+
+const SORT_OPTIONS: ReadonlyArray<{ value: string; label: string; needsPrices?: boolean }> = [
+  { value: "name", label: "Name (A–Z)" },
+  { value: "price-low", label: "Price: Low to High", needsPrices: true },
+  { value: "price-high", label: "Price: High to Low", needsPrices: true },
+  { value: "rating", label: "Rating: Highest" },
+]
 
 const parseProductRating = (rating: unknown) => {
   const numericRating = typeof rating === "number" ? rating : Number(rating)
@@ -247,7 +269,7 @@ export default function OrderPortalPage() {
   const [isLoadingOrderForEdit, setIsLoadingOrderForEdit] = useState(false)
   const [pageSize, setPageSize] = useState(12)
   const [currentPage, setCurrentPage] = useState(1)
-  const [activeCategory, setActiveCategory] = useState<string>("All")
+  const [categorySelection, setCategorySelection] = useState<CategorySelection>(ALL_CATEGORIES_SELECTION)
   const [isPlacingOrder, setIsPlacingOrder] = useState(false)
   const [isSendingTokenEmail, setIsSendingTokenEmail] = useState(false)
   const orderIdempotencyKeyRef = React.useRef<string | null>(null)
@@ -451,14 +473,44 @@ export default function OrderPortalPage() {
     return items.filter((item: any) => typeof item.quantityBudgetRemaining === "number")
   }, [inventoryData])
 
-  const categories = useMemo(() => {
-    if (shopInventoryItems.length === 0) return ["All"]
-    const cats = new Set<string>()
-    cats.add("All")
-    shopInventoryItems.forEach((item: any) => {
-      if (item.categoryName) cats.add(item.categoryName)
+  // The catalogue already carries each item's subcategory (`categoryName`) and
+  // its parent (`parentCategoryName`), so the picker is derived from the same
+  // branch-scoped rows the grid renders — no extra request, and nothing that
+  // could widen what this branch is allowed to see.
+  const categoryGroups = useMemo(() => buildCategoryTree(shopInventoryItems), [shopInventoryItems])
+
+  // The ribbon keeps listing subcategories, narrowed to the chosen category.
+  const categories = useMemo(
+    () => [ALL_CATEGORIES, ...listSubCategories(shopInventoryItems, categorySelection.category)],
+    [shopInventoryItems, categorySelection.category],
+  )
+
+  const selectCategory = React.useCallback((next: CategorySelection) => {
+    setCategorySelection(next)
+  }, [])
+
+  // A ribbon chip names a subcategory; pairing it with the category that owns it
+  // keeps the chip and the picker showing the same thing.
+  const selectSubCategory = React.useCallback((subCategory: string) => {
+    if (subCategory === ALL_CATEGORIES) {
+      setCategorySelection((current) => ({ ...current, subCategory: ALL_CATEGORIES }))
+      return
+    }
+    setCategorySelection((current) => ({
+      category: current.category !== ALL_CATEGORIES
+        ? current.category
+        : findCategoryForSubCategory(shopInventoryItems, subCategory) ?? ALL_CATEGORIES,
+      subCategory,
+    }))
+  }, [shopInventoryItems])
+
+  // Selecting a category must not leave a subcategory from a different branch
+  // of the tree silently filtering the grid down to nothing.
+  React.useEffect(() => {
+    setCategorySelection((current) => {
+      const normalized = normalizeSelection(current, shopInventoryItems)
+      return normalized.subCategory === current.subCategory ? current : normalized
     })
-    return Array.from(cats)
   }, [shopInventoryItems])
 
   const mappedProducts = useMemo(() => {
@@ -470,6 +522,11 @@ export default function OrderPortalPage() {
       editingOriginalQuantities[item.organizationInventoryId] || 0,
     ))
   }, [shopInventoryItems, editingOriginalQuantities])
+
+  const inventoryItemsByProductId = useMemo(
+    () => new Map<number, any>(shopInventoryItems.map((item: any) => [item.organizationInventoryId, item])),
+    [shopInventoryItems]
+  )
 
   const products: Product[] = mappedProducts
   const productsById = useMemo(() => new Map(products.map((product) => [product.id, product])), [products])
@@ -532,10 +589,10 @@ export default function OrderPortalPage() {
       )
     }
 
-    if (activeCategory !== "All") {
+    if (!isDefaultSelection(categorySelection)) {
       filtered = filtered.filter(p => {
-        const item = shopInventoryItems.find((i: any) => i.organizationInventoryId === p.id)
-        return item?.categoryName === activeCategory
+        const item = inventoryItemsByProductId.get(p.id)
+        return Boolean(item) && matchesCategorySelection(item, categorySelection)
       })
     }
 
@@ -544,12 +601,12 @@ export default function OrderPortalPage() {
     else if (sortBy === "rating") filtered.sort((a, b) => (b.rating || 0) - (a.rating || 0))
     else filtered.sort((a, b) => a.name.localeCompare(b.name))
     return filtered
-  }, [products, searchQuery, sortBy, activeCategory, shopInventoryItems, pricesHidden])
+  }, [products, searchQuery, sortBy, categorySelection, inventoryItemsByProductId, pricesHidden])
 
   // Reset to first page when filters change
   React.useEffect(() => {
     setCurrentPage(1)
-  }, [searchQuery, sortBy, activeCategory])
+  }, [searchQuery, sortBy, categorySelection])
 
   const totalProducts = filteredProducts.length
   const totalPages = Math.max(1, Math.ceil(totalProducts / pageSize))
@@ -1535,49 +1592,110 @@ export default function OrderPortalPage() {
           <>
             {/* Search & Filters */}
             <div className="mb-8 space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="relative md:col-span-2">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    placeholder="Search products by name or code..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="pl-9 h-11 text-base"
-                    suppressHydrationWarning
-                  />
+              <div className="rounded-2xl border border-white/40 bg-white/50 p-3 shadow-sm ring-1 ring-black/5 backdrop-blur-xl dark:border-slate-800/60 dark:bg-slate-900/40">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-12">
+                  <div className="group relative md:col-span-6">
+                    <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground transition-colors group-focus-within:text-blue-600" />
+                    <Input
+                      placeholder="Search products by name or code..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="h-11 rounded-xl border-slate-200/70 bg-white/60 pl-10 pr-10 text-sm backdrop-blur-xl focus-visible:bg-white dark:border-slate-700/60 dark:bg-slate-900/50"
+                      suppressHydrationWarning
+                    />
+                    {searchQuery && (
+                      <button
+                        type="button"
+                        aria-label="Clear search"
+                        onClick={() => setSearchQuery("")}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-full p-1 text-muted-foreground transition-colors hover:bg-slate-200/70 hover:text-foreground dark:hover:bg-slate-700/70"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="md:col-span-3">
+                    <CategoryFilter
+                      groups={categoryGroups}
+                      selection={categorySelection}
+                      onSelect={selectCategory}
+                      totalCount={products.length}
+                    />
+                  </div>
+
+                  <div className="md:col-span-3">
+                    <Select value={sortBy} onValueChange={setSortBy}>
+                      <SelectTrigger
+                        aria-label="Sort products"
+                        className="h-11 w-full rounded-xl border-slate-200/70 bg-white/60 px-3 text-sm font-medium backdrop-blur-xl hover:bg-white/90 dark:border-slate-700/60 dark:bg-slate-900/50 dark:hover:bg-slate-900/80"
+                      >
+                        <span className="flex min-w-0 items-center gap-2.5">
+                          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                            <ArrowDownUp className="h-3.5 w-3.5" />
+                          </span>
+                          <SelectValue />
+                        </span>
+                      </SelectTrigger>
+                      <SelectContent className="rounded-xl">
+                        {SORT_OPTIONS.filter((option) => !option.needsPrices || !pricesHidden).map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
-                <select
-                  value={sortBy}
-                  onChange={(e) => setSortBy(e.target.value)}
-                  className="px-3 py-2 border rounded-lg bg-white dark:bg-slate-800 text-base font-medium"
-                >
-                  <option value="name">Sort: Name (A-Z)</option>
-                  {!pricesHidden && <option value="price-low">Price: Low to High</option>}
-                  {!pricesHidden && <option value="price-high">Price: High to Low</option>}
-                  <option value="rating">Rating: Highest</option>
-                </select>
+
+                {/* Category Ribbon */}
+                <CategoryRibbon
+                  items={categories}
+                  activeItem={categorySelection.subCategory}
+                  onSelect={selectSubCategory}
+                />
               </div>
 
-              {/* Category Ribbon */}
-              <div className="relative -mx-4 px-4 overflow-hidden">
-                <div className="flex items-center gap-2 overflow-x-auto pb-4 no-scrollbar scroll-smooth">
-                  {categories.map((cat) => (
-                    <Button
-                      key={cat}
-                      onClick={() => setActiveCategory(cat)}
-                      variant={activeCategory === cat ? "default" : "outline"}
-                      className={cn(
-                        "rounded-full px-5 py-2 whitespace-nowrap text-xs font-bold transition-all duration-300",
-                        activeCategory === cat
-                          ? "shadow-lg shadow-blue-500/25 bg-blue-600 border-blue-600"
-                          : "bg-white/50 backdrop-blur-md dark:bg-slate-800/50 border-slate-200/50 dark:border-slate-700/50"
-                      )}
+              {/* Active filters */}
+              {(!isDefaultSelection(categorySelection) || Boolean(searchQuery)) && (
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="flex items-center gap-1.5 font-medium text-muted-foreground">
+                    <SlidersHorizontal className="h-3.5 w-3.5" />
+                    Filters
+                  </span>
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery("")}
+                      className="flex items-center gap-1.5 rounded-full border border-slate-200/70 bg-white/70 py-1 pl-3 pr-2 font-medium text-slate-700 transition-colors hover:bg-white dark:border-slate-700/60 dark:bg-slate-800/70 dark:text-slate-200"
                     >
-                      {cat}
-                    </Button>
-                  ))}
+                      <span className="max-w-[12rem] truncate">&ldquo;{searchQuery}&rdquo;</span>
+                      <X className="h-3 w-3 opacity-60" />
+                    </button>
+                  )}
+                  {!isDefaultSelection(categorySelection) && (
+                    <button
+                      type="button"
+                      aria-label={`Clear category filter ${formatSelectionLabel(categorySelection)}`}
+                      onClick={() => selectCategory(ALL_CATEGORIES_SELECTION)}
+                      className="flex items-center gap-1.5 rounded-full border border-blue-200/70 bg-blue-50/80 py-1 pl-3 pr-2 font-medium text-blue-700 transition-colors hover:bg-blue-100/80 dark:border-blue-900/60 dark:bg-blue-950/50 dark:text-blue-300"
+                    >
+                      <span className="max-w-[12rem] truncate">{formatSelectionLabel(categorySelection)}</span>
+                      <X className="h-3 w-3 opacity-60" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchQuery("")
+                      selectCategory(ALL_CATEGORIES_SELECTION)
+                    }}
+                    className="ml-0.5 font-semibold text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline"
+                  >
+                    Clear all
+                  </button>
                 </div>
-              </div>
+              )}
 
               {/* Budget Warning */}
               {!pricesHidden && cartTotal > budgetAvailableForCart && (

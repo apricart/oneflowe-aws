@@ -17,6 +17,9 @@ vi.mock("@/lib/rate-limiter", () => ({
   getClientIdentifier: vi.fn(),
   resetRateLimit: vi.fn(),
 }))
+vi.mock("@/lib/server/auth-audit", () => ({
+    recordAuthAuditEvent: vi.fn(),
+}))
 vi.mock("@/lib/server/auth-session-store", () => ({
   revokeAuthSessionFromToken: mocks.revokeAuthSessionFromToken,
 }))

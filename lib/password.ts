@@ -1,4 +1,7 @@
-import bcrypt from "bcryptjs"
+// Bcrypt now runs on the libuv threadpool instead of the request event
+// loop. Digests are unchanged, so every existing stored password keeps
+// verifying -- see lib/server/password-hasher.ts.
+import { bcryptCompare, bcryptHash } from "@/lib/server/password-hasher"
 import { randomInt } from "node:crypto"
 import { env } from "@/lib/server/env"
 
@@ -119,7 +122,7 @@ export async function hashPassword(plain: string): Promise<string> {
     }
 
     // Hash password
-    const hash = await bcrypt.hash(plain, SALT_ROUNDS)
+    const hash = await bcryptHash(plain, SALT_ROUNDS)
 
     if (!hash || typeof hash !== 'string') {
       throw new Error('Failed to generate password hash')
@@ -158,7 +161,7 @@ export async function verifyPassword(plain: string, hash: string): Promise<boole
     }
 
     // Bcrypt compare
-    const isMatch = await bcrypt.compare(plain, hash)
+    const isMatch = await bcryptCompare(plain, hash)
     return isMatch
   } catch (error) {
     console.error('[Password] Verification error:', error)

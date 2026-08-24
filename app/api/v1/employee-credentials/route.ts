@@ -2,7 +2,9 @@ import { ok,error,readJson } from "@/lib/api"
 import { db } from "@/lib/db"
 import { employeeCredentials,auditLogs } from "@/db/schema"
 import { and,eq } from "drizzle-orm"
-import { hash } from "bcryptjs"
+// Cost factor deliberately left at the existing value; only the execution
+// backend changes. See lib/server/password-hasher.ts.
+import { bcryptHash as hash } from "@/lib/server/password-hasher"
 import { NextRequest } from 'next/server'
 import { getRequestScope } from "@/lib/auth"
 import { assertUniqueUserFields,normalizeEmail,UserUniqueFieldError } from "@/lib/user-uniqueness"
