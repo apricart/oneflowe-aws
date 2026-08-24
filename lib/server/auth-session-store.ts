@@ -144,9 +144,60 @@ export async function createAuthSessionRecord(input: {
 }
 
 /**
+ * Decide whether a persisted row has passed either deadline. The absolute
+ * boundary is reported first so a session past both is never attributed to the
+ * weaker, tenant-configurable idle rule.
+ */
+function registryExpirationReason(
+  row: SessionRegistryRow,
+  idleTimeoutMinutes: number,
+  nowMs: number,
+): Exclude<SessionExpirationReason, "invalid_policy"> | null {
+  if (row.absoluteExpiresAt.getTime() <= nowMs) return "absolute_timeout"
+  if (row.lastActivityAt.getTime() + idleTimeoutMinutes * 60_000 <= nowMs) {
+    return "idle_timeout"
+  }
+  return null
+}
+
+/**
+ * Persist an observed expiry as a one-way revocation.
+ *
+ * The predicate repeats the expiry test rather than trusting the row the caller
+ * just read, so the write is still decided by the database, and a row another
+ * request already revoked keeps its original revocation timestamp.
+ */
+async function persistRegistryExpiry(
+  identity: SessionRegistryIdentity,
+  idleTimeoutMinutes: number,
+  now: Date,
+): Promise<void> {
+  await db
+    .update(authSessions)
+    .set({ revokedAt: now })
+    .where(
+      and(
+        eq(authSessions.id, identity.sessionId),
+        eq(authSessions.subjectId, identity.subjectId),
+        isNull(authSessions.revokedAt),
+        or(
+          lte(authSessions.absoluteExpiresAt, now),
+          sql`${authSessions.lastActivityAt} + (${idleTimeoutMinutes} * INTERVAL '1 minute') <= ${now}`,
+        ),
+      ),
+    )
+}
+
+/**
  * Validate a registry row without recording activity. Expiration is persisted
  * as revocation before returning, so a later tenant-policy increase can never
  * revive a session that was already rejected under a stricter policy.
+ *
+ * The row is read first and written only when it has genuinely expired. This
+ * path runs on every authenticated request, including `GET /api/auth/session`,
+ * so keeping the common case a plain SELECT takes a session read off the write
+ * path entirely: no WAL record, no row lock, and no write transaction holding a
+ * connection-pool slot.
  */
 export async function validateAuthSessionRecord(
   identity: SessionRegistryIdentity,
@@ -163,34 +214,6 @@ export async function validateAuthSessionRecord(
   const now = new Date(nowMs)
 
   try {
-    const [expired] = await db
-      .update(authSessions)
-      .set({ revokedAt: now })
-      .where(
-        and(
-          eq(authSessions.id, identity.sessionId),
-          eq(authSessions.subjectId, identity.subjectId),
-          isNull(authSessions.revokedAt),
-          or(
-            lte(authSessions.absoluteExpiresAt, now),
-            sql`${authSessions.lastActivityAt} + (${idleTimeoutMinutes} * INTERVAL '1 minute') <= ${now}`,
-          ),
-        ),
-      )
-      .returning(registrySelection)
-
-    if (expired) {
-      const reason =
-        expired.absoluteExpiresAt.getTime() <= nowMs
-          ? "absolute_timeout"
-          : "idle_timeout"
-      logSessionLifecycle("expired", identity, { reason })
-      return {
-        kind: "invalid",
-        reason,
-      }
-    }
-
     const [row] = await db
       .select(registrySelection)
       .from(authSessions)
@@ -202,17 +225,24 @@ export async function validateAuthSessionRecord(
       )
       .limit(1)
 
-    if (!row || row.revokedAt || !rowMatchesIdentity(row, identity)) {
+    if (!row) return { kind: "invalid", reason: "invalid_policy" }
+
+    // Evaluated ahead of the identity comparison so an expired row is still
+    // recorded as revoked when its claims no longer match the presented token,
+    // exactly as the previous write-first predicate did.
+    const expirationReason = registryExpirationReason(
+      row,
+      idleTimeoutMinutes,
+      nowMs,
+    )
+    if (expirationReason && !row.revokedAt) {
+      await persistRegistryExpiry(identity, idleTimeoutMinutes, now)
+      logSessionLifecycle("expired", identity, { reason: expirationReason })
+      return { kind: "invalid", reason: expirationReason }
+    }
+
+    if (row.revokedAt || !rowMatchesIdentity(row, identity)) {
       return { kind: "invalid", reason: "invalid_policy" }
-    }
-    if (row.absoluteExpiresAt.getTime() <= nowMs) {
-      return { kind: "invalid", reason: "absolute_timeout" }
-    }
-    if (
-      row.lastActivityAt.getTime() + idleTimeoutMinutes * 60_000 <=
-      nowMs
-    ) {
-      return { kind: "invalid", reason: "idle_timeout" }
     }
 
     return {

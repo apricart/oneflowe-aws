@@ -250,6 +250,10 @@ async function updateUserProfile(userId: string, input: any, targetUser: any, ne
     fullName: values.fullName,
     passwordHash: input.password ? await hashPassword(input.password) : undefined,
     sessionVersion: isSecurityChange ? targetUser.sessionVersion + 1 : undefined,
+    // An administrator resetting the password is the confirmed-identity branch
+    // of the lockout policy, so it releases the account.
+    failedLoginAttempts: isSecurityChange ? 0 : undefined,
+    lockoutUntil: isSecurityChange ? null : undefined,
     updatedAt: new Date(),
   }).where(eq(users.id, userId))
   await invalidateSessionValidationCache(userId)
@@ -348,6 +352,10 @@ export async function PATCH(
       fullName,
       passwordHash,
       sessionVersion,
+      // An administrator resetting the password is the confirmed-identity
+      // branch of the lockout policy, so it releases the account.
+      failedLoginAttempts: isSecurityChange ? 0 : undefined,
+      lockoutUntil: isSecurityChange ? null : undefined,
       updatedAt: new Date(),
     }).where(eq(users.id, id))
 

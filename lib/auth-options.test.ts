@@ -11,6 +11,9 @@ const mocks = vi.hoisted(() => ({
   advanceAuthSessionRecord: vi.fn(),
   evaluateNetworkAccess: vi.fn(),
   resolveRequestClientIp: vi.fn(),
+  recordAuthAuditEvent: vi.fn(),
+  registerFailedLogin: vi.fn(),
+  clearFailedLogins: vi.fn(),
 }))
 
 vi.mock("@/lib/server/env", () => ({
@@ -29,7 +32,7 @@ vi.mock("@/lib/mfa", () => ({
   verifyOTP: vi.fn(),
   clearDailyCount: vi.fn(),
 }))
-vi.mock("bcryptjs", () => ({ compare: vi.fn() }))
+vi.mock("@/lib/server/password-hasher", () => ({ bcryptCompare: vi.fn() }))
 vi.mock("@/lib/session-validation-cache", () => ({
   getSessionValidationCache: mocks.getSessionValidationCache,
   setSessionValidationCache: mocks.setSessionValidationCache,
@@ -46,6 +49,21 @@ vi.mock("@/lib/server/auth-session-store", () => ({
 vi.mock("@/lib/server/network-policy", () => ({
   evaluateNetworkAccess: mocks.evaluateNetworkAccess,
 }))
+vi.mock("@/lib/server/auth-audit", () => ({
+  recordAuthAuditEvent: mocks.recordAuthAuditEvent,
+}))
+// Only the database-backed writers are stubbed; the lockout decision itself is
+// the real pure implementation, so these tests exercise the shipped rule.
+vi.mock("@/lib/server/auth-lockout", async () => {
+  const policy = await vi.importActual<
+    typeof import("@/lib/auth-lockout-policy")
+  >("@/lib/auth-lockout-policy")
+  return {
+    ...policy,
+    registerFailedLogin: mocks.registerFailedLogin,
+    clearFailedLogins: mocks.clearFailedLogins,
+  }
+})
 vi.mock("@/lib/server/request-ip", () => ({
   resolveRequestClientIp: mocks.resolveRequestClientIp,
 }))

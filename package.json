@@ -52,6 +52,7 @@
     "@aws-sdk/client-s3": "^3.1067.0",
     "@aws-sdk/client-sesv2": "^3.1068.0",
     "@next/env": "16.3.0",
+    "@node-rs/bcrypt": "1.10.8",
     "@radix-ui/react-accordion": "^1.2.12",
     "@radix-ui/react-alert-dialog": "^1.1.15",
     "@radix-ui/react-aspect-ratio": "^1.1.8",

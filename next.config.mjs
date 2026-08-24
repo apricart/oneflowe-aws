@@ -61,6 +61,10 @@ const nextConfig = {
     }
     return config
   },
+  // Native (.node) addon: must stay external so webpack/turbopack never try
+  // to bundle the binary, and so output-file-tracing copies it into the
+  // standalone build.
+  serverExternalPackages: ['@node-rs/bcrypt'],
   output: 'standalone',
 }
 

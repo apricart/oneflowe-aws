@@ -2,6 +2,8 @@
 -- Run only in the staging database where that script was tested.
 -- This rollback removes only policies prefixed oneflowe_ and runtime grants.
 -- It intentionally leaves the pre-existing deny-by-default RLS state enabled.
+-- Run this as the same object owner/grantor that ran the staging template;
+-- PostgreSQL default privileges are scoped to that grantor.
 
 BEGIN;
 
@@ -29,9 +31,23 @@ REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM oneflowe_runtime;
 REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM oneflowe_runtime;
 REVOKE USAGE ON SCHEMA public FROM oneflowe_runtime;
 
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  REVOKE SELECT, INSERT, UPDATE, DELETE ON TABLES FROM oneflowe_runtime;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  REVOKE USAGE, SELECT ON SEQUENCES FROM oneflowe_runtime;
+
 REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM oneflowe_migrator;
 REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM oneflowe_migrator;
 REVOKE USAGE, CREATE ON SCHEMA public FROM oneflowe_migrator;
+
+DO $database_grants$
+BEGIN
+  EXECUTE format(
+    'REVOKE CONNECT ON DATABASE %I FROM oneflowe_runtime, oneflowe_migrator',
+    current_database()
+  );
+END
+$database_grants$;
 
 DROP SCHEMA IF EXISTS oneflowe_rls CASCADE;
 

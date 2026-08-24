@@ -42,6 +42,10 @@ USER nextjs
 EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
+# Bcrypt runs on the libuv threadpool. 4 is the libuv default (so this is a
+# no-op today); raise it toward the container CPU limit in docker-compose.yml
+# if that limit is increased, otherwise the extra threads only contend.
+ENV UV_THREADPOOL_SIZE=4
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:3000').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 CMD ["node", "server.js"]
