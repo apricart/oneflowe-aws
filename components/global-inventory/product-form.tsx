@@ -111,9 +111,11 @@ const getProductValidationError = (productData: ProductFormState) => {
 const getProductPayload = (
   productData: ProductFormState,
   initialProduct?: GlobalProduct | null,
+  confirmTaxInclusivePrice = false,
 ) => ({
   ...productData,
   id: initialProduct?.id,
+  confirmTaxInclusivePrice,
   basePrice: Number.parseFloat(productData.basePrice),
   // Blank clears the override so the product follows its organization's rate.
   taxRatePercent: productData.taxRatePercent.trim() === ""
@@ -166,6 +168,15 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Reado
     discountEndAt: "",
     discountActive: false,
   })
+
+  /**
+   * Legacy imports stored prices net of tax, so activating one needs the admin
+   * to say the price now includes tax. The claim is about this particular save,
+   * so it is deliberately not seeded from the product and not remembered.
+   */
+  const isHistoricalOnly = mode === "edit"
+    && (initialProduct?.metadata as Record<string, unknown> | undefined)?.historicalOnly === true
+  const [confirmTaxInclusivePrice, setConfirmTaxInclusivePrice] = useState(false)
 
   /**
    * Show how the entered price divides, so it is obvious at the point of entry
@@ -395,7 +406,7 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Reado
       const response = await fetch(`/api/v1/admin/global-inventory`, {
         method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(getProductPayload(productData, initialProduct)),
+        body: JSON.stringify(getProductPayload(productData, initialProduct, confirmTaxInclusivePrice)),
       })
 
       // Handle non-JSON responses (e.g. Vercel 413 Request Entity Too Large returns HTML)
@@ -623,6 +634,29 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Reado
                   )}
                 </div>
               </div>
+              {isHistoricalOnly ? (
+                <div className="sm:col-span-2 lg:col-span-3">
+                  <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-3 text-xs dark:border-amber-900 dark:bg-amber-950/30">
+                    <p className="font-medium text-amber-900 dark:text-amber-200">
+                      Imported for historical records — price excludes sales tax
+                    </p>
+                    <p className="mt-1 text-amber-800 dark:text-amber-300">
+                      This product came from a legacy import, where prices were recorded
+                      net of tax. Everywhere else in the catalogue the price includes tax.
+                      Set the tax-inclusive price above, then confirm below to activate it.
+                    </p>
+                    <label className="mt-2 flex items-start gap-2 text-amber-900 dark:text-amber-200">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={confirmTaxInclusivePrice}
+                        onChange={(e) => setConfirmTaxInclusivePrice(e.target.checked)}
+                      />
+                      <span>The price above includes sales tax.</span>
+                    </label>
+                  </div>
+                </div>
+              ) : null}
               <div>
                 <label htmlFor="product-unit" className="block text-sm font-medium mb-1">Unit <span className="text-destructive">*</span></label>
                 <Input
