@@ -124,24 +124,33 @@ describe("session policy proxy enforcement", () => {
     ["GROUP_ORDER_PORTAL", "/organizations", "/group-portal"],
     ["GROUP_ORDER_PORTAL", "/group-portal", null],
     // The approver works inside the shared shell, but only in the areas its
-    // role has: its queue, the reports its assignments scope, and settings.
+    // role has: its dashboard and order directory, its queue, the reports its
+    // assignments scope, and settings.
     ["GROUP_USER", "/approvals", null],
+    ["GROUP_USER", "/dashboard", null],
+    ["GROUP_USER", "/orders", null],
+    ["GROUP_USER", "/orders/42", null],
     ["GROUP_USER", "/reports", null],
     ["GROUP_USER", "/reports/order-report", null],
     ["GROUP_USER", "/settings", null],
-    // Everything else in the shell stays closed to it.
-    ["GROUP_USER", "/dashboard", "/approvals"],
-    ["GROUP_USER", "/shop", "/approvals"],
-    ["GROUP_USER", "/organizations", "/approvals"],
-    ["GROUP_USER", "/orders", "/approvals"],
-    ["GROUP_USER", "/users", "/approvals"],
-    ["GROUP_USER", "/branches", "/approvals"],
-    ["GROUP_USER", "/inventory", "/approvals"],
-    ["GROUP_USER", "/budgets", "/approvals"],
-    ["GROUP_USER", "/group-portal", "/approvals"],
+    // Everything else in the shell stays closed to it, and its home is now the
+    // dashboard rather than the queue.
+    ["GROUP_USER", "/shop", "/dashboard"],
+    ["GROUP_USER", "/organizations", "/dashboard"],
+    ["GROUP_USER", "/users", "/dashboard"],
+    ["GROUP_USER", "/branches", "/dashboard"],
+    ["GROUP_USER", "/inventory", "/dashboard"],
+    ["GROUP_USER", "/branch-inventory", "/dashboard"],
+    ["GROUP_USER", "/budgets", "/dashboard"],
+    ["GROUP_USER", "/budget-by-quantity", "/dashboard"],
+    ["GROUP_USER", "/groups", "/dashboard"],
+    ["GROUP_USER", "/refunds", "/dashboard"],
+    ["GROUP_USER", "/products", "/dashboard"],
+    ["GROUP_USER", "/employee-management", "/dashboard"],
+    ["GROUP_USER", "/group-portal", "/dashboard"],
     // The multi-branch ordering workspace is exclusive to the requesting role.
     ["GROUP_ORDER_PORTAL", "/group-portal/bulk-order", null],
-    ["GROUP_USER", "/group-portal/bulk-order", "/approvals"],
+    ["GROUP_USER", "/group-portal/bulk-order", "/dashboard"],
     ["SUPER_ADMIN", "/group-portal/bulk-order", "/dashboard"],
     ["ORDER_PORTAL", "/group-portal/bulk-order", "/shop"],
     // The approval queue is the approver's alone; no administrator and neither
@@ -170,7 +179,6 @@ describe("session policy proxy enforcement", () => {
     ["GROUP_USER", "/invoices/42", null],
     ["GROUP_ORDER_PORTAL", "/invoices/42", null],
     // The rest of each area stays exactly as closed as before.
-    ["GROUP_USER", "/orders", "/approvals"],
     ["GROUP_ORDER_PORTAL", "/orders", "/group-portal"],
   ])(
     "preserves %s routing for %s",

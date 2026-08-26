@@ -105,6 +105,10 @@ function OrdersManagementContent() {
   const isBranchAdmin = userRole === "BRANCH_ADMIN"
   const isHeadOffice = userRole === "HEAD_OFFICE"
   const isSuperAdmin = userRole === "SUPER_ADMIN"
+  // The approver reaches every branch assigned to it. It sends no branch filter
+  // of its own: `/api/v1/orders` resolves that set from the caller's own
+  // assignments, so the list is scoped on the server rather than here.
+  const isGroupUser = userRole === "GROUP_USER"
 
   const [searchQuery, setSearchQuery] = useState("")
   const debouncedSearchQuery = useDebounce(searchQuery.trim(), 300)
@@ -333,10 +337,21 @@ function OrdersManagementContent() {
     if (branchId) {
       return selectedBranch?.name || `Branch #${branchId}`
     }
+    // The approver's list already covers exactly its assigned branches, so the
+    // badge names that scope rather than the whole organization.
+    if (isGroupUser) {
+      return "Assigned branches"
+    }
     if (organizationId) {
       return selectedOrg?.name || "Selected organization"
     }
     return "All organizations"
+  })()
+
+  const scopeDescription = (() => {
+    if (isBranchAdmin) return "Review orders placed from your branch's Order Portal."
+    if (isGroupUser) return "Review orders placed from the branches assigned to you."
+    return `Monitor approvals and fulfillment pipelines across ${scopeText.toLowerCase()}.`
   })()
 
   if (!isInitialized || !ordersEndpoint) {
@@ -359,7 +374,7 @@ function OrdersManagementContent() {
             <span>Order Intelligence</span>
           </h1>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1 sm:ml-[3.25rem]">
-            {isBranchAdmin ? "Review orders placed from your branch's Order Portal." : `Monitor approvals and fulfillment pipelines across ${scopeText.toLowerCase()}.`}
+            {scopeDescription}
           </p>
         </div>
         <div className="flex items-center gap-3">

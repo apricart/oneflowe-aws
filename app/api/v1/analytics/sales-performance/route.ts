@@ -8,8 +8,14 @@ import { getCached,generateCacheKey,CACHE_TTL } from "@/lib/cache-utils"
 import { metricExpressions } from "@/lib/metric-utils"
 import { redactAnalyticsPrices,shouldHidePricesForRole } from "@/lib/price-visibility"
 import { parseEndDateParam,parseStartDateParam } from "@/lib/date-range-params"
+import { isMultiBranchAnalyticsRole,resolveMultiBranchAnalyticsIds } from "@/lib/server/analytics-scope"
+import { loadAnalyticsAssignedBranchIds } from "@/lib/server/analytics-branch-scope"
 
-const allowedRoles = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"] as const
+// GROUP_USER reads the same dashboard as an administrator, but over the branch
+// set assigned to it rather than a tenant or a single branch. It is resolved
+// separately below and never through the ladder the other roles use, so their
+// behaviour is untouched.
+const allowedRoles = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER"] as const
 type Role = typeof allowedRoles[number]
 type SalesGranularity = "hourly" | "daily" | "monthly" | "yearly"
 
@@ -20,6 +26,11 @@ function parseNumberList(value: string | null, isValid = (number: number) => num
 async function resolveSalesScope(role: Role | undefined, scope: any, searchParams: URLSearchParams) {
     if (role === "BRANCH_ADMIN") {
         return { organizationId: scope?.organizationId ?? null, branchId: scope?.branchId ?? null }
+    }
+    // The branch filter for a multi-branch role comes from its assignments, not
+    // from the request; it is applied by the caller as an explicit branch list.
+    if (isMultiBranchAnalyticsRole(role)) {
+        return { organizationId: scope?.organizationId ?? null, branchId: null }
     }
     if (role === "SUPER_ADMIN") {
         return {
@@ -300,8 +311,27 @@ export async function GET(req: NextRequest) {
     const organizationId = resolvedScope.organizationId ?? null
     const branchId = resolvedScope.branchId ?? null
     const pricesHidden = await shouldHidePricesForRole(role, scope?.organizationId)
-    const branchIds = parseNumberList(branchIdsParam)
-    const organizationIds = parseNumberList(organizationIdsParam)
+
+    // A multi-branch role never chooses its own scope: the assignments are read
+    // on the server and a requested branch list can only narrow them. An empty
+    // result is a refusal — it must never fall through to the tenant-wide query
+    // the ladder below would otherwise run.
+    const assignedBranchIds = await loadAnalyticsAssignedBranchIds(role, scope?.userId)
+    const scopedBranchIds = assignedBranchIds === null
+        ? null
+        : resolveMultiBranchAnalyticsIds({
+            role: role as string,
+            assignedBranchIds,
+            requestedBranchIds: parseNumberList(branchIdsParam),
+        }) ?? []
+    if (scopedBranchIds !== null && scopedBranchIds.length === 0) {
+        return error("Access denied: no branches are assigned to your account", 403)
+    }
+
+    const branchIds = scopedBranchIds ?? parseNumberList(branchIdsParam)
+    // The tenant is re-asserted from the session for a multi-branch role rather
+    // than read from the request.
+    const organizationIds = scopedBranchIds === null ? parseNumberList(organizationIdsParam) : []
 
     if (groupIdParam && groupIdParam !== "null" && groupIdParam !== "0") {
         groupId = Number(groupIdParam)
@@ -509,10 +539,22 @@ export async function GET(req: NextRequest) {
             .from(branches)
             .leftJoin(orders, and(eq(orders.branchId, branches.id), and(...branchConditions)))
 
+        // The breakdown selects from `branches`, so its own filter decides which
+        // branches are named at all — the order conditions above only decide
+        // their totals. A multi-branch role is therefore narrowed to its
+        // assigned branches here as well; every other role keeps the
+        // tenant-wide list it already had.
+        const branchListConditions: any[] = []
         if (organizationIds.length > 0) {
-            branchQuery = branchQuery.where(inArray(branches.organizationId, organizationIds)) as any
+            branchListConditions.push(inArray(branches.organizationId, organizationIds))
         } else if (organizationId) {
-            branchQuery = branchQuery.where(eq(branches.organizationId, organizationId)) as any
+            branchListConditions.push(eq(branches.organizationId, organizationId))
+        }
+        if (scopedBranchIds !== null) {
+            branchListConditions.push(inArray(branches.id, scopedBranchIds))
+        }
+        if (branchListConditions.length > 0) {
+            branchQuery = branchQuery.where(and(...branchListConditions)) as any
         }
 
         const branchRows = await branchQuery

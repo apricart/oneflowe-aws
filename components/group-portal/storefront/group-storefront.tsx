@@ -25,6 +25,7 @@ import {
 import { ReviewStep } from "../review-step"
 import { SubmissionResult } from "../submission-result"
 import type {
+  BranchBudgetResponse,
   BranchPlan,
   CatalogItem,
   GroupOrderSubmission,
@@ -95,6 +96,18 @@ export function GroupStorefront() {
     fetcher,
     { revalidateOnFocus: false },
   )
+  /**
+   * This month's budget per location, for the sidebar.
+   *
+   * Unlike the group list this one does revalidate on focus: holds are placed
+   * the moment any requester submits, so a figure left over from an hour ago
+   * would be the wrong number to plan against. A failure here is left to
+   * resolve itself on the next revalidation — the sidebar simply shows no
+   * figure, and ordering is unaffected because the server checks the real
+   * budget at submission regardless.
+   */
+  const { data: budgetData, isLoading: budgetsLoading, mutate: mutateBudgets } =
+    useSWR<BranchBudgetResponse>("/api/v1/group-portal/budgets", fetcher)
 
   const [groupId, setGroupId] = useState<number | null | undefined>(undefined)
   const [branchIds, setBranchIds] = useState<number[]>([])
@@ -120,6 +133,10 @@ export function GroupStorefront() {
   const autoSelectedRef = useRef(false)
 
   const groups = useMemo(() => groupsData?.items ?? [], [groupsData])
+  const budgetByBranchId = useMemo(
+    () => new Map((budgetData?.items ?? []).map((item) => [item.branchId, item])),
+    [budgetData],
+  )
   const selectedGroup = useMemo(
     () => groups.find((group) => group.id === groupId),
     [groups, groupId],
@@ -317,6 +334,9 @@ export function GroupStorefront() {
       }
 
       setSubmission(body.item as GroupOrderSubmission)
+      // The orders just created hold budget at every location they covered, so
+      // the sidebar's figures are stale the instant this returns.
+      void mutateBudgets()
       setReviewPlans(null)
       setReviewedSignature(null)
       setReviewing(false)
@@ -360,6 +380,8 @@ export function GroupStorefront() {
       selectedGroupId={groupId}
       selectedBranchIds={branchIds}
       expandedGroupKey={expandedGroupKey}
+      budgets={budgetByBranchId}
+      budgetsLoading={budgetsLoading}
       disabled={reviewing || submitting}
       onToggleExpand={(key) => setExpandedGroupKey((current) => current === key ? null : key)}
       onToggleBranch={toggleBranch}

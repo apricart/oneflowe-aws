@@ -168,15 +168,20 @@ describe("group user reporting endpoints", () => {
     expect(groupUserNav).toContain('href: "/approvals"')
     expect(groupUserNav).toContain('href: "/reports/order-report"')
     expect(groupUserNav).toContain('href: "/settings"')
+    // The dashboard and order directory are shared pages scoped to the
+    // approver's assigned branches on the server, so they are offered here.
+    expect(groupUserNav).toContain("...baseNav")
+    expect(groupUserNav).toContain('href: "/orders"')
+    // The administrator-only areas stay absent.
     for (const adminArea of [
       '"/organizations"',
       '"/users"',
       '"/branches"',
       '"/inventory"',
+      '"/branch-inventory"',
       '"/budgets"',
       '"/groups"',
-      '"/dashboard"',
-      '"/orders"',
+      '"/refunds"',
     ]) {
       expect(groupUserNav).not.toContain(`href: ${adminArea}`)
     }

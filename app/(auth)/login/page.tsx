@@ -103,16 +103,30 @@ async function authenticateUser(username: string, password: string): Promise<{ i
   throw new Error(getLoginErrorMessage(result.error))
 }
 
+/**
+ * The area each role starts in, or `null` when the role uses the shell default
+ * and may therefore honour a `callbackUrl`.
+ *
+ * This only picks a first destination. `proxy.ts` owns the actual boundary and
+ * re-checks every navigation, so a role that lands somewhere it may not be is
+ * sent home by the proxy rather than let through.
+ */
+function roleLandingPath(role: unknown): string | null {
+  if (role === "ORDER_PORTAL" || role === "EMPLOYEE") return "/shop"
+  if (role === "GROUP_ORDER_PORTAL") return "/group-portal"
+  // The approver works inside the shared shell and starts on its dashboard,
+  // which reports only the branches assigned to it.
+  if (role === "GROUP_USER") return "/dashboard"
+  return null
+}
+
 function redirectAuthenticatedUser(session: any, callbackUrl: string | null): void {
   if (session.user?.mustChangePassword === true) {
     window.location.replace("/change-password")
-  } else if (["ORDER_PORTAL", "EMPLOYEE"].includes(session.user?.role)) {
-    window.location.replace("/shop")
-  } else if (["GROUP_ORDER_PORTAL", "GROUP_USER"].includes(session.user?.role)) {
-    window.location.replace("/group-portal")
-  } else {
-    window.location.replace(safeInternalRedirectPath(callbackUrl))
+    return
   }
+  const landingPath = roleLandingPath(session.user?.role)
+  window.location.replace(landingPath ?? safeInternalRedirectPath(callbackUrl))
 }
 
 function LoginForm() {
@@ -198,20 +212,7 @@ function LoginForm() {
         throw new Error(LOGIN_CONFIRMATION_ERROR)
       }
 
-      const userRole = (session?.user as any)?.role
-      const mustChangePassword = (session?.user as any)?.mustChangePassword === true
-
-      if (mustChangePassword) {
-        window.location.replace("/change-password")
-      } else if (userRole === "ORDER_PORTAL" || userRole === "EMPLOYEE") {
-        window.location.replace("/shop")
-      } else if (userRole === "GROUP_ORDER_PORTAL" || userRole === "GROUP_USER") {
-        window.location.replace("/group-portal")
-      } else {
-        const cb = searchParams.get("callbackUrl")
-        const targetUrl = safeInternalRedirectPath(cb)
-        window.location.replace(targetUrl)
-      }
+      redirectAuthenticatedUser(session, searchParams.get("callbackUrl"))
     } catch (err: any) {
       if (isUrlConstructorError(err)) {
         clearAuthCookies()
