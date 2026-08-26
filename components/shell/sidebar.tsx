@@ -104,12 +104,17 @@ const getNavigationByRole = (role: string) => {
     ]
   }
 
-  // The approver shares the shell but not the administrator's reach: it gets
-  // its own queue plus the reports its branch assignments scope, and no
-  // dashboard, inventory, user or organization entries. `proxy.ts` enforces the
-  // same allowlist, so a hand-typed URL cannot reach anything omitted here.
+  // The approver shares the shell but not the administrator's reach: it gets a
+  // dashboard and an order directory covering the branches assigned to it, its
+  // own approval queue, and the reports those assignments scope — and no
+  // inventory, user, branch or organization entries. `proxy.ts` enforces the
+  // same allowlist, so a hand-typed URL cannot reach anything omitted here, and
+  // every endpoint behind the entries below re-derives the branch set from the
+  // caller's own assignments.
   if (role === "GROUP_USER") {
     return [
+      ...baseNav,
+      { href: "/orders", label: "Orders", icon: Package },
       { href: "/approvals", label: "Approvals", icon: ClipboardCheck },
       {
         href: "/reports",
@@ -184,6 +189,9 @@ export function Sidebar() {
                 }
                 if (role === "BRANCH_ADMIN") {
                   return "Branch Admin"
+                }
+                if (role === "GROUP_USER") {
+                  return "Group User"
                 }
                 return ""
               })()

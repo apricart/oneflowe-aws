@@ -227,8 +227,10 @@ function buildDrillDownUrl(options: {
     return `/api/v1/analytics/drill-down?${params.toString()}`
 }
 
+// Wording only: these roles buy stock rather than sell it, so the drawer reads
+// "Purchased" instead of "Revenue" for them. It grants no access of its own.
 function isBuyerRole(role: string | null): boolean {
-    return ["HEAD_OFFICE", "BRANCH_ADMIN"].includes(role ?? "")
+    return ["HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER"].includes(role ?? "")
 }
 
 function drillDownConfig(type: DrillDownSheetProps["type"]) {

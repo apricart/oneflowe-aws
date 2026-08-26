@@ -138,9 +138,10 @@ describe("rate entry", () => {
 })
 
 /**
- * Legacy K-Electric products are priced *excluding* tax, so the inclusive split
- * would misread them. They are imported inactive and unreachable by order
- * creation; this flag is what stops someone reintroducing them by hand.
+ * The marker identifies a product priced *excluding* tax, which the inclusive
+ * split would misread; it is what stops someone activating one by hand. No
+ * product carries it today — K-Electric's export turned out to be tax-inclusive
+ * — so these cases cover the detector itself rather than any live data.
  */
 describe("legacy product detection", () => {
   it("recognises the marker written by the K-Electric import", () => {

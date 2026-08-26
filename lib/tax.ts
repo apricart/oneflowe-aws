@@ -129,11 +129,18 @@ export function splitOrderInclusiveCents(lines: TaxableLine[]): OrderTaxTotals {
 }
 
 /**
- * Products created by the legacy K-Electric import carry prices that exclude
- * tax, unlike everything else in the catalogue. They are imported inactive and
- * order creation only reads active rows, so they can never reach an order — but
- * activating one would put a net-priced product into a system that assumes
- * gross, understating both the price base and the tax on every order using it.
+ * Marks a product whose stored price excludes tax, unlike the rest of the
+ * catalogue. Activating one would put a net-priced product into a system that
+ * assumes gross, understating both the price base and the tax on every order
+ * using it, so `getHistoricalProductActivationError` holds it back until an
+ * admin restates the price.
+ *
+ * No product currently carries this marker. The K-Electric import used to set
+ * it on everything it created, on the assumption that the legacy export was
+ * net-priced. That assumption was wrong — K-Electric confirmed the export is
+ * tax-inclusive — so the marker was cleared from all 147 of its products and
+ * the importer no longer writes it. The mechanism is kept for a future import
+ * whose source genuinely is net-priced.
  */
 export function isHistoricalOnlyProduct(metadata: unknown): boolean {
   if (!metadata || typeof metadata !== "object") return false

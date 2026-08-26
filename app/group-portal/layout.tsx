@@ -3,7 +3,7 @@ import { redirect } from "next/navigation"
 import { SessionGuard } from "@/components/shell/session-guard"
 import { SessionUnavailable } from "@/components/shell/session-unavailable"
 import { getProtectedPageSession } from "@/lib/server/page-session"
-import { GROUP_ORDER_PORTAL_ROLE, GROUP_USER_ROLE } from "@/lib/server/multi-branch-scope"
+import { GROUP_ORDER_PORTAL_ROLE } from "@/lib/server/multi-branch-scope"
 
 export const metadata = {
   title: "Group Order Portal - Apricart OneFlowe",
@@ -24,10 +24,10 @@ export const metadata = {
  * it is reached by a route the proxy did not match — it is refused before any
  * of its client code is sent.
  *
- * GROUP_USER approves orders across its branches but does not raise them, so it
- * is returned to its own queue; every other role belongs in the admin shell and
- * is sent to the dashboard. The check fails closed: an unrecognised role is
- * turned away rather than allowed through.
+ * Only the requester belongs here. GROUP_USER approves orders across its
+ * branches but does not raise them, so it is returned to the admin shell along
+ * with every other role. The check fails closed: an unrecognised role is turned
+ * away rather than allowed through.
  *
  * Deliberately does not mount AppContextProvider. The org/branch context is
  * built around a single active branch; this portal's multi-branch context is
@@ -43,7 +43,6 @@ export default async function GroupPortalLayout({
   if (pageSession.kind === "unavailable") return <SessionUnavailable />
 
   const role = (pageSession.session.user as { role?: string }).role
-  if (role === GROUP_USER_ROLE) redirect("/approvals")
   if (role !== GROUP_ORDER_PORTAL_ROLE) redirect("/dashboard")
 
   return <SessionGuard>{children}</SessionGuard>

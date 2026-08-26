@@ -456,9 +456,11 @@ describe("group order portal access contracts", () => {
     expect(proxySource).toContain("return pathname.startsWith(GROUP_ORDER_PORTAL_HOME) || isInvoiceArea(pathname)")
     expect(proxySource).toContain(": GROUP_ORDER_PORTAL_HOME")
     // The gate that used to sit on the retired wizard route now guards the area
-    // itself, and still fails closed: only the requester renders the storefront.
-    expect(layout).toContain("if (role === GROUP_USER_ROLE) redirect(\"/approvals\")")
+    // itself, and still fails closed: only the requester renders the
+    // storefront. Every other role — the approver included — is sent to the
+    // admin shell.
     expect(layout).toContain("if (role !== GROUP_ORDER_PORTAL_ROLE) redirect(\"/dashboard\")")
+    expect(layout).not.toContain("GROUP_USER_ROLE) redirect")
   })
 
   it("leaves the single-branch order endpoint untouched", () => {

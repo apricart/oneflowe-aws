@@ -4,7 +4,11 @@ import { createContext, useContext, useEffect, useMemo, useState, useCallback, t
 import { useSession } from "next-auth/react"
 
 // Types
-type Role = "SUPER_ADMIN" | "HEAD_OFFICE" | "BRANCH_ADMIN"
+// GROUP_USER shares the admin shell, so it needs a context entry too. Its reach
+// is a set of branches resolved on the server from its own assignments, so it
+// is pinned to its organization here and never to a branch — the branch filter
+// it would otherwise carry is not the client's to decide.
+type Role = "SUPER_ADMIN" | "HEAD_OFFICE" | "BRANCH_ADMIN" | "GROUP_USER"
 
 interface AppContextValue {
   // Current context
@@ -65,6 +69,12 @@ function initializeRoleContext(options: {
     setOrganizationId(String(userOrgId))
     setBranchId(String(userBranchId))
     setBranchIds([String(userBranchId)])
+  } else if (userRole === "GROUP_USER" && userOrgId) {
+    // Pinned to its tenant, with no branch selection: leaving the branch filter
+    // empty lets each endpoint apply this role's assigned branch set itself.
+    setOrganizationId(String(userOrgId))
+    setBranchId(null)
+    setBranchIds([])
   }
 }
 
@@ -162,6 +172,10 @@ export function AppContextProvider({ children }: Readonly<{ children: ReactNode 
       setOrganizationIdState(String(userOrgId))
       setBranchIdState(String(userBranchId))
       setBranchIdsState([String(userBranchId)])
+    } else if (userRole === "GROUP_USER" && userOrgId) {
+      setOrganizationIdState(String(userOrgId))
+      setBranchIdState(null)
+      setBranchIdsState([])
     }
   }, [userRole, userOrgId, userBranchId])
 

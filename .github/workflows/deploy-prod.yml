@@ -4,24 +4,90 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Serialises production deployments so two approvals can never rewrite the
+# host's docker-compose.yml at the same time. An in-flight run is never
+# cancelled; a newer run waits for it.
+concurrency:
+  group: oneflowe-production-deployment
+  cancel-in-progress: false
 
 jobs:
   # ============================================================
-  # JOB 1 - Runs immediately on push. Scans, builds, pushes the
-  # image to ECR, generates a PDF report, and emails it.
-  # Does NOT deploy anything yet.
+  # JOB 1 - Runs immediately on push. Verifies the commit, scans,
+  # builds, pushes the image to ECR, generates a PDF report, and
+  # emails it. Does NOT deploy anything yet.
   # ============================================================
   build-and-report:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       contents: read
     outputs:
       commit_sha: ${{ github.sha }}
     steps:
+      # workflow_dispatch can be pointed at any branch. Production is only
+      # ever built from main.
+      - name: Refuse any ref other than main
+        if: ${{ github.ref != 'refs/heads/main' }}
+        run: |
+          echo "deploy-prod only builds and deploys refs/heads/main." >&2
+          exit 1
+
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # ---- Secret scan (report only) ----
+      # Uses the open-source CLI rather than gitleaks-action, which exits 1 on
+      # organization-owned repositories unless a paid GITLEAKS_LICENSE secret
+      # is configured. Known false positives live in .gitleaksignore.
+      - name: Scan repository history for committed secrets
+        continue-on-error: true
+        env:
+          GITLEAKS_VERSION: 8.28.0
+        run: |
+          set -Eeuo pipefail
+
+          curl \
+            --fail \
+            --show-error \
+            --silent \
+            --location \
+            --output "$RUNNER_TEMP/gitleaks.tar.gz" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+
+          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
+
+          "$RUNNER_TEMP/gitleaks" git . \
+            --no-banner \
+            --redact \
+            --exit-code 0 \
+            --report-format json \
+            --report-path gitleaks-report.json
+
+          LEAK_COUNT=$(jq 'length' gitleaks-report.json)
+
+          echo "Secret scan findings: $LEAK_COUNT"
+
+          if [ "$LEAK_COUNT" -gt 0 ]; then
+            {
+              echo "### Secret scan: $LEAK_COUNT potential secret(s)"
+              echo
+              echo "Rotate anything real. Record a verified false positive as"
+              echo "its fingerprint in .gitleaksignore."
+              echo
+
+              jq -r \
+                '.[] | "- \(.File) line \(.StartLine) - \(.RuleID)"' \
+                gitleaks-report.json
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -31,6 +97,18 @@ jobs:
 
       - name: Install dependencies
         run: npm ci --ignore-scripts
+
+      # ---- Quality gates ----
+      # These run before the image is built so a failing commit never reaches
+      # ECR or the approval queue. The suite needs no secrets and no database.
+      - name: Run unit tests
+        run: npm test
+
+      - name: Run TypeScript checks
+        run: npm run typecheck
+
+      - name: Run lint
+        run: npm run lint
 
       # ---- SonarCloud scan (report only) ----
       - name: SonarCloud Scan
@@ -117,6 +195,7 @@ jobs:
         with:
           name: scan-reports-prod-${{ github.sha }}
           path: |
+            gitleaks-report.json
             trivy-fs-report.json
             trivy-fs-report.txt
             trivy-image-report.txt
@@ -131,14 +210,19 @@ jobs:
           DEPLOY_AWS_REGION: ${{ secrets.DEPLOY_AWS_REGION }}
           ECR_REPOSITORY_URL: ${{ secrets.ECR_REPOSITORY_URL }}
         run: |
-          if aws ecr describe-images --repository-name oneflowe-app --region "$DEPLOY_AWS_REGION" --image-ids "imageTag=prod-${GITHUB_SHA}" >/dev/null 2>&1; then
+          REPOSITORY_NAME="${ECR_REPOSITORY_URL#*/}"
+
+          if aws ecr describe-images --repository-name "$REPOSITORY_NAME" --region "$DEPLOY_AWS_REGION" --image-ids "imageTag=prod-${GITHUB_SHA}" >/dev/null 2>&1; then
             echo "Image tag prod-${GITHUB_SHA} already exists in ECR (likely a re-run on the same commit) - skipping push."
           else
             docker push "${ECR_REPOSITORY_URL}:prod-${GITHUB_SHA}"
           fi
 
       # ---- Email the PDF report ----
+      # Report-only notification. A mail outage must not be able to block a
+      # production deployment; the same PDF is retained in the run artifacts.
       - name: Email pipeline report
+        continue-on-error: true
         uses: dawidd6/action-send-mail@4226df7daafa6fc901a43789c49bf7ab309066e7 # v3
         with:
           server_address: ${{ secrets.SMTP_HOST }}
@@ -166,10 +250,15 @@ jobs:
   # JOB 2 - Gated behind the "production-approval" environment.
   # Pauses here until a required reviewer approves. Only then
   # does it pull the already-built image and deploy it.
+  #
+  # The remote script aborts on the first failed command, verifies
+  # the new container actually serves /api/v1/health, and restores
+  # the previous Compose configuration if it does not.
   # ============================================================
   deploy:
     needs: build-and-report
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions: {}
     environment: production-approval
     steps:
@@ -187,19 +276,195 @@ jobs:
           ECR_REPOSITORY_URL: ${{ secrets.ECR_REPOSITORY_URL }}
           PROD_EC2_INSTANCE_ID: ${{ secrets.PROD_EC2_INSTANCE_ID }}
         run: |
+          set -Eeuo pipefail
+
+          ECR_REGISTRY="${ECR_REPOSITORY_URL%%/*}"
+
+          if [ "$ECR_REGISTRY" = "$ECR_REPOSITORY_URL" ]; then
+            echo "ECR_REPOSITORY_URL must include the registry host and repository name" >&2
+            exit 1
+          fi
+
+          REMOTE_BODY=$(cat <<'REMOTE_SCRIPT'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+
+          APP_DIR="/home/ubuntu/app"
+          COMPOSE_FILE="$APP_DIR/docker-compose.yml"
+          BACKUP_FILE="$APP_DIR/docker-compose.yml.before-deploy"
+          NEW_IMAGE="${DEPLOY_REPOSITORY}:prod-${DEPLOY_COMMIT}"
+          ROLLBACK_ENABLED=false
+
+          rollback_on_error() {
+            status=$?
+            trap - EXIT
+
+            if [ "$status" -ne 0 ] &&
+               [ "$ROLLBACK_ENABLED" = true ] &&
+               [ -f "$BACKUP_FILE" ]; then
+              echo "[rollback] Deployment failed; restoring the previous Compose configuration" >&2
+
+              set +e
+
+              sudo cp "$BACKUP_FILE" "$COMPOSE_FILE"
+              cd "$APP_DIR"
+
+              sudo docker compose up -d
+              sleep 10
+
+              sudo docker compose ps -a >&2
+              sudo docker compose logs \
+                --no-color \
+                --tail=100 \
+                app >&2
+            fi
+
+            exit "$status"
+          }
+
+          trap rollback_on_error EXIT
+
+          echo "[deploy] Validating production host configuration"
+
+          cd "$APP_DIR"
+
+          test -f "$COMPOSE_FILE"
+
+          echo "[deploy] Current filesystem and Docker usage"
+
+          df -h /
+          sudo docker system df || true
+
+          # Informational only. This deployment never prunes Docker data on the
+          # production host. Reclaiming space stays a reviewed manual step so
+          # nothing the host depends on is removed automatically.
+          AVAILABLE_KB=$(df -Pk / | awk 'NR == 2 {print $4}')
+
+          if [ "$AVAILABLE_KB" -lt 3145728 ]; then
+            echo "[deploy] WARNING: less than 3 GiB free on /. Review Docker disk usage." >&2
+          fi
+
+          echo "[deploy] Saving rollback configuration"
+
+          sudo cp "$COMPOSE_FILE" "$BACKUP_FILE"
+          ROLLBACK_ENABLED=true
+
+          echo "[deploy] Authenticating Docker to ECR"
+
+          aws ecr get-login-password \
+            --region "$DEPLOY_REGION" |
+            sudo docker login \
+              --username AWS \
+              --password-stdin \
+              "$DEPLOY_REGISTRY"
+
+          echo "[deploy] Pulling $NEW_IMAGE"
+
+          sudo docker pull "$NEW_IMAGE"
+
+          echo "[deploy] Updating Compose to the immutable image"
+
+          # The capture group preserves the file's existing indentation.
+          sudo sed -i -E \
+            "s|^([[:space:]]*)image:[[:space:]]*.*oneflowe-app:.*$|\1image: $NEW_IMAGE|" \
+            "$COMPOSE_FILE"
+
+          sudo grep -Fq \
+            "image: $NEW_IMAGE" \
+            "$COMPOSE_FILE"
+
+          echo "[deploy] Starting the new application container"
+
+          sudo docker compose up -d
+
+          DEPLOYMENT_HEALTHY=false
+
+          for attempt in $(seq 1 36); do
+            container_id=$(sudo docker compose ps -a -q app)
+            running_id=$(sudo docker compose ps --status running -q app)
+
+            echo "[deploy] Health attempt ${attempt}/36"
+
+            if [ -n "$container_id" ] &&
+               [ "$container_id" = "$running_id" ] &&
+               sudo docker exec "$container_id" node -e \
+                 "fetch('http://127.0.0.1:3000/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"; then
+              DEPLOYMENT_HEALTHY=true
+              break
+            fi
+
+            sleep 5
+          done
+
+          if [ "$DEPLOYMENT_HEALTHY" != true ]; then
+            echo "[deploy] New application did not become healthy" >&2
+
+            sudo docker compose ps -a >&2 || true
+            sudo docker compose logs \
+              --no-color \
+              --tail=200 \
+              app >&2 || true
+
+            # Exiting here activates rollback_on_error.
+            exit 21
+          fi
+
+          echo "[deploy] Production application is running and healthy"
+
+          # The new application is healthy, so rollback is no longer required.
+          # The backup file is deliberately kept: it always holds the previous
+          # Compose configuration for a manual rollback.
+          ROLLBACK_ENABLED=false
+          trap - EXIT
+
+          # Everything below is reporting only. A healthy deployment must never
+          # be reported as a failure because a status command failed.
+          set +e
+
+          echo "[deploy] Final host status"
+
+          final_id=$(sudo docker compose ps -q app)
+
+          if [ -n "$final_id" ]; then
+            sudo docker inspect \
+              --format 'Deployed image: {{.Config.Image}}' \
+              "$final_id"
+          fi
+
+          df -h /
+          sudo docker system df
+          sudo docker compose ps -a
+
+          exit 0
+          REMOTE_SCRIPT
+          )
+
+          REMOTE_SCRIPT=$(printf \
+            'DEPLOY_REGION=%q\nDEPLOY_REGISTRY=%q\nDEPLOY_REPOSITORY=%q\nDEPLOY_COMMIT=%q\n' \
+            "$DEPLOY_AWS_REGION" \
+            "$ECR_REGISTRY" \
+            "$ECR_REPOSITORY_URL" \
+            "$DEPLOY_COMMIT_SHA")
+
+          REMOTE_SCRIPT+=$'\n'
+          REMOTE_SCRIPT+="$REMOTE_BODY"
+
+          # Validate the generated remote script before sending it to EC2.
+          printf '%s\n' "$REMOTE_SCRIPT" | /bin/bash -n
+
+          # Base64 prevents SSM and shell interpolation from changing the script.
+          REMOTE_SCRIPT_BASE64=$(printf '%s\n' "$REMOTE_SCRIPT" |
+            base64 --wrap=0)
+
           REMOTE_COMMANDS=$(jq -cn \
-            --arg region "$DEPLOY_AWS_REGION" \
-            --arg repository "$ECR_REPOSITORY_URL" \
-            --arg commit "$DEPLOY_COMMIT_SHA" \
+            --arg payload "$REMOTE_SCRIPT_BASE64" \
             '{
               commands: [
-                "cd /home/ubuntu/app",
-                ("aws ecr get-login-password --region " + $region + " | sudo docker login --username AWS --password-stdin " + $repository),
-                ("sudo docker pull " + $repository + ":prod-" + $commit),
-                ("sudo sed -i \"s|image:.*oneflowe-app:.*|image: " + $repository + ":prod-" + $commit + "|\" docker-compose.yml"),
-                "sudo docker compose up -d",
-                "sleep 15",
-                "sudo docker ps --filter name=app-app-1 --filter status=running | grep app-app-1"
+                (
+                  "echo \"[ssm] Launching production deployment script\"; printf %s "
+                  + $payload
+                  + " | base64 --decode | /bin/bash"
+                )
               ]
             }')
 
@@ -207,41 +472,87 @@ jobs:
             --instance-ids "$PROD_EC2_INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
             --parameters "$REMOTE_COMMANDS" \
+            --region "$DEPLOY_AWS_REGION" \
+            --timeout-seconds 600 \
             --comment "Deploy prod-${DEPLOY_COMMIT_SHA} to production (approved)" \
-            --query "Command.CommandId" \
+            --query 'Command.CommandId' \
             --output text)
 
           echo "SSM Command ID: $COMMAND_ID"
-          echo "Waiting for deployment to complete..."
+          echo "Waiting for production deployment to complete"
 
-          aws ssm wait command-executed \
-            --command-id "$COMMAND_ID" \
-            --instance-id "$PROD_EC2_INSTANCE_ID" \
-            --region "$DEPLOY_AWS_REGION" || true
+          INVOCATION=""
+          STATUS=""
 
-          STATUS=$(aws ssm get-command-invocation \
-            --command-id "$COMMAND_ID" \
-            --instance-id "$PROD_EC2_INSTANCE_ID" \
-            --region "$DEPLOY_AWS_REGION" \
-            --query "Status" --output text)
-
-          echo "Deployment status: $STATUS"
-
-          if [ "$STATUS" != "Success" ]; then
-            echo "=== STDOUT ==="
-            aws ssm get-command-invocation \
+          for attempt in $(seq 1 120); do
+            if CURRENT_INVOCATION=$(aws ssm get-command-invocation \
               --command-id "$COMMAND_ID" \
               --instance-id "$PROD_EC2_INSTANCE_ID" \
               --region "$DEPLOY_AWS_REGION" \
-              --query "StandardOutputContent" --output text
-            echo "=== STDERR ==="
-            aws ssm get-command-invocation \
-              --command-id "$COMMAND_ID" \
-              --instance-id "$PROD_EC2_INSTANCE_ID" \
-              --region "$DEPLOY_AWS_REGION" \
-              --query "StandardErrorContent" --output text
-            echo "Deployment failed - see output above"
+              --output json 2>/dev/null); then
+
+              INVOCATION="$CURRENT_INVOCATION"
+              STATUS=$(jq -r '.Status' <<<"$INVOCATION")
+
+              case "$STATUS" in
+                Success|Failed|TimedOut|Cancelled)
+                  break
+                  ;;
+              esac
+            fi
+
+            if [ $((attempt % 6)) -eq 0 ]; then
+              echo "Still waiting for SSM deployment (status: ${STATUS:-not available})"
+            fi
+
+            sleep 5
+          done
+
+          if [ -z "$INVOCATION" ]; then
+            echo "SSM did not return invocation details within 10 minutes" >&2
             exit 1
           fi
 
-          echo "Deployment succeeded and container confirmed running"
+          echo "Deployment status: $STATUS"
+
+          echo "=== STDOUT ==="
+
+          STDOUT=$(jq -r \
+            '.StandardOutputContent // empty' \
+            <<<"$INVOCATION")
+
+          if [ -n "$STDOUT" ]; then
+            printf '%s\n' "$STDOUT"
+          else
+            echo "<empty: SSM may not have started the script>"
+          fi
+
+          if [ "$STATUS" != "Success" ]; then
+            echo "=== SSM INVOCATION ==="
+
+            jq '{
+              Status,
+              StatusDetails,
+              ResponseCode,
+              ExecutionElapsedTime,
+              ExecutionStartDateTime,
+              ExecutionEndDateTime
+            }' <<<"$INVOCATION"
+
+            echo "=== STDERR ==="
+
+            STDERR=$(jq -r \
+              '.StandardErrorContent // empty' \
+              <<<"$INVOCATION")
+
+            if [ -n "$STDERR" ]; then
+              printf '%s\n' "$STDERR"
+            else
+              echo "<empty>"
+            fi
+
+            echo "Deployment failed - see output above" >&2
+            exit 1
+          fi
+
+          echo "Deployment succeeded and the production container is healthy"
