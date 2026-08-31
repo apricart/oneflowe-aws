@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
-import { branches, organizations, refunds, refundItems, orderItems, users } from "@/db/schema"
+import { branches, organizations, refunds, refundItems, orderItems } from "@/db/schema"
 import { and, eq } from "drizzle-orm"
 import { shouldHidePricesForRole, redactReceiptPrices } from "@/lib/price-visibility"
 import { aggregateReceiptRefundItems, getReceiptNetTotal, type ReceiptRefundItem } from "@/lib/receipt-display"
 import { getOrderDerivedStatus } from "@/lib/order-status"
 import { formatBranchAddress } from "@/lib/branch-address"
 import { authorizeInvoiceRequest } from "@/lib/server/invoice-access"
-import { getReceiptUserDisplayName } from "@/lib/receipt-user"
+import { loadInvoiceParticipants } from "@/lib/server/invoice-participants"
 
 function refundHistoryLine(item: any, pricesHidden: boolean) {
     return {
@@ -58,35 +58,7 @@ export async function GET(
 
         const pricesHidden = await shouldHidePricesForRole(userRole, order.organizationId)
 
-        const userIdentityColumns = {
-            fullName: users.fullName,
-            firstName: users.firstName,
-            lastName: users.lastName,
-            username: users.username,
-            email: users.email,
-            phone: users.phone,
-        }
-        const [creatorRows, approverRows] = await Promise.all([
-            db
-                .select(userIdentityColumns)
-                .from(users)
-                .where(eq(users.id, order.createdByUserId))
-                .limit(1),
-            order.approvedByUserId
-                ? db
-                    .select(userIdentityColumns)
-                    .from(users)
-                    .where(eq(users.id, order.approvedByUserId))
-                    .limit(1)
-                : Promise.resolve([]),
-        ])
-        const creator = creatorRows[0]
-        const approver = approverRows[0]
-        const creatorName = getReceiptUserDisplayName(creator, "Unknown")
-        const approverName = getReceiptUserDisplayName(
-            approver,
-            order.approvedByUserId ? "Unknown" : "N/A"
-        )
+        const participants = await loadInvoiceParticipants(order)
 
         let branchAddress = ""
         if (order.branchId !== null && order.organizationId !== null) {
@@ -167,12 +139,15 @@ export async function GET(
             buyerAddress: branchAddress,
             organizationName: (order.receiptData as any)?.organizationName || organizationName || "",
             organizationNtn: organizationNtn || (order.receiptData as any)?.organizationNtn || "",
-            // The order row is the record of the buyer's purchase order; the
-            // snapshot is the fallback for orders whose row predates the column.
-            poNumber: order.poNumber || (order.receiptData as any)?.poNumber || "",
-            placedByName: creatorName,
-            placedByPhone: creator?.phone || null,
-            approvedByName: approverName,
+            // Recorded on the order rather than in the snapshot: the payment
+            // can be settled long after the invoice was issued, and the
+            // transaction reference identifies the order the invoice covers.
+            orderTid: order.tid,
+            paymentStatus: order.paymentStatus,
+            placedByName: participants.placedByName,
+            placedByPhone: participants.placedByPhone,
+            approvedByName: participants.approvedByName,
+            fulfilledByName: participants.fulfilledByName,
             status: derivedStatus.label,
             statusKey: derivedStatus.key,
             refund: totalApprovedRefundAmount,

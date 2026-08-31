@@ -233,14 +233,18 @@ describe("invoice endpoint wiring", () => {
     }
   })
 
-  it("includes initiator and approver in both invoice formats", () => {
+  it("includes initiator, approver and fulfiller in both invoice formats", () => {
     const preview = source("components/receipts/receipt-content.tsx")
-    const download = source("app/api/v1/receipts/[orderId]/download/route.ts")
+    // The download's page is drawn in its own module; the route handler only
+    // authorizes the request and hands over the snapshot.
+    const download = source("lib/server/invoice-pdf.ts")
 
     for (const invoiceFormat of [preview, download]) {
       expect(invoiceFormat).toContain("Initiator:")
       expect(invoiceFormat).toContain("Approver:")
       expect(invoiceFormat).toContain("approvedByName")
+      expect(invoiceFormat).toContain("Fulfiller:")
+      expect(invoiceFormat).toContain("fulfilledByName")
     }
   })
 })

@@ -351,6 +351,13 @@
       "when": 1787572800000,
       "tag": "20260824120000_add_auth_login_lookup_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1787918400000,
+      "tag": "20260828120000_add_audit_entity_lookup_index",
+      "breakpoints": true
     }
   ]
 }

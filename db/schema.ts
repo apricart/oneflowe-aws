@@ -459,8 +459,8 @@ export const orders = pgTable(
     taxCents: bigint("tax_cents", { mode: "number" }).notNull().default(0),
     totalCents: bigint("total_cents", { mode: "number" }).notNull().default(0),
     notes: text("notes"),
-    // Buyer-supplied purchase order reference, printed as "P.O.#" on the
-    // invoice. Optional: orders raised without one simply have no PO to print.
+    // Buyer-supplied purchase order reference, recorded against the order.
+    // Optional: orders may be raised without one.
     poNumber: varchar("po_number", { length: 64 }),
     // Set only for orders created through the Group Order Portal's multi-branch
     // submission, which records one ordinary order per branch under a shared
@@ -724,6 +724,8 @@ export const auditLogs = pgTable(
     index("audit_org_idx").on(t.organizationId),
     index("audit_branch_idx").on(t.branchId),
     index("audit_created_action_idx").on(t.createdAt, t.action),
+    // One record's trail: the invoice reads an order's token hand-off from here.
+    index("audit_entity_lookup_idx").on(t.entity, t.entityId, t.action, t.createdAt),
   ],
 )
 

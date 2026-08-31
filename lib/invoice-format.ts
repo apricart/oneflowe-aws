@@ -44,14 +44,11 @@ export function formatInvoiceDisplayDate(value: unknown): string {
 }
 
 /**
- * The purchase-order reference printed on the invoice.
+ * The closing note on the invoice.
  *
- * This is the buyer's own reference, supplied when the order was placed, and it
- * is printed only when there is one. It deliberately does not fall back to the
- * invoice number: repeating the invoice number under "P.O.#" made the invoice
- * assert a purchase order that the buyer never raised.
+ * The invoice is issued by the platform rather than counter-signed, so it says
+ * so outright in place of the signature blocks it used to print. Both the
+ * on-screen invoice and the PDF read it from here so the two cannot disagree.
  */
-export function getInvoicePoNumber(receiptData: { poNumber?: unknown } | null | undefined): string {
-    const poNumber = typeof receiptData?.poNumber === "string" ? receiptData.poNumber.trim() : ""
-    return poNumber || "N/A"
-}
+export const INVOICE_SYSTEM_GENERATED_NOTE =
+    "This is a system-generated invoice and does not require a signature or stamp."

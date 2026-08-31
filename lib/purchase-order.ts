@@ -1,5 +1,5 @@
 /**
- * The buyer's own purchase order reference, printed as "P.O.#" on the invoice.
+ * The buyer's own purchase order reference, captured against the order.
  *
  * One definition shared by the request schemas and by every form that offers
  * the field, so what a portal lets a user type is exactly what the server

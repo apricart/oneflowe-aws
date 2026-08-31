@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { formatInvoiceDisplayDate, getInvoicePoNumber } from "@/lib/invoice-format"
+import { formatInvoiceDisplayDate, INVOICE_SYSTEM_GENERATED_NOTE } from "@/lib/invoice-format"
 
 describe("formatInvoiceDisplayDate", () => {
     it("renders a stored MM/DD/YYYY snapshot in invoice style", () => {
@@ -27,19 +27,10 @@ describe("formatInvoiceDisplayDate", () => {
     })
 })
 
-describe("getInvoicePoNumber", () => {
-    it("prints the buyer's purchase order reference", () => {
-        expect(getInvoicePoNumber({ poNumber: "PO-99" })).toBe("PO-99")
-        expect(getInvoicePoNumber({ poNumber: "  PO-99  " })).toBe("PO-99")
-    })
-
-    it("never falls back to the invoice number", () => {
-        expect(getInvoicePoNumber({ invoiceNumber: "247/JUL/APR/2026" } as { poNumber?: unknown })).toBe("N/A")
-        expect(getInvoicePoNumber({ poNumber: "   " })).toBe("N/A")
-    })
-
-    it("reports a missing reference instead of printing an empty field", () => {
-        expect(getInvoicePoNumber(null)).toBe("N/A")
-        expect(getInvoicePoNumber({})).toBe("N/A")
+describe("the closing note", () => {
+    it("states that the invoice needs no signature or stamp", () => {
+        expect(INVOICE_SYSTEM_GENERATED_NOTE).toBe(
+            "This is a system-generated invoice and does not require a signature or stamp."
+        )
     })
 })
