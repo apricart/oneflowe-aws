@@ -61,13 +61,20 @@ type DraftResponse = { item: { groupId: number | null; payload: StoredPayload } 
  * products are withdrawn" apart from "the catalogue could not be reached" —
  * two situations that must not lead to the same outcome.
  */
-async function loadPricedProducts(inventoryIds: number[]): Promise<Map<number, PricedProduct>> {
+async function loadPricedProducts(
+  inventoryIds: number[],
+  groupId: number | null,
+): Promise<Map<number, PricedProduct>> {
   const priced = new Map<number, PricedProduct>()
+  // Always sent, including as an empty value for the ungrouped bucket: a
+  // product can be priced differently per group, so the endpoint refuses to
+  // answer without knowing which group the draft belongs to.
+  const groupParam = groupId === null ? "" : String(groupId)
 
   for (let index = 0; index < inventoryIds.length; index += PRICE_LOOKUP_CHUNK_SIZE) {
     const chunk = inventoryIds.slice(index, index + PRICE_LOOKUP_CHUNK_SIZE)
     const prices = await fetcher<PricesResponse>(
-      `/api/v1/group-portal/prices?organizationInventoryIds=${chunk.join(",")}`,
+      `/api/v1/group-portal/prices?groupId=${groupParam}&organizationInventoryIds=${chunk.join(",")}`,
     )
     for (const item of prices.items) priced.set(item.organizationInventoryId, item)
   }
@@ -219,7 +226,10 @@ export function useStorefrontDraft({
 
     let priced: Map<number, PricedProduct>
     try {
-      priced = await loadPricedProducts(savedItems.map((item) => item.organizationInventoryId))
+      priced = await loadPricedProducts(
+        savedItems.map((item) => item.organizationInventoryId),
+        payload?.groupId ?? null,
+      )
     } catch (restoreError) {
       console.warn("[GroupStorefront] Draft restore failed", restoreError)
       setRestoreFailed(true)

@@ -35,7 +35,24 @@ npm run db:check      # Check current users in DB
 npm run import:products-csv  # Import products from CSV file
 ```
 
-Vitest is configured for focused unit and security tests (`npm test`).
+### Testing
+
+```bash
+npm test               # unit + contract tests (no external services needed)
+npm run test:watch     # same, in watch mode
+npm run test:integration  # needs a disposable Postgres; skips itself without one
+npm run test:all       # both projects
+npm run typecheck
+```
+
+Two Vitest projects: `vitest.config.ts` (jsdom, tests beside the code) and
+`vitest.integration.config.ts` (node, `tests/integration/**`, one file at a
+time). Both alias `server-only` to an empty module so tests can import code
+under `lib/server/` directly.
+
+Integration tests need `TEST_DATABASE_URL` pointing at a **migrated, disposable**
+database whose name contains `test`; without it they skip and the command still
+passes. See `tests/README.md` for the full setup and conventions.
 
 ## Architecture
 
@@ -96,6 +113,7 @@ app/
 | `lib/db.ts` | Drizzle + connection pooling |
 | `lib/permissions.ts` | RBAC permission checks |
 | `lib/inventory-cascade.ts` | Multi-level inventory sync logic (global → org → branch) |
+| `lib/price-ladder.ts` / `lib/server/effective-price.ts` | Price resolution: group → organization → global base price |
 | `lib/order-utils.ts` / `lib/order-status.ts` | Order state machine helpers |
 | `lib/budget-allocation-mode.ts` | Budget allocation logic |
 | `lib/error-handler.ts` | Centralized API error handling |
@@ -132,5 +150,6 @@ an administrator; use the explicit one-time bootstrap command when required.
 - **API routes** follow the pattern `app/api/v1/<resource>/route.ts` and use `lib/error-handler.ts` for consistent error responses.
 - **Server components vs client components**: API data fetching happens in client components via `lib/hooks/` and `lib/api.ts`; use `"use client"` at the top of interactive components.
 - **Inventory cascade**: When inventory changes at the global level, `lib/inventory-cascade.ts` propagates changes down to org and branch levels. Always go through this utility rather than writing directly.
+- **Pricing**: A product's price is layered — group override, then organization override, then global base price. Always resolve it through `lib/server/effective-price.ts` (`resolveEffectivePriceCents`, `effectivePriceCentsSql`, `scopedOverrideCentsSql`); never write a `customPrice ?? basePrice` expression by hand, or the price charged and the price displayed will drift. The group tier applies only where exactly one group is in scope (a branch, or an authorized group-portal submission).
 - **Permissions**: Check `lib/permissions.ts` before adding any new admin-only feature — never inline permission logic in components.
 - **Path aliases**: `@/` maps to the project root (configured in `tsconfig.json`).

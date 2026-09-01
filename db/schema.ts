@@ -1087,6 +1087,58 @@ export const branchInventory = pgTable(
   ],
 )
 
+/**
+ * Group Inventory Prices - the group tier of the price ladder.
+ *
+ * The ladder is resolved by `lib/server/effective-price.ts` and is, in order:
+ *
+ *   group override (here) -> organization override (`organization_inventory`)
+ *   -> global base price (`global_products.base_price_cents`)
+ *
+ * Deliberate properties:
+ *
+ *  * **Absence is inheritance.** A group with no row for a product pays the
+ *    organization price, so this table never has to be backfilled and the
+ *    organization price it falls back to is left completely untouched.
+ *  * **A branch resolves to exactly one group** (`branches.group_id`), so the
+ *    price applying to a branch is never ambiguous. A branch outside every
+ *    group simply has no group tier and keeps the organization price.
+ *  * **Live, not copied.** Moving a branch between groups changes its prices
+ *    immediately; nothing is denormalized onto the branch. Orders are unaffected
+ *    because `order_items.price_cents` is a snapshot taken at order time.
+ */
+export const groupInventoryPrices = pgTable(
+  "group_inventory_prices",
+  {
+    id: serial("id").primaryKey(),
+    groupId: integer("group_id")
+      .references(() => groups.id, { onDelete: "cascade" })
+      .notNull(),
+    // Denormalized tenant guard, matching `user_group_assignments`: every row is
+    // pinned to the tenant it was written under so a cross-tenant override is
+    // impossible to write and impossible to read back by accident.
+    organizationId: integer("organization_id")
+      .references(() => organizations.id)
+      .notNull(),
+    organizationInventoryId: integer("organization_inventory_id")
+      .references(() => organizationInventory.id, { onDelete: "cascade" })
+      .notNull(),
+    // Tax-inclusive, like every other price in the system. NOT NULL because
+    // "no override" is represented by the absence of the row, never by a NULL.
+    customPriceCents: integer("custom_price_cents").notNull(),
+    updatedByUserId: uuid("updated_by_user_id").references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("group_inventory_prices_group_item_uq").on(t.groupId, t.organizationInventoryId),
+    index("group_inventory_prices_group_idx").on(t.groupId),
+    index("group_inventory_prices_org_idx").on(t.organizationId),
+    index("group_inventory_prices_item_idx").on(t.organizationInventoryId),
+    check("group_inventory_prices_price_valid_ck", sql`${t.customPriceCents} >= 0`),
+  ],
+)
+
 export const productQuantityBudgets = pgTable(
   "product_quantity_budgets",
   {

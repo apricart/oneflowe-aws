@@ -79,6 +79,7 @@ import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allo
 import { orderUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
 import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
 import { GROUP_USER_ROLE, canUseScopedBranch } from "@/lib/server/multi-branch-scope"
+import { loadGroupPriceOverrides, resolveBranchGroupId, resolveEffectivePriceCents } from "@/lib/server/effective-price"
 
 /**
  * Branch authorization for reading one order.
@@ -196,11 +197,24 @@ async function loadOrderEditInventory(tx: any, context: any) {
   ]))
   const productRows = await tx.select().from(globalProducts)
     .where(inArray(globalProducts.id, allGlobalProductIds)).for("update")
+  // The group tier of the price ladder, read inside the same transaction that
+  // re-prices the order. An edited order is always re-priced at the rates in
+  // force now, which is the behaviour that was already documented below.
+  const groupId = await resolveBranchGroupId(tx, {
+    branchId: context.branchId,
+    organizationId: context.organizationId,
+  })
+  const groupPriceByInventoryId = await loadGroupPriceOverrides(tx, {
+    organizationId: context.organizationId,
+    groupId,
+    organizationInventoryIds: requestedInventoryIds,
+  })
   return {
     existingItems,
     allGlobalProductIds,
     inventoryById: new Map(inventoryRows.map((item: any) => [item.id, item])),
     productById: new Map(productRows.map((product: any) => [product.id, product])),
+    groupPriceByInventoryId,
     oldQuantities: indexExistingOrderQuantities(existingItems),
   }
 }
@@ -220,8 +234,12 @@ function calculateEditedItems(normalizedItems: any[], inventoryData: any, orgTax
       label: `Quantity for ${product.name}`,
     })
     if (!validation.ok) throw new Error(validation.error)
-    const priceCents = inventoryItem.customPrice ?? product.basePrice
-    if (!Number.isSafeInteger(priceCents) || priceCents < 0) throw new Error(`Pricing is unavailable for ${product.name}`)
+    const priceCents = resolveEffectivePriceCents({
+      groupPriceCents: inventoryData.groupPriceByInventoryId?.get(inventoryItem.id),
+      organizationPriceCents: inventoryItem.customPrice,
+      basePriceCents: product.basePrice,
+    })
+    if (priceCents === null || !Number.isSafeInteger(priceCents) || priceCents < 0) throw new Error(`Pricing is unavailable for ${product.name}`)
     const availableStock = Number(product.stockQuantity) + (inventoryData.oldQuantities.byProduct.get(product.id) || 0)
     if (validation.quantity > availableStock) {
       throw new Error(`Insufficient stock for ${product.name}. Available: ${formatQuantity(availableStock)}, Requested: ${formatQuantity(validation.quantity)}`)

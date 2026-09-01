@@ -6,6 +6,7 @@ import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { calculateLineCents, formatQuantity, parseQuantity, validateProductQuantity } from "@/lib/quantity"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
+import { groupPriceJoinOn, groupPriceTier, scopedOverrideCentsSql } from "@/lib/server/effective-price"
 import { buildAppMonthPeriods, getAppMonthPeriod, parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
 import {
   auditLogs,
@@ -571,7 +572,11 @@ export async function POST(req: NextRequest) {
         productName: globalProducts.name,
         productCode: globalProducts.productCode,
         customName: organizationInventory.customName,
-        customPrice: organizationInventory.customPrice,
+        // The override in force for this branch — the group price when its
+        // group sets one, otherwise the organization price. A quantity
+        // allocation is valued at the price the branch will actually be
+        // charged, so it has to walk the same ladder the order does.
+        customPrice: scopedOverrideCentsSql(),
         basePrice: globalProducts.basePrice,
         unit: globalProducts.unit,
         allowDecimalQuantity: globalProducts.allowDecimalQuantity,
@@ -580,6 +585,10 @@ export async function POST(req: NextRequest) {
       .from(branchInventory)
       .innerJoin(organizationInventory, eq(branchInventory.organizationInventoryId, organizationInventory.id))
       .innerJoin(globalProducts, eq(organizationInventory.globalProductId, globalProducts.id))
+      .leftJoin(groupPriceTier, groupPriceJoinOn({
+        organizationId: branch.organizationId,
+        groupId: branch.groupId,
+      }))
       .where(and(
         eq(branchInventory.branchId, branch.id),
         eq(branchInventory.organizationId, branch.organizationId),
