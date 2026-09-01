@@ -6,6 +6,7 @@ import {
   MAX_ITEMS_PER_REFUNDED_ORDER,
   MAX_ORDERS_PER_GROUP_REFUND,
 } from "@/lib/server/group-refund-rules"
+import { PROPAGATION_MODES } from "@/lib/group-price-propagation"
 import { MAX_PRICE_CENTS } from "@/lib/price-ladder"
 import { MAX_ALLOWLIST_ENTRIES } from "@/lib/security/ip-allowlist"
 import {
@@ -505,6 +506,24 @@ export const groupBranchesUpdateSchema = z.object({
  * the schema also uses.
  */
 export const MAX_GROUP_PRICE_UPDATES = 500
+
+/**
+ * What should happen to group prices when an organization price changes.
+ *
+ * Optional everywhere it is accepted, and absent means `none` — the behaviour
+ * the application had before propagation existed, so no existing caller changes
+ * meaning. `groupIds` is only read for `selected`; the server still rebuilds the
+ * plan from its own rows, so this is a statement of intent, never a plan.
+ */
+export const groupPricePropagationSchema = z.object({
+  mode: z.enum(PROPAGATION_MODES),
+  groupIds: z.array(positiveId).max(MAX_ASSIGNED_SCOPE_IDS).optional(),
+}).strict().refine(
+  // `selected` has to say which groups. An empty list is allowed and means
+  // "hold every group where it is", which the planner handles explicitly.
+  (input) => input.mode !== "selected" || Array.isArray(input.groupIds),
+  { message: "Selecting specific groups requires a groupIds list" },
+)
 
 export const groupPricesUpdateSchema = z.object({
   prices: z.array(z.object({

@@ -191,13 +191,21 @@ describe("group pricing surfaces", () => {
 describe("group pricing access control", () => {
   const route = source("app/api/v1/groups/[id]/prices/route.ts")
 
-  it("admits only the two roles that already administer groups", () => {
-    expect(route).toContain('const PRICING_ROLES = ["SUPER_ADMIN", "HEAD_OFFICE"] as const')
-    expect(route).toContain("if (!PRICING_ROLES.includes(role))")
+  it("opens the screen only to the two roles that already administer groups", () => {
+    expect(route).toContain('const PRICING_READ_ROLES = ["SUPER_ADMIN", "HEAD_OFFICE"] as const')
+    expect(route).toContain("if (!PRICING_READ_ROLES.includes(role))")
     // Belonging to a group grants the right to order at its prices, never to
-    // set them.
+    // see or set them.
     expect(route).not.toContain("GROUP_ORDER_PORTAL")
     expect(route).not.toContain("GROUP_USER")
+  })
+
+  it("lets only a Super Admin change a price on it", () => {
+    // Head Office reads this screen because it has to know what its branches
+    // pay; the write goes through the one shared pricing rule, which admits
+    // Super Admin alone.
+    expect(route).toContain('from "@/lib/pricing-access"')
+    expect(route).toContain("const priceAccess = priceMutationFailure(authorized.role)")
   })
 
   it("confines Head Office to its own organization on both reads and writes", () => {

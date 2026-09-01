@@ -4,6 +4,7 @@ import { and, eq } from "drizzle-orm"
 
 import { branchInventory, branches, globalProducts, groupInventoryPrices, groups, organizationInventory } from "@/db/schema"
 import { db, closePool } from "@/lib/db"
+import { cascadeGlobalProductFieldUpdate } from "@/lib/inventory-cascade"
 import {
   effectivePriceCentsSql,
   groupPriceJoinOn,
@@ -276,6 +277,36 @@ describe.skipIf(!hasTestDatabase)("group price ladder in Postgres", () => {
       organizationInventoryId: fixtures.organizationInventoryId,
       customPriceCents: -1,
     })).rejects.toThrow()
+  })
+
+  it("a global price change leaves organization and group prices untouched", async () => {
+    // Prices flow downward and never past a tier that has set its own. An
+    // organization override that happens to equal the old global price used to
+    // be deleted by this, silently revoking a price somebody chose.
+    await setOrganizationPrice(fixtures, BASE_PRICE_CENTS)
+    await setGroupPrice(fixtures, fixtures.groupId, fixtures.organizationId, BASE_PRICE_CENTS)
+
+    await cascadeGlobalProductFieldUpdate(
+      fixtures.globalProductId,
+      [{ field: "basePrice", oldValue: BASE_PRICE_CENTS, newValue: BASE_PRICE_CENTS * 2 }],
+      fixtures.userId,
+      db,
+    )
+
+    const [item] = await db
+      .select({ customPrice: organizationInventory.customPrice })
+      .from(organizationInventory)
+      .where(eq(organizationInventory.id, fixtures.organizationInventoryId))
+    expect(item.customPrice).toBe(BASE_PRICE_CENTS)
+
+    const [groupRow] = await db
+      .select({ customPriceCents: groupInventoryPrices.customPriceCents })
+      .from(groupInventoryPrices)
+      .where(and(
+        eq(groupInventoryPrices.groupId, fixtures.groupId),
+        eq(groupInventoryPrices.organizationInventoryId, fixtures.organizationInventoryId),
+      ))
+    expect(groupRow.customPriceCents).toBe(BASE_PRICE_CENTS)
   })
 
   it("removes a group's prices when the group row is deleted", async () => {
