@@ -1,6 +1,6 @@
 import { eq, and, inArray } from "drizzle-orm"
 import { organizationSettings } from "@/db/schema"
-import { coalesceInFlight, scopedCacheKey } from "@/lib/cache-utils"
+import { CACHE_TTL, getCached, scopedCacheKey } from "@/lib/cache-utils"
 import { db } from "@/lib/db"
 // Re-exported so existing callers keep importing it from here, while the rule
 // itself lives in a database-free module that can be unit-tested directly.
@@ -37,11 +37,18 @@ export async function shouldHidePricesForRole(role: unknown, organizationId: unk
   const orgId = Number(organizationId)
   if (!Number.isFinite(orgId) || orgId <= 0) return false
 
-  // Coalesce only simultaneous reads for the same organization. This is not a
-  // persisted cache: price-visibility changes remain observable on the next
-  // request, while a burst cannot issue hundreds of identical settings reads.
-  const settings = await coalesceInFlight(
-    scopedCacheKey("inflight:settings:price-visibility", { orgId }),
+  // Cached per organization and never per role. The rows read here are the
+  // tenant's raw price-visibility settings; the role-specific decision is
+  // resolved from them below. Keeping the role out of the cache key lets one
+  // tenant read serve every role without any role observing another role's
+  // resolved visibility, and keeping the organization in the key is what stops
+  // one tenant from reading another tenant's settings.
+  //
+  // The key sits under the "settings" prefix so the invalidateByPrefix("settings")
+  // that already runs on every organization-settings write and delete clears it,
+  // which keeps a visibility change observable on the request after the change.
+  const settings = await getCached(
+    scopedCacheKey("settings:price-visibility", { orgId }),
     () => db
       .select({ key: organizationSettings.key, value: organizationSettings.value })
       .from(organizationSettings)
@@ -52,6 +59,7 @@ export async function shouldHidePricesForRole(role: unknown, organizationId: unk
         )
       )
       .limit(PRICE_VISIBILITY_SETTING_KEYS.length),
+    CACHE_TTL.SETTINGS,
   )
 
   const roleSetting = settings.find((setting) => setting.key === roleSettingKey)

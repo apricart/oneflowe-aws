@@ -1,0 +1,690 @@
+/**
+ * Executive Procurement Analytics — the curated contract.
+ *
+ * This module is deliberately free of the database, of React and of the
+ * session, so the whitelist that decides what an analytics request may ask for
+ * can be unit-tested on its own, and so the formula behind every figure has one
+ * written definition instead of one per chart.
+ *
+ * Nothing here widens access. The registry below decides which *shapes* of
+ * question are askable; `lib/server/executive-analytics-scope.ts` decides which
+ * rows the answer may be drawn from, and the two are independent.
+ *
+ * ── Business definitions this module encodes ───────────────────────────────
+ *
+ * The application already owns these meanings; they are restated here, not
+ * redefined. See `lib/metric-utils.ts` (order money) and
+ * `lib/branch-budget-summary.ts` (budget money).
+ *
+ *   Revenue-eligible order   status IN (FULFILLED, APPROVED, PARTIAL,
+ *                            PARTIALLY_FULFILLED)          — metric-utils
+ *   Procurement Value        SUM(total_cents - refund_amount_cents) over
+ *                            revenue-eligible orders       — metricExpressions.revenue
+ *   Committed (Held)         SUM(total_cents - refund_amount_cents) over
+ *                            PENDING + APPROVED orders     — budgets/summary route
+ *   Total Budget             allocated + credited          — summarizeBranchBudget
+ *   Remaining                total - spent - held          — summarizeBranchBudget
+ *   Consumed                 spent + held (the "Purchases" figure the existing
+ *                            Budget Report shows)          — budgets/summary route
+ *   Utilization %            consumed / total * 100
+ *   Variance                 total - consumed
+ *   Growth %                 (current - previous) / previous * 100
+ *
+ * A cancelled or rejected order is worth nothing in any money metric: it is
+ * outside both the revenue-eligible set and the committed set. A pending order
+ * is a commitment, never consumption.
+ */
+
+/** Roles allowed to open the Executive Analytics Center at all. */
+export const EXECUTIVE_ANALYTICS_ROLES = ["SUPER_ADMIN", "HEAD_OFFICE"] as const
+export type ExecutiveAnalyticsRole = (typeof EXECUTIVE_ANALYTICS_ROLES)[number]
+
+export function isExecutiveAnalyticsRole(role: unknown): role is ExecutiveAnalyticsRole {
+  return typeof role === "string"
+    && (EXECUTIVE_ANALYTICS_ROLES as readonly string[]).includes(role)
+}
+
+/**
+ * The aggregation grain a query must run at.
+ *
+ * This is the guard against join fan-out. An `order`-grain metric may never be
+ * summed across a join to `order_items` (one order with three lines would count
+ * three times); a `line`-grain metric may never sum `orders.total_cents`. Every
+ * request resolves to exactly one grain before any SQL is built.
+ */
+export type AnalyticsGrain = "order" | "line" | "budget"
+
+export type ExecutiveMetricId =
+  | "spend"
+  | "orders"
+  | "avgOrderValue"
+  | "quantity"
+  | "avgUnitPrice"
+  | "utilization"
+  | "budgetRemaining"
+
+export type ExecutiveDimensionId =
+  | "branch"
+  | "group"
+  | "organization"
+  | "user"
+  | "category"
+  | "product"
+  | "month"
+
+export type MetricDefinition = {
+  id: ExecutiveMetricId
+  label: string
+  /** How the value is expressed to the reader. */
+  format: "currency" | "count" | "percent" | "quantity"
+  /** The grain this metric forces, regardless of dimension. */
+  grain: AnalyticsGrain
+  /**
+   * True when the figure is only meaningful inside one unit of measure.
+   * Litres and packs are not addable; the API refuses to total them.
+   */
+  unitSensitive: boolean
+  /** The arithmetic, in the same words used in code review. */
+  formula: string
+  /** What a decision-maker uses it for. */
+  decision: string
+}
+
+export const EXECUTIVE_METRICS: Record<ExecutiveMetricId, MetricDefinition> = {
+  spend: {
+    id: "spend",
+    label: "Procurement Value",
+    format: "currency",
+    grain: "order",
+    unitSensitive: false,
+    formula: "SUM(order.totalCents - order.refundAmountCents) over revenue-eligible orders",
+    decision: "Where the money actually went in the selected period.",
+  },
+  orders: {
+    id: "orders",
+    label: "Orders",
+    format: "count",
+    grain: "order",
+    unitSensitive: false,
+    formula: "COUNT(order) over revenue-eligible orders",
+    decision: "Purchasing activity independent of order size.",
+  },
+  avgOrderValue: {
+    id: "avgOrderValue",
+    label: "Average Order Value",
+    format: "currency",
+    grain: "order",
+    unitSensitive: false,
+    formula: "Procurement Value / Orders (0 when there are no orders)",
+    decision: "Whether a branch buys often and small, or rarely and large.",
+  },
+  quantity: {
+    id: "quantity",
+    label: "Quantity",
+    format: "quantity",
+    grain: "line",
+    unitSensitive: true,
+    formula: "SUM(orderItem.quantity) over lines of revenue-eligible orders, within one unit of measure",
+    decision: "Physical consumption, when money hides a price change.",
+  },
+  avgUnitPrice: {
+    id: "avgUnitPrice",
+    label: "Average Unit Price",
+    format: "currency",
+    grain: "line",
+    unitSensitive: true,
+    formula: "SUM(line value) / SUM(quantity) — a weighted average, never an average of averages",
+    decision: "Whether the same goods are being bought at different prices.",
+  },
+  utilization: {
+    id: "utilization",
+    label: "Budget Utilization %",
+    format: "percent",
+    grain: "budget",
+    unitSensitive: false,
+    formula: "(spent + held) / (allocated + credited) * 100; 0 when there is no budget",
+    decision: "Which branches are close to exhausting what they were given.",
+  },
+  budgetRemaining: {
+    id: "budgetRemaining",
+    label: "Remaining Budget",
+    format: "currency",
+    grain: "budget",
+    unitSensitive: false,
+    formula: "(allocated + credited) - (spent + held)",
+    decision: "How much room is left before a branch stops being able to order.",
+  },
+}
+
+export type DimensionDefinition = {
+  id: ExecutiveDimensionId
+  label: string
+  /** Plural noun for the entity picker, e.g. "products". */
+  entityNoun: string
+  /**
+   * The grain this dimension forces. Category and product only exist on order
+   * lines, so asking for them moves the whole query to line grain.
+   */
+  forcedGrain: AnalyticsGrain | null
+  metrics: readonly ExecutiveMetricId[]
+  /**
+   * When set, only this role may compare by this dimension. Comparing tenants
+   * against each other is a platform-level question, so it belongs to the
+   * platform-level role and to nobody else.
+   */
+  requiredRole?: ExecutiveAnalyticsRole
+  /**
+   * Whether the reader may pick specific members to compare. Months are a
+   * continuous axis rather than a set of things, so they are not pickable.
+   */
+  selectable: boolean
+}
+
+/** Metrics that come from the budget ledger, so only budget-bearing entities get them. */
+const BUDGET_BEARING_METRICS = [
+  "spend", "orders", "avgOrderValue", "quantity", "avgUnitPrice", "utilization", "budgetRemaining",
+] as const
+
+/** Metrics available where there is procurement activity but no budget of its own. */
+const ACTIVITY_METRICS = ["spend", "orders", "avgOrderValue", "quantity", "avgUnitPrice"] as const
+
+/** Line-grain entities: an order line knows its product, not its order's average value. */
+const LINE_ENTITY_METRICS = ["spend", "orders", "quantity", "avgUnitPrice"] as const
+
+export const EXECUTIVE_DIMENSIONS: Record<ExecutiveDimensionId, DimensionDefinition> = {
+  branch: {
+    id: "branch",
+    label: "Branch",
+    entityNoun: "branches",
+    forcedGrain: null,
+    metrics: BUDGET_BEARING_METRICS,
+    selectable: true,
+  },
+  // A group is a set of branches, so its budget is the sum of theirs.
+  group: {
+    id: "group",
+    label: "Group",
+    entityNoun: "groups",
+    forcedGrain: null,
+    metrics: BUDGET_BEARING_METRICS,
+    selectable: true,
+  },
+  // Comparing tenants is a platform question and stays with the platform role.
+  organization: {
+    id: "organization",
+    label: "Organization",
+    entityNoun: "organizations",
+    forcedGrain: null,
+    metrics: BUDGET_BEARING_METRICS,
+    requiredRole: "SUPER_ADMIN",
+    selectable: true,
+  },
+  // The person who raised the order. No budget is held against a requester, so
+  // the budget metrics are absent rather than reported as zero.
+  user: {
+    id: "user",
+    label: "Requester",
+    entityNoun: "people",
+    forcedGrain: null,
+    metrics: ACTIVITY_METRICS,
+    selectable: true,
+  },
+  category: {
+    id: "category",
+    label: "Category",
+    entityNoun: "categories",
+    forcedGrain: "line",
+    metrics: LINE_ENTITY_METRICS,
+    selectable: true,
+  },
+  product: {
+    id: "product",
+    label: "Product",
+    entityNoun: "products",
+    forcedGrain: "line",
+    metrics: LINE_ENTITY_METRICS,
+    selectable: true,
+  },
+  // A continuous axis, not a set of things to tick.
+  month: {
+    id: "month",
+    label: "Month",
+    entityNoun: "months",
+    forcedGrain: null,
+    metrics: ACTIVITY_METRICS,
+    selectable: false,
+  },
+}
+
+/** Dimensions the caller's role may compare by. */
+export function dimensionsForRole(role: unknown): DimensionDefinition[] {
+  return Object.values(EXECUTIVE_DIMENSIONS)
+    .filter((dimension) => !dimension.requiredRole || dimension.requiredRole === role)
+}
+
+export function isDimensionAllowedForRole(dimension: unknown, role: unknown): boolean {
+  if (!isExecutiveDimension(dimension)) return false
+  const required = EXECUTIVE_DIMENSIONS[dimension].requiredRole
+  return !required || required === role
+}
+
+export function isExecutiveDimension(value: unknown): value is ExecutiveDimensionId {
+  return typeof value === "string" && value in EXECUTIVE_DIMENSIONS
+}
+
+export function isExecutiveMetric(value: unknown): value is ExecutiveMetricId {
+  return typeof value === "string" && value in EXECUTIVE_METRICS
+}
+
+/** Whether this pairing is one the server will answer at all. */
+export function isSupportedCombination(dimension: unknown, metric: unknown): boolean {
+  if (!isExecutiveDimension(dimension) || !isExecutiveMetric(metric)) return false
+  return EXECUTIVE_DIMENSIONS[dimension].metrics.includes(metric)
+}
+
+export function metricsForDimension(dimension: ExecutiveDimensionId): MetricDefinition[] {
+  return EXECUTIVE_DIMENSIONS[dimension].metrics.map((id) => EXECUTIVE_METRICS[id])
+}
+
+/**
+ * The one grain the query runs at. A budget metric wins outright — it does not
+ * read orders at all — then a line-grain metric or a line-only dimension.
+ */
+/** The entities a budget is actually held against, directly or by rollup. */
+export const BUDGET_ROLLUP_DIMENSIONS = ["branch", "group", "organization"] as const
+
+export function isBudgetRollupDimension(dimension: unknown): dimension is "branch" | "group" | "organization" {
+  return typeof dimension === "string"
+    && (BUDGET_ROLLUP_DIMENSIONS as readonly string[]).includes(dimension)
+}
+
+export function resolveGrain(
+  dimension: ExecutiveDimensionId,
+  metric: ExecutiveMetricId,
+  options?: {
+    /**
+     * True when the request is narrowed to particular products or categories.
+     *
+     * This changes the right answer for money. At order grain, "spend by branch
+     * for product X" sums the *whole* value of every order that happened to
+     * contain X — on real data that came out 5.7x too high. Narrowing to lines
+     * means only X's own lines may count, so the query has to move to line
+     * grain. Quantity and unit price are already line-grain and unaffected.
+     */
+    lineScoped?: boolean
+  },
+): AnalyticsGrain {
+  const metricGrain = EXECUTIVE_METRICS[metric].grain
+  if (metricGrain === "budget") return "budget"
+  if (metricGrain === "line") return "line"
+  if (EXECUTIVE_DIMENSIONS[dimension].forcedGrain === "line") return "line"
+  if (options?.lineScoped && metric === "spend") return "line"
+  return EXECUTIVE_DIMENSIONS[dimension].forcedGrain ?? "order"
+}
+
+/**
+ * Metrics that stop being meaningful once the request is narrowed to particular
+ * products.
+ *
+ * "Average order value for product X" is the average of whole orders that
+ * happened to contain X, which reads as though it were X's own average and is
+ * not. Rather than relabel it into a sentence nobody would trust, it is
+ * withdrawn while a focus is active.
+ */
+export function metricsUnderLineFocus(metrics: readonly ExecutiveMetricId[]): ExecutiveMetricId[] {
+  return metrics.filter((metric) => metric !== "avgOrderValue")
+}
+
+/** How many rows a comparison may return, so one request cannot scan unbounded. */
+export const EXECUTIVE_MAX_ROWS = 50
+export const EXECUTIVE_DEFAULT_ROWS = 12
+
+export function clampRowLimit(value: unknown): number {
+  const parsed = Math.trunc(Number(value))
+  if (!Number.isFinite(parsed) || parsed <= 0) return EXECUTIVE_DEFAULT_ROWS
+  return Math.min(parsed, EXECUTIVE_MAX_ROWS)
+}
+
+// ── Chart types ────────────────────────────────────────────────────────────
+
+/**
+ * The chart forms the workbench offers, and the rules deciding which are on the
+ * menu for a given question.
+ *
+ * The rules exist because the wrong form actively misleads. A donut of twenty
+ * slices cannot be read; a donut of averages is arithmetic nonsense, because
+ * averages are not parts of a whole; a line chart of things that have no time
+ * order invents a trend. Rather than let a reader pick those and then explain
+ * the result away, the unusable forms are simply not offered, each with a
+ * stated reason.
+ */
+export type ChartTypeId = "bar" | "column" | "grouped" | "donut" | "line" | "scatter" | "table"
+
+export type ChartTypeDefinition = {
+  id: ChartTypeId
+  label: string
+  /** What this form is for, shown as the option's help text. */
+  purpose: string
+  /** "rank" is one value per entity; "series" is one line per entity over time. */
+  mode: "rank" | "series"
+}
+
+export const CHART_TYPES: Record<ChartTypeId, ChartTypeDefinition> = {
+  bar: { id: "bar", label: "Ranked bars", purpose: "Rank entities against each other. The safe default.", mode: "rank" },
+  column: { id: "column", label: "Columns", purpose: "Same comparison upright, for a handful of short labels.", mode: "rank" },
+  grouped: { id: "grouped", label: "This vs prior period", purpose: "Each entity now against the equivalent window before it.", mode: "rank" },
+  donut: { id: "donut", label: "Share of total", purpose: "Part-of-whole, when a few entities make up the total.", mode: "rank" },
+  line: { id: "line", label: "Trend over time", purpose: "How each selected entity moved, month by month.", mode: "series" },
+  scatter: { id: "scatter", label: "Value vs quantity", purpose: "Spot entities buying a lot cheaply, or a little dearly.", mode: "rank" },
+  table: { id: "table", label: "Table", purpose: "Every figure as text, readable without colour.", mode: "rank" },
+}
+
+/**
+ * Metrics that can be meaningfully added up across entities.
+ *
+ * Only these can form a part-of-whole, so only these may be drawn as a donut.
+ * An average or a percentage cannot: three branches at 90% utilization do not
+ * make 270% of anything.
+ */
+const ADDITIVE_METRICS: readonly ExecutiveMetricId[] = ["spend", "quantity", "orders", "budgetRemaining"]
+
+export function isAdditiveMetric(metric: unknown): boolean {
+  return typeof metric === "string" && ADDITIVE_METRICS.includes(metric as ExecutiveMetricId)
+}
+
+/** Past this many slices a donut is unreadable, so it stops being offered. */
+export const DONUT_MAX_SLICES = 6
+
+export type ChartTypeOption = ChartTypeDefinition & {
+  /** Present when the form is offered but currently unusable, and why. */
+  disabledReason?: string
+}
+
+/**
+ * The chart menu for one question, with a reason attached to anything that is
+ * on the menu but not currently usable — so the reader learns why rather than
+ * finding an option silently missing.
+ */
+export function chartTypesFor({ dimension, metric, entityCount }: {
+  dimension: ExecutiveDimensionId
+  metric: ExecutiveMetricId
+  /** How many entities the comparison currently resolves to. */
+  entityCount: number
+}): ChartTypeOption[] {
+  const isTimeAxis = dimension === "month"
+  const isBudgetMetric = EXECUTIVE_METRICS[metric].grain === "budget"
+  const options: ChartTypeOption[] = []
+
+  const push = (id: ChartTypeId, disabledReason?: string) =>
+    options.push({ ...CHART_TYPES[id], disabledReason })
+
+  if (isTimeAxis) {
+    // Months already run along an axis; ranking them by size would destroy the
+    // one thing that makes them meaningful.
+    push("line")
+    push("column")
+    push("table")
+    return options
+  }
+
+  push("bar")
+  push("column")
+
+  push("grouped", isBudgetMetric
+    ? "A budget position is a snapshot of the selected period, so there is no prior-period figure to set beside it."
+    : undefined)
+
+  push("donut", (() => {
+    if (!isAdditiveMetric(metric)) {
+      return `${EXECUTIVE_METRICS[metric].label} is an average, not a part of a whole, so a share chart would be meaningless.`
+    }
+    if (entityCount > DONUT_MAX_SLICES) {
+      return `Too many ${EXECUTIVE_DIMENSIONS[dimension].entityNoun} to read as slices. Pick ${DONUT_MAX_SLICES} or fewer.`
+    }
+    if (entityCount === 0) return "Nothing to divide up yet."
+    return undefined
+  })())
+
+  push("line", isBudgetMetric
+    ? "The budget ledger is monthly and per branch, so a budget position has no trend line of its own here."
+    : undefined)
+
+  push("scatter", (() => {
+    if (isBudgetMetric) return "Value against quantity needs order lines; a budget position has none."
+    return undefined
+  })())
+
+  push("table")
+  return options
+}
+
+export function isChartType(value: unknown): value is ChartTypeId {
+  return typeof value === "string" && value in CHART_TYPES
+}
+
+/** The response shape a chart needs: one value per entity, or a time series. */
+export function chartMode(chart: ChartTypeId): "rank" | "series" {
+  return CHART_TYPES[chart].mode
+}
+
+/** How many entities may be compared at once, so one request stays bounded. */
+export const MAX_COMPARE_ENTITIES = 25
+
+// ── Arithmetic ─────────────────────────────────────────────────────────────
+// Every one of these is written to survive a zero denominator, because a branch
+// with no budget and a period with no history are both ordinary states here.
+
+export function utilizationPct(consumedCents: number, totalBudgetCents: number): number {
+  if (!Number.isFinite(totalBudgetCents) || totalBudgetCents <= 0) return 0
+  return (consumedCents / totalBudgetCents) * 100
+}
+
+export function varianceCents(totalBudgetCents: number, consumedCents: number): number {
+  return totalBudgetCents - consumedCents
+}
+
+/**
+ * Period-over-period change. `null` — not zero — when the previous period had
+ * nothing to grow from: "no baseline" and "no change" are different answers and
+ * the chart must not draw them the same way.
+ */
+export function growthPct(current: number, previous: number): number | null {
+  if (!Number.isFinite(previous) || previous === 0) return null
+  return ((current - previous) / previous) * 100
+}
+
+export function safeDivide(numerator: number, denominator: number): number {
+  if (!Number.isFinite(denominator) || denominator === 0) return 0
+  return numerator / denominator
+}
+
+/**
+ * Weighted average unit price. Never an average of per-order averages, which
+ * would let a single one-unit order outweigh a thousand-unit one.
+ */
+export function weightedAverageUnitPrice(totalValueCents: number, totalQuantity: number): number {
+  return safeDivide(totalValueCents, totalQuantity)
+}
+
+// ── Exception thresholds ───────────────────────────────────────────────────
+/**
+ * These are analytics presentation thresholds, not business rules the
+ * application enforces anywhere. Nothing is approved, blocked or charged
+ * differently because of them — they only decide what the "Needs attention"
+ * panel puts at the top. They are named and exported so a reader can see the
+ * exact number behind every flag rather than inferring it from a colour.
+ */
+export const EXECUTIVE_THRESHOLDS = {
+  /** Utilization at or above this is flagged as approaching the limit. */
+  budgetWarningPct: 90,
+  /** Above this the branch has consumed more than it was given. */
+  budgetOverPct: 100,
+  /** Utilization below this, with budget allocated, is flagged as under-used. */
+  budgetUnderusedPct: 40,
+  /** Period-over-period spend change beyond this is flagged as a swing. */
+  spendSwingPct: 25,
+  /**
+   * Spread between the cheapest and dearest branch unit price for the same
+   * product and unit, above which the buying inconsistency is worth a look.
+   */
+  priceSpreadPct: 15,
+  /** A pending order older than this many days is flagged as stuck. */
+  pendingOrderAgingDays: 7,
+} as const
+
+export type BudgetHealth = "over" | "warning" | "healthy" | "underused" | "unbudgeted"
+
+export function classifyBudgetHealth(totalBudgetCents: number, consumedCents: number): BudgetHealth {
+  if (!Number.isFinite(totalBudgetCents) || totalBudgetCents <= 0) return "unbudgeted"
+  const pct = utilizationPct(consumedCents, totalBudgetCents)
+  if (pct > EXECUTIVE_THRESHOLDS.budgetOverPct) return "over"
+  if (pct >= EXECUTIVE_THRESHOLDS.budgetWarningPct) return "warning"
+  if (pct < EXECUTIVE_THRESHOLDS.budgetUnderusedPct) return "underused"
+  return "healthy"
+}
+
+// ── Concentration (Pareto) ─────────────────────────────────────────────────
+
+export type ParetoPoint<T> = T & { share: number; cumulativeShare: number }
+
+/**
+ * Running share of the total, largest first. Used for the 80/20 question
+ * ("which few categories carry most of the spend?"). Values must already be
+ * sorted descending by the caller's SQL; this only accumulates.
+ */
+export function withCumulativeShare<T>(rows: T[], valueOf: (row: T) => number): ParetoPoint<T>[] {
+  const total = rows.reduce((sum, row) => sum + Math.max(0, valueOf(row)), 0)
+  let running = 0
+  return rows.map((row) => {
+    const value = Math.max(0, valueOf(row))
+    running += value
+    return {
+      ...row,
+      share: total > 0 ? (value / total) * 100 : 0,
+      cumulativeShare: total > 0 ? (running / total) * 100 : 0,
+    }
+  })
+}
+
+/** How many leading rows it takes to reach `targetShare` of the total. */
+export function countToReachShare<T>(
+  rows: ParetoPoint<T>[],
+  targetShare = 80,
+): number {
+  const index = rows.findIndex((row) => row.cumulativeShare >= targetShare)
+  return index === -1 ? rows.length : index + 1
+}
+
+// ── Unit-of-measure safety ─────────────────────────────────────────────────
+
+/**
+ * Whether a quantity figure may be totalled at all.
+ *
+ * "20 laptops + 400 litres" is not 420 of anything. When more than one unit is
+ * in scope and the caller has not picked one, the API returns the unit list and
+ * refuses the total rather than printing a meaningless number.
+ */
+export function resolveQuantityUnit(
+  unitsInScope: string[],
+  requestedUnit: string | null | undefined,
+): { unit: string | null; conflict: boolean; units: string[] } {
+  const units = Array.from(new Set(unitsInScope.filter((unit) => typeof unit === "string" && unit.length > 0))).sort((a, b) => a.localeCompare(b))
+  const requested = requestedUnit?.trim() || ""
+
+  if (requested && units.includes(requested)) return { unit: requested, conflict: false, units }
+  if (units.length === 1) return { unit: units[0], conflict: false, units }
+  if (units.length === 0) return { unit: null, conflict: false, units }
+  return { unit: null, conflict: true, units }
+}
+
+// ── Chart registry ─────────────────────────────────────────────────────────
+/**
+ * Every visual on the Executive Overview, with the management question it
+ * exists to answer. A chart that cannot state its question does not belong on
+ * the page, so the page renders from this list rather than from hardcoded JSX
+ * headings.
+ */
+export type ExecutiveChartDefinition = {
+  id: string
+  title: string
+  businessQuestion: string
+  decision: string
+  metric: string
+  chart: "grouped-bar" | "ranked-bar" | "line" | "pareto" | "heatmap" | "stacked-bar" | "list"
+  priority: "P0" | "P1" | "P2"
+}
+
+export const EXECUTIVE_CHARTS: ExecutiveChartDefinition[] = [
+  {
+    id: "budget-vs-actual",
+    title: "Budget vs Consumed by Branch",
+    businessQuestion: "Is each branch living within the budget it was given?",
+    decision: "Move budget toward branches that need it, away from branches that cannot use it.",
+    metric: "Total Budget, Consumed (spent + committed), Remaining",
+    chart: "grouped-bar",
+    priority: "P0",
+  },
+  {
+    id: "utilization-ranking",
+    title: "Budget Utilization Ranking",
+    businessQuestion: "Which branch is closest to exhausting its budget?",
+    decision: "Intervene before a branch is blocked from ordering.",
+    metric: "Utilization %",
+    chart: "ranked-bar",
+    priority: "P0",
+  },
+  {
+    id: "procurement-trend",
+    title: "Procurement Trend",
+    businessQuestion: "Are we spending faster than we were?",
+    decision: "Adjust the run rate while the period is still open.",
+    metric: "Procurement Value by month, current vs previous period",
+    chart: "line",
+    priority: "P0",
+  },
+  {
+    id: "category-pareto",
+    title: "Spend Concentration by Category",
+    businessQuestion: "Which few categories carry most of our procurement cost?",
+    decision: "Concentrate negotiation effort where the money actually is.",
+    metric: "Procurement Value by category, with cumulative share",
+    chart: "pareto",
+    priority: "P0",
+  },
+  {
+    id: "branch-category-heatmap",
+    title: "Branch × Category Mix",
+    businessQuestion: "Is any branch's category mix unlike its peers?",
+    decision: "Ask why one branch buys a category the others do not.",
+    metric: "Procurement Value, share of branch total",
+    chart: "heatmap",
+    priority: "P1",
+  },
+  {
+    id: "price-variance",
+    title: "Same Product, Different Price",
+    businessQuestion: "Are branches paying different prices for the same item?",
+    decision: "Consolidate buying, or explain the gap.",
+    metric: "Weighted average unit price by branch, same product and unit",
+    chart: "ranked-bar",
+    priority: "P1",
+  },
+  {
+    id: "process-funnel",
+    title: "Order Status Composition by Branch",
+    businessQuestion: "Where is the procurement process getting stuck?",
+    decision: "Chase the approver whose queue is not moving.",
+    metric: "Order count by status, as a share of each branch's orders",
+    chart: "stacked-bar",
+    priority: "P1",
+  },
+  {
+    id: "attention",
+    title: "Needs Attention",
+    businessQuestion: "Where should I look first?",
+    decision: "Work the shortlist instead of reading every chart.",
+    metric: "Rule-based exceptions against documented thresholds",
+    chart: "list",
+    priority: "P0",
+  },
+]

@@ -10,11 +10,22 @@ interface QuickDateRangeProps {
     onStartDateChange: (date: string) => void
     onEndDateChange: (date: string) => void
     storageKey?: string
+    /**
+     * Which range starts out highlighted. The caller must seed its own dates
+     * from `getDateRange` with the same key, or the control will claim a range
+     * the data does not reflect.
+     */
+    defaultRange?: RangeKey
 }
 
-type RangeKey = "today" | "7days" | "30days" | "thisMonth" | "thisQuarter" | "custom"
+export type RangeKey = "today" | "7days" | "30days" | "thisMonth" | "thisQuarter" | "custom"
 
-function getDateRange(key: RangeKey): { start: string; end: string } | null {
+/**
+ * Exported so a caller can seed its own state from the same function this
+ * control uses. Previously a caller had to compute its initial range by hand,
+ * which let the highlighted button disagree with the range actually applied.
+ */
+export function getDateRange(key: RangeKey): { start: string; end: string } | null {
     const now = new Date()
     const fmt = (d: Date) => d.toISOString().split("T")[0]
 
@@ -87,8 +98,9 @@ export function QuickDateRange({
     onStartDateChange,
     onEndDateChange,
     storageKey = "report-date-range",
+    defaultRange = "thisMonth",
 }: Readonly<QuickDateRangeProps>) {
-    const [activeRange, setActiveRange] = useState<RangeKey>("thisMonth")
+    const [activeRange, setActiveRange] = useState<RangeKey>(defaultRange)
     const [showCustom, setShowCustom] = useState(false)
 
     // Restore from localStorage on mount
