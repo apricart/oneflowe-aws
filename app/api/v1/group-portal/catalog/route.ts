@@ -73,6 +73,10 @@ export async function GET(req: NextRequest) {
 
   const catalog = await loadGroupCatalog({
     organizationId: actor.organizationId,
+    // The group the branch set was just authorized against, never a group id
+    // taken straight from the query string — the catalogue is priced by the
+    // same group the submission will be created under.
+    groupId: scope.group.id,
     branchIds: scope.branches.map((branch) => branch.id),
     search,
     categoryId: parsePositiveInt(searchParams.get("category")),

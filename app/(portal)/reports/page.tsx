@@ -87,6 +87,25 @@ const reportCards = [
 ]
 
 /**
+ * The Executive Analytics Center, offered only to the two roles whose scope
+ * spans more than one branch.
+ *
+ * Kept out of `reportCards` for the same reason as the approver's card: no role
+ * should be shown a destination its own routing and endpoints refuse. The page
+ * and both of its endpoints enforce the same pair of roles on the server, so
+ * this list decides what is offered, never what is readable.
+ */
+const executiveOnlyReportCards = [
+  {
+    title: "Graphical Reports",
+    description: "Executive procurement analytics — budget vs actual, branch comparison, cost drivers and exceptions",
+    href: "/reports/graphical",
+    icon: BarChart3,
+    gradient: "from-indigo-600 to-sky-500",
+  },
+]
+
+/**
  * Reports that exist only for the multi-branch approver.
  *
  * Kept out of `reportCards` so no other role is offered a destination its own
@@ -133,7 +152,14 @@ export default function ReportsPage() {
     ? [...reportCards, ...groupUserOnlyReportCards]
     : reportCards
 
-  const displayReportCards = availableReportCards
+  // The Analytics Center is layered on separately, the same way and for the
+  // same reason: appended for the two roles that may open it, never filtered
+  // back out of anyone else's hub.
+  const scopedReportCards = role === "SUPER_ADMIN" || role === "HEAD_OFFICE"
+    ? [...executiveOnlyReportCards, ...availableReportCards]
+    : availableReportCards
+
+  const displayReportCards = scopedReportCards
     .filter(card => {
       if (role === "GROUP_USER") return groupUserReportHrefs.has(card.href)
       if (role === "BRANCH_ADMIN") {

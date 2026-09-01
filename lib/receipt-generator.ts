@@ -9,7 +9,8 @@ export interface ReceiptData {
     /**
      * The buyer's own purchase order reference, when they supplied one. Absent
      * on orders raised without a purchase order, and on every order placed
-     * before the field existed.
+     * before the field existed. Recorded on the order; not currently printed
+     * on the invoice.
      */
     poNumber?: string
     date: string

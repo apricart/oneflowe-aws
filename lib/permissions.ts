@@ -85,6 +85,7 @@ export enum Permission {
   GROUP_EDIT = "group:edit",
   GROUP_DELETE = "group:delete",
   GROUP_ASSIGN_BRANCH = "group:assign_branch",
+  GROUP_SET_PRICE = "group:set_price",
 }
 
 export interface PermissionInfo {
@@ -440,6 +441,13 @@ export const PERMISSION_DEFINITIONS: PermissionInfo[] = [
     description: "Assign branches to groups",
     category: PermissionCategory.GROUP,
   },
+  {
+    key: Permission.GROUP_SET_PRICE,
+    label: "Set Group Prices",
+    description: "Override product prices for every branch in a group",
+    category: PermissionCategory.GROUP,
+    isHighRisk: true,
+  },
 ]
 
 export function getPermissionsByCategory() {
@@ -493,6 +501,10 @@ export const ROLE_TEMPLATES = {
       Permission.SETTINGS_VIEW,
       Permission.SETTINGS_EDIT,
       Permission.GROUP_VIEW,
+      // Head Office already manages groups and the organization price; pricing
+      // a group is the same authority applied one tier lower, and is confined
+      // to its own organization by the route that grants it.
+      Permission.GROUP_SET_PRICE,
     ],
   },
   BRANCH_ADMIN: {

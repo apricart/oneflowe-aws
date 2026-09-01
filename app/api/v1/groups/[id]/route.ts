@@ -2,7 +2,7 @@ import { NextRequest,NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
-import { groups,groupAuditLogs,branches,branchInventory,organizationInventory,globalProducts } from "@/db/schema"
+import { groups,groupAuditLogs,groupInventoryPrices,branches,branchInventory,organizationInventory,globalProducts } from "@/db/schema"
 import { eq,and,sql,count,isNull,inArray } from "drizzle-orm"
 import { invalidateByPrefix } from "@/lib/cache-utils"
 import { groupUpdateSchema,validationMessage } from "@/lib/server/mutation-validation"
@@ -238,7 +238,12 @@ export async function DELETE(
                 updatedAt: new Date()
             }).where(eq(groups.id, groupId))
 
-            // 2. Log the deletion
+            // 2. Drop any group prices it carried. The check above guarantees
+            // the group has no branches left, so no branch is repriced by this;
+            // it stops a soft-deleted group from leaving price rows behind.
+            await tx.delete(groupInventoryPrices).where(eq(groupInventoryPrices.groupId, groupId))
+
+            // 3. Log the deletion
             await tx.insert(groupAuditLogs).values({
                 organizationId: existing.organizationId,
                 groupId: groupId,

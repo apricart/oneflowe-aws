@@ -2,7 +2,7 @@
 
 import { useState,useEffect } from "react"
 import useSWR,{ mutate } from "swr"
-import { Plus,Pencil,Trash2,Building,CheckCircle2,Users,AlertCircle,Eraser,Package,Loader2,Search } from "lucide-react"
+import { Plus,Pencil,Trash2,Building,CheckCircle2,Users,AlertCircle,Eraser,Package,Loader2,Search,Tag } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { PremiumConfirmDialog } from "@/components/premium/premium-confirm-dialog"
 import {
@@ -37,6 +37,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useAppContext } from "@/components/context/app-context"
 import { formatCountLabel } from "@/lib/count-label"
+import { GroupPriceManager } from "@/components/admin/group-price-manager"
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json())
 
@@ -70,6 +71,7 @@ export function GroupManagement({ role }: Readonly<{ role: string }>) {
     const [isCreateOpen, setIsCreateOpen] = useState(false)
     const [isEditOpen, setIsEditOpen] = useState(false)
     const [isBranchOpen, setIsBranchOpen] = useState(false)
+    const [pricedGroup, setPricedGroup] = useState<Group | null>(null)
     const [selectedGroup, setSelectedGroup] = useState<Group | null>(null)
     const [isDeleting, setIsDeleting] = useState<number | null>(null)
     const [isSaving, setIsSaving] = useState(false)
@@ -396,7 +398,7 @@ export function GroupManagement({ role }: Readonly<{ role: string }>) {
                             <TableHead className="font-bold">Description</TableHead>
                             <TableHead className="font-bold">Branches</TableHead>
                             <TableHead className="font-bold">Status</TableHead>
-                            <TableHead className="text-right font-bold w-[150px]">Actions</TableHead>
+                            <TableHead className="text-right font-bold w-[190px]">Actions</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -453,6 +455,9 @@ export function GroupManagement({ role }: Readonly<{ role: string }>) {
                                         </Button>
                                         {(role === "SUPER_ADMIN" || role === "HEAD_OFFICE") && (
                                             <>
+                                                <Button variant="ghost" size="icon" onClick={() => setPricedGroup(group)} title="Group Prices" className="hover:bg-emerald-50 hover:text-emerald-600 rounded-lg">
+                                                    <Tag className="h-4 w-4" />
+                                                </Button>
                                                 <Button variant="ghost" size="icon" onClick={() => openEdit(group)} className="hover:bg-amber-50 hover:text-amber-600 rounded-lg">
                                                     <Pencil className="h-4 w-4" />
                                                 </Button>
@@ -758,6 +763,12 @@ export function GroupManagement({ role }: Readonly<{ role: string }>) {
                 confirmText="Release"
                 type="warning"
                 isLoading={isReleasing !== null}
+            />
+
+            <GroupPriceManager
+                group={pricedGroup}
+                open={pricedGroup !== null}
+                onOpenChange={(open) => !open && setPricedGroup(null)}
             />
         </div>
     )

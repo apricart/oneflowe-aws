@@ -22,6 +22,7 @@ import { attemptImmediateOrderEmailDelivery,queueOrderCreatedNotifications as en
 import { canViewFulfillmentToken } from "@/lib/fulfillment-token-access"
 import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
 import { resolveScopedBranchIds,usesMultiBranchScope } from "@/lib/server/multi-branch-scope"
+import { loadGroupPriceOverrides,resolveBranchGroupId,resolveEffectivePriceCents } from "@/lib/server/effective-price"
 import { isValidRole } from "@/lib/rbac"
 import { metricExpressions } from "@/lib/metric-utils"
 import { getOrderStatusesForFilter,getOrderStatusFilter } from "@/lib/order-status"
@@ -302,9 +303,23 @@ async function lockCreationInventory(tx: any, context: any) {
     eq(globalProducts.status, "active"),
     isNull(globalProducts.deletedAt),
   )).for('update')
+  // The group tier of the price ladder. Resolved inside the transaction so the
+  // price charged comes from the same snapshot as the rows it is charged
+  // against, rather than from a group assignment that may have moved since the
+  // pre-flight budget check.
+  const groupId = await resolveBranchGroupId(tx, {
+    branchId: context.branchId,
+    organizationId: context.organizationId,
+  })
+  const groupPriceByInventoryId = await loadGroupPriceOverrides(tx, {
+    organizationId: context.organizationId,
+    groupId,
+    organizationInventoryIds: context.inventoryIds,
+  })
   return {
     inventoryById: new Map<number, any>(inventory.map((item: any) => [item.id, item])),
     productById: new Map<number, any>(lockedGps.map((product: any) => [product.id, product])),
+    groupPriceByInventoryId,
   }
 }
 
@@ -323,8 +338,12 @@ function calculateLockedOrderItems(normalizedItems: any[], locked: any, orgTaxRa
       label: `Quantity for ${product.name}`,
     })
     if (!validation.ok) throw new Error(validation.error)
-    const priceCents = inventoryItem.customPrice ?? product.basePrice
-    if (!Number.isSafeInteger(priceCents) || priceCents < 0) throw new Error(`Pricing is unavailable for ${product.name}`)
+    const priceCents = resolveEffectivePriceCents({
+      groupPriceCents: locked.groupPriceByInventoryId?.get(inventoryItem.id),
+      organizationPriceCents: inventoryItem.customPrice,
+      basePriceCents: product.basePrice,
+    })
+    if (priceCents === null || !Number.isSafeInteger(priceCents) || priceCents < 0) throw new Error(`Pricing is unavailable for ${product.name}`)
     // Catalogue prices are tax-inclusive, so the line amount is the gross the
     // branch pays and the split below only records how much of it is tax. The
     // order total stays exactly the sum of these gross amounts.
@@ -569,9 +588,22 @@ async function loadCreationInventory(context: any) {
     eq(globalProducts.status, "active"),
     isNull(globalProducts.deletedAt),
   ))
+  // Same ladder the transaction re-resolves below, so this pre-flight total is
+  // checked against the budget at the price the order will actually be created
+  // at.
+  const groupId = await resolveBranchGroupId(db, {
+    branchId: context.branchId,
+    organizationId: context.organizationId,
+  })
+  const groupPriceByInventoryId = await loadGroupPriceOverrides(db, {
+    organizationId: context.organizationId,
+    groupId,
+    organizationInventoryIds: context.inventoryIds,
+  })
   return {
     inventoryById: new Map(inventoryRows.map((row) => [row.id, row])),
     productById: new Map(productRows.map((row) => [row.id, row])),
+    groupPriceByInventoryId,
   }
 }
 
@@ -588,7 +620,11 @@ function calculateCreationItems(normalizedItems: any[], inventory: any) {
       label: `Quantity for ${product.name}`,
     })
     if (!validation.ok) throw new Error(validation.error)
-    const priceCents = inventoryItem.customPrice ?? product.basePrice
+    const priceCents = resolveEffectivePriceCents({
+      groupPriceCents: inventory.groupPriceByInventoryId?.get(inventoryItem.id),
+      organizationPriceCents: inventoryItem.customPrice,
+      basePriceCents: product.basePrice,
+    })
     if (priceCents === null || priceCents === undefined) throw new Error(`Price not found for item ${requestedItem.organizationInventoryId}. Custom: ${inventoryItem.customPrice}, Base: ${product.basePrice}`)
     subtotal += calculateLineCents(priceCents, validation.quantity)
     return {
