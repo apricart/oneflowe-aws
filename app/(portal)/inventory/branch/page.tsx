@@ -7,21 +7,29 @@ import { Input } from "@/components/ui/input"
 import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from "@/components/ui/select"
 import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from "@/components/ui/table"
 import { formatPKR } from "@/lib/utils"
-import { Building2,GitBranch,Loader2,Package,Search } from "lucide-react"
+import { AlertCircle,Building2,GitBranch,Loader2,Package,Search } from "lucide-react"
 import { useSession } from "next-auth/react"
 import { useRouter } from "next/navigation"
 import { useEffect,useMemo,useState } from "react"
 import useSWR from "swr"
 
-const fetcher = (url: string) => fetch(url).then((res) => res.json())
+// Throws on a failed request so SWR reports it as an error instead of handing
+// the table an object with no `items` — which used to render as "no products
+// assigned yet" and hide a 500 completely.
+const fetcher = async (url: string) => {
+    const res = await fetch(url)
+    const data = await res.json().catch(() => null)
+    if (!res.ok) throw new Error(data?.error || `Request failed (${res.status})`)
+    return data
+}
 
 type Organization = { id: number; name: string }
 type Group = { id: number; name: string; organizationId: number }
 
-type BranchProduct = {
+// One row per product for the group: the API collapses the per-branch rows so
+// a page limit counts products, not products x branches.
+type GroupProduct = {
     id: number
-    branchId: number
-    branchName: string
     productName: string
     productCode: string
     productImageUrl: string | null
@@ -35,28 +43,8 @@ type BranchProduct = {
     globalProductId: number
     globalStatus: string
     orgIsActive: boolean
-}
-
-function mergeBranchProduct(
-    productMap: Map<number, BranchProduct & { branches: string[] }>,
-    globalProductId: number,
-    product: BranchProduct,
-): void {
-    const existing = productMap.get(globalProductId)
-    if (!existing) {
-        productMap.set(globalProductId, {
-            ...product,
-            isActive: product.orgIsActive ?? product.isActive,
-            branches: product.branchName ? [product.branchName] : [],
-        })
-        return
-    }
-    if (product.branchName && !existing.branches.includes(product.branchName)) {
-        existing.branches.push(product.branchName)
-    }
-    if (new Date(product.assignedAt) < new Date(existing.assignedAt)) {
-        existing.assignedAt = product.assignedAt
-    }
+    branchCount: number
+    branches: string[]
 }
 
 export default function ViewBranchProductsPage() {
@@ -93,51 +81,38 @@ export default function ViewBranchProductsPage() {
     )
 
     // Fetch products for selected group
-    const { data: productsData, isLoading } = useSWR<{ items: BranchProduct[] }>(
+    const { data: productsData, isLoading, error: productsError } = useSWR<{ items: GroupProduct[]; total: number }>(
         selectedOrgId && selectedGroupId
-            ? `/api/v1/head-office/branch-assignments?organizationId=${selectedOrgId}&groupId=${selectedGroupId}&limit=1000`
+            ? `/api/v1/head-office/branch-assignments?organizationId=${selectedOrgId}&groupId=${selectedGroupId}&view=group-products&limit=1000`
             : null,
         fetcher,
-        { fallbackData: { items: [] } }
     )
 
     // Fetch actual branches in the selected group
-    const { data: groupBranchesData } = useSWR<{ branches: { id: number; name: string }[] }>(
+    const { data: groupBranchesData, error: groupBranchesError } = useSWR<{ branches: { id: number; name: string }[] }>(
         selectedGroupId ? `/api/v1/groups/${selectedGroupId}/branches` : null,
         fetcher,
-        { fallbackData: { branches: [] } }
     )
 
-    const branchProducts = productsData?.items ?? []
-
-    // Deduplicate: group by globalProductId so each product appears once
-    const deduplicatedProducts = useMemo(() => {
-        const productMap = new Map<number, BranchProduct & { branches: string[] }>()
-
-        for (const p of branchProducts) {
-            const gpId = p.globalProductId as number
-            if (!gpId) continue
-
-            mergeBranchProduct(productMap, gpId, p)
-        }
-
-        return Array.from(productMap.values())
-    }, [branchProducts])
+    const groupProducts = productsData?.items ?? []
 
     // Search filtering
     const filteredProducts = useMemo(() => {
-        if (!searchQuery) return deduplicatedProducts
+        if (!searchQuery) return groupProducts
         const q = searchQuery.toLowerCase()
-        return deduplicatedProducts.filter(p =>
+        return groupProducts.filter(p =>
             p.productName.toLowerCase().includes(q) ||
             p.productCode.toLowerCase().includes(q) ||
-            p.branches.some(b => b.toLowerCase().includes(q))
+            (p.branches ?? []).some(b => b.toLowerCase().includes(q))
         )
-    }, [deduplicatedProducts, searchQuery])
+    }, [groupProducts, searchQuery])
 
     const allBranches = useMemo(() => {
         return (groupBranchesData?.branches || []).map(b => b.name)
     }, [groupBranchesData])
+
+    const totalProducts = productsData?.total ?? groupProducts.length
+    const truncated = totalProducts > groupProducts.length
 
     return (
         <div className="space-y-8 p-6">
@@ -184,7 +159,7 @@ export default function ViewBranchProductsPage() {
             </Card>
 
             {/* Branches in this group */}
-            {selectedGroupId && allBranches.length > 0 && (
+            {selectedGroupId && !groupBranchesError && allBranches.length > 0 && (
                 <Card className="border border-slate-200 dark:border-slate-800 shadow-sm">
                     <CardContent className="pt-5">
                         <div className="flex items-center gap-2 mb-2">
@@ -211,6 +186,7 @@ export default function ViewBranchProductsPage() {
                             <CardTitle className="text-xl">Group Products</CardTitle>
                             <p className="text-sm text-muted-foreground">
                                 Products assigned to branches in the selected group.
+                                {truncated && ` Showing ${groupProducts.length} of ${totalProducts}.`}
                             </p>
                         </div>
                         <div className="relative w-full lg:w-64">
@@ -237,6 +213,23 @@ export default function ViewBranchProductsPage() {
                                 </TableHeader>
                                 <TableBody>
                                     {(() => {
+                                      if (productsError) {
+                                        return (
+                                        <TableRow>
+                                            <TableCell colSpan={5} className="py-10 text-center text-sm">
+                                                <div className="flex flex-col items-center gap-1">
+                                                    <span className="flex items-center gap-2 font-medium text-destructive">
+                                                        <AlertCircle className="h-4 w-4" />
+                                                        Could not load this group&apos;s products
+                                                    </span>
+                                                    <span className="text-muted-foreground">
+                                                        {productsError instanceof Error ? productsError.message : "Please try again."}
+                                                    </span>
+                                                </div>
+                                            </TableCell>
+                                        </TableRow>
+                                    )
+                                      }
                                       if (isLoading) {
                                         return (
                                         <TableRow>
@@ -253,7 +246,7 @@ export default function ViewBranchProductsPage() {
                                         return (
                                         <TableRow>
                                             <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
-                                                {branchProducts.length === 0
+                                                {groupProducts.length === 0
                                                     ? "No products assigned to branches in this group yet."
                                                     : "No products match your search."}
                                             </TableCell>

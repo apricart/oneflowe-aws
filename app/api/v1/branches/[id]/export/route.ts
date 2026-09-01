@@ -26,6 +26,11 @@ import {
   users,
 } from "@/db/schema"
 import type { BranchExportSheet } from "@/lib/branch-excel-export"
+import {
+  groupPriceJoinOn,
+  groupPriceTier,
+  resolveEffectivePriceCents,
+} from "@/lib/server/effective-price"
 
 export const dynamic = "force-dynamic"
 
@@ -217,6 +222,10 @@ export async function GET(
           globalStockQuantity: globalProducts.stockQuantity,
           basePriceCents: globalProducts.basePrice,
           customPriceCents: organizationInventory.customPrice,
+          // The group tier is exported as its own column rather than folded
+          // into "Custom Price", so the export keeps showing which tier set the
+          // price the branch pays.
+          groupPriceCents: groupPriceTier.customPriceCents,
           organizationItemActive: organizationInventory.isActive,
           branchVisible: branchInventory.isVisible,
           branchActive: branchInventory.isActive,
@@ -235,6 +244,10 @@ export async function GET(
           eq(organizationInventory.globalProductId, globalProducts.id),
         )
         .leftJoin(categories, eq(globalProducts.categoryId, categories.id))
+        .leftJoin(groupPriceTier, groupPriceJoinOn({
+          organizationId: branch.organizationId,
+          groupId: branch.groupId,
+        }))
         .where(eq(branchInventory.branchId, branchId))
         .orderBy(globalProducts.name),
       db
@@ -604,7 +617,7 @@ export async function GET(
           "Assignment ID", "Organization Inventory ID", "Product ID", "Product Code",
           "Product Name", "Description", "Category", "Unit", "Global Status",
           "Global Stock Quantity", "Base Price (PKR)", "Custom Price (PKR)",
-          "Effective Price (PKR)", "Branch Visible", "Branch Active",
+          "Group Price (PKR)", "Effective Price (PKR)", "Branch Visible", "Branch Active",
           "Organization Item Active", "Assigned By", "Assigned At", "Last Updated",
           "Deleted At",
         ],
@@ -621,7 +634,12 @@ export async function GET(
           "Global Stock Quantity": Number(item.globalStockQuantity),
           "Base Price (PKR)": toMoney(item.basePriceCents),
           "Custom Price (PKR)": item.customPriceCents === null ? "-" : toMoney(item.customPriceCents),
-          "Effective Price (PKR)": toMoney(item.customPriceCents ?? item.basePriceCents),
+          "Group Price (PKR)": item.groupPriceCents === null ? "-" : toMoney(item.groupPriceCents),
+          "Effective Price (PKR)": toMoney(resolveEffectivePriceCents({
+            groupPriceCents: item.groupPriceCents,
+            organizationPriceCents: item.customPriceCents,
+            basePriceCents: item.basePriceCents,
+          }) ?? 0),
           "Branch Visible": toYesNo(item.branchVisible),
           "Branch Active": toYesNo(item.branchActive),
           "Organization Item Active": toYesNo(item.organizationItemActive),

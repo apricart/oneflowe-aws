@@ -7,6 +7,64 @@ import { eq,inArray,and,sql,isNull,count } from "drizzle-orm"
 import { invalidateByPrefix } from "@/lib/cache-utils"
 import { groupBranchesUpdateSchema,validationMessage } from "@/lib/server/mutation-validation"
 
+/**
+ * Who may read or change a group's branch list.
+ *
+ * The same rule serves GET and PUT so the two cannot drift apart: only the two
+ * roles that administer groups at all, and Head Office only inside its own
+ * organization. Super Admin is the one role that crosses tenants, which is the
+ * rule the rest of `/api/v1/groups` already applies.
+ *
+ * Returning the group is what lets the callers pin their own queries to the
+ * tenant that owns it, rather than trusting the id from the URL.
+ */
+const GROUP_BRANCH_ROLES = ["SUPER_ADMIN", "HEAD_OFFICE"]
+
+type AuthorizedGroup = {
+    group: { id: number; organizationId: number }
+    role: string
+    userId: string
+}
+
+async function authorizeGroupBranchAccess(
+    idParam: string,
+): Promise<{ authorized: AuthorizedGroup; failure?: undefined } | { authorized?: undefined; failure: NextResponse }> {
+    const session = await getServerSession(authOptions)
+    if (!session?.user) {
+        return { failure: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) }
+    }
+
+    const role = (session.user as any).role
+    if (!GROUP_BRANCH_ROLES.includes(role)) {
+        return { failure: NextResponse.json({ error: "Forbidden" }, { status: 403 }) }
+    }
+
+    const groupId = Number.parseInt(idParam)
+    if (!Number.isInteger(groupId) || groupId <= 0) {
+        return { failure: NextResponse.json({ error: "Invalid ID" }, { status: 400 }) }
+    }
+
+    const [group] = await db
+        .select({ id: groups.id, organizationId: groups.organizationId })
+        .from(groups)
+        .where(eq(groups.id, groupId))
+        .limit(1)
+    if (!group) {
+        return { failure: NextResponse.json({ error: "Group not found" }, { status: 404 }) }
+    }
+
+    if (role === "HEAD_OFFICE" && group.organizationId !== (session.user as any).organizationId) {
+        return {
+            failure: NextResponse.json(
+                { error: "Forbidden: You can only manage branches for groups within your own organization" },
+                { status: 403 },
+            ),
+        }
+    }
+
+    return { authorized: { group, role, userId: (session.user as any).id } }
+}
+
 async function getBlockedBranchRemovals(groupId: number, nextBranchIds: number[]) {
     const currentBranches = await db.select({ id: branches.id, name: branches.name })
         .from(branches)
@@ -133,11 +191,31 @@ async function updateGroupBranchesTransaction({ group, groupId, branchIds, curre
 export async function GET(_: Request, props: { params: Promise<{ id: string }> }) {
     try {
         const { id } = await props.params
-        const session = await getServerSession(authOptions)
-        if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-        const groupId = Number.parseInt(id)
-        if (Number.isNaN(groupId)) return NextResponse.json({ error: "Invalid ID" }, { status: 400 })
-        const assignedBranches = await db.select().from(branches).where(eq(branches.groupId, groupId))
+        const { authorized, failure } = await authorizeGroupBranchAccess(id)
+        if (failure) return failure
+
+        const assignedBranches = await db
+            // Only the identity fields the group screens render. The row also
+            // carries budget baselines, the branch admin, and external identity
+            // columns, none of which a branch list needs to expose.
+            .select({
+                id: branches.id,
+                name: branches.name,
+                code: branches.code,
+                city: branches.city,
+                status: branches.status,
+                organizationId: branches.organizationId,
+                groupId: branches.groupId,
+            })
+            .from(branches)
+            .where(and(
+                eq(branches.groupId, authorized.group.id),
+                // Pinned to the tenant that owns the group, so a branch row that
+                // somehow referenced another tenant's group cannot surface here.
+                eq(branches.organizationId, authorized.group.organizationId),
+            ))
+            .orderBy(branches.name)
+
         return NextResponse.json({ branches: assignedBranches })
     } catch (error) {
         console.error("Failed to list group branches:", error)
@@ -148,18 +226,10 @@ export async function GET(_: Request, props: { params: Promise<{ id: string }> }
 export async function PUT(req: Request, props: { params: Promise<{ id: string }> }) {
     try {
         const { id } = await props.params
-        const session = await getServerSession(authOptions)
-        if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-        const role = (session.user as any).role
-        const userOrganizationId = (session.user as any).organizationId
-        if (!["SUPER_ADMIN", "HEAD_OFFICE"].includes(role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
-        const groupId = Number.parseInt(id)
-        if (Number.isNaN(groupId)) return NextResponse.json({ error: "Invalid ID" }, { status: 400 })
-        const [group] = await db.select().from(groups).where(eq(groups.id, groupId)).limit(1)
-        if (!group) return NextResponse.json({ error: "Group not found" }, { status: 404 })
-        if (role === "HEAD_OFFICE" && group.organizationId !== userOrganizationId) {
-            return NextResponse.json({ error: "Forbidden: You can only manage branches for groups within your own organization" }, { status: 403 })
-        }
+        const { authorized, failure } = await authorizeGroupBranchAccess(id)
+        if (failure) return failure
+        const { group, role } = authorized
+        const groupId = group.id
         const parsedBody = groupBranchesUpdateSchema.safeParse(await req.json().catch(() => null))
         if (!parsedBody.success) return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
         const { branchIds, newlyAddedBranchIds: clientNewIds } = parsedBody.data
@@ -181,11 +251,14 @@ export async function PUT(req: Request, props: { params: Promise<{ id: string }>
             branchIds,
             currentBranchIds,
             newlyAddedBranchIds,
-            userId: (session.user as any).id,
+            userId: authorized.userId,
             role,
         })
         await invalidateByPrefix('group')
         await invalidateByPrefix('branches')
+        // A branch that changed group also changed the prices it pays, and the
+        // branch inventory listings are cached per branch.
+        await invalidateByPrefix('branch-inv')
         const autoMessage = newlyAddedBranchIds.length > 0
             ? ` ${newlyAddedBranchIds.length} new branch(es) received group products automatically.`
             : ""

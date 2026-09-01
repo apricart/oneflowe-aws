@@ -1,11 +1,15 @@
-
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 
-const configDirectory = path.dirname(fileURLToPath(import.meta.url))
+import { sharedAlias, sharedExclude } from './vitest.shared'
 
+/**
+ * Unit and contract tests: everything that runs with no external service.
+ *
+ * These must stay runnable on a laptop with nothing installed and in CI with no
+ * database, so anything needing Postgres lives under `tests/integration/` and is
+ * excluded here — run it with `npm run test:integration`.
+ */
 export default defineConfig({
     plugins: [react()],
     test: {
@@ -16,9 +20,12 @@ export default defineConfig({
         // 2-core CI runner it overruns the 5s default and times out.
         testTimeout: 30000,
         setupFiles: [],
-        exclude: ['tests/e2e/**', 'node_modules/**', '.next/**'],
-        alias: {
-            '@': path.resolve(configDirectory, './'),
-        },
+        exclude: [
+            ...sharedExclude,
+            'tests/e2e/**',
+            // Needs a live Postgres; `npm run test:integration` runs these.
+            'tests/integration/**',
+        ],
+        alias: sharedAlias,
     },
 })

@@ -323,6 +323,11 @@ export async function cascadeGlobalProductStatusChange(
 /**
  * Get the effective product data for a branch inventory item
  * Returns organization overrides if they exist, otherwise global values
+ *
+ * Note: the `price` here walks only the organization and global tiers. It does
+ * not know about group prices, so it must not be used to price anything a
+ * branch is charged for — use `resolveEffectivePriceCents` from
+ * `lib/server/effective-price.ts`, which resolves the full ladder.
  */
 export function getEffectiveProductData(
   globalProduct: {

@@ -6,16 +6,16 @@ import { branchInventory,organizationInventory,branches,globalProducts,auditLogs
 import { eq,and,desc,sql,inArray,isNull } from "drizzle-orm"
 import { logInventoryAction } from "@/lib/global-logger"
 import { invalidateByPrefix } from "@/lib/cache-utils"
+import { groupPriceJoinOn,groupPriceJoinOnBranchGroup,groupPriceTier,scopedOverrideCentsSql } from "@/lib/server/effective-price"
 
 function resolveAssignmentOrganizationId(role: string, sessionOrganizationId: any, requestedOrganizationId: any) {
   return Number(role === "SUPER_ADMIN" && requestedOrganizationId ? requestedOrganizationId : sessionOrganizationId)
 }
 
 async function loadAssignmentState(organizationId: number, groupIdValue: string | null) {
-  const groupId = Number(groupIdValue)
-  if (!Number.isInteger(groupId) || groupId <= 0) return { error: "A valid groupId is required for assignment-state view", status: 400 }
-  const [group] = await db.select({ id: groups.id }).from(groups).where(and(eq(groups.id, groupId), eq(groups.organizationId, organizationId))).limit(1)
-  if (!group) return { error: "Group not found", status: 404 }
+  const resolved = await resolveViewGroup(organizationId, groupIdValue, "assignment-state")
+  if ("error" in resolved) return resolved
+  const { groupId } = resolved
   const [branchRows, assignmentCounts] = await Promise.all([
     db.select({ count: sql<number>`count(*)::int` }).from(branches)
       .where(and(eq(branches.organizationId, organizationId), eq(branches.groupId, groupId))),
@@ -42,6 +42,125 @@ async function loadAssignmentState(organizationId: number, groupIdValue: string 
     else if (count > 0) partial.push(assignment.organizationInventoryId)
   })
   return { organizationInventoryIds: assigned, partialOrganizationInventoryIds: partial, branchCount }
+}
+
+async function resolveViewGroup(organizationId: number, groupIdValue: string | null, view: string) {
+  const groupId = Number(groupIdValue)
+  if (!Number.isInteger(groupId) || groupId <= 0) return { error: `A valid groupId is required for ${view} view`, status: 400 }
+  const [group] = await db.select({ id: groups.id }).from(groups)
+    .where(and(eq(groups.id, groupId), eq(groups.organizationId, organizationId))).limit(1)
+  if (!group) return { error: "Group not found", status: 404 }
+  return { groupId }
+}
+
+/**
+ * One row per product for a group, collapsed in the database.
+ *
+ * The row-per-branch listing multiplies every product by the group's branch
+ * count — 76 branches turn 20 products into 1520 rows — so a page limit
+ * applied to it truncates the product list long before the caller has seen
+ * every product. Grouping here means the limit counts products, which is what
+ * a caller asking "what does this group sell" actually wants.
+ *
+ * The group is fixed for the whole view, so the group price tier joins on that
+ * single group rather than per row.
+ */
+async function loadGroupProducts(organizationId: number, groupIdValue: string | null, limit: number, offset: number) {
+  const resolved = await resolveViewGroup(organizationId, groupIdValue, "group-products")
+  if ("error" in resolved) return resolved
+  const { groupId } = resolved
+
+  const scope = { organizationId, groupId }
+  const membership = and(
+    eq(branchInventory.organizationId, organizationId),
+    isNull(branchInventory.deletedAt),
+  )
+  const joinBranches = () => and(
+    eq(branchInventory.branchId, branches.id),
+    eq(branches.organizationId, organizationId),
+    eq(branches.groupId, groupId),
+  )
+  const joinOrganizationInventory = () => and(
+    eq(branchInventory.organizationInventoryId, organizationInventory.id),
+    eq(organizationInventory.organizationId, organizationId),
+    isNull(organizationInventory.deletedAt),
+  )
+  const joinGlobalProducts = () => and(
+    eq(organizationInventory.globalProductId, globalProducts.id),
+    isNull(globalProducts.deletedAt),
+  )
+
+  const [items, totalResult] = await Promise.all([
+    db.select({
+      id: sql<number>`min(${branchInventory.id})::int`,
+      organizationInventoryId: organizationInventory.id,
+      globalProductId: globalProducts.id,
+      productName: globalProducts.name,
+      productCode: globalProducts.productCode,
+      productImageUrl: sql<string | null>`
+        case
+          when ${globalProducts.imageUrl} like 'data:%' then null
+          else ${globalProducts.imageUrl}
+        end
+      `,
+      globalStatus: globalProducts.status,
+      basePrice: globalProducts.basePrice,
+      unit: globalProducts.unit,
+      customName: organizationInventory.customName,
+      // The override the whole group pays: its own price when it sets one,
+      // otherwise the organization price.
+      customPrice: scopedOverrideCentsSql(),
+      isActive: organizationInventory.isActive,
+      orgIsActive: organizationInventory.isActive,
+      isVisible: sql<boolean>`bool_or(${branchInventory.isVisible})`,
+      // The first time the product reached any branch of the group, matching
+      // what the per-branch listing reported once collapsed.
+      assignedAt: sql<string>`min(${branchInventory.assignedAt})`,
+      branchCount: sql<number>`count(distinct ${branchInventory.branchId})::int`,
+      branches: sql<string[]>`array_agg(distinct ${branches.name})`,
+    })
+      .from(branchInventory)
+      .innerJoin(branches, joinBranches())
+      .innerJoin(organizationInventory, joinOrganizationInventory())
+      .innerJoin(globalProducts, joinGlobalProducts())
+      .leftJoin(groupPriceTier, groupPriceJoinOn(scope))
+      .where(membership)
+      .groupBy(globalProducts.id, organizationInventory.id, groupPriceTier.customPriceCents)
+      .orderBy(desc(sql`min(${branchInventory.assignedAt})`))
+      .limit(limit)
+      .offset(offset),
+
+    db.select({ count: sql<number>`count(distinct ${globalProducts.id})::int` })
+      .from(branchInventory)
+      .innerJoin(branches, joinBranches())
+      .innerJoin(organizationInventory, joinOrganizationInventory())
+      .innerJoin(globalProducts, joinGlobalProducts())
+      .where(membership),
+  ])
+
+  return { items, total: Number(totalResult[0]?.count ?? 0) }
+}
+
+/**
+ * The collapsed views of a group's assignments, or null when the caller asked
+ * for the default row-per-branch listing.
+ */
+async function loadAssignmentView(context: {
+  view: string | null
+  organizationId: number
+  groupId: string | null
+  page: number
+  limit: number
+  offset: number
+}) {
+  if (context.view === "assignment-state") {
+    return loadAssignmentState(context.organizationId, context.groupId)
+  }
+  if (context.view === "group-products") {
+    const groupProducts = await loadGroupProducts(context.organizationId, context.groupId, context.limit, context.offset)
+    return "error" in groupProducts ? groupProducts : { ...groupProducts, page: context.page, limit: context.limit }
+  }
+  return null
 }
 
 function buildAssignmentConditions(organizationId: number, branchId: string | null, groupId: string | null) {
@@ -239,10 +358,10 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Invalid organization ID" }, { status: 400 })
     }
 
-    if (view === "assignment-state") {
-      const assignmentState = await loadAssignmentState(parsedOrganizationId, groupId)
-      if ("error" in assignmentState) return NextResponse.json({ error: assignmentState.error }, { status: assignmentState.status })
-      return NextResponse.json(assignmentState)
+    const viewResult = await loadAssignmentView({ view, organizationId: parsedOrganizationId, groupId, page, limit, offset })
+    if (viewResult) {
+      if ("error" in viewResult) return NextResponse.json({ error: viewResult.error }, { status: viewResult.status })
+      return NextResponse.json(viewResult)
     }
     const conditions = buildAssignmentConditions(parsedOrganizationId, branchId, groupId)
 
@@ -280,7 +399,11 @@ export async function GET(req: NextRequest) {
         unit: globalProducts.unit,
         branchName: branches.name,
         customName: organizationInventory.customName,
-        customPrice: organizationInventory.customPrice,
+        // The override in force for the branch on this row: its group's price
+        // when that group sets one, otherwise the organization price. Resolved
+        // per row from `branches.group_id`, so a listing that spans several
+        // groups prices each row by its own group.
+        customPrice: scopedOverrideCentsSql(),
         orgIsActive: organizationInventory.isActive,
       })
         .from(branchInventory)
@@ -288,6 +411,7 @@ export async function GET(req: NextRequest) {
         .leftJoin(globalProducts, eq(organizationInventory.globalProductId, globalProducts.id))
         .leftJoin(categories, eq(globalProducts.categoryId, categories.id))
         .leftJoin(branches, eq(branchInventory.branchId, branches.id))
+        .leftJoin(groupPriceTier, groupPriceJoinOnBranchGroup())
         .where(
           productId
             ? and(
