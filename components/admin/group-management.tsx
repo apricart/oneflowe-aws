@@ -455,7 +455,7 @@ export function GroupManagement({ role }: Readonly<{ role: string }>) {
                                         </Button>
                                         {(role === "SUPER_ADMIN" || role === "HEAD_OFFICE") && (
                                             <>
-                                                <Button variant="ghost" size="icon" onClick={() => setPricedGroup(group)} title="Group Prices" className="hover:bg-emerald-50 hover:text-emerald-600 rounded-lg">
+                                                <Button variant="ghost" size="icon" onClick={() => setPricedGroup(group)} title={role === "SUPER_ADMIN" ? "Group Prices" : "Group Prices (read-only)"} className="hover:bg-emerald-50 hover:text-emerald-600 rounded-lg">
                                                     <Tag className="h-4 w-4" />
                                                 </Button>
                                                 <Button variant="ghost" size="icon" onClick={() => openEdit(group)} className="hover:bg-amber-50 hover:text-amber-600 rounded-lg">
@@ -767,6 +767,7 @@ export function GroupManagement({ role }: Readonly<{ role: string }>) {
 
             <GroupPriceManager
                 group={pricedGroup}
+                role={role}
                 open={pricedGroup !== null}
                 onOpenChange={(open) => !open && setPricedGroup(null)}
             />

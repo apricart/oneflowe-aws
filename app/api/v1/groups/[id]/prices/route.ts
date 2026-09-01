@@ -14,6 +14,7 @@ import {
 import { invalidateByPrefix } from "@/lib/cache-utils"
 import { escapeLikePattern } from "@/lib/utils"
 import { groupPricesUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
+import { priceMutationFailure } from "@/lib/pricing-access"
 import { resolveEffectivePriceCents } from "@/lib/server/effective-price"
 
 /**
@@ -21,10 +22,15 @@ import { resolveEffectivePriceCents } from "@/lib/server/effective-price"
  * price.
  *
  * Reading and writing both go through `authorizeGroupPricing`, which is the
- * only place the tenant rule lives: Super Admin may price any group, Head
- * Office only groups inside its own organization, and every other role — the
- * two group roles included — is refused. Group membership grants the right to
- * *order* at a group's prices, never to set them.
+ * only place the tenant rule lives: Super Admin reaches any group, Head Office
+ * only groups inside its own organization, and every other role — the two group
+ * roles included — is refused outright. Group membership grants the right to
+ * *order* at a group's prices, never to see or set them.
+ *
+ * Writing is narrower still. **Only a Super Admin may change a price**, at this
+ * or any other tier — `lib/pricing-access.ts` holds that rule and PUT applies it
+ * on top of the tenant check. Head Office may read this screen, because it has
+ * to know what its branches pay, and may not change a figure on it.
  *
  * A price is stored as one row per (group, product). Clearing a price deletes
  * the row rather than writing a NULL, so "no group price" always means exactly
@@ -32,7 +38,8 @@ import { resolveEffectivePriceCents } from "@/lib/server/effective-price"
  * endpoint never modifies.
  */
 
-const PRICING_ROLES = ["SUPER_ADMIN", "HEAD_OFFICE"] as const
+/** May open the pricing screen. Changing a figure on it is narrower — see PUT. */
+const PRICING_READ_ROLES = ["SUPER_ADMIN", "HEAD_OFFICE"] as const
 const PAGE_SIZE_DEFAULT = 50
 const PAGE_SIZE_MAX = 200
 
@@ -51,7 +58,7 @@ async function authorizeGroupPricing(
   }
 
   const role = (session.user as any).role
-  if (!PRICING_ROLES.includes(role)) {
+  if (!PRICING_READ_ROLES.includes(role)) {
     return { failure: NextResponse.json({ error: "Forbidden: Insufficient permissions" }, { status: 403 }) }
   }
 
@@ -173,18 +180,27 @@ export async function GET(req: NextRequest, props: { params: Promise<{ id: strin
 }
 
 /**
- * Set or clear group prices.
+ * Set or clear group prices. Super Admin only.
+ *
+ * Three checks, in order, before a single row is written: the caller may reach
+ * this group at all, the caller may change prices anywhere, and every product
+ * named belongs to this group's own organization.
  *
  * The whole request is one transaction: either every line is applied or none
- * is, so a partially repriced catalogue is never observable. Products are
- * verified to belong to this group's organization first, which is what stops a
- * crafted id from pricing another tenant's catalogue item under this group.
+ * is, so a partially repriced catalogue is never observable.
  */
 export async function PUT(req: NextRequest, props: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await props.params
     const { authorized, failure } = await authorizeGroupPricing(id)
     if (failure) return failure
+
+    // Reading this screen is open to Head Office; changing a figure on it is
+    // Super Admin only, at every tier of the ladder.
+    const priceAccess = priceMutationFailure(authorized.role)
+    if (priceAccess) {
+      return NextResponse.json({ error: priceAccess.message }, { status: priceAccess.status })
+    }
 
     const parsedBody = groupPricesUpdateSchema.safeParse(await req.json().catch(() => null))
     if (!parsedBody.success) {

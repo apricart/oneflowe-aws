@@ -31,6 +31,7 @@ import {
   isPriceInputInvalid,
   parsePriceInput,
 } from "@/lib/group-price-input"
+import { canMutatePrices } from "@/lib/pricing-access"
 import { formatPKR } from "@/lib/utils"
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json())
@@ -75,17 +76,26 @@ function priceSourceBadge(item: PricedItem) {
  * and nothing else — the organization price itself is never written here.
  * Emptying a row clears the override, which returns the product to the
  * organization price. Only the rows actually changed are sent.
+ *
+ * **Only a Super Admin may change a price.** Every other role that can open
+ * this screen sees it read-only: the inputs become plain text and the save
+ * control is gone. The endpoint refuses the write regardless — this only keeps
+ * the screen from offering an action it would reject.
  */
 export function GroupPriceManager({
   group,
+  role,
   open,
   onOpenChange,
 }: Readonly<{
   group: PricedGroup | null
+  /** The viewer's role; only a Super Admin gets editable fields. */
+  role: string
   open: boolean
   onOpenChange: (open: boolean) => void
 }>) {
   const { toast } = useToast()
+  const canEdit = canMutatePrices(role)
   const [search, setSearch] = useState("")
   const [page, setPage] = useState(1)
   const [drafts, setDrafts] = useState<Record<number, string>>({})
@@ -120,7 +130,7 @@ export function GroupPriceManager({
   )
 
   const save = async () => {
-    if (!group || changed.length === 0) return
+    if (!group || changed.length === 0 || !canEdit) return
     if (invalid.length > 0) {
       toast({
         title: "Check the highlighted prices",
@@ -176,8 +186,9 @@ export function GroupPriceManager({
             Group Prices{group ? ` — ${group.name}` : ""}
           </DialogTitle>
           <DialogDescription>
-            A price set here applies to every branch in this group. Leave a box empty to use the
-            organization price. The organization price itself is never changed here.
+            {canEdit
+              ? "A price set here applies to every branch in this group. Leave a box empty to use the organization price. The organization price itself is never changed here."
+              : "What this group's branches pay for each product. Only a Super Admin can change a price."}
           </DialogDescription>
         </DialogHeader>
 
@@ -238,18 +249,26 @@ export function GroupPriceManager({
                       {item.organizationPriceCents === null ? "—" : formatPKR(item.organizationPriceCents / 100)}
                     </TableCell>
                     <TableCell>
-                      <Input
-                        inputMode="decimal"
-                        value={value}
-                        aria-label={`Group price for ${item.name}`}
-                        aria-invalid={isInvalid}
-                        className={isInvalid ? "border-rose-400 focus-visible:ring-rose-400" : ""}
-                        placeholder="Inherit"
-                        onChange={(event) => setDrafts((current) => ({
-                          ...current,
-                          [item.organizationInventoryId]: event.target.value,
-                        }))}
-                      />
+                      {canEdit ? (
+                        <Input
+                          inputMode="decimal"
+                          value={value}
+                          aria-label={`Group price for ${item.name}`}
+                          aria-invalid={isInvalid}
+                          className={isInvalid ? "border-rose-400 focus-visible:ring-rose-400" : ""}
+                          placeholder="Inherit"
+                          onChange={(event) => setDrafts((current) => ({
+                            ...current,
+                            [item.organizationInventoryId]: event.target.value,
+                          }))}
+                        />
+                      ) : (
+                        <span className="text-slate-500">
+                          {item.groupPriceCents === null
+                            ? "Inherited"
+                            : formatPKR(item.groupPriceCents / 100)}
+                        </span>
+                      )}
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">
@@ -286,15 +305,19 @@ export function GroupPriceManager({
               Next
             </Button>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-slate-500">
-              {changed.length === 0 ? "No changes" : `${changed.length} price(s) to save`}
-            </span>
-            <Button onClick={save} disabled={isSaving || changed.length === 0}>
-              {isSaving && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
-              Save prices
-            </Button>
-          </div>
+          {canEdit ? (
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-slate-500">
+                {changed.length === 0 ? "No changes" : `${changed.length} price(s) to save`}
+              </span>
+              <Button onClick={save} disabled={isSaving || changed.length === 0}>
+                {isSaving && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+                Save prices
+              </Button>
+            </div>
+          ) : (
+            <span className="text-sm text-slate-500">Read-only — Super Admin sets prices</span>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

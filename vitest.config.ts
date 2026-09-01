@@ -19,7 +19,10 @@ export default defineConfig({
         // That is ~2s of actual work, but under full-suite parallelism on a
         // 2-core CI runner it overruns the 5s default and times out.
         testTimeout: 30000,
-        setupFiles: [],
+        // Throwaway server env so a unit test may import code under
+        // `lib/server/`. Points the database at an address nothing listens on —
+        // unit tests must never reach one.
+        setupFiles: ['./tests/setup/unit-env.ts'],
         exclude: [
             ...sharedExclude,
             'tests/e2e/**',
