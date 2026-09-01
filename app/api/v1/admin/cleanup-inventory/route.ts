@@ -37,29 +37,30 @@ export async function POST(req: NextRequest) {
 
         const nameCount = nameResult.length
 
-        // Clean up customPrice where it matches globalProducts.basePrice
-        const priceResult = await db
-            .update(organizationInventory)
-            .set({ customPrice: null, updatedAt: new Date() })
-            .where(
-                and(
-                    isNull(organizationInventory.deletedAt),
-                    sql`${organizationInventory.customPrice} = (
-            SELECT base_price FROM global_products 
-            WHERE id = ${organizationInventory.globalProductId}
-          )`
-                )
-            )
-            .returning({ id: organizationInventory.id })
+        // Prices are deliberately NOT cleaned up here.
+        //
+        // This used to clear any organization price that happened to equal the
+        // global base price, on the theory that such an override was a copy.
+        // An organization's price is its own commercial decision, and two
+        // tiers holding the same number is not evidence that one was copied
+        // from the other — clearing it silently revoked a price somebody chose
+        // and quietly re-subscribed that tenant to every future global change.
+        //
+        // Prices only ever flow downward, and never past a tier that has set
+        // its own. Nothing here may delete an organization or group price.
+        //
+        // (The removed statement was also inoperative: it selected `base_price`
+        // from global_products, where the column is `base_price_cents`, so it
+        // raised an undefined-column error rather than clearing anything.)
+        const priceCount = 0
 
-        const priceCount = priceResult.length
-
-        console.log(`✅ Cleanup complete: ${nameCount} names, ${priceCount} prices`)
+        console.log(`✅ Cleanup complete: ${nameCount} names`)
 
         return NextResponse.json({
             success: true,
             message: "Inventory cleanup completed successfully",
             clearedNames: nameCount,
+            // Retained so existing callers keep their response shape; always 0.
             clearedPrices: priceCount,
         })
     } catch (error: any) {

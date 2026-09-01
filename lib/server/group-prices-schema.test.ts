@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import { MAX_PRICE_CENTS } from "@/lib/price-ladder"
 import {
   MAX_GROUP_PRICE_UPDATES,
+  groupPricePropagationSchema,
   groupPricesUpdateSchema,
 } from "@/lib/server/mutation-validation"
 
@@ -91,5 +92,37 @@ describe("group price update payloads", () => {
     if (result.success) {
       expect(result.data.prices[0].organizationInventoryId).toBe(10)
     }
+  })
+})
+
+describe("group price propagation directives", () => {
+  const parsePropagation = (body: unknown) => groupPricePropagationSchema.safeParse(body)
+
+  it.each(["none", "all"])("accepts %s without a group list", (mode) => {
+    expect(parsePropagation({ mode }).success).toBe(true)
+  })
+
+  it("accepts selected with a group list", () => {
+    expect(parsePropagation({ mode: "selected", groupIds: [1, 2] }).success).toBe(true)
+  })
+
+  it("accepts selected with an empty list, which holds every group still", () => {
+    expect(parsePropagation({ mode: "selected", groupIds: [] }).success).toBe(true)
+  })
+
+  it("rejects selected without a group list", () => {
+    // Otherwise the server would have to guess, and guessing here silently
+    // moves every unpriced group onto the new price.
+    expect(parsePropagation({ mode: "selected" }).success).toBe(false)
+  })
+
+  it.each([
+    ["an unknown mode", { mode: "everything" }],
+    ["a missing mode", { groupIds: [1] }],
+    ["a zero group id", { mode: "selected", groupIds: [0] }],
+    ["a negative group id", { mode: "selected", groupIds: [-1] }],
+    ["an unknown field", { mode: "all", applyToBranches: true }],
+  ])("rejects %s", (_label, body) => {
+    expect(parsePropagation(body).success).toBe(false)
   })
 })

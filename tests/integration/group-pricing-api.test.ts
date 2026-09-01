@@ -136,10 +136,29 @@ describe.skipIf(!hasTestDatabase)("group pricing endpoint", () => {
       },
     )
 
-    it("lets Head Office price a group inside its own organization", async () => {
+    it("lets Head Office read a group inside its own organization", async () => {
+      // Head Office has to know what its branches pay to do its job.
       signIn(headOffice)
       const response = await GET(getRequest(fixtures.groupId), params(fixtures.groupId))
       expect(response.status).toBe(200)
+    })
+
+    it("refuses Head Office the write, even in its own organization", async () => {
+      // Only a Super Admin may change a price, at any tier. Administering the
+      // group does not carry the right to reprice it.
+      signIn(headOffice)
+
+      const response = await PUT(
+        putRequest(fixtures.groupId, {
+          prices: [{ organizationInventoryId: fixtures.organizationInventoryId, customPriceCents: 6_500 }],
+        }),
+        params(fixtures.groupId),
+      )
+      const body = await response.json()
+
+      expect(response.status).toBe(403)
+      expect(body.error).toContain("only a Super Admin may change prices")
+      expect(await storedPrice()).toBeNull()
     })
 
     it("refuses Head Office from another organization", async () => {

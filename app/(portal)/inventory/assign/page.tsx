@@ -1,5 +1,6 @@
 "use client"
 
+import { OrganizationPricePropagationDialog, type PropagationChoice } from "@/components/admin/organization-price-propagation-dialog"
 import { useAppContext } from "@/components/context/app-context"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -57,6 +58,9 @@ export default function AssignProductPage() {
     const [searchQuery, setSearchQuery] = useState("")
     const [priceDialogOpen, setPriceDialogOpen] = useState(false)
     const [editDialogOpen, setEditDialogOpen] = useState(false)
+    // Second step of a price edit: what should happen to this product's group
+    // prices. Only opened when the price actually changed.
+    const [propagationOpen, setPropagationOpen] = useState(false)
     const [selectedProduct, setSelectedProduct] = useState<GlobalProduct | null>(null)
     const [selectedAssignment, setSelectedAssignment] = useState<AssignedProduct | null>(null)
     const [categoryFilter, setCategoryFilter] = useState("all")
@@ -168,11 +172,30 @@ export default function AssignProductPage() {
         }
     }
 
-    const handleUpdatePrice = async () => {
+    /** The price about to be saved, in cents, for the propagation preview. */
+    const nextPriceCents = price ? Math.round(Number.parseFloat(price) * 100) : null
+
+    /** True when this edit actually moves the organization price. */
+    const priceIsChanging = Boolean(selectedAssignment)
+        && nextPriceCents !== (selectedAssignment?.customPrice ?? null)
+
+    const handleUpdatePrice = () => {
         if (!selectedAssignment || !price) {
             toast({ title: "Error", description: "Please enter a price", variant: "destructive" })
             return
         }
+        // Changing the price moves every group that has no price of its own, so
+        // ask what should happen before writing anything. An edit that leaves
+        // the price alone saves straight away.
+        if (priceIsChanging) {
+            setPropagationOpen(true)
+            return
+        }
+        void savePrice({ mode: "none" })
+    }
+
+    const savePrice = async (propagation: PropagationChoice) => {
+        if (!selectedAssignment || !price) return
 
         setSaving(true)
         try {
@@ -183,15 +206,17 @@ export default function AssignProductPage() {
                     id: selectedAssignment.id,
                     customPrice: Number.parseFloat(price),
                     isActive: isActive,
+                    groupPricePropagation: propagation,
                 }),
             })
 
+            const data = await res.json().catch(() => ({}))
             if (!res.ok) {
-                const data = await res.json()
                 throw new Error(data.error || "Failed to update price")
             }
 
-            toast({ title: "Success", description: "Price updated successfully" })
+            toast({ title: "Success", description: data.message || "Price updated successfully" })
+            setPropagationOpen(false)
             setEditDialogOpen(false)
             setSelectedAssignment(null)
             mutateAssignments()
@@ -581,11 +606,24 @@ export default function AssignProductPage() {
                             Cancel
                         </Button>
                         <Button onClick={handleUpdatePrice} disabled={saving || !price}>
-                            {saving ? "Updating..." : "Update Price"}
+                            {(() => {
+                              if (saving) return "Updating..."
+                              return priceIsChanging ? "Continue" : "Update Price"
+                            })()}
                         </Button>
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            {/* Second step: what this price change should do to group prices. */}
+            <OrganizationPricePropagationDialog
+                organizationInventoryId={selectedAssignment?.id ?? null}
+                nextPriceCents={nextPriceCents}
+                open={propagationOpen}
+                isSaving={saving}
+                onCancel={() => setPropagationOpen(false)}
+                onConfirm={(choice) => { void savePrice(choice) }}
+            />
         </div>
     )
 }

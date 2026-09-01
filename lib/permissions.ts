@@ -85,7 +85,12 @@ export enum Permission {
   GROUP_EDIT = "group:edit",
   GROUP_DELETE = "group:delete",
   GROUP_ASSIGN_BRANCH = "group:assign_branch",
-  GROUP_SET_PRICE = "group:set_price",
+
+  // Pricing — its own authority, held by Super Admin alone. Deliberately not
+  // folded into the inventory, organization, or group sets: administering a
+  // catalogue, a tenant, or a group must not carry the right to change what
+  // anyone is charged. Enforced through `lib/pricing-access.ts`.
+  PRICING_MANAGE = "pricing:manage",
 }
 
 export interface PermissionInfo {
@@ -442,10 +447,11 @@ export const PERMISSION_DEFINITIONS: PermissionInfo[] = [
     category: PermissionCategory.GROUP,
   },
   {
-    key: Permission.GROUP_SET_PRICE,
-    label: "Set Group Prices",
-    description: "Override product prices for every branch in a group",
-    category: PermissionCategory.GROUP,
+    key: Permission.PRICING_MANAGE,
+    label: "Change Prices",
+    description:
+      "Set or clear a price at any tier: global base, organization, or group. Super Admin only.",
+    category: PermissionCategory.FINANCIAL,
     isHighRisk: true,
   },
 ]
@@ -501,10 +507,9 @@ export const ROLE_TEMPLATES = {
       Permission.SETTINGS_VIEW,
       Permission.SETTINGS_EDIT,
       Permission.GROUP_VIEW,
-      // Head Office already manages groups and the organization price; pricing
-      // a group is the same authority applied one tier lower, and is confined
-      // to its own organization by the route that grants it.
-      Permission.GROUP_SET_PRICE,
+      // Deliberately no PRICING_MANAGE: Head Office administers groups and
+      // branches but may never change what they are charged. See
+      // lib/pricing-access.ts.
     ],
   },
   BRANCH_ADMIN: {
