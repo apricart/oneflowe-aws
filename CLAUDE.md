@@ -35,7 +35,24 @@ npm run db:check      # Check current users in DB
 npm run import:products-csv  # Import products from CSV file
 ```
 
-Vitest is configured for focused unit and security tests (`npm test`).
+### Testing
+
+```bash
+npm test               # unit + contract tests (no external services needed)
+npm run test:watch     # same, in watch mode
+npm run test:integration  # needs a disposable Postgres; skips itself without one
+npm run test:all       # both projects
+npm run typecheck
+```
+
+Two Vitest projects: `vitest.config.ts` (jsdom, tests beside the code) and
+`vitest.integration.config.ts` (node, `tests/integration/**`, one file at a
+time). Both alias `server-only` to an empty module so tests can import code
+under `lib/server/` directly.
+
+Integration tests need `TEST_DATABASE_URL` pointing at a **migrated, disposable**
+database whose name contains `test`; without it they skip and the command still
+passes. See `tests/README.md` for the full setup and conventions.
 
 ## Architecture
 
@@ -96,12 +113,14 @@ app/
 | `lib/db.ts` | Drizzle + connection pooling |
 | `lib/permissions.ts` | RBAC permission checks |
 | `lib/inventory-cascade.ts` | Multi-level inventory sync logic (global → org → branch) |
+| `lib/price-ladder.ts` / `lib/server/effective-price.ts` | Price resolution: group → organization → global base price |
 | `lib/order-utils.ts` / `lib/order-status.ts` | Order state machine helpers |
 | `lib/budget-allocation-mode.ts` | Budget allocation logic |
 | `lib/error-handler.ts` | Centralized API error handling |
 | `lib/rate-limiter.ts` | Rate limiting for API routes |
 | `lib/cache-utils.ts` | Redis caching helpers |
 | `lib/receipt-generator.ts` | jsPDF-based receipt generation |
+| `lib/server/image-storage.ts` | S3 upload/fetch for product images, key generation and validation |
 | `lib/hooks/` | Data-fetching React hooks (useApi, useDashboardAnalytics, etc.) |
 
 ### Database Schema (Key Tables)
@@ -132,5 +151,10 @@ an administrator; use the explicit one-time bootstrap command when required.
 - **API routes** follow the pattern `app/api/v1/<resource>/route.ts` and use `lib/error-handler.ts` for consistent error responses.
 - **Server components vs client components**: API data fetching happens in client components via `lib/hooks/` and `lib/api.ts`; use `"use client"` at the top of interactive components.
 - **Inventory cascade**: When inventory changes at the global level, `lib/inventory-cascade.ts` propagates changes down to org and branch levels. Always go through this utility rather than writing directly.
+- **Pricing — resolving**: A product's price is layered — group override, then organization override, then global base price. Always resolve it through `lib/server/effective-price.ts` (`resolveEffectivePriceCents`, `effectivePriceCentsSql`, `scopedOverrideCentsSql`); never write a `customPrice ?? basePrice` expression by hand, or the price charged and the price displayed will drift. The group tier applies only where exactly one group is in scope (a branch, or an authorized group-portal submission).
+- **Pricing — the downward rule**: A price change never reaches past a tier that has set its own price. Changing the global base price does **not** touch any organization or group price, whatever their values happen to be; changing an organization price does not touch the global one, and reaches groups only as the administrator chose; changing a group price touches nothing above it. `cascadeGlobalProductFieldUpdate` cascades descriptive fields only (`CASCADABLE_GLOBAL_FIELDS`) — never `basePrice`.
+- **Pricing — propagating**: Changing an organization price moves every group that has no override of its own, because those groups inherit it. `lib/group-price-propagation.ts` turns an administrator's choice into a plan: `all` (clear group overrides so everyone follows), `selected` (the chosen groups follow; every other unpriced group is *pinned* at its current price so it does not drift), or `none` (the default and the pre-existing behaviour). The planner is pure and shared — the confirmation dialog previews with it and the server rebuilds the plan with it from rows read **before** the price update, inside the same transaction. Clients send a mode, never a plan.
+- **Pricing — changing**: **Only `SUPER_ADMIN` may write a price, at any tier.** The rule lives in `lib/pricing-access.ts` (`canMutatePrices`, `priceMutationFailure`, `rejectPriceFieldsForRole`) and is carried in RBAC as `Permission.PRICING_MANAGE`, granted to Super Admin alone. Administering a catalogue, tenant, or group does not carry the right to change what anyone is charged — Head Office may read prices but never set them. Any new endpoint that writes a price column must go through that module and be added to the route list in `lib/pricing-access.test.ts`. Reading a price is a separate concern, governed by `lib/price-visibility.ts`.
+- **Image storage**: Uploaded images live in S3, never in the database. `POST /api/v1/upload/image` sanitises through `sharp`, writes the object, and returns an application path (`/api/v1/images/products/<uuid>.<ext>`) which is what gets stored in `imageUrl`/`customImageUrl`. `GET /api/v1/images/*` streams it back to signed-in users; the bucket itself is private. Rows written before this change still hold `data:` URLs and still render — use `isDataUrl`/`isStoredImagePath` from `lib/server/image-storage.ts` to tell the two apart, and `npm run migrate:images-to-s3` to move the remainder. Never write a `data:` URL to a column.
 - **Permissions**: Check `lib/permissions.ts` before adding any new admin-only feature — never inline permission logic in components.
 - **Path aliases**: `@/` maps to the project root (configured in `tsconfig.json`).

@@ -8,6 +8,8 @@
  * treated as authoritative.
  */
 
+import type { BranchBudgetSummary } from "@/lib/branch-budget-summary"
+
 export type ScopedBranch = {
   id: number
   name: string
@@ -20,6 +22,22 @@ export type ScopedGroup = {
   id: number | null
   name: string
   branches: ScopedBranch[]
+}
+
+/**
+ * This month's money budget for one location.
+ *
+ * Re-exported from the module that derives it so the sidebar and the server
+ * agree on the shape by construction. Display only, like every other figure
+ * here: the ordering engine re-reads and locks the real budget row before it
+ * accepts anything.
+ */
+export type { BranchBudgetSummary } from "@/lib/branch-budget-summary"
+
+export type BranchBudgetResponse = {
+  items: BranchBudgetSummary[]
+  /** The `YYYY-MM` period the figures belong to. */
+  period: string
 }
 
 export type CatalogItem = {

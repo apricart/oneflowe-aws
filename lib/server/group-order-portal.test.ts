@@ -425,7 +425,13 @@ describe("group order portal access contracts", () => {
     const creation = source("lib/server/group-order-creation.ts")
     const draft = source("app/api/v1/group-portal/draft/route.ts")
 
-    expect(creation).toContain("inventoryItem.customPrice ?? product.basePrice")
+    // Every tier of the price ladder is read from the locked rows: the group
+    // override loaded inside the transaction, the organization override on the
+    // locked inventory row, and the base price on the locked product row.
+    expect(creation).toContain("resolveEffectivePriceCents({")
+    expect(creation).toContain("groupPriceCents: locked.groupPriceByInventoryId.get(inventoryItem.id)")
+    expect(creation).toContain("organizationPriceCents: inventoryItem.customPrice")
+    expect(creation).toContain("basePriceCents: product.basePrice")
     expect(creation).toContain(".for(\"update\")")
     expect(creation).toContain("Insufficient stock")
     // The draft is a resume aid; the tenant on it is always rewritten from the
@@ -456,9 +462,11 @@ describe("group order portal access contracts", () => {
     expect(proxySource).toContain("return pathname.startsWith(GROUP_ORDER_PORTAL_HOME) || isInvoiceArea(pathname)")
     expect(proxySource).toContain(": GROUP_ORDER_PORTAL_HOME")
     // The gate that used to sit on the retired wizard route now guards the area
-    // itself, and still fails closed: only the requester renders the storefront.
-    expect(layout).toContain("if (role === GROUP_USER_ROLE) redirect(\"/approvals\")")
+    // itself, and still fails closed: only the requester renders the
+    // storefront. Every other role — the approver included — is sent to the
+    // admin shell.
     expect(layout).toContain("if (role !== GROUP_ORDER_PORTAL_ROLE) redirect(\"/dashboard\")")
+    expect(layout).not.toContain("GROUP_USER_ROLE) redirect")
   })
 
   it("leaves the single-branch order endpoint untouched", () => {
@@ -537,8 +545,18 @@ describe("group order line snapshot", () => {
   })
 
   it("still prices every line from the locked database rows", () => {
-    expect(creation).toContain("const priceCents = inventoryItem.customPrice ?? product.basePrice")
+    expect(creation).toContain("const priceCents = resolveEffectivePriceCents({")
+    expect(creation).toContain("organizationPriceCents: inventoryItem.customPrice")
+    expect(creation).toContain("basePriceCents: product.basePrice")
     expect(creation).toContain("calculateLineCents(priceCents, validation.quantity)")
+  })
+
+  it("resolves the group price tier inside the same transaction that locks the rows", () => {
+    // Read from the branch rather than from the submission scope, so a branch
+    // moved between groups mid-submission is priced by the group it is in now.
+    expect(creation).toContain("resolveBranchGroupId(tx, {")
+    expect(creation).toContain("loadGroupPriceOverrides(tx, {")
+    expect(creation).not.toContain("loadGroupPriceOverrides(db,")
   })
 })
 

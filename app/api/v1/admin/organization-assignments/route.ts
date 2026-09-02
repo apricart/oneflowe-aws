@@ -9,6 +9,12 @@ import { cascadeOrgDeletion, cascadeOrgStatusChange } from "@/lib/inventory-casc
 import { validateAssignmentData } from "@/lib/inventory-validation"
 import { invalidateByPrefix } from "@/lib/cache-utils"
 import { normalizeSafeImageUrl } from "@/lib/security"
+import { groupPricePropagationSchema, validationMessage } from "@/lib/server/mutation-validation"
+import {
+  applyGroupPricePropagation,
+  buildPropagationPlan,
+  loadPropagationContext,
+} from "@/lib/server/group-price-propagation"
 
 async function addCategoryCondition(conditions: SQL[], category: string | null) {
   if (!category || category === "all") return
@@ -84,6 +90,77 @@ function buildOrganizationAssignments(
       customDescription: override?.customDescription ?? defaults.customDescription ?? null,
       customImageUrl: override?.customImageUrl ?? defaults.customImageUrl,
     }
+  })
+}
+
+/**
+ * The organization price this update is moving the item to, in cents.
+ *
+ * `undefined` means the request is not touching the price at all, which is what
+ * distinguishes "renamed the product" from "repriced it" — only the latter has
+ * anything to propagate to groups.
+ */
+function nextOrganizationPriceCents(body: any): number | null | undefined {
+  if (body.customPrice === undefined) return undefined
+  return body.customPrice ? Math.round(Number.parseFloat(body.customPrice) * 100) : null
+}
+
+type PropagationRequest = {
+  mode: "none" | "all" | "selected"
+  groupIds?: number[]
+}
+
+/**
+ * The pre-change state the plan is computed against, or null when there is
+ * nothing to propagate.
+ *
+ * **Read before the organization price is written.** The plan needs the price
+ * the groups are on *now* — that is what an unselected group gets pinned at —
+ * so reading it after the update would pin every group at the new price and
+ * quietly do the opposite of what was asked.
+ */
+async function loadPropagationContextIfNeeded(
+  tx: any,
+  input: {
+    organizationInventoryId: number
+    propagation: PropagationRequest
+    nextPriceCents: number | null | undefined
+  },
+) {
+  // Nothing to do when the caller did not ask, or when the request is not
+  // touching the price at all (a rename has nothing to propagate).
+  if (input.propagation.mode === "none" || input.nextPriceCents === undefined) return null
+  return loadPropagationContext(tx, input.organizationInventoryId)
+}
+
+/**
+ * Apply the caller's choice about group prices alongside the organization price.
+ *
+ * The plan is always rebuilt here from rows this transaction read; the request
+ * contributes only the mode and the chosen group ids, never a plan.
+ */
+async function applyPropagation(
+  tx: any,
+  input: {
+    context: Awaited<ReturnType<typeof loadPropagationContext>>
+    propagation: PropagationRequest
+    nextPriceCents: number | null | undefined
+    userId: string
+  },
+) {
+  if (!input.context || input.nextPriceCents === undefined) return null
+
+  const plan = buildPropagationPlan(input.context, {
+    mode: input.propagation.mode,
+    selectedGroupIds: input.propagation.groupIds,
+    nextOrganizationPriceCents: input.nextPriceCents,
+  })
+
+  return applyGroupPricePropagation(tx, {
+    context: input.context,
+    plan,
+    performedByUserId: input.userId,
+    performedByRole: "SUPER_ADMIN",
   })
 }
 
@@ -504,11 +581,42 @@ export async function PUT(req: NextRequest) {
 
     const updateData = buildAssignmentUpdateData(body, normalizedCustomImageUrl)
 
-    // Update the assignment
-    const [updatedAssignment] = await db.update(organizationInventory)
-      .set(updateData)
-      .where(eq(organizationInventory.id, Number.parseInt(id)))
-      .returning()
+    // What should happen to group prices. Absent means `none`: groups keep
+    // their own prices and unpriced ones follow the organization, which is what
+    // this endpoint did before propagation existed.
+    const parsedPropagation = body.groupPricePropagation === undefined
+      ? { success: true as const, data: { mode: "none" as const, groupIds: undefined } }
+      : groupPricePropagationSchema.safeParse(body.groupPricePropagation)
+    if (!parsedPropagation.success) {
+      return NextResponse.json({ error: validationMessage(parsedPropagation.error) }, { status: 400 })
+    }
+
+    // One transaction: an organization price without its propagation, or a
+    // propagation without the price it was planned against, would each leave a
+    // branch on a price nobody chose.
+    const nextPriceCents = nextOrganizationPriceCents(body)
+    const { updatedAssignment, propagation } = await db.transaction(async (tx) => {
+      // Read the state the groups are on now, before the price moves under it.
+      const propagationContext = await loadPropagationContextIfNeeded(tx, {
+        organizationInventoryId: Number.parseInt(id),
+        propagation: parsedPropagation.data,
+        nextPriceCents,
+      })
+
+      const [assignment] = await tx.update(organizationInventory)
+        .set(updateData)
+        .where(eq(organizationInventory.id, Number.parseInt(id)))
+        .returning()
+
+      const outcome = await applyPropagation(tx, {
+        context: propagationContext,
+        propagation: parsedPropagation.data,
+        nextPriceCents,
+        userId: (session.user as any).id,
+      })
+
+      return { updatedAssignment: assignment, propagation: outcome }
+    })
 
     // If isActive status changed, cascade to branches
     if (isActive !== undefined && isActive !== existingAssignment.isActive) {
@@ -552,10 +660,21 @@ export async function PUT(req: NextRequest) {
     if (isActive !== undefined) {
       await invalidateByPrefix('branch-inv')
     }
+    if (nextPriceCents !== undefined) {
+      // A price change reaches the shop and every branch inventory listing
+      // through these; leaving them cached would show one price and charge
+      // another.
+      await invalidateByPrefix('branch-inv')
+      await invalidateByPrefix('group')
+    }
 
     return NextResponse.json({
-      message: "Assignment updated successfully",
-      assignment: updatedAssignment
+      message: propagation && propagation.changedGroupCount > 0
+        ? `Assignment updated. ${propagation.changedGroupCount} group price(s) changed.`
+        : "Assignment updated successfully",
+      assignment: updatedAssignment,
+      // Absent for every caller that did not ask for propagation.
+      ...(propagation ? { groupPricePropagation: propagation } : {}),
     })
   } catch (error: any) {
     console.error("Error updating organization assignment:", error)

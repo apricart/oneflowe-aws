@@ -292,6 +292,10 @@ export async function DELETE(
     // 4. Invalidate caches
     await invalidateByPrefix('organizations')
     await invalidateByPrefix('branches')
+    // The transaction above deleted this organization's settings rows, so the
+    // tenant-scoped settings caches must go with them rather than lingering
+    // until their TTL elapses.
+    await invalidateByPrefix('settings')
 
     return ok({ ok: true })
   } catch (e: any) {

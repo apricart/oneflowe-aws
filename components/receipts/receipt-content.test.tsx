@@ -5,6 +5,9 @@ const receiptResponse = {
     pricesHidden: false,
     receiptData: {
         invoiceNumber: "247/JUL/APR/2026",
+        orderId: 41288,
+        orderTid: "TXN-01J8F4K2QW",
+        paymentStatus: "UNPAID",
         date: "07/27/2026",
         status: "Fulfilled",
         statusKey: "fulfilled",
@@ -16,6 +19,7 @@ const receiptResponse = {
         placedByName: "Rajesh Ramesh",
         placedByPhone: "0300-2185120",
         approvedByName: "Muhammad Faisal Siddiqui",
+        fulfilledByName: "Sana Iqbal",
         items: [
             {
                 mainCategoryName: "Stationery",
@@ -73,7 +77,7 @@ describe("invoice header", () => {
         expect(screen.getByText("INVOICE")).toBeTruthy()
     })
 
-    it("prints the invoice references, and no purchase order when the buyer gave none", () => {
+    it("prints the invoice references", () => {
         const { container } = renderInvoice()
         const references = container.textContent || ""
 
@@ -81,13 +85,37 @@ describe("invoice header", () => {
         expect(references).toContain("247/JUL/APR/2026")
         expect(references).toContain("Invoice Date")
         expect(references).toContain("27 Jul 2026")
-        expect(references).toContain("P.O.#")
-        // The invoice number is never reprinted as the purchase order: that
-        // asserted a purchase order the buyer never raised.
-        expect(references).not.toContain("247/JUL/APR/2026247/JUL/APR/2026")
     })
 
-    it("prints the buyer's purchase order reference when the order carries one", () => {
+    it("prints the order reference directly under the invoice date", () => {
+        const { container } = renderInvoice()
+        const references = container.textContent || ""
+
+        expect(references).toContain("Order ID")
+        expect(references).toContain("41288")
+        expect(references).not.toContain("TXN-01J8F4K2QW")
+        expect(references.indexOf("Invoice Date")).toBeLessThan(references.indexOf("Order ID"))
+    })
+
+    it("falls back to the requested order when the snapshot carries no reference", () => {
+        const { orderId, ...withoutOrderReference } = receiptResponse.receiptData
+        swrResponse = {
+            data: { ...receiptResponse, receiptData: withoutOrderReference },
+            error: undefined,
+            isLoading: false,
+        }
+        const { container } = renderInvoice()
+
+        expect(container.textContent).toContain("Order ID")
+        expect(container.textContent).toContain("42")
+    })
+
+    /**
+     * The purchase order reference is still recorded against the order; it is
+     * simply no longer printed. An order that carries one must not leak it back
+     * onto the invoice.
+     */
+    it("prints no purchase order reference, even when the order carries one", () => {
         swrResponse = {
             data: {
                 ...receiptResponse,
@@ -98,11 +126,13 @@ describe("invoice header", () => {
         }
 
         const { container } = renderInvoice()
+        const references = container.textContent || ""
 
-        expect(container.textContent || "").toContain("PO-2026-0148")
+        expect(references).not.toContain("P.O.#")
+        expect(references).not.toContain("PO-2026-0148")
     })
 
-    it("keeps the order status, initiator and approver on the invoice", () => {
+    it("keeps the order status, initiator, approver and fulfiller on the invoice", () => {
         const { container } = renderInvoice()
         const header = container.textContent || ""
 
@@ -111,15 +141,32 @@ describe("invoice header", () => {
         expect(header).toContain("Rajesh Ramesh")
         expect(header).toContain("Approver:")
         expect(header).toContain("Muhammad Faisal Siddiqui")
+        expect(header).toContain("Fulfiller:")
+        expect(header).toContain("Sana Iqbal")
     })
 
-    it("lists the initiator and approver after the delivery address", () => {
+    it("reports no fulfiller rather than an empty field when the order was fulfilled without one", () => {
+        const { fulfilledByName, ...withoutFulfiller } = receiptResponse.receiptData
+        swrResponse = {
+            data: { ...receiptResponse, receiptData: withoutFulfiller },
+            error: undefined,
+            isLoading: false,
+        }
+        const { container } = renderInvoice()
+        const header = container.textContent || ""
+
+        expect(header).toContain("Fulfiller:")
+        expect(header).toContain("N/A")
+    })
+
+    it("lists the initiator, approver and fulfiller after the delivery address", () => {
         const { container } = renderInvoice()
         const header = container.textContent || ""
 
         expect(header.indexOf("Address:")).toBeLessThan(header.indexOf("Initiator:"))
         expect(header.indexOf("Phone:")).toBeLessThan(header.indexOf("Initiator:"))
         expect(header.indexOf("Initiator:")).toBeLessThan(header.indexOf("Approver:"))
+        expect(header.indexOf("Approver:")).toBeLessThan(header.indexOf("Fulfiller:"))
     })
 
     it("bills the organization and delivers to the branch", () => {
@@ -133,7 +180,13 @@ describe("invoice header", () => {
         expect(screen.getByText("ASU-CPU Central Processing Unit")).toBeTruthy()
     })
 
-    it("keeps the subtotal out of the header when prices are hidden for the role", () => {
+    it("keeps the subtotal out of the header, whatever the role may see", () => {
+        const priced = renderInvoice()
+
+        expect(priced.container.textContent).not.toContain("Subtotal")
+        expect(priced.container.textContent).toContain("Total Items")
+
+        cleanup()
         swrResponse = {
             data: { ...receiptResponse, pricesHidden: true },
             error: undefined,
@@ -143,6 +196,51 @@ describe("invoice header", () => {
 
         expect(container.textContent).not.toContain("Subtotal")
         expect(container.textContent).toContain("Total Items")
+    })
+
+    it("stamps an invoice the order records as settled", () => {
+        swrResponse = {
+            data: {
+                ...receiptResponse,
+                receiptData: { ...receiptResponse.receiptData, paymentStatus: "PAID" },
+            },
+            error: undefined,
+            isLoading: false,
+        }
+        const { container } = renderInvoice()
+
+        expect(container.querySelector(".paid-stamp")?.textContent).toBe("PAID")
+    })
+
+    it("leaves an unpaid invoice unstamped", () => {
+        const { container } = renderInvoice()
+
+        expect(container.querySelector(".paid-stamp")).toBeNull()
+    })
+
+    it("treats an unrecognised payment status as unpaid", () => {
+        swrResponse = {
+            data: {
+                ...receiptResponse,
+                receiptData: { ...receiptResponse.receiptData, paymentStatus: "SOMETHING_ELSE" },
+            },
+            error: undefined,
+            isLoading: false,
+        }
+        const { container } = renderInvoice()
+
+        expect(container.querySelector(".paid-stamp")).toBeNull()
+    })
+
+    it("closes with the system-generated note instead of signature blocks", () => {
+        const { container } = renderInvoice()
+        const note = container.querySelector(".invoice-note")?.textContent || ""
+
+        expect(note).toContain(
+            "This is a system-generated invoice and does not require a signature or stamp."
+        )
+        expect(container.textContent).not.toContain("Authorized Sign")
+        expect(container.textContent).not.toContain("Accountant")
     })
 
     it("falls back to the branch name when an older invoice has no organization recorded", () => {
@@ -205,7 +303,7 @@ describe("invoice line items", () => {
         expect(headers).toEqual(["#", "Item & Description", "Qty", "Rate", "Tax %", "Tax", "Amount"])
     })
 
-    it("prints tax-exclusive figures for a line, with its unit and rate", () => {
+    it("prints tax-exclusive figures for a line, without the confusing unit", () => {
         swrResponse = { data: withTaxedLine, error: undefined, isLoading: false }
         const { container } = renderInvoice()
         const cells = [...container.querySelectorAll(".items-table tbody td")]
@@ -213,7 +311,7 @@ describe("invoice line items", () => {
 
         expect(cells[0]).toBe("1")
         expect(cells[1]).toBe("Tapal Danedar Teabags - 600pcs box")
-        expect(cells[2]).toBe("5.00pcs")
+        expect(cells[2]).toBe("5.00")
         expect(cells[3]).toBe("2,881.35")
         expect(cells[4]).toBe("18.00")
         expect(cells[5]).toBe("2,593.22")
@@ -231,6 +329,41 @@ describe("invoice line items", () => {
         expect(summary).toContain("14,406.75")
         expect(summary).toContain("2,593.22")
         expect(summary).toContain("16,999.97")
+    })
+
+    /**
+     * A long product name is printed in full: the cell wraps it rather than
+     * cutting it short, and never widens the table past the money columns.
+     */
+    it("prints a long product name in full, in a cell that wraps it", () => {
+        swrResponse = {
+            data: {
+                ...receiptResponse,
+                receiptData: {
+                    ...receiptResponse.receiptData,
+                    items: [{
+                        mainCategoryName: "Pantry",
+                        subCategories: [{
+                            subCategoryName: "Tea",
+                            items: [{
+                                description: "Tapal Danedar Teabags 600pcs Catering Box, Imported Ceylon Blend (PRD-LONG-NAME-0001)",
+                                quantity: 1,
+                                rate: 100,
+                                total: 100,
+                            }],
+                        }],
+                    }],
+                },
+            },
+            error: undefined,
+            isLoading: false,
+        }
+        const { container } = renderInvoice()
+        const cell = container.querySelector(".items-table tbody .item-description")
+
+        expect(cell?.textContent).toBe(
+            "Tapal Danedar Teabags 600pcs Catering Box, Imported Ceylon Blend (PRD-LONG-NAME-0001)"
+        )
     })
 
     it("prints one flat numbered list rather than category headings", () => {

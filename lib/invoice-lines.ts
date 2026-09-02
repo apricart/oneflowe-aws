@@ -15,7 +15,6 @@ export interface InvoiceLine {
   serial: number
   description: string
   quantity: number
-  unit: string
   /** Unit price excluding tax. Null when prices are hidden for the role. */
   rate: number | null
   /** Null when the line carries no recorded tax rate. */
@@ -83,7 +82,6 @@ function toInvoiceLine(item: any, serial: number): InvoiceLine {
     serial,
     description: typeof item?.description === "string" ? item.description : "",
     quantity: toAmount(item?.quantity),
-    unit: typeof item?.unit === "string" ? item.unit : "",
     rate,
     taxPercent: taxPercent === null || taxPercent === 0 ? null : taxPercent,
     tax: toMoney(item?.tax),

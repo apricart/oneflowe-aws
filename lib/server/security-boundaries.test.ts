@@ -41,3 +41,48 @@ describe('repository security boundaries', () => {
     )
   })
 })
+
+describe('group sub-resources are confined to the tenant that owns the group', () => {
+  // Every one of these takes a group id straight from the URL. Authenticating
+  // is not enough to read one: the caller must administer groups, and Head
+  // Office must own the group it names. Without that, a group id is all anyone
+  // needs to enumerate another tenant's structure.
+  const groupSubResources = [
+    'app/api/v1/groups/[id]/branches/route.ts',
+    'app/api/v1/groups/[id]/branches/clean/route.ts',
+    'app/api/v1/groups/[id]/branch-counts/route.ts',
+    'app/api/v1/groups/[id]/prices/route.ts',
+  ]
+
+  it('admits only the roles that administer groups', () => {
+    for (const path of groupSubResources) {
+      const route = repositoryFile(path)
+      expect(route).toContain('SUPER_ADMIN')
+      expect(route).toContain('HEAD_OFFICE')
+      expect(route).toContain('{ status: 403 }')
+    }
+  })
+
+  it('pins Head Office to its own organization on every handler', () => {
+    for (const path of groupSubResources) {
+      const route = repositoryFile(path)
+      // The group is loaded and its owning organization compared before any
+      // row is read — never trusted from the request.
+      expect(route).toMatch(/role === ['"]HEAD_OFFICE['"] && group\.organizationId !== /)
+      expect(route).toContain('{ status: 404 }')
+    }
+  })
+
+  it('reads a group branch list only through the shared authorization helper', () => {
+    const route = repositoryFile('app/api/v1/groups/[id]/branches/route.ts')
+    // GET and PUT share one rule so a future edit cannot re-open the read side
+    // while leaving the write side guarded.
+    expect((route.match(/await authorizeGroupBranchAccess\(id\)/g) || []).length).toBe(2)
+    expect(route).not.toMatch(/db\s*\n?\s*\.select\(\)\s*\.from\(branches\)/)
+    // The listing is pinned to the group's tenant and exposes identity fields
+    // only — not budget baselines, the branch admin, or external identifiers.
+    expect(route).toContain('eq(branches.organizationId, authorized.group.organizationId)')
+    expect(route).not.toContain('baselineBudgetCents')
+    expect(route).not.toContain('adminUserId')
+  })
+})

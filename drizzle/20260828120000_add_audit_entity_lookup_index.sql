@@ -1,0 +1,21 @@
+-- Indexed lookup for one entity's audit trail.
+--
+-- The invoice names the person who handed an order's fulfilment token to admin
+-- operations, which is recorded only in the audit trail:
+--   WHERE entity = 'ORDER' AND entity_id = $1 AND action = 'SEND_ORDER_TOKEN_EMAIL'
+--   ORDER BY created_at DESC
+-- `audit_entity_idx` indexes `entity` alone, and every order action shares the
+-- value 'ORDER', so that index narrows almost nothing: the lookup would read a
+-- growing share of the audit table on every invoice preview and download.
+--
+-- Ordered so the leading columns also serve the general "history of this one
+-- record" query. Ascending on created_at is deliberate — Postgres scans an
+-- index backwards for ORDER BY ... DESC, so a second, descending index would
+-- buy nothing.
+--
+-- Deliberately created without CONCURRENTLY so the statement stays inside the
+-- migration transaction, matching every other migration in this directory. On a
+-- large live table an operator may create the identical index CONCURRENTLY
+-- ahead of the deploy; IF NOT EXISTS then makes this migration a no-op.
+CREATE INDEX IF NOT EXISTS audit_entity_lookup_idx
+  ON audit_logs (entity, entity_id, action, created_at);

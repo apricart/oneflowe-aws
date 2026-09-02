@@ -17,3 +17,9 @@ docs
 .idea
 README.md
 docker-compose.yml
+
+# CI scan output. Written into the workspace before `docker build .`, so it
+# would otherwise be uploaded with the build context.
+*-report.json
+*-report.txt
+.gitleaksignore

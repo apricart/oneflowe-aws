@@ -6,6 +6,8 @@ import {
   MAX_ITEMS_PER_REFUNDED_ORDER,
   MAX_ORDERS_PER_GROUP_REFUND,
 } from "@/lib/server/group-refund-rules"
+import { PROPAGATION_MODES } from "@/lib/group-price-propagation"
+import { MAX_PRICE_CENTS } from "@/lib/price-ladder"
 import { MAX_ALLOWLIST_ENTRIES } from "@/lib/security/ip-allowlist"
 import {
   MAX_PO_NUMBER_LENGTH,
@@ -491,6 +493,52 @@ export const groupUpdateSchema = z.object({
 export const groupBranchesUpdateSchema = z.object({
   branchIds: z.array(positiveId).max(10_000),
   newlyAddedBranchIds: z.array(positiveId).max(10_000).optional(),
+}).strict()
+
+/**
+ * Group-level product prices.
+ *
+ * `customPriceCents: null` clears the group override so the product falls back
+ * to the organization price — the same "absence is inheritance" rule the
+ * organization tier uses. Prices are integers in cents, never floats, so a
+ * rounding error cannot reach the ledger. The ceiling is the range of the
+ * `integer` column the value is stored in, which every other price column in
+ * the schema also uses.
+ */
+export const MAX_GROUP_PRICE_UPDATES = 500
+
+/**
+ * What should happen to group prices when an organization price changes.
+ *
+ * Optional everywhere it is accepted, and absent means `none` — the behaviour
+ * the application had before propagation existed, so no existing caller changes
+ * meaning. `groupIds` is only read for `selected`; the server still rebuilds the
+ * plan from its own rows, so this is a statement of intent, never a plan.
+ */
+export const groupPricePropagationSchema = z.object({
+  mode: z.enum(PROPAGATION_MODES),
+  groupIds: z.array(positiveId).max(MAX_ASSIGNED_SCOPE_IDS).optional(),
+}).strict().refine(
+  // `selected` has to say which groups. An empty list is allowed and means
+  // "hold every group where it is", which the planner handles explicitly.
+  (input) => input.mode !== "selected" || Array.isArray(input.groupIds),
+  { message: "Selecting specific groups requires a groupIds list" },
+)
+
+export const groupPricesUpdateSchema = z.object({
+  prices: z.array(z.object({
+    organizationInventoryId: positiveId,
+    customPriceCents: z.union([
+      z.number().int().nonnegative().max(MAX_PRICE_CENTS),
+      z.null(),
+    ]),
+  }).strict())
+    .min(1, "At least one price is required")
+    .max(MAX_GROUP_PRICE_UPDATES)
+    .refine(
+      (prices) => isUniquePositiveIdList(prices.map((price) => price.organizationInventoryId)),
+      { message: "Each product can only appear once in a price update" },
+    ),
 }).strict()
 
 /**

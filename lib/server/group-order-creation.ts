@@ -26,6 +26,11 @@ import { resolveTaxRateBp, splitInclusiveCents } from "@/lib/tax"
 import { getOrganizationTaxRateBp } from "@/lib/server/tax-rate"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
 import {
+  loadGroupPriceOverrides,
+  resolveBranchGroupId,
+  resolveEffectivePriceCents,
+} from "@/lib/server/effective-price"
+import {
   UNGROUPED_BUCKET_NAME,
   type ResolvedSubmissionScope,
   type ScopedBranch,
@@ -240,6 +245,12 @@ async function getOrCreateBranchBudget(branchId: number, period: string) {
 }
 
 type LockedCatalogue = {
+  /**
+   * The group tier of the price ladder for the branch being priced, keyed by
+   * `organization_inventory.id`. Empty for a branch that belongs to no group,
+   * which leaves the organization price in force.
+   */
+  groupPriceByInventoryId: Map<number, number>
   inventoryById: Map<number, {
     id: number
     globalProductId: number
@@ -325,7 +336,21 @@ async function lockBranchCatalogue(
     ))
     .for("update")
 
+  // Resolved from the branch inside this transaction rather than from the
+  // submission scope, so a branch moved between groups while the submission was
+  // in flight is priced by the group it actually belongs to now.
+  const groupId = await resolveBranchGroupId(tx, {
+    branchId: context.branchId,
+    organizationId: context.organizationId,
+  })
+  const groupPriceByInventoryId = await loadGroupPriceOverrides(tx, {
+    organizationId: context.organizationId,
+    groupId,
+    organizationInventoryIds: context.inventoryIds,
+  })
+
   return {
+    groupPriceByInventoryId,
     inventoryById: new Map(inventory.map((row) => [row.id, row])),
     productById: new Map(products.map((row) => [row.id, row])),
   }
@@ -374,8 +399,12 @@ function priceLockedLines(
     })
     if (!validation.ok) throw new Error(validation.error)
 
-    const priceCents = inventoryItem.customPrice ?? product.basePrice
-    if (!Number.isSafeInteger(priceCents) || priceCents < 0) {
+    const priceCents = resolveEffectivePriceCents({
+      groupPriceCents: locked.groupPriceByInventoryId.get(inventoryItem.id),
+      organizationPriceCents: inventoryItem.customPrice,
+      basePriceCents: product.basePrice,
+    })
+    if (priceCents === null || !Number.isSafeInteger(priceCents) || priceCents < 0) {
       throw new Error(`Pricing is unavailable for ${productName}`)
     }
     // Prices are tax-inclusive, so this split records how much of the gross

@@ -323,6 +323,11 @@ export async function cascadeGlobalProductStatusChange(
 /**
  * Get the effective product data for a branch inventory item
  * Returns organization overrides if they exist, otherwise global values
+ *
+ * Note: the `price` here walks only the organization and global tiers. It does
+ * not know about group prices, so it must not be used to price anything a
+ * branch is charged for — use `resolveEffectivePriceCents` from
+ * `lib/server/effective-price.ts`, which resolves the full ladder.
  */
 export function getEffectiveProductData(
   globalProduct: {
@@ -347,10 +352,36 @@ export function getEffectiveProductData(
 }
 
 /**
+ * Descriptive fields a global product update may cascade into organization
+ * overrides.
+ *
+ * **`basePrice` is deliberately absent.** Price is the one field where an
+ * override is a commercial decision rather than a copy of the global value, and
+ * it must never be revoked as a side effect of someone editing the global
+ * catalogue. Prices flow downward only, and never past a tier that has set its
+ * own: a global price change reaches an organization only when that
+ * organization has no price of its own, and reaches a branch only when its
+ * group has none either.
+ *
+ * Two organizations can legitimately hold the same number — one that happens to
+ * match the old global price is not evidence that it was a copy, and treating
+ * it as one silently deleted a price somebody chose.
+ */
+const CASCADABLE_GLOBAL_FIELDS = {
+  name: 'customName',
+  description: 'customDescription',
+  imageUrl: 'customImageUrl',
+} as const
+
+/**
  * Cascade global product field updates to organization inventory
  * Clears organization-level overrides if they match the OLD global value,
  * allowing the new global value to propagate through.
- * 
+ *
+ * Applies to descriptive fields only — see `CASCADABLE_GLOBAL_FIELDS`. A
+ * `basePrice` change is accepted and ignored, so callers may keep reporting it
+ * without any organization or group price being touched.
+ *
  * @param globalProductId - The ID of the global product being updated
  * @param updates - Object containing the fields being updated and their OLD values
  * @param performedByUserId - User performing the action
@@ -370,25 +401,17 @@ export async function cascadeGlobalProductFieldUpdate(
 
     let updatedCount = 0
 
-    // Only proceed if there are actual changes that might have overrides
-    const fieldMapping = {
-      name: 'customName',
-      description: 'customDescription',
-      imageUrl: 'customImageUrl',
-      basePrice: 'customPrice'
-    } as const
-
     for (const update of updates) {
-      const customField = fieldMapping[update.field]
+      // A price change is never cascaded: an organization's price is its own,
+      // and so is a group's. Both are left exactly as they are.
+      const customField = CASCADABLE_GLOBAL_FIELDS[
+        update.field as keyof typeof CASCADABLE_GLOBAL_FIELDS
+      ]
       if (!customField) continue
 
       // Find all organization inventory items where the custom override matches the old global value
       // This indicates the override was likely a static copy of the old global data
       const oldValue = update.oldValue
-      if (update.field === 'basePrice' && typeof oldValue === 'number') {
-        // basePrice in globalProducts is in cents, customPrice in organizationInventory is also in cents
-        // Ensure we are comparing same types
-      }
 
       const result: any[] = await database.update(organizationInventory)
         .set({

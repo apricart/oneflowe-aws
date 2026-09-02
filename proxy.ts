@@ -154,13 +154,26 @@ const ADMIN_PORTAL_ROLES = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"]
 
 /**
  * The approver works inside the admin shell so it gets the same sidebar and
- * topbar, but it is not an administrator: it may reach only the approval queue,
- * the reports its branch assignments scope, and settings. Every other shell
- * area — organizations, users, inventory, budgets, branches — stays closed, and
- * this allowlist fails closed for anything not named in it.
+ * topbar, but it is not an administrator: it may reach the dashboard and order
+ * directory for the branches assigned to it, its own approval queue, the
+ * reports those assignments scope, and settings. Every other shell area —
+ * organizations, users, inventory, budgets, branches — stays closed, and this
+ * allowlist fails closed for anything not named in it.
+ *
+ * The dashboard and the order directory are pages shared with the
+ * administrators. Reaching a shared page is not the same as reading another
+ * branch's rows: every endpoint behind them resolves this role's branch set
+ * from its own assignments on the server, so this allowlist widens which pages
+ * render and never which data they return.
  */
-const GROUP_USER_HOME = "/approvals"
-const GROUP_USER_AREAS = ["/approvals", "/reports", "/settings"]
+const GROUP_USER_HOME = "/dashboard"
+const GROUP_USER_AREAS = [
+  "/approvals",
+  "/dashboard",
+  "/orders",
+  "/reports",
+  "/settings",
+]
 
 // The approval area belongs to the approver alone; an administrator that lands
 // on it is sent back to its own dashboard.

@@ -9,6 +9,7 @@ import { escapeLikePattern } from "@/lib/utils"
 import { coalesceInFlight,getCached,invalidateByPrefix,scopedCacheKey,CACHE_TTL } from "@/lib/cache-utils"
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
+import { groupPriceJoinOn,groupPriceTier,resolveBranchGroupId,scopedOverrideCentsSql } from "@/lib/server/effective-price"
 
 function parseOptionalId(value: unknown) {
   if (!value) return null
@@ -195,6 +196,17 @@ export async function GET(req: NextRequest) {
     const subCats = alias(categories, "subCategories")
     const parentCats = alias(categories, "parentCategories")
 
+    // The group tier of the price ladder for this branch. A branch belongs to
+    // at most one group, so `customPrice` below stays a single unambiguous
+    // number: the override in force for this branch, whichever tier set it.
+    // The cache key is already per branch, so no group ever reads another's
+    // prices out of it.
+    const branchGroupId = await resolveBranchGroupId(db, {
+      branchId,
+      organizationId: orgIdNum,
+    })
+    const groupPriceOn = groupPriceJoinOn({ organizationId: orgIdNum, groupId: branchGroupId })
+
     const result = await getCached(cacheKey, async () => {
       const [items, totalResult] = await Promise.all([
         db.select({
@@ -220,7 +232,12 @@ export async function GET(req: NextRequest) {
           categoryName: subCats.name,
           parentCategoryName: parentCats.name,
           customName: organizationInventory.customName,
-          customPrice: organizationInventory.customPrice,
+          // The override in force for this branch: the group price when its
+          // group sets one, the organization price otherwise, and NULL when the
+          // product inherits the global base price. Every consumer already
+          // reads this field as "the tenant's price, if it set one", so they
+          // stay correct without knowing that groups can be priced.
+          customPrice: scopedOverrideCentsSql(),
           customDescription: organizationInventory.customDescription,
           customImageUrl: organizationInventory.customImageUrl,
           discountType: globalProducts.discountType,
@@ -234,6 +251,7 @@ export async function GET(req: NextRequest) {
           .innerJoin(globalProducts, eq(organizationInventory.globalProductId, globalProducts.id))
           .leftJoin(subCats, eq(globalProducts.categoryId, subCats.id))
           .leftJoin(parentCats, eq(subCats.parentId, parentCats.id))
+          .leftJoin(groupPriceTier, groupPriceOn)
           .where(whereClause)
           .orderBy(desc(branchInventory.assignedAt))
           .limit(limitNum)

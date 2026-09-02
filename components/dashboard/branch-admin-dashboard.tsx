@@ -23,8 +23,43 @@ import { useAppContext } from "@/components/context/app-context"
 import { startOfDay, endOfDay } from "date-fns"
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 
-export function BranchAdminDashboard() {
-  const { organizationId, branchId, userRole, isInitialized } = useAppContext()
+/**
+ * A dashboard scope supplied by the caller instead of read from the shell
+ * context. Used by roles whose reach is a set of branches rather than the one
+ * branch pinned on their user row.
+ *
+ * This only decides which filters the dashboard *asks* for. Every analytics
+ * endpoint behind it re-derives the caller's permitted branches on the server
+ * and intersects them with whatever is requested, so a scope passed here can
+ * narrow the view but never widen it.
+ */
+export type BranchDashboardScope = {
+  organizationId: string | null
+  /** The single branch, for a role pinned to one; null for a branch set. */
+  branchId: string | null
+  /** The branch set, for a role whose reach is many branches. */
+  branchIds?: string[]
+  /** False while the scope is still resolving; no request is issued until true. */
+  isReady: boolean
+  /** Heading shown above the filter row. */
+  heading: string
+}
+
+export function BranchAdminDashboard({ scope }: Readonly<{ scope?: BranchDashboardScope }> = {}) {
+  const {
+    organizationId: contextOrganizationId,
+    branchId: contextBranchId,
+    userRole,
+    isInitialized,
+  } = useAppContext()
+
+  // Without an explicit scope the component behaves exactly as before: the
+  // Branch Admin's own organization and branch, straight from the shell.
+  const organizationId = scope ? scope.organizationId : contextOrganizationId
+  const branchId = scope ? scope.branchId : contextBranchId
+  const branchIds = scope?.branchIds
+  const isScopeReady = scope ? scope.isReady : isInitialized
+  const heading = scope?.heading ?? "Branch Metrics"
 
   // Branch Admin defaults to 'Today'
   const defaultPreset = "today" as const
@@ -42,12 +77,19 @@ export function BranchAdminDashboard() {
   const [isDrillDownOpen, setIsDrillDownOpen] = useState(false)
   const allTimeEndDate = useMemo(() => new Date().toISOString(), [])
 
+  // The branch filter for the all-time year probe below: a single branch for a
+  // pinned role, or the explicit set for a multi-branch one.
+  const allTimeBranchParam = (() => {
+    if (branchIds?.length) return `branchIds=${branchIds.join(",")}`
+    return branchId ? `branchId=${branchId}` : null
+  })()
+
   // Fetch all-time data to extract available years from the database for this branch
   // (deferred until the branch context has hydrated — previously this could fire
   // with the literal string "branchId=null" before initialization)
   const { data: allTimePerf } = useSWR(
-    isInitialized && branchId
-      ? `/api/v1/analytics/sales-performance?startDate=2015-01-01T00:00:00.000Z&endDate=${allTimeEndDate}&granularity=yearly&status=all&branchId=${branchId}`
+    isScopeReady && allTimeBranchParam
+      ? `/api/v1/analytics/sales-performance?startDate=2015-01-01T00:00:00.000Z&endDate=${allTimeEndDate}&granularity=yearly&status=all&${allTimeBranchParam}`
       : null,
     fetcher
   )
@@ -114,6 +156,7 @@ export function BranchAdminDashboard() {
   const { data: perfData, isLoading: isLoadingPerf } = useSalesPerformance({
     organizationId,
     branchId,
+    branchIds,
     dateRange,
     status: "all",
     compare,
@@ -124,7 +167,7 @@ export function BranchAdminDashboard() {
     compareYears,
     granularity: activePreset === "all" ? "yearly" : undefined,
     includeStatusCounts: true,
-    request: { enabled: isInitialized, keepPreviousData: true },
+    request: { enabled: isScopeReady, keepPreviousData: true },
   })
 
   // Chart Logic (Local Filters)
@@ -165,6 +208,7 @@ export function BranchAdminDashboard() {
   const { data: chartPerfData, isLoading: isLoadingChart } = useSalesPerformance({
     organizationId,
     branchId,
+    branchIds,
     dateRange: chartDateRange,
     status: "all",
     compare: false,
@@ -174,7 +218,7 @@ export function BranchAdminDashboard() {
     compareMonths: [],
     compareYears: [],
     granularity: chartGranularity,
-    request: { enabled: isInitialized, keepPreviousData: true },
+    request: { enabled: isScopeReady, keepPreviousData: true },
   })
   const pricesHidden = Boolean((perfData as any)?.pricesHidden || (chartPerfData as any)?.pricesHidden || (allTimePerf as any)?.pricesHidden)
   const priceVisibilityKnown = [perfData, chartPerfData, allTimePerf].some((data: any) => typeof data?.pricesHidden === "boolean")
@@ -279,7 +323,7 @@ export function BranchAdminDashboard() {
       <div className="relative z-30 flex flex-col md:flex-row md:items-center justify-between gap-4 mb-2">
         <div className="flex items-center gap-3 px-2">
           <Layers className="w-5 h-5 text-indigo-500" />
-          <h2 className="text-sm font-black text-slate-800 dark:text-slate-200 uppercase tracking-widest">Branch Metrics</h2>
+          <h2 className="text-sm font-black text-slate-800 dark:text-slate-200 uppercase tracking-widest">{heading}</h2>
         </div>
         
         <div className="flex items-center gap-3 flex-wrap">
@@ -515,6 +559,7 @@ export function BranchAdminDashboard() {
         type={drillDownType}
         organizationId={organizationId}
         branchId={branchId}
+        branchIds={branchIds}
         defaultDateRange={dateRange}
         activePreset={activePreset}
         compare={compare}

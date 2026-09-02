@@ -7,8 +7,13 @@ import { getRequestScope } from "@/lib/auth"
 import { redactAnalyticsPrices, shouldHidePricesForRole } from "@/lib/price-visibility"
 import { parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
 import { resolveDrillDownSortColumn } from "@/lib/server/drill-down-sort"
+import { isMultiBranchAnalyticsRole, resolveMultiBranchAnalyticsIds } from "@/lib/server/analytics-scope"
+import { loadAnalyticsAssignedBranchIds } from "@/lib/server/analytics-branch-scope"
 
-const allowedRoles = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"] as const
+// GROUP_USER drills into the same dashboard cards as an administrator, over the
+// branch set assigned to it. Its scope is resolved from those assignments
+// below, never from the request, so the other roles' ladders are untouched.
+const allowedRoles = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER"] as const
 
 function parseNumberList(value: string | null, isValid = (number: number) => number > 0) {
     return value ? value.split(",").map(Number).filter((number) => !Number.isNaN(number) && isValid(number)) : []
@@ -34,6 +39,11 @@ async function resolveDrillDownScope(role: string, scope: any, context: any) {
     if (role === "BRANCH_ADMIN") {
         return { organizationId: scope?.organizationId ?? null, branchId: scope?.branchId ?? null }
     }
+    // The branch filter for a multi-branch role is its assigned set, applied by
+    // the caller as an explicit branch list rather than a single branch here.
+    if (isMultiBranchAnalyticsRole(role)) {
+        return { organizationId: scope?.organizationId ?? null, branchId: null }
+    }
     if (role === "SUPER_ADMIN") {
         return {
             organizationId: context.organizationId ? Number(context.organizationId) : null,
@@ -50,8 +60,23 @@ async function resolveDrillDownScope(role: string, scope: any, context: any) {
     return { organizationId, ...result }
 }
 
-async function resolveDrillDownBranchIds(role: string, organizationId: number | null, value: string | null) {
+async function resolveDrillDownBranchIds(role: string, organizationId: number | null, value: string | null, scope: any) {
     const requested = parseNumberList(value)
+    // A multi-branch role is confined to the branches assigned to it. A
+    // requested list can only narrow that set, and an empty result is a
+    // refusal — returning no branch ids here would otherwise leave the query
+    // filtered by tenant alone.
+    if (isMultiBranchAnalyticsRole(role)) {
+        const assignedBranchIds = await loadAnalyticsAssignedBranchIds(role, scope?.userId)
+        const branchIds = resolveMultiBranchAnalyticsIds({
+            role,
+            assignedBranchIds,
+            requestedBranchIds: requested,
+        }) ?? []
+        return branchIds.length > 0
+            ? { branchIds }
+            : { error: "Access denied: no branches are assigned to your account", branchIds: [] }
+    }
     if (requested.length === 0 || role === "BRANCH_ADMIN") return { branchIds: [] }
     if (role === "SUPER_ADMIN") return { branchIds: requested }
     if (role !== "HEAD_OFFICE" || !organizationId) return { branchIds: [] }
@@ -359,7 +384,7 @@ export async function GET(req: NextRequest) {
     if (resolvedScope.error) return error(resolvedScope.error)
     const organizationId = resolvedScope.organizationId ?? null
     const branchId = resolvedScope.branchId ?? null
-    const resolvedBranches = await resolveDrillDownBranchIds(role, organizationId, branchIdsParam)
+    const resolvedBranches = await resolveDrillDownBranchIds(role, organizationId, branchIdsParam, scope)
     if (resolvedBranches.error) return error(resolvedBranches.error)
     const branchIds = resolvedBranches.branchIds
 

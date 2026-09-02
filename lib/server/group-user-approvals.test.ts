@@ -228,9 +228,17 @@ describe("group user approval surface contracts", () => {
     const layout = source("app/(portal)/approvals/layout.tsx")
 
     // The approver works inside the shared shell, but only in the areas its
-    // role has; everything else redirects back to its own queue.
-    expect(proxySource).toContain('const GROUP_USER_HOME = "/approvals"')
-    expect(proxySource).toContain('const GROUP_USER_AREAS = ["/approvals", "/reports", "/settings"]')
+    // role has; everything else redirects back to its own dashboard. The queue
+    // stays in the allowlist and stays exclusive to this role.
+    expect(proxySource).toContain('const GROUP_USER_HOME = "/dashboard"')
+    for (const area of ['"/approvals"', '"/dashboard"', '"/orders"', '"/reports"', '"/settings"']) {
+      expect(
+        proxySource.slice(
+          proxySource.indexOf("const GROUP_USER_AREAS = ["),
+          proxySource.indexOf("// The approval area belongs to the approver alone"),
+        ),
+      ).toContain(area)
+    }
     expect(proxySource).toContain("GROUP_USER_AREAS.some((prefix) => pathMatchesPrefix(pathname, prefix))")
     // The queue is the approver's alone: an administrator is sent away from it.
     expect(proxySource).toContain("pathMatchesPrefix(pathname, APPROVALS_AREA)")
@@ -243,9 +251,12 @@ describe("group user approval surface contracts", () => {
 
     // The ordering gate is unchanged in what it accepts.
     expect(orderingGate).toContain("requireApiRole([GROUP_ORDER_PORTAL_ROLE])")
-    expect(storefrontLayout).toContain("!== GROUP_ORDER_PORTAL_ROLE")
-    // The approver never lands on the requester's storefront, even by URL.
-    expect(storefrontLayout).toContain("if (role === GROUP_USER_ROLE) redirect(\"/approvals\")")
+    // The approver never lands on the requester's storefront, even by URL: the
+    // gate admits the requester alone and sends every other role to the shell.
+    expect(storefrontLayout).toContain(
+      'if (role !== GROUP_ORDER_PORTAL_ROLE) redirect("/dashboard")',
+    )
+    expect(storefrontLayout).not.toContain("GROUP_USER_ROLE) redirect")
   })
 })
 

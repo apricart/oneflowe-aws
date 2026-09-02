@@ -936,7 +936,10 @@ async function main() {
         allowDecimalQuantity: false,
         quantityStep: 1,
         createdByUserId: opts.actorUserId!,
-        metadata: { legacySource: LEGACY_SOURCE, normalizedName: resolution.normalizedName, sourceCodes: resolution.sourceCodes, historicalOnly: true },
+        // No `historicalOnly` marker: K-Electric confirmed the legacy export is
+        // priced inclusive of sales tax, the same basis the rest of the
+        // catalogue uses, so these prices need no restatement before activation.
+        metadata: { legacySource: LEGACY_SOURCE, normalizedName: resolution.normalizedName, sourceCodes: resolution.sourceCodes },
       }))
     for (const values of chunksOf(newProductValues, 250)) {
       const created = await tx.insert(schema.globalProducts).values(values).returning({

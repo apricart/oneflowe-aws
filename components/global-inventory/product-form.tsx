@@ -143,6 +143,15 @@ const getSaveErrorMessage = (status: number, fallback?: string) => {
   return fallback || "Failed to save product"
 }
 
+/**
+ * The native number spinner is hidden on the money fields: a price and a tax
+ * rate are typed, not stepped, and the arrows only invited a stray scroll or
+ * click to change an amount. The field stays `type="number"`, so its keyboard,
+ * validation and step behaviour are unchanged.
+ */
+const NUMBER_INPUT_NO_SPINNER =
+  "[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+
 export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Readonly<ProductFormProps>) {
   const { toast } = useToast()
   const router = useRouter()
@@ -587,6 +596,7 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Reado
                   id="product-base-price"
                   type="number"
                   step="0.01"
+                  className={NUMBER_INPUT_NO_SPINNER}
                   value={productData.basePrice ?? ""}
                   onChange={(e) => setProductData({ ...productData, basePrice: e.target.value })}
                   placeholder="0.00"
@@ -602,6 +612,7 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Reado
                   step="0.01"
                   min="0"
                   max="100"
+                  className={NUMBER_INPUT_NO_SPINNER}
                   value={productData.taxRatePercent ?? ""}
                   onChange={(e) => setProductData({ ...productData, taxRatePercent: e.target.value })}
                   placeholder={String(taxRateBpToPercent(DEFAULT_TAX_RATE_BP))}

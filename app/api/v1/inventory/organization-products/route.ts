@@ -6,6 +6,7 @@ import { organizationProducts, globalProducts, auditLogs, branchInventory, branc
 import { eq, and, sql, inArray, exists } from "drizzle-orm"
 import { getCached, invalidateByPrefix, scopedCacheKey, CACHE_TTL } from "@/lib/cache-utils"
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
+import { rejectPriceFieldsForRole } from "@/lib/pricing-access"
 import { organizationProductUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
 
 // GET /api/v1/inventory/organization-products - Get products for organization
@@ -149,6 +150,17 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
     }
     const input = parsedBody.data
+
+    // Head Office keeps editing names, descriptions, images, tags, and
+    // availability here. Only a Super Admin may change the price, at this or
+    // any other tier. The whole request is refused rather than the price being
+    // dropped silently, so a caller that believes it repriced something is told
+    // that it did not.
+    const priceAccess = rejectPriceFieldsForRole(userRole, input, ["customPrice"])
+    if (priceAccess) {
+      return NextResponse.json({ error: priceAccess.message }, { status: priceAccess.status })
+    }
+
     const { organizationProductId, isEnabled, customName, customDescription, customPrice, customImageUrl, tags, priority } = input
 
     // BOLA: Scope update to user's organization for non-SUPER_ADMIN

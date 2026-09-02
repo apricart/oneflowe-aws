@@ -90,7 +90,6 @@ describe("invoice lines", () => {
     expect(line.amount).toBe(14_406.75)
     expect(line.tax).toBe(2_593.22)
     expect(line.taxPercent).toBe(18)
-    expect(line.unit).toBe("pcs")
   })
 
   it("keeps rate x quantity reconciling to the amount", () => {

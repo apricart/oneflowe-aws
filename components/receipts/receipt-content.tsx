@@ -8,7 +8,8 @@ import useSWR from "swr"
 import Image from "next/image"
 import { getReceiptItemQuantity, toDisplayNameCase } from "@/lib/receipt-display"
 import { INVOICE_ISSUER } from "@/lib/invoice-issuer"
-import { formatInvoiceDisplayDate, getInvoicePoNumber } from "@/lib/invoice-format"
+import { normalizePaymentStatus } from "@/lib/payment-status"
+import { formatInvoiceDisplayDate, INVOICE_SYSTEM_GENERATED_NOTE } from "@/lib/invoice-format"
 import { formatQuantity } from "@/lib/quantity"
 import {
     buildInvoiceLines,
@@ -120,6 +121,8 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
     const invoiceLines = buildInvoiceLines(receiptData)
     const invoiceTotals = buildInvoiceTotals(receiptData, invoiceLines, refundAmount)
     const statusKey = String(receiptData.statusKey || receiptData.status || "PENDING").toLowerCase()
+    const isPaid = normalizePaymentStatus(receiptData.paymentStatus) === "PAID"
+    const orderReference = receiptData.orderId || data?.orderId || orderId || "N/A"
 
     return (
         <div className={`receipt-container ${standalone ? 'py-8 px-4' : 'p-2'}`}>
@@ -175,6 +178,22 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
                     color: #334155;
                     white-space: nowrap;
                     padding-top: 4px;
+                    text-align: right;
+                }
+
+                /* Printed only for an invoice the order records as settled. */
+                .paid-stamp {
+                    display: inline-block;
+                    margin-top: 14px;
+                    padding: 4px 18px;
+                    border: 3px double #15803d;
+                    border-radius: 4px;
+                    color: #15803d;
+                    font-size: 20px;
+                    font-weight: 800;
+                    letter-spacing: 0.18em;
+                    line-height: 1.1;
+                    transform: rotate(-8deg);
                 }
 
                 /* Bordered party grid: invoice meta, then Bill To / Delivery To */
@@ -208,7 +227,7 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
 
                 .meta-line {
                     display: grid;
-                    grid-template-columns: 88px 10px 1fr;
+                    grid-template-columns: 104px 10px 1fr;
                     align-items: baseline;
                     font-size: 11.5px;
                     margin-bottom: 4px;
@@ -267,6 +286,18 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
                     padding: 8px 12px;
                     font-size: 12px;
                     border-bottom: 1px solid #f1f5f9;
+                    vertical-align: top;
+                }
+
+                /*
+                 * A long product name wraps within its column and the row
+                 * grows, rather than being cut short or pushing the money
+                 * columns off the page. Breaking anywhere also wraps an
+                 * unbroken product code, which has no space to break at.
+                 */
+                .items-table .item-description {
+                    overflow-wrap: anywhere;
+                    word-break: break-word;
                 }
 
                 .summary-block {
@@ -359,7 +390,10 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
                             <p className="issuer-line">STRN: {INVOICE_ISSUER.strn}</p>
                         </div>
                     </div>
-                    <div className="masthead-title">INVOICE</div>
+                    <div className="masthead-title">
+                        <div>INVOICE</div>
+                        {isPaid && <div className="paid-stamp">PAID</div>}
+                    </div>
                 </div>
 
                 {/* Invoice meta and parties */}
@@ -376,9 +410,9 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
                             <span className="meta-value">{formatInvoiceDisplayDate(receiptData.date) || "N/A"}</span>
                         </div>
                         <div className="meta-line">
-                            <span className="meta-key">P.O.#</span>
+                            <span className="meta-key">Order ID</span>
                             <span className="meta-key">:</span>
-                            <span className="meta-value">{getInvoicePoNumber(receiptData)}</span>
+                            <span className="meta-value">{orderReference}</span>
                         </div>
                     </div>
 
@@ -397,13 +431,6 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
                             <span className="meta-key">:</span>
                             <span className="meta-value">{itemQuantity}</span>
                         </div>
-                        {!pricesHidden && (
-                            <div className="meta-line">
-                                <span className="meta-key">Subtotal</span>
-                                <span className="meta-key">:</span>
-                                <span className="meta-value">PKR {Number(receiptData.subtotal).toLocaleString()}</span>
-                            </div>
-                        )}
                     </div>
 
                     <div className="party-head">Bill To</div>
@@ -437,6 +464,10 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
                             <span className="party-label">Approver:</span>{" "}
                             {toDisplayNameCase(receiptData.approvedByName || "N/A")}
                         </p>
+                        <p className="party-line">
+                            <span className="party-label">Fulfiller:</span>{" "}
+                            {toDisplayNameCase(receiptData.fulfilledByName || "N/A")}
+                        </p>
                     </div>
                 </div>
 
@@ -457,10 +488,9 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
                         {invoiceLines.map((line) => (
                             <tr key={`${line.serial}-${line.description}`}>
                                 <td className="text-center text-slate-400 font-medium">{line.serial}</td>
-                                <td className="text-slate-800 font-medium">{line.description}</td>
+                                <td className="item-description text-slate-800 font-medium">{line.description}</td>
                                 <td className="text-center tabular-nums text-slate-600">
                                     {formatInvoiceQuantity(line.quantity)}
-                                    {line.unit && <span className="ml-1 text-[9px] text-slate-400">{line.unit}</span>}
                                 </td>
                                 {!pricesHidden && <td className="text-right tabular-nums text-slate-600">{formatInvoiceMoney(line.rate)}</td>}
                                 {!pricesHidden && <td className="text-right tabular-nums text-slate-500">{formatInvoiceTaxPercent(line.taxPercent)}</td>}
@@ -526,24 +556,9 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
                 </div>}
 
                 {/* Footer */}
-                <div className="mt-16 pt-8 border-t border-slate-100 flex justify-between items-end">
-                    <div className="space-y-1">
-                        <p className="text-[10px] text-slate-400 font-medium uppercase tracking-widest">Authentication</p>
-                        <p className="text-[9px] text-slate-300">Generated on: {new Date().toLocaleString()}</p>
-                        <p className="text-[9px] text-slate-300">Authorized by Apricart</p>
-                    </div>
-                    <div className="flex gap-16">
-                        <div className="text-center">
-                            <div className="w-32 border-t border-slate-300 pt-2">
-                                <p className="text-[9px] font-bold text-slate-400 uppercase">Accountant</p>
-                            </div>
-                        </div>
-                        <div className="text-center">
-                            <div className="w-32 border-t border-slate-300 pt-2">
-                                <p className="text-[9px] font-bold text-slate-400 uppercase">Authorized Sign</p>
-                            </div>
-                        </div>
-                    </div>
+                <div className="invoice-note mt-16 pt-8 border-t border-slate-100 text-center">
+                    <p className="text-[10px] font-medium text-slate-500">{INVOICE_SYSTEM_GENERATED_NOTE}</p>
+                    <p className="mt-1 text-[9px] text-slate-300">Generated on: {new Date().toLocaleString()}</p>
                 </div>
             </div>
         </div>

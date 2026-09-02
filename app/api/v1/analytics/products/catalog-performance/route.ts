@@ -211,6 +211,13 @@ export async function GET(req: NextRequest) {
                     unit: p.unit,
                     status: catalogProductStatus(p),
                     basePriceCents: isSuperAdmin ? (p.basePrice || 0) : 0,
+                    // Deliberately the organization catalogue price, not a
+                    // branch's. This listing spans every branch of the
+                    // organization and those branches can sit in different
+                    // groups, so there is no single group price to report here.
+                    // Revenue below comes from `order_items.price_cents`, the
+                    // snapshot of what was actually charged, so the group tier
+                    // is already reflected in every money figure.
                     unitPriceCents: p.customPrice || p.basePrice,
                     stockQuantity: p.stockQuantity,
                     categoryName: catInfo?.name || "Uncategorized",

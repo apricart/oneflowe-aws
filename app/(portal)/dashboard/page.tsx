@@ -19,6 +19,13 @@ const BranchAdminDashboard = dynamic(
   { loading: () => <DashboardSkeleton /> }
 )
 
+// The approver sees the Branch Admin dashboard over the branches assigned to
+// it. The wrapper resolves that set; the analytics endpoints enforce it.
+const GroupUserDashboard = dynamic(
+  () => import("@/components/dashboard/group-user-dashboard").then(mod => ({ default: mod.GroupUserDashboard })),
+  { loading: () => <DashboardSkeleton /> }
+)
+
 export default function DashboardPage() {
   const { data: session, status } = useSession()
   const role = (session?.user as any)?.role
@@ -34,6 +41,7 @@ export default function DashboardPage() {
   if (role === "SUPER_ADMIN") return <SuperAdminDashboard />
   if (role === "HEAD_OFFICE") return <HeadOfficeDashboard />
   if (role === "BRANCH_ADMIN") return <BranchAdminDashboard />
+  if (role === "GROUP_USER") return <GroupUserDashboard />
 
   return (
     <div className="p-6 text-sm text-muted-foreground">

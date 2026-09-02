@@ -1,0 +1,198 @@
+import { randomUUID } from "node:crypto"
+
+import {
+  GetObjectCommand,
+  PutObjectCommand,
+  S3Client,
+  type GetObjectCommandOutput,
+} from "@aws-sdk/client-s3"
+
+import { parseImageStorageEnv } from "@/lib/server/env-validation"
+
+/**
+ * Product images live in S3, not in the database.
+ *
+ * The column stores an application path (`/api/v1/images/<key>`) rather than a
+ * bucket URL, so the bucket can stay private and the serving strategy can change
+ * — a CDN in front, a different bucket, a different region — without rewriting
+ * a single row. Rows written before this change still hold `data:` URLs; both
+ * shapes render, and `isStoredImagePath`/`isDataUrl` tell them apart.
+ */
+
+export const IMAGE_PATH_PREFIX = "/api/v1/images"
+const KEY_PREFIX = "products"
+
+export type StoredImageExtension = "jpg" | "png" | "gif" | "webp"
+
+const EXTENSION_BY_MIME: Record<string, StoredImageExtension> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/gif": "gif",
+  "image/webp": "webp",
+}
+
+const CONTENT_TYPE_BY_EXTENSION: Record<StoredImageExtension, string> = {
+  jpg: "image/jpeg",
+  png: "image/png",
+  gif: "image/gif",
+  webp: "image/webp",
+}
+
+/**
+ * Keys are generated here and never derived from user input, so the serving
+ * route can demand this exact shape. Anything else — a traversal attempt, a
+ * probe for another prefix — is rejected before it reaches S3.
+ */
+const KEY_PATTERN =
+  /^products\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|png|gif|webp)$/
+
+let s3Client: S3Client | null = null
+let s3ClientRegion: string | null = null
+let resolvedConfig: { region: string; bucket: string } | null = null
+
+export class ImageStorageNotConfiguredError extends Error {
+  constructor() {
+    super(
+      "Image storage is not configured: set S3_UPLOADS_BUCKET and S3_UPLOADS_REGION (or AWS_REGION)",
+    )
+    this.name = "ImageStorageNotConfiguredError"
+  }
+}
+
+export function isImageStorageConfigured(): boolean {
+  // S3_UPLOADS_REGION wins; AWS_REGION (which SES also uses) is the fallback.
+  return Boolean(
+    (process.env.S3_UPLOADS_REGION || process.env.AWS_REGION) &&
+      process.env.S3_UPLOADS_BUCKET,
+  )
+}
+
+function requireConfig(): { region: string; bucket: string } {
+  if (resolvedConfig) return resolvedConfig
+
+  if (!isImageStorageConfigured()) {
+    throw new ImageStorageNotConfiguredError()
+  }
+
+  const parsed = parseImageStorageEnv(process.env)
+  resolvedConfig = { region: parsed.region, bucket: parsed.bucket }
+  return resolvedConfig
+}
+
+/**
+ * Credentials come from the default provider chain — the EC2 instance profile in
+ * production, a local profile in development. They are never read from
+ * application config, matching `lib/email/ses.ts`.
+ */
+function getClient(region: string): S3Client {
+  if (!s3Client || s3ClientRegion !== region) {
+    s3Client = new S3Client({ region })
+    s3ClientRegion = region
+  }
+  return s3Client
+}
+
+export function extensionForMime(mime: string): StoredImageExtension | null {
+  return EXTENSION_BY_MIME[mime.toLowerCase()] ?? null
+}
+
+export function contentTypeForKey(key: string): string {
+  const extension = key.slice(key.lastIndexOf(".") + 1) as StoredImageExtension
+  return CONTENT_TYPE_BY_EXTENSION[extension] ?? "application/octet-stream"
+}
+
+export function buildImageKey(extension: StoredImageExtension): string {
+  return `${KEY_PREFIX}/${randomUUID()}.${extension}`
+}
+
+export function isValidImageKey(key: string): boolean {
+  return KEY_PATTERN.test(key)
+}
+
+export function imagePathForKey(key: string): string {
+  return `${IMAGE_PATH_PREFIX}/${key}`
+}
+
+export function isDataUrl(value: string | null | undefined): boolean {
+  return typeof value === "string" && value.startsWith("data:")
+}
+
+export function isStoredImagePath(value: string | null | undefined): boolean {
+  if (typeof value !== "string" || !value.startsWith(`${IMAGE_PATH_PREFIX}/`)) {
+    return false
+  }
+  return isValidImageKey(value.slice(IMAGE_PATH_PREFIX.length + 1))
+}
+
+/** Parses a `data:` URL into its bytes. Returns null if it is not one we wrote. */
+export function parseDataUrl(
+  value: string,
+): { buffer: Buffer; mime: string } | null {
+  const match = /^data:([a-z]+\/[a-z0-9.+-]+);base64,(.+)$/i.exec(value)
+  if (!match) return null
+
+  const [, mime, base64] = match
+  if (!extensionForMime(mime)) return null
+
+  try {
+    const buffer = Buffer.from(base64, "base64")
+    return buffer.length > 0 ? { buffer, mime: mime.toLowerCase() } : null
+  } catch {
+    return null
+  }
+}
+
+export async function putImage(input: {
+  key: string
+  body: Buffer
+  contentType: string
+}): Promise<void> {
+  const { bucket, region } = requireConfig()
+
+  await getClient(region).send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: input.key,
+      Body: input.body,
+      ContentType: input.contentType,
+      // Filenames are random UUIDs, so an object never changes once written.
+      CacheControl: "public, max-age=31536000, immutable",
+      ServerSideEncryption: "AES256",
+    }),
+  )
+}
+
+export type FetchedImage = {
+  body: GetObjectCommandOutput["Body"]
+  contentType: string
+  contentLength?: number
+  etag?: string
+}
+
+export async function getImage(key: string): Promise<FetchedImage | null> {
+  const { bucket, region } = requireConfig()
+
+  try {
+    const result = await getClient(region).send(
+      new GetObjectCommand({ Bucket: bucket, Key: key }),
+    )
+
+    return {
+      body: result.Body,
+      contentType: result.ContentType || contentTypeForKey(key),
+      contentLength: result.ContentLength,
+      etag: result.ETag,
+    }
+  } catch (error) {
+    const name = (error as { name?: string })?.name
+    if (name === "NoSuchKey" || name === "NotFound") return null
+    throw error
+  }
+}
+
+/** Test seam: forces the next call to build a fresh client. */
+export function resetImageStorageClientForTests(): void {
+  s3Client = null
+  s3ClientRegion = null
+  resolvedConfig = null
+}

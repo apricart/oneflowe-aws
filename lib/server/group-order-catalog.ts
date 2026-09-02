@@ -11,6 +11,11 @@ import {
 } from "@/db/schema"
 import { db } from "@/lib/db"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
+import {
+  effectivePriceCentsSql,
+  groupPriceJoinOn,
+  groupPriceTier,
+} from "@/lib/server/effective-price"
 import { escapeLikePattern } from "@/lib/utils"
 
 /**
@@ -76,6 +81,12 @@ export type GroupCatalogPage = {
 
 type CatalogQuery = {
   organizationId: number
+  /**
+   * The group the branches were authorized under, or null for the bucket of
+   * branches that belong to no group. Selects the group tier of the price
+   * ladder; null leaves the organization price in force.
+   */
+  groupId: number | null
   branchIds: number[]
   search?: string
   categoryId?: number
@@ -283,7 +294,11 @@ export async function loadGroupCatalog(query: CatalogQuery): Promise<GroupCatalo
   const where = and(...scopeConditions, ...filters)
 
   const displayName = sql<string>`COALESCE(${organizationInventory.customName}, ${globalProducts.name})`
-  const priceCents = sql<number>`COALESCE(${organizationInventory.customPrice}, ${globalProducts.basePrice})`
+  // The full ladder: group override, then organization override, then the
+  // global base price. Resolved in SQL because the catalogue sorts and pages on
+  // it — a price computed after the query would sort the wrong rows onto a page.
+  const priceCents = effectivePriceCentsSql()
+  const groupPriceOn = groupPriceJoinOn({ organizationId, groupId: query.groupId })
 
   const rows = await db
     .select({
@@ -304,8 +319,12 @@ export async function loadGroupCatalog(query: CatalogQuery): Promise<GroupCatalo
     .innerJoin(organizationInventory, eq(branchInventory.organizationInventoryId, organizationInventory.id))
     .innerJoin(globalProducts, eq(organizationInventory.globalProductId, globalProducts.id))
     .leftJoin(categories, eq(globalProducts.categoryId, categories.id))
+    .leftJoin(groupPriceTier, groupPriceOn)
     .where(where)
-    .groupBy(organizationInventory.id, globalProducts.id, categories.name)
+    // The group tier joins at most one row per catalogue item, so grouping by
+    // its price keeps the aggregate deterministic without changing which rows
+    // qualify.
+    .groupBy(organizationInventory.id, globalProducts.id, categories.name, groupPriceTier.customPriceCents)
     // A product qualifies only when it is assigned at every selected branch.
     .having(sql`COUNT(DISTINCT ${branchInventory.branchId}) = ${branchCount}`)
     .orderBy(...catalogOrderBy(query.sort, displayName, priceCents))
