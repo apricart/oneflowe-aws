@@ -122,7 +122,7 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
     const invoiceTotals = buildInvoiceTotals(receiptData, invoiceLines, refundAmount)
     const statusKey = String(receiptData.statusKey || receiptData.status || "PENDING").toLowerCase()
     const isPaid = normalizePaymentStatus(receiptData.paymentStatus) === "PAID"
-    const transactionId = receiptData.orderTid || data?.orderTid || "N/A"
+    const orderReference = receiptData.orderId || data?.orderId || orderId || "N/A"
 
     return (
         <div className={`receipt-container ${standalone ? 'py-8 px-4' : 'p-2'}`}>
@@ -410,9 +410,9 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
                             <span className="meta-value">{formatInvoiceDisplayDate(receiptData.date) || "N/A"}</span>
                         </div>
                         <div className="meta-line">
-                            <span className="meta-key">Transaction ID</span>
+                            <span className="meta-key">Order ID</span>
                             <span className="meta-key">:</span>
-                            <span className="meta-value">{transactionId}</span>
+                            <span className="meta-value">{orderReference}</span>
                         </div>
                     </div>
 

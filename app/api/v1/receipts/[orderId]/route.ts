@@ -141,7 +141,8 @@ export async function GET(
             organizationNtn: organizationNtn || (order.receiptData as any)?.organizationNtn || "",
             // Recorded on the order rather than in the snapshot: the payment
             // can be settled long after the invoice was issued, and the
-            // transaction reference identifies the order the invoice covers.
+            // order reference identifies the order the invoice covers.
+            orderId: order.id,
             orderTid: order.tid,
             paymentStatus: order.paymentStatus,
             placedByName: participants.placedByName,
