@@ -6,6 +6,8 @@ import {
   LOCKOUT_THRESHOLD_MIN,
 } from '@/lib/auth-lockout-policy'
 
+const AWS_REGION_PATTERN = /^[a-z]{2}(?:-gov)?-[a-z]+-\d$/
+
 const PLACEHOLDER_VALUES = new Set([
   'admin123',
   'change-me',
@@ -195,15 +197,20 @@ const serverEnvSchema = z
       .default('oneflowe@apricart.pk'),
 
     AWS_REGION: optionalValue('AWS_REGION').refine(
-      (value) => value === undefined || /^[a-z]{2}(?:-gov)?-[a-z]+-\d$/.test(value),
+      (value) => value === undefined || AWS_REGION_PATTERN.test(value),
       'AWS_REGION must be a valid AWS region name',
+    ),
+    S3_UPLOADS_REGION: optionalValue('S3_UPLOADS_REGION').refine(
+      (value) => value === undefined || AWS_REGION_PATTERN.test(value),
+      'S3_UPLOADS_REGION must be a valid AWS region name',
     ),
     SES_FROM_EMAIL: z.email('SES_FROM_EMAIL must be a valid email address').optional(),
     SES_CONFIGURATION_SET: optionalValue('SES_CONFIGURATION_SET'),
+    S3_UPLOADS_BUCKET: optionalValue('S3_UPLOADS_BUCKET'),
   })
   .superRefine((values, context) => {
     const sesConfigured = Boolean(
-      values.AWS_REGION || values.SES_FROM_EMAIL || values.SES_CONFIGURATION_SET,
+      values.SES_FROM_EMAIL || values.SES_CONFIGURATION_SET,
     )
 
     if (sesConfigured && !values.AWS_REGION) {
@@ -219,6 +226,15 @@ const serverEnvSchema = z
         code: 'custom',
         path: ['SES_FROM_EMAIL'],
         message: 'SES_FROM_EMAIL is required when AWS SES is configured',
+      })
+    }
+
+    if (values.S3_UPLOADS_BUCKET && !values.S3_UPLOADS_REGION && !values.AWS_REGION) {
+      context.addIssue({
+        code: 'custom',
+        path: ['S3_UPLOADS_REGION'],
+        message:
+          'S3_UPLOADS_REGION (or AWS_REGION) is required when S3_UPLOADS_BUCKET is set',
       })
     }
 
@@ -246,6 +262,9 @@ const serverEnvSchema = z
   .transform((values) => ({
     ...values,
     SES_ENABLED: Boolean(values.AWS_REGION && values.SES_FROM_EMAIL),
+    S3_UPLOADS_ENABLED: Boolean(
+      (values.S3_UPLOADS_REGION || values.AWS_REGION) && values.S3_UPLOADS_BUCKET,
+    ),
   }))
 
 const databaseToolEnvSchema = z.object({
@@ -257,6 +276,39 @@ const redisToolEnvSchema = z.object({
   UPSTASH_REDIS_REST_URL: httpUrl('UPSTASH_REDIS_REST_URL'),
   UPSTASH_REDIS_REST_TOKEN: requiredSecret('UPSTASH_REDIS_REST_TOKEN'),
 })
+
+const imageStorageEnvSchema = z
+  .object({
+    // The uploads bucket need not sit in the same region as SES, so a
+    // dedicated override wins and AWS_REGION is only the fallback.
+    AWS_REGION: optionalValue('AWS_REGION'),
+    S3_UPLOADS_REGION: optionalValue('S3_UPLOADS_REGION'),
+    S3_UPLOADS_BUCKET: requiredValue('S3_UPLOADS_BUCKET'),
+  })
+  .superRefine((values, context) => {
+    const region = values.S3_UPLOADS_REGION ?? values.AWS_REGION
+
+    if (!region) {
+      context.addIssue({
+        code: 'custom',
+        path: ['S3_UPLOADS_REGION'],
+        message: 'S3_UPLOADS_REGION or AWS_REGION is required',
+      })
+      return
+    }
+
+    if (!AWS_REGION_PATTERN.test(region)) {
+      context.addIssue({
+        code: 'custom',
+        path: values.S3_UPLOADS_REGION ? ['S3_UPLOADS_REGION'] : ['AWS_REGION'],
+        message: 'S3 uploads region must be a valid AWS region name',
+      })
+    }
+  })
+  .transform((values) => ({
+    region: (values.S3_UPLOADS_REGION ?? values.AWS_REGION) as string,
+    bucket: values.S3_UPLOADS_BUCKET,
+  }))
 
 const sesToolEnvSchema = z.object({
   AWS_REGION: requiredValue('AWS_REGION').refine(
@@ -312,6 +364,7 @@ export type ServerEnv = Readonly<z.output<typeof serverEnvSchema>>
 export type DatabaseToolEnv = Readonly<z.output<typeof databaseToolEnvSchema>>
 export type RedisToolEnv = Readonly<z.output<typeof redisToolEnvSchema>>
 export type SesToolEnv = Readonly<z.output<typeof sesToolEnvSchema>>
+export type ImageStorageEnv = Readonly<z.output<typeof imageStorageEnvSchema>>
 export type PasswordToolEnv = Readonly<z.output<typeof passwordToolEnvSchema>>
 export type MigrationEnv = Readonly<z.output<typeof migrationEnvSchema>>
 export type BootstrapEnv = Readonly<z.output<typeof bootstrapEnvSchema>>
@@ -330,6 +383,12 @@ export function parseRedisToolEnv(
   values: NodeJS.ProcessEnv | Record<string, unknown>,
 ): RedisToolEnv {
   return parseWithSchema(redisToolEnvSchema, values, 'Redis tool')
+}
+
+export function parseImageStorageEnv(
+  values: Record<string, string | undefined>,
+): ImageStorageEnv {
+  return parseWithSchema(imageStorageEnvSchema, values, 'image storage')
 }
 
 export function parseSesToolEnv(

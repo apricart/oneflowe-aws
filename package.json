@@ -18,6 +18,7 @@
     "db:studio": "drizzle-kit studio --config=drizzle.config.ts",
     "db:sync": "tsx scripts/sync-schema.ts",
     "import:products-csv": "tsx scripts/import-products-csv.ts",
+    "migrate:images-to-s3": "tsx scripts/migrate-images-to-s3.ts",
     "import:users": "tsx scripts/import-users-csv.ts",
     "import:ke-legacy": "tsx scripts/import-ke-legacy-orders.ts",
     "import:ke-orders": "tsx scripts/import-ke-orders.ts",
