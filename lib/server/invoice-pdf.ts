@@ -217,7 +217,7 @@ function drawPartyGrid(doc: any, receiptData: any, itemQuantity: number, x: numb
     const metaLeft: Array<[string, string]> = [
         ["Invoice#", receiptData.invoiceNumber || "N/A"],
         ["Invoice Date", formatInvoiceDisplayDate(receiptData.date) || "N/A"],
-        ["Transaction ID", String(receiptData.orderTid || "N/A")],
+        ["Order ID", receiptData.orderId ? String(receiptData.orderId) : "N/A"],
     ]
     const metaRight: Array<[string, string]> = [
         ["Status", String(receiptData.status || "PENDING")],

@@ -12,6 +12,7 @@ import { INVOICE_SYSTEM_GENERATED_NOTE } from "@/lib/invoice-format"
  */
 const receiptData = {
   invoiceNumber: "APR-000004",
+  orderId: 41288,
   orderTid: "TXN-01J8F4K2QW",
   paymentStatus: "UNPAID",
   poNumber: "PO-2026-0148",
@@ -109,18 +110,20 @@ describe("the downloaded invoice", () => {
     expect(pdf).toContain("16,999.97")
   })
 
-  it("prints the transaction reference under the invoice date", () => {
+  it("prints the order reference under the invoice date", () => {
     const pdf = printedText()
 
-    expect(pdf).toContain("Transaction ID")
-    expect(pdf).toContain("TXN-01J8F4K2QW")
-    expect(pdf.indexOf("Invoice Date")).toBeLessThan(pdf.indexOf("Transaction ID"))
+    expect(pdf).toContain("Order ID")
+    expect(pdf).toContain("41288")
+    expect(pdf).not.toContain("TXN-01J8F4K2QW")
+    expect(pdf.indexOf("Invoice Date")).toBeLessThan(pdf.indexOf("Order ID"))
   })
 
-  it("reports a missing transaction reference rather than an empty field", () => {
-    const { orderTid, ...withoutTransaction } = receiptData
+  it("reports a missing order reference rather than an empty field", () => {
+    const { orderId, ...withoutOrderReference } = receiptData
 
-    expect(printedText(withoutTransaction)).toContain("Transaction ID")
+    expect(printedText(withoutOrderReference)).toContain("Order ID")
+    expect(printedText(withoutOrderReference)).toContain("N/A")
   })
 })
 

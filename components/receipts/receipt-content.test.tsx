@@ -5,6 +5,7 @@ const receiptResponse = {
     pricesHidden: false,
     receiptData: {
         invoiceNumber: "247/JUL/APR/2026",
+        orderId: 41288,
         orderTid: "TXN-01J8F4K2QW",
         paymentStatus: "UNPAID",
         date: "07/27/2026",
@@ -86,25 +87,27 @@ describe("invoice header", () => {
         expect(references).toContain("27 Jul 2026")
     })
 
-    it("prints the transaction reference directly under the invoice date", () => {
+    it("prints the order reference directly under the invoice date", () => {
         const { container } = renderInvoice()
         const references = container.textContent || ""
 
-        expect(references).toContain("Transaction ID")
-        expect(references).toContain("TXN-01J8F4K2QW")
-        expect(references.indexOf("Invoice Date")).toBeLessThan(references.indexOf("Transaction ID"))
+        expect(references).toContain("Order ID")
+        expect(references).toContain("41288")
+        expect(references).not.toContain("TXN-01J8F4K2QW")
+        expect(references.indexOf("Invoice Date")).toBeLessThan(references.indexOf("Order ID"))
     })
 
-    it("reports a missing transaction reference rather than an empty field", () => {
-        const { orderTid, ...withoutTransaction } = receiptResponse.receiptData
+    it("falls back to the requested order when the snapshot carries no reference", () => {
+        const { orderId, ...withoutOrderReference } = receiptResponse.receiptData
         swrResponse = {
-            data: { ...receiptResponse, receiptData: withoutTransaction },
+            data: { ...receiptResponse, receiptData: withoutOrderReference },
             error: undefined,
             isLoading: false,
         }
         const { container } = renderInvoice()
 
-        expect(container.textContent).toContain("Transaction ID")
+        expect(container.textContent).toContain("Order ID")
+        expect(container.textContent).toContain("42")
     })
 
     /**
