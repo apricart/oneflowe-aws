@@ -23,6 +23,10 @@ export interface InvoiceParticipantIds {
   id: number
   createdByUserId: string
   approvedByUserId: string | null
+  /** The order's own status, which decides whether it has a fulfiller at all. */
+  status?: string | null
+  /** Set by the fulfilment transition; the most direct evidence of settlement. */
+  fulfilledAt?: Date | string | null
 }
 
 /**
@@ -35,6 +39,33 @@ const UNRESOLVED_PARTICIPANT = "Unknown"
 
 /** Written by both token hand-off endpoints, single-order and group alike. */
 const TOKEN_EMAIL_AUDIT_ACTION = "SEND_ORDER_TOKEN_EMAIL"
+
+/**
+ * The statuses an order only reaches by being settled. A refund is applied to
+ * an order that was already fulfilled, so it keeps its fulfiller.
+ */
+const FULFILLED_STATUSES = new Set([
+  "FULFILLED",
+  "PARTIAL",
+  "PARTIALLY_FULFILLED",
+  "REFUNDED",
+])
+
+/**
+ * Whether the order has actually been fulfilled.
+ *
+ * An order that is still pending or merely approved has no fulfiller yet, and
+ * the invoice must not name one: a hand-off that was attempted but did not
+ * settle the order, or an approver standing in for a hand-off that never
+ * happened, would otherwise be printed as the person who fulfilled it.
+ *
+ * `fulfilledAt` is the transition's own stamp and settles the question on its
+ * own; the status set covers rows written before that column was populated.
+ */
+function hasBeenFulfilled(order: InvoiceParticipantIds): boolean {
+  if (order.fulfilledAt) return true
+  return FULFILLED_STATUSES.has(String(order.status ?? "").trim().toUpperCase())
+}
 
 /**
  * Who sent the fulfilment token to admin operations.
@@ -69,13 +100,19 @@ export async function loadInvoiceParticipants(
   order: InvoiceParticipantIds,
 ): Promise<InvoiceParticipants> {
   /*
-   * The hand-off is what the invoice reports. A token shared outside the app
-   * leaves no record of its sender, so the approver stands in: the plaintext
-   * token is issued to them on approval, which makes them the person who hands
-   * it to admin operations. The administrator who redeemed it is never named.
+   * The hand-off is what the invoice reports, but only once the order has
+   * actually been fulfilled. An unfulfilled order reports no fulfiller at all —
+   * neither a hand-off that failed to settle it nor the approver standing in
+   * for one that never happened.
+   *
+   * For a fulfilled order a token shared outside the app leaves no record of
+   * its sender, so the approver stands in: the plaintext token is issued to
+   * them on approval, which makes them the person who hands it to admin
+   * operations. The administrator who redeemed it is never named.
    */
-  const handoffSenderId = await findTokenHandoffSenderId(order.id)
-  const fulfilledByUserId = handoffSenderId ?? order.approvedByUserId
+  const fulfilled = hasBeenFulfilled(order)
+  const handoffSenderId = fulfilled ? await findTokenHandoffSenderId(order.id) : null
+  const fulfilledByUserId = fulfilled ? handoffSenderId ?? order.approvedByUserId : null
 
   const ids = [order.createdByUserId, order.approvedByUserId, fulfilledByUserId]
     .filter((id): id is string => typeof id === "string" && id.length > 0)
