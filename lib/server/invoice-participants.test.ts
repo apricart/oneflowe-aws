@@ -34,6 +34,8 @@ const order = {
   id: 1904,
   createdByUserId: INITIATOR,
   approvedByUserId: APPROVER,
+  status: "FULFILLED",
+  fulfilledAt: new Date("2026-08-27T09:00:00.000Z"),
 }
 
 const people = [
@@ -85,6 +87,78 @@ describe("who the invoice names as the fulfiller", () => {
     const participants = await loadInvoiceParticipants(order)
 
     expect(participants.fulfilledByName).toBe("Unknown")
+  })
+
+  /**
+   * The invoice is available from the moment the order exists, so most of the
+   * invoices anyone previews are for orders that have not been settled. Those
+   * have no fulfiller, and the approver must not be printed as one.
+   */
+  it("names no fulfiller on an approved order that has not been fulfilled", async () => {
+    store.results = [people]
+
+    const participants = await loadInvoiceParticipants({
+      ...order,
+      status: "APPROVED",
+      fulfilledAt: null,
+    })
+
+    expect(participants.fulfilledByName).toBe("N/A")
+    expect(participants.approvedByName).toBe("Salman Khan")
+  })
+
+  it("names no fulfiller on a pending order", async () => {
+    store.results = [people]
+
+    const participants = await loadInvoiceParticipants({
+      ...order,
+      status: "PENDING",
+      approvedByUserId: null,
+      fulfilledAt: null,
+    })
+
+    expect(participants.fulfilledByName).toBe("N/A")
+  })
+
+  /**
+   * A hand-off writes its audit entry whether or not the fulfilment behind it
+   * actually claimed the order, so the entry alone is not a settlement.
+   */
+  it("names no fulfiller when a hand-off was recorded but the order never settled", async () => {
+    store.results = [[{ userId: TOKEN_SENDER }], people]
+
+    const participants = await loadInvoiceParticipants({
+      ...order,
+      status: "APPROVED",
+      fulfilledAt: null,
+    })
+
+    expect(participants.fulfilledByName).toBe("N/A")
+  })
+
+  it("names no fulfiller on a rejected or cancelled order", async () => {
+    store.results = [people]
+
+    const participants = await loadInvoiceParticipants({
+      ...order,
+      status: "REJECTED",
+      fulfilledAt: null,
+    })
+
+    expect(participants.fulfilledByName).toBe("N/A")
+  })
+
+  /** A refund is applied to an order that was fulfilled first. */
+  it("keeps the fulfiller on a refunded order", async () => {
+    store.results = [[{ userId: TOKEN_SENDER }], people]
+
+    const participants = await loadInvoiceParticipants({
+      ...order,
+      status: "REFUNDED",
+      fulfilledAt: null,
+    })
+
+    expect(participants.fulfilledByName).toBe("Ayesha Khan")
   })
 
   it("still names the initiator and the approver from the order itself", async () => {
