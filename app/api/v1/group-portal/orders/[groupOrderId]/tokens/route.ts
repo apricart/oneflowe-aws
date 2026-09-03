@@ -5,7 +5,7 @@ import { ADMIN_OPERATIONS_EMAIL } from "@/lib/email/recipients"
 import { tokenHandoffMessage } from "@/lib/order-token-handoff"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { requireGroupOrderPortal } from "@/lib/server/group-order-access"
-import { fulfillOrdersAfterTokenHandoff } from "@/lib/server/order-fulfillment"
+import { settleOrdersAfterTokenHandoff } from "@/lib/server/order-fulfillment"
 import {
   loadShareableGroupTokens,
   recordGroupTokenHandoff,
@@ -80,15 +80,16 @@ export async function POST(
     return error(`Failed to send token email through AWS SES: ${message}`, 400)
   }
 
-  // Every token in this message has now reached the administrator, so each of
-  // those orders is settled — the same transition the single-order hand-off
-  // applies, run once per branch order inside its own transaction.
-  const fulfilledOrderIds = await fulfillOrdersAfterTokenHandoff(bundle.entries.map((entry) => ({
+  // Every token in this message has now reached the administrator, so each
+  // hand-off is recorded against its branch order — and settles that order if
+  // it has already been delivered. This is the same rule the single-order
+  // hand-off applies, run once per branch order inside its own transactions.
+  const settlement = await settleOrdersAfterTokenHandoff(bundle.entries.map((entry) => ({
     orderId: entry.orderId,
     organizationId: bundle.organizationId,
     branchId: entry.branchId,
     status: entry.status,
-    fulfilledByUserId: actor.scope.userId,
+    handedOffByUserId: actor.scope.userId,
   })))
 
   await recordGroupTokenHandoff({
@@ -96,16 +97,19 @@ export async function POST(
     organizationId: actor.organizationId,
     bundle,
     recipient: ADMIN_OPERATIONS_EMAIL,
-    fulfilledOrderIds,
+    fulfilledOrderIds: settlement.fulfilledOrderIds,
+    awaitingDeliveryOrderIds: settlement.awaitingDeliveryOrderIds,
   })
 
   return ok({
     message: tokenHandoffMessage({
       sentCount: bundle.entries.length,
-      fulfilledCount: fulfilledOrderIds.size,
+      fulfilledCount: settlement.fulfilledOrderIds.size,
+      awaitingDeliveryCount: settlement.awaitingDeliveryOrderIds.size,
     }),
     recipient: ADMIN_OPERATIONS_EMAIL,
     sentCount: bundle.entries.length,
-    fulfilledCount: fulfilledOrderIds.size,
+    fulfilledCount: settlement.fulfilledOrderIds.size,
+    awaitingDeliveryCount: settlement.awaitingDeliveryOrderIds.size,
   })
 }

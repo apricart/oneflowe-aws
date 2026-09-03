@@ -392,13 +392,11 @@ export default function OrderPortalPage() {
 
       toast({
         title: data?.fulfilled ? "Token sent — order fulfilled" : "Token sent",
-        description: data?.fulfilled
-          ? "Fulfillment token emailed to the admin. Your order is now marked fulfilled."
-          : "Fulfillment token emailed to the admin.",
+        description: data?.message || "Fulfillment token emailed to the admin.",
       })
 
-      // Sending the token settles the order, so the open detail and the order
-      // list behind it are refreshed rather than left showing it as approved.
+      // Sending the token settles the order only once it has been delivered,
+      // so the open detail and the list behind it are refreshed when it did.
       if (data?.fulfilled) {
         setSelectedOrder((current) => (
           current ? { ...current, status: "FULFILLED" } : current

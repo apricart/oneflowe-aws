@@ -350,6 +350,8 @@ function SendAllTokensButton({
         title: payload?.fulfilledCount ? "Tokens sent — orders fulfilled" : "Tokens sent to admin",
         description: payload?.message || `${count} tokens shared in one email.`,
       })
+      // Only a hand-off that actually settled an order changes what history
+      // shows; one waiting on delivery leaves those orders approved.
       if (payload?.fulfilledCount) onFulfilled?.()
     } catch {
       toast({

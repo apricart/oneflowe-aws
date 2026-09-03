@@ -47,7 +47,9 @@ async function syncSchema() {
       ADD COLUMN IF NOT EXISTS "tax_cents" integer DEFAULT 0 NOT NULL,
       ADD COLUMN IF NOT EXISTS "notes" text,
       ADD COLUMN IF NOT EXISTS "fulfillment_status" varchar(32) NOT NULL DEFAULT 'NOT_STARTED',
-      ADD COLUMN IF NOT EXISTS "delivered_at" timestamp with time zone
+      ADD COLUMN IF NOT EXISTS "delivered_at" timestamp with time zone,
+      ADD COLUMN IF NOT EXISTS "token_handoff_at" timestamp with time zone,
+      ADD COLUMN IF NOT EXISTS "token_handoff_by_user_id" uuid
     `).catch((e) => console.log("ℹ️ Orders columns:", e.message))
 
     await client.query(`

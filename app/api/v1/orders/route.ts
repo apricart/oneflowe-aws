@@ -767,6 +767,7 @@ export async function GET(req: NextRequest) {
         fulfillmentStatus: orderSelectColumns.fulfillmentStatus,
         paymentStatus: orderSelectColumns.paymentStatus,
         paidAt: orderSelectColumns.paidAt,
+        tokenHandoffAt: orderSelectColumns.tokenHandoffAt,
         statusAtRefund: orders.statusAtRefund,
         refundedAt: orders.refundedAt,
         refundedByUserId: orders.refundedByUserId,

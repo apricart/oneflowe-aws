@@ -485,6 +485,15 @@ export const orders = pgTable(
     approvalTokenHash: varchar("approval_token_hash", { length: 255 }), // Hash for verification
     approvalTokenCreatedAt: timestamp("approval_token_created_at", { withTimezone: true }),
     fulfilledByUserId: uuid("fulfilled_by_user_id").references(() => users.id),
+    // Fulfilment token hand-off tracking.
+    //
+    // Handing the token to admin operations no longer settles the order on its
+    // own: the goods still have to arrive. These columns remember a hand-off
+    // that happened before delivery, so the order can be settled the moment its
+    // delivery status reaches DELIVERED. Both are nullable, so every order that
+    // never had a token handed over keeps exactly the data it has today.
+    tokenHandoffAt: timestamp("token_handoff_at", { withTimezone: true }),
+    tokenHandoffByUserId: uuid("token_handoff_by_user_id").references(() => users.id),
     // Refund tracking fields
     refundedAt: timestamp("refunded_at", { withTimezone: true }),
     refundedByUserId: uuid("refunded_by_user_id").references(() => users.id),

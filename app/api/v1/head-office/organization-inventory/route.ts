@@ -7,7 +7,66 @@ import { eq,and,ilike,or,desc,sql,isNull,SQL,inArray } from "drizzle-orm"
 import { alias } from "drizzle-orm/pg-core"
 import { cascadeOrgStatusChange } from "@/lib/inventory-cascade"
 import { getCached,invalidateByPrefix,scopedCacheKey,CACHE_TTL } from "@/lib/cache-utils"
+import { canViewGlobalBasePrice } from "@/lib/pricing-access"
 import { normalizeSafeImageUrl } from "@/lib/security"
+import { resolveEffectivePriceCents } from "@/lib/server/effective-price"
+
+/**
+ * One organization's catalogue: what is assigned to it, and what it pays.
+ *
+ * Reading and writing are deliberately not the same audience. **GET** is open
+ * to Head Office as well as Super Admin, because a tenant has to see its own
+ * catalogue. **PUT** is Super Admin only, and has been since long before the
+ * pricing rule — it writes `custom_price` among other overrides, and only a
+ * Super Admin may write a price at any tier (`lib/pricing-access.ts`). The path
+ * says "head-office" because of the tier it edits, not the role that may edit
+ * it.
+ *
+ * One figure is read-only for Head Office and absent rather than merely hidden:
+ * the global base price. It is the internal cost the whole catalogue is built
+ * on, so `withVisiblePrices` strips it from the payload for any role that may
+ * not see it — the same rule, and the same treatment, as the group pricing
+ * screen. What every reader keeps is `effectivePriceCents`: what this
+ * organization's branches actually pay.
+ */
+
+/** The two price tiers this screen reads. The group tier needs a group scope. */
+type PricedCatalogueRow = {
+  customPrice: number | null
+  basePrice: number | null
+}
+
+/**
+ * Apply the price-visibility rule on the way out of the cache.
+ *
+ * Deliberately not applied inside `getCached`: the cache holds the unredacted
+ * rows, so one cached page serves both roles and no entry can ever be handed to
+ * the role it was not built for. Redacting first and caching the result would
+ * make the cache key the only thing standing between Head Office and the
+ * internal cost.
+ */
+function withVisiblePrices<Row extends PricedCatalogueRow, Data extends { items: Row[] }>(
+  data: Data,
+  role: unknown,
+) {
+  const showBasePrice = canViewGlobalBasePrice(role)
+
+  return {
+    ...data,
+    canViewGlobalBasePrice: showBasePrice,
+    items: data.items.map((item) => ({
+      ...item,
+      basePrice: showBasePrice ? item.basePrice : null,
+      // Resolved from the real base price, before it is stripped. This screen
+      // is organization-wide, so no single group is in scope and only the two
+      // upper tiers of the ladder can apply.
+      effectivePriceCents: resolveEffectivePriceCents({
+        organizationPriceCents: item.customPrice,
+        basePriceCents: item.basePrice,
+      }),
+    })),
+  }
+}
 
 function validateOrganizationInventoryUpdate(body: any) {
   const inventoryId = Number(body.id)
@@ -47,9 +106,18 @@ function buildOrganizationInventoryUpdate(body: any, validated: any) {
   }
 }
 
-async function cascadeOrganizationInventoryStatus(inventoryId: number, isActive: boolean, previousStatus: boolean, userId: string) {
+async function cascadeOrganizationInventoryStatus(
+  inventoryId: number,
+  isActive: boolean,
+  previousStatus: boolean,
+  userId: string,
+  // The role that actually performed the change, rather than the tier being
+  // edited. Only a Super Admin can reach this write, so recording "HEAD_OFFICE"
+  // named the wrong actor in every cascade audit entry it wrote.
+  performedByRole: string,
+) {
   if (isActive === previousStatus) return
-  const cascadeResult = await cascadeOrgStatusChange(inventoryId, isActive, userId, "HEAD_OFFICE")
+  const cascadeResult = await cascadeOrgStatusChange(inventoryId, isActive, userId, performedByRole)
   await db.insert(auditLogs).values({
     userId,
     action: "CASCADE_UPDATE",
@@ -60,7 +128,7 @@ async function cascadeOrganizationInventoryStatus(inventoryId: number, isActive:
       isActive,
       branchUpdates: cascadeResult.updatedCount,
       affectedBranches: cascadeResult.affectedBranches,
-      performedByRole: "HEAD_OFFICE",
+      performedByRole,
     },
   })
   await invalidateByPrefix('org-inv')
@@ -198,7 +266,7 @@ export async function GET(req: NextRequest) {
 
       const total = totalResult[0].count
       return { items, total, page, limit }
-    }, CACHE_TTL.INVENTORY).then(data => NextResponse.json(data))
+    }, CACHE_TTL.INVENTORY).then(data => NextResponse.json(withVisiblePrices(data, userRole)))
   } catch (error) {
     console.error("Error fetching organization inventory:", error)
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 })
@@ -268,7 +336,13 @@ export async function PUT(req: NextRequest) {
 
     // If isActive status changed, cascade to branches
     if (isActive !== undefined) {
-      await cascadeOrganizationInventoryStatus(inventoryId, isActive, existingItem.isActive, (session.user as any).id)
+      await cascadeOrganizationInventoryStatus(
+        inventoryId,
+        isActive,
+        existingItem.isActive,
+        (session.user as any).id,
+        userRole,
+      )
     }
 
     // Log the update

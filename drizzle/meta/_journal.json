@@ -365,6 +365,13 @@
       "when": 1788264000000,
       "tag": "20260901120000_add_group_inventory_prices",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1788436800000,
+      "tag": "20260903120000_add_order_token_handoff",
+      "breakpoints": true
     }
   ]
 }

@@ -218,6 +218,59 @@ describe("every endpoint that writes a price enforces the rule", () => {
     expect(screen).toContain('{canSeeBasePrice && <TableHead className="font-bold">Global</TableHead>}')
   })
 
+  it("keeps the global base price out of the organization catalogue response", () => {
+    const route = source("app/api/v1/head-office/organization-inventory/route.ts")
+
+    // Same rule as the group screen: stripped from the payload rather than
+    // hidden in the markup, so it cannot be read off the network tab.
+    expect(route).toContain("const showBasePrice = canViewGlobalBasePrice(role)")
+    expect(route).toContain("basePrice: showBasePrice ? item.basePrice : null")
+
+    // What Head Office needs is what its branches pay, which survives the
+    // redaction because it is resolved through the shared ladder from the real
+    // base price before that price is stripped.
+    expect(route).toContain("effectivePriceCents: resolveEffectivePriceCents({")
+    expect(route).toContain("organizationPriceCents: item.customPrice,")
+    expect(route).toContain("basePriceCents: item.basePrice,")
+
+    // Applied on the way out of the cache, never inside it: a redacted payload
+    // in the cache would leave the cache key as the only thing keeping the
+    // internal cost away from the role that may not see it.
+    expect(route).toContain("NextResponse.json(withVisiblePrices(data, userRole))")
+    expect(route).not.toContain("getCached(cacheKey, async () => withVisiblePrices")
+
+    // Reading the catalogue itself stays open to Head Office — the point is to
+    // hide one figure, not to close the screen.
+    expect(route).toContain('if (userRole !== "HEAD_OFFICE" && userRole !== "SUPER_ADMIN")')
+  })
+
+  it("shows the price a screen may display rather than a hand-written fallback", () => {
+    // `customPrice ?? basePrice` written by hand drifts from what is charged
+    // and prints "Rs 0" the moment the base price is redacted away.
+    const screens = [
+      "components/head-office/organization-inventory-view.tsx",
+      "app/(portal)/inventory/branch/org-products/page.tsx",
+    ]
+
+    for (const path of screens) {
+      const screen = source(path)
+      expect(screen).toContain("effectivePriceCents")
+      expect(screen).not.toContain("item.customPrice ?? item.basePrice")
+      expect(screen).not.toContain("product.customPrice ?? product.basePrice")
+    }
+  })
+
+  it("records the role that actually performed a catalogue write", () => {
+    const route = source("app/api/v1/head-office/organization-inventory/route.ts")
+
+    // The path is named for the tier it edits, not for a role that may reach
+    // it: only a Super Admin can write here, so the cascade audit trail must
+    // not claim Head Office did.
+    expect(route).not.toContain('performedByRole: "HEAD_OFFICE"')
+    expect(route).not.toContain('cascadeOrgStatusChange(inventoryId, isActive, userId, "HEAD_OFFICE")')
+    expect(route).toContain("performedByRole: string,")
+  })
+
   it("the group pricing endpoint separates reading from repricing", () => {
     const route = source("app/api/v1/groups/[id]/prices/route.ts")
     // Head Office may look at what its branches pay...

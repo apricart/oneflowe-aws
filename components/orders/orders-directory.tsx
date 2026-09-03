@@ -314,11 +314,17 @@ export function OrdersDirectory({
       const updatedOrder = {
         ...viewingOrder,
         fulfillmentStatus: data.item?.fulfillmentStatus || nextStatus,
+        // Recording delivery settles an order whose fulfilment token has
+        // already reached the admin, so the order status is taken from the
+        // server rather than assumed to be unchanged.
+        status: data.item?.status || viewingOrder.status,
       }
       setViewingOrder(updatedOrder)
       toast({
-        title: "Progress updated",
-        description: `Order marked ${FULFILLMENT_STATUS_LABELS[nextStatus]}.`,
+        title: data?.fulfilled ? "Delivered — order fulfilled" : "Progress updated",
+        description: data?.fulfilled
+          ? `Order marked ${FULFILLMENT_STATUS_LABELS[nextStatus]}. Its fulfilment token was already sent to the admin, so the order is now fulfilled.`
+          : `Order marked ${FULFILLMENT_STATUS_LABELS[nextStatus]}.`,
       })
       onUpdate()
     } catch (err: any) {
@@ -422,13 +428,11 @@ export function OrdersDirectory({
 
       toast({
         title: data?.fulfilled ? "Token sent — order fulfilled" : "Token sent",
-        description: data?.fulfilled
-          ? "Fulfillment token emailed to the admin. The order is now marked fulfilled."
-          : "Fulfillment token emailed to the admin.",
+        description: data?.message || "Fulfillment token emailed to the admin.",
       })
 
-      // The hand-off settles the order, so the open panel and the list behind
-      // it have to show the order in its new state rather than as approved.
+      // The hand-off settles the order only once it has been delivered, so the
+      // open panel and the list behind it are refreshed when it actually did.
       if (data?.fulfilled) {
         setViewingOrder((current: any) => (
           current ? { ...current, status: "FULFILLED" } : current
@@ -821,6 +825,14 @@ export function OrdersDirectory({
 
                   {viewingOrder.status.toLowerCase() === "approved" && isSuperAdmin && (
                     <div className="w-full space-y-3">
+                      {/* The token reached admin operations before the goods
+                          did, so recording delivery is what completes this
+                          order. Saying so here stops it looking unfinished. */}
+                      {viewingOrder.tokenHandoffAt && (
+                        <p className="rounded-xl border border-dashed border-emerald-200 bg-emerald-50/60 p-3 text-xs font-medium text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/20 dark:text-emerald-300">
+                          Fulfilment token already sent to the admin — this order is marked fulfilled as soon as it is delivered.
+                        </p>
+                      )}
                       {(() => {
                         const nextStatus = getNextFulfillmentStatus(viewingOrder.fulfillmentStatus)
                         return (() => {
