@@ -57,6 +57,7 @@ import {
   type LegacyOrderDetail,
   type LegacyOrderListRow,
 } from "../lib/legacy-import/ke-post-cutoff"
+import { contestedIdentityFor, type LegacySubUser } from "../lib/legacy-import/ke-sync"
 import { resolveWorkspacePath } from "./lib/resolve-workspace-path"
 
 dotenv.config({ path: ".env.local", quiet: true })
@@ -211,7 +212,11 @@ interface Plan {
   planDigest: string
 }
 
-async function buildPlan(client: QueryClient, prepared: readonly PreparedApiOrder[]): Promise<Plan> {
+async function buildPlan(
+  client: QueryClient,
+  prepared: readonly PreparedApiOrder[],
+  legacySubUsers: readonly LegacySubUser[],
+): Promise<Plan> {
   const branchRows = await rows(client,
     `select id, name, address from branches where organization_id = $1`, [ORGANIZATION.id])
   const branchByName = new Map<string, Row>()
@@ -222,7 +227,7 @@ async function buildPlan(client: QueryClient, prepared: readonly PreparedApiOrde
   // those people placed still have to be attributed to them rather than to
   // whoever happens to be active at that branch today.
   const userRows = await rows(client,
-    `select u.id, u.full_name, u.branch_id, u.is_active
+    `select u.id, u.full_name, u.branch_id, u.is_active, u.external_id
        from users u
        join roles r on r.id = u.role_id
       where u.organization_id = $1 and u.deleted_at is null
@@ -233,6 +238,32 @@ async function buildPlan(client: QueryClient, prepared: readonly PreparedApiOrde
     const bucket = usersByBranchAndName.get(key) ?? []
     bucket.push(user)
     usersByBranchAndName.set(key, bucket)
+  }
+
+  // Identity beats spelling. The order carries an `OrderTakerID`, which names a
+  // legacy person exactly, whereas the `UserDetails` string on the same order is
+  // free text that disagrees with that person's own record in a dozen ways —
+  // trailing "-", a doubled name, an appended department. Matching on the name
+  // left eleven orders unattributable to people who were sitting in the
+  // database the whole time, so the legacy id is resolved to an account first
+  // and the name is only a fallback for orders whose taker is not in the
+  // legacy user list at all.
+  const usersByExternalId = new Map<string, Row[]>()
+  for (const user of userRows) {
+    if (!user.external_id) continue
+    const key = String(user.external_id).toLowerCase()
+    const bucket = usersByExternalId.get(key) ?? []
+    bucket.push(user)
+    usersByExternalId.set(key, bucket)
+  }
+  const identitiesByTakerId = new Map<number, string[]>()
+  for (const subUser of legacySubUsers) {
+    const id = Number(subUser.ID)
+    if (!Number.isFinite(id)) continue
+    const passcode = String(subUser.Passcode ?? "").trim()
+    // A person whose employee code OneFlowe holds for somebody else was created
+    // under a derived identity by `sync-ke.ts`; that identity is checked first.
+    identitiesByTakerId.set(id, [contestedIdentityFor(id), passcode].filter(Boolean))
   }
 
   // Catalogue: the org's own inventory by name, then the mapping ledger that
@@ -302,13 +333,34 @@ async function buildPlan(client: QueryClient, prepared: readonly PreparedApiOrde
     const branch = branchByName.get(normalizeLegacyText(order.branchName))
     if (!branch) { reject("BRANCH_NOT_FOUND", `no K-Electric branch named "${order.branchName}"`); continue }
 
-    const candidates = usersByBranchAndName.get(`${branch.id}|${normalizeLegacyText(order.userName)}`) ?? []
+    let candidates: Row[] = []
+    for (const identity of identitiesByTakerId.get(Number(order.legacyOrderTakerId)) ?? []) {
+      const byIdentity = usersByExternalId.get(identity.toLowerCase()) ?? []
+      if (byIdentity.length === 0) continue
+      // One person can hold an account at more than one branch; prefer the one
+      // at the branch that actually placed this order.
+      const atBranch = byIdentity.filter((user) => Number(user.branch_id) === Number(branch.id))
+      candidates = atBranch.length > 0 ? atBranch : byIdentity
+      break
+    }
     if (candidates.length === 0) {
-      reject("USER_NOT_FOUND", `no active ORDER_PORTAL user "${order.userName}" at ${branch.name}`)
+      candidates = usersByBranchAndName.get(`${branch.id}|${normalizeLegacyText(order.userName)}`) ?? []
+    }
+    if (candidates.length === 0) {
+      reject("USER_NOT_FOUND", `no ORDER_PORTAL user "${order.userName}" at ${branch.name}`)
       continue
     }
-    if (candidates.length > 1) {
-      reject("USER_AMBIGUOUS", `${candidates.length} active users named "${order.userName}" at ${branch.name}`)
+    // A person who now holds a real account and still has the historical
+    // placeholder an earlier import made for them matches twice. The live
+    // account wins: the placeholder exists only to attribute orders placed
+    // before that person had one, so it must not outrank them once they do.
+    // With no live account, the placeholder is still the right answer.
+    const active = candidates.filter((candidate) => candidate.is_active)
+    const matched = active.length > 0 ? active : candidates
+    if (matched.length > 1) {
+      reject("USER_AMBIGUOUS",
+        `${matched.length} ${active.length > 0 ? "active" : "historical"} users named `
+          + `"${order.userName}" at ${branch.name}`)
       continue
     }
 
@@ -337,8 +389,8 @@ async function buildPlan(client: QueryClient, prepared: readonly PreparedApiOrde
       branchId: Number(branch.id),
       branchName: String(branch.name),
       branchAddress: branch.address ?? null,
-      userId: String(candidates[0].id),
-      userIsActive: candidates[0].is_active === true,
+      userId: String(matched[0].id),
+      userIsActive: matched[0].is_active === true,
       inactiveProducts: order.lines
         .filter((line) => productByName.get(line.normalizedName)?.inventory_active !== true)
         .map((line) => line.sourceName),
@@ -580,6 +632,14 @@ async function main() {
   })
   assert(Array.isArray(listRows), "Legacy list endpoint did not return an array")
 
+  // The people directory, used to turn each order's `OrderTakerID` into the
+  // account that person holds here. Read-only, and the same endpoint sync-ke.ts
+  // reads, so the two commands agree on who is who.
+  const legacySubUsers = await fetchJson<LegacySubUser[]>(
+    `${KE_LOGISTICS_BASE_URL}/api/SubUser/0/1`)
+  assert(Array.isArray(legacySubUsers) && legacySubUsers.length > 0,
+    "Legacy user endpoint returned nothing")
+
   const sheetReconciliation = options.sheetPath
     ? reconcileAgainstSheet(parseSheet(options.sheetPath), listRows)
     : null
@@ -624,7 +684,7 @@ async function main() {
     const detailsById = new Map(details.map((entry) => [Number(entry.ID), entry]))
 
     const preparation = prepareApiOrders(listRows, detailsById, alreadyImported)
-    const plan = await buildPlan(pool, preparation.prepared)
+    const plan = await buildPlan(pool, preparation.prepared, legacySubUsers)
 
     const sourceManifest = {
       importer: "import-ke-orders",
@@ -712,7 +772,7 @@ async function main() {
     try {
       await client.query("begin isolation level serializable")
       await client.query("select pg_advisory_xact_lock($1,$2)", [1263482710, ORGANIZATION.id])
-      const lockedPlan = await buildPlan(client, preparation.prepared)
+      const lockedPlan = await buildPlan(client, preparation.prepared, legacySubUsers)
       assert(lockedPlan.planDigest === plan.planDigest, "Plan changed between confirmation and commit")
 
       const result = await applyPlan(client, lockedPlan, options.actorUserId, tokenByOrder, sourceManifest)

@@ -379,6 +379,13 @@
       "when": 1788652800000,
       "tag": "20260906000000_add_user_external_identity",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1788656400000,
+      "tag": "20260906010000_repair_schema_gaps",
+      "breakpoints": true
     }
   ]
 }

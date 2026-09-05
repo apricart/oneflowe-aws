@@ -156,5 +156,28 @@ an administrator; use the explicit one-time bootstrap command when required.
 - **Pricing — propagating**: Changing an organization price moves every group that has no override of its own, because those groups inherit it. `lib/group-price-propagation.ts` turns an administrator's choice into a plan: `all` (clear group overrides so everyone follows), `selected` (the chosen groups follow; every other unpriced group is *pinned* at its current price so it does not drift), or `none` (the default and the pre-existing behaviour). The planner is pure and shared — the confirmation dialog previews with it and the server rebuilds the plan with it from rows read **before** the price update, inside the same transaction. Clients send a mode, never a plan.
 - **Pricing — changing**: **Only `SUPER_ADMIN` may write a price, at any tier.** The rule lives in `lib/pricing-access.ts` (`canMutatePrices`, `priceMutationFailure`, `rejectPriceFieldsForRole`) and is carried in RBAC as `Permission.PRICING_MANAGE`, granted to Super Admin alone. Administering a catalogue, tenant, or group does not carry the right to change what anyone is charged — Head Office may read prices but never set them. Any new endpoint that writes a price column must go through that module and be added to the route list in `lib/pricing-access.test.ts`. Reading a price is a separate concern, governed by `lib/price-visibility.ts`.
 - **Image storage**: Uploaded images live in S3, never in the database. `POST /api/v1/upload/image` sanitises through `sharp`, writes the object, and returns an application path (`/api/v1/images/products/<uuid>.<ext>`) which is what gets stored in `imageUrl`/`customImageUrl`. `GET /api/v1/images/*` streams it back to signed-in users; the bucket itself is private. Rows written before this change still hold `data:` URLs and still render — use `isDataUrl`/`isStoredImagePath` from `lib/server/image-storage.ts` to tell the two apart, and `npm run migrate:images-to-s3` to move the remainder. Never write a `data:` URL to a column.
+- **Mirrored accounts and email login**: A user row with `external_source` set was mirrored from another system and **cannot sign in with an email address** — only with its username (`lib/auth-options.ts`, `loadStaffLoginRecord`). Such a person holds one account per role behind a single shared email (`<employee code>-ba` to approve, `-op` to order), so an email alone cannot say which portal they meant. Accounts created in the portal leave `external_source` null and keep email-or-username login. Never relax that guard to "fix" a login complaint from a K-Electric user; point them at their username.
+- **K-Electric legacy sync**: Reference data comes from the legacy platform via `npm run sync:ke` (branches, groups, users), and orders via `npm run import:ke-orders` — in that order, because an order cannot be written until its branch and ordering user exist. Both are dry-run by default and require the plan digest they print in order to commit. Planning logic is pure and lives in `lib/legacy-import/ke-sync.ts`; branches are matched by `external_id`, never by name once pinned. Organization 10 only — organization 2 (`K-E-Demo`) shares many of the same emails and must never be touched.
 - **Permissions**: Check `lib/permissions.ts` before adding any new admin-only feature — never inline permission logic in components.
 - **Path aliases**: `@/` maps to the project root (configured in `tsconfig.json`).
+
+## Engineering Development & Security Standard
+
+This repository follows the Engineering Development & Security Standard v1.0.
+The mandatory rules are imported below and apply to all work in this
+repository. Read `.claude/README.md` for how they map to the source standard.
+
+@.claude/rules/00-project-overview.md
+@.claude/rules/01-architecture.md
+@.claude/rules/02-typescript-standards.md
+@.claude/rules/03-testing.md
+@.claude/rules/04-security.md
+@.claude/rules/05-api-standards.md
+@.claude/rules/06-database.md
+@.claude/rules/07-git-pr.md
+@.claude/rules/08-ai-development.md
+@.claude/rules/09-frontend.md
+
+Workflow skills live in `.claude/skills/` and are invoked by name:
+`/standard-feature-development`, `/standard-api-endpoint`, `/standard-testing`,
+`/standard-security-check`, `/standard-code-review`.

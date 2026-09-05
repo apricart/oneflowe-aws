@@ -446,3 +446,55 @@ describe("account lockout", () => {
     expect(auditedActions()).toEqual(["AUTH_LOCKOUT_BLOCKED"])
   })
 })
+
+/**
+ * A person mirrored from another system holds one account per role behind a
+ * single shared email address, so an email cannot say which portal they meant.
+ * These tests pin the resulting rule at the level it is enforced: the query.
+ */
+describe("email sign-in is limited to accounts created in OneFlowe", () => {
+  function captureLoginCondition(...results: unknown[][]) {
+    const queue = [...results]
+    const conditions: unknown[] = []
+    const chain: any = {
+      from: () => chain,
+      leftJoin: () => chain,
+      where: (condition: unknown) => { conditions.push(condition); return chain },
+      limit: () => chain,
+      then: (resolve: (value: unknown) => void) => resolve(queue.shift() ?? []),
+    }
+    mocks.dbSelect.mockReturnValue(chain)
+    return conditions
+  }
+
+  async function loginConditionSql() {
+    const { PgDialect } = await import("drizzle-orm/pg-core")
+    const conditions = captureLoginCondition([staffRow()])
+    mocks.bcryptCompare.mockResolvedValue(true)
+    await staffLogin(CREDENTIALS)
+    expect(conditions).toHaveLength(1)
+    return new PgDialect().sqlToQuery(conditions[0] as any).sql
+  }
+
+  it("pairs the email comparison with an external_source guard", async () => {
+    const sql = await loginConditionSql()
+    const email = sql.indexOf("lower(")
+    expect(email).toBeGreaterThan(-1)
+    // The guard must sit inside the same OR branch as the email comparison,
+    // not merely somewhere in the statement.
+    expect(sql.slice(email)).toMatch(/"external_source"\s+is\s+null/i)
+  })
+
+  it("still matches a username without requiring that guard", async () => {
+    const sql = await loginConditionSql()
+    const username = sql.indexOf('"username"')
+    const email = sql.indexOf("lower(")
+    expect(username).toBeGreaterThan(-1)
+    expect(username).toBeLessThan(email)
+    expect(sql.slice(username, email)).not.toMatch(/external_source/i)
+  })
+
+  it("keeps excluding soft-deleted accounts", async () => {
+    expect(await loginConditionSql()).toMatch(/"deleted_at"\s+is\s+null/i)
+  })
+})

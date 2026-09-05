@@ -158,6 +158,40 @@ async function syncSchema() {
       CREATE INDEX IF NOT EXISTS "scheduled_reports_org_idx" ON "scheduled_reports" USING btree ("organization_id")
     `).catch((e) => console.log("ℹ️ Scheduled reports org index:", e.message))
 
+    // External identity for accounts mirrored from another system, matching the
+    // pair already on "branches". Only accounts with a NULL external_source may
+    // sign in with an email address: a mirrored person holds one account per
+    // role behind a single shared email, so the email alone cannot say which
+    // portal they meant. See lib/auth-options.ts and lib/legacy-import/ke-sync.ts.
+    console.log("📝 Updating users table (external identity)...")
+    await client.query(`
+      ALTER TABLE "users"
+      ADD COLUMN IF NOT EXISTS "external_source" varchar(64),
+      ADD COLUMN IF NOT EXISTS "external_id" varchar(128)
+    `).catch((e) => console.log("ℹ️ Users external identity columns:", e.message))
+
+    await client.query(`
+      ALTER TABLE "users"
+      ADD CONSTRAINT "users_external_identity_pair_ck" CHECK (
+        ("users"."external_source" IS NULL) = ("users"."external_id" IS NULL)
+        AND ("users"."external_source" IS NULL
+             OR (btrim("users"."external_source") <> '' AND btrim("users"."external_id") <> ''))
+      )
+    `).catch((e) => console.log("ℹ️ Users external identity check:", e.message))
+
+    // One account per source person per role — a mirrored person is two rows
+    // (one to place orders, one to approve them) sharing an external identity.
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS "users_org_external_identity_role_uq"
+        ON "users" USING btree ("organization_id", "external_source", "external_id", "role_id")
+        WHERE "external_source" IS NOT NULL AND "external_id" IS NOT NULL
+    `).catch((e) => console.log("ℹ️ Users external identity unique index:", e.message))
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS "users_external_identity_idx"
+        ON "users" USING btree ("external_source", "external_id")
+    `).catch((e) => console.log("ℹ️ Users external identity index:", e.message))
+
     await client.end()
 
     console.log("✅ Schema synced successfully!")
