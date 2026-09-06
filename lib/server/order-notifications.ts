@@ -22,6 +22,8 @@ import {
   type OrderApproverRole,
   type OrderDecisionRole,
 } from "@/lib/order-approver-role"
+import { ORDER_CREATOR_ROLES } from "@/lib/group-order-visibility"
+import { GROUP_ORDER_PORTAL_ROLE, resolveScopedBranchIds } from "@/lib/server/multi-branch-scope"
 
 type OrderEventInput = {
   id: number
@@ -111,6 +113,28 @@ async function insertRecipientEvents(tx: any, input: {
   }
 }
 
+/**
+ * Confirm the person who raised the order really reaches the branch it was
+ * raised for.
+ *
+ * An Order Portal user is pinned to one branch, so the comparison is direct. A
+ * Group Order Portal user has no pinned branch — its reach is the set of
+ * branches an administrator assigned it — so it is checked against that
+ * resolved set instead, read inside the caller's transaction. An empty set
+ * denies rather than widening to the organization.
+ */
+async function creatorReachesOrderBranch(
+  tx: any,
+  creator: { id: string; role: string; branchId: number | null },
+  branchId: number,
+): Promise<boolean> {
+  if (creator.role === GROUP_ORDER_PORTAL_ROLE) {
+    const scopedBranchIds = await resolveScopedBranchIds(tx, creator.id)
+    return scopedBranchIds.includes(branchId)
+  }
+  return creator.branchId === branchId
+}
+
 export async function queueOrderCreatedNotifications(tx: any, input: {
   order: OrderEventInput
   requestedBy: string
@@ -118,21 +142,32 @@ export async function queueOrderCreatedNotifications(tx: any, input: {
   const { order } = input
   if (!order.organizationId) return { eventKeys: [], recipientCount: 0 }
 
+  // Both requester roles raise orders that an approver has to decide, so both
+  // have to be able to raise the "awaiting approval" event. Nothing else about
+  // the notification changes: the recipients are still the tenant's configured
+  // approvers for this order's branch.
   const [creator] = await tx
-    .select({ id: users.id, fullName: users.fullName })
+    .select({
+      id: users.id,
+      fullName: users.fullName,
+      branchId: users.branchId,
+      role: roles.name,
+    })
     .from(users)
     .innerJoin(roles, eq(users.roleId, roles.id))
     .where(and(
       eq(users.id, order.createdByUserId),
-      eq(roles.name, "ORDER_PORTAL"),
+      inArray(roles.name, [...ORDER_CREATOR_ROLES]),
       eq(users.organizationId, order.organizationId),
-      eq(users.branchId, order.branchId),
       eq(users.isActive, true),
       isNull(users.deletedAt),
     ))
     .limit(1)
 
   if (!creator) return { eventKeys: [], recipientCount: 0 }
+  if (!await creatorReachesOrderBranch(tx, creator, order.branchId)) {
+    return { eventKeys: [], recipientCount: 0 }
+  }
 
   const context = await getOrderContext(tx, order)
   if (!context || !isOrderApproverRole(context.orderApproverRole)) {

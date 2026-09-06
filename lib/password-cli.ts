@@ -38,3 +38,25 @@ export async function hashImportPassword(password: string): Promise<string> {
   }
   return bcrypt.hash(password, passwordToolEnv.BCRYPT_ROUNDS)
 }
+
+/**
+ * Hash a password carried over from a system whose rules were weaker than ours.
+ *
+ * This deliberately skips the strength policy `hashImportPassword` enforces,
+ * and it is the only function here that does. A person migrating from the
+ * legacy K-Electric platform has to be able to sign in with the password they
+ * already know — they were never told a new one — so the old password is
+ * mirrored for exactly one sign-in and the account is marked
+ * `must_change_password`, at which point the normal policy applies and this
+ * hash is replaced.
+ *
+ * Callers must set `must_change_password`. A mirrored weak password that is
+ * never forced to rotate is strictly worse than the system it came from,
+ * because it now also unlocks a second account.
+ */
+export async function hashMirroredLegacyPassword(password: string): Promise<string> {
+  const value = String(password ?? '')
+  if (!value.trim()) throw new Error('Cannot mirror an empty legacy password.')
+  if (value.length > MAX_PASSWORD_LENGTH) throw new Error(`Password must not exceed ${MAX_PASSWORD_LENGTH} characters.`)
+  return bcrypt.hash(value, passwordToolEnv.BCRYPT_ROUNDS)
+}

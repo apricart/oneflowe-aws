@@ -31,7 +31,7 @@ import {
   isPriceInputInvalid,
   parsePriceInput,
 } from "@/lib/group-price-input"
-import { canMutatePrices } from "@/lib/pricing-access"
+import { canMutatePrices, canViewGlobalBasePrice } from "@/lib/pricing-access"
 import { formatPKR } from "@/lib/utils"
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json())
@@ -44,7 +44,8 @@ type PricedItem = {
   productCode: string | null
   name: string
   unit: string
-  basePriceCents: number
+  /** Null for a role that may not see the global base price. */
+  basePriceCents: number | null
   organizationPriceCents: number | null
   groupPriceCents: number | null
   effectivePriceCents: number | null
@@ -81,6 +82,12 @@ function priceSourceBadge(item: PricedItem) {
  * this screen sees it read-only: the inputs become plain text and the save
  * control is gone. The endpoint refuses the write regardless — this only keeps
  * the screen from offering an action it would reject.
+ *
+ * The Global column is likewise Super Admin only. It carries the internal base
+ * price the whole ladder is built on, which would expose the margin on every
+ * product to the tenant buying it. The endpoint already nulls the field out for
+ * anyone else, so dropping the column here only keeps the table from rendering
+ * a row of dashes.
  */
 export function GroupPriceManager({
   group,
@@ -89,13 +96,16 @@ export function GroupPriceManager({
   onOpenChange,
 }: Readonly<{
   group: PricedGroup | null
-  /** The viewer's role; only a Super Admin gets editable fields. */
+  /** The viewer's role: only a Super Admin gets editable fields and the Global column. */
   role: string
   open: boolean
   onOpenChange: (open: boolean) => void
 }>) {
   const { toast } = useToast()
   const canEdit = canMutatePrices(role)
+  const canSeeBasePrice = canViewGlobalBasePrice(role)
+  // Product, Group Price, Branches pay, Organization — plus Global when shown.
+  const columnCount = canSeeBasePrice ? 5 : 4
   const [search, setSearch] = useState("")
   const [page, setPage] = useState(1)
   const [drafts, setDrafts] = useState<Record<number, string>>({})
@@ -210,7 +220,7 @@ export function GroupPriceManager({
             <TableHeader className="bg-slate-50 dark:bg-slate-800/50">
               <TableRow>
                 <TableHead className="font-bold">Product</TableHead>
-                <TableHead className="font-bold">Global</TableHead>
+                {canSeeBasePrice && <TableHead className="font-bold">Global</TableHead>}
                 <TableHead className="font-bold">Organization</TableHead>
                 <TableHead className="font-bold w-[170px]">Group Price (PKR)</TableHead>
                 <TableHead className="font-bold">Branches pay</TableHead>
@@ -219,7 +229,7 @@ export function GroupPriceManager({
             <TableBody>
               {isLoading && (
                 <TableRow>
-                  <TableCell colSpan={5} className="h-32 text-center text-slate-500">
+                  <TableCell colSpan={columnCount} className="h-32 text-center text-slate-500">
                     <Loader2 className="h-5 w-5 animate-spin inline mr-2" />
                     Loading catalogue…
                   </TableCell>
@@ -227,7 +237,7 @@ export function GroupPriceManager({
               )}
               {!isLoading && items.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={5} className="h-32 text-center text-slate-500 italic">
+                  <TableCell colSpan={columnCount} className="h-32 text-center text-slate-500 italic">
                     No products found for this organization.
                   </TableCell>
                 </TableRow>
@@ -244,7 +254,11 @@ export function GroupPriceManager({
                         {item.productCode || "—"} · per {item.unit}
                       </div>
                     </TableCell>
-                    <TableCell className="text-slate-500">{formatPKR(item.basePriceCents / 100)}</TableCell>
+                    {canSeeBasePrice && (
+                      <TableCell className="text-slate-500">
+                        {item.basePriceCents === null ? "—" : formatPKR(item.basePriceCents / 100)}
+                      </TableCell>
+                    )}
                     <TableCell className="text-slate-500">
                       {item.organizationPriceCents === null ? "—" : formatPKR(item.organizationPriceCents / 100)}
                     </TableCell>

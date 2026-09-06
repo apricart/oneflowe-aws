@@ -9,7 +9,7 @@ import { withRateLimit } from "@/lib/rate-limiter"
 import { canViewFulfillmentToken } from "@/lib/fulfillment-token-access"
 import { isTokenHandoffEligible, tokenHandoffMessage } from "@/lib/order-token-handoff"
 import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
-import { fulfillOrdersAfterTokenHandoff } from "@/lib/server/order-fulfillment"
+import { settleOrdersAfterTokenHandoff } from "@/lib/server/order-fulfillment"
 import { canUseScopedBranch, usesMultiBranchScope } from "@/lib/server/multi-branch-scope"
 
 const TOKEN_EMAIL_RECIPIENT = ADMIN_OPERATIONS_EMAIL
@@ -41,16 +41,26 @@ async function hasBranchAccessForTokenEmail(
 /**
  * What the caller is told once the token has left.
  *
- * The order is reported as it actually stands: a hand-off that could not settle
- * its order — one someone else already fulfilled, or one whose budget hold no
- * longer adds up — still delivered the token, and says so rather than claiming
- * a fulfilment that did not happen.
+ * The order is reported as it actually stands. A token that reaches the
+ * administrator before the goods do leaves the order approved with the hand-off
+ * recorded — it settles when the delivery is recorded, and the caller is told
+ * that rather than being told the order is fulfilled. A hand-off that could not
+ * even be recorded — one someone else already fulfilled, or one whose status
+ * moved underneath the request — still delivered the token, and says so.
  */
-function tokenHandoffResponse(orderStatus: string, fulfilled: boolean) {
+function tokenHandoffResponse(
+  orderStatus: string,
+  { fulfilled, awaitingDelivery }: { fulfilled: boolean; awaitingDelivery: boolean },
+) {
   return ok({
-    message: tokenHandoffMessage({ sentCount: 1, fulfilledCount: fulfilled ? 1 : 0 }),
+    message: tokenHandoffMessage({
+      sentCount: 1,
+      fulfilledCount: fulfilled ? 1 : 0,
+      awaitingDeliveryCount: awaitingDelivery ? 1 : 0,
+    }),
     recipient: TOKEN_EMAIL_RECIPIENT,
     fulfilled,
+    awaitingDelivery,
     status: fulfilled ? "FULFILLED" : orderStatus,
   })
 }
@@ -168,17 +178,19 @@ export async function POST(
     return error(`Failed to send token email through AWS SES: ${emailErrorMessage}`, 400)
   }
 
-  // The token has reached the administrator, so the order is settled. The
-  // transition runs on the order this request already authorized, under the
-  // same tenant and branch, and never fails a hand-off that did go out.
-  const fulfilledOrderIds = await fulfillOrdersAfterTokenHandoff([{
+  // The token has reached the administrator, so the hand-off is recorded
+  // against the order — and settles it if the order has already been delivered.
+  // Both run on the order this request already authorized, under the same
+  // tenant and branch, and never fail a hand-off that did go out.
+  const settlement = await settleOrdersAfterTokenHandoff([{
     orderId: order.id,
     organizationId: order.organizationId,
     branchId: order.branchId,
     status: order.status,
-    fulfilledByUserId: user.id,
+    handedOffByUserId: user.id,
   }])
-  const fulfilled = fulfilledOrderIds.has(order.id)
+  const fulfilled = settlement.fulfilledOrderIds.has(order.id)
+  const awaitingDelivery = settlement.awaitingDeliveryOrderIds.has(order.id)
 
   await db.insert(auditLogs).values({
     userId: user.id,
@@ -191,8 +203,9 @@ export async function POST(
       tid: order.tid,
       recipient: TOKEN_EMAIL_RECIPIENT,
       fulfilled,
+      awaitingDelivery,
     },
   })
 
-  return tokenHandoffResponse(order.status, fulfilled)
+  return tokenHandoffResponse(order.status, { fulfilled, awaitingDelivery })
 }

@@ -19,8 +19,11 @@ type OrgProduct = {
     productName: string
     productCode: string
     productImageUrl: string | null
-    basePrice: number
+    /** Null for a role that may not see the global base price. */
+    basePrice: number | null
     customPrice: number | null
+    /** What the branches pay: the organization price, or the base price under it. */
+    effectivePriceCents: number | null
     customName: string | null
     customDescription: string | null
     customImageUrl: string | null
@@ -239,7 +242,9 @@ export default function ViewOrgProductsPage() {
                                                     </div>
                                                 </TableCell>
                                                 <TableCell className="font-medium">
-                                                    {formatPKR((product.customPrice ?? product.basePrice) / 100)}
+                                                    {product.effectivePriceCents == null
+                                                        ? "—"
+                                                        : formatPKR(product.effectivePriceCents / 100)}
                                                 </TableCell>
                                                 <TableCell>
                                                     {product.isActive ? (

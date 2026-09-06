@@ -26,6 +26,10 @@ import { resolveTaxRateBp, splitInclusiveCents } from "@/lib/tax"
 import { getOrganizationTaxRateBp } from "@/lib/server/tax-rate"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
 import {
+  attemptImmediateOrderEmailDelivery,
+  queueOrderCreatedNotifications,
+} from "@/lib/server/order-notifications"
+import {
   loadGroupPriceOverrides,
   resolveBranchGroupId,
   resolveEffectivePriceCents,
@@ -593,7 +597,17 @@ function childIdempotencyKey(groupOrderId: number, branchId: number): string {
   return `grp-${groupOrderId}-b${branchId}`
 }
 
-async function createBranchOrder(context: BranchCreationContext): Promise<GroupOrderBranchResult> {
+/**
+ * One branch's outcome, plus the notification events queued for it. The event
+ * keys never reach the caller of the API — the submission delivers them once
+ * every branch has committed.
+ */
+type BranchCreationOutcome = {
+  result: GroupOrderBranchResult
+  eventKeys: string[]
+}
+
+async function createBranchOrder(context: BranchCreationContext): Promise<BranchCreationOutcome> {
   const { plan, organizationId } = context
   const branchId = plan.branch.id
   const inventoryIds = plan.items.map((item) => item.organizationInventoryId)
@@ -602,10 +616,13 @@ async function createBranchOrder(context: BranchCreationContext): Promise<GroupO
   const budget = await getOrCreateBranchBudget(branchId, context.period)
   if (!budget) {
     return {
-      status: "failed",
-      branchId,
-      branchName: plan.branch.name,
-      reason: `Budget not configured for ${context.period}. Please contact head office to allocate budget for this branch.`,
+      result: {
+        status: "failed",
+        branchId,
+        branchName: plan.branch.name,
+        reason: `Budget not configured for ${context.period}. Please contact head office to allocate budget for this branch.`,
+      },
+      eventKeys: [],
     }
   }
 
@@ -704,24 +721,53 @@ async function createBranchOrder(context: BranchCreationContext): Promise<GroupO
         success: true,
       })
 
-      return { order, itemCount: priced.items.length, total: priced.total }
+      // The approver has to learn about this order the same way it learns about
+      // a single-branch one: a bell notification and an "awaiting approval"
+      // email, addressed to the tenant's configured approver for this branch.
+      // Queued inside the branch's own transaction so an order and its event
+      // are committed together, and never allowed to fail an order that is
+      // otherwise complete — branches stay independent.
+      let eventKeys: string[] = []
+      try {
+        const queued = await queueOrderCreatedNotifications(tx, {
+          order: {
+            id: order.id,
+            tid: order.tid,
+            organizationId,
+            branchId,
+            createdByUserId: context.actor.userId,
+          },
+          requestedBy: "Group Order Portal user",
+        })
+        eventKeys = queued.eventKeys
+      } catch (notificationError) {
+        console.error("Group order approval notification could not be queued", notificationError)
+      }
+
+      return { order, itemCount: priced.items.length, total: priced.total, eventKeys }
     })
 
     return {
-      status: "created",
-      branchId,
-      branchName: plan.branch.name,
-      orderId: created.order.id,
-      tid: created.order.tid,
-      totalCents: created.total,
-      itemCount: created.itemCount,
+      result: {
+        status: "created",
+        branchId,
+        branchName: plan.branch.name,
+        orderId: created.order.id,
+        tid: created.order.tid,
+        totalCents: created.total,
+        itemCount: created.itemCount,
+      },
+      eventKeys: created.eventKeys,
     }
   } catch (branchError) {
     return {
-      status: "failed",
-      branchId,
-      branchName: plan.branch.name,
-      reason: toUserFacingReason(branchError),
+      result: {
+        status: "failed",
+        branchId,
+        branchName: plan.branch.name,
+        reason: toUserFacingReason(branchError),
+      },
+      eventKeys: [],
     }
   }
 }
@@ -815,10 +861,11 @@ export async function createGroupOrder(
   const childNotes = buildChildOrderNotes(envelope.reference, input.notes)
 
   const results: GroupOrderBranchResult[] = []
+  const notificationEventKeys: string[] = []
   for (const plan of plans) {
     // Sequential on purpose: branch orders take row locks on shared product
     // stock, so running them in parallel would trade throughput for deadlocks.
-    results.push(await createBranchOrder({
+    const outcome = await createBranchOrder({
       plan,
       organizationId: input.organizationId,
       groupOrderId: envelope.id,
@@ -829,7 +876,9 @@ export async function createGroupOrder(
       mode,
       actor: input.actor,
       invoiceSequenceReady,
-    }))
+    })
+    results.push(outcome.result)
+    notificationEventKeys.push(...outcome.eventKeys)
   }
 
   const failures = results
@@ -850,6 +899,11 @@ export async function createGroupOrder(
     requestedBranchCount: plans.length,
     createdOrderCount,
   })
+
+  // Best-effort first delivery, exactly as the single-branch endpoint does. The
+  // events are already committed, so anything not sent here is picked up by the
+  // outbox processor rather than lost.
+  await attemptImmediateOrderEmailDelivery(notificationEventKeys)
 
   return {
     ok: true,

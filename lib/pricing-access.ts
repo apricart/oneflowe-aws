@@ -9,9 +9,12 @@
  * Head Office administers organizations, branches, and groups, and still cannot
  * reprice any of them.
  *
- * Reading a price is not restricted here. Head Office has to see what its
- * branches pay to do its job; `lib/price-visibility.ts` governs who may see a
- * price, and this module governs only who may change one.
+ * Reading a price is mostly not restricted here. Head Office has to see what
+ * its branches pay to do its job; `lib/price-visibility.ts` governs who may see
+ * a price on the branch-facing screens. The one read this module does gate is
+ * the **global base price** — the internal cost the catalogue is built on,
+ * which sits above every tenant and is nobody's business but a Super Admin's.
+ * See `canViewGlobalBasePrice`.
  *
  * No imports, no `server-only`: the API routes enforce it, the React screens
  * use it to render a read-only view, and the unit tests call it directly. One
@@ -37,6 +40,29 @@ export const PRICE_MUTATION_FORBIDDEN_MESSAGE =
   "Forbidden: only a Super Admin may change prices"
 
 export type PriceAccessFailure = { message: string; status: number }
+
+/**
+ * The only roles permitted to *see* the global base price. Also a list of one.
+ *
+ * The base price is the internal figure the whole ladder is built on: it is set
+ * once, globally, and every organization's price is negotiated down from it.
+ * Showing it to a tenant exposes the margin on every product they buy, so Head
+ * Office sees what its own branches pay and never the number underneath.
+ *
+ * Deliberately separate from `PRICE_MUTATION_ROLES`: the two lists happen to
+ * hold the same role today, but they answer different questions, and folding
+ * them together would make "may see the cost" silently follow "may set a price"
+ * the first time either list changes.
+ */
+export const GLOBAL_PRICE_VIEW_ROLES = ["SUPER_ADMIN"] as const
+
+export type GlobalPriceViewRole = (typeof GLOBAL_PRICE_VIEW_ROLES)[number]
+
+/** True only for a role allowed to see the global base price. */
+export function canViewGlobalBasePrice(role: unknown): role is GlobalPriceViewRole {
+  return typeof role === "string"
+    && (GLOBAL_PRICE_VIEW_ROLES as readonly string[]).includes(role)
+}
 
 /** True only for a role allowed to write a price. Unknown values are never allowed. */
 export function canMutatePrices(role: unknown): role is PriceMutationRole {

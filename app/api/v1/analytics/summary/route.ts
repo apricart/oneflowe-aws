@@ -15,6 +15,7 @@ import {
     resolveAnalyticsOrganizationIds,
 } from "@/lib/server/analytics-scope"
 import { loadAnalyticsAssignedBranchIds } from "@/lib/server/analytics-branch-scope"
+import { orderSelectColumns } from "@/lib/order-select"
 
 function parseNumberList(value: string | null, isValid = (number: number) => number > 0) {
     return value ? value.split(",").map(Number).filter((number) => !Number.isNaN(number) && isValid(number)) : []
@@ -308,6 +309,11 @@ export async function GET(req: NextRequest) {
         id: orders.id,
         tid: orders.tid,
         status: orders.status,
+        // Read defensively, exactly as the orders list does, so an environment
+        // whose fulfillment/payment migration has not been applied reports the
+        // default rather than failing the whole report.
+        fulfillmentStatus: orderSelectColumns.fulfillmentStatus,
+        paymentStatus: orderSelectColumns.paymentStatus,
         totalCents: orders.totalCents,
         subtotalCents: orders.subtotalCents,
         taxCents: orders.taxCents,

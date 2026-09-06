@@ -1,5 +1,6 @@
 import { isValidRole, type Role } from "@/lib/rbac"
 import { isInvoiceAvailableForOrder } from "@/lib/invoice-availability"
+import { isGroupPortalOrder } from "@/lib/group-order-visibility"
 
 /**
  * The parts of an order the invoice decision looks at. Structural on purpose so
@@ -12,6 +13,12 @@ export type InvoiceOrderSubject = {
   status: string | null
   statusAtRefund?: string | null
   receiptData?: unknown
+  /**
+   * Set when the order came from a Group Order Portal submission. Absent or
+   * null on every order raised through any other flow, which is what keeps the
+   * branch exception below from reaching an order that already exists.
+   */
+  groupOrderId?: number | null
 }
 
 /**
@@ -46,6 +53,17 @@ type InvoiceRoleRule = {
   tenant: "platform" | "own-organization"
   branches: "all" | "own-organization" | "own-branch" | "assigned"
   ownOrdersOnly: boolean
+  /**
+   * Relaxes `ownOrdersOnly` for one narrow case: an order the Group Order Portal
+   * raised *for this caller's branch*. Such an order spends the branch's budget
+   * and is delivered to it, so its invoice is a branch document rather than a
+   * personal one — the Branch Admin above already reads every one of them.
+   *
+   * Set on `ORDER_PORTAL` alone. The tenant and branch checks still run first,
+   * so this never reaches another branch or another organization, and it never
+   * exposes an order a colleague raised personally.
+   */
+  includesBranchGroupOrders?: boolean
 }
 
 /**
@@ -55,7 +73,9 @@ type InvoiceRoleRule = {
  *  - SUPER_ADMIN         — the platform, like everywhere else.
  *  - HEAD_OFFICE         — its whole organization.
  *  - BRANCH_ADMIN        — its own branch, like the orders directory.
- *  - ORDER_PORTAL        — its own orders, like the store's order list.
+ *  - ORDER_PORTAL        — its own orders, like the store's order list, plus the
+ *                          group orders raised for its branch, which appear in
+ *                          that same list.
  *  - GROUP_ORDER_PORTAL  — the orders it raised, across the branches it ordered
  *                          for, like its group order history.
  *  - GROUP_USER          — every order in its assigned branches, like its
@@ -65,7 +85,12 @@ const INVOICE_ROLE_RULES: Record<Role, InvoiceRoleRule> = {
   SUPER_ADMIN: { tenant: "platform", branches: "all", ownOrdersOnly: false },
   HEAD_OFFICE: { tenant: "own-organization", branches: "own-organization", ownOrdersOnly: false },
   BRANCH_ADMIN: { tenant: "own-organization", branches: "own-branch", ownOrdersOnly: false },
-  ORDER_PORTAL: { tenant: "own-organization", branches: "own-branch", ownOrdersOnly: true },
+  ORDER_PORTAL: {
+    tenant: "own-organization",
+    branches: "own-branch",
+    ownOrdersOnly: true,
+    includesBranchGroupOrders: true,
+  },
   GROUP_ORDER_PORTAL: { tenant: "own-organization", branches: "own-organization", ownOrdersOnly: true },
   GROUP_USER: { tenant: "own-organization", branches: "assigned", ownOrdersOnly: false },
 }
@@ -150,8 +175,15 @@ export function resolveInvoiceAccess(input: {
   // Branch scope inside the tenant.
   if (!isWithinBranchScope(rule, scope, order)) return FORBIDDEN
 
-  // Ownership, for the roles that only ever see their own orders.
-  if (rule.ownOrdersOnly && order.createdByUserId !== scope.userId) return FORBIDDEN
+  // Ownership, for the roles that only ever see their own orders — plus the
+  // group orders raised for their own branch, where the rule allows it.
+  if (
+    rule.ownOrdersOnly
+    && order.createdByUserId !== scope.userId
+    && !(rule.includesBranchGroupOrders && isGroupPortalOrder(order))
+  ) {
+    return FORBIDDEN
+  }
 
   // Identical availability rules for every role: an invoice exists only once
   // the order is approved, and stays available through fulfillment and refund.

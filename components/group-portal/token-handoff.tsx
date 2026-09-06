@@ -20,10 +20,19 @@ import { useToast } from "@/hooks/use-toast"
  * It is one component rather than two so the wording, the audit trail, and the
  * failure handling cannot drift apart between the two surfaces.
  *
- * Emailing the token settles the order: the server marks it fulfilled once the
- * message has gone out, and reports back whether it did, so the panel can say
- * what actually happened instead of promising it.
+ * Emailing the token is half of what settles the order; the goods still have to
+ * arrive. The server marks the order fulfilled if it has already been
+ * delivered, and otherwise remembers the hand-off so the delivery settles it.
+ * It reports back which of the two happened, so the panel can say what actually
+ * happened instead of promising it.
  */
+
+/** What the hand-off did, in the words the server reported it in. */
+function handoffOutcome(payload: { fulfilled?: boolean; awaitingDelivery?: boolean }): string {
+  if (payload?.fulfilled) return "the order is now marked fulfilled."
+  if (payload?.awaitingDelivery) return "it will be marked fulfilled once the admin records delivery."
+  return "the admin can now mark this order delivered."
+}
 export function TokenHandoff({
   orderId,
   tid,
@@ -78,9 +87,7 @@ export function TokenHandoff({
       setSent(true)
       toast({
         title: payload?.fulfilled ? "Token sent — order fulfilled" : "Token sent to admin",
-        description: payload?.fulfilled
-          ? `${label} is now marked fulfilled.`
-          : `${label} — the admin can now mark this order delivered.`,
+        description: `${label} — ${handoffOutcome(payload)}`,
       })
       if (payload?.fulfilled) onFulfilled?.()
     } catch {

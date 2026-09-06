@@ -15,6 +15,8 @@ import { Pagination,PaginationContent,PaginationItem } from "@/components/ui/pag
 import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from "@/components/ui/table"
 import { Tabs,TabsContent,TabsList,TabsTrigger } from "@/components/ui/tabs"
 import { getOrderDerivedStatus } from "@/lib/order-status"
+import { getOrderStatusDisplay } from "@/lib/order-status-display"
+import { getFulfillmentProgressColor, getPaymentStatusColor } from "@/lib/order-status-colors"
 import { Role } from "@/lib/rbac"
 import { sanitizeSpreadsheetRow } from "@/lib/spreadsheet"
 import { cn,formatPKR } from "@/lib/utils"
@@ -81,6 +83,8 @@ const ALL_COLUMNS: ColumnDef[] = [
     { key: "groupOrderReference", label: "Group Order ID", defaultVisible: true },
     { key: "branchName", label: "Branch", defaultVisible: true },
     { key: "status", label: "Status", defaultVisible: true },
+    { key: "deliveryStatus", label: "Delivery Status", defaultVisible: true },
+    { key: "paymentStatus", label: "Payment", defaultVisible: true },
     { key: "quantityOrdered", label: "Qty Ordered", defaultVisible: true },
     { key: "quantityDelivered", label: "Qty Delivered", defaultVisible: true },
     { key: "quantityRefunded", label: "Qty Refunded", defaultVisible: true },
@@ -128,9 +132,12 @@ export default function OrderReportPage() {
     const [activeTab, setActiveTab] = useState("analytics")
     const [reportSearch, setReportSearch] = useState("")
     const debouncedReportSearch = useDebounce(reportSearch.trim(), 300)
-    // Group orders are the approver's unit of work, so only that role is
-    // offered the filter and the column that goes with it.
-    const showsGroupOrders = role === "GROUP_USER"
+    // A Group Order Portal submission is recorded as one ordinary order per
+    // branch, so these rows already sit in every administrator's report. The
+    // column and the reference filter are what let them tell which submission a
+    // row came from — the server pins the reference lookup to the caller's own
+    // organizations, so it reveals nothing outside the scope they already read.
+    const showsGroupOrders = ["GROUP_USER", "SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"].includes(role)
     const [groupOrderFilter, setGroupOrderFilter] = useState("")
     const debouncedGroupOrderFilter = useDebounce(groupOrderFilter.trim(), 300)
     const [statusFilter, setStatusFilter] = useState<StatusFilter>("all")
@@ -557,6 +564,8 @@ export default function OrderReportPage() {
                     case "groupOrderReference": return order.groupOrderReference || "-"
                     case "branchName": return order.branchName || "-"
                     case "status": return getOrderDerivedStatus({ status: order.status }).label || "-"
+                    case "deliveryStatus": return getOrderStatusDisplay(order).fulfillmentStatus || "-"
+                    case "paymentStatus": return getOrderStatusDisplay(order).paymentStatus || "-"
                     case "quantityOrdered": return order.quantityOrdered || 0
                     case "quantityDelivered": return (order.quantityOrdered || 0) - (order.quantityRefunded || 0)
                     case "quantityRefunded": return order.quantityRefunded || 0
@@ -981,7 +990,7 @@ export default function OrderReportPage() {
                         {/* Report Table */}
                         <Card className="min-w-0 rounded-[2.5rem] border-slate-200 dark:border-slate-800 shadow-2xl bg-white dark:bg-slate-900/40 overflow-hidden min-h-[600px] flex flex-col">
                             <div className="min-w-0 flex-1 overflow-hidden [&_[data-slot=table-container]]:overflow-x-auto [&_[data-slot=table-container]]:overscroll-x-contain">
-                                <Table className="min-w-[1850px] table-fixed">
+                                <Table className="min-w-[2100px] table-fixed">
                                     <colgroup>
                                         {isVisible("tid") && <col className="w-[185px]" />}
                                         {isVisible("orderDate") && <col className="w-[125px]" />}
@@ -992,6 +1001,8 @@ export default function OrderReportPage() {
                                         {isVisible("groupOrderReference") && showsGroupOrders && <col className="w-[175px]" />}
                                         {isVisible("branchName") && role !== "BRANCH_ADMIN" && <col className="w-[180px]" />}
                                         {isVisible("status") && <col className="w-[135px]" />}
+                                        {isVisible("deliveryStatus") && <col className="w-[140px]" />}
+                                        {isVisible("paymentStatus") && <col className="w-[110px]" />}
                                         {isVisible("quantityOrdered") && <col className="w-[90px]" />}
                                         {isVisible("quantityDelivered") && <col className="w-[90px]" />}
                                         {isVisible("quantityRefunded") && <col className="w-[90px]" />}
@@ -1017,6 +1028,8 @@ export default function OrderReportPage() {
                                             {isVisible("groupOrderReference") && showsGroupOrders && <TableHead className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500"><div className="flex items-center gap-1.5"><Layers className="h-3 w-3 shrink-0" /> Group Order</div></TableHead>}
                                             {isVisible("branchName") && role !== "BRANCH_ADMIN" && <TableHead className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500"><div className="flex items-center gap-1.5"><Store className="h-3 w-3 shrink-0" /> Branch</div></TableHead>}
                                             {isVisible("status") && <TableHead className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500 text-center">Status</TableHead>}
+                                            {isVisible("deliveryStatus") && <TableHead className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500 text-center">Delivery</TableHead>}
+                                            {isVisible("paymentStatus") && <TableHead className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500 text-center">Payment</TableHead>}
                                             {isVisible("quantityOrdered") && <TableHead className="h-14 px-2 text-center text-[9px] font-black uppercase leading-tight tracking-wide text-slate-500 whitespace-normal">Qty Ordered</TableHead>}
                                             {isVisible("quantityDelivered") && <TableHead className="h-14 px-2 text-center text-[9px] font-black uppercase leading-tight tracking-wide text-emerald-600 whitespace-normal">Qty Delivered</TableHead>}
                                             {isVisible("quantityRefunded") && <TableHead className="h-14 px-2 text-center text-[9px] font-black uppercase leading-tight tracking-wide text-rose-500 whitespace-normal">Qty Refunded</TableHead>}
@@ -1094,6 +1107,34 @@ export default function OrderReportPage() {
                                                                     </Badge>
                                                                 )}
                                                             </div>
+                                                        </TableCell>
+                                                    )}
+                                                    {isVisible("deliveryStatus") && (
+                                                        <TableCell className="px-2 2xl:px-3 py-5 text-center">
+                                                            {getOrderStatusDisplay(order).fulfillmentStatus
+                                                                ? (
+                                                                    <Badge
+                                                                        variant="outline"
+                                                                        className={cn("max-w-full whitespace-normal rounded-xl border px-2 py-1 text-[9px] font-black uppercase tracking-wide", getFulfillmentProgressColor(order.fulfillmentStatus))}
+                                                                    >
+                                                                        {getOrderStatusDisplay(order).fulfillmentStatus}
+                                                                    </Badge>
+                                                                )
+                                                                : <span className="text-[10px] font-bold text-slate-400">—</span>}
+                                                        </TableCell>
+                                                    )}
+                                                    {isVisible("paymentStatus") && (
+                                                        <TableCell className="px-2 2xl:px-3 py-5 text-center">
+                                                            {getOrderStatusDisplay(order).paymentStatus
+                                                                ? (
+                                                                    <Badge
+                                                                        variant="outline"
+                                                                        className={cn("max-w-full whitespace-normal rounded-xl border px-2 py-1 text-[9px] font-black uppercase tracking-wide", getPaymentStatusColor(order.paymentStatus))}
+                                                                    >
+                                                                        {getOrderStatusDisplay(order).paymentStatus}
+                                                                    </Badge>
+                                                                )
+                                                                : <span className="text-[10px] font-bold text-slate-400">—</span>}
                                                         </TableCell>
                                                     )}
                                                     {isVisible("quantityOrdered") && <TableCell className="px-2 py-5 text-center text-[12px] font-black font-mono text-slate-900 dark:text-white tabular-nums">{order.quantityOrdered || 0}</TableCell>}

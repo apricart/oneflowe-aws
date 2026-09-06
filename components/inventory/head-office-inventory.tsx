@@ -12,6 +12,7 @@ SelectValue,
 } from "@/components/ui/select"
 import { Table } from "@/components/ui/table"
 import { fetcher } from "@/lib/fetcher"
+import { resolveEffectivePriceCents } from "@/lib/price-ladder"
 import { cn,formatPKR } from "@/lib/utils"
 import {
 AlertCircle,
@@ -39,7 +40,11 @@ interface AssignedProduct {
   productCode: string
   productImageUrl: string | null
   categoryName: string | null
-  basePrice: number
+  /**
+   * Null for a role that may not see the global base price — the catalogue
+   * endpoints strip it rather than hiding it in the markup.
+   */
+  basePrice: number | null
   unit: string
 }
 
@@ -288,9 +293,20 @@ export default function HeadOfficeInventory({ organizationId }: Readonly<{ organ
                     </td>
                     <td className="p-4">
                       <div className="text-sm">
-                        {product.customPrice
-                          ? formatPKR(product.customPrice / 100)
-                          : formatPKR(product.basePrice / 100)}
+                        {/*
+                          Resolved through the shared ladder rather than a
+                          hand-written fallback: a price of 0 is a price, and
+                          the base price is absent for a role that may not see
+                          it — dividing that by 100 printed "Rs 0" as though the
+                          product were free.
+                        */}
+                        {(() => {
+                          const priceCents = resolveEffectivePriceCents({
+                            organizationPriceCents: product.customPrice,
+                            basePriceCents: product.basePrice,
+                          })
+                          return priceCents === null ? "—" : formatPKR(priceCents / 100)
+                        })()}
                       </div>
                     </td>
                     <td className="p-4 text-right">

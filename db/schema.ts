@@ -148,6 +148,13 @@ export const users = pgTable(
     contactPerson: varchar("contact_person", { length: 255 }),
     location: varchar("location", { length: 255 }),
     address: text("address"),
+    // Optional stable identity for accounts mirrored from an external system,
+    // matching the same pair on `branches`. Accounts created through the portal
+    // leave both null, and only those accounts may sign in with an email
+    // address: a mirrored person holds one account per role behind a single
+    // shared email, so an email alone cannot say which portal they meant.
+    externalSource: varchar("external_source", { length: 64 }),
+    externalId: varchar("external_id", { length: 128 }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
@@ -167,6 +174,17 @@ export const users = pgTable(
     index("users_org_idx").on(t.organizationId),
     index("users_branch_idx").on(t.branchId),
     index("users_employee_id_idx").on(t.employeeId),
+    // One account per source person *per role* — a mirrored person is two rows
+    // (one to place orders, one to approve them) sharing an external identity.
+    uniqueIndex("users_org_external_identity_role_uq")
+      .on(t.organizationId, t.externalSource, t.externalId, t.roleId)
+      .where(sql`${t.externalSource} IS NOT NULL AND ${t.externalId} IS NOT NULL`),
+    index("users_external_identity_idx").on(t.externalSource, t.externalId),
+    check(
+      "users_external_identity_pair_ck",
+      sql`(${t.externalSource} IS NULL) = (${t.externalId} IS NULL)
+        AND (${t.externalSource} IS NULL OR (btrim(${t.externalSource}) <> '' AND btrim(${t.externalId}) <> ''))`,
+    ),
   ],
 )
 
@@ -485,6 +503,15 @@ export const orders = pgTable(
     approvalTokenHash: varchar("approval_token_hash", { length: 255 }), // Hash for verification
     approvalTokenCreatedAt: timestamp("approval_token_created_at", { withTimezone: true }),
     fulfilledByUserId: uuid("fulfilled_by_user_id").references(() => users.id),
+    // Fulfilment token hand-off tracking.
+    //
+    // Handing the token to admin operations no longer settles the order on its
+    // own: the goods still have to arrive. These columns remember a hand-off
+    // that happened before delivery, so the order can be settled the moment its
+    // delivery status reaches DELIVERED. Both are nullable, so every order that
+    // never had a token handed over keeps exactly the data it has today.
+    tokenHandoffAt: timestamp("token_handoff_at", { withTimezone: true }),
+    tokenHandoffByUserId: uuid("token_handoff_by_user_id").references(() => users.id),
     // Refund tracking fields
     refundedAt: timestamp("refunded_at", { withTimezone: true }),
     refundedByUserId: uuid("refunded_by_user_id").references(() => users.id),

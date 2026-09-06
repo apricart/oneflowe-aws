@@ -12,6 +12,10 @@ export const orderSelectColumns = {
   fulfillmentStatus: sql<FulfillmentStatus>`COALESCE(to_jsonb("orders") ->> 'fulfillment_status', 'NOT_STARTED')`,
   paymentStatus: sql<PaymentStatus>`COALESCE(to_jsonb("orders") ->> 'payment_status', 'UNPAID')`,
   paidAt: sql<string | null>`to_jsonb("orders") ->> 'paid_at'`,
+  // Read the same defensive way as the columns above, so an environment whose
+  // hand-off migration has not been applied reports "never handed over" rather
+  // than failing every order read.
+  tokenHandoffAt: sql<string | null>`to_jsonb("orders") ->> 'token_handoff_at'`,
   paidByUserId: sql<string | null>`to_jsonb("orders") ->> 'paid_by_user_id'`,
   subtotalCents: orders.subtotalCents,
   taxCents: orders.taxCents,

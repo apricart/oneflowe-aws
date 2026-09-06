@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button"
 import { FieldSourceBadge } from "./field-source-badge"
 import { StockStatusBadge } from "./stock-status-badge"
 import { Eye, EyeOff, Settings, Package } from "lucide-react"
+import { resolveEffectivePriceCents } from "@/lib/price-ladder"
 import { cn, formatPKR } from "@/lib/utils"
 
 interface ProductDetailCardProps {
@@ -11,7 +12,8 @@ interface ProductDetailCardProps {
     id: number
     productName: string
     productCode: string
-    basePrice: number
+    /** Null for a role that may not see the global base price. */
+    basePrice: number | null
     unit: string
     stockQuantity: number
     reorderThreshold: number
@@ -43,7 +45,12 @@ export function ProductDetailCard({
   className
 }: Readonly<ProductDetailCardProps>) {
   const effectiveName = product.customName || product.productName
-  const effectivePrice = product.customPrice || product.basePrice
+  // Nullish, never falsy, and never hand-written: a deliberate price of 0 is a
+  // price, and the base price is absent for a role that may not see it.
+  const effectivePrice = resolveEffectivePriceCents({
+    organizationPriceCents: product.customPrice,
+    basePriceCents: product.basePrice,
+  })
   const effectiveDescription = product.customDescription || product.description
 
 
@@ -122,7 +129,7 @@ export function ProductDetailCard({
             <span className="text-sm font-medium text-muted-foreground">Price</span>
             <div className="flex items-center gap-2">
               <span className="font-semibold">
-                {formatPKR(effectivePrice / 100)} {product.unit}
+                {effectivePrice === null ? "—" : `${formatPKR(effectivePrice / 100)} ${product.unit}`}
               </span>
               {showSource && (
                 <FieldSourceBadge

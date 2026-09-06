@@ -14,6 +14,7 @@ resolveAnalyticsBranchIds,
 resolveAnalyticsOrganizationIds,
 } from "@/lib/server/analytics-scope"
 import { loadAnalyticsAssignedBranchIds } from "@/lib/server/analytics-branch-scope"
+import { resolveEffectivePriceCents } from "@/lib/server/effective-price"
 import { escapeLikePattern } from "@/lib/utils"
 import { aliasedTable,and,eq,exists,gte,ilike,inArray,lte,or,sql } from "drizzle-orm"
 import { getServerSession } from "next-auth"
@@ -159,12 +160,64 @@ function getInventoryOrganizationCondition(organizationIds: number[], userOrgani
     return userOrganizationId ? eq(organizationInventory.organizationId, userOrganizationId) : undefined
 }
 
+/**
+ * Whether exactly one organization is in scope, and therefore whether an
+ * organization price can be reported at all.
+ *
+ * The join above admits every organization in scope. With one, the joined row
+ * is unambiguous — `organization_inventory` is unique per (organization,
+ * product) — and its price is *the* price for this report. With several, or
+ * with none (a Super Admin looking across every tenant), a product assigned to
+ * more than one of them joins more than one row and the last one read would
+ * win: the report would print one tenant's negotiated price against another
+ * tenant's product. There is no single organization price in that case, so the
+ * report falls back to the global base price. Only a Super Admin can be in that
+ * position — `resolveAnalyticsOrganizationIds` pins every other role to its own
+ * organization — and a Super Admin is excluded from the organization tier
+ * anyway, which makes this a second, independent guard rather than the only
+ * one.
+ *
+ * This mirrors the rule the price ladder already applies to the group tier: an
+ * override tier applies only where the question it answers has one answer.
+ */
+function hasSingleOrganizationInScope(organizationIds: number[], userOrganizationId: number | null) {
+    if (organizationIds.length === 1) return true
+    return organizationIds.length === 0 && Boolean(userOrganizationId)
+}
+
+/**
+ * The unit price reported for a product with no sales in the period.
+ *
+ * There is no charged amount to report for such a product, so the price comes
+ * from the catalogue — and it must come down the ladder rather than straight
+ * off `global_products`. Reporting the base price to an organization that has
+ * negotiated its own price is both the wrong number and a way around the
+ * redaction applied to `basePriceCents`: the same figure would simply travel
+ * under another name.
+ *
+ * Nullish, never falsy: an organization price deliberately set to 0 is a price
+ * and must not fall through to the tier below it.
+ */
+function reportedUnitPriceCents(
+    product: { organizationPriceCents?: number | null; basePriceCents?: number | null },
+    organizationPriceApplies: boolean,
+) {
+    return resolveEffectivePriceCents({
+        organizationPriceCents: organizationPriceApplies ? product.organizationPriceCents : null,
+        basePriceCents: product.basePriceCents,
+    }) ?? 0
+}
+
 function getProductStatus(product: any) {
     if (product.deletedAt) return 'deleted'
     return product.orgIsActive === false ? 'inactive' : product.status
 }
 
-function initializeProductMap(allProducts: any[], results: any[], isSuperAdmin: boolean) {
+function initializeProductMap(
+    allProducts: any[],
+    results: any[],
+    { isSuperAdmin, organizationPriceApplies }: { isSuperAdmin: boolean; organizationPriceApplies: boolean },
+) {
     const productMap: Record<number, any> = {}
     allProducts.forEach((product) => {
         productMap[product.id] = {
@@ -181,7 +234,10 @@ function initializeProductMap(allProducts: any[], results: any[], isSuperAdmin: 
             qtyRefunded: 0,
             revenueGeneratedCents: 0,
             basePriceCents: isSuperAdmin ? (product.basePriceCents || 0) : 0,
-            unitPriceCents: product.basePriceCents || 0,
+            // No sales in the period, so the catalogue price stands in — the
+            // organization's own price where it has one, and the price under it
+            // where it does not.
+            unitPriceCents: reportedUnitPriceCents(product, organizationPriceApplies),
             refundLossCents: 0,
         }
     })
@@ -201,6 +257,8 @@ function initializeProductMap(allProducts: any[], results: any[], isSuperAdmin: 
             qtyRefunded: 0,
             revenueGeneratedCents: 0,
             basePriceCents: isSuperAdmin ? (row.basePriceCents || 0) : 0,
+            // What was actually charged, which already reflects every tier of
+            // the ladder that applied when the order was placed.
             unitPriceCents: row.priceCents || 0,
             refundLossCents: 0,
         }
@@ -466,7 +524,10 @@ export async function GET(req: NextRequest) {
                 orgIsActive: organizationInventory.isActive,
                 categoryName: sql<string>`COALESCE(${parentCategories.name}, ${categories.name})`,
                 subCategoryName: sql<string>`CASE WHEN ${parentCategories.id} IS NOT NULL THEN ${categories.name} ELSE NULL END`,
-                basePriceCents: globalProducts.basePrice
+                basePriceCents: globalProducts.basePrice,
+                // Read from the same joined row `orgIsActive` comes from, and
+                // only reported when one organization is in scope.
+                organizationPriceCents: organizationInventory.customPrice
             })
             .from(globalProducts)
             .leftJoin(categories, eq(globalProducts.categoryId, categories.id))
@@ -479,8 +540,18 @@ export async function GET(req: NextRequest) {
             
         // 2. Initialize the product map with ALL products
         const isSuperAdmin = userRole === "SUPER_ADMIN"
-        
-        const productMap = initializeProductMap(allProducts, results, isSuperAdmin)
+        // A Super Admin's column is labelled "Base Price" and the base price is
+        // precisely what only they may see, so their report is left exactly as
+        // it was. Every other role reads a column labelled "Unit Price" and is
+        // pinned to a single organization, so it sees what that organization
+        // actually pays.
+        const organizationPriceApplies = !isSuperAdmin
+            && hasSingleOrganizationInScope(parsedOrgIds, userOrgId)
+
+        const productMap = initializeProductMap(allProducts, results, {
+            isSuperAdmin,
+            organizationPriceApplies,
+        })
         aggregateProductRows(productMap, results, refundQuantities)
 
         // Format mapping back to an array and apply the allowlisted ranking.

@@ -7,7 +7,7 @@
   },
   "scripts": {
     "build": "next build",
-    "db:check": "tsx lib/check-users.ts",
+    "db:check": "tsx scripts/check-users.ts",
     "db:validate": "drizzle-kit check --config=drizzle.config.ts",
     "db:export": "tsx scripts/export-db.ts",
     "db:generate": "drizzle-kit generate --config=drizzle.config.ts",
@@ -21,6 +21,7 @@
     "migrate:images-to-s3": "tsx scripts/migrate-images-to-s3.ts",
     "import:users": "tsx scripts/import-users-csv.ts",
     "import:ke-legacy": "tsx scripts/import-ke-legacy-orders.ts",
+    "sync:ke": "tsx scripts/sync-ke.ts",
     "import:ke-orders": "tsx scripts/import-ke-orders.ts",
     "prepare:ke-post-cutoff": "tsx scripts/prepare-ke-post-cutoff-import-source.ts",
     "import:ke-post-cutoff": "tsx scripts/import-ke-post-cutoff-orders.ts",

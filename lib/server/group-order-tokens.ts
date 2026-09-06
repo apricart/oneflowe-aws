@@ -182,6 +182,7 @@ export async function recordGroupTokenHandoff({
   bundle,
   recipient,
   fulfilledOrderIds,
+  awaitingDeliveryOrderIds,
 }: {
   userId: string
   organizationId: number
@@ -189,6 +190,8 @@ export async function recordGroupTokenHandoff({
   recipient: string
   /** The orders the hand-off actually settled, so the trail records what moved. */
   fulfilledOrderIds?: ReadonlySet<number>
+  /** The orders whose hand-off is recorded and waiting on their delivery. */
+  awaitingDeliveryOrderIds?: ReadonlySet<number>
 }): Promise<void> {
   if (bundle.entries.length === 0) return
 
@@ -204,6 +207,7 @@ export async function recordGroupTokenHandoff({
       recipient,
       groupOrderReference: bundle.reference,
       fulfilled: Boolean(fulfilledOrderIds?.has(entry.orderId)),
+      awaitingDelivery: Boolean(awaitingDeliveryOrderIds?.has(entry.orderId)),
     },
   })))
 }

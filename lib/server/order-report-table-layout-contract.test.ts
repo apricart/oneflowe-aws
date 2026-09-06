@@ -11,7 +11,7 @@ describe("order-report table layout contract", () => {
     )
 
     expect(page).toContain("[&_[data-slot=table-container]]:overflow-x-auto")
-    expect(page).toContain('Table className="min-w-[1850px] table-fixed"')
+    expect(page).toContain('Table className="min-w-[2100px] table-fixed"')
     expect(page).toContain('<col className="w-[185px]" />')
     expect(page).not.toContain("[&_[data-slot=table-container]]:overflow-hidden")
     expect(page).not.toContain("[&_td]:overflow-hidden")

@@ -26,7 +26,15 @@ type OrganizationInventoryItem = {
 
     categoryName?: string
     parentCategoryName?: string
-    basePrice?: number
+    /** Null for a role that may not see the global base price. */
+    basePrice?: number | null
+    /**
+     * What this organization's branches pay: the organization price where one
+     * is set, and the global base price where none is. The server resolves it
+     * through the shared price ladder, so it is present for every role that may
+     * open this screen even when the base price itself is not.
+     */
+    effectivePriceCents?: number | null
     unit: string
     assignedAt: string
 }
@@ -289,7 +297,9 @@ export default function HeadOfficeInventoryView() {
                                                 </Badge>
                                             </TableCell>
                                             <TableCell className="font-bold text-slate-900 dark:text-slate-100">
-                                                {formatPKR((item.customPrice ?? item.basePrice ?? 0) / 100)}
+                                                {item.effectivePriceCents == null
+                                                    ? "—"
+                                                    : formatPKR(item.effectivePriceCents / 100)}
                                             </TableCell>
                                             <TableCell>
                                                 <Badge className={cn(

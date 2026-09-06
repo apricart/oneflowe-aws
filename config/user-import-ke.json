@@ -1,0 +1,6 @@
+{
+  "organization": "0001",
+  "branchOverrides": {},
+  "allowedEmailDomains": ["ke.com.pk", "ke.com"],
+  "usernameFormat": "explicit"
+}

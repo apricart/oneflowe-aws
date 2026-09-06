@@ -48,11 +48,10 @@ import {
 import { ReceiptIconButton } from "@/components/receipts/receipt-icon-button"
 import {
   OrderDetailPanel,
-  getFulfillmentProgressColor,
-  getPaymentStatusColor,
   getStatusColor,
   type OrderDetails,
 } from "@/components/orders/order-detail-panel"
+import { getFulfillmentProgressColor, getPaymentStatusColor } from "@/lib/order-status-colors"
 import { ColumnSelector,type ColumnDef,useColumnSelector } from "@/components/reports/column-selector"
 import { isInvoiceAvailableForOrder } from "@/lib/invoice-availability"
 import { getOrderDerivedStatus,hasPartialRefund,type DerivedOrderStatusKey,type OrderStatusContext } from "@/lib/order-status"
@@ -101,6 +100,24 @@ type OrdersDirectoryProps = {
   showCostCenterId?: boolean
   pricesHidden?: boolean
   onUpdate: () => void
+}
+
+/**
+ * Marks an order that reached this branch through a Group Order Portal
+ * submission. It is an ordinary branch order in every other respect — the badge
+ * exists so an administrator can tell at a glance why an order they did not
+ * expect is on their branch's list.
+ */
+function GroupOrderBadge() {
+  return (
+    <Badge
+      variant="outline"
+      title="Raised for this branch through the Group Order Portal"
+      className="mt-1 rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-indigo-600 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-400"
+    >
+      Group Order
+    </Badge>
+  )
 }
 
 function EmptyOrdersState({ compact = false }: Readonly<{ compact?: boolean }>) {
@@ -314,11 +331,17 @@ export function OrdersDirectory({
       const updatedOrder = {
         ...viewingOrder,
         fulfillmentStatus: data.item?.fulfillmentStatus || nextStatus,
+        // Recording delivery settles an order whose fulfilment token has
+        // already reached the admin, so the order status is taken from the
+        // server rather than assumed to be unchanged.
+        status: data.item?.status || viewingOrder.status,
       }
       setViewingOrder(updatedOrder)
       toast({
-        title: "Progress updated",
-        description: `Order marked ${FULFILLMENT_STATUS_LABELS[nextStatus]}.`,
+        title: data?.fulfilled ? "Delivered — order fulfilled" : "Progress updated",
+        description: data?.fulfilled
+          ? `Order marked ${FULFILLMENT_STATUS_LABELS[nextStatus]}. Its fulfilment token was already sent to the admin, so the order is now fulfilled.`
+          : `Order marked ${FULFILLMENT_STATUS_LABELS[nextStatus]}.`,
       })
       onUpdate()
     } catch (err: any) {
@@ -422,13 +445,11 @@ export function OrdersDirectory({
 
       toast({
         title: data?.fulfilled ? "Token sent — order fulfilled" : "Token sent",
-        description: data?.fulfilled
-          ? "Fulfillment token emailed to the admin. The order is now marked fulfilled."
-          : "Fulfillment token emailed to the admin.",
+        description: data?.message || "Fulfillment token emailed to the admin.",
       })
 
-      // The hand-off settles the order, so the open panel and the list behind
-      // it have to show the order in its new state rather than as approved.
+      // The hand-off settles the order only once it has been delivered, so the
+      // open panel and the list behind it are refreshed when it actually did.
       if (data?.fulfilled) {
         setViewingOrder((current: any) => (
           current ? { ...current, status: "FULFILLED" } : current
@@ -524,6 +545,7 @@ export function OrdersDirectory({
                     <div className="min-w-0 flex-1 space-y-1">
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">TID</p>
                       <p className="truncate font-mono text-sm font-bold text-slate-800 dark:text-slate-100">{order.tid}</p>
+                      {order.placedByGroupPortal && <GroupOrderBadge />}
                     </div>
                     <Badge
                       variant="outline"
@@ -636,6 +658,7 @@ export function OrdersDirectory({
                     >
                       {isTableColumnVisible("tid") && <td className="py-5 pl-6 pr-4">
                         <span className="block truncate font-mono text-xs font-bold text-slate-700 dark:text-slate-300 group-hover:text-indigo-600 transition-colors uppercase tracking-wider" title={order.tid}>{order.tid}</span>
+                        {order.placedByGroupPortal && <GroupOrderBadge />}
                       </td>}
                       {isTableColumnVisible("branch") && <td className="px-4 py-5">
                         <div className="flex items-center gap-2">
@@ -821,6 +844,14 @@ export function OrdersDirectory({
 
                   {viewingOrder.status.toLowerCase() === "approved" && isSuperAdmin && (
                     <div className="w-full space-y-3">
+                      {/* The token reached admin operations before the goods
+                          did, so recording delivery is what completes this
+                          order. Saying so here stops it looking unfinished. */}
+                      {viewingOrder.tokenHandoffAt && (
+                        <p className="rounded-xl border border-dashed border-emerald-200 bg-emerald-50/60 p-3 text-xs font-medium text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/20 dark:text-emerald-300">
+                          Fulfilment token already sent to the admin — this order is marked fulfilled as soon as it is delivered.
+                        </p>
+                      )}
                       {(() => {
                         const nextStatus = getNextFulfillmentStatus(viewingOrder.fulfillmentStatus)
                         return (() => {

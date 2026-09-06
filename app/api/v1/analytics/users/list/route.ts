@@ -3,7 +3,9 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { users, branches, roles } from "@/db/schema"
-import { and, eq, inArray, isNull, sql } from "drizzle-orm"
+import { and, eq, inArray, isNull, or, sql } from "drizzle-orm"
+import { ORDER_CREATOR_ROLES } from "@/lib/group-order-visibility"
+import { resolveUsersScopedToBranches } from "@/lib/server/multi-branch-scope"
 
 export async function GET(req: NextRequest) {
     try {
@@ -55,7 +57,14 @@ export async function GET(req: NextRequest) {
         }
 
         if (branchIds.length > 0) {
-            conditions.push(inArray(users.branchId, branchIds))
+            // A multi-branch requester has no `users.branch_id` of its own — it
+            // reaches branches through its assignments — so a filter written
+            // only against that column drops it from the list even when it
+            // placed the orders being reported on.
+            const scopedUserIds = await resolveUsersScopedToBranches(db, branchIds)
+            conditions.push(scopedUserIds.length > 0
+                ? or(inArray(users.branchId, branchIds), inArray(users.id, scopedUserIds))!
+                : inArray(users.branchId, branchIds))
         }
 
         const items = await db
@@ -68,7 +77,9 @@ export async function GET(req: NextRequest) {
             })
             .from(users)
             .innerJoin(roles, eq(users.roleId, roles.id))
-            .where(and(...conditions, eq(roles.name, "ORDER_PORTAL")))
+            // Both roles raise orders, so both belong in a filter over the
+            // people whose orders this report can show.
+            .where(and(...conditions, inArray(roles.name, [...ORDER_CREATOR_ROLES])))
             .groupBy(users.id, users.fullName, users.firstName, users.lastName, users.email, users.employeeId, users.branchId, users.organizationId)
             .orderBy(users.fullName)
             .limit(1000)

@@ -14,7 +14,7 @@ import {
 import { invalidateByPrefix } from "@/lib/cache-utils"
 import { escapeLikePattern } from "@/lib/utils"
 import { groupPricesUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
-import { priceMutationFailure } from "@/lib/pricing-access"
+import { canViewGlobalBasePrice, priceMutationFailure } from "@/lib/pricing-access"
 import { resolveEffectivePriceCents } from "@/lib/server/effective-price"
 
 /**
@@ -31,6 +31,12 @@ import { resolveEffectivePriceCents } from "@/lib/server/effective-price"
  * or any other tier — `lib/pricing-access.ts` holds that rule and PUT applies it
  * on top of the tenant check. Head Office may read this screen, because it has
  * to know what its branches pay, and may not change a figure on it.
+ *
+ * One figure is not merely read-only for Head Office but absent: the global
+ * base price, which GET nulls out for any role that may not see it. Stripping
+ * it in the response rather than only hiding the column keeps the internal cost
+ * out of the payload, where a devtools panel would otherwise read it straight
+ * off the network tab.
  *
  * A price is stored as one row per (group, product). Clearing a price deletes
  * the row rather than writing a NULL, so "no group price" always means exactly
@@ -159,10 +165,17 @@ export async function GET(req: NextRequest, props: { params: Promise<{ id: strin
         .where(where),
     ])
 
+    // The effective price is still resolved from the real base price — it is
+    // what the branches are charged — but the base price itself only travels to
+    // a role allowed to see it.
+    const showBasePrice = canViewGlobalBasePrice(authorized.role)
+
     return NextResponse.json({
       group: authorized.group,
+      canViewGlobalBasePrice: showBasePrice,
       items: items.map((item) => ({
         ...item,
+        basePriceCents: showBasePrice ? item.basePriceCents : null,
         effectivePriceCents: resolveEffectivePriceCents({
           groupPriceCents: item.groupPriceCents,
           organizationPriceCents: item.organizationPriceCents,

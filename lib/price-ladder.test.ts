@@ -188,6 +188,60 @@ describe("group pricing surfaces", () => {
   })
 })
 
+describe("the product reports price down the ladder", () => {
+  const performance = source("app/api/v1/analytics/products/performance/route.ts")
+  const catalogue = source("app/api/v1/analytics/products/catalog-performance/route.ts")
+
+  it("never reports the raw base price as a unit price", () => {
+    // A product with no sales in the period has no charged amount to report, so
+    // its price comes from the catalogue — down the ladder, not straight off
+    // `global_products`. Reporting the base price to an organization that has
+    // negotiated its own is both the wrong number and a way around the
+    // redaction on `basePriceCents`: the same figure under another name.
+    expect(performance).not.toContain("unitPriceCents: product.basePriceCents || 0")
+    expect(performance).toContain("unitPriceCents: reportedUnitPriceCents(product, organizationPriceApplies)")
+
+    for (const route of [performance, catalogue]) {
+      expect(route).toContain('from "@/lib/server/effective-price"')
+      expect(route).toContain("resolveEffectivePriceCents({")
+    }
+  })
+
+  it("reports what was actually charged wherever a charge exists", () => {
+    // The charged snapshot already reflects every tier that applied, the group
+    // tier included, so a sold product is reported from it rather than re-priced.
+    expect(performance).toContain("unitPriceCents: row.priceCents || 0")
+    expect(catalogue).toContain("totalRevenueCents")
+  })
+
+  it("reads an organization price only where exactly one organization is in scope", () => {
+    // The join admits every organization in scope; with several, a product
+    // assigned to more than one joins more than one row and the last read would
+    // win — one tenant's negotiated price printed against another's product.
+    expect(performance).toContain("function hasSingleOrganizationInScope(")
+    expect(performance).toContain("if (organizationIds.length === 1) return true")
+    expect(performance).toContain("return organizationIds.length === 0 && Boolean(userOrganizationId)")
+    expect(performance).toContain("const organizationPriceApplies = !isSuperAdmin")
+
+    // The catalogue report fails closed the same way, in SQL.
+    expect(catalogue).toContain("targetOrgId ? eq(organizationInventory.organizationId, targetOrgId) : sql`FALSE`")
+  })
+
+  it("leaves the base price redaction exactly as it was", () => {
+    // Resolving the unit price must not widen who sees the base price itself.
+    expect(performance).toContain("basePriceCents: isSuperAdmin ? (product.basePriceCents || 0) : 0")
+    expect(performance).toContain("basePriceCents: isSuperAdmin ? (row.basePriceCents || 0) : 0")
+    expect(catalogue).toContain("basePriceCents: isSuperAdmin ? (p.basePrice || 0) : 0")
+  })
+
+  it("resolves nullish, never falsy, so a price of 0 is a price", () => {
+    for (const route of [performance, catalogue]) {
+      expect(route).not.toContain("customPrice || p.basePrice")
+      expect(route).not.toContain("p.customPrice || p.basePrice")
+    }
+  })
+})
+
 describe("group pricing access control", () => {
   const route = source("app/api/v1/groups/[id]/prices/route.ts")
 
