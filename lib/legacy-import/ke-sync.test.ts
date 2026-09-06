@@ -17,6 +17,7 @@ import {
   type CurrentUser,
   type LegacyLocation,
   type LegacySubUser,
+  legacyLocationOf,
 } from "./ke-sync"
 
 function location(overrides: Partial<LegacyLocation> & { ID: number; Name: string }): LegacyLocation {
@@ -550,5 +551,56 @@ describe("employee code conflicts", () => {
   it("names the derived identity after the legacy record, not the position", () => {
     expect(contestedIdentityFor(148)).toBe("ke148")
     expect(fallbackEmail({ ID: 9, FirstName: "A B", LastName: "C" })).toBe("a.b.c@ke-legacy.invalid")
+  })
+})
+
+describe("legacyLocationOf", () => {
+  // Regression: LocationID is a default legacy sets for everyone, mostly 2
+  // (KE HOUSE). Trusting it put Kashif Memon (16592) at KE HOUSE when
+  // K-Electric's own user report places him at GSMP-KKI, and left GSMP-KKI with
+  // no staff at all — which in turn made three of its orders unattributable.
+  it("prefers the explicit assignment when LocationID disagrees with it", () => {
+    expect(legacyLocationOf({
+      ID: 1,
+      LocationID: 2,
+      SubuserLocations: [{ LocationID: 10 }],
+    })).toBe(10)
+  })
+
+  it("keeps LocationID when the assignment agrees the person is there", () => {
+    expect(legacyLocationOf({
+      ID: 2,
+      LocationID: 21,
+      SubuserLocations: [{ LocationID: 21 }],
+    })).toBe(21)
+  })
+
+  it("keeps LocationID for someone assigned to several locations including it", () => {
+    expect(legacyLocationOf({
+      ID: 3,
+      LocationID: 5,
+      SubuserLocations: [{ LocationID: 10 }, { LocationID: 5 }],
+    })).toBe(5)
+  })
+
+  it("falls back to LocationID when there is no assignment", () => {
+    expect(legacyLocationOf({ ID: 4, LocationID: 7, SubuserLocations: [] })).toBe(7)
+    expect(legacyLocationOf({ ID: 5, LocationID: 7 })).toBe(7)
+  })
+
+  it("uses the assignment when LocationID is absent", () => {
+    expect(legacyLocationOf({ ID: 6, LocationID: null, SubuserLocations: [{ LocationID: 33 }] })).toBe(33)
+  })
+
+  it("returns null when legacy attaches the person to nothing", () => {
+    expect(legacyLocationOf({ ID: 7, LocationID: null, SubuserLocations: [] })).toBeNull()
+  })
+
+  it("ignores unusable location ids in the assignment", () => {
+    expect(legacyLocationOf({
+      ID: 8,
+      LocationID: null,
+      SubuserLocations: [{ LocationID: 0 }, { LocationID: null }, { LocationID: 12 }],
+    })).toBe(12)
   })
 })

@@ -48,11 +48,10 @@ import {
 import { ReceiptIconButton } from "@/components/receipts/receipt-icon-button"
 import {
   OrderDetailPanel,
-  getFulfillmentProgressColor,
-  getPaymentStatusColor,
   getStatusColor,
   type OrderDetails,
 } from "@/components/orders/order-detail-panel"
+import { getFulfillmentProgressColor, getPaymentStatusColor } from "@/lib/order-status-colors"
 import { ColumnSelector,type ColumnDef,useColumnSelector } from "@/components/reports/column-selector"
 import { isInvoiceAvailableForOrder } from "@/lib/invoice-availability"
 import { getOrderDerivedStatus,hasPartialRefund,type DerivedOrderStatusKey,type OrderStatusContext } from "@/lib/order-status"
@@ -101,6 +100,24 @@ type OrdersDirectoryProps = {
   showCostCenterId?: boolean
   pricesHidden?: boolean
   onUpdate: () => void
+}
+
+/**
+ * Marks an order that reached this branch through a Group Order Portal
+ * submission. It is an ordinary branch order in every other respect — the badge
+ * exists so an administrator can tell at a glance why an order they did not
+ * expect is on their branch's list.
+ */
+function GroupOrderBadge() {
+  return (
+    <Badge
+      variant="outline"
+      title="Raised for this branch through the Group Order Portal"
+      className="mt-1 rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-indigo-600 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-400"
+    >
+      Group Order
+    </Badge>
+  )
 }
 
 function EmptyOrdersState({ compact = false }: Readonly<{ compact?: boolean }>) {
@@ -528,6 +545,7 @@ export function OrdersDirectory({
                     <div className="min-w-0 flex-1 space-y-1">
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">TID</p>
                       <p className="truncate font-mono text-sm font-bold text-slate-800 dark:text-slate-100">{order.tid}</p>
+                      {order.placedByGroupPortal && <GroupOrderBadge />}
                     </div>
                     <Badge
                       variant="outline"
@@ -640,6 +658,7 @@ export function OrdersDirectory({
                     >
                       {isTableColumnVisible("tid") && <td className="py-5 pl-6 pr-4">
                         <span className="block truncate font-mono text-xs font-bold text-slate-700 dark:text-slate-300 group-hover:text-indigo-600 transition-colors uppercase tracking-wider" title={order.tid}>{order.tid}</span>
+                        {order.placedByGroupPortal && <GroupOrderBadge />}
                       </td>}
                       {isTableColumnVisible("branch") && <td className="px-4 py-5">
                         <div className="flex items-center gap-2">

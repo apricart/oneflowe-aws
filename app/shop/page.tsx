@@ -129,6 +129,13 @@ interface Order {
   poNumber?: string | null
   statusAtRefund?: string | null
   approvalToken?: string | null
+  /**
+   * True when this order reached the branch through a Group Order Portal
+   * submission rather than being raised here. Such an order is listed because
+   * it spends this branch's budget, but it belongs to the person who raised it:
+   * it is read-only from the store.
+   */
+  placedByGroupPortal?: boolean
   orderItems?: OrderItem[]
 }
 
@@ -1442,6 +1449,15 @@ export default function OrderPortalPage() {
                                   Partial Refund
                                 </Badge>
                               )}
+                              {order.placedByGroupPortal && (
+                                <Badge
+                                  variant="outline"
+                                  title="Raised for this branch through the Group Order Portal"
+                                  className="px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider rounded-lg border border-indigo-300 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400"
+                                >
+                                  Group Order
+                                </Badge>
+                              )}
                             </div>
                             <p className="text-xs text-muted-foreground mt-1">
                               <Calendar className="h-3 w-3 inline mr-1" />
@@ -1541,7 +1557,7 @@ export default function OrderPortalPage() {
                             <RefreshCw className="h-4 w-4" />
                             View Details
                           </Button>
-                          {isOrderPortal && order.status?.toUpperCase() === "PENDING" && (
+                          {isOrderPortal && order.status?.toUpperCase() === "PENDING" && !order.placedByGroupPortal && (
                             <Button
                               onClick={() => { void beginEditOrder(order) }}
                               variant="outline"
@@ -2465,7 +2481,12 @@ export default function OrderPortalPage() {
                 orderStatus={selectedOrder.status}
                 orderFulfillmentStatus={selectedOrder.fulfillmentStatus}
                 createdAt={selectedOrder.createdAt}
-                allowRefundRequest={["HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL"].includes(userRole)}
+                allowRefundRequest={
+                  ["HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL"].includes(userRole)
+                  // A requester may only refund what it raised itself, so the
+                  // control is hidden rather than offered and then refused.
+                  && !(isOrderPortal && selectedOrder.placedByGroupPortal)
+                }
                 requesterRole={userRole}
                 pricesHidden={pricesHidden}
                 initialOrderItems={orderDetailsData?.items?.[0]?.orderItems || selectedOrder.orderItems || []}

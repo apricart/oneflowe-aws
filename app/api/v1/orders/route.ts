@@ -5,7 +5,7 @@ import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { budgets,orders,orderItems,organizationInventory,branchInventory,branches,globalProducts,productQuantityBudgets,refunds,systemLogs,groupAuditLogs,organizations,refundItems } from "@/db/schema"
 import { headers } from "next/headers"
-import { and,desc,eq,gte,ilike,lte,or,sql,inArray,isNull } from "drizzle-orm"
+import { and,desc,eq,gte,ilike,lte,or,sql,inArray,isNotNull,isNull } from "drizzle-orm"
 import { logOrderActivity } from "@/lib/global-logger"
 import { generateReceiptData } from "@/lib/receipt-generator"
 import { generateNextInvoiceNumber,hasInvoiceSequenceTable } from "@/lib/invoice-number"
@@ -26,6 +26,7 @@ import { loadGroupPriceOverrides,resolveBranchGroupId,resolveEffectivePriceCents
 import { isValidRole } from "@/lib/rbac"
 import { metricExpressions } from "@/lib/metric-utils"
 import { getOrderStatusesForFilter,getOrderStatusFilter } from "@/lib/order-status"
+import { isGroupPortalOrder } from "@/lib/group-order-visibility"
 
 
 
@@ -128,7 +129,17 @@ function addOrderRoleConditions(conditions: any[], context: any) {
     return
   }
 
-  if (role === "ORDER_PORTAL" && currentUserId) conditions.push(eq(orders.createdByUserId, currentUserId))
+  // The requester reads the orders it raised itself, plus the orders the Group
+  // Order Portal raised for its branch — those spend this branch's budget and
+  // are delivered to it, so they belong in the branch's own history. The branch
+  // pin below still applies to both halves, and `groupOrderId` is null on every
+  // order created by any other flow, so no existing order changes hands.
+  if (role === "ORDER_PORTAL" && currentUserId) {
+    conditions.push(or(
+      eq(orders.createdByUserId, currentUserId),
+      isNotNull(orders.groupOrderId),
+    ))
+  }
   // Fail closed: any remaining role must be pinned to its own branch. Without
   // this a branch-less role would otherwise fall through to the whole tenant.
   conditions.push(typeof branchIdFromUser === "number"
@@ -179,14 +190,17 @@ function sanitizeOrderListItems(items: any[], context: any) {
       orderApprovedByUserId: item.approvedByUserId,
       configuredApproverRole: context.capabilities.orderApproverRole,
     })
-    const { createdByUserId: _createdByUserId, ...publicItem } = item
+    // Derived, read-only, and the same for every role: which rows came from a
+    // Group Order Portal submission. The envelope id itself stays server-side.
+    const { createdByUserId: _createdByUserId, groupOrderId: _groupOrderId, ...publicItem } = item
+    const withOrigin = { ...publicItem, placedByGroupPortal: isGroupPortalOrder(item) }
     const safeItem = context.pricesHidden ? {
-      ...publicItem,
+      ...withOrigin,
       subtotalCents: null,
       taxCents: null,
       totalCents: null,
       refundAmountCents: null,
-    } : publicItem
+    } : withOrigin
     return { ...safeItem, approvalToken: canSeeToken ? item.approvalToken : null }
   })
 }
@@ -803,6 +817,7 @@ export async function GET(req: NextRequest) {
           WHERE ${orderItems.orderId} = ${orders.id}
         )`,
         createdByUserId: orders.createdByUserId,
+        groupOrderId: orders.groupOrderId,
         approvedByUserId: orders.approvedByUserId,
         approvalToken: orders.approvalToken, // Will be filtered before return
       })

@@ -9,9 +9,25 @@ const route = readFileSync(
 const portal = readFileSync(resolve(process.cwd(), "app/shop/page.tsx"), "utf8")
 
 describe("order edit security contract", () => {
-  it("allows the fast single-order read only for the portal user's own order", () => {
+  it("scopes the fast single-order read to what the portal user may see", () => {
     expect(route).toContain('"BRANCH_ADMIN", "GROUP_USER", "ORDER_PORTAL"')
-    expect(route).toContain('currentRole === "ORDER_PORTAL" && item.createdByUserId !== currentUserId')
+    // A requester reads its own orders and the group orders raised for its
+    // branch, which spend that branch's budget. The rule is the shared one
+    // rather than an inline comparison, so this read and the store's list can
+    // never disagree about which orders exist.
+    expect(route).toContain("or(eq(orders.createdByUserId, currentUserId), isNotNull(orders.groupOrderId))")
+    expect(route).toContain("canOrderPortalReadOrder({ viewerUserId: currentUserId, order: item })")
+  })
+
+  it("does not let that wider read reach a colleague's own order", () => {
+    // The widening turns on `groupOrderId`, which is null on every order raised
+    // through any other flow — including a colleague's own.
+    const policy = readFileSync(
+      resolve(process.cwd(), "lib/group-order-visibility.ts"),
+      "utf8",
+    )
+    expect(policy).toContain("if (isGroupPortalOrder(order)) return true")
+    expect(policy).toContain("return Boolean(viewerUserId) && order.createdByUserId === viewerUserId")
   })
 
   it("keeps the update restricted to Order Portal users and strict input", () => {

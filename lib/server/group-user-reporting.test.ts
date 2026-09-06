@@ -150,10 +150,17 @@ describe("group user reporting endpoints", () => {
     )
   })
 
-  it("offers the group order filter and column to the approver alone", () => {
+  it("offers the group order filter and column to every administrator", () => {
     const orderReport = source("app/(portal)/reports/order-report/page.tsx")
 
-    expect(orderReport).toContain('const showsGroupOrders = role === "GROUP_USER"')
+    // A submission is recorded as one ordinary order per branch, so these rows
+    // already sit in every administrator's report. The column and the reference
+    // filter are what let them tell which submission a row came from; the
+    // server pins the lookup to the caller's own organizations, so offering it
+    // widens no scope. The two requester roles never reach this page at all.
+    expect(orderReport).toContain(
+      'const showsGroupOrders = ["GROUP_USER", "SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"].includes(role)',
+    )
     expect(orderReport).toContain('reportParams.set("groupOrderRef", debouncedGroupOrderFilter)')
     expect(orderReport).toContain('if (!showsGroupOrders && c.key === "groupOrderReference") return false;')
   })

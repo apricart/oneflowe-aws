@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, sql } from "drizzle-orm"
+import { and, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm"
 import { getServerSession } from "next-auth"
 import {
   auditLogs,
@@ -79,6 +79,7 @@ import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allo
 import { orderUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
 import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
 import { GROUP_USER_ROLE, canUseScopedBranch } from "@/lib/server/multi-branch-scope"
+import { canOrderPortalReadOrder, isGroupPortalOrder } from "@/lib/group-order-visibility"
 import { loadGroupPriceOverrides, resolveBranchGroupId, resolveEffectivePriceCents } from "@/lib/server/effective-price"
 
 /**
@@ -489,6 +490,9 @@ export async function GET(
   const [item] = await db
     .select({
       ...orderSelectColumns,
+      // Selected so the ownership rule below and the requester's history agree
+      // on which orders came from a Group Order Portal submission.
+      groupOrderId: orders.groupOrderId,
       branchName: branches.name,
       branchOrganizationId: branches.organizationId,
       creatorName: sql<string | null>`COALESCE(
@@ -503,8 +507,13 @@ export async function GET(
     .from(orders)
     .leftJoin(users, eq(orders.createdByUserId, users.id))
     .leftJoin(branches, eq(orders.branchId, branches.id))
+    // A requester reads its own orders and the group orders raised for its
+    // branch; the branch and tenant checks below still apply to both.
     .where(currentRole === "ORDER_PORTAL"
-      ? and(eq(orders.id, orderId), eq(orders.createdByUserId, currentUserId))
+      ? and(
+        eq(orders.id, orderId),
+        or(eq(orders.createdByUserId, currentUserId), isNotNull(orders.groupOrderId)),
+      )
       : eq(orders.id, orderId))
   if (!item) return error("Not found", 404)
   if (!item.organizationId || item.branchOrganizationId !== item.organizationId) {
@@ -524,7 +533,10 @@ export async function GET(
       : error("Forbidden: You do not have access to this order", 403)
   }
 
-  if (currentRole === "ORDER_PORTAL" && item.createdByUserId !== currentUserId) {
+  if (
+    currentRole === "ORDER_PORTAL"
+    && !canOrderPortalReadOrder({ viewerUserId: currentUserId, order: item })
+  ) {
     return error("Not found", 404)
   }
   const capabilities = await getOrderDecisionCapabilities(requestScope)
@@ -534,8 +546,11 @@ export async function GET(
     approvalTokenHash: _approvalTokenHash,
     approvalTokenCreatedAt: _approvalTokenCreatedAt,
     branchOrganizationId: _branchOrganizationId,
-    ...safeItem
+    groupOrderId: _groupOrderId,
+    ...detailItem
   } = item
+  // Same derived, read-only flag the list returns; the envelope id stays here.
+  const safeItem = { ...detailItem, placedByGroupPortal: isGroupPortalOrder(item) }
   const canSeeToken = canViewFulfillmentToken({
     role: currentRole,
     userId: currentUserId,

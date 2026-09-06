@@ -43,6 +43,8 @@ import {
   KE_ORDERS_LIST_PATH,
   computeOrderTax,
   identityKeyForListRow,
+  monthWindows,
+  type LegacyRefund,
   orderIdentityKey,
   prepareApiOrders,
   reconcileAgainstSheet,
@@ -63,10 +65,35 @@ import { resolveWorkspacePath } from "./lib/resolve-workspace-path"
 dotenv.config({ path: ".env.local", quiet: true })
 dotenv.config({ quiet: true })
 
-const ORGANIZATION_CONFIRMATION = `${ORGANIZATION.id}:${ORGANIZATION.code}:${ORGANIZATION.name}`
+/**
+ * The organization this run targets.
+ *
+ * Resolved at run time rather than compiled in, so the same script serves a
+ * production import against K-Electric (10/0001) and a rehearsal on a test
+ * database, where that organization has a different id and code. Mirrors
+ * `sync-ke.ts`, and the two must agree or the orders land in a tenant whose
+ * branches and users the sync never created.
+ */
+type TargetOrganization = { id: number; code: string; name: string }
+let target: TargetOrganization = { ...ORGANIZATION }
+
+function organizationConfirmation(org: TargetOrganization): string {
+  return `${org.id}:${org.code}:${org.name}`
+}
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
-const DETAIL_CONCURRENCY = 6
-const FETCH_ATTEMPTS = 4
+
+/**
+ * The earliest date any K-Electric order exists on the legacy platform.
+ * Used as the default lower bound so a bare run sweeps the whole history.
+ */
+const LEGACY_EPOCH = "2025-01-01"
+/**
+ * Detail fetches run in parallel, but gently: at six the legacy platform began
+ * answering 403 partway through a full-history sweep. Three keeps a ~1,000-order
+ * run inside its tolerance, and `backoffMs` recovers if it still trips.
+ */
+const DETAIL_CONCURRENCY = 3
+const FETCH_ATTEMPTS = 6
 
 type Row = Record<string, any>
 interface QueryClient { query(text: string, params?: unknown[]): Promise<{ rows: Row[] }> }
@@ -96,14 +123,22 @@ interface Options {
   confirmPlan?: string
   expectedOrders?: number
   sheetPath?: string
+  organizationCode: string
+  organizationName: string
   outputPath: string
 }
 
 function parseOptions(): Options {
-  const startDate = argument("start-date")
-  const endDate = argument("end-date")
-  assert(startDate && ISO_DATE.test(startDate), "Required: --start-date=YYYY-MM-DD")
-  assert(endDate && ISO_DATE.test(endDate), "Required: --end-date=YYYY-MM-DD")
+  // Both bounds default to a full sweep, because the common case is "bring
+  // across everything K-Electric has that we do not". Orders already present
+  // are recognised by `alreadyImported` and skipped, so a full sweep on a
+  // populated database is cheap and writes nothing new — which makes the wide
+  // default safe rather than merely convenient. Narrow it only to inspect a
+  // particular window.
+  const startDate = argument("start-date") ?? LEGACY_EPOCH
+  const endDate = argument("end-date") ?? new Date().toISOString().slice(0, 10)
+  assert(ISO_DATE.test(startDate), "--start-date must be YYYY-MM-DD")
+  assert(ISO_DATE.test(endDate), "--end-date must be YYYY-MM-DD")
   assert(startDate <= endDate, "--start-date must not be after --end-date")
   const expected = argument("expected-orders")
   return {
@@ -116,27 +151,76 @@ function parseOptions(): Options {
     confirmPlan: argument("confirm-plan"),
     expectedOrders: expected === undefined ? undefined : Number(expected),
     sheetPath: argument("sheet"),
+    organizationCode: argument("organization-code") ?? ORGANIZATION.code,
+    organizationName: argument("organization-name") ?? ORGANIZATION.name,
     outputPath: resolveWorkspacePath(
       argument("output") ?? `updatedReports/ke-orders-import-${startDate}-to-${endDate}.json`,
     ),
   }
 }
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/**
+ * Back-off for one failed attempt, in milliseconds.
+ *
+ * A full history sweep is ~1,000 detail calls, and the legacy platform starts
+ * answering 403 partway through. That is throttling, not a transient network
+ * blip: retrying it half a second later fails again and burns the budget, so
+ * the whole run dies on one order. Throttling therefore gets a much longer,
+ * exponential wait (5s, 15s, 45s, ...) while ordinary errors keep the short one.
+ */
+function backoffMs(status: number | null, attempt: number): number {
+  const throttled = status === 403 || status === 429 || status === 503
+  return throttled ? 5_000 * 3 ** (attempt - 1) : 500 * attempt
+}
+
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   let lastError: unknown
   for (let attempt = 1; attempt <= FETCH_ATTEMPTS; attempt += 1) {
+    let status: number | null = null
     try {
       const response = await fetch(url, init)
+      status = response.status
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       return await response.json() as T
     } catch (error) {
       lastError = error
-      if (attempt < FETCH_ATTEMPTS) {
-        await new Promise((resolve) => setTimeout(resolve, 500 * attempt))
-      }
+      if (attempt < FETCH_ATTEMPTS) await sleep(backoffMs(status, attempt))
     }
   }
   throw new Error(`${url}: ${lastError instanceof Error ? lastError.message : String(lastError)}`)
+}
+
+/**
+ * The order list, fetched one calendar month at a time.
+ *
+ * A single request for the whole history asks the legacy platform for ~1MB in
+ * one response, and it answers by dropping the connection or throttling. Month
+ * windows keep each response small, and a window that fails no longer costs the
+ * entire sweep. Rows are de-duplicated by legacy order id because the windows
+ * are inclusive at both ends.
+ */
+async function fetchOrderList(startDate: string, endDate: string): Promise<LegacyOrderListRow[]> {
+  const url = `${KE_LOGISTICS_BASE_URL}${KE_ORDERS_LIST_PATH}`
+  const byId = new Map<number, LegacyOrderListRow>()
+  for (const window of monthWindows(startDate, endDate)) {
+    const rows = await fetchJson<LegacyOrderListRow[]>(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        UserID: 1,
+        StartDate: window.start,
+        EndDate: window.end,
+        LocationIDs: null,
+        LocationGroupIDs: null,
+        IsMulti: true,
+      }),
+    })
+    assert(Array.isArray(rows), `Legacy list endpoint did not return an array for ${window.start}..${window.end}`)
+    for (const row of rows) byId.set(Number(row.ID), row)
+  }
+  return [...byId.values()]
 }
 
 async function mapConcurrent<T, R>(values: readonly T[], concurrency: number, fn: (value: T) => Promise<R>): Promise<R[]> {
@@ -199,7 +283,8 @@ interface ResolvedOrder {
 
 interface UnresolvedOrder {
   legacyOrderId: number
-  reason: "BRANCH_NOT_FOUND" | "USER_NOT_FOUND" | "USER_AMBIGUOUS" | "PRODUCT_NOT_FOUND" | "PRODUCT_AMBIGUOUS"
+  reason: "BRANCH_NOT_FOUND" | "USER_NOT_FOUND" | "USER_AMBIGUOUS" | "PRODUCT_NOT_FOUND"
+    | "PRODUCT_AMBIGUOUS" | "TAX_SPLIT_MISMATCH"
   detail: string
   branchName: string
   userName: string
@@ -218,7 +303,7 @@ async function buildPlan(
   legacySubUsers: readonly LegacySubUser[],
 ): Promise<Plan> {
   const branchRows = await rows(client,
-    `select id, name, address from branches where organization_id = $1`, [ORGANIZATION.id])
+    `select id, name, address from branches where organization_id = $1`, [target.id])
   const branchByName = new Map<string, Row>()
   for (const branch of branchRows) branchByName.set(normalizeLegacyText(branch.name), branch)
 
@@ -231,13 +316,20 @@ async function buildPlan(
        from users u
        join roles r on r.id = u.role_id
       where u.organization_id = $1 and u.deleted_at is null
-        and r.name = 'ORDER_PORTAL'`, [ORGANIZATION.id])
+        and r.name = 'ORDER_PORTAL'`, [target.id])
   const usersByBranchAndName = new Map<string, Row[]>()
+  /** Every order-portal account at a branch, for the unresolvable-name fallback. */
+  const usersByBranch = new Map<number, Row[]>()
   for (const user of userRows) {
     const key = `${user.branch_id}|${normalizeLegacyText(user.full_name)}`
     const bucket = usersByBranchAndName.get(key) ?? []
     bucket.push(user)
     usersByBranchAndName.set(key, bucket)
+
+    const branchKey = Number(user.branch_id)
+    const branchBucket = usersByBranch.get(branchKey) ?? []
+    branchBucket.push(user)
+    usersByBranch.set(branchKey, branchBucket)
   }
 
   // Identity beats spelling. The order carries an `OrderTakerID`, which names a
@@ -281,7 +373,7 @@ async function buildPlan(
        from organization_inventory oi
        join global_products gp on gp.id = oi.global_product_id
       where oi.organization_id = $1
-        and oi.deleted_at is null and gp.deleted_at is null`, [ORGANIZATION.id])
+        and oi.deleted_at is null and gp.deleted_at is null`, [target.id])
   // Two catalogue rows that normalize to one name cannot be told apart from a
   // legacy line, so neither is usable: picking either would guess which product
   // a branch actually bought.
@@ -302,7 +394,7 @@ async function buildPlan(
   const mappingRows = await rows(client,
     `select lpm.normalized_name, lpm.global_product_id
        from legacy_product_mappings lpm
-      where lpm.organization_id = $1 and lpm.source_system = $2`, [ORGANIZATION.id, SOURCE_SYSTEM])
+      where lpm.organization_id = $1 and lpm.source_system = $2`, [target.id, SOURCE_SYSTEM])
   const productById = new Map<number, Row>()
   for (const product of productRows) productById.set(Number(product.global_product_id), product)
   for (const mapping of mappingRows) {
@@ -313,7 +405,7 @@ async function buildPlan(
   }
 
   const settingRows = await rows(client,
-    `select value from organization_settings where organization_id = $1 and key = 'tax_rate'`, [ORGANIZATION.id])
+    `select value from organization_settings where organization_id = $1 and key = 'tax_rate'`, [target.id])
   const rawRate = settingRows[0]?.value
   const organizationTaxRateBp = typeof rawRate === "number" ? rawRate : null
 
@@ -346,8 +438,25 @@ async function buildPlan(
     if (candidates.length === 0) {
       candidates = usersByBranchAndName.get(`${branch.id}|${normalizeLegacyText(order.userName)}`) ?? []
     }
+    // Legacy names an orderer this branch has no account for — orders 200-202
+    // are placed by a literal "test branch". Rather than drop a real order over
+    // a name we cannot resolve, attribute it to the branch's own order-portal
+    // account: the branch is what the order actually belongs to, and the
+    // legacy name is preserved in `legacy_order_imports.source_payload`.
+    let attributedToBranchFallback = false
     if (candidates.length === 0) {
-      reject("USER_NOT_FOUND", `no ORDER_PORTAL user "${order.userName}" at ${branch.name}`)
+      const branchUsers = usersByBranch.get(Number(branch.id)) ?? []
+      const activeBranchUsers = branchUsers.filter((user) => user.is_active)
+      const pool = activeBranchUsers.length > 0 ? activeBranchUsers : branchUsers
+      if (pool.length > 0) {
+        candidates = [pool.slice().sort((a, b) =>
+          String(a.username ?? "").localeCompare(String(b.username ?? "")))[0]]
+        attributedToBranchFallback = true
+      }
+    }
+    if (candidates.length === 0) {
+      reject("USER_NOT_FOUND", `no ORDER_PORTAL user "${order.userName}" at ${branch.name}, `
+        + "and the branch has no order-portal account to attribute it to")
       continue
     }
     // A person who now holds a real account and still has the historical
@@ -382,7 +491,14 @@ async function buildPlan(
       (line) => productByName.get(line.normalizedName)?.tax_rate_bp ?? null,
       organizationTaxRateBp,
     )
-    assert(tax.totalCents === order.totalCents, `Order ${order.legacyOrderId}: tax split changed the total`)
+    // Refused, not fatal: see TAX_SPLIT_MISMATCH in ke-orders-api.ts. One order
+    // whose money does not reconcile must not stop the other nine hundred.
+    if (tax.totalCents !== order.totalCents) {
+      reject("TAX_SPLIT_MISMATCH",
+        `lines total ${tax.totalCents} but the order states ${order.totalCents}; `
+          + "legacy appears to add VAT on top for this order rather than pricing inclusive of it")
+      continue
+    }
 
     resolved.push({
       order,
@@ -448,7 +564,7 @@ function receiptData(entry: ResolvedOrder) {
     fulfillmentStatus: entry.order.fulfillmentStatus,
     buyerName: entry.branchName,
     buyerAddress: entry.branchAddress ?? "",
-    organizationName: ORGANIZATION.name,
+    organizationName: target.name,
     items: [{
       categoryName: "General",
       items,
@@ -476,7 +592,7 @@ async function applyPlan(
      values ($1, $2, $3, $4::jsonb, 'COMPLETED', $5::jsonb, $6, now())
      returning id`,
     [
-      randomUUID(), ORGANIZATION.id, SOURCE_SYSTEM,
+      randomUUID(), target.id, SOURCE_SYSTEM,
       JSON.stringify(sourceManifest),
       JSON.stringify({ orders: plan.resolved.length, unresolved: plan.unresolved.length }),
       actorUserId,
@@ -487,7 +603,7 @@ async function applyPlan(
     const isDelivered = entry.order.fulfillmentStatus === "DELIVERED"
     return {
       tid: `KE-LEGACY-${entry.order.legacyOrderId}`,
-      organization_id: ORGANIZATION.id,
+      organization_id: target.id,
       branch_id: entry.branchId,
       status: entry.order.status,
       fulfillment_status: entry.order.fulfillmentStatus,
@@ -533,7 +649,7 @@ async function applyPlan(
   }
 
   const itemRows = plan.resolved.flatMap((entry) => entry.lines.map((line) => ({
-    organization_id: ORGANIZATION.id,
+    organization_id: target.id,
     organization_inventory_id: line.organizationInventoryId,
     order_id: orderIdByLegacy.get(entry.order.legacyOrderId),
     global_product_id: line.globalProductId,
@@ -559,7 +675,7 @@ async function applyPlan(
 
   const importRows = plan.resolved.map((entry) => ({
     batch_id: batch.id,
-    organization_id: ORGANIZATION.id,
+    organization_id: target.id,
     source_system: SOURCE_SYSTEM,
     legacy_order_id: entry.order.legacyOrderId,
     order_id: orderIdByLegacy.get(entry.order.legacyOrderId),
@@ -617,19 +733,7 @@ function summarize(plan: Plan) {
 
 async function main() {
   const options = parseOptions()
-  const listUrl = `${KE_LOGISTICS_BASE_URL}${KE_ORDERS_LIST_PATH}`
-  const listRows = await fetchJson<LegacyOrderListRow[]>(listUrl, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      UserID: 1,
-      StartDate: options.startDate,
-      EndDate: options.endDate,
-      LocationIDs: null,
-      LocationGroupIDs: null,
-      IsMulti: true,
-    }),
-  })
+  const listRows = await fetchOrderList(options.startDate, options.endDate)
   assert(Array.isArray(listRows), "Legacy list endpoint did not return an array")
 
   // The people directory, used to turn each order's `OrderTakerID` into the
@@ -653,11 +757,27 @@ async function main() {
 
   const { pool } = await import("../lib/db-cli")
   try {
+    // Resolved before any scoped read. Matched on code, and refused if that
+    // code belongs to a differently-named tenant, so an order can never be
+    // written into an organization this import was not aimed at.
+    const [organization] = await rows(pool,
+      `select id, code, name from organizations where code = $1`, [options.organizationCode])
+    assert(organization,
+      `No organization with code "${options.organizationCode}". Run sync-ke.ts first, `
+        + `or pass --organization-code=<code>.`)
+    assert(
+      String(organization.name).normalize("NFKC").trim().toLowerCase()
+        === options.organizationName.normalize("NFKC").trim().toLowerCase(),
+      `Organization code ${options.organizationCode} belongs to "${organization.name}", not `
+        + `"${options.organizationName}". Refusing to import K-Electric orders into another tenant.`,
+    )
+    target = { id: Number(organization.id), code: String(organization.code), name: String(organization.name) }
+
     const importedRows = await rows(pool,
       `select li.legacy_order_id,
               coalesce(li.source_payload->'sourceHeader', li.source_payload->'header') as header
          from legacy_order_imports li
-        where li.organization_id = $1 and li.source_system = $2`, [ORGANIZATION.id, SOURCE_SYSTEM])
+        where li.organization_id = $1 and li.source_system = $2`, [target.id, SOURCE_SYSTEM])
     const alreadyImported = {
       legacyOrderIds: new Set(importedRows.map((row) => Number(row.legacy_order_id))),
       identityKeys: new Set(
@@ -683,12 +803,36 @@ async function main() {
         `${KE_LOGISTICS_BASE_URL}/api/OrderDetailController/${Number(row.LocationID)}/${Number(row.ID)}`))
     const detailsById = new Map(details.map((entry) => [Number(entry.ID), entry]))
 
-    const preparation = prepareApiOrders(listRows, detailsById, alreadyImported)
+    // A refunded line is zeroed on the order but kept on the refund record, so
+    // an order whose lines sum short of its own checkout subtotal needs that
+    // record to be restored to its pre-refund value. Fetched only for those
+    // orders — seventeen of a thousand — rather than for every one.
+    const needRefund = candidates.filter((row) => {
+      const detail = detailsById.get(Number(row.ID))
+      const checkout = detail?.OrderCheckoutList?.[0]
+      if (!detail || !checkout) return false
+      const lineSum = (detail.OrderDetailsList ?? []).reduce(
+        (sum: number, line: any) => sum + Math.abs(Math.round((Number(line.Price ?? 0) + Number.EPSILON) * 100)), 0)
+      const subtotal = Math.round((Number(checkout.AmountTotal ?? 0) + Number.EPSILON) * 100)
+      return lineSum !== subtotal
+    })
+    const refunds = await mapConcurrent(needRefund, DETAIL_CONCURRENCY, (row) =>
+      fetchJson<LegacyRefund>(
+        `${KE_LOGISTICS_BASE_URL}/api/RefundModal/${Number(row.LocationID)}`
+          + `/${encodeURIComponent(String(row.TransactionNo))}`)
+        .catch(() => ({} as LegacyRefund)))
+    const refundsByOrderId = new Map(needRefund.map((row, index) => [Number(row.ID), refunds[index]]))
+    if (needRefund.length > 0) {
+      console.log(`Fetched ${needRefund.length} refund record(s) for orders whose lines sum short of their subtotal.`)
+    }
+
+    const preparation = prepareApiOrders(listRows, detailsById, alreadyImported, refundsByOrderId)
     const plan = await buildPlan(pool, preparation.prepared, legacySubUsers)
 
     const sourceManifest = {
       importer: "import-ke-orders",
-      listUrl,
+      listUrl: `${KE_LOGISTICS_BASE_URL}${KE_ORDERS_LIST_PATH}`,
+      listFetchedInMonthWindows: true,
       startDate: options.startDate,
       endDate: options.endDate,
       listRowCount: listRows.length,
@@ -700,7 +844,7 @@ async function main() {
     const report = {
       generatedAt: new Date().toISOString(),
       mode: options.commit ? "COMMIT" : options.rollbackTest ? "ROLLBACK_TEST" : "DRY_RUN",
-      organization: ORGANIZATION,
+      organization: target,
       range: { startDate: options.startDate, endDate: options.endDate },
       sourceManifest,
       planDigest: plan.planDigest,
@@ -745,8 +889,8 @@ async function main() {
     }
 
     assert(options.actorUserId, "Commit requires --actor-user-id")
-    assert(options.confirmOrganization === ORGANIZATION_CONFIRMATION,
-      `Commit requires --confirm-organization=${ORGANIZATION_CONFIRMATION}`)
+    assert(options.confirmOrganization === organizationConfirmation(target),
+      `Commit requires --confirm-organization=${organizationConfirmation(target)}`)
     assert(options.confirmPlan === plan.planDigest,
       `Commit requires --confirm-plan=${plan.planDigest}`)
     assert(options.expectedOrders === plan.resolved.length,
@@ -758,7 +902,7 @@ async function main() {
          from users u join roles r on r.id = u.role_id where u.id = $1`, [options.actorUserId])
     assert(
       actor && actor.is_active && actor.deleted_at == null && actor.role_name === "SUPER_ADMIN"
-        && (actor.organization_id == null || Number(actor.organization_id) === ORGANIZATION.id),
+        && (actor.organization_id == null || Number(actor.organization_id) === target.id),
       "Actor must be an active, non-deleted global or K-Electric SUPER_ADMIN",
     )
 
@@ -771,7 +915,7 @@ async function main() {
     const client = await pool.connect()
     try {
       await client.query("begin isolation level serializable")
-      await client.query("select pg_advisory_xact_lock($1,$2)", [1263482710, ORGANIZATION.id])
+      await client.query("select pg_advisory_xact_lock($1,$2)", [1263482710, target.id])
       const lockedPlan = await buildPlan(client, preparation.prepared, legacySubUsers)
       assert(lockedPlan.planDigest === plan.planDigest, "Plan changed between confirmation and commit")
 

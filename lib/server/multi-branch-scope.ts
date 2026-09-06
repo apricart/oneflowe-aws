@@ -311,6 +311,55 @@ export async function resolveScopedGroupIds(
   return rows.map((row: { id: number }) => row.id)
 }
 
+/**
+ * The multi-branch users whose assignments reach any of the given branches.
+ *
+ * The inverse of `resolveScopedBranchIds`: that answers "which branches does
+ * this user reach", this answers "which users reach these branches". Reporting
+ * filters need it because a multi-branch user has no `users.branch_id` of its
+ * own, so a branch predicate written against that column silently drops it.
+ *
+ * An empty `branchIds` returns no users — never every user.
+ */
+export async function resolveUsersScopedToBranches(
+  client: DbClient,
+  branchIds: number[],
+): Promise<string[]> {
+  if (branchIds.length === 0) return []
+
+  const [byBranch, byGroup] = await Promise.all([
+    client
+      .selectDistinct({ userId: userBranchAssignments.userId })
+      .from(userBranchAssignments)
+      .innerJoin(
+        branches,
+        and(
+          eq(branches.id, userBranchAssignments.branchId),
+          // Re-assert the tenant the assignment was written under, exactly as
+          // the branch resolver above does.
+          eq(branches.organizationId, userBranchAssignments.organizationId),
+        ),
+      )
+      .where(inArray(branches.id, branchIds)),
+    client
+      .selectDistinct({ userId: userGroupAssignments.userId })
+      .from(userGroupAssignments)
+      .innerJoin(
+        branches,
+        and(
+          eq(branches.groupId, userGroupAssignments.groupId),
+          eq(branches.organizationId, userGroupAssignments.organizationId),
+        ),
+      )
+      .where(inArray(branches.id, branchIds)),
+  ])
+
+  return [...new Set([
+    ...byBranch.map((row: { userId: string }) => row.userId),
+    ...byGroup.map((row: { userId: string }) => row.userId),
+  ])]
+}
+
 /** True when the user may act on the given branch. Never true without an assignment. */
 export async function canUseScopedBranch(
   userId: string,

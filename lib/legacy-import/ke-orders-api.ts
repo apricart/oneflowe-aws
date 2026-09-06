@@ -52,7 +52,15 @@ export const LEGACY_STATUS_LIVE = 2
 export const LEGACY_STATUS_CANCELLED = 5
 export const LEGACY_STATUS_DRAFT = 1
 
-export type SkipReason = "CANCELLED" | "DRAFT" | "ALREADY_IMPORTED"
+/**
+ * `4` is a legacy test order. Order 173 is TransactionNo "G-12", LastUpdatedBy
+ * "test", carrying an item named "TEST 2"; all nine sit at one branch. They are
+ * skipped like a cancelled order rather than rejected, so they stop appearing
+ * as failures needing attention.
+ */
+export const LEGACY_STATUS_TEST = 4
+
+export type SkipReason = "CANCELLED" | "DRAFT" | "ALREADY_IMPORTED" | "TEST_ORDER"
 
 export interface StatusMapping {
   status: TargetOrderStatus
@@ -99,6 +107,19 @@ export type RejectReason =
   | "MISSING_CHECKOUT"
   | "INVALID_TIMESTAMP"
   | "UNSUPPORTED_STATUS"
+  /**
+   * The tax split does not reproduce the order's own total.
+   *
+   * Legacy is not consistent about whether a line price includes VAT. Most
+   * orders price inclusively, which is what OneFlowe stores; a few add VAT on
+   * top, so the checkout GrandTotal exceeds the sum of the lines (order 50:
+   * one line at 355 against a GrandTotal of 418.90, i.e. 355 x 1.18).
+   *
+   * Importing one of those under the inclusive model would understate the
+   * money, so it is refused. It is refused per order rather than fatally,
+   * because a single such order must not block the rest of the history.
+   */
+  | "TAX_SPLIT_MISMATCH"
 
 export interface PreparedApiLine {
   sourceLineId: number
@@ -111,6 +132,28 @@ export interface PreparedApiLine {
   /** Gross line total, in cents. Always `priceCents * quantity`. */
   lineTotalCents: number
   sourceCodes: string[]
+}
+
+/**
+ * One line of legacy `GET /api/RefundModal/{locationId}/{transactionNo}`.
+ *
+ * The refund detail an order's own lines do not carry: `OrderDetailController`
+ * zeroes a refunded line's `Price`, so the order looks cheaper than legacy says
+ * it was. Here the same line keeps `RefundPrice`, and the original value is
+ * `Price + RefundPrice`.
+ */
+export interface LegacyRefundLine {
+  ID?: number | null
+  Name?: string | null
+  Quantity?: number | string | null
+  RefundQuantity?: number | string | null
+  UnitPrice?: number | string | null
+  Price?: number | string | null
+  RefundPrice?: number | string | null
+}
+
+export interface LegacyRefund {
+  OrderDetailsList?: LegacyRefundLine[] | null
 }
 
 export interface PreparedApiOrder {
@@ -251,10 +294,70 @@ export interface AlreadyImported {
  * importer nobody can use unattended, so per-order problems are collected as
  * rejections and the caller decides whether the remainder is worth committing.
  */
+/**
+ * Rebuild an order's lines at their pre-refund values.
+ *
+ * The refunded *amount* is deliberately NOT returned, and is not stored
+ * anywhere. `RefundPrice` reconstructs the billed line reliably — `Price +
+ * RefundPrice` reconciles to the checkout subtotal on every order tested — but
+ * it is not a trustworthy per-order refund figure: at one branch the same
+ * product carries the same `RefundPrice` on four different orders, and summing
+ * it there exceeds the order's own total, which no real refund can. At another
+ * branch it is genuinely per-order. The two cases are indistinguishable, so the
+ * order is stored at its gross total with no refund claimed.
+ *
+ * A refunded line survives on the order with `Price` zeroed, so the original
+ * value of every line is `Price + RefundPrice` and the refunded value is
+ * `sum(RefundPrice)`. Both come from the refund record, matched to the order's
+ * own lines by line id.
+ *
+ * Returns null when there is no refund record, or when a line cannot be matched
+ * or would not divide into a whole unit price — in which case the caller
+ * refuses the order rather than storing a total it cannot substantiate.
+ */
+function restoreRefundedLines(
+  lines: readonly PreparedApiLine[],
+  refund: LegacyRefund | undefined,
+): { lines: PreparedApiLine[]; subtotalCents: number } | null {
+  const refundLines = refund?.OrderDetailsList
+  if (!refundLines || refundLines.length === 0) return null
+
+  const byId = new Map<number, LegacyRefundLine>()
+  for (const line of refundLines) {
+    const id = Number(line.ID)
+    if (Number.isFinite(id)) byId.set(id, line)
+  }
+
+  const restored: PreparedApiLine[] = []
+  for (const line of lines) {
+    const source = byId.get(line.sourceLineId)
+    if (!source) return null
+    // Signed, deliberately. On a heavily refunded line the surviving `Price` is
+    // a negative remainder and the two only reconstruct the billed line when it
+    // is added, not its magnitude: order 1059's Tapal line is
+    // -1,850 + 13,875 = 12,025, which is 13 units at 925. Taking the magnitude
+    // would give 15,725 and reconcile against nothing.
+    const kept = Math.round((Number(source.Price ?? 0) + Number.EPSILON) * 100)
+    const refunded = Math.round((Number(source.RefundPrice ?? 0) + Number.EPSILON) * 100)
+    if (!Number.isFinite(kept) || !Number.isFinite(refunded)) return null
+    const original = kept + refunded
+    if (original < 0) return null
+    const priceCents = original / line.quantity
+    if (!Number.isSafeInteger(priceCents)) return null
+    restored.push({ ...line, lineTotalCents: original, priceCents })
+  }
+
+  return {
+    lines: restored,
+    subtotalCents: restored.reduce((sum, line) => sum + line.lineTotalCents, 0),
+  }
+}
+
 export function prepareApiOrders(
   listRows: readonly LegacyOrderListRow[],
   detailsById: ReadonlyMap<number, LegacyOrderDetail>,
   alreadyImported: AlreadyImported = { legacyOrderIds: new Set(), identityKeys: new Set() },
+  refundsByOrderId: ReadonlyMap<number, LegacyRefund> = new Map(),
 ): PreparationResult {
   const prepared: PreparedApiOrder[] = []
   const skipped: SkippedOrder[] = []
@@ -288,6 +391,7 @@ export function prepareApiOrders(
     }
     if (statusId === LEGACY_STATUS_CANCELLED) { skip("CANCELLED"); continue }
     if (statusId === LEGACY_STATUS_DRAFT) { skip("DRAFT"); continue }
+    if (statusId === LEGACY_STATUS_TEST) { skip("TEST_ORDER"); continue }
     if (statusId !== LEGACY_STATUS_LIVE) {
       reject("UNSUPPORTED_STATUS", `legacy StatusID ${statusId}`)
       continue
@@ -314,7 +418,12 @@ export function prepareApiOrders(
     const lines: PreparedApiLine[] = []
     for (const line of detail.OrderDetailsList ?? []) {
       const quantity = Number(line.Quantity ?? 0)
-      const lineTotalCents = centsFrom(line.Price, `Order ${legacyOrderId}, item ${line.ID}`)
+      // Legacy occasionally stores a line total with the sign flipped — order 57
+      // carries a single "tea" line at -1. A purchased line cannot cost less
+      // than nothing and there is no credit-note concept on this endpoint
+      // (refunds live in RefundModal, handled separately), so the magnitude is
+      // the price and the sign is noise.
+      const lineTotalCents = Math.abs(centsFrom(line.Price, `Order ${legacyOrderId}, item ${line.ID}`))
       // A zero/zero line is a leftover basket row, not a purchase; drop it
       // rather than rejecting an order that is otherwise sound.
       if (quantity === 0 && lineTotalCents === 0) continue
@@ -323,12 +432,14 @@ export function prepareApiOrders(
         failed = true
         break
       }
+      // Deliberately NOT checked here. On a heavily refunded order the line's
+      // surviving `Price` is a remainder — negative or zero — and dividing it
+      // gives a meaningless unit price: order 1059's Tapal line reads -1850
+      // over 13, while the line legacy actually billed is 1,202,500 over 13,
+      // a clean 92,500. Rejecting now would kill the order before the refund
+      // record has been consulted. The check runs once below, after the lines
+      // have been restored to what legacy billed.
       const priceCents = lineTotalCents / quantity
-      if (!Number.isSafeInteger(priceCents) || priceCents < 0) {
-        reject("INEXACT_UNIT_PRICE", `item ${line.ID}: ${lineTotalCents} over ${quantity} is not a whole cent price`)
-        failed = true
-        break
-      }
       const sourceName = String(line.Name ?? "").trim()
       if (!sourceName) {
         reject("BLANK_PRODUCT_NAME", `item ${line.ID} has no name`)
@@ -355,7 +466,7 @@ export function prepareApiOrders(
       continue
     }
     const checkout = checkouts[0]
-    const itemSubtotalCents = lines.reduce((sum, line) => sum + line.lineTotalCents, 0)
+    let itemSubtotalCents = lines.reduce((sum, line) => sum + line.lineTotalCents, 0)
 
     let totalCents: number
     try {
@@ -366,9 +477,33 @@ export function prepareApiOrders(
       const legacyTaxCents = centsFrom(checkout.Tax, `Order ${legacyOrderId} tax`)
       totalCents = centsFrom(checkout.GrandTotal, `Order ${legacyOrderId} grand total`)
 
+      // A refunded line is not removed from the order, it is zeroed: its `Price`
+      // becomes 0 while `RefundPrice` on the refund record keeps what came off.
+      // So the lines legitimately sum short of the checkout subtotal, by exactly
+      // the refunded value. Restore the original line values from the refund
+      // record; the order is then stored gross, the way legacy counts it, with
+      // the refund recorded separately.
+      //
+      // `sum(RefundPrice)` is the refund figure, not `checkout.RefundAmount` —
+      // the latter is null on at least one order (573) whose lines are
+      // nonetheless short by the refunded amount.
       if (itemSubtotalCents !== subtotalCents) {
-        reject("ITEM_SUBTOTAL_MISMATCH", `items total ${itemSubtotalCents}, checkout says ${subtotalCents}`)
-        continue
+        const restored = restoreRefundedLines(lines, refundsByOrderId.get(legacyOrderId))
+        if (!restored) {
+          reject("ITEM_SUBTOTAL_MISMATCH",
+            `items total ${itemSubtotalCents}, checkout says ${subtotalCents}, `
+              + "and no refund record explains the difference")
+          continue
+        }
+        if (restored.subtotalCents !== subtotalCents) {
+          reject("ITEM_SUBTOTAL_MISMATCH",
+            `items total ${itemSubtotalCents}, checkout says ${subtotalCents}; restoring the refunded `
+              + `lines gives ${restored.subtotalCents}, which still does not reconcile`)
+          continue
+        }
+        lines.length = 0
+        lines.push(...restored.lines)
+        itemSubtotalCents = restored.subtotalCents
       }
       if (subtotalCents - discountCents + legacyTaxCents + serviceCents + deliveryCents !== totalCents) {
         reject("CHECKOUT_MISMATCH", "checkout components do not reconcile to the grand total")
@@ -379,8 +514,52 @@ export function prepareApiOrders(
         reject("CHECKOUT_MISMATCH", "list and detail totals differ")
         continue
       }
+      // Legacy is not consistent about VAT. Most orders price inclusive of it,
+      // so the grand total equals the line total. A minority add it on top —
+      // order 50 is one line at 355 against a grand total of 418.90 — and for
+      // those the lines are net while OneFlowe stores gross. Scale them up so
+      // they are stored the way every other imported order is.
+      //
+      // Refuses rather than rounds: if the scale-up does not land exactly on the
+      // order's own total, or leaves a unit price that is not a whole number of
+      // cents, the money would be misstated. Across the eleven affected orders
+      // every line divides cleanly and the residual is zero.
+      if (legacyTaxCents > 0 && totalCents !== itemSubtotalCents) {
+        const scaled = lines.map((line) => {
+          const lineTotal = Math.round((line.lineTotalCents * totalCents) / itemSubtotalCents)
+          return { ...line, lineTotalCents: lineTotal, priceCents: lineTotal / line.quantity }
+        })
+        const scaledTotal = scaled.reduce((sum, line) => sum + line.lineTotalCents, 0)
+        const indivisible = scaled.find((line) => !Number.isSafeInteger(line.priceCents))
+        if (scaledTotal !== totalCents) {
+          reject("TAX_SPLIT_MISMATCH",
+            `scaling the lines to the gross total gives ${scaledTotal}, not ${totalCents}`)
+          continue
+        }
+        if (indivisible) {
+          reject("TAX_SPLIT_MISMATCH",
+            `line ${indivisible.sourceLineId} grosses up to ${indivisible.lineTotalCents} over `
+              + `${indivisible.quantity}, which is not a whole cent price`)
+          continue
+        }
+        lines.length = 0
+        lines.push(...scaled)
+      }
     } catch (error) {
       reject("CHECKOUT_MISMATCH", error instanceof Error ? error.message : String(error))
+      continue
+    }
+
+    // Now that the lines hold what legacy billed — restored from the refund
+    // record where one applied, and grossed up where VAT was added on top — a
+    // unit price that is still not a whole number of cents cannot be
+    // represented, and no rounding is applied to make one fit.
+    const indivisibleLine = lines.find(
+      (line) => !Number.isSafeInteger(line.priceCents) || line.priceCents < 0)
+    if (indivisibleLine) {
+      reject("INEXACT_UNIT_PRICE",
+        `item ${indivisibleLine.sourceLineId}: ${indivisibleLine.lineTotalCents} over `
+          + `${indivisibleLine.quantity} is not a whole cent price`)
       continue
     }
 
@@ -517,4 +696,23 @@ export function reconcileAgainstSheet(
     onlyInSheet: onlyInSheet.sort((a, b) => a.localeCompare(b)),
     onlyInApi: onlyInApi.sort((a, b) => a.localeCompare(b)),
   }
+}
+
+/** Inclusive calendar-month windows covering [start, end], as YYYY-MM-DD pairs. */
+export function monthWindows(startDate: string, endDate: string): Array<{ start: string; end: string }> {
+  const windows: Array<{ start: string; end: string }> = []
+  let [year, month] = startDate.split("-").map(Number)
+  for (;;) {
+    const first = `${year}-${String(month).padStart(2, "0")}-01`
+    const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate()
+    const last = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`
+    windows.push({
+      start: first < startDate ? startDate : first,
+      end: last > endDate ? endDate : last,
+    })
+    if (last >= endDate) break
+    month += 1
+    if (month > 12) { month = 1; year += 1 }
+  }
+  return windows
 }

@@ -551,6 +551,25 @@ export interface UserPlan {
   stamps: Array<{ userId: string; username: string; externalId: string }>
   /** Employee codes OneFlowe has on a different person than legacy does. */
   conflicts: EmployeeCodeConflict[]
+  /**
+   * Accounts sitting at a different branch than legacy assigns them to.
+   *
+   * Only reachable because `LocationID` was trusted over `SubuserLocations`
+   * before `legacyLocationOf` existed; a person put at the wrong branch takes
+   * their branch's orders with them, and leaves the right branch looking
+   * unstaffed. Moving them is a correction toward the source, not a
+   * preference — legacy is the record of who works where.
+   */
+  branchMoves: BranchMove[]
+}
+
+export interface BranchMove {
+  userId: string
+  username: string
+  fromBranchId: number
+  toBranchId: number
+  toBranchName: string
+  legacySubUserId: number
 }
 
 /**
@@ -568,6 +587,32 @@ export function employeeCodeOf(username: string | null | undefined): string | nu
   if (!name) return null
   const stem = name.replace(/(-ba|-op|_op)$/i, "")
   return stem && stem !== name ? stem : (/^[A-Za-z0-9._-]+$/.test(name) ? name : null)
+}
+
+/**
+ * The legacy location a person actually works at.
+ *
+ * `LocationID` looks like the answer and is not: it is a default that legacy
+ * populates for everyone, overwhelmingly with 2 (KE HOUSE). The real assignment
+ * is `SubuserLocations`, and for thirteen of the 148 people the two disagree —
+ * Kashif Memon (passcode 16592) carries LocationID 2 while his
+ * SubuserLocations says GSMP-KKI, which is where K-Electric's own user report
+ * places him and where his orders were raised.
+ *
+ * So `LocationID` is honoured only when `SubuserLocations` agrees that the
+ * person is there; otherwise the explicit assignment wins. Preferring
+ * SubuserLocations outright would also be correct today, but this keeps the
+ * one person who holds several locations on the branch legacy names first.
+ */
+export function legacyLocationOf(subUser: LegacySubUser): number | null {
+  const assigned = (subUser.SubuserLocations ?? [])
+    .map((entry) => Number(entry?.LocationID))
+    .filter((id) => Number.isInteger(id) && id > 0)
+  const home = subUser.LocationID == null ? null : Number(subUser.LocationID)
+
+  if (assigned.length === 0) return home
+  if (home != null && assigned.includes(home)) return home
+  return assigned[0]
 }
 
 function personName(subUser: LegacySubUser): string {
@@ -599,6 +644,7 @@ export function planUsers(
   const skipped: SkippedPerson[] = []
   const backfill: UserPlan["backfill"] = []
   const stamps: UserPlan["stamps"] = []
+  const branchMoves: BranchMove[] = []
   const conflicts: EmployeeCodeConflict[] = []
   let alreadyPresent = 0
 
@@ -661,10 +707,28 @@ export function planUsers(
     const identity = contested ? contestedId : passcode
     const usernameStem = contested ? contestedId : passcode
 
+    // Resolved before the already-present branch as well as after it: an
+    // account that already exists still has to be checked against the branch
+    // legacy assigns it to.
+    const locationId = legacyLocationOf(subUser)
+    const pin = locationId == null ? undefined : branchByLegacyId.get(Number(locationId))
+
     if (existing.length > 0) {
       alreadyPresent += 1
       const roles = new Set(existing.map((user) => user.roleName))
       const branchId = existing.find((user) => user.branchId != null)?.branchId ?? null
+      for (const account of pin ? existing : []) {
+        if (account.branchId != null && account.branchId !== pin!.branchId) {
+          branchMoves.push({
+            userId: account.id,
+            username: account.username ?? "",
+            fromBranchId: account.branchId,
+            toBranchId: pin!.branchId,
+            toBranchName: pin!.currentName,
+            legacySubUserId,
+          })
+        }
+      }
       for (const [roleName, suffix] of [
         [ROLE_BRANCH_ADMIN, SUFFIX_BRANCH_ADMIN],
         [ROLE_ORDER_PORTAL, SUFFIX_ORDER_PORTAL],
@@ -702,12 +766,10 @@ export function planUsers(
       continue
     }
     const resolvedEmail = email || fallbackEmail(subUser)
-    const locationId = subUser.LocationID ?? subUser.SubuserLocations?.[0]?.LocationID ?? null
     if (locationId == null) {
       skip("NO_LOCATION", "legacy record is not attached to any location")
       continue
     }
-    const pin = branchByLegacyId.get(Number(locationId))
     if (!pin) {
       skip("BRANCH_NOT_PINNED", `legacy location ${locationId} has no OneFlowe branch yet`)
       continue
@@ -746,7 +808,7 @@ export function planUsers(
     })
   }
 
-  return { people, skipped, alreadyPresent, backfill, stamps, conflicts }
+  return { people, skipped, alreadyPresent, backfill, stamps, conflicts, branchMoves }
 }
 
 // ============================================================
@@ -774,6 +836,8 @@ export interface SyncCounts {
   accountsToStamp: number
   peopleSkipped: number
   peopleAlreadyPresent: number
+  /** Accounts sitting at a branch legacy does not assign them to. */
+  branchMoves: number
   employeeCodeConflicts: number
   derivedEmails: number
 }
@@ -793,6 +857,7 @@ export function summarize(plan: SyncPlan): SyncCounts {
     accountsToStamp: plan.users.stamps.length,
     peopleSkipped: plan.users.skipped.length,
     peopleAlreadyPresent: plan.users.alreadyPresent,
+    branchMoves: plan.users.branchMoves.length,
     employeeCodeConflicts: plan.users.conflicts.length,
     derivedEmails: plan.users.people.filter((person) => person.emailIsDerived).length,
   }
