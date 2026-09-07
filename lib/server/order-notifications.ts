@@ -1,6 +1,6 @@
 import "server-only"
 
-import { and, asc, eq, gte, inArray, isNull, lt, lte, or, sql } from "drizzle-orm"
+import { and, eq, inArray, isNull } from "drizzle-orm"
 
 import {
   branches,
@@ -24,6 +24,18 @@ import {
 } from "@/lib/order-approver-role"
 import { ORDER_CREATOR_ROLES } from "@/lib/group-order-visibility"
 import { GROUP_ORDER_PORTAL_ROLE, resolveScopedBranchIds } from "@/lib/server/multi-branch-scope"
+import {
+  markFailedAttempt,
+  markSent,
+  markSkipped,
+  runEmailOutbox,
+  type ClaimedOutboxRow,
+  type DeliveryOutcome,
+} from "@/lib/server/email-outbox-runtime"
+import {
+  deliverClaimedSupportEmail,
+  isSupportEmailTemplate,
+} from "@/lib/server/support-notifications"
 
 type OrderEventInput = {
   id: number
@@ -38,9 +50,6 @@ export type QueuedOrderNotifications = {
   recipientCount: number
 }
 
-const MAX_DELIVERY_ATTEMPTS = 5
-const PROCESSING_TIMEOUT_MS = 10 * 60 * 1000
-const RETRY_DELAYS_MS = [60_000, 5 * 60_000, 30 * 60_000, 2 * 60 * 60_000, 12 * 60 * 60_000]
 export function orderNotificationEventKey(
   template: OrderLifecycleEmailTemplate,
   orderId: number,
@@ -345,41 +354,38 @@ function parsePayload(value: Record<string, unknown>): OrderLifecycleEmailPayloa
   }
 }
 
-function retryTime(attempts: number) {
-  const delay = RETRY_DELAYS_MS[Math.min(Math.max(attempts - 1, 0), RETRY_DELAYS_MS.length - 1)]
-  return new Date(Date.now() + delay)
-}
+/**
+ * `branch_id` became nullable on `email_outbox` when support threads started
+ * sharing the table, so this asks for a row whose branch is already known to be
+ * present. `deliverClaimedOrderEmail` establishes that before it calls in; the
+ * rule itself is exactly what it always was.
+ */
+type OrderScopedOutboxRow = ClaimedOutboxRow & { orderId: number; branchId: number }
 
-function safeDeliveryError(error: unknown) {
-  const message = error instanceof Error ? `${error.name}: ${error.message}` : "Unknown email delivery error"
-  return message.replace(/[\r\n]+/g, " ").slice(0, 1000)
-}
-
-async function markSkipped(id: number, reason: string) {
-  await db.update(emailOutbox).set({
-    status: "SKIPPED",
-    processingStartedAt: null,
-    lastError: reason,
-    updatedAt: new Date(),
-  }).where(and(eq(emailOutbox.id, id), eq(emailOutbox.status, "PROCESSING")))
-}
-
-type DeliveryOutcome = "sent" | "retried" | "failed" | "skipped"
-type ClaimedOutboxRow = typeof emailOutbox.$inferSelect & { attempts: number }
-
-function recipientScopeCondition(row: ClaimedOutboxRow) {
+function recipientScopeCondition(row: OrderScopedOutboxRow) {
   if (row.recipientRole === "SUPER_ADMIN") return undefined
   if (row.recipientRole === "HEAD_OFFICE") return eq(users.organizationId, row.organizationId)
   return and(eq(users.organizationId, row.organizationId), eq(users.branchId, row.branchId))
 }
 
-async function deliverClaimedOrderEmail(row: ClaimedOutboxRow): Promise<DeliveryOutcome> {
-  const template = isLifecycleTemplate(row.template) ? row.template : null
-  const payload = parsePayload(row.payload)
+async function deliverClaimedOrderEmail(claimed: ClaimedOutboxRow): Promise<DeliveryOutcome> {
+  const template = isLifecycleTemplate(claimed.template) ? claimed.template : null
+  const payload = parsePayload(claimed.payload)
   if (!template || !payload) {
-    await markSkipped(row.id, "Invalid order email template or payload")
+    await markSkipped(claimed.id, "Invalid order email template or payload")
     return "skipped"
   }
+
+  // `order_id` and `branch_id` became nullable when support threads joined this
+  // table. Every order lifecycle row still carries both; one that does not is
+  // malformed and is retired rather than delivered against a partial scope.
+  // Past this guard the row is known to carry its whole order scope, which is
+  // what the rest of this function has always assumed.
+  if (claimed.orderId === null || claimed.branchId === null) {
+    await markSkipped(claimed.id, "Order lifecycle email is missing its order scope")
+    return "skipped"
+  }
+  const row: OrderScopedOutboxRow = { ...claimed, orderId: claimed.orderId, branchId: claimed.branchId }
 
   const currentApproverCondition = row.template === "ORDER_CREATED"
     ? eq(organizations.orderApproverRole, row.recipientRole)
@@ -410,96 +416,37 @@ async function deliverClaimedOrderEmail(row: ClaimedOutboxRow): Promise<Delivery
 
   try {
     const providerMessageId = await sendOrderLifecycleEmail({ to: recipient.email, template, payload })
-    await db.update(emailOutbox).set({
-      recipientEmail: recipient.email,
-      status: "SENT",
-      processingStartedAt: null,
-      sentAt: new Date(),
-      providerMessageId,
-      lastError: null,
-      updatedAt: new Date(),
-    }).where(and(eq(emailOutbox.id, row.id), eq(emailOutbox.status, "PROCESSING")))
+    await markSent(row.id, { recipientEmail: recipient.email, providerMessageId })
     return "sent"
   } catch (error) {
-    const terminal = row.attempts >= MAX_DELIVERY_ATTEMPTS
-    await db.update(emailOutbox).set({
-      status: terminal ? "FAILED" : "PENDING",
-      processingStartedAt: null,
-      nextAttemptAt: terminal ? null : retryTime(row.attempts),
-      lastError: safeDeliveryError(error),
-      updatedAt: new Date(),
-    }).where(and(eq(emailOutbox.id, row.id), eq(emailOutbox.status, "PROCESSING")))
-    return terminal ? "failed" : "retried"
+    return markFailedAttempt(row, error)
   }
 }
 
+/**
+ * Which deliverer a claimed row belongs to.
+ *
+ * The outbox carries more than one kind of mail. An order lifecycle row takes
+ * exactly the path it always has; a support row takes the support path.
+ */
+function deliverClaimedEmail(row: ClaimedOutboxRow): Promise<DeliveryOutcome> {
+  return isSupportEmailTemplate(row.template)
+    ? deliverClaimedSupportEmail(row)
+    : deliverClaimedOrderEmail(row)
+}
+
+/**
+ * Drains the email outbox.
+ *
+ * Kept under its original name because the cron route and every order handler
+ * call it; it now drives the shared runtime and dispatches each claimed row to
+ * the deliverer for its template family.
+ */
 export async function processOrderEmailOutbox(options?: {
   eventKeys?: string[]
   limit?: number
 }) {
-  const eventKeys = Array.from(new Set((options?.eventKeys || []).filter(Boolean))).slice(0, 100)
-  const limit = Math.min(Math.max(Math.floor(options?.limit || 25), 1), 50)
-  const now = new Date()
-  const staleBefore = new Date(now.getTime() - PROCESSING_TIMEOUT_MS)
-
-  const claimed = await db.transaction(async (tx) => {
-    const eligibility = or(
-      and(
-        eq(emailOutbox.status, "PENDING"),
-        or(isNull(emailOutbox.nextAttemptAt), lte(emailOutbox.nextAttemptAt, now)),
-      ),
-      and(
-        eq(emailOutbox.status, "PROCESSING"),
-        or(isNull(emailOutbox.processingStartedAt), lte(emailOutbox.processingStartedAt, staleBefore)),
-      ),
-    )
-
-    await tx.update(emailOutbox).set({
-      status: "FAILED",
-      processingStartedAt: null,
-      nextAttemptAt: null,
-      lastError: "Delivery worker stopped after the maximum number of attempts",
-      updatedAt: now,
-    }).where(and(
-      gte(emailOutbox.attempts, MAX_DELIVERY_ATTEMPTS),
-      or(
-        eq(emailOutbox.status, "PENDING"),
-        and(
-          eq(emailOutbox.status, "PROCESSING"),
-          or(isNull(emailOutbox.processingStartedAt), lte(emailOutbox.processingStartedAt, staleBefore)),
-        ),
-      ),
-    ))
-
-    const conditions = [eligibility, lt(emailOutbox.attempts, MAX_DELIVERY_ATTEMPTS)]
-    if (eventKeys.length > 0) conditions.push(inArray(emailOutbox.eventKey, eventKeys))
-
-    const rows = await tx
-      .select()
-      .from(emailOutbox)
-      .where(and(...conditions))
-      .orderBy(asc(emailOutbox.createdAt))
-      .limit(limit)
-      .for("update", { skipLocked: true })
-
-    if (rows.length === 0) return []
-    const ids = rows.map((row) => row.id)
-    await tx.update(emailOutbox).set({
-      status: "PROCESSING",
-      processingStartedAt: now,
-      attempts: sql`${emailOutbox.attempts} + 1`,
-      updatedAt: now,
-    }).where(inArray(emailOutbox.id, ids))
-
-    return rows.map((row) => ({ ...row, attempts: row.attempts + 1 }))
-  })
-
-  const outcomes: Record<DeliveryOutcome, number> = { sent: 0, retried: 0, failed: 0, skipped: 0 }
-  for (const row of claimed) {
-    outcomes[await deliverClaimedOrderEmail(row)]++
-  }
-
-  return { claimed: claimed.length, ...outcomes }
+  return runEmailOutbox(deliverClaimedEmail, options)
 }
 
 export async function attemptImmediateOrderEmailDelivery(eventKeys: string[]) {
@@ -523,3 +470,10 @@ export async function attemptImmediateOrderEmailDelivery(eventKeys: string[]) {
     })
   }
 }
+
+/**
+ * The same immediate drain, under a name that does not claim to be about
+ * orders. Support routes call this after queueing; the dispatcher sends each
+ * claimed row down the path for its own template family.
+ */
+export const attemptImmediateEmailDelivery = attemptImmediateOrderEmailDelivery

@@ -1,5 +1,6 @@
 "use client"
 import React,{ useMemo,useState } from "react"
+import Link from "next/link"
 import { formatPKR,cn } from "@/lib/utils"
 import { calculateLineCents,formatQuantity,parseQuantity,roundQuantity,sanitizeQuantityStep } from "@/lib/quantity"
 import useSWR from "swr"
@@ -13,7 +14,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Dialog,DialogContent,DialogHeader,DialogTitle,DialogFooter,DialogDescription } from "@/components/ui/dialog"
-import { ShoppingBag,Search,Plus,Minus,Trash2,Home,CheckCircle,Clock,AlertTriangle,DollarSign,Zap,Package,TrendingDown,Grid,LogOut,ArrowRight,ArrowLeft,Calendar,MapPin,RefreshCw,Building2,Copy,Send,Pencil,Loader2,ArrowDownUp,X,SlidersHorizontal } from "lucide-react"
+import { ShoppingBag,Search,Plus,Minus,Trash2,Home,CheckCircle,Clock,AlertTriangle,DollarSign,Zap,Package,TrendingDown,Grid,LogOut,ArrowRight,ArrowLeft,Calendar,MapPin,RefreshCw,Building2,Copy,Send,Pencil,Loader2,ArrowDownUp,X,SlidersHorizontal,LifeBuoy } from "lucide-react"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from "@/components/ui/select"
 import { CategoryFilter } from "@/components/shop/category-filter"
@@ -1091,6 +1092,14 @@ export default function OrderPortalPage() {
             </div>}
 
             {isOrderPortal && <NotificationBell />}
+
+            {/* The direct channel to Apricart. Shared with every other portal,
+                which is why it lives at /support rather than under /shop. */}
+            <Button asChild variant="ghost" size="icon" title="Support - raise a query with Apricart">
+              <Link href="/support">
+                <LifeBuoy className="h-4 w-4" />
+              </Link>
+            </Button>
 
             {/* Cart Button */}
             <Button

@@ -49,6 +49,14 @@ function notificationTitle(type: string) {
       return "Order rejected"
     case "REFUND_REQUESTED":
       return "Refund request submitted"
+    case "SUPPORT_THREAD_OPENED":
+      return "New support request"
+    case "SUPPORT_MESSAGE_RECEIVED":
+      return "New reply on a support request"
+    case "SUPPORT_THREAD_RESOLVED":
+      return "Support request resolved"
+    case "SUPPORT_THREAD_CLOSED":
+      return "Support request closed"
     default:
       return "Notification"
   }
@@ -60,6 +68,8 @@ function notificationSeverity(type: string): "info" | "warning" | "critical" {
     case "ORDER_APPROVED_ADMIN":
     case "ORDER_REJECTED":
     case "REFUND_REQUESTED":
+    case "SUPPORT_THREAD_OPENED":
+    case "SUPPORT_MESSAGE_RECEIVED":
       return "warning"
     default:
       return "info"
@@ -71,7 +81,16 @@ function notificationCta(
   orderId: number | null,
   role: string | undefined,
   canDecideOrders: boolean,
+  supportThreadId: number | null,
 ) {
+  // The support area is shared by every role, and the endpoints behind it
+  // decide what each caller may read, so the link needs no role gate here.
+  if (type.startsWith("SUPPORT_")) {
+    return supportThreadId
+      ? { label: "Open the request", href: `/support/${supportThreadId}` }
+      : { label: "Open support", href: "/support" }
+  }
+
   switch (type) {
     case "ORDER_CREATED":
       return orderId && canDecideOrders
@@ -125,6 +144,7 @@ export async function GET() {
         organizationId: notifications.organizationId,
         branchId: notifications.branchId,
         orderId: notifications.orderId,
+        supportThreadId: notifications.supportThreadId,
         targetRole: notifications.targetRole,
         createdAt: notifications.createdAt,
       })
@@ -145,12 +165,14 @@ export async function GET() {
           notification.orderId,
           role,
           capabilities.canApproveOrders,
+          notification.supportThreadId,
         ),
         tag: notification.type.toLowerCase().replace(/_/g, "-"),
         createdAt: notification.createdAt,
         organizationId: notification.organizationId,
         branchId: notification.branchId,
         orderId: notification.orderId,
+        supportThreadId: notification.supportThreadId,
         targetRole: notification.targetRole,
       })),
     })

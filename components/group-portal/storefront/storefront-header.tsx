@@ -1,6 +1,7 @@
 "use client"
 
-import { Building2, Cloud, CloudOff, Layers, Loader2, LogOut, Menu, ShoppingBag } from "lucide-react"
+import Link from "next/link"
+import { Building2, Cloud, CloudOff, Layers, LifeBuoy, Loader2, LogOut, Menu, ShoppingBag } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { securelySignOut } from "@/lib/session-coordination"
@@ -166,6 +167,18 @@ export function StorefrontHeader({
           >
             <ShoppingBag className="h-4 w-4" />
             <span className="font-semibold">{cartCount}</span>
+          </Button>
+
+          <Button
+            asChild
+            variant="ghost"
+            size="icon"
+            title="Support - raise a query with Apricart"
+            aria-label="Support"
+          >
+            <Link href="/support">
+              <LifeBuoy className="h-4 w-4" />
+            </Link>
           </Button>
 
           <Button
