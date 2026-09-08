@@ -22,6 +22,18 @@ const formatDuration = (mins: number) => {
     return hRemaining > 0 ? `${d}d ${hRemaining}h` : `${d}d`
 }
 
+/**
+ * "Placed at 03 Sep 2026, 02:05". Returns the fallback when the timestamp is
+ * absent or unparseable — date-fns `format` throws on an invalid date, and
+ * `orders.created_at` / `orders.approved_at` are both nullable columns.
+ */
+const formatOrderTimestamp = (value: string | Date | null | undefined, prefix: string, fallback: string): string => {
+    if (!value) return fallback
+    const parsed = new Date(value)
+    if (Number.isNaN(parsed.getTime())) return fallback
+    return `${prefix} ${format(parsed, "dd MMM yyyy, HH:mm")}`
+}
+
 const getDeliveryStatusColor = (status?: string | null) => {
     switch (normalizeFulfillmentStatus(status)) {
         case "DELIVERED":
@@ -523,13 +535,14 @@ export function DrillDownSheet({
                                                                 <span className="text-sm font-semibold text-slate-900 dark:text-white tracking-tight">{item.tid}</span>
                                                             </div>
                                                             <div className="flex flex-wrap items-center gap-3 mt-1 text-[10px] font-medium text-slate-400 uppercase tracking-widest opacity-80">
-                                                                <span className="flex items-center gap-1"><Clock className="w-3.5 h-3.5" /> {format(new Date(item.date), "HH:mm")}</span>
+                                                                <span className="flex items-center gap-1 normal-case tracking-normal" title="Date and time this order was placed">
+                                                                    <Clock className="w-3.5 h-3.5" />
+                                                                    {formatOrderTimestamp(item.date, "Placed at", "Placed date unavailable")}
+                                                                </span>
                                                                 {type === "APPROVED" && (
                                                                     <span className="flex items-center gap-1 normal-case tracking-normal" title="Date and time this order became active">
                                                                         <CalendarDays className="w-3.5 h-3.5" />
-                                                                        {item.approvedAt
-                                                                            ? `Approved ${format(new Date(item.approvedAt), "dd MMM yyyy, HH:mm")}`
-                                                                            : "Approval date unavailable"}
+                                                                        {formatOrderTimestamp(item.approvedAt, "Approved", "Approval date unavailable")}
                                                                     </span>
                                                                 )}
                                                                 <span className="flex items-center gap-1"><Box className="w-3.5 h-3.5" /> {item.branchName}</span>

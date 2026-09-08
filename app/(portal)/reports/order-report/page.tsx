@@ -195,8 +195,11 @@ export default function OrderReportPage() {
 
     // ━━━ SMART SYNC (Global to Local) ━━━
     useEffect(() => {
+        // Clearing the global selection is a change like any other: without
+        // propagating the empty list the tabs stay pinned to the branch the
+        // user just deselected.
         const hasGlobalChanged = JSON.stringify(contextBranchIds) !== JSON.stringify(lastSyncedBranchIds.current)
-        if (hasGlobalChanged && contextBranchIds.length > 0) {
+        if (hasGlobalChanged) {
             setChartBranchIds([...contextBranchIds])
             setReportBranchIds([...contextBranchIds])
             lastSyncedBranchIds.current = [...contextBranchIds]
@@ -215,8 +218,12 @@ export default function OrderReportPage() {
         const adminBranchId = contextBranchId || (session?.user as any)?.branchId
         if (userOrgId) globalParams.set("organizationId", String(userOrgId))
         if (adminBranchId) globalParams.set("branchIds", String(adminBranchId))
-    } else if (organizationId) {
-        globalParams.set("organizationId", organizationId.toString())
+    } else {
+        // The KPI cards answer the same question the sticky-header branch
+        // selector asks, so they carry the global branch scope too. Without it
+        // they report organization-wide totals beside branch-scoped charts.
+        if (organizationId) globalParams.set("organizationId", organizationId.toString())
+        if (contextBranchIds.length > 0) globalParams.set("branchIds", contextBranchIds.join(","))
     }
 
     if (dateRange?.startDate) globalParams.set("startDate", dateRange.startDate.toISOString())

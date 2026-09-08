@@ -20,7 +20,7 @@ import {
   ZAxis,
 } from "recharts"
 
-import type { ChartTypeId } from "@/lib/executive-analytics"
+import type { ChartTypeId, ExecutiveDimensionId } from "@/lib/executive-analytics"
 import {
   AXIS_STYLE,
   DataTable,
@@ -65,6 +65,21 @@ export type ComparisonRow = {
 
 export type EntitySeries = { key: string; label: string; points: Array<{ period: string; value: number }> }
 
+/**
+ * What a reader clicked: the entity, and — on a trend — the bucket as well.
+ *
+ * Both travel to the detail table, because a point on "requesters over months"
+ * names a person *and* a month, and a table showing that person across the
+ * whole window would not be the rows behind the point that was clicked.
+ */
+export type DrillTarget = {
+  dimension: ExecutiveDimensionId
+  key: string
+  label: string
+  /** "YYYY-MM" or "YYYY-MM-DD" when the click also named a bucket. */
+  period?: string
+}
+
 type ChartProps = {
   chart: ChartTypeId
   rows: ComparisonRow[]
@@ -75,11 +90,63 @@ type ChartProps = {
   dimensionLabel: string
   unit: string | null
   concentrationEligible: boolean
-  onSelectEntity?: (key: string) => void
+  /**
+   * A distinct hue per entity.
+   *
+   * Colour is decoration here, never the encoding: every bar keeps its own axis
+   * label and its own direct value label, so a repeated hue past the sixth slot
+   * costs a reader nothing. On a time axis it is off, because months are a
+   * sequence and colouring them at random would imply a grouping that is not
+   * there.
+   */
+  colorful?: boolean
+  /** Opens the detail table for the clicked bar, slice or point. */
+  onDrillDown?: (target: DrillTarget) => void
+  /** The dimension being compared, carried into the drill target. */
+  dimension?: ExecutiveDimensionId
 }
 
 /** Long labels need vertical room; short lists should not stretch to fill. */
 const rankHeight = (count: number) => Math.max(220, Math.min(560, count * 34 + 48))
+
+/** The hue for one entity's slot, cycling once the fixed palette is exhausted. */
+export function entityColor(index: number, colorful?: boolean): string {
+  return colorful ? SERIES[index % SERIES.length] : SERIES[0]
+}
+
+/** Reads a Recharts click payload back into a row, whatever shape it arrives in. */
+function rowFromPayload(entry: any): ComparisonRow | null {
+  const row = entry?.payload?.payload ?? entry?.payload ?? entry
+  return row && typeof row.key === "string" ? (row as ComparisonRow) : null
+}
+
+/**
+ * The shared "clicking this opens the rows behind it" affordance.
+ *
+ * Kept as one helper rather than repeated per chart so every form drills the
+ * same way — a reader who learns it on the bars does not have to rediscover it
+ * on the donut.
+ */
+function drillHandler(
+  dimension: ExecutiveDimensionId | undefined,
+  onDrillDown: ((target: DrillTarget) => void) | undefined,
+) {
+  if (!dimension || !onDrillDown) return undefined
+  return (entry: any) => {
+    const row = rowFromPayload(entry)
+    if (row) onDrillDown({ dimension, key: row.key, label: row.label })
+  }
+}
+
+/** Footnote telling the reader the chart is drillable, shown only when it is. */
+export function DrillHint({ enabled, noun }: Readonly<{ enabled: boolean; noun: string }>) {
+  if (!enabled) return null
+  return (
+    <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
+      Select any {noun} to open the order lines behind it, for this same period and these same filters.
+    </p>
+  )
+}
 
 function EntityTooltip({ row, format, metricLabel, concentrationEligible, showChange }: Readonly<{
   row: ComparisonRow
@@ -124,7 +191,10 @@ export function ComparisonChart(props: Readonly<ChartProps>) {
 
 // ── Ranked bars — the default ──────────────────────────────────────────────
 
-function RankedBars({ rows, format, metricLabel, onSelectEntity }: Readonly<ChartProps>) {
+function RankedBars({
+  rows, format, metricLabel, colorful, dimension, onDrillDown, dimensionLabel,
+}: Readonly<ChartProps>) {
+  const drill = drillHandler(dimension, onDrillDown)
   return (
     <>
       <ResponsiveContainer width="100%" height={rankHeight(rows.length)}>
@@ -149,9 +219,16 @@ function RankedBars({ rows, format, metricLabel, onSelectEntity }: Readonly<Char
             fill={SERIES[0]}
             radius={[0, 4, 4, 0]}
             barSize={18}
-            onClick={(entry: any) => onSelectEntity?.(entry?.payload?.key)}
-            className={onSelectEntity ? "cursor-pointer" : undefined}
+            isAnimationActive={false}
+            // Selecting a bar opens the rows behind it. Adding an entity to the
+            // comparison is the "Which ones" picker's job — one click cannot
+            // mean two things, and the rows are what a reader wants first.
+            onClick={drill}
+            className={drill ? "cursor-pointer" : undefined}
           >
+            {rows.map((row, index) => (
+              <Cell key={row.key} fill={entityColor(index, colorful)} />
+            ))}
             {/* Direct labels: the relief rule for the low-contrast light slots. */}
             <LabelList
               dataKey="value"
@@ -162,15 +239,21 @@ function RankedBars({ rows, format, metricLabel, onSelectEntity }: Readonly<Char
           </Bar>
         </BarChart>
       </ResponsiveContainer>
-      <Legend items={[{ label: metricLabel, color: SERIES[0] }]} />
+      {colorful
+        ? <Legend items={rows.slice(0, 12).map((row, index) => ({ label: row.label, color: entityColor(index, true) }))} />
+        : <Legend items={[{ label: metricLabel, color: SERIES[0] }]} />}
+      <DrillHint enabled={Boolean(drill)} noun={dimensionLabel.toLowerCase()} />
     </>
   )
 }
 
 // ── Columns ────────────────────────────────────────────────────────────────
 
-function ColumnChart({ rows, format, metricLabel }: Readonly<ChartProps>) {
+function ColumnChart({
+  rows, format, metricLabel, colorful, dimension, onDrillDown, dimensionLabel,
+}: Readonly<ChartProps>) {
   const crowded = rows.length > 6
+  const drill = drillHandler(dimension, onDrillDown)
   return (
     <>
       <ResponsiveContainer width="100%" height={300}>
@@ -199,7 +282,18 @@ function ColumnChart({ rows, format, metricLabel }: Readonly<ChartProps>) {
               ? <EntityTooltip row={payload[0].payload} format={format} metricLabel={metricLabel} concentrationEligible showChange />
               : null)}
           />
-          <Bar dataKey="value" fill={SERIES[0]} radius={[4, 4, 0, 0]} maxBarSize={56}>
+          <Bar
+            dataKey="value"
+            fill={SERIES[0]}
+            radius={[4, 4, 0, 0]}
+            maxBarSize={56}
+            isAnimationActive={false}
+            onClick={drill}
+            className={drill ? "cursor-pointer" : undefined}
+          >
+            {rows.map((row, index) => (
+              <Cell key={row.key} fill={entityColor(index, colorful)} />
+            ))}
             <LabelList
               dataKey="value"
               position="top"
@@ -209,7 +303,10 @@ function ColumnChart({ rows, format, metricLabel }: Readonly<ChartProps>) {
           </Bar>
         </BarChart>
       </ResponsiveContainer>
-      <Legend items={[{ label: metricLabel, color: SERIES[0] }]} />
+      {colorful
+        ? <Legend items={rows.slice(0, 12).map((row, index) => ({ label: row.label, color: entityColor(index, true) }))} />
+        : <Legend items={[{ label: metricLabel, color: SERIES[0] }]} />}
+      <DrillHint enabled={Boolean(drill)} noun={dimensionLabel.toLowerCase()} />
     </>
   )
 }
@@ -268,8 +365,9 @@ function GroupedChart({ rows, format, metricLabel }: Readonly<ChartProps>) {
 
 // ── Share of total ─────────────────────────────────────────────────────────
 
-function DonutChart({ rows, format, metricLabel, dimensionLabel }: Readonly<ChartProps>) {
+function DonutChart({ rows, format, metricLabel, dimensionLabel, dimension, onDrillDown }: Readonly<ChartProps>) {
   const total = rows.reduce((sum, row) => sum + Math.max(0, row.value), 0)
+  const drill = drillHandler(dimension, onDrillDown)
   return (
     <>
       <ResponsiveContainer width="100%" height={300}>
@@ -300,6 +398,8 @@ function DonutChart({ rows, format, metricLabel, dimensionLabel }: Readonly<Char
             stroke="var(--viz-surface)"
             strokeWidth={2}
             isAnimationActive={false}
+            onClick={drill}
+            className={drill ? "cursor-pointer" : undefined}
             label={({ payload, percent: fraction }: any) =>
               fraction > 0.04 ? `${payload.label} ${(fraction * 100).toFixed(0)}%` : ""}
             labelLine={false}
@@ -315,13 +415,66 @@ function DonutChart({ rows, format, metricLabel, dimensionLabel }: Readonly<Char
         Shares are of the {rows.length} {dimensionLabel.toLowerCase()} shown, totalling {formatByKind(total, format)} —
         not of everything in the period.
       </p>
+      <DrillHint enabled={Boolean(drill)} noun="slice" />
     </>
   )
 }
 
 // ── Trend over time ────────────────────────────────────────────────────────
 
-function TrendChart({ series, periods, format, metricLabel }: Readonly<ChartProps>) {
+/**
+ * A line-chart dot with its own hit area.
+ *
+ * Recharts hands a custom `dot` element the row it is drawn from, which is the
+ * only reliable way to know *both* which line and which bucket a click landed
+ * on. The visible dot stays small for legibility while an invisible circle
+ * around it gives a target big enough to hit on a touch screen.
+ */
+function DrillDot({ cx, cy, color, payload, onDrill }: Readonly<{
+  cx?: number
+  cy?: number
+  color?: string
+  payload?: { period?: string }
+  onDrill?: (period: string) => void
+}>) {
+  if (!Number.isFinite(cx) || !Number.isFinite(cy)) return null
+  return (
+    <g>
+      <circle cx={cx} cy={cy} r={3} fill={color} stroke="var(--viz-surface)" strokeWidth={1} pointerEvents="none" />
+      {onDrill ? (
+        <circle
+          cx={cx}
+          cy={cy}
+          r={11}
+          fill="transparent"
+          className="cursor-pointer"
+          onClick={() => onDrill(String(payload?.period ?? ""))}
+        />
+      ) : null}
+    </g>
+  )
+}
+
+function TrendChart({
+  series, periods, format, metricLabel, dimension, onDrillDown, dimensionLabel,
+}: Readonly<ChartProps>) {
+  /**
+   * A point on a trend can name one thing or two.
+   *
+   * On a time axis the series *is* the period, so the bucket is the entity and
+   * it drills as one. On "requesters over months" the point names a person and
+   * a month, so both travel and the table shows that person in that month —
+   * anything else would show rows the clicked point does not account for.
+   */
+  const isTimeAxis = dimension === "month" || dimension === "day"
+  const drillPoint = dimension && onDrillDown
+    ? (entity: EntitySeries, period: string) => {
+      if (!period) return
+      if (isTimeAxis) onDrillDown({ dimension, key: period, label: period })
+      else onDrillDown({ dimension, key: entity.key, label: `${entity.label} · ${period}`, period })
+    }
+    : undefined
+
   // One row per period, one column per entity: the shape Recharts draws lines from.
   const data = periods.map((period, index) => {
     const point: Record<string, string | number> = { period }
@@ -366,7 +519,13 @@ function TrendChart({ series, periods, format, metricLabel }: Readonly<ChartProp
               name={entity.label}
               stroke={SERIES[index % SERIES.length]}
               strokeWidth={2}
-              dot={{ r: 3 }}
+              dot={(
+                <DrillDot
+                  color={SERIES[index % SERIES.length]}
+                  onDrill={drillPoint ? (period) => drillPoint(entity, period) : undefined}
+                />
+              )}
+              activeDot={{ r: 5 }}
               isAnimationActive={false}
             />
           ))}
@@ -374,16 +533,19 @@ function TrendChart({ series, periods, format, metricLabel }: Readonly<ChartProp
       </ResponsiveContainer>
       <Legend items={series.map((entity, index) => ({ label: entity.label, color: SERIES[index % SERIES.length] }))} />
       <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
-        {metricLabel} per month. A month with no purchase reads as zero, not as a gap.
+        {metricLabel} per {isTimeAxis && dimension === "day" ? "day" : "month"}. A period with no purchase reads as zero,
+        not as a gap.
       </p>
+      <DrillHint enabled={Boolean(drillPoint)} noun={isTimeAxis ? "point" : `point — one ${dimensionLabel.toLowerCase()} in one month`} />
     </>
   )
 }
 
 // ── Value against quantity ─────────────────────────────────────────────────
 
-function ScatterCompare({ rows, format, metricLabel, unit }: Readonly<ChartProps>) {
+function ScatterCompare({ rows, format, metricLabel, unit, dimension, onDrillDown }: Readonly<ChartProps>) {
   const usable = rows.filter((row) => row.quantity > 0)
+  const drill = drillHandler(dimension, onDrillDown)
 
   if (usable.length === 0) {
     return (
@@ -438,7 +600,19 @@ function ScatterCompare({ rows, format, metricLabel, unit }: Readonly<ChartProps
               )
             }}
           />
-          <Scatter data={usable} fill={SERIES[0]} fillOpacity={0.75} stroke="var(--viz-surface)" strokeWidth={2}>
+          <Scatter
+            data={usable}
+            fill={SERIES[0]}
+            fillOpacity={0.75}
+            stroke="var(--viz-surface)"
+            strokeWidth={2}
+            isAnimationActive={false}
+            onClick={drill}
+            className={drill ? "cursor-pointer" : undefined}
+          >
+            {usable.map((row, index) => (
+              <Cell key={row.key} fill={entityColor(index, true)} />
+            ))}
             <LabelList
               dataKey="label"
               position="top"
@@ -451,13 +625,16 @@ function ScatterCompare({ rows, format, metricLabel, unit }: Readonly<ChartProps
         Each point is one entity: quantity across, value up, bubble size is order count. High and left means paying a lot
         for little; low and right means buying volume cheaply.
       </p>
+      <DrillHint enabled={Boolean(drill)} noun="point" />
     </>
   )
 }
 
 // ── Table ──────────────────────────────────────────────────────────────────
 
-function ComparisonTable({ rows, format, metricLabel, dimensionLabel, concentrationEligible }: Readonly<ChartProps>) {
+function ComparisonTable({
+  rows, format, metricLabel, dimensionLabel, concentrationEligible, dimension, onDrillDown,
+}: Readonly<ChartProps>) {
   return (
     <DataTable
       columns={[
@@ -474,15 +651,22 @@ function ComparisonTable({ rows, format, metricLabel, dimensionLabel, concentrat
         changeLabel(row.changePct).text,
         countShort(row.orderCount),
       ])}
+      // The table is the keyboard path to the same drill-down the bars give a
+      // mouse, so neither reader is offered a comparison they cannot open.
+      rowKeys={rows.map((row) => row.key)}
+      onSelectRow={dimension && onDrillDown
+        ? (key, index) => onDrillDown({ dimension, key, label: rows[index]?.label ?? key })
+        : undefined}
     />
   )
 }
 
 /** The table shown for a trend, since a line chart has no single value per row. */
-export function SeriesTable({ series, periods, format }: Readonly<{
+export function SeriesTable({ series, periods, format, onSelectEntity }: Readonly<{
   series: EntitySeries[]
   periods: string[]
   format: string
+  onSelectEntity?: (key: string, index: number) => void
 }>) {
   return (
     <DataTable
@@ -491,6 +675,8 @@ export function SeriesTable({ series, periods, format }: Readonly<{
         entity.label,
         ...entity.points.map((point) => formatByKind(point.value, format)),
       ])}
+      rowKeys={series.map((entity) => entity.key)}
+      onSelectRow={onSelectEntity}
     />
   )
 }
