@@ -59,7 +59,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1067.0",
     "@aws-sdk/client-sesv2": "^3.1068.0",
-    "@next/env": "16.3.0",
+    "@next/env": "16.3.3",
     "@node-rs/bcrypt": "1.10.8",
     "@radix-ui/react-accordion": "^1.2.12",
     "@radix-ui/react-alert-dialog": "^1.1.15",
@@ -103,7 +103,7 @@
     "jspdf": "4.2.1",
     "jspdf-autotable": "5.0.8",
     "lucide-react": "^0.454.0",
-    "next": "16.3.0",
+    "next": "16.3.3",
     "next-auth": "4.24.15",
     "next-themes": "latest",
     "pg": "latest",

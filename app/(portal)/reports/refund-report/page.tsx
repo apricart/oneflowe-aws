@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useSession } from "next-auth/react"
 import useSWR from "swr"
 import jsPDF from "jspdf"
@@ -211,6 +211,7 @@ export default function RefundReportPage() {
     const {
         organizationId: contextOrganizationId,
         branchId: contextBranchId,
+        branchIds: contextBranchIds,
         isInitialized,
     } = useAppContext()
 
@@ -234,6 +235,16 @@ export default function RefundReportPage() {
     const { visibleKeys, isVisible, setVisibleKeys } = useColumnSelector(ALL_COLUMNS, "refund-report-v2")
 
     useEffect(() => setGeneratedAt(new Date().toLocaleString()), [])
+
+    // The sticky-header branch selector is the page scope, not a suggestion:
+    // mirror it into the local filter so the summary and the table both narrow
+    // to the selected branches, and widen again when the selection is cleared.
+    const lastSyncedBranchIds = useRef<string[]>([])
+    useEffect(() => {
+        if (JSON.stringify(contextBranchIds) === JSON.stringify(lastSyncedBranchIds.current)) return
+        setBranchIds([...contextBranchIds])
+        lastSyncedBranchIds.current = [...contextBranchIds]
+    }, [contextBranchIds])
 
     const queryParams = useMemo(() => buildRefundQueryParams({
         role,
@@ -304,9 +315,9 @@ export default function RefundReportPage() {
         setActivePreset("all")
         setOrganizationIds([])
         setGroupIds([])
-        setBranchIds([])
+        setBranchIds(contextBranchIds.length > 0 ? [...contextBranchIds] : [])
         setCurrentPage(1)
-    }, [])
+    }, [contextBranchIds])
 
     const openDetails = useCallback((refund: RefundRecord) => {
         setSelectedRefund(refund)

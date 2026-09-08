@@ -2,7 +2,7 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { Home,Building2,Users,Package,Boxes,Wallet,BarChart3,Settings,FolderTree,ChevronDown,ClipboardCheck,PanelLeftClose,PanelLeftOpen } from "lucide-react"
+import { Home,Building2,Users,Package,Boxes,Wallet,BarChart3,Settings,FolderTree,ChevronDown,ClipboardCheck,LifeBuoy,PanelLeftClose,PanelLeftOpen } from "lucide-react"
 import Image from "next/image"
 import { useCallback,useEffect,useState,type ReactNode } from "react"
 import { Tooltip,TooltipContent,TooltipTrigger } from "@/components/ui/tooltip"
@@ -55,6 +55,7 @@ const getNavigationByRole = (role: string) => {
           { href: "/reports/groups", label: "Group Report" },
         ]
       },
+      { href: "/support", label: "Support", icon: LifeBuoy },
       { href: "/settings", label: "Settings", icon: Settings },
     ]
   }
@@ -85,6 +86,7 @@ const getNavigationByRole = (role: string) => {
           { href: "/reports/groups", label: "Group Report" },
         ]
       },
+      { href: "/support", label: "Support", icon: LifeBuoy },
       { href: "/settings", label: "Settings", icon: Settings },
     ]
   }
@@ -106,6 +108,7 @@ const getNavigationByRole = (role: string) => {
           { href: "/reports/branch-reports", label: "Branch Report" },
         ]
       },
+      { href: "/support", label: "Support", icon: LifeBuoy },
       { href: "/settings", label: "Settings", icon: Settings },
     ]
   }
@@ -135,6 +138,7 @@ const getNavigationByRole = (role: string) => {
           { href: "/reports/branch-reports", label: "Branch Report" },
         ]
       },
+      { href: "/support", label: "Support", icon: LifeBuoy },
       { href: "/settings", label: "Settings", icon: Settings },
     ]
   }

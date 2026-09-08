@@ -2,7 +2,8 @@
 
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Download, X, Printer } from "lucide-react"
+import Link from "next/link"
+import { Download, LifeBuoy, X, Printer } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import useSWR from "swr"
 import Image from "next/image"
@@ -353,6 +354,14 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
 
             {/* Action Bar */}
             <div className="flex justify-end gap-2 mb-6 print-hidden max-w-[850px] mx-auto">
+                {/* The client's route to Apricart about this exact invoice. The
+                    order travels as a query parameter; whether this person may
+                    cite it is decided on the server against the order row. */}
+                <Button asChild variant="outline" size="sm" className="gap-2 h-9 border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-900 dark:text-white hover:bg-slate-100 dark:hover:bg-slate-700 font-semibold shadow-sm">
+                    <Link href={`/support?orderId=${orderId}&orderTid=${encodeURIComponent(String(orderReference))}`}>
+                        <LifeBuoy className="h-4 w-4" /> Raise a Query
+                    </Link>
+                </Button>
                 <Button onClick={handlePrint} variant="outline" size="sm" className="gap-2 h-9 border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-900 dark:text-white hover:bg-slate-100 dark:hover:bg-slate-700 font-semibold shadow-sm">
                     <Printer className="h-4 w-4" /> Print Invoice
                 </Button>

@@ -32,6 +32,12 @@ export type ExecutiveFilterState = {
    * alongside a comparison that groups by something other than the product.
    */
   productIds?: string[]
+  /**
+   * Narrows every figure to these requesters. Set by the side-by-side screen's
+   * "requesters to compare" picker, so the month and day panels answer for the
+   * same people the requester panel ranks rather than for everyone.
+   */
+  userIds?: string[]
   unit: string | null
 }
 
@@ -167,6 +173,7 @@ export function toQuery(filters: ExecutiveFilterState, extra: Record<string, str
   if (filters.branchIds.length > 0) params.set("branchIds", filters.branchIds.join(","))
   if (filters.categoryIds.length > 0) params.set("categoryIds", filters.categoryIds.join(","))
   if (filters.productIds && filters.productIds.length > 0) params.set("productIds", filters.productIds.join(","))
+  if (filters.userIds && filters.userIds.length > 0) params.set("userIds", filters.userIds.join(","))
   if (filters.unit) params.set("unit", filters.unit)
   Object.entries(extra).forEach(([key, entry]) => {
     if (entry) params.set(key, entry)

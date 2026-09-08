@@ -12,6 +12,7 @@ export enum PermissionCategory {
   REPORTS = "Reports & Analytics",
   SETTINGS = "Settings & Configuration",
   GROUP = "Group Management",
+  SUPPORT = "Support & Communication",
 }
 
 export enum Permission {
@@ -91,6 +92,15 @@ export enum Permission {
   // catalogue, a tenant, or a group must not carry the right to change what
   // anyone is charged. Enforced through `lib/pricing-access.ts`.
   PRICING_MANAGE = "pricing:manage",
+
+  // Support & Communication — the direct channel between a client organization
+  // and Apricart. View/create/reply belong to every role that can hold a
+  // conversation; SUPPORT_MANAGE is Apricart's view of its own queue and is
+  // held by Super Admin alone. Enforced through `lib/support-access.ts`.
+  SUPPORT_VIEW = "support:view",
+  SUPPORT_CREATE = "support:create",
+  SUPPORT_REPLY = "support:reply",
+  SUPPORT_MANAGE = "support:manage",
 }
 
 export interface PermissionInfo {
@@ -454,6 +464,34 @@ export const PERMISSION_DEFINITIONS: PermissionInfo[] = [
     category: PermissionCategory.FINANCIAL,
     isHighRisk: true,
   },
+
+  // Support & Communication
+  {
+    key: Permission.SUPPORT_VIEW,
+    label: "View Support Requests",
+    description: "Read support conversations within the caller's own scope",
+    category: PermissionCategory.SUPPORT,
+  },
+  {
+    key: Permission.SUPPORT_CREATE,
+    label: "Raise Support Requests",
+    description: "Open a query or complaint with the Apricart team",
+    category: PermissionCategory.SUPPORT,
+  },
+  {
+    key: Permission.SUPPORT_REPLY,
+    label: "Reply to Support Requests",
+    description: "Post a message to a support conversation",
+    category: PermissionCategory.SUPPORT,
+  },
+  {
+    key: Permission.SUPPORT_MANAGE,
+    label: "Manage the Support Queue",
+    description:
+      "Assign, prioritise and close support requests across every organization. Apricart only.",
+    category: PermissionCategory.SUPPORT,
+    isHighRisk: true,
+  },
 ]
 
 export function getPermissionsByCategory() {
@@ -507,6 +545,11 @@ export const ROLE_TEMPLATES = {
       Permission.SETTINGS_VIEW,
       Permission.SETTINGS_EDIT,
       Permission.GROUP_VIEW,
+      // Every client role holds a direct channel to Apricart. SUPPORT_MANAGE
+      // is deliberately absent: triaging the queue is Apricart's own.
+      Permission.SUPPORT_VIEW,
+      Permission.SUPPORT_CREATE,
+      Permission.SUPPORT_REPLY,
       // Deliberately no PRICING_MANAGE: Head Office administers groups and
       // branches but may never change what they are charged. See
       // lib/pricing-access.ts.
@@ -530,6 +573,11 @@ export const ROLE_TEMPLATES = {
       Permission.REPORTS_VIEW_BRANCH,
       Permission.REPORTS_EXPORT,
       Permission.SETTINGS_VIEW,
+      // Every client role holds a direct channel to Apricart. SUPPORT_MANAGE
+      // is deliberately absent: triaging the queue is Apricart's own.
+      Permission.SUPPORT_VIEW,
+      Permission.SUPPORT_CREATE,
+      Permission.SUPPORT_REPLY,
     ],
   },
   GROUP_USER: {
@@ -544,6 +592,11 @@ export const ROLE_TEMPLATES = {
       Permission.FINANCE_VIEW_BUDGETS,
       Permission.REPORTS_VIEW_BRANCH,
       Permission.GROUP_VIEW,
+      // Every client role holds a direct channel to Apricart. SUPPORT_MANAGE
+      // is deliberately absent: triaging the queue is Apricart's own.
+      Permission.SUPPORT_VIEW,
+      Permission.SUPPORT_CREATE,
+      Permission.SUPPORT_REPLY,
     ],
   },
   GROUP_ORDER_PORTAL: {
@@ -555,6 +608,11 @@ export const ROLE_TEMPLATES = {
       Permission.ORDER_VIEW,
       Permission.FINANCE_VIEW_BUDGETS,
       Permission.GROUP_VIEW,
+      // Every client role holds a direct channel to Apricart. SUPPORT_MANAGE
+      // is deliberately absent: triaging the queue is Apricart's own.
+      Permission.SUPPORT_VIEW,
+      Permission.SUPPORT_CREATE,
+      Permission.SUPPORT_REPLY,
     ],
   },
   ORDER_PORTAL: {
@@ -565,6 +623,11 @@ export const ROLE_TEMPLATES = {
       Permission.ORDER_CREATE,
       Permission.ORDER_VIEW,
       Permission.FINANCE_VIEW_BUDGETS,
+      // Every client role holds a direct channel to Apricart. SUPPORT_MANAGE
+      // is deliberately absent: triaging the queue is Apricart's own.
+      Permission.SUPPORT_VIEW,
+      Permission.SUPPORT_CREATE,
+      Permission.SUPPORT_REPLY,
     ],
   },
 }

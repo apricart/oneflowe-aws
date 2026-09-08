@@ -113,3 +113,68 @@ describe("grain separation", () => {
     }
   })
 })
+
+/**
+ * The drill-down is the one builder in this file that returns individual order
+ * lines rather than an aggregate, so the properties that keep it safe are
+ * structural and are pinned here rather than left to review.
+ */
+const drillDownRoute = source("app/api/v1/analytics/executive/drill-down/route.ts")
+
+describe("the drill-down listing", () => {
+  it("applies the same tenant fence every aggregate builder does", () => {
+    const body = builderBody("loadDrillDownLines")
+    // Not a hand-written where clause: the fence has one implementation and
+    // this listing must not become a second one that can drift from it.
+    expect(body).toContain("lineConditions(scope, filters)")
+    expect(body).not.toContain("inArray(orders.branchId")
+  })
+
+  it("sorts only through the allowlisted expression map", () => {
+    const body = builderBody("loadDrillDownLines")
+    expect(body).toContain("DRILLDOWN_SORT_EXPRESSIONS[sortKey]")
+    // A sort key is the classic path from a request string into an ORDER BY.
+    expect(body).not.toContain("sql.raw")
+    expect(body).not.toMatch(/orderBy\([^)]*options\.sort/)
+  })
+
+  it("pages deterministically, so a retry cannot repeat or skip a line", () => {
+    // Every line of one order shares a timestamp, so the sort needs a tiebreak.
+    expect(builderBody("loadDrillDownLines")).toContain("desc(orderItems.id)")
+  })
+
+  it("bounds the page it reads", () => {
+    const body = builderBody("loadDrillDownLines")
+    expect(body).toContain(".limit(options.limit + 1)")
+    expect(body).toContain(".offset(options.offset)")
+  })
+})
+
+describe("the drill-down route", () => {
+  it("resolves the caller's scope rather than reading a branch from the request", () => {
+    expect(drillDownRoute).toContain("resolveExecutiveScope(session, scopeParams)")
+    expect(drillDownRoute).toContain("if (!scope.ok) return NextResponse.json({ error: scope.error }, { status: scope.status })")
+  })
+
+  it("folds a branch or organization key into the scope before the fence is resolved", () => {
+    // Ordering matters: a key merged after scope resolution would be trusted
+    // instead of intersected with what the caller may already see.
+    const scopeFold = drillDownRoute.indexOf("applyEntityKeys")
+    const scopeResolve = drillDownRoute.indexOf("await resolveExecutiveScope")
+    expect(scopeFold).toBeGreaterThan(-1)
+    expect(scopeResolve).toBeGreaterThan(scopeFold)
+  })
+
+  it("re-validates every parameter through the shared parser", () => {
+    expect(drillDownRoute).toContain("parseDrillDownRequest(url.searchParams, new Date(), scope.role)")
+  })
+
+  it("is rate limited, being a listing endpoint", () => {
+    expect(drillDownRoute).toContain('withRateLimit("search"')
+  })
+
+  it("never returns an internal error message to the caller", () => {
+    expect(drillDownRoute).toContain('{ error: "Internal Server Error" }')
+    expect(drillDownRoute).not.toMatch(/error:\s*(caught)?[eE]rror\b/)
+  })
+})

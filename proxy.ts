@@ -30,6 +30,7 @@ const protectedPrefixes = [
   "/reports",
   "/settings",
   "/shop",
+  "/support",
   "/users",
 ]
 const SESSION_COOKIE_NAMES = [
@@ -197,6 +198,19 @@ function isInvoiceArea(pathname: string): boolean {
 }
 
 /**
+ * The support area is shared by every role for the same reason the invoice page
+ * is: a client raises a query from whichever portal they live in, and Apricart
+ * answers from the admin shell. Which threads a caller may actually read is
+ * decided by `lib/support-access.ts` on the endpoints behind the page — this
+ * allowlist only stops the shell bouncing the request home first.
+ */
+const SUPPORT_AREA = "/support"
+
+function isSupportArea(pathname: string): boolean {
+  return pathMatchesPrefix(pathname, SUPPORT_AREA)
+}
+
+/**
  * The portal each role is confined to, or null when the path is already inside
  * it. Each restricted role owns exactly one area and is redirected home from
  * everywhere else; /change-password stays reachable so a forced password change
@@ -210,12 +224,15 @@ function rolePortalRedirect(role: string | undefined, pathname: string): string 
 
   if (role === "ORDER_PORTAL") {
     // The store links each fulfilled order to its invoice, so the invoice page
-    // stays reachable; everything else still funnels back to /shop.
-    return pathname.startsWith("/shop") || isInvoiceArea(pathname) ? null : "/shop"
+    // stays reachable, as does the shared support area it raises queries from;
+    // everything else still funnels back to /shop.
+    return pathname.startsWith("/shop") || isInvoiceArea(pathname) || isSupportArea(pathname) ? null : "/shop"
   }
   if (role === "GROUP_USER") {
-    // The approval queue links each approved order to its invoice.
+    // The approval queue links each approved order to its invoice, and the
+    // support area is shared by every role.
     return isInvoiceArea(pathname)
+      || isSupportArea(pathname)
       || GROUP_USER_AREAS.some((prefix) => pathMatchesPrefix(pathname, prefix))
       ? null
       : GROUP_USER_HOME
@@ -223,8 +240,9 @@ function rolePortalRedirect(role: string | undefined, pathname: string): string 
   if (role === "GROUP_ORDER_PORTAL") {
     // The requester keeps its own workspace and never reaches the admin shell,
     // the approver's queue, or the single-branch /shop. Its order history links
-    // to the invoice page, which is shared by every ordering surface.
-    return pathname.startsWith(GROUP_ORDER_PORTAL_HOME) || isInvoiceArea(pathname)
+    // to the invoice page, and the support area is shared by every role; both
+    // are scoped per row on their own endpoints rather than by area.
+    return pathname.startsWith(GROUP_ORDER_PORTAL_HOME) || isInvoiceArea(pathname) || isSupportArea(pathname)
       ? null
       : GROUP_ORDER_PORTAL_HOME
   }
@@ -340,6 +358,8 @@ export const config = {
     "/settings/:path*",
     "/shop",
     "/shop/:path*",
+    "/support",
+    "/support/:path*",
     "/approvals",
     "/approvals/:path*",
     "/group-portal",

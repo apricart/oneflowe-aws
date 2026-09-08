@@ -8,10 +8,14 @@ import { useAPI } from "@/lib/hooks/use-api"
 import { cn } from "@/lib/utils"
 import {
   EXECUTIVE_METRICS,
+  MEASURE_METRIC,
+  isTimeAxisDimension,
+  measureOfMetric,
   metricsUnderLineFocus,
   type ChartTypeId,
   type ExecutiveDimensionId,
   type ExecutiveMetricId,
+  type MeasureId,
 } from "@/lib/executive-analytics"
 import {
   AXIS_STYLE,
@@ -24,9 +28,17 @@ import {
   formatShortByKind,
   money,
 } from "./chart-kit"
-import { ComparisonChart, SeriesTable, type ComparisonRow, type EntitySeries } from "./comparison-charts"
+import {
+  ComparisonChart,
+  SeriesTable,
+  type ComparisonRow,
+  type DrillTarget,
+  type EntitySeries,
+} from "./comparison-charts"
+import { DrillDownPanel } from "./drill-down-panel"
 import { EntityPicker, type EntityOption } from "./entity-picker"
 import { toQuery, type ExecutiveFilterState } from "./executive-filters"
+import { MeasureToggle } from "./measure-toggle"
 
 /**
  * Level 2 — the Explore / Compare workbench.
@@ -171,6 +183,16 @@ export function ExploreWorkspace({ filters, priceProduct, onClearPriceProduct }:
    * would contradict each other.
    */
   const [focusProducts, setFocusProducts] = React.useState<string[]>([])
+  /**
+   * The bar, slice or point whose rows are open below the chart.
+   *
+   * Held here rather than inside the chart card so it survives a measure flip
+   * and a chart-form change: a reader who opens one branch's lines and then
+   * switches Amount to Quantity is asking the same question a second way, and
+   * having the table close under them would make the flip cost more than it
+   * saves.
+   */
+  const [drillTarget, setDrillTarget] = React.useState<DrillTarget | null>(null)
 
   // The dimensions this caller may use. Role filtering happens on the server;
   // this only decides what the menu renders.
@@ -186,6 +208,9 @@ export function ExploreWorkspace({ filters, priceProduct, onClearPriceProduct }:
     if (previousDimension.current !== dimension) {
       previousDimension.current = dimension
       setKeys([])
+      // The open rows belong to the old dimension's entity; keeping them would
+      // show a branch's lines under a chart of products.
+      setDrillTarget(null)
     }
   }, [dimension])
 
@@ -282,17 +307,29 @@ export function ExploreWorkspace({ filters, priceProduct, onClearPriceProduct }:
       />
 
       <ComparisonCard
+        dimension={dimension}
         dimensionLabel={current?.label ?? "Branch"}
         selectedCount={keys.length}
         focusLabels={activeFocus.map(
           (key) => productOptions.find((option) => option.key === key)?.label ?? "selected product",
         )}
         metric={effectiveMetric}
+        availableMetrics={availableMetrics}
+        onMetricChange={setMetric}
         data={data}
         isLoading={isLoading}
         requestError={requestError}
-        onSelectEntity={(key) => setKeys((existing) => (existing.includes(key) ? existing : [...existing, key]))}
+        onDrillDown={setDrillTarget}
       />
+
+      {drillTarget ? (
+        <DrillDownPanel
+          target={drillTarget}
+          filters={scopedFilters}
+          metric={effectiveMetric}
+          onClose={() => setDrillTarget(null)}
+        />
+      ) : null}
 
       {priceProduct ? (
         <PriceByBranchCard
@@ -421,17 +458,21 @@ function QuestionBuilder({
 }
 
 function ComparisonCard({
-  dimensionLabel, selectedCount, focusLabels, metric, data, isLoading, requestError, onSelectEntity,
+  dimension, dimensionLabel, selectedCount, focusLabels, metric, availableMetrics, onMetricChange,
+  data, isLoading, requestError, onDrillDown,
 }: Readonly<{
+  dimension: ExecutiveDimensionId
   dimensionLabel: string
   selectedCount: number
   /** Products the comparison is narrowed to, named so the chart cannot mislead. */
   focusLabels: string[]
   metric: ExecutiveMetricId
+  availableMetrics: ExecutiveMetricId[]
+  onMetricChange: (next: ExecutiveMetricId) => void
   data: ComparisonResponse | undefined
   isLoading: boolean
   requestError: string | null
-  onSelectEntity?: (key: string) => void
+  onDrillDown: (target: DrillTarget) => void
 }>) {
   const rows = data?.rows ?? []
   const series = data?.series ?? []
@@ -458,6 +499,17 @@ function ComparisonCard({
     return subject ? `${subject} — ${metricLabel} by ${dimensionLabel}` : base
   })()
 
+  /**
+   * The one-click flip between money and stuff, on the chart itself.
+   *
+   * The full metric row above can already reach both, but the flip is the most
+   * repeated action on this screen and burying it among seven options makes a
+   * reader hunt for it every time. It writes the same state, so the two
+   * controls can never disagree, and it is hidden where the dimension does not
+   * offer both measures rather than shown as a control that does nothing.
+   */
+  const canToggleMeasure = availableMetrics.includes("spend") && availableMetrics.includes("quantity")
+
   return (
     <ChartCard
       title={title}
@@ -466,7 +518,26 @@ function ComparisonCard({
       loading={isLoading}
       error={requestError}
       empty={blockedMessage ?? (isEmpty ? "No data for this combination in the selected period and filters." : null)}
-      table={mode === "series" ? <SeriesTable series={series} periods={periods} format={format} /> : undefined}
+      toolbar={canToggleMeasure ? (
+        <MeasureToggle
+          value={measureOfMetric(metric)}
+          onChange={(next: MeasureId) => onMetricChange(MEASURE_METRIC[next])}
+        />
+      ) : undefined}
+      table={mode === "series"
+        ? (
+          <SeriesTable
+            series={series}
+            periods={periods}
+            format={format}
+            onSelectEntity={(key, index) => onDrillDown({
+              dimension,
+              key,
+              label: series[index]?.label ?? key,
+            })}
+          />
+        )
+        : undefined}
     >
       <ComparisonChart
         chart={chart}
@@ -478,7 +549,11 @@ function ComparisonCard({
         dimensionLabel={dimensionLabel}
         unit={data?.quantityUnit.selected ?? null}
         concentrationEligible={Boolean(data?.concentrationEligible)}
-        onSelectEntity={chart === "bar" ? onSelectEntity : undefined}
+        // Months and days are a sequence; colouring them apart would imply a
+        // grouping that is not there. Entities get their own hue.
+        colorful={!isTimeAxisDimension(dimension)}
+        dimension={dimension}
+        onDrillDown={onDrillDown}
       />
       {data?.quantityUnit.selected ? (
         <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">

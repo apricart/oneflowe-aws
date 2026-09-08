@@ -18,6 +18,14 @@ import {
   MAX_STORED_IMAGE_URL_LENGTH,
   normalizeSafeImageUrl,
 } from "@/lib/security"
+import {
+  SUPPORT_CATEGORIES,
+  SUPPORT_MAX_ATTACHMENTS_PER_MESSAGE,
+  SUPPORT_MESSAGE_MAX_LENGTH,
+  SUPPORT_PRIORITIES,
+  SUPPORT_STATUSES,
+  SUPPORT_SUBJECT_MAX_LENGTH,
+} from "@/lib/support-thread"
 
 export const systemRoleSchema = z.enum([
   "SUPER_ADMIN",
@@ -659,6 +667,67 @@ export const groupOrderDraftSchema = z.object({
     "Each product can only appear once",
   ).optional(),
 }).strict()
+
+// Support & Communication — the direct channel between a client organization
+// and Apricart. Every one of these is `.strict()`: a body carrying an
+// organization, a branch, a status the caller may not set, or a `createdBy` is
+// rejected outright rather than silently ignored. Scope is read from the
+// session, never from here.
+
+const supportAttachmentIds = z.array(positiveId)
+  .max(
+    SUPPORT_MAX_ATTACHMENTS_PER_MESSAGE,
+    `A message can carry at most ${SUPPORT_MAX_ATTACHMENTS_PER_MESSAGE} attachments`,
+  )
+  .refine(isUniquePositiveIdList, "Each attachment can only be used once")
+  .optional()
+  .default([])
+
+const supportMessageBody = z.string()
+  .trim()
+  .min(1, "A message is required")
+  .max(
+    SUPPORT_MESSAGE_MAX_LENGTH,
+    `A message must not exceed ${SUPPORT_MESSAGE_MAX_LENGTH} characters`,
+  )
+
+export const supportThreadCreateSchema = z.object({
+  subject: z.string()
+    .trim()
+    .min(1, "A subject is required")
+    .max(
+      SUPPORT_SUBJECT_MAX_LENGTH,
+      `A subject must not exceed ${SUPPORT_SUBJECT_MAX_LENGTH} characters`,
+    ),
+  category: z.enum(SUPPORT_CATEGORIES),
+  priority: z.enum(SUPPORT_PRIORITIES).optional().default("NORMAL"),
+  // The order the query is about. Whether the caller may cite it is decided on
+  // the server against the order row, not here.
+  orderId: positiveId.nullish(),
+  message: supportMessageBody,
+  attachmentIds: supportAttachmentIds,
+}).strict()
+
+export const supportMessageCreateSchema = z.object({
+  message: supportMessageBody,
+  attachmentIds: supportAttachmentIds,
+}).strict()
+
+/**
+ * A hand-made change to a thread. At least one field must be present, so an
+ * empty body is a 400 rather than a silent no-op that looks like success.
+ */
+export const supportThreadUpdateSchema = z.object({
+  status: z.enum(SUPPORT_STATUSES).optional(),
+  priority: z.enum(SUPPORT_PRIORITIES).optional(),
+  // `null` unassigns; omitted leaves the assignment alone.
+  assignedToUserId: z.string().uuid().nullish(),
+}).strict().refine(
+  (value) => value.status !== undefined
+    || value.priority !== undefined
+    || value.assignedToUserId !== undefined,
+  "Nothing to update",
+)
 
 export function validationMessage(error: z.ZodError): string {
   const unknownKeys = error.issues
