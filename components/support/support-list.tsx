@@ -35,6 +35,7 @@ import {
   useSupportSide,
 } from "@/components/support/support-chrome"
 import { NewThreadDialog } from "@/components/support/new-thread-dialog"
+import { SupportStats } from "@/components/support/support-stats"
 
 type SupportThreadRow = {
   id: number
@@ -64,7 +65,7 @@ type SupportListResponse = {
 
 export function SupportList() {
   const searchParams = useSearchParams()
-  const { role, side } = useSupportSide()
+  const { role, side, embedded } = useSupportSide()
   const apricart = side === "APRICART"
   const home = homeHrefForRole(role)
 
@@ -99,16 +100,19 @@ export function SupportList() {
   const lastPage = Math.max(1, Math.ceil(total / pageSize))
 
   return (
-    <>
+    <div className={cn(embedded && "mx-auto max-w-5xl")}>
+      {/* Inside the portal chrome the sidebar is the way back, so the header
+          drops its own link home rather than offering a second one. */}
       <SupportHeader
+        embedded={embedded}
         title={apricart ? "Support queue" : "Support"}
         subtitle={
           apricart
             ? "Queries and complaints raised by portal users"
             : "Your queries and complaints to the Apricart team"
         }
-        backHref={home.href}
-        backLabel={home.label}
+        backHref={embedded ? undefined : home.href}
+        backLabel={embedded ? undefined : home.label}
         actions={
           apricart ? null : (
             <NewThreadDialog
@@ -122,7 +126,15 @@ export function SupportList() {
         }
       />
 
-      <main className="mx-auto max-w-5xl space-y-4 p-4">
+      <div className={cn("space-y-4", embedded ? "" : "mx-auto max-w-5xl p-4")}>
+        <SupportStats
+          side={side}
+          onSelectStatus={(next) => {
+            setStatus(next)
+            setPage(1)
+          }}
+        />
+
         <div className="flex flex-wrap items-center gap-3">
           <Select
             value={status}
@@ -200,8 +212,8 @@ export function SupportList() {
             </Button>
           </div>
         ) : null}
-      </main>
-    </>
+      </div>
+    </div>
   )
 }
 

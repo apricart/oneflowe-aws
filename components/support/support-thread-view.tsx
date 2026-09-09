@@ -35,6 +35,7 @@ import {
   StatusBadge,
   SupportHeader,
   formatWhen,
+  useSupportSide,
 } from "@/components/support/support-chrome"
 
 type SupportMessage = {
@@ -70,6 +71,9 @@ type SupportThreadResponse = {
 
 export function SupportThreadView({ threadId }: Readonly<{ threadId: number }>) {
   const { toast } = useToast()
+  // Whether the portal chrome is around us — read from the session, so it is
+  // settled before the thread itself arrives.
+  const { embedded } = useSupportSide()
   const { data, error, isLoading, mutate } = useAPI<SupportThreadResponse>(
     `/api/v1/support/threads/${threadId}`,
     { refreshInterval: 30_000 },
@@ -126,8 +130,9 @@ export function SupportThreadView({ threadId }: Readonly<{ threadId: number }>) 
   }
 
   return (
-    <>
+    <div className={cn(embedded && "mx-auto max-w-3xl")}>
       <SupportHeader
+        embedded={embedded}
         title={thread.subject}
         subtitle={`${supportThreadReference(thread.id)} · raised ${formatWhen(thread.createdAt)} by ${thread.createdByName || "a colleague"}`}
         backHref="/support"
@@ -140,7 +145,7 @@ export function SupportThreadView({ threadId }: Readonly<{ threadId: number }>) 
         }
       />
 
-      <main className="mx-auto max-w-3xl space-y-4 p-4">
+      <div className={cn("space-y-4", embedded ? "" : "mx-auto max-w-3xl p-4")}>
         <Card>
           <CardContent className="grid gap-x-6 gap-y-2 py-4 text-sm sm:grid-cols-2">
             <Detail label="Category">
@@ -202,8 +207,8 @@ export function SupportThreadView({ threadId }: Readonly<{ threadId: number }>) 
             onPriority={(value) => void patch({ priority: value }, "Priority updated")}
           />
         )}
-      </main>
-    </>
+      </div>
+    </div>
   )
 }
 
@@ -330,22 +335,36 @@ function ReplyComposer({
 }
 
 function ThreadLoading() {
+  const { embedded } = useSupportSide()
+
   return (
-    <>
-      <SupportHeader title="Support request" backHref="/support" backLabel="All requests" />
-      <main className="mx-auto max-w-3xl space-y-3 p-4">
+    <div className={cn(embedded && "mx-auto max-w-3xl")}>
+      <SupportHeader
+        embedded={embedded}
+        title="Support request"
+        backHref="/support"
+        backLabel="All requests"
+      />
+      <div className={cn("space-y-3", embedded ? "" : "mx-auto max-w-3xl p-4")}>
         <Skeleton className="h-24 w-full rounded-lg" />
         <Skeleton className="h-32 w-full rounded-lg" />
-      </main>
-    </>
+      </div>
+    </div>
   )
 }
 
 function ThreadUnavailable() {
+  const { embedded } = useSupportSide()
+
   return (
-    <>
-      <SupportHeader title="Support request" backHref="/support" backLabel="All requests" />
-      <main className="mx-auto max-w-3xl p-4">
+    <div className={cn(embedded && "mx-auto max-w-3xl")}>
+      <SupportHeader
+        embedded={embedded}
+        title="Support request"
+        backHref="/support"
+        backLabel="All requests"
+      />
+      <div className={cn(embedded ? "" : "mx-auto max-w-3xl p-4")}>
         <Card>
           <CardContent className="py-14 text-center">
             <p className="font-semibold text-slate-700 dark:text-slate-200">
@@ -359,8 +378,8 @@ function ThreadUnavailable() {
             </Button>
           </CardContent>
         </Card>
-      </main>
-    </>
+      </div>
+    </div>
   )
 }
 

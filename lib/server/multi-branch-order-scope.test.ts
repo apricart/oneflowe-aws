@@ -68,18 +68,21 @@ describe("group user decision surface", () => {
     const detail = source("app/api/v1/orders/[id]/route.ts")
 
     // Reading a single order is how the approver opens the detail drawer, so
-    // the role is on the GET allowlist only.
-    expect(detail).toContain('requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "ORDER_PORTAL"])')
+    // the role is on the GET allowlist only. The requester role joined this
+    // list for its own read-only tab; neither is on any write allowlist below.
+    expect(detail).toContain('requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "GROUP_ORDER_PORTAL", "ORDER_PORTAL"])')
     // Editing stays with the requester and deletion with the Super Admin.
     expect(detail).toContain('requireApiRole(["ORDER_PORTAL"])')
     expect(detail).toContain('requireApiRole(["SUPER_ADMIN"])')
   })
 
-  it("checks that read against the approver's assignments, not a single branch", () => {
+  it("checks that read against the group roles' assignments, not a single branch", () => {
     const detail = source("app/api/v1/orders/[id]/route.ts")
 
-    // Every other role keeps the original single-branch check untouched.
-    expect(detail).toContain("if (role !== GROUP_USER_ROLE) {")
+    // Every single-branch role keeps the original check untouched. The
+    // predicate names the mechanism rather than one role, so the approver and
+    // the requester cannot drift apart.
+    expect(detail).toContain("if (!usesMultiBranchScope(role)) {")
     expect(detail).toContain("return verifyResourceAccess(order.organizationId, order.branchId)")
     // The approver is checked against its resolved assignments, tenant first.
     expect(detail).toContain("if (!scope.organizationId || scope.organizationId !== order.organizationId) return false")
@@ -90,5 +93,146 @@ describe("group user decision surface", () => {
     const scope = source("lib/server/multi-branch-scope.ts")
     expect(scope).toContain("export function isGroupApproverRole")
     expect(scope).toContain('return role === GROUP_USER_ROLE')
+  })
+})
+
+/**
+ * The Group User's "Other orders" tab narrows the shared order list to the
+ * orders branch employees raised themselves. It is a *narrowing* filter laid on
+ * top of the branch scope above, so these contracts pin down that it can only
+ * remove rows — and that a malformed value is refused rather than dropped,
+ * which would hand back more than the caller asked for.
+ */
+describe("order list creator-role filter", () => {
+  const orders = source("app/api/v1/orders/route.ts")
+
+  it("takes the role from an allowlist and binds it as a parameter", () => {
+    expect(orders).toContain("parseOrderCreatorRoleFilter(params.createdByRole)")
+    expect(orders).toContain("eq(roles.name, creatorRole)")
+    // Nothing the caller sends is ever concatenated into the fragment.
+    expect(orders).not.toContain("sql.raw(params.createdByRole")
+  })
+
+  it("refuses a malformed value rather than ignoring it", () => {
+    expect(orders).toContain("if (!creatorFilter.ok) return NextResponse.json({ error: creatorFilter.message }, { status: 400 })")
+  })
+
+  it("applies the filter before the summary snapshot is taken", () => {
+    // Otherwise the status counts would describe the whole branch scope while
+    // the rows beneath them described only one role's orders.
+    const creatorAt = orders.indexOf("addOrderCreatorRoleCondition(conditions, creatorFilter.role)")
+    const summaryAt = orders.indexOf("const summaryConditions = [...conditions]")
+    expect(creatorAt).toBeGreaterThan(-1)
+    expect(summaryAt).toBeGreaterThan(creatorAt)
+  })
+
+  it("narrows the branch scope instead of replacing it", () => {
+    // The role condition is pushed onto the same `conditions` array the branch
+    // scope was pushed onto, so both are AND-ed together.
+    expect(orders).toContain("function addOrderCreatorRoleCondition(conditions: any[], creatorRole: OrderCreatorRole | null)")
+    expect(orders).toContain("if (!creatorRole) return")
+  })
+
+  it("does not key the tab on groupOrderId", () => {
+    // A group order is an ordinary order of the branch's. Keying a query on
+    // that column is what makes one vanish from the branch's own figures.
+    const creatorCondition = orders.slice(
+      orders.indexOf("function addOrderCreatorRoleCondition"),
+      orders.indexOf("function addOrderDateConditions"),
+    )
+    expect(creatorCondition).not.toContain("groupOrderId")
+  })
+})
+
+describe("group user approval workspace", () => {
+  it("reads the shared, role-scoped order list for the employee-order tab", () => {
+    const tab = source("components/group-portal/approval-other-orders.tsx")
+
+    // The branch set is resolved server-side from this user's assignments; the
+    // client sends no branch filter of its own.
+    expect(tab).toContain('createdByRole: "ORDER_PORTAL"')
+    expect(tab).toContain("/api/v1/orders?")
+    expect(tab).not.toContain("branchIds")
+  })
+
+  it("takes the decision controls from the endpoint's own capabilities", () => {
+    const tab = source("components/group-portal/approval-other-orders.tsx")
+
+    expect(tab).toContain("data?.capabilities?.canApproveOrders && data?.capabilities?.canRejectOrders")
+    // Super Admin-only controls stay closed for this role.
+    expect(tab).toContain("isSuperAdmin={false}")
+  })
+
+  it("keeps the existing tabs alongside the new one", () => {
+    const workspace = source("components/group-portal/approvals-workspace.tsx")
+
+    expect(workspace).toContain("<ApprovalQueue />")
+    expect(workspace).toContain("<ApprovalAllOrders />")
+    expect(workspace).toContain("<ApprovalOtherOrders />")
+  })
+})
+
+/**
+ * The Group Order Portal requester's "Other orders" tab. It reads the orders
+ * branch employees raised in its assigned branches, and does nothing else —
+ * these contracts are what keep "and does nothing else" true.
+ */
+describe("group order portal requester stays read-only", () => {
+  const detail = () => source("app/api/v1/orders/[id]/route.ts")
+
+  it("reaches the single-order read", () => {
+    expect(detail()).toContain('"GROUP_ORDER_PORTAL"')
+  })
+
+  it("gains no write on any order route", () => {
+    // Each of these is a mutating route. None may name the requester role.
+    for (const path of [
+      "app/api/v1/orders/[id]/approve/route.ts",
+      "app/api/v1/orders/[id]/reject/route.ts",
+      "app/api/v1/orders/[id]/fulfill/route.ts",
+      "app/api/v1/orders/[id]/fulfillment-status/route.ts",
+      "app/api/v1/orders/[id]/payment-status/route.ts",
+    ]) {
+      expect(source(path)).not.toContain("GROUP_ORDER_PORTAL")
+    }
+  })
+
+  it("leaves editing, refunding and the token with the person who raised the order", () => {
+    // The four creator-bound controls the read-only tab must not disturb.
+    expect(source("lib/order-edit-policy.ts"))
+      .toContain('input.actorRole === "ORDER_PORTAL"')
+    expect(source("lib/order-edit-policy.ts"))
+      .toContain("input.actorUserId === input.orderCreatedByUserId")
+    expect(source("app/api/v1/orders/[id]/refunds/route.ts"))
+      .toContain("orderData.createdByUserId === userId")
+    expect(source("lib/fulfillment-token-access.ts"))
+      .toContain("orderCreatedByUserId === userId")
+    // Invoices for this role stay its own orders only.
+    expect(source("lib/invoice-access-policy.ts"))
+      .toContain("GROUP_ORDER_PORTAL: { tenant: \"own-organization\", branches: \"own-organization\", ownOrdersOnly: true }")
+  })
+
+  it("withholds the creator's contact row from a requester reading another's order", () => {
+    expect(detail()).toContain("applyOrderCreatorContactVisibility(")
+    expect(detail()).toContain("orderCreatedByUserId: item.createdByUserId")
+  })
+
+  it("offers no control in the tab that the server would refuse", () => {
+    const tab = source("components/group-portal/other-branch-orders.tsx")
+
+    // A read-only surface: nothing here may POST, PUT, PATCH or DELETE.
+    expect(tab).not.toContain("method: \"POST\"")
+    expect(tab).not.toContain("method: \"PUT\"")
+    expect(tab).not.toContain("method: \"PATCH\"")
+    expect(tab).not.toContain("method: \"DELETE\"")
+    // And it asks the server only for the orders it is meant to show.
+    expect(tab).toContain('createdByRole: "ORDER_PORTAL"')
+  })
+
+  it("sends no branch filter of its own", () => {
+    // The branch set is resolved server-side from this user's assignments.
+    const tab = source("components/group-portal/other-branch-orders.tsx")
+    expect(tab).not.toContain("branchIds")
+    expect(tab).not.toContain("organizationId")
   })
 })

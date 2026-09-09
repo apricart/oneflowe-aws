@@ -18,6 +18,7 @@ import {
 import { error, ok, requireApiRole } from "@/lib/api"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
+import { applyOrderCreatorContactVisibility } from "@/lib/order-detail-visibility"
 import { canOrderPortalEditOrder } from "@/lib/order-edit-policy"
 import { orderSelectColumns } from "@/lib/order-select"
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
@@ -78,7 +79,7 @@ import { generateReceiptData } from "@/lib/receipt-generator"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
 import { orderUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
 import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
-import { GROUP_USER_ROLE, canUseScopedBranch } from "@/lib/server/multi-branch-scope"
+import { canUseScopedBranch, usesMultiBranchScope } from "@/lib/server/multi-branch-scope"
 import { canOrderPortalReadOrder, isGroupPortalOrder } from "@/lib/group-order-visibility"
 import { loadGroupPriceOverrides, resolveBranchGroupId, resolveEffectivePriceCents } from "@/lib/server/effective-price"
 
@@ -87,11 +88,15 @@ import { loadGroupPriceOverrides, resolveBranchGroupId, resolveEffectivePriceCen
  *
  * `verifyResourceAccess` compares the order's branch against the single branch
  * pinned on the user row, which is exactly right for SUPER_ADMIN, HEAD_OFFICE,
- * BRANCH_ADMIN and ORDER_PORTAL and is left untouched for them. A GROUP_USER
- * has no single branch — its reach is the set of branches an administrator
- * assigned it — so it is checked against that resolved set instead, with the
+ * BRANCH_ADMIN and ORDER_PORTAL and is left untouched for them. Neither group
+ * role has a single branch — each reaches the set of branches an administrator
+ * assigned it — so both are checked against that resolved set instead, with the
  * tenant re-asserted explicitly first. An empty assignment set denies access
  * rather than widening to the organization.
+ *
+ * The approver was the first role to need this; the requester needs the same
+ * check for the same reason, and keying it on `usesMultiBranchScope` says that
+ * once rather than naming one role and quietly meaning both.
  */
 async function hasBranchAccessForOrderRead(
   role: unknown,
@@ -100,7 +105,7 @@ async function hasBranchAccessForOrderRead(
   order: { organizationId: number; branchId: number },
 ): Promise<boolean> {
   const { verifyResourceAccess } = await import("@/lib/auth")
-  if (role !== GROUP_USER_ROLE) {
+  if (!usesMultiBranchScope(role)) {
     return verifyResourceAccess(order.organizationId, order.branchId)
   }
   if (typeof userId !== "string" || !scope || scope.userId !== userId || scope.role !== role) {
@@ -477,7 +482,7 @@ export async function GET(
   _: Request,
   props: { params: Promise<{ id: string }> },
 ) {
-  const authError = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "ORDER_PORTAL"])
+  const authError = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "GROUP_ORDER_PORTAL", "ORDER_PORTAL"])
   if (authError) return authError
 
   const { id } = await props.params
@@ -550,7 +555,17 @@ export async function GET(
     ...detailItem
   } = item
   // Same derived, read-only flag the list returns; the envelope id stays here.
-  const safeItem = { ...detailItem, placedByGroupPortal: isGroupPortalOrder(item) }
+  // The creator's contact row is then withheld from a requester reading an
+  // order it did not raise, so reaching many branches does not turn this into a
+  // staff directory. Every other role's response is unchanged.
+  const safeItem = applyOrderCreatorContactVisibility(
+    { ...detailItem, placedByGroupPortal: isGroupPortalOrder(item) },
+    {
+      role: currentRole,
+      viewerUserId: currentUserId,
+      orderCreatedByUserId: item.createdByUserId,
+    },
+  )
   const canSeeToken = canViewFulfillmentToken({
     role: currentRole,
     userId: currentUserId,

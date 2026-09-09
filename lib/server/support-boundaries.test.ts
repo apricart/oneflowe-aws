@@ -23,6 +23,7 @@ function repositoryFile(path: string): string {
 
 const SUPPORT_ROUTES = [
   "app/api/v1/support/threads/route.ts",
+  "app/api/v1/support/stats/route.ts",
   "app/api/v1/support/threads/[id]/route.ts",
   "app/api/v1/support/threads/[id]/messages/route.ts",
   "app/api/v1/support/attachments/route.ts",
@@ -115,6 +116,24 @@ describe("the thread rule is stated in exactly one place", () => {
     // The list and the single-thread read share one predicate, so they cannot
     // drift apart and let a detail page show what a list would not.
     expect(service).toContain("listSupportThreads(viewer, { threadId")
+  })
+
+  it("counts the KPI figures under the same scope the list reads", () => {
+    // A tile that counted further than the list reads would disclose the
+    // existence of threads the caller cannot open — the aggregate equivalent
+    // of a missing tenant filter.
+    const service = repositoryFile("lib/server/support-threads.ts")
+    const stats = service.slice(service.indexOf("export async function getSupportThreadStats"))
+    const body = stats.slice(0, stats.indexOf("async function loadAssigneeNames"))
+
+    expect(body, "the stats reader must derive its predicate from the shared scope").toContain(
+      "supportScopeCondition(viewer)",
+    )
+    // Nothing at all when the viewer may see nothing, rather than the table.
+    expect(body).toContain("if (!scopeCondition) return")
+    expect(body, "the stats query must be filtered by that predicate").toContain(
+      ".where(scopeCondition)",
+    )
   })
 
   it("keeps triage rights with Apricart alone", () => {

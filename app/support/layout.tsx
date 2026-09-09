@@ -1,15 +1,26 @@
 import type { ReactNode } from "react"
 import { redirect } from "next/navigation"
 
+import { PortalShell } from "@/components/shell/portal-shell"
 import { SessionGuard } from "@/components/shell/session-guard"
 import { SessionUnavailable } from "@/components/shell/session-unavailable"
 import { getProtectedPageSession } from "@/lib/server/page-session"
+import { supportUsesPortalShell } from "@/lib/support-shell"
 
 /**
- * The support area is shared by every role, so it carries its own minimal
- * shell rather than the admin sidebar — an Order Portal user reaching it from
- * `/shop` must not suddenly find themselves inside the administrator's
- * navigation. Same arrangement as `/invoices`, for the same reason.
+ * The support area is shared by every role, so the shell is chosen per role
+ * rather than fixed.
+ *
+ * An `ORDER_PORTAL` or `GROUP_ORDER_PORTAL` user reaching support from `/shop`
+ * or `/group-portal` gets the minimal shell — they have no sidebar anywhere
+ * else and must not find themselves inside the administrator's navigation, the
+ * same arrangement `/invoices` has for the same reason. Everyone the sidebar
+ * already builds a menu for keeps that menu here, so clicking *Support* does
+ * not strip the navigation out from under them.
+ *
+ * `lib/support-shell.ts` states the rule; this reads the role from the session
+ * and nowhere else. It is presentation either way — what a caller may read is
+ * decided by the endpoints behind the page.
  */
 export const metadata = {
   title: "Support - Apricart OneFlowe",
@@ -23,10 +34,18 @@ export default async function SupportLayout({
   if (pageSession.kind === "invalid") redirect("/login?reason=session-expired")
   if (pageSession.kind === "unavailable") return <SessionUnavailable />
 
+  const role = (pageSession.session.user as { role?: string } | undefined)?.role
+
+  if (supportUsesPortalShell(role)) {
+    // No prefetch: support reads none of the portal's cached order, user or
+    // branch lists.
+    return <PortalShell preload={false}>{children}</PortalShell>
+  }
+
   // The root layout already provides the session, SWR and toast providers.
   return (
     <SessionGuard>
-      <div className="min-h-svh bg-background dark:bg-slate-950">{children}</div>
+      <main className="min-h-svh bg-background dark:bg-slate-950">{children}</main>
     </SessionGuard>
   )
 }

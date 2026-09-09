@@ -7,6 +7,7 @@ import { useSession } from "next-auth/react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { supportUsesPortalShell } from "@/lib/support-shell"
 import {
   SUPPORT_CATEGORY_LABELS,
   SUPPORT_PRIORITY_LABELS,
@@ -27,10 +28,22 @@ import {
  * single string on the row.
  */
 
+/**
+ * The viewer's side of the conversation, and whether the portal chrome is
+ * around them.
+ *
+ * `embedded` comes from the same rule `app/support/layout.tsx` used to pick the
+ * shell, so the page cannot draw a "back to dashboard" affordance next to a
+ * sidebar that already offers one.
+ */
 export function useSupportSide() {
   const { data: session } = useSession()
   const role = (session?.user as { role?: string } | undefined)?.role
-  return { role, side: supportSideForRole(role) }
+  return {
+    role,
+    side: supportSideForRole(role),
+    embedded: supportUsesPortalShell(role),
+  }
 }
 
 const statusTone: Record<string, string> = {
@@ -74,22 +87,42 @@ export function CategoryLabel({ category }: Readonly<{ category: string }>) {
   return <>{isSupportCategory(category) ? SUPPORT_CATEGORY_LABELS[category] : category}</>
 }
 
+/**
+ * The banner at the top of a support screen.
+ *
+ * `embedded` is for the roles that read support inside the portal chrome: the
+ * white full-bleed banner would sit directly under the topbar as a second one,
+ * so it becomes a plain heading block instead. The back link is the caller's
+ * decision, not this component's — inside the chrome a link *home* is
+ * redundant with the sidebar, but a link back to the thread list is not.
+ */
 export function SupportHeader({
   title,
   subtitle,
   backHref,
   backLabel,
   actions,
+  embedded = false,
 }: Readonly<{
   title: string
   subtitle?: string
   backHref?: string
   backLabel?: string
   actions?: React.ReactNode
+  embedded?: boolean
 }>) {
   return (
-    <header className="border-b bg-white dark:border-slate-800 dark:bg-slate-900">
-      <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-3 px-4 py-4">
+    <header
+      className={cn(
+        embedded ? "mb-4" : "border-b bg-white dark:border-slate-800 dark:bg-slate-900",
+      )}
+    >
+      <div
+        className={cn(
+          "flex flex-wrap items-center gap-3",
+          embedded ? "" : "mx-auto max-w-5xl px-4 py-4",
+        )}
+      >
         {backHref ? (
           <Button asChild variant="ghost" size="sm" className="-ml-2">
             <Link href={backHref}>

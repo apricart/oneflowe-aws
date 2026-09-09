@@ -29,6 +29,11 @@ import {
   type SupportSide,
   type SupportStatus,
 } from "@/lib/support-thread"
+import {
+  EMPTY_SUPPORT_STATS,
+  normalizeSupportStats,
+  type SupportStats,
+} from "@/lib/support-stats"
 import { resolveScopedBranchIds } from "@/lib/server/multi-branch-scope"
 import {
   queueSupportMessageNotifications,
@@ -239,6 +244,58 @@ export async function listSupportThreads(
     ))
 
   return { items, total, unreadCount: unread, page, pageSize }
+}
+
+/**
+ * The figures behind the queue's KPI row.
+ *
+ * Deliberately built on the same `supportScopeCondition` the list uses, so the
+ * counts cover exactly the threads the caller could open. A branch
+ * administrator's "12 open" is twelve threads they can click; there is no
+ * aggregate here that spans further than the list does.
+ *
+ * One pass over `support_threads` with filtered counts rather than a query per
+ * tile: the joins and the predicate are identical for all of them, and the
+ * scope columns are indexed. The read-state join is the same left join the list
+ * uses for its unread count.
+ *
+ * Unfiltered by status or category on purpose — the row is the overview the
+ * list's filters narrow against, not a second view of the current filter.
+ */
+export async function getSupportThreadStats(viewer: SupportViewer): Promise<SupportStats> {
+  const scopeCondition = supportScopeCondition(viewer)
+  if (!scopeCondition) return { ...EMPTY_SUPPORT_STATS }
+
+  const live = sql`${supportThreads.status} IN ('OPEN', 'AWAITING_CUSTOMER')`
+
+  const [row] = await db
+    .select({
+      total: count(),
+      open: sql`count(*) filter (where ${supportThreads.status} = 'OPEN')`,
+      awaitingCustomer: sql`count(*) filter (where ${supportThreads.status} = 'AWAITING_CUSTOMER')`,
+      resolved: sql`count(*) filter (where ${supportThreads.status} = 'RESOLVED')`,
+      closed: sql`count(*) filter (where ${supportThreads.status} = 'CLOSED')`,
+      urgent: sql`count(*) filter (where ${live} and ${supportThreads.priority} IN ('HIGH', 'URGENT'))`,
+      unanswered: sql`count(*) filter (where ${live} and ${supportThreads.firstResponseAt} is null)`,
+      openedLast7Days: sql`count(*) filter (where ${supportThreads.createdAt} >= now() - interval '7 days')`,
+      unread: sql`count(*) filter (where ${supportThreadReads.lastReadAt} is null or ${supportThreads.lastMessageAt} > ${supportThreadReads.lastReadAt})`,
+      // Averaged in minutes here rather than in the client, and null when no
+      // thread has been answered yet — `avg` ignores the unanswered rows.
+      avgFirstResponseMinutes: sql`avg(extract(epoch from (${supportThreads.firstResponseAt} - ${supportThreads.createdAt})) / 60.0) filter (where ${supportThreads.firstResponseAt} is not null)`,
+    })
+    .from(supportThreads)
+    .leftJoin(
+      supportThreadReads,
+      and(
+        eq(supportThreadReads.threadId, supportThreads.id),
+        eq(supportThreadReads.userId, viewer.userId),
+      ),
+    )
+    .where(scopeCondition)
+
+  // The driver hands bigint counts and a numeric average back as strings, so
+  // the row goes through the same tolerant reader the client uses.
+  return normalizeSupportStats(row)
 }
 
 async function loadAssigneeNames(threadIds: number[]): Promise<Map<number, string | null>> {
