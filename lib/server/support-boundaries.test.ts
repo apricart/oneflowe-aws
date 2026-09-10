@@ -24,6 +24,7 @@ function repositoryFile(path: string): string {
 const SUPPORT_ROUTES = [
   "app/api/v1/support/threads/route.ts",
   "app/api/v1/support/stats/route.ts",
+  "app/api/v1/support/products/route.ts",
   "app/api/v1/support/threads/[id]/route.ts",
   "app/api/v1/support/threads/[id]/messages/route.ts",
   "app/api/v1/support/attachments/route.ts",
@@ -133,6 +134,88 @@ describe("the thread rule is stated in exactly one place", () => {
     expect(body).toContain("if (!scopeCondition) return")
     expect(body, "the stats query must be filtered by that predicate").toContain(
       ".where(scopeCondition)",
+    )
+  })
+
+  it("lets a query cite only a product the author's own organization carries", () => {
+    // Citing is a write, and the organization it is checked against comes from
+    // the author the server resolved — never from the request.
+    const service = repositoryFile("lib/server/support-threads.ts")
+    const start = service.indexOf("async function verifyProductReference")
+    expect(start, "verifyProductReference must exist").toBeGreaterThan(-1)
+    const check = service.slice(start, service.indexOf("export type PostSupportMessageInput"))
+
+    expect(check, "must scope to the author's organization").toContain(
+      "eq(organizationInventory.organizationId, author.organizationId)",
+    )
+    expect(check, "a disabled assignment is not a citable product").toContain(
+      "eq(organizationInventory.isActive, true)",
+    )
+    expect(check, "nor is a withdrawn one").toContain(
+      "isNull(organizationInventory.deletedAt)",
+    )
+    // `organization_products` looks like the catalogue and is written by nothing
+    // but the K-Electric sync. Citing it refuses every product of every tenant
+    // whose catalogue was assigned through the application.
+    expect(check, "the catalogue is organization_inventory").not.toContain(
+      "organizationProducts",
+    )
+    // One answer for "no such product" and "not yours", so the field cannot be
+    // used to discover another tenant's catalogue.
+    expect(check).toContain("That product could not be found.")
+  })
+
+  it("keeps the product search scoped to the caller's own organization", () => {
+    const route = repositoryFile("app/api/v1/support/products/route.ts")
+    expect(route, "the organization must come from the viewer").toContain(
+      "eq(organizationInventory.organizationId, organizationId)",
+    )
+    expect(route, "and the viewer from the session").toContain(
+      "const organizationId = viewer.organizationId",
+    )
+    // The picker must offer the catalogue the store is built from, or it offers
+    // nothing at all — see the verifyProductReference case above.
+    expect(route, "the catalogue is organization_inventory").not.toContain(
+      "organizationProducts",
+    )
+    // A picker has no business carrying a price; price visibility is
+    // `lib/price-visibility.ts`'s question and is avoided rather than answered.
+    expect(route).not.toMatch(/basePrice|customPrice|priceCents/)
+    expect(route, "the result set must be bounded").toContain("RESULT_LIMIT")
+  })
+
+  it("searches by order id without letting the search widen a scope", () => {
+    const service = repositoryFile("lib/server/support-threads.ts")
+    const start = service.indexOf("function supportOrderSearchCondition")
+    expect(start, "supportOrderSearchCondition must exist").toBeGreaterThan(-1)
+    const condition = service.slice(start, service.indexOf("export type SupportThreadListItem"))
+
+    // A typed `%` searches for a percent sign. Unescaped it would turn the
+    // filter into "everything", which is the wrong answer for a search box.
+    expect(condition, "the term must be escaped before it becomes a pattern").toContain(
+      "escapeLikePattern(term)",
+    )
+    expect(condition, "the term is a parameter, never spliced into the SQL").not.toContain(
+      "sql.raw",
+    )
+
+    // The scope condition opens `conditions`; the search is pushed onto the
+    // same array, so it is ANDed underneath rather than replacing it.
+    expect(service).toContain("const conditions: SQL[] = [scopeCondition]")
+    expect(service).toContain(
+      "if (filters.orderSearch) conditions.push(supportOrderSearchCondition(filters.orderSearch))",
+    )
+  })
+
+  it("bounds the order search at the route rather than in the query", () => {
+    const route = repositoryFile("app/api/v1/support/threads/route.ts")
+    // The only free-text parameter this route takes. It is parsed by the pure
+    // module, and a term too long to name an order is refused outright.
+    expect(route, "the search must go through the shared parser").toContain(
+      'parseSupportOrderSearch(params.get("orderSearch"))',
+    )
+    expect(route, "and be answerable with a 400").toMatch(
+      /orderSearch\.ok[\s\S]{0,120}\{ status: 400 \}/,
     )
   })
 

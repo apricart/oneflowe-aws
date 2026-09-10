@@ -19,12 +19,13 @@ import {
   normalizeSafeImageUrl,
 } from "@/lib/security"
 import {
-  SUPPORT_CATEGORIES,
   SUPPORT_MAX_ATTACHMENTS_PER_MESSAGE,
   SUPPORT_MESSAGE_MAX_LENGTH,
   SUPPORT_PRIORITIES,
+  SUPPORT_SELECTABLE_CATEGORIES,
   SUPPORT_STATUSES,
   SUPPORT_SUBJECT_MAX_LENGTH,
+  isProductRequiredForCategory,
 } from "@/lib/support-thread"
 
 export const systemRoleSchema = z.enum([
@@ -699,14 +700,30 @@ export const supportThreadCreateSchema = z.object({
       SUPPORT_SUBJECT_MAX_LENGTH,
       `A subject must not exceed ${SUPPORT_SUBJECT_MAX_LENGTH} characters`,
     ),
-  category: z.enum(SUPPORT_CATEGORIES),
+  // Selectable, not the full vocabulary: a retired category may still be read
+  // and filtered, but a new thread may not be raised under one.
+  category: z.enum(SUPPORT_SELECTABLE_CATEGORIES),
   priority: z.enum(SUPPORT_PRIORITIES).optional().default("NORMAL"),
   // The order the query is about. Whether the caller may cite it is decided on
   // the server against the order row, not here.
   orderId: positiveId.nullish(),
+  // The product the query is about. Likewise checked on the server, against the
+  // author's own organization — this is an id, never a claim of scope.
+  productId: positiveId.nullish(),
   message: supportMessageBody,
   attachmentIds: supportAttachmentIds,
-}).strict()
+}).strict().superRefine((value, ctx) => {
+  // Every category but OTHER is about something in the catalogue, so it must
+  // say which product. Restated here rather than left to the dialog, because a
+  // caller reaching the endpoint directly never sees the dialog.
+  if (isProductRequiredForCategory(value.category) && (value.productId ?? null) === null) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["productId"],
+      message: "A query under this category must name the product it is about",
+    })
+  }
+})
 
 export const supportMessageCreateSchema = z.object({
   message: supportMessageBody,

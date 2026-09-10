@@ -61,6 +61,8 @@ type SupportThreadResponse = {
     branchName: string | null
     orderId: number | null
     orderTid: string | null
+  productCode: string | null
+  productName: string | null
     createdByName: string | null
     assignedToName: string | null
     createdAt: string
@@ -159,6 +161,14 @@ export function SupportThreadView({ threadId }: Readonly<{ threadId: number }>) 
                 >
                   {thread.orderTid || `#${thread.orderId}`}
                 </Link>
+              </Detail>
+            ) : null}
+            {thread.productCode ? (
+              <Detail label="About product">
+                <span className="font-mono font-semibold">{thread.productCode}</span>
+                {thread.productName ? (
+                  <span className="text-slate-500 dark:text-slate-400"> · {thread.productName}</span>
+                ) : null}
               </Detail>
             ) : null}
             {apricart ? (

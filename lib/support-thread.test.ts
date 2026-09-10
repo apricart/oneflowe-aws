@@ -1,11 +1,21 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  SUPPORT_CATEGORIES,
+  SUPPORT_CATEGORY_LABELS,
+  SUPPORT_ORDER_SEARCH_MAX_LENGTH,
+  SUPPORT_RETIRED_CATEGORIES,
+  SUPPORT_SELECTABLE_CATEGORIES,
   SUPPORT_STATUSES,
+  isSelectableSupportCategory,
+  isSupportCategory,
+  isProductRequiredForCategory,
   canTransitionSupportStatus,
   isTerminalSupportStatus,
   nextSupportStatusAfterMessage,
+  parseSupportOrderSearch,
   parseSupportThreadReference,
+  supportOrderSearchId,
   supportSideForRole,
   supportThreadReference,
   type SupportSide,
@@ -160,5 +170,125 @@ describe("the human reference", () => {
     for (const value of ["", "SUP-", "SUP-abc", "12a", null, undefined, "SUP-0", "0"]) {
       expect(parseSupportThreadReference(value)).toBeNull()
     }
+  })
+})
+
+
+describe("retiring a category narrows the write path, not the vocabulary", () => {
+  it("still recognises a retired category, so an existing thread keeps its label", () => {
+    // A thread raised under BILLING before it was retired must not start
+    // printing a raw "BILLING" in the list, and must stay reachable by filter.
+    for (const retired of SUPPORT_RETIRED_CATEGORIES) {
+      expect(isSupportCategory(retired), `${retired} must stay readable`).toBe(true)
+      expect(SUPPORT_CATEGORIES).toContain(retired)
+      expect(SUPPORT_CATEGORY_LABELS[retired]).toBeTruthy()
+    }
+  })
+
+  it("refuses a retired category for a new thread", () => {
+    for (const retired of SUPPORT_RETIRED_CATEGORIES) {
+      expect(isSelectableSupportCategory(retired), `${retired} must not be raisable`).toBe(false)
+      expect(SUPPORT_SELECTABLE_CATEGORIES).not.toContain(retired)
+    }
+  })
+
+  it("keeps the selectable list exactly the vocabulary minus the retired set", () => {
+    // The two are declared separately because `z.enum` needs a literal tuple.
+    // This is what stops them drifting.
+    const expected = SUPPORT_CATEGORIES.filter(
+      (category) => !(SUPPORT_RETIRED_CATEGORIES as readonly string[]).includes(category),
+    )
+    expect([...SUPPORT_SELECTABLE_CATEGORIES]).toEqual(expected)
+  })
+
+  it("labels every selectable category", () => {
+    for (const category of SUPPORT_SELECTABLE_CATEGORIES) {
+      expect(SUPPORT_CATEGORY_LABELS[category]).toBeTruthy()
+    }
+  })
+
+  it("accepts every selectable category as readable too", () => {
+    for (const category of SUPPORT_SELECTABLE_CATEGORIES) {
+      expect(isSupportCategory(category)).toBe(true)
+      expect(isSelectableSupportCategory(category)).toBe(true)
+    }
+  })
+
+  it("rejects anything that is not a category at all", () => {
+    for (const value of [undefined, null, "", "billing", "BILLING_AND_PAYMENT", 3]) {
+      expect(isSelectableSupportCategory(value)).toBe(false)
+    }
+  })
+})
+
+describe("searching the queue by order id", () => {
+  it("reads nothing typed as an absent search, not a search for nothing", () => {
+    // The distinction matters: a blank field must leave the list unfiltered
+    // rather than filter it down to the threads citing an empty reference.
+    for (const value of [null, undefined, "", "   ", "\t\n"]) {
+      expect(parseSupportOrderSearch(value)).toEqual({ ok: true, term: null })
+    }
+  })
+
+  it("trims what the person typed", () => {
+    expect(parseSupportOrderSearch("  ORD-000123  ")).toEqual({ ok: true, term: "ORD-000123" })
+  })
+
+  it("keeps a term the length of the column that holds an order reference", () => {
+    const term = "A".repeat(SUPPORT_ORDER_SEARCH_MAX_LENGTH)
+    expect(parseSupportOrderSearch(term)).toEqual({ ok: true, term })
+  })
+
+  it("refuses a longer term rather than truncating it", () => {
+    // Truncating would search for something shorter, and so broader, than what
+    // was typed — the list would answer with rows the person did not ask for.
+    const result = parseSupportOrderSearch("A".repeat(SUPPORT_ORDER_SEARCH_MAX_LENGTH + 1))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toContain(String(SUPPORT_ORDER_SEARCH_MAX_LENGTH))
+  })
+
+  it("refuses anything that is not text at all", () => {
+    for (const value of [7, {}, [], true]) {
+      expect(parseSupportOrderSearch(value).ok).toBe(false)
+    }
+  })
+
+  it("keeps a wildcard as a literal term for the caller to escape", () => {
+    // The parser does not neuter `%`; escaping belongs to the query layer,
+    // which knows it is building a LIKE pattern.
+    expect(parseSupportOrderSearch("100%")).toEqual({ ok: true, term: "100%" })
+  })
+
+  it("recognises a bare number as an internal order id", () => {
+    expect(supportOrderSearchId("42")).toBe(42)
+    expect(supportOrderSearchId("0042")).toBe(42)
+  })
+
+  it("does not read a reference or a partial one as an id", () => {
+    for (const term of ["ORD-42", "42-A", "4 2", "42.0", "-42", "1e3", ""]) {
+      expect(supportOrderSearchId(term), `${term} is not an id`).toBeNull()
+    }
+  })
+
+  it("refuses zero and anything past the safe integer range", () => {
+    expect(supportOrderSearchId("0")).toBeNull()
+    expect(supportOrderSearchId("9".repeat(30))).toBeNull()
+  })
+})
+
+describe("which categories must name a product", () => {
+  it("requires one of every category that is about something in the catalogue", () => {
+    for (const category of ["INVOICE", "ORDER", "DELIVERY", "PRODUCT"] as const) {
+      expect(isProductRequiredForCategory(category), `${category} must name a product`).toBe(true)
+    }
+  })
+
+  it("leaves it optional under OTHER, and only under OTHER", () => {
+    expect(isProductRequiredForCategory("OTHER")).toBe(false)
+
+    const optional = SUPPORT_SELECTABLE_CATEGORIES.filter(
+      (category) => !isProductRequiredForCategory(category),
+    )
+    expect(optional).toEqual(["OTHER"])
   })
 })

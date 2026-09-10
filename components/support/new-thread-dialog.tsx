@@ -25,14 +25,24 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import { useToast } from "@/hooks/use-toast"
 import {
-  SUPPORT_CATEGORIES,
   SUPPORT_CATEGORY_LABELS,
   SUPPORT_MESSAGE_MAX_LENGTH,
   SUPPORT_PRIORITIES,
   SUPPORT_PRIORITY_LABELS,
+  SUPPORT_SELECTABLE_CATEGORIES,
   SUPPORT_SUBJECT_MAX_LENGTH,
+  isProductRequiredForCategory,
+  isSelectableSupportCategory,
+  type SupportSelectableCategory,
 } from "@/lib/support-thread"
 import { AttachmentPicker, type PendingAttachment } from "@/components/support/attachment-picker"
+import { ProductPicker, type SupportProduct } from "@/components/support/product-picker"
+
+/**
+ * Said in one place, because the dialog shows it under the field and repeats
+ * it in the toast that explains why nothing was sent.
+ */
+const PRODUCT_REQUIRED_MESSAGE = "Choose the product this query is about."
 
 /**
  * Raising a query.
@@ -64,8 +74,10 @@ export function NewThreadDialog({
   const setOpen = onOpenChange ?? setInternalOpen
 
   const [subject, setSubject] = useState("")
-  const [category, setCategory] = useState<string>(orderId ? "ORDER" : "OTHER")
+  const [category, setCategory] = useState<SupportSelectableCategory>(orderId ? "ORDER" : "OTHER")
   const [priority, setPriority] = useState<string>("NORMAL")
+  const [product, setProduct] = useState<SupportProduct | null>(null)
+  const [productError, setProductError] = useState<string | null>(null)
   const [message, setMessage] = useState("")
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
   const [submitting, setSubmitting] = useState(false)
@@ -73,7 +85,13 @@ export function NewThreadDialog({
   useEffect(() => {
     if (!open) return
     setCategory(orderId ? "ORDER" : "OTHER")
+    setProductError(null)
   }, [open, orderId])
+
+  // The category decides whether the product is needed. Marking the field is
+  // presentation only: the same rule is applied again by the schema the
+  // endpoint parses with.
+  const productRequired = isProductRequiredForCategory(category)
 
   async function submit() {
     if (submitting) return
@@ -81,6 +99,16 @@ export function NewThreadDialog({
       toast({
         title: "Almost there",
         description: "A subject and a message are both needed.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (productRequired && !product) {
+      setProductError(PRODUCT_REQUIRED_MESSAGE)
+      toast({
+        title: "Almost there",
+        description: PRODUCT_REQUIRED_MESSAGE,
         variant: "destructive",
       })
       return
@@ -96,6 +124,7 @@ export function NewThreadDialog({
           category,
           priority,
           orderId: orderId ?? undefined,
+          productId: product?.id ?? undefined,
           message: message.trim(),
           attachmentIds: attachments.map((attachment) => attachment.id),
         }),
@@ -117,6 +146,8 @@ export function NewThreadDialog({
       })
       setSubject("")
       setMessage("")
+      setProduct(null)
+      setProductError(null)
       setAttachments([])
       setOpen(false)
       onCreated?.()
@@ -165,12 +196,21 @@ export function NewThreadDialog({
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="support-category">Category</Label>
-              <Select value={category} onValueChange={setCategory}>
+              <Select
+                value={category}
+                onValueChange={(value) => {
+                  if (!isSelectableSupportCategory(value)) return
+                  setCategory(value)
+                  // The field may have just become optional, and an error left
+                  // standing under a field nobody must fill is noise.
+                  setProductError(null)
+                }}
+              >
                 <SelectTrigger id="support-category">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {SUPPORT_CATEGORIES.map((value) => (
+                  {SUPPORT_SELECTABLE_CATEGORIES.map((value) => (
                     <SelectItem key={value} value={value}>
                       {SUPPORT_CATEGORY_LABELS[value]}
                     </SelectItem>
@@ -194,6 +234,17 @@ export function NewThreadDialog({
               </Select>
             </div>
           </div>
+
+          <ProductPicker
+            value={product}
+            onChange={(next) => {
+              setProduct(next)
+              setProductError(null)
+            }}
+            required={productRequired}
+            error={productError}
+            disabled={submitting}
+          />
 
           <div className="space-y-1.5">
             <Label htmlFor="support-message">What has happened?</Label>

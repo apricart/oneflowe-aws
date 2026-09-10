@@ -147,9 +147,29 @@ describe("planProducts", () => {
 
     expect(plan.creates).toHaveLength(0)
     expect(plan.existing).toEqual([
-      { normalizedName: "sugar", globalProductId: 7, organizationInventoryId: 1 },
+      {
+        normalizedName: "sugar",
+        globalProductId: 7,
+        organizationInventoryId: 1,
+        // Carried for every mapped product, agreeing or not — the organization
+        // price tier needs legacy's price even where ours already matches.
+        legacyModalCents: 10_000,
+      },
     ])
     expect(plan.priceDrift).toHaveLength(0)
+  })
+
+  it("carries legacy's price on an existing product even when it disagrees with ours", () => {
+    const plan = planProducts(
+      [item({ ID: 1, Name: "Sugar", Price: 195 })],
+      [category(1, 100)],
+      [mapping({ normalizedName: "sugar", globalProductId: 7, basePriceCents: 16_200 })],
+    )
+
+    expect(plan.existing[0].legacyModalCents).toBe(19_500)
+    expect(plan.priceDrift).toEqual([
+      { normalizedName: "sugar", globalProductId: 7, currentCents: 16_200, legacyModalCents: 19_500 },
+    ])
   })
 
   it("reports a price disagreement on an existing product instead of changing it", () => {

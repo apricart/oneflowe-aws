@@ -143,6 +143,17 @@ export interface ExistingProduct {
   normalizedName: string
   globalProductId: number
   organizationInventoryId: number
+  /**
+   * The price legacy charges for this product, on the same modal rule new
+   * products are created with.
+   *
+   * Carried for every mapped product, not only the ones that disagree with
+   * ours. `priceDrift` answers "has this moved?"; the organization price tier
+   * needs "what is legacy's price?" for all of them, and deriving that from the
+   * absence of a drift row means silently reading our own value back the day
+   * the comparison base changes.
+   */
+  legacyModalCents: number
 }
 
 export interface PriceDrift {
@@ -285,6 +296,7 @@ export function planProducts(
         normalizedName,
         globalProductId: mapped.globalProductId,
         organizationInventoryId: mapped.organizationInventoryId,
+        legacyModalCents: modal,
       })
       // Reported, never applied: see the header note on the pricing rules.
       if (mapped.basePriceCents !== modal) {
@@ -362,6 +374,9 @@ export function planProducts(
         normalizedName,
         globalProductId: mapped.globalProductId,
         organizationInventoryId: mapped.organizationInventoryId,
+        // Priced from the history rows, which is all this branch has; every
+        // entry here already passed the non-zero filter above.
+        legacyModalCents: modalPriceCents(entries.map((entry) => entry.cents)),
       })
       continue
     }
