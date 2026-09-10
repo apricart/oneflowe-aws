@@ -14,8 +14,40 @@ import { ADMIN_OPERATIONS_EMAIL } from "@/lib/email/recipients"
 import { buildRefundSuccessPayload, redactRefundHistoryForPriceHidden } from "@/lib/refund-visibility"
 import { refundRequestSchema, validationMessage } from "@/lib/server/mutation-validation"
 import { isOrderPortalRefundEligible, isRefundEligibleOrderStatus } from "@/lib/business-rules"
+import {
+  canRequesterActOnOrder,
+  describeOrderWrite,
+  isOrderWriteRole,
+  ORDER_WRITE_ROLES,
+} from "@/lib/order-write-access"
+import {
+  resolveScopedBranchIds,
+  usesMultiBranchScope,
+} from "@/lib/server/multi-branch-scope"
+import { notifyRaiserOfOrderWrite } from "@/lib/server/order-write-audit"
 
-const refundRequestRoles = new Set(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL"])
+const refundRequestRoles = new Set([
+  "SUPER_ADMIN",
+  "HEAD_OFFICE",
+  "BRANCH_ADMIN",
+  // Both requester roles, because the branch owns its orders: a group order and
+  // a branch order arrive at the same place and spend the same budget.
+  ...ORDER_WRITE_ROLES,
+])
+
+/**
+ * Every branch the caller may raise a refund for. `ORDER_PORTAL` is pinned to
+ * the branch on its user row; `GROUP_ORDER_PORTAL` reaches its assignment set.
+ * Resolved from the session, and empty means none.
+ */
+async function resolveRefundBranchIds(
+  role: string,
+  userId: string,
+  userBranchId: unknown,
+): Promise<number[]> {
+  if (usesMultiBranchScope(role)) return resolveScopedBranchIds(db, userId)
+  return typeof userBranchId === "number" ? [userBranchId] : []
+}
 
 const maskEmailAddress = (email: string) => {
   const [localPart, domain] = email.split("@")
@@ -28,11 +60,25 @@ const maskEmailAddress = (email: string) => {
   return `${visibleLocal}@${domain}`
 }
 
+/**
+ * Who may raise a refund against this order.
+ *
+ * The administrative roles are unchanged. The two requester roles are now
+ * checked against **the branches they are assigned**, not against whether they
+ * personally raised the order — the branch received the goods, so the branch
+ * claims on them. `branchOrganizationId` is read alongside the order so the
+ * shared rule can assert the branch belongs to the order's tenant.
+ */
 function canAccessOrderForRefund(
   userRole: string,
-  orderData: { organizationId: number | null; branchId: number; createdByUserId: string },
+  orderData: {
+    organizationId: number | null
+    branchId: number
+    branchOrganizationId?: number | null
+    createdByUserId: string
+  },
   userOrgId: unknown,
-  userBranchId: unknown,
+  allowedBranchIds: readonly number[],
   userId: string,
 ) {
   if (!refundRequestRoles.has(userRole)) {
@@ -48,14 +94,25 @@ function canAccessOrderForRefund(
   }
 
   if (userRole === "BRANCH_ADMIN") {
-    return orderData.organizationId === userOrgId && orderData.branchId === userBranchId
+    return orderData.organizationId === userOrgId
+      && allowedBranchIds.includes(orderData.branchId)
   }
 
-  if (userRole === "ORDER_PORTAL") {
-    return (
-      orderData.organizationId === userOrgId &&
-      orderData.branchId === userBranchId &&
-      orderData.createdByUserId === userId
+  if (isOrderWriteRole(userRole)) {
+    return canRequesterActOnOrder(
+      {
+        role: userRole,
+        userId,
+        organizationId: typeof userOrgId === "number" ? userOrgId : null,
+        branchIds: allowedBranchIds,
+      },
+      {
+        status: null,
+        createdByUserId: orderData.createdByUserId,
+        organizationId: orderData.organizationId,
+        branchId: orderData.branchId,
+        branchOrganizationId: orderData.branchOrganizationId ?? orderData.organizationId,
+      },
     )
   }
 
@@ -70,8 +127,8 @@ function getRefundEligibilityError(orderData: any, role: string) {
   if (orderDate.getMonth() !== now.getMonth() || orderDate.getFullYear() !== now.getFullYear()) {
     return "Refund period ended. Refunds are only allowed within the calendar month of the order."
   }
-  if (role === "ORDER_PORTAL" && !isOrderPortalRefundEligible(status, orderData.fulfillmentStatus)) {
-    return "Order Portal users can request a refund only after the order is fulfilled and delivered."
+  if (isOrderWriteRole(role) && !isOrderPortalRefundEligible(status, orderData.fulfillmentStatus)) {
+    return "A requester can request a refund only after the order is fulfilled and delivered."
   }
   return null
 }
@@ -183,7 +240,7 @@ function getRefundProcessingErrorResponse(caughtError: any) {
 async function lockAndValidateRefund(tx: any, context: any) {
   const [lockedOrder] = await tx.select(orderSelectColumns).from(orders).where(eq(orders.id, context.orderId)).for('update')
   if (!lockedOrder || !isRefundEligibleOrderStatus(lockedOrder.status)
-    || (context.userRole === "ORDER_PORTAL" && !isOrderPortalRefundEligible(lockedOrder.status, lockedOrder.fulfillmentStatus))) {
+    || (isOrderWriteRole(context.userRole) && !isOrderPortalRefundEligible(lockedOrder.status, lockedOrder.fulfillmentStatus))) {
     throw new Error("REFUND_ELIGIBILITY_CONFLICT")
   }
   const liveLines = await tx.select({
@@ -272,7 +329,25 @@ async function createPendingRefund(tx: any, context: any) {
     entityId: String(context.orderId),
     organizationId: context.order.organizationId,
     branchId: context.order.branchId,
-    metadata: { tid: context.order.tid, amountCents: context.total, reason: context.reason?.trim() || "Itemized refund", items: context.details },
+    metadata: {
+      tid: context.order.tid,
+      amountCents: context.total,
+      reason: context.reason?.trim() || "Itemized refund",
+      items: context.details,
+      // Branch ownership replaced creator equality, so the trail names both
+      // parties whenever a colleague claims on someone else's order.
+      onBehalfOfUserId: context.write?.onBehalfOfUserId ?? null,
+      crossRequesterWrite: Boolean(context.write?.isCrossRequesterWrite),
+    },
+  })
+  await notifyRaiserOfOrderWrite(tx, {
+    write: context.write,
+    organizationId: context.order.organizationId,
+    branchId: context.order.branchId,
+    orderId: context.orderId,
+    tid: context.order.tid,
+    message: `A refund was requested on order ${context.order.tid}, which you raised.`,
+    type: "REFUND_REQUESTED_BY_COLLEAGUE",
   })
   if (context.recipients.length > 0) await tx.insert(notifications).values(context.recipients.map((recipient: any) => ({
     userId: recipient.id,
@@ -358,8 +433,15 @@ export async function GET(
     const orderId = Number.parseInt(id)
     if (!Number.isFinite(orderId)) return NextResponse.json({ error: "Invalid order ID" }, { status: 400 })
 
-    // Get order details first to check permissions
-    const [order] = await db.select(orderSelectColumns).from(orders).where(eq(orders.id, orderId)).limit(1)
+    // Get order details first to check permissions. The branch's own tenant is
+    // read with it, so the requester rule can confirm the branch and the order
+    // belong to the same organization.
+    const [order] = await db
+      .select({ ...orderSelectColumns, branchOrganizationId: branches.organizationId })
+      .from(orders)
+      .leftJoin(branches, eq(orders.branchId, branches.id))
+      .where(eq(orders.id, orderId))
+      .limit(1)
     if (!order) return NextResponse.json({ error: "Order not found" }, { status: 404 })
 
     const userRole = (session.user as any).role
@@ -367,8 +449,9 @@ export async function GET(
     const userBranchId = (session.user as any).branchId
     const userId = (session.user as any).id as string
     const pricesHidden = await shouldHidePricesForRole(userRole, order.organizationId)
+    const allowedBranchIds = await resolveRefundBranchIds(userRole, userId, userBranchId)
 
-    if (!canAccessOrderForRefund(userRole, order, userOrgId, userBranchId, userId)) {
+    if (!canAccessOrderForRefund(userRole, order, userOrgId, allowedBranchIds, userId)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
 
@@ -488,7 +571,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const { items, reason } = parsedBody.data
 
     // Fetch order with validation
-    const [ord] = await db.select(orderSelectColumns).from(orders).where(eq(orders.id, orderId)).limit(1)
+    const [ord] = await db
+      .select({ ...orderSelectColumns, branchOrganizationId: branches.organizationId })
+      .from(orders)
+      .leftJoin(branches, eq(orders.branchId, branches.id))
+      .where(eq(orders.id, orderId))
+      .limit(1)
 
     if (!ord) {
       return NextResponse.json({ error: 'Order not found' }, { status: 404 })
@@ -501,11 +589,24 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const userOrgId = (session.user as any).organizationId
     const userBranchId = (session.user as any).branchId
     const pricesHidden = await shouldHidePricesForRole(userRole, orderData.organizationId)
+    const allowedBranchIds = await resolveRefundBranchIds(userRole, userId, userBranchId)
     const eligibilityError = getRefundEligibilityError(orderData, userRole)
     if (eligibilityError) return NextResponse.json({ error: eligibilityError }, { status: 400 })
-    if (!canAccessOrderForRefund(userRole, orderData, userOrgId, userBranchId, userId)) {
+    if (!canAccessOrderForRefund(userRole, orderData, userOrgId, allowedBranchIds, userId)) {
       return NextResponse.json({ error: "Forbidden: Cannot request a refund for this order" }, { status: 403 })
     }
+    // Named in the audit row and notified below when a colleague, rather than
+    // the person who raised the order, is claiming on it.
+    const refundWrite = describeOrderWrite(
+      { role: userRole, userId, organizationId: userOrgId, branchIds: allowedBranchIds },
+      {
+        status: orderData.status,
+        createdByUserId: orderData.createdByUserId,
+        organizationId: orderData.organizationId,
+        branchId: orderData.branchId,
+        branchOrganizationId: orderData.branchOrganizationId ?? orderData.organizationId,
+      },
+    )
     const requestData = await loadRefundRequestData(orderId, items)
     if (requestData.calculated.error) return NextResponse.json({ error: requestData.calculated.error }, { status: 400 })
     const refundDetails = requestData.calculated.details!
@@ -541,6 +642,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       orderItems: orderItemsMap,
       recipients: notificationData.recipients,
       message: refundRequestMessage,
+      write: refundWrite,
     }))
 
     await sendRefundRequestNotification({

@@ -2,8 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react"
 import useSWR from "swr"
-import { Building2, ChevronRight, User } from "lucide-react"
+import { Building2, ChevronRight, Pencil } from "lucide-react"
 
+import { BranchOrderEditSheet } from "@/components/group-portal/branch-order-edit-sheet"
+import { OrderDetailPanel, type OrderDetails } from "@/components/orders/order-detail-panel"
+import { RefundManagement } from "@/components/refund-management"
+import { Button } from "@/components/ui/button"
 import {
   OrderListBody,
   OrderListPager,
@@ -13,7 +17,6 @@ import {
 } from "@/components/orders/order-list-chrome"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
-import { ListSkeleton } from "@/components/ui/skeleton"
 import {
   Sheet,
   SheetContent,
@@ -50,26 +53,8 @@ type BranchOrdersResponse = {
   pagination?: { page: number; limit: number; total: number; totalPages: number; hasMore: boolean }
 }
 
-type OrderDetailLine = {
-  id: number
-  productName: string
-  productCode?: string | null
-  quantity: number | string
-  priceCents?: number | null
-  unit?: string | null
-}
-
 type OrderDetailResponse = {
-  item?: BranchOrder & {
-    creatorName?: string | null
-    subtotalCents?: number | null
-    taxCents?: number | null
-    notes?: string | null
-    poNumber?: string | null
-    deliveredAt?: string | null
-    orderItems?: OrderDetailLine[]
-    pricesHidden?: boolean
-  }
+  item?: OrderDetails & Record<string, unknown>
 }
 
 const PAGE_SIZE = 25
@@ -151,6 +136,8 @@ export function OtherBranchOrders() {
     { keepPreviousData: true },
   )
 
+  const [editOrder, setEditOrder] = useState<BranchOrder | null>(null)
+
   const orders = data?.items ?? []
   const total = Number(data?.pagination?.total ?? 0)
   const totalPages = Math.max(1, Number(data?.pagination?.totalPages ?? 1))
@@ -197,8 +184,15 @@ export function OtherBranchOrders() {
 
       <OrderDetailSheet
         order={openOrder}
-        pricesHidden={pricesHidden}
         onClose={() => setOpenOrder(null)}
+        onEdit={(target) => { setOpenOrder(null); setEditOrder(target) }}
+        onChanged={() => { void mutate() }}
+      />
+
+      <BranchOrderEditSheet
+        order={editOrder}
+        onClose={() => setEditOrder(null)}
+        onSaved={() => { void mutate() }}
       />
     </div>
   )
@@ -246,7 +240,7 @@ function OrderRow({
               </span>
               {!pricesHidden && typeof order.totalCents === "number" && (
                 <span className="font-bold text-slate-700 dark:text-slate-200">
-                  {formatPKR(order.totalCents)}
+                  {formatPKR(order.totalCents / 100)}
                 </span>
               )}
             </p>
@@ -260,132 +254,113 @@ function OrderRow({
 }
 
 /**
- * The order as raised, read-only. Fetched fresh rather than shown from the list
- * row, so the line items and the status are the current ones.
+ * The order as raised, read-only.
+ *
+ * It renders the shared `OrderDetailPanel` — the same body the Branch Admin,
+ * the Order Portal and this portal's own approvals drawer show — so an order
+ * looks the same to a requester here as it does to the people it is raised
+ * with. The panel owns no decision logic; the `actions` footer stays empty
+ * because editing, refunding, the fulfilment token and the invoice all remain
+ * with the person who placed the order.
+ *
+ * Fetched fresh rather than shown from the list row, so the line items and the
+ * status are the current ones; the row paints the panel immediately while that
+ * request is in flight.
  */
 function OrderDetailSheet({
   order,
-  pricesHidden,
   onClose,
-}: Readonly<{ order: BranchOrder | null; pricesHidden: boolean; onClose: () => void }>) {
+  onEdit,
+  onChanged,
+}: Readonly<{
+  order: BranchOrder | null
+  onClose: () => void
+  onEdit: (order: BranchOrder) => void
+  onChanged: () => void
+}>) {
+  const [expanded, setExpanded] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
+
   const { data, error, isLoading } = useSWR<OrderDetailResponse>(
-    order ? `/api/v1/orders/${order.id}` : null,
-    fetcher,
+    order ? [`/api/v1/orders/${order.id}`, reloadKey] : null,
+    ([url]: [string, number]) => fetcher(url),
   )
 
-  const detail = data?.item
-  const lines = detail?.orderItems ?? []
-  const hidePrices = pricesHidden || Boolean(detail?.pricesHidden)
+  const fetched = data?.item
+  const matched = fetched && fetched.id === order?.id ? fetched : null
+  // The detail endpoint carries the refund state; the list row does not, so it
+  // is read from the fetched record rather than from the row that opened this.
+  const refundState = (matched ?? {}) as {
+    refundAmountCents?: number | null
+    refundedAt?: string | null
+    refundReason?: string | null
+    pricesHidden?: boolean
+  }
+  // The list row paints immediately; the fetched record only adds detail.
+  const detailedOrder = { ...order, ...(matched ?? {}) }
+
+  const closeSheet = () => {
+    setExpanded(false)
+    onClose()
+  }
 
   return (
-    <Sheet open={Boolean(order)} onOpenChange={(open) => { if (!open) onClose() }}>
-      <SheetContent className="w-full overflow-y-auto sm:max-w-lg">
-        <SheetHeader>
-          <SheetTitle className="font-mono text-base">{order?.tid}</SheetTitle>
+    <Sheet open={Boolean(order)} onOpenChange={(open) => { if (!open) closeSheet() }}>
+      <SheetContent className="w-full overflow-y-auto border-l-0 bg-[#fdfdfd] p-0 shadow-[0_0_50px_rgba(0,0,0,0.1)] dark:bg-[#0b0f19] sm:max-w-md">
+        <SheetHeader className="sr-only p-0">
+          <SheetTitle>Order details</SheetTitle>
           <SheetDescription>
-            Raised at {order?.branchName || `Branch ${order?.branchId}`}. You are viewing this
-            order; it stays with the person who placed it.
+            {order
+              ? `Order ${order.tid}, raised at ${order.branchName || `branch ${order.branchId}`}. You are viewing this order; it stays with the person who placed it.`
+              : "Review the order status, branch information, and line items."}
           </SheetDescription>
         </SheetHeader>
 
-        <DetailBody error={Boolean(error)} loading={isLoading && !data}>
-          <div className="mt-5 space-y-5">
-            <dl className="grid grid-cols-2 gap-3 text-sm">
-              <DetailField label="Status" value={detail?.status ?? order?.status ?? "—"} />
-              <DetailField
-                label="Progress"
-                value={FULFILLMENT_STATUS_LABELS[normalizeFulfillmentStatus(detail?.fulfillmentStatus)]}
-              />
-              <DetailField label="Raised by" value={detail?.creatorName || "—"} icon={<User className="h-3 w-3" />} />
-              <DetailField label="Placed" value={formatDate(detail?.createdAt ?? order?.createdAt)} />
-              <DetailField label="Approved" value={formatDate(detail?.approvedAt)} />
-              <DetailField label="Delivered" value={formatDate(detail?.deliveredAt)} />
-              {detail?.poNumber && <DetailField label="PO number" value={detail.poNumber} />}
-            </dl>
-
-            {detail?.rejectionReason && (
-              <div className="rounded-xl border border-rose-200 bg-rose-50/60 p-3 text-sm text-rose-800 dark:border-rose-900/60 dark:bg-rose-950/20 dark:text-rose-300">
-                <p className="text-[10px] font-bold uppercase tracking-wider">Rejection reason</p>
-                <p className="mt-1">{detail.rejectionReason}</p>
-              </div>
-            )}
-
-            <section>
-              <h3 className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                Items
-              </h3>
-              <ul className="space-y-2">
-                {lines.map((line) => (
-                  <li
-                    key={line.id}
-                    className="flex items-start justify-between gap-3 rounded-xl border border-slate-100 p-3 text-sm dark:border-slate-800"
+        {order && (
+          <OrderDetailPanel
+            order={detailedOrder}
+            details={matched}
+            detailsExpanded={expanded}
+            detailsLoading={isLoading}
+            detailsError={error ? (error as Error)?.message || "Unable to load order details" : null}
+            onToggleDetails={() => setExpanded((open) => !open)}
+            onRetryDetails={() => setReloadKey((key) => key + 1)}
+            actions={
+              <div className="mt-auto shrink-0 space-y-4 border-t border-slate-100 bg-white/80 px-6 py-4 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-900/80">
+                {/* The branch owns its orders, so a group requester may amend a
+                    still-pending one. The server re-checks the same rule and
+                    tells the person who raised it. */}
+                {String(detailedOrder.status).toUpperCase() === "PENDING" && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full gap-2"
+                    onClick={() => onEdit(order)}
                   >
-                    <div className="min-w-0">
-                      <p className="font-medium text-slate-900 dark:text-slate-100">{line.productName}</p>
-                      <p className="text-xs text-slate-500 dark:text-slate-400">
-                        {formatQuantity(Number(line.quantity))} {line.unit || ""}
-                      </p>
-                    </div>
-                    {!hidePrices && typeof line.priceCents === "number" && (
-                      <span className="shrink-0 text-xs font-bold text-slate-700 dark:text-slate-200">
-                        {formatPKR(line.priceCents * Number(line.quantity))}
-                      </span>
-                    )}
-                  </li>
-                ))}
-                {lines.length === 0 && (
-                  <li className="rounded-xl border border-dashed border-slate-200 p-4 text-center text-xs text-slate-400 dark:border-slate-800">
-                    No line items recorded.
-                  </li>
+                    <Pencil className="h-4 w-4" />
+                    Edit order
+                  </Button>
                 )}
-              </ul>
-            </section>
-
-            {!hidePrices && typeof detail?.totalCents === "number" && (
-              <div className="flex items-center justify-between border-t border-slate-100 pt-3 text-sm font-bold dark:border-slate-800">
-                <span className="text-slate-500">Order total</span>
-                <span className="text-slate-900 dark:text-white">{formatPKR(detail.totalCents)}</span>
+                <RefundManagement
+                  orderId={order.id}
+                  orderTotalCents={detailedOrder.totalCents ?? null}
+                  orderStatus={String(detailedOrder.status ?? "")}
+                  orderFulfillmentStatus={detailedOrder.fulfillmentStatus ?? null}
+                  createdAt={String(detailedOrder.createdAt ?? "")}
+                  requesterRole="GROUP_ORDER_PORTAL"
+                  allowRefundRequest
+                  pricesHidden={Boolean(refundState.pricesHidden)}
+                  initialOrderItems={matched?.orderItems ?? []}
+                  refundAmountCents={refundState.refundAmountCents ?? null}
+                  refundedAt={refundState.refundedAt ?? null}
+                  refundReason={refundState.refundReason ?? null}
+                  onRefundSuccess={onChanged}
+                />
               </div>
-            )}
-          </div>
-        </DetailBody>
+            }
+          />
+        )}
       </SheetContent>
     </Sheet>
-  )
-}
-
-function DetailBody({
-  loading,
-  error,
-  children,
-}: Readonly<{ loading: boolean; error: boolean; children: React.ReactNode }>) {
-  if (loading) return <div className="mt-6"><ListSkeleton rows={4} /></div>
-
-  if (error) {
-    return (
-      <p role="alert" className="mt-6 text-sm text-slate-700 dark:text-slate-300">
-        This order could not be loaded. Please try again.
-      </p>
-    )
-  }
-
-  return <>{children}</>
-}
-
-function DetailField({
-  label,
-  value,
-  icon,
-}: Readonly<{ label: string; value: string; icon?: React.ReactNode }>) {
-  return (
-    <div>
-      <dt className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-        {icon}
-        {label}
-      </dt>
-      <dd className="mt-0.5 truncate text-slate-900 dark:text-slate-100" title={value}>
-        {value}
-      </dd>
-    </div>
   )
 }

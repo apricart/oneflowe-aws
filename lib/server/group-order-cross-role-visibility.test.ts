@@ -18,8 +18,8 @@ function orderRoleConditions(): string {
 /**
  * A Group Order Portal submission is recorded as one ordinary `orders` row per
  * branch. Everything below exists to keep that true: the branch's own roles must
- * keep reading those rows through the scoping they already have, and no role may
- * gain a write it did not have.
+ * keep reading those rows through the scoping they already have, and every write
+ * must stay inside the branch that owns the order.
  */
 describe("group orders reach the branch's own roles", () => {
   it("never excludes a group order from any list", () => {
@@ -85,43 +85,91 @@ describe("group orders reach the branch's own roles", () => {
 })
 
 /**
- * Reading a group order is not the same as acting on one. Every write stays with
- * the person who raised the order; these are the controls that keep it there.
+ * The branch owns its orders.
+ *
+ * Writes were once pinned to whoever raised the order. They are now pinned to
+ * the **branch**: either requester role may edit or refund an order at a branch
+ * it is assigned to, whoever raised it, because that branch received the goods
+ * and its budget paid for them. `plans/OF-GROUP-branch-owns-order-writes.md`
+ * records the decision.
+ *
+ * That makes the branch predicate the whole of the control, so these assert it
+ * is present and mandatory on every write path — and that the two things which
+ * deliberately did **not** widen have not drifted along with it.
  */
-describe("reading a group order grants no write", () => {
-  it("keeps order edits with the creator", () => {
-    const policy = source("lib/order-edit-policy.ts")
-    expect(policy).toContain("input.actorUserId === input.orderCreatedByUserId")
-    expect(policy).not.toContain("groupOrderId")
-
-    // The edit lock re-asserts the creator inside the transaction too.
-    expect(source("app/api/v1/orders/[id]/route.ts"))
-      .toContain("eq(orders.createdByUserId, user.id)")
+describe("the branch owns its orders", () => {
+  it("states the rule once, in a module with no database", () => {
+    const policy = source("lib/order-write-access.ts")
+    // An assignment set, not a creator comparison.
+    expect(policy).toContain("branchIds.includes(order.branchId)")
+    expect(policy).not.toContain("=== order.createdByUserId")
+    // The failure that would matter most: no assignment must mean no access,
+    // never "every branch in the tenant".
+    expect(policy).toContain("if (branchIds.length === 0) return false")
+    // Tenant equality is asserted in both directions.
+    expect(policy).toContain("actor.organizationId !== order.organizationId")
+    expect(policy).toContain("order.branchOrganizationId !== order.organizationId")
   })
 
-  it("keeps refund requests with the creator", () => {
+  it("authorizes an edit against the actor's branches, resolved server-side", () => {
+    const route = source("app/api/v1/orders/[id]/route.ts")
+    expect(route).toContain("canRequesterActOnOrder")
+    expect(route).toContain("canRequesterEditOrder")
+    // The branch set never comes from the request body or query, and the copy
+    // the decision is made on is re-resolved on the transaction handle so a
+    // revoked assignment cannot be used mid-request.
+    expect(route).toContain("resolveWritableBranchIds(user.role, user.id, scope)")
+    expect(route).toContain("if (allowedBranchIds.length === 0) return error(\"Forbidden\", 403)")
+    expect(route).toContain("? await resolveScopedBranchIds(tx, actor.id)")
+    expect(route).toContain("if (allowedBranchIds.length === 0) return { kind: \"forbidden\" } as const")
+    // The order is no longer located by creator, at either step.
+    expect(route).not.toContain("eq(orders.createdByUserId, user.id)")
+    expect(route).not.toContain("eq(orders.createdByUserId, context.userId)")
+  })
+
+  it("authorizes a refund against the same branch set", () => {
     const refunds = source("app/api/v1/orders/[id]/refunds/route.ts")
-    expect(refunds).toContain("orderData.createdByUserId === userId")
-    expect(refunds).not.toContain("groupOrderId")
+    expect(refunds).toContain("canRequesterActOnOrder")
+    expect(refunds).toContain("resolveRefundBranchIds")
+    expect(refunds).not.toContain("orderData.createdByUserId === userId")
   })
 
-  it("keeps the fulfilment token with the creator", () => {
+  // Creator equality used to carry accountability as well as access. Branch
+  // ownership keeps only the access half, so the trail has to carry the rest.
+  it("names both parties and tells the raiser when a colleague writes", () => {
+    const audit = source("lib/server/order-write-audit.ts")
+    expect(audit).toContain("isCrossRequesterWrite")
+    expect(audit).toContain("notifications")
+
+    for (const path of [
+      "app/api/v1/orders/[id]/route.ts",
+      "app/api/v1/orders/[id]/refunds/route.ts",
+    ]) {
+      const route = source(path)
+      expect(route).toContain("notifyRaiserOfOrderWrite")
+      expect(route).toContain("onBehalfOfUserId")
+    }
+  })
+
+  it("keeps the fulfilment token with the raiser", () => {
+    // A credential handed to an administrator, not an action on the order, so
+    // this one did not widen with the rest.
     const token = source("lib/fulfillment-token-access.ts")
     expect(token).toContain("orderCreatedByUserId === userId")
     expect(token).not.toContain("groupOrderId")
-  })
-
-  it("keeps the token email with the creator", () => {
     expect(source("app/api/v1/orders/[id]/send-token-email/route.ts"))
       .not.toContain("groupOrderId")
   })
 
   it("offers no control the server would refuse", () => {
-    // A requester sees a group order but cannot edit or refund it, so the store
-    // hides both controls rather than failing the request afterwards.
+    // The store no longer hides its write controls on a group order, because
+    // the server now accepts them. A guard left behind here would read as the
+    // feature being broken.
     const shop = source("app/shop/page.tsx")
-    expect(shop).toContain('order.status?.toUpperCase() === "PENDING" && !order.placedByGroupPortal')
-    expect(shop).toContain("!(isOrderPortal && selectedOrder.placedByGroupPortal)")
+    expect(shop).not.toContain('&& !order.placedByGroupPortal')
+    expect(shop).not.toContain("!(isOrderPortal && selectedOrder.placedByGroupPortal)")
+    // Editing is still offered only while the order can actually be edited.
+    expect(shop).toContain('order.status?.toUpperCase() === "PENDING"')
   })
 })
 

@@ -71,8 +71,9 @@ describe("group user decision surface", () => {
     // the role is on the GET allowlist only. The requester role joined this
     // list for its own read-only tab; neither is on any write allowlist below.
     expect(detail).toContain('requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "GROUP_ORDER_PORTAL", "ORDER_PORTAL"])')
-    // Editing stays with the requester and deletion with the Super Admin.
-    expect(detail).toContain('requireApiRole(["ORDER_PORTAL"])')
+    // Editing stays with the two requester roles and deletion with the Super
+    // Admin; neither list may quietly pick up a deciding role.
+    expect(detail).toContain('requireApiRole(["ORDER_PORTAL", "GROUP_ORDER_PORTAL"])')
     expect(detail).toContain('requireApiRole(["SUPER_ADMIN"])')
   })
 
@@ -177,15 +178,17 @@ describe("group user approval workspace", () => {
  * branch employees raised in its assigned branches, and does nothing else —
  * these contracts are what keep "and does nothing else" true.
  */
-describe("group order portal requester stays read-only", () => {
+describe("group order portal requester writes only inside its branches", () => {
   const detail = () => source("app/api/v1/orders/[id]/route.ts")
 
   it("reaches the single-order read", () => {
     expect(detail()).toContain('"GROUP_ORDER_PORTAL"')
   })
 
-  it("gains no write on any order route", () => {
-    // Each of these is a mutating route. None may name the requester role.
+  it("never gains a decision on any order route", () => {
+    // Raising an order and deciding one stay separate roles. Editing and
+    // refunding widened to the branch; approving, rejecting, fulfilling and
+    // marking paid did not, so none of these may name the requester role.
     for (const path of [
       "app/api/v1/orders/[id]/approve/route.ts",
       "app/api/v1/orders/[id]/reject/route.ts",
@@ -197,17 +200,22 @@ describe("group order portal requester stays read-only", () => {
     }
   })
 
-  it("leaves editing, refunding and the token with the person who raised the order", () => {
-    // The four creator-bound controls the read-only tab must not disturb.
-    expect(source("lib/order-edit-policy.ts"))
-      .toContain('input.actorRole === "ORDER_PORTAL"')
-    expect(source("lib/order-edit-policy.ts"))
-      .toContain("input.actorUserId === input.orderCreatedByUserId")
+  it("bounds editing and refunding by branch assignment, not by creator", () => {
+    // The branch owns its orders, so both writes are gated on the assignment
+    // set this role resolves to — never on who raised the order.
+    expect(source("lib/order-write-access.ts"))
+      .toContain("branchIds.includes(order.branchId)")
+    expect(source("app/api/v1/orders/[id]/route.ts"))
+      .toContain("resolveWritableBranchIds")
     expect(source("app/api/v1/orders/[id]/refunds/route.ts"))
-      .toContain("orderData.createdByUserId === userId")
+      .toContain("resolveRefundBranchIds")
+  })
+
+  it("leaves the fulfilment token and the invoice with the person who raised the order", () => {
+    // A credential and a document, not actions on the order, so neither
+    // widened with the writes above.
     expect(source("lib/fulfillment-token-access.ts"))
       .toContain("orderCreatedByUserId === userId")
-    // Invoices for this role stay its own orders only.
     expect(source("lib/invoice-access-policy.ts"))
       .toContain("GROUP_ORDER_PORTAL: { tenant: \"own-organization\", branches: \"own-organization\", ownOrdersOnly: true }")
   })
