@@ -45,7 +45,9 @@ describe("concurrency protection contracts", () => {
       expect(route).not.toContain("isPaidForRefund")
       expect(route).not.toContain("Only paid orders are eligible for a refund")
     }
-    expect(requestRefund).toContain('userRole === "ORDER_PORTAL"')
+    // Both requester roles face the delivered gate, and it is re-checked
+    // against the locked row rather than the one read before the lock.
+    expect(requestRefund).toContain("isOrderWriteRole(context.userRole)")
     expect(requestRefund).toContain("isOrderPortalRefundEligible(lockedOrder.status, lockedOrder.fulfillmentStatus)")
   })
 

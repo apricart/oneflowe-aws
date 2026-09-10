@@ -33,16 +33,19 @@ describe("order edit security contract", () => {
     expect(policy).toContain("return Boolean(viewerUserId) && order.createdByUserId === viewerUserId")
   })
 
-  it("keeps the update restricted to Order Portal users and strict input", () => {
-    expect(route).toContain('requireApiRole(["ORDER_PORTAL"])')
+  it("keeps the update restricted to the requester roles and strict input", () => {
+    expect(route).toContain('requireApiRole(["ORDER_PORTAL", "GROUP_ORDER_PORTAL"])')
     expect(route).toContain("orderUpdateSchema.safeParse")
-    expect(route).toContain("canOrderPortalEditOrder")
+    expect(route).toContain("canRequesterEditOrder")
   })
 
   it("locks and scopes the order before reconciling reservations", () => {
-    expect(route).toContain('eq(orders.createdByUserId, user.id)')
+    // Located by tenant and locked, then authorized against the branch set the
+    // session resolves to — the branch owns the order, so the creator is not a
+    // predicate here.
     expect(route).toContain('eq(orders.organizationId, organizationId)')
-    expect(route).toContain('eq(orders.branchId, branchId)')
+    expect(route).toContain("canRequesterActOnOrder(writeActor, subject)")
+    expect(route).toContain('eq(orders.branchId, context.branchId)')
     expect(route).toContain('.for("update")')
     expect(route).toContain("lockedBudget.amountHeldCents - existingOrder.totalCents + totalCents")
     expect(route).toContain("Number(product.stockQuantity) + previousQuantity - nextQuantity")

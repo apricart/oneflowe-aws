@@ -1566,7 +1566,7 @@ export default function OrderPortalPage() {
                             <RefreshCw className="h-4 w-4" />
                             View Details
                           </Button>
-                          {isOrderPortal && order.status?.toUpperCase() === "PENDING" && !order.placedByGroupPortal && (
+                          {isOrderPortal && order.status?.toUpperCase() === "PENDING" && (
                             <Button
                               onClick={() => { void beginEditOrder(order) }}
                               variant="outline"
@@ -2490,11 +2490,10 @@ export default function OrderPortalPage() {
                 orderStatus={selectedOrder.status}
                 orderFulfillmentStatus={selectedOrder.fulfillmentStatus}
                 createdAt={selectedOrder.createdAt}
+                // The branch owns its orders, so a requester may claim on a
+                // group order raised for its branch as well as on its own.
                 allowRefundRequest={
                   ["HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL"].includes(userRole)
-                  // A requester may only refund what it raised itself, so the
-                  // control is hidden rather than offered and then refused.
-                  && !(isOrderPortal && selectedOrder.placedByGroupPortal)
                 }
                 requesterRole={userRole}
                 pricesHidden={pricesHidden}

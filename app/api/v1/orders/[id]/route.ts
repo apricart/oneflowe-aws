@@ -6,6 +6,7 @@ import {
   branchInventory,
   budgets,
   globalProducts,
+  notifications,
   orderItems,
   orders,
   organizationInventory,
@@ -19,23 +20,51 @@ import { error, ok, requireApiRole } from "@/lib/api"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { applyOrderCreatorContactVisibility } from "@/lib/order-detail-visibility"
-import { canOrderPortalEditOrder } from "@/lib/order-edit-policy"
+import {
+  canRequesterActOnOrder,
+  canRequesterEditOrder,
+  describeOrderWrite,
+  isOrderWriteRole,
+} from "@/lib/order-write-access"
 import { orderSelectColumns } from "@/lib/order-select"
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
+import { notifyRaiserOfOrderWrite } from "@/lib/server/order-write-audit"
 
 type CurrentOrderUser = NonNullable<Awaited<ReturnType<typeof getCurrentUser>>>
 
-const isValidOrderPortalActor = (
+/**
+ * The session identifies the actor; nothing about who may be edited comes from
+ * the request. Both requester roles reach this endpoint, so the check is that
+ * the session agrees with itself and names a tenant — the branch set is
+ * resolved separately, and is what actually bounds the edit.
+ */
+const isValidOrderWriteActor = (
   user: Awaited<ReturnType<typeof getCurrentUser>>,
   scope: Awaited<ReturnType<typeof getRequestScope>>,
 ): user is CurrentOrderUser => (
   user != null
   && user.id === scope?.userId
-  && user.role === "ORDER_PORTAL"
-  && scope?.role === "ORDER_PORTAL"
+  && isOrderWriteRole(user.role)
+  && user.role === scope?.role
   && Boolean(scope.organizationId)
-  && Boolean(scope.branchId)
 )
+
+/**
+ * Every branch the actor may write to.
+ *
+ * `ORDER_PORTAL` is pinned to the one branch on its user row.
+ * `GROUP_ORDER_PORTAL` has none of its own and reaches the set an
+ * administrator assigned it. An empty result denies every order rather than
+ * falling through to the tenant.
+ */
+async function resolveWritableBranchIds(
+  role: string,
+  userId: string,
+  scope: RequestScope | null,
+): Promise<number[]> {
+  if (usesMultiBranchScope(role)) return resolveScopedBranchIds(db, userId)
+  return scope?.branchId ? [scope.branchId] : []
+}
 
 const getOrderEditResultResponse = (result: any, pricesHidden: boolean) => {
   if (result.kind === "not-found") return error("Order not found", 404)
@@ -79,7 +108,11 @@ import { generateReceiptData } from "@/lib/receipt-generator"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
 import { orderUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
 import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
-import { canUseScopedBranch, usesMultiBranchScope } from "@/lib/server/multi-branch-scope"
+import {
+  canUseScopedBranch,
+  resolveScopedBranchIds,
+  usesMultiBranchScope,
+} from "@/lib/server/multi-branch-scope"
 import { canOrderPortalReadOrder, isGroupPortalOrder } from "@/lib/group-order-visibility"
 import { loadGroupPriceOverrides, resolveBranchGroupId, resolveEffectivePriceCents } from "@/lib/server/effective-price"
 
@@ -115,49 +148,76 @@ async function hasBranchAccessForOrderRead(
   return canUseScopedBranch(userId, order.branchId)
 }
 
+/**
+ * Lock the order and decide whether this actor may edit it.
+ *
+ * The order is located by id and tenant only — **not** by creator and not by
+ * the actor's branch — because the branch that owns the order is what decides
+ * access, and a `GROUP_ORDER_PORTAL` actor has no branch of its own to match
+ * against. Authorization is then the branch-set test in
+ * `lib/order-write-access.ts`, so an order at a branch this actor was never
+ * assigned is refused here, after the row is read but before anything is
+ * written.
+ *
+ * The actor's role and tenant are re-read from the database inside the
+ * transaction rather than trusted from the session, so a role or assignment
+ * revoked mid-request cannot be used.
+ */
 async function lockOrderEditAccess(tx: any, context: any) {
-  const { userId, organizationId, branchId, orderId } = context
-  const user = { id: userId }
+  const { userId, organizationId, orderId } = context
   const [actor] = await tx.select({
     id: users.id,
     role: roles.name,
     organizationId: users.organizationId,
     branchId: users.branchId,
   }).from(users).innerJoin(roles, eq(users.roleId, roles.id)).where(and(
-    eq(users.id, user.id),
+    eq(users.id, userId),
     eq(users.isActive, true),
     isNull(users.deletedAt),
   )).limit(1)
-  if (actor?.role !== "ORDER_PORTAL"
-    || actor.organizationId !== organizationId
-    || actor.branchId !== branchId) return { kind: "forbidden" } as const
+  if (!isOrderWriteRole(actor?.role) || actor.organizationId !== organizationId) {
+    return { kind: "forbidden" } as const
+  }
+
+  // Re-resolved on the transaction handle, not taken from the pre-flight check
+  // in the handler: an assignment revoked between the two must deny the edit,
+  // and this is the copy the decision is actually made on.
+  const allowedBranchIds = usesMultiBranchScope(actor.role)
+    ? await resolveScopedBranchIds(tx, actor.id)
+    : (actor.branchId ? [actor.branchId] : [])
+  if (allowedBranchIds.length === 0) return { kind: "forbidden" } as const
 
   const [existingOrder] = await tx.select().from(orders).where(and(
     eq(orders.id, orderId),
-    eq(orders.createdByUserId, user.id),
     eq(orders.organizationId, organizationId),
-    eq(orders.branchId, branchId),
   )).for("update").limit(1)
   if (!existingOrder) return { kind: "not-found" } as const
 
   const [orderBranch] = await tx.select({ organizationId: branches.organizationId })
     .from(branches).where(eq(branches.id, existingOrder.branchId)).for("share").limit(1)
-  const canEdit = canOrderPortalEditOrder({
-    actorRole: actor.role,
-    actorUserId: actor.id,
-    actorOrganizationId: actor.organizationId,
-    actorBranchId: actor.branchId,
-    orderStatus: existingOrder.status,
-    orderCreatedByUserId: existingOrder.createdByUserId,
-    orderOrganizationId: existingOrder.organizationId,
-    orderBranchId: existingOrder.branchId,
+
+  const writeActor = {
+    role: actor.role,
+    userId: actor.id,
+    organizationId: actor.organizationId,
+    branchIds: allowedBranchIds,
+  }
+  const subject = {
+    status: existingOrder.status,
+    createdByUserId: existingOrder.createdByUserId,
+    organizationId: existingOrder.organizationId,
+    branchId: existingOrder.branchId,
     branchOrganizationId: orderBranch?.organizationId,
-  })
-  if (!canEdit && String(existingOrder.status).toUpperCase() !== "PENDING") {
+  }
+
+  // Out of scope reads as "not found", matching the read path, so the response
+  // cannot be used to discover that an order exists at another branch.
+  if (!canRequesterActOnOrder(writeActor, subject)) return { kind: "not-found" } as const
+  if (!canRequesterEditOrder(writeActor, subject)) {
     return { kind: "invalid-state", status: existingOrder.status } as const
   }
-  if (!canEdit) return { kind: "forbidden" } as const
-  return { actor, existingOrder }
+
+  return { actor, existingOrder, write: describeOrderWrite(writeActor, subject) }
 }
 
 function indexExistingOrderQuantities(existingItems: any[]) {
@@ -409,9 +469,11 @@ async function persistEditedOrder(tx: any, context: any) {
     ...(context.notes !== undefined ? { notes: context.notes || null } : {}),
     ...(context.poNumber !== undefined ? { poNumber: context.poNumber || null } : {}),
     updatedAt: new Date(),
+    // The creator is deliberately not a predicate here: the branch owns the
+    // order. Id, tenant, branch and PENDING still make this the optimistic
+    // guard that turns a concurrent approval into ORDER_EDIT_CONFLICT.
   }).where(and(
     eq(orders.id, context.orderId),
-    eq(orders.createdByUserId, context.userId),
     eq(orders.organizationId, context.organizationId),
     eq(orders.branchId, context.branchId),
     sql`UPPER(${orders.status}) = 'PENDING'`,
@@ -444,14 +506,32 @@ async function persistEditedOrder(tx: any, context: any) {
       totalCents: context.totalCents,
       previousItemCount: context.existingItems.length,
       itemCount: context.calculatedItems.length,
+      // Branch ownership replaced creator equality as the access rule, so the
+      // trail is what now carries accountability: both parties are named
+      // whenever the editor is not the person who raised the order.
+      onBehalfOfUserId: context.write?.onBehalfOfUserId ?? null,
+      crossRequesterWrite: Boolean(context.write?.isCrossRequesterWrite),
     },
+  })
+  await notifyRaiserOfOrderWrite(tx, {
+    write: context.write,
+    organizationId: context.organizationId,
+    branchId: context.branchId,
+    orderId: context.orderId,
+    tid: context.existingOrder.tid,
+    message: `Order ${context.existingOrder.tid} was edited by a colleague at your branch.`,
+    type: "ORDER_EDITED_BY_COLLEAGUE",
   })
   return { kind: "updated", order: updatedOrder } as const
 }
 
-async function processOrderEditTransaction(tx: any, context: any) {
-  const access = await lockOrderEditAccess(tx, context)
+async function processOrderEditTransaction(tx: any, baseContext: any) {
+  const access = await lockOrderEditAccess(tx, baseContext)
   if ("kind" in access) return access
+  // Everything below keys on the branch that owns the order, not on the actor:
+  // a group requester has no branch of its own, and a branch colleague editing
+  // a group order must still move that branch's budget and stock.
+  const context = { ...baseContext, branchId: access.existingOrder.branchId }
   const inventory = await loadOrderEditInventory(tx, context)
   const orgTaxRateBp = await getOrganizationTaxRateBp(context.organizationId)
   const calculated = calculateEditedItems(context.normalizedItems, inventory, orgTaxRateBp)
@@ -625,7 +705,7 @@ export async function PUT(
   req: Request,
   props: { params: Promise<{ id: string }> },
 ) {
-  const authError = await requireApiRole(["ORDER_PORTAL"])
+  const authError = await requireApiRole(["ORDER_PORTAL", "GROUP_ORDER_PORTAL"])
   if (authError) return authError
 
   const [{ id }, user, scope] = await Promise.all([
@@ -636,9 +716,14 @@ export async function PUT(
   const orderId = Number(id)
 
   if (!Number.isInteger(orderId) || orderId <= 0) return error("Invalid order ID", 400)
-  if (!isValidOrderPortalActor(user, scope)) {
+  if (!isValidOrderWriteActor(user, scope)) {
     return error("Unauthorized", 401)
   }
+
+  // Resolved from the session, never from the request. A fast fail only — the
+  // set the decision is made on is re-resolved inside the transaction.
+  const allowedBranchIds = await resolveWritableBranchIds(user.role, user.id, scope)
+  if (allowedBranchIds.length === 0) return error("Forbidden", 403)
 
   const rateLimit = await withRateLimit("order", user.id)
   if (rateLimit) return rateLimit
@@ -655,7 +740,6 @@ export async function PUT(
   }
 
   const organizationId = scope!.organizationId!
-  const branchId = scope!.branchId!
   const budgetAllocationMode = await getBudgetAllocationModeForOrganization(organizationId)
   const pricesHidden = await shouldHidePricesForRole(user.role, organizationId)
 
@@ -664,7 +748,6 @@ export async function PUT(
       orderId,
       userId: user.id,
       organizationId,
-      branchId,
       normalizedItems,
       mode: budgetAllocationMode,
       pricesHidden,
