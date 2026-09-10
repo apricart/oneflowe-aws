@@ -1,9 +1,10 @@
 "use client"
 
 import { useState } from "react"
-import { ClipboardCheck, Layers, Package } from "lucide-react"
+import { ClipboardCheck, Layers, Package, Store } from "lucide-react"
 
 import { ApprovalAllOrders } from "@/components/group-portal/approval-all-orders"
+import { ApprovalOtherOrders } from "@/components/group-portal/approval-other-orders"
 import { ApprovalQueue } from "@/components/group-portal/approval-queue"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
@@ -42,6 +43,10 @@ export function ApprovalsWorkspace() {
               <Package className="h-4 w-4" />
               All branch orders
             </TabsTrigger>
+            <TabsTrigger value="other" className="gap-2">
+              <Store className="h-4 w-4" />
+              Other orders
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="groups" className="mt-5">
@@ -50,6 +55,12 @@ export function ApprovalsWorkspace() {
 
           <TabsContent value="orders" className="mt-5">
             <ApprovalAllOrders />
+          </TabsContent>
+
+          {/* The orders the branches' own employees raised, kept apart from the
+              group submissions above so each is decided on its own terms. */}
+          <TabsContent value="other" className="mt-5">
+            <ApprovalOtherOrders />
           </TabsContent>
         </Tabs>
     </div>

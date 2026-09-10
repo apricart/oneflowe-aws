@@ -4,7 +4,9 @@ import { and, count, desc, eq, gt, inArray, isNotNull, isNull, lt, or, sql, type
 
 import {
   branches,
+  globalProducts,
   orders,
+  organizationInventory,
   organizations,
   roles,
   supportAttachments,
@@ -22,6 +24,7 @@ import {
 import {
   SUPPORT_MAX_ATTACHMENTS_PER_MESSAGE,
   nextSupportStatusAfterMessage,
+  supportOrderSearchId,
   supportSideForRole,
   supportThreadReference,
   type SupportCategory,
@@ -29,6 +32,12 @@ import {
   type SupportSide,
   type SupportStatus,
 } from "@/lib/support-thread"
+import {
+  EMPTY_SUPPORT_STATS,
+  normalizeSupportStats,
+  type SupportStats,
+} from "@/lib/support-stats"
+import { escapeLikePattern } from "@/lib/utils"
 import { resolveScopedBranchIds } from "@/lib/server/multi-branch-scope"
 import {
   queueSupportMessageNotifications,
@@ -92,6 +101,35 @@ export function supportScopeCondition(viewer: SupportViewer): SQL | null {
   }
 }
 
+/**
+ * Matching a thread by the order it is about.
+ *
+ * An `EXISTS` rather than a predicate on the joined `orders` row, because the
+ * list shares one `where` between a count that reads `support_threads` alone
+ * and a row query that joins `orders` — naming `orders.tid` in the shared
+ * predicate would drag the join into the count as well. Either way it is a
+ * primary-key lookup.
+ *
+ * The term is escaped before it reaches the pattern, so a typed `%` searches
+ * for a percent sign rather than turning the filter into "everything". A bare
+ * number also matches the internal id, which is what an internal link carries.
+ */
+function supportOrderSearchCondition(term: string): SQL {
+  const pattern = `%${escapeLikePattern(term)}%`
+  const matches: SQL[] = [
+    sql`exists (
+      select 1 from ${orders}
+      where ${orders.id} = ${supportThreads.orderId}
+      and ${orders.tid} ilike ${pattern}
+    )`,
+  ]
+
+  const orderId = supportOrderSearchId(term)
+  if (orderId) matches.push(eq(supportThreads.orderId, orderId))
+
+  return or(...matches)!
+}
+
 export type SupportThreadListItem = {
   id: number
   reference: string
@@ -105,6 +143,11 @@ export type SupportThreadListItem = {
   branchName: string | null
   orderId: number | null
   orderTid: string | null
+  productId: number | null
+  /** The catalogue code, e.g. `KE-00421`. What people actually quote. */
+  productCode: string | null
+  /** The organization's own name for it, falling back to the catalogue name. */
+  productName: string | null
   createdByUserId: string
   createdByName: string | null
   assignedToName: string | null
@@ -121,6 +164,8 @@ export type SupportThreadListFilters = {
   /** Apricart may narrow to one tenant; every other role is already narrowed. */
   organizationId?: number
   orderId?: number
+  /** A reference the person typed, matched against the order the thread cites. */
+  orderSearch?: string
   threadId?: number
   page?: number
   pageSize?: number
@@ -146,6 +191,9 @@ export async function listSupportThreads(
   if (filters.category) conditions.push(eq(supportThreads.category, filters.category))
   if (filters.organizationId) conditions.push(eq(supportThreads.organizationId, filters.organizationId))
   if (filters.orderId) conditions.push(eq(supportThreads.orderId, filters.orderId))
+  // Pushed onto the same array the scope condition opens, so a search can only
+  // ever narrow what the viewer could already read.
+  if (filters.orderSearch) conditions.push(supportOrderSearchCondition(filters.orderSearch))
   if (filters.threadId) conditions.push(eq(supportThreads.id, filters.threadId))
 
   const where = and(...conditions)!
@@ -168,6 +216,9 @@ export async function listSupportThreads(
       branchName: branches.name,
       orderId: supportThreads.orderId,
       orderTid: orders.tid,
+      productId: supportThreads.productId,
+      productCode: globalProducts.productCode,
+      productName: sql<string | null>`coalesce(${organizationInventory.customName}, ${globalProducts.name})`,
       createdByUserId: supportThreads.createdByUserId,
       createdByName: users.fullName,
       messageCount: supportThreads.messageCount,
@@ -180,6 +231,17 @@ export async function listSupportThreads(
     .leftJoin(organizations, eq(organizations.id, supportThreads.organizationId))
     .leftJoin(branches, eq(branches.id, supportThreads.branchId))
     .leftJoin(orders, eq(orders.id, supportThreads.orderId))
+    .leftJoin(globalProducts, eq(globalProducts.id, supportThreads.productId))
+    // The tenant's own name for the product, when it has set one. Joined on the
+    // thread's organization, never the viewer's — Apricart reads every tenant's
+    // threads and must see each one's product named as that tenant names it.
+    .leftJoin(
+      organizationInventory,
+      and(
+        eq(organizationInventory.globalProductId, supportThreads.productId),
+        eq(organizationInventory.organizationId, supportThreads.organizationId),
+      ),
+    )
     .leftJoin(users, eq(users.id, supportThreads.createdByUserId))
     .leftJoin(
       supportThreadReads,
@@ -210,6 +272,9 @@ export async function listSupportThreads(
     branchName: row.branchName,
     orderId: row.orderId,
     orderTid: row.orderTid,
+    productId: row.productId,
+    productCode: row.productCode,
+    productName: row.productName,
     createdByUserId: row.createdByUserId,
     createdByName: row.createdByName,
     assignedToName: assigneeNames.get(row.id) ?? null,
@@ -239,6 +304,58 @@ export async function listSupportThreads(
     ))
 
   return { items, total, unreadCount: unread, page, pageSize }
+}
+
+/**
+ * The figures behind the queue's KPI row.
+ *
+ * Deliberately built on the same `supportScopeCondition` the list uses, so the
+ * counts cover exactly the threads the caller could open. A branch
+ * administrator's "12 open" is twelve threads they can click; there is no
+ * aggregate here that spans further than the list does.
+ *
+ * One pass over `support_threads` with filtered counts rather than a query per
+ * tile: the joins and the predicate are identical for all of them, and the
+ * scope columns are indexed. The read-state join is the same left join the list
+ * uses for its unread count.
+ *
+ * Unfiltered by status or category on purpose — the row is the overview the
+ * list's filters narrow against, not a second view of the current filter.
+ */
+export async function getSupportThreadStats(viewer: SupportViewer): Promise<SupportStats> {
+  const scopeCondition = supportScopeCondition(viewer)
+  if (!scopeCondition) return { ...EMPTY_SUPPORT_STATS }
+
+  const live = sql`${supportThreads.status} IN ('OPEN', 'AWAITING_CUSTOMER')`
+
+  const [row] = await db
+    .select({
+      total: count(),
+      open: sql`count(*) filter (where ${supportThreads.status} = 'OPEN')`,
+      awaitingCustomer: sql`count(*) filter (where ${supportThreads.status} = 'AWAITING_CUSTOMER')`,
+      resolved: sql`count(*) filter (where ${supportThreads.status} = 'RESOLVED')`,
+      closed: sql`count(*) filter (where ${supportThreads.status} = 'CLOSED')`,
+      urgent: sql`count(*) filter (where ${live} and ${supportThreads.priority} IN ('HIGH', 'URGENT'))`,
+      unanswered: sql`count(*) filter (where ${live} and ${supportThreads.firstResponseAt} is null)`,
+      openedLast7Days: sql`count(*) filter (where ${supportThreads.createdAt} >= now() - interval '7 days')`,
+      unread: sql`count(*) filter (where ${supportThreadReads.lastReadAt} is null or ${supportThreads.lastMessageAt} > ${supportThreadReads.lastReadAt})`,
+      // Averaged in minutes here rather than in the client, and null when no
+      // thread has been answered yet — `avg` ignores the unanswered rows.
+      avgFirstResponseMinutes: sql`avg(extract(epoch from (${supportThreads.firstResponseAt} - ${supportThreads.createdAt})) / 60.0) filter (where ${supportThreads.firstResponseAt} is not null)`,
+    })
+    .from(supportThreads)
+    .leftJoin(
+      supportThreadReads,
+      and(
+        eq(supportThreadReads.threadId, supportThreads.id),
+        eq(supportThreadReads.userId, viewer.userId),
+      ),
+    )
+    .where(scopeCondition)
+
+  // The driver hands bigint counts and a numeric average back as strings, so
+  // the row goes through the same tolerant reader the client uses.
+  return normalizeSupportStats(row)
 }
 
 async function loadAssigneeNames(threadIds: number[]): Promise<Map<number, string | null>> {
@@ -420,6 +537,7 @@ export type CreateSupportThreadInput = {
   category: SupportCategory
   priority: SupportPriority
   orderId: number | null
+  productId: number | null
   body: string
   attachmentIds: number[]
 }
@@ -431,10 +549,10 @@ export type CreateSupportThreadResult =
 /**
  * Opens a thread and posts its first message.
  *
- * The order reference is verified here, not in the route handler, because the
- * check needs the order row and must happen in the same transaction that writes
- * the thread — otherwise a caller could cite an order they lost access to
- * between the check and the write.
+ * The order and product references are verified here, not in the route handler,
+ * because each check needs its own row and must happen in the same transaction
+ * that writes the thread — otherwise a caller could cite something they lost
+ * access to between the check and the write.
  */
 export async function createSupportThread(
   input: CreateSupportThreadInput,
@@ -449,6 +567,13 @@ export async function createSupportThread(
       orderId = verified.orderId
     }
 
+    let productId: number | null = null
+    if (input.productId !== null) {
+      const verified = await verifyProductReference(tx, input.author, input.productId)
+      if (!verified.ok) return { ok: false as const, failure: verified.failure }
+      productId = verified.productId
+    }
+
     const now = new Date()
     const [thread] = await tx
       .insert(supportThreads)
@@ -456,6 +581,7 @@ export async function createSupportThread(
         organizationId: input.author.organizationId,
         branchId: input.author.branchId,
         orderId,
+        productId,
         subject: input.subject,
         category: input.category,
         status: side === "APRICART" ? "AWAITING_CUSTOMER" : "OPEN",
@@ -554,6 +680,51 @@ async function verifyOrderReference(
   return allowed
     ? { ok: true, orderId: order.id }
     : { ok: false, failure: failure("That order could not be found.", 400) }
+}
+
+/**
+ * May this author cite this product?
+ *
+ * The rule is one fact: the product is assigned to the author's **own**
+ * organization, enabled, and not withdrawn from the catalogue. That is narrower
+ * than the order rule deliberately — a catalogue entry is tenant-wide, so there
+ * is no branch or ownership dimension to it, and an organization's assignment
+ * row is exactly the statement "we carry this".
+ *
+ * That row is `organization_inventory`, which is what the Super Admin
+ * assignment endpoint writes and what `/api/v1/branch/inventory` reads to build
+ * the store. `organization_products` carries the same shape and is written by
+ * nothing but the K-Electric sync, so joining it would refuse every product of
+ * every tenant whose catalogue was assigned through the application.
+ *
+ * The organization comes from the author, which `resolveSupportAuthor` read
+ * from the database. Nothing here trusts the request beyond the id itself.
+ */
+async function verifyProductReference(
+  tx: any,
+  author: SupportAuthor,
+  productId: number,
+): Promise<{ ok: true; productId: number } | { ok: false; failure: SupportServiceFailure }> {
+  const [product] = await tx
+    .select({ id: globalProducts.id })
+    .from(globalProducts)
+    .innerJoin(
+      organizationInventory,
+      and(
+        eq(organizationInventory.globalProductId, globalProducts.id),
+        eq(organizationInventory.organizationId, author.organizationId),
+        eq(organizationInventory.isActive, true),
+        isNull(organizationInventory.deletedAt),
+      ),
+    )
+    .where(and(eq(globalProducts.id, productId), isNull(globalProducts.deletedAt)))
+    .limit(1)
+
+  // One answer for "no such product" and "not carried by your organization", so
+  // the field cannot be used to enumerate another tenant's catalogue.
+  return product
+    ? { ok: true, productId: product.id }
+    : { ok: false, failure: failure("That product could not be found.", 400) }
 }
 
 export type PostSupportMessageInput = {

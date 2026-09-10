@@ -1669,6 +1669,12 @@ export const supportThreads = pgTable(
     // cascaded so a thread survives an order being removed: the conversation is
     // the record of what was asked, and it outlives its subject.
     orderId: integer("order_id").references(() => orders.id, { onDelete: "set null" }),
+    // The product the query is about, when there is one. Points at the global
+    // catalogue rather than the organization's assignment row: the thread
+    // already carries its organization, so the pair resolves the tenant's own
+    // name for the product, and the reference survives the assignment later
+    // being disabled — the conversation is still about that product.
+    productId: integer("product_id").references(() => globalProducts.id, { onDelete: "set null" }),
     subject: varchar("subject", { length: 200 }).notNull(),
     category: varchar("category", { length: 32 }).notNull(),
     status: varchar("status", { length: 32 }).notNull().default("OPEN"),
@@ -1695,6 +1701,7 @@ export const supportThreads = pgTable(
     index("support_threads_org_idx").on(t.organizationId),
     index("support_threads_branch_idx").on(t.branchId),
     index("support_threads_order_idx").on(t.orderId),
+    index("support_threads_product_idx").on(t.productId),
     index("support_threads_creator_idx").on(t.createdByUserId),
     index("support_threads_assignee_idx").on(t.assignedToUserId),
     // The list is always ordered by most recent activity, within a scope.

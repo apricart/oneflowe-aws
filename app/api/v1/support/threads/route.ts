@@ -9,6 +9,7 @@ import { canRaiseSupportThread, isSupportParticipantRole } from "@/lib/support-a
 import {
   isSupportCategory,
   isSupportStatus,
+  parseSupportOrderSearch,
   parseSupportThreadReference,
 } from "@/lib/support-thread"
 import {
@@ -54,6 +55,13 @@ export async function GET(req: NextRequest) {
     const orderId = Number(params.get("orderId"))
     const reference = parseSupportThreadReference(params.get("reference"))
 
+    // The one free-text filter on this route. Refused outright when it is too
+    // long to name an order, rather than quietly matching more than was typed.
+    const orderSearch = parseSupportOrderSearch(params.get("orderSearch"))
+    if (!orderSearch.ok) {
+      return NextResponse.json({ error: orderSearch.reason }, { status: 400 })
+    }
+
     const result = await listSupportThreads(viewer, {
       status: isSupportStatus(status) ? status : undefined,
       category: isSupportCategory(category) ? category : undefined,
@@ -65,6 +73,7 @@ export async function GET(req: NextRequest) {
           ? organizationId
           : undefined,
       orderId: Number.isInteger(orderId) && orderId > 0 ? orderId : undefined,
+      orderSearch: orderSearch.term ?? undefined,
       threadId: reference ?? undefined,
       page: Number(params.get("page")) || 1,
       pageSize: Math.min(Number(params.get("pageSize")) || 20, SUPPORT_THREAD_PAGE_SIZE_MAX),
@@ -104,6 +113,7 @@ export async function POST(req: NextRequest) {
       category: parsed.data.category,
       priority: parsed.data.priority,
       orderId: parsed.data.orderId ?? null,
+      productId: parsed.data.productId ?? null,
       body: parsed.data.message,
       attachmentIds: parsed.data.attachmentIds,
     })
@@ -124,6 +134,7 @@ export async function POST(req: NextRequest) {
         category: parsed.data.category,
         priority: parsed.data.priority,
         orderId: parsed.data.orderId ?? null,
+        productId: parsed.data.productId ?? null,
         notified: result.queued.recipientCount,
       },
     })

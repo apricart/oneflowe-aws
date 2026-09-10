@@ -34,6 +34,68 @@ export const SUPPORT_CATEGORY_LABELS: Record<SupportCategory, string> = {
   OTHER: "Other",
 }
 
+/**
+ * Categories that were once offered and no longer are.
+ *
+ * A retired category is **not** deleted. It stays in the vocabulary above, in
+ * the labels, and in the `support_threads_category_valid_ck` constraint,
+ * because threads already recorded under it must keep rendering with their
+ * proper label and must stay reachable through the list's filter. Dropping the
+ * member would make `isSupportCategory("BILLING")` false and print a raw
+ * `BILLING` on a real row.
+ *
+ * What retiring does is narrow the *write* path: `SUPPORT_SELECTABLE_CATEGORIES`
+ * is what the dialog offers and what `supportThreadCreateSchema` accepts.
+ */
+export const SUPPORT_RETIRED_CATEGORIES = ["BILLING"] as const
+
+export type SupportRetiredCategory = (typeof SUPPORT_RETIRED_CATEGORIES)[number]
+
+/**
+ * The categories a new query may be raised under.
+ *
+ * Declared as its own literal tuple rather than derived, because `z.enum` needs
+ * one. `support-thread.test.ts` asserts it is exactly the vocabulary minus the
+ * retired set, so the two cannot drift.
+ */
+export const SUPPORT_SELECTABLE_CATEGORIES = [
+  "INVOICE",
+  "ORDER",
+  "DELIVERY",
+  "PRODUCT",
+  "OTHER",
+] as const
+
+export type SupportSelectableCategory = (typeof SUPPORT_SELECTABLE_CATEGORIES)[number]
+
+/** May a new thread be raised under this category? Retired ones may not. */
+export function isSelectableSupportCategory(
+  value: unknown,
+): value is SupportSelectableCategory {
+  return (
+    typeof value === "string" &&
+    SUPPORT_SELECTABLE_CATEGORIES.includes(value as SupportSelectableCategory)
+  )
+}
+
+
+/**
+ * Must a query raised under this category name the product it is about?
+ *
+ * Every category but `OTHER` describes something in the catalogue — an
+ * invoice line, an order line, a delivery, a product — and a request that does
+ * not say which product it concerns cannot be triaged without a round trip
+ * asking. `OTHER` is the category for everything that is not about a product,
+ * so it alone may leave the field blank.
+ *
+ * Stated here rather than in the dialog, because the dialog only hides a
+ * button: the rule is enforced again in `supportThreadCreateSchema`, which is
+ * what a caller reaching the endpoint directly meets.
+ */
+export function isProductRequiredForCategory(category: SupportSelectableCategory): boolean {
+  return category !== "OTHER"
+}
+
 export const SUPPORT_PRIORITIES = ["LOW", "NORMAL", "HIGH", "URGENT"] as const
 export type SupportPriority = (typeof SUPPORT_PRIORITIES)[number]
 
@@ -195,3 +257,57 @@ export function parseSupportThreadReference(value: string | null | undefined): n
 export const SUPPORT_SUBJECT_MAX_LENGTH = 200
 export const SUPPORT_MESSAGE_MAX_LENGTH = 5000
 export const SUPPORT_MAX_ATTACHMENTS_PER_MESSAGE = 5
+
+/**
+ * The longest order reference a search term can be: `orders.tid` is
+ * `varchar(26)`, so nothing longer can name an order.
+ */
+export const SUPPORT_ORDER_SEARCH_MAX_LENGTH = 26
+
+/**
+ * A parsed order search. `term: null` means nothing was typed — an absent
+ * search, not a search for nothing — so a caller cannot turn a blank field
+ * into a filter that matches no rows.
+ */
+export type SupportOrderSearch =
+  | { ok: true; term: string | null }
+  | { ok: false; reason: string }
+
+/**
+ * Reads the queue's order-id search box.
+ *
+ * Takes `unknown` because it parses a query parameter, and refuses a term
+ * longer than the column that holds an order reference rather than truncating
+ * it — a truncated term searches for something shorter, and so broader, than
+ * what the person typed.
+ */
+export function parseSupportOrderSearch(value: unknown): SupportOrderSearch {
+  if (value === null || value === undefined) return { ok: true, term: null }
+  if (typeof value !== "string") {
+    return { ok: false, reason: "The order search must be text." }
+  }
+
+  const term = value.trim()
+  if (!term) return { ok: true, term: null }
+  if (term.length > SUPPORT_ORDER_SEARCH_MAX_LENGTH) {
+    return {
+      ok: false,
+      reason: `An order reference is at most ${SUPPORT_ORDER_SEARCH_MAX_LENGTH} characters.`,
+    }
+  }
+
+  return { ok: true, term }
+}
+
+/**
+ * The internal order id a search term names, when it plainly is one.
+ *
+ * People quote an order by its reference, but the numeric id is what an
+ * internal link carries, so a bare number is matched against both. Null when
+ * the term is not a positive whole number.
+ */
+export function supportOrderSearchId(term: string): number | null {
+  if (!/^\d+$/.test(term)) return null
+  const id = Number(term)
+  return Number.isSafeInteger(id) && id > 0 ? id : null
+}

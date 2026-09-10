@@ -3,9 +3,9 @@ import { createHash,randomBytes } from "node:crypto"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
-import { budgets,orders,orderItems,organizationInventory,branchInventory,branches,globalProducts,productQuantityBudgets,refunds,systemLogs,groupAuditLogs,organizations,refundItems } from "@/db/schema"
+import { budgets,orders,orderItems,organizationInventory,branchInventory,branches,globalProducts,productQuantityBudgets,refunds,roles,systemLogs,groupAuditLogs,organizations,refundItems,users } from "@/db/schema"
 import { headers } from "next/headers"
-import { and,desc,eq,gte,ilike,lte,or,sql,inArray,isNotNull,isNull } from "drizzle-orm"
+import { and,desc,eq,exists,gte,ilike,lte,or,sql,inArray,isNotNull,isNull } from "drizzle-orm"
 import { logOrderActivity } from "@/lib/global-logger"
 import { generateReceiptData } from "@/lib/receipt-generator"
 import { generateNextInvoiceNumber,hasInvoiceSequenceTable } from "@/lib/invoice-number"
@@ -26,7 +26,8 @@ import { loadGroupPriceOverrides,resolveBranchGroupId,resolveEffectivePriceCents
 import { isValidRole } from "@/lib/rbac"
 import { metricExpressions } from "@/lib/metric-utils"
 import { getOrderStatusesForFilter,getOrderStatusFilter } from "@/lib/order-status"
-import { isGroupPortalOrder } from "@/lib/group-order-visibility"
+import { isGroupPortalOrder,type OrderCreatorRole } from "@/lib/group-order-visibility"
+import { parseOrderCreatorRoleFilter } from "@/lib/order-creator-filter"
 
 
 
@@ -62,6 +63,7 @@ function getOrderListParams(req: NextRequest) {
     organizationId: searchParams.get("organizationId") || undefined,
     id,
     groupId: searchParams.get("groupId") || undefined,
+    createdByRole: searchParams.get("createdByRole"),
     groupIds: parseNumberList(searchParams.get("groupIds") || undefined),
     months: parseNumberList(searchParams.get("months") || undefined, 1, 12),
     years: parseNumberList(searchParams.get("years") || undefined, 2000, 2100),
@@ -153,6 +155,32 @@ function addOrderDimensionConditions(conditions: any[], params: ReturnType<typeo
   else if (params.branchId && /^\d+$/.test(params.branchId)) conditions.push(eq(orders.branchId, Number(params.branchId)))
   if (params.groupIds.length > 0) conditions.push(inArray(branches.groupId, params.groupIds))
   else if (params.groupId && /^\d+$/.test(params.groupId)) conditions.push(eq(branches.groupId, Number(params.groupId)))
+}
+
+/**
+ * Narrow the list to the orders one ordering role raised.
+ *
+ * The role name comes from a compile-time allowlist (`parseOrderCreatorRoleFilter`)
+ * and is bound as a parameter, so nothing a caller sends reaches SQL. An order
+ * with no creator matches nothing, which is what an absent `created_by_user_id`
+ * should mean here.
+ *
+ * This is deliberately not a `groupOrderId` predicate: a group order is an
+ * ordinary order of the branch's, and keying a query on that column is what
+ * makes one disappear from the branch's own figures.
+ */
+function addOrderCreatorRoleCondition(conditions: any[], creatorRole: OrderCreatorRole | null) {
+  if (!creatorRole) return
+  conditions.push(exists(
+    db
+      .select({ one: sql`1` })
+      .from(users)
+      .innerJoin(roles, eq(users.roleId, roles.id))
+      .where(and(
+        eq(users.id, orders.createdByUserId),
+        eq(roles.name, creatorRole),
+      )),
+  ))
 }
 
 function addOrderDateConditions(conditions: any[], params: ReturnType<typeof getOrderListParams>) {
@@ -751,8 +779,15 @@ export async function GET(req: NextRequest) {
       scopedBranchIds,
     })
 
+    // Narrowing by the role that raised the order. Parsed before anything is
+    // built so a malformed value is refused rather than quietly dropped, which
+    // would return more rows than the caller asked for.
+    const creatorFilter = parseOrderCreatorRoleFilter(params.createdByRole)
+    if (!creatorFilter.ok) return NextResponse.json({ error: creatorFilter.message }, { status: 400 })
+
     const pricesHidden = await shouldHidePricesForRole(role, orgIdNum)
     addOrderDimensionConditions(conditions, params)
+    addOrderCreatorRoleCondition(conditions, creatorFilter.role)
     addOrderDateConditions(conditions, params)
 
     // Status changes which rows are returned, but not the KPI scope. Keeping a

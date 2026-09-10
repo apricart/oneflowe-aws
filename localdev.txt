@@ -1,0 +1,11 @@
+
+Role	Username	Email	Scope
+SUPER_ADMIN	demo_superadmin	demo.superadmin@demo.local	Global (all tenants)
+HEAD_OFFICE	demo_headoffice	demo.headoffice@demo.local	Demo Corp
+BRANCH_ADMIN	demo_branchadmin	demo.branchadmin@demo.local	Demo Corp → Demo North Branch
+ORDER_PORTAL	demo_orderportal	demo.orderportal@demo.local	Demo North Branch (/shop)
+GROUP_ORDER_PORTAL	demo_grouportal	demo.grouportal@demo.local	Groups A + B (/group-portal)
+GROUP_USER	demo_groupuser	demo.groupuser@demo.local	Group A (approve
+
+
+PASS For ALL Demo@123456
