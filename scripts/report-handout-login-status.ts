@@ -246,9 +246,9 @@ async function main(): Promise<void> {
     mkdirSync(dirname(output), { recursive: true })
     const book = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet(sanitizeSpreadsheetRecords(summary)), "Summary")
-    XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet(sanitizeSpreadsheetRecords(
+    XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet(sanitizeSpreadsheetRecords<Record<string, unknown>>(
       problems.length > 0 ? problems : [{ Result: "Every hand-out row can sign in" }])), "Cannot sign in")
-    XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet(sanitizeSpreadsheetRecords(
+    XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet(sanitizeSpreadsheetRecords<Record<string, unknown>>(
       notInHandout.length > 0 ? notInHandout : [{ Result: "Every account has a hand-out row" }])), "Not in handout")
     XLSX.writeFile(book, output)
 
