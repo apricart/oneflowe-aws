@@ -2,9 +2,10 @@ import { NextRequest } from "next/server"
 import { ok,error,requireApiRole,readJson } from "@/lib/api"
 import { getRequestScope } from "@/lib/auth"
 import { enableMFA,disableMFA } from "@/lib/mfa"
+import { MFA_SELF_SERVICE_ROLES } from "@/lib/server/mfa-self-service-access"
 
 export async function POST(req: NextRequest) {
-  const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"])
+  const err = await requireApiRole(MFA_SELF_SERVICE_ROLES)
   if (err) return err
 
   try {

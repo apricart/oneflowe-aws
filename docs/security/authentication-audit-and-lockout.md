@@ -13,7 +13,7 @@ against the same account.
 | Requirement | Control |
 |---|---|
 | PCI DSS 10.2.1.1–10.2.1.5 | Every sign-in outcome is a `system_logs` row |
-| PCI DSS 8.3.4 | At most 10 attempts, at least a 30-minute lock |
+| PCI DSS 8.3.4 | At most 10 attempts. **Lock duration deviates** — see [Configuration](#configuration) |
 | SOC 2 CC7.2 | Queryable, retained authentication event history |
 | ISO 27001 A.8.15 | As above |
 
@@ -94,7 +94,7 @@ the account they protect.
 
 An account is released by any of:
 
-1. Waiting out `lockout_until` (default 30 minutes).
+1. Waiting out `lockout_until` (default 5 minutes).
 2. A successful authentication, which clears the counters.
 3. An administrator resetting the password (`PATCH /api/v1/users/[id]`) — the
    "identity confirmed" branch of PCI DSS 8.3.4.
@@ -105,12 +105,31 @@ An account is released by any of:
 | Variable | Range | Default |
 |---|---|---|
 | `AUTH_LOCKOUT_THRESHOLD` | 3–10 | 5 |
-| `AUTH_LOCKOUT_DURATION_MINUTES` | 30–1440 | 30 |
+| `AUTH_LOCKOUT_DURATION_MINUTES` | 5–1440 | 5 |
 
-The **ranges are the control**. They exclude every value weaker than PCI DSS
-8.3.4 permits, so a misconfigured secret store cannot relax the policy — the
-same approach `INACTIVITY_TIMEOUT_MINUTES` already uses. Bounds are defined once
-in `lib/auth-lockout-policy.ts` and imported by env validation.
+The **ranges are the control**: a value outside them is rejected at startup,
+so a misconfigured secret store cannot relax the policy — the same approach
+`INACTIVITY_TIMEOUT_MINUTES` already uses. Bounds are defined once in
+`lib/auth-lockout-policy.ts` and imported by env validation.
+
+> **Known deviation from PCI DSS 8.3.4.** The standard requires a lockout of at
+> least thirty minutes. The duration floor here is **five minutes**, lowered
+> deliberately so a user who mistypes a password is not shut out of the portal
+> for half an hour. The attempt threshold (at most ten) still conforms, the lock
+> is still applied, audited as `AUTH_ACCOUNT_LOCKED`, and still refuses the
+> password while it holds — but an attacker's mandatory wait between bursts is
+> six times shorter than the standard assumes. Restore
+> `LOCKOUT_DURATION_MINUTES_MIN = 30` in `lib/auth-lockout-policy.ts` if this
+> platform is ever brought into scope for a PCI assessment.
+
+### Local development
+
+Neither brute-force control runs under `next dev`. `lib/auth-brute-force-mode.ts`
+exempts that one environment, which switches off both the `login` rate limiter
+and the account lockout — including a lock already recorded in the database, so
+an account locked elsewhere is still usable against a local copy. `next build`
+sets `NODE_ENV=production`, so every deployed build enforces both; an unset or
+unrecognised `NODE_ENV` also enforces.
 
 ## Sign-in page behaviour
 
@@ -168,7 +187,10 @@ ORDER BY timestamp DESC;
 ## Tests
 
 - `lib/auth-lockout-policy.test.ts` — the pure rule: boundaries, expiry,
-  counter reset, and that the enforced range stays inside PCI DSS 8.3.4.
+  counter reset, that the attempt threshold stays inside PCI DSS 8.3.4, and
+  that the duration floor holds at its chosen non-zero value.
+- `lib/auth-brute-force-mode.test.ts` — that only `development` is exempt, and
+  that an unset or unrecognised `NODE_ENV` still enforces.
 - `lib/auth-options-signin.test.ts` — the sign-in path across all providers:
   which event each outcome records, that a locked account is refused before
   `verifyPassword` is called, that failures are counted against the account,

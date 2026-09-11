@@ -19,6 +19,10 @@ import { getOrderStatusDisplay } from "@/lib/order-status-display"
 import { getFulfillmentProgressColor, getPaymentStatusColor } from "@/lib/order-status-colors"
 import { Role } from "@/lib/rbac"
 import { sanitizeSpreadsheetRow } from "@/lib/spreadsheet"
+import {
+    buildOrderReportExportRows,
+    resolveOrderReportExportHeaders,
+} from "@/lib/order-report-export-layout"
 import { cn,formatPKR } from "@/lib/utils"
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
@@ -544,44 +548,15 @@ export default function OrderReportPage() {
                 return
             }
 
-            // Build active column list — single source of truth for both headers and data
-            const financialColumns = new Set(["subtotalValue", "refundValue", "netTotalValue"])
-            const activeColumns = ALL_COLUMNS.filter(c => {
-                if (role === "BRANCH_ADMIN" && (c.key === "group" || c.key === "branchName")) return false;
-                if (!showsGroupOrders && c.key === "groupOrderReference") return false;
-                if (role !== "SUPER_ADMIN" && c.key === "organizationName") return false;
-                if (pricesHidden && financialColumns.has(c.key)) return false;
-                return isVisible(c.key);
-            })
-
-            const headers = activeColumns.map(c => {
-                if (c.key === "netTotalValue" && isBuyer) return "Net Purchased"
-                return c.label
-            })
+            // The download is a fixed document, not a snapshot of the toggled
+            // table: the same columns in the same order every time, so two
+            // exports taken weeks apart line up. Only the money columns vary,
+            // and only where price visibility has already withheld them.
+            const exportLayoutOptions = { pricesHidden, isBuyer }
+            const headers = resolveOrderReportExportHeaders(exportLayoutOptions)
 
             // Map every filtered API page, not just the currently visible table page.
-            const rows = exportOrders.map((order: any) => activeColumns.map(c => {
-                switch (c.key) {
-                    case "orderDate": return new Date(order.createdAt).toLocaleDateString()
-                    case "userName": return order.userName || "-"
-                    case "employeeId": return order.employeeId || order.userId || "-"
-                    case "tid": return order.tid || "-"
-                    case "organizationName": return order.organizationName || "N/A"
-                    case "group": return order.groupName || "-"
-                    case "groupOrderReference": return order.groupOrderReference || "-"
-                    case "branchName": return order.branchName || "-"
-                    case "status": return getOrderDerivedStatus({ status: order.status }).label || "-"
-                    case "deliveryStatus": return getOrderStatusDisplay(order).fulfillmentStatus || "-"
-                    case "paymentStatus": return getOrderStatusDisplay(order).paymentStatus || "-"
-                    case "quantityOrdered": return order.quantityOrdered || 0
-                    case "quantityDelivered": return (order.quantityOrdered || 0) - (order.quantityRefunded || 0)
-                    case "quantityRefunded": return order.quantityRefunded || 0
-                    case "subtotalValue": return ((order.subtotalCents || 0) / 100).toFixed(2)
-                    case "refundValue": return ((order.refundAmountCents || 0) / 100).toFixed(2)
-                    case "netTotalValue": return (((order.totalCents || 0) - (order.refundAmountCents || 0)) / 100).toFixed(2)
-                    default: return "-"
-                }
-            }))
+            const rows = buildOrderReportExportRows(exportOrders, exportLayoutOptions)
 
             if (format === 'pdf') {
                 const doc = new jsPDF('landscape')

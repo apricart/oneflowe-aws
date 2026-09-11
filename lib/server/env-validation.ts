@@ -46,6 +46,19 @@ function optionalValue(name: string) {
   return requiredValue(name).optional()
 }
 
+function optionalBoolean(name: string, fallback = false) {
+  return z.preprocess((value) => {
+    if (value === undefined) return fallback
+    if (typeof value === 'boolean') return value
+    if (typeof value !== 'string') return value
+
+    const normalized = value.trim().toLowerCase()
+    if (normalized === 'true' || normalized === '1') return true
+    if (normalized === 'false' || normalized === '0') return false
+    return value
+  }, z.boolean({ error: `${name} must be true or false` }))
+}
+
 function requiredSecret(name: string, minimumLength = 32) {
   return requiredValue(name).min(
     minimumLength,
@@ -127,6 +140,52 @@ const databaseRuntimeShape = {
   ),
 } as const
 
+function validateRedisRuntime(
+  values: {
+    NODE_ENV: 'development' | 'test' | 'production'
+    ONEFLOWE_OFFLINE_MODE: boolean
+    UPSTASH_REDIS_REST_URL?: string
+    UPSTASH_REDIS_REST_TOKEN?: string
+  },
+  context: z.RefinementCtx,
+) {
+  if (values.ONEFLOWE_OFFLINE_MODE && values.NODE_ENV !== 'development') {
+    context.addIssue({
+      code: 'custom',
+      path: ['ONEFLOWE_OFFLINE_MODE'],
+      message: 'ONEFLOWE_OFFLINE_MODE is allowed only in development',
+    })
+  }
+
+  if (!values.ONEFLOWE_OFFLINE_MODE && !values.UPSTASH_REDIS_REST_URL) {
+    context.addIssue({
+      code: 'custom',
+      path: ['UPSTASH_REDIS_REST_URL'],
+      message: 'UPSTASH_REDIS_REST_URL is required unless offline mode is enabled',
+    })
+  }
+
+  if (!values.ONEFLOWE_OFFLINE_MODE && !values.UPSTASH_REDIS_REST_TOKEN) {
+    context.addIssue({
+      code: 'custom',
+      path: ['UPSTASH_REDIS_REST_TOKEN'],
+      message: 'UPSTASH_REDIS_REST_TOKEN is required unless offline mode is enabled',
+    })
+  }
+
+  if (
+    values.NODE_ENV === 'production' &&
+    values.UPSTASH_REDIS_REST_URL &&
+    new URL(values.UPSTASH_REDIS_REST_URL).protocol !== 'https:'
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['UPSTASH_REDIS_REST_URL'],
+      message: 'UPSTASH_REDIS_REST_URL must use HTTPS in production',
+    })
+  }
+}
+
 const serverEnvSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -135,8 +194,9 @@ const serverEnvSchema = z
     NEXTAUTH_URL: httpUrl('NEXTAUTH_URL'),
     NEXTAUTH_SECRET: requiredSecret('NEXTAUTH_SECRET'),
 
-    UPSTASH_REDIS_REST_URL: httpUrl('UPSTASH_REDIS_REST_URL'),
-    UPSTASH_REDIS_REST_TOKEN: requiredSecret('UPSTASH_REDIS_REST_TOKEN'),
+    ONEFLOWE_OFFLINE_MODE: optionalBoolean('ONEFLOWE_OFFLINE_MODE'),
+    UPSTASH_REDIS_REST_URL: httpUrl('UPSTASH_REDIS_REST_URL').optional(),
+    UPSTASH_REDIS_REST_TOKEN: requiredSecret('UPSTASH_REDIS_REST_TOKEN').optional(),
 
     CRON_SECRET: requiredSecret('CRON_SECRET'),
 
@@ -175,10 +235,11 @@ const serverEnvSchema = z
       1,
     ),
 
-    // Per-account lockout bounds. The accepted ranges deliberately exclude
-    // values weaker than PCI DSS 8.3.4 (at most ten attempts, at least a
-    // thirty-minute lockout), so a misconfigured secret store cannot relax
-    // the control the way a plain default would.
+    // Per-account lockout bounds. Values outside the accepted range are
+    // rejected at startup, so a misconfigured secret store cannot relax the
+    // control the way a plain default would. The bounds themselves, and the
+    // deliberate five-minute duration floor that departs from PCI DSS 8.3.4,
+    // are documented in `@/lib/auth-lockout-policy`.
     AUTH_LOCKOUT_THRESHOLD: optionalInteger(
       'AUTH_LOCKOUT_THRESHOLD',
       LOCKOUT_THRESHOLD_MIN,
@@ -189,7 +250,7 @@ const serverEnvSchema = z
       'AUTH_LOCKOUT_DURATION_MINUTES',
       LOCKOUT_DURATION_MINUTES_MIN,
       LOCKOUT_DURATION_MINUTES_MAX,
-      30,
+      5,
     ),
 
     ORDER_TOKEN_ADMIN_EMAIL: z
@@ -209,6 +270,8 @@ const serverEnvSchema = z
     S3_UPLOADS_BUCKET: optionalValue('S3_UPLOADS_BUCKET'),
   })
   .superRefine((values, context) => {
+    validateRedisRuntime(values, context)
+
     const sesConfigured = Boolean(
       values.SES_FROM_EMAIL || values.SES_CONFIGURATION_SET,
     )
@@ -240,7 +303,6 @@ const serverEnvSchema = z
 
     if (values.NODE_ENV === 'production') {
       const nextAuthUrl = new URL(values.NEXTAUTH_URL)
-      const redisUrl = new URL(values.UPSTASH_REDIS_REST_URL)
 
       if (nextAuthUrl.protocol !== 'https:') {
         context.addIssue({
@@ -250,13 +312,6 @@ const serverEnvSchema = z
         })
       }
 
-      if (redisUrl.protocol !== 'https:') {
-        context.addIssue({
-          code: 'custom',
-          path: ['UPSTASH_REDIS_REST_URL'],
-          message: 'UPSTASH_REDIS_REST_URL must use HTTPS in production',
-        })
-      }
     }
   })
   .transform((values) => ({

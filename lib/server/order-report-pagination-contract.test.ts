@@ -44,7 +44,9 @@ describe("order-report pagination contract", () => {
 
     expect(page).toContain('exportParams.set("limit", "100")')
     expect(page).toContain("for (let page = 2; page <= totalPages; page += exportConcurrency)")
-    expect(page).toContain("const rows = exportOrders.map")
+    // The row builder is handed the whole accumulated set, not the page the
+    // table happens to be showing.
+    expect(page).toContain("const rows = buildOrderReportExportRows(exportOrders, exportLayoutOptions)")
     expect(page).not.toContain("const rows = filteredOrders.map")
     expect(route).toContain(".orderBy(desc(orders.createdAt), desc(orders.id))")
     expect(route).toContain('url.searchParams.get("ordersOnly") === "true"')

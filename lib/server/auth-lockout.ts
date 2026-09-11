@@ -5,6 +5,7 @@ import { employeeCredentials, users } from "@/db/schema"
 import { db } from "@/lib/db"
 import { env } from "@/lib/server/env"
 import type { LockoutPrincipal } from "@/lib/auth-lockout-policy"
+import { isBruteForceProtectionEnforced } from "@/lib/auth-brute-force-mode"
 
 /**
  * Database-backed per-account brute-force lockout (PCI DSS 8.3.4).
@@ -63,6 +64,19 @@ export async function registerFailedLogin(
   principal: LockoutPrincipal,
   now: Date = new Date(),
 ): Promise<FailedLoginResult> {
+  // On the local development server the attempt is not counted at all, rather
+  // than counted and forgiven: a stored counter would otherwise survive into a
+  // later run against the same database and lock the account there. The caller
+  // still audits the failed attempt -- only the lockout budget is skipped.
+  if (!isBruteForceProtectionEnforced(env.NODE_ENV)) {
+    return {
+      lockedNow: false,
+      lockoutUntil: null,
+      attempts: 0,
+      threshold: LOCKOUT_THRESHOLD,
+    }
+  }
+
   const lockUntil = new Date(now.getTime() + LOCKOUT_DURATION_MS)
 
   if (principal.kind === "user") {
