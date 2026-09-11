@@ -203,7 +203,7 @@ async function main(): Promise<void> {
 
     const workbook = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(sanitizeSpreadsheetRecords(results)), "Results")
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(sanitizeSpreadsheetRecords(
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(sanitizeSpreadsheetRecords<Record<string, unknown>>(
       notInHandout.length > 0
         ? notInHandout.map((a) => ({ Username: a.username, Name: a.fullName ?? "", Role: a.role,
             Branch: a.branch ?? "", Active: a.isActive ? "Yes" : "No" }))

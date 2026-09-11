@@ -331,13 +331,13 @@ function writeExcel(path: string, loaded: LoadedPlan, mode: string): void {
 
   const empty = (message: string) => [{ Result: message }]
   const workbook = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(sanitizeSpreadsheetRecords(
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(sanitizeSpreadsheetRecords<Record<string, unknown>>(
     planned.length > 0 ? planned : empty("Nothing to change"))), mode === "COMMITTED" ? "Applied" : "Planned")
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(sanitizeSpreadsheetRecords(
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(sanitizeSpreadsheetRecords<Record<string, unknown>>(
     blocked.length > 0 ? blocked : empty("Every hand-out row was aligned"))), "Blocked")
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(sanitizeSpreadsheetRecords(
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(sanitizeSpreadsheetRecords<Record<string, unknown>>(
     remaining.length > 0 ? remaining : empty("Nothing left alone"))), "Left alone")
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(sanitizeSpreadsheetRecords(
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(sanitizeSpreadsheetRecords<Record<string, unknown>>(
     notInHandout.length > 0 ? notInHandout : empty("Every account appears in the hand-out"))), "Not in handout")
   mkdirSync(dirname(path), { recursive: true })
   XLSX.writeFile(workbook, path)
