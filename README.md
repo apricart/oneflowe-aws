@@ -36,7 +36,23 @@ Continue building your app on:
 
 ## Local Development
 
-- Start the dev server with Turbopack for faster compile times:
+- Keep PostgreSQL running in Docker, but run Next.js directly on Windows. Next.js
+  documents that Docker bind mounts make development and hot reload much slower
+  on Windows and macOS.
+
+- For a fully offline run, set these local-only values in `.env.development.local`:
+
+  ```dotenv
+  ONEFLOWE_OFFLINE_MODE=true
+  PASSWORD_HASHER=bcryptjs
+  ```
+
+  Offline mode replaces cloud Upstash calls with a process-local Redis-compatible
+  store. It is rejected automatically in test and production environments. The
+  `bcryptjs` setting avoids the native backend's one-time compatibility self-test
+  during the first local login.
+
+- Start the host dev server with Turbopack (the Next.js 16 default):
 
   ```bash
   npm run dev
@@ -47,6 +63,11 @@ Continue building your app on:
   ```bash
   npm run dev:legacy
   ```
+
+The application connects directly to PostgreSQL on the `DATABASE_URL`; it does
+not use Supabase Auth, Realtime, Storage, Analytics, or Studio at runtime. Those
+extra local containers may be stopped when they are not needed, leaving the
+Supabase database container running.
 
 ## How It Works
 

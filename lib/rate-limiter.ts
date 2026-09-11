@@ -8,6 +8,7 @@ import { NextResponse } from "next/server"
 import { headers } from "next/headers"
 import { env } from "@/lib/server/env"
 import { resolveTrustedClientIp } from "@/lib/security/client-ip"
+import { isBruteForceProtectionEnforced } from "@/lib/auth-brute-force-mode"
 
 // Rate limit configurations for different endpoint types
 const RATE_LIMITS = {
@@ -105,21 +106,50 @@ export async function getClientIdentifier(userId?: string): Promise<string> {
  * Check rate limit for a given identifier and type
  * Returns whether the request is allowed and remaining requests
  */
+type RateLimitResult = { allowed: boolean; remaining: number; resetIn: number }
+
+/** A full budget, for the cases that skip Redis entirely. */
+function unlimitedResult(type: RateLimitType): RateLimitResult {
+    const config = RATE_LIMITS[type] || RATE_LIMITS.api
+    return {
+        allowed: true,
+        remaining: config.requests,
+        resetIn: config.windowSeconds,
+    }
+}
+
+/**
+ * The two cases that skip the limiter outright, kept together so the exemptions
+ * are enumerated in one place rather than accumulating inside `checkRateLimit`.
+ * Returns null when the limiter applies normally.
+ *
+ * Neither case can fire in a production runtime: `next build` sets
+ * NODE_ENV=production, which fails the first condition and satisfies
+ * `isBruteForceProtectionEnforced` in the second.
+ */
+function resolveRateLimitBypass(type: RateLimitType): RateLimitResult | null {
+    // Browser E2E runs use isolated users and an isolated test database. Avoid
+    // coupling those local runs to a shared Upstash instance.
+    if (env.NODE_ENV !== "production" && process.env.E2E_TESTING === "1") {
+        return unlimitedResult(type)
+    }
+
+    // The sign-in limiter is skipped on the local development server only, so a
+    // developer retyping a seeded demo password is never thrown a 429. Only the
+    // `login` budget is exempt -- the OTP, upload and import limiters are not.
+    if (type === "login" && !isBruteForceProtectionEnforced(env.NODE_ENV)) {
+        return unlimitedResult("login")
+    }
+
+    return null
+}
+
 export async function checkRateLimit(
     identifier: string,
     type: RateLimitType = "api"
-): Promise<{ allowed: boolean; remaining: number; resetIn: number }> {
-    // Browser E2E runs use isolated users and an isolated test database. Avoid
-    // coupling those local runs to a shared Upstash instance. This can never
-    // disable rate limiting in a production runtime.
-    if (env.NODE_ENV !== "production" && process.env.E2E_TESTING === "1") {
-        const config = RATE_LIMITS[type] || RATE_LIMITS.api
-        return {
-            allowed: true,
-            remaining: config.requests,
-            resetIn: config.windowSeconds,
-        }
-    }
+): Promise<RateLimitResult> {
+    const bypass = resolveRateLimitBypass(type)
+    if (bypass) return bypass
 
     try {
         // Validate inputs

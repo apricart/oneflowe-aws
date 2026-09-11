@@ -7,6 +7,7 @@ import { and, eq, gte, lte, inArray, desc, isNull, sql, exists, or, isNotNull } 
 import { getCached, scopedCacheKey, CACHE_TTL } from "@/lib/cache-utils"
 import { redactAnalyticsPrices, shouldHidePricesForRole } from "@/lib/price-visibility"
 import { parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
+import { resolveEffectivePriceCents } from "@/lib/server/effective-price"
 
 function positiveIds(raw: string | null, minimum = 0): number[] {
     return raw?.split(',').map(Number).filter((value) => !Number.isNaN(value) && value > minimum) ?? []
@@ -218,7 +219,12 @@ export async function GET(req: NextRequest) {
                     // Revenue below comes from `order_items.price_cents`, the
                     // snapshot of what was actually charged, so the group tier
                     // is already reflected in every money figure.
-                    unitPriceCents: p.customPrice || p.basePrice,
+                    // Nullish, never falsy: an organization price of 0 is a
+                    // price and must not fall through to the base price.
+                    unitPriceCents: resolveEffectivePriceCents({
+                        organizationPriceCents: p.customPrice,
+                        basePriceCents: p.basePrice,
+                    }) ?? 0,
                     stockQuantity: p.stockQuantity,
                     categoryName: catInfo?.name || "Uncategorized",
                     subCategoryName: parentCatInfo ? catInfo?.name : "",

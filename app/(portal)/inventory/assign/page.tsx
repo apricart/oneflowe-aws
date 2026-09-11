@@ -2,6 +2,7 @@
 
 import { OrganizationPricePropagationDialog, type PropagationChoice } from "@/components/admin/organization-price-propagation-dialog"
 import { useAppContext } from "@/components/context/app-context"
+import { ProductNameCell } from "@/components/inventory/product-name-cell"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card,CardContent,CardHeader,CardTitle } from "@/components/ui/card"
@@ -364,20 +365,10 @@ export default function AssignProductPage() {
                                                 filteredNotAssigned.map((product) => (
                                                     <TableRow key={product.id} className="hover:bg-muted/40">
                                                         <TableCell>
-                                                            <div className="flex items-center gap-3">
-                                                                {product.imageUrl ? (
-                                                                    <img
-                                                                        src={product.imageUrl}
-                                                                        alt={product.name}
-                                                                        className="h-10 w-10 rounded-lg border object-cover"
-                                                                    />
-                                                                ) : (
-                                                                    <div className="flex h-10 w-10 items-center justify-center rounded-lg border bg-muted/40">
-                                                                        <Package className="h-4 w-4 text-muted-foreground" />
-                                                                    </div>
-                                                                )}
-                                                                <span className="font-medium">{product.name}</span>
-                                                            </div>
+                                                            <ProductNameCell
+                                                                name={product.name}
+                                                                imageUrl={product.imageUrl}
+                                                            />
                                                         </TableCell>
                                                         <TableCell>
                                                             <Badge variant="outline" className="bg-indigo-50 text-indigo-700 border-indigo-200">
@@ -446,20 +437,10 @@ export default function AssignProductPage() {
                                                 filteredAssigned.map((assignment) => (
                                                     <TableRow key={assignment.id} className="hover:bg-muted/40">
                                                         <TableCell>
-                                                            <div className="flex items-center gap-3">
-                                                                {assignment.productImageUrl ? (
-                                                                    <img
-                                                                        src={assignment.productImageUrl}
-                                                                        alt={assignment.productName}
-                                                                        className="h-10 w-10 rounded-lg border object-cover"
-                                                                    />
-                                                                ) : (
-                                                                    <div className="flex h-10 w-10 items-center justify-center rounded-lg border bg-muted/40">
-                                                                        <Package className="h-4 w-4 text-muted-foreground" />
-                                                                    </div>
-                                                                )}
-                                                                <span className="font-medium">{assignment.customName || assignment.productName}</span>
-                                                            </div>
+                                                            <ProductNameCell
+                                                                name={assignment.customName || assignment.productName}
+                                                                imageUrl={assignment.productImageUrl}
+                                                            />
                                                         </TableCell>
                                                         <TableCell>
                                                             <Badge variant="outline" className="bg-indigo-50 text-indigo-700 border-indigo-200">

@@ -10,6 +10,7 @@ const connection = createDatabaseConnection({
   idleTimeoutMs: env.PGPOOL_IDLE_MS,
   connectionTimeoutMs: env.PGPOOL_CONN_TIMEOUT_MS,
   statementTimeoutMs: env.PG_STATEMENT_TIMEOUT_MS,
+  logQueries: !env.ONEFLOWE_OFFLINE_MODE,
 })
 
 export const db = connection.db

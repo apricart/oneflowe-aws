@@ -32,11 +32,11 @@ import { BranchFilter } from "@/components/reports/branch-filter"
 import { GroupFilter } from "@/components/reports/group-filter"
 import {
   getOrderFulfillmentVariant,
-  getOrderRefundVariant,
   getOrderStatusFilter,
   type OrderSplitFilter,
   type OrderStatusFilter,
 } from "@/lib/order-status"
+import { selectOrdersForListView } from "@/lib/order-list-view"
 
 type DateRange = {
   startDate: Date
@@ -47,6 +47,10 @@ const getDefaultDateRange = (): DateRange => ({
   endDate: endOfDay(new Date()),
 })
 const ORDERS_PAGE_SIZE = 25
+// The export walks the same query a page at a time. 200 is the list endpoint's
+// own default page size and well inside its cap of 500.
+const ORDERS_EXPORT_PAGE_SIZE = 200
+const ORDERS_EXPORT_CONCURRENCY = 4
 
 const fetcher = (url: string) => fetch(url).then(r => r.json())
 
@@ -76,6 +80,8 @@ interface OrderItem {
   rejectionReason?: string | null
   itemNames?: string | null
   approvalToken?: string | null
+  /** Derived server-side: the order came from a Group Order Portal submission. */
+  placedByGroupPortal?: boolean
 }
 
 export default function OrdersManagementPage() {
@@ -170,8 +176,9 @@ function OrdersManagementContent() {
     setCurrentPage(1)
   }, [organizationId, branchId, branchIds])
 
-  // Build orders endpoint with context parameters
-  const ordersEndpoint = useMemo(() => {
+  // The active filters, without paging. The screen appends its own page and the
+  // export walks every page of the same query, so both describe the same scope.
+  const ordersQuery = useMemo<string | null>(() => {
     if (!isInitialized) return null
     const params = new URLSearchParams()
     if (organizationId && organizationId !== "null" && organizationId !== "0") {
@@ -227,11 +234,16 @@ function OrdersManagementContent() {
       params.set("q", debouncedSearchQuery)
     }
 
+    return params.toString()
+  }, [organizationId, branchId, branchIds, reportBranchIds, reportGroupIds, dateRange, selectedMonths, selectedYears, statusFilter, isInitialized, debouncedSearchQuery])
+
+  const ordersEndpoint = useMemo(() => {
+    if (ordersQuery === null) return null
+    const params = new URLSearchParams(ordersQuery)
     params.set("page", currentPage.toString())
     params.set("limit", ORDERS_PAGE_SIZE.toString())
-
-    return `/api/v1/orders${params.toString() ? ("?" + String(params.toString())) : ""}`
-  }, [organizationId, branchId, branchIds, reportBranchIds, reportGroupIds, dateRange, selectedMonths, selectedYears, statusFilter, isInitialized, debouncedSearchQuery, currentPage])
+    return `/api/v1/orders?${params.toString()}`
+  }, [ordersQuery, currentPage])
 
   // Fetch orders scoped by context
   const { data: ordersData, mutate: mutateOrders, isValidating } = useSWR<any>(
@@ -254,38 +266,43 @@ function OrdersManagementContent() {
   }, [showSplitFilter, splitFilter])
 
   // Filter and search orders
-  const filteredOrders = useMemo(() => {
-    let filtered = orders
+  const filteredOrders = useMemo(
+    () => selectOrdersForListView<OrderItem>(orders, { statusFilter, splitFilter }),
+    [orders, splitFilter, statusFilter],
+  )
 
-    if (statusFilter !== "all") {
-      if (statusFilter === "refunded") {
-        filtered = filtered.filter((o: OrderItem) => o.status.toLowerCase() === "refunded")
-      } else if (statusFilter === "fulfilled") {
-        filtered = filtered.filter((o: OrderItem) => getOrderFulfillmentVariant(o) !== "none")
-      } else if (statusFilter === "rejected") {
-        filtered = filtered.filter((o: OrderItem) =>
-          o.status.toLowerCase() === "rejected" || o.status.toLowerCase() === "cancelled"
-        )
-      } else {
-        filtered = filtered.filter((o: OrderItem) => o.status.toLowerCase() === statusFilter)
-      }
+  // Export covers the whole filtered scope, not the page on screen. The list is
+  // paginated, so this walks every page of the same query and narrows the
+  // result with the selector the table itself uses.
+  const fetchAllFilteredOrders = useCallback(async (): Promise<OrderItem[]> => {
+    if (ordersQuery === null) return []
+
+    const requestPage = async (page: number) => {
+      const params = new URLSearchParams(ordersQuery)
+      params.set("page", page.toString())
+      params.set("limit", ORDERS_EXPORT_PAGE_SIZE.toString())
+      const response = await fetch(`/api/v1/orders?${params.toString()}`)
+      if (!response.ok) throw new Error(`Export request failed (${response.status})`)
+      const data = await response.json()
+      if (data?.error) throw new Error(data.error)
+      return data
     }
 
-    if (showSplitFilter && splitFilter !== "all") {
-      filtered = filtered.filter((o: OrderItem) => {
-        const variant = statusFilter === "refunded"
-          ? getOrderRefundVariant(o)
-          : getOrderFulfillmentVariant(o)
+    const firstPage = await requestPage(1)
+    const collected: OrderItem[] = [...(firstPage?.items || [])]
+    const totalPages = Math.max(1, Number(firstPage?.pagination?.totalPages) || 1)
 
-        return variant === splitFilter
-      })
+    for (let page = 2; page <= totalPages; page += ORDERS_EXPORT_CONCURRENCY) {
+      const pageNumbers = Array.from(
+        { length: Math.min(ORDERS_EXPORT_CONCURRENCY, totalPages - page + 1) },
+        (_, index) => page + index,
+      )
+      const pages = await Promise.all(pageNumbers.map(requestPage))
+      pages.forEach((data) => collected.push(...(data?.items || [])))
     }
 
-
-    return filtered.sort((a: OrderItem, b: OrderItem) =>
-      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    )
-  }, [orders, showSplitFilter, splitFilter, statusFilter])
+    return selectOrdersForListView<OrderItem>(collected, { statusFilter, splitFilter })
+  }, [ordersQuery, splitFilter, statusFilter])
 
   // Approve order
 
@@ -499,7 +516,8 @@ function OrdersManagementContent() {
 
                 <div className="h-6 w-px bg-slate-200 dark:bg-slate-800 mx-1" />
                 <OrderExport
-                  orders={filteredOrders}
+                  fetchOrders={fetchAllFilteredOrders}
+                  totalOrders={totalOrders}
                   role={userRole}
                   statusContext={showSplitFilter ? statusFilter : "default"}
                 />

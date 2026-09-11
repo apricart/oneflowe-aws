@@ -88,10 +88,13 @@ describe("tenant scoping is unchanged", () => {
     expect(source).toContain("eq(branchInventory.organizationId, context.organizationId)")
   })
 
-  it("keeps order editing pinned to the creator's own pending order", () => {
+  it("keeps order editing pinned to the branch that owns the order", () => {
     const source = read(ORDER_EDIT)
-    expect(source).toContain("eq(orders.createdByUserId, user.id)")
+    // The order is located by tenant, then authorized against the actor's
+    // branch set; the branch it belongs to is what the reservations move.
     expect(source).toContain("eq(orders.organizationId, organizationId)")
-    expect(source).toContain("eq(orders.branchId, branchId)")
+    expect(source).toContain("canRequesterEditOrder")
+    expect(source).toContain("branchId: access.existingOrder.branchId")
+    expect(source).toContain("eq(orders.branchId, context.branchId)")
   })
 })

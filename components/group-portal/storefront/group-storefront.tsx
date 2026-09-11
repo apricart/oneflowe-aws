@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useSession } from "next-auth/react"
 import useSWR from "swr"
-import { AlertTriangle, Grid, History, Loader2, RotateCcw } from "lucide-react"
+import { AlertTriangle, Grid, History, Loader2, Package, RotateCcw } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -15,6 +15,7 @@ import { formatQuantity } from "@/lib/quantity"
 
 import { GroupOrderHistory } from "../group-order-history"
 import { GroupRefundHistory } from "../group-refund-history"
+import { OtherBranchOrders } from "../other-branch-orders"
 import {
   MAX_ENTRIES,
   applyQuantityToBranchPlans,
@@ -51,7 +52,7 @@ import { useStorefrontDraft, type StorefrontDraft } from "./use-storefront-draft
 type GroupsResponse = { items: ScopedGroup[]; autoSelectGroupId?: number | null }
 type ScopeResponse = { item?: { organization: { id: number; name: string } | null } }
 
-type StorefrontTab = "shop" | "orders" | "refunds"
+type StorefrontTab = "shop" | "orders" | "other" | "refunds"
 
 /** Stable id for a submitted entry. Client-only; never sent to the server. */
 function newEntryKey(): string {
@@ -596,6 +597,15 @@ function StorefrontBody({
         </Button>
         <Button
           type="button"
+          onClick={() => onTabChange("other")}
+          variant={tab === "other" ? "default" : "outline"}
+          className="gap-2"
+        >
+          <Package className="h-4 w-4" />
+          Other orders
+        </Button>
+        <Button
+          type="button"
           onClick={() => onTabChange("refunds")}
           variant={tab === "refunds" ? "default" : "outline"}
           className="gap-2"
@@ -615,6 +625,9 @@ function StorefrontBody({
         />
       )}
       {tab === "orders" && <GroupOrderHistory />}
+      {/* What the assigned branches raised for themselves. Read-only: every
+          write on such an order stays with the person who placed it. */}
+      {tab === "other" && <OtherBranchOrders />}
       {tab === "refunds" && <GroupRefundHistory />}
     </>
   )

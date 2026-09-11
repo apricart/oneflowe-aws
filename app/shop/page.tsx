@@ -1,5 +1,6 @@
 "use client"
 import React,{ useMemo,useState } from "react"
+import Link from "next/link"
 import { formatPKR,cn } from "@/lib/utils"
 import { calculateLineCents,formatQuantity,parseQuantity,roundQuantity,sanitizeQuantityStep } from "@/lib/quantity"
 import useSWR from "swr"
@@ -13,7 +14,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Dialog,DialogContent,DialogHeader,DialogTitle,DialogFooter,DialogDescription } from "@/components/ui/dialog"
-import { ShoppingBag,Search,Plus,Minus,Trash2,Home,CheckCircle,Clock,AlertTriangle,DollarSign,Zap,Package,TrendingDown,Grid,LogOut,ArrowRight,ArrowLeft,Calendar,MapPin,RefreshCw,Building2,Copy,Send,Pencil,Loader2,ArrowDownUp,X,SlidersHorizontal } from "lucide-react"
+import { ShoppingBag,Search,Plus,Minus,Trash2,Home,CheckCircle,Clock,AlertTriangle,DollarSign,Zap,Package,TrendingDown,Grid,LogOut,ArrowRight,ArrowLeft,Calendar,MapPin,RefreshCw,Building2,Copy,Send,Pencil,Loader2,ArrowDownUp,X,SlidersHorizontal,LifeBuoy } from "lucide-react"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from "@/components/ui/select"
 import { CategoryFilter } from "@/components/shop/category-filter"
@@ -129,6 +130,13 @@ interface Order {
   poNumber?: string | null
   statusAtRefund?: string | null
   approvalToken?: string | null
+  /**
+   * True when this order reached the branch through a Group Order Portal
+   * submission rather than being raised here. Such an order is listed because
+   * it spends this branch's budget, but it belongs to the person who raised it:
+   * it is read-only from the store.
+   */
+  placedByGroupPortal?: boolean
   orderItems?: OrderItem[]
 }
 
@@ -392,13 +400,11 @@ export default function OrderPortalPage() {
 
       toast({
         title: data?.fulfilled ? "Token sent — order fulfilled" : "Token sent",
-        description: data?.fulfilled
-          ? "Fulfillment token emailed to the admin. Your order is now marked fulfilled."
-          : "Fulfillment token emailed to the admin.",
+        description: data?.message || "Fulfillment token emailed to the admin.",
       })
 
-      // Sending the token settles the order, so the open detail and the order
-      // list behind it are refreshed rather than left showing it as approved.
+      // Sending the token settles the order only once it has been delivered,
+      // so the open detail and the list behind it are refreshed when it did.
       if (data?.fulfilled) {
         setSelectedOrder((current) => (
           current ? { ...current, status: "FULFILLED" } : current
@@ -1087,6 +1093,14 @@ export default function OrderPortalPage() {
 
             {isOrderPortal && <NotificationBell />}
 
+            {/* The direct channel to Apricart. Shared with every other portal,
+                which is why it lives at /support rather than under /shop. */}
+            <Button asChild variant="ghost" size="icon" title="Support - raise a query with Apricart">
+              <Link href="/support">
+                <LifeBuoy className="h-4 w-4" />
+              </Link>
+            </Button>
+
             {/* Cart Button */}
             <Button
               onClick={() => setShowCart(!showCart)}
@@ -1442,6 +1456,15 @@ export default function OrderPortalPage() {
                               {['FULFILLED', 'PARTIAL', 'PARTIALLY_FULFILLED'].includes(order.status?.toUpperCase()) && Number(order.refundAmountCents || 0) > 0 && (
                                 <Badge variant="outline" className="px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400">
                                   Partial Refund
+                                </Badge>
+                              )}
+                              {order.placedByGroupPortal && (
+                                <Badge
+                                  variant="outline"
+                                  title="Raised for this branch through the Group Order Portal"
+                                  className="px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider rounded-lg border border-indigo-300 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400"
+                                >
+                                  Group Order
                                 </Badge>
                               )}
                             </div>
@@ -2467,7 +2490,11 @@ export default function OrderPortalPage() {
                 orderStatus={selectedOrder.status}
                 orderFulfillmentStatus={selectedOrder.fulfillmentStatus}
                 createdAt={selectedOrder.createdAt}
-                allowRefundRequest={["HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL"].includes(userRole)}
+                // The branch owns its orders, so a requester may claim on a
+                // group order raised for its branch as well as on its own.
+                allowRefundRequest={
+                  ["HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL"].includes(userRole)
+                }
                 requesterRole={userRole}
                 pricesHidden={pricesHidden}
                 initialOrderItems={orderDetailsData?.items?.[0]?.orderItems || selectedOrder.orderItems || []}

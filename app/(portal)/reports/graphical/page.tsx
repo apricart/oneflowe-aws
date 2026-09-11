@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { useSession } from "next-auth/react"
-import { BarChart3, Compass, LayoutDashboard, ShieldAlert } from "lucide-react"
+import { BarChart3, Compass, LayoutDashboard, LayoutGrid, ShieldAlert } from "lucide-react"
 
 import { Card, CardContent } from "@/components/ui/card"
 import { useAPI } from "@/lib/hooks/use-api"
@@ -19,6 +19,7 @@ import {
   type ExecutiveFilterState,
 } from "@/components/reports/executive/executive-filters"
 import { ExploreWorkspace } from "@/components/reports/executive/explore-workspace"
+import { SideBySideWorkspace } from "@/components/reports/executive/side-by-side-workspace"
 import {
   AttentionList,
   KpiRow,
@@ -72,6 +73,19 @@ type OverviewResponse = {
 }
 
 /**
+ * The three levels of the Center, in the order a reader moves through them:
+ * what is happening, then how these things compare side by side, then an
+ * open-ended question of their own.
+ */
+type AnalyticsTab = "overview" | "side-by-side" | "explore"
+
+const ANALYTICS_TABS = [
+  { id: "overview", label: "Executive Overview", icon: LayoutDashboard },
+  { id: "side-by-side", label: "Compare Side by Side", icon: LayoutGrid },
+  { id: "explore", label: "Explore & Compare", icon: Compass },
+] as const satisfies ReadonlyArray<{ id: AnalyticsTab; label: string; icon: typeof LayoutDashboard }>
+
+/**
  * The opening range comes from the same function the date control uses to
  * highlight a button, so the two cannot disagree. They previously did: the page
  * opened on six months while the control claimed "This Month".
@@ -91,7 +105,7 @@ export default function GraphicalReportsPage() {
   const role = ((session?.user as { role?: string } | undefined)?.role || "").toUpperCase()
   const authorized = (EXECUTIVE_ANALYTICS_ROLES as readonly string[]).includes(role)
 
-  const [tab, setTab] = React.useState<"overview" | "explore">("overview")
+  const [tab, setTab] = React.useState<AnalyticsTab>("overview")
   const [filters, setFilters] = React.useState<ExecutiveFilterState>(defaultFilters)
   const [priceProduct, setPriceProduct] = React.useState<{ productId: number; unit: string; name?: string } | null>(null)
 
@@ -156,16 +170,14 @@ export default function GraphicalReportsPage() {
             Graphical Reports
           </h1>
           <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-            Executive procurement analytics — budget position, branch comparison, cost drivers and exceptions.
+            Executive procurement analytics — budget position, side-by-side comparison across people, branches and
+            months, and the order lines behind any figure.
             {data ? ` Covering ${data.scope.branchCount} branch${data.scope.branchCount === 1 ? "" : "es"} in your scope.` : ""}
           </p>
         </div>
 
         <div role="tablist" aria-label="Analytics level" className="flex items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 p-1 dark:border-slate-700 dark:bg-slate-800/60">
-          {([
-            { id: "overview", label: "Executive Overview", icon: LayoutDashboard },
-            { id: "explore", label: "Explore & Compare", icon: Compass },
-          ] as const).map((entry) => (
+          {ANALYTICS_TABS.map((entry) => (
             <button
               key={entry.id}
               type="button"
@@ -274,13 +286,17 @@ export default function GraphicalReportsPage() {
             />
           </div>
         </div>
-      ) : (
+      ) : null}
+
+      {tab === "side-by-side" ? <SideBySideWorkspace filters={filters} /> : null}
+
+      {tab === "explore" ? (
         <ExploreWorkspace
           filters={filters}
           priceProduct={priceProduct}
           onClearPriceProduct={() => setPriceProduct(null)}
         />
-      )}
+      ) : null}
     </div>
   )
 }

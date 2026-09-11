@@ -9,7 +9,15 @@ import { buildAppMonthPeriods } from "@/lib/date-range-params"
 import { REVENUE_ELIGIBLE_FILTER, metricExpressions } from "@/lib/metric-utils"
 import type { ExecutiveScope } from "@/lib/server/executive-analytics-scope"
 import type { ExecutiveDimensionId, ExecutiveMetricId } from "@/lib/executive-analytics"
-import { EXECUTIVE_METRICS, resolveGrain, safeDivide } from "@/lib/executive-analytics"
+import {
+  EXECUTIVE_METRICS,
+  MAX_TIME_AXIS_POINTS,
+  isTimeAxisDimension,
+  resolveDrillDownSort,
+  resolveGrain,
+  safeDivide,
+  type DrillDownSortKey,
+} from "@/lib/executive-analytics"
 
 /**
  * The aggregation layer behind the Executive Analytics Center.
@@ -319,7 +327,7 @@ export type OrderGrainRow = {
  */
 type DimensionColumn = { key: any; label: any; group: any[] }
 
-const ENTITY_DIMENSION_COLUMNS: Record<Exclude<ExecutiveDimensionId, "category" | "product" | "month">, DimensionColumn> = {
+const ENTITY_DIMENSION_COLUMNS: Record<Exclude<ExecutiveDimensionId, "category" | "product" | "month" | "day">, DimensionColumn> = {
   branch: {
     key: sql<string>`${orders.branchId}::text`,
     label: sql<string>`COALESCE(${branches.name}, 'Unassigned')`,
@@ -344,10 +352,31 @@ const ENTITY_DIMENSION_COLUMNS: Record<Exclude<ExecutiveDimensionId, "category" 
   },
 }
 
+/**
+ * `orders.created_at` read in the application timezone.
+ *
+ * Every other analytics route in the application buckets through this same
+ * expression (`weekly-sales`, `yearly-sales`, `sales-performance`,
+ * `organization-stats`), and the budget periods in this very file come from
+ * `buildAppMonthPeriods`, which is Asia/Karachi. Bucketing orders in the
+ * database session zone instead put every order placed between midnight and
+ * 05:00 local into the previous day — and, on the first of a month, the
+ * previous month — so the month comparison and the budget it was being read
+ * against disagreed at every boundary. It matters far more at day grain, where
+ * five hours is a fifth of the bucket.
+ */
+const APP_LOCAL_CREATED_AT = sql`((${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi')`
+
 const MONTH_DIMENSION_COLUMN: DimensionColumn = {
-  key: sql<string>`TO_CHAR(${orders.createdAt}, 'YYYY-MM')`,
-  label: sql<string>`TO_CHAR(${orders.createdAt}, 'YYYY-MM')`,
-  group: [sql`TO_CHAR(${orders.createdAt}, 'YYYY-MM')`],
+  key: sql<string>`TO_CHAR(${APP_LOCAL_CREATED_AT}, 'YYYY-MM')`,
+  label: sql<string>`TO_CHAR(${APP_LOCAL_CREATED_AT}, 'YYYY-MM')`,
+  group: [sql`TO_CHAR(${APP_LOCAL_CREATED_AT}, 'YYYY-MM')`],
+}
+
+const DAY_DIMENSION_COLUMN: DimensionColumn = {
+  key: sql<string>`TO_CHAR(${APP_LOCAL_CREATED_AT}, 'YYYY-MM-DD')`,
+  label: sql<string>`TO_CHAR(${APP_LOCAL_CREATED_AT}, 'YYYY-MM-DD')`,
+  group: [sql`TO_CHAR(${APP_LOCAL_CREATED_AT}, 'YYYY-MM-DD')`],
 }
 
 export type OrderGrainDimension = Exclude<ExecutiveDimensionId, "category" | "product">
@@ -355,6 +384,18 @@ export type OrderGrainDimension = Exclude<ExecutiveDimensionId, "category" | "pr
 const orderDimensionColumns: Record<OrderGrainDimension, DimensionColumn> = {
   ...ENTITY_DIMENSION_COLUMNS,
   month: MONTH_DIMENSION_COLUMN,
+  day: DAY_DIMENSION_COLUMN,
+}
+
+/**
+ * The row cap for one grouped read.
+ *
+ * A time axis is not ranked, so it cannot be cut to the reader's row limit
+ * without losing the middle of the period; it gets its own cap per grain
+ * instead, which is what keeps a two-year day-grain request bounded.
+ */
+function groupedRowLimit(dimension: ExecutiveDimensionId, limit: number): number {
+  return isTimeAxisDimension(dimension) ? MAX_TIME_AXIS_POINTS[dimension] : limit
 }
 
 /** Order-grain totals by branch or month. Never joins `order_items`. */
@@ -379,8 +420,8 @@ export async function loadOrderGrainSeries(
     .leftJoin(users, eq(orders.createdByUserId, users.id))
     .where(and(...orderConditions(scope, filters)))
     .groupBy(...column.group)
-    .orderBy(dimension === "month" ? asc(column.key) : desc(metricExpressions.revenue))
-    .limit(dimension === "month" ? 120 : limit)
+    .orderBy(isTimeAxisDimension(dimension) ? asc(column.key) : desc(metricExpressions.revenue))
+    .limit(groupedRowLimit(dimension, limit))
 
   return rows.map((row) => ({
     key: String(row.key),
@@ -405,6 +446,7 @@ export type LineGrainRow = {
 const lineDimensionColumns: Record<ExecutiveDimensionId, DimensionColumn> = {
   ...ENTITY_DIMENSION_COLUMNS,
   month: MONTH_DIMENSION_COLUMN,
+  day: DAY_DIMENSION_COLUMN,
   category: {
     key: sql<string>`COALESCE(COALESCE(${parentCategories.id}, ${categories.id})::text, 'uncategorized')`,
     label: sql<string>`COALESCE(COALESCE(${parentCategories.name}, ${categories.name}), 'Uncategorized')`,
@@ -449,8 +491,8 @@ export async function loadLineGrainSeries(
     .leftJoin(parentCategories, eq(categories.parentId, parentCategories.id))
     .where(and(...lineConditions(scope, filters)))
     .groupBy(...column.group)
-    .orderBy(dimension === "month" ? asc(column.key) : desc(lineNetValue))
-    .limit(dimension === "month" ? 120 : limit)
+    .orderBy(isTimeAxisDimension(dimension) ? asc(column.key) : desc(lineNetValue))
+    .limit(groupedRowLimit(dimension, limit))
 
   return rows.map((row) => {
     const valueCents = Number(row.valueCents) || 0
@@ -953,10 +995,31 @@ export async function loadEntitySeries(
   limit: number,
 ): Promise<{ periods: string[]; series: EntitySeries[] }> {
   const grain = resolveGrain(dimension, metric, { lineScoped: isLineScoped(filters) })
-  const monthKey = sql<string>`TO_CHAR(${orders.createdAt}, 'YYYY-MM')`
+  const monthKey = sql<string>`TO_CHAR(${APP_LOCAL_CREATED_AT}, 'YYYY-MM')`
 
   const ranked = await loadComparison(scope, filters, dimension, metric, limit)
   if (ranked.length === 0) return { periods: [], series: [] }
+
+  /**
+   * When the dimension *is* the time axis, the periods are the entities.
+   *
+   * Falling through to the code below would key one series per month and then
+   * plot it against the months, giving as many lines as there are months, each
+   * a single spike — which is what "Trend over time" drew for a month
+   * comparison before this branch existed, and it was the form offered first.
+   */
+  if (isTimeAxisDimension(dimension)) {
+    const chronological = [...ranked].sort((left, right) => left.key.localeCompare(right.key))
+    return {
+      periods: chronological.map((row) => row.key),
+      series: [{
+        key: dimension,
+        label: EXECUTIVE_METRICS[metric].label,
+        points: chronological.map((row) => ({ period: row.key, value: row.value })),
+      }],
+    }
+  }
+
   const wanted = new Map(ranked.map((row) => [row.key, row.label]))
 
   const lineRows = grain === "line"
@@ -1127,8 +1190,169 @@ export async function loadComparison(
       avgUnitPriceCents: row.avgUnitPriceCents,
     }))
     .sort((left, right) => (
-      EXECUTIVE_METRICS[metric].grain === "line" && dimension === "month"
+      EXECUTIVE_METRICS[metric].grain === "line" && isTimeAxisDimension(dimension)
         ? left.key.localeCompare(right.key)
         : right.value - left.value
     ))
+}
+
+// ── Drill-down: the lines behind a bar ─────────────────────────────────────
+
+export type DrillDownLine = {
+  orderId: number
+  tid: string
+  createdAt: string
+  status: string
+  branchId: number | null
+  branchName: string
+  requesterId: string | null
+  requesterName: string
+  productId: number | null
+  productName: string
+  categoryName: string
+  unit: string
+  quantity: number
+  unitPriceCents: number
+  valueCents: number
+}
+
+export type DrillDownResult = {
+  rows: DrillDownLine[]
+  totals: { lineCount: number; orderCount: number; valueCents: number; quantityByUnit: Array<{ unit: string; quantity: number }> }
+  hasMore: boolean
+}
+
+/**
+ * Net line value and quantity for a *single* row, rather than the summed
+ * expressions above.
+ *
+ * The aggregate forms cannot be reused here because a listing selects one row
+ * at a time; the arithmetic is deliberately identical — same refund join, same
+ * `GREATEST(0, …)` floor, same rounding — so a drill-down always reconciles
+ * with the bar it was opened from. A drill-down that did not add up to its own
+ * chart would be worse than no drill-down at all.
+ */
+const rowNetValue = sql<number>`GREATEST(0, ROUND(${orderItems.priceCents} * ${orderItems.quantity}) - ${lineRefundValue})`
+const rowNetQuantity = sql<number>`GREATEST(0, ${orderItems.quantity} - ${lineRefundQuantity})`
+
+/** Sortable expressions, selected by an allowlisted key — never built from input. */
+const DRILLDOWN_SORT_EXPRESSIONS: Record<DrillDownSortKey, any> = {
+  date: orders.createdAt,
+  value: rowNetValue,
+  quantity: rowNetQuantity,
+  unitPrice: orderItems.priceCents,
+  branch: branches.name,
+  requester: sql`COALESCE(NULLIF(TRIM(${users.fullName}), ''), ${users.employeeId}, ${users.email})`,
+  product: orderItems.productName,
+}
+
+/**
+ * The order lines behind one clicked bar, point or slice.
+ *
+ * Always line grain, whatever the chart was drawn at. A bar of order-grain
+ * money opened at order grain would list whole orders and their whole totals,
+ * which is the same 5.7x overstatement `resolveGrain` already guards against
+ * for the chart itself — so the detail is the lines, and the money column is
+ * each line's own net value.
+ *
+ * The fence is `lineConditions`, the same one every other builder here uses, so
+ * this listing can only ever name rows the caller could already see in
+ * aggregate.
+ */
+export async function loadDrillDownLines(
+  scope: ExecutiveScope,
+  filters: ExecutiveFilters,
+  options: { sort?: DrillDownSortKey; direction?: "asc" | "desc"; limit: number; offset: number },
+): Promise<DrillDownResult> {
+  const conditions = lineConditions(scope, filters)
+  const sortKey = resolveDrillDownSort(options.sort)
+  const sortExpression = DRILLDOWN_SORT_EXPRESSIONS[sortKey]
+  const direction = options.direction === "asc" ? asc : desc
+
+  const [rows, [totals], units] = await Promise.all([
+    db
+      .select({
+        orderId: orders.id,
+        tid: orders.tid,
+        createdAt: orders.createdAt,
+        status: orders.status,
+        branchId: orders.branchId,
+        branchName: sql<string>`COALESCE(${branches.name}, 'Unassigned')`,
+        requesterId: orders.createdByUserId,
+        requesterName: sql<string>`COALESCE(NULLIF(TRIM(${users.fullName}), ''), ${users.employeeId}, ${users.email}, 'Unknown')`,
+        productId: orderItems.globalProductId,
+        productName: orderItems.productName,
+        categoryName: sql<string>`COALESCE(COALESCE(${parentCategories.name}, ${categories.name}), 'Uncategorized')`,
+        unit: orderItems.unit,
+        quantity: rowNetQuantity,
+        unitPriceCents: orderItems.priceCents,
+        valueCents: rowNetValue,
+      })
+      .from(orderItems)
+      .innerJoin(orders, eq(orderItems.orderId, orders.id))
+      .leftJoin(branches, eq(orders.branchId, branches.id))
+      .leftJoin(users, eq(orders.createdByUserId, users.id))
+      .leftJoin(globalProducts, eq(orderItems.globalProductId, globalProducts.id))
+      .leftJoin(categories, eq(globalProducts.categoryId, categories.id))
+      .leftJoin(parentCategories, eq(categories.parentId, parentCategories.id))
+      .where(and(...conditions))
+      // The id breaks ties, so paging cannot repeat or skip a row when many
+      // lines share a timestamp — which they do, since one order writes all of
+      // its lines at once.
+      .orderBy(direction(sortExpression), desc(orderItems.id))
+      // One row past the page, so "there is more" needs no second count query.
+      .limit(options.limit + 1)
+      .offset(options.offset),
+
+    db
+      .select({
+        lineCount: sql<number>`COUNT(*)`.mapWith(Number),
+        orderCount: sql<number>`COUNT(DISTINCT ${orders.id})`.mapWith(Number),
+        valueCents: lineNetValue,
+      })
+      .from(orderItems)
+      .innerJoin(orders, eq(orderItems.orderId, orders.id))
+      .where(and(...conditions)),
+
+    // Quantity is reported per unit rather than as one total: litres and packs
+    // are not addable, and a drill-down must not invent a number the charts
+    // above it refuse to print.
+    db
+      .select({ unit: orderItems.unit, quantity: lineNetQuantity })
+      .from(orderItems)
+      .innerJoin(orders, eq(orderItems.orderId, orders.id))
+      .where(and(...conditions))
+      .groupBy(orderItems.unit)
+      .orderBy(desc(lineNetQuantity))
+      .limit(8),
+  ])
+
+  const page = rows.slice(0, options.limit)
+
+  return {
+    hasMore: rows.length > options.limit,
+    totals: {
+      lineCount: Number(totals?.lineCount) || 0,
+      orderCount: Number(totals?.orderCount) || 0,
+      valueCents: Number(totals?.valueCents) || 0,
+      quantityByUnit: units.map((row) => ({ unit: String(row.unit), quantity: Number(row.quantity) || 0 })),
+    },
+    rows: page.map((row) => ({
+      orderId: Number(row.orderId),
+      tid: String(row.tid),
+      createdAt: row.createdAt ? new Date(row.createdAt).toISOString() : "",
+      status: String(row.status),
+      branchId: row.branchId ?? null,
+      branchName: String(row.branchName),
+      requesterId: row.requesterId ?? null,
+      requesterName: String(row.requesterName),
+      productId: row.productId ?? null,
+      productName: String(row.productName),
+      categoryName: String(row.categoryName),
+      unit: String(row.unit),
+      quantity: Number(row.quantity) || 0,
+      unitPriceCents: Number(row.unitPriceCents) || 0,
+      valueCents: Number(row.valueCents) || 0,
+    })),
+  }
 }

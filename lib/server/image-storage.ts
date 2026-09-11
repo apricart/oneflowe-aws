@@ -22,6 +22,19 @@ import { parseImageStorageEnv } from "@/lib/server/env-validation"
 export const IMAGE_PATH_PREFIX = "/api/v1/images"
 const KEY_PREFIX = "products"
 
+/**
+ * Support attachments live under their own prefix, and that separation is a
+ * security control rather than tidiness.
+ *
+ * `GET /api/v1/images/[...key]` authenticates but does not authorize — every
+ * signed-in user may fetch any product image, which is right for a catalogue
+ * picture and wrong for a screenshot of somebody's invoice. `isValidImageKey`
+ * therefore stays pinned to `products/`, so that route can never serve one of
+ * these objects. A support attachment comes back only through
+ * `GET /api/v1/support/attachments/[id]`, which applies its thread's rule.
+ */
+const SUPPORT_KEY_PREFIX = "support"
+
 export type StoredImageExtension = "jpg" | "png" | "gif" | "webp"
 
 const EXTENSION_BY_MIME: Record<string, StoredImageExtension> = {
@@ -107,6 +120,21 @@ export function buildImageKey(extension: StoredImageExtension): string {
 
 export function isValidImageKey(key: string): boolean {
   return KEY_PATTERN.test(key)
+}
+
+/**
+ * Keys for support attachments. Same shape, different prefix, and deliberately
+ * a different validator — nothing that accepts one accepts the other.
+ */
+const SUPPORT_KEY_PATTERN =
+  /^support\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|png|gif|webp)$/
+
+export function buildSupportAttachmentKey(extension: StoredImageExtension): string {
+  return `${SUPPORT_KEY_PREFIX}/${randomUUID()}.${extension}`
+}
+
+export function isValidSupportAttachmentKey(key: string): boolean {
+  return SUPPORT_KEY_PATTERN.test(key)
 }
 
 export function imagePathForKey(key: string): string {

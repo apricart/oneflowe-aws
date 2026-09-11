@@ -248,3 +248,72 @@ describe("invoice endpoint wiring", () => {
     }
   })
 })
+
+describe("invoice access for a group order raised for the caller's branch", () => {
+  const GROUP_PORTAL_USER = "user-group-portal"
+  const groupOrder = (overrides: Record<string, unknown> = {}) =>
+    order({ createdByUserId: GROUP_PORTAL_USER, groupOrderId: 12, ...overrides })
+
+  it("lets the branch's own requester open it", () => {
+    // The order spends this branch's budget and is delivered to it, so its
+    // invoice is a branch document rather than a personal one.
+    expect(resolveInvoiceAccess({
+      role: "ORDER_PORTAL",
+      scope: scope(),
+      order: groupOrder(),
+    })).toBeNull()
+  })
+
+  it("still refuses a requester at another branch", () => {
+    const denial = resolveInvoiceAccess({
+      role: "ORDER_PORTAL",
+      scope: scope({ branchId: 101 }),
+      order: groupOrder(),
+    })
+
+    expect(denial?.status).toBe(403)
+  })
+
+  it("still refuses a requester in another organization", () => {
+    const denial = resolveInvoiceAccess({
+      role: "ORDER_PORTAL",
+      scope: scope({ organizationId: 99 }),
+      order: groupOrder(),
+    })
+
+    expect(denial?.status).toBe(403)
+  })
+
+  it("does not widen a colleague's ordinary order", () => {
+    // The exception turns on `groupOrderId`, not on "someone else raised it".
+    const denial = resolveInvoiceAccess({
+      role: "ORDER_PORTAL",
+      scope: scope(),
+      order: order({ createdByUserId: OTHER_USER, groupOrderId: null }),
+    })
+
+    expect(denial?.status).toBe(403)
+  })
+
+  it("does not widen the group requester's own rule", () => {
+    // GROUP_ORDER_PORTAL keeps reading only the submissions it raised itself,
+    // so one group requester cannot read another's.
+    const denial = resolveInvoiceAccess({
+      role: "GROUP_ORDER_PORTAL",
+      scope: assignedScope([100]),
+      order: groupOrder(),
+    })
+
+    expect(denial?.status).toBe(403)
+  })
+
+  it("keeps the availability rule for a group order", () => {
+    const denial = resolveInvoiceAccess({
+      role: "ORDER_PORTAL",
+      scope: scope(),
+      order: groupOrder({ status: "PENDING" }),
+    })
+
+    expect(denial?.status).toBe(409)
+  })
+})

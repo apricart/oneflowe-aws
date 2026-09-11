@@ -71,6 +71,7 @@ export type ExecutiveDimensionId =
   | "category"
   | "product"
   | "month"
+  | "day"
 
 export type MetricDefinition = {
   id: ExecutiveMetricId
@@ -254,6 +255,42 @@ export const EXECUTIVE_DIMENSIONS: Record<ExecutiveDimensionId, DimensionDefinit
     metrics: ACTIVITY_METRICS,
     selectable: false,
   },
+  /**
+   * The same axis one grain finer, for "pick a month and a product, show me the
+   * daily consumption". Not selectable for the same reason months are not, and
+   * capped at `MAX_TIME_AXIS_POINTS` buckets so a two-year window cannot ask
+   * for seven hundred of them.
+   */
+  day: {
+    id: "day",
+    label: "Day",
+    entityNoun: "days",
+    forcedGrain: null,
+    metrics: ACTIVITY_METRICS,
+    selectable: false,
+  },
+}
+
+/**
+ * Dimensions that *are* the time axis rather than a set of things ranked along
+ * one.
+ *
+ * This distinction decides two separate things and both were wrong for `month`
+ * before `day` existed: which chart forms are offered (ranking months by size
+ * destroys the only thing that makes them meaningful), and what a "series"
+ * response means — one line over the periods, not one line *per* period.
+ */
+export const TIME_AXIS_DIMENSIONS = ["month", "day"] as const
+
+export function isTimeAxisDimension(dimension: unknown): dimension is "month" | "day" {
+  return typeof dimension === "string"
+    && (TIME_AXIS_DIMENSIONS as readonly string[]).includes(dimension)
+}
+
+/** How many time buckets one comparison may return, so a wide range stays bounded. */
+export const MAX_TIME_AXIS_POINTS: Record<"month" | "day", number> = {
+  month: 120,
+  day: 400,
 }
 
 /** Dimensions the caller's role may compare by. */
@@ -411,7 +448,7 @@ export function chartTypesFor({ dimension, metric, entityCount }: {
   /** How many entities the comparison currently resolves to. */
   entityCount: number
 }): ChartTypeOption[] {
-  const isTimeAxis = dimension === "month"
+  const isTimeAxis = isTimeAxisDimension(dimension)
   const isBudgetMetric = EXECUTIVE_METRICS[metric].grain === "budget"
   const options: ChartTypeOption[] = []
 
@@ -688,3 +725,163 @@ export const EXECUTIVE_CHARTS: ExecutiveChartDefinition[] = [
     priority: "P0",
   },
 ]
+
+// ── Amount ⇄ Quantity ──────────────────────────────────────────────────────
+
+/**
+ * The two ways the same purchase is measured, as a first-class pair.
+ *
+ * "Money" and "how much stuff" answer different questions and a reader flips
+ * between them constantly — a branch whose spend rose 20% while its quantity
+ * fell 5% is paying more for less, and neither number says that alone. The pair
+ * is named here rather than left implicit in a seven-option metric row so the
+ * toggle, the drill-down and the panel registry all agree on what "the other
+ * measure" is.
+ *
+ * Switching measure changes *only* the metric. Filters, the focused products,
+ * the compared entities and any open drill-down are deliberately untouched.
+ */
+export type MeasureId = "amount" | "quantity"
+
+export const MEASURE_METRIC: Record<MeasureId, ExecutiveMetricId> = {
+  amount: "spend",
+  quantity: "quantity",
+}
+
+export const MEASURE_LABEL: Record<MeasureId, string> = {
+  amount: "Amount",
+  quantity: "Quantity",
+}
+
+export function isMeasureId(value: unknown): value is MeasureId {
+  return value === "amount" || value === "quantity"
+}
+
+/** The measure a metric belongs to, so a toggle can show the right side as pressed. */
+export function measureOfMetric(metric: ExecutiveMetricId): MeasureId {
+  return metric === "quantity" || metric === "avgUnitPrice" ? "quantity" : "amount"
+}
+
+// ── Drill-down ─────────────────────────────────────────────────────────────
+
+/**
+ * The detail behind a clicked bar: the order lines that add up to it.
+ *
+ * A chart answers "how much"; the only honest answer to "why" is the rows
+ * themselves. The listing is bounded because it is the one place in the Center
+ * that returns individual records rather than an aggregate — an unbounded
+ * `limit` here would be a data-exfiltration path, not a convenience.
+ */
+export const DRILLDOWN_DEFAULT_ROWS = 50
+export const DRILLDOWN_MAX_ROWS = 200
+export const DRILLDOWN_MAX_OFFSET = 5000
+
+export function clampDrillDownLimit(value: unknown): number {
+  const parsed = Math.trunc(Number(value))
+  if (!Number.isFinite(parsed) || parsed <= 0) return DRILLDOWN_DEFAULT_ROWS
+  return Math.min(parsed, DRILLDOWN_MAX_ROWS)
+}
+
+export function clampDrillDownOffset(value: unknown): number {
+  const parsed = Math.trunc(Number(value))
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0
+  return Math.min(parsed, DRILLDOWN_MAX_OFFSET)
+}
+
+/**
+ * Sortable columns, as an allowlist.
+ *
+ * A sort key is the classic way user input reaches an ORDER BY. Nothing outside
+ * this list is accepted, and the value is used to *select* a pre-written
+ * expression rather than to build one.
+ */
+export const DRILLDOWN_SORT_KEYS = [
+  "date", "value", "quantity", "unitPrice", "branch", "requester", "product",
+] as const
+export type DrillDownSortKey = (typeof DRILLDOWN_SORT_KEYS)[number]
+
+export function isDrillDownSortKey(value: unknown): value is DrillDownSortKey {
+  return typeof value === "string" && (DRILLDOWN_SORT_KEYS as readonly string[]).includes(value)
+}
+
+export function resolveDrillDownSort(value: unknown): DrillDownSortKey {
+  return isDrillDownSortKey(value) ? value : "date"
+}
+
+export function resolveSortDirection(value: unknown): "asc" | "desc" {
+  return value === "asc" ? "asc" : "desc"
+}
+
+// ── The side-by-side screen ────────────────────────────────────────────────
+
+/**
+ * The panels that make up "one product, every angle, on one screen".
+ *
+ * Held as a registry rather than as hardcoded JSX for the same reason
+ * `EXECUTIVE_CHARTS` is: a panel that cannot state the question it answers does
+ * not belong on the page, and the set is then testable without rendering
+ * anything. Every panel is served by the *existing* comparison endpoint with a
+ * different dimension — there is no new aggregation path behind this screen.
+ */
+export type SideBySidePanel = {
+  id: string
+  dimension: ExecutiveDimensionId
+  chart: ChartTypeId
+  title: string
+  question: string
+  /** Distinct hues per entity. False for a time axis, where one hue is correct. */
+  colorful: boolean
+  /** Rendered only when exactly one product is in focus. */
+  requiresSingleProduct?: boolean
+}
+
+export const SIDE_BY_SIDE_PANELS: SideBySidePanel[] = [
+  {
+    id: "by-requester",
+    dimension: "user",
+    chart: "bar",
+    title: "By requester",
+    question: "Who consumed the most?",
+    colorful: true,
+  },
+  {
+    id: "by-branch",
+    dimension: "branch",
+    chart: "bar",
+    title: "By branch",
+    question: "Which branches consumed the most?",
+    colorful: true,
+  },
+  {
+    id: "by-month",
+    dimension: "month",
+    chart: "column",
+    title: "By month",
+    question: "How did consumption move month to month?",
+    colorful: false,
+  },
+  {
+    id: "requesters-over-months",
+    dimension: "user",
+    chart: "line",
+    title: "Requesters over months",
+    question: "Who moved, and when — one line per person.",
+    colorful: true,
+  },
+  {
+    id: "day-by-day",
+    dimension: "day",
+    chart: "line",
+    title: "Day-by-day consumption",
+    question: "On which days was this product actually consumed?",
+    colorful: false,
+    requiresSingleProduct: true,
+  },
+]
+
+/** The panels to render for the current focus. */
+export function panelsForFocus(focusedProductCount: number): SideBySidePanel[] {
+  return SIDE_BY_SIDE_PANELS.filter(
+    (panel) => !panel.requiresSingleProduct || focusedProductCount === 1,
+  )
+}

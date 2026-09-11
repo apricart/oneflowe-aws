@@ -21,6 +21,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { isOrderPortalRefundEligible } from "@/lib/business-rules"
+import { isOrderWriteRole } from "@/lib/order-write-access"
 
 interface RefundManagementProps {
     orderId: number
@@ -70,7 +71,9 @@ const getFullyRefundedState = (input: RefundAvailabilityInput) => (
 
 const getRefundAvailability = (input: RefundAvailabilityInput) => {
     const isOrderApproved = ["APPROVED", "FULFILLED", "REFUNDED"].includes(input.orderStatus.toUpperCase())
-    const isOrderPortal = input.requesterRole === "ORDER_PORTAL"
+    // Both requester roles wait for delivery before claiming; the server
+    // applies the same gate, so offering it earlier would only be refused.
+    const isOrderPortal = isOrderWriteRole(input.requesterRole)
     const meetsOrderPortalDeliveryRequirement = !isOrderPortal
         || isOrderPortalRefundEligible(input.orderStatus, input.orderFulfillmentStatus)
     const hasRefundCapacity = getHasRefundCapacity(input)

@@ -365,6 +365,48 @@
       "when": 1788264000000,
       "tag": "20260901120000_add_group_inventory_prices",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1788436800000,
+      "tag": "20260903120000_add_order_token_handoff",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1788652800000,
+      "tag": "20260906000000_add_user_external_identity",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1788656400000,
+      "tag": "20260906010000_repair_schema_gaps",
+      "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1788660000000,
+      "tag": "20260906020000_users_email_non_unique",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1789128000000,
+      "tag": "20260907120000_add_support_threads",
+      "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1789300800000,
+      "tag": "20260909120000_add_support_thread_product",
+      "breakpoints": true
     }
   ]
 }

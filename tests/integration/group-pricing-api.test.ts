@@ -199,6 +199,7 @@ describe.skipIf(!hasTestDatabase)("group pricing endpoint", () => {
       const body = await response.json()
 
       expect(response.status).toBe(200)
+      expect(body.canViewGlobalBasePrice).toBe(true)
       const item = body.items.find(
         (row: any) => row.organizationInventoryId === fixtures.organizationInventoryId,
       )
@@ -208,6 +209,48 @@ describe.skipIf(!hasTestDatabase)("group pricing endpoint", () => {
         groupPriceCents: null,
         effectivePriceCents: 8_000,
       })
+    })
+
+    it("hides the global base price from Head Office", async () => {
+      // The base price is the internal cost the ladder is built on. Head Office
+      // must see what its branches pay and never the number underneath it.
+      await setOrganizationPrice(fixtures, 8_000)
+      signIn(headOffice)
+
+      const response = await GET(
+        getRequest(fixtures.groupId, `?search=${fixtures.suffix}`),
+        params(fixtures.groupId),
+      )
+      const body = await response.json()
+      const item = body.items.find(
+        (row: any) => row.organizationInventoryId === fixtures.organizationInventoryId,
+      )
+
+      expect(response.status).toBe(200)
+      expect(body.canViewGlobalBasePrice).toBe(false)
+      expect(item.basePriceCents).toBeNull()
+      // Stripped for every row, not just the one under test.
+      expect(body.items.every((row: any) => row.basePriceCents === null)).toBe(true)
+      // ...while the figures Head Office does need are untouched.
+      expect(item).toMatchObject({ organizationPriceCents: 8_000, effectivePriceCents: 8_000 })
+    })
+
+    it("still resolves the effective price from the base price it hides", async () => {
+      // Nothing overrides this product, so its branches pay the base price.
+      // Hiding the column must not turn that into a missing figure.
+      signIn(headOffice)
+
+      const response = await GET(
+        getRequest(fixtures.groupId, `?search=${fixtures.suffix}`),
+        params(fixtures.groupId),
+      )
+      const body = await response.json()
+      const item = body.items.find(
+        (row: any) => row.organizationInventoryId === fixtures.organizationInventoryId,
+      )
+
+      expect(item.basePriceCents).toBeNull()
+      expect(item.effectivePriceCents).toBe(BASE_PRICE_CENTS)
     })
 
     it("lists a product the group has not been assigned yet", async () => {

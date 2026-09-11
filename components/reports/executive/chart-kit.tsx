@@ -276,10 +276,19 @@ export function ChartMessage({ tone, message }: Readonly<{ tone: "error" | "empt
   )
 }
 
-/** The table half of every chart card: the same rows, readable without colour. */
-export function DataTable({ columns, rows }: Readonly<{
+/**
+ * The table half of every chart card: the same rows, readable without colour.
+ *
+ * When `onSelectRow` is given the first cell becomes a real button, so the
+ * drill-down the bars offer a mouse is reachable by keyboard and by a screen
+ * reader. `rowKeys` supplies a stable identity — the first cell's text is a
+ * label and two entities may share one.
+ */
+export function DataTable({ columns, rows, rowKeys, onSelectRow }: Readonly<{
   columns: string[]
   rows: Array<Array<string | number>>
+  rowKeys?: string[]
+  onSelectRow?: (key: string, index: number) => void
 }>) {
   if (rows.length === 0) return <ChartMessage tone="empty" message="No rows in the selected period." />
   return (
@@ -302,21 +311,34 @@ export function DataTable({ columns, rows }: Readonly<{
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
-            <tr key={String(row[0])} className="border-t border-slate-100 dark:border-slate-800">
-              {row.map((cell, index) => (
-                <td
-                  key={`${String(row[0])}-${columns[index]}`}
-                  className={cn(
-                    "px-3 py-1.5 tabular-nums text-slate-700 dark:text-slate-300",
-                    index === 0 ? "text-left font-medium" : "text-right",
-                  )}
-                >
-                  {cell}
-                </td>
-              ))}
-            </tr>
-          ))}
+          {rows.map((row, rowIndex) => {
+            const key = rowKeys?.[rowIndex] ?? String(row[0])
+            return (
+              <tr key={key} className="border-t border-slate-100 dark:border-slate-800">
+                {row.map((cell, index) => (
+                  <td
+                    key={`${key}-${columns[index]}`}
+                    className={cn(
+                      "px-3 py-1.5 tabular-nums text-slate-700 dark:text-slate-300",
+                      index === 0 ? "text-left font-medium" : "text-right",
+                    )}
+                  >
+                    {index === 0 && onSelectRow ? (
+                      <button
+                        type="button"
+                        onClick={() => onSelectRow(key, rowIndex)}
+                        className="rounded text-left font-medium text-indigo-600 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-indigo-300"
+                      >
+                        {cell}
+                      </button>
+                    ) : (
+                      cell
+                    )}
+                  </td>
+                ))}
+              </tr>
+            )
+          })}
         </tbody>
       </table>
     </div>

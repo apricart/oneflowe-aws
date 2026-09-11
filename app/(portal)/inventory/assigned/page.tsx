@@ -8,8 +8,9 @@ import { Badge } from "@/components/ui/badge"
 import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from "@/components/ui/table"
 import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from "@/components/ui/select"
 import { formatPKR } from "@/lib/utils"
-import { Search,Package } from "lucide-react"
+import { Search } from "lucide-react"
 import { useAppContext } from "@/components/context/app-context"
+import { ProductNameCell } from "@/components/inventory/product-name-cell"
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json())
 
@@ -179,20 +180,10 @@ export default function ShowAssignedProductsPage() {
                                         filteredProducts.map((product) => (
                                             <TableRow key={product.id} className="hover:bg-muted/40">
                                                 <TableCell>
-                                                    <div className="flex items-center gap-3">
-                                                        {product.productImageUrl ? (
-                                                            <img
-                                                                src={product.productImageUrl}
-                                                                alt={product.productName}
-                                                                className="h-10 w-10 rounded-lg border object-cover"
-                                                            />
-                                                        ) : (
-                                                            <div className="flex h-10 w-10 items-center justify-center rounded-lg border bg-muted/40">
-                                                                <Package className="h-4 w-4 text-muted-foreground" />
-                                                            </div>
-                                                        )}
-                                                        <span className="font-medium">{product.customName || product.productName}</span>
-                                                    </div>
+                                                    <ProductNameCell
+                                                        name={product.customName || product.productName}
+                                                        imageUrl={product.productImageUrl}
+                                                    />
                                                 </TableCell>
                                                 <TableCell>
                                                     <Badge variant="outline">{product.productCode}</Badge>

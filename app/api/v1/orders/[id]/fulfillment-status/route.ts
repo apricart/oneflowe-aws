@@ -6,10 +6,62 @@ import { FULFILLMENT_STATUSES, normalizeFulfillmentStatus, type FulfillmentStatu
 import { orderSelectColumns, transitionOrderFulfillmentStatusColumn } from "@/lib/order-select"
 import { eq } from "drizzle-orm"
 import { fulfillmentStatusSchema, validationMessage } from "@/lib/server/mutation-validation"
+import { settleDeliveredOrderAfterTokenHandoff } from "@/lib/server/order-fulfillment"
 
 const PROGRESS_STATUSES = FULFILLMENT_STATUSES.filter(
   (status) => status !== "NOT_STARTED"
 ) as FulfillmentStatus[]
+
+/** The order this route reads and, once delivered, may settle. */
+type ProgressOrder = {
+  id: number
+  tid: string
+  organizationId: number | null
+  branchId: number
+}
+
+/**
+ * Settle an order whose fulfilment token already reached admin operations.
+ *
+ * A hand-off does not complete an order on its own — the goods have to arrive —
+ * so a token handed over before delivery is remembered on the order. Recording
+ * the delivery is the other half of that rule, and this is where it is applied.
+ *
+ * It runs after the progress transition has committed, never inside it: the
+ * settlement opens its own transaction against the same row. It adds no reach —
+ * this request has already been authorized against this order, and it settles
+ * that order alone, re-asserting the same tenant and branch.
+ *
+ * An order with no hand-off recorded is left approved exactly as before, which
+ * is every order whose token is redeemed by the administrator directly.
+ */
+async function settleOnDeliveryIfTokenHandedOff(
+  order: ProgressOrder,
+  actorUserId: string,
+): Promise<boolean> {
+  const outcome = await settleDeliveredOrderAfterTokenHandoff({
+    orderId: order.id,
+    organizationId: order.organizationId,
+    branchId: order.branchId,
+  })
+
+  if (outcome !== "fulfilled") return false
+
+  await db.insert(auditLogs).values({
+    userId: actorUserId,
+    organizationId: order.organizationId,
+    branchId: order.branchId,
+    action: "ORDER_FULFILLED_ON_DELIVERY",
+    entity: "Order",
+    entityId: String(order.id),
+    metadata: {
+      tid: order.tid,
+      reason: "Fulfilment token was already handed to admin operations; delivery completed the order",
+    },
+  })
+
+  return true
+}
 
 export async function POST(
   req: Request,
@@ -88,8 +140,23 @@ export async function POST(
     return error("Fulfillment progress was already changed by another request", 409)
   }
 
+  const fulfilled = nextStatus === "DELIVERED"
+    && await settleOnDeliveryIfTokenHandedOff(
+      { id: order.id, tid: order.tid, organizationId: order.organizationId, branchId: order.branchId },
+      user.id,
+    )
+
+  // Settling the order changed the row this response reports, so it is read
+  // back rather than describing the state it had a moment earlier.
+  const [settledOrder] = fulfilled
+    ? await db.select(orderSelectColumns).from(orders).where(eq(orders.id, orderId)).limit(1)
+    : []
+
   return ok({
-    message: "Fulfillment progress updated",
-    item: updated,
+    message: fulfilled
+      ? "Fulfillment progress updated — the order is now marked fulfilled"
+      : "Fulfillment progress updated",
+    fulfilled,
+    item: settledOrder ?? updated,
   })
 }

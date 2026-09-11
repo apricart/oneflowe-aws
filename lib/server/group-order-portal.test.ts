@@ -461,6 +461,11 @@ describe("group order portal access contracts", () => {
     expect(proxySource).toContain('if (role === "GROUP_ORDER_PORTAL") {')
     expect(proxySource).toContain("return pathname.startsWith(GROUP_ORDER_PORTAL_HOME) || isInvoiceArea(pathname)")
     expect(proxySource).toContain(": GROUP_ORDER_PORTAL_HOME")
+    // The support area joined the invoice page as a second shared surface: a
+    // requester raises a query about its own order from here, and which threads
+    // it may read is decided by lib/support-access rather than by area.
+    expect(proxySource).toContain("isSupportArea(pathname)")
+    expect(proxySource).toContain('const SUPPORT_AREA = "/support"')
     // The gate that used to sit on the retired wizard route now guards the area
     // itself, and still fails closed: only the requester renders the
     // storefront. Every other role — the approver included — is sent to the
@@ -469,13 +474,23 @@ describe("group order portal access contracts", () => {
     expect(layout).not.toContain("GROUP_USER_ROLE) redirect")
   })
 
-  it("leaves the single-branch order endpoint untouched", () => {
+  it("never gives the single-branch order endpoint a group creation path", () => {
     const ordersRoute = source("app/api/v1/orders/route.ts")
 
-    // The group flow has its own endpoint; the shared one must not learn about
-    // group orders or gain a multi-branch creation path.
-    expect(ordersRoute).not.toContain("groupOrderId")
+    // The group flow keeps its own endpoint. The shared one must not learn how
+    // to raise a submission, and must never write an envelope reference of its
+    // own — an order created here is an ordinary single-branch order.
     expect(ordersRoute).not.toContain("createGroupOrder")
+    const createPath = ordersRoute.slice(
+      ordersRoute.indexOf("async function persistCreatedOrder"),
+      ordersRoute.indexOf("async function processOrderCreationTransaction"),
+    )
+    expect(createPath).not.toContain("groupOrderId")
+
+    // Reading the column is deliberate and separate: it is how a branch's own
+    // roles see the orders the group portal raised for them.
+    expect(ordersRoute).toContain("groupOrderId: orders.groupOrderId,")
+    expect(ordersRoute).toContain("isNotNull(orders.groupOrderId)")
   })
 })
 

@@ -31,6 +31,7 @@ import {
   type NetworkAccessDecision,
 } from "@/lib/server/network-policy"
 import { resolveRequestClientIp } from "@/lib/server/request-ip"
+import { isBruteForceProtectionEnforced } from "@/lib/auth-brute-force-mode"
 import {
   recordAuthAuditEvent,
   type AuthFailureReason,
@@ -157,6 +158,13 @@ async function assertAccountNotLocked(
   state: LockoutState,
   context: AuthAttemptContext,
 ): Promise<void> {
+  // The local development server does not lock accounts, so it must also not
+  // honour a lock already sitting in the database -- otherwise an account
+  // locked by an earlier run, or by a database copied down from elsewhere,
+  // stays unusable for the whole lock duration with nothing on this machine
+  // able to clear it. Every deployed build enforces the lock.
+  if (!isBruteForceProtectionEnforced(env.NODE_ENV)) return
+
   const decision = evaluateLockout(state)
   if (!decision.locked) return
 
@@ -674,6 +682,14 @@ function assertTenantScopeActive(scope: {
  * `lower(email)` is matched against the `users_email_lower_idx` functional
  * index so the OR can be planned as a bitmap of two index scans instead of a
  * sequential scan of every user.
+ *
+ * Email only resolves an account created in OneFlowe itself. An account
+ * mirrored from another system (`external_source` set) must be named by its
+ * username, because such a person holds one account per role — one to place
+ * orders, one to approve them — behind a single shared email address. Matching
+ * that email would pick whichever row the index reached first and drop the
+ * person into an arbitrary one of their two portals. Accounts created through
+ * the portal leave `external_source` null and are unaffected.
  */
 async function loadStaffLoginRecord(username: string) {
   const [record] = await db
@@ -699,7 +715,13 @@ async function loadStaffLoginRecord(username: string) {
     .leftJoin(organizations, eq(users.organizationId, organizations.id))
     .leftJoin(branches, eq(users.branchId, branches.id))
     .leftJoin(roles, eq(users.roleId, roles.id))
-    .where(and(or(eq(users.username, username), sql`lower(${users.email}) = ${username}`), isNull(users.deletedAt)))
+    .where(and(
+      or(
+        eq(users.username, username),
+        and(sql`lower(${users.email}) = ${username}`, isNull(users.externalSource)),
+      ),
+      isNull(users.deletedAt),
+    ))
     .limit(1)
 
   return record

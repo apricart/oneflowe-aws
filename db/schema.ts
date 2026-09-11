@@ -148,6 +148,13 @@ export const users = pgTable(
     contactPerson: varchar("contact_person", { length: 255 }),
     location: varchar("location", { length: 255 }),
     address: text("address"),
+    // Optional stable identity for accounts mirrored from an external system,
+    // matching the same pair on `branches`. Accounts created through the portal
+    // leave both null, and only those accounts may sign in with an email
+    // address: a mirrored person holds one account per role behind a single
+    // shared email, so an email alone cannot say which portal they meant.
+    externalSource: varchar("external_source", { length: 64 }),
+    externalId: varchar("external_id", { length: 128 }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
@@ -167,6 +174,17 @@ export const users = pgTable(
     index("users_org_idx").on(t.organizationId),
     index("users_branch_idx").on(t.branchId),
     index("users_employee_id_idx").on(t.employeeId),
+    // One account per source person *per role* — a mirrored person is two rows
+    // (one to place orders, one to approve them) sharing an external identity.
+    uniqueIndex("users_org_external_identity_role_uq")
+      .on(t.organizationId, t.externalSource, t.externalId, t.roleId)
+      .where(sql`${t.externalSource} IS NOT NULL AND ${t.externalId} IS NOT NULL`),
+    index("users_external_identity_idx").on(t.externalSource, t.externalId),
+    check(
+      "users_external_identity_pair_ck",
+      sql`(${t.externalSource} IS NULL) = (${t.externalId} IS NULL)
+        AND (${t.externalSource} IS NULL OR (btrim(${t.externalSource}) <> '' AND btrim(${t.externalId}) <> ''))`,
+    ),
   ],
 )
 
@@ -485,6 +503,15 @@ export const orders = pgTable(
     approvalTokenHash: varchar("approval_token_hash", { length: 255 }), // Hash for verification
     approvalTokenCreatedAt: timestamp("approval_token_created_at", { withTimezone: true }),
     fulfilledByUserId: uuid("fulfilled_by_user_id").references(() => users.id),
+    // Fulfilment token hand-off tracking.
+    //
+    // Handing the token to admin operations no longer settles the order on its
+    // own: the goods still have to arrive. These columns remember a hand-off
+    // that happened before delivery, so the order can be settled the moment its
+    // delivery status reaches DELIVERED. Both are nullable, so every order that
+    // never had a token handed over keeps exactly the data it has today.
+    tokenHandoffAt: timestamp("token_handoff_at", { withTimezone: true }),
+    tokenHandoffByUserId: uuid("token_handoff_by_user_id").references(() => users.id),
     // Refund tracking fields
     refundedAt: timestamp("refunded_at", { withTimezone: true }),
     refundedByUserId: uuid("refunded_by_user_id").references(() => users.id),
@@ -647,6 +674,12 @@ export const notifications = pgTable(
     type: varchar("type", { length: 64 }).notNull(),
     targetRole: varchar("target_role", { length: 64 }),
     orderId: integer("order_id").references(() => orders.id, { onDelete: "cascade" }),
+    // The support thread this notification points at, when it is about one.
+    // Null for every notification type that predates support threads, so the
+    // column changes nothing about the rows already in this table.
+    supportThreadId: integer("support_thread_id").references(() => supportThreads.id, {
+      onDelete: "cascade",
+    }),
     eventKey: varchar("event_key", { length: 255 }),
     message: text("message").notNull(),
     readAt: timestamp("read_at", { withTimezone: true }),
@@ -658,6 +691,7 @@ export const notifications = pgTable(
     index("notifications_org_idx").on(t.organizationId),
     index("notifications_branch_idx").on(t.branchId),
     index("notifications_order_idx").on(t.orderId),
+    index("notifications_support_thread_idx").on(t.supportThreadId),
     uniqueIndex("notifications_event_key_uq").on(t.eventKey),
   ],
 )
@@ -675,12 +709,15 @@ export const emailOutbox = pgTable(
     organizationId: integer("organization_id")
       .references(() => organizations.id, { onDelete: "cascade" })
       .notNull(),
-    branchId: integer("branch_id")
-      .references(() => branches.id, { onDelete: "cascade" })
-      .notNull(),
-    orderId: integer("order_id")
-      .references(() => orders.id, { onDelete: "cascade" })
-      .notNull(),
+    // Nullable since support threads joined the outbox: a Head Office raiser
+    // has no branch, and a support notification has no order. Every order
+    // lifecycle row still carries both, and `deliverClaimedOrderEmail` refuses
+    // an order row that does not.
+    branchId: integer("branch_id").references(() => branches.id, { onDelete: "cascade" }),
+    orderId: integer("order_id").references(() => orders.id, { onDelete: "cascade" }),
+    supportThreadId: integer("support_thread_id").references(() => supportThreads.id, {
+      onDelete: "cascade",
+    }),
     template: varchar("template", { length: 64 }).notNull(),
     payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
     status: varchar("status", { length: 32 }).notNull().default("PENDING"),
@@ -700,6 +737,7 @@ export const emailOutbox = pgTable(
     index("email_outbox_org_idx").on(t.organizationId),
     index("email_outbox_branch_idx").on(t.branchId),
     index("email_outbox_order_idx").on(t.orderId),
+    index("email_outbox_support_thread_idx").on(t.supportThreadId),
     check("email_outbox_attempts_nonnegative_ck", sql`${t.attempts} >= 0`),
     check("email_outbox_status_valid_ck", sql`${t.status} IN ('PENDING', 'PROCESSING', 'SENT', 'FAILED', 'SKIPPED')`),
   ],
@@ -1602,4 +1640,190 @@ export const groupOrderDrafts = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
   (t) => [uniqueIndex("group_order_drafts_user_uq").on(t.userId)],
+)
+
+/**
+ * Direct communication between a client organization and Apricart.
+ *
+ * A support thread is a conversation, not a decision. It may be raised against
+ * a specific order — and therefore against that order's invoice — or stand on
+ * its own. Apricart (`SUPER_ADMIN`) participates in every thread; who on the
+ * client side may read it is decided by `lib/support-access.ts` and is never
+ * stored, so a role change takes effect immediately rather than leaving a
+ * stale grant behind.
+ *
+ * There is deliberately no `reference` column: the human reference `SUP-000123`
+ * is derived from the id by `supportThreadReference()`, and a column would be a
+ * second source of truth for a value that is already unique.
+ */
+export const supportThreads = pgTable(
+  "support_threads",
+  {
+    id: serial("id").primaryKey(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id)
+      .notNull(),
+    // Null when the raiser has no branch of their own — Head Office does not.
+    branchId: integer("branch_id").references(() => branches.id),
+    // The order the query is about, when there is one. Nulled rather than
+    // cascaded so a thread survives an order being removed: the conversation is
+    // the record of what was asked, and it outlives its subject.
+    orderId: integer("order_id").references(() => orders.id, { onDelete: "set null" }),
+    // The product the query is about, when there is one. Points at the global
+    // catalogue rather than the organization's assignment row: the thread
+    // already carries its organization, so the pair resolves the tenant's own
+    // name for the product, and the reference survives the assignment later
+    // being disabled — the conversation is still about that product.
+    productId: integer("product_id").references(() => globalProducts.id, { onDelete: "set null" }),
+    subject: varchar("subject", { length: 200 }).notNull(),
+    category: varchar("category", { length: 32 }).notNull(),
+    status: varchar("status", { length: 32 }).notNull().default("OPEN"),
+    priority: varchar("priority", { length: 16 }).notNull().default("NORMAL"),
+    createdByUserId: uuid("created_by_user_id")
+      .references(() => users.id)
+      .notNull(),
+    // An Apricart person who has picked the thread up. Triage only — it grants
+    // nothing and withholds nothing, every SUPER_ADMIN still reads every thread.
+    assignedToUserId: uuid("assigned_to_user_id").references(() => users.id),
+    messageCount: integer("message_count").notNull().default(0),
+    lastMessageAt: timestamp("last_message_at", { withTimezone: true }).defaultNow().notNull(),
+    lastMessageSide: varchar("last_message_side", { length: 16 }).notNull().default("CUSTOMER"),
+    // Recorded so response time can be measured later without a backfill.
+    firstResponseAt: timestamp("first_response_at", { withTimezone: true }),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    resolvedByUserId: uuid("resolved_by_user_id").references(() => users.id),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+    closedByUserId: uuid("closed_by_user_id").references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    index("support_threads_org_idx").on(t.organizationId),
+    index("support_threads_branch_idx").on(t.branchId),
+    index("support_threads_order_idx").on(t.orderId),
+    index("support_threads_product_idx").on(t.productId),
+    index("support_threads_creator_idx").on(t.createdByUserId),
+    index("support_threads_assignee_idx").on(t.assignedToUserId),
+    // The list is always ordered by most recent activity, within a scope.
+    index("support_threads_org_activity_idx").on(t.organizationId, t.lastMessageAt),
+    index("support_threads_status_activity_idx").on(t.status, t.lastMessageAt),
+    check(
+      "support_threads_status_valid_ck",
+      sql`${t.status} IN ('OPEN', 'AWAITING_CUSTOMER', 'RESOLVED', 'CLOSED')`,
+    ),
+    check(
+      "support_threads_category_valid_ck",
+      sql`${t.category} IN ('INVOICE', 'ORDER', 'DELIVERY', 'PRODUCT', 'BILLING', 'OTHER')`,
+    ),
+    check(
+      "support_threads_priority_valid_ck",
+      sql`${t.priority} IN ('LOW', 'NORMAL', 'HIGH', 'URGENT')`,
+    ),
+    check(
+      "support_threads_side_valid_ck",
+      sql`${t.lastMessageSide} IN ('CUSTOMER', 'APRICART')`,
+    ),
+    check("support_threads_message_count_ck", sql`${t.messageCount} >= 0`),
+    check("support_threads_subject_present_ck", sql`char_length(btrim(${t.subject})) > 0`),
+  ],
+)
+
+/**
+ * One message in a thread.
+ *
+ * `authorRole` is a snapshot taken when the message was written. A person's
+ * role can change; the record of who said what, in what capacity, must not.
+ */
+export const supportMessages = pgTable(
+  "support_messages",
+  {
+    id: serial("id").primaryKey(),
+    threadId: integer("thread_id")
+      .references(() => supportThreads.id, { onDelete: "cascade" })
+      .notNull(),
+    authorUserId: uuid("author_user_id")
+      .references(() => users.id)
+      .notNull(),
+    authorSide: varchar("author_side", { length: 16 }).notNull(),
+    authorRole: varchar("author_role", { length: 64 }).notNull(),
+    body: text("body").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    index("support_messages_thread_created_idx").on(t.threadId, t.createdAt),
+    index("support_messages_author_idx").on(t.authorUserId),
+    check("support_messages_side_valid_ck", sql`${t.authorSide} IN ('CUSTOMER', 'APRICART')`),
+    check(
+      "support_messages_body_length_ck",
+      sql`char_length(btrim(${t.body})) BETWEEN 1 AND 5000`,
+    ),
+  ],
+)
+
+/**
+ * An image attached to a support message.
+ *
+ * Uploaded first and *claimed* by the message that carries it, inside the same
+ * transaction that writes the message. Until it is claimed both `thread_id` and
+ * `message_id` are null and the object is readable by nobody.
+ *
+ * The object itself lives in the private uploads bucket under the `support/`
+ * prefix, deliberately outside the `products/` prefix that
+ * `GET /api/v1/images/[...key]` will serve to any signed-in user. A support
+ * attachment comes back only through `GET /api/v1/support/attachments/[id]`,
+ * which applies the owning thread's visibility rule.
+ */
+export const supportAttachments = pgTable(
+  "support_attachments",
+  {
+    id: serial("id").primaryKey(),
+    threadId: integer("thread_id").references(() => supportThreads.id, { onDelete: "cascade" }),
+    messageId: integer("message_id").references(() => supportMessages.id, { onDelete: "cascade" }),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id)
+      .notNull(),
+    uploadedByUserId: uuid("uploaded_by_user_id")
+      .references(() => users.id)
+      .notNull(),
+    storageKey: varchar("storage_key", { length: 255 }).notNull(),
+    fileName: varchar("file_name", { length: 255 }).notNull(),
+    contentType: varchar("content_type", { length: 64 }).notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("support_attachments_storage_key_uq").on(t.storageKey),
+    index("support_attachments_message_idx").on(t.messageId),
+    index("support_attachments_thread_idx").on(t.threadId),
+    // The claim looks up this uploader's unclaimed rows by id.
+    index("support_attachments_uploader_idx").on(t.uploadedByUserId, t.createdAt),
+    check(
+      "support_attachments_size_valid_ck",
+      sql`${t.sizeBytes} > 0 AND ${t.sizeBytes} <= 4194304`,
+    ),
+  ],
+)
+
+/**
+ * How far each participant has read a thread.
+ *
+ * Not a participant table — being listed here grants nothing. It exists so the
+ * list can show which conversations have moved since the viewer last looked.
+ */
+export const supportThreadReads = pgTable(
+  "support_thread_reads",
+  {
+    id: serial("id").primaryKey(),
+    threadId: integer("thread_id")
+      .references(() => supportThreads.id, { onDelete: "cascade" })
+      .notNull(),
+    userId: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    lastReadAt: timestamp("last_read_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("support_thread_reads_thread_user_uq").on(t.threadId, t.userId),
+    index("support_thread_reads_user_idx").on(t.userId),
+  ],
 )

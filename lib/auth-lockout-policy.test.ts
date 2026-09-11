@@ -52,10 +52,20 @@ describe("evaluateLockout", () => {
 })
 
 describe("policy bounds", () => {
-  it("keeps the enforced range within what PCI DSS 8.3.4 permits", () => {
-    // At most ten attempts before lockout, and at least a thirty-minute lock.
+  it("keeps the attempt threshold within what PCI DSS 8.3.4 permits", () => {
+    // At most ten attempts before lockout.
     expect(LOCKOUT_THRESHOLD_MAX).toBeLessThanOrEqual(10)
-    expect(LOCKOUT_DURATION_MINUTES_MIN).toBeGreaterThanOrEqual(30)
+  })
+
+  // This assertion used to require >= 30 to match PCI DSS 8.3.4. The floor was
+  // lowered to five minutes by an explicit product decision, so the test now
+  // pins the value actually chosen rather than the standard's minimum. It is
+  // still a floor, and still a bound a configuration value cannot escape: the
+  // point of the assertion is that nobody drops it to zero (which would make
+  // every lock expire on the same request that applied it) by editing a
+  // constant without reading why it exists.
+  it("keeps a real, non-zero lock duration floor", () => {
+    expect(LOCKOUT_DURATION_MINUTES_MIN).toBe(5)
   })
 
   it("exposes a stable error code for the sign-in page", () => {

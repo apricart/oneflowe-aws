@@ -9,6 +9,15 @@ import { and, eq, gte, lte, inArray, desc, sql } from "drizzle-orm"
 import { metricExpressions } from "@/lib/metric-utils"
 import { redactAnalyticsPrices, shouldHidePricesForRole } from "@/lib/price-visibility"
 import { parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
+import { ORDER_CREATOR_ROLES } from "@/lib/group-order-visibility"
+
+/**
+ * This report attributes orders to the person who raised them, so it has to
+ * recognise both requester roles. Restricting it to ORDER_PORTAL alone dropped
+ * every order a Group Order Portal user placed for a branch out of the branch's
+ * own performance figures.
+ */
+const orderCreatorRoleFilter = inArray(roles.name, [...ORDER_CREATOR_ROLES])
 
 function parseNumberList(value: string | null, isValid = (number: number) => number > 0) {
     return value
@@ -101,7 +110,7 @@ function getComparisonEnd(startDate: string, compareStart: string | null, compar
 }
 
 function buildComparisonConditions(branchIds: number[], userIds: string[], months: number[], years: number[], end?: Date | null) {
-    const conditions: any[] = [inArray(orders.branchId, branchIds), eq(roles.name, "ORDER_PORTAL")]
+    const conditions: any[] = [inArray(orders.branchId, branchIds), orderCreatorRoleFilter]
     addPerformanceDateConditions(conditions, months, years, undefined, end)
     if (userIds.length > 0) conditions.push(inArray(orders.createdByUserId, userIds))
     return conditions
@@ -221,7 +230,7 @@ export async function GET(req: NextRequest) {
             .innerJoin(roles, eq(users.roleId, roles.id))
             .leftJoin(branches, eq(users.branchId, branches.id))
             .leftJoin(organizations, eq(orders.organizationId, organizations.id))
-            .where(and(...baseConditions, eq(roles.name, "ORDER_PORTAL")))
+            .where(and(...baseConditions, orderCreatorRoleFilter))
             .groupBy(users.id, branches.name, organizations.name, users.deletedAt, users.isActive)
             .orderBy(desc(metricExpressions.revenue))
 
@@ -245,7 +254,7 @@ export async function GET(req: NextRequest) {
                 .from(orders)
                 .innerJoin(users, eq(orders.createdByUserId, users.id))
                 .innerJoin(roles, eq(users.roleId, roles.id))
-                .where(and(inArray(orders.branchId, branchIds), eq(roles.name, "ORDER_PORTAL")))
+                .where(and(inArray(orders.branchId, branchIds), orderCreatorRoleFilter))
                 .groupBy(sql`EXTRACT(YEAR FROM ${orders.createdAt})`)
                 .orderBy(desc(sql`EXTRACT(YEAR FROM ${orders.createdAt})`))
 
@@ -279,7 +288,7 @@ export async function GET(req: NextRequest) {
                 .from(orders)
                 .innerJoin(users, eq(orders.createdByUserId, users.id))
                 .innerJoin(roles, eq(users.roleId, roles.id))
-                .where(and(...baseConditions, eq(roles.name, "ORDER_PORTAL")))
+                .where(and(...baseConditions, orderCreatorRoleFilter))
                 .groupBy(sql`TO_CHAR(${orders.createdAt}, 'YYYY-MM')`)
                 .orderBy(sql`TO_CHAR(${orders.createdAt}, 'YYYY-MM')`)
 

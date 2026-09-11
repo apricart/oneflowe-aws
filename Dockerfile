@@ -32,7 +32,21 @@ FROM node:20.19-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN apk add --no-cache libc6-compat \
+# Patch the base image's Alpine packages (openssl, musl, zlib) up to the
+# fixed releases within the same Alpine branch, then remove the package
+# managers. The runtime only ever executes 'node server.js', so npm, yarn
+# and corepack contribute nothing to it except their own vulnerable bundled
+# dependencies (node-tar, minimatch, brace-expansion, cross-spawn, glob).
+RUN apk --no-cache upgrade \
+  && apk add --no-cache libc6-compat \
+  && rm -rf /usr/local/lib/node_modules/npm \
+            /usr/local/lib/node_modules/corepack \
+            /usr/local/bin/npm \
+            /usr/local/bin/npx \
+            /usr/local/bin/corepack \
+            /usr/local/bin/yarn \
+            /usr/local/bin/yarnpkg \
+            /opt/yarn-v* \
   && addgroup --system --gid 1001 nodejs \
   && adduser --system --uid 1001 nextjs
 COPY --from=builder /app/public ./public

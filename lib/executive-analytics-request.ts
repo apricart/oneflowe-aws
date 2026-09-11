@@ -1,13 +1,18 @@
 import { parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
 import {
   MAX_COMPARE_ENTITIES,
+  clampDrillDownLimit,
+  clampDrillDownOffset,
   clampRowLimit,
   isChartType,
   isDimensionAllowedForRole,
   isExecutiveDimension,
   isExecutiveMetric,
   isSupportedCombination,
+  resolveDrillDownSort,
+  resolveSortDirection,
   type ChartTypeId,
+  type DrillDownSortKey,
   type ExecutiveDimensionId,
   type ExecutiveMetricId,
 } from "@/lib/executive-analytics"
@@ -132,7 +137,10 @@ export const ENTITY_KEY_PARAM: Record<ExecutiveDimensionId, string | null> = {
   user: "userIds",
   category: "categoryIds",
   product: "productIds",
+  // A time axis has no id list to fold into; a clicked month or day narrows the
+  // window instead. See `narrowWindowToPeriod`.
   month: null,
+  day: null,
 }
 
 /**
@@ -206,4 +214,203 @@ export function previousWindow(startDate: Date, endDate: Date) {
   const previousEnd = new Date(startDate.getTime() - 1)
   const previousStart = new Date(previousEnd.getTime() - durationMs)
   return { previousStart, previousEnd }
+}
+
+// ── Drill-down ─────────────────────────────────────────────────────────────
+
+/** A clicked month key, e.g. "2025-03". */
+const MONTH_KEY_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/
+/** A clicked day key, e.g. "2025-03-17". */
+const DAY_KEY_PATTERN = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/
+
+/**
+ * The clicked entity's key, as sent by a chart.
+ *
+ * Entity keys are numeric ids or UUIDs and are re-parsed downstream by the id
+ * parsers, so this only enforces a shape and a length — anything longer is
+ * refused rather than truncated, because a truncated key would silently drill
+ * into the wrong row.
+ */
+const ENTITY_KEY_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
+
+export function isMonthKey(value: unknown): value is string {
+  return typeof value === "string" && MONTH_KEY_PATTERN.test(value)
+}
+
+export function isDayKey(value: unknown): value is string {
+  return typeof value === "string" && DAY_KEY_PATTERN.test(value)
+}
+
+/** Calendar length of a "YYYY-MM" key. Day 0 of the next month is the last of this one. */
+function daysInMonth(monthKey: string): number {
+  const [year, month] = monthKey.split("-").map(Number)
+  return new Date(Date.UTC(year, month, 0)).getUTCDate()
+}
+
+/**
+ * Narrows an existing window to the clicked month or day, intersected with it.
+ *
+ * Intersected, never replaced: clicking March on a chart drawn for
+ * "1 Feb – 15 Mar" must give the rows behind *that bar*, which is 1–15 March,
+ * not the whole of March. Getting this wrong would show the reader more money
+ * than the bar they clicked, which is the one thing a drill-down must never do.
+ *
+ * Both keys are read in the application timezone, matching how the buckets they
+ * came from were built.
+ */
+export function narrowWindowToPeriod(
+  startDate: Date,
+  endDate: Date,
+  dimension: ExecutiveDimensionId,
+  key: string | null,
+): { startDate: Date; endDate: Date } | ExecutiveRequestError {
+  if (dimension !== "month" && dimension !== "day") return { startDate, endDate }
+  if (!key) return { startDate, endDate }
+
+  const valid = dimension === "month" ? isMonthKey(key) : isDayKey(key)
+  if (!valid) return { ok: false, error: `Invalid ${dimension} key` }
+
+  // Both bounds are built as plain calendar strings and handed to the shared
+  // date parsers, which anchor them to the application timezone. Doing the
+  // arithmetic on a Date would do it in UTC and land the boundary five hours
+  // out — the exact class of error this drill-down exists to avoid.
+  const firstDay = dimension === "month" ? `${key}-01` : key
+  const lastDay = dimension === "month" ? `${key}-${String(daysInMonth(key)).padStart(2, "0")}` : key
+
+  const periodStart = parseStartDateParam(firstDay)
+  const periodEnd = parseEndDateParam(lastDay)
+  if (!periodStart || !periodEnd) return { ok: false, error: `Invalid ${dimension} key` }
+
+  const start = new Date(Math.max(startDate.getTime(), periodStart.getTime()))
+  const end = new Date(Math.min(endDate.getTime(), periodEnd.getTime()))
+  if (start.getTime() > end.getTime()) {
+    return { ok: false, error: "The selected period does not overlap the requested window" }
+  }
+  return { startDate: start, endDate: end }
+}
+
+export type ParsedDrillDownRequest = ParsedExecutiveRequest & {
+  dimension: ExecutiveDimensionId
+  metric: ExecutiveMetricId
+  /** The clicked entity, already folded into the matching filter for entity dimensions. */
+  entityKey: string | null
+  /** The clicked bucket on a trend, when the point named one as well as an entity. */
+  period: string | null
+  sort: DrillDownSortKey
+  direction: "asc" | "desc"
+  offset: number
+}
+
+/** The dimension/metric/role half of the drill-down request. */
+function validateDrillDownSubject(
+  dimension: unknown,
+  metric: unknown,
+  role: unknown,
+): ExecutiveRequestError | null {
+  if (!isExecutiveDimension(dimension)) return { ok: false, error: "Unsupported dimension" }
+  if (!isExecutiveMetric(metric)) return { ok: false, error: "Unsupported metric" }
+  if (!isSupportedCombination(dimension, metric)) {
+    return { ok: false, error: `Metric "${metric}" cannot be compared by ${dimension}` }
+  }
+  if (role !== undefined && !isDimensionAllowedForRole(dimension, role)) {
+    return { ok: false, error: "Forbidden: Insufficient permissions" }
+  }
+  return null
+}
+
+/**
+ * The clicked key, validated for its dimension.
+ *
+ * A time-axis key is validated by `narrowWindowToPeriod` against the calendar
+ * shape it must have; every other key is an id or a UUID and is only checked
+ * for shape here, because the id parsers downstream are what actually decide
+ * which rows it can reach.
+ */
+function resolveEntityKey(
+  dimension: ExecutiveDimensionId,
+  rawKey: string | null,
+): { key: string | null } | ExecutiveRequestError {
+  if (!rawKey) return { key: null }
+  if (dimension === "month" || dimension === "day") return { key: rawKey }
+  if (ENTITY_KEY_PATTERN.test(rawKey)) return { key: rawKey }
+  return { ok: false, error: "Invalid entity key" }
+}
+
+/**
+ * A second, optional narrowing for a point on a multi-series trend.
+ *
+ * "Requesters over months" plots one line per person across months, so a
+ * clicked point names *two* things — the person and the month — and the table
+ * must show that person in that month, not that person across the whole window.
+ * The entity travels as `key`, the bucket as `period`, and its grain is read
+ * from its own shape rather than taken on trust.
+ */
+function narrowToClickedPeriod(
+  window: { startDate: Date; endDate: Date },
+  rawPeriod: string | null,
+): { startDate: Date; endDate: Date } | ExecutiveRequestError {
+  if (!rawPeriod) return window
+  const grain = isDayKey(rawPeriod) ? "day" : isMonthKey(rawPeriod) ? "month" : null
+  if (!grain) return { ok: false, error: "Invalid period" }
+  return narrowWindowToPeriod(window.startDate, window.endDate, grain, rawPeriod)
+}
+
+/**
+ * The detail request behind a clicked bar.
+ *
+ * It re-parses the whole filter set rather than trusting a client to send a
+ * consistent one, folds an entity key through the same `applyEntityKeys` path
+ * the comparison uses — so a branch or organization key is intersected with the
+ * caller's fence upstream rather than believed — and narrows the window for a
+ * clicked month or day. The sort key selects a pre-written expression from an
+ * allowlist and never reaches SQL as text.
+ */
+export function parseDrillDownRequest(
+  searchParams: URLSearchParams,
+  now = new Date(),
+  role?: unknown,
+): ParsedDrillDownRequest | ExecutiveRequestError {
+  const dimension = searchParams.get("dimension")
+  const metric = searchParams.get("metric") ?? "spend"
+
+  const invalid = validateDrillDownSubject(dimension, metric, role)
+  if (invalid) return invalid
+  // Narrowed by `validateDrillDownSubject`; re-asserted for the type checker.
+  if (!isExecutiveDimension(dimension) || !isExecutiveMetric(metric)) {
+    return { ok: false, error: "Unsupported dimension" }
+  }
+
+  const resolvedKey = resolveEntityKey(dimension, searchParams.get("key"))
+  if ("ok" in resolvedKey) return resolvedKey
+  const entityKey = resolvedKey.key
+  const isTimeKey = dimension === "month" || dimension === "day"
+
+  // An entity key travels as `keys`, exactly as the comparison's picker does,
+  // so there is no second code path that has to be audited for scoping.
+  const params = new URLSearchParams(searchParams)
+  if (entityKey && !isTimeKey) params.set("keys", entityKey)
+
+  const base = parseExecutiveRequest(applyEntityKeys(params, dimension), now)
+  if (!base.ok) return base
+
+  const window = narrowWindowToPeriod(base.startDate, base.endDate, dimension, entityKey)
+  if ("ok" in window) return window
+
+  const rawPeriod = searchParams.get("period")
+  const period = narrowToClickedPeriod(window, rawPeriod)
+  if ("ok" in period) return period
+
+  return {
+    ...base,
+    startDate: period.startDate,
+    endDate: period.endDate,
+    limit: clampDrillDownLimit(searchParams.get("limit")),
+    offset: clampDrillDownOffset(searchParams.get("offset")),
+    dimension,
+    metric,
+    entityKey,
+    period: rawPeriod || null,
+    sort: resolveDrillDownSort(searchParams.get("sort")),
+    direction: resolveSortDirection(searchParams.get("direction")),
+  }
 }

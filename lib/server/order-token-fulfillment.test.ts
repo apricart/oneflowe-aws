@@ -2,18 +2,22 @@ import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { describe, expect, it } from "vitest"
 
-import { isTokenHandoffEligible, tokenHandoffMessage } from "@/lib/order-token-handoff"
+import {
+  isTokenHandoffEligible,
+  tokenHandoffMessage,
+  tokenHandoffSettlesNow,
+} from "@/lib/order-token-handoff"
 
 const source = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8")
 
 describe("token hand-off eligibility", () => {
-  it("settles only an approved order, whatever case the status arrives in", () => {
+  it("records a hand-off only for an approved order, whatever case the status arrives in", () => {
     expect(isTokenHandoffEligible("APPROVED")).toBe(true)
     expect(isTokenHandoffEligible("approved")).toBe(true)
     expect(isTokenHandoffEligible(" Approved ")).toBe(true)
   })
 
-  it("never settles an order that is not approved", () => {
+  it("never records a hand-off against an order that is not approved", () => {
     for (const status of ["PENDING", "REJECTED", "CANCELLED", "FULFILLED", "REFUNDED", "PARTIAL"]) {
       expect(isTokenHandoffEligible(status)).toBe(false)
     }
@@ -23,6 +27,32 @@ describe("token hand-off eligibility", () => {
     expect(isTokenHandoffEligible(null)).toBe(false)
     expect(isTokenHandoffEligible(undefined)).toBe(false)
     expect(isTokenHandoffEligible("")).toBe(false)
+  })
+})
+
+describe("when a hand-off settles its order", () => {
+  it("settles an approved order whose goods have already been delivered", () => {
+    expect(tokenHandoffSettlesNow("APPROVED", "DELIVERED")).toBe(true)
+    expect(tokenHandoffSettlesNow(" approved ", " delivered ")).toBe(true)
+  })
+
+  it("never settles an approved order that has not been delivered", () => {
+    for (const delivery of ["NOT_STARTED", "IN_PROCESS", "OUT_FOR_DELIVERY"]) {
+      expect(tokenHandoffSettlesNow("APPROVED", delivery)).toBe(false)
+    }
+  })
+
+  it("fails closed on a missing or unrecognised delivery status", () => {
+    expect(tokenHandoffSettlesNow("APPROVED", null)).toBe(false)
+    expect(tokenHandoffSettlesNow("APPROVED", undefined)).toBe(false)
+    expect(tokenHandoffSettlesNow("APPROVED", "")).toBe(false)
+    expect(tokenHandoffSettlesNow("APPROVED", "SHIPPED")).toBe(false)
+  })
+
+  it("never settles an order that is not approved, however it was delivered", () => {
+    for (const status of ["PENDING", "REJECTED", "FULFILLED", "REFUNDED"]) {
+      expect(tokenHandoffSettlesNow(status, "DELIVERED")).toBe(false)
+    }
   })
 })
 
@@ -42,6 +72,20 @@ describe("token hand-off wording", () => {
       .toBe("Sent 4 fulfilment tokens to the admin — 1 of 4 orders are now marked fulfilled")
     expect(tokenHandoffMessage({ sentCount: 2, fulfilledCount: 0 }))
       .toBe("Sent 2 fulfilment tokens to the admin")
+  })
+
+  it("says an undelivered order settles at delivery rather than now", () => {
+    expect(tokenHandoffMessage({ sentCount: 1, fulfilledCount: 0, awaitingDeliveryCount: 1 }))
+      .toBe("Sent 1 fulfilment token to the admin — the order will be marked fulfilled once it is delivered")
+    expect(tokenHandoffMessage({ sentCount: 3, fulfilledCount: 0, awaitingDeliveryCount: 3 }))
+      .toBe("Sent 3 fulfilment tokens to the admin — all 3 orders will be marked fulfilled once they are delivered")
+  })
+
+  it("reports a group hand-off that settled some orders and left others waiting", () => {
+    expect(tokenHandoffMessage({ sentCount: 4, fulfilledCount: 1, awaitingDeliveryCount: 3 }))
+      .toBe("Sent 4 fulfilment tokens to the admin — 1 of 4 orders are now marked fulfilled; 3 will be marked fulfilled once delivered")
+    expect(tokenHandoffMessage({ sentCount: 4, fulfilledCount: 0, awaitingDeliveryCount: 2 }))
+      .toBe("Sent 4 fulfilment tokens to the admin — 2 of 4 orders will be marked fulfilled once they are delivered")
   })
 })
 
@@ -63,6 +107,20 @@ describe("the shared fulfilment transition", () => {
     expect(service).toContain('updateOrderFulfillmentStatusColumn(tx, orderId, "DELIVERED")')
   })
 
+  it("only settles an undelivered order for the caller that records the delivery", () => {
+    const service = source("lib/server/order-fulfillment.ts")
+
+    // The delivery requirement is part of the same single-winner claim, so a
+    // caller that requires delivery cannot settle goods that have not arrived.
+    expect(service).toContain("requiresDelivery ? DELIVERED_ORDER_CONDITION : undefined")
+    expect(service).toContain("= 'DELIVERED'")
+    // An order that was delivered earlier keeps the moment it was delivered.
+    expect(service).toContain("...(requiresDelivery ? {} : { deliveredAt: fulfilledAt })")
+    expect(service).toContain("if (!requiresDelivery) {")
+    // The Super Admin fulfilment route keeps recording the delivery itself.
+    expect(service).toContain('delivery = "record-delivery"')
+  })
+
   it("decides nothing about who may act — that stays with each caller", () => {
     const service = source("lib/server/order-fulfillment.ts")
 
@@ -79,6 +137,99 @@ describe("the shared fulfilment transition", () => {
     // One order that cannot move must not fail a hand-off whose email already
     // left, nor stop the orders behind it.
     expect(service).toContain("catch (fulfillmentError)")
+  })
+
+  it("records every hand-off, and settles only the orders already delivered", () => {
+    const service = source("lib/server/order-fulfillment.ts")
+
+    // The hand-off is remembered first and committed on its own, so a
+    // settlement that fails still leaves the delivery able to settle the order.
+    expect(service).toContain("const record = await recordOrderTokenHandoff(candidate)")
+    expect(service).toContain('if (record.outcome !== "recorded")')
+    expect(service).toContain("if (!tokenHandoffSettlesNow(candidate.status, record.fulfillmentStatus))")
+    expect(service).toContain("settlement.awaitingDeliveryOrderIds.add(candidate.orderId)")
+    expect(service).toContain('delivery: "require-delivered"')
+  })
+
+  it("settles a delivered order for whoever handed its token over, inside the caller's scope", () => {
+    const service = source("lib/server/order-fulfillment.ts")
+
+    expect(service).toContain("export async function settleDeliveredOrderAfterTokenHandoff(")
+    expect(service).toContain("const handoff = await findPendingTokenHandoff(target)")
+    expect(service).toContain('if (!handoff) return "no-handoff"')
+    // Credited to the sender, not to the administrator who recorded delivery.
+    expect(service).toContain("fulfilledByUserId: handoff.handedOffByUserId,")
+  })
+})
+
+describe("where a hand-off is remembered", () => {
+  it("writes the hand-off only on an approved order in the authorized scope", () => {
+    const store = source("lib/server/order-token-handoff-store.ts")
+
+    expect(store).toContain("eq(orders.id, orderId)")
+    expect(store).toContain("organizationId === null ? undefined : eq(orders.organizationId, organizationId)")
+    expect(store).toContain("eq(orders.branchId, branchId)")
+    expect(store).toContain("UPPER(TRIM(${orders.status})) = 'APPROVED'")
+  })
+
+  it("keeps the first hand-off when a token is re-sent", () => {
+    const store = source("lib/server/order-token-handoff-store.ts")
+
+    expect(store).toContain("COALESCE(${orders.tokenHandoffAt}, NOW())")
+    expect(store).toContain("COALESCE(${orders.tokenHandoffByUserId}, ${target.handedOffByUserId}::uuid)")
+  })
+
+  it("decides nothing about who may act — that stays with each caller", () => {
+    const store = source("lib/server/order-token-handoff-store.ts")
+
+    expect(store).not.toContain("requireApiRole")
+    expect(store).not.toContain("getCurrentUser")
+    expect(store).not.toContain("verifyResourceAccess")
+    expect(store).not.toContain("canViewFulfillmentToken")
+  })
+
+  it("reports no hand-off rather than failing where the migration has not been applied", () => {
+    const store = source("lib/server/order-token-handoff-store.ts")
+
+    expect(store).toContain(`to_jsonb("orders") ->> 'token_handoff_at'`)
+    expect(store).toContain(`to_jsonb("orders") ->> 'token_handoff_by_user_id'`)
+    expect(store).toContain('if (isMissingFulfillmentStatusColumn(writeError)) return { outcome: "migration-missing" }')
+    expect(store).toContain("if (!row?.handedOffAt) return null")
+  })
+
+  it("adds the columns as nullable so no existing order changes", () => {
+    const schema = source("db/schema.ts")
+    const migration = source("drizzle/20260903120000_add_order_token_handoff.sql")
+
+    expect(schema).toContain('tokenHandoffAt: timestamp("token_handoff_at", { withTimezone: true })')
+    expect(schema).toContain('tokenHandoffByUserId: uuid("token_handoff_by_user_id").references(() => users.id)')
+    expect(migration).toContain('ADD COLUMN IF NOT EXISTS "token_handoff_at" timestamp with time zone')
+    expect(migration).toContain('ADD COLUMN IF NOT EXISTS "token_handoff_by_user_id" uuid')
+    expect(migration).toContain('REFERENCES "public"."users"("id")')
+    expect(migration).not.toContain("NOT NULL")
+  })
+})
+
+describe("delivery settles an order whose token already went out", () => {
+  it("settles it from the delivery transition, after that transition commits", () => {
+    const progressRoute = source("app/api/v1/orders/[id]/fulfillment-status/route.ts")
+
+    // Still Super Admin only, and still scoped to the order it authorized.
+    expect(progressRoute).toContain('requireApiRole(["SUPER_ADMIN"])')
+    expect(progressRoute).toContain("verifyResourceAccess(order.organizationId, order.branchId)")
+    expect(progressRoute).toContain("settleDeliveredOrderAfterTokenHandoff({")
+    expect(progressRoute).toContain("organizationId: order.organizationId,")
+    expect(progressRoute).toContain("branchId: order.branchId,")
+    // Only delivery settles an order, never an earlier progress step.
+    expect(progressRoute).toContain('nextStatus === "DELIVERED"')
+    // The settlement runs outside the progress transaction, which has already
+    // committed by the time the route reaches it.
+    expect(progressRoute.indexOf("await db.transaction")).toBeLessThan(
+      progressRoute.indexOf("await settleOnDeliveryIfTokenHandedOff("),
+    )
+    // What happened is recorded and reported rather than assumed.
+    expect(progressRoute).toContain('action: "ORDER_FULFILLED_ON_DELIVERY"')
+    expect(progressRoute).toContain("fulfilled,")
   })
 })
 
@@ -106,17 +257,19 @@ describe("fulfilment on token hand-off, per role", () => {
     // Authorization still runs first and is unchanged.
     expect(tokenEmail).toContain("const canShareToken = canViewFulfillmentToken({")
     expect(tokenEmail).toContain("if (!hasAccess) return error(")
-    // The order is settled only after the email actually went out, and only on
-    // the order, tenant, and branch this request already authorized.
-    expect(tokenEmail).toContain("await fulfillOrdersAfterTokenHandoff([{")
+    // The hand-off is recorded only after the email actually went out, and only
+    // on the order, tenant, and branch this request already authorized.
+    expect(tokenEmail).toContain("await settleOrdersAfterTokenHandoff([{")
     expect(tokenEmail).toContain("orderId: order.id,")
     expect(tokenEmail).toContain("organizationId: order.organizationId,")
     expect(tokenEmail).toContain("branchId: order.branchId,")
-    expect(tokenEmail).toContain("fulfilledByUserId: user.id,")
-    // What happened is recorded and reported rather than assumed.
+    expect(tokenEmail).toContain("handedOffByUserId: user.id,")
+    // What happened is recorded and reported rather than assumed — including an
+    // order that is waiting on its delivery.
     expect(tokenEmail).toContain("fulfilled,")
+    expect(tokenEmail).toContain("awaitingDelivery,")
     expect(tokenEmail.indexOf("await sendOrderTokenEmail({")).toBeLessThan(
-      tokenEmail.indexOf("await fulfillOrdersAfterTokenHandoff([{"),
+      tokenEmail.indexOf("await settleOrdersAfterTokenHandoff([{"),
     )
   })
 
@@ -125,20 +278,22 @@ describe("fulfilment on token hand-off, per role", () => {
     const tokenLoader = source("lib/server/group-order-tokens.ts")
 
     expect(groupTokens).toContain("requireGroupOrderPortal()")
-    expect(groupTokens).toContain("await fulfillOrdersAfterTokenHandoff(bundle.entries.map((entry) => ({")
+    expect(groupTokens).toContain("await settleOrdersAfterTokenHandoff(bundle.entries.map((entry) => ({")
     // Only the entries the loader already released, and only inside the tenant
     // the bundle was resolved in.
     expect(groupTokens).toContain("organizationId: bundle.organizationId,")
     expect(groupTokens).toContain("branchId: entry.branchId,")
-    expect(groupTokens).toContain("fulfilledByUserId: actor.scope.userId,")
+    expect(groupTokens).toContain("handedOffByUserId: actor.scope.userId,")
     // The bundle itself is still restricted to this requester's own approved
     // orders, at branches still in their live assignments.
     expect(tokenLoader).toContain("eq(orders.createdByUserId, userId)")
     expect(tokenLoader).toContain("eq(orders.organizationId, organizationId)")
     expect(tokenLoader).toContain("if (!scopedBranchIds.has(child.branchId)) return false")
     expect(tokenLoader).toContain("canViewFulfillmentToken({")
-    // Every hand-off records whether it settled the order.
+    // Every hand-off records whether it settled the order, or is waiting on the
+    // delivery that will.
     expect(tokenLoader).toContain("fulfilled: Boolean(fulfilledOrderIds?.has(entry.orderId))")
+    expect(tokenLoader).toContain("awaitingDelivery: Boolean(awaitingDeliveryOrderIds?.has(entry.orderId))")
   })
 
   it("leaves the unattended auto-fulfilment sweep exactly as it was", () => {
@@ -147,7 +302,8 @@ describe("fulfilment on token hand-off, per role", () => {
     expect(autoFulfil).toContain("isCronAuthorized(req)")
     expect(autoFulfil).toContain("lte(orders.deliveredAt, cutoff)")
     expect(autoFulfil).toContain("NOT EXISTS (SELECT 1 FROM \"refunds\"")
-    expect(autoFulfil).not.toContain("fulfillOrdersAfterTokenHandoff")
+    expect(autoFulfil).not.toContain("settleOrdersAfterTokenHandoff")
+    expect(autoFulfil).not.toContain("token_handoff")
   })
 
   it("does not widen who may see a token in the first place", () => {
