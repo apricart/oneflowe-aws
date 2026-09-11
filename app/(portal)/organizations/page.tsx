@@ -53,7 +53,7 @@ type Organization = {
 type Branch = {
   id: number
   name: string
-  code: string
+  code: string | null
   organizationId: number
   province?: string | null
   city?: string | null
@@ -385,7 +385,7 @@ export default function OrganizationsPage() {
       const q = branchSearch.toLowerCase()
       result = result.filter((b) =>
         b.name.toLowerCase().includes(q) ||
-        b.code.toLowerCase().includes(q) ||
+        (b.code || "").toLowerCase().includes(q) ||
         (b.costCenterId || "").toLowerCase().includes(q)
       )
     }
