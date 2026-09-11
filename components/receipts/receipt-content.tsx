@@ -129,10 +129,8 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
         <div className={`receipt-container ${standalone ? 'py-8 px-4' : 'p-2'}`}>
             {/* Professional Styles */}
             <style>{`
-                @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
-                
                 .official-invoice {
-                    font-family: 'Outfit', sans-serif;
+                    font-family: var(--font-geist-sans), Arial, sans-serif;
                     background: white;
                     border: 1px solid #e2e8f0;
                     padding: 40px;

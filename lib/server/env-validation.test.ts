@@ -27,7 +27,28 @@ describe('server environment validation', () => {
     expect(result.PGPOOL_MAX).toBe(20)
     expect(result.BCRYPT_ROUNDS).toBe(12)
     expect(result.INACTIVITY_TIMEOUT_MINUTES).toBe(15)
+    expect(result.ONEFLOWE_OFFLINE_MODE).toBe(false)
     expect(result.SES_ENABLED).toBe(false)
+  })
+
+  it('allows Redis-free offline mode only in development', () => {
+    const offline = validRuntimeEnv()
+    offline.NODE_ENV = 'development'
+    offline.ONEFLOWE_OFFLINE_MODE = 'true'
+    delete offline.UPSTASH_REDIS_REST_URL
+    delete offline.UPSTASH_REDIS_REST_TOKEN
+
+    expect(parseServerEnv(offline).ONEFLOWE_OFFLINE_MODE).toBe(true)
+    expect(() =>
+      parseServerEnv({
+        ...offline,
+        NODE_ENV: 'production',
+        NEXTAUTH_URL: 'https://app.test.invalid',
+      }),
+    ).toThrow(/ONEFLOWE_OFFLINE_MODE/)
+    expect(() =>
+      parseServerEnv({ ...offline, ONEFLOWE_OFFLINE_MODE: 'sometimes' }),
+    ).toThrow(/ONEFLOWE_OFFLINE_MODE/)
   })
 
   it('enforces the global idle-timeout security bounds', () => {

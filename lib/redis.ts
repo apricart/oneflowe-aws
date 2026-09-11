@@ -1,10 +1,13 @@
 import { Redis } from '@upstash/redis'
+import { getLocalMemoryRedis, type RedisLike } from '@/lib/local-memory-redis'
 import { env } from '@/lib/server/env'
 
-const redis = new Redis({
-  url: env.UPSTASH_REDIS_REST_URL,
-  token: env.UPSTASH_REDIS_REST_TOKEN,
-})
+const redis: RedisLike = env.ONEFLOWE_OFFLINE_MODE
+  ? getLocalMemoryRedis()
+  : (new Redis({
+      url: env.UPSTASH_REDIS_REST_URL!,
+      token: env.UPSTASH_REDIS_REST_TOKEN!,
+    }) as unknown as RedisLike)
 
 export { redis }
 

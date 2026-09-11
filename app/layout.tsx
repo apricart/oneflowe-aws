@@ -1,15 +1,6 @@
 import type { Metadata } from 'next'
-import { Inter, JetBrains_Mono } from 'next/font/google'
-
-const inter = Inter({
-  subsets: ['latin'],
-  variable: '--font-inter',
-})
-
-const jetbrainsMono = JetBrains_Mono({
-  subsets: ['latin'],
-  variable: '--font-jetbrains-mono',
-})
+import { GeistSans } from 'geist/font/sans'
+import { GeistMono } from 'geist/font/mono'
 
 import { AuthSessionProvider } from '@/components/session-provider'
 import { Toaster } from '@/components/ui/toaster'
@@ -42,7 +33,7 @@ export default function RootLayout({
         <meta name="theme-color" content="#1e3a8a" />
         <script src="/theme-init.js" />
       </head>
-      <body className={`font-sans ${inter.variable} ${jetbrainsMono.variable} selection:bg-indigo-100 selection:text-indigo-900`} suppressHydrationWarning>
+      <body className={`font-sans ${GeistSans.variable} ${GeistMono.variable} selection:bg-indigo-100 selection:text-indigo-900`} suppressHydrationWarning>
         <ThemeProvider>
           <AuthSessionProvider>
             <SWRProvider>

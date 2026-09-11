@@ -162,7 +162,11 @@ describe("group user reporting endpoints", () => {
       'const showsGroupOrders = ["GROUP_USER", "SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"].includes(role)',
     )
     expect(orderReport).toContain('reportParams.set("groupOrderRef", debouncedGroupOrderFilter)')
-    expect(orderReport).toContain('if (!showsGroupOrders && c.key === "groupOrderReference") return false;')
+    // On screen the column is offered to exactly those roles. The download no
+    // longer carries it: it follows the fixed tenant-facing layout in
+    // `lib/order-report-export-layout.ts`, which has no group-order column, so
+    // there is nothing there to withhold from anyone.
+    expect(orderReport).toContain('isVisible("groupOrderReference") && showsGroupOrders')
   })
 
   it("gives the approver a sidebar without any administrator area", () => {

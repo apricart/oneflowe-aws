@@ -5,6 +5,7 @@ import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { orders, users, roles, branches, organizations, groups, groupOrders, orderItems, refunds, refundItems } from "@/db/schema"
 import { and, desc, eq, gte, ilike, lte, or, sql, sum, count, inArray } from "drizzle-orm"
+import { alias } from "drizzle-orm/pg-core"
 import { metricExpressions } from "@/lib/metric-utils"
 import { escapeLikePattern } from "@/lib/utils"
 import { redactAnalyticsPrices, shouldHidePricesForRole } from "@/lib/price-visibility"
@@ -16,6 +17,11 @@ import {
 } from "@/lib/server/analytics-scope"
 import { loadAnalyticsAssignedBranchIds } from "@/lib/server/analytics-branch-scope"
 import { orderSelectColumns } from "@/lib/order-select"
+
+// Separate aliases for the two people an order can pass through after its
+// raiser, so one query can name all three without colliding on `users`.
+const approverUsers = alias(users, "approver_users")
+const fulfillerUsers = alias(users, "fulfiller_users")
 
 function parseNumberList(value: string | null, isValid = (number: number) => number > 0) {
     return value ? value.split(",").map(Number).filter((number) => !Number.isNaN(number) && isValid(number)) : []
@@ -328,10 +334,19 @@ export async function GET(req: NextRequest) {
         )`,
         organizationName: organizations.name,
         createdAt: orders.createdAt,
+        approvedAt: orders.approvedAt,
+        deliveredAt: orders.deliveredAt,
         fulfilledAt: orders.fulfilledAt,
         refundedAt: orders.refundedAt,
         userName: users.fullName,
         employeeId: users.employeeId,
+        // The approver and the fulfiller are separate people from the raiser,
+        // so each needs its own join rather than reusing the creator row.
+        approverName: approverUsers.fullName,
+        fulfillerName: fulfillerUsers.fullName,
+        // The invoice number lives in the receipt snapshot taken when the order
+        // was raised, exactly as the branch export reads it.
+        invoiceNumber: sql<string | null>`${orders.receiptData} ->> 'invoiceNumber'`,
         quantityOrdered: sql<number>`(
             SELECT COALESCE(SUM(${orderItems.quantity}), 0)
             FROM ${orderItems}
@@ -350,6 +365,8 @@ export async function GET(req: NextRequest) {
         .leftJoin(organizations, eq(orders.organizationId, organizations.id))
         .leftJoin(groups, eq(branches.groupId, groups.id))
         .leftJoin(users, eq(orders.createdByUserId, users.id))
+        .leftJoin(approverUsers, eq(orders.approvedByUserId, approverUsers.id))
+        .leftJoin(fulfillerUsers, eq(orders.fulfilledByUserId, fulfillerUsers.id))
         .where(whereClause)
         .orderBy(desc(orders.createdAt), desc(orders.id))
         .limit(limit)
