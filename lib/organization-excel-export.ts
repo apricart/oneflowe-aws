@@ -15,7 +15,7 @@ export type OrganizationBranchExportData = {
   id: number
   organizationId: number
   name: string
-  code: string
+  code: string | null
   status?: string | null
   province?: string | null
   city?: string | null
@@ -161,7 +161,7 @@ export function buildOrganizationWorkbookData(
       "Organization Code": organization.code,
       "Branch ID": branch.id,
       "Branch Name": branch.name,
-      "Branch Code": branch.code,
+      "Branch Code": branch.code || "-",
       "Status": formatStatus(branch.status),
       "Province": branch.province || "-",
       "City": branch.city || "-",

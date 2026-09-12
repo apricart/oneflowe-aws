@@ -10,7 +10,9 @@ import {
   planUsernameMigration,
   planUsers,
   contestedIdentityFor,
+  employeeCodeOf,
   fallbackEmail,
+  isNamedUsername,
   isSamePerson,
   summarize,
   type CurrentBranch,
@@ -230,6 +232,29 @@ describe("planUsernameMigration", () => {
     expect(renames).toHaveLength(0)
   })
 
+  it("prefixes the first name when one is known, matching the hand-out convention", () => {
+    const { renames } = planUsernameMigration([
+      user({ id: "a", roleName: "BRANCH_ADMIN", username: "80004178-ba", firstName: "Muhammad" }),
+      user({ id: "b", roleName: "ORDER_PORTAL", username: "1761044_op", fullName: "Muhammad Huzaifa" }),
+    ])
+    expect(renames.map((r) => r.to).sort()).toEqual(["muhammad-1761044-op", "muhammad-80004178-ba"])
+  })
+
+  it("never renames an account already in the named shape, whatever its external_id says", () => {
+    const { renames } = planUsernameMigration([
+      user({ id: "a", roleName: "BRANCH_ADMIN", username: "hamza-18716-ba", firstName: "Hamza", externalSource: KE_SYNC_SOURCE, externalId: "ke75" }),
+      user({ id: "b", roleName: "ORDER_PORTAL", username: "checking-18716-op", firstName: "Shehryar" }),
+    ])
+    expect(renames).toHaveLength(0)
+  })
+
+  it("leaves head-office accounts alone", () => {
+    const { renames } = planUsernameMigration([
+      user({ id: "h", roleName: "HEAD_OFFICE", username: "head-1734549", firstName: "Head" }),
+    ])
+    expect(renames).toHaveLength(0)
+  })
+
   it("flags a rename that would land on a name already in use", () => {
     const { collisions } = planUsernameMigration([
       user({ id: "a", roleName: "BRANCH_ADMIN", username: "500" }),
@@ -249,8 +274,8 @@ describe("planUsers", () => {
     const plan = planUsers([subUser({ ID: 201, Passcode: "15100" })], pins, [])
     expect(plan.people).toHaveLength(1)
     expect(plan.people[0].accounts).toEqual([
-      { roleName: "BRANCH_ADMIN", username: "15100-ba" },
-      { roleName: "ORDER_PORTAL", username: "15100-op" },
+      { roleName: "BRANCH_ADMIN", username: "test-15100-ba" },
+      { roleName: "ORDER_PORTAL", username: "test-15100-op" },
     ])
     expect(plan.people[0].branchId).toBe(5)
     expect(plan.people[0].legacyPassword).toBe("secret12")
@@ -291,8 +316,56 @@ describe("planUsers", () => {
       user({ id: "a", roleName: "BRANCH_ADMIN", username: "12997-ba", branchId: 5, email: "user5@ke.com.pk" }),
     ])
     expect(plan.backfill).toEqual([
-      { legacySubUserId: 5, email: "user5@ke.com.pk", username: "12997-op", roleName: "ORDER_PORTAL", branchId: 5 },
+      { legacySubUserId: 5, email: "user5@ke.com.pk", username: "test-12997-op", roleName: "ORDER_PORTAL", branchId: 5, sourceUserId: "a" },
     ])
+  })
+
+  it("backfills a twin in the sibling's named shape, copying from the portal account", () => {
+    const plan = planUsers([subUser({ ID: 5, Passcode: "12997", FirstName: "Test" })], pins, [
+      user({ id: "h", roleName: "HEAD_OFFICE", username: "head-12997", email: "user5@ke.com.pk", externalSource: KE_SYNC_SOURCE, externalId: "12997", branchId: null }),
+      user({ id: "a", roleName: "BRANCH_ADMIN", username: "test-12997-ba", branchId: 5, email: "user5@ke.com.pk", externalSource: KE_SYNC_SOURCE, externalId: "12997" }),
+    ])
+    expect(plan.backfill).toEqual([
+      { legacySubUserId: 5, email: "user5@ke.com.pk", username: "test-12997-op", roleName: "ORDER_PORTAL", branchId: 5, sourceUserId: "a" },
+    ])
+  })
+
+  it("builds a named twin from the first name when the only sibling has no suffix", () => {
+    const plan = planUsers([subUser({ ID: 5, Passcode: "12997", FirstName: "Head" })], pins, [
+      user({ id: "h", roleName: "HEAD_OFFICE", username: "head-12997", firstName: "Head", email: "user5@ke.com.pk", externalSource: KE_SYNC_SOURCE, externalId: "12997", branchId: 5 }),
+    ])
+    expect(plan.backfill.map((b) => [b.username, b.sourceUserId])).toEqual([
+      ["head-12997-ba", "h"],
+      ["head-12997-op", "h"],
+    ])
+  })
+
+  it("recognises a person by external_id when the username carries a first name", () => {
+    const plan = planUsers([subUser({ ID: 5, Passcode: "12997", FirstName: "Aamir" })], pins, [
+      user({ id: "a", roleName: "BRANCH_ADMIN", username: "aamir-12997-ba", email: "user5@ke.com.pk", externalSource: KE_SYNC_SOURCE, externalId: "12997" }),
+      user({ id: "b", roleName: "ORDER_PORTAL", username: "aamir-12997-op", email: "user5@ke.com.pk", externalSource: KE_SYNC_SOURCE, externalId: "12997" }),
+    ])
+    expect(plan.people).toHaveLength(0)
+    expect(plan.alreadyPresent).toBe(1)
+    expect(plan.backfill).toHaveLength(0)
+  })
+
+  it("recognises a person by external_id even when the username carries a different code", () => {
+    // A damaged stamp: the username says 9418, legacy says 09418.
+    const plan = planUsers([subUser({ ID: 5, Passcode: "09418", FirstName: "Yasir" })], pins, [
+      user({ id: "a", roleName: "BRANCH_ADMIN", username: "yasir-9418-ba", email: "user5@ke.com.pk", externalSource: KE_SYNC_SOURCE, externalId: "09418" }),
+      user({ id: "b", roleName: "ORDER_PORTAL", username: "yasir-9418-op", email: "user5@ke.com.pk", externalSource: KE_SYNC_SOURCE, externalId: "09418" }),
+    ])
+    expect(plan.people).toHaveLength(0)
+    expect(plan.alreadyPresent).toBe(1)
+  })
+
+  it("treats a username held by a soft-deleted or foreign row as taken", () => {
+    const plan = planUsers([subUser({ ID: 201, Passcode: "15100" })], pins, [], {
+      takenUsernames: ["test-15100-op"],
+    })
+    expect(plan.people).toHaveLength(0)
+    expect(plan.skipped.map((entry) => entry.reason)).toEqual(["USERNAME_TAKEN"])
   })
 
   it("skips rather than invents when the source is incomplete", () => {
@@ -341,7 +414,7 @@ describe("planUsers", () => {
     // A stranger holds the code, so the person is created beside them rather
     // than merged into them or dropped.
     expect(plan.conflicts).toHaveLength(1)
-    expect(plan.people.flatMap((p) => p.accounts.map((a) => a.username))).toEqual(["ke9-ba", "ke9-op"])
+    expect(plan.people.flatMap((p) => p.accounts.map((a) => a.username))).toEqual(["test-ke9-ba", "test-ke9-op"])
     expect(plan.people[0].accounts.every((a) => a.username !== "777-ba")).toBe(true)
   })
 
@@ -388,7 +461,7 @@ describe("planUsers", () => {
     )
     expect(plan.people).toHaveLength(2)
     expect(plan.people.flatMap((p) => p.accounts.map((a) => a.username))).toEqual([
-      "111-ba", "111-op", "222-ba", "222-op",
+      "test-111-ba", "test-111-op", "test-222-ba", "test-222-op",
     ])
   })
 })
@@ -422,6 +495,18 @@ describe("planDigest", () => {
 })
 
 describe("guards", () => {
+  it("reads the employee code out of every username shape", () => {
+    expect(employeeCodeOf("12997")).toBe("12997")
+    expect(employeeCodeOf("12997_op")).toBe("12997")
+    expect(employeeCodeOf("12997-ba")).toBe("12997")
+    expect(employeeCodeOf("aamir-1398122-op")).toBe("1398122")
+    expect(employeeCodeOf("checking-18716-ba")).toBe("18716")
+    expect(employeeCodeOf("")).toBeNull()
+    expect(isNamedUsername("aamir-1398122-op")).toBe(true)
+    expect(isNamedUsername("1398122-op")).toBe(false)
+    expect(isNamedUsername("head-1734549")).toBe(false)
+  })
+
   it("recognises synthetic historical accounts", () => {
     expect(isSyntheticAccount("legacy_ke_133_10@historical.invalid")).toBe(true)
     expect(isSyntheticAccount("real.person@ke.com.pk")).toBe(false)
@@ -481,7 +566,7 @@ describe("employee code conflicts", () => {
     expect(plan.people).toHaveLength(1)
     expect(plan.people[0].email).toBe("malaika.khan@ke.com.pk")
     expect(plan.people[0].employeeCode).toBe("ke148")
-    expect(plan.people[0].accounts.map((a) => a.username)).toEqual(["ke148-ba", "ke148-op"])
+    expect(plan.people[0].accounts.map((a) => a.username)).toEqual(["malaikafayyazkhan-ke148-ba", "malaikafayyazkhan-ke148-op"])
   })
 
   it("leaves the sitting account alone", () => {
@@ -522,7 +607,7 @@ describe("employee code conflicts", () => {
     const plan = planUsers([malaika], pins, [self])
     expect(plan.conflicts).toHaveLength(0)
     expect(plan.alreadyPresent).toBe(1)
-    expect(plan.backfill.map((b) => b.username)).toEqual(["16476-ba"])
+    expect(plan.backfill.map((b) => b.username)).toEqual(["malaika-16476-ba"])
   })
 
   it("treats a person whose email drifted domains as the same person", () => {

@@ -26,6 +26,13 @@
  *   npm run align:handout -- --organization-code=0001 --commit --confirm-plan-sha256=<digest> --operator=you@example.com
  *   npm run align:handout -- --rollback=deliverables/<committed report>.json --operator=you@example.com
  *
+ * `--trust-login-codes=<code,code>` plans a row for the named login codes even
+ * when its password does not verify, provided the row matched its account by
+ * login code (never by the email fallback). This is for a person who has
+ * already changed their password: the hand-out username and name still apply,
+ * and the password is never written by this script anyway. Each such row is
+ * reported as `trusted` in the plan so the exception is visible.
+ *
  * `--rollback` accepts `--flag-prefix=<prefix>`: the restored username is
  * written as `<prefix><previous username>` (names are restored as-is), which
  * parks an account that turned out to belong to somebody else under a visible
@@ -75,6 +82,8 @@ interface LoadedPlan {
   handoutRows: number
   matched: MatchResult
   built: AlignmentPlan
+  /** Rows planned on `--trust-login-codes` although their password did not verify. */
+  trusted: Array<{ sheetIndex: number; username: string; loginCode: string }>
 }
 
 /* ------------------------------------------------------------------ helpers */
@@ -183,6 +192,9 @@ async function readAccounts(client: PoolClient, organizationId: number): Promise
       join roles r on r.id = u.role_id
       left join branches b on b.id = u.branch_id
      where u.organization_id = $1 and u.deleted_at is null
+       -- A retired account (a previous holder of a reissued legacy login) still
+       -- carries the code it once signed in with; it is not a hand-out target.
+       and coalesce(u.external_source, '') !~ '_RETIRED$'
      order by u.id
   `, [organizationId])
   return result.map(toAccount)
@@ -208,11 +220,18 @@ async function loadPlan(client: PoolClient, code: string, handoutPath: string): 
   // `server-only`, and bcrypt verification is fully specified, so bcryptjs
   // directly checks exactly what a login would.
   const bcrypt = (await import("bcryptjs")).default
+  const trustedCodes = new Set(
+    (arg("--trust-login-codes") ?? "").split(",").map((value) => codeKeyOf(value)).filter(Boolean))
   const verified: VerifiedMatch[] = []
+  const trusted: Array<{ sheetIndex: number; username: string; loginCode: string }> = []
   for (const match of matched.matches) {
     const hash = hashById.get(match.account.id) ?? ""
     const password = handout.passwordByIndex.get(match.row.index) ?? ""
-    const passwordVerified = hash !== "" && password !== "" && await bcrypt.compare(password, hash)
+    let passwordVerified = hash !== "" && password !== "" && await bcrypt.compare(password, hash)
+    if (!passwordVerified && match.matchedBy === "login_code" && trustedCodes.has(codeKeyOf(match.row.loginCode))) {
+      passwordVerified = true
+      trusted.push({ sheetIndex: match.row.index, username: match.row.username, loginCode: match.row.loginCode })
+    }
     verified.push({ ...match, passwordVerified })
   }
 
@@ -220,7 +239,12 @@ async function loadPlan(client: PoolClient, code: string, handoutPath: string): 
   const built = buildAlignmentPlan(verified,
     existing.map((row) => ({ id: String(row.id), username: (row.username as string | null) ?? null })))
 
-  return { org, handoutRows: handout.rows.length, matched, built }
+  return { org, handoutRows: handout.rows.length, matched, built, trusted }
+}
+
+/** Login codes are compared as digits-and-letters, case-insensitively. */
+function codeKeyOf(value: unknown): string {
+  return text(value).toLowerCase().replace(/[^a-z0-9]/g, "")
 }
 
 /* ------------------------------------------------------------------- report */
@@ -260,6 +284,7 @@ function baseReport(loaded: LoadedPlan, handoutPath: string): JsonRow {
     warning:
       "Mirrored accounts sign in by username only. Every renamed account must be told its new username — the hand-out is that notice.",
     requiredCommitArguments: ["--commit", `--confirm-plan-sha256=${digest}`, "--operator=<your email>"],
+    trustedWithoutPasswordProof: loaded.trusted,
     plan: loaded.built.plan,
     unchanged: loaded.built.unchanged,
     blocked: { unmatched: loaded.matched.skipped, notPlanned: loaded.built.skipped },
