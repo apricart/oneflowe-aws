@@ -111,3 +111,44 @@ of anything.
 Additive. No schema change, no migration. The two behavioural corrections
 (time-axis series, app-timezone month buckets) are confined to the Executive
 Analytics Center. Reverting the commit restores the previous page exactly.
+
+## Addendum — item-wise comparison on the side-by-side screen (2026-09-13)
+
+### Gap
+
+The requirement asks for comparison "across items/products, users, branches
+and months … in one screen". The side-by-side screen compared users, branches
+and months, but products were only ever the *subject*: ticking three products
+gave their combined figure per requester and per branch, never three bars.
+Product-vs-product lived only on Explore, one question at a time.
+
+### Change
+
+Two entries in `SIDE_BY_SIDE_PANELS`, both served by the existing `/compare`
+endpoint with `dimension=product` — no new aggregation path, no new
+authorization surface, no schema change:
+
+* **By product** — ranked bars, `chart: "bar"`, one hue per product.
+* **Products over months** — `chart: "line"`, one line per product.
+
+Both are withheld when exactly one product is in focus (`hiddenForSingleProduct`),
+where a single bar or a single line would restate the subject; the day-by-day
+panel already covers that case. With no focus they rank the top products in
+scope; with several products ticked they compare exactly those, because the
+focus already travels as `productIds`.
+
+`panelsForFocus` honours the new flag alongside `requiresSingleProduct`. The
+subject sentence names products among the compared dimensions when the product
+panels are on screen.
+
+### Tests
+
+Registry: product panels support both measures and draw an allowed form
+(existing loops); product panels hidden for one focused product and present
+for zero or several; the screen covers product as well as requester, branch and
+month.
+
+### Risk and rollback
+
+Additive registry entries. Removing the two entries restores the previous
+screen exactly.

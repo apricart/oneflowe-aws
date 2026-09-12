@@ -360,8 +360,10 @@ export function VizTooltip({ title, rows }: Readonly<{
     <div className="min-w-[180px] rounded-lg border border-slate-200 bg-white p-3 shadow-lg dark:border-slate-700 dark:bg-slate-900">
       <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">{title}</p>
       <dl className="space-y-1">
-        {rows.map((row) => (
-          <div key={row.label} className="flex items-center justify-between gap-4">
+        {rows.map((row, index) => (
+          // Slot-indexed: the list is a fixed read-out, and a metric label can
+          // coincide with a context row (the scatter shows "Quantity" twice).
+          <div key={`${index}:${row.label}`} className="flex items-center justify-between gap-4">
             <dt className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
               {row.color ? (
                 <span aria-hidden className="h-2 w-2 shrink-0 rounded-[2px]" style={{ background: row.color }} />
@@ -382,11 +384,17 @@ export function VizTooltip({ title, rows }: Readonly<{
 }
 
 /** A legend is always present for two or more series; identity is never colour alone. */
-export function Legend({ items }: Readonly<{ items: Array<{ label: string; color: string }> }>) {
+/**
+ * Legend entries take an optional `key` — the entity's id — because two entities
+ * may share a label (two people with one name, a product renamed mid-period).
+ * Without one the slot index stands in: the legend is a static read-out of the
+ * chart's rows and never reorders on its own.
+ */
+export function Legend({ items }: Readonly<{ items: Array<{ key?: string; label: string; color: string }> }>) {
   return (
     <ul className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">
-      {items.map((item) => (
-        <li key={item.label} className="flex items-center gap-1.5 text-[11px] text-slate-600 dark:text-slate-400">
+      {items.map((item, index) => (
+        <li key={item.key ?? `${index}:${item.label}`} className="flex items-center gap-1.5 text-[11px] text-slate-600 dark:text-slate-400">
           <span aria-hidden className="h-2 w-2 rounded-[2px]" style={{ background: item.color }} />
           {item.label}
         </li>

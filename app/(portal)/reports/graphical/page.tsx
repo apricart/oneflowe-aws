@@ -170,8 +170,8 @@ export default function GraphicalReportsPage() {
             Graphical Reports
           </h1>
           <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-            Executive procurement analytics — budget position, side-by-side comparison across people, branches and
-            months, and the order lines behind any figure.
+            Executive procurement analytics — budget position, side-by-side comparison across products, people,
+            branches and months, and the order lines behind any figure.
             {data ? ` Covering ${data.scope.branchCount} branch${data.scope.branchCount === 1 ? "" : "es"} in your scope.` : ""}
           </p>
         </div>

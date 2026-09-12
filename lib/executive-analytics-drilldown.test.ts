@@ -155,8 +155,31 @@ describe("the side-by-side panel registry", () => {
     expect(panelsForFocus(1).map((panel) => panel.id)).toContain("day-by-day")
   })
 
-  it("covers requester, branch and month on the one screen", () => {
+  it("withholds the product-vs-product panels only for a single focused product", () => {
+    // One product against itself is a single bar restating the subject line.
+    // With nothing focused the panels rank the top products in scope; with
+    // several focused they compare exactly those.
+    const productPanels = SIDE_BY_SIDE_PANELS
+      .filter((panel) => panel.dimension === "product")
+      .map((panel) => panel.id)
+    expect(productPanels).toEqual(["by-product", "products-over-months"])
+
+    const idsFor = (count: number) => panelsForFocus(count).map((panel) => panel.id)
+    expect(idsFor(0)).toEqual(expect.arrayContaining(productPanels))
+    expect(idsFor(2)).toEqual(expect.arrayContaining(productPanels))
+    expect(idsFor(25)).toEqual(expect.arrayContaining(productPanels))
+    for (const id of productPanels) expect(idsFor(1)).not.toContain(id)
+  })
+
+  it("never hides every panel, whatever the focus", () => {
+    for (const count of [0, 1, 2, 25]) {
+      expect(panelsForFocus(count).length, `focus of ${count}`).toBeGreaterThan(0)
+    }
+  })
+
+  it("covers product, requester, branch and month on the one screen", () => {
     const dimensions = SIDE_BY_SIDE_PANELS.map((panel) => panel.dimension)
+    expect(dimensions).toContain("product")
     expect(dimensions).toContain("user")
     expect(dimensions).toContain("branch")
     expect(dimensions).toContain("month")
