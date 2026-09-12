@@ -21,6 +21,8 @@ import { dirname, resolve } from "node:path"
 import * as dotenv from "dotenv"
 import type { PoolClient } from "pg"
 
+import { invalidateCachePrefixes } from "../lib/cache-cli"
+
 dotenv.config({ path: ".env.local", quiet: true })
 dotenv.config({ quiet: true })
 
@@ -475,8 +477,13 @@ async function commit(client: PoolClient): Promise<void> {
   }
   saveJson(output, commitReport)
 
-  const { invalidateByPrefix } = await import("../lib/cache-utils")
-  for (const prefix of ["budgets", "analytics", "branches"]) await invalidateByPrefix(prefix)
+  // Already committed — a cache that will not clear is reported, not thrown
+  // (`lib/cache-utils` cannot be imported from a plain tsx process; see
+  // `lib/cache-cli.ts`).
+  const cache = await invalidateCachePrefixes(["budgets", "analytics", "branches"])
+  for (const entry of cache.filter((row) => row.error)) {
+    console.warn(`WARNING: cache prefix "${entry.prefix}" was not cleared: ${entry.error}`)
+  }
 
   console.log(JSON.stringify({
     mode: "COMMITTED",
@@ -553,8 +560,13 @@ async function rollback(client: PoolClient, reportPath: string): Promise<void> {
     throw error
   }
 
-  const { invalidateByPrefix } = await import("../lib/cache-utils")
-  for (const prefix of ["budgets", "analytics", "branches"]) await invalidateByPrefix(prefix)
+  // Already committed — a cache that will not clear is reported, not thrown
+  // (`lib/cache-utils` cannot be imported from a plain tsx process; see
+  // `lib/cache-cli.ts`).
+  const cache = await invalidateCachePrefixes(["budgets", "analytics", "branches"])
+  for (const entry of cache.filter((row) => row.error)) {
+    console.warn(`WARNING: cache prefix "${entry.prefix}" was not cleared: ${entry.error}`)
+  }
 }
 
 async function preflight(client: PoolClient): Promise<void> {

@@ -21,6 +21,7 @@
  * of the same email addresses, and must never be touched by this sync.
  */
 
+import { buildUsername, roleSuffix, slugToken } from "../username-generation"
 import { canonicalJson, normalizeLegacyText, sha256 } from "./ke-post-cutoff"
 
 export const KE_SYNC_ORGANIZATION = { id: 10, code: "0001", name: "K-Electric" } as const
@@ -107,6 +108,8 @@ export interface CurrentUser {
   username: string | null
   email: string
   fullName: string | null
+  /** Used to build `<first name>-<code>-<suffix>`; the full name is the fallback. */
+  firstName?: string | null
   roleName: string
   branchId: number | null
   isActive: boolean
@@ -377,17 +380,56 @@ export interface UsernameRename {
 }
 
 /**
- * Move existing accounts onto the `-ba` / `-op` convention.
+ * The username shape every K-Electric portal account carries today:
+ * `<first name>-<employee code>-<ba|op>`, as `lib/username-generation.ts`
+ * builds it and as the credential hand-out spells it. An account already in
+ * this shape is never renamed by the sync — it is what the person was told.
+ */
+const NAMED_USERNAME = /^([a-z0-9]+)-([a-z0-9]+)-(ba|op)$/i
+
+export function isNamedUsername(username: string | null | undefined): boolean {
+  return NAMED_USERNAME.test(String(username ?? "").trim())
+}
+
+/**
+ * The username for one account under the current convention.
  *
- * Before this, an approver held the bare employee code and the order-portal
- * account held `<code>_op`. That made the approver's username indistinguishable
- * from a plain employee code, so nothing on the login screen told a person
- * which of their two accounts they were about to use. Both roles now carry an
- * explicit suffix.
+ * Falls back to the bare `<code>-<suffix>` form only when no first name is
+ * known at all, so a person legacy records with an empty name still gets an
+ * account rather than being skipped.
+ */
+export function accountUsername(
+  firstName: string | null | undefined,
+  employeeCode: string,
+  roleName: string,
+): string {
+  const built = buildUsername(firstName, employeeCode, roleName)
+  if ("username" in built) return built.username
+  const suffix = roleSuffix(roleName) ?? SUFFIX_BRANCH_ADMIN.slice(1)
+  return `${slugToken(employeeCode) || employeeCode}-${suffix}`
+}
+
+/** The first name a username should be built from, from whichever field holds one. */
+export function firstNameOf(user: Pick<CurrentUser, "firstName" | "fullName">): string | null {
+  const first = String(user.firstName ?? "").trim()
+  if (first) return first
+  const full = String(user.fullName ?? "").trim()
+  return full ? full.split(/\s+/)[0] : null
+}
+
+/**
+ * Move existing accounts onto the current username convention.
  *
- * Synthetic historical accounts are excluded: they are inactive placeholders
- * that nobody signs in as, and renaming them would only churn rows that exist
- * to hold order attribution.
+ * Historically an approver held the bare employee code and the order-portal
+ * account held `<code>_op`; a first pass added an explicit `-ba` / `-op`
+ * suffix, and a later regeneration prefixed the person's first name. Accounts
+ * still on either older form are brought forward; anything already in the
+ * named shape is left exactly as it is.
+ *
+ * Only the two portal roles are renamed — a head-office account has no suffix
+ * convention. Synthetic historical accounts are excluded: they are inactive
+ * placeholders that nobody signs in as, and renaming them would only churn
+ * rows that exist to hold order attribution.
  */
 export function planUsernameMigration(currentUsers: readonly CurrentUser[]): {
   renames: UsernameRename[]
@@ -396,12 +438,14 @@ export function planUsernameMigration(currentUsers: readonly CurrentUser[]): {
   const renames: UsernameRename[] = []
   for (const user of currentUsers) {
     if (!user.username || isSyntheticAccount(user.email)) continue
+    if (user.roleName !== ROLE_BRANCH_ADMIN && user.roleName !== ROLE_ORDER_PORTAL) continue
+    if (isNamedUsername(user.username)) continue
     const suffix = user.roleName === ROLE_ORDER_PORTAL ? SUFFIX_ORDER_PORTAL : SUFFIX_BRANCH_ADMIN
-    if (user.username.endsWith(suffix)) continue
     const base = user.username.endsWith(LEGACY_SUFFIX_ORDER_PORTAL)
       ? user.username.slice(0, -LEGACY_SUFFIX_ORDER_PORTAL.length)
-      : user.username
-    const to = `${base}${suffix}`
+      : user.username.replace(/(-ba|-op)$/i, "")
+    const firstName = firstNameOf(user)
+    const to = firstName ? accountUsername(firstName, base, user.roleName) : `${base}${suffix}`
     if (to === user.username) continue
     renames.push({ userId: user.id, from: user.username, to, roleName: user.roleName })
   }
@@ -538,7 +582,15 @@ export interface UserPlan {
   /** Legacy people who already hold accounts. */
   alreadyPresent: number
   /** Accounts a present person is missing — e.g. an approver with no order-portal twin. */
-  backfill: Array<{ legacySubUserId: number; email: string; username: string; roleName: string; branchId: number }>
+  backfill: Array<{
+    legacySubUserId: number
+    email: string
+    username: string
+    roleName: string
+    branchId: number
+    /** The existing account whose credentials the new twin copies. */
+    sourceUserId: string
+  }>
   /**
    * Existing accounts to stamp with their external identity.
    *
@@ -585,6 +637,9 @@ export interface BranchMove {
 export function employeeCodeOf(username: string | null | undefined): string | null {
   const name = String(username ?? "").trim()
   if (!name) return null
+  // `<first name>-<code>-<suffix>`: the code is the middle segment.
+  const named = NAMED_USERNAME.exec(name)
+  if (named) return named[2]
   const stem = name.replace(/(-ba|-op|_op)$/i, "")
   return stem && stem !== name ? stem : (/^[A-Za-z0-9._-]+$/.test(name) ? name : null)
 }
@@ -637,7 +692,15 @@ export function planUsers(
   legacySubUsers: readonly LegacySubUser[],
   pins: readonly BranchPin[],
   currentUsers: readonly CurrentUser[],
-  options: { renames?: readonly UsernameRename[] } = {},
+  options: {
+    renames?: readonly UsernameRename[]
+    /**
+     * Usernames held anywhere in the table — other tenants and soft-deleted
+     * rows included. `users_username_idx` is unique across the whole table,
+     * so a name held by a deleted row is still not free.
+     */
+    takenUsernames?: Iterable<string>
+  } = {},
 ): UserPlan {
   const branchByLegacyId = new Map(pins.map((pin) => [pin.legacyLocationId, pin]))
   const people: PlannedPerson[] = []
@@ -652,13 +715,17 @@ export function planUsers(
   // so a new account cannot be planned onto a name that is about to be taken.
   const renameById = new Map((options.renames ?? []).map((rename) => [rename.userId, rename.to]))
   const takenUsernames = new Set<string>()
+  for (const name of options.takenUsernames ?? []) {
+    if (name) takenUsernames.add(String(name).toLowerCase())
+  }
   for (const user of currentUsers) {
     const name = renameById.get(user.id) ?? user.username
     if (name) takenUsernames.add(name.toLowerCase())
   }
 
-  // Existing accounts by legacy identity, then by employee code, so accounts
-  // created before `external_id` existed are still recognised as that person's.
+  // Existing accounts by legacy identity first — `external_id` carries the
+  // employee code — then by the code in the username, so accounts created
+  // before `external_id` existed are still recognised as that person's.
   const byExternalId = new Map<string, CurrentUser[]>()
   const byEmployeeCode = new Map<string, CurrentUser[]>()
   for (const user of currentUsers) {
@@ -693,7 +760,12 @@ export function planUsers(
     // An account already created for this person under a contested code keeps
     // its own identity, so a re-run recognises it before the code is consulted.
     const contestedId = contestedIdentityFor(legacySubUserId)
-    const holdersOfCode = byEmployeeCode.get(passcode.toLowerCase()) ?? []
+    const holdersOfCode = [...new Map(
+      [
+        ...(byExternalId.get(passcode.toLowerCase()) ?? []),
+        ...(byEmployeeCode.get(passcode.toLowerCase()) ?? []),
+      ].map((account) => [account.id, account]),
+    ).values()]
     const ownAccounts = byExternalId.get(contestedId.toLowerCase()) ?? []
     const sameHolders = holdersOfCode.filter((account) => isSamePerson(subUser, account))
     const existing = ownAccounts.length > 0 ? ownAccounts : sameHolders
@@ -705,7 +777,6 @@ export function planUsers(
     // legacy record instead, and the clash is reported.
     const contested = existing.length === 0 && holdersOfCode.length > 0
     const identity = contested ? contestedId : passcode
-    const usernameStem = contested ? contestedId : passcode
 
     // Resolved before the already-present branch as well as after it: an
     // account that already exists still has to be checked against the branch
@@ -729,20 +800,31 @@ export function planUsers(
           })
         }
       }
-      for (const [roleName, suffix] of [
-        [ROLE_BRANCH_ADMIN, SUFFIX_BRANCH_ADMIN],
-        [ROLE_ORDER_PORTAL, SUFFIX_ORDER_PORTAL],
-      ] as const) {
+      // The twin copies its sibling's credentials, so a portal account is the
+      // preferred source; a head-office account may carry a different password.
+      const source = existing.find((user) => user.roleName === ROLE_BRANCH_ADMIN || user.roleName === ROLE_ORDER_PORTAL)
+        ?? existing[0]
+      const sourceName = renameById.get(source.id) ?? source.username
+      // The stamp is the identity; the username is only consulted for an
+      // account that predates the stamp.
+      const code = (source.externalSource === KE_SYNC_SOURCE && source.externalId)
+        || employeeCodeOf(sourceName) || passcode
+      for (const roleName of [ROLE_BRANCH_ADMIN, ROLE_ORDER_PORTAL] as const) {
         if (roles.has(roleName) || branchId == null) continue
-        const username = `${employeeCodeOf(existing[0].username) ?? passcode}${suffix}`
+        // Mirror the sibling's shape: swap the suffix on a named username, and
+        // build a named one from scratch when the sibling has no suffix at all.
+        const username = isNamedUsername(sourceName)
+          ? String(sourceName).replace(/-(ba|op)$/i, `-${roleSuffix(roleName)}`)
+          : accountUsername(firstNameOf(source) ?? String(subUser.FirstName ?? "").trim(), code, roleName)
         if (takenUsernames.has(username.toLowerCase())) continue
         takenUsernames.add(username.toLowerCase())
         backfill.push({
           legacySubUserId,
-          email: existing[0].email,
+          email: source.email,
           username,
           roleName,
           branchId,
+          sourceUserId: source.id,
         })
       }
       continue
@@ -777,11 +859,8 @@ export function planUsers(
 
     const accounts: PlannedAccount[] = []
     let clash = false
-    for (const [roleName, suffix] of [
-      [ROLE_BRANCH_ADMIN, SUFFIX_BRANCH_ADMIN],
-      [ROLE_ORDER_PORTAL, SUFFIX_ORDER_PORTAL],
-    ] as const) {
-      const username = `${usernameStem}${suffix}`
+    for (const roleName of [ROLE_BRANCH_ADMIN, ROLE_ORDER_PORTAL] as const) {
+      const username = accountUsername(String(subUser.FirstName ?? "").trim(), identity, roleName)
       if (takenUsernames.has(username.toLowerCase())) {
         skip("USERNAME_TAKEN", `username "${username}" already belongs to another account`)
         clash = true
