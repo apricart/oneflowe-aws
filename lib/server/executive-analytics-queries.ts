@@ -908,24 +908,28 @@ export async function loadEntityOptions(
   }
 
   if (dimension === "user") {
+    // One row per person. A group requester orders for several branches, and a
+    // person moved between branches has orders at two, so the branch is
+    // aggregated into the hint rather than grouped on — grouping on it listed
+    // the same person twice under one key, and ticking one ticked both.
     const rows = await db
       .select({
         id: orders.createdByUserId,
         label: sql<string>`COALESCE(NULLIF(TRIM(${users.fullName}), ''), ${users.employeeId}, ${users.email}, 'Unknown')`,
-        branchName: branches.name,
+        branchNames: sql<string>`STRING_AGG(DISTINCT ${branches.name}, ', ' ORDER BY ${branches.name})`,
         orderCount: sql<number>`COUNT(${orders.id})`.mapWith(Number),
       })
       .from(orders)
       .innerJoin(users, eq(orders.createdByUserId, users.id))
       .leftJoin(branches, eq(orders.branchId, branches.id))
       .where(and(...orderConditions(scope, unfiltered, { revenueEligible: false })))
-      .groupBy(orders.createdByUserId, users.fullName, users.employeeId, users.email, branches.name)
+      .groupBy(orders.createdByUserId, users.fullName, users.employeeId, users.email)
       .orderBy(desc(sql`COUNT(${orders.id})`))
       .limit(limit)
     return rows.map((row) => ({
       key: String(row.id),
       label: String(row.label),
-      hint: row.branchName ? `${row.branchName} · ${row.orderCount} orders` : `${row.orderCount} orders`,
+      hint: row.branchNames ? `${row.branchNames} · ${row.orderCount} orders` : `${row.orderCount} orders`,
     }))
   }
 
@@ -949,23 +953,28 @@ export async function loadEntityOptions(
   }
 
   if (dimension === "product") {
+    // One row per product, whatever units it was sold in. The focus filter is
+    // `productIds`, so the key must be the product alone; grouping on the unit
+    // as well listed a product sold per Piece and per Box twice under one key.
+    // The units are still named in the hint, because they decide whether a
+    // quantity comparison across the ticked products will need a unit chosen.
     const rows = await db
       .select({
         id: orderItems.globalProductId,
         label: sql<string>`MIN(${orderItems.productName})`,
-        unit: orderItems.unit,
+        units: sql<string>`STRING_AGG(DISTINCT ${orderItems.unit}, ', ' ORDER BY ${orderItems.unit})`,
         orderCount: sql<number>`COUNT(DISTINCT ${orders.id})`.mapWith(Number),
       })
       .from(orderItems)
       .innerJoin(orders, eq(orderItems.orderId, orders.id))
       .where(and(...lineConditions(scope, unfiltered)))
-      .groupBy(orderItems.globalProductId, orderItems.unit)
+      .groupBy(orderItems.globalProductId)
       .orderBy(desc(sql`COUNT(DISTINCT ${orders.id})`))
       .limit(limit)
     return rows.map((row) => ({
       key: String(row.id),
       label: String(row.label),
-      hint: `per ${row.unit} · ${row.orderCount} orders`,
+      hint: `per ${row.units} · ${row.orderCount} orders`,
     }))
   }
 
@@ -1199,6 +1208,8 @@ export async function loadComparison(
 // ── Drill-down: the lines behind a bar ─────────────────────────────────────
 
 export type DrillDownLine = {
+  /** The order line itself — the only identity that is unique per row. */
+  lineId: number
   orderId: number
   tid: string
   createdAt: string
@@ -1272,6 +1283,7 @@ export async function loadDrillDownLines(
   const [rows, [totals], units] = await Promise.all([
     db
       .select({
+        lineId: orderItems.id,
         orderId: orders.id,
         tid: orders.tid,
         createdAt: orders.createdAt,
@@ -1338,6 +1350,7 @@ export async function loadDrillDownLines(
       quantityByUnit: units.map((row) => ({ unit: String(row.unit), quantity: Number(row.quantity) || 0 })),
     },
     rows: page.map((row) => ({
+      lineId: Number(row.lineId),
       orderId: Number(row.orderId),
       tid: String(row.tid),
       createdAt: row.createdAt ? new Date(row.createdAt).toISOString() : "",
