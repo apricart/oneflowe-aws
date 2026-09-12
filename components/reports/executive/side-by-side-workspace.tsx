@@ -3,6 +3,7 @@
 import * as React from "react"
 import { Package, Users, X } from "lucide-react"
 
+import { Checkbox } from "@/components/ui/checkbox"
 import { useAPI } from "@/lib/hooks/use-api"
 import { cn } from "@/lib/utils"
 import {
@@ -43,6 +44,11 @@ import { MeasureToggle } from "./measure-toggle"
  * authorization surface behind any of it: the same registry decides what may be
  * asked, and the same scope decides which rows may answer.
  *
+ * Products are also a dimension here, not only the subject: with no focus, or
+ * with several products ticked, the product panels rank them against each
+ * other. Ticking one product collapses those panels into the day-by-day view,
+ * where a single bar would only restate the subject line.
+ *
  * Two things are shared across every panel, deliberately:
  *
  *  * **the measure** — flipping Amount ⇄ Quantity re-asks all five questions at
@@ -75,6 +81,20 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
   const [focusProducts, setFocusProducts] = React.useState<string[]>([])
   const [compareUsers, setCompareUsers] = React.useState<string[]>([])
   const [drillTarget, setDrillTarget] = React.useState<DrillTarget | null>(null)
+  /**
+   * Panels the reader has widened to the full row.
+   *
+   * Twelve bars in half a row are legible but cramped, and a month axis across
+   * twenty months is not. Each panel carries its own "Full width" checkbox so
+   * the reader decides which question deserves the room; the rest keep their
+   * place in the grid rather than being pushed off screen.
+   */
+  const [expanded, setExpanded] = React.useState<string[]>([])
+  const toggleExpanded = React.useCallback((panelId: string, next: boolean) => {
+    setExpanded((current) => (
+      next ? Array.from(new Set([...current, panelId])) : current.filter((id) => id !== panelId)
+    ))
+  }, [])
 
   const metric: ExecutiveMetricId = MEASURE_METRIC[measure]
 
@@ -110,6 +130,18 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
   const userOptions = userData?.options ?? []
   const panels = panelsForFocus(focusProducts.length)
 
+  /**
+   * Widened panels lead the grid, in registry order among themselves.
+   *
+   * A two-column grid cannot widen a panel in place: the half-row before it
+   * would be left empty. Bringing the widened panel to the top is also what the
+   * reader asked for by ticking it — the one question they want the room for.
+   */
+  const orderedPanels = React.useMemo(() => {
+    const rank = (panel: SideBySidePanel) => (expanded.includes(panel.id) ? 0 : 1)
+    return [...panels].sort((left, right) => rank(left) - rank(right))
+  }, [panels, expanded])
+
   const focusLabels = focusProducts.map(
     (key) => productOptions.find((option) => option.key === key)?.label ?? "selected product",
   )
@@ -119,6 +151,12 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
     if (focusLabels.length <= 2) return focusLabels.join(" and ")
     return `${focusLabels.length} products`
   })()
+
+  // Products are named among the compared dimensions only while the product
+  // panels are on screen; with one product in focus they are the subject alone.
+  const comparedAcross = panels.some((panel) => panel.dimension === "product")
+    ? "products, requesters, branches and months"
+    : "requesters, branches and months"
 
   return (
     <div className="space-y-4">
@@ -167,21 +205,24 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
 
       <p className="text-xs text-slate-500 dark:text-slate-400">
         <strong className="text-slate-700 dark:text-slate-200">{subject}</strong>, measured by{" "}
-        {EXECUTIVE_METRICS[metric].label.toLowerCase()}, compared across requesters, branches and months at once. Select
+        {EXECUTIVE_METRICS[metric].label.toLowerCase()}, compared across {comparedAcross} at once. Select
         any bar, column or point to open the order lines behind it.
         {focusProducts.length === 1 ? " Day-by-day consumption is shown below." : ""}
         {focusProducts.length > 1 ? " Choose a single product to see day-by-day consumption." : ""}
       </p>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        {panels.map((panel) => (
+        {orderedPanels.map((panel) => (
           <ComparePanel
             key={panel.id}
             panel={panel}
             filters={scopedFilters}
             metric={metric}
             compareUsers={compareUsers}
-            className={panel.requiresSingleProduct ? "xl:col-span-2" : undefined}
+            // The single-product panel is always the full row; every other
+            // panel widens only when its own checkbox says so.
+            expanded={panel.requiresSingleProduct ? null : expanded.includes(panel.id)}
+            onToggleExpanded={(next) => toggleExpanded(panel.id, next)}
             onDrillDown={setDrillTarget}
           />
         ))}
@@ -217,16 +258,20 @@ function Control({ label, children }: Readonly<{ label: string; children: React.
  * dimension that returns nothing — a period with no orders for one branch, say
  * — leaves the other four panels intact instead of emptying the screen.
  */
-function ComparePanel({ panel, filters, metric, compareUsers, className, onDrillDown }: Readonly<{
+function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggleExpanded, onDrillDown }: Readonly<{
   panel: SideBySidePanel
   filters: ExecutiveFilterState
   metric: ExecutiveMetricId
   compareUsers: string[]
-  className?: string
+  /** Whether the panel spans the row; `null` when it always does and offers no choice. */
+  expanded: boolean | null
+  onToggleExpanded: (next: boolean) => void
   onDrillDown: (target: DrillTarget) => void
 }>) {
   const isSeries = panel.chart === "line"
   const limit = isSeries ? SERIES_PANEL_ROWS : RANK_PANEL_ROWS
+  const fullWidth = expanded === null || expanded
+  const expandId = `expand-${panel.id}`
 
   // A requester panel honours the people picked to compare; every other
   // dimension ranks whatever is in scope.
@@ -255,7 +300,23 @@ function ComparePanel({ panel, filters, metric, compareUsers, className, onDrill
       loading={isLoading}
       error={requestError}
       empty={data?.blocked?.message ?? (isEmpty ? "Nothing in the selected period under these filters." : null)}
-      className={className}
+      className={fullWidth ? "xl:col-span-2" : undefined}
+      toolbar={expanded === null
+        ? undefined
+        : (
+          <label
+            htmlFor={expandId}
+            className="mr-1 flex cursor-pointer select-none items-center gap-1.5 rounded-md px-1.5 py-1 text-[11px] font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+          >
+            <Checkbox
+              id={expandId}
+              checked={expanded}
+              onCheckedChange={(state) => onToggleExpanded(state === true)}
+              aria-label={`Show ${panel.title} at full width`}
+            />
+            Full width
+          </label>
+        )}
       table={data?.mode === "series"
         ? (
           <SeriesTable

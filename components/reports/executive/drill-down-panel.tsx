@@ -33,6 +33,7 @@ import { toQuery, type ExecutiveFilterState } from "./executive-filters"
  */
 
 type DrillDownRow = {
+  lineId: number
   orderId: number
   tid: string
   createdAt: string
@@ -113,6 +114,22 @@ export function DrillDownPanel({ target, filters, metric, onClose }: Readonly<{
     setPage(0)
   }, [targetSignature])
 
+  /**
+   * The table opens below the charts, and on a screen with six panels that is
+   * well past the fold. A click on a bar therefore brings the table to the
+   * reader rather than leaving them to find it — on first open and again when a
+   * different bar is selected. Reduced-motion readers get an instant jump.
+   */
+  const cardRef = React.useRef<HTMLDivElement>(null)
+  React.useEffect(() => {
+    const prefersReducedMotion = typeof window !== "undefined"
+      && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+    cardRef.current?.scrollIntoView?.({
+      behavior: prefersReducedMotion ? "auto" : "smooth",
+      block: "start",
+    })
+  }, [targetSignature])
+
   const url = `/api/v1/analytics/executive/drill-down?${toQuery(filters, {
     dimension: target.dimension,
     key: target.key,
@@ -156,7 +173,10 @@ export function DrillDownPanel({ target, filters, metric, onClose }: Readonly<{
   }
 
   return (
-    <Card id="executive-drill-down" className="overflow-hidden ring-1 ring-indigo-200 dark:ring-indigo-900">
+    // The wrapper owns the scroll anchor: `Card` is a plain function component
+    // on React 18 and does not forward a ref.
+    <div ref={cardRef} id="executive-drill-down" className="scroll-mt-4">
+    <Card className="overflow-hidden ring-1 ring-indigo-200 dark:ring-indigo-900">
       <CardHeader className="gap-1 pb-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
@@ -233,6 +253,7 @@ export function DrillDownPanel({ target, filters, metric, onClose }: Readonly<{
 
       </CardContent>
     </Card>
+    </div>
   )
 }
 
@@ -301,7 +322,7 @@ function LineTable({ rows, sort, direction, onSort }: Readonly<{
         <tbody>
           {rows.map((row) => (
             <tr
-              key={`${row.orderId}-${row.productName}-${row.unitPriceCents}-${row.quantity}`}
+              key={row.lineId}
               className="border-t border-slate-100 dark:border-slate-800"
             >
               <td className="whitespace-nowrap px-3 py-1.5 text-slate-600 dark:text-slate-400">

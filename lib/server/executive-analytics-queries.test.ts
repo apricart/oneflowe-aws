@@ -178,3 +178,41 @@ describe("the drill-down route", () => {
     expect(drillDownRoute).not.toMatch(/error:\s*(caught)?[eE]rror\b/)
   })
 })
+
+describe("entity picker keys are unique per entity", () => {
+  /**
+   * The picker keys its rows by entity id and the focus filter narrows by that
+   * same id, so a list with one id on two rows both duplicates a React key and
+   * makes ticking one row tick both. Both happened: a product sold per Piece and
+   * per Box was grouped on its unit, and a group requester was grouped on the
+   * branch of each order. Neither attribute may be a grouping column here; both
+   * belong in the hint.
+   */
+  const options = builderBody("loadEntityOptions")
+
+  function groupByClauses(body: string) {
+    return Array.from(body.matchAll(/\.groupBy\(([^)]*)\)/g)).map((match) => match[1])
+  }
+
+  it("lists a product once, whatever units it was sold in", () => {
+    const productGroup = groupByClauses(options).find((clause) => clause.includes("orderItems.globalProductId"))
+    expect(productGroup).toBeDefined()
+    expect(productGroup).not.toContain("orderItems.unit")
+    expect(options).toContain("STRING_AGG(DISTINCT ${orderItems.unit}")
+  })
+
+  it("lists a person once, whichever branches they ordered for", () => {
+    const userGroup = groupByClauses(options).find((clause) => clause.includes("orders.createdByUserId"))
+    expect(userGroup).toBeDefined()
+    expect(userGroup).not.toContain("branches.name")
+    expect(options).toContain("STRING_AGG(DISTINCT ${branches.name}")
+  })
+
+  it("gives every drill-down row the order line's own id as its identity", () => {
+    // An order can carry the same product twice at the same price and
+    // quantity, so nothing short of the line id is unique per row.
+    const drill = builderBody("loadDrillDownLines")
+    expect(drill).toContain("lineId: orderItems.id")
+    expect(source("components/reports/executive/drill-down-panel.tsx")).toContain("key={row.lineId}")
+  })
+})

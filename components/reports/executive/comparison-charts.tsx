@@ -240,7 +240,7 @@ function RankedBars({
         </BarChart>
       </ResponsiveContainer>
       {colorful
-        ? <Legend items={rows.slice(0, 12).map((row, index) => ({ label: row.label, color: entityColor(index, true) }))} />
+        ? <Legend items={rows.slice(0, 12).map((row, index) => ({ key: row.key, label: row.label, color: entityColor(index, true) }))} />
         : <Legend items={[{ label: metricLabel, color: SERIES[0] }]} />}
       <DrillHint enabled={Boolean(drill)} noun={dimensionLabel.toLowerCase()} />
     </>
@@ -304,7 +304,7 @@ function ColumnChart({
         </BarChart>
       </ResponsiveContainer>
       {colorful
-        ? <Legend items={rows.slice(0, 12).map((row, index) => ({ label: row.label, color: entityColor(index, true) }))} />
+        ? <Legend items={rows.slice(0, 12).map((row, index) => ({ key: row.key, label: row.label, color: entityColor(index, true) }))} />
         : <Legend items={[{ label: metricLabel, color: SERIES[0] }]} />}
       <DrillHint enabled={Boolean(drill)} noun={dimensionLabel.toLowerCase()} />
     </>
@@ -410,7 +410,7 @@ function DonutChart({ rows, format, metricLabel, dimensionLabel, dimension, onDr
           </Pie>
         </PieChart>
       </ResponsiveContainer>
-      <Legend items={rows.map((row, index) => ({ label: row.label, color: SERIES[index % SERIES.length] }))} />
+      <Legend items={rows.map((row, index) => ({ key: row.key, label: row.label, color: SERIES[index % SERIES.length] }))} />
       <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
         Shares are of the {rows.length} {dimensionLabel.toLowerCase()} shown, totalling {formatByKind(total, format)} —
         not of everything in the period.
@@ -531,7 +531,7 @@ function TrendChart({
           ))}
         </LineChart>
       </ResponsiveContainer>
-      <Legend items={series.map((entity, index) => ({ label: entity.label, color: SERIES[index % SERIES.length] }))} />
+      <Legend items={series.map((entity, index) => ({ key: entity.key, label: entity.label, color: SERIES[index % SERIES.length] }))} />
       <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
         {metricLabel} per {isTimeAxis && dimension === "day" ? "day" : "month"}. A period with no purchase reads as zero,
         not as a gap.

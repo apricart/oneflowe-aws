@@ -833,9 +833,30 @@ export type SideBySidePanel = {
   colorful: boolean
   /** Rendered only when exactly one product is in focus. */
   requiresSingleProduct?: boolean
+  /**
+   * Withheld when exactly one product is in focus.
+   *
+   * A product comparison with one product in it is a single bar restating the
+   * subject line; the day-by-day panel is the useful view of that case.
+   */
+  hiddenForSingleProduct?: boolean
 }
 
 export const SIDE_BY_SIDE_PANELS: SideBySidePanel[] = [
+  /**
+   * Item-wise: products against each other. With no focus this ranks the top
+   * products in scope; with several ticked it compares exactly those, because
+   * the focus already travels as `productIds` and the ranking is drawn from it.
+   */
+  {
+    id: "by-product",
+    dimension: "product",
+    chart: "bar",
+    title: "By product",
+    question: "Which products consumed the most?",
+    colorful: true,
+    hiddenForSingleProduct: true,
+  },
   {
     id: "by-requester",
     dimension: "user",
@@ -869,6 +890,15 @@ export const SIDE_BY_SIDE_PANELS: SideBySidePanel[] = [
     colorful: true,
   },
   {
+    id: "products-over-months",
+    dimension: "product",
+    chart: "line",
+    title: "Products over months",
+    question: "Which products moved, and when — one line per product.",
+    colorful: true,
+    hiddenForSingleProduct: true,
+  },
+  {
     id: "day-by-day",
     dimension: "day",
     chart: "line",
@@ -881,7 +911,10 @@ export const SIDE_BY_SIDE_PANELS: SideBySidePanel[] = [
 
 /** The panels to render for the current focus. */
 export function panelsForFocus(focusedProductCount: number): SideBySidePanel[] {
-  return SIDE_BY_SIDE_PANELS.filter(
-    (panel) => !panel.requiresSingleProduct || focusedProductCount === 1,
-  )
+  const single = focusedProductCount === 1
+  return SIDE_BY_SIDE_PANELS.filter((panel) => {
+    if (panel.requiresSingleProduct && !single) return false
+    if (panel.hiddenForSingleProduct && single) return false
+    return true
+  })
 }
