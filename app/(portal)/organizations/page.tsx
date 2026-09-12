@@ -1831,7 +1831,7 @@ function EditOrgDialog({
 function EditBranchDialog({ branch, onSave }: Readonly<{ branch: Branch; onSave: (payload: Partial<Branch>) => void }>) {
   const [open, setOpen] = useState(false)
   const [name, setName] = useState(branch.name)
-  const [code, setCode] = useState(branch.code)
+  const [code, setCode] = useState(branch.code ?? "")
   const [province, setProvince] = useState(branch.province ?? "")
   const [city, setCity] = useState(branch.city ?? "")
   const [address, setAddress] = useState(branch.address ?? "")
@@ -1840,7 +1840,7 @@ function EditBranchDialog({ branch, onSave }: Readonly<{ branch: Branch; onSave:
 
   useEffect(() => {
     setName(branch.name)
-    setCode(branch.code)
+    setCode(branch.code ?? "")
     setProvince(branch.province ?? "")
     setCity(branch.city ?? "")
     setAddress(branch.address ?? "")

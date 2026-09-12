@@ -134,6 +134,7 @@ async function main(): Promise<void> {
         join roles r on r.id = u.role_id
         left join branches b on b.id = u.branch_id
        where u.organization_id = $1 and u.deleted_at is null and u.username is not null
+         and coalesce(u.external_source, '') !~ '_RETIRED$'
     `, [Number(org.id)])).map((row): Account => ({
       id: String(row.id),
       email: String(row.email ?? "").toLowerCase(),

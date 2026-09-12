@@ -233,7 +233,7 @@ async function readCurrent(client: QueryClient) {
     .map((row): CurrentGroup => ({ id: Number(row.id), name: String(row.name) }))
 
   const users = (await rows(client,
-    `select u.id, u.username, u.email, u.full_name, u.branch_id, u.is_active,
+    `select u.id, u.username, u.email, u.full_name, u.first_name, u.branch_id, u.is_active,
             u.external_source, u.external_id, r.name as role_name
        from users u join roles r on r.id = u.role_id
       where u.organization_id = $1 and u.deleted_at is null
@@ -243,6 +243,7 @@ async function readCurrent(client: QueryClient) {
       username: row.username ?? null,
       email: String(row.email),
       fullName: row.full_name ?? null,
+      firstName: row.first_name ?? null,
       roleName: String(row.role_name),
       branchId: row.branch_id == null ? null : Number(row.branch_id),
       isActive: Boolean(row.is_active),
@@ -250,7 +251,12 @@ async function readCurrent(client: QueryClient) {
       externalId: row.external_id ?? null,
     }))
 
-  return { branches, groups, users }
+  // `users_username_idx` is unique over the whole table, so a name held by a
+  // soft-deleted row or by another tenant is not free for a new account.
+  const takenUsernames = (await rows(client, `select username from users where username is not null`))
+    .map((row) => String(row.username))
+
+  return { branches, groups, users, takenUsernames }
 }
 
 /**
@@ -547,19 +553,23 @@ async function applyProducts(
       ])
     counts.productsCreated += 1
 
+    // A product legacy has retired exists only so historical order lines can
+    // resolve; it must not appear in the shop, so it is assigned inactive —
+    // the same footing as the historical products the earlier imports created.
+    const stillSold = product.source === "item-list"
     const [inventory] = await rows(client,
       `insert into organization_inventory
          (organization_id, global_product_id, assigned_by_user_id, is_active)
-       values ($1, $2, $3, true)
+       values ($1, $2, $3, $4)
        returning id`,
-      [target.id, Number(globalProduct.id), actorUserId])
+      [target.id, Number(globalProduct.id), actorUserId, stillSold])
     counts.productsAssigned += 1
 
     await client.query(
       `insert into organization_products (organization_id, global_product_id, is_enabled)
-       values ($1, $2, true)
+       values ($1, $2, $3)
        on conflict (organization_id, global_product_id) do nothing`,
-      [target.id, Number(globalProduct.id)])
+      [target.id, Number(globalProduct.id), stillSold])
 
     await client.query(
       `insert into legacy_product_mappings
@@ -791,11 +801,11 @@ async function apply(
     const [source] = await rows(client,
       `select password_hash, full_name, first_name, last_name, phone, must_change_password, external_id
          from users
-        where organization_id = $1 and external_source = $2
-          and external_id = $3 and deleted_at is null
+        where organization_id = $1 and id = $2 and deleted_at is null
         limit 1`,
-      [target.id, SOURCE_SYSTEM, entry.username.replace(/(-ba|-op)$/i, "")])
+      [target.id, entry.sourceUserId])
     assert(source, `no existing account to copy credentials from for ${entry.username}`)
+    assert(source.external_id, `account ${entry.sourceUserId} carries no external identity to share with ${entry.username}`)
     await client.query(
       `insert into users
          (email, username, password_hash, role_id, is_active, full_name, first_name, last_name,
@@ -861,7 +871,7 @@ async function main() {
 
     const current = organizationExists
       ? await readCurrent(pool)
-      : { branches: [], groups: [], users: [] }
+      : { branches: [], groups: [], users: [], takenUsernames: [] }
     const currentMappings = organizationExists ? await readProductMappings(pool) : []
     const products = options.skipProducts
       ? null
@@ -877,7 +887,10 @@ async function main() {
     )
     const groups = planGroups(legacyGroups, current.groups, branches.pins, current.branches)
     const usernames = planUsernameMigration(current.users)
-    const users = planUsers(legacySubUsers, branches.pins, current.users, { renames: usernames.renames })
+    const users = planUsers(legacySubUsers, branches.pins, current.users, {
+      renames: usernames.renames,
+      takenUsernames: current.takenUsernames,
+    })
     const plan: SyncPlan = { branches, groups, usernames, users }
     const digest = combinedDigest(plan, products, budgets, organizationExists)
     const counts = summarize(plan)
@@ -977,7 +990,10 @@ async function main() {
         branches: lockedBranches,
         groups: planGroups(legacyGroups, locked.groups, lockedBranches.pins, locked.branches),
         usernames: lockedUsernames,
-        users: planUsers(legacySubUsers, lockedBranches.pins, locked.users, { renames: lockedUsernames.renames }),
+        users: planUsers(legacySubUsers, lockedBranches.pins, locked.users, {
+          renames: lockedUsernames.renames,
+          takenUsernames: locked.takenUsernames,
+        }),
       }
       const lockedProducts = options.skipProducts
         ? null
