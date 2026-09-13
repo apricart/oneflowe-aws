@@ -28,7 +28,7 @@ export async function GET() {
   if (!scope) return error("Unauthorized", 401)
 
   const [assignments, effectiveBranchIds] = await Promise.all([
-    getMultiBranchScope(scope.userId),
+    getMultiBranchScope(scope.userId, scope.organizationId),
     resolveScopedBranchIds(db, scope.userId),
   ])
 

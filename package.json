@@ -38,6 +38,7 @@
     "fix:usernames": "tsx scripts/regenerate-usernames.ts",
     "align:handout": "tsx scripts/align-accounts-to-handout.ts",
     "fix:head-office": "tsx scripts/convert-account-to-head-office.ts",
+    "create:group-accounts": "tsx scripts/create-group-accounts.ts",
     "restore:accounts": "tsx scripts/restore-deleted-accounts.ts",
     "fix:emails": "tsx scripts/set-account-emails.ts",
     "verify:credentials": "tsx scripts/verify-credential-handout.ts",

@@ -89,7 +89,7 @@ describe("SessionGuard", () => {
 
     expect(coordinationMocks.securelySignOut).not.toHaveBeenCalled()
     expect(screen.getByText("Unsaved form remains mounted")).not.toBeNull()
-    expect(screen.getByRole("status").textContent).toContain(
+    expect((await screen.findByRole("status")).textContent).toContain(
       "Your work remains open",
     )
   })

@@ -10,7 +10,7 @@ import {
   parseReportPageSize,
 } from "@/lib/server/group-order-report-filters"
 
-const source = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8")
+const source = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8").replace(/\r\n/g, "\n")
 
 /**
  * The group order report is a second read path over order data, so the contract
