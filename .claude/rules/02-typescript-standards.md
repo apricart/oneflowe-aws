@@ -24,8 +24,10 @@ npm run build
 ```
 
 Run `npm run test:integration` as well when the change touches SQL, schema,
-constraints, or a route handler. These are the same checks
-`.github/workflows/dev-check.yml` runs, so a green local run predicts a green CI run.
+constraints, or a route handler — CI runs it against a throwaway Postgres on
+every PR to `dev` and every production deploy, and fails if the suites skip.
+These are the same checks `.github/workflows/dev-check.yml` runs, so a green
+local run predicts a green CI run.
 
 ## Code rules
 

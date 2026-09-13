@@ -15,7 +15,9 @@ because the change is small.
 
 - Integration tests **skip silently and pass** without `TEST_DATABASE_URL`. A
   green `npm run test:integration` does not mean the integration tests ran.
-  Check the stderr notice before claiming integration coverage.
+  Check the stderr notice before claiming integration coverage. CI has no such
+  allowance: both workflows provide a service-container database and fail the
+  job on a skip.
 - `.env.local` is deliberately not read for `TEST_DATABASE_URL`. Never
   "fix" a skipping suite by pointing it at the application database.
 
