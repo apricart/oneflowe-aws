@@ -44,6 +44,7 @@ vi.mock("@/components/reports/executive/summary-panels", () => ({
 }))
 
 import GraphicalReportsPage from "./page"
+import { toCalendarDate } from "@/components/reports/quick-date-range"
 
 function signIn(role: string | null, status: "authenticated" | "loading" = "authenticated") {
   mocks.useSession.mockReturnValue({ status, data: role ? { user: { role } } : null })
@@ -105,7 +106,7 @@ describe("the levels", () => {
     render(<GraphicalReportsPage />)
     const quarterStart = new Date()
     quarterStart.setMonth(Math.floor(quarterStart.getMonth() / 3) * 3, 1)
-    const expected = quarterStart.toISOString().split("T")[0]
+    const expected = toCalendarDate(quarterStart)
     expect(screen.getByTestId("filters").textContent).toBe(expected)
     fireEvent.click(screen.getByRole("tab", { name: "Compare Side by Side" }))
     expect(screen.getByTestId("filters").textContent).toBe(expected)

@@ -106,6 +106,7 @@ type ScopeWrite =
 async function resolveNextScope({
   targetUserId,
   targetRole,
+  targetOrganizationId,
   nextRole,
   nextOrganizationId,
   inputGroupIds,
@@ -114,6 +115,7 @@ async function resolveNextScope({
 }: {
   targetUserId: string
   targetRole: string
+  targetOrganizationId: number | null
   nextRole: string
   nextOrganizationId: number | null
   inputGroupIds: number[] | undefined
@@ -139,7 +141,7 @@ async function resolveNextScope({
     return { action: "none" }
   }
 
-  const existing = await getMultiBranchScopeIds(targetUserId)
+  const existing = await getMultiBranchScopeIds(targetUserId, targetOrganizationId)
   const groupIds = inputGroupIds ?? existing.groupIds
   const branchIds = inputBranchIds ?? existing.branchIds
 
@@ -225,6 +227,7 @@ export async function PATCH(
   const scopeResolution = await resolveNextScope({
     targetUserId,
     targetRole,
+    targetOrganizationId: target.organizationId,
     nextRole,
     nextOrganizationId,
     inputGroupIds: input.groupIds,

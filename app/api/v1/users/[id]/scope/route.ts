@@ -54,7 +54,7 @@ export async function GET(
   }
 
   const [assignments, effectiveBranchIds] = await Promise.all([
-    getMultiBranchScope(targetUserId),
+    getMultiBranchScope(targetUserId, target.organizationId),
     resolveScopedBranchIds(db, targetUserId),
   ])
 

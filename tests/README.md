@@ -42,8 +42,9 @@ route handlers with only the session faked.
 so a fresh clone stays green. The run says so on stderr every time, because a
 skipped run and a passing run otherwise look identical.
 
-CI does not get that allowance. Both `dev-check.yml` (every PR to `dev`) and
-`deploy-prod.yml` (every push to `main`, before the image is built) start a
+CI does not get that allowance. `dev-check.yml` (every PR to `dev`),
+`deploy-test.yml` (every staging deployment), and `deploy-prod.yml` (every push
+to `main`, before the image is built) start a
 throwaway Postgres 16 service container, migrate it, run this project against
 it, and **fail the job if the runner reports a skip** instead of
 `running against oneflowe_test`. A production deploy therefore cannot pass
@@ -108,6 +109,7 @@ and fills in throwaway NextAuth/Redis/cron values the server env schema demands.
 | Suite | Exercises |
 |---|---|
 | `group-price-ladder`, `group-pricing-api`, `organization-price-propagation` | The price ladder and its endpoints |
+| `group-roles-api` | `GROUP_ORDER_PORTAL` and `GROUP_USER` end to end: authentication and mutually exclusive role gates, group-plus-branch assignment resolution, stale/cross-tenant assignment isolation, displayed budget arithmetic, approval-queue visibility and token rules, group-report quantity/gross/refund/net reconciliation, empty-scope fail-closed behavior, and Super Admin/Head Office provisioning of both roles. |
 | `executive-analytics-api` | The Compare Side by Side tab's four routes (`compare`, `options`, `drill-down`, `overview`): 401/403 per role, the user row overriding the session claim, tenant isolation, every panel's figures against a hand-computed order history, refund netting, whole-order vs line-by-line money, the unit-of-measure rule, the pickers, and drill-down reconciliation. `helpers/executive-analytics-fixtures.ts` documents the history and the expected answers. |
 
 ### Writing them
