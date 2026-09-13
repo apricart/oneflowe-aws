@@ -599,11 +599,20 @@ describe.skipIf(!hasTestDatabase)("Support threads — routes against a real dat
       expect(body.items.length).toBeGreaterThan(0)
       for (const item of body.items) expect(item.orderTid).toBe(f.ahmedOrderTid)
 
-      const byId = await listThreads({ orderSearch: String(f.ahmedOrderId) })
-      expect(byId.body.items.length).toBe(body.items.length)
+      // A bare number matches the internal id *and* any reference containing
+      // those digits as text, so this finds everything the text search found,
+      // and can legitimately find more when a random fixture reference happens
+      // to contain the digits — never anything that cites no such order.
+      const digits = String(f.ahmedOrderId)
+      const byId = await listThreads({ orderSearch: digits })
+      expect(ids(byId.body)).toEqual(expect.arrayContaining(ids(body)))
+      for (const item of byId.body.items) {
+        expect(item.orderId === f.ahmedOrderId || String(item.orderTid).includes(digits), item.orderTid).toBe(true)
+      }
 
       signIn(headOfficeB)
       expect((await listThreads({ orderSearch: f.ahmedOrderTid })).body.items).toEqual([])
+      expect((await listThreads({ orderSearch: digits })).body.items).toEqual([])
 
       signIn(headOfficeA)
       expect((await listThreads({ orderSearch: "%" })).body.items).toEqual([])
