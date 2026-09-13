@@ -59,6 +59,11 @@ import {
   type LegacyOrderDetail,
   type LegacyOrderListRow,
 } from "../lib/legacy-import/ke-post-cutoff"
+import {
+  indexBranches,
+  resolveLegacyBranch,
+  type CatalogueBranch,
+} from "../lib/legacy-import/ke-order-branches"
 import { contestedIdentityFor, type LegacySubUser } from "../lib/legacy-import/ke-sync"
 import { resolveWorkspacePath } from "./lib/resolve-workspace-path"
 
@@ -283,8 +288,8 @@ interface ResolvedOrder {
 
 interface UnresolvedOrder {
   legacyOrderId: number
-  reason: "BRANCH_NOT_FOUND" | "USER_NOT_FOUND" | "USER_AMBIGUOUS" | "PRODUCT_NOT_FOUND"
-    | "PRODUCT_AMBIGUOUS" | "TAX_SPLIT_MISMATCH"
+  reason: "BRANCH_NOT_FOUND" | "BRANCH_AMBIGUOUS" | "USER_NOT_FOUND" | "USER_AMBIGUOUS"
+    | "PRODUCT_NOT_FOUND" | "PRODUCT_AMBIGUOUS" | "TAX_SPLIT_MISMATCH"
   detail: string
   branchName: string
   userName: string
@@ -302,10 +307,20 @@ async function buildPlan(
   prepared: readonly PreparedApiOrder[],
   legacySubUsers: readonly LegacySubUser[],
 ): Promise<Plan> {
+  // Branches are matched by legacy location id, never by name once pinned.
+  // Legacy has twins whose names differ only in punctuation or case (`Johar |`
+  // / `Johar ||`), and a name-keyed map kept one twin and filed the other's
+  // orders at it. See lib/legacy-import/ke-order-branches.ts.
   const branchRows = await rows(client,
-    `select id, name, address from branches where organization_id = $1`, [target.id])
-  const branchByName = new Map<string, Row>()
-  for (const branch of branchRows) branchByName.set(normalizeLegacyText(branch.name), branch)
+    `select id, name, address, external_source, external_id
+       from branches where organization_id = $1`, [target.id])
+  const branchIndex = indexBranches(branchRows.map((row): CatalogueBranch => ({
+    id: Number(row.id),
+    name: String(row.name),
+    address: row.address ?? null,
+    externalSource: row.external_source ?? null,
+    externalId: row.external_id == null ? null : String(row.external_id),
+  })), SOURCE_SYSTEM)
 
   // Inactive users are eligible on purpose. Earlier imports created historical
   // ORDER_PORTAL identities deactivated so they cannot sign in, and the orders
@@ -422,8 +437,11 @@ async function buildPlan(
       totalCents: order.totalCents,
     })
 
-    const branch = branchByName.get(normalizeLegacyText(order.branchName))
-    if (!branch) { reject("BRANCH_NOT_FOUND", `no K-Electric branch named "${order.branchName}"`); continue }
+    const resolution = resolveLegacyBranch(branchIndex,
+      { legacyLocationId: order.legacyLocationId, branchName: order.branchName })
+    if (resolution.kind === "NOT_FOUND") { reject("BRANCH_NOT_FOUND", resolution.detail); continue }
+    if (resolution.kind === "AMBIGUOUS") { reject("BRANCH_AMBIGUOUS", resolution.detail); continue }
+    const branch = resolution.branch
 
     let candidates: Row[] = []
     for (const identity of identitiesByTakerId.get(Number(order.legacyOrderTakerId)) ?? []) {

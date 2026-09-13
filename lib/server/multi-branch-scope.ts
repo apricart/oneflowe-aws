@@ -184,19 +184,36 @@ export type MultiBranchScope = {
 }
 
 /** The raw assignments, for display on the user management screens. */
-export async function getMultiBranchScope(userId: string): Promise<MultiBranchScope> {
+export async function getMultiBranchScope(
+  userId: string,
+  organizationId: number | null,
+): Promise<MultiBranchScope> {
+  if (!organizationId) return { groups: [], branches: [] }
+
   const [assignedGroups, assignedBranches] = await Promise.all([
     db
       .select({ id: groups.id, name: groups.name })
       .from(userGroupAssignments)
-      .innerJoin(groups, eq(userGroupAssignments.groupId, groups.id))
-      .where(eq(userGroupAssignments.userId, userId))
+      .innerJoin(groups, and(
+        eq(userGroupAssignments.groupId, groups.id),
+        eq(userGroupAssignments.organizationId, groups.organizationId),
+      ))
+      .where(and(
+        eq(userGroupAssignments.userId, userId),
+        eq(userGroupAssignments.organizationId, organizationId),
+      ))
       .orderBy(groups.name),
     db
       .select({ id: branches.id, name: branches.name, groupId: branches.groupId })
       .from(userBranchAssignments)
-      .innerJoin(branches, eq(userBranchAssignments.branchId, branches.id))
-      .where(eq(userBranchAssignments.userId, userId))
+      .innerJoin(branches, and(
+        eq(userBranchAssignments.branchId, branches.id),
+        eq(userBranchAssignments.organizationId, branches.organizationId),
+      ))
+      .where(and(
+        eq(userBranchAssignments.userId, userId),
+        eq(userBranchAssignments.organizationId, organizationId),
+      ))
       .orderBy(branches.name),
   ])
 
@@ -206,16 +223,33 @@ export async function getMultiBranchScope(userId: string): Promise<MultiBranchSc
 /** Just the assigned ids, for revalidating an existing scope during an edit. */
 export async function getMultiBranchScopeIds(
   userId: string,
+  organizationId: number | null,
 ): Promise<{ groupIds: number[]; branchIds: number[] }> {
+  if (!organizationId) return { groupIds: [], branchIds: [] }
+
   const [assignedGroups, assignedBranches] = await Promise.all([
     db
       .select({ groupId: userGroupAssignments.groupId })
       .from(userGroupAssignments)
-      .where(eq(userGroupAssignments.userId, userId)),
+      .innerJoin(groups, and(
+        eq(userGroupAssignments.groupId, groups.id),
+        eq(userGroupAssignments.organizationId, groups.organizationId),
+      ))
+      .where(and(
+        eq(userGroupAssignments.userId, userId),
+        eq(userGroupAssignments.organizationId, organizationId),
+      )),
     db
       .select({ branchId: userBranchAssignments.branchId })
       .from(userBranchAssignments)
-      .where(eq(userBranchAssignments.userId, userId)),
+      .innerJoin(branches, and(
+        eq(userBranchAssignments.branchId, branches.id),
+        eq(userBranchAssignments.organizationId, branches.organizationId),
+      ))
+      .where(and(
+        eq(userBranchAssignments.userId, userId),
+        eq(userBranchAssignments.organizationId, organizationId),
+      )),
   ])
 
   return {

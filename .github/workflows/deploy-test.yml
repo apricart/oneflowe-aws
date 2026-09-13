@@ -18,6 +18,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
 
+    # The role suites exercise real assignment joins, tenant boundaries, and
+    # reporting arithmetic. Run them against a fresh database before an image
+    # can reach staging, matching the production deployment gate.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: oneflowe_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -82,6 +100,26 @@ jobs:
 
       - name: Run unit tests
         run: npm test
+
+      - name: Migrate the throwaway test database
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/oneflowe_test
+        run: npm run db:migrate
+
+      - name: Run integration tests
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/oneflowe_test
+        run: |
+          set -Eeuo pipefail
+          npm run test:integration 2>&1 | tee integration-run.log
+          if ! grep -q "running against oneflowe_test" integration-run.log; then
+            echo "Integration suites did not run against the test database." >&2
+            exit 1
+          fi
+          if grep -q "will SKIP" integration-run.log; then
+            echo "Integration suites skipped themselves." >&2
+            exit 1
+          fi
 
       - name: Run TypeScript checks
         run: npm run typecheck

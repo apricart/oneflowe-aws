@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest"
 
 import { resolveMultiBranchAnalyticsIds } from "@/lib/server/analytics-scope"
 
-const source = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8")
+const source = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8").replace(/\r\n/g, "\n")
 
 /**
  * The approver now lands on the Branch Admin dashboard and gets the order

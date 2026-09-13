@@ -64,7 +64,7 @@ describe("date range filtering", () => {
 
     fireEvent.click(screen.getByText("Today"))
 
-    const today = new Date().toISOString().split("T")[0]
+    const today = toCalendarDate(new Date())
     expect(harness.current.startDate).toBe(today)
     expect(harness.current.endDate).toBe(today)
   })
@@ -89,7 +89,7 @@ describe("date range filtering", () => {
     expect(harness.current.startDate).not.toBe(before)
     const expected = new Date()
     expected.setDate(expected.getDate() - 6)
-    expect(harness.current.startDate).toBe(expected.toISOString().split("T")[0])
+    expect(harness.current.startDate).toBe(toCalendarDate(expected))
   })
 
   it("carries the picked range into the query both endpoints receive", () => {
