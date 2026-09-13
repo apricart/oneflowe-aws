@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto"
 import { eq, inArray } from "drizzle-orm"
 
 import {
+  auditLogs,
   branches,
   globalProducts,
   groupAuditLogs,
@@ -224,6 +225,9 @@ export async function destroyPricingFixtures(fixtures: PricingFixtures): Promise
   await db.delete(branches).where(inArray(branches.id, branchIds))
   await db.delete(groups).where(inArray(groups.id, groupIds))
   await db.delete(globalProducts).where(eq(globalProducts.id, fixtures.globalProductId))
+  // The price routes audit every write against the acting user, and the row
+  // references the user, so it has to go before the user does.
+  await db.delete(auditLogs).where(eq(auditLogs.userId, fixtures.userId))
   await db.delete(users).where(eq(users.id, fixtures.userId))
   await db.delete(organizations).where(inArray(organizations.id, organizationIds))
 }

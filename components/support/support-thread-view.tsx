@@ -201,6 +201,7 @@ export function SupportThreadView({ threadId }: Readonly<{ threadId: number }>) 
           />
         ) : (
           <ReplyComposer
+            threadId={thread.id}
             apricart={apricart}
             canManage={viewer.canManage}
             status={thread.status}
@@ -256,6 +257,7 @@ function ClosedNotice({
  * PATCH endpoint refuses them for anybody else regardless of what renders here.
  */
 function ReplyComposer({
+  threadId,
   apricart,
   canManage,
   status,
@@ -271,6 +273,7 @@ function ReplyComposer({
   onClose,
   onPriority,
 }: Readonly<{
+  threadId: number
   apricart: boolean
   canManage: boolean
   status: string
@@ -300,6 +303,7 @@ function ReplyComposer({
           attachments={attachments}
           onChange={onAttachmentsChange}
           disabled={sending}
+          threadId={threadId}
         />
         <div className="flex flex-wrap items-center gap-2">
           <Button onClick={onSend} disabled={sending || !reply.trim()}>

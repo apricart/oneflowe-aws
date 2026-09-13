@@ -25,9 +25,21 @@ export type RangeKey = "today" | "7days" | "30days" | "thisMonth" | "thisQuarter
  * control uses. Previously a caller had to compute its initial range by hand,
  * which let the highlighted button disagree with the range actually applied.
  */
-export function getDateRange(key: RangeKey): { start: string; end: string } | null {
-    const now = new Date()
-    const fmt = (d: Date) => d.toISOString().split("T")[0]
+/**
+ * A calendar date in the reader's own timezone.
+ *
+ * Not `toISOString().slice(0, 10)`: that converts to UTC first, and east of
+ * Greenwich local midnight on the 1st is still the previous evening in UTC —
+ * so "This Month" and "Quarter" opened one day early for everyone in Pakistan,
+ * and "Today" pointed at yesterday until five in the morning.
+ */
+export function toCalendarDate(d: Date): string {
+    const pad = (n: number) => String(n).padStart(2, "0")
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+export function getDateRange(key: RangeKey, now = new Date()): { start: string; end: string } | null {
+    const fmt = toCalendarDate
 
     switch (key) {
         case "today":

@@ -125,3 +125,21 @@ const testDefaults: Record<string, string> = {
 for (const [key, value] of Object.entries(testDefaults)) {
   if (!process.env[key]) process.env[key] = value
 }
+
+/**
+ * Quiet the pool's own chatter.
+ *
+ * `@/lib/db` logs every statement and every connect/acquire/remove event
+ * through `console.log` whenever the app is not in offline mode. In a test run
+ * that is hundreds of lines nobody reads — and the `remove` events fire while
+ * `closePool()` is still draining in `afterAll`, after the worker has begun to
+ * shut down, which Vitest reports as an unhandled "console log pending" error
+ * and turns into a failed run with every test green. Only those messages are
+ * dropped; a test's own `console.log` still reaches the report.
+ */
+const POOL_CHATTER = /^(Query: |Database client )/
+const originalLog = console.log
+console.log = (...args: unknown[]) => {
+  if (typeof args[0] === 'string' && POOL_CHATTER.test(args[0])) return
+  originalLog(...args)
+}

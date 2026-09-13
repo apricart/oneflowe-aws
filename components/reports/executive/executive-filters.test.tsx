@@ -21,6 +21,8 @@ vi.mock("@/components/reports/branch-filter", () => ({ BranchFilter: () => null 
 vi.mock("@/components/reports/organization-filter", () => ({ OrganizationFilter: () => null }))
 vi.mock("@/components/reports/multi-select-filter", () => ({ MultiSelectFilter: () => null }))
 
+import { toCalendarDate } from "@/components/reports/quick-date-range"
+
 import { ExecutiveFilters, executiveDefaultDates, toQuery, type ExecutiveFilterState } from "./executive-filters"
 
 const baseFilters = (): ExecutiveFilterState => ({
@@ -148,8 +150,12 @@ describe("the highlighted range matches the range applied", () => {
     const quarter = screen.getByText("Quarter")
     expect(quarter.className).toContain("bg-white")
 
+    // The local calendar date, deliberately: the previous form of this
+    // assertion went through `toISOString()`, which converts to UTC and, east of
+    // Greenwich, names the day before the quarter began — so the test agreed
+    // with a bug the control had.
     const now = new Date()
     const quarterStart = new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1)
-    expect(defaults.startDate).toBe(quarterStart.toISOString().split("T")[0])
+    expect(defaults.startDate).toBe(toCalendarDate(quarterStart))
   })
 })

@@ -5,7 +5,7 @@ import { Ruler, X } from "lucide-react"
 
 import { BranchFilter } from "@/components/reports/branch-filter"
 import { OrganizationFilter } from "@/components/reports/organization-filter"
-import { QuickDateRange, getDateRange, type RangeKey } from "@/components/reports/quick-date-range"
+import { QuickDateRange, getDateRange, toCalendarDate, type RangeKey } from "@/components/reports/quick-date-range"
 import { useAPI } from "@/lib/hooks/use-api"
 import { MultiSelectFilter } from "@/components/reports/multi-select-filter"
 import { cn } from "@/lib/utils"
@@ -46,7 +46,7 @@ export const EXECUTIVE_DEFAULT_RANGE: RangeKey = "thisQuarter"
 
 export function executiveDefaultDates() {
   const range = getDateRange(EXECUTIVE_DEFAULT_RANGE)
-  const today = new Date().toISOString().split("T")[0]
+  const today = toCalendarDate(new Date())
   return { startDate: range?.start ?? today, endDate: range?.end ?? today }
 }
 
