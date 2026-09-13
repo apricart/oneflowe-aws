@@ -31,6 +31,7 @@
     "prepare:ke-tax-refunds": "tsx scripts/prepare-ke-tax-refund-import-source.ts",
     "import:ke-refunds": "tsx scripts/import-ke-legacy-refunded-orders.ts",
     "repair:ke-branch-identities": "tsx scripts/repair-ke-case-sensitive-branches.ts",
+    "repair:ke-order-branches": "tsx scripts/repair-ke-order-branches.ts",
     "restore:ke-budget-carryforward": "tsx scripts/restore-ke-branch-budget-carryforward.ts",
     "add:ke-missing-branches": "tsx scripts/add-ke-missing-branches.ts",
     "fix:user-names": "tsx scripts/fix-user-names-from-export.ts",
