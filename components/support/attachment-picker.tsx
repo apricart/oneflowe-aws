@@ -19,15 +19,22 @@ export type PendingAttachment = {
  * The upload happens first and separately, so a large file cannot make the
  * message body time out, and a message that is never sent leaves an unclaimed
  * row that belongs to nobody's thread.
+ *
+ * `threadId` is sent when replying, so the server can file the upload under
+ * the thread's tenant — without it, an uploader with no organization of their
+ * own (the Apricart team) has nowhere to put it. A new query has no thread yet
+ * and sends nothing.
  */
 export function AttachmentPicker({
   attachments,
   onChange,
   disabled,
+  threadId,
 }: Readonly<{
   attachments: PendingAttachment[]
   onChange: (next: PendingAttachment[]) => void
   disabled?: boolean
+  threadId?: number
 }>) {
   const { toast } = useToast()
   const inputRef = useRef<HTMLInputElement>(null)
@@ -39,6 +46,7 @@ export function AttachmentPicker({
     try {
       const form = new FormData()
       form.append("file", file)
+      if (threadId) form.append("threadId", String(threadId))
       const response = await fetch("/api/v1/support/attachments", {
         method: "POST",
         body: form,

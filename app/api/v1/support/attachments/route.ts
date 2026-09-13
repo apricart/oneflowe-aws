@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
+import { getServerSession } from "next-auth"
 
 import { supportAttachments } from "@/db/schema"
+import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { handleError } from "@/lib/error-handler"
 import { withRateLimit } from "@/lib/rate-limiter"
-import { canRaiseSupportThread } from "@/lib/support-access"
+import { canRaiseSupportThread, isSupportParticipantRole, type SupportViewer } from "@/lib/support-access"
 import {
   buildSupportAttachmentKey,
   extensionForMime,
@@ -12,7 +14,8 @@ import {
   putImage,
 } from "@/lib/server/image-storage"
 import { sanitizeRasterUpload } from "@/lib/server/upload-security"
-import { resolveSupportAuthor } from "@/lib/server/support-session"
+import { getSupportThreadForViewer } from "@/lib/server/support-threads"
+import { resolveSupportAuthor, supportViewerFromSession } from "@/lib/server/support-session"
 
 /**
  * Uploading a screenshot to attach to a support message.
@@ -29,21 +32,45 @@ import { resolveSupportAuthor } from "@/lib/server/support-session"
  * The row is created unclaimed: it belongs to no thread and no message until
  * the message that carries it is posted, and until then only its uploader can
  * read it back.
+ *
+ * Which tenant the row is stamped with depends on where the upload comes from:
+ *
+ *  - **A reply** sends the `threadId` it is replying to. The uploader must be
+ *    able to read that thread — the same rule as opening it, answered with the
+ *    same 404 — and the row takes the thread's organization. This is what lets
+ *    Apricart, which has no organization of its own, attach a screenshot to an
+ *    answer: the claim on the reply checks the row against the thread's tenant.
+ *  - **A new query** sends nothing, because there is no thread yet. The row
+ *    takes the uploader's own organization, so a caller with none cannot
+ *    upload here — Apricart answers threads, it does not raise them.
+ *
+ * Either way the tenant is read from the database, never from the request: a
+ * `threadId` is an id the visibility rule is applied to, not a claim of scope.
  */
 export async function POST(req: NextRequest) {
   try {
-    const author = await resolveSupportAuthor()
-    if (!author || !canRaiseSupportThread(author.role)) {
+    const session = await getServerSession(authOptions)
+    if (!session?.user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    }
+
+    const viewer = supportViewerFromSession(session)
+    if (!viewer || !isSupportParticipantRole(viewer.role)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
 
-    const rateLimit = await withRateLimit("upload", author.userId)
+    const rateLimit = await withRateLimit("upload", viewer.userId)
     if (rateLimit) return rateLimit
 
     const formData = await req.formData()
     const file = formData.get("file")
     if (!file || !(file instanceof File)) {
       return NextResponse.json({ error: "No file provided" }, { status: 400 })
+    }
+
+    const tenant = await resolveUploadTenant(viewer, formData.get("threadId"))
+    if (!tenant.ok) {
+      return NextResponse.json({ error: tenant.error }, { status: tenant.status })
     }
 
     const buffer = Buffer.from(await file.arrayBuffer())
@@ -76,8 +103,8 @@ export async function POST(req: NextRequest) {
       .values({
         threadId: null,
         messageId: null,
-        organizationId: author.organizationId,
-        uploadedByUserId: author.userId,
+        organizationId: tenant.organizationId,
+        uploadedByUserId: viewer.userId,
         storageKey: key,
         // The client's filename is recorded for display only. It never builds a
         // key, a path, or a header.
@@ -100,6 +127,38 @@ export async function POST(req: NextRequest) {
     const handled = handleError(error, "POST /api/v1/support/attachments")
     return NextResponse.json({ error: handled.message }, { status: handled.status })
   }
+}
+
+type UploadTenant =
+  | { ok: true; organizationId: number }
+  | { ok: false; error: string; status: 403 | 404 }
+
+/**
+ * The organization an upload belongs to. See the handler comment for the two
+ * cases; the thread path answers 404 for an unreadable thread so an id cannot
+ * be probed for existence, exactly as `GET /threads/[id]` does.
+ */
+async function resolveUploadTenant(
+  viewer: SupportViewer,
+  rawThreadId: FormDataEntryValue | null,
+): Promise<UploadTenant> {
+  if (rawThreadId !== null) {
+    const threadId = typeof rawThreadId === "string" ? Number(rawThreadId) : NaN
+    if (!Number.isInteger(threadId) || threadId <= 0) {
+      return { ok: false, error: "Support request not found", status: 404 }
+    }
+    const thread = await getSupportThreadForViewer(viewer, threadId)
+    if (!thread) {
+      return { ok: false, error: "Support request not found", status: 404 }
+    }
+    return { ok: true, organizationId: thread.organizationId }
+  }
+
+  const author = await resolveSupportAuthor()
+  if (!author || !canRaiseSupportThread(author.role)) {
+    return { ok: false, error: "Forbidden", status: 403 }
+  }
+  return { ok: true, organizationId: author.organizationId }
 }
 
 /**

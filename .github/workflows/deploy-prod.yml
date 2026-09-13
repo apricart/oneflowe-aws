@@ -29,6 +29,26 @@ jobs:
       contents: read
     outputs:
       commit_sha: ${{ github.sha }}
+
+    # A throwaway Postgres for the integration suite. It lives and dies with
+    # this job, holds nothing but the fixtures the tests create, and needs no
+    # secret. The database name carries "test" because the test runner refuses
+    # anything else — a guard against ever pointing the suite at a real tenant.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: oneflowe_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       # workflow_dispatch can be pointed at any branch. Production is only
       # ever built from main.
@@ -100,9 +120,35 @@ jobs:
 
       # ---- Quality gates ----
       # These run before the image is built so a failing commit never reaches
-      # ECR or the approval queue. The suite needs no secrets and no database.
+      # ECR or the approval queue. The unit suite needs no secrets and no
+      # database; the integration suite runs against the service container
+      # above, migrated fresh on every run.
       - name: Run unit tests
         run: npm test
+
+      - name: Migrate the throwaway test database
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/oneflowe_test
+        run: npm run db:migrate
+
+      # The runner skips every integration suite, and passes, when it has no
+      # database. That is right on a laptop and wrong here: a mis-set variable
+      # would turn the gate green without running a test. The runner says on
+      # stderr whether it ran or skipped, and this step fails on a skip.
+      - name: Run integration tests
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/oneflowe_test
+        run: |
+          set -Eeuo pipefail
+          npm run test:integration 2>&1 | tee integration-run.log
+          if ! grep -q "running against oneflowe_test" integration-run.log; then
+            echo "Integration suites did not run against the test database." >&2
+            exit 1
+          fi
+          if grep -q "will SKIP" integration-run.log; then
+            echo "Integration suites skipped themselves." >&2
+            exit 1
+          fi
 
       - name: Run TypeScript checks
         run: npm run typecheck
