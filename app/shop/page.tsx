@@ -238,6 +238,11 @@ function isAuthorizedForOrderPortal(user: any) {
   return ["BRANCH_ADMIN", "HEAD_OFFICE", "SUPER_ADMIN", "ORDER_PORTAL"].includes(role) || Boolean(user?.isEmployee)
 }
 
+// The shop searches, sorts and filters the catalogue on the client, so it
+// needs every product the branch stocks in one response. The inventory
+// endpoint pages at 50 by default; this is the most it will return.
+const BRANCH_CATALOGUE_LIMIT = 1000
+
 function buildShopResourceUrls(context: any) {
   if (!context.branchId) return { inventory: null, budgets: null }
   let scoped = ""
@@ -248,7 +253,7 @@ function buildShopResourceUrls(context: any) {
   const inventoryScope = scoped ? `&${scoped}` : ""
   const budgetScope = scoped ? `?${scoped}` : ""
   return {
-    inventory: `/api/v1/branch/inventory?visibility=visible&includeQuantityBudget=true${inventoryScope}`,
+    inventory: `/api/v1/branch/inventory?visibility=visible&includeQuantityBudget=true&limit=${BRANCH_CATALOGUE_LIMIT}${inventoryScope}`,
     budgets: `/api/v1/budgets${budgetScope}`,
   }
 }

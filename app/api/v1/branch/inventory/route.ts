@@ -132,8 +132,12 @@ export async function GET(req: NextRequest) {
     const category = searchParams.get("category") || ""
     const subCategory = searchParams.get("subCategory") || ""
     const includeQuantityBudget = searchParams.get("includeQuantityBudget") === "true"
-    const pageNum = Math.max(1, Number.parseInt(searchParams.get("page") || "1") || 1)
-    const limitNum = Math.max(1, Number.parseInt(searchParams.get("limit") || "50") || 50)
+    // Bounded like /head-office/organization-inventory, the tier above: a
+    // branch never lists more than its organization has assigned. The shop
+    // and the branch inventory page ask for the ceiling, because they search,
+    // sort and filter the catalogue on the client.
+    const pageNum = Math.min(Math.max(Math.trunc(Number(searchParams.get("page"))) || 1, 1), 10_000)
+    const limitNum = Math.min(Math.max(Math.trunc(Number(searchParams.get("limit"))) || 50, 1), 1_000)
     const offset = (pageNum - 1) * limitNum
 
     const orgIdNum = Number(organizationId)
