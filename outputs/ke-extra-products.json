@@ -1,0 +1,2031 @@
+{
+  "summary": {
+    "databaseHost": "aws-1-ap-northeast-2.pooler.supabase.com:6543",
+    "itemList": {
+      "rows": 121,
+      "distinct": 120,
+      "matchedInDb": 120,
+      "notFoundInDb": []
+    },
+    "keRelatedProducts": 165,
+    "onList": 126,
+    "extra": {
+      "total": 39,
+      "globalActive": 23,
+      "globalInactiveOrDeleted": 16,
+      "keAssignmentActive": 18,
+      "visibleAtSomeKeBranch": 18,
+      "assignedToOtherOrgs": 6,
+      "assignedToOtherOrgsLive": 6,
+      "withLegacyOrderLines": 28
+    }
+  },
+  "extra": [
+    {
+      "id": 167,
+      "product_code": "PRD--22",
+      "name": "tea",
+      "status": "inactive",
+      "global_deleted": false,
+      "base_price_cents": 11900,
+      "stock_quantity": "0.000",
+      "created_at": "2026-07-12T22:50:04.756Z",
+      "metadata": {
+        "sourceCodes": [
+          "6634184512166"
+        ],
+        "legacySource": "KE_LOGISTICS",
+        "normalizedName": "tea",
+        "parentCategoryId": 2
+      },
+      "ke_assignment": {
+        "id": 177,
+        "is_active": false,
+        "deleted": false
+      },
+      "ke_visible_branches": "0",
+      "other_assignments": [
+        {
+          "organization_id": 2,
+          "organization": "K-E-Demo",
+          "code": "KE",
+          "is_active": true,
+          "deleted": false,
+          "branches": 0
+        }
+      ],
+      "legacy_mappings": [
+        {
+          "source_name": "tea",
+          "codes": [
+            "6634184512166"
+          ]
+        }
+      ],
+      "ke_order_lines": "1",
+      "ke_legacy_order_lines": "1",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 183,
+      "product_code": "PRD--38",
+      "name": "Coffee Pods Eespresso (8 boxes)",
+      "status": "active",
+      "global_deleted": false,
+      "base_price_cents": 350000,
+      "stock_quantity": "500.000",
+      "created_at": "2026-07-12T22:50:04.756Z",
+      "metadata": {
+        "sourceCodes": [
+          "50620497682738"
+        ],
+        "legacySource": "KE_LOGISTICS",
+        "normalizedName": "coffee pods eespresso (8 boxes)",
+        "parentCategoryId": 2
+      },
+      "ke_assignment": {
+        "id": 193,
+        "is_active": true,
+        "deleted": false
+      },
+      "ke_visible_branches": "82",
+      "other_assignments": [
+        {
+          "organization_id": 2,
+          "organization": "K-E-Demo",
+          "code": "KE",
+          "is_active": true,
+          "deleted": false,
+          "branches": 0
+        }
+      ],
+      "legacy_mappings": [
+        {
+          "source_name": "Coffee Pods Eespresso (8 boxes)",
+          "codes": [
+            "50620497682738"
+          ]
+        }
+      ],
+      "ke_order_lines": "8",
+      "ke_legacy_order_lines": "8",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 189,
+      "product_code": "PRD--44",
+      "name": "Nestle Everyday / Milac (1 KG)",
+      "status": "inactive",
+      "global_deleted": false,
+      "base_price_cents": 158500,
+      "stock_quantity": "0.000",
+      "created_at": "2026-07-12T22:50:04.756Z",
+      "metadata": {
+        "sourceCodes": [],
+        "legacySource": "KE_LOGISTICS",
+        "normalizedName": "nestle everyday / milac (1 kg)",
+        "parentCategoryId": 13
+      },
+      "ke_assignment": {
+        "id": 199,
+        "is_active": false,
+        "deleted": false
+      },
+      "ke_visible_branches": "0",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "Nestle Everyday / Milac (1 KG)",
+          "codes": []
+        }
+      ],
+      "ke_order_lines": "15",
+      "ke_legacy_order_lines": "15",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 192,
+      "product_code": "PRD--47",
+      "name": "Family Pack Biscuits Marrie",
+      "status": "inactive",
+      "global_deleted": false,
+      "base_price_cents": 9500,
+      "stock_quantity": "0.000",
+      "created_at": "2026-07-12T22:50:04.756Z",
+      "metadata": {
+        "sourceCodes": [],
+        "legacySource": "KE_LOGISTICS",
+        "normalizedName": "family pack biscuits marrie",
+        "parentCategoryId": 13
+      },
+      "ke_assignment": {
+        "id": 202,
+        "is_active": false,
+        "deleted": false
+      },
+      "ke_visible_branches": "0",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "Family Pack Biscuits Marrie",
+          "codes": []
+        }
+      ],
+      "ke_order_lines": "1",
+      "ke_legacy_order_lines": "1",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 193,
+      "product_code": "PRD--48",
+      "name": "TEST 1",
+      "status": "inactive",
+      "global_deleted": false,
+      "base_price_cents": 2200,
+      "stock_quantity": "0.000",
+      "created_at": "2026-07-12T22:50:04.756Z",
+      "metadata": {
+        "sourceCodes": [
+          "25194376948168"
+        ],
+        "legacySource": "KE_LOGISTICS",
+        "normalizedName": "test 1",
+        "parentCategoryId": 23
+      },
+      "ke_assignment": {
+        "id": 203,
+        "is_active": false,
+        "deleted": false
+      },
+      "ke_visible_branches": "0",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "TEST 1",
+          "codes": [
+            "25194376948168"
+          ]
+        }
+      ],
+      "ke_order_lines": "3",
+      "ke_legacy_order_lines": "3",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 199,
+      "product_code": "PRD--54",
+      "name": "Biscuits Peak Freens (Halfroll)",
+      "status": "active",
+      "global_deleted": false,
+      "base_price_cents": 32000,
+      "stock_quantity": "500.000",
+      "created_at": "2026-07-12T22:50:04.756Z",
+      "metadata": {
+        "sourceCodes": [
+          "55577036520631",
+          "APRA-BC34-10"
+        ],
+        "legacySource": "KE_LOGISTICS",
+        "normalizedName": "biscuits peak freens (halfroll)",
+        "parentCategoryId": 13
+      },
+      "ke_assignment": {
+        "id": 209,
+        "is_active": true,
+        "deleted": false
+      },
+      "ke_visible_branches": "1",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "Biscuits Peak Freens (Halfroll)",
+          "codes": [
+            "55577036520631",
+            "APRA-BC34-10"
+          ]
+        }
+      ],
+      "ke_order_lines": "301",
+      "ke_legacy_order_lines": "301",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 204,
+      "product_code": "PRD--59",
+      "name": "Family Pack Biscuits Marrie, Butter Puff & Lemon Biscuits (100 pack)",
+      "status": "inactive",
+      "global_deleted": false,
+      "base_price_cents": 9500,
+      "stock_quantity": "0.000",
+      "created_at": "2026-07-12T22:50:04.756Z",
+      "metadata": {
+        "sourceCodes": [],
+        "legacySource": "KE_LOGISTICS",
+        "normalizedName": "family pack biscuits marrie, butter puff & lemon biscuits (100 pack)",
+        "parentCategoryId": 13
+      },
+      "ke_assignment": {
+        "id": 214,
+        "is_active": false,
+        "deleted": false
+      },
+      "ke_visible_branches": "0",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "Family Pack Biscuits Marrie, Butter Puff & Lemon Biscuits (100 pack)",
+          "codes": []
+        }
+      ],
+      "ke_order_lines": "4",
+      "ke_legacy_order_lines": "4",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 205,
+      "product_code": "PRD--60",
+      "name": "English Biscuit Factory (100 Pack)",
+      "status": "inactive",
+      "global_deleted": false,
+      "base_price_cents": 9500,
+      "stock_quantity": "0.000",
+      "created_at": "2026-07-12T22:50:04.756Z",
+      "metadata": {
+        "sourceCodes": [
+          "21145866031285",
+          "26710091346524",
+          "87199553187895"
+        ],
+        "legacySource": "KE_LOGISTICS",
+        "normalizedName": "english biscuit factory (100 pack)",
+        "parentCategoryId": 13
+      },
+      "ke_assignment": {
+        "id": 215,
+        "is_active": false,
+        "deleted": false
+      },
+      "ke_visible_branches": "0",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "English Biscuit Factory (100 Pack)",
+          "codes": [
+            "21145866031285",
+            "26710091346524",
+            "87199553187895"
+          ]
+        }
+      ],
+      "ke_order_lines": "4",
+      "ke_legacy_order_lines": "4",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 210,
+      "product_code": "PRD--65",
+      "name": "scotch bright foam (2 Pcs)",
+      "status": "inactive",
+      "global_deleted": false,
+      "base_price_cents": 13800,
+      "stock_quantity": "0.000",
+      "created_at": "2026-07-12T22:50:04.756Z",
+      "metadata": {
+        "sourceCodes": [],
+        "legacySource": "KE_LOGISTICS",
+        "normalizedName": "scotch bright foam (2 pcs)",
+        "parentCategoryId": 23
+      },
+      "ke_assignment": {
+        "id": 220,
+        "is_active": false,
+        "deleted": false
+      },
+      "ke_visible_branches": "0",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "scotch bright foam (2 Pcs)",
+          "codes": []
+        }
+      ],
+      "ke_order_lines": "6",
+      "ke_legacy_order_lines": "6",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 211,
+      "product_code": "PRD--66",
+      "name": "Biscuits Marrie, Butter Puff & Lemon Biscuits(Half Roll)",
+      "status": "active",
+      "global_deleted": false,
+      "base_price_cents": 32000,
+      "stock_quantity": "500.000",
+      "created_at": "2026-07-12T22:50:04.756Z",
+      "metadata": {
+        "sourceCodes": [],
+        "legacySource": "KE_LOGISTICS",
+        "normalizedName": "biscuits marrie, butter puff & lemon biscuits (half roll)",
+        "parentCategoryId": 13
+      },
+      "ke_assignment": {
+        "id": 221,
+        "is_active": true,
+        "deleted": false
+      },
+      "ke_visible_branches": "1",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "Biscuits Marrie, Butter Puff & Lemon Biscuits(Half Roll)",
+          "codes": []
+        }
+      ],
+      "ke_order_lines": "160",
+      "ke_legacy_order_lines": "160",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 212,
+      "product_code": "PRD--67",
+      "name": "Cell - Toshiba(AA,AAA) 1pc",
+      "status": "active",
+      "global_deleted": false,
+      "base_price_cents": 4900,
+      "stock_quantity": "500.000",
+      "created_at": "2026-07-12T22:50:04.756Z",
+      "metadata": {
+        "sourceCodes": [],
+        "legacySource": "KE_LOGISTICS",
+        "normalizedName": "cell-toshiba (aa,aaa)1pc",
+        "parentCategoryId": 25
+      },
+      "ke_assignment": {
+        "id": 222,
+        "is_active": true,
+        "deleted": false
+      },
+      "ke_visible_branches": "28",
+      "other_assignments": [
+        {
+          "organization_id": 2,
+          "organization": "K-E-Demo",
+          "code": "KE",
+          "is_active": true,
+          "deleted": false,
+          "branches": 27
+        }
+      ],
+      "legacy_mappings": [
+        {
+          "source_name": "Cell - Toshiba(AA",
+          "codes": []
+        },
+        {
+          "source_name": "Cell - Toshiba(AA,AAA) 1pc",
+          "codes": []
+        }
+      ],
+      "ke_order_lines": "42",
+      "ke_legacy_order_lines": "42",
+      "other_org_order_lines": "3"
+    },
+    {
+      "id": 213,
+      "product_code": "PRD--68",
+      "name": "English Biscuit Factory (Half Roll)",
+      "status": "active",
+      "global_deleted": false,
+      "base_price_cents": 32000,
+      "stock_quantity": "500.000",
+      "created_at": "2026-07-12T22:50:04.756Z",
+      "metadata": {
+        "sourceCodes": [
+          "16213429220649"
+        ],
+        "legacySource": "KE_LOGISTICS",
+        "normalizedName": "english biscuit factory (half roll)",
+        "parentCategoryId": 13
+      },
+      "ke_assignment": {
+        "id": 223,
+        "is_active": true,
+        "deleted": false
+      },
+      "ke_visible_branches": "1",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "English Biscuit Factory (Half Roll)",
+          "codes": [
+            "16213429220649"
+          ]
+        }
+      ],
+      "ke_order_lines": "219",
+      "ke_legacy_order_lines": "219",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 225,
+      "product_code": "PRD--80",
+      "name": "Biscuits Marrie, Butter Puff & Lemon Biscuits(Halfroll)",
+      "status": "inactive",
+      "global_deleted": false,
+      "base_price_cents": 32000,
+      "stock_quantity": "0.000",
+      "created_at": "2026-07-12T22:50:04.756Z",
+      "metadata": {
+        "sourceCodes": [],
+        "legacySource": "KE_LOGISTICS",
+        "normalizedName": "biscuits marrie, butter puff & lemon biscuits (halfroll)",
+        "parentCategoryId": 13
+      },
+      "ke_assignment": {
+        "id": 235,
+        "is_active": false,
+        "deleted": false
+      },
+      "ke_visible_branches": "0",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "Biscuits Marrie, Butter Puff & Lemon Biscuits(Halfroll)",
+          "codes": []
+        }
+      ],
+      "ke_order_lines": "11",
+      "ke_legacy_order_lines": "11",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 228,
+      "product_code": "PRD--83",
+      "name": "Pakola (330ml)",
+      "status": "active",
+      "global_deleted": false,
+      "base_price_cents": 3300,
+      "stock_quantity": "500.000",
+      "created_at": "2026-07-12T22:50:04.756Z",
+      "metadata": {
+        "sourceCodes": [
+          "46864073027994"
+        ],
+        "legacySource": "KE_LOGISTICS",
+        "normalizedName": "pakola (330ml)",
+        "parentCategoryId": 2
+      },
+      "ke_assignment": {
+        "id": 238,
+        "is_active": true,
+        "deleted": false
+      },
+      "ke_visible_branches": "19",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "Pakola (330ml)",
+          "codes": [
+            "46864073027994"
+          ]
+        }
+      ],
+      "ke_order_lines": "14",
+      "ke_legacy_order_lines": "14",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 231,
+      "product_code": "PRD--86",
+      "name": "Pakola (500ml)",
+      "status": "active",
+      "global_deleted": false,
+      "base_price_cents": 3700,
+      "stock_quantity": "500.000",
+      "created_at": "2026-07-12T22:50:04.756Z",
+      "metadata": {
+        "sourceCodes": [
+          "70395371397750"
+        ],
+        "legacySource": "KE_LOGISTICS",
+        "normalizedName": "pakola (500ml)",
+        "parentCategoryId": 2
+      },
+      "ke_assignment": {
+        "id": 241,
+        "is_active": true,
+        "deleted": false
+      },
+      "ke_visible_branches": "19",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "Pakola (500ml)",
+          "codes": [
+            "70395371397750"
+          ]
+        }
+      ],
+      "ke_order_lines": "16",
+      "ke_legacy_order_lines": "16",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 234,
+      "product_code": "PRD--89",
+      "name": "Party pack Tissues (1pcs)",
+      "status": "inactive",
+      "global_deleted": false,
+      "base_price_cents": 24500,
+      "stock_quantity": "0.000",
+      "created_at": "2026-07-12T22:50:04.756Z",
+      "metadata": {
+        "sourceCodes": [
+          "APRA-HS14-21"
+        ],
+        "legacySource": "KE_LOGISTICS",
+        "normalizedName": "party pack tissues (1pcs)",
+        "parentCategoryId": 12
+      },
+      "ke_assignment": {
+        "id": 244,
+        "is_active": false,
+        "deleted": false
+      },
+      "ke_visible_branches": "0",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "Party pack Tissues (1pcs)",
+          "codes": [
+            "APRA-HS14-21"
+          ]
+        }
+      ],
+      "ke_order_lines": "19",
+      "ke_legacy_order_lines": "19",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 258,
+      "product_code": "PRD--113",
+      "name": "Family Pack Biscuits Marrie, Butter Puff, Zeera plus, Chocolate sooper, chocolicious & Lemon Biscuits) (100 pack)",
+      "status": "inactive",
+      "global_deleted": false,
+      "base_price_cents": 9500,
+      "stock_quantity": "0.000",
+      "created_at": "2026-07-12T22:50:04.756Z",
+      "metadata": {
+        "sourceCodes": [
+          "37398443925258"
+        ],
+        "legacySource": "KE_LOGISTICS",
+        "normalizedName": "family pack biscuits marrie, butter puff, zeera plus, chocolate sooper, chocolicious & lemon biscuits)(100 pack)",
+        "parentCategoryId": 13
+      },
+      "ke_assignment": {
+        "id": 269,
+        "is_active": false,
+        "deleted": false
+      },
+      "ke_visible_branches": "0",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "Family Pack Biscuits Marrie, Butter Puff, Zeera plus, Chocolate sooper, chocolicious & Lemon Biscuits) (100 pack)",
+          "codes": [
+            "37398443925258"
+          ]
+        }
+      ],
+      "ke_order_lines": "45",
+      "ke_legacy_order_lines": "45",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 259,
+      "product_code": "PRD--114",
+      "name": "Nescafe Classic Coffee(Gold) (100 GM)",
+      "status": "active",
+      "global_deleted": false,
+      "base_price_cents": 230000,
+      "stock_quantity": "500.000",
+      "created_at": "2026-07-12T22:50:04.756Z",
+      "metadata": {
+        "sourceCodes": [
+          "53887889437420"
+        ],
+        "legacySource": "KE_LOGISTICS",
+        "normalizedName": "nescafe classic coffee (gold)(100 gm)",
+        "parentCategoryId": 2
+      },
+      "ke_assignment": {
+        "id": 270,
+        "is_active": true,
+        "deleted": false
+      },
+      "ke_visible_branches": "81",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "Nescafe Classic Coffee(Gold 100 GM)",
+          "codes": []
+        },
+        {
+          "source_name": "Nescafe Classic Coffee(Gold) (100 GM)",
+          "codes": [
+            "53887889437420"
+          ]
+        }
+      ],
+      "ke_order_lines": "57",
+      "ke_legacy_order_lines": "57",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 260,
+      "product_code": "PRD--115",
+      "name": "Biscuits Marrie",
+      "status": "inactive",
+      "global_deleted": false,
+      "base_price_cents": 32000,
+      "stock_quantity": "0.000",
+      "created_at": "2026-07-12T22:50:04.756Z",
+      "metadata": {
+        "sourceCodes": [],
+        "legacySource": "KE_LOGISTICS",
+        "normalizedName": "biscuits marrie",
+        "parentCategoryId": 13
+      },
+      "ke_assignment": {
+        "id": 271,
+        "is_active": false,
+        "deleted": false
+      },
+      "ke_visible_branches": "0",
+      "other_assignments": [
+        {
+          "organization_id": 2,
+          "organization": "K-E-Demo",
+          "code": "KE",
+          "is_active": true,
+          "deleted": false,
+          "branches": 0
+        }
+      ],
+      "legacy_mappings": [
+        {
+          "source_name": "Biscuits Marrie",
+          "codes": []
+        }
+      ],
+      "ke_order_lines": "6",
+      "ke_legacy_order_lines": "6",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 261,
+      "product_code": "PRD--116",
+      "name": "Dustbin Shoppers -15 bags per roll (18x24) - FAY",
+      "status": "active",
+      "global_deleted": false,
+      "base_price_cents": 45000,
+      "stock_quantity": "500.000",
+      "created_at": "2026-07-12T22:50:04.756Z",
+      "metadata": {
+        "sourceCodes": [],
+        "legacySource": "KE_LOGISTICS",
+        "normalizedName": "dustbin shoppers-15 bags per roll (18x24)-fay",
+        "parentCategoryId": 23
+      },
+      "ke_assignment": {
+        "id": 272,
+        "is_active": true,
+        "deleted": false
+      },
+      "ke_visible_branches": "24",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "Dustbin Shoppers -15 bags per roll (18x24) - FAY",
+          "codes": []
+        }
+      ],
+      "ke_order_lines": "3",
+      "ke_legacy_order_lines": "3",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 263,
+      "product_code": "PRD--118",
+      "name": "Rose Petal Maxob Toilet Roll 8+2 (10 Rolls)",
+      "status": "active",
+      "global_deleted": false,
+      "base_price_cents": 95000,
+      "stock_quantity": "500.000",
+      "created_at": "2026-07-12T22:50:04.756Z",
+      "metadata": {
+        "sourceCodes": [
+          "APRA-HS02-18"
+        ],
+        "legacySource": "KE_LOGISTICS",
+        "normalizedName": "rose petal maxob toilet roll 8+2 (10 rolls)",
+        "parentCategoryId": 12
+      },
+      "ke_assignment": {
+        "id": 274,
+        "is_active": true,
+        "deleted": false
+      },
+      "ke_visible_branches": "24",
+      "other_assignments": [
+        {
+          "organization_id": 6,
+          "organization": "UBL",
+          "code": "UBL_123A",
+          "is_active": true,
+          "deleted": false,
+          "branches": 0
+        }
+      ],
+      "legacy_mappings": [
+        {
+          "source_name": "Rose Petal Maxob Toilet Roll 8+2 (10 Rolls)",
+          "codes": [
+            "APRA-HS02-18"
+          ]
+        }
+      ],
+      "ke_order_lines": "4",
+      "ke_legacy_order_lines": "4",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 264,
+      "product_code": "PRD--119",
+      "name": "Biscuits LU prince (Tikki pack)",
+      "status": "inactive",
+      "global_deleted": false,
+      "base_price_cents": 32000,
+      "stock_quantity": "0.000",
+      "created_at": "2026-07-12T22:50:04.756Z",
+      "metadata": {
+        "sourceCodes": [
+          "10189247318721"
+        ],
+        "legacySource": "KE_LOGISTICS",
+        "normalizedName": "biscuits lu prince (tikki pack)",
+        "parentCategoryId": 13
+      },
+      "ke_assignment": {
+        "id": 275,
+        "is_active": false,
+        "deleted": false
+      },
+      "ke_visible_branches": "0",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "Biscuits LU prince (Tikki pack)",
+          "codes": [
+            "10189247318721"
+          ]
+        }
+      ],
+      "ke_order_lines": "19",
+      "ke_legacy_order_lines": "19",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 265,
+      "product_code": "PRD--120",
+      "name": "Nescafe Classic Coffee (95gm)",
+      "status": "active",
+      "global_deleted": false,
+      "base_price_cents": 230000,
+      "stock_quantity": "500.000",
+      "created_at": "2026-07-12T22:50:04.756Z",
+      "metadata": {
+        "sourceCodes": [
+          "84098609325322"
+        ],
+        "legacySource": "KE_LOGISTICS",
+        "normalizedName": "nescafe classic coffee (95gm)",
+        "parentCategoryId": 2
+      },
+      "ke_assignment": {
+        "id": 276,
+        "is_active": true,
+        "deleted": false
+      },
+      "ke_visible_branches": "2",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "Nescafe Classic Coffee (95gm)",
+          "codes": [
+            "84098609325322"
+          ]
+        }
+      ],
+      "ke_order_lines": "5",
+      "ke_legacy_order_lines": "5",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 266,
+      "product_code": "PRD--121",
+      "name": "Nescafe Classic Coffee Gold (95gm)",
+      "status": "active",
+      "global_deleted": false,
+      "base_price_cents": 230000,
+      "stock_quantity": "500.000",
+      "created_at": "2026-07-12T22:50:04.756Z",
+      "metadata": {
+        "sourceCodes": [
+          "84098609325322"
+        ],
+        "legacySource": "KE_LOGISTICS",
+        "normalizedName": "nescafe classic coffee gold (95gm)",
+        "parentCategoryId": 2
+      },
+      "ke_assignment": {
+        "id": 277,
+        "is_active": true,
+        "deleted": false
+      },
+      "ke_visible_branches": "23",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "Nescafe Classic Coffee Gold (95gm)",
+          "codes": [
+            "84098609325322"
+          ]
+        }
+      ],
+      "ke_order_lines": "4",
+      "ke_legacy_order_lines": "4",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 267,
+      "product_code": "PRD--122",
+      "name": "Family Pack Biscuits-Marrie Butter Puff-Zeera plus Chocolate sooper-chocolicious & Lemon Biscuits) (100 pack)",
+      "status": "inactive",
+      "global_deleted": false,
+      "base_price_cents": 9500,
+      "stock_quantity": "0.000",
+      "created_at": "2026-07-12T22:50:04.756Z",
+      "metadata": {
+        "sourceCodes": [
+          "37398443925258"
+        ],
+        "legacySource": "KE_LOGISTICS",
+        "normalizedName": "family pack biscuits-marrie butter puff-zeera plus chocolate sooper-chocolicious & lemon biscuits)(100 pack)",
+        "parentCategoryId": 13
+      },
+      "ke_assignment": {
+        "id": 278,
+        "is_active": false,
+        "deleted": false
+      },
+      "ke_visible_branches": "0",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "Family Pack Biscuits-Marrie Butter Puff-Zeera plus Chocolate sooper-chocolicious & Lemon Biscuits) (100 pack)",
+          "codes": [
+            "37398443925258"
+          ]
+        }
+      ],
+      "ke_order_lines": "2",
+      "ke_legacy_order_lines": "2",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 268,
+      "product_code": "PRD--123",
+      "name": "Nescafe Classic Coffee Gold (200gm)",
+      "status": "inactive",
+      "global_deleted": false,
+      "base_price_cents": 230000,
+      "stock_quantity": "0.000",
+      "created_at": "2026-07-12T22:50:04.756Z",
+      "metadata": {
+        "sourceCodes": [],
+        "legacySource": "KE_LOGISTICS",
+        "normalizedName": "nescafe classic coffee gold (200gm)",
+        "parentCategoryId": 2
+      },
+      "ke_assignment": {
+        "id": 279,
+        "is_active": false,
+        "deleted": false
+      },
+      "ke_visible_branches": "0",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "Nescafe Classic Coffee Gold (200gm)",
+          "codes": []
+        }
+      ],
+      "ke_order_lines": "2",
+      "ke_legacy_order_lines": "2",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 315,
+      "product_code": "PRD--167",
+      "name": "Lipton Tea Bags (600 PCS)",
+      "status": "active",
+      "global_deleted": false,
+      "base_price_cents": 360000,
+      "stock_quantity": "500.000",
+      "created_at": "2026-07-23T08:39:51.082Z",
+      "metadata": {
+        "sourceCodes": [
+          "9055833031847",
+          "APRA-T01-22"
+        ],
+        "legacySource": "KE_LOGISTICS",
+        "normalizedName": "lipton tea bags (600 pcs)",
+        "parentCategoryId": 2
+      },
+      "ke_assignment": {
+        "id": 347,
+        "is_active": true,
+        "deleted": false
+      },
+      "ke_visible_branches": "21",
+      "other_assignments": [
+        {
+          "organization_id": 2,
+          "organization": "K-E-Demo",
+          "code": "KE",
+          "is_active": true,
+          "deleted": false,
+          "branches": 0
+        }
+      ],
+      "legacy_mappings": [
+        {
+          "source_name": "Lipton Tea Bags (600 PCS)",
+          "codes": [
+            "9055833031847",
+            "APRA-T01-22"
+          ]
+        }
+      ],
+      "ke_order_lines": "3",
+      "ke_legacy_order_lines": "3",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 323,
+      "product_code": "PRD--175",
+      "name": "Toothbrush Colgate",
+      "status": "active",
+      "global_deleted": false,
+      "base_price_cents": 0,
+      "stock_quantity": "500.000",
+      "created_at": "2026-08-03T10:48:33.257Z",
+      "metadata": {
+        "sourceCodes": [],
+        "legacySource": "KE_LOGISTICS",
+        "normalizedName": "toothbrush colgate",
+        "parentCategoryId": 12
+      },
+      "ke_assignment": {
+        "id": 392,
+        "is_active": true,
+        "deleted": false
+      },
+      "ke_visible_branches": "1",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "Toothbrush Colgate",
+          "codes": []
+        }
+      ],
+      "ke_order_lines": "1",
+      "ke_legacy_order_lines": "1",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 325,
+      "product_code": "PRD--176",
+      "name": "Olpers",
+      "status": "inactive",
+      "global_deleted": false,
+      "base_price_cents": 40000,
+      "stock_quantity": "0.000",
+      "created_at": "2026-08-05T05:20:36.510Z",
+      "metadata": {
+        "sourceCodes": [],
+        "legacySource": "KE_LOGISTICS",
+        "normalizedName": "olpers",
+        "parentCategoryId": 2
+      },
+      "ke_assignment": {
+        "id": 395,
+        "is_active": false,
+        "deleted": false
+      },
+      "ke_visible_branches": "0",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "Olpers",
+          "codes": []
+        }
+      ],
+      "ke_order_lines": "0",
+      "ke_legacy_order_lines": "0",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 339,
+      "product_code": "KE-19585",
+      "name": "ToothPaste Medicam - 180 gms",
+      "status": "active",
+      "global_deleted": false,
+      "base_price_cents": 37000,
+      "stock_quantity": "500.000",
+      "created_at": "2026-09-11T21:50:59.220Z",
+      "metadata": {},
+      "ke_assignment": {
+        "id": 416,
+        "is_active": true,
+        "deleted": false
+      },
+      "ke_visible_branches": "25",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "ToothPaste Medicam - 180 gms",
+          "codes": [
+            "19585",
+            "19477",
+            "13742",
+            "4721",
+            "4644",
+            "4567",
+            "4490",
+            "4380",
+            "4226",
+            "4149",
+            "4072",
+            "4028",
+            "3874",
+            "3797",
+            "3720",
+            "3643",
+            "3566",
+            "3489",
+            "3412",
+            "3335",
+            "3181",
+            "1829",
+            "1828",
+            "1827",
+            "1826"
+          ]
+        }
+      ],
+      "ke_order_lines": "0",
+      "ke_legacy_order_lines": "0",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 340,
+      "product_code": "KE-3898",
+      "name": "Lipton Tea Bags (600PCS)",
+      "status": "active",
+      "global_deleted": false,
+      "base_price_cents": 360000,
+      "stock_quantity": "500.000",
+      "created_at": "2026-09-11T21:50:59.220Z",
+      "metadata": {},
+      "ke_assignment": {
+        "id": 417,
+        "is_active": true,
+        "deleted": false
+      },
+      "ke_visible_branches": "2",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "Lipton Tea Bags (600PCS)",
+          "codes": [
+            "3898",
+            "3821"
+          ]
+        }
+      ],
+      "ke_order_lines": "0",
+      "ke_legacy_order_lines": "0",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 341,
+      "product_code": "KE-3742",
+      "name": "Nescafe Classic Coffee  (200gm)",
+      "status": "inactive",
+      "global_deleted": false,
+      "base_price_cents": 210000,
+      "stock_quantity": "0.000",
+      "created_at": "2026-09-11T21:50:59.220Z",
+      "metadata": {
+        "mergeReason": "confirmed K-Electric duplicate",
+        "mergedIntoProductId": 19,
+        "mergedForOrganizationId": 10
+      },
+      "ke_assignment": null,
+      "ke_visible_branches": "0",
+      "other_assignments": [],
+      "legacy_mappings": [],
+      "ke_order_lines": "0",
+      "ke_legacy_order_lines": "0",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 342,
+      "product_code": "KE-432",
+      "name": "Milac (1 KG)",
+      "status": "active",
+      "global_deleted": false,
+      "base_price_cents": 158500,
+      "stock_quantity": "500.000",
+      "created_at": "2026-09-11T21:50:59.220Z",
+      "metadata": {},
+      "ke_assignment": {
+        "id": 419,
+        "is_active": true,
+        "deleted": false
+      },
+      "ke_visible_branches": "1",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "Milac (1 KG)",
+          "codes": [
+            "432"
+          ]
+        }
+      ],
+      "ke_order_lines": "0",
+      "ke_legacy_order_lines": "0",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 343,
+      "product_code": "KE-411",
+      "name": "Cell - Toshiba(AA)",
+      "status": "active",
+      "global_deleted": false,
+      "base_price_cents": 4900,
+      "stock_quantity": "500.000",
+      "created_at": "2026-09-11T21:50:59.220Z",
+      "metadata": {},
+      "ke_assignment": {
+        "id": 420,
+        "is_active": true,
+        "deleted": false
+      },
+      "ke_visible_branches": "1",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "Cell - Toshiba(AA)",
+          "codes": [
+            "411"
+          ]
+        }
+      ],
+      "ke_order_lines": "0",
+      "ke_legacy_order_lines": "0",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 344,
+      "product_code": "KE-history:deal 12",
+      "name": "DEAL 12",
+      "status": "active",
+      "global_deleted": false,
+      "base_price_cents": 22100,
+      "stock_quantity": "0.000",
+      "created_at": "2026-09-11T21:50:59.220Z",
+      "metadata": {},
+      "ke_assignment": {
+        "id": 421,
+        "is_active": false,
+        "deleted": false
+      },
+      "ke_visible_branches": "0",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "DEAL 12",
+          "codes": [
+            "history:deal 12"
+          ]
+        }
+      ],
+      "ke_order_lines": "0",
+      "ke_legacy_order_lines": "0",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 345,
+      "product_code": "KE-history:scotch bright foam (1 pcs)",
+      "name": "Scotch bright foam (1 Pcs)",
+      "status": "active",
+      "global_deleted": false,
+      "base_price_cents": 15000,
+      "stock_quantity": "0.000",
+      "created_at": "2026-09-11T21:50:59.220Z",
+      "metadata": {},
+      "ke_assignment": {
+        "id": 422,
+        "is_active": false,
+        "deleted": false
+      },
+      "ke_visible_branches": "0",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "Scotch bright foam (1 Pcs)",
+          "codes": [
+            "history:scotch bright foam (1 pcs)"
+          ]
+        }
+      ],
+      "ke_order_lines": "0",
+      "ke_legacy_order_lines": "0",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 346,
+      "product_code": "KE-history:test 2",
+      "name": "TEST 2",
+      "status": "active",
+      "global_deleted": false,
+      "base_price_cents": 22000,
+      "stock_quantity": "0.000",
+      "created_at": "2026-09-11T21:50:59.220Z",
+      "metadata": {},
+      "ke_assignment": {
+        "id": 423,
+        "is_active": false,
+        "deleted": false
+      },
+      "ke_visible_branches": "0",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "TEST 2",
+          "codes": [
+            "history:test 2"
+          ]
+        }
+      ],
+      "ke_order_lines": "0",
+      "ke_legacy_order_lines": "0",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 347,
+      "product_code": "KE-history:test 3",
+      "name": "TEST 3",
+      "status": "active",
+      "global_deleted": false,
+      "base_price_cents": 1580,
+      "stock_quantity": "0.000",
+      "created_at": "2026-09-11T21:50:59.220Z",
+      "metadata": {},
+      "ke_assignment": {
+        "id": 424,
+        "is_active": false,
+        "deleted": false
+      },
+      "ke_visible_branches": "0",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "TEST 3",
+          "codes": [
+            "history:test 3"
+          ]
+        }
+      ],
+      "ke_order_lines": "0",
+      "ke_legacy_order_lines": "0",
+      "other_org_order_lines": "0"
+    },
+    {
+      "id": 348,
+      "product_code": "KE-history:test",
+      "name": "test",
+      "status": "active",
+      "global_deleted": false,
+      "base_price_cents": 20000,
+      "stock_quantity": "0.000",
+      "created_at": "2026-09-11T21:50:59.220Z",
+      "metadata": {},
+      "ke_assignment": {
+        "id": 425,
+        "is_active": false,
+        "deleted": false
+      },
+      "ke_visible_branches": "0",
+      "other_assignments": [],
+      "legacy_mappings": [
+        {
+          "source_name": "test",
+          "codes": [
+            "history:test"
+          ]
+        }
+      ],
+      "ke_order_lines": "0",
+      "ke_legacy_order_lines": "0",
+      "other_org_order_lines": "0"
+    }
+  ],
+  "onList": [
+    {
+      "id": 6,
+      "code": "PRD-006",
+      "name": "Rose Petal Pop-up"
+    },
+    {
+      "id": 7,
+      "code": "PRD-007",
+      "name": "Sugar"
+    },
+    {
+      "id": 12,
+      "code": "PRD--11",
+      "name": "Tapal Family Mixture 900gm"
+    },
+    {
+      "id": 17,
+      "code": "PRD--16",
+      "name": "Tapal Family Mixture 430gm"
+    },
+    {
+      "id": 18,
+      "code": "PRD--17",
+      "name": "Nescafe Classic Coffee 100gm"
+    },
+    {
+      "id": 19,
+      "code": "PRD--18",
+      "name": "Nescafe Classic Coffee 200gm"
+    },
+    {
+      "id": 165,
+      "code": "PRD--20",
+      "name": "Olper Milk (1 Litre)"
+    },
+    {
+      "id": 166,
+      "code": "PRD--21",
+      "name": "Sprite -Zero Can (250 ML)"
+    },
+    {
+      "id": 168,
+      "code": "PRD--23",
+      "name": "Viper Big mosi (1pcs)"
+    },
+    {
+      "id": 169,
+      "code": "PRD--24",
+      "name": "Steel Balls(Jhoona 1pcs)"
+    },
+    {
+      "id": 170,
+      "code": "PRD--25",
+      "name": "Phool Jharo (1pcs)"
+    },
+    {
+      "id": 171,
+      "code": "PRD--26",
+      "name": "Motein Spray Insert Killer Triple Action (375ml)"
+    },
+    {
+      "id": 172,
+      "code": "PRD--27",
+      "name": "Mop Set (1pcs)"
+    },
+    {
+      "id": 173,
+      "code": "PRD--28",
+      "name": "Mop Refill (500g)"
+    },
+    {
+      "id": 174,
+      "code": "PRD--29",
+      "name": "Max Dishwash Soap (85 GM)"
+    },
+    {
+      "id": 175,
+      "code": "PRD--30",
+      "name": "Kingtox Spray (600ml)"
+    },
+    {
+      "id": 176,
+      "code": "PRD--31",
+      "name": "Sprite Can (250 ML)"
+    },
+    {
+      "id": 177,
+      "code": "PRD--32",
+      "name": "Nestle water (500 ML)"
+    },
+    {
+      "id": 178,
+      "code": "PRD--33",
+      "name": "Nestle water pack of 12 (330ML)"
+    },
+    {
+      "id": 179,
+      "code": "PRD--34",
+      "name": "Nestle Juices (200 ML)"
+    },
+    {
+      "id": 180,
+      "code": "PRD--35",
+      "name": "Coke-Zero Can (250 ML)"
+    },
+    {
+      "id": 181,
+      "code": "PRD--36",
+      "name": "Coke Can (250 ML)"
+    },
+    {
+      "id": 182,
+      "code": "PRD--37",
+      "name": "Sugar (01 KG)"
+    },
+    {
+      "id": 184,
+      "code": "PRD--39",
+      "name": "Mug (6 Pcs)"
+    },
+    {
+      "id": 185,
+      "code": "PRD--40",
+      "name": "Plates (6 Pcs)"
+    },
+    {
+      "id": 186,
+      "code": "PRD--41",
+      "name": "Nestle Everyday 1kg "
+    },
+    {
+      "id": 187,
+      "code": "PRD--42",
+      "name": "Rose Petal Luxury Tissue Box (1pcs)"
+    },
+    {
+      "id": 188,
+      "code": "PRD--43",
+      "name": "Tapal Danedar Teabags (100 PCS)"
+    },
+    {
+      "id": 190,
+      "code": "PRD--45",
+      "name": "Nescafe Classic Coffee (100 GM)"
+    },
+    {
+      "id": 191,
+      "code": "PRD--46",
+      "name": "Tapal Green Tea Bags (30 PCS)"
+    },
+    {
+      "id": 194,
+      "code": "PRD--49",
+      "name": "Nescafe Classic Coffee (475 GM)"
+    },
+    {
+      "id": 195,
+      "code": "PRD--50",
+      "name": "Tapal Danedar Teabags (600 PCS)"
+    },
+    {
+      "id": 196,
+      "code": "PRD--51",
+      "name": "Nestle Cardamom Tea Pouch (500 GM)"
+    },
+    {
+      "id": 197,
+      "code": "PRD--52",
+      "name": "Rose Petal Hi-jeen WHITE (100 sheets)"
+    },
+    {
+      "id": 198,
+      "code": "PRD--53",
+      "name": "Biscuits LU prince (Halfroll)"
+    },
+    {
+      "id": 200,
+      "code": "PRD--55",
+      "name": "Nestle Everyday 2kg"
+    },
+    {
+      "id": 201,
+      "code": "PRD--56",
+      "name": "Milkpak (1 Litre)"
+    },
+    {
+      "id": 202,
+      "code": "PRD--57",
+      "name": "Rose Petal Pop-Up (1pcs)"
+    },
+    {
+      "id": 203,
+      "code": "PRD--58",
+      "name": "Dish Washing Liquid (Lemon Max 475ml)"
+    },
+    {
+      "id": 206,
+      "code": "PRD--61",
+      "name": "Tapal Green Tea Bags (90 PCS)"
+    },
+    {
+      "id": 207,
+      "code": "PRD--62",
+      "name": "ToothPaste Colgate (75 GM)"
+    },
+    {
+      "id": 208,
+      "code": "PRD--63",
+      "name": "Air Freshener - PERFECT (300 ML)"
+    },
+    {
+      "id": 209,
+      "code": "PRD--64",
+      "name": "Tapal Family Mixture Tea (900 GM)"
+    },
+    {
+      "id": 214,
+      "code": "PRD--69",
+      "name": "Max bright foam (2 Pcs)"
+    },
+    {
+      "id": 215,
+      "code": "PRD--70",
+      "name": "Olpers Creamer Milk Tea Powder 800gm"
+    },
+    {
+      "id": 216,
+      "code": "PRD--71",
+      "name": "Tapal Cardamom Teabags (30 pcs)"
+    },
+    {
+      "id": 217,
+      "code": "PRD--72",
+      "name": "Lipton Green Tea Bags (25 PCS)"
+    },
+    {
+      "id": 218,
+      "code": "PRD--73",
+      "name": "Cell-Energizer (1pc)"
+    },
+    {
+      "id": 219,
+      "code": "PRD--74",
+      "name": "Dustbin Shoppers -15 bags per roll (4ltr)"
+    },
+    {
+      "id": 220,
+      "code": "PRD--75",
+      "name": "Duster (1pcs)"
+    },
+    {
+      "id": 221,
+      "code": "PRD--76",
+      "name": "Spoon (6 Pcs)"
+    },
+    {
+      "id": 222,
+      "code": "PRD--77",
+      "name": "Coffee Pods Nespresso (8 boxes)"
+    },
+    {
+      "id": 223,
+      "code": "PRD--78",
+      "name": "Glass (6 Pcs)"
+    },
+    {
+      "id": 224,
+      "code": "PRD--79",
+      "name": "Klassno Classic Coffee (100gm)"
+    },
+    {
+      "id": 226,
+      "code": "PRD--81",
+      "name": "Hiclean Handwash (500 ML)"
+    },
+    {
+      "id": 227,
+      "code": "PRD--82",
+      "name": "Tapal Family Mixture Tea (430 GM)"
+    },
+    {
+      "id": 229,
+      "code": "PRD--84",
+      "name": "Nescafe Classic Coffee Gold (100gm)"
+    },
+    {
+      "id": 230,
+      "code": "PRD--85",
+      "name": "Maxob Toilet Roll 8+2 (10 Rolls)"
+    },
+    {
+      "id": 232,
+      "code": "PRD--87",
+      "name": "Fiz-up Can (250ml)"
+    },
+    {
+      "id": 233,
+      "code": "PRD--88",
+      "name": "Rubber Bands (200gm)"
+    },
+    {
+      "id": 235,
+      "code": "PRD--90",
+      "name": "Nestle Kashmiri Tea (500 GM)"
+    },
+    {
+      "id": 236,
+      "code": "PRD--91",
+      "name": "HiClean Handwash (5 Litre)"
+    },
+    {
+      "id": 237,
+      "code": "PRD--92",
+      "name": "Fay Hijeen Tissues (150sheet)"
+    },
+    {
+      "id": 238,
+      "code": "PRD--93",
+      "name": "Millac Instant Tea whitener (850gm)"
+    },
+    {
+      "id": 239,
+      "code": "PRD--94",
+      "name": "Lipton Tea Bags (100 PCS)"
+    },
+    {
+      "id": 240,
+      "code": "PRD--95",
+      "name": "Soaps - Lux/ Lifebuoy/ Dettol (128 GM)"
+    },
+    {
+      "id": 241,
+      "code": "PRD--96",
+      "name": "Cell - Toshiba(AA) 1pc"
+    },
+    {
+      "id": 242,
+      "code": "PRD--97",
+      "name": "Cell - Toshiba(AAA) 1pc"
+    },
+    {
+      "id": 243,
+      "code": "PRD--98",
+      "name": "Glint Glass Cleaner (500 ML)"
+    },
+    {
+      "id": 244,
+      "code": "PRD--99",
+      "name": "Next Cola (250ML)"
+    },
+    {
+      "id": 245,
+      "code": "PRD--100",
+      "name": "Green Tea Material (Spices)"
+    },
+    {
+      "id": 246,
+      "code": "PRD--101",
+      "name": "Coopex Powder Bottle (100g)"
+    },
+    {
+      "id": 247,
+      "code": "PRD--102",
+      "name": "Lipton Yellow Label Pouch (1600 GM)"
+    },
+    {
+      "id": 248,
+      "code": "PRD--103",
+      "name": "Pakola Drinking Water (500ml)"
+    },
+    {
+      "id": 249,
+      "code": "PRD--104",
+      "name": "Pakola Drinking Water (330ml)"
+    },
+    {
+      "id": 250,
+      "code": "PRD--105",
+      "name": "Lipton Tea Bags (500 PCS)"
+    },
+    {
+      "id": 251,
+      "code": "PRD--106",
+      "name": "Brasso (200ml)"
+    },
+    {
+      "id": 252,
+      "code": "PRD--107",
+      "name": "French Vanilla Flavoured Cofee - 100gms"
+    },
+    {
+      "id": 253,
+      "code": "PRD--108",
+      "name": "Nescafe Classic Coffee (200 GM)"
+    },
+    {
+      "id": 254,
+      "code": "PRD--109",
+      "name": "Fay Glow Glass Cleaner (550ml)"
+    },
+    {
+      "id": 255,
+      "code": "PRD--110",
+      "name": "Irani Khajoor (1kg)"
+    },
+    {
+      "id": 256,
+      "code": "PRD--111",
+      "name": "Rooh Afza (3000ml)"
+    },
+    {
+      "id": 257,
+      "code": "PRD--112",
+      "name": "Rooh Afza (800ml)"
+    },
+    {
+      "id": 262,
+      "code": "PRD--117",
+      "name": "Fay Party Pack Tissues White (1pcs)"
+    },
+    {
+      "id": 269,
+      "code": "PRD--124",
+      "name": "Marie Biscuits Half Roll (Peek Freans)"
+    },
+    {
+      "id": 270,
+      "code": "PRD--125",
+      "name": "Click Zeera Half Roll (Peek Freans)"
+    },
+    {
+      "id": 271,
+      "code": "PRD--126",
+      "name": "Peanut Pik Half Roll"
+    },
+    {
+      "id": 272,
+      "code": "PRD--127",
+      "name": "Party Pik\tHalf Roll (Peek Freans)"
+    },
+    {
+      "id": 273,
+      "code": "PRD--128",
+      "name": "Peanut Pista Half Roll (Peek Freans)"
+    },
+    {
+      "id": 274,
+      "code": "PRD--129",
+      "name": "Bakery Biscuits\tSnack Pack (Lu)"
+    },
+    {
+      "id": 275,
+      "code": "PRD--130",
+      "name": "Sooper Biscuits Choclate Half Roll (Peek Freans)"
+    },
+    {
+      "id": 276,
+      "code": "PRD--131",
+      "name": "Sooper Biscuits Half Roll (Peek Freans)"
+    },
+    {
+      "id": 277,
+      "code": "PRD--132",
+      "name": "Lemon Sandwitch Half Roll (Peek Freans)"
+    },
+    {
+      "id": 278,
+      "code": "PRD--133",
+      "name": "Peanut Pik Snack Pack (Peek Freans)"
+    },
+    {
+      "id": 279,
+      "code": "PRD--134",
+      "name": "Party Pik\tSnack Pack ( Peek Freans)"
+    },
+    {
+      "id": 280,
+      "code": "PRD--135",
+      "name": "Gluco Half Roll (Peek Freans)"
+    },
+    {
+      "id": 281,
+      "code": "PRD--136",
+      "name": "Lemon Sandwitch Snack Pack (Peek Freans)"
+    },
+    {
+      "id": 282,
+      "code": "PRD--137",
+      "name": "Rio Half Roll Strawbery (Peek Freans)"
+    },
+    {
+      "id": 283,
+      "code": "PRD--138",
+      "name": "Nankhatai Biscuits\tHalf Roll (LU)"
+    },
+    {
+      "id": 284,
+      "code": "PRD--139",
+      "name": "Gala Biscuits\tSnack Pack (Lu)"
+    },
+    {
+      "id": 285,
+      "code": "PRD--140",
+      "name": "Butter Puff Snack Pack (Peek Freans)"
+    },
+    {
+      "id": 286,
+      "code": "PRD--141",
+      "name": "Candi Biscuits\tSnack Pack (Lu)"
+    },
+    {
+      "id": 287,
+      "code": "PRD--142",
+      "name": "Nankhatai Biscuits\tSnack Pack (Lu)"
+    },
+    {
+      "id": 288,
+      "code": "PRD--143",
+      "name": "Tuc Biscuits\tSnack Pack (Lu)"
+    },
+    {
+      "id": 289,
+      "code": "PRD--144",
+      "name": "Zeera Plus Biscuits Half Roll(LU)"
+    },
+    {
+      "id": 290,
+      "code": "PRD--145",
+      "name": "Sooper Biscuits Choclate Snack Pack (Peek Freans)"
+    },
+    {
+      "id": 291,
+      "code": "PRD--146",
+      "name": "Marie Biscuits\tSnack Pack (Peek Freans)"
+    },
+    {
+      "id": 292,
+      "code": "PRD--147",
+      "name": "Butter Puff Half Roll (Peek Freans)"
+    },
+    {
+      "id": 293,
+      "code": "PRD--148",
+      "name": "Choclate Sandwitch Half Roll (Peek Freans)"
+    },
+    {
+      "id": 294,
+      "code": "PRD--149",
+      "name": "Peanut Pista Snack Pack (Peek Freans)"
+    },
+    {
+      "id": 295,
+      "code": "PRD--150",
+      "name": "Zeera Plus Biscuits\tSnack Pack (Lu)"
+    },
+    {
+      "id": 296,
+      "code": "PRD--151",
+      "name": "Click Zeera Snack Pack (Peek Freans)"
+    },
+    {
+      "id": 297,
+      "code": "PRD--152",
+      "name": "Gala Biscuits Half Roll (LU)"
+    },
+    {
+      "id": 298,
+      "code": "PRD--153",
+      "name": "Gluco Snack Pack (Peek Freans)"
+    },
+    {
+      "id": 299,
+      "code": "PRD--154",
+      "name": "Milcolu Biscuits Half Roll (LU)"
+    },
+    {
+      "id": 300,
+      "code": "PRD--155",
+      "name": "Tuc Biscuits Half Roll (LU)"
+    },
+    {
+      "id": 301,
+      "code": "PRD--156",
+      "name": "Bakery Biscuits Half Roll (LU)"
+    },
+    {
+      "id": 302,
+      "code": "PRD--157",
+      "name": "Candi Biscuits\tHalf Roll (LU)"
+    },
+    {
+      "id": 303,
+      "code": "PRD--158",
+      "name": "Rio Half Roll Choclate (Peek Freans)"
+    },
+    {
+      "id": 304,
+      "code": "PRD--159",
+      "name": "Milcolu Biscuits\tSnack Pack(Lu)"
+    },
+    {
+      "id": 305,
+      "code": "PRD--160",
+      "name": "Choclate Sandwitch Snack Pack (Peek Freans)"
+    },
+    {
+      "id": 306,
+      "code": "PRD--161",
+      "name": "Rio Choclate Snack Pack (Peek Freans)"
+    },
+    {
+      "id": 307,
+      "code": "PRD--162",
+      "name": "Rio Strawbery Snack Pack"
+    },
+    {
+      "id": 308,
+      "code": "PRD--163",
+      "name": "Sooper Biscuits Snack Pack (Peek Freans)"
+    },
+    {
+      "id": 337,
+      "code": "KE-19709",
+      "name": "Liquid Soap Dispenser (1pc)"
+    },
+    {
+      "id": 338,
+      "code": "KE-19703",
+      "name": "ToothPaste Medicam"
+    }
+  ]
+}

@@ -14,6 +14,10 @@ import { ProductNameCell } from "@/components/inventory/product-name-cell"
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json())
 
+// The endpoint pages at 50 by default; this view searches and totals the
+// whole list on the client, so it asks for the maximum the endpoint allows.
+const FULL_LIST_LIMIT = "500"
+
 type Organization = {
     id: number
     name: string
@@ -53,13 +57,17 @@ export default function ShowAssignedProductsPage() {
     // Fetch assigned products for selected organization
     const { data: assignmentsData, isLoading } = useSWR<{
         items: AssignedProduct[]
+        total?: number
     }>(
-        selectedOrgId ? `/api/v1/admin/organization-assignments?organizationId=${selectedOrgId}` : null,
+        selectedOrgId
+            ? `/api/v1/admin/organization-assignments?organizationId=${selectedOrgId}&limit=${FULL_LIST_LIMIT}`
+            : null,
         fetcher,
         { fallbackData: { items: [] } }
     )
 
     const assignedProducts = assignmentsData?.items ?? []
+    const assignedTotal = assignmentsData?.total ?? assignedProducts.length
 
     // Search filtering
     const filteredProducts = useMemo(() => {
@@ -83,7 +91,7 @@ export default function ShowAssignedProductsPage() {
                     <Card className="border border-slate-200 dark:border-slate-800">
                         <CardContent className="p-5 space-y-2">
                             <p className="text-xs uppercase tracking-wide text-muted-foreground">Total Assigned</p>
-                            <p className="text-2xl font-semibold">{assignedProducts.length}</p>
+                            <p className="text-2xl font-semibold">{assignedTotal}</p>
                             <p className="text-xs text-muted-foreground">Products for this organization</p>
                             <div className="h-1 rounded-full bg-gradient-to-r from-emerald-500 to-teal-500" />
                         </CardContent>

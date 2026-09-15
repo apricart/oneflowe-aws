@@ -33,6 +33,8 @@
     "repair:ke-branch-identities": "tsx scripts/repair-ke-case-sensitive-branches.ts",
     "repair:ke-order-branches": "tsx scripts/repair-ke-order-branches.ts",
     "restore:ke-budget-carryforward": "tsx scripts/restore-ke-branch-budget-carryforward.ts",
+    "restore:ke-zeroed-budgets": "tsx scripts/restore-ke-zeroed-budgets.ts",
+    "set:ke-budget-allocation": "tsx scripts/set-ke-budget-allocation.ts",
     "add:ke-missing-branches": "tsx scripts/add-ke-missing-branches.ts",
     "fix:user-names": "tsx scripts/fix-user-names-from-export.ts",
     "fix:usernames": "tsx scripts/regenerate-usernames.ts",

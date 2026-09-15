@@ -195,8 +195,11 @@ export async function GET(req: NextRequest) {
     const search = searchParams.get("search")
     const category = searchParams.get("category")
     const subCategory = searchParams.get("subCategory")
-    const page = Number.parseInt(searchParams.get("page") || "1")
-    const limit = Number.parseInt(searchParams.get("limit") || "50")
+    // Same bounds as /admin/global-inventory, which the assignment page reads
+    // alongside this list: a malformed value falls back to the default rather
+    // than reaching the query as NaN, and the ceiling keeps the list bounded.
+    const page = Math.min(Math.max(Math.trunc(Number(searchParams.get("page"))) || 1, 1), 10_000)
+    const limit = Math.min(Math.max(Math.trunc(Number(searchParams.get("limit"))) || 50, 1), 500)
     const offset = (page - 1) * limit
 
     const conditions: SQL[] = [
