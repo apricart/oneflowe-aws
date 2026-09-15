@@ -64,17 +64,20 @@ const addInventoryScope = (params: URLSearchParams, scope: InventoryScope) => {
   if (branchId) params.set("branchId", String(branchId))
 }
 
+// The table has no pager and the stat cards count every row, so both fetches
+// ask for the most the endpoint returns rather than its default page of 50.
+const FULL_LIST_LIMIT = "1000"
+
 const buildInventoryParams = (
   scope: InventoryScope,
   filters?: { search: string; category: string; subcategory: string },
 ) => {
   const params = new URLSearchParams()
+  params.set("limit", FULL_LIST_LIMIT)
   if (filters) {
     params.set("search", filters.search)
     if (filters.category !== "all") params.set("category", filters.category)
     if (filters.subcategory !== "all") params.set("subCategory", filters.subcategory)
-  } else {
-    params.set("limit", "5000")
   }
   addInventoryScope(params, scope)
   return params

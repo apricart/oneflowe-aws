@@ -96,6 +96,22 @@ describe("OrderPortalPage data refresh policy", () => {
       }),
     )
   })
+
+  it("asks for the whole branch catalogue, not the endpoint's default page", () => {
+    // The grid searches, sorts and filters on the client, so a page of 50
+    // would leave every product past it invisible to the buyer.
+    render(<OrderPortalPage />)
+
+    const inventoryUrl = mocks.useSWR.mock.calls
+      .map(([key]) => key)
+      .find((key): key is string => typeof key === "string" && key.startsWith("/api/v1/branch/inventory?"))
+    expect(inventoryUrl).toBeDefined()
+
+    const params = new URL(inventoryUrl as string, "http://localhost").searchParams
+    expect(params.get("limit")).toBe("1000")
+    expect(params.get("visibility")).toBe("visible")
+    expect(params.get("includeQuantityBudget")).toBe("true")
+  })
 })
 
 /** A signed-in Order Portal user browsing a one-product branch catalogue. */
