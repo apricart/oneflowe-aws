@@ -16,6 +16,7 @@ import {
   type MeasureId,
   type SideBySidePanel,
 } from "@/lib/executive-analytics"
+import { isPanelSnapshotReady, type SideBySidePanelSnapshot } from "@/lib/executive-side-by-side-export"
 import { ChartCard } from "./chart-kit"
 import {
   ComparisonChart,
@@ -28,6 +29,7 @@ import { DrillDownPanel } from "./drill-down-panel"
 import { EntityPicker, type EntityOption } from "./entity-picker"
 import { toQuery, type ExecutiveFilterState } from "./executive-filters"
 import { MeasureToggle } from "./measure-toggle"
+import { SideBySideExportButton } from "./side-by-side-export-button"
 
 /**
  * Level 3 — one product, every angle, on one screen.
@@ -99,6 +101,36 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
   const metric: ExecutiveMetricId = MEASURE_METRIC[measure]
 
   /**
+   * What each panel currently holds, for the Excel download.
+   *
+   * The workbook is built from these rather than from a request of its own, so
+   * it can only ever contain what the screen shows. A panel that leaves the
+   * grid (the product panels under a single focus) withdraws its entry.
+   *
+   * The responses live in a ref, not in state: a panel reports on every
+   * answer, and routing six responses through state would redraw every chart
+   * on the screen each time one of them loaded. Only readiness — the one fact
+   * the button renders from — is state, and it flips at most twice per fetch.
+   */
+  const snapshotsRef = React.useRef<Record<string, SideBySidePanelSnapshot>>({})
+  const [panelReady, setPanelReady] = React.useState<Record<string, boolean>>({})
+  const reportSnapshot = React.useCallback((panelId: string, snapshot: SideBySidePanelSnapshot | null) => {
+    if (snapshot) snapshotsRef.current[panelId] = snapshot
+    else delete snapshotsRef.current[panelId]
+
+    const next = snapshot ? isPanelSnapshotReady(snapshot) : undefined
+    setPanelReady((current) => {
+      if (current[panelId] === next) return current
+      if (next === undefined) {
+        const { [panelId]: _withdrawn, ...rest } = current
+        return rest
+      }
+      return { ...current, [panelId]: next }
+    })
+  }, [])
+  const readSnapshots = React.useCallback(() => ({ ...snapshotsRef.current }), [])
+
+  /**
    * The filter set every panel shares.
    *
    * Resolved once so the five panels and the detail table cannot disagree about
@@ -129,6 +161,7 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
   const productOptions = productData?.options ?? []
   const userOptions = userData?.options ?? []
   const panels = panelsForFocus(focusProducts.length)
+  const filterNames = useFilterNames(filters)
 
   /**
    * Widened panels lead the grid, in registry order among themselves.
@@ -201,6 +234,27 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
             Clear selection
           </button>
         ) : null}
+
+        <div className="ml-auto">
+          <SideBySideExportButton
+            panels={panels}
+            ready={panels.length > 0 && panels.every((panel) => panelReady[panel.id] === true)}
+            readSnapshots={readSnapshots}
+            context={{
+              startDate: filters.startDate,
+              endDate: filters.endDate,
+              measure,
+              metricLabel: EXECUTIVE_METRICS[metric].label,
+              metricFormula: EXECUTIVE_METRICS[metric].formula,
+              ...filterNames,
+              products: focusLabels,
+              requesters: compareUsers.map(
+                (key) => userOptions.find((option) => option.key === key)?.label ?? "selected requester",
+              ),
+              unit: filters.unit,
+            }}
+          />
+        </div>
       </div>
 
       <p className="text-xs text-slate-500 dark:text-slate-400">
@@ -224,6 +278,7 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
             expanded={panel.requiresSingleProduct ? null : expanded.includes(panel.id)}
             onToggleExpanded={(next) => toggleExpanded(panel.id, next)}
             onDrillDown={setDrillTarget}
+            onSnapshot={reportSnapshot}
           />
         ))}
       </div>
@@ -251,6 +306,38 @@ function Control({ label, children }: Readonly<{ label: string; children: React.
   )
 }
 
+type NamedItems = { items?: Array<{ id: number | string; name: string }> }
+
+/**
+ * The names behind the ids in the shared filter bar, for the workbook's cover
+ * sheet.
+ *
+ * Each list is requested only while its filter is set, and at the same URL the
+ * filter control itself uses, so it is answered from the SWR cache rather than
+ * by another request. An id whose name is not (yet) known is written as
+ * `#id` rather than dropped — the reader should see that a filter was set even
+ * if the label had not arrived.
+ */
+function useFilterNames(filters: ExecutiveFilterState): { organizations: string[]; branches: string[]; categories: string[] } {
+  const branchQuery = new URLSearchParams()
+  if (filters.organizationIds.length > 0) branchQuery.set("organizationId", filters.organizationIds.join(","))
+  const branchQueryString = branchQuery.toString()
+  const branchesUrl = `/api/v1/branches${branchQueryString ? `?${branchQueryString}` : ""}`
+
+  const { data: organizations } = useAPI<NamedItems>(filters.organizationIds.length > 0 ? "/api/v1/organizations" : null)
+  const { data: branches } = useAPI<NamedItems>(filters.branchIds.length > 0 ? branchesUrl : null)
+  const { data: categories } = useAPI<NamedItems>(filters.categoryIds.length > 0 ? "/api/v1/categories" : null)
+
+  const resolve = (ids: string[], list: NamedItems | undefined) =>
+    ids.map((id) => list?.items?.find((item) => String(item.id) === id)?.name ?? `#${id}`)
+
+  return {
+    organizations: resolve(filters.organizationIds, organizations),
+    branches: resolve(filters.branchIds, branches),
+    categories: resolve(filters.categoryIds, categories),
+  }
+}
+
 /**
  * One panel: one dimension, the shared subject, the shared measure.
  *
@@ -258,7 +345,7 @@ function Control({ label, children }: Readonly<{ label: string; children: React.
  * dimension that returns nothing — a period with no orders for one branch, say
  * — leaves the other four panels intact instead of emptying the screen.
  */
-function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggleExpanded, onDrillDown }: Readonly<{
+function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggleExpanded, onDrillDown, onSnapshot }: Readonly<{
   panel: SideBySidePanel
   filters: ExecutiveFilterState
   metric: ExecutiveMetricId
@@ -267,6 +354,8 @@ function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggle
   expanded: boolean | null
   onToggleExpanded: (next: boolean) => void
   onDrillDown: (target: DrillTarget) => void
+  /** Reports what the panel holds, for the download; `null` when it leaves the grid. */
+  onSnapshot: (panelId: string, snapshot: SideBySidePanelSnapshot | null) => void
 }>) {
   const isSeries = panel.chart === "line"
   const limit = isSeries ? SERIES_PANEL_ROWS : RANK_PANEL_ROWS
@@ -291,6 +380,14 @@ function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggle
   const rows = data?.rows ?? []
   const series = data?.series ?? []
   const isEmpty = data?.mode === "series" ? series.length === 0 : rows.length === 0
+
+  // The same three facts the card renders from, so the download cannot show a
+  // figure the panel did not. Reporting is cheap: the parent re-renders only
+  // when the panel's readiness flips, never on the report itself.
+  React.useEffect(() => {
+    onSnapshot(panel.id, { response: data ?? null, loading: isLoading, error: requestError })
+  }, [panel.id, data, isLoading, requestError, onSnapshot])
+  React.useEffect(() => () => onSnapshot(panel.id, null), [panel.id, onSnapshot])
 
   return (
     <ChartCard

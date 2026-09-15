@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
 /**
@@ -17,11 +17,16 @@ const requested: string[] = []
 let blocked: { reason: string; message: string } | undefined
 let selectedUnit: string | null = null
 let emptyRows = false
+/** When set, every comparison is still in flight and has no answer yet. */
+let panelsLoading = false
 
 vi.mock("@/lib/hooks/use-api", () => ({
   useAPI: (url: string | null) => {
     if (url) requested.push(url)
     if (!url) return { data: undefined, isLoading: false }
+    if (url.startsWith("/api/v1/branches")) {
+      return { data: { items: [{ id: 7, name: "North Zone" }] }, isLoading: false }
+    }
     if (url.includes("/options?")) {
       return {
         data: {
@@ -45,28 +50,32 @@ vi.mock("@/lib/hooks/use-api", () => ({
         isLoading: false,
       }
     }
-    const isSeries = url.includes("chart=line")
-    return {
-      data: {
-        rows: isSeries || emptyRows ? [] : [{
-          key: "7", label: "North Zone", value: 100, previousValue: 0, changePct: null,
-          spendCents: 100, quantity: 0, orderCount: 1, avgUnitPriceCents: 0, share: 100, cumulativeShare: 100,
-        }],
-        series: isSeries && !emptyRows ? [{ key: "u1", label: "Ahmed", points: [{ period: "2026-07", value: 1 }] }] : [],
-        periods: isSeries ? ["2026-07"] : [],
-        format: url.includes("metric=quantity") ? "quantity" : "currency",
-        label: url.includes("metric=quantity") ? "Quantity" : "Procurement Value",
-        formula: "",
-        mode: isSeries ? "series" : "rank",
-        chart: isSeries ? "line" : "bar",
-        concentrationEligible: true,
-        quantityUnit: { selected: selectedUnit, conflict: false, available: [] },
-        blocked,
-      },
-      isLoading: false,
-    }
+    if (panelsLoading) return { data: undefined, isLoading: true }
+    return { data: comparisonResponse(url), isLoading: false }
   },
 }))
+
+/** The canned answer to one `/compare` request, shaped by the flags above. */
+function comparisonResponse(url: string) {
+  const isSeries = url.includes("chart=line")
+  const isQuantity = url.includes("metric=quantity")
+  return {
+    rows: isSeries || emptyRows ? [] : [{
+      key: "7", label: "North Zone", value: 100, previousValue: 0, changePct: null,
+      spendCents: 100, quantity: 0, orderCount: 1, avgUnitPriceCents: 0, share: 100, cumulativeShare: 100,
+    }],
+    series: isSeries && !emptyRows ? [{ key: "u1", label: "Ahmed", points: [{ period: "2026-07", value: 1 }] }] : [],
+    periods: isSeries ? ["2026-07"] : [],
+    format: isQuantity ? "quantity" : "currency",
+    label: isQuantity ? "Quantity" : "Procurement Value",
+    formula: "",
+    mode: isSeries ? "series" : "rank",
+    chart: isSeries ? "line" : "bar",
+    concentrationEligible: true,
+    quantityUnit: { selected: selectedUnit, conflict: false, available: [] },
+    blocked,
+  }
+}
 
 vi.mock("./comparison-charts", () => ({
   ComparisonChart: ({ rows, series, dimension, onDrillDown }: any) => (
@@ -75,6 +84,25 @@ vi.mock("./comparison-charts", () => ({
     </button>
   ),
   SeriesTable: () => null,
+}))
+
+/**
+ * The spreadsheet library, reduced to what the download hands it: a sheet is
+ * its rows, a workbook is its sheets by name, and "write" is recorded.
+ */
+type FakeWorkbook = { SheetNames: string[]; Sheets: Record<string, { rows: unknown[][] }>; Props?: unknown }
+const writeFile = vi.fn<(workbook: FakeWorkbook, filename: string) => void>()
+
+vi.mock("xlsx", () => ({
+  utils: {
+    book_new: (): FakeWorkbook => ({ SheetNames: [], Sheets: {} }),
+    aoa_to_sheet: (rows: unknown[][]) => ({ rows }),
+    book_append_sheet: (workbook: FakeWorkbook, sheet: { rows: unknown[][] }, name: string) => {
+      workbook.SheetNames.push(name)
+      workbook.Sheets[name] = sheet
+    },
+  },
+  writeFile,
 }))
 
 import { SideBySideWorkspace } from "./side-by-side-workspace"
@@ -134,6 +162,8 @@ beforeEach(() => {
   blocked = undefined
   selectedUnit = null
   emptyRows = false
+  panelsLoading = false
+  writeFile.mockClear()
   scrollIntoView.mockClear()
   window.HTMLElement.prototype.scrollIntoView = scrollIntoView
 })
@@ -320,5 +350,66 @@ describe("drill-down on click", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "bar month" }))
     expect(scrollIntoView).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe("download as Excel", () => {
+  const downloadButton = () => screen.getByRole("button", { name: /Download Excel/ }) as HTMLButtonElement
+
+  it("waits until every panel has answered", () => {
+    panelsLoading = true
+    render(<SideBySideWorkspace filters={filters()} />)
+    expect(downloadButton().disabled).toBe(true)
+    fireEvent.click(downloadButton())
+    expect(writeFile).not.toHaveBeenCalled()
+  })
+
+  it("writes the cover sheet and one sheet per panel on screen, under the current focus and filters", async () => {
+    render(<SideBySideWorkspace filters={filters()} />)
+    expect(downloadButton().disabled).toBe(false)
+
+    fireEvent.click(within(openPicker(/All products/)).getByText("A4 Paper"))
+    fireEvent.click(within(openPicker(/All requesters/)).getByText("Sana"))
+    fireEvent.click(downloadButton())
+
+    await waitFor(() => expect(writeFile).toHaveBeenCalledTimes(1))
+    const [workbook, filename] = writeFile.mock.calls[0]
+
+    // Exactly the single-focus layout, in registry order, behind a cover sheet.
+    expect(workbook.SheetNames).toEqual([
+      "Report", "By requester", "By branch", "By month", "Requesters over months", "Day-by-day consumption",
+    ])
+    expect(filename).toMatch(/^compare-side-by-side-amount-\d{4}-\d{2}-\d{2}-to-\d{4}-\d{2}-\d{2}\.xlsx$/)
+
+    // The cover names what was selected — the branch by name, not by id.
+    const cover = workbook.Sheets.Report.rows
+    expect(cover).toContainEqual(["Products in focus", "A4 Paper"])
+    expect(cover).toContainEqual(["Requesters compared", "Sana"])
+    expect(cover).toContainEqual(["Branches", "North Zone"])
+    expect(cover).toContainEqual(["Measured by", "Amount (Procurement Value)"])
+
+    // A ranked sheet: header, then the mocked row with money in rupees.
+    const branch = workbook.Sheets["By branch"].rows
+    expect(branch[0]).toEqual([
+      "Rank", "Branch", "Procurement Value (PKR)", "Share %", "Cumulative share %",
+      "Previous period Procurement Value (PKR)", "Change %", "Orders",
+    ])
+    expect(branch[1]).toEqual([1, "North Zone", 1, 100, 100, 0, null, 1])
+
+    // A trend sheet: one column per period and a total.
+    const trend = workbook.Sheets["Requesters over months"].rows
+    expect(trend[0]).toEqual(["Requester", "2026-07", "Total Procurement Value (PKR)"])
+    expect(trend[1]).toEqual(["Ahmed", 0.01, 0.01])
+  })
+
+  it("writes the screen's own explanation for a panel with nothing to draw", async () => {
+    blocked = { reason: "unit-conflict", message: "Quantity cannot be totalled across Litre, Ream." }
+    render(<SideBySideWorkspace filters={filters()} />)
+    fireEvent.click(downloadButton())
+
+    await waitFor(() => expect(writeFile).toHaveBeenCalledTimes(1))
+    const [workbook] = writeFile.mock.calls[0]
+    expect(workbook.SheetNames).toHaveLength(7)
+    expect(workbook.Sheets["By product"].rows).toEqual([["Note"], ["Quantity cannot be totalled across Litre, Ream."]])
   })
 })

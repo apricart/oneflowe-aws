@@ -1,0 +1,28 @@
+{
+  "kind": "KE_CONFIRMED_PRODUCT_MERGE_POST_VALIDATION",
+  "status": "PASS",
+  "planSha256": "c8d4b2f1043a46e1bd045f264e7c866caee3d805f466e1822a750c09c49564b4",
+  "auditLogId": 1337,
+  "database": {
+    "database_name": "postgres",
+    "transaction_read_only": "on",
+    "transaction_isolation": "repeatable read",
+    "validated_at": "2026-09-14T21:33:27.110Z"
+  },
+  "verified": {
+    "clusters": 6,
+    "movedOrderItems": 1224,
+    "historicalOrderItemValuesUnchanged": true,
+    "affectedOrdersUnchanged": 818,
+    "refundRowsUnchanged": 24,
+    "canonicalGlobalProductsUnchanged": 6,
+    "keInventoryRows": 6,
+    "branchRows": 641,
+    "branchCollisionsRemaining": 0,
+    "legacyMappings": 8,
+    "constraintExceptionsPreserved": 24,
+    "ublInventory326Unchanged": true,
+    "globalProduct202Unchanged": true,
+    "demoInventory352Removed": true
+  }
+}
