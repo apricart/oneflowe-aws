@@ -349,11 +349,14 @@ async function main(): Promise<void> {
        where oi.organization_id = $1 and oi.deleted_at is null order by gp.name`, [ORGANIZATION_ID])
 
     const budgetRows = await rows(client,
-      `select branch_id, period, amount_allocated_cents, amount_spent_cents
+      `select branch_id, period, amount_allocated_cents, amount_credited_cents, amount_spent_cents, amount_held_cents
          from budgets where organization_id = $1`, [ORGANIZATION_ID])
     const currentBudgets: CurrentBudget[] = budgetRows.map((row) => ({
       branchId: Number(row.branch_id), period: String(row.period),
       amountAllocatedCents: Number(row.amount_allocated_cents ?? 0),
+      amountCreditedCents: Number(row.amount_credited_cents ?? 0),
+      amountSpentCents: Number(row.amount_spent_cents ?? 0),
+      amountHeldCents: Number(row.amount_held_cents ?? 0),
     }))
 
     const orderRows = await rows(client, `
@@ -866,13 +869,19 @@ async function main(): Promise<void> {
       new Map(branchPlan.pins.map((pin) => [pin.legacyLocationId, { branchId: pin.branchId, name: pin.legacyName }])),
       currentBudgets,
     )
+    // This report compares; it never applies. A row the sync would raise and
+    // one it would only report are both "differs" here.
+    const budgetDifferences = [
+      ...budgetPlan.raises.map((entry) => ({ ...entry, legacyCents: entry.amountAllocatedCents })),
+      ...budgetPlan.drift,
+    ]
     const budgetSheet: Row[] = [
       ...budgetPlan.creates.map((entry) => ({
         legacy_location_id: entry.legacyLocationId, branch: entry.branchName, db_branch_id: entry.branchId,
         period: entry.period, legacy_monthly_budget: money(entry.amountAllocatedCents), db_allocated: "",
         result: "MISSING IN DB", detail: "no budgets row for this branch and period",
       })),
-      ...budgetPlan.drift.map((entry) => ({
+      ...budgetDifferences.map((entry) => ({
         legacy_location_id: "", branch: entry.branchName, db_branch_id: entry.branchId,
         period: entry.period, legacy_monthly_budget: money(entry.legacyCents), db_allocated: money(entry.currentCents),
         result: "AMOUNT DIFFERS", detail: `difference ${money(entry.legacyCents - entry.currentCents)}`,
@@ -1262,7 +1271,7 @@ async function main(): Promise<void> {
       {
         entity: "Branch budgets (current tenure)", legacy: legacyLocations.filter((location) => location.MonthlyBudget != null).length,
         oneflowe: budgetRows.length, matched: budgetPlan.unchanged,
-        missing_in_db: budgetPlan.creates.length, only_in_db: "", with_differences: budgetPlan.drift.length,
+        missing_in_db: budgetPlan.creates.length, only_in_db: "", with_differences: budgetDifferences.length,
         note: `${budgetPlan.skipped.length} legacy location(s) skipped. Legacy exposes only the current month's budget.`,
       },
     ]

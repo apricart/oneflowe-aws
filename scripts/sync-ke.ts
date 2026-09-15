@@ -15,7 +15,8 @@
  * rather than silently applied.
  *
  * It syncs, in dependency order: the organization (only with
- * `--create-organization`), branches, groups, the catalogue, then users.
+ * `--create-organization`), branches, groups, budgets, the catalogue, which
+ * branch may order which product, then users.
  *
  * The organization is resolved by `--organization-code` rather than compiled
  * in, so the same script serves a production run against K-Electric (10/0001)
@@ -31,7 +32,23 @@
  *     price most of its branches agree on and every disagreement is reported
  *     rather than applied. See `lib/legacy-import/ke-products.ts`.
  *   - delete or deactivate anything. A branch or account that legacy no longer
- *     has is reported, never removed.
+ *     has is reported, never removed; a product a branch can see that legacy
+ *     does not list there is reported, never hidden.
+ *   - lower a budget unless told to (`--lower-budgets`). Raising one to the
+ *     legacy figure is always applied; see `lib/legacy-import/ke-budgets.ts`.
+ *
+ * Budgets have three modes (`--budgets=`): `legacy` (the default) mirrors the
+ * legacy allocation for the current tenure; `zero` leaves every active branch
+ * nothing to order against this month — allocation down to what is already
+ * spent and held, baseline cleared so the budgets API cannot re-fund it —
+ * and ignores the legacy figures for the run; `skip` leaves budgets alone.
+ *
+ * Which branch sees which product comes from the legacy item list, which is
+ * kept per location: that list is mirrored into `branch_inventory`, dormant
+ * catalogue entries legacy still sells are activated, and every product legacy
+ * sells is given `--stock` units so it can actually be ordered — a zero-stock
+ * product on every run, every product with `--reset-stock`. See
+ * `lib/legacy-import/ke-branch-catalogue.ts`.
  *
  * Catalogue and group creation were previously refused here because both carry
  * pricing scope. They are now in scope because the order import cannot resolve
@@ -74,10 +91,20 @@ import {
 } from "../lib/legacy-import/ke-products"
 import {
   planBranchBudgets,
+  planZeroBudgets,
   summarizeBudgets,
+  type BudgetBranch,
   type BudgetPlan,
   type CurrentBudget,
 } from "../lib/legacy-import/ke-budgets"
+import {
+  planBranchCatalogue,
+  summarizeBranchCatalogue,
+  type BranchCataloguePlan,
+  type CurrentBranchAssignment,
+  type CurrentCatalogueEntry,
+} from "../lib/legacy-import/ke-branch-catalogue"
+import { invalidateCachePrefixes } from "../lib/cache-cli"
 import { hashMirroredLegacyPassword } from "../lib/password-cli"
 import { resolveWorkspacePath } from "./lib/resolve-workspace-path"
 
@@ -88,6 +115,13 @@ const BASE_URL = "https://logistics.oneflowe.com"
 /** The K-Electric account id on the legacy platform; every read is scoped by it. */
 const LEGACY_ACCOUNT_ID = 1
 const FETCH_ATTEMPTS = 4
+/**
+ * Units every product legacy sells should hold. Legacy does not track stock;
+ * OneFlowe refuses an order beyond it and decrements it on every order.
+ */
+const DEFAULT_STOCK_LEVEL = 500
+const BUDGET_MODES = ["legacy", "zero", "skip"] as const
+type BudgetMode = (typeof BUDGET_MODES)[number]
 /**
  * The organization this run targets.
  *
@@ -139,7 +173,19 @@ interface Options {
   organizationName: string
   createOrganization: boolean
   skipProducts: boolean
+  stockLevel: number
+  resetStock: boolean
+  budgetMode: BudgetMode
+  /** `YYYY-MM` zeroed by `--budgets=zero`; the current month unless given. */
+  zeroPeriod: string
+  lowerBudgets: boolean
   outputPath: string
+}
+
+function budgetModeOf(value: string | undefined): BudgetMode {
+  const mode = value ?? "legacy"
+  assert((BUDGET_MODES as readonly string[]).includes(mode), `--budgets must be one of ${BUDGET_MODES.join(", ")}`)
+  return mode as BudgetMode
 }
 
 function parseOptions(): Options {
@@ -153,6 +199,11 @@ function parseOptions(): Options {
     organizationName: argument("organization-name") ?? ORGANIZATION.name,
     createOrganization: flag("create-organization"),
     skipProducts: flag("skip-products"),
+    stockLevel: Number(argument("stock") ?? DEFAULT_STOCK_LEVEL),
+    resetStock: flag("reset-stock"),
+    budgetMode: budgetModeOf(argument("budgets")),
+    zeroPeriod: argument("zero-period") ?? new Date().toISOString().slice(0, 7),
+    lowerBudgets: flag("lower-budgets"),
     outputPath: resolveWorkspacePath(
       argument("output") ?? `updatedReports/ke-sync-${new Date().toISOString().slice(0, 10)}.json`,
     ),
@@ -324,12 +375,115 @@ function branchPinMap(
 /** Budget rows this organization already holds, for the periods legacy funds. */
 async function readBudgets(client: QueryClient): Promise<CurrentBudget[]> {
   return (await rows(client,
-    `select branch_id, period, amount_allocated_cents
+    `select branch_id, period, amount_allocated_cents, amount_credited_cents,
+            amount_spent_cents, amount_held_cents
        from budgets where organization_id = $1`, [target.id]))
     .map((row): CurrentBudget => ({
       branchId: Number(row.branch_id),
       period: String(row.period),
       amountAllocatedCents: Number(row.amount_allocated_cents ?? 0),
+      amountCreditedCents: Number(row.amount_credited_cents ?? 0),
+      amountSpentCents: Number(row.amount_spent_cents ?? 0),
+      amountHeldCents: Number(row.amount_held_cents ?? 0),
+    }))
+}
+
+/** Every active branch with its baseline, for `--budgets=zero`. */
+async function readBudgetBranches(client: QueryClient): Promise<BudgetBranch[]> {
+  return (await rows(client,
+    `select id, name, baseline_budget_cents from branches
+      where organization_id = $1 and status = 'active' order by id`, [target.id]))
+    .map((row): BudgetBranch => ({
+      branchId: Number(row.id),
+      name: String(row.name),
+      baselineBudgetCents: Number(row.baseline_budget_cents ?? 0),
+    }))
+}
+
+/** The budget plan for this run's mode; see the header. */
+async function planBudgetsFor(
+  client: QueryClient,
+  options: Options,
+  legacyLocations: readonly LegacyLocation[],
+  branchByLegacyId: ReadonlyMap<number, { branchId: number; name: string }>,
+  organizationExists: boolean,
+): Promise<BudgetPlan | null> {
+  if (options.budgetMode === "skip") return null
+  const currentBudgets = organizationExists ? await readBudgets(client) : []
+  if (options.budgetMode === "zero") {
+    return planZeroBudgets(
+      options.zeroPeriod,
+      organizationExists ? await readBudgetBranches(client) : [],
+      currentBudgets,
+    )
+  }
+  return planBranchBudgets(legacyLocations, branchByLegacyId, currentBudgets, { allowLower: options.lowerBudgets })
+}
+
+/** The mapped catalogue with the state the shop listing checks, for branch assignment. */
+async function readCatalogue(client: QueryClient): Promise<CurrentCatalogueEntry[]> {
+  return (await rows(client,
+    `select lpm.normalized_name, lpm.global_product_id, lpm.organization_inventory_id,
+            (oi.is_active and oi.deleted_at is null) as organization_inventory_active,
+            (gp.status = 'active' and gp.deleted_at is null) as product_active,
+            (gp.metadata->>'legacySource' = $2 or gp.product_code like 'KE-%') as legacy_owned,
+            gp.stock_quantity
+       from legacy_product_mappings lpm
+       join organization_inventory oi on oi.id = lpm.organization_inventory_id
+       join global_products gp on gp.id = lpm.global_product_id
+      where lpm.organization_id = $1 and lpm.source_system = $2
+      order by lpm.normalized_name`, [target.id, SOURCE_SYSTEM]))
+    .map((row): CurrentCatalogueEntry => ({
+      normalizedName: String(row.normalized_name),
+      globalProductId: Number(row.global_product_id),
+      organizationInventoryId: Number(row.organization_inventory_id),
+      organizationInventoryActive: Boolean(row.organization_inventory_active),
+      productActive: Boolean(row.product_active),
+      legacyOwned: Boolean(row.legacy_owned),
+      stockQuantity: Number(row.stock_quantity ?? 0),
+    }))
+}
+
+/**
+ * Other tenants holding a catalogue row for a global product this run would
+ * activate. Informational: the sync writes nothing outside the target
+ * organization, and a product only shows in a tenant's shop through that
+ * tenant's own visible branch rows — but a Super Admin should know the reach.
+ */
+async function readOtherTenantReferences(
+  client: QueryClient,
+  globalProductIds: readonly number[],
+): Promise<Array<{ organizationId: number; organizationName: string; products: number; visibleBranchRows: number }>> {
+  if (globalProductIds.length === 0) return []
+  return (await rows(client,
+    `select oi.organization_id, o.name,
+            count(distinct oi.global_product_id)::int as products,
+            count(bi.id) filter (where bi.is_visible and bi.is_active and bi.deleted_at is null)::int as visible_branch_rows
+       from organization_inventory oi
+       join organizations o on o.id = oi.organization_id
+       left join branch_inventory bi on bi.organization_inventory_id = oi.id
+      where oi.global_product_id = any($1::int[]) and oi.organization_id <> $2 and oi.deleted_at is null
+      group by oi.organization_id, o.name
+      order by oi.organization_id`, [globalProductIds, target.id]))
+    .map((row) => ({
+      organizationId: Number(row.organization_id),
+      organizationName: String(row.name),
+      products: Number(row.products),
+      visibleBranchRows: Number(row.visible_branch_rows),
+    }))
+}
+
+async function readBranchAssignments(client: QueryClient): Promise<CurrentBranchAssignment[]> {
+  return (await rows(client,
+    `select branch_id, organization_inventory_id, is_visible, is_active, deleted_at
+       from branch_inventory where organization_id = $1
+      order by branch_id, organization_inventory_id`, [target.id]))
+    .map((row): CurrentBranchAssignment => ({
+      branchId: Number(row.branch_id),
+      organizationInventoryId: Number(row.organization_inventory_id),
+      isVisible: Boolean(row.is_visible),
+      isActive: Boolean(row.is_active),
+      deleted: row.deleted_at !== null && row.deleted_at !== undefined,
     }))
 }
 
@@ -433,19 +587,63 @@ function describeProducts(plan: ProductPlan, legacyRowCount: number): string[] {
   return lines
 }
 
-function describeBudgets(plan: BudgetPlan): string[] {
+function describeBudgets(plan: BudgetPlan | null, options: Options): string[] {
+  if (!plan) return ["BUDGETS", "  skipped (--budgets=skip)"]
   const counts = summarizeBudgets(plan)
+  const money = (cents: number) => (cents / 100).toLocaleString("en-US")
   const lines: string[] = ["BUDGETS"]
-  lines.push(`  funded in legacy ....... ${counts.fundedLocations}`)
+  if (options.budgetMode === "zero") {
+    lines.push(`  mode ................... zero ${options.zeroPeriod}: every active branch left nothing to order against;`)
+    lines.push("                           legacy figures ignored for this run")
+    lines.push(`  clear baseline ......... ${counts.baselineResets} branch(es), so the budgets API cannot re-fund the month`)
+  } else {
+    lines.push(`  funded in legacy ....... ${counts.fundedLocations}`)
+  }
   lines.push(`  create ................. ${counts.toCreate}` +
     (counts.periods.length ? `  period(s) ${counts.periods.join(", ")}` : ""))
+  lines.push(`  raise .................. ${counts.toRaise}`)
+  lines.push(`  lower .................. ${counts.toLower}`)
   lines.push(`  already correct ........ ${counts.unchanged}`)
-  if (counts.toCreate > 0) {
-    lines.push(`  total to allocate ...... ${(counts.totalAllocatedCents / 100).toLocaleString("en-US")}`)
+  if (counts.toCreate + counts.toRaise + counts.toLower > 0) {
+    lines.push(`  net allocation change .. ${money(counts.totalAllocatedCents)}`)
+  }
+  for (const change of [...plan.raises, ...plan.lowers]) {
+    const verb = change.amountAllocatedCents > change.currentCents ? "raise" : "lower"
+    lines.push(`  ${verb} ${change.branchName} ${change.period}: ${money(change.currentCents)} -> `
+      + `${money(change.amountAllocatedCents)} [${change.source}]`)
   }
   for (const drift of plan.drift) {
     lines.push(`  DIFFERS ................ ${drift.branchName} ${drift.period}: ours `
-      + `${drift.currentCents / 100}, legacy ${drift.legacyCents / 100} (reported only — never overwritten)`)
+      + `${money(drift.currentCents)}, legacy ${money(drift.legacyCents)} [${drift.reason}] (reported only)`)
+  }
+  const byReason = new Map<string, number>()
+  for (const skip of plan.skipped) byReason.set(skip.reason, (byReason.get(skip.reason) ?? 0) + 1)
+  for (const [reason, n] of byReason) lines.push(`  skipped ................ ${n} [${reason}]`)
+  return lines
+}
+
+function describeBranchCatalogue(
+  plan: BranchCataloguePlan,
+  otherTenants: Awaited<ReturnType<typeof readOtherTenantReferences>>,
+): string[] {
+  const counts = summarizeBranchCatalogue(plan)
+  const lines: string[] = ["BRANCH CATALOGUE"]
+  lines.push(`  legacy locations ....... ${counts.legacyLocations}, ${counts.legacyPairs} location/product pairs`)
+  lines.push(`  activate globally ...... ${counts.globalActivations} (import-created products parked inactive that legacy still sells)`)
+  for (const tenant of otherTenants) {
+    lines.push(`    also referenced by ... "${tenant.organizationName}" (org ${tenant.organizationId}): `
+      + `${tenant.products} product(s), ${tenant.visibleBranchRows} visible branch row(s) — their rows are not touched`)
+  }
+  lines.push(`  activate in catalogue .. ${counts.activations} (dormant entries legacy still sells)`)
+  lines.push(`  set stock .............. ${counts.stockChanges} product(s) legacy sells`
+    + (plan.stockChanges.length ? ` -> ${plan.stockChanges[0].stockQuantity} units` : "")
+    + (plan.stockChanges.some((change) => change.currentStock > 0) ? " (--reset-stock: non-zero figures overwritten)" : ""))
+  lines.push(`  assign to branch ....... ${counts.toCreate} new, ${counts.toRestore} hidden rows made visible, `
+    + `${counts.branchesTouched} branch(es)`)
+  lines.push(`  already visible ........ ${counts.unchanged}`)
+  if (counts.extras > 0) {
+    lines.push(`  EXTRA .................. ${counts.extras} visible in OneFlowe but not listed by legacy `
+      + "(reported only — never hidden; see the report)")
   }
   const byReason = new Map<string, number>()
   for (const skip of plan.skipped) byReason.set(skip.reason, (byReason.get(skip.reason) ?? 0) + 1)
@@ -481,7 +679,8 @@ function productCodeFor(legacyItemId: string): string {
 function combinedDigest(
   plan: SyncPlan,
   products: ProductPlan | null,
-  budgets: BudgetPlan,
+  budgets: BudgetPlan | null,
+  branchCatalogue: BranchCataloguePlan | null,
   organizationExists: boolean,
 ): string {
   return createHash("sha256")
@@ -497,7 +696,23 @@ function combinedDigest(
         })
       : "skipped")
     .update("|budgets:")
-    .update(JSON.stringify(budgets.creates.map((entry) => [entry.branchId, entry.period, entry.amountAllocatedCents])))
+    .update(budgets
+      ? JSON.stringify({
+          creates: budgets.creates.map((entry) => [entry.branchId, entry.period, entry.amountAllocatedCents]),
+          raises: budgets.raises.map((entry) => [entry.branchId, entry.period, entry.currentCents, entry.amountAllocatedCents]),
+          lowers: budgets.lowers.map((entry) => [entry.branchId, entry.period, entry.currentCents, entry.amountAllocatedCents]),
+          baselineResets: budgets.baselineResets.map((entry) => [entry.branchId, entry.currentCents]),
+        })
+      : "skipped")
+    .update("|branch-catalogue:")
+    .update(branchCatalogue
+      ? JSON.stringify({
+          globalActivations: branchCatalogue.globalActivations.map((entry) => entry.globalProductId),
+          activations: branchCatalogue.activations.map((entry) => entry.organizationInventoryId),
+          stockChanges: branchCatalogue.stockChanges.map((entry) => [entry.globalProductId, entry.currentStock, entry.stockQuantity]),
+          assignments: branchCatalogue.assignments.map((entry) => [entry.branchId, entry.organizationInventoryId, entry.action]),
+        })
+      : "skipped")
     .digest("hex")
 }
 
@@ -612,6 +827,115 @@ async function applyBudgets(
       [target.id, entry.branchId, entry.period, entry.amountAllocatedCents])
     if (result.rowCount ?? 0) counts.budgetsCreated += 1
   }
+  // The digest already proves the row still holds the planned current value;
+  // the predicate makes the statement itself refuse a row that moved anyway.
+  for (const change of [...plan.raises, ...plan.lowers]) {
+    const result = await client.query(
+      `update budgets set amount_allocated_cents = $1, updated_at = now()
+        where organization_id = $2 and branch_id = $3 and period = $4 and amount_allocated_cents = $5`,
+      [change.amountAllocatedCents, target.id, change.branchId, change.period, change.currentCents])
+    assert(result.rowCount === 1,
+      `budget ${change.branchName} ${change.period} moved since the plan was built; re-run the dry run`)
+    if (change.amountAllocatedCents > change.currentCents) counts.budgetsRaised += 1
+    else counts.budgetsLowered += 1
+  }
+  for (const reset of plan.baselineResets) {
+    const result = await client.query(
+      `update branches set baseline_budget_cents = 0, updated_at = now()
+        where organization_id = $1 and id = $2 and baseline_budget_cents = $3`,
+      [target.id, reset.branchId, reset.currentCents])
+    assert(result.rowCount === 1,
+      `baseline of branch ${reset.branchName} moved since the plan was built; re-run the dry run`)
+    counts.baselinesCleared += 1
+  }
+}
+
+/**
+ * Make the legacy per-location list what each branch can see and order.
+ *
+ * Three writes, in the order the shop listing checks them: the catalogue entry
+ * is activated, a zero-stock product is given stock, then the branch row is
+ * created or restored to visible and active. The upsert on
+ * `branch_inventory_branch_org_inventory_uq` covers both a missing row and a
+ * hidden, inactive or soft-deleted one.
+ */
+async function applyBranchCatalogue(
+  client: QueryClient,
+  plan: BranchCataloguePlan,
+  actorUserId: string,
+  counts: Record<string, number>,
+): Promise<void> {
+  // `global_products` is shared across tenants, so every write to it is pinned
+  // to a row this organization's legacy mapping points at, and only a row the
+  // import itself parked inactive is woken.
+  for (const activation of plan.globalActivations) {
+    const result = await client.query(
+      `update global_products set status = 'active', updated_at = now()
+        where id = $1 and status = 'inactive' and deleted_at is null
+          and (metadata->>'legacySource' = $3 or product_code like 'KE-%')
+          and exists (select 1 from legacy_product_mappings lpm
+                       where lpm.global_product_id = global_products.id
+                         and lpm.organization_id = $2 and lpm.source_system = $3)`,
+      [activation.globalProductId, target.id, SOURCE_SYSTEM])
+    assert(result.rowCount === 1,
+      `global product ${activation.globalProductId} ("${activation.normalizedName}") moved since the plan was built; re-run the dry run`)
+    counts.productsActivatedGlobally += 1
+  }
+
+  for (const activation of plan.activations) {
+    await client.query(
+      `update organization_inventory set is_active = true, updated_at = now()
+        where id = $1 and organization_id = $2`,
+      [activation.organizationInventoryId, target.id])
+    await client.query(
+      `insert into organization_products (organization_id, global_product_id, is_enabled)
+       values ($1, $2, true)
+       on conflict (organization_id, global_product_id) do update set is_enabled = true`,
+      [target.id, activation.globalProductId])
+    counts.productsActivated += 1
+  }
+
+  for (const change of plan.stockChanges) {
+    // Pinned to the figure the plan saw, so an order placed meanwhile makes
+    // the statement refuse rather than overwrite. `global_products` is shared
+    // across tenants, so the row must also be one this organization's legacy
+    // mapping points at.
+    const result = await client.query(
+      `update global_products set stock_quantity = $1, updated_at = now()
+        where id = $2 and stock_quantity = $3 and deleted_at is null
+          and exists (select 1 from legacy_product_mappings lpm
+                       where lpm.global_product_id = global_products.id
+                         and lpm.organization_id = $4 and lpm.source_system = $5)`,
+      [change.stockQuantity, change.globalProductId, change.currentStock, target.id, SOURCE_SYSTEM])
+    assert(result.rowCount === 1,
+      `stock of product ${change.globalProductId} ("${change.normalizedName}") moved since the plan was built; re-run the dry run`)
+    counts.stockSet += 1
+  }
+
+  // Eleven thousand rows on a first run; one statement per chunk rather than
+  // one round trip per row.
+  const chunkSize = 500
+  for (let offset = 0; offset < plan.assignments.length; offset += chunkSize) {
+    const chunk = plan.assignments.slice(offset, offset + chunkSize)
+    await client.query(
+      `insert into branch_inventory
+         (branch_id, organization_id, organization_inventory_id, assigned_by_user_id, is_visible, is_active)
+       select pair.branch_id, $1, pair.organization_inventory_id, $2, true, true
+         from unnest($3::int[], $4::int[]) as pair(branch_id, organization_inventory_id)
+       on conflict (branch_id, organization_inventory_id) do update
+         set is_visible = true, is_active = true, deleted_at = null,
+             assigned_by_user_id = excluded.assigned_by_user_id, updated_at = now()`,
+      [
+        target.id,
+        actorUserId,
+        chunk.map((assignment) => assignment.branchId),
+        chunk.map((assignment) => assignment.organizationInventoryId),
+      ])
+    for (const assignment of chunk) {
+      if (assignment.action === "CREATE") counts.branchProductsAssigned += 1
+      else counts.branchProductsRestored += 1
+    }
+  }
 }
 
 /**
@@ -654,6 +978,7 @@ async function apply(
   options: Options,
   products: ProductPlan | null,
   budgets: BudgetPlan | null,
+  branchCatalogue: BranchCataloguePlan | null,
 ): Promise<CommitResult> {
   const counts: Record<string, number> = {
     branchesPinned: 0,
@@ -662,10 +987,18 @@ async function apply(
     groupsCreated: 0,
     groupAssignments: 0,
     budgetsCreated: 0,
+    budgetsRaised: 0,
+    budgetsLowered: 0,
+    baselinesCleared: 0,
     categoriesCreated: 0,
     productsCreated: 0,
     productsAssigned: 0,
     productsMapped: 0,
+    productsActivatedGlobally: 0,
+    productsActivated: 0,
+    stockSet: 0,
+    branchProductsAssigned: 0,
+    branchProductsRestored: 0,
     usernamesRenamed: 0,
     usersMovedToLegacyBranch: 0,
     accountsStamped: 0,
@@ -733,6 +1066,11 @@ async function apply(
   // 4. Catalogue. Independent of branches and users, but it must exist before
   //    `import-ke-orders.ts` runs or every order line fails PRODUCT_NOT_FOUND.
   if (products) await applyProducts(client, products, options.actorUserId!, counts)
+
+  // 4b. Which branch sees which product. Planned from the catalogue as it was
+  //     read, so an entry created just above is assigned on the next run — the
+  //     same two-pass rule branches and their people follow.
+  if (branchCatalogue) await applyBranchCatalogue(client, branchCatalogue, options.actorUserId!, counts)
 
   // Correct anyone sitting at a branch legacy does not assign them to. Applied
   // before the username work so a moved account is already in the right place
@@ -880,11 +1218,24 @@ async function main() {
     // Budgets key off the branch pins, so they can only be planned for branches
     // that already exist. Ones created in this same run are picked up next time,
     // exactly as their people are.
-    const budgets = planBranchBudgets(
-      legacyLocations,
-      branchPinMap(branches, current.branches),
-      organizationExists ? await readBudgets(pool) : [],
+    const budgets = await planBudgetsFor(
+      pool, options, legacyLocations, branchPinMap(branches, current.branches), organizationExists,
     )
+    // Branch assignment keys off the pins and the mapped catalogue, so like
+    // budgets it reaches only what already exists.
+    const branchCatalogue = options.skipProducts
+      ? null
+      : planBranchCatalogue(
+          legacyItems,
+          legacyCategories,
+          branchPinMap(branches, current.branches),
+          organizationExists ? await readCatalogue(pool) : [],
+          organizationExists ? await readBranchAssignments(pool) : [],
+          { stockLevel: options.stockLevel, resetStock: options.resetStock },
+        )
+    const otherTenants = branchCatalogue && organizationExists
+      ? await readOtherTenantReferences(pool, branchCatalogue.globalActivations.map((entry) => entry.globalProductId))
+      : []
     const groups = planGroups(legacyGroups, current.groups, branches.pins, current.branches)
     const usernames = planUsernameMigration(current.users)
     const users = planUsers(legacySubUsers, branches.pins, current.users, {
@@ -892,7 +1243,7 @@ async function main() {
       takenUsernames: current.takenUsernames,
     })
     const plan: SyncPlan = { branches, groups, usernames, users }
-    const digest = combinedDigest(plan, products, budgets, organizationExists)
+    const digest = combinedDigest(plan, products, budgets, branchCatalogue, organizationExists)
     const counts = summarize(plan)
     const productCounts = products ? summarizeProducts(products, legacyItems.length) : null
 
@@ -912,10 +1263,20 @@ async function main() {
       planDigest: digest,
       counts,
       productCounts,
-      budgetCounts: summarizeBudgets(budgets),
+      budgetCounts: budgets ? summarizeBudgets(budgets) : null,
+      branchCatalogueCounts: branchCatalogue ? summarizeBranchCatalogue(branchCatalogue) : null,
+      options: {
+        stockLevel: options.stockLevel,
+        resetStock: options.resetStock,
+        budgetMode: options.budgetMode,
+        zeroPeriod: options.budgetMode === "zero" ? options.zeroPeriod : null,
+        lowerBudgets: options.lowerBudgets,
+      },
       plan,
       products,
       budgets,
+      branchCatalogue,
+      otherTenantsReferencingActivatedProducts: otherTenants,
     }
     mkdirSync(dirname(options.outputPath), { recursive: true })
     writeFileSync(options.outputPath, `${JSON.stringify(report, null, 2)}\n`, "utf8")
@@ -925,10 +1286,13 @@ async function main() {
     }
     console.log(describe(plan).join("\n"))
     if (products) console.log(`\n${describeProducts(products, legacyItems.length).join("\n")}`)
+    console.log(`\n${describeBudgets(budgets, options).join("\n")}`)
+    if (branchCatalogue) console.log(`\n${describeBranchCatalogue(branchCatalogue, otherTenants).join("\n")}`)
     console.log("")
     console.log(JSON.stringify(
       { output: options.outputPath, planDigest: digest, counts, productCounts,
-        budgetCounts: summarizeBudgets(budgets) }, null, 2))
+        budgetCounts: budgets ? summarizeBudgets(budgets) : null,
+        branchCatalogueCounts: branchCatalogue ? summarizeBranchCatalogue(branchCatalogue) : null }, null, 2))
 
     assert(branches.ambiguous.length === 0,
       `${branches.ambiguous.length} legacy location(s) match more than one branch; resolve them before syncing`)
@@ -940,7 +1304,13 @@ async function main() {
         + counts.usernameRenames + counts.peopleToCreate + counts.accountsToBackfill + counts.accountsToStamp
         + plan.groups.missingGroups.length + (products?.creates.length ?? 0)
         + plan.users.branchMoves.length
-        + budgets.creates.length) === 0
+        + (budgets
+          ? budgets.creates.length + budgets.raises.length + budgets.lowers.length + budgets.baselineResets.length
+          : 0)
+        + (branchCatalogue
+          ? branchCatalogue.globalActivations.length + branchCatalogue.activations.length
+            + branchCatalogue.stockChanges.length + branchCatalogue.assignments.length
+          : 0)) === 0
 
     if (!options.commit && !options.rollbackTest) {
       if (nothingToDo) {
@@ -998,23 +1368,39 @@ async function main() {
       const lockedProducts = options.skipProducts
         ? null
         : planProducts(legacyItems, legacyCategories, await readProductMappings(client), legacyPriceHistory)
-      const lockedBudgets = planBranchBudgets(
-        legacyLocations,
-        branchPinMap(lockedPlan.branches, locked.branches),
-        await readBudgets(client),
+      const lockedBudgets = await planBudgetsFor(
+        client, options, legacyLocations, branchPinMap(lockedPlan.branches, locked.branches), organizationExists,
       )
+      const lockedBranchCatalogue = options.skipProducts
+        ? null
+        : planBranchCatalogue(
+            legacyItems,
+            legacyCategories,
+            branchPinMap(lockedPlan.branches, locked.branches),
+            await readCatalogue(client),
+            await readBranchAssignments(client),
+            { stockLevel: options.stockLevel, resetStock: options.resetStock },
+          )
       assert(
-        combinedDigest(lockedPlan, lockedProducts, lockedBudgets, organizationExists) === digest,
+        combinedDigest(lockedPlan, lockedProducts, lockedBudgets, lockedBranchCatalogue, organizationExists) === digest,
         "Plan changed between confirmation and commit; re-run the dry run",
       )
 
-      const result = await apply(client, lockedPlan, options, lockedProducts, lockedBudgets)
+      const result = await apply(client, lockedPlan, options, lockedProducts, lockedBudgets, lockedBranchCatalogue)
       if (options.rollbackTest) {
         await client.query("rollback")
         console.log(`\nRollback test: applied and rolled back. Counts: ${JSON.stringify(result.counts)}`)
       } else {
         await client.query("commit")
         console.log(`\nCommitted batch ${result.batchId}. Counts: ${JSON.stringify(result.counts)}`)
+        // Already committed — a cache that will not clear is reported, not
+        // thrown. Inventory listings expire in seconds on their own.
+        if (result.counts.budgetsCreated + result.counts.budgetsRaised + result.counts.budgetsLowered
+          + result.counts.baselinesCleared > 0) {
+          for (const entry of await invalidateCachePrefixes(["budgets", "analytics", "branches"])) {
+            if (entry.error) console.warn(`WARNING: cache prefix "${entry.prefix}" was not cleared: ${entry.error}`)
+          }
+        }
         console.log("Next: npm run import:ke-orders -- --start-date=<YYYY-MM-DD> --end-date=<YYYY-MM-DD>")
       }
     } catch (error) {

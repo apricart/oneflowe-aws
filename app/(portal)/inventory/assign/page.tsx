@@ -19,6 +19,11 @@ import useSWR from "swr"
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json())
 
+// This page works out "not assigned" by subtracting the organization's
+// assignments from the global catalogue on the client, so both lists have to
+// be complete. Both endpoints page at 50 by default and allow at most 500.
+const FULL_LIST_LIMIT = "500"
+
 type Organization = {
     id: number
     name: string
@@ -83,7 +88,7 @@ export default function AssignProductPage() {
 
     // Fetch all global products with filters
     const productParams = new URLSearchParams()
-    productParams.set("limit", "500")
+    productParams.set("limit", FULL_LIST_LIMIT)
     if (categoryFilter !== "all") productParams.set("category", categoryFilter)
     if (subCategoryFilter !== "all") productParams.set("subCategory", subCategoryFilter)
     if (searchQuery) productParams.set("search", searchQuery)
@@ -99,12 +104,14 @@ export default function AssignProductPage() {
     // Fetch assigned products for selected organization
     const assignmentParams = new URLSearchParams()
     assignmentParams.set("organizationId", selectedOrgId || "")
+    assignmentParams.set("limit", FULL_LIST_LIMIT)
     if (categoryFilter !== "all") assignmentParams.set("category", categoryFilter)
     if (subCategoryFilter !== "all") assignmentParams.set("subCategory", subCategoryFilter)
     if (searchQuery) assignmentParams.set("search", searchQuery)
 
     const { data: assignmentsData, isLoading: assignmentsLoading, mutate: mutateAssignments } = useSWR<{
         items: AssignedProduct[]
+        total?: number
     }>(
         selectedOrgId ? `/api/v1/admin/organization-assignments?${assignmentParams.toString()}` : null,
         fetcher,
@@ -113,6 +120,9 @@ export default function AssignProductPage() {
 
     const allProducts = productsData?.items ?? []
     const assignedProducts = assignmentsData?.items ?? []
+    // The endpoint reports the full count even when it has paged the items,
+    // so the stat card reads it rather than the length of what came back.
+    const assignedTotal = assignmentsData?.total ?? assignedProducts.length
     const assignedProductIds = new Set(assignedProducts.map(a => a.globalProductId))
     const hasActiveSearchOrFilters = Boolean(searchQuery.trim()) || categoryFilter !== "all" || subCategoryFilter !== "all"
 
@@ -260,7 +270,7 @@ export default function AssignProductPage() {
                     />
                     <StatCard
                         label="Assigned Products"
-                        value={assignedProducts.length}
+                        value={assignedTotal}
                         icon={<Check className="h-5 w-5" />}
                         variant="green"
                     />
