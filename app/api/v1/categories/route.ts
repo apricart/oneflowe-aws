@@ -16,8 +16,17 @@ export async function GET(req: NextRequest) {
     }
 
     const userRole = (session.user as any).role
-    // Allow Super Admin, Head Office, and Branch Admin to list categories
-    if (userRole !== "SUPER_ADMIN" && userRole !== "HEAD_OFFICE" && userRole !== "BRANCH_ADMIN") {
+    // The catalogue taxonomy: top-level category names and counts, with no
+    // tenant rows in it. Readable by every role that reads inventory or
+    // filters a report by category — the multi-branch approver holds the same
+    // INVENTORY_VIEW permission as Branch Admin and needs the list for the
+    // Graphical Reports filter row.
+    if (
+      userRole !== "SUPER_ADMIN"
+      && userRole !== "HEAD_OFFICE"
+      && userRole !== "BRANCH_ADMIN"
+      && userRole !== "GROUP_USER"
+    ) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
 

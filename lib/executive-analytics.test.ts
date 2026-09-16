@@ -37,10 +37,14 @@ import {
 } from "./executive-analytics-request"
 
 describe("role gate", () => {
-  it("admits only the two executive roles", () => {
+  it("admits only the roles whose reach spans more than one branch", () => {
     expect(isExecutiveAnalyticsRole("SUPER_ADMIN")).toBe(true)
     expect(isExecutiveAnalyticsRole("HEAD_OFFICE")).toBe(true)
-    for (const role of ["BRANCH_ADMIN", "ORDER_PORTAL", "GROUP_USER", "GROUP_ORDER_PORTAL", "", null, undefined, 7]) {
+    // The multi-branch approver reads over its assigned branch set.
+    expect(isExecutiveAnalyticsRole("GROUP_USER")).toBe(true)
+    // The ordering group role raises orders and has no reporting surface, and
+    // a single-branch role has nothing to compare side by side.
+    for (const role of ["BRANCH_ADMIN", "ORDER_PORTAL", "GROUP_ORDER_PORTAL", "group_user", "", null, undefined, 7]) {
       expect(isExecutiveAnalyticsRole(role)).toBe(false)
     }
   })
@@ -274,11 +278,15 @@ describe("role-gated dimensions", () => {
   it("offers the tenant comparison to the platform role only", () => {
     const superAdmin = dimensionsForRole("SUPER_ADMIN").map((entry) => entry.id)
     const headOffice = dimensionsForRole("HEAD_OFFICE").map((entry) => entry.id)
+    const groupUser = dimensionsForRole("GROUP_USER").map((entry) => entry.id)
 
     expect(superAdmin).toContain("organization")
     expect(headOffice).not.toContain("organization")
-    // Everything else stays available to both, so the gate is narrow.
+    expect(groupUser).not.toContain("organization")
+    // Everything else stays available to every admitted role, so the gate is
+    // narrow — the approver's menu is Head Office's menu.
     expect(headOffice).toEqual(superAdmin.filter((id) => id !== "organization"))
+    expect(groupUser).toEqual(headOffice)
   })
 
   it("refuses the reserved dimension for every other role", () => {
@@ -287,11 +295,15 @@ describe("role-gated dimensions", () => {
       expect(isDimensionAllowedForRole("organization", role)).toBe(false)
     }
     expect(isDimensionAllowedForRole("branch", "HEAD_OFFICE")).toBe(true)
+    expect(isDimensionAllowedForRole("branch", "GROUP_USER")).toBe(true)
+    expect(isDimensionAllowedForRole("group", "GROUP_USER")).toBe(true)
   })
 
   it("rejects a reserved dimension at the request boundary, not just in the menu", () => {
     const params = new URLSearchParams("dimension=organization&metric=spend")
     expect(parseComparisonRequest(params, new Date(), "HEAD_OFFICE"))
+      .toEqual({ ok: false, error: "Forbidden: Insufficient permissions" })
+    expect(parseComparisonRequest(params, new Date(), "GROUP_USER"))
       .toEqual({ ok: false, error: "Forbidden: Insufficient permissions" })
     expect(parseComparisonRequest(params, new Date(), "SUPER_ADMIN").ok).toBe(true)
   })

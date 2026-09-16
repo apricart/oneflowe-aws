@@ -85,4 +85,37 @@ describe('group sub-resources are confined to the tenant that owns the group', (
     expect(route).not.toContain('baselineBudgetCents')
     expect(route).not.toContain('adminUserId')
   })
+
+  it('refuses the API to a session that still owes a password change, except the change itself', () => {
+    const proxy = repositoryFile('proxy.ts')
+    // The gate lives in the API branch, on the signed claim, with the
+    // allowlist held in one pure module a contract test pins.
+    expect(proxy).toContain("from \"@/lib/password-change-pending\"")
+    expect(proxy).toMatch(/mustChangePassword === true &&\s+!isPasswordChangePendingApiPathAllowed\(pathname\)/)
+    expect(proxy).toContain('code: PASSWORD_CHANGE_REQUIRED_CODE')
+  })
+
+  it('changes a password only through the module that demands the emailed proof', () => {
+    const route = repositoryFile('app/api/v1/users/me/change-password/route.ts')
+    expect(route).toContain("from \"@/lib/server/password-change\"")
+    expect(route).toContain('await changeOwnPassword({')
+    // The handler never touches the hash or the flag itself, and never reads
+    // the session id from anything the browser could have supplied.
+    expect(route).not.toContain('passwordHash')
+    expect(route).not.toContain('mustChangePassword: false')
+    expect(route).toContain('await getCurrentSessionId(req)')
+
+    const change = repositoryFile('lib/server/password-change.ts')
+    // The proof is consumed in the same transaction as the hash write, and
+    // re-checked for freshness there; the earlier check is advisory.
+    expect(change).toMatch(/db\.transaction\(async \(tx\) => \{[\s\S]*?\.update\(authSessions\)[\s\S]*?emailVerifiedAt: null[\s\S]*?PROOF_FRESH[\s\S]*?\.update\(users\)[\s\S]*?passwordHash,/)
+    expect(change).toContain('sessionVersion: sql`${users.sessionVersion} + 1`')
+    expect(change).toContain('passwordChangedAt: sql`now()`')
+  })
+
+  it('stamps the emailed proof on the session that entered the code, never on the account alone', () => {
+    const verification = repositoryFile('lib/server/email-verification.ts')
+    expect(verification).toMatch(/\.update\(authSessions\)[\s\S]*?emailVerifiedAt: sql`now\(\)`[\s\S]*?eq\(authSessions\.id, sessionId\)[\s\S]*?eq\(authSessions\.subjectId, subject\.id\)[\s\S]*?isNull\(authSessions\.revokedAt\)/)
+    expect(verification).toContain('isRoutableEmailAddress(subject.email)')
+  })
 })

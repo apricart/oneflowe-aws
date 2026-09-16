@@ -8,6 +8,10 @@ import {
   requestBodyLimitForPath,
 } from "@/lib/edge/request-security"
 import { getSessionNonIdleExpirationReason } from "@/lib/session-policy"
+import {
+  isPasswordChangePendingApiPathAllowed,
+  PASSWORD_CHANGE_REQUIRED_CODE,
+} from "@/lib/password-change-pending"
 
 const protectedPrefixes = [
   "/approvals",
@@ -126,7 +130,7 @@ function withSecurityHeaders(response: NextResponse, pathname: string = ""): Nex
   return response
 }
 
-function handleApiRequest(req: NextRequest, pathname: string, response: NextResponse): NextResponse {
+async function handleApiRequest(req: NextRequest, pathname: string, response: NextResponse): Promise<NextResponse> {
   const allowedMutation = isCookieAuthenticatedMutationAllowed({
     method: req.method,
     requestUrl: req.url,
@@ -148,6 +152,26 @@ function handleApiRequest(req: NextRequest, pathname: string, response: NextResp
       pathname,
     )
   }
+
+  // A session that still owes a password change reaches only the endpoints
+  // that change it. The page branch below redirects; here a redirect would be
+  // meaningless, so the request is refused. The claim is signed, and the
+  // change endpoint demands its own proof besides, so the handlers do not
+  // depend on this check alone.
+  const token = await getToken({ req, secret: edgeEnv.NEXTAUTH_SECRET })
+  if (
+    (token as any)?.mustChangePassword === true &&
+    !isPasswordChangePendingApiPathAllowed(pathname)
+  ) {
+    logger("middleware", { reason: "password_change_required", path: pathname })
+    return withSecurityHeaders(
+      NextResponse.json(
+        { error: "Password change required", code: PASSWORD_CHANGE_REQUIRED_CODE },
+        { status: 403 },
+      ),
+      pathname,
+    )
+  }
   return withSecurityHeaders(response, pathname)
 }
 
@@ -157,9 +181,10 @@ const ADMIN_PORTAL_ROLES = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"]
  * The approver works inside the admin shell so it gets the same sidebar and
  * topbar, but it is not an administrator: it may reach the dashboard and order
  * directory for the branches assigned to it, its own approval queue, the
- * reports those assignments scope, and settings. Every other shell area —
- * organizations, users, inventory, budgets, branches — stays closed, and this
- * allowlist fails closed for anything not named in it.
+ * reports those assignments scope, the money budgets of those same branches,
+ * and settings. Every other shell area — organizations, users, inventory,
+ * branches, quantity budgets — stays closed, and this allowlist fails closed
+ * for anything not named in it.
  *
  * The dashboard and the order directory are pages shared with the
  * administrators. Reaching a shared page is not the same as reading another
@@ -170,6 +195,7 @@ const ADMIN_PORTAL_ROLES = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"]
 const GROUP_USER_HOME = "/dashboard"
 const GROUP_USER_AREAS = [
   "/approvals",
+  "/budgets",
   "/dashboard",
   "/orders",
   "/reports",
@@ -263,7 +289,7 @@ export async function proxy(req: NextRequest) {
   const response = NextResponse.next()
 
   if (pathname.startsWith("/api/v1/")) {
-    return handleApiRequest(req, pathname, response)
+    return await handleApiRequest(req, pathname, response)
   }
 
   const isPublicPath = ["/login"].includes(pathname)

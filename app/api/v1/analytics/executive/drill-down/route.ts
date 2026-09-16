@@ -33,10 +33,11 @@ import { resolveExecutiveScope } from "@/lib/server/executive-analytics-scope"
  *  * **Sorting is an allowlist.** The sort key selects a pre-written
  *    expression; no request string reaches an ORDER BY.
  *
- * Prices are returned without redaction because both roles that can reach this
- * endpoint at all — Super Admin and Head Office — already read prices
- * everywhere else; `lib/price-visibility.ts` restricts Branch Admin and Order
- * Portal, neither of which has any Executive Analytics surface.
+ * Prices are returned without redaction because every role that can reach this
+ * endpoint at all — Super Admin, Head Office and the multi-branch approver —
+ * already reads prices everywhere else; `lib/price-visibility.ts` restricts
+ * Branch Admin and Order Portal, neither of which has any Executive Analytics
+ * surface.
  */
 export async function GET(req: NextRequest) {
   try {

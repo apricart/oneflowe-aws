@@ -35,8 +35,18 @@
  * is a commitment, never consumption.
  */
 
-/** Roles allowed to open the Executive Analytics Center at all. */
-export const EXECUTIVE_ANALYTICS_ROLES = ["SUPER_ADMIN", "HEAD_OFFICE"] as const
+/**
+ * Roles allowed to open the Executive Analytics Center at all.
+ *
+ * Each one reaches more than a single branch, which is what makes a
+ * side-by-side comparison worth drawing: the platform role reaches every
+ * tenant, Head Office its own tenant, and the multi-branch approver the set of
+ * branches its group and branch assignments resolve to. The ordering group
+ * role is deliberately absent — it raises orders and has no reporting surface.
+ * Which *rows* each role may draw from is decided in
+ * `lib/server/executive-analytics-scope.ts`, never here.
+ */
+export const EXECUTIVE_ANALYTICS_ROLES = ["SUPER_ADMIN", "HEAD_OFFICE", "GROUP_USER"] as const
 export type ExecutiveAnalyticsRole = (typeof EXECUTIVE_ANALYTICS_ROLES)[number]
 
 export function isExecutiveAnalyticsRole(role: unknown): role is ExecutiveAnalyticsRole {

@@ -49,10 +49,11 @@ import {
  * handful of high-value visuals, and an Explore workspace where a reader builds
  * a curated comparison without a developer adding a chart for it.
  *
- * The role check here decides what renders, never what is readable. Both
- * endpoints behind this page re-derive the caller's tenant and branch set from
- * their own user row and refuse anything else, so a hand-typed URL reaches the
- * same 403 the sidebar entry is hidden behind.
+ * The role check here decides what renders, never what is readable. Every
+ * endpoint behind this page re-derives the caller's tenant and branch set from
+ * their own user row — and, for a Group User, from their own assignment rows —
+ * and refuses anything else, so a hand-typed URL reaches the same 403 the
+ * sidebar entry is hidden behind.
  */
 
 type OverviewResponse = {
@@ -145,8 +146,8 @@ export default function GraphicalReportsPage() {
               Graphical Reports is not available for your role
             </h1>
             <p className="max-w-md text-xs text-slate-500 dark:text-slate-400">
-              This report compares budgets and procurement across branches, and is limited to Super Admin and Head
-              Office users.
+              This report compares budgets and procurement across branches, and is limited to Super Admin, Head
+              Office and Group User accounts.
             </p>
           </CardContent>
         </Card>

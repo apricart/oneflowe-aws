@@ -380,14 +380,17 @@ export async function POST(req: NextRequest) {
     }
 
     // Log the assignment creation
+    // Keyed by the organization: `entity_id` is varchar(128), and a bulk
+    // assignment of a few dozen products would overflow it as a joined list.
     await db.insert(auditLogs).values({
       userId: (session.user as any).id,
       action: "CREATE",
       entity: "OrganizationAssignment",
-      entityId: newAssignments.map(a => a.id).join(','),
+      entityId: String(organizationId),
       metadata: {
         assignedCount: newAssignments.length,
         organizationId,
+        assignmentIds: newAssignments.map(a => a.id),
         productIds: normalizedProductIds,
         skippedCount: normalizedProductIds.length - newAssignments.length
       },
@@ -486,39 +489,43 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: "No assignments found" }, { status: 404 })
     }
 
-    // Hard delete each assignment and cascade to branches
+    // Hard delete each assignment and cascade to branches — all of them in
+    // one transaction, so a failure part-way leaves no product half removed.
     let totalBranchDeletions = 0
     const affectedBranches: number[] = []
 
-    for (const assignment of assignmentsToDelete) {
-      // Cascade to branches first
-      const cascadeResult = await cascadeOrgDeletion(
-        assignment.id,
-        (session.user as any).id,
-        "SUPER_ADMIN"
-      )
-      totalBranchDeletions += cascadeResult.deletedCount
-      affectedBranches.push(...cascadeResult.affectedBranches)
+    await db.transaction(async (tx) => {
+      for (const assignment of assignmentsToDelete) {
+        // Cascade to branches first
+        const cascadeResult = await cascadeOrgDeletion(
+          assignment.id,
+          (session.user as any).id,
+          "SUPER_ADMIN",
+          tx,
+        )
+        totalBranchDeletions += cascadeResult.deletedCount
+        affectedBranches.push(...cascadeResult.affectedBranches)
 
-      // Then hard delete the organization assignment
-      await db
-        .delete(organizationInventory)
-        .where(eq(organizationInventory.id, assignment.id))
-    }
+        // Then hard delete the organization assignment
+        await tx
+          .delete(organizationInventory)
+          .where(eq(organizationInventory.id, assignment.id))
+      }
 
-    // Log the assignment deletion
-    await db.insert(auditLogs).values({
-      userId: (session.user as any).id,
-      action: "DELETE",
-      entity: "OrganizationAssignment",
-      entityId: id || "bulk",
-      metadata: {
-        deletedCount: assignmentsToDelete.length,
-        branchDeletions: totalBranchDeletions,
-        affectedBranches: [...new Set(affectedBranches)],
-        organizationId,
-        productId
-      },
+      // Log the assignment deletion
+      await tx.insert(auditLogs).values({
+        userId: (session.user as any).id,
+        action: "DELETE",
+        entity: "OrganizationAssignment",
+        entityId: id || "bulk",
+        metadata: {
+          deletedCount: assignmentsToDelete.length,
+          branchDeletions: totalBranchDeletions,
+          affectedBranches: [...new Set(affectedBranches)],
+          organizationId,
+          productId
+        },
+      })
     })
 
     // Invalidate both organization and branch inventory caches
@@ -596,8 +603,11 @@ export async function PUT(req: NextRequest) {
 
     // One transaction: an organization price without its propagation, or a
     // propagation without the price it was planned against, would each leave a
-    // branch on a price nobody chose.
+    // branch on a price nobody chose — and a status change without its branch
+    // cascade, or a cascade without its audit entry, would leave a product
+    // half switched off with nothing to say who did it.
     const nextPriceCents = nextOrganizationPriceCents(body)
+    const statusChanged = isActive !== undefined && isActive !== existingAssignment.isActive
     const { updatedAssignment, propagation } = await db.transaction(async (tx) => {
       // Read the state the groups are on now, before the price moves under it.
       const propagationContext = await loadPropagationContextIfNeeded(tx, {
@@ -618,44 +628,44 @@ export async function PUT(req: NextRequest) {
         userId: (session.user as any).id,
       })
 
-      return { updatedAssignment: assignment, propagation: outcome }
-    })
+      if (statusChanged) {
+        const cascadeResult = await cascadeOrgStatusChange(
+          Number.parseInt(id),
+          isActive,
+          (session.user as any).id,
+          "SUPER_ADMIN",
+          tx,
+        )
 
-    // If isActive status changed, cascade to branches
-    if (isActive !== undefined && isActive !== existingAssignment.isActive) {
-      const cascadeResult = await cascadeOrgStatusChange(
-        Number.parseInt(id),
-        isActive,
-        (session.user as any).id,
-        "SUPER_ADMIN"
-      )
+        // Log the cascade update
+        await tx.insert(auditLogs).values({
+          userId: (session.user as any).id,
+          action: "CASCADE_UPDATE",
+          entity: "OrganizationAssignment",
+          entityId: id.toString(),
+          metadata: {
+            organizationInventoryId: Number.parseInt(id),
+            isActive,
+            branchUpdates: cascadeResult.updatedCount,
+            affectedBranches: cascadeResult.affectedBranches,
+            performedByRole: "SUPER_ADMIN"
+          },
+        })
+      }
 
-      // Log the cascade update
-      await db.insert(auditLogs).values({
+      // Log the assignment update
+      await tx.insert(auditLogs).values({
         userId: (session.user as any).id,
-        action: "CASCADE_UPDATE",
+        action: "UPDATE",
         entity: "OrganizationAssignment",
         entityId: id.toString(),
         metadata: {
-          organizationInventoryId: Number.parseInt(id),
-          isActive,
-          branchUpdates: cascadeResult.updatedCount,
-          affectedBranches: cascadeResult.affectedBranches,
+          updateData,
           performedByRole: "SUPER_ADMIN"
         },
       })
-    }
 
-    // Log the assignment update
-    await db.insert(auditLogs).values({
-      userId: (session.user as any).id,
-      action: "UPDATE",
-      entity: "OrganizationAssignment",
-      entityId: id.toString(),
-      metadata: {
-        updateData,
-        performedByRole: "SUPER_ADMIN"
-      },
+      return { updatedAssignment: assignment, propagation: outcome }
     })
 
     // Invalidate caches

@@ -5,12 +5,16 @@ import { NextRequest } from "next/server"
 import * as mockedNextAuth from "next-auth"
 
 import * as approvalsRoute from "@/app/api/v1/group-portal/approvals/route"
+import * as moneyBudgetsRoute from "@/app/api/v1/budgets/route"
 import * as budgetsRoute from "@/app/api/v1/group-portal/budgets/route"
 import * as groupsRoute from "@/app/api/v1/group-portal/groups/route"
 import * as reportRoute from "@/app/api/v1/group-portal/reports/group-orders/route"
 import * as scopeRoute from "@/app/api/v1/group-portal/scope/route"
 import * as usersRoute from "@/app/api/v1/users/route"
 import {
+  auditLogs,
+  branches,
+  budgets,
   roles,
   userBranchAssignments,
   userGroupAssignments,
@@ -42,12 +46,19 @@ vi.mock("@/lib/email", () => ({ sendWelcomeEmail: mocks.sendWelcomeEmail }))
 vi.mock("@/lib/rate-limiter", () => ({ withRateLimit: mocks.withRateLimit }))
 vi.mock("@/lib/cache-utils", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/cache-utils")>()
-  return { ...actual, invalidateByPrefix: mocks.invalidateByPrefix }
+  return {
+    ...actual,
+    invalidateByPrefix: mocks.invalidateByPrefix,
+    // No Redis here: every cached read runs its real fetcher against the test
+    // database instead of waiting on a connection that will never open.
+    getCached: async <T,>(_key: string, fetchFn: () => Promise<T>) => fetchFn(),
+  }
 })
 
 const { getServerSession } = mockedNextAuth
 const { GET: getApprovals } = approvalsRoute
 const { GET: getBudgets } = budgetsRoute
+const { GET: listMoneyBudgets, PUT: allocateMoneyBudget } = moneyBudgetsRoute
 const { GET: getGroups } = groupsRoute
 const { GET: getReport } = reportRoute
 const { GET: getScope } = scopeRoute
@@ -70,6 +81,14 @@ function signIn(actor: Actor | null) {
 
 function request(path: string): NextRequest {
   return new NextRequest(`http://localhost${path}`)
+}
+
+function allocationRequest(body: unknown): NextRequest {
+  return new NextRequest("http://localhost/api/v1/budgets", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
 }
 
 function userRequest(body: unknown): Request {
@@ -429,6 +448,248 @@ describe.skipIf(!hasTestDatabase)("group-based roles through their real API and 
         expect(response.status).toBe(403)
       },
     )
+  })
+
+  // ── Money budgets: the approver allocates to its own branches ──────────
+  //
+  // Runs last: it writes to Alpha South's ledger, and the reads above expect
+  // the fixture's untouched figures.
+
+  describe("Group User money budget allocation", () => {
+    const period = currentBudgetPeriod()
+
+    async function listFor(query = "") {
+      const response = await listMoneyBudgets(request(`/api/v1/budgets?all=true&period=${period}${query}`))
+      const body = await response.json()
+      return { status: response.status, body }
+    }
+
+    const branchIdsOf = (body: any): number[] =>
+      (body.budgets as Array<{ branchId: number }>).map((row) => row.branchId).sort((a, b) => a - b)
+
+    it("lists exactly the approver's assigned branches, with the ledger figures behind them", async () => {
+      signIn(actor("approver"))
+
+      const { status, body } = await listFor()
+
+      expect(status).toBe(200)
+      expect(branchIdsOf(body)).toEqual([fixtures.alphaNorthId, fixtures.alphaSouthId].sort((a, b) => a - b))
+      expect(branchIdsOf(body)).not.toContain(fixtures.betaBranchId)
+      expect(branchIdsOf(body)).not.toContain(fixtures.foreignBranchId)
+
+      const north = body.budgets.find((row: any) => row.branchId === fixtures.alphaNorthId)
+      expect(north).toMatchObject({
+        branchName: fixtures.names.alphaNorth,
+        organizationId: fixtures.organizationId,
+        amountAllocatedCents: 100_000,
+        amountSpentCents: 20_000,
+        amountHeldCents: 30_000,
+        amountCreditedCents: 5_000,
+        remainingCents: 55_000,
+        budgetAllocationMode: "money",
+      })
+    })
+
+    it("narrows within its assignments and refuses a request that reaches outside them", async () => {
+      signIn(actor("approver"))
+
+      const south = await listFor(`&branchIds=${fixtures.alphaSouthId}`)
+      expect(branchIdsOf(south.body)).toEqual([fixtures.alphaSouthId])
+
+      // A tenant branch it is not assigned to drops out rather than joining.
+      const mixed = await listFor(`&branchIds=${fixtures.alphaNorthId},${fixtures.betaBranchId}`)
+      expect(branchIdsOf(mixed.body)).toEqual([fixtures.alphaNorthId])
+
+      // Only unassigned branches — in its own tenant or another — is a refusal,
+      // never a fall-through to the tenant list.
+      for (const outside of [fixtures.betaBranchId, fixtures.foreignBranchId]) {
+        const { status, body } = await listFor(`&branchIds=${outside}`)
+        expect(status).toBe(403)
+        expect(body.error).toBe("Requested branches are outside your assigned scope")
+        expect(body.budgets).toBeUndefined()
+      }
+    })
+
+    it("refuses an approver with no assignments rather than listing the tenant", async () => {
+      signIn(actor("emptyApprover"))
+
+      const { status, body } = await listFor()
+
+      expect(status).toBe(403)
+      expect(body.error).toBe("No branches are assigned to your account")
+      expect(body.budgets).toBeUndefined()
+    })
+
+    it("leaves Head Office on the whole tenant, and out of the neighbour's", async () => {
+      signIn(actor("head"))
+      const own = await listFor()
+      expect(own.status).toBe(200)
+      expect(branchIdsOf(own.body)).toEqual(
+        [fixtures.alphaNorthId, fixtures.alphaSouthId, fixtures.betaBranchId].sort((a, b) => a - b),
+      )
+      // Naming the neighbour's branch matches nothing inside the tenant fence.
+      const foreign = await listFor(`&branchIds=${fixtures.foreignBranchId}`)
+      expect(foreign.status).toBe(200)
+      expect(foreign.body.budgets).toEqual([])
+
+      signIn(actor("foreignHead"))
+      const neighbour = await listFor()
+      expect(branchIdsOf(neighbour.body)).toEqual([fixtures.foreignBranchId])
+    })
+
+    it("keeps the ordering role out of the listing entirely", async () => {
+      signIn(actor("requester"))
+      // Not a manager: the `all` listing is skipped and the single-branch path
+      // has no branch for this role, so nothing is returned either way.
+      const { status, body } = await listFor()
+      expect(status).toBe(400)
+      expect(body.budgets).toBeUndefined()
+    })
+
+    it("credits an add-on and sets a baseline on an assigned branch, with the ledger and audit trail to match", async () => {
+      signIn(actor("approver"))
+
+      const addon = await allocateMoneyBudget(allocationRequest({
+        branchId: fixtures.alphaSouthId,
+        amountAllocatedCents: 12_500,
+        type: "addon",
+        reason: "Integration add-on",
+      }))
+      const addonBody = await addon.json()
+      expect(addon.status).toBe(200)
+      expect(addonBody.budget).toMatchObject({
+        branchId: fixtures.alphaSouthId,
+        branchName: fixtures.names.alphaSouth,
+        period,
+        newCredited: 125,
+      })
+
+      const monthly = await allocateMoneyBudget(allocationRequest({
+        branchId: fixtures.alphaSouthId,
+        amountAllocatedCents: 40_000,
+        type: "monthly",
+      }))
+      expect(monthly.status).toBe(200)
+      expect((await monthly.json()).baseline).toBe(400)
+
+      const [ledger] = await db
+        .select({
+          allocated: budgets.amountAllocatedCents,
+          credited: budgets.amountCreditedCents,
+          organizationId: budgets.organizationId,
+        })
+        .from(budgets)
+        .where(and(eq(budgets.branchId, fixtures.alphaSouthId), eq(budgets.period, period)))
+      expect(ledger).toEqual({ allocated: 40_000, credited: 12_500, organizationId: fixtures.organizationId })
+
+      const [branch] = await db
+        .select({ baseline: branches.baselineBudgetCents })
+        .from(branches)
+        .where(eq(branches.id, fixtures.alphaSouthId))
+      expect(branch.baseline).toBe(40_000)
+
+      // The trail names the approver, so a reviewer can see who moved the money.
+      const trail = await db
+        .select({ action: auditLogs.action, entityId: auditLogs.entityId })
+        .from(auditLogs)
+        .where(and(
+          eq(auditLogs.userId, fixtures.approverId),
+          eq(auditLogs.organizationId, fixtures.organizationId),
+        ))
+      expect(trail).toEqual(expect.arrayContaining([
+        { action: "ADD_CREDIT", entityId: String(fixtures.alphaSouthId) },
+        { action: "UPDATE_BRANCH_BASELINE", entityId: String(fixtures.alphaSouthId) },
+      ]))
+
+      // The approver's own listing now shows the new figures.
+      const { body } = await listFor(`&branchIds=${fixtures.alphaSouthId}`)
+      expect(body.budgets[0]).toMatchObject({ amountAllocatedCents: 40_000, amountCreditedCents: 12_500 })
+    })
+
+    it("refuses a write to a tenant branch outside its assignments, and to another tenant's, before touching the ledger", async () => {
+      // The Head Office listings above already opened this period's rows for
+      // Beta and Foreign at their baselines; what must hold is that the
+      // refused writes below leave them exactly as they are.
+      const ledgerOf = () => db
+        .select({
+          branchId: budgets.branchId,
+          allocated: budgets.amountAllocatedCents,
+          credited: budgets.amountCreditedCents,
+          updatedAt: budgets.updatedAt,
+        })
+        .from(budgets)
+        .where(and(
+          inArray(budgets.branchId, [fixtures.betaBranchId, fixtures.foreignBranchId]),
+          eq(budgets.period, period),
+        ))
+        .orderBy(budgets.branchId)
+      const before = await ledgerOf()
+
+      signIn(actor("approver"))
+
+      const beta = await allocateMoneyBudget(allocationRequest({
+        branchId: fixtures.betaBranchId,
+        amountAllocatedCents: 1_000,
+        type: "addon",
+      }))
+      expect(beta.status).toBe(403)
+      expect((await beta.json()).error).toBe("Unauthorized: Branch is outside your assigned scope")
+
+      const foreign = await allocateMoneyBudget(allocationRequest({
+        branchId: fixtures.foreignBranchId,
+        amountAllocatedCents: 1_000,
+        type: "addon",
+      }))
+      expect(foreign.status).toBe(403)
+      expect((await foreign.json()).error).toBe("Unauthorized: Branch belongs to different organization")
+
+      // Neither refusal moved a rupee or touched a row.
+      expect(await ledgerOf()).toEqual(before)
+      for (const row of before) expect(row.credited).toBe(0)
+
+      // And no audit row claims the approver did anything to either branch.
+      const trail = await db
+        .select({ entityId: auditLogs.entityId })
+        .from(auditLogs)
+        .where(and(
+          eq(auditLogs.userId, fixtures.approverId),
+          inArray(auditLogs.entityId, [String(fixtures.betaBranchId), String(fixtures.foreignBranchId)]),
+        ))
+      expect(trail).toEqual([])
+    })
+
+    it("refuses the assignment-less approver and the ordering role on write", async () => {
+      const body = { branchId: fixtures.alphaNorthId, amountAllocatedCents: 1_000, type: "addon" }
+
+      signIn(actor("emptyApprover"))
+      const empty = await allocateMoneyBudget(allocationRequest(body))
+      expect(empty.status).toBe(403)
+      expect((await empty.json()).error).toBe("Unauthorized: Branch is outside your assigned scope")
+
+      signIn(actor("requester"))
+      expect((await allocateMoneyBudget(allocationRequest(body))).status).toBe(403)
+
+      signIn(null)
+      expect((await allocateMoneyBudget(allocationRequest(body))).status).toBe(401)
+
+      // Alpha North's ledger is exactly as the fixture left it.
+      const [north] = await db
+        .select({ allocated: budgets.amountAllocatedCents, credited: budgets.amountCreditedCents })
+        .from(budgets)
+        .where(and(eq(budgets.branchId, fixtures.alphaNorthId), eq(budgets.period, period)))
+      expect(north).toEqual({ allocated: 100_000, credited: 5_000 })
+    })
+
+    it("keeps Head Office inside its own tenant on write", async () => {
+      signIn(actor("foreignHead"))
+      const response = await allocateMoneyBudget(allocationRequest({
+        branchId: fixtures.alphaNorthId,
+        amountAllocatedCents: 1_000,
+        type: "addon",
+      }))
+      expect(response.status).toBe(403)
+      expect((await response.json()).error).toBe("Unauthorized: Branch belongs to different organization")
+    })
   })
 })
 

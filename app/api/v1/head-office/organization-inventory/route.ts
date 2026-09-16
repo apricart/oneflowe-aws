@@ -106,7 +106,16 @@ function buildOrganizationInventoryUpdate(body: any, validated: any) {
   }
 }
 
+type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0]
+
+/**
+ * Cascade a status change to the branches, on the caller's transaction so the
+ * organization row, its branch rows and the audit entry commit together.
+ * Returns whether anything changed, so the caller clears the shop's cache
+ * only once the transaction has committed.
+ */
 async function cascadeOrganizationInventoryStatus(
+  tx: Transaction,
   inventoryId: number,
   isActive: boolean,
   previousStatus: boolean,
@@ -115,10 +124,10 @@ async function cascadeOrganizationInventoryStatus(
   // edited. Only a Super Admin can reach this write, so recording "HEAD_OFFICE"
   // named the wrong actor in every cascade audit entry it wrote.
   performedByRole: string,
-) {
-  if (isActive === previousStatus) return
-  const cascadeResult = await cascadeOrgStatusChange(inventoryId, isActive, userId, performedByRole)
-  await db.insert(auditLogs).values({
+): Promise<boolean> {
+  if (isActive === previousStatus) return false
+  const cascadeResult = await cascadeOrgStatusChange(inventoryId, isActive, userId, performedByRole, tx)
+  await tx.insert(auditLogs).values({
     userId,
     action: "CASCADE_UPDATE",
     entity: "OrganizationInventory",
@@ -131,8 +140,7 @@ async function cascadeOrganizationInventoryStatus(
       performedByRole,
     },
   })
-  await invalidateByPrefix('org-inv')
-  await invalidateByPrefix('branch-inv')
+  return true
 }
 
 // GET /api/v1/head-office/organization-inventory - List products in organization inventory
@@ -324,42 +332,50 @@ export async function PUT(req: NextRequest) {
 
     const updateData = buildOrganizationInventoryUpdate(body, validated)
 
-    const [updatedInventory] = await db.update(organizationInventory)
-      .set(updateData)
-      .where(
-        and(
-          eq(organizationInventory.id, inventoryId),
-          eq(organizationInventory.organizationId, Number.parseInt(organizationId))
+    // One transaction: the organization row, the branch cascade and the audit
+    // entries commit together, so a failure part-way cannot leave a product
+    // switched off at the organization and still on sale at its branches.
+    const { updatedInventory, statusChanged } = await db.transaction(async (tx) => {
+      const [updated] = await tx.update(organizationInventory)
+        .set(updateData)
+        .where(
+          and(
+            eq(organizationInventory.id, inventoryId),
+            eq(organizationInventory.organizationId, Number.parseInt(organizationId))
+          )
         )
-      )
-      .returning()
+        .returning()
 
-    // If isActive status changed, cascade to branches
-    if (isActive !== undefined) {
-      await cascadeOrganizationInventoryStatus(
+      // If isActive status changed, cascade to branches
+      const changed = isActive !== undefined && await cascadeOrganizationInventoryStatus(
+        tx,
         inventoryId,
         isActive,
         existingItem.isActive,
         (session.user as any).id,
         userRole,
       )
-    }
 
-    // Log the update
-    await db.insert(auditLogs).values({
-      userId: (session.user as any).id,
-      action: "UPDATE",
-      entity: "OrganizationInventory",
-      entityId: id.toString(),
-      metadata: {
-        organizationId,
-        updateData,
-        level: "head_office"
-      },
+      // Log the update
+      await tx.insert(auditLogs).values({
+        userId: (session.user as any).id,
+        action: "UPDATE",
+        entity: "OrganizationInventory",
+        entityId: id.toString(),
+        metadata: {
+          organizationId,
+          updateData,
+          level: "head_office"
+        },
+      })
+
+      return { updatedInventory: updated, statusChanged: changed }
     })
 
-    // Invalidate organization inventory cache for any update
+    // Invalidate organization inventory cache for any update, and the shop's
+    // listing when the product was switched on or off.
     await invalidateByPrefix('org-inv')
+    if (statusChanged) await invalidateByPrefix('branch-inv')
 
     return NextResponse.json({
       message: "Inventory updated successfully",

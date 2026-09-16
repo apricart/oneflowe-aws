@@ -132,6 +132,9 @@ describe("session policy proxy enforcement", () => {
     ["GROUP_USER", "/orders/42", null],
     ["GROUP_USER", "/reports", null],
     ["GROUP_USER", "/reports/order-report", null],
+    ["GROUP_USER", "/reports/graphical", null],
+    // Money budgets for its assigned branches; the quantity ledger stays closed.
+    ["GROUP_USER", "/budgets", null],
     ["GROUP_USER", "/settings", null],
     // Everything else in the shell stays closed to it, and its home is now the
     // dashboard rather than the queue.
@@ -141,7 +144,6 @@ describe("session policy proxy enforcement", () => {
     ["GROUP_USER", "/branches", "/dashboard"],
     ["GROUP_USER", "/inventory", "/dashboard"],
     ["GROUP_USER", "/branch-inventory", "/dashboard"],
-    ["GROUP_USER", "/budgets", "/dashboard"],
     ["GROUP_USER", "/budget-by-quantity", "/dashboard"],
     ["GROUP_USER", "/groups", "/dashboard"],
     ["GROUP_USER", "/refunds", "/dashboard"],
@@ -199,10 +201,82 @@ describe("session policy proxy enforcement", () => {
     },
   )
 
-  it("leaves API authorization to getServerSession while still applying no-store", async () => {
+  it("leaves API authorization to the handlers while still applying no-store", async () => {
+    // No session at all: the proxy neither redirects nor refuses an API
+    // request — the handler answers 401 itself.
+    mocks.getToken.mockResolvedValue(null)
+
     const response = await proxy(request("/api/v1/orders"))
 
-    expect(mocks.getToken).not.toHaveBeenCalled()
+    expect(response.status).toBe(200)
+    expect(response.headers.get("x-middleware-next")).toBe("1")
     expect(response.headers.get("cache-control")).toContain("no-store")
+  })
+})
+
+describe("API requests from a session that still owes a password change", () => {
+  beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW)
+    mocks.getToken.mockReset()
+    mocks.logger.mockReset()
+  })
+
+  afterEach(() => vi.restoreAllMocks())
+
+  const flagged = () => ({ ...validToken("ORDER_PORTAL"), mustChangePassword: true })
+
+  it.each([
+    "/api/v1/orders",
+    "/api/v1/orders/42/approve",
+    "/api/v1/users/me",
+    "/api/v1/budgets",
+    "/api/v1/users/me/change-password/extra",
+  ])("refuses %s with 403 and a stable code", async (path) => {
+    mocks.getToken.mockResolvedValue(flagged())
+
+    const response = await proxy(request(path))
+
+    expect(response.status).toBe(403)
+    await expect(response.json()).resolves.toEqual({
+      error: "Password change required",
+      code: "PASSWORD_CHANGE_REQUIRED",
+    })
+    expect(response.headers.get("cache-control")).toContain("no-store")
+    expect(mocks.logger).toHaveBeenCalledWith("middleware", {
+      reason: "password_change_required",
+      path,
+    })
+  })
+
+  it.each([
+    "/api/v1/users/me/change-password",
+    "/api/v1/users/me/email-verification/send",
+    "/api/v1/users/me/email-verification/verify",
+    "/api/v1/users/me/email-verification/verify/",
+  ])("lets %s through so the change can complete", async (path) => {
+    mocks.getToken.mockResolvedValue(flagged())
+
+    const response = await proxy(request(path))
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get("x-middleware-next")).toBe("1")
+  })
+
+  it("does not touch a session that has already changed its password", async () => {
+    mocks.getToken.mockResolvedValue({ ...validToken("ORDER_PORTAL"), mustChangePassword: false })
+
+    const response = await proxy(request("/api/v1/orders"))
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get("x-middleware-next")).toBe("1")
+  })
+
+  it("still sends the same session to /change-password for pages", async () => {
+    mocks.getToken.mockResolvedValue(flagged())
+
+    const response = await proxy(request("/shop"))
+
+    expect(response.status).toBe(307)
+    expect(response.headers.get("location")).toBe("https://app.test/change-password")
   })
 })

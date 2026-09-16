@@ -72,12 +72,16 @@ describe.skipIf(!hasTestDatabase)("Compare Side by Side — executive analytics 
   let headOffice: Actor
   let neighbourHeadOffice: Actor
   let superAdmin: Actor
+  let southApprover: Actor
+  let idleApprover: Actor
 
   beforeAll(async () => {
     f = await createExecutiveAnalyticsFixtures()
     headOffice = { id: f.headOfficeId, role: "HEAD_OFFICE" }
     neighbourHeadOffice = { id: f.neighbourHeadOfficeId, role: "HEAD_OFFICE" }
     superAdmin = { id: f.superAdminId, role: "SUPER_ADMIN" }
+    southApprover = { id: f.southApproverId, role: "GROUP_USER" }
+    idleApprover = { id: f.idleApproverId, role: "GROUP_USER" }
   })
 
   beforeEach(() => {
@@ -129,6 +133,19 @@ describe.skipIf(!hasTestDatabase)("Compare Side by Side — executive analytics 
       expect((await run()).status).toBe(200)
       signIn(superAdmin)
       expect((await run()).status).toBe(200)
+    })
+
+    it.each(everyRoute)("%s refuses a group requester whose session claims GROUP_USER", async (_name, run) => {
+      signIn({ id: f.groupRequesterId, role: "GROUP_USER" })
+      expect((await run()).status).toBe(403)
+    })
+
+    it.each(everyRoute)("%s refuses a GROUP_USER with no assignments rather than showing it the tenant", async (_name, run) => {
+      signIn(idleApprover)
+      const { status, body } = await run()
+      expect(status).toBe(403)
+      expect(body.error).toBe("No branches in scope")
+      expect(body.rows ?? body.options ?? body.kpis).toBeUndefined()
     })
 
     it("keeps the organization comparison to SUPER_ADMIN, on the server", async () => {
@@ -204,6 +221,108 @@ describe.skipIf(!hasTestDatabase)("Compare Side by Side — executive analytics 
       expect(ranked(narrowed.body)).toEqual([[f.names.foreign, 7000]])
       const tenants = await compare({ dimension: "organization", metric: "spend", keys: `${f.organizationId},${f.neighbourOrganizationId}` })
       expect(ranked(tenants.body)).toEqual([[`IT Exec Org ${f.suffix}`, 31500], [`IT Exec Neighbour ${f.suffix}`, 7000]])
+    })
+  })
+
+  // ── The multi-branch approver ──────────────────────────────────────────
+
+  describe("a Group User sees its assigned branches and nothing else", () => {
+    beforeEach(() => signIn(southApprover))
+
+    it("answers every route, fenced to the one assigned branch", async () => {
+      const { status, body } = await overview({})
+      expect(status).toBe(200)
+      expect(body.scope.role).toBe("GROUP_USER")
+      expect(body.scope.organizationIds).toEqual([f.organizationId])
+      expect(body.scope.branchCount).toBe(1)
+      expect(body.scope.branches).toEqual([{ id: f.southBranchId, name: f.names.south }])
+      expect(body.kpis.spendCents).toBe(16500)
+      expect(body.kpis.orderCount).toBe(3)
+      // The Unit list is built from South's lines alone — nothing of Foreign's.
+      expect(body.quantityUnit.available).toEqual(["Box", "Litre", "Piece", "Ream"])
+      expect(body.branches.map((row: any) => row.branchName)).toEqual([f.names.south])
+    })
+
+    it("ranks South alone, and the people, months and products behind South alone", async () => {
+      const byBranch = await compare({ dimension: "branch", metric: "spend" })
+      expect(ranked(byBranch.body)).toEqual([[f.names.south, 16500]])
+
+      const byRequester = await compare({ dimension: "user", metric: "spend" })
+      expect(ranked(byRequester.body)).toEqual([[f.names.sana, 8500], [f.names.group, 8000]])
+      expect(keysOf(byRequester.body)).not.toContain(f.ahmedId)
+
+      const byMonth = await compare({ dimension: "month", metric: "spend", chart: "column" })
+      expect(ranked(byMonth.body)).toEqual([["2026-06", 7000], ["2026-07", 8000], ["2026-08", 1500]])
+
+      const byProduct = await compare({ dimension: "product", metric: "spend" })
+      expect(ranked(byProduct.body)).toEqual([[f.names.paper, 8500], [f.names.diesel, 5000], [f.names.toner, 3000]])
+    })
+
+    it("narrows a branch it is not assigned to — in its own tenant or another — to nothing", async () => {
+      for (const branchId of [f.northBranchId, f.foreignBranchId]) {
+        expect((await compare({ dimension: "branch", metric: "spend", branchIds: branchId })).status).toBe(403)
+        expect((await compare({ dimension: "branch", metric: "spend", keys: branchId })).status).toBe(403)
+        expect((await drillDown({ dimension: "branch", key: String(branchId), metric: "spend" })).status).toBe(403)
+        expect((await overview({ branchIds: branchId })).status).toBe(403)
+      }
+      // Naming the assigned branch alongside an unassigned one keeps only the
+      // assigned one, rather than either failing or widening.
+      const mixed = await compare({ dimension: "branch", metric: "spend", branchIds: `${f.southBranchId},${f.northBranchId}` })
+      expect(ranked(mixed.body)).toEqual([[f.names.south, 16500]])
+    })
+
+    it("ignores an organizationIds pointing anywhere, its own tenant included", async () => {
+      const foreign = await compare({ dimension: "branch", metric: "spend", organizationIds: f.neighbourOrganizationId })
+      expect(ranked(foreign.body)).toEqual([[f.names.south, 16500]])
+      const own = await compare({ dimension: "branch", metric: "spend", organizationIds: f.organizationId })
+      expect(ranked(own.body)).toEqual([[f.names.south, 16500]])
+    })
+
+    it("matches nothing for an unassigned branch's person named directly", async () => {
+      const ahmed = await compare({ dimension: "user", metric: "spend", keys: f.ahmedId })
+      expect(ahmed.body.rows).toEqual([])
+      const lines = await drillDown({ dimension: "user", key: f.ahmedId, metric: "spend" })
+      expect(lines.body.rows).toEqual([])
+      expect(lines.body.totals.lineCount).toBe(0)
+    })
+
+    it("offers only South's branch, people and products in every picker", async () => {
+      const branches = await options({ dimension: "branch" })
+      expect(branches.body.options.map((o: any) => o.key)).toEqual([String(f.southBranchId)])
+
+      const people = await options({ dimension: "user" })
+      expect(people.body.options.map((o: any) => o.key).sort()).toEqual([f.groupRequesterId, f.sanaId].sort())
+
+      const products = await options({ dimension: "product" })
+      expect(products.body.options.map((o: any) => o.key)).not.toContain(String(f.foreignProductId))
+      expect(products.body.options.map((o: any) => o.label).sort()).toEqual([f.names.diesel, f.names.paper, f.names.toner].sort())
+
+      // The menu of dimensions is Head Office's: no tenant comparison.
+      const menu = await options({})
+      expect(menu.body.role).toBe("GROUP_USER")
+      expect(menu.body.dimensions.map((d: any) => d.id)).not.toContain("organization")
+    })
+
+    it("keeps the organization comparison closed on the server", async () => {
+      expect((await compare({ dimension: "organization", metric: "spend" })).status).toBe(403)
+      expect((await options({ dimension: "organization" })).status).toBe(403)
+      expect((await drillDown({ dimension: "organization", key: String(f.organizationId), metric: "spend" })).status).toBe(403)
+    })
+
+    it("lists the lines behind its own bar and reconciles with it", async () => {
+      const { body } = await drillDown({ dimension: "branch", key: String(f.southBranchId), metric: "spend" })
+      expect(body.totals).toMatchObject({ orderCount: 3, lineCount: 5, valueCents: 16500 })
+      for (const row of body.rows) expect(row.branchName).toBe(f.names.south)
+      expect(body.rows.map((row: any) => row.status)).not.toContain("CANCELLED")
+      // Prices are not redacted for this role: it approves orders at these prices.
+      for (const row of body.rows) expect(row.unitPriceCents).toBeGreaterThan(0)
+    })
+
+    it("rolls the group view up over its own branches only", async () => {
+      // No group in this tenant, so the assigned set is one ungrouped row — of
+      // South's money, not the tenant's 31500.
+      const { body } = await compare({ dimension: "group", metric: "spend" })
+      expect(ranked(body)).toEqual([["No group", 16500]])
     })
   })
 

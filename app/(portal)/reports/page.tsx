@@ -87,12 +87,13 @@ const reportCards = [
 ]
 
 /**
- * The Executive Analytics Center, offered only to the two roles whose scope
- * spans more than one branch.
+ * The Executive Analytics Center, offered only to the roles whose scope spans
+ * more than one branch: the platform role, Head Office, and the multi-branch
+ * approver.
  *
  * Kept out of `reportCards` for the same reason as the approver's card: no role
  * should be shown a destination its own routing and endpoints refuse. The page
- * and both of its endpoints enforce the same pair of roles on the server, so
+ * and every endpoint behind it enforce the same role list on the server, so
  * this list decides what is offered, never what is readable.
  */
 const executiveOnlyReportCards = [
@@ -138,6 +139,7 @@ export default function ReportsPage() {
   // Matched on href rather than title: the sidebar and `proxy.ts` allow exactly
   // these destinations, so the hub must not offer a card the role cannot open.
   const groupUserReportHrefs = new Set([
+    "/reports/graphical",
     "/reports/order-report",
     "/reports/group-orders",
     "/reports/refund-report",
@@ -153,9 +155,9 @@ export default function ReportsPage() {
     : reportCards
 
   // The Analytics Center is layered on separately, the same way and for the
-  // same reason: appended for the two roles that may open it, never filtered
-  // back out of anyone else's hub.
-  const scopedReportCards = role === "SUPER_ADMIN" || role === "HEAD_OFFICE"
+  // same reason: appended for the roles that may open it, never filtered back
+  // out of anyone else's hub.
+  const scopedReportCards = role === "SUPER_ADMIN" || role === "HEAD_OFFICE" || role === "GROUP_USER"
     ? [...executiveOnlyReportCards, ...availableReportCards]
     : availableReportCards
 
