@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto"
 import { eq, inArray } from "drizzle-orm"
 
 import {
+  auditLogs,
   branches,
   budgets,
   globalProducts,
@@ -443,6 +444,9 @@ export async function destroyGroupRoleFixtures(
   ]
 
   await db.delete(systemLogs).where(inArray(systemLogs.organizationId, organizationIds))
+  // A budget allocation writes an audit row naming the acting user; it must go
+  // before the user does.
+  await db.delete(auditLogs).where(inArray(auditLogs.organizationId, organizationIds))
   await db.delete(orderItems).where(inArray(orderItems.orderId, orderIds))
   await db.delete(orders).where(inArray(orders.id, orderIds))
   await db.delete(groupOrders).where(inArray(groupOrders.id, envelopeIds))

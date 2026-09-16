@@ -407,6 +407,13 @@
       "when": 1789300800000,
       "tag": "20260909120000_add_support_thread_product",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1789905600000,
+      "tag": "20260916120000_add_email_verification_and_password_changed",
+      "breakpoints": true
     }
   ]
 }

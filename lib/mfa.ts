@@ -12,8 +12,19 @@ import { RedisMFA, type RedisOTPData } from "@/lib/redis"
 import { logError } from "@/lib/global-logger"
 import { isValidEmailAddress } from "@/lib/validation/email"
 
-type MFACodeType = 'LOGIN' | 'VERIFY_EMAIL' | 'RESET_PASSWORD'
+export type MFACodeType = 'LOGIN' | 'VERIFY_EMAIL' | 'RESET_PASSWORD'
 type MFACooldownType = 'OTP_REQUEST' | 'OTP_VERIFY'
+
+/**
+ * Which account a code is for, printed in the email. A mirrored K-Electric
+ * person holds two accounts behind one address (`-ba` to approve, `-op` to
+ * order) and each gets its own code, so the mail has to say which one it
+ * opens or the person will try the wrong code on the wrong account.
+ */
+export interface OTPAccountContext {
+  username: string | null
+  accountLabel: string
+}
 
 export interface MFACode {
   id: string
@@ -44,11 +55,18 @@ export interface MFACooldown {
 // OTP Configuration
 const OTP_CONFIG = {
   LENGTH: 6,
-  EXPIRY_MINUTES: 2,
+  // A login code is typed straight back; a verification code is read from a
+  // corporate mailbox, often on another device, and two minutes is not enough
+  // for that round trip.
+  EXPIRY_MINUTES: { LOGIN: 2, VERIFY_EMAIL: 10, RESET_PASSWORD: 10 } as Record<MFACodeType, number>,
   MAX_ATTEMPTS: 5,
   COOLDOWN_MINUTES: 1,
   MAX_DAILY_REQUESTS: 20
 } as const
+
+export function otpExpiryMinutes(type: MFACodeType): number {
+  return OTP_CONFIG.EXPIRY_MINUTES[type]
+}
 
 /**
  * Validate email format
@@ -87,7 +105,12 @@ export function generateOTP(): string {
 /**
  * Send OTP via email
  */
-export async function sendOTPEmail(email: string, code: string, type: string): Promise<boolean> {
+export async function sendOTPEmail(
+  email: string,
+  code: string,
+  type: string,
+  account?: OTPAccountContext,
+): Promise<boolean> {
   try {
     // Validate inputs
     if (!isValidEmail(email)) {
@@ -107,7 +130,10 @@ export async function sendOTPEmail(email: string, code: string, type: string): P
 
     // Use the email service to send the OTP
     const { sendOTPEmail: sendEmail } = await import('@/lib/email')
-    return await sendEmail(email, code, type as MFACodeType)
+    return await sendEmail(email, code, type, {
+      validForMinutes: otpExpiryMinutes(type),
+      account: account ?? null,
+    })
 
   } catch (error) {
     logError(error, 'MFA_SEND_EMAIL', { email, type })
@@ -224,7 +250,8 @@ function validateOtpRequest(userId: string, email: string, type: MFACodeType): M
 export async function generateAndSendOTP(
   userId: string,
   email: string,
-  type: MFACodeType
+  type: MFACodeType,
+  account?: OTPAccountContext,
 ): Promise<MFAResult> {
   try {
     const validationError = validateOtpRequest(userId, email, type)
@@ -260,7 +287,7 @@ export async function generateAndSendOTP(
 
     // Generate OTP
     const code = generateOTP()
-    const ttlSeconds = OTP_CONFIG.EXPIRY_MINUTES * 60
+    const ttlSeconds = otpExpiryMinutes(type) * 60
     const expiresAt = new Date(Date.now() + ttlSeconds * 1000)
 
     // Keep exactly one active OTP per user and MFA type.
@@ -302,7 +329,7 @@ export async function generateAndSendOTP(
     }
 
     // Send OTP via email
-    const emailSent = await sendOTPEmail(email, code, type)
+    const emailSent = await sendOTPEmail(email, code, type, account)
 
     if (!emailSent) {
       return {
@@ -321,7 +348,7 @@ export async function generateAndSendOTP(
 
     return {
       success: true,
-      message: `OTP sent to ${email}. Valid for ${OTP_CONFIG.EXPIRY_MINUTES} minutes.`
+      message: `OTP sent to ${email}. Valid for ${otpExpiryMinutes(type)} minutes.`
     }
 
   } catch (error) {

@@ -56,7 +56,7 @@ beforeEach(() => {
 })
 
 describe("who gets the page", () => {
-  it.each(["BRANCH_ADMIN", "ORDER_PORTAL", "GROUP_ORDER_PORTAL", "GROUP_USER"])(
+  it.each(["BRANCH_ADMIN", "ORDER_PORTAL", "GROUP_ORDER_PORTAL"])(
     "tells %s the report is not available for their role, and fetches nothing",
     (role) => {
       signIn(role)
@@ -68,7 +68,9 @@ describe("who gets the page", () => {
     },
   )
 
-  it.each(["SUPER_ADMIN", "HEAD_OFFICE", "head_office"])("gives %s the three levels", (role) => {
+  // The multi-branch approver reads the same three levels over the branches
+  // its assignments reach; the endpoints behind them fence every figure.
+  it.each(["SUPER_ADMIN", "HEAD_OFFICE", "head_office", "GROUP_USER"])("gives %s the three levels", (role) => {
     signIn(role)
     render(<GraphicalReportsPage />)
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([

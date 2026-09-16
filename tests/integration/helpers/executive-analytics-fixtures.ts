@@ -12,6 +12,7 @@ import {
   refundItems,
   refunds,
   roles,
+  userBranchAssignments,
   users,
 } from "@/db/schema"
 import { db } from "@/lib/db"
@@ -34,6 +35,10 @@ export { NO_DATABASE_REASON, hasTestDatabase } from "./pricing-fixtures"
  *             Group requester (GROUP_ORDER_PORTAL,
  *                              orders at both branches)
  *             Head Office A, Branch Admin A
+ *             South approver (GROUP_USER, assigned
+ *                             to South only — plus a
+ *                             stale row naming Foreign)
+ *             Idle approver (GROUP_USER, no assignments)
  *   Super Admin (no tenant)
  *   categories: Stationery ─ Paper (subcategory), Fuel
  *   products:   Paper  (Stationery/Paper)   sold per Ream and per Box
@@ -66,6 +71,12 @@ export { NO_DATABASE_REASON, hasTestDatabase } from "./pricing-fixtures"
  *     unit Ream: 21 (North 14, South 7) · unit Box: 2
  *   Quantity, Diesel in focus: only Litre → resolves itself: North 20, South 50
  *
+ *   The South approver (GROUP_USER assigned to South) sees O2, O4 and O8 only:
+ *     total 16500 · Sana 8500 · Group 8000
+ *     2026-06 7000 · 2026-07 8000 · 2026-08 1500
+ *     by product (line-by-line): Paper 8500 · Diesel 5000 · Toner 3000
+ *     North, Ahmed, and everything of tenant B's are outside its reach.
+ *
  * Every row carries a unique suffix; `destroyExecutiveAnalyticsFixtures`
  * removes them children-first.
  */
@@ -86,6 +97,8 @@ export type ExecutiveAnalyticsFixtures = {
   ahmedId: string
   sanaId: string
   groupRequesterId: string
+  southApproverId: string
+  idleApproverId: string
   foreignUserId: string
   stationeryCategoryId: number
   paperCategoryId: number
@@ -136,6 +149,7 @@ export async function createExecutiveAnalyticsFixtures(): Promise<ExecutiveAnaly
     branchAdmin: await resolveRoleId("BRANCH_ADMIN"),
     orderPortal: await resolveRoleId("ORDER_PORTAL"),
     groupOrderPortal: await resolveRoleId("GROUP_ORDER_PORTAL"),
+    groupUser: await resolveRoleId("GROUP_USER"),
   }
 
   const [organization] = await db
@@ -200,7 +214,17 @@ export async function createExecutiveAnalyticsFixtures(): Promise<ExecutiveAnaly
   const ahmedId = await person("ahmed", role.orderPortal, organization.id, north.id, names.ahmed)
   const sanaId = await person("sana", role.orderPortal, organization.id, south.id, names.sana)
   const groupRequesterId = await person("group", role.groupOrderPortal, organization.id, null, names.group)
+  const southApproverId = await person("approver", role.groupUser, organization.id, null, `South Approver ${suffix}`)
+  const idleApproverId = await person("idle", role.groupUser, organization.id, null, `Idle Approver ${suffix}`)
   const foreignUserId = await person("foreign", role.orderPortal, neighbour.id, foreign.id, `Foreign User ${suffix}`)
+
+  // The approver reaches South and nothing else. The second row is a stale or
+  // inconsistent assignment naming the neighbour's branch under tenant A's id;
+  // every read must re-assert the tenant and drop it rather than reach Foreign.
+  await db.insert(userBranchAssignments).values([
+    { userId: southApproverId, branchId: south.id, organizationId: organization.id, createdByUserId: headOfficeId },
+    { userId: southApproverId, branchId: foreign.id, organizationId: organization.id, createdByUserId: headOfficeId },
+  ])
 
   const [stationery] = await db
     .insert(categories)
@@ -332,6 +356,8 @@ export async function createExecutiveAnalyticsFixtures(): Promise<ExecutiveAnaly
     ahmedId,
     sanaId,
     groupRequesterId,
+    southApproverId,
+    idleApproverId,
     foreignUserId,
     stationeryCategoryId: stationery.id,
     paperCategoryId: paperCategory.id,
@@ -356,6 +382,7 @@ export async function destroyExecutiveAnalyticsFixtures(fixtures: ExecutiveAnaly
   await db.delete(refunds).where(eq(refunds.id, fixtures.refundId))
   await db.delete(orderItems).where(inArray(orderItems.orderId, orderIds))
   await db.delete(orders).where(inArray(orders.id, orderIds))
+  await db.delete(userBranchAssignments).where(eq(userBranchAssignments.userId, fixtures.southApproverId))
   await db.delete(users).where(inArray(users.id, [
     fixtures.superAdminId,
     fixtures.headOfficeId,
@@ -364,6 +391,8 @@ export async function destroyExecutiveAnalyticsFixtures(fixtures: ExecutiveAnaly
     fixtures.ahmedId,
     fixtures.sanaId,
     fixtures.groupRequesterId,
+    fixtures.southApproverId,
+    fixtures.idleApproverId,
     fixtures.foreignUserId,
   ]))
   await db.delete(branches).where(inArray(branches.id, [

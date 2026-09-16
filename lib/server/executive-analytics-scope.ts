@@ -4,13 +4,15 @@ import { and, eq, inArray } from "drizzle-orm"
 
 import { branches, roles, users } from "@/db/schema"
 import { db } from "@/lib/db"
-import { isExecutiveAnalyticsRole } from "@/lib/executive-analytics"
+import { isExecutiveAnalyticsRole, type ExecutiveAnalyticsRole } from "@/lib/executive-analytics"
 import {
+  isMultiBranchAnalyticsRole,
   normalizePositiveIds,
   parseRequestedOrganizationIds,
   resolveAnalyticsBranchIds,
   resolveAnalyticsOrganizationIds,
 } from "@/lib/server/analytics-scope"
+import { resolveScopedBranchIds } from "@/lib/server/multi-branch-scope"
 import { scopedCacheKey } from "@/lib/cache-utils"
 
 /**
@@ -35,10 +37,19 @@ import { scopedCacheKey } from "@/lib/cache-utils"
  *                 re-read from `branches` for that tenant — so a branch id from
  *                 another tenant intersects to nothing rather than to itself.
  *
- *   everything else is refused before a single query runs. A branch-scoped or
- *                 group-scoped role has no Executive Analytics surface at all;
- *                 there is no "hidden chart" path where the data is fetched and
- *                 then dropped in the browser.
+ *   GROUP_USER    is pinned to its tenant the same way, but its branch set is
+ *                 not the tenant's: it is the live union of its assigned
+ *                 groups' member branches and its individually assigned
+ *                 branches (`resolveScopedBranchIds`), intersected with the
+ *                 tenant's list so a stale assignment on another tenant's
+ *                 branch contributes nothing. A requested `branchIds` narrows
+ *                 within that set. No assignments means no branches, and no
+ *                 branches is a refusal — never the tenant.
+ *
+ *   everything else is refused before a single query runs. A single-branch
+ *                 role and the ordering group role have no Executive Analytics
+ *                 surface at all; there is no "hidden chart" path where the
+ *                 data is fetched and then dropped in the browser.
  *
  * An empty resolved branch set is a deny, never "everything": callers must
  * return the empty payload rather than fall through to an unfiltered query.
@@ -48,17 +59,21 @@ export type ExecutiveScopeDenial = { ok: false; error: string; status: number }
 
 export type ExecutiveScope = {
   ok: true
-  role: "SUPER_ADMIN" | "HEAD_OFFICE"
+  role: ExecutiveAnalyticsRole
   userId: string
   /** Empty only for a SUPER_ADMIN that selected no tenant. */
   organizationIds: number[]
   /**
    * The branches every query is fenced to. `null` only for a SUPER_ADMIN with
    * no tenant and no branch selection, where "all branches" is the correct and
-   * authorized answer. Never null for HEAD_OFFICE.
+   * authorized answer. Never null for HEAD_OFFICE or GROUP_USER.
    */
   branchIds: number[] | null
-  /** The tenant's full branch list, for filter UI and share-of-total maths. */
+  /**
+   * Every branch the caller may name, before any request-side narrowing: the
+   * tenant's full list for the tenant-wide roles, the assigned set for the
+   * multi-branch approver. For filter UI and share-of-total maths.
+   */
   allowedBranchIds: number[]
 }
 
@@ -127,13 +142,26 @@ export async function resolveExecutiveScope(
     requestedOrganizationIds,
   })
 
-  if (caller.role === "HEAD_OFFICE" && organizationIds.length === 0) {
-    // A head-office user with no tenant on its row has no data to see, and
+  if (caller.role !== "SUPER_ADMIN" && organizationIds.length === 0) {
+    // A tenant-pinned user with no tenant on its row has no data to see, and
     // must not fall through to the unrestricted branch list.
     return { ok: false, error: "Organization context missing", status: 403 }
   }
 
-  const allowedBranchIds = await loadTenantBranchIds(organizationIds)
+  const tenantBranchIds = await loadTenantBranchIds(organizationIds)
+
+  // The approver's reach is its assignment rows, read on the server and never
+  // from the request. `null` for every other role, so their path below keeps
+  // its shape; an empty array is a deny and resolves to nothing further down.
+  const assignedBranchIds = isMultiBranchAnalyticsRole(caller.role)
+    ? await resolveScopedBranchIds(db, userId)
+    : null
+
+  // What the caller may name at all: the tenant for the tenant-wide roles, the
+  // assignments — re-checked against the tenant — for the approver.
+  const allowedBranchIds = assignedBranchIds === null
+    ? tenantBranchIds
+    : assignedBranchIds.filter((branchId) => tenantBranchIds.includes(branchId))
 
   const requestedBranchIds = normalizePositiveIds(
     (searchParams.get("branchIds") || "").split(",").filter(Boolean),
@@ -154,13 +182,15 @@ export async function resolveExecutiveScope(
     }
   }
 
-  // Requested branches are intersected with the tenant's own list, so an id
-  // belonging to another organization simply drops out.
+  // Requested branches are intersected with the tenant's own list — and, for
+  // the approver, with its assignments — so an id belonging to another
+  // organization or to an unassigned branch simply drops out.
   const branchIds = resolveAnalyticsBranchIds({
     role: caller.role,
     userBranchId: caller.branchId,
     requestedBranchIds,
-    allowedBranchIds,
+    allowedBranchIds: tenantBranchIds,
+    assignedBranchIds,
   })
 
   if (branchIds.length === 0) {

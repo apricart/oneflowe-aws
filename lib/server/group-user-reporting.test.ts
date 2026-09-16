@@ -179,6 +179,9 @@ describe("group user reporting endpoints", () => {
     expect(groupUserNav).toContain('href: "/approvals"')
     expect(groupUserNav).toContain('href: "/reports/order-report"')
     expect(groupUserNav).toContain('href: "/settings"')
+    // Money budgets for its assigned branches; the endpoint behind the page
+    // fences the approver to that set (`lib/money-budget-access.ts`).
+    expect(groupUserNav).toContain('href: "/budgets"')
     // The dashboard and order directory are shared pages scoped to the
     // approver's assigned branches on the server, so they are offered here.
     expect(groupUserNav).toContain("...baseNav")
@@ -190,7 +193,7 @@ describe("group user reporting endpoints", () => {
       '"/branches"',
       '"/inventory"',
       '"/branch-inventory"',
-      '"/budgets"',
+      '"/budget-by-quantity"',
       '"/groups"',
       '"/refunds"',
     ]) {

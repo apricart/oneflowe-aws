@@ -12,18 +12,44 @@ const sanitizeEmailTagValue = (value: string) =>
   value.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 256) || "unknown"
 
 /**
+ * What the OTP mail says beyond the code: how long it lives, and which
+ * account it opens. The account line matters where one mailbox serves several
+ * accounts (every mirrored K-Electric person has a `-ba` and a `-op` account
+ * behind one address) — without it the person cannot tell two codes apart.
+ */
+export interface OTPEmailDetails {
+  validForMinutes: number
+  account: { username: string | null; accountLabel: string } | null
+}
+
+const DEFAULT_OTP_DETAILS: OTPEmailDetails = { validForMinutes: 2, account: null }
+
+function otpTypeText(type: string): string {
+  if (type === 'LOGIN') return 'Login'
+  if (type === 'VERIFY_EMAIL') return 'Email Verification'
+  return 'Password Reset'
+}
+
+function otpAccountSentence(account: OTPEmailDetails["account"]): string | null {
+  if (!account) return null
+  const who = account.username
+    ? `${account.accountLabel} account (username ${account.username})`
+    : `${account.accountLabel} account`
+  return `This code is for your ${who}. It will not work for any other account that uses this email address.`
+}
+
+/**
  * Generate HTML email template for OTP
  */
-function generateOTPEmailHTML(code: string, type: string): string {
-  const typeText = (() => {
-    if (type === 'LOGIN') {
-      return 'Login'
-    }
-    if (type === 'VERIFY_EMAIL') {
-      return 'Email Verification'
-    }
-    return 'Password Reset'
-  })()
+function generateOTPEmailHTML(code: string, type: string, details: OTPEmailDetails): string {
+  const typeText = otpTypeText(type)
+  const accountSentence = otpAccountSentence(details.account)
+  const accountBlock = accountSentence
+    ? `
+                  <p style="margin: 0 0 20px 0; padding: 12px 16px; background-color: #fff7ed; border-left: 4px solid #f59e0b; color: #7c2d12; font-size: 15px; line-height: 1.5;">
+                    ${escapeHtml(accountSentence)}
+                  </p>`
+    : ""
 
   return `
     <!DOCTYPE html>
@@ -52,9 +78,9 @@ function generateOTPEmailHTML(code: string, type: string): string {
                   <p style="margin: 0 0 20px 0; color: #333333; font-size: 16px; line-height: 1.5;">
                     Hello,
                   </p>
-                  <p style="margin: 0 0 30px 0; color: #333333; font-size: 16px; line-height: 1.5;">
+                  <p style="margin: 0 0 20px 0; color: #333333; font-size: 16px; line-height: 1.5;">
                     We received a request for ${typeText.toLowerCase()}. Please use the following one-time password (OTP) to complete your verification:
-                  </p>
+                  </p>${accountBlock}
                   
                   <!-- OTP Code -->
                   <table role="presentation" style="width: 100%; border-collapse: collapse; margin: 30px 0;">
@@ -68,7 +94,7 @@ function generateOTPEmailHTML(code: string, type: string): string {
                   </table>
                   
                   <p style="margin: 30px 0 20px 0; color: #333333; font-size: 16px; line-height: 1.5;">
-                    This code will expire in <strong>2 minutes</strong>.
+                    This code will expire in <strong>${details.validForMinutes} minutes</strong>.
                   </p>
                   
                   <p style="margin: 0 0 10px 0; color: #666666; font-size: 14px; line-height: 1.5;">
@@ -100,16 +126,10 @@ function generateOTPEmailHTML(code: string, type: string): string {
 /**
  * Generate plain text email for OTP (fallback)
  */
-function generateOTPEmailText(code: string, type: string): string {
-  const typeText = (() => {
-    if (type === 'LOGIN') {
-      return 'Login'
-    }
-    if (type === 'VERIFY_EMAIL') {
-      return 'Email Verification'
-    }
-    return 'Password Reset'
-  })()
+function generateOTPEmailText(code: string, type: string, details: OTPEmailDetails): string {
+  const typeText = otpTypeText(type)
+  const accountSentence = otpAccountSentence(details.account)
+  const accountBlock = accountSentence ? `${accountSentence}\n\n` : ""
 
   return `
 OneFlowe - ${typeText} Verification
@@ -118,9 +138,9 @@ Hello,
 
 We received a request for ${typeText.toLowerCase()}. Please use the following one-time password (OTP) to complete your verification:
 
-OTP Code: ${code}
+${accountBlock}OTP Code: ${code}
 
-This code will expire in 2 minutes.
+This code will expire in ${details.validForMinutes} minutes.
 
 If you didn't request this code, please ignore this email or contact support if you have concerns.
 
@@ -136,7 +156,8 @@ This is an automated message, please do not reply.
 export async function sendOTPEmail(
   to: string,
   code: string,
-  type: 'LOGIN' | 'VERIFY_EMAIL' | 'RESET_PASSWORD'
+  type: 'LOGIN' | 'VERIFY_EMAIL' | 'RESET_PASSWORD',
+  details: OTPEmailDetails = DEFAULT_OTP_DETAILS,
 ): Promise<boolean> {
   try {
     // Validate inputs
@@ -166,8 +187,8 @@ export async function sendOTPEmail(
       fromName: "OneFlowe",
       to,
       subject,
-      text: generateOTPEmailText(code, type),
-      html: generateOTPEmailHTML(code, type),
+      text: generateOTPEmailText(code, type, details),
+      html: generateOTPEmailHTML(code, type, details),
       tags: [
         { name: "type", value: sanitizeEmailTagValue(`otp_${type.toLowerCase()}`) },
       ],

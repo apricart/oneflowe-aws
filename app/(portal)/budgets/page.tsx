@@ -18,6 +18,7 @@ import { BranchFilter } from "@/components/reports/branch-filter"
 import { GroupFilter } from "@/components/reports/group-filter"
 import { type DateRange } from "@/lib/hooks/use-sales-performance"
 import { BUDGET_ALLOCATION_MODE_SETTING_KEY,parseBudgetAllocationMode,type BudgetAllocationMode } from "@/lib/budget-allocation-mode"
+import { canManageMoneyBudgets,managesAssignedBranchesOnly } from "@/lib/money-budget-access"
 
 const fetcher = (url: string) => fetch(url).then(r => r.json())
 
@@ -87,10 +88,6 @@ const buildBudgetsEndpoint = (options: {
   return `/api/v1/budgets?${params.toString()}`
 }
 
-const isBudgetManagerRole = (role: string | undefined) => (
-  role === "HEAD_OFFICE" || role === "SUPER_ADMIN"
-)
-
 const getMoneyAllocationDisabledTitle = (mode: BudgetAllocationMode) => (
   mode === "quantity"
     ? "This organization uses quantity-based budgeting. Allocate budgets from Budget by Quantity."
@@ -110,7 +107,13 @@ export default function BudgetsPage() {
   const { toast } = useToast()
   const { mutate: globalMutate } = useSWRConfig()
   const role = (session?.user as any)?.role
-  const isHeadOffice = isBudgetManagerRole(role)
+  // Who gets the page at all. The name predates the approver joining the list;
+  // every endpoint behind the page fences the approver to its assigned
+  // branches on the server, so this decides what renders, never what is read.
+  const isHeadOffice = canManageMoneyBudgets(role)
+  // The approver may not read organization settings; its allocation mode comes
+  // from the rows instead (see `budgetAllocationMode` below).
+  const canReadOrganizationSettings = isHeadOffice && !managesAssignedBranchesOnly(role)
   const { organizationId, branchIds: contextBranchIds, setBranchIds: setContextBranchIds, isInitialized } = useAppContext()
 
   const [searchQuery, setSearchQuery] = useState("")
@@ -159,9 +162,9 @@ export default function BudgetsPage() {
   }), [isHeadOffice, isInitialized, organizationId, dateRange, activePreset, selectedMonths, selectedYears, contextBranchIds, selectedGroupIds])
 
   const settingsEndpoint = useMemo(() => {
-    if (!isHeadOffice || !isInitialized || !organizationId) return null
+    if (!canReadOrganizationSettings || !isInitialized || !organizationId) return null
     return `/api/v1/settings?organizationId=${organizationId}`
-  }, [isHeadOffice, isInitialized, organizationId])
+  }, [canReadOrganizationSettings, isInitialized, organizationId])
 
   // keepPreviousData keeps the current numbers on screen during filter changes
   const { data: budgetsData, mutate } = useSWR<any>(budgetsEndpoint, fetcher, { keepPreviousData: true })
@@ -176,8 +179,12 @@ export default function BudgetsPage() {
   }, [handleDateChange, mutate, setContextBranchIds])
 
   const budgets: BudgetAllocation[] = budgetsData?.budgets || []
+  // The organization's mode, from its settings where the caller may read them,
+  // otherwise from the rows — the server resolves each row's mode from the same
+  // setting, and a tenant-pinned caller's rows all belong to one organization.
   const budgetAllocationMode = parseBudgetAllocationMode(
     settingsData?.data?.find((setting: any) => setting.key === BUDGET_ALLOCATION_MODE_SETTING_KEY)?.value
+      ?? budgets[0]?.budgetAllocationMode
   )
   const isQuantityBudgetMode = budgetAllocationMode === "quantity"
   const moneyAllocationDisabledTitle = getMoneyAllocationDisabledTitle(budgetAllocationMode)
@@ -538,7 +545,12 @@ export default function BudgetsPage() {
               months={selectedMonths}
               years={selectedYears}
             />
-            {(role === "SUPER_ADMIN" || role === "HEAD_OFFICE") && (
+            {/*
+              Both pickers are already scoped on the server for every role
+              here: /api/v1/groups and /api/v1/branches list the approver's
+              assignments and nothing else.
+            */}
+            {isHeadOffice && (
               <div className="flex items-center gap-2 h-6 pl-3 border-l border-slate-200 dark:border-slate-800">
                 <GroupFilter 
                   selectedIds={selectedGroupIds} 
