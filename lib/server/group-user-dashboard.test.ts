@@ -25,12 +25,15 @@ describe("group user dashboard and order directory", () => {
     )
 
     expect(proxySource).toContain('const GROUP_USER_HOME = "/dashboard"')
-    for (const area of ['"/approvals"', '"/dashboard"', '"/orders"', '"/reports"', '"/settings"']) {
+    // Money budgets joined the list when the approver gained allocation over
+    // its assigned branches (`lib/money-budget-access.ts`).
+    for (const area of ['"/approvals"', '"/budgets"', '"/dashboard"', '"/orders"', '"/reports"', '"/settings"']) {
       expect(areas).toContain(area)
     }
     // The administrator areas are still absent from the allowlist, so the
-    // proxy keeps bouncing the approver home from them.
-    for (const closedArea of ['"/organizations"', '"/users"', '"/branches"', '"/inventory"', '"/budgets"', '"/groups"']) {
+    // proxy keeps bouncing the approver home from them. The quantity ledger
+    // stays with Head Office.
+    for (const closedArea of ['"/organizations"', '"/users"', '"/branches"', '"/inventory"', '"/budget-by-quantity"', '"/groups"']) {
       expect(areas).not.toContain(closedArea)
     }
     // The queue remains closed to the administrators.

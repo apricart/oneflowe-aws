@@ -15,6 +15,13 @@ import {
   parseBudgetAllocationMode,
 } from "@/lib/budget-allocation-mode"
 import { moneyBudgetUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
+import {
+  canAllocateToBranch,
+  canManageMoneyBudgets,
+  managesAssignedBranchesOnly,
+  resolveManagedBranchScope,
+} from "@/lib/money-budget-access"
+import { resolveScopedBranchIds } from "@/lib/server/multi-branch-scope"
 
 type MoneyBudgetUpdate = ReturnType<typeof moneyBudgetUpdateSchema.parse>
 
@@ -31,7 +38,50 @@ function validateMoneyBudgetUpdate(body: MoneyBudgetUpdate) {
   return null
 }
 
-const canManageMoneyBudgets = (role: string) => role === "HEAD_OFFICE" || role === "SUPER_ADMIN"
+/**
+ * The approver's allocation reach, read from its own assignment rows and
+ * never from the request. `null` for every other role, whose reach is the
+ * tenant predicate applied elsewhere in this file; an empty array for an
+ * approver with nothing assigned, which every caller must turn into a refusal.
+ */
+async function loadAssignedBranchIds(role: unknown, userId: unknown): Promise<number[] | null> {
+  if (!managesAssignedBranchesOnly(role)) return null
+  if (typeof userId !== "string" || userId.length === 0) return []
+  return resolveScopedBranchIds(db, userId)
+}
+
+/**
+ * Whether this caller may write an allocation to this branch, as the response
+ * to send when it may not. Two fences, in order: every tenant-pinned manager
+ * stays inside its own organization, and the approver additionally reaches
+ * only the branches its assignments resolve to — the same set it approves
+ * orders for, read from its own rows and never from the body.
+ */
+async function allocationAccessError({ role, userId, orgId, branch }: {
+  role: unknown
+  userId: unknown
+  orgId: unknown
+  branch: { id: number; organizationId: number | null }
+}): Promise<NextResponse | null> {
+  if (role !== "SUPER_ADMIN" && branch.organizationId !== orgId) {
+    return NextResponse.json({
+      error: "Unauthorized: Branch belongs to different organization"
+    }, { status: 403 })
+  }
+
+  const allowed = canAllocateToBranch({
+    role,
+    assignedBranchIds: await loadAssignedBranchIds(role, userId),
+    branchId: branch.id,
+  })
+  if (!allowed) {
+    return NextResponse.json({
+      error: "Unauthorized: Branch is outside your assigned scope"
+    }, { status: 403 })
+  }
+
+  return null
+}
 
 /**
  * Validate numeric ID parameter
@@ -308,8 +358,10 @@ async function loadCurrentMoneyBudgets(branchScope: any, period: string) {
 
 async function handleAllMoneyBudgets(context: any) {
   try {
-    if (context.role === "HEAD_OFFICE" && !context.organizationId) {
-      return NextResponse.json({ error: "Organization context required for HEAD_OFFICE users" }, { status: 400 })
+    // Every tenant-pinned manager needs its tenant: Head Office and the
+    // approver alike. Only the platform role may list without one.
+    if (context.role !== "SUPER_ADMIN" && !context.organizationId) {
+      return NextResponse.json({ error: `Organization context required for ${context.role} users` }, { status: 400 })
     }
     const branchScope = buildBudgetBranchScope(context.role, context.organizationId, context.groupIds, context.branchIds)
     let rows
@@ -345,6 +397,7 @@ export async function GET(req: NextRequest) {
     const normalizedRole = typeof role === "string" ? role.toUpperCase().replace(/\s+/g, "_") : role
     const sessionOrgId = (session.user as any).organizationId
     const userBranchId = (session.user as any).branchId
+    const userId = (session.user as any).id
 
     const { searchParams } = new URL(req.url)
     const allParam = searchParams.get("all")
@@ -364,6 +417,18 @@ export async function GET(req: NextRequest) {
     const orgId = resolvedOrganization.organizationId
 
     if (allParam && canManageMoneyBudgets(role)) {
+      // The approver's list is its assignments, intersected with whatever the
+      // request asked for; the tenant-wide roles keep their request as-is and
+      // are fenced by the organization predicate in `buildBudgetBranchScope`.
+      // An empty result for the approver is refused here, because that
+      // builder drops the branch predicate for an empty list.
+      const managed = resolveManagedBranchScope({
+        role,
+        assignedBranchIds: await loadAssignedBranchIds(role, userId),
+        requestedBranchIds: parseNumberList(branchIdsParam),
+      })
+      if (!managed.ok) return NextResponse.json({ error: managed.error }, { status: managed.status })
+
       return handleAllMoneyBudgets({
         role,
         organizationId: orgId,
@@ -374,7 +439,7 @@ export async function GET(req: NextRequest) {
         years: parseNumberList(yearsParam, 2000, 2100),
         preset: presetParam,
         groupIds: parseNumberList(groupIdsParam),
-        branchIds: parseNumberList(branchIdsParam),
+        branchIds: managed.branchIds ?? [],
       })
     }
     // Single branch budget query - must be for current month period
@@ -443,7 +508,8 @@ export async function PUT(req: NextRequest) {
     const userId = (session.user as any).id
     const orgId = (session.user as any).organizationId
 
-    // Only Head Office and Super Admin can update budgets
+    // Super Admin, Head Office, and the multi-branch approver may allocate;
+    // which branches each may reach is checked below, after the branch is read.
     if (!canManageMoneyBudgets(role)) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 403 })
     }
@@ -475,12 +541,8 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: "Branch not found" }, { status: 404 })
     }
 
-    // HEAD_OFFICE users can only update budgets for their own organization
-    if (role === "HEAD_OFFICE" && branch.organizationId !== orgId) {
-      return NextResponse.json({
-        error: "Unauthorized: Branch belongs to different organization"
-      }, { status: 403 })
-    }
+    const accessError = await allocationAccessError({ role, userId, orgId, branch })
+    if (accessError) return accessError
 
     const budgetAllocationMode = await getBudgetAllocationModeForOrganization(branch.organizationId)
     if (budgetAllocationMode === "quantity") {

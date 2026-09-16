@@ -20,7 +20,18 @@ const fixture = {
   user: null as UserRow | null,
   /** branchId -> organizationId, the whole world of branches. */
   branches: new Map<number, number>(),
+  /**
+   * userId -> branch ids the multi-branch resolver would return. The resolver
+   * itself is covered by `multi-branch-scope.test.ts` and the group-roles
+   * integration suite; here only what this module does with its answer is
+   * under test.
+   */
+  assignments: new Map<string, number[]>(),
 }
+
+vi.mock("@/lib/server/multi-branch-scope", () => ({
+  resolveScopedBranchIds: vi.fn(async (_client: unknown, userId: string) => fixture.assignments.get(userId) ?? []),
+}))
 
 /**
  * A chainable stand-in for drizzle. It answers the two shapes this module
@@ -104,6 +115,7 @@ const params = (query = "") => new URLSearchParams(query)
 beforeEach(() => {
   seed()
   fixture.user = null
+  fixture.assignments = new Map()
 })
 
 describe("tenant isolation", () => {
@@ -150,18 +162,133 @@ describe("tenant isolation", () => {
   })
 })
 
+describe("group user scope", () => {
+  const groupUser = (id = "approver") => session(id, "GROUP_USER")
+
+  beforeEach(() => {
+    fixture.user = { organizationId: TENANT_A, branchId: null, roleName: "GROUP_USER" }
+  })
+
+  it("confines the approver to its assigned branches, not the tenant's list", async () => {
+    fixture.assignments.set("approver", [10, 11])
+
+    const scope = await resolveExecutiveScope(groupUser(), params())
+
+    expect(scope.ok).toBe(true)
+    if (!scope.ok) return
+    expect(scope.role).toBe("GROUP_USER")
+    expect(scope.organizationIds).toEqual([TENANT_A])
+    expect(scope.branchIds).toEqual([10, 11])
+    // Branch 12 is in the tenant but not assigned; it may not even be named.
+    expect(scope.allowedBranchIds).toEqual([10, 11])
+  })
+
+  it("lets a requested branch narrow within the assignments and never beyond them", async () => {
+    fixture.assignments.set("approver", [10, 11])
+
+    const narrowed = await resolveExecutiveScope(groupUser(), params("branchIds=11"))
+    expect(narrowed.ok && narrowed.branchIds).toEqual([11])
+
+    // Branch 12 belongs to the same tenant but is not assigned: it drops out
+    // rather than joining the set.
+    const mixed = await resolveExecutiveScope(groupUser(), params("branchIds=10,12"))
+    expect(mixed.ok && mixed.branchIds).toEqual([10])
+  })
+
+  it("denies rather than widening when every requested branch is outside the assignments", async () => {
+    fixture.assignments.set("approver", [10, 11])
+
+    expect(await resolveExecutiveScope(groupUser(), params("branchIds=12")))
+      .toEqual({ ok: false, error: "No branches in scope", status: 403 })
+    expect(await resolveExecutiveScope(groupUser(), params("branchIds=90,91")))
+      .toEqual({ ok: false, error: "No branches in scope", status: 403 })
+  })
+
+  it("refuses an approver with no assignments instead of falling back to the tenant", async () => {
+    fixture.assignments.set("approver", [])
+
+    expect(await resolveExecutiveScope(groupUser(), params()))
+      .toEqual({ ok: false, error: "No branches in scope", status: 403 })
+  })
+
+  it("drops an assignment that points at another tenant's branch", async () => {
+    // A stale or inconsistent assignment row names the neighbour's branch. The
+    // tenant on the user row is re-asserted, so it contributes nothing.
+    fixture.assignments.set("approver", [10, 90])
+
+    const scope = await resolveExecutiveScope(groupUser(), params())
+
+    expect(scope.ok && scope.branchIds).toEqual([10])
+    expect(scope.ok && scope.allowedBranchIds).toEqual([10])
+  })
+
+  it("ignores an organizationId pointing at another tenant", async () => {
+    fixture.assignments.set("approver", [10])
+
+    const scope = await resolveExecutiveScope(groupUser(), params(`organizationId=${TENANT_B}`))
+
+    expect(scope.ok && scope.organizationIds).toEqual([TENANT_A])
+    expect(scope.ok && scope.branchIds).toEqual([10])
+  })
+
+  it("refuses an approver with no tenant on its row", async () => {
+    fixture.user = { organizationId: null, branchId: null, roleName: "GROUP_USER" }
+    fixture.assignments.set("approver", [10])
+
+    expect(await resolveExecutiveScope(groupUser(), params()))
+      .toEqual({ ok: false, error: "Organization context missing", status: 403 })
+  })
+
+  it("keys two approvers with different assignments apart in the cache", async () => {
+    const { executiveCacheKey } = await import("./executive-analytics-scope")
+
+    fixture.assignments.set("approver", [10, 11])
+    fixture.assignments.set("other", [11, 12])
+    const first = await resolveExecutiveScope(groupUser("approver"), params())
+    const second = await resolveExecutiveScope(groupUser("other"), params())
+
+    expect(first.ok && second.ok).toBe(true)
+    if (!first.ok || !second.ok) return
+    expect(executiveCacheKey("exec:overview", first, {}))
+      .not.toEqual(executiveCacheKey("exec:overview", second, {}))
+  })
+
+  it("leaves Head Office on the tenant's full list, untouched by the assignment path", async () => {
+    // A Head Office user never has assignment rows, and if one somehow did
+    // they must not narrow it: the tenant list is its scope.
+    fixture.user = { organizationId: TENANT_A, branchId: null, roleName: "HEAD_OFFICE" }
+    fixture.assignments.set("user-1", [10])
+
+    const scope = await resolveExecutiveScope(session(), params())
+
+    expect(scope.ok && scope.branchIds).toEqual([10, 11, 12])
+    expect(scope.ok && scope.allowedBranchIds).toEqual([10, 11, 12])
+  })
+})
+
 describe("role gate", () => {
   it.each([
     ["BRANCH_ADMIN"],
     ["ORDER_PORTAL"],
-    ["GROUP_USER"],
     ["GROUP_ORDER_PORTAL"],
   ])("refuses %s before any query runs", async (role) => {
     fixture.user = { organizationId: TENANT_A, branchId: 10, roleName: role }
+    // Even with assignments on file: the ordering group role has no reporting
+    // surface, and no other role reads through the assignment path.
+    fixture.assignments.set("user-1", [10, 11])
 
     const scope = await resolveExecutiveScope(session("user-1", role), params())
 
     expect(scope).toEqual({ ok: false, error: "Forbidden: Insufficient permissions", status: 403 })
+  })
+
+  it("refuses a group requester that claims GROUP_USER in its session", async () => {
+    fixture.user = { organizationId: TENANT_A, branchId: null, roleName: "GROUP_ORDER_PORTAL" }
+    fixture.assignments.set("user-1", [10, 11])
+
+    const scope = await resolveExecutiveScope(session("user-1", "GROUP_USER"), params())
+
+    expect(scope.ok).toBe(false)
   })
 
   it("refuses a branch admin that claims HEAD_OFFICE in its session", async () => {

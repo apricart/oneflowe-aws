@@ -29,6 +29,15 @@ export type AuthAuditAction =
   | "AUTH_LOCKOUT_BLOCKED"
   | "AUTH_LOCKOUT_CLEARED"
   | "AUTH_SESSION_REVOKED"
+  // Self-service password change and the emailed proof that precedes it.
+  | "AUTH_EMAIL_VERIFICATION_SENT"
+  | "AUTH_EMAIL_VERIFIED"
+  | "AUTH_EMAIL_VERIFICATION_FAILURE"
+  | "AUTH_PASSWORD_CHANGED"
+  | "AUTH_PASSWORD_CHANGE_FAILURE"
+  // Written by `scripts/force-password-rotation.ts`, one row per account.
+  | "AUTH_PASSWORD_ROTATION_FORCED"
+  | "AUTH_PASSWORD_ROTATION_REVERSED"
 
 /**
  * Why an attempt did not produce a session. Kept as a closed set so the audit
@@ -46,6 +55,9 @@ export type AuthFailureReason =
   | "mfa_required"
   | "mfa_invalid"
   | "mfa_not_enrolled"
+  | "email_unroutable"
+  | "email_verification_required"
+  | "password_unchanged"
 
 export type AuthAuditEvent = {
   action: AuthAuditAction

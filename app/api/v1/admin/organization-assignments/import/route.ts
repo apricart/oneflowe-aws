@@ -201,14 +201,17 @@ export async function POST(req: NextRequest) {
         })))
         .returning()
 
+      // Keyed by the organization: `entity_id` is varchar(128), and an
+      // import of a few dozen rows would overflow it as a joined list.
       await tx.insert(auditLogs).values({
         userId,
         action: "CREATE",
         entity: "OrganizationAssignmentImport",
-        entityId: assignments.map((row) => row.id).join(","),
+        entityId: String(organizationId),
         metadata: {
           organizationId,
           importedCount: assignments.length,
+          assignmentIds: assignments.map((row) => row.id),
           fileName: file.name,
         },
       })

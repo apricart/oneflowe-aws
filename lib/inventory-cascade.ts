@@ -2,6 +2,9 @@ import { db } from "@/lib/db"
 import { organizationInventory, branchInventory, auditLogs } from "@/db/schema"
 import { eq, and, isNull } from "drizzle-orm"
 
+/** The pool, or a transaction the caller has already opened. */
+type DbClient = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0]
+
 /**
  * Cascade utility functions for inventory management
  * Handles soft deletes and status changes across the 3-level hierarchy
@@ -16,11 +19,15 @@ import { eq, and, isNull } from "drizzle-orm"
 export async function cascadeOrgDeletion(
   organizationInventoryId: number,
   performedByUserId: string,
-  performedByRole: string
+  performedByRole: string,
+  // The caller's transaction, so the organization row, its branch rows and
+  // the audit entry commit together or not at all. Defaults to the pool for
+  // callers that have no transaction of their own.
+  database: DbClient = db,
 ) {
   try {
     // Find all branch inventory items linked to this org inventory
-    const branchItems = await db.select({
+    const branchItems = await database.select({
       id: branchInventory.id,
       branchId: branchInventory.branchId,
       organizationId: branchInventory.organizationId,
@@ -39,7 +46,7 @@ export async function cascadeOrgDeletion(
 
     // Soft delete all branch inventory items
     const now = new Date()
-    await db.update(branchInventory)
+    await database.update(branchInventory)
       .set({
         deletedAt: now,
         updatedAt: now
@@ -51,16 +58,19 @@ export async function cascadeOrgDeletion(
         )
       )
 
-    // Log the cascade deletion
-    await db.insert(auditLogs).values({
+    // Log the cascade deletion. `entity_id` is varchar(128) and holds the
+    // row that triggered the cascade; the branch rows it reached are listed
+    // in the metadata, where a product stocked at eighty branches still fits.
+    await database.insert(auditLogs).values({
       userId: performedByUserId,
       action: "CASCADE_DELETE",
       entity: "BranchInventory",
-      entityId: branchItems.map(item => item.id).join(','),
+      entityId: String(organizationInventoryId),
       metadata: {
         triggeredBy: "organization_inventory_deletion",
         organizationInventoryId,
         deletedCount: branchItems.length,
+        branchInventoryIds: branchItems.map(item => item.id),
         affectedBranches: branchItems.map(item => item.branchId),
         performedByRole
       },
@@ -87,7 +97,9 @@ export async function cascadeOrgStatusChange(
   organizationInventoryId: number,
   isActive: boolean,
   performedByUserId: string,
-  performedByRole: string
+  performedByRole: string,
+  // The caller's transaction; see `cascadeOrgDeletion`.
+  database: DbClient = db,
 ) {
   try {
     // Update all branch inventory items and get the affected ones in one go
@@ -97,7 +109,7 @@ export async function cascadeOrgStatusChange(
       isVisible: isActive // If disabling, also hide from branches; if enabling, restore visibility
     }
 
-    const branchItems = await db.update(branchInventory)
+    const branchItems = await database.update(branchInventory)
       .set(updateData)
       .where(
         and(
@@ -115,17 +127,19 @@ export async function cascadeOrgStatusChange(
       return { updatedCount: 0, affectedBranches: [] }
     }
 
-    // Log the cascade update
-    await db.insert(auditLogs).values({
+    // Log the cascade update, keyed by the triggering row as the deletion
+    // cascade is; the branch rows reached are in the metadata.
+    await database.insert(auditLogs).values({
       userId: performedByUserId,
       action: "CASCADE_UPDATE",
       entity: "BranchInventory",
-      entityId: branchItems.map(item => item.id).join(','),
+      entityId: String(organizationInventoryId),
       metadata: {
         triggeredBy: "organization_inventory_status_change",
         organizationInventoryId,
         isActive,
         updatedCount: branchItems.length,
+        branchInventoryIds: branchItems.map(item => item.id),
         affectedBranches: branchItems.map(item => item.branchId),
         performedByRole,
         changes: updateData
@@ -435,13 +449,14 @@ export async function cascadeGlobalProductFieldUpdate(
           userId: performedByUserId,
           action: "CASCADE_CLEAR_OVERRIDE",
           entity: "OrganizationInventory",
-          entityId: result.map(r => r.id).join(','),
+          entityId: String(globalProductId),
           metadata: {
             triggeredBy: "global_product_update",
             globalProductId,
             field: update.field,
             oldValue: update.oldValue,
             newValue: update.newValue,
+            organizationInventoryIds: result.map(r => r.id),
             affectedOrgs: result.map(r => r.organizationId)
           },
         })

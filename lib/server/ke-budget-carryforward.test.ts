@@ -167,6 +167,11 @@ describe("monthly repeat contract (source-pinned)", () => {
   it("changes the repeating figure only when a user allocates a monthly budget", () => {
     const route = repoFile("app/api/v1/budgets/route.ts")
     expect(route).toContain(".set({ baselineBudgetCents: newAllocated, updatedAt: new Date() })")
-    expect(route).toContain('const canManageMoneyBudgets = (role: string) => role === "HEAD_OFFICE" || role === "SUPER_ADMIN"')
+    // Who may allocate is decided in one shared module, not inline here: the
+    // two tenant-wide roles, and the approver over its assigned branches.
+    expect(route).toContain('from "@/lib/money-budget-access"')
+    expect(route).toContain("if (!canManageMoneyBudgets(role)) {")
+    expect(repoFile("lib/money-budget-access.ts"))
+      .toContain('export const MONEY_BUDGET_MANAGER_ROLES = ["SUPER_ADMIN", "HEAD_OFFICE", "GROUP_USER"] as const')
   })
 })

@@ -1,13 +1,34 @@
-import { db } from "@/lib/db"
-import { users, sessions } from "@/db/schema"
-import { eq } from "drizzle-orm"
-import { hashPassword } from "@/lib/password"
+import { NextResponse, type NextRequest } from "next/server"
+import { z } from "zod"
+
 import { ok, error, readJson } from "@/lib/api"
 import { getCurrentUser } from "@/lib/auth"
-import { invalidateSessionValidationCache } from "@/lib/session-validation-cache"
+import { logError } from "@/lib/global-logger"
 import { withRateLimit } from "@/lib/rate-limiter"
+import { getCurrentSessionId } from "@/lib/server/current-session"
+import { validationMessage } from "@/lib/server/mutation-validation"
+import { changeOwnPassword } from "@/lib/server/password-change"
 
-export async function POST(req: Request) {
+/**
+ * A person setting their own password. The rules — emailed proof on this
+ * session, current password, policy, must differ — live in
+ * `lib/server/password-change.ts`; this handler authenticates, validates and
+ * maps the outcome to a status. Reachable by a session that still owes a
+ * password change (`lib/password-change-pending.ts`).
+ */
+
+export const EMAIL_VERIFICATION_REQUIRED_CODE = "EMAIL_VERIFICATION_REQUIRED"
+
+const bodySchema = z.object({
+  currentPassword: z.string().min(1, "Current password is required").max(128),
+  password: z.string().min(1, "New password is required").max(128),
+}).strict()
+
+function refused(message: string, status: number, code: string, headers?: HeadersInit): NextResponse {
+  return NextResponse.json({ error: message, code }, { status, headers })
+}
+
+export async function POST(req: NextRequest) {
   try {
     const currentUser = await getCurrentUser()
     if (!currentUser) return error("Unauthorized", 401)
@@ -20,46 +41,46 @@ export async function POST(req: Request) {
     const rateLimit = await withRateLimit("sensitive", currentUser.id)
     if (rateLimit) return rateLimit
 
-    const body = await readJson<{ password?: string }>(req)
-    if (!body?.password) return error("New password is required", 400)
+    const sessionId = await getCurrentSessionId(req)
+    if (!sessionId) return error("Unauthorized", 401)
 
-    // hashPassword validates complexity requirements before hashing
-    const passwordHash = await hashPassword(body.password)
+    const parsed = bodySchema.safeParse(await readJson<unknown>(req))
+    if (!parsed.success) return error(validationMessage(parsed.error), 400)
 
-    // Increment sessionVersion to invalidate all existing JWTs for this user
-    const [dbUser] = await db
-      .select({ sessionVersion: users.sessionVersion })
-      .from(users)
-      .where(eq(users.id, currentUser.id))
-      .limit(1)
+    const outcome = await changeOwnPassword({
+      userId: currentUser.id,
+      sessionId,
+      currentPassword: parsed.data.currentPassword,
+      newPassword: parsed.data.password,
+    })
 
-    if (!dbUser) return error("User not found", 404)
-
-    await db.update(users).set({
-      passwordHash,
-      mustChangePassword: false,
-      sessionVersion: (dbUser.sessionVersion || 0) + 1,
-      // A completed password change releases any brute-force lockout counters
-      // left over from failed attempts against the old password.
-      failedLoginAttempts: 0,
-      lockoutUntil: null,
-      updatedAt: new Date(),
-    }).where(eq(users.id, currentUser.id))
-
-    // Drop the cached session-validation result so the sessionVersion bump
-    // takes effect on the next session check across all devices
-    await invalidateSessionValidationCache(currentUser.id)
-
-    // Remove physical sessions so all devices are logged out
-    await db.delete(sessions).where(eq(sessions.userId, currentUser.id))
-
-    return ok({ success: true })
-  } catch (err: any) {
-    const msg = String(err?.message || "")
-    if (msg.toLowerCase().includes("invalid password") || msg.toLowerCase().includes("must contain")) {
-      return error(err.message, 400)
+    switch (outcome.kind) {
+      case "changed":
+        return ok({ success: true })
+      case "verification_required":
+        return refused(
+          "Verify your email address before changing your password.",
+          403,
+          EMAIL_VERIFICATION_REQUIRED_CODE,
+        )
+      case "locked":
+        return refused(
+          "Too many failed attempts. Please try again later.",
+          423,
+          "ACCOUNT_LOCKED",
+          { "Retry-After": String(outcome.retryAfterSeconds) },
+        )
+      case "invalid_current_password":
+        return error("The current password is incorrect.", 400)
+      case "password_unchanged":
+        return error("The new password must be different from your current password.", 400)
+      case "invalid_password":
+        return error(outcome.errors.join(", "), 400)
+      case "not_found":
+        return error("User not found", 404)
     }
-    console.error("[API/ChangePassword] Unexpected error:", err)
+  } catch (err) {
+    logError(err, "API_CHANGE_PASSWORD")
     return error("Failed to change password", 500)
   }
 }

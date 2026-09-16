@@ -160,6 +160,12 @@ export const users = pgTable(
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
     sessionVersion: integer("session_version").notNull().default(1),
     mustChangePassword: boolean("must_change_password").notNull().default(false),
+    // When the address on this row was last proven to reach the person (an
+    // emailed code entered back), and when the person last set their own
+    // password. A `must_change_password` cleared by an administrator is not a
+    // rotation; `password_changed_at` is what says one happened.
+    emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
+    passwordChangedAt: timestamp("password_changed_at", { withTimezone: true }),
     // Per-account brute-force lockout. Keyed on the account rather than the
     // client address, so rotating source addresses cannot reset the budget.
     failedLoginAttempts: integer("failed_login_attempts").notNull().default(0),
@@ -804,6 +810,11 @@ export const authSessions = pgTable(
     lastActivityAt: timestamp("last_activity_at", { withTimezone: true }).notNull(),
     absoluteExpiresAt: timestamp("absolute_expires_at", { withTimezone: true }).notNull(),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    // Proof that this session entered an emailed code, consumed by the
+    // password change it authorises (`lib/server/password-change.ts`). Bound
+    // to the session so a code entered on one device cannot authorise a
+    // change from another.
+    emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

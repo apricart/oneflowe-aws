@@ -65,3 +65,37 @@ export async function invalidateCachePrefixes(
   for (const prefix of prefixes) results.push(await invalidateCachePrefix(prefix))
   return results
 }
+
+export interface KeyDeletionResult {
+  keysRequested: number
+  keysDeleted: number
+  error?: string
+}
+
+/**
+ * Drop exact keys that live outside the `cache:` namespace — the session
+ * validation entries (`session-ok:<user id>`, see
+ * `lib/session-validation-cache.ts`) that would otherwise let a session the
+ * database has just invalidated survive for one TTL window. Never throws, for
+ * the same reason as above.
+ */
+export async function deleteCacheKeys(keys: readonly string[]): Promise<KeyDeletionResult> {
+  if (keys.length === 0) return { keysRequested: 0, keysDeleted: 0 }
+  const redis = client()
+  if (!redis) {
+    return { keysRequested: keys.length, keysDeleted: 0, error: "UPSTASH_REDIS_REST_URL/TOKEN not set" }
+  }
+  try {
+    let keysDeleted = 0
+    for (let index = 0; index < keys.length; index += 100) {
+      keysDeleted += await redis.del(...keys.slice(index, index + 100))
+    }
+    return { keysRequested: keys.length, keysDeleted }
+  } catch (error) {
+    return {
+      keysRequested: keys.length,
+      keysDeleted: 0,
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
