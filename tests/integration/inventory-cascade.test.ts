@@ -24,8 +24,13 @@ import {
  * K-Electric product stocked at more than a couple of dozen branches.
  */
 
-/** Enough rows that their ids joined by commas exceed 128 characters. */
-const BRANCH_COUNT = 40
+/**
+ * Enough rows that their ids joined by commas exceed 128 characters even on a
+ * brand-new database where the sequence starts at 1: ids 1..60 join to 170
+ * characters (1..40 join to only 110, which passed locally only because the
+ * long-lived test database had already advanced the sequence).
+ */
+const BRANCH_COUNT = 60
 
 describe.skipIf(!hasTestDatabase)("organization inventory cascades", () => {
   let fixtures: PricingFixtures
