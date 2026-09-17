@@ -316,6 +316,7 @@ function assignTokenToSessionUser(session: any, token: any): void {
     isEmployee: token.isEmployee,
     employeeId: token.employeeId,
     mustChangePassword: token.mustChangePassword ?? false,
+    budgetAllocationEnabled: token.role === "GROUP_USER" && token.budgetAllocationEnabled === true,
   })
 }
 
@@ -520,6 +521,7 @@ async function registerAuthenticatedSessionToken(token: any, user: any) {
   token.employeeId = user.employeeId
   token.sessionVersion = user.sessionVersion
   token.mustChangePassword = user.mustChangePassword ?? false
+  token.budgetAllocationEnabled = user.role === "GROUP_USER" && user.budgetAllocationEnabled === true
 
   const idleTimeoutMinutes = await resolveSessionIdleTimeoutMinutes(
     token.organizationId,
@@ -705,6 +707,7 @@ async function loadStaffLoginRecord(username: string) {
       isActive: users.isActive,
       sessionVersion: users.sessionVersion,
       mustChangePassword: users.mustChangePassword,
+      budgetAllocationEnabled: users.budgetAllocationEnabled,
       failedLoginAttempts: users.failedLoginAttempts,
       lockoutUntil: users.lockoutUntil,
       organizationStatus: organizations.status,
@@ -786,6 +789,7 @@ async function authorizeStaffPassword(
     isEmployee: false,
     sessionVersion: u.sessionVersion,
     mustChangePassword: u.mustChangePassword,
+    budgetAllocationEnabled: u.budgetAllocationEnabled,
   } as any
 }
 
@@ -849,6 +853,7 @@ async function authorizeStaffMfa(
     isEmployee: false,
     sessionVersion: u.sessionVersion,
     mustChangePassword: u.mustChangePassword,
+    budgetAllocationEnabled: u.budgetAllocationEnabled,
   } as any
 }
 

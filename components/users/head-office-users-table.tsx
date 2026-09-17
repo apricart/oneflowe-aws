@@ -42,6 +42,7 @@ type UserRow = {
   phone?: string
   mfaEnabled?: boolean
   isActive: boolean
+  budgetAllocationEnabled?: boolean
   createdAt: string
   employeeId?: string | null
   imprestHolder?: string | null
@@ -69,6 +70,7 @@ type EditFormState = {
   branchId: string
   mfaEnabled: boolean
   isActive: boolean
+  budgetAllocationEnabled: boolean
   password: string
   confirmPassword: string
   employeeId: string
@@ -159,6 +161,9 @@ const buildUserUpdate = (form: EditFormState, user: UserRow, includePassword: bo
   addChangedValue(body, "branchId", form.branchId ? Number.parseInt(form.branchId) : null, user.branchId ?? null)
   addChangedValue(body, "mfaEnabled", form.mfaEnabled, Boolean(user.mfaEnabled))
   addChangedValue(body, "isActive", form.isActive, user.isActive)
+  if (form.role === "GROUP_USER") {
+    addChangedValue(body, "budgetAllocationEnabled", form.budgetAllocationEnabled, user.budgetAllocationEnabled === true)
+  }
   addChangedValue(body, "employeeId", form.employeeId.trim() || null, user.employeeId?.trim() || null)
   addChangedValue(body, "imprestHolder", form.imprestHolder.trim() || null, user.imprestHolder?.trim() || null)
   addChangedValue(body, "contactPerson", form.contactPerson.trim() || null, user.contactPerson?.trim() || null)
@@ -168,7 +173,7 @@ const buildUserUpdate = (form: EditFormState, user: UserRow, includePassword: bo
 }
 
 const splitUserUpdate = (body: Record<string, unknown>) => {
-  const accessKeys = new Set(["role", "organizationId", "branchId", "mfaEnabled", "isActive"])
+  const accessKeys = new Set(["role", "organizationId", "branchId", "mfaEnabled", "isActive", "budgetAllocationEnabled"])
   const accessBody: Record<string, unknown> = {}
   const profileBody: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(body)) {
@@ -510,6 +515,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
     branchId: "",
     mfaEnabled: false,
     isActive: true,
+    budgetAllocationEnabled: false,
     password: "",
     confirmPassword: "",
     employeeId: "",
@@ -613,6 +619,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
       branchId: user.branchId ? String(user.branchId) : "",
       mfaEnabled: user.mfaEnabled || false,
       isActive: user.isActive,
+      budgetAllocationEnabled: user.budgetAllocationEnabled === true,
       password: "",
       confirmPassword: "",
       employeeId: user.employeeId || "",
@@ -640,6 +647,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
       branchId: "",
       mfaEnabled: false,
       isActive: true,
+      budgetAllocationEnabled: false,
       password: "",
       confirmPassword: "",
       employeeId: "",
@@ -1612,6 +1620,19 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
             <div className="space-y-4">
               <h3 className="text-sm font-semibold">Security & Access</h3>
               <div className="flex flex-col gap-4 rounded-lg border p-4">
+                {editForm.role === "GROUP_USER" && (
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label htmlFor="edit-budget-allocation" className="text-base">Budget Allocation</Label>
+                      <p className="text-sm text-muted-foreground">Allow money budget allocation for assigned branches</p>
+                    </div>
+                    <Switch
+                      id="edit-budget-allocation"
+                      checked={editForm.budgetAllocationEnabled}
+                      onCheckedChange={(checked) => setEditForm({ ...editForm, budgetAllocationEnabled: checked })}
+                    />
+                  </div>
+                )}
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
                     <Label htmlFor="isActive" className="text-base">Account Status</Label>

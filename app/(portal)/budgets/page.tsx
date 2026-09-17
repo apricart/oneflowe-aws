@@ -18,7 +18,7 @@ import { BranchFilter } from "@/components/reports/branch-filter"
 import { GroupFilter } from "@/components/reports/group-filter"
 import { type DateRange } from "@/lib/hooks/use-sales-performance"
 import { BUDGET_ALLOCATION_MODE_SETTING_KEY,parseBudgetAllocationMode,type BudgetAllocationMode } from "@/lib/budget-allocation-mode"
-import { canManageMoneyBudgets,managesAssignedBranchesOnly } from "@/lib/money-budget-access"
+import { canManageMoneyBudgetsForAccount,managesAssignedBranchesOnly } from "@/lib/money-budget-access"
 
 const fetcher = (url: string) => fetch(url).then(r => r.json())
 
@@ -110,7 +110,7 @@ export default function BudgetsPage() {
   // Who gets the page at all. The name predates the approver joining the list;
   // every endpoint behind the page fences the approver to its assigned
   // branches on the server, so this decides what renders, never what is read.
-  const isHeadOffice = canManageMoneyBudgets(role)
+  const isHeadOffice = canManageMoneyBudgetsForAccount(role, (session?.user as any)?.budgetAllocationEnabled)
   // The approver may not read organization settings; its allocation mode comes
   // from the rows instead (see `budgetAllocationMode` below).
   const canReadOrganizationSettings = isHeadOffice && !managesAssignedBranchesOnly(role)
