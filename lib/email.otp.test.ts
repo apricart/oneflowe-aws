@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import type { sendAppEmail } from "./email/ses"
 
 /**
  * What the verification mail says. Every mirrored K-Electric person has a
@@ -11,7 +12,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
  */
 
 const mocks = vi.hoisted(() => ({
-  sendAppEmail: vi.fn(async () => undefined),
+  sendAppEmail: vi.fn(async (_message: Parameters<typeof sendAppEmail>[0]) => undefined),
   validateSesConfig: vi.fn(() => true),
   logError: vi.fn(),
 }))

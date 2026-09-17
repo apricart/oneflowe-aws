@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import type { AuthAuditEvent } from "./auth-audit"
 
 import { authSessions, users } from "@/db/schema"
 
@@ -27,7 +28,7 @@ const mocks = vi.hoisted(() => ({
   generateAndSendOTP: vi.fn(),
   verifyOTP: vi.fn(),
   otpExpiryMinutes: vi.fn(() => 10),
-  recordAuthAuditEvent: vi.fn(async () => undefined),
+  recordAuthAuditEvent: vi.fn(async (_event: AuthAuditEvent) => undefined),
 }))
 
 /** A thenable Drizzle-shaped chain: every builder method returns itself, `await` yields `rows`. */
@@ -85,7 +86,7 @@ function subject(overrides: Partial<Row> = {}): Row {
   }
 }
 
-const auditActions = () => mocks.recordAuthAuditEvent.mock.calls.map(([event]) => (event as Row).action)
+const auditActions = () => mocks.recordAuthAuditEvent.mock.calls.map(([event]) => event.action)
 
 beforeEach(() => {
   state.subjectRows = [subject()]
