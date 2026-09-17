@@ -134,7 +134,7 @@ describe("session policy proxy enforcement", () => {
     ["GROUP_USER", "/reports/order-report", null],
     ["GROUP_USER", "/reports/graphical", null],
     // Money budgets for its assigned branches; the quantity ledger stays closed.
-    ["GROUP_USER", "/budgets", null],
+    ["GROUP_USER", "/budgets", "/dashboard"],
     ["GROUP_USER", "/settings", null],
     // Everything else in the shell stays closed to it, and its home is now the
     // dashboard rather than the queue.
@@ -278,5 +278,91 @@ describe("API requests from a session that still owes a password change", () => 
 
     expect(response.status).toBe(307)
     expect(response.headers.get("location")).toBe("https://app.test/change-password")
+  })
+})
+
+describe("pages for a session that still owes a password change, per role", () => {
+  beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW)
+    mocks.getToken.mockReset()
+    mocks.logger.mockReset()
+  })
+
+  afterEach(() => vi.restoreAllMocks())
+
+  // Every role the K-Electric rotation flags, with the page each lands on
+  // after sign-in. The redirect has to fire for all of them, and
+  // `/change-password` itself has to be reachable by all of them — including
+  // the ones normally confined to another area — or the flow loops.
+  const homes: [string, string][] = [
+    ["ORDER_PORTAL", "/shop"],
+    ["BRANCH_ADMIN", "/dashboard"],
+    ["HEAD_OFFICE", "/dashboard"],
+    ["GROUP_ORDER_PORTAL", "/group-portal"],
+    ["GROUP_USER", "/dashboard"],
+  ]
+
+  it.each(homes)("sends a flagged %s from %s to /change-password", async (role, home) => {
+    mocks.getToken.mockResolvedValue({ ...validToken(role), mustChangePassword: true })
+
+    const response = await proxy(request(home))
+
+    expect(response.status).toBe(307)
+    expect(response.headers.get("location")).toBe("https://app.test/change-password")
+  })
+
+  it.each(homes)("lets a flagged %s stay on /change-password — no redirect loop", async (role) => {
+    mocks.getToken.mockResolvedValue({ ...validToken(role), mustChangePassword: true })
+
+    const response = await proxy(request("/change-password"))
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get("x-middleware-next")).toBe("1")
+    expect(response.headers.get("cache-control")).toContain("no-store")
+  })
+
+  it.each(homes)("refuses a flagged %s the rest of the API, whatever its role", async (role) => {
+    mocks.getToken.mockResolvedValue({ ...validToken(role), mustChangePassword: true })
+
+    const response = await proxy(request("/api/v1/users/me"))
+
+    expect(response.status).toBe(403)
+    await expect(response.json()).resolves.toMatchObject({ code: "PASSWORD_CHANGE_REQUIRED" })
+  })
+
+  it.each(homes)("still lets a flagged %s reach the three endpoints the change needs", async (role) => {
+    mocks.getToken.mockResolvedValue({ ...validToken(role), mustChangePassword: true })
+
+    for (const path of [
+      "/api/v1/users/me/email-verification/send",
+      "/api/v1/users/me/email-verification/verify",
+      "/api/v1/users/me/change-password",
+    ]) {
+      const response = await proxy(request(path))
+      expect(response.status, path).toBe(200)
+      expect(response.headers.get("x-middleware-next"), path).toBe("1")
+    }
+  })
+
+  it("sends an unauthenticated visitor to /change-password on to the login page", async () => {
+    mocks.getToken.mockResolvedValue(null)
+
+    const response = await proxy(request("/change-password"))
+
+    expect(response.status).toBe(307)
+    expect(response.headers.get("location")).toBe("https://app.test/login")
+  })
+
+  it("does not read the flag off a request the gate is not for: an expired session is expired first", async () => {
+    mocks.getToken.mockResolvedValue({
+      ...validToken("BRANCH_ADMIN"),
+      mustChangePassword: true,
+      sessionAbsoluteExpiresAt: NOW - 1,
+    })
+
+    const response = await proxy(request("/dashboard"))
+
+    expect(response.status).toBe(307)
+    expect(response.headers.get("location")).not.toBe("https://app.test/change-password")
   })
 })

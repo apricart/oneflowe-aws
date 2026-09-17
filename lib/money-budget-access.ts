@@ -26,6 +26,12 @@ export function canManageMoneyBudgets(role: unknown): role is MoneyBudgetManager
     && (MONEY_BUDGET_MANAGER_ROLES as readonly string[]).includes(role)
 }
 
+/** Group User's allocation privilege is opt-in on the account, not the role. */
+export function canManageMoneyBudgetsForAccount(role: unknown, budgetAllocationEnabled: unknown): boolean {
+  return canManageMoneyBudgets(role)
+    && (role !== "GROUP_USER" || budgetAllocationEnabled === true)
+}
+
 /** Roles whose allocation reach is a set of assigned branches rather than a tenant. */
 export function managesAssignedBranchesOnly(role: unknown): boolean {
   return role === "GROUP_USER"

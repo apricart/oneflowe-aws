@@ -590,9 +590,6 @@ export const ROLE_TEMPLATES = {
       Permission.ORDER_APPROVE,
       Permission.ORDER_REJECT,
       Permission.FINANCE_VIEW_BUDGETS,
-      // Money budgets for its assigned branches only — the handler fences the
-      // write to the assignment set (`lib/money-budget-access.ts`).
-      Permission.FINANCE_MANAGE_BUDGETS,
       Permission.REPORTS_VIEW_BRANCH,
       Permission.GROUP_VIEW,
       // Every client role holds a direct channel to Apricart. SUPPORT_MANAGE

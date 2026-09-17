@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import {
   canAllocateToBranch,
   canManageMoneyBudgets,
+  canManageMoneyBudgetsForAccount,
   managesAssignedBranchesOnly,
   resolveManagedBranchScope,
 } from "./money-budget-access"
@@ -13,6 +14,15 @@ import {
  * widen it, and that an empty set is a refusal rather than a tenant-wide read.
  */
 describe("who may allocate money budgets", () => {
+  it("requires a Group User's explicit account grant", () => {
+    for (const flag of [undefined, null, false, "true", 1]) {
+      expect(canManageMoneyBudgetsForAccount("GROUP_USER", flag)).toBe(false)
+    }
+    expect(canManageMoneyBudgetsForAccount("GROUP_USER", true)).toBe(true)
+    expect(canManageMoneyBudgetsForAccount("HEAD_OFFICE", false)).toBe(true)
+    expect(canManageMoneyBudgetsForAccount("SUPER_ADMIN", false)).toBe(true)
+    expect(canManageMoneyBudgetsForAccount("GROUP_ORDER_PORTAL", true)).toBe(false)
+  })
   it("admits the two tenant-wide roles and the multi-branch approver", () => {
     expect(canManageMoneyBudgets("SUPER_ADMIN")).toBe(true)
     expect(canManageMoneyBudgets("HEAD_OFFICE")).toBe(true)

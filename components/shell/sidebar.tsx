@@ -12,7 +12,7 @@ import { useSession } from "next-auth/react"
 
 const COLLAPSED_STORAGE_KEY = "oneflowe.sidebar.collapsed"
 
-const getNavigationByRole = (role: string) => {
+export const getNavigationByRole = (role: string, budgetAllocationEnabled = false) => {
   const baseNav = [
     { href: "/dashboard", label: "Dashboard", icon: Home },
   ]
@@ -115,7 +115,7 @@ const getNavigationByRole = (role: string) => {
 
   // The approver shares the shell but not the administrator's reach: it gets a
   // dashboard and an order directory covering the branches assigned to it, its
-  // own approval queue, the money budgets of those same branches, and the
+  // own approval queue, optionally the money budgets of those same branches, and the
   // reports those assignments scope — and no inventory, user, branch,
   // organization or quantity-budget entries. `proxy.ts` enforces the same
   // allowlist, so a hand-typed URL cannot reach anything omitted here, and
@@ -126,7 +126,7 @@ const getNavigationByRole = (role: string) => {
       ...baseNav,
       { href: "/orders", label: "Orders", icon: Package },
       { href: "/approvals", label: "Approvals", icon: ClipboardCheck },
-      { href: "/budgets", label: "Budgets", icon: Wallet },
+      ...(budgetAllocationEnabled ? [{ href: "/budgets", label: "Budgets", icon: Wallet }] : []),
       {
         href: "/reports",
         label: "Reports",
@@ -229,7 +229,7 @@ export function Sidebar() {
   const { data: session, status } = useSession()
   const role = (session?.user as any)?.role
   const isLoading = status === "loading"
-  const nav = getNavigationByRole(role || "")
+  const nav = getNavigationByRole(role || "", (session?.user as any)?.budgetAllocationEnabled === true)
   const [expandedItems, setExpandedItems] = useState<string[]>([])
   const { collapsed, changeCollapsed } = useCollapsedRail()
 

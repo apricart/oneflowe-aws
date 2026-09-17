@@ -80,11 +80,15 @@ export const userCreateSchema = z.object({
   address: nullableText(2_000).optional(),
   mfaEnabled: z.boolean().optional().default(false),
   isActive: z.boolean().optional().default(true),
+  budgetAllocationEnabled: z.boolean().optional(),
   // GROUP_ORDER_PORTAL only. Ignored (and rejected when non-empty) for every
   // other role, so existing single-branch roles are unaffected.
   groupIds: assignedIdList.optional().default([]),
   branchIds: assignedIdList.optional().default([]),
-}).strict()
+}).strict().refine((input) => input.role === "GROUP_USER" || input.budgetAllocationEnabled === undefined, {
+  message: "Budget allocation access applies only to Group Users",
+  path: ["budgetAllocationEnabled"],
+})
 
 /**
  * Replaces the full group/branch scope of a GROUP_ORDER_PORTAL user. Sending
@@ -118,6 +122,7 @@ export const userAccessUpdateSchema = z.object({
   branchId: nullablePositiveId.optional(),
   isActive: z.boolean().optional(),
   mfaEnabled: z.boolean().optional(),
+  budgetAllocationEnabled: z.boolean().optional(),
   // GROUP_ORDER_PORTAL only. Omitting a list leaves it unchanged; sending one
   // replaces it wholesale.
   groupIds: assignedIdList.optional(),

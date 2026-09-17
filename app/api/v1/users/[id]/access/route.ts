@@ -193,6 +193,7 @@ export async function PATCH(
       role: roles.name,
       organizationId: users.organizationId,
       branchId: users.branchId,
+      budgetAllocationEnabled: users.budgetAllocationEnabled,
       sessionVersion: users.sessionVersion,
     })
     .from(users)
@@ -213,6 +214,12 @@ export async function PATCH(
   if (input.role !== undefined && !canAssignRole(scope.role, nextRole)) {
     return error("You cannot assign this role", 403)
   }
+  if (input.budgetAllocationEnabled !== undefined && nextRole !== "GROUP_USER") {
+    return error("Budget allocation access applies only to Group Users", 400)
+  }
+  const nextBudgetAllocationEnabled = nextRole === "GROUP_USER"
+    ? input.budgetAllocationEnabled ?? (targetRole === "GROUP_USER" && target.budgetAllocationEnabled)
+    : false
 
   const nextOrganizationId = input.organizationId !== undefined
     ? input.organizationId
@@ -250,6 +257,7 @@ export async function PATCH(
         branchId: input.branchId !== undefined ? nextBranchId : undefined,
         isActive: input.isActive,
         mfaEnabled: input.mfaEnabled,
+        budgetAllocationEnabled: nextBudgetAllocationEnabled,
         sessionVersion: target.sessionVersion + 1,
         updatedAt: new Date(),
       })
@@ -261,6 +269,7 @@ export async function PATCH(
         branchId: users.branchId,
         isActive: users.isActive,
         mfaEnabled: users.mfaEnabled,
+        budgetAllocationEnabled: users.budgetAllocationEnabled,
       })
 
     if (scopeResolution.action === "clear") {
@@ -292,6 +301,8 @@ export async function PATCH(
         nextOrganizationId,
         previousBranchId: target.branchId,
         nextBranchId,
+        previousBudgetAllocationEnabled: target.budgetAllocationEnabled,
+        nextBudgetAllocationEnabled,
       },
       success: true,
     })

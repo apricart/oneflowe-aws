@@ -22,6 +22,7 @@ import {
   resolveManagedBranchScope,
 } from "@/lib/money-budget-access"
 import { resolveScopedBranchIds } from "@/lib/server/multi-branch-scope"
+import { isGroupUserBudgetAllocationEnabled } from "@/lib/server/group-user-budget-allocation"
 
 type MoneyBudgetUpdate = ReturnType<typeof moneyBudgetUpdateSchema.parse>
 
@@ -399,6 +400,10 @@ export async function GET(req: NextRequest) {
     const userBranchId = (session.user as any).branchId
     const userId = (session.user as any).id
 
+    if (role === "GROUP_USER" && !await isGroupUserBudgetAllocationEnabled(userId, sessionOrgId)) {
+      return NextResponse.json({ error: "Budget allocation is not enabled for this user" }, { status: 403 })
+    }
+
     const { searchParams } = new URL(req.url)
     const allParam = searchParams.get("all")
     const branchIdParam = searchParams.get("branchId")
@@ -512,6 +517,9 @@ export async function PUT(req: NextRequest) {
     // which branches each may reach is checked below, after the branch is read.
     if (!canManageMoneyBudgets(role)) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 403 })
+    }
+    if (role === "GROUP_USER" && !await isGroupUserBudgetAllocationEnabled(userId, orgId)) {
+      return NextResponse.json({ error: "Budget allocation is not enabled for this user" }, { status: 403 })
     }
 
     let rawBody

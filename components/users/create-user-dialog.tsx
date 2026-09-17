@@ -110,6 +110,7 @@ function getInitialCreateUserForm(
     branchIds: [] as string[],
     mfaEnabled: false,
     isActive: true,
+    budgetAllocationEnabled: false,
     employeeId: "",
     imprestHolder: "",
     contactPerson: "",
@@ -434,6 +435,7 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
           branchId: isSingleBranchRole(form.role) && form.branchId ? Number.parseInt(form.branchId) : null,
           groupIds: usesMultiBranchScope(form.role) ? form.groupIds.map(Number) : [],
           branchIds: usesMultiBranchScope(form.role) ? form.branchIds.map(Number) : [],
+          ...(form.role === "GROUP_USER" ? { budgetAllocationEnabled: form.budgetAllocationEnabled } : {}),
           mfaEnabled: form.mfaEnabled,
           isActive: form.isActive,
           employeeId: form.employeeId.trim() || null,
@@ -877,7 +879,7 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                 {/* Role Selector */}
                 <div className="space-y-2">
                   <Label htmlFor="role">Role *</Label>
-                  <Select value={form.role} onValueChange={value => setForm({ ...form, role: value, branchId: "", groupIds: [], branchIds: [] })}>
+                  <Select value={form.role} onValueChange={value => setForm({ ...form, role: value, branchId: "", groupIds: [], branchIds: [], budgetAllocationEnabled: false })}>
                     <SelectTrigger name="role" className={errors.role ? 'border-red-500' : ''}>
                       <SelectValue placeholder="Select role" />
                     </SelectTrigger>
@@ -895,6 +897,20 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                     <p className="text-xs text-red-600">{errors.role}</p>
                   )}
                 </div>
+
+                {form.role === "GROUP_USER" && (
+                  <div className="flex items-center justify-between rounded-lg border p-4">
+                    <div className="space-y-0.5">
+                      <Label htmlFor="create-budget-allocation">Budget Allocation</Label>
+                      <p className="text-xs text-muted-foreground">Allow this user to allocate money budgets to assigned branches</p>
+                    </div>
+                    <Switch
+                      id="create-budget-allocation"
+                      checked={form.budgetAllocationEnabled}
+                      onCheckedChange={(checked) => setForm({ ...form, budgetAllocationEnabled: checked })}
+                    />
+                  </div>
+                )}
 
                 {/* Branch Selector - Only for Branch Admin and Order Portal */}
                 {isSingleBranchRole(form.role) && (
