@@ -414,6 +414,13 @@
       "when": 1789905600000,
       "tag": "20260916120000_add_email_verification_and_password_changed",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1790164800000,
+      "tag": "20260917120000_group_user_budget_allocation_permission",
+      "breakpoints": true
     }
   ]
 }

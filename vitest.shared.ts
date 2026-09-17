@@ -23,4 +23,5 @@ export const sharedExclude = [
   'node_modules/**',
   '.next/**',
   'dist/**',
+  'tmp/**',
 ]

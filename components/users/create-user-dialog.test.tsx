@@ -134,6 +134,27 @@ describe("CreateUserDialog", () => {
     ).not.toBeNull()
   })
 
+  it("shows an off-by-default budget allocation switch only for Group User", async () => {
+    render(<CreateUserDialog />)
+    fireEvent.click(screen.getByRole("button", { name: "Create User" }))
+    fireEvent.change(await screen.findByLabelText(/^First Name/), { target: { value: "Budget" } })
+    fireEvent.change(screen.getByLabelText(/^Last Name/), { target: { value: "User" } })
+    fireEvent.change(screen.getByLabelText(/^Email Address/), { target: { value: "budget.user@example.com" } })
+    fireEvent.change(screen.getByLabelText(/^Username/), { target: { value: "budget.user" } })
+    fireEvent.change(screen.getByLabelText(/^Password/), { target: { value: "StrongPassword1!" } })
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+
+    expect(screen.queryByLabelText("Budget Allocation")).toBeNull()
+    const roleSelect = document.querySelector('[name="role"]')
+    fireEvent.keyDown(roleSelect as Element, { key: "Enter" })
+    fireEvent.click(await screen.findByRole("option", { name: "Group User", hidden: true }))
+
+    const budgetSwitch = await screen.findByLabelText("Budget Allocation")
+    expect(budgetSwitch.getAttribute("aria-checked")).toBe("false")
+    fireEvent.click(budgetSwitch)
+    expect(budgetSwitch.getAttribute("aria-checked")).toBe("true")
+  })
+
   it("visually distinguishes the disabled Next button on step 2", async () => {
     render(<CreateUserDialog />)
 

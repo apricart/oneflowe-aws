@@ -135,6 +135,7 @@ export const users = pgTable(
       .references(() => roles.id)
       .notNull(),
     isActive: boolean("is_active").notNull().default(true),
+    budgetAllocationEnabled: boolean("budget_allocation_enabled").notNull().default(false),
     fullName: varchar("full_name", { length: 255 }),
     firstName: varchar("first_name", { length: 100 }),
     lastName: varchar("last_name", { length: 100 }),

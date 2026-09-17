@@ -11,6 +11,7 @@ import * as groupsRoute from "@/app/api/v1/group-portal/groups/route"
 import * as reportRoute from "@/app/api/v1/group-portal/reports/group-orders/route"
 import * as scopeRoute from "@/app/api/v1/group-portal/scope/route"
 import * as usersRoute from "@/app/api/v1/users/route"
+import * as userAccessRoute from "@/app/api/v1/users/[id]/access/route"
 import {
   auditLogs,
   branches,
@@ -63,6 +64,7 @@ const { GET: getGroups } = groupsRoute
 const { GET: getReport } = reportRoute
 const { GET: getScope } = scopeRoute
 const { POST: createUser } = usersRoute
+const { PATCH: changeUserAccess } = userAccessRoute
 
 type Actor = {
   id: string
@@ -94,6 +96,14 @@ function allocationRequest(body: unknown): NextRequest {
 function userRequest(body: unknown): Request {
   return new Request("http://localhost/api/v1/users", {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+}
+
+function accessRequest(userId: string, body: unknown): NextRequest {
+  return new NextRequest(`http://localhost/api/v1/users/${userId}/access`, {
+    method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   })
@@ -411,7 +421,7 @@ describe.skipIf(!hasTestDatabase)("group-based roles through their real API and 
 
     it("lets Head Office create a Group User only inside its own tenant", async () => {
       signIn(actor("head"))
-      const good = payload("GROUP_USER", "approver")
+      const good = { ...payload("GROUP_USER", "approver"), budgetAllocationEnabled: true }
 
       const response = await createUser(userRequest(good))
       const body = await response.json()
@@ -419,7 +429,12 @@ describe.skipIf(!hasTestDatabase)("group-based roles through their real API and 
 
       expect(response.status).toBe(201)
       const [stored] = await db
-        .select({ role: roles.name, organizationId: users.organizationId, branchId: users.branchId })
+        .select({
+          role: roles.name,
+          organizationId: users.organizationId,
+          branchId: users.branchId,
+          budgetAllocationEnabled: users.budgetAllocationEnabled,
+        })
         .from(users)
         .innerJoin(roles, eq(users.roleId, roles.id))
         .where(eq(users.id, body.item.id))
@@ -427,6 +442,7 @@ describe.skipIf(!hasTestDatabase)("group-based roles through their real API and 
         role: "GROUP_USER",
         organizationId: fixtures.organizationId,
         branchId: null,
+        budgetAllocationEnabled: true,
       })
 
       signIn(actor("foreignHead"))
@@ -438,6 +454,11 @@ describe.skipIf(!hasTestDatabase)("group-based roles through their real API and 
         .from(users)
         .where(and(eq(users.email, denied.email), inArray(users.organizationId, [fixtures.organizationId]))))
         .toEqual([])
+
+      signIn(actor("head"))
+      expect((await changeUserAccess(accessRequest(fixtures.requesterId, { budgetAllocationEnabled: true }), {
+        params: Promise.resolve({ id: fixtures.requesterId }),
+      })).status).toBe(400)
     })
 
     it.each(["BRANCH_ADMIN", "GROUP_ORDER_PORTAL", "GROUP_USER"])(
@@ -689,6 +710,67 @@ describe.skipIf(!hasTestDatabase)("group-based roles through their real API and 
       }))
       expect(response.status).toBe(403)
       expect((await response.json()).error).toBe("Unauthorized: Branch belongs to different organization")
+    })
+
+    it("defaults a new Group User to denied, then grants and revokes only within its tenant and assigned branches", async () => {
+      signIn(actor("head"))
+      const created = await createUser(userRequest({
+        firstName: "Budget",
+        lastName: "Opt In",
+        email: `it-budget-opt-in-${fixtures.suffix}@example.test`,
+        username: `it-budget-opt-in-${fixtures.suffix}`,
+        password: "Strong-Test-Password-9!",
+        role: "GROUP_USER",
+        organizationId: fixtures.organizationId,
+        branchId: null,
+        groupIds: [fixtures.alphaGroupId],
+        branchIds: [],
+      }))
+      expect(created.status).toBe(201)
+      const userId = (await created.json()).item.id as string
+      createdUserIds.push(userId)
+      const [stored] = await db.select({ enabled: users.budgetAllocationEnabled })
+        .from(users).where(eq(users.id, userId))
+      expect(stored.enabled).toBe(false)
+
+      const newGroupUser = { ...actor("approver"), id: userId }
+      const write = (branchId: number) => allocationRequest({
+        branchId,
+        amountAllocatedCents: 1,
+        type: "addon",
+      })
+      signIn(newGroupUser)
+      expect((await listFor()).status).toBe(403)
+      expect((await allocateMoneyBudget(write(fixtures.alphaNorthId))).status).toBe(403)
+
+      signIn(actor("foreignHead"))
+      expect((await changeUserAccess(accessRequest(userId, { budgetAllocationEnabled: true }), {
+        params: Promise.resolve({ id: userId }),
+      })).status).toBe(403)
+      signIn(actor("approver"))
+      expect((await changeUserAccess(accessRequest(userId, { budgetAllocationEnabled: true }), {
+        params: Promise.resolve({ id: userId }),
+      })).status).toBe(403)
+
+      signIn(actor("head"))
+      expect((await changeUserAccess(accessRequest(userId, { budgetAllocationEnabled: true }), {
+        params: Promise.resolve({ id: userId }),
+      })).status).toBe(200)
+      signIn(newGroupUser)
+      const allowed = await listFor()
+      expect(allowed.status).toBe(200)
+      expect(branchIdsOf(allowed.body)).toEqual([fixtures.alphaNorthId, fixtures.alphaSouthId].sort((a, b) => a - b))
+      expect((await allocateMoneyBudget(write(fixtures.betaBranchId))).status).toBe(403)
+      expect((await allocateMoneyBudget(write(fixtures.foreignBranchId))).status).toBe(403)
+      expect((await allocateMoneyBudget(write(fixtures.alphaNorthId))).status).toBe(200)
+
+      signIn(actor("head"))
+      expect((await changeUserAccess(accessRequest(userId, { budgetAllocationEnabled: false }), {
+        params: Promise.resolve({ id: userId }),
+      })).status).toBe(200)
+      signIn(newGroupUser)
+      expect((await listFor()).status).toBe(403)
+      expect((await allocateMoneyBudget(write(fixtures.alphaNorthId))).status).toBe(403)
     })
   })
 })

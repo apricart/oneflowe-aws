@@ -150,6 +150,10 @@ export async function createGroupRoleFixtures(): Promise<GroupRoleFixtures> {
   const requesterId = await person("requester", role.requester, organization.id)
   const approverId = await person("approver", role.approver, organization.id)
   const emptyApproverId = await person("empty-approver", role.approver, organization.id)
+  // Existing allocation coverage exercises the explicitly granted path.
+  await db.update(users)
+    .set({ budgetAllocationEnabled: true })
+    .where(inArray(users.id, [approverId, emptyApproverId]))
 
   const [alphaGroup] = await db
     .insert(groups)

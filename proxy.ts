@@ -181,7 +181,7 @@ const ADMIN_PORTAL_ROLES = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"]
  * The approver works inside the admin shell so it gets the same sidebar and
  * topbar, but it is not an administrator: it may reach the dashboard and order
  * directory for the branches assigned to it, its own approval queue, the
- * reports those assignments scope, the money budgets of those same branches,
+ * reports those assignments scope, optionally the money budgets of those same branches,
  * and settings. Every other shell area — organizations, users, inventory,
  * branches, quantity budgets — stays closed, and this allowlist fails closed
  * for anything not named in it.
@@ -245,7 +245,7 @@ function isSupportArea(pathname: string): boolean {
  * ORDER_PORTAL -> /shop and the group roles -> /group-portal are mutually
  * exclusive: neither can reach the other's area or the admin shell.
  */
-function rolePortalRedirect(role: string | undefined, pathname: string): string | null {
+function rolePortalRedirect(role: string | undefined, pathname: string, budgetAllocationEnabled = false): string | null {
   if (pathname.startsWith("/change-password")) return null
 
   if (role === "ORDER_PORTAL") {
@@ -255,6 +255,7 @@ function rolePortalRedirect(role: string | undefined, pathname: string): string 
     return pathname.startsWith("/shop") || isInvoiceArea(pathname) || isSupportArea(pathname) ? null : "/shop"
   }
   if (role === "GROUP_USER") {
+    if (pathMatchesPrefix(pathname, "/budgets") && !budgetAllocationEnabled) return GROUP_USER_HOME
     // The approval queue links each approved order to its invoice, and the
     // support area is shared by every role.
     return isInvoiceArea(pathname)
@@ -334,7 +335,7 @@ export async function proxy(req: NextRequest) {
   }
 
   // Role-based routing enforcement
-  const roleRedirect = rolePortalRedirect(role, pathname)
+  const roleRedirect = rolePortalRedirect(role, pathname, (token as any).budgetAllocationEnabled === true)
   if (roleRedirect) {
     const url = new URL(roleRedirect, req.url || "http://localhost")
     const redirectRes = NextResponse.redirect(url)
