@@ -16,7 +16,7 @@ import {
 } from "./chart-kit"
 
 /**
- * The chrome every panel on the Compare Side by Side tab is wrapped in, and the
+ * The chrome every panel on the Product Performance tab is wrapped in, and the
  * formatters every label and tooltip goes through.
  *
  * A wrong abbreviation or a card that draws an empty axis instead of saying why

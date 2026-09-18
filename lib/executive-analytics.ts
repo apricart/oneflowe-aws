@@ -517,6 +517,78 @@ export function chartMode(chart: ChartTypeId): "rank" | "series" {
 /** How many entities may be compared at once, so one request stays bounded. */
 export const MAX_COMPARE_ENTITIES = 25
 
+// ── The grid: one figure per pair ──────────────────────────────────────────
+
+/**
+ * The dimensions a two-way grid may be laid out on.
+ *
+ * Only entities whose ranked keys are plain ids that fold straight back into a
+ * filter: a person, a product, a category, a branch. The time axes are absent
+ * because a period is not a thing to cross with another; groups and
+ * organizations because their keys are resolved into the branch fence
+ * upstream rather than filtered downstream, and a budget-bearing rollup has
+ * nothing to say per product anyway.
+ */
+export const MATRIX_DIMENSIONS = ["user", "product", "category", "branch"] as const satisfies readonly ExecutiveDimensionId[]
+export type MatrixDimensionId = (typeof MATRIX_DIMENSIONS)[number]
+
+/**
+ * The measures a cell may hold.
+ *
+ * Never a budget figure — a budget is held per branch, and there is no such
+ * thing as "Ahmed's budget for toner". Never the average order value either,
+ * for the reason `metricsUnderLineFocus` gives: a product on one axis makes
+ * every cell line-scoped, and the average of whole orders that happened to
+ * contain the product is not the product's own average.
+ */
+export const MATRIX_METRICS = ["spend", "orders", "quantity", "avgUnitPrice"] as const satisfies readonly ExecutiveMetricId[]
+
+/** How many entities each axis may carry, so a grid stays readable and bounded. */
+export const MATRIX_MAX_ENTITIES = 12
+export const MATRIX_DEFAULT_ENTITIES = 8
+
+export function isMatrixDimension(value: unknown): value is MatrixDimensionId {
+  return typeof value === "string" && (MATRIX_DIMENSIONS as readonly string[]).includes(value)
+}
+
+export function isMatrixMetric(value: unknown): value is ExecutiveMetricId {
+  return typeof value === "string" && (MATRIX_METRICS as readonly string[]).includes(value)
+}
+
+/**
+ * Whether the server will lay out this grid at all. Both axes must be grid
+ * dimensions and different from each other, and the metric must be one both
+ * of them already answer on their own — a cell is a narrowing of two bars.
+ */
+export function isSupportedMatrix(rows: unknown, columns: unknown, metric: unknown): boolean {
+  if (!isMatrixDimension(rows) || !isMatrixDimension(columns) || rows === columns) return false
+  if (!isMatrixMetric(metric)) return false
+  return EXECUTIVE_DIMENSIONS[rows].metrics.includes(metric)
+    && EXECUTIVE_DIMENSIONS[columns].metrics.includes(metric)
+}
+
+export function clampMatrixLimit(value: unknown): number {
+  const parsed = Math.trunc(Number(value))
+  if (!Number.isFinite(parsed) || parsed <= 0) return MATRIX_DEFAULT_ENTITIES
+  return Math.min(parsed, MATRIX_MAX_ENTITIES)
+}
+
+/**
+ * The grain a pair of axes forces: line grain the moment either axis, the
+ * metric or a focus needs order lines, order grain only when every part of the
+ * question can be answered from whole orders (a person against a branch, in
+ * money). Never budget grain — `isSupportedMatrix` has already refused those.
+ */
+export function resolveMatrixGrain(
+  rows: MatrixDimensionId,
+  columns: MatrixDimensionId,
+  metric: ExecutiveMetricId,
+  options?: { lineScoped?: boolean },
+): "order" | "line" {
+  const forced = [rows, columns].some((axis) => resolveGrain(axis, metric, options) === "line")
+  return forced ? "line" : "order"
+}
+
 // ── Arithmetic ─────────────────────────────────────────────────────────────
 // Every one of these is written to survive a zero denominator, because a branch
 // with no budget and a period with no history are both ordinary states here.
@@ -850,6 +922,13 @@ export type SideBySidePanel = {
    * subject line; the day-by-day panel is the useful view of that case.
    */
   hiddenForSingleProduct?: boolean
+  /**
+   * When set, the panel is a two-way grid served by `/matrix` rather than a
+   * ranking served by `/compare`: `dimension` is the column axis and `rows`
+   * the row axis, one figure per pair. The dimension is kept in its usual slot
+   * so everything that reasons about "which panels name products" still does.
+   */
+  matrix?: { rows: MatrixDimensionId }
 }
 
 export const SIDE_BY_SIDE_PANELS: SideBySidePanel[] = [
@@ -867,6 +946,20 @@ export const SIDE_BY_SIDE_PANELS: SideBySidePanel[] = [
     colorful: true,
     hiddenForSingleProduct: true,
   },
+  /**
+   * The category angle the requirement lists beside the product one. Withheld
+   * for a single focused product for the same reason the product panels are:
+   * one product belongs to one category, so the panel would be one bar.
+   */
+  {
+    id: "by-category",
+    dimension: "category",
+    chart: "bar",
+    title: "By category",
+    question: "Which categories consumed the most?",
+    colorful: true,
+    hiddenForSingleProduct: true,
+  },
   {
     id: "by-requester",
     dimension: "user",
@@ -874,6 +967,23 @@ export const SIDE_BY_SIDE_PANELS: SideBySidePanel[] = [
     title: "By requester",
     question: "Who consumed the most?",
     colorful: true,
+  },
+  /**
+   * Requester against product, uncombined. "By requester" with three products
+   * in focus gives one bar per person summed over the three; this gives the
+   * nine figures behind those bars, one per (person, product), which is what
+   * "compare several people, product by product" actually asks for. Withheld
+   * for a single product, where "By requester" already is that answer.
+   */
+  {
+    id: "requester-by-product",
+    dimension: "product",
+    matrix: { rows: "user" },
+    chart: "column",
+    title: "Requester × product",
+    question: "How much did each requester consume of each product — one figure per pair, never combined?",
+    colorful: true,
+    hiddenForSingleProduct: true,
   },
   {
     id: "by-branch",

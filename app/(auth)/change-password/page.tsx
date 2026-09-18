@@ -10,14 +10,24 @@ import { OTPInput } from "@/components/mfa/otp-input"
 import { useToast } from "@/hooks/use-toast"
 import Image from "next/image"
 import { Eye, EyeOff, MailCheck, ShieldAlert, ShieldCheck } from "lucide-react"
+import { isEmailVerificationRequiredForPasswordChange } from "@/lib/password-change-policy"
 import { securelySignOut } from "@/lib/session-coordination"
 
 /**
  * Three steps, each enforced by the server regardless of what this page does:
  * a code goes to the address on the account, the code is entered back, and
  * only then is a new password accepted (`lib/server/password-change.ts`).
+ *
+ * While `lib/password-change-policy.ts` has the emailed code switched off the
+ * page opens on the password step and never asks for a code. If the server
+ * turns out to want one anyway (a 403 `EMAIL_VERIFICATION_REQUIRED`) the
+ * page falls back to the send step, so the two can never strand anyone.
  */
 type Step = "send" | "code" | "password"
+
+function initialStep(): Step {
+  return isEmailVerificationRequiredForPasswordChange() ? "send" : "password"
+}
 
 const EMAIL_UNROUTABLE_CODE = "EMAIL_UNROUTABLE"
 const EMAIL_VERIFICATION_REQUIRED_CODE = "EMAIL_VERIFICATION_REQUIRED"
@@ -96,7 +106,8 @@ export default function ChangePasswordPage() {
   const { status } = useSession()
   const { toast } = useToast()
 
-  const [step, setStep] = useState<Step>("send")
+  const [step, setStep] = useState<Step>(initialStep)
+  const [emailVerified, setEmailVerified] = useState(false)
   const [emailHint, setEmailHint] = useState<string | null>(null)
   const [validForMinutes, setValidForMinutes] = useState<number | null>(null)
   const [unroutable, setUnroutable] = useState(false)
@@ -162,6 +173,7 @@ export default function ChangePasswordPage() {
         setFormError(data?.error || "That code was not accepted. Please try again.")
         return
       }
+      setEmailVerified(true)
       setStep("password")
     } catch {
       setFormError("An unexpected error occurred. Please try again.")
@@ -187,9 +199,15 @@ export default function ChangePasswordPage() {
       })
 
       if (httpStatus === 403 && data?.code === EMAIL_VERIFICATION_REQUIRED_CODE) {
-        // The proof expired or was spent; start again from the code.
+        // The proof expired or was spent — or the server requires one this
+        // page did not ask for; either way, start from the code.
+        setEmailVerified(false)
         setStep("send")
-        setFormError("Your verification has expired. Please request a new code.")
+        setFormError(
+          emailVerified
+            ? "Your verification has expired. Please request a new code."
+            : "Please verify your email address before setting a new password.",
+        )
         return
       }
       if (httpStatus === 401) {
@@ -364,12 +382,21 @@ export default function ChangePasswordPage() {
 
             {step === "password" && (
               <form onSubmit={submitPassword} className="grid gap-4">
-                <div className="flex items-start gap-3 rounded-md border border-green-200 bg-green-50 p-3">
-                  <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-green-600" />
-                  <p className="text-sm text-green-800 leading-relaxed">
-                    Email verified. Enter your current password and choose a new one you have not used before.
-                  </p>
-                </div>
+                {emailVerified ? (
+                  <div className="flex items-start gap-3 rounded-md border border-green-200 bg-green-50 p-3">
+                    <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-green-600" />
+                    <p className="text-sm text-green-800 leading-relaxed">
+                      Email verified. Enter your current password and choose a new one you have not used before.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="flex items-start gap-3 rounded-md border border-amber-200 bg-amber-50 p-3">
+                    <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+                    <p className="text-sm text-amber-800 leading-relaxed">
+                      Your account requires a new password before you can continue. Enter your current password and choose a new one you have not used before.
+                    </p>
+                  </div>
+                )}
 
                 <PasswordField
                   id="currentPassword"

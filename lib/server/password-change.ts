@@ -5,6 +5,7 @@ import { and, eq, isNull, sql } from "drizzle-orm"
 import { authSessions, roles, sessions, users } from "@/db/schema"
 import { db } from "@/lib/db"
 import { hashPassword, validatePassword, verifyPassword } from "@/lib/password"
+import { isEmailVerificationRequiredForPasswordChange } from "@/lib/password-change-policy"
 import { recordAuthAuditEvent } from "@/lib/server/auth-audit"
 import { evaluateLockout, registerFailedLogin } from "@/lib/server/auth-lockout"
 import { EMAIL_VERIFICATION_VALIDITY_SECONDS } from "@/lib/server/email-verification"
@@ -33,6 +34,13 @@ import { invalidateSessionValidationCache } from "@/lib/session-validation-cache
  * the account — this one included — is refused from the next request, and
  * the physical session rows dropped. A failure anywhere leaves the proof in
  * place and the password as it was.
+ *
+ * While `lib/password-change-policy.ts` has the emailed proof switched off,
+ * step 1 is skipped and the transaction's session update keeps every term of
+ * its predicate except freshness — it still has to find *this* account's
+ * live session, so a revoked or foreign session changes nothing and is
+ * answered `session_invalid`. The audit row then records
+ * `emailVerified: false`. Nothing else in the sequence changes.
  */
 
 export type PasswordChangeInput = {
@@ -45,6 +53,7 @@ export type PasswordChangeInput = {
 export type PasswordChangeOutcome =
   | { kind: "changed"; forced: boolean }
   | { kind: "verification_required" }
+  | { kind: "session_invalid" }
   | { kind: "locked"; retryAfterSeconds: number }
   | { kind: "invalid_current_password" }
   | { kind: "password_unchanged" }
@@ -113,7 +122,7 @@ export async function changeOwnPassword(input: PasswordChangeInput): Promise<Pas
     branchId: account.branchId,
   }
   const refuse = async (
-    reason: "email_verification_required" | "account_locked" | "invalid_password" | "password_unchanged",
+    reason: "email_verification_required" | "session_invalid" | "account_locked" | "invalid_password" | "password_unchanged",
   ): Promise<void> => {
     await recordAuthAuditEvent({
       action: "AUTH_PASSWORD_CHANGE_FAILURE",
@@ -124,7 +133,9 @@ export async function changeOwnPassword(input: PasswordChangeInput): Promise<Pas
     })
   }
 
-  if (!(await hasFreshProof(input.sessionId, account.id))) {
+  const proofRequired = isEmailVerificationRequiredForPasswordChange()
+
+  if (proofRequired && !(await hasFreshProof(input.sessionId, account.id))) {
     await refuse("email_verification_required")
     return { kind: "verification_required" }
   }
@@ -154,7 +165,9 @@ export async function changeOwnPassword(input: PasswordChangeInput): Promise<Pas
   const changed = await db.transaction(async (tx) => {
     // The control: consumed and re-checked in one statement. A proof that
     // expired since the advisory check, or was consumed by a concurrent
-    // request, leaves no row and nothing below runs.
+    // request, leaves no row and nothing below runs. With the proof switched
+    // off only the freshness term goes: the row must still be this account's
+    // live session.
     const [proof] = await tx
       .update(authSessions)
       .set({ emailVerifiedAt: null })
@@ -162,7 +175,7 @@ export async function changeOwnPassword(input: PasswordChangeInput): Promise<Pas
         eq(authSessions.id, input.sessionId),
         eq(authSessions.subjectId, account.id),
         isNull(authSessions.revokedAt),
-        PROOF_FRESH,
+        proofRequired ? PROOF_FRESH : undefined,
       ))
       .returning({ id: authSessions.id })
     if (!proof) return false
@@ -190,8 +203,12 @@ export async function changeOwnPassword(input: PasswordChangeInput): Promise<Pas
   })
 
   if (!changed) {
-    await refuse("email_verification_required")
-    return { kind: "verification_required" }
+    if (proofRequired) {
+      await refuse("email_verification_required")
+      return { kind: "verification_required" }
+    }
+    await refuse("session_invalid")
+    return { kind: "session_invalid" }
   }
 
   // Drop the cached session-validation result so the sessionVersion bump
@@ -202,7 +219,7 @@ export async function changeOwnPassword(input: PasswordChangeInput): Promise<Pas
     action: "AUTH_PASSWORD_CHANGED",
     ...audit,
     success: true,
-    details: { forced: account.mustChangePassword, emailVerified: true },
+    details: { forced: account.mustChangePassword, emailVerified: proofRequired },
   })
   return { kind: "changed", forced: account.mustChangePassword }
 }

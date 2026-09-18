@@ -21,6 +21,7 @@ import {
 } from "recharts"
 
 import type { ChartTypeId, ExecutiveDimensionId } from "@/lib/executive-analytics"
+import type { ExecutiveFilterState } from "./executive-filters"
 import {
   AXIS_STYLE,
   DataTable,
@@ -78,6 +79,16 @@ export type DrillTarget = {
   label: string
   /** "YYYY-MM" or "YYYY-MM-DD" when the click also named a bucket. */
   period?: string
+  /**
+   * A second entity the click named, as a narrowing of the shared filters.
+   *
+   * A cell of the requester × product grid is one person *and* one product;
+   * the person travels as the key and the product overrides the screen's
+   * product focus for this one request, so the table shows that pair and not
+   * the person across every focused product. Only filters the server already
+   * applies can be named here — there is no new parameter to audit.
+   */
+  narrow?: Partial<Pick<ExecutiveFilterState, "productIds" | "userIds" | "categoryIds" | "branchIds">>
 }
 
 type ChartProps = {
@@ -632,9 +643,23 @@ function ScatterCompare({ rows, format, metricLabel, unit, dimension, onDrillDow
 
 // ── Table ──────────────────────────────────────────────────────────────────
 
-function ComparisonTable({
+/** What the ranked table reads; `ComparisonChart` hands it the full chart props. */
+export type ComparisonTableProps = Pick<
+  ChartProps,
+  "rows" | "format" | "metricLabel" | "dimensionLabel" | "concentrationEligible" | "dimension" | "onDrillDown"
+>
+
+/**
+ * The table form of a ranking: the same rows, readable without colour.
+ *
+ * Reached two ways — as the `table` chart type in the Explore workbench, and
+ * as the table view of every ranked panel on the Product Performance screen,
+ * where it is what makes "graph + table" true for the bar panels and not only
+ * the trends.
+ */
+export function ComparisonTable({
   rows, format, metricLabel, dimensionLabel, concentrationEligible, dimension, onDrillDown,
-}: Readonly<ChartProps>) {
+}: Readonly<ComparisonTableProps>) {
   return (
     <DataTable
       columns={[

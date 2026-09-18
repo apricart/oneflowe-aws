@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { useSession } from "next-auth/react"
+import { usePathname, useSearchParams } from "next/navigation"
 import { BarChart3, Compass, LayoutDashboard, LayoutGrid, ShieldAlert } from "lucide-react"
 
 import { Card, CardContent } from "@/components/ui/card"
@@ -75,16 +76,54 @@ type OverviewResponse = {
 
 /**
  * The three levels of the Center, in the order a reader moves through them:
- * what is happening, then how these things compare side by side, then an
- * open-ended question of their own.
+ * what is happening, then how products, categories, people, branches and
+ * months compare side by side, then an open-ended question of their own.
+ *
+ * The id is the `?tab=` value, so it is user-facing: `product-performance` is
+ * the name the client gave that screen and what the sidebar links to.
  */
-type AnalyticsTab = "overview" | "side-by-side" | "explore"
+type AnalyticsTab = "overview" | "product-performance" | "explore"
 
 const ANALYTICS_TABS = [
   { id: "overview", label: "Executive Overview", icon: LayoutDashboard },
-  { id: "side-by-side", label: "Compare Side by Side", icon: LayoutGrid },
+  { id: "product-performance", label: "Product Performance", icon: LayoutGrid },
   { id: "explore", label: "Explore & Compare", icon: Compass },
 ] as const satisfies ReadonlyArray<{ id: AnalyticsTab; label: string; icon: typeof LayoutDashboard }>
+
+const DEFAULT_TAB: AnalyticsTab = "overview"
+const TAB_PARAM = "tab"
+
+function isAnalyticsTab(value: string | null): value is AnalyticsTab {
+  return ANALYTICS_TABS.some((entry) => entry.id === value)
+}
+
+/**
+ * The tab, read from and written to `?tab=`.
+ *
+ * The URL is the single source of truth, so a sidebar link straight to one
+ * level opens on it, a bookmark returns to it, and a link followed while the
+ * page is already open — which changes only the search params — still
+ * switches. The URL is written with the native History API rather than
+ * `router.replace`: Next syncs `useSearchParams` from it without a round trip,
+ * so a tab click stays instant. An unknown value falls back to the overview
+ * rather than rendering nothing.
+ */
+function useAnalyticsTab(): [AnalyticsTab, (next: AnalyticsTab) => void] {
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const requested = searchParams.get(TAB_PARAM)
+  const tab = isAnalyticsTab(requested) ? requested : DEFAULT_TAB
+
+  const setTab = React.useCallback((next: AnalyticsTab) => {
+    const params = new URLSearchParams(searchParams.toString())
+    if (next === DEFAULT_TAB) params.delete(TAB_PARAM)
+    else params.set(TAB_PARAM, next)
+    const query = params.toString()
+    window.history.replaceState(null, "", query ? `${pathname}?${query}` : pathname)
+  }, [pathname, searchParams])
+
+  return [tab, setTab]
+}
 
 /**
  * The opening range comes from the same function the date control uses to
@@ -95,18 +134,31 @@ function defaultFilters(): ExecutiveFilterState {
   return {
     ...executiveDefaultDates(),
     organizationIds: [],
+    groupIds: [],
     branchIds: [],
     categoryIds: [],
     unit: null,
   }
 }
 
+/**
+ * The Suspense boundary is for `useSearchParams`: without one, a prerender
+ * would bail the whole page to the client. Same shape as the orders page.
+ */
 export default function GraphicalReportsPage() {
+  return (
+    <React.Suspense fallback={<div className="p-6 text-sm text-slate-500">Loading…</div>}>
+      <GraphicalReportsContent />
+    </React.Suspense>
+  )
+}
+
+function GraphicalReportsContent() {
   const { data: session, status } = useSession()
   const role = ((session?.user as { role?: string } | undefined)?.role || "").toUpperCase()
   const authorized = (EXECUTIVE_ANALYTICS_ROLES as readonly string[]).includes(role)
 
-  const [tab, setTab] = React.useState<AnalyticsTab>("overview")
+  const [tab, setTab] = useAnalyticsTab()
   const [filters, setFilters] = React.useState<ExecutiveFilterState>(defaultFilters)
   const [priceProduct, setPriceProduct] = React.useState<{ productId: number; unit: string; name?: string } | null>(null)
 
@@ -130,7 +182,7 @@ export default function GraphicalReportsPage() {
   const openPriceDrilldown = React.useCallback((productId: number, unit: string, name?: string) => {
     setPriceProduct({ productId, unit, name })
     setTab("explore")
-  }, [])
+  }, [setTab])
 
   if (status === "loading") {
     return <div className="p-6 text-sm text-slate-500">Loading…</div>
@@ -171,7 +223,7 @@ export default function GraphicalReportsPage() {
             Graphical Reports
           </h1>
           <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-            Executive procurement analytics — budget position, side-by-side comparison across products, people,
+            Executive procurement analytics — budget position, product performance across products, categories, people,
             branches and months, and the order lines behind any figure.
             {data ? ` Covering ${data.scope.branchCount} branch${data.scope.branchCount === 1 ? "" : "es"} in your scope.` : ""}
           </p>
@@ -289,7 +341,7 @@ export default function GraphicalReportsPage() {
         </div>
       ) : null}
 
-      {tab === "side-by-side" ? <SideBySideWorkspace filters={filters} /> : null}
+      {tab === "product-performance" ? <SideBySideWorkspace filters={filters} /> : null}
 
       {tab === "explore" ? (
         <ExploreWorkspace

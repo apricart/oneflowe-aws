@@ -7,7 +7,7 @@ import {
 } from "@/lib/executive-analytics"
 
 /**
- * The Excel form of the Compare Side by Side screen.
+ * The Excel form of the Product Performance screen.
  *
  * This module is pure — no React, no `xlsx`, no network — so the shape of the
  * workbook can be unit-tested on its own and the client half is left with
@@ -38,8 +38,8 @@ export type ExportSeries = {
   points: Array<{ period: string; value: number }>
 }
 
-/** What a panel holds once the comparison endpoint has answered. */
-export type SideBySidePanelResponse = {
+/** What a ranking or trend panel holds once `/compare` has answered. */
+export type SideBySideComparisonResponse = {
   rows: ExportRankRow[]
   series: ExportSeries[]
   periods: string[]
@@ -51,6 +51,27 @@ export type SideBySidePanelResponse = {
   quantityUnit: { selected: string | null }
   blocked?: { reason: string; message: string }
 }
+
+/** One entity on an axis of the grid, with the figure it was ranked by. */
+export type ExportMatrixEntity = { key: string; label: string; total: number }
+
+/** What the grid panel holds once `/matrix` has answered. */
+export type SideBySideMatrixResponse = {
+  mode: "matrix"
+  rowLabel: string
+  columnLabel: string
+  rows: ExportMatrixEntity[]
+  columns: ExportMatrixEntity[]
+  cells: Array<{ row: string; column: string; value: number }>
+  format: string
+  label: string
+  formula: string
+  quantityUnit: { selected: string | null }
+  blocked?: { reason: string; message: string }
+}
+
+/** What a panel holds once its endpoint has answered. */
+export type SideBySidePanelResponse = SideBySideComparisonResponse | SideBySideMatrixResponse
 
 /**
  * One panel's current state, as the screen reports it.
@@ -74,6 +95,7 @@ export type SideBySideExportContext = {
   metricFormula: string
   /** Empty means "all"; every list is names, not ids. */
   organizations: string[]
+  groups: string[]
   branches: string[]
   categories: string[]
   products: string[]
@@ -146,7 +168,7 @@ function noteSheet(name: string, note: string): WorkbookSheet {
   return { name, columns: ["Note"], rows: [[note]], columnWidths: [90] }
 }
 
-function rankSheet(name: string, panel: SideBySidePanel, response: SideBySidePanelResponse): WorkbookSheet {
+function rankSheet(name: string, panel: SideBySidePanel, response: SideBySideComparisonResponse): WorkbookSheet {
   const dimensionLabel = EXECUTIVE_DIMENSIONS[panel.dimension].label
   const metricHeader = metricColumnHeader(response.label, response.format, response.quantityUnit.selected)
   // The server computes no prior window for a time axis: the months *are* the
@@ -176,7 +198,7 @@ function rankSheet(name: string, panel: SideBySidePanel, response: SideBySidePan
   return { name, columns, rows, columnWidths: widths }
 }
 
-function seriesSheet(name: string, panel: SideBySidePanel, response: SideBySidePanelResponse): WorkbookSheet {
+function seriesSheet(name: string, panel: SideBySidePanel, response: SideBySideComparisonResponse): WorkbookSheet {
   const dimensionLabel = EXECUTIVE_DIMENSIONS[panel.dimension].label
   const metricHeader = metricColumnHeader(response.label, response.format, response.quantityUnit.selected)
   const periods = response.periods
@@ -198,6 +220,39 @@ function seriesSheet(name: string, panel: SideBySidePanel, response: SideBySideP
   }
 }
 
+/**
+ * The grid, margins included: one row per row entity, one column per column
+ * entity, and the row's own ranked total last. A pair the server sent no cell
+ * for is left blank rather than written as 0 — "bought nothing" and "bought a
+ * refunded-to-nothing amount" are different facts, and the screen shows a dash.
+ */
+function matrixSheet(name: string, response: SideBySideMatrixResponse): WorkbookSheet {
+  const metricHeader = metricColumnHeader(response.label, response.format, response.quantityUnit.selected)
+  const byPair = new Map(response.cells.map((cell) => [`${cell.row}|${cell.column}`, cell.value]))
+  const totalHeader = response.format === "count" ? `${metricHeader} (whole row)` : `Total ${metricHeader}`
+
+  const rows = response.rows.map((row) => [
+    row.label,
+    ...response.columns.map((column) => {
+      const value = byPair.get(`${row.key}|${column.key}`)
+      return value === undefined ? null : cellValue(value, response.format)
+    }),
+    cellValue(row.total, response.format),
+  ])
+  rows.push([
+    response.format === "count" ? `${metricHeader} (whole column)` : "Total",
+    ...response.columns.map((column) => cellValue(column.total, response.format)),
+    null,
+  ])
+
+  return {
+    name,
+    columns: [`${response.rowLabel} / ${response.columnLabel}`, ...response.columns.map((column) => column.label), totalHeader],
+    rows,
+    columnWidths: [36, ...response.columns.map(() => 16), 24],
+  }
+}
+
 /** One sheet for one panel, whatever state it is in. */
 function panelSheet(name: string, panel: SideBySidePanel, snapshot: SideBySidePanelSnapshot | undefined): WorkbookSheet {
   if (!snapshot || snapshot.loading || !snapshot.response) {
@@ -206,6 +261,11 @@ function panelSheet(name: string, panel: SideBySidePanel, snapshot: SideBySidePa
   if (snapshot.error) return noteSheet(name, snapshot.error)
   const { response } = snapshot
   if (response.blocked) return noteSheet(name, response.blocked.message)
+
+  if (response.mode === "matrix") {
+    if (response.rows.length === 0 || response.columns.length === 0) return noteSheet(name, EMPTY_PANEL_NOTE)
+    return matrixSheet(name, response)
+  }
 
   const isEmpty = response.mode === "series" ? response.series.length === 0 : response.rows.length === 0
   if (isEmpty) return noteSheet(name, EMPTY_PANEL_NOTE)
@@ -223,12 +283,13 @@ function summarySheet(context: SideBySideExportContext, index: Array<{ panel: Si
   })()
 
   const rows: unknown[][] = [
-    ["Report", "Graphical Reports — Compare Side by Side"],
+    ["Report", "Graphical Reports — Product Performance"],
     ["Subject", subject],
     ["Measured by", `${MEASURE_LABEL[context.measure]} (${context.metricLabel})`],
     ["Formula", context.metricFormula],
     ["Period", `${context.startDate} to ${context.endDate}`],
     ["Organizations", nameList(context.organizations)],
+    ["Groups", nameList(context.groups)],
     ["Branches", nameList(context.branches)],
     ["Categories", nameList(context.categories)],
     ["Unit of measure", context.unit ?? "Not selected"],
@@ -285,5 +346,5 @@ export function getSideBySideExportFilename(
   context: Pick<SideBySideExportContext, "startDate" | "endDate" | "measure">,
 ): string {
   const day = (value: string) => value.replace(/[^0-9-]/g, "") || "unknown"
-  return `compare-side-by-side-${context.measure}-${day(context.startDate)}-to-${day(context.endDate)}.xlsx`
+  return `product-performance-${context.measure}-${day(context.startDate)}-to-${day(context.endDate)}.xlsx`
 }

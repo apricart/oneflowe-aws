@@ -137,3 +137,32 @@ export function resolveAnalyticsBranchIds({
     ? requested.filter((branchId) => allowedSet.has(branchId))
     : allowed
 }
+
+/**
+ * A group selection, turned into the branch selection it really is.
+ *
+ * A group is a set of branches, so choosing groups narrows the branch request:
+ * to the groups' member branches when no branch was named, and to the branches
+ * named *inside* those groups when some were. The result is what
+ * `resolveAnalyticsBranchIds` then intersects with the caller's own reach, so
+ * a group can only ever narrow.
+ *
+ * An empty result is returned as empty — never as "no restriction". The
+ * resolver reads an empty *request* as "everything allowed", so a group with
+ * no branches in reach, or a branch named outside the chosen groups, must be
+ * turned into a refusal by the caller rather than handed on as an empty list.
+ */
+export function narrowRequestedBranchIdsToGroups({
+  requestedBranchIds,
+  groupBranchIds,
+}: {
+  requestedBranchIds: unknown[]
+  /** Member branches of the selected groups, already inside the tenant fence. */
+  groupBranchIds: unknown[]
+}): number[] {
+  const members = normalizePositiveIds(groupBranchIds)
+  const requested = normalizePositiveIds(requestedBranchIds)
+  if (requested.length === 0) return members
+  const memberSet = new Set(members)
+  return requested.filter((branchId) => memberSet.has(branchId))
+}

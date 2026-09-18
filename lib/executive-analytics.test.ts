@@ -4,14 +4,22 @@ import {
   DONUT_MAX_SLICES,
   EXECUTIVE_DIMENSIONS,
   EXECUTIVE_METRICS,
+  MATRIX_DEFAULT_ENTITIES,
+  MATRIX_DIMENSIONS,
+  MATRIX_MAX_ENTITIES,
+  MATRIX_METRICS,
   MAX_COMPARE_ENTITIES,
   chartMode,
   chartTypesFor,
   classifyBudgetHealth,
+  clampMatrixLimit,
   dimensionsForRole,
   isBudgetRollupDimension,
   isChartType,
   isDimensionAllowedForRole,
+  isMatrixDimension,
+  isMatrixMetric,
+  isSupportedMatrix,
   metricsUnderLineFocus,
   clampRowLimit,
   countToReachShare,
@@ -19,6 +27,7 @@ import {
   isExecutiveAnalyticsRole,
   isSupportedCombination,
   resolveGrain,
+  resolveMatrixGrain,
   resolveQuantityUnit,
   safeDivide,
   utilizationPct,
@@ -28,9 +37,12 @@ import {
 } from "./executive-analytics"
 import {
   ENTITY_KEY_PARAM,
+  SCOPE_KEYED_DIMENSIONS,
   applyEntityKeys,
+  isScopeKeyedDimension,
   parseComparisonRequest,
   parseExecutiveRequest,
+  parseMatrixRequest,
   parseUuidList,
   previousWindow,
   sanitizeUnit,
@@ -262,6 +274,57 @@ describe("request parsing", () => {
   })
 })
 
+describe("grid request parsing", () => {
+  const now = new Date("2026-08-31T12:00:00.000Z")
+  const parse = (query: string, role?: unknown) => parseMatrixRequest(new URLSearchParams(query), now, role)
+
+  it("accepts requesters against products and carries every shared filter through", () => {
+    const result = parse(
+      "rows=user&columns=product&metric=spend&productIds=186,187&userIds=8b1a0d3e-5a2f-4c1d-9e7b-1f2a3b4c5d6e"
+      + "&categoryIds=4&groupIds=2&startDate=2026-06-01&endDate=2026-08-31&limit=5",
+    )
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.rows).toBe("user")
+    expect(result.columns).toBe("product")
+    expect(result.metric).toBe("spend")
+    expect(result.limit).toBe(5)
+    expect(result.productIds).toEqual([186, 187])
+    expect(result.userIds).toEqual(["8b1a0d3e-5a2f-4c1d-9e7b-1f2a3b4c5d6e"])
+    expect(result.categoryIds).toEqual([4])
+    expect(result.groupIds).toEqual([2])
+    expect(result.startDate.toISOString().slice(0, 10)).toBe("2026-05-31")
+  })
+
+  it("refuses each half of an unlisted grid with its own message, never a default", () => {
+    expect(parse("rows=month&columns=product&metric=spend")).toEqual({ ok: false, error: "Unsupported row dimension" })
+    expect(parse("rows=user&columns=group&metric=spend")).toEqual({ ok: false, error: "Unsupported column dimension" })
+    expect(parse("rows=user&columns=user&metric=spend")).toEqual({ ok: false, error: "Rows and columns must be different dimensions" })
+    expect(parse("rows=user&columns=product&metric=utilization")).toEqual({ ok: false, error: "Unsupported metric" })
+    expect(parse("rows=user&columns=product&metric=avgOrderValue")).toEqual({ ok: false, error: "Unsupported metric" })
+    expect(parse("columns=product&metric=spend")).toEqual({ ok: false, error: "Unsupported row dimension" })
+    expect(parse("rows=user&columns=product")).toEqual({ ok: false, error: "Unsupported metric" })
+  })
+
+  it("clamps the per-axis limit so the grid is bounded whatever is asked", () => {
+    const wide = parse("rows=user&columns=product&metric=quantity&limit=9999")
+    expect(wide.ok && wide.limit).toBe(MATRIX_MAX_ENTITIES)
+    const unset = parse("rows=user&columns=product&metric=quantity")
+    expect(unset.ok && unset.limit).toBe(MATRIX_DEFAULT_ENTITIES)
+  })
+
+  it("still refuses an inverted window like every other request", () => {
+    expect(parse("rows=user&columns=product&metric=spend&startDate=2026-08-01&endDate=2026-07-01"))
+      .toEqual({ ok: false, error: "startDate must be on or before endDate" })
+  })
+
+  it("admits every executive role, since no grid dimension is reserved", () => {
+    for (const role of ["SUPER_ADMIN", "HEAD_OFFICE", "GROUP_USER"]) {
+      expect(parse("rows=user&columns=product&metric=spend", role).ok, role).toBe(true)
+    }
+  })
+})
+
 describe("previous period", () => {
   it("returns an equal-length window that does not overlap the current one", () => {
     const start = new Date("2026-08-01T00:00:00.000Z")
@@ -320,6 +383,70 @@ describe("budget metrics belong to budget-bearing entities", () => {
       expect(isSupportedCombination(dimension, "budgetRemaining")).toBe(false)
       expect(isBudgetRollupDimension(dimension)).toBe(false)
     }
+  })
+})
+
+describe("the two-way grid whitelist", () => {
+  it("lays out only entity dimensions whose keys fold back into a filter", () => {
+    expect([...MATRIX_DIMENSIONS].sort()).toEqual(["branch", "category", "product", "user"])
+    for (const dimension of MATRIX_DIMENSIONS) expect(isMatrixDimension(dimension)).toBe(true)
+    // A period is not a thing to cross with another; a group or a tenant is
+    // resolved into the branch fence upstream, never filtered downstream.
+    for (const dimension of ["month", "day", "group", "organization", "", null, 3]) {
+      expect(isMatrixDimension(dimension)).toBe(false)
+    }
+  })
+
+  it("answers requester against product under both measures, and against branch and category", () => {
+    expect(isSupportedMatrix("user", "product", "spend")).toBe(true)
+    expect(isSupportedMatrix("user", "product", "quantity")).toBe(true)
+    expect(isSupportedMatrix("product", "user", "spend")).toBe(true)
+    expect(isSupportedMatrix("user", "branch", "spend")).toBe(true)
+    expect(isSupportedMatrix("category", "branch", "orders")).toBe(true)
+    expect(isSupportedMatrix("product", "branch", "avgUnitPrice")).toBe(true)
+  })
+
+  it("refuses the same axis twice, a budget figure, and the average order value", () => {
+    expect(isSupportedMatrix("user", "user", "spend")).toBe(false)
+    // A budget is held per branch; "Ahmed's budget for toner" does not exist.
+    expect(isSupportedMatrix("user", "branch", "utilization")).toBe(false)
+    expect(isSupportedMatrix("user", "branch", "budgetRemaining")).toBe(false)
+    // The average of whole orders that happened to contain the product is not
+    // the product's own average — withdrawn for the reason `metricsUnderLineFocus` gives.
+    expect(isSupportedMatrix("user", "product", "avgOrderValue")).toBe(false)
+    expect(isSupportedMatrix("user", "branch", "avgOrderValue")).toBe(false)
+    expect(isMatrixMetric("avgOrderValue")).toBe(false)
+    expect(isMatrixMetric("utilization")).toBe(false)
+    for (const metric of MATRIX_METRICS) expect(isMatrixMetric(metric)).toBe(true)
+  })
+
+  it("refuses a dimension the grid does not lay out, whatever the metric", () => {
+    expect(isSupportedMatrix("group", "product", "spend")).toBe(false)
+    expect(isSupportedMatrix("organization", "user", "spend")).toBe(false)
+    expect(isSupportedMatrix("month", "product", "spend")).toBe(false)
+    expect(isSupportedMatrix(undefined, "product", "spend")).toBe(false)
+    expect(isSupportedMatrix("user", "product", "nope")).toBe(false)
+  })
+
+  it("bounds each axis so a grid can never be wider than the screen can read", () => {
+    expect(clampMatrixLimit(undefined)).toBe(MATRIX_DEFAULT_ENTITIES)
+    expect(clampMatrixLimit("0")).toBe(MATRIX_DEFAULT_ENTITIES)
+    expect(clampMatrixLimit("abc")).toBe(MATRIX_DEFAULT_ENTITIES)
+    expect(clampMatrixLimit("5")).toBe(5)
+    expect(clampMatrixLimit("500")).toBe(MATRIX_MAX_ENTITIES)
+    expect(MATRIX_MAX_ENTITIES).toBeLessThanOrEqual(MAX_COMPARE_ENTITIES)
+  })
+
+  it("runs at line grain the moment a product or category is on either axis", () => {
+    expect(resolveMatrixGrain("user", "product", "spend")).toBe("line")
+    expect(resolveMatrixGrain("product", "user", "spend")).toBe("line")
+    expect(resolveMatrixGrain("category", "branch", "orders")).toBe("line")
+    // Two whole-order entities in money stay at order grain — until a focus
+    // narrows the question to particular products.
+    expect(resolveMatrixGrain("user", "branch", "spend")).toBe("order")
+    expect(resolveMatrixGrain("user", "branch", "orders")).toBe("order")
+    expect(resolveMatrixGrain("user", "branch", "spend", { lineScoped: true })).toBe("line")
+    expect(resolveMatrixGrain("user", "branch", "quantity")).toBe("line")
   })
 })
 
@@ -385,8 +512,24 @@ describe("entity selection", () => {
   it("routes each dimension's keys to the parameter that dimension uses", () => {
     expect(ENTITY_KEY_PARAM.branch).toBe("branchIds")
     expect(ENTITY_KEY_PARAM.organization).toBe("organizationIds")
+    expect(ENTITY_KEY_PARAM.group).toBe("groupIds")
     expect(ENTITY_KEY_PARAM.user).toBe("userIds")
     expect(ENTITY_KEY_PARAM.month).toBeNull()
+  })
+
+  it("folds exactly the dimensions the scope resolver reads into the scope, before the fence", () => {
+    // The resolver reads branchIds, organizationIds and groupIds; a picked
+    // entity of any of those kinds must be intersected with the caller's own
+    // reach rather than applied as a filter afterwards. The two lists are one
+    // decision, so they are asserted together.
+    expect([...SCOPE_KEYED_DIMENSIONS]).toEqual(["branch", "organization", "group"])
+    for (const dimension of SCOPE_KEYED_DIMENSIONS) {
+      expect(isScopeKeyedDimension(dimension)).toBe(true)
+      expect(ENTITY_KEY_PARAM[dimension]).toMatch(/Ids$/)
+    }
+    for (const other of ["user", "category", "product", "month", "day", "nonsense", null, undefined]) {
+      expect(isScopeKeyedDimension(other), String(other)).toBe(false)
+    }
   })
 
   it("folds branch keys into the scope parameter, so they get intersected", () => {

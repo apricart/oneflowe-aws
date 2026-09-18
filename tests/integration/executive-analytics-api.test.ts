@@ -1,13 +1,17 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
+import { eq, inArray } from "drizzle-orm"
 import { NextRequest } from "next/server"
 import * as mockedNextAuth from "next-auth"
 
+import { branches, budgets, groups } from "@/db/schema"
+
 import * as compareRoute from "@/app/api/v1/analytics/executive/compare/route"
 import * as drillDownRoute from "@/app/api/v1/analytics/executive/drill-down/route"
+import * as matrixRoute from "@/app/api/v1/analytics/executive/matrix/route"
 import * as optionsRoute from "@/app/api/v1/analytics/executive/options/route"
 import * as overviewRoute from "@/app/api/v1/analytics/executive/overview/route"
-import { closePool } from "@/lib/db"
+import { closePool, db } from "@/lib/db"
 
 import {
   NO_DATABASE_REASON,
@@ -19,7 +23,7 @@ import {
 } from "./helpers/executive-analytics-fixtures"
 
 /**
- * The Compare Side by Side tab, end to end: the four routes it is built from,
+ * The Product Performance tab, end to end: the four routes it is built from,
  * driven with HTTP-shaped requests against real rows.
  *
  * Only identity is faked. The role gate, the tenant fence, the registry
@@ -62,12 +66,13 @@ const compare = (query: Query) => call(compareRoute.GET, "compare", { ...WINDOW,
 const options = (query: Query) => call(optionsRoute.GET, "options", { ...WINDOW, ...query })
 const drillDown = (query: Query) => call(drillDownRoute.GET, "drill-down", { ...WINDOW, ...query })
 const overview = (query: Query) => call(overviewRoute.GET, "overview", { ...WINDOW, ...query })
+const matrix = (query: Query) => call(matrixRoute.GET, "matrix", { ...WINDOW, ...query })
 
 /** `[label, value]` pairs, in the order the route ranked them. */
 const ranked = (body: any): Array<[string, number]> => body.rows.map((row: any) => [row.label, row.value])
 const keysOf = (body: any): string[] => body.rows.map((row: any) => row.key)
 
-describe.skipIf(!hasTestDatabase)("Compare Side by Side — executive analytics routes", () => {
+describe.skipIf(!hasTestDatabase)("Product Performance — executive analytics routes", () => {
   let f: ExecutiveAnalyticsFixtures
   let headOffice: Actor
   let neighbourHeadOffice: Actor
@@ -102,6 +107,7 @@ describe.skipIf(!hasTestDatabase)("Compare Side by Side — executive analytics 
       ["options", () => options({ dimension: "product" })],
       ["drill-down", () => drillDown({ dimension: "branch", key: String(f.northBranchId), metric: "spend" })],
       ["overview", () => overview({})],
+      ["matrix", () => matrix({ rows: "user", columns: "product", metric: "spend" })],
     ] as const
 
     it.each(everyRoute)("%s refuses an unauthenticated caller with 401", async (_name, run) => {
@@ -684,6 +690,324 @@ describe.skipIf(!hasTestDatabase)("Compare Side by Side — executive analytics 
 
       const chosen = await overview({ unit: "Ream" })
       expect(chosen.body.quantityUnit).toEqual({ selected: "Ream", conflict: false, available: ["Box", "Litre", "Piece", "Ream"] })
+    })
+  })
+
+  // ── The group filter ───────────────────────────────────────────────────
+
+  /**
+   * A group is a set of branches, and the scope resolver turns a `groupIds`
+   * request into one. These put North into a group of its own — and Foreign
+   * into one of tenant B's — for the duration of the block, and give South a
+   * budget so the budget side of the answer can be checked as well as the
+   * order side: an order-level filter would have left South's allocation in
+   * the KPI total while removing South's spend from it.
+   */
+  // ── Requester × product ────────────────────────────────────────────────
+
+  describe("the requester × product grid", () => {
+    /** `{ "<row label>|<column label>": value }` for every cell the route returned. */
+    const cellsOf = (body: any): Record<string, number> => {
+      const rowLabel = new Map(body.rows.map((row: any) => [row.key, row.label]))
+      const columnLabel = new Map(body.columns.map((column: any) => [column.key, column.label]))
+      return Object.fromEntries(
+        body.cells.map((cell: any) => [`${rowLabel.get(cell.row)}|${columnLabel.get(cell.column)}`, cell.value]),
+      )
+    }
+    const margins = (entities: any[]): Array<[string, number]> => entities.map((entity) => [entity.label, entity.total])
+
+    it("gives one figure per (requester, product) pair, never combined, with margins that are the panels' own bars", async () => {
+      const { status, body } = await matrix({ rows: "user", columns: "product", metric: "spend" })
+      expect(status).toBe(200)
+      expect(body).toMatchObject({
+        rowDimension: "user", columnDimension: "product", rowLabel: "Requester", columnLabel: "Product",
+        metric: "spend", grain: "line", format: "currency", limits: { rows: 8, columns: 8 },
+      })
+      expect(body.blocked).toBeUndefined()
+
+      // The oracle in the fixture comment, cell by cell.
+      expect(cellsOf(body)).toEqual({
+        [`${f.names.ahmed}|${f.names.paper}`]: 7000,
+        [`${f.names.ahmed}|${f.names.toner}`]: 6000,
+        [`${f.names.group}|${f.names.paper}`]: 5000,
+        [`${f.names.group}|${f.names.toner}`]: 3000,
+        [`${f.names.group}|${f.names.diesel}`]: 2000,
+        [`${f.names.sana}|${f.names.paper}`]: 3500,
+        [`${f.names.sana}|${f.names.diesel}`]: 5000,
+      })
+      // No pair that never happened is invented as a zero cell.
+      expect(body.cells).toHaveLength(7)
+
+      // The margins are exactly "By requester" and "By product", ranked.
+      expect(margins(body.rows)).toEqual([[f.names.ahmed, 13000], [f.names.group, 10000], [f.names.sana, 8500]])
+      expect(margins(body.columns)).toEqual([[f.names.paper, 15500], [f.names.toner, 9000], [f.names.diesel, 7000]])
+      expect(ranked((await compare({ dimension: "user", metric: "spend" })).body)).toEqual(margins(body.rows))
+      expect(ranked((await compare({ dimension: "product", metric: "spend" })).body)).toEqual(margins(body.columns))
+
+      // And every cell carries what it was made of.
+      const ahmedPaper = body.cells.find((cell: any) => cell.row === f.ahmedId && cell.column === String(f.paperProductId))
+      expect(ahmedPaper).toMatchObject({ value: 7000, spendCents: 7000, quantity: 14, orderCount: 2 })
+    })
+
+    it("narrows to the chosen requesters and products, exactly as the panels beside it do", async () => {
+      const { body } = await matrix({
+        rows: "user", columns: "product", metric: "spend",
+        userIds: [f.ahmedId, f.sanaId].join(","),
+        productIds: [f.paperProductId, f.dieselProductId].join(","),
+      })
+      expect(cellsOf(body)).toEqual({
+        [`${f.names.ahmed}|${f.names.paper}`]: 7000,
+        [`${f.names.sana}|${f.names.paper}`]: 3500,
+        [`${f.names.sana}|${f.names.diesel}`]: 5000,
+      })
+      // The margins narrow with the grid: Ahmed's row is his Paper alone now.
+      expect(margins(body.rows)).toEqual([[f.names.sana, 8500], [f.names.ahmed, 7000]])
+      expect(margins(body.columns)).toEqual([[f.names.paper, 10500], [f.names.diesel, 5000]])
+    })
+
+    it("lays the grid the other way round, and by other pairs of axes", async () => {
+      const transposed = await matrix({ rows: "product", columns: "user", metric: "spend" })
+      expect(margins(transposed.body.rows)).toEqual([[f.names.paper, 15500], [f.names.toner, 9000], [f.names.diesel, 7000]])
+      expect(cellsOf(transposed.body)[`${f.names.paper}|${f.names.ahmed}`]).toBe(7000)
+
+      // Requester against branch in money stays at order grain: whole orders.
+      const byBranch = await matrix({ rows: "user", columns: "branch", metric: "spend" })
+      expect(byBranch.body.grain).toBe("order")
+      expect(cellsOf(byBranch.body)).toEqual({
+        [`${f.names.ahmed}|${f.names.north}`]: 13000,
+        [`${f.names.group}|${f.names.north}`]: 2000,
+        [`${f.names.group}|${f.names.south}`]: 8000,
+        [`${f.names.sana}|${f.names.south}`]: 8500,
+      })
+
+      // Category against branch rolls the Paper subcategory up to Stationery.
+      const byCategory = await matrix({ rows: "category", columns: "branch", metric: "spend" })
+      expect(cellsOf(byCategory.body)).toEqual({
+        [`Stationery ${f.suffix}|${f.names.north}`]: 13000,
+        [`Stationery ${f.suffix}|${f.names.south}`]: 11500,
+        [`Fuel ${f.suffix}|${f.names.north}`]: 2000,
+        [`Fuel ${f.suffix}|${f.names.south}`]: 5000,
+      })
+    })
+
+    it("counts orders per pair without pretending they add up to the row", async () => {
+      const { body } = await matrix({ rows: "user", columns: "product", metric: "orders" })
+      // O1 holds Paper and Toner: one order in each cell, one order in the row.
+      const cells = cellsOf(body)
+      expect(cells[`${f.names.ahmed}|${f.names.paper}`]).toBe(2)
+      expect(cells[`${f.names.ahmed}|${f.names.toner}`]).toBe(1)
+      expect(margins(body.rows).find(([label]) => label === f.names.ahmed)?.[1]).toBe(2)
+    })
+
+    it("refuses to total quantity across units until one is chosen, then counts only that unit", async () => {
+      const blocked = await matrix({ rows: "user", columns: "product", metric: "quantity", productIds: f.paperProductId })
+      expect(blocked.status).toBe(200)
+      expect(blocked.body.blocked?.reason).toBe("unit-conflict")
+      expect(blocked.body.quantityUnit).toEqual({ selected: null, conflict: true, available: ["Box", "Ream"] })
+      expect(blocked.body.cells).toEqual([])
+      expect(blocked.body.rows).toEqual([])
+
+      const reams = await matrix({ rows: "user", columns: "product", metric: "quantity", productIds: f.paperProductId, unit: "Ream" })
+      expect(reams.body.quantityUnit.selected).toBe("Ream")
+      expect(cellsOf(reams.body)).toEqual({
+        [`${f.names.ahmed}|${f.names.paper}`]: 14,
+        [`${f.names.sana}|${f.names.paper}`]: 7,
+      })
+      // The group requester bought Paper by the Box only, so it has no Ream row.
+      expect(margins(reams.body.rows)).toEqual([[f.names.ahmed, 14], [f.names.sana, 7]])
+    })
+
+    it("bounds each axis to the limit, keeping the largest", async () => {
+      const { body } = await matrix({ rows: "user", columns: "product", metric: "spend", limit: 1 })
+      expect(body.limits).toEqual({ rows: 1, columns: 1 })
+      expect(margins(body.rows)).toEqual([[f.names.ahmed, 13000]])
+      expect(margins(body.columns)).toEqual([[f.names.paper, 15500]])
+      expect(cellsOf(body)).toEqual({ [`${f.names.ahmed}|${f.names.paper}`]: 7000 })
+      expect((await matrix({ rows: "user", columns: "product", metric: "spend", limit: 9999 })).body.limits.rows).toBe(12)
+    })
+
+    it("refuses a grid the registry does not list, rather than guessing", async () => {
+      for (const query of [
+        { rows: "user", columns: "user", metric: "spend" },
+        { rows: "user", columns: "product", metric: "utilization" },
+        { rows: "user", columns: "product", metric: "avgOrderValue" },
+        { rows: "month", columns: "product", metric: "spend" },
+        { rows: "group", columns: "product", metric: "spend" },
+        { rows: "user", columns: "organization", metric: "spend" },
+        { rows: "user", columns: "product" },
+        { columns: "product", metric: "spend" },
+      ]) {
+        const { status, body } = await matrix(query)
+        expect(status, JSON.stringify(query)).toBe(400)
+        expect(body.cells).toBeUndefined()
+      }
+    })
+
+    it("shows the neighbour's Head Office its own pair and nothing of tenant A's", async () => {
+      signIn(neighbourHeadOffice)
+      const { body } = await matrix({ rows: "user", columns: "product", metric: "spend" })
+      expect(margins(body.rows)).toEqual([[`Foreign User ${f.suffix}`, 7000]])
+      expect(margins(body.columns)).toEqual([[`Foreign Product ${f.suffix}`, 7000]])
+      expect(body.cells).toHaveLength(1)
+
+      // Naming tenant A's people and products from tenant B matches nothing.
+      const reaching = await matrix({
+        rows: "user", columns: "product", metric: "spend",
+        userIds: f.ahmedId, productIds: f.paperProductId,
+      })
+      expect(reaching.status).toBe(200)
+      expect(reaching.body.rows).toEqual([])
+      expect(reaching.body.cells).toEqual([])
+      // And so does its organizationIds, which is discarded for Head Office.
+      expect((await matrix({ rows: "user", columns: "product", metric: "spend", organizationIds: f.organizationId })).body.cells).toHaveLength(1)
+    })
+
+    it("shows the South approver only South's pairs, and nothing for North's requester named directly", async () => {
+      signIn(southApprover)
+      const { body } = await matrix({ rows: "user", columns: "product", metric: "spend" })
+      expect(cellsOf(body)).toEqual({
+        [`${f.names.sana}|${f.names.paper}`]: 3500,
+        [`${f.names.sana}|${f.names.diesel}`]: 5000,
+        [`${f.names.group}|${f.names.paper}`]: 5000,
+        [`${f.names.group}|${f.names.toner}`]: 3000,
+      })
+      expect(margins(body.rows)).toEqual([[f.names.sana, 8500], [f.names.group, 8000]])
+
+      expect((await matrix({ rows: "user", columns: "product", metric: "spend", userIds: f.ahmedId })).body.cells).toEqual([])
+      expect((await matrix({ rows: "user", columns: "product", metric: "spend", branchIds: f.northBranchId })).status).toBe(403)
+    })
+
+    it("lets Super Admin see both tenants in one grid, or narrow to one", async () => {
+      signIn(superAdmin)
+      const everyone = await matrix({ rows: "user", columns: "product", metric: "spend" })
+      expect(margins(everyone.body.rows)).toContainEqual([`Foreign User ${f.suffix}`, 7000])
+      expect(margins(everyone.body.rows)).toContainEqual([f.names.ahmed, 13000])
+
+      const tenantA = await matrix({ rows: "user", columns: "product", metric: "spend", organizationIds: f.organizationId })
+      expect(margins(tenantA.body.rows)).toEqual([[f.names.ahmed, 13000], [f.names.group, 10000], [f.names.sana, 8500]])
+    })
+
+    it("opens the order lines behind one cell, and they reconcile with it", async () => {
+      // The screen asks for the cell (Ahmed, Paper) as "requester Ahmed,
+      // narrowed to Paper" — the same drill-down every other panel uses.
+      const { body } = await drillDown({ dimension: "user", key: f.ahmedId, metric: "spend", productIds: f.paperProductId })
+      expect(body.totals.valueCents).toBe(7000)
+      expect(body.totals.orderCount).toBe(2)
+      expect(body.totals.lineCount).toBe(2)
+      expect(body.totals.quantityByUnit).toEqual([{ unit: "Ream", quantity: 14 }])
+      for (const row of body.rows) {
+        expect(row.requesterName).toBe(f.names.ahmed)
+        expect(row.productName).toBe(f.names.paper)
+      }
+    })
+  })
+
+  describe("the group filter", () => {
+    let northGroupId: number
+    let foreignGroupId: number
+    let southBudgetId: number
+    const northGroupName = () => `North Region ${f.suffix}`
+
+    beforeAll(async () => {
+      const [northGroup] = await db
+        .insert(groups)
+        .values({ organizationId: f.organizationId, name: northGroupName(), createdByUserId: f.headOfficeId })
+        .returning({ id: groups.id })
+      const [foreignGroup] = await db
+        .insert(groups)
+        .values({ organizationId: f.neighbourOrganizationId, name: `Coast ${f.suffix}`, createdByUserId: f.neighbourHeadOfficeId })
+        .returning({ id: groups.id })
+      northGroupId = northGroup.id
+      foreignGroupId = foreignGroup.id
+      await db.update(branches).set({ groupId: northGroupId }).where(eq(branches.id, f.northBranchId))
+      await db.update(branches).set({ groupId: foreignGroupId }).where(eq(branches.id, f.foreignBranchId))
+      const [southBudget] = await db
+        .insert(budgets)
+        .values({ organizationId: f.organizationId, branchId: f.southBranchId, period: "2026-07", amountAllocatedCents: 100_000 })
+        .returning({ id: budgets.id })
+      southBudgetId = southBudget.id
+    })
+
+    afterAll(async () => {
+      await db.delete(budgets).where(eq(budgets.id, southBudgetId))
+      await db.update(branches).set({ groupId: null }).where(inArray(branches.id, [f.northBranchId, f.foreignBranchId]))
+      await db.delete(groups).where(inArray(groups.id, [northGroupId, foreignGroupId]))
+    })
+
+    it("fences every route to the group's branches, budgets included", async () => {
+      const groupIds = String(northGroupId)
+
+      // Overview: the branch list, the budget rows and the KPIs are North's
+      // alone. South's 100,000 allocation is outside the group and so outside
+      // the total — the figure an order-level filter would have got wrong.
+      const { body: summary } = await overview({ groupIds })
+      expect(summary.scope.branches).toEqual([{ id: f.northBranchId, name: f.names.north }])
+      expect(summary.branches.map((row: any) => row.branchName)).toEqual([f.names.north])
+      expect(summary.kpis.spendCents).toBe(15000)
+      expect(summary.kpis.orderCount).toBe(3)
+      expect(summary.kpis.totalBudgetCents).toBe(0)
+      // Without the group, South's allocation is in the total.
+      expect((await overview({})).body.kpis.totalBudgetCents).toBe(100_000)
+
+      // Compare: by branch, by requester, and the group dimension itself.
+      expect(ranked((await compare({ dimension: "branch", metric: "spend", groupIds })).body)).toEqual([[f.names.north, 15000]])
+      expect(ranked((await compare({ dimension: "user", metric: "spend", groupIds })).body))
+        .toEqual([[f.names.ahmed, 13000], [f.names.group, 2000]])
+      expect(ranked((await compare({ dimension: "group", metric: "spend", groupIds })).body)).toEqual([[northGroupName(), 15000]])
+
+      // Picking the group as an entity travels the same path as the filter.
+      expect(ranked((await compare({ dimension: "group", metric: "spend", keys: groupIds })).body)).toEqual([[northGroupName(), 15000]])
+
+      // Options: only the people who ordered at North are offered.
+      const people = await options({ dimension: "user", groupIds })
+      expect(people.body.options.map((o: any) => o.key).sort()).toEqual([f.ahmedId, f.groupRequesterId].sort())
+
+      // Drill-down on the group: North's lines and nothing else.
+      const { body: lines } = await drillDown({ dimension: "group", key: groupIds, metric: "spend" })
+      expect(lines.totals.orderCount).toBe(3)
+      expect(lines.totals.lineCount).toBe(4)
+      for (const row of lines.rows) expect(row.branchName).toBe(f.names.north)
+    })
+
+    it("intersects with a branch selection instead of adding to it", async () => {
+      const inside = await compare({ dimension: "branch", metric: "spend", groupIds: northGroupId, branchIds: f.northBranchId })
+      expect(ranked(inside.body)).toEqual([[f.names.north, 15000]])
+
+      // South is in the tenant but not in the group: nothing survives, and
+      // nothing is a refusal rather than the tenant.
+      const outside = await overview({ groupIds: northGroupId, branchIds: f.southBranchId })
+      expect(outside.status).toBe(403)
+      expect(outside.body.kpis).toBeUndefined()
+    })
+
+    it("refuses another tenant's group and a group outside the approver's assignments", async () => {
+      // Head Office A naming tenant B's group reaches nothing of B's.
+      for (const run of [
+        () => overview({ groupIds: foreignGroupId }),
+        () => compare({ dimension: "branch", metric: "spend", groupIds: foreignGroupId }),
+        () => options({ dimension: "product", groupIds: foreignGroupId }),
+        () => drillDown({ dimension: "group", key: String(foreignGroupId), metric: "spend" }),
+      ]) {
+        const { status, body } = await run()
+        expect(status).toBe(403)
+        expect(body.rows ?? body.options ?? body.kpis).toBeUndefined()
+      }
+
+      // The South approver is assigned South; North's group holds nothing it
+      // may see, and the assignment wins over the group.
+      signIn(southApprover)
+      expect((await overview({ groupIds: northGroupId })).status).toBe(403)
+      expect((await compare({ dimension: "group", metric: "spend", keys: String(northGroupId) })).status).toBe(403)
+      // Its own reach, unnarrowed, is unchanged by the block's setup.
+      expect(ranked((await compare({ dimension: "branch", metric: "spend" })).body)).toEqual([[f.names.south, 16500]])
+    })
+
+    it("offers the group to the picker, and lists ungrouped branches under 'No group' beside it", async () => {
+      const picker = await options({ dimension: "group" })
+      expect(picker.body.options).toEqual([{ key: String(northGroupId), label: northGroupName() }])
+
+      const byGroup = await compare({ dimension: "group", metric: "spend" })
+      expect(ranked(byGroup.body)).toEqual([["No group", 16500], [northGroupName(), 15000]])
     })
   })
 })

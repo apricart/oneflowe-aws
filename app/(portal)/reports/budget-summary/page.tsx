@@ -234,6 +234,7 @@ export default function BudgetSummaryPage() {
     const [chartYears, setChartYears] = useState<number[]>([]) // Will be initialized by useEffect
     const [chartMonths, setChartMonths] = useState<number[]>([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
     const [chartBranchIds, setChartBranchIds] = useState<string[]>([])
+    const [chartGroupIds, setChartGroupIds] = useState<string[]>([])
     const [showBudgetBar, setShowBudgetBar] = useState(false)
     const hasInitializedChartDefaults = useRef(false)
 
@@ -252,6 +253,7 @@ export default function BudgetSummaryPage() {
     const startFromUrl = searchParams.get("startDate") || ""
     const endFromUrl = searchParams.get("endDate") || ""
     const activeTab = searchParams.get("tab") || "analytics"
+    const activeGroupIds = activeTab === "reports" ? reportGroupIds : chartGroupIds
     const compareFromUrl = searchParams.get("compare") === "true"
 
     const [compare, setCompare] = useState(compareFromUrl)
@@ -338,6 +340,7 @@ export default function BudgetSummaryPage() {
 
     if (startFromUrl) queryParams.set("startDate", startFromUrl)
     if (endFromUrl) queryParams.set("endDate", endFromUrl)
+    if (activeGroupIds.length > 0) queryParams.set("groupIds", activeGroupIds.join(","))
     queryParams.set("preset", activePreset)
     if (selectedMonths.length > 0) queryParams.set("months", selectedMonths.join(","))
     if (selectedYears.length > 0) queryParams.set("years", selectedYears.join(","))
@@ -368,7 +371,7 @@ export default function BudgetSummaryPage() {
     })();
     queryParams.set("granularity", granularity);
 
-    // ━━━ PAGE DATA (Global) ━━━
+    // ━━━ PAGE DATA (Current Tab) ━━━
     // Fetches are deferred until the org/branch context has hydrated, and
     // keepPreviousData keeps the current numbers on screen during filter changes
     const { data: pageData, isLoading: isPageLoading } = useSWR<BudgetSummaryResponse>(isInitialized ? `/api/v1/analytics/budgets/summary?${queryParams.toString()}` : null, fetcher, { keepPreviousData: true })
@@ -390,7 +393,12 @@ export default function BudgetSummaryPage() {
     chartQueryParams.set("preset", "all")
     chartQueryParams.set("granularity", "monthly")
 
-    const { data: chartApiData, isLoading: isChartLoading } = useSWR<BudgetSummaryResponse>(isInitialized ? `/api/v1/analytics/budgets/summary?${chartQueryParams.toString()}` : null, fetcher, { keepPreviousData: true })
+    // Keep the unfiltered chart response for branch and year options in both tabs.
+    const { data: chartApiData, isLoading: isBaseChartLoading } = useSWR<BudgetSummaryResponse>(isInitialized ? `/api/v1/analytics/budgets/summary?${chartQueryParams.toString()}` : null, fetcher, { keepPreviousData: true })
+    if (chartGroupIds.length > 0) chartQueryParams.set("groupIds", chartGroupIds.join(","))
+    const { data: groupedChartApiData, isLoading: isGroupedChartLoading } = useSWR<BudgetSummaryResponse>(isInitialized && chartGroupIds.length > 0 ? `/api/v1/analytics/budgets/summary?${chartQueryParams.toString()}` : null, fetcher)
+    const selectedChartApiData = chartGroupIds.length > 0 ? groupedChartApiData : chartApiData
+    const isChartLoading = isBaseChartLoading || (chartGroupIds.length > 0 && isGroupedChartLoading)
 
     const reportQueryParams = new URLSearchParams()
     if (role === "BRANCH_ADMIN") {
@@ -411,7 +419,7 @@ export default function BudgetSummaryPage() {
     if (reportYears.length > 0) reportQueryParams.set("years", reportYears.join(","))
     reportQueryParams.set("granularity", "monthly")
 
-    const { data: budgetReportData, isLoading: isReportLoading, mutate: mutateReport } = useSWR<BudgetSummaryResponse>(isInitialized ? `/api/v1/analytics/budgets/summary?${reportQueryParams.toString()}` : null, fetcher, { keepPreviousData: true })
+    const { data: budgetReportData, isLoading: isReportLoading, mutate: mutateReport } = useSWR<BudgetSummaryResponse>(isInitialized ? `/api/v1/analytics/budgets/summary?${reportQueryParams.toString()}` : null, fetcher)
 
     useEffect(() => {
         setHasMounted(true)
@@ -458,6 +466,8 @@ export default function BudgetSummaryPage() {
     useEffect(() => {
         setChartBranchIds([])
         setReportBranchIds([])
+        setChartGroupIds([])
+        setReportGroupIds([])
     }, [organizationId])
 
 
@@ -467,15 +477,9 @@ export default function BudgetSummaryPage() {
     const branchBreakdown = pageData?.branchBreakdown || []
 
 
-    const filteredBranches = branchBreakdown.filter((b: any) =>
-        (b.branchName || "").toLowerCase().includes(searchTerm.toLowerCase())
-    )
-
-
-
     const transformedChartData = useMemo(() => {
-        if (!chartApiData?.chartData?.length) return []
-        return chartApiData.chartData.map((d: any) => {
+        if (!selectedChartApiData?.chartData?.length) return []
+        return selectedChartApiData.chartData.map((d: any) => {
             const item: any = {
                 date: format(new Date(d.date + "-01"), chartYears.length <= 1 ? "MMM" : "MMM yyyy"),
                 rawDate: d.date,
@@ -500,7 +504,7 @@ export default function BudgetSummaryPage() {
             item.totalLimit = item.totalBaseline + item.totalAddon;
             return item;
         })
-    }, [chartApiData?.chartData, granularity, chartYears.length])
+    }, [selectedChartApiData?.chartData, chartYears.length])
 
     const availableChartYears = useMemo(() => {
         const years = new Set<number>()
@@ -508,9 +512,9 @@ export default function BudgetSummaryPage() {
 
         // Find earliest year in data
         let minYear = currentY;
-        transformedChartData.forEach((d: any) => {
-            if (d.rawDate) {
-                const y = Number.parseInt(d.rawDate.slice(0, 4))
+        chartApiData?.chartData?.forEach((d) => {
+            if (d.date) {
+                const y = Number.parseInt(d.date.slice(0, 4))
                 if (!Number.isNaN(y)) {
                     years.add(y)
                     if (y < minYear) minYear = y;
@@ -524,7 +528,7 @@ export default function BudgetSummaryPage() {
         }
 
         return Array.from(years).sort((a, b) => a - b)
-    }, [transformedChartData])
+    }, [chartApiData?.chartData])
 
     const uniqueBranches = useMemo(() => {
         const branches: { id: string; name: string }[] = []
@@ -532,8 +536,9 @@ export default function BudgetSummaryPage() {
         chartApiData.chartData.forEach((d: any) => {
             if (d.branches) {
                 d.branches.forEach((b: any) => {
-                    if (!branches.some(br => br.id === b.branchId)) {
-                        branches.push({ id: b.branchId, name: b.branchName });
+                    const id = String(b.branchId)
+                    if (!branches.some(br => br.id === id)) {
+                        branches.push({ id, name: b.branchName });
                     }
                 });
             }
@@ -541,55 +546,11 @@ export default function BudgetSummaryPage() {
         return branches;
     }, [chartApiData?.chartData])
 
-    const calculatedReportBranches = useMemo(() => {
-        if (!transformedChartData.length) return []
-
-        const branchMap: Record<string, any> = {}
-
-        transformedChartData.forEach((d: any) => {
-            if (!d.rawDate) return;
-            const yr = Number.parseInt(d.rawDate.slice(0, 4))
-            const mo = Number.parseInt(d.rawDate.split("-")[1])
-
-            // Apply reports-specific Year/Month filters
-            if (reportYears.length > 0 && !reportYears.includes(yr)) return
-            if (reportMonths.length > 0 && !reportMonths.includes(mo)) return
-
-            if (d.branches) {
-                d.branches.forEach((b: any) => {
-                    // Apply reports-specific Branch filter
-                    if (reportBranchIds.length > 0 && !reportBranchIds.includes(String(b.branchId))) return
-
-                    if (!branchMap[b.branchId]) {
-                        branchMap[b.branchId] = {
-                            branchId: b.branchId,
-                            branchName: b.branchName,
-                            baselineAmount: 0,
-                            spent: 0,
-                            credited: 0,
-                            held: 0
-                        }
-                    }
-                    branchMap[b.branchId].baselineAmount += (b.baseline || 0)
-                    branchMap[b.branchId].spent += (b.spent || 0)
-                    branchMap[b.branchId].credited += (b.addon || 0)
-                    branchMap[b.branchId].held += (b.held || 0)
-                })
-            }
-        })
-
-        return Object.values(branchMap)
-    }, [transformedChartData, reportYears, reportMonths, reportBranchIds])
-
-    const reportBranches = useMemo(() => {
-        return budgetReportData ? (budgetReportData.branchBreakdown || []) : calculatedReportBranches
-    }, [budgetReportData, calculatedReportBranches])
-
     const filteredReportBranches = useMemo(() => {
-        return reportBranches.filter((b: any) =>
+        return (budgetReportData?.branchBreakdown || []).filter((b: any) =>
             (b.branchName || "").toLowerCase().includes(searchTerm.toLowerCase())
         )
-    }, [reportBranches, searchTerm])
+    }, [budgetReportData?.branchBreakdown, searchTerm])
 
     // Smart defaults: if no year is selected, pick the CURRENT year if available, else latest
     useEffect(() => {
@@ -624,6 +585,7 @@ export default function BudgetSummaryPage() {
         setChartYears(getDefaultChartYears())
         setChartMonths([...ALL_MONTHS])
         setChartBranchIds(contextBranchIds.length > 0 ? [...contextBranchIds] : [])
+        setChartGroupIds([])
         setShowBudgetBar(false)
     }, [contextBranchIds, getDefaultChartYears])
 
@@ -716,7 +678,7 @@ export default function BudgetSummaryPage() {
         }
 
         return filtered;
-    }, [transformedChartData, chartYears, chartMonths, chartBranchIds, uniqueBranches])
+    }, [transformedChartData, chartYears, chartMonths, chartBranchIds, uniqueBranches, availableChartYears])
 
     // Auto-aggregate to yearly when too many data points for readable bars
     const chartDisplayData = useMemo(() => {
@@ -752,11 +714,17 @@ export default function BudgetSummaryPage() {
 
     // Determine which branches to show as individual bars in chart
     const chartVisibleBranches = useMemo(() => {
+        const selectedGroupBranchIds = chartGroupIds.length > 0
+            ? new Set((selectedChartApiData?.branchBreakdown || []).map((branch) => String(branch.branchId)))
+            : null
+        const groupBranches = selectedGroupBranchIds
+            ? uniqueBranches.filter((branch) => selectedGroupBranchIds.has(String(branch.id)))
+            : uniqueBranches
         if (chartBranchIds.length > 0) {
-            return uniqueBranches.filter(b => chartBranchIds.includes(String(b.id)))
+            return groupBranches.filter(b => chartBranchIds.includes(String(b.id)))
         }
-        return uniqueBranches
-    }, [uniqueBranches, chartBranchIds])
+        return groupBranches
+    }, [uniqueBranches, chartBranchIds, chartGroupIds.length, selectedChartApiData?.branchBreakdown])
 
 
     const toggleChartYear = (year: number) => {
@@ -767,6 +735,7 @@ export default function BudgetSummaryPage() {
     }
 
     const toggleChartBranch = (branchId: string) => {
+        setChartGroupIds([])
         setChartBranchIds(prev => prev.includes(branchId) ? prev.filter(b => b !== branchId) : [...prev, branchId])
     }
 
@@ -777,6 +746,7 @@ export default function BudgetSummaryPage() {
         setReportMonths(prev => prev.includes(month) ? prev.filter(m => m !== month) : [...prev, month])
     }
     const toggleReportBranch = (branchId: string) => {
+        setReportGroupIds([])
         setReportBranchIds(prev => prev.includes(branchId) ? prev.filter(b => b !== branchId) : [...prev, branchId])
     }
 
@@ -796,7 +766,7 @@ export default function BudgetSummaryPage() {
         ]
 
         const headers = columns.map(c => c.label)
-        const exportSource = filteredReportBranches.length > 0 ? filteredReportBranches : filteredBranches
+        const exportSource = filteredReportBranches
         const rows = exportSource.map((b: any) => columns.map(c => c.value(b)))
 
         if (format === 'pdf') {
@@ -834,7 +804,7 @@ export default function BudgetSummaryPage() {
         )
     }
 
-    const pricesHidden = Boolean(pageData?.pricesHidden || chartApiData?.pricesHidden || budgetReportData?.pricesHidden)
+    const pricesHidden = Boolean(pageData?.pricesHidden || chartApiData?.pricesHidden || selectedChartApiData?.pricesHidden || budgetReportData?.pricesHidden)
     if (pricesHidden) {
         return (
             <div className="min-h-screen bg-[#f8fafc] dark:bg-[#020617] p-6">
@@ -1067,6 +1037,18 @@ export default function BudgetSummaryPage() {
                                             </PopoverContent>
                                         </Popover>
 
+                                        {role !== "BRANCH_ADMIN" && organizationId && (
+                                            <GroupFilter
+                                                selectedIds={chartGroupIds}
+                                                onChange={(ids) => {
+                                                    setChartGroupIds(ids)
+                                                    if (ids.length > 0) setChartBranchIds([])
+                                                }}
+                                                organizationId={organizationId}
+                                                placeholder="Groups"
+                                            />
+                                        )}
+
                                         {/* Branch Filter */}
                                         <Popover>
                                             <PopoverTrigger asChild>
@@ -1085,7 +1067,7 @@ export default function BudgetSummaryPage() {
                                                 <div className="flex items-center justify-between px-1 pb-2 mb-2 border-b border-slate-100 dark:border-slate-800">
                                                     <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Select Branches</p>
                                                     <div className="flex gap-2">
-                                                        <button type="button" onClick={() => setChartBranchIds(uniqueBranches.map(b => b.id))} className="text-[9px] font-bold text-amber-500 hover:text-amber-600 transition-colors uppercase tracking-tighter">All</button>
+                                                        <button type="button" onClick={() => { setChartGroupIds([]); setChartBranchIds(uniqueBranches.map(b => b.id)) }} className="text-[9px] font-bold text-amber-500 hover:text-amber-600 transition-colors uppercase tracking-tighter">All</button>
                                                         <span className="text-slate-200 dark:text-slate-800">|</span>
                                                         <button type="button" onClick={() => setChartBranchIds([])} className="text-[9px] font-bold text-rose-500 hover:text-rose-600 transition-colors uppercase tracking-tighter">None</button>
                                                     </div>
@@ -1109,7 +1091,7 @@ export default function BudgetSummaryPage() {
                                         </Popover>
 
                                         {/* Divider */}
-                                        {(chartYears.length > 0 || chartMonths.length > 0 || chartBranchIds.length > 0) && (
+                                        {(chartYears.length > 0 || chartMonths.length > 0 || chartGroupIds.length > 0 || chartBranchIds.length > 0) && (
                                             <div className="h-6 w-px bg-slate-200 dark:bg-slate-700 mx-1" />
                                         )}
 
@@ -1519,10 +1501,9 @@ export default function BudgetSummaryPage() {
                                                             selectedIds={reportGroupIds}
                                                             onChange={(ids) => {
                                                                 setReportGroupIds(ids)
-                                                                setReportBranchIds([])
+                                                                if (ids.length > 0) setReportBranchIds([])
                                                             }}
                                                             organizationId={organizationId}
-                                                            disabled={reportBranchIds.length > 0}
                                                             placeholder="Groups"
                                                         />
                                                     )}
@@ -1543,7 +1524,7 @@ export default function BudgetSummaryPage() {
                                                             <div className="flex items-center justify-between px-1 pb-2 mb-2 border-b border-slate-100 dark:border-slate-800">
                                                                 <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Select Branches</p>
                                                                 <div className="flex gap-2">
-                                                                    <button type="button" onClick={() => setReportBranchIds(uniqueBranches.map(b => b.id))} className="text-[9px] font-bold text-amber-500 hover:text-amber-600 uppercase">All</button>
+                                                                    <button type="button" onClick={() => { setReportGroupIds([]); setReportBranchIds(uniqueBranches.map(b => b.id)) }} className="text-[9px] font-bold text-amber-500 hover:text-amber-600 uppercase">All</button>
                                                                     <span className="text-slate-200">|</span>
                                                                     <button type="button" onClick={() => setReportBranchIds([])} className="text-[9px] font-bold text-rose-500 hover:text-rose-600 uppercase">None</button>
                                                                 </div>
@@ -1590,6 +1571,7 @@ export default function BudgetSummaryPage() {
                                                         <DropdownMenuTrigger asChild>
                                                             <Button
                                                                 variant="outline"
+                                                                disabled={isReportLoading || !budgetReportData}
                                                                 className="h-8 border-indigo-100/50 dark:border-slate-800 font-black text-[10px] uppercase tracking-[0.2em] gap-2 bg-indigo-50/30 dark:bg-slate-950/30 hover:bg-white dark:hover:bg-slate-900 shadow-sm transition-all rounded-lg px-3 border-2 group"
                                                             >
                                                                 <Upload className="h-3.5 w-3.5 text-indigo-600 transition-transform group-hover:-translate-y-0.5" />
@@ -1627,6 +1609,13 @@ export default function BudgetSummaryPage() {
                                                         </TableRow>
                                                     </TableHeader>
                                                     <TableBody className="bg-transparent">
+                                                        {filteredReportBranches.length === 0 && (
+                                                            <TableRow>
+                                                                <TableCell colSpan={7} className="h-24 text-center text-sm text-slate-500">
+                                                                    {isReportLoading ? "Loading budget report..." : "No branches match the selected filters."}
+                                                                </TableCell>
+                                                            </TableRow>
+                                                        )}
                                                         <AnimatePresence mode="popLayout">
                                                             {filteredReportBranches.map((b: any, index: number) => {
                                                                 const baseline = b.baselineAmount || 0;

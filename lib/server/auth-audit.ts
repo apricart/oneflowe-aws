@@ -57,6 +57,8 @@ export type AuthFailureReason =
   | "mfa_not_enrolled"
   | "email_unroutable"
   | "email_verification_required"
+  // The token named a session that is revoked, or another account's.
+  | "session_invalid"
   | "password_unchanged"
 
 export type AuthAuditEvent = {

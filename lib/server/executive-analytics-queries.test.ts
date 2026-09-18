@@ -216,3 +216,54 @@ describe("entity picker keys are unique per entity", () => {
     expect(source("components/reports/executive/drill-down-panel.tsx")).toContain("key={row.lineId}")
   })
 })
+
+/**
+ * The grid is the one builder that pins its own key lists back into SQL, so
+ * the properties that keep it fenced and bounded are structural and are pinned
+ * here; the figures themselves are checked by the integration suite.
+ */
+describe("the requester × product grid", () => {
+  const grid = builderBody("loadMatrix")
+
+  it("ranks both axes with the same builder the single-dimension panels use", () => {
+    // The margins must *be* the bars of "By requester" and "By product", not a
+    // second aggregation that could drift from them.
+    expect(grid.match(/loadComparison\(scope, filters, (rows|columns), metric, limit\)/g)).toHaveLength(2)
+  })
+
+  it("fences the cells through the shared conditions at either grain, never a hand-written where", () => {
+    expect(grid).toContain("lineConditions(scope, filters)")
+    expect(grid).toContain("orderConditions(scope, filters)")
+    expect(grid).not.toContain("inArray(orders.organizationId")
+    expect(grid).not.toContain("sql.raw")
+  })
+
+  it("pins the cells to the ranked members on both sides, so the read is bounded by limit × limit", () => {
+    expect(grid).toContain("matrixAxisCondition(rows, rowAxis)")
+    expect(grid).toContain("matrixAxisCondition(columns, columnAxis)")
+    // And only through the helper, which binds ids as parameters.
+    const helper = queries.slice(
+      queries.indexOf("function matrixAxisCondition"),
+      queries.indexOf("export async function loadMatrix"),
+    )
+    expect(helper).toContain("inArray(orders.createdByUserId, axis.uuids)")
+    expect(helper).toContain("inArray(orderItems.globalProductId, axis.ids)")
+    expect(helper).toContain("categoryProductFilter(axis.ids)")
+    expect(helper).toContain("inArray(orders.branchId, axis.ids)")
+  })
+
+  it("keeps the grain rule: order grain never joins order_items, line grain never sums order totals", () => {
+    const orderHalf = grid.slice(grid.indexOf(": await db"), grid.indexOf("const valueOf"))
+    expect(orderHalf).not.toContain("orderItems")
+    const lineHalf = grid.slice(grid.indexOf("? await db"), grid.indexOf(": await db"))
+    expect(lineHalf).not.toContain("orders.totalCents")
+    expect(lineHalf).toContain("lineNetValue")
+    expect(lineHalf).toContain(".leftJoin(parentCategories, eq(categories.parentId, parentCategories.id))")
+  })
+
+  it("keys the cells with the same expressions the axes were ranked by", () => {
+    expect(grid).toContain("row: lineDimensionColumns[rows].key")
+    expect(grid).toContain("column: lineDimensionColumns[columns].key")
+    expect(grid).toContain("row: orderDimensionColumns[rows as OrderGrainDimension].key")
+  })
+})

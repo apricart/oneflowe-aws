@@ -141,6 +141,15 @@ describe("POST /api/v1/users/me/change-password — outcomes", () => {
     await expect(response.json()).resolves.toMatchObject({ code: EMAIL_VERIFICATION_REQUIRED_CODE })
   })
 
+  it("answers a session the module could not find — revoked, or another account's — with 401", async () => {
+    mocks.changeOwnPassword.mockResolvedValue({ kind: "session_invalid" })
+
+    const response = await POST(post(GOOD_BODY))
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toEqual({ error: "Unauthorized" })
+  })
+
   it("answers a locked account with 423 and when to retry", async () => {
     mocks.changeOwnPassword.mockResolvedValue({ kind: "locked", retryAfterSeconds: 540 })
 
