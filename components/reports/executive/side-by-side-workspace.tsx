@@ -13,6 +13,7 @@ import {
   type ChartTypeId,
   type ExecutiveDimensionId,
   type ExecutiveMetricId,
+  type MatrixDimensionId,
   type MeasureId,
   type SideBySidePanel,
 } from "@/lib/executive-analytics"
@@ -20,6 +21,7 @@ import { isPanelSnapshotReady, type SideBySidePanelSnapshot } from "@/lib/execut
 import { ChartCard } from "./chart-kit"
 import {
   ComparisonChart,
+  ComparisonTable,
   SeriesTable,
   type ComparisonRow,
   type DrillTarget,
@@ -27,12 +29,16 @@ import {
 } from "./comparison-charts"
 import { DrillDownPanel } from "./drill-down-panel"
 import { EntityPicker, type EntityOption } from "./entity-picker"
-import { toQuery, type ExecutiveFilterState } from "./executive-filters"
+import { groupOptionsFromBranches, toQuery, type ExecutiveFilterState } from "./executive-filters"
+import { MatrixChart, MatrixTable, type MatrixResponse } from "./matrix-chart"
 import { MeasureToggle } from "./measure-toggle"
 import { SideBySideExportButton } from "./side-by-side-export-button"
 
 /**
- * Level 3 — one product, every angle, on one screen.
+ * Product Performance — one product, every angle, on one screen.
+ *
+ * Reached as the `product-performance` tab of Graphical Reports, and linked
+ * from the sidebar under that name.
  *
  * The Explore workbench answers one question at a time, which is the right
  * shape for an open-ended investigation and the wrong shape for the question
@@ -41,10 +47,12 @@ import { SideBySideExportButton } from "./side-by-side-export-button"
  * times and remembering the first two.
  *
  * So this screen fixes the subject — a product, or a few — and varies the
- * dimension instead. Every panel is the *existing* comparison endpoint with a
- * different `dimension`, so there is no new aggregation path and no new
- * authorization surface behind any of it: the same registry decides what may be
- * asked, and the same scope decides which rows may answer.
+ * dimension instead. Every ranking and trend panel is the *existing*
+ * comparison endpoint with a different `dimension`; the one grid panel —
+ * requester against product, uncombined — is the `/matrix` endpoint under the
+ * same registry and the same scope, so there is no new authorization surface
+ * behind any of it: the same whitelist decides what may be asked, and the same
+ * fence decides which rows may answer.
  *
  * Products are also a dimension here, not only the subject: with no focus, or
  * with several products ticked, the product panels rank them against each
@@ -185,10 +193,11 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
     return `${focusLabels.length} products`
   })()
 
-  // Products are named among the compared dimensions only while the product
-  // panels are on screen; with one product in focus they are the subject alone.
+  // Products and categories are named among the compared dimensions only while
+  // their panels are on screen; with one product in focus it is the subject
+  // alone, and its category would be a single bar.
   const comparedAcross = panels.some((panel) => panel.dimension === "product")
-    ? "products, requesters, branches and months"
+    ? "products, categories, requesters, branches and months"
     : "requesters, branches and months"
 
   return (
@@ -266,7 +275,19 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
       </p>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        {orderedPanels.map((panel) => (
+        {orderedPanels.map((panel) => (panel.matrix ? (
+          <MatrixPanel
+            key={panel.id}
+            panel={panel}
+            rows={panel.matrix.rows}
+            filters={scopedFilters}
+            metric={metric}
+            expanded={expanded.includes(panel.id)}
+            onToggleExpanded={(next) => toggleExpanded(panel.id, next)}
+            onDrillDown={setDrillTarget}
+            onSnapshot={reportSnapshot}
+          />
+        ) : (
           <ComparePanel
             key={panel.id}
             panel={panel}
@@ -280,7 +301,7 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
             onDrillDown={setDrillTarget}
             onSnapshot={reportSnapshot}
           />
-        ))}
+        )))}
       </div>
 
       {drillTarget ? (
@@ -306,7 +327,7 @@ function Control({ label, children }: Readonly<{ label: string; children: React.
   )
 }
 
-type NamedItems = { items?: Array<{ id: number | string; name: string }> }
+type NamedItems = { items?: Array<{ id: number | string; name: string; groupId?: number | null; groupName?: string | null }> }
 
 /**
  * The names behind the ids in the shared filter bar, for the workbook's cover
@@ -314,25 +335,31 @@ type NamedItems = { items?: Array<{ id: number | string; name: string }> }
  *
  * Each list is requested only while its filter is set, and at the same URL the
  * filter control itself uses, so it is answered from the SWR cache rather than
- * by another request. An id whose name is not (yet) known is written as
- * `#id` rather than dropped — the reader should see that a filter was set even
- * if the label had not arrived.
+ * by another request. Group names come from the branch rows, exactly as the
+ * group filter's own options do. An id whose name is not (yet) known is written
+ * as `#id` rather than dropped — the reader should see that a filter was set
+ * even if the label had not arrived.
  */
-function useFilterNames(filters: ExecutiveFilterState): { organizations: string[]; branches: string[]; categories: string[] } {
+function useFilterNames(filters: ExecutiveFilterState): {
+  organizations: string[]; groups: string[]; branches: string[]; categories: string[]
+} {
   const branchQuery = new URLSearchParams()
   if (filters.organizationIds.length > 0) branchQuery.set("organizationId", filters.organizationIds.join(","))
   const branchQueryString = branchQuery.toString()
   const branchesUrl = `/api/v1/branches${branchQueryString ? `?${branchQueryString}` : ""}`
+  const wantsBranchRows = filters.branchIds.length > 0 || filters.groupIds.length > 0
 
   const { data: organizations } = useAPI<NamedItems>(filters.organizationIds.length > 0 ? "/api/v1/organizations" : null)
-  const { data: branches } = useAPI<NamedItems>(filters.branchIds.length > 0 ? branchesUrl : null)
+  const { data: branches } = useAPI<NamedItems>(wantsBranchRows ? branchesUrl : null)
   const { data: categories } = useAPI<NamedItems>(filters.categoryIds.length > 0 ? "/api/v1/categories" : null)
 
   const resolve = (ids: string[], list: NamedItems | undefined) =>
     ids.map((id) => list?.items?.find((item) => String(item.id) === id)?.name ?? `#${id}`)
+  const groupNames = groupOptionsFromBranches(branches?.items ?? [])
 
   return {
     organizations: resolve(filters.organizationIds, organizations),
+    groups: filters.groupIds.map((id) => groupNames.find((group) => group.id === id)?.label ?? `#${id}`),
     branches: resolve(filters.branchIds, branches),
     categories: resolve(filters.categoryIds, categories),
   }
@@ -400,20 +427,9 @@ function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggle
       className={fullWidth ? "xl:col-span-2" : undefined}
       toolbar={expanded === null
         ? undefined
-        : (
-          <label
-            htmlFor={expandId}
-            className="mr-1 flex cursor-pointer select-none items-center gap-1.5 rounded-md px-1.5 py-1 text-[11px] font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
-          >
-            <Checkbox
-              id={expandId}
-              checked={expanded}
-              onCheckedChange={(state) => onToggleExpanded(state === true)}
-              aria-label={`Show ${panel.title} at full width`}
-            />
-            Full width
-          </label>
-        )}
+        : <FullWidthToggle id={expandId} title={panel.title} checked={expanded} onChange={onToggleExpanded} />}
+      // Every panel has a table, not only the trends: "graph + table" is the
+      // requirement, and the ranked panels are the ones doing the comparing.
       table={data?.mode === "series"
         ? (
           <SeriesTable
@@ -427,7 +443,17 @@ function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggle
             })}
           />
         )
-        : undefined}
+        : (
+          <ComparisonTable
+            rows={rows}
+            format={data?.format ?? "currency"}
+            metricLabel={data?.label ?? EXECUTIVE_METRICS[metric].label}
+            dimensionLabel={panelDimensionLabel(panel.dimension)}
+            concentrationEligible={Boolean(data?.concentrationEligible)}
+            dimension={panel.dimension}
+            onDrillDown={onDrillDown}
+          />
+        )}
     >
       <ComparisonChart
         chart={data?.chart ?? panel.chart}
@@ -447,6 +473,104 @@ function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggle
         <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
           Measured in <strong>{data.quantityUnit.selected}</strong> only. Other units in this period are excluded rather
           than added to it.
+        </p>
+      ) : null}
+    </ChartCard>
+  )
+}
+
+/** The "Full width" toggle every widenable panel carries in its toolbar. */
+function FullWidthToggle({ id, title, checked, onChange }: Readonly<{
+  id: string
+  title: string
+  checked: boolean
+  onChange: (next: boolean) => void
+}>) {
+  return (
+    <label
+      htmlFor={id}
+      className="mr-1 flex cursor-pointer select-none items-center gap-1.5 rounded-md px-1.5 py-1 text-[11px] font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+    >
+      <Checkbox
+        id={id}
+        checked={checked}
+        onCheckedChange={(state) => onChange(state === true)}
+        aria-label={`Show ${title} at full width`}
+      />
+      Full width
+    </label>
+  )
+}
+
+/** How many entities the grid asks for on each axis: the same cap as a ranked panel. */
+const MATRIX_PANEL_ENTITIES = 12
+
+/**
+ * The grid panel: requester against product, one figure per pair.
+ *
+ * It reads the same shared filters as every other panel — the focused
+ * products as `productIds`, the compared people as `userIds` — so its axes
+ * are exactly the entities the ranking panels show, and its margins are their
+ * bars. What it adds is the cells between them, which no ranking can give.
+ */
+function MatrixPanel({ panel, rows, filters, metric, expanded, onToggleExpanded, onDrillDown, onSnapshot }: Readonly<{
+  panel: SideBySidePanel
+  rows: MatrixDimensionId
+  filters: ExecutiveFilterState
+  metric: ExecutiveMetricId
+  expanded: boolean
+  onToggleExpanded: (next: boolean) => void
+  onDrillDown: (target: DrillTarget) => void
+  onSnapshot: (panelId: string, snapshot: SideBySidePanelSnapshot | null) => void
+}>) {
+  const url = `/api/v1/analytics/executive/matrix?${toQuery(filters, {
+    rows,
+    columns: panel.dimension,
+    metric,
+    limit: String(MATRIX_PANEL_ENTITIES),
+  })}`
+
+  const { data, error, isLoading } = useAPI<MatrixResponse>(url)
+
+  const requestError = error ? "This comparison could not be loaded." : data?.error ?? null
+  const isEmpty = !data || data.rows.length === 0 || data.columns.length === 0
+
+  React.useEffect(() => {
+    onSnapshot(panel.id, {
+      response: data ? { ...data, mode: "matrix" } : null,
+      loading: isLoading,
+      error: requestError,
+    })
+  }, [panel.id, data, isLoading, requestError, onSnapshot])
+  React.useEffect(() => () => onSnapshot(panel.id, null), [panel.id, onSnapshot])
+
+  // An axis that filled its cap may have left entities out; say so, rather
+  // than let a reader take twelve for everyone.
+  const truncated = data && !isEmpty
+    && (data.rows.length >= data.limits.rows || data.columns.length >= data.limits.columns)
+
+  return (
+    <ChartCard
+      title={panel.title}
+      question={panel.question}
+      formula={data?.formula ?? EXECUTIVE_METRICS[metric].formula}
+      loading={isLoading}
+      error={requestError}
+      empty={data?.blocked?.message ?? (isEmpty ? "Nothing in the selected period under these filters." : null)}
+      className={expanded ? "xl:col-span-2" : undefined}
+      toolbar={<FullWidthToggle id={`expand-${panel.id}`} title={panel.title} checked={expanded} onChange={onToggleExpanded} />}
+      table={data ? <MatrixTable response={data} onDrillDown={onDrillDown} /> : null}
+    >
+      {data ? <MatrixChart response={data} onDrillDown={onDrillDown} /> : null}
+      {data?.quantityUnit.selected ? (
+        <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
+          Measured in <strong>{data.quantityUnit.selected}</strong> only. Other units in this period are excluded rather
+          than added to it.
+        </p>
+      ) : null}
+      {truncated ? (
+        <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+          Showing the top {MATRIX_PANEL_ENTITIES} on each axis. Choose specific products or requesters above to see others.
         </p>
       ) : null}
     </ChartCard>

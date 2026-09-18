@@ -4,7 +4,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest"
 import { ComparisonChart, SeriesTable, entityColor, type ComparisonRow, type EntitySeries } from "./comparison-charts"
 
 /**
- * The renderers behind every panel on the Compare Side by Side tab.
+ * The renderers behind every panel on the Product Performance tab.
  *
  * Recharts draws nothing in jsdom — its ResponsiveContainer measures a box that
  * has no size — so these assert on what surrounds the drawing: the legend, the

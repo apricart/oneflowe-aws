@@ -105,8 +105,9 @@ export function DrillDownPanel({ target, filters, metric, onClose }: Readonly<{
   const [page, setPage] = React.useState(0)
 
   // A different bar is a different question: paging starts over rather than
-  // opening the new selection on page four of the old one.
-  const targetSignature = `${target.dimension}:${target.key}:${target.period ?? ""}`
+  // opening the new selection on page four of the old one. A grid cell names a
+  // second entity, so that is part of the question too.
+  const targetSignature = `${target.dimension}:${target.key}:${target.period ?? ""}:${JSON.stringify(target.narrow ?? {})}`
   const previousSignature = React.useRef(targetSignature)
   React.useEffect(() => {
     if (previousSignature.current === targetSignature) return
@@ -130,7 +131,9 @@ export function DrillDownPanel({ target, filters, metric, onClose }: Readonly<{
     })
   }, [targetSignature])
 
-  const url = `/api/v1/analytics/executive/drill-down?${toQuery(filters, {
+  // The click's own narrowing wins over the screen's: a grid cell is one
+  // product, whatever the focus picker holds.
+  const url = `/api/v1/analytics/executive/drill-down?${toQuery({ ...filters, ...target.narrow }, {
     dimension: target.dimension,
     key: target.key,
     metric,

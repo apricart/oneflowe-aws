@@ -9,7 +9,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
  * page re-derives the caller's role from the database and refuses on its own
  * (see `tests/integration/executive-analytics-api.test.ts`). So the assertions
  * here are about the reader's experience: an unauthorised role is told why,
- * and the Compare Side by Side tab mounts the workspace with the shared filters.
+ * the Product Performance tab mounts the workspace with the shared filters,
+ * and the tab is a URL.
  */
 
 const mocks = vi.hoisted(() => ({
@@ -17,6 +18,36 @@ const mocks = vi.hoisted(() => ({
   useAPI: vi.fn(),
 }))
 
+/**
+ * The router's view of the search params, as a small store.
+ *
+ * Next patches `window.history.replaceState` so that `useSearchParams` follows
+ * it; the test reproduces that by routing the spy below into this store, so a
+ * tab click re-renders the page the way it does in the browser.
+ */
+const location = vi.hoisted(() => {
+  let search = ""
+  const listeners = new Set<() => void>()
+  return {
+    get: () => search,
+    set(next: string) {
+      search = next
+      for (const listener of listeners) listener()
+    },
+    subscribe(listener: () => void) {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    },
+  }
+})
+
+vi.mock("next/navigation", async () => {
+  const React = await import("react")
+  return {
+    usePathname: () => "/reports/graphical",
+    useSearchParams: () => new URLSearchParams(React.useSyncExternalStore(location.subscribe, location.get)),
+  }
+})
 vi.mock("next-auth/react", () => ({ useSession: mocks.useSession }))
 vi.mock("@/lib/hooks/use-api", () => ({ useAPI: mocks.useAPI }))
 vi.mock("@/components/reports/executive/executive-filters", async (importOriginal) => {
@@ -50,9 +81,17 @@ function signIn(role: string | null, status: "authenticated" | "loading" = "auth
   mocks.useSession.mockReturnValue({ status, data: role ? { user: { role } } : null })
 }
 
+const replaceState = vi.fn<(state: unknown, unused: string, url?: string | URL | null) => void>()
+
 beforeEach(() => {
   mocks.useAPI.mockReset()
   mocks.useAPI.mockReturnValue({ data: undefined, error: undefined, isLoading: false })
+  location.set("")
+  replaceState.mockReset()
+  replaceState.mockImplementation((_state, _unused, url) => {
+    location.set(new URL(String(url), "http://x").search)
+  })
+  window.history.replaceState = replaceState
 })
 
 describe("who gets the page", () => {
@@ -74,7 +113,7 @@ describe("who gets the page", () => {
     signIn(role)
     render(<GraphicalReportsPage />)
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
-      "Executive Overview", "Compare Side by Side", "Explore & Compare",
+      "Executive Overview", "Product Performance", "Explore & Compare",
     ])
     expect(mocks.useAPI).toHaveBeenCalledWith(expect.stringContaining("/api/v1/analytics/executive/overview?"))
   })
@@ -87,20 +126,51 @@ describe("who gets the page", () => {
 })
 
 describe("the levels", () => {
-  it("opens on the overview and switches to Compare Side by Side with the shared filters", () => {
+  it("opens on the overview and switches to Product Performance with the shared filters", () => {
     signIn("HEAD_OFFICE")
     render(<GraphicalReportsPage />)
     expect(screen.getByTestId("kpis")).toBeTruthy()
     expect(screen.queryByTestId("side-by-side")).toBeNull()
 
-    fireEvent.click(screen.getByRole("tab", { name: "Compare Side by Side" }))
-    expect(screen.getByRole("tab", { name: "Compare Side by Side" }).getAttribute("aria-selected")).toBe("true")
+    fireEvent.click(screen.getByRole("tab", { name: "Product Performance" }))
+    expect(screen.getByRole("tab", { name: "Product Performance" }).getAttribute("aria-selected")).toBe("true")
     expect(screen.getByTestId("side-by-side").textContent).toBe("all")
     expect(screen.queryByTestId("kpis")).toBeNull()
 
     fireEvent.click(screen.getByRole("tab", { name: "Explore & Compare" }))
     expect(screen.getByTestId("explore")).toBeTruthy()
     expect(screen.queryByTestId("side-by-side")).toBeNull()
+  })
+
+  it("writes the chosen tab to the URL, and clears it for the overview", () => {
+    signIn("HEAD_OFFICE")
+    render(<GraphicalReportsPage />)
+
+    fireEvent.click(screen.getByRole("tab", { name: "Product Performance" }))
+    expect(replaceState).toHaveBeenLastCalledWith(null, "", "/reports/graphical?tab=product-performance")
+
+    fireEvent.click(screen.getByRole("tab", { name: "Executive Overview" }))
+    expect(replaceState).toHaveBeenLastCalledWith(null, "", "/reports/graphical")
+    expect(screen.getByTestId("kpis")).toBeTruthy()
+  })
+
+  it("opens straight on the tab the URL names, which is what the sidebar entry links to", () => {
+    signIn("GROUP_USER")
+    location.set("?tab=product-performance")
+    render(<GraphicalReportsPage />)
+    expect(screen.getByRole("tab", { name: "Product Performance" }).getAttribute("aria-selected")).toBe("true")
+    expect(screen.getByTestId("side-by-side")).toBeTruthy()
+    expect(screen.queryByTestId("kpis")).toBeNull()
+    // Arriving on a tab is not a navigation of its own; nothing is written back.
+    expect(replaceState).not.toHaveBeenCalled()
+  })
+
+  it("falls back to the overview for a tab the URL names that does not exist", () => {
+    signIn("SUPER_ADMIN")
+    location.set("?tab=nonsense")
+    render(<GraphicalReportsPage />)
+    expect(screen.getByRole("tab", { name: "Executive Overview" }).getAttribute("aria-selected")).toBe("true")
+    expect(screen.getByTestId("kpis")).toBeTruthy()
   })
 
   it("keeps the same filter row above every level, opening on this quarter", () => {
@@ -110,7 +180,7 @@ describe("the levels", () => {
     quarterStart.setMonth(Math.floor(quarterStart.getMonth() / 3) * 3, 1)
     const expected = toCalendarDate(quarterStart)
     expect(screen.getByTestId("filters").textContent).toBe(expected)
-    fireEvent.click(screen.getByRole("tab", { name: "Compare Side by Side" }))
+    fireEvent.click(screen.getByRole("tab", { name: "Product Performance" }))
     expect(screen.getByTestId("filters").textContent).toBe(expected)
   })
 

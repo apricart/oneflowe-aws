@@ -15,11 +15,12 @@ vi.mock("server-only", () => ({}))
 vi.mock("@/lib/redis", () => ({ redis: {} }))
 
 type UserRow = { organizationId: number | null; branchId: number | null; roleName: string | null }
+type BranchRow = { organizationId: number; groupId: number | null }
 
 const fixture = {
   user: null as UserRow | null,
-  /** branchId -> organizationId, the whole world of branches. */
-  branches: new Map<number, number>(),
+  /** branchId -> its tenant and group, the whole world of branches. */
+  branches: new Map<number, BranchRow>(),
   /**
    * userId -> branch ids the multi-branch resolver would return. The resolver
    * itself is covered by `multi-branch-scope.test.ts` and the group-roles
@@ -34,18 +35,31 @@ vi.mock("@/lib/server/multi-branch-scope", () => ({
 }))
 
 /**
- * A chainable stand-in for drizzle. It answers the two shapes this module
- * issues — the caller lookup and the tenant branch list — and resolves from the
- * fixture rather than a database.
+ * A chainable stand-in for drizzle. It answers the three shapes this module
+ * issues — the caller lookup, the tenant branch list and the group member
+ * list — and resolves from the fixture rather than a database.
  */
 function makeQuery(table: "users" | "branches") {
   let organizationFilter: number[] | null = null
+  let groupFilter: number[] | null = null
+
+  // The module builds `inArray` predicates on the tenant and group columns,
+  // alone or joined with `and`; anything else is not modelled.
+  const apply = (condition: any) => {
+    if (!condition) return
+    if (condition.__and) {
+      for (const entry of condition.__and) apply(entry)
+      return
+    }
+    if (condition.__column === "branches.organizationId") organizationFilter = condition.__in
+    if (condition.__column === "branches.groupId") groupFilter = condition.__in
+  }
 
   const chain: any = {
     from: () => chain,
     leftJoin: () => chain,
     where: (condition: any) => {
-      if (table === "branches") organizationFilter = condition?.__orgIds ?? null
+      if (table === "branches") apply(condition)
       return chain
     },
     limit: () => chain,
@@ -53,7 +67,8 @@ function makeQuery(table: "users" | "branches") {
     then: (resolve: (rows: any[]) => unknown) => {
       if (table === "users") return resolve(fixture.user ? [fixture.user] : [])
       const rows = Array.from(fixture.branches.entries())
-        .filter(([, orgId]) => organizationFilter === null || organizationFilter.includes(orgId))
+        .filter(([, row]) => organizationFilter === null || organizationFilter.includes(row.organizationId))
+        .filter(([, row]) => groupFilter === null || (row.groupId !== null && groupFilter.includes(row.groupId)))
         .map(([id]) => ({ id }))
       return resolve(rows)
     },
@@ -69,15 +84,15 @@ vi.mock("@/lib/db", () => ({
   },
 }))
 
-// `inArray(branches.organizationId, ids)` is the only condition the module
-// builds for the branch lookup, so tagging it is enough to model the filter.
+// `inArray` on the tenant and group columns are the only conditions the module
+// builds for the branch lookups, so tagging them is enough to model the filter.
 vi.mock("drizzle-orm", async (importOriginal) => {
   const actual = await importOriginal<typeof import("drizzle-orm")>()
   return {
     ...actual,
-    inArray: (column: any, values: any[]) => ({ __orgIds: values, __column: column }),
+    inArray: (column: any, values: any[]) => ({ __in: values, __column: column?.__column }),
     eq: (...args: any[]) => ({ __eq: args }),
-    and: (...args: any[]) => args.find((entry) => entry?.__orgIds) ?? { __and: args },
+    and: (...args: any[]) => ({ __and: args }),
   }
 })
 
@@ -89,7 +104,7 @@ vi.mock("@/db/schema", () => ({
     id: {},
     name: {},
     organizationId: { __column: "branches.organizationId" },
-    groupId: {},
+    groupId: { __column: "branches.groupId" },
     baselineBudgetCents: {},
   },
 }))
@@ -98,14 +113,20 @@ import { resolveExecutiveScope } from "./executive-analytics-scope"
 
 const TENANT_A = 1
 const TENANT_B = 2
+/** Tenant A's groups: North holds 10 and 11, South holds 12. Tenant B's Coast holds 90. */
+const GROUP_NORTH = 5
+const GROUP_SOUTH = 6
+const GROUP_COAST = 7
+/** A group with no branches at all. */
+const GROUP_EMPTY = 8
 
 function seed() {
-  fixture.branches = new Map([
-    [10, TENANT_A],
-    [11, TENANT_A],
-    [12, TENANT_A],
-    [90, TENANT_B],
-    [91, TENANT_B],
+  fixture.branches = new Map<number, BranchRow>([
+    [10, { organizationId: TENANT_A, groupId: GROUP_NORTH }],
+    [11, { organizationId: TENANT_A, groupId: GROUP_NORTH }],
+    [12, { organizationId: TENANT_A, groupId: GROUP_SOUTH }],
+    [90, { organizationId: TENANT_B, groupId: GROUP_COAST }],
+    [91, { organizationId: TENANT_B, groupId: null }],
   ])
 }
 
@@ -335,6 +356,100 @@ describe("super admin scope", () => {
     if (!scope.ok) return
     expect(scope.organizationIds).toEqual([TENANT_B])
     expect(scope.branchIds).toEqual([90, 91])
+  })
+})
+
+describe("group selection", () => {
+  const headOffice = () => {
+    fixture.user = { organizationId: TENANT_A, branchId: null, roleName: "HEAD_OFFICE" }
+  }
+
+  it("narrows the tenant to the members of the selected groups", async () => {
+    headOffice()
+
+    const one = await resolveExecutiveScope(session(), params(`groupIds=${GROUP_NORTH}`))
+    expect(one.ok && one.branchIds).toEqual([10, 11])
+
+    const both = await resolveExecutiveScope(session(), params(`groupIds=${GROUP_NORTH},${GROUP_SOUTH}`))
+    expect(both.ok && both.branchIds).toEqual([10, 11, 12])
+
+    // What may be *named* is still the whole tenant: the filter list must not
+    // shrink to the current selection or it could never be changed.
+    expect(one.ok && one.allowedBranchIds).toEqual([10, 11, 12])
+  })
+
+  it("intersects a group with a branch selection rather than adding to it", async () => {
+    headOffice()
+
+    const inside = await resolveExecutiveScope(session(), params(`groupIds=${GROUP_NORTH}&branchIds=11`))
+    expect(inside.ok && inside.branchIds).toEqual([11])
+
+    // Branch 12 is in the tenant but not in North: naming both yields nothing,
+    // and nothing is a refusal — never the tenant, never the group.
+    const outside = await resolveExecutiveScope(session(), params(`groupIds=${GROUP_NORTH}&branchIds=12`))
+    expect(outside).toEqual({ ok: false, error: "No branches in scope", status: 403 })
+  })
+
+  it("refuses another tenant's group and a group with no branches, instead of widening", async () => {
+    headOffice()
+
+    const foreign = await resolveExecutiveScope(session(), params(`groupIds=${GROUP_COAST}`))
+    expect(foreign).toEqual({ ok: false, error: "No branches in scope", status: 403 })
+
+    const empty = await resolveExecutiveScope(session(), params(`groupIds=${GROUP_EMPTY}`))
+    expect(empty).toEqual({ ok: false, error: "No branches in scope", status: 403 })
+
+    // A foreign group beside a legitimate one contributes nothing to the set.
+    const mixed = await resolveExecutiveScope(session(), params(`groupIds=${GROUP_SOUTH},${GROUP_COAST}`))
+    expect(mixed.ok && mixed.branchIds).toEqual([12])
+  })
+
+  it("keeps the approver inside its assignments even when the group reaches further", async () => {
+    fixture.user = { organizationId: TENANT_A, branchId: null, roleName: "GROUP_USER" }
+    fixture.assignments.set("approver", [11])
+
+    // North holds 10 and 11; only 11 is assigned.
+    const scope = await resolveExecutiveScope(session("approver", "GROUP_USER"), params(`groupIds=${GROUP_NORTH}`))
+    expect(scope.ok && scope.branchIds).toEqual([11])
+
+    // South is in the tenant but none of it is assigned.
+    const unassigned = await resolveExecutiveScope(session("approver", "GROUP_USER"), params(`groupIds=${GROUP_SOUTH}`))
+    expect(unassigned).toEqual({ ok: false, error: "No branches in scope", status: 403 })
+  })
+
+  it("is a narrowing for a super admin, never the unrestricted case", async () => {
+    fixture.user = { organizationId: null, branchId: null, roleName: "SUPER_ADMIN" }
+
+    const noTenant = await resolveExecutiveScope(session("admin", "SUPER_ADMIN"), params(`groupIds=${GROUP_COAST}`))
+    expect(noTenant.ok && noTenant.branchIds).toEqual([90])
+
+    // With a tenant selected, a group from another tenant is not reachable
+    // even for the platform role.
+    const crossed = await resolveExecutiveScope(
+      session("admin", "SUPER_ADMIN"),
+      params(`organizationId=${TENANT_A}&groupIds=${GROUP_COAST}`),
+    )
+    expect(crossed).toEqual({ ok: false, error: "No branches in scope", status: 403 })
+  })
+
+  it("ignores malformed group ids rather than failing on them", async () => {
+    headOffice()
+    const scope = await resolveExecutiveScope(session(), params("groupIds=abc,-1,0"))
+    // Nothing valid was asked for, so no narrowing applies.
+    expect(scope.ok && scope.branchIds).toEqual([10, 11, 12])
+  })
+
+  it("bounds the group list as the filter parser does, so the two cannot disagree", async () => {
+    headOffice()
+    // North's group sits past the cap: it is dropped, and with every group
+    // that survives being empty the request is refused rather than widened.
+    const past = Array.from({ length: 100 }, (_, index) => 1000 + index).concat(GROUP_NORTH).join(",")
+    expect(await resolveExecutiveScope(session(), params(`groupIds=${past}`)))
+      .toEqual({ ok: false, error: "No branches in scope", status: 403 })
+    // Inside the cap it is honoured.
+    const within = Array.from({ length: 99 }, (_, index) => 1000 + index).concat(GROUP_NORTH).join(",")
+    const scope = await resolveExecutiveScope(session(), params(`groupIds=${within}`))
+    expect(scope.ok && scope.branchIds).toEqual([10, 11])
   })
 })
 

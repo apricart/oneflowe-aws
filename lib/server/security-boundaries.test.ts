@@ -113,6 +113,28 @@ describe('group sub-resources are confined to the tenant that owns the group', (
     expect(change).toContain('passwordChangedAt: sql`now()`')
   })
 
+  it('relaxes the emailed proof only through the pure policy module, and only its freshness term', () => {
+    // The switch is one constant in an import-free module — no environment
+    // variable, no request value — read by the server module and the page
+    // alike, so the two cannot disagree within one build.
+    const policy = repositoryFile('lib/password-change-policy.ts')
+    expect(policy).not.toMatch(/^import /m)
+    expect(policy).not.toContain('process.env')
+    expect(policy).toMatch(/export const PASSWORD_CHANGE_EMAIL_VERIFICATION: PasswordChangeEmailVerificationMode = "(required|disabled)"/)
+
+    const change = repositoryFile('lib/server/password-change.ts')
+    expect(change).toContain("from \"@/lib/password-change-policy\"")
+    expect(change).toContain('const proofRequired = isEmailVerificationRequiredForPasswordChange()')
+    // With the proof off, the session update keeps its identity and liveness
+    // terms unconditionally; freshness is the only term the policy governs.
+    expect(change).toMatch(/\.update\(authSessions\)[\s\S]*?eq\(authSessions\.id, input\.sessionId\),\s+eq\(authSessions\.subjectId, account\.id\),\s+isNull\(authSessions\.revokedAt\),\s+proofRequired \? PROOF_FRESH : undefined,/)
+    expect(change).toContain('emailVerified: proofRequired')
+
+    const page = repositoryFile('app/(auth)/change-password/page.tsx')
+    expect(page).toContain("from \"@/lib/password-change-policy\"")
+    expect(page).not.toContain('process.env')
+  })
+
   it('stamps the emailed proof on the session that entered the code, never on the account alone', () => {
     const verification = repositoryFile('lib/server/email-verification.ts')
     expect(verification).toMatch(/\.update\(authSessions\)[\s\S]*?emailVerifiedAt: sql`now\(\)`[\s\S]*?eq\(authSessions\.id, sessionId\)[\s\S]*?eq\(authSessions\.subjectId, subject\.id\)[\s\S]*?isNull\(authSessions\.revokedAt\)/)

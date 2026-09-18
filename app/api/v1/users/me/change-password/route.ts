@@ -11,10 +11,11 @@ import { changeOwnPassword } from "@/lib/server/password-change"
 
 /**
  * A person setting their own password. The rules — emailed proof on this
- * session, current password, policy, must differ — live in
- * `lib/server/password-change.ts`; this handler authenticates, validates and
- * maps the outcome to a status. Reachable by a session that still owes a
- * password change (`lib/password-change-pending.ts`).
+ * session (while `lib/password-change-policy.ts` requires it), current
+ * password, policy, must differ — live in `lib/server/password-change.ts`;
+ * this handler authenticates, validates and maps the outcome to a status.
+ * Reachable by a session that still owes a password change
+ * (`lib/password-change-pending.ts`).
  */
 
 export const EMAIL_VERIFICATION_REQUIRED_CODE = "EMAIL_VERIFICATION_REQUIRED"
@@ -63,6 +64,8 @@ export async function POST(req: NextRequest) {
           403,
           EMAIL_VERIFICATION_REQUIRED_CODE,
         )
+      case "session_invalid":
+        return error("Unauthorized", 401)
       case "locked":
         return refused(
           "Too many failed attempts. Please try again later.",

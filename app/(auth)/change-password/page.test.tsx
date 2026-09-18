@@ -9,6 +9,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
  * enforces every step regardless of this page; what is on trial here is
  * that the page never asks for something the server will refuse, never
  * leaks the address, and never lets a click go through twice.
+ *
+ * The three-step suites run with the emailed code pinned to *required*, so
+ * they keep guarding that path while `lib/password-change-policy.ts` has it
+ * switched off. The last block covers the page as it currently ships: the
+ * password form alone.
  */
 
 const mocks = vi.hoisted(() => ({
@@ -16,9 +21,13 @@ const mocks = vi.hoisted(() => ({
   securelySignOut: vi.fn(async () => undefined),
   toast: vi.fn(),
   fetch: vi.fn(),
+  emailVerificationRequired: vi.fn(() => true),
 }))
 
 vi.mock("next-auth/react", () => ({ useSession: mocks.useSession }))
+vi.mock("@/lib/password-change-policy", () => ({
+  isEmailVerificationRequiredForPasswordChange: mocks.emailVerificationRequired,
+}))
 vi.mock("next/image", () => ({
   default: ({ src, alt }: { src: string; alt: string }) => <img src={src} alt={alt} />,
 }))
@@ -102,6 +111,7 @@ beforeEach(() => {
   mocks.useSession.mockReturnValue({ status: "authenticated", data: { user: { id: "u1", mustChangePassword: true } } })
   mocks.securelySignOut.mockClear()
   mocks.toast.mockClear()
+  mocks.emailVerificationRequired.mockReset().mockReturnValue(true)
   vi.stubGlobal("fetch", mocks.fetch)
   server()
 })
@@ -432,5 +442,96 @@ describe("what never reaches the screen", () => {
     await reachPasswordStep()
 
     await waitFor(() => expect(document.body.textContent).not.toMatch(/[a-z]{2,}@ke\.com\.pk/))
+  })
+})
+
+describe("with the emailed code switched off — the page as it currently ships", () => {
+  const CURRENT = "Handout-Passw0rd!"
+  const NEXT = "Chosen-Passw0rd!2026"
+
+  beforeEach(() => {
+    mocks.emailVerificationRequired.mockReturnValue(false)
+  })
+
+  it("opens on the password form, says why, and asks the server nothing first", () => {
+    render(<ChangePasswordPage />)
+
+    expect(title("Set New Password")).toBeTruthy()
+    expect(screen.getByText(/requires a new password before you can continue/)).toBeTruthy()
+    expect(screen.getByLabelText("Current Password")).toBeTruthy()
+    expect(screen.getByLabelText("New Password")).toBeTruthy()
+    expect(screen.getByLabelText("Confirm New Password")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Send verification code" })).toBeNull()
+    expect(screen.queryByText(/Email verified/)).toBeNull()
+    expect(codeInputs()).toHaveLength(0)
+    expect(document.body.textContent).not.toMatch(/@/)
+    expect(mocks.fetch).not.toHaveBeenCalled()
+  })
+
+  it("changes the password with one request — never a send, never a verify — then signs out to the login page", async () => {
+    server({ status: 200, body: { success: true } })
+    render(<ChangePasswordPage />)
+
+    await fillPasswords(CURRENT, NEXT)
+    await submitPasswords()
+
+    expect(requests()).toEqual([{ path: CHANGE, body: { currentPassword: CURRENT, password: NEXT } }])
+    expect(mocks.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Password changed" }))
+    expect(mocks.securelySignOut).toHaveBeenCalledWith({ callbackUrl: "/login" })
+  })
+
+  it("still refuses a mismatched confirmation on the page", async () => {
+    render(<ChangePasswordPage />)
+
+    await fillPasswords(CURRENT, NEXT, "Chosen-Passw0rd!2025")
+    await submitPasswords()
+
+    expect(banner().textContent).toContain("Passwords do not match.")
+    expect(mocks.fetch).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    "The current password is incorrect.",
+    "The new password must be different from your current password.",
+  ])("shows the server's refusal and keeps the form: %s", async (message) => {
+    server({ status: 400, body: { error: message } })
+    render(<ChangePasswordPage />)
+
+    await fillPasswords(CURRENT, NEXT)
+    await submitPasswords()
+
+    expect(banner().textContent).toContain(message)
+    expect(title("Set New Password")).toBeTruthy()
+    expect(mocks.securelySignOut).not.toHaveBeenCalled()
+  })
+
+  it("signs the person out when the server says the session is gone", async () => {
+    server({ status: 401, body: { error: "Unauthorized" } })
+    render(<ChangePasswordPage />)
+
+    await fillPasswords(CURRENT, NEXT)
+    await submitPasswords()
+
+    expect(mocks.securelySignOut).toHaveBeenCalledWith({ callbackUrl: "/login?reason=session-expired" })
+    expect(mocks.toast).not.toHaveBeenCalled()
+  })
+
+  it("falls back to the code when a server built the other way demands one", async () => {
+    // A page with the proof off against a server with it on must not strand
+    // the person: the 403 sends them to step one instead of a dead end.
+    server({ status: 403, body: { error: "Verify your email address before changing your password.", code: "EMAIL_VERIFICATION_REQUIRED" } })
+    render(<ChangePasswordPage />)
+
+    await fillPasswords(CURRENT, NEXT)
+    await submitPasswords()
+
+    expect(title("Verify Your Email")).toBeTruthy()
+    expect(banner().textContent).toContain("Please verify your email address before setting a new password.")
+    expect(sendButton()).toBeTruthy()
+    expect(mocks.securelySignOut).not.toHaveBeenCalled()
+
+    // And from there the full three steps still work.
+    await reachCodeStep()
+    expect(requests().at(-1)).toEqual({ path: SEND, body: undefined })
   })
 })

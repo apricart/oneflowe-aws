@@ -11,7 +11,7 @@ import {
   resolveQuantityUnit,
   withCumulativeShare,
 } from "@/lib/executive-analytics"
-import { applyEntityKeys, parseComparisonRequest, previousWindow } from "@/lib/executive-analytics-request"
+import { applyEntityKeys, isScopeKeyedDimension, parseComparisonRequest, previousWindow } from "@/lib/executive-analytics-request"
 import {
   isLineScoped,
   loadComparison,
@@ -34,9 +34,10 @@ import { resolveExecutiveScope } from "@/lib/server/executive-analytics-scope"
  * Authorization runs in two independent places, deliberately:
  *
  *  * `resolveExecutiveScope` decides which rows exist for this caller, and the
- *    branch/organization halves of an entity selection are routed through it —
- *    so ticking another tenant's branch narrows to nothing rather than reaching
- *    it. That is why `applyEntityKeys` runs *before* the scope is resolved.
+ *    branch, organization and group halves of an entity selection are routed
+ *    through it — so ticking another tenant's branch narrows to nothing rather
+ *    than reaching it. That is why `applyEntityKeys` runs *before* the scope is
+ *    resolved.
  *  * `parseComparisonRequest` refuses a dimension reserved to another role, so
  *    the organization comparison is closed to Head Office on the server and not
  *    merely absent from its menu.
@@ -46,12 +47,12 @@ export async function GET(req: NextRequest) {
     const session = await getServerSession(authOptions)
     const url = new URL(req.url)
 
-    // The dimension is needed before scope resolution so a branch or
+    // The dimension is needed before scope resolution so a branch, group or
     // organization selection is folded into the scope parameters and gets
     // intersected with the caller's own reach. It is re-validated immediately
     // below; nothing is trusted from this read.
     const requestedDimension = url.searchParams.get("dimension")
-    const scopeParams = requestedDimension === "branch" || requestedDimension === "organization"
+    const scopeParams = isScopeKeyedDimension(requestedDimension)
       ? applyEntityKeys(url.searchParams, requestedDimension)
       : url.searchParams
 

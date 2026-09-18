@@ -15,7 +15,7 @@ import {
 import { sanitizeSpreadsheetRow } from "@/lib/spreadsheet"
 
 /**
- * Downloads the Compare Side by Side screen as one workbook.
+ * Downloads the Product Performance screen as one workbook.
  *
  * The sheets are built from the responses the panels already hold — nothing
  * is re-fetched — so the file is the screen, under the same filters, at the
@@ -51,7 +51,7 @@ export function SideBySideExportButton({ panels, ready, readSnapshots, context }
 
       const workbook = XLSX.utils.book_new()
       workbook.Props = {
-        Title: "Compare Side by Side",
+        Title: "Product Performance",
         Subject: "Executive procurement analytics",
         Author: "OneFlowe",
         CreatedDate: exportedAt,

@@ -29,6 +29,7 @@ const filters = {
   startDate: "2026-07-01",
   endDate: "2026-09-12",
   organizationIds: ["3"],
+  groupIds: ["4"],
   branchIds: ["7", "9"],
   categoryIds: ["21"],
   productIds: ["186"],
@@ -138,6 +139,32 @@ describe("the request behind the table", () => {
 
     rerender(<DrillDownPanel target={{ dimension: "branch", key: "9", label: "South" }} filters={filters} metric="spend" onClose={() => {}} />)
     expect(param("key")).toBe("9")
+    expect(param("offset")).toBe("0")
+  })
+
+  it("lets a grid cell narrow the screen's focus to its own product, and pages that pair on its own", () => {
+    respond({ hasMore: true })
+    // The screen has two products in focus; the cell is Ahmed × the second.
+    const twoInFocus = { ...filters, productIds: ["186", "187"] }
+    const cell = (productId: string) => ({
+      dimension: "user" as const,
+      key: "6ec33598-9ec2-4a1a-86df-cd0801ee0178",
+      label: "Ahmed · Toner",
+      narrow: { productIds: [productId] },
+    })
+    const { rerender } = render(<DrillDownPanel target={cell("187")} filters={twoInFocus} metric="spend" onClose={() => {}} />)
+    expect(param("dimension")).toBe("user")
+    expect(param("key")).toBe("6ec33598-9ec2-4a1a-86df-cd0801ee0178")
+    expect(param("productIds")).toBe("187")
+    // Everything the cell did not name is still the screen's.
+    expect(param("branchIds")).toBe("7,9")
+    expect(param("unit")).toBe("Ream")
+
+    fireEvent.click(screen.getByLabelText("Next page"))
+    expect(param("offset")).toBe(String(DRILLDOWN_DEFAULT_ROWS))
+    // The cell beside it is a different question: same person, other product.
+    rerender(<DrillDownPanel target={cell("186")} filters={twoInFocus} metric="spend" onClose={() => {}} />)
+    expect(param("productIds")).toBe("186")
     expect(param("offset")).toBe("0")
   })
 })

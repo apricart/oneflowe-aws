@@ -9,7 +9,9 @@ import {
   getSideBySideExportFilename,
   isSideBySideExportReady,
   metricColumnHeader,
+  type SideBySideComparisonResponse,
   type SideBySideExportContext,
+  type SideBySideMatrixResponse,
   type SideBySidePanelResponse,
   type SideBySidePanelSnapshot,
 } from "./executive-side-by-side-export"
@@ -20,7 +22,7 @@ const byId = (id: string) => {
   return panel
 }
 
-const rankResponse = (overrides: Partial<SideBySidePanelResponse> = {}): SideBySidePanelResponse => ({
+const rankResponse = (overrides: Partial<SideBySideComparisonResponse> = {}): SideBySideComparisonResponse => ({
   rows: [
     { key: "186", label: "A4 Paper", value: 1_250_050, previousValue: 1_000_000, changePct: 25.005, orderCount: 12, share: 62.5, cumulativeShare: 62.5 },
     { key: "187", label: "=Toner", value: 750_000, previousValue: 0, changePct: null, orderCount: 3, share: 37.5, cumulativeShare: 100 },
@@ -36,7 +38,7 @@ const rankResponse = (overrides: Partial<SideBySidePanelResponse> = {}): SideByS
   ...overrides,
 })
 
-const seriesResponse = (overrides: Partial<SideBySidePanelResponse> = {}): SideBySidePanelResponse => ({
+const seriesResponse = (overrides: Partial<SideBySideComparisonResponse> = {}): SideBySideComparisonResponse => ({
   rows: [],
   series: [
     { key: "u1", label: "Ahmed", points: [{ period: "2026-07", value: 100_00 }, { period: "2026-08", value: 200_00 }, { period: "2026-09", value: 50_00 }] },
@@ -53,6 +55,26 @@ const seriesResponse = (overrides: Partial<SideBySidePanelResponse> = {}): SideB
   ...overrides,
 })
 
+const matrixResponse = (overrides: Partial<SideBySideMatrixResponse> = {}): SideBySideMatrixResponse => ({
+  mode: "matrix",
+  rowLabel: "Requester",
+  columnLabel: "Product",
+  rows: [{ key: "u1", label: "Ahmed", total: 1_300_000 }, { key: "u2", label: "Sana", total: 850_000 }],
+  columns: [{ key: "186", label: "A4 Paper", total: 1_050_000 }, { key: "187", label: "Toner", total: 600_000 }, { key: "188", label: "Diesel", total: 500_000 }],
+  cells: [
+    { row: "u1", column: "186", value: 700_000 },
+    { row: "u1", column: "187", value: 600_000 },
+    { row: "u2", column: "186", value: 350_000 },
+    // Sana never bought Toner; Ahmed never bought Diesel. Neither is a zero.
+    { row: "u2", column: "188", value: 500_000 },
+  ],
+  format: "currency",
+  label: "Procurement Value",
+  formula: "SUM(...)",
+  quantityUnit: { selected: null },
+  ...overrides,
+})
+
 const loaded = (response: SideBySidePanelResponse): SideBySidePanelSnapshot => ({ response, loading: false, error: null })
 
 const context = (overrides: Partial<SideBySideExportContext> = {}): SideBySideExportContext => ({
@@ -62,6 +84,7 @@ const context = (overrides: Partial<SideBySideExportContext> = {}): SideBySideEx
   metricLabel: "Procurement Value",
   metricFormula: "SUM(order.totalCents - order.refundAmountCents) over revenue-eligible orders",
   organizations: [],
+  groups: [],
   branches: ["North Zone"],
   categories: [],
   products: [],
@@ -71,11 +94,13 @@ const context = (overrides: Partial<SideBySideExportContext> = {}): SideBySideEx
   ...overrides,
 })
 
-/** Every snapshot the default six-panel screen holds, all answered. */
+/** Every snapshot the default eight-panel screen holds, all answered. */
 function defaultSnapshots(): Record<string, SideBySidePanelSnapshot> {
   return {
     "by-product": loaded(rankResponse()),
+    "by-category": loaded(rankResponse()),
     "by-requester": loaded(rankResponse()),
+    "requester-by-product": loaded(matrixResponse()),
     "by-branch": loaded(rankResponse()),
     "by-month": loaded(rankResponse({
       rows: [
@@ -118,7 +143,8 @@ describe("buildSideBySideWorkbookData", () => {
     const panels = panelsForFocus(0)
     const sheets = buildSideBySideWorkbookData(panels, defaultSnapshots(), context())
     expect(sheets.map((sheet) => sheet.name)).toEqual([
-      SUMMARY_SHEET_NAME, "By product", "By requester", "By branch", "By month", "Requesters over months", "Products over months",
+      SUMMARY_SHEET_NAME, "By product", "By category", "By requester", "Requester × product", "By branch", "By month",
+      "Requesters over months", "Products over months",
     ])
   })
 
@@ -128,6 +154,7 @@ describe("buildSideBySideWorkbookData", () => {
       products: ["A4 Paper"],
       requesters: ["Ahmed", "Sana"],
       organizations: ["K-Electric"],
+      groups: ["Distribution"],
       categories: ["Stationery"],
       unit: "Ream",
       measure: "quantity",
@@ -139,6 +166,7 @@ describe("buildSideBySideWorkbookData", () => {
     expect(field("Measured by")).toBe("Quantity (Quantity)")
     expect(field("Period")).toBe("2026-07-01 to 2026-09-12")
     expect(field("Organizations")).toBe("K-Electric")
+    expect(field("Groups")).toBe("Distribution")
     expect(field("Branches")).toBe("North Zone")
     expect(field("Categories")).toBe("Stationery")
     expect(field("Unit of measure")).toBe("Ream")
@@ -205,6 +233,48 @@ describe("buildSideBySideWorkbookData", () => {
     ])
   })
 
+  it("writes the grid with a blank for a pair that never happened, and the margins", () => {
+    const [, grid] = buildSideBySideWorkbookData(
+      [byId("requester-by-product")],
+      { "requester-by-product": loaded(matrixResponse()) },
+      context(),
+    )
+    expect(grid.columns).toEqual(["Requester / Product", "A4 Paper", "Toner", "Diesel", "Total Procurement Value (PKR)"])
+    expect(grid.rows).toEqual([
+      ["Ahmed", 7000, 6000, null, 13000],
+      ["Sana", 3500, null, 5000, 8500],
+      ["Total", 10500, 6000, 5000, null],
+    ])
+  })
+
+  it("names the order-count margins for what they are, since cells of orders do not add up", () => {
+    const [, grid] = buildSideBySideWorkbookData(
+      [byId("requester-by-product")],
+      { "requester-by-product": loaded(matrixResponse({ format: "count", label: "Orders", cells: [{ row: "u1", column: "186", value: 2 }], rows: [{ key: "u1", label: "Ahmed", total: 2 }], columns: [{ key: "186", label: "A4 Paper", total: 2 }] })) },
+      context(),
+    )
+    expect(grid.columns).toEqual(["Requester / Product", "A4 Paper", "Orders (whole row)"])
+    expect(grid.rows).toEqual([["Ahmed", 2, 2], ["Orders (whole column)", 2, null]])
+  })
+
+  it("writes the screen's message for a blocked or empty grid", () => {
+    const sheets = buildSideBySideWorkbookData(
+      [byId("requester-by-product"), byId("by-branch")],
+      {
+        "requester-by-product": loaded(matrixResponse({ rows: [], columns: [], cells: [], blocked: { reason: "unit-conflict", message: "Quantity cannot be totalled across Litre, Ream." } })),
+        "by-branch": loaded(rankResponse()),
+      },
+      context(),
+    )
+    expect(sheets[1].rows).toEqual([["Quantity cannot be totalled across Litre, Ream."]])
+    const [, empty] = buildSideBySideWorkbookData(
+      [byId("requester-by-product")],
+      { "requester-by-product": loaded(matrixResponse({ rows: [], cells: [] })) },
+      context(),
+    )
+    expect(empty.rows).toEqual([[EMPTY_PANEL_NOTE]])
+  })
+
   it("writes the screen's message for a blocked, empty, failed or unanswered panel", () => {
     const blocked = rankResponse({ rows: [], blocked: { reason: "unit-conflict", message: "Quantity cannot be totalled across Litre, Ream." } })
     const sheets = buildSideBySideWorkbookData(
@@ -250,8 +320,8 @@ describe("isSideBySideExportReady", () => {
 describe("getSideBySideExportFilename", () => {
   it("is built from the measure and the ISO period only", () => {
     expect(getSideBySideExportFilename({ measure: "amount", startDate: "2026-07-01", endDate: "2026-09-12" }))
-      .toBe("compare-side-by-side-amount-2026-07-01-to-2026-09-12.xlsx")
+      .toBe("product-performance-amount-2026-07-01-to-2026-09-12.xlsx")
     expect(getSideBySideExportFilename({ measure: "quantity", startDate: "../x", endDate: "" }))
-      .toBe("compare-side-by-side-quantity-unknown-to-unknown.xlsx")
+      .toBe("product-performance-quantity-unknown-to-unknown.xlsx")
   })
 })

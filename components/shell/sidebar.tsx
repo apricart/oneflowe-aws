@@ -45,6 +45,7 @@ export const getNavigationByRole = (role: string, budgetAllocationEnabled = fals
         icon: BarChart3,
         subItems: [
           { href: "/reports/graphical", label: "Graphical Reports" },
+          { href: "/reports/graphical?tab=product-performance", label: "Product Performance" },
           { href: "/reports/organization-report", label: "Organization Report" },
           { href: "/reports/order-report", label: "Order Report" },
           { href: "/reports/refund-report", label: "Refund Report" },
@@ -76,6 +77,7 @@ export const getNavigationByRole = (role: string, budgetAllocationEnabled = fals
         icon: BarChart3,
         subItems: [
           { href: "/reports/graphical", label: "Graphical Reports" },
+          { href: "/reports/graphical?tab=product-performance", label: "Product Performance" },
           { href: "/reports/organization-report", label: "Organization Report" },
           { href: "/reports/order-report", label: "Order Report" },
           { href: "/reports/refund-report", label: "Refund Report" },
@@ -133,6 +135,7 @@ export const getNavigationByRole = (role: string, budgetAllocationEnabled = fals
         icon: BarChart3,
         subItems: [
           { href: "/reports/graphical", label: "Graphical Reports" },
+          { href: "/reports/graphical?tab=product-performance", label: "Product Performance" },
           { href: "/reports/order-report", label: "Order Report" },
           { href: "/reports/group-orders", label: "Group Order Report" },
           { href: "/reports/refund-report", label: "Refund Report" },
