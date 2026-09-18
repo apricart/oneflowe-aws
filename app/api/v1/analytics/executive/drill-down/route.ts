@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth"
 
 import { authOptions } from "@/lib/auth-options"
 import { EXECUTIVE_DIMENSIONS, EXECUTIVE_METRICS, resolveQuantityUnit } from "@/lib/executive-analytics"
-import { applyEntityKeys, parseDrillDownRequest } from "@/lib/executive-analytics-request"
+import { applyEntityKeys, isScopeKeyedDimension, parseDrillDownRequest } from "@/lib/executive-analytics-request"
 import { withRateLimit } from "@/lib/rate-limiter"
 import {
   loadDrillDownLines,
@@ -49,10 +49,11 @@ export async function GET(req: NextRequest) {
     const url = new URL(req.url)
 
     // Same ordering as the comparison endpoint, and for the same reason: a
-    // branch or organization key must be inside the scope parameters before the
-    // fence is resolved, so it can only narrow what the caller already had.
+    // branch, group or organization key must be inside the scope parameters
+    // before the fence is resolved, so it can only narrow what the caller
+    // already had.
     const requestedDimension = url.searchParams.get("dimension")
-    const scopeParams = requestedDimension === "branch" || requestedDimension === "organization"
+    const scopeParams = isScopeKeyedDimension(requestedDimension)
       ? applyEntityKeys(withKeyAsKeys(url.searchParams), requestedDimension)
       : url.searchParams
 

@@ -1,12 +1,12 @@
 "use client"
 
 import * as React from "react"
-import { Ruler, X } from "lucide-react"
+import { LayoutGrid, Ruler, X } from "lucide-react"
 
 import { BranchFilter } from "@/components/reports/branch-filter"
 import { OrganizationFilter } from "@/components/reports/organization-filter"
 import { QuickDateRange, getDateRange, toCalendarDate, type RangeKey } from "@/components/reports/quick-date-range"
-import { useAPI } from "@/lib/hooks/use-api"
+import { useAPI, useBranches } from "@/lib/hooks/use-api"
 import { MultiSelectFilter } from "@/components/reports/multi-select-filter"
 import { cn } from "@/lib/utils"
 
@@ -24,6 +24,12 @@ export type ExecutiveFilterState = {
   startDate: string
   endDate: string
   organizationIds: string[]
+  /**
+   * Branch groups to narrow to. A group is a set of branches, and the server
+   * resolves it into one: every figure, budget or order, is then fenced to the
+   * groups' member branches (`lib/server/executive-analytics-scope.ts`).
+   */
+  groupIds: string[]
   branchIds: string[]
   categoryIds: string[]
   /**
@@ -75,9 +81,18 @@ export function ExecutiveFilters({ role, value, onChange, availableUnits, unitCo
     label: category.name,
   }))
 
+  // The group list is the branch list, folded: only a group with a branch the
+  // caller can see is offered, which is exactly the set a selection can answer
+  // for, and `/api/v1/branches` already scopes per role — the approver's
+  // assigned branches, Head Office's tenant. It is the same request the branch
+  // filter makes, so it is answered from the SWR cache.
+  const { data: branchData } = useBranches(organizationQuery)
+  const groupOptions = groupOptionsFromBranches(branchData?.items ?? [])
+
   const patch = (next: Partial<ExecutiveFilterState>) => onChange((current) => ({ ...current, ...next }))
 
   const hasFilters = value.branchIds.length > 0
+    || value.groupIds.length > 0
     || value.categoryIds.length > 0
     || value.organizationIds.length > 0
     || Boolean(value.unit)
@@ -96,15 +111,31 @@ export function ExecutiveFilters({ role, value, onChange, availableUnits, unitCo
       {isSuperAdmin ? (
         <OrganizationFilter
           selectedIds={value.organizationIds}
-          onChange={(organizationIds) => patch({ organizationIds, branchIds: [] })}
+          onChange={(organizationIds) => patch({ organizationIds, groupIds: [], branchIds: [] })}
           maxSelect={1}
         />
       ) : null}
+
+      {/*
+        Picking groups narrows the branch filter to their members and drops any
+        branch already picked, as changing the organization does: a branch
+        outside the chosen groups would intersect to nothing on the server.
+      */}
+      <MultiSelectFilter
+        title="Groups"
+        items={groupOptions}
+        selectedIds={value.groupIds}
+        onChange={(groupIds) => patch({ groupIds, branchIds: [] })}
+        placeholder="All Groups"
+        icon={<LayoutGrid className={cn("h-4 w-4 shrink-0", value.groupIds.length > 0 ? "text-indigo-600" : "text-slate-400")} />}
+        className="w-[220px]"
+      />
 
       <BranchFilter
         selectedIds={value.branchIds}
         onChange={(branchIds) => patch({ branchIds })}
         organizationIds={value.organizationIds}
+        groupIds={value.groupIds}
       />
 
       <MultiSelectFilter
@@ -152,7 +183,7 @@ export function ExecutiveFilters({ role, value, onChange, availableUnits, unitCo
         <button
           type="button"
           onClick={() => onChange((current) => ({
-            ...current, organizationIds: [], branchIds: [], categoryIds: [], unit: null,
+            ...current, organizationIds: [], groupIds: [], branchIds: [], categoryIds: [], unit: null,
           }))}
           className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-300"
         >
@@ -164,12 +195,32 @@ export function ExecutiveFilters({ role, value, onChange, availableUnits, unitCo
   )
 }
 
+/**
+ * The groups behind a branch list: one option per distinct group, by name.
+ *
+ * Exported for the test and for the Excel cover sheet, which resolves the
+ * chosen ids back to names from the same rows.
+ */
+export function groupOptionsFromBranches(
+  items: ReadonlyArray<{ groupId?: number | null; groupName?: string | null }>,
+): Array<{ id: string; label: string }> {
+  const seen = new Map<string, string>()
+  for (const item of items) {
+    if (item.groupId === null || item.groupId === undefined) continue
+    const id = String(item.groupId)
+    if (!seen.has(id)) seen.set(id, item.groupName?.trim() || `Group #${id}`)
+  }
+  return Array.from(seen, ([id, label]) => ({ id, label }))
+    .sort((left, right) => left.label.localeCompare(right.label))
+}
+
 /** Serializes the filter state into the query string both endpoints accept. */
 export function toQuery(filters: ExecutiveFilterState, extra: Record<string, string> = {}): string {
   const params = new URLSearchParams()
   if (filters.startDate) params.set("startDate", filters.startDate)
   if (filters.endDate) params.set("endDate", filters.endDate)
   if (filters.organizationIds.length > 0) params.set("organizationIds", filters.organizationIds.join(","))
+  if (filters.groupIds.length > 0) params.set("groupIds", filters.groupIds.join(","))
   if (filters.branchIds.length > 0) params.set("branchIds", filters.branchIds.join(","))
   if (filters.categoryIds.length > 0) params.set("categoryIds", filters.categoryIds.join(","))
   if (filters.productIds && filters.productIds.length > 0) params.set("productIds", filters.productIds.join(","))

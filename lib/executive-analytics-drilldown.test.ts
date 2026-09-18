@@ -15,6 +15,7 @@ import {
   isDrillDownSortKey,
   isMeasureId,
   isSupportedCombination,
+  isSupportedMatrix,
   isTimeAxisDimension,
   measureOfMetric,
   panelsForFocus,
@@ -155,14 +156,15 @@ describe("the side-by-side panel registry", () => {
     expect(panelsForFocus(1).map((panel) => panel.id)).toContain("day-by-day")
   })
 
-  it("withholds the product-vs-product panels only for a single focused product", () => {
-    // One product against itself is a single bar restating the subject line.
+  it("withholds the product-vs-product and category panels only for a single focused product", () => {
+    // One product against itself is a single bar restating the subject line,
+    // and one product belongs to one category, so that panel would be too.
     // With nothing focused the panels rank the top products in scope; with
     // several focused they compare exactly those.
     const productPanels = SIDE_BY_SIDE_PANELS
-      .filter((panel) => panel.dimension === "product")
+      .filter((panel) => panel.dimension === "product" || panel.dimension === "category")
       .map((panel) => panel.id)
-    expect(productPanels).toEqual(["by-product", "products-over-months"])
+    expect(productPanels).toEqual(["by-product", "by-category", "requester-by-product", "products-over-months"])
 
     const idsFor = (count: number) => panelsForFocus(count).map((panel) => panel.id)
     expect(idsFor(0)).toEqual(expect.arrayContaining(productPanels))
@@ -177,12 +179,35 @@ describe("the side-by-side panel registry", () => {
     }
   })
 
-  it("covers product, requester, branch and month on the one screen", () => {
+  it("covers product, category, requester, branch and month on the one screen", () => {
+    // The requirement: "product / month / user / item / branch compare", with
+    // category standing in for item until the client says otherwise.
     const dimensions = SIDE_BY_SIDE_PANELS.map((panel) => panel.dimension)
     expect(dimensions).toContain("product")
+    expect(dimensions).toContain("category")
     expect(dimensions).toContain("user")
     expect(dimensions).toContain("branch")
     expect(dimensions).toContain("month")
+  })
+
+  it("lays requesters against products as a grid the server will answer, under either measure", () => {
+    // The uncombined view: one figure per (person, product). It is the one
+    // panel that is not a ranking, so it has its own contract to satisfy.
+    const grid = SIDE_BY_SIDE_PANELS.find((panel) => panel.id === "requester-by-product")
+    expect(grid?.matrix).toEqual({ rows: "user" })
+    expect(grid?.dimension).toBe("product")
+    for (const measure of ["amount", "quantity"] as const) {
+      expect(isSupportedMatrix(grid?.matrix?.rows, grid?.dimension, MEASURE_METRIC[measure])).toBe(true)
+    }
+    // Every other panel is a plain ranking.
+    expect(SIDE_BY_SIDE_PANELS.filter((panel) => panel.matrix).map((panel) => panel.id)).toEqual(["requester-by-product"])
+  })
+
+  it("withholds the grid for a single focused product, where 'By requester' already is that answer", () => {
+    const idsFor = (count: number) => panelsForFocus(count).map((panel) => panel.id)
+    expect(idsFor(0)).toContain("requester-by-product")
+    expect(idsFor(3)).toContain("requester-by-product")
+    expect(idsFor(1)).not.toContain("requester-by-product")
   })
 })
 

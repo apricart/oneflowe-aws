@@ -76,6 +76,27 @@ function chartHeight(rowCount: number, perRow = 34, minimum = 200) {
 
 // ── 1. Budget vs Consumed ──────────────────────────────────────────────────
 
+/**
+ * Room per branch on the category axis, so a long tenant scrolls sideways
+ * rather than crushing a hundred names into slivers. Two columns and a gap
+ * need about this much to stay readable; the chart's own width is the larger
+ * of the card and this.
+ */
+export const BUDGET_COLUMN_WIDTH = 64
+const BUDGET_COLUMN_HEIGHT = 340
+
+/** The pixel width a Budget vs Consumed chart needs for `count` branches. */
+export function budgetChartMinWidth(count: number): number {
+  return Math.max(0, count) * BUDGET_COLUMN_WIDTH + 96
+}
+
+/**
+ * Two upright columns per branch — Total Budget beside Consumed — and nothing
+ * stacked, because that is the comparison the reader is making: how much was
+ * given against how much was used. Spent and committed, the two halves of
+ * Consumed, stay in the tooltip and the table where they can be read as
+ * figures rather than guessed from a boundary inside a bar.
+ */
 export function BudgetVsActualChart({ rows, loading, error, onSelectBranch, selectedBranchId }: Readonly<{
   rows: BranchRow[]
   loading: boolean
@@ -84,6 +105,10 @@ export function BudgetVsActualChart({ rows, loading, error, onSelectBranch, sele
   selectedBranchId?: number | null
 }>) {
   const data = rows.filter((row) => row.totalBudgetCents > 0 || row.consumedCents > 0)
+  const crowded = data.length > 8
+  const select = onSelectBranch
+    ? (entry: any) => onSelectBranch(entry?.payload?.branchId)
+    : undefined
 
   return (
     <ChartCard
@@ -95,10 +120,11 @@ export function BudgetVsActualChart({ rows, loading, error, onSelectBranch, sele
       empty={data.length === 0 ? "No branch in the selected period has a budget or any procurement activity." : null}
       table={
         <DataTable
-          columns={["Branch", "Total Budget", "Spent", "Committed", "Remaining", "Utilization"]}
+          columns={["Branch", "Total Budget", "Consumed", "Spent", "Committed", "Remaining", "Utilization"]}
           rows={data.map((row) => [
             row.branchName,
             money(row.totalBudgetCents),
+            money(row.consumedCents),
             money(row.spentCents),
             money(row.heldCents),
             money(row.remainingCents),
@@ -107,65 +133,79 @@ export function BudgetVsActualChart({ rows, loading, error, onSelectBranch, sele
         />
       }
     >
-      <ResponsiveContainer width="100%" height={chartHeight(data.length, 40)}>
-        <BarChart data={data} layout="vertical" margin={{ top: 4, right: 64, bottom: 4, left: 4 }} barCategoryGap="28%">
-          <CartesianGrid {...GRID_STYLE} horizontal={false} />
-          <XAxis type="number" tickFormatter={moneyShort} tick={AXIS_STYLE} axisLine={false} tickLine={false} />
-          <YAxis
-            type="category"
-            dataKey="branchName"
-            width={128}
-            tick={AXIS_STYLE}
-            axisLine={false}
-            tickLine={false}
-          />
-          <Tooltip
-            cursor={{ fill: "var(--viz-track)", fillOpacity: 0.35 }}
-            content={({ active, payload }: any) => {
-              if (!active || !payload?.length) return null
-              const row: BranchRow = payload[0].payload
-              return (
-                <VizTooltip
-                  title={row.branchName}
-                  rows={[
-                    { label: "Total budget", value: money(row.totalBudgetCents), color: "var(--viz-track)" },
-                    { label: "Spent", value: money(row.spentCents), color: SERIES[0] },
-                    { label: "Committed", value: money(row.heldCents), color: SERIES[1] },
-                    { label: "Remaining", value: money(row.remainingCents) },
-                    {
-                      label: "Utilization",
-                      value: row.totalBudgetCents > 0 ? percent(row.utilizationPct) : "no budget set",
-                      muted: true,
-                    },
-                    { label: "Orders", value: countShort(row.orderCount), muted: true },
-                  ]}
-                />
-              )
-            }}
-          />
-          {/* The budget itself is the track the consumed bars are read against. */}
-          <Bar dataKey="totalBudgetCents" fill="var(--viz-track)" radius={[0, 4, 4, 0]} barSize={16} />
-          <Bar dataKey="spentCents" stackId="consumed" fill={SERIES[0]} barSize={16} />
-          <Bar
-            dataKey="heldCents"
-            stackId="consumed"
-            fill={SERIES[1]}
-            radius={[0, 4, 4, 0]}
-            barSize={16}
-            onClick={(entry: any) => onSelectBranch?.(entry?.payload?.branchId)}
-            className={onSelectBranch ? "cursor-pointer" : undefined}
-          >
-            {data.map((row) => (
-              <Cell key={row.branchId} stroke={selectedBranchId === row.branchId ? "var(--viz-ink)" : undefined} strokeWidth={2} />
-            ))}
-          </Bar>
-        </BarChart>
-      </ResponsiveContainer>
+      <div className="overflow-x-auto" data-testid="budget-vs-consumed-scroll">
+        <div style={{ minWidth: budgetChartMinWidth(data.length) }} data-testid="budget-vs-consumed-canvas">
+          <ResponsiveContainer width="100%" height={BUDGET_COLUMN_HEIGHT}>
+            <BarChart data={data} margin={{ top: 12, right: 12, bottom: crowded ? 72 : 12, left: 4 }} barCategoryGap="24%" barGap={3}>
+              <CartesianGrid {...GRID_STYLE} vertical={false} />
+              <XAxis
+                dataKey="branchName"
+                tick={AXIS_STYLE}
+                axisLine={false}
+                tickLine={false}
+                interval={0}
+                angle={crowded ? -35 : 0}
+                textAnchor={crowded ? "end" : "middle"}
+                height={crowded ? 76 : 30}
+              />
+              <YAxis tickFormatter={moneyShort} tick={AXIS_STYLE} axisLine={false} tickLine={false} width={72} />
+              <Tooltip
+                cursor={{ fill: "var(--viz-track)", fillOpacity: 0.35 }}
+                content={({ active, payload }: any) => {
+                  if (!active || !payload?.length) return null
+                  const row: BranchRow = payload[0].payload
+                  return (
+                    <VizTooltip
+                      title={row.branchName}
+                      rows={[
+                        { label: "Total budget", value: money(row.totalBudgetCents), color: "var(--viz-track)" },
+                        { label: "Consumed", value: money(row.consumedCents), color: SERIES[0] },
+                        { label: "Spent", value: money(row.spentCents), muted: true },
+                        { label: "Committed", value: money(row.heldCents), muted: true },
+                        { label: "Remaining", value: money(row.remainingCents) },
+                        {
+                          label: "Utilization",
+                          value: row.totalBudgetCents > 0 ? percent(row.utilizationPct) : "no budget set",
+                          muted: true,
+                        },
+                        { label: "Orders", value: countShort(row.orderCount), muted: true },
+                      ]}
+                    />
+                  )
+                }}
+              />
+              <Bar
+                dataKey="totalBudgetCents"
+                name="Total budget"
+                fill="var(--viz-track)"
+                radius={[4, 4, 0, 0]}
+                maxBarSize={28}
+                isAnimationActive={false}
+                onClick={select}
+                className={select ? "cursor-pointer" : undefined}
+              />
+              <Bar
+                dataKey="consumedCents"
+                name="Consumed"
+                fill={SERIES[0]}
+                radius={[4, 4, 0, 0]}
+                maxBarSize={28}
+                isAnimationActive={false}
+                onClick={select}
+                className={select ? "cursor-pointer" : undefined}
+              >
+                {data.map((row) => (
+                  <Cell key={row.branchId} stroke={selectedBranchId === row.branchId ? "var(--viz-ink)" : undefined} strokeWidth={2} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
       <Legend
         items={[
           { label: "Total budget", color: "var(--viz-track)" },
-          { label: "Spent", color: SERIES[0] },
-          { label: "Committed (pending + approved)", color: SERIES[1] },
+          { label: "Consumed (spent + committed)", color: SERIES[0] },
         ]}
       />
     </ChartCard>

@@ -16,18 +16,56 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
  * is the only thing that would have caught it.
  */
 
-vi.mock("@/lib/hooks/use-api", () => ({ useAPI: () => ({ data: { items: [] } }) }))
-vi.mock("@/components/reports/branch-filter", () => ({ BranchFilter: () => null }))
-vi.mock("@/components/reports/organization-filter", () => ({ OrganizationFilter: () => null }))
-vi.mock("@/components/reports/multi-select-filter", () => ({ MultiSelectFilter: () => null }))
+/**
+ * The branch list the group filter is folded from: two groups, one branch with
+ * no group. Scoped per role by the endpoint, which is not under test here.
+ */
+const scopedBranches = [
+  { id: 4, name: "Karachi", groupId: 5, groupName: "North" },
+  { id: 8, name: "Hub", groupId: 5, groupName: "North" },
+  { id: 9, name: "Gwadar", groupId: 6, groupName: "Coast" },
+  { id: 3, name: "Head Office", groupId: null, groupName: null },
+]
+
+vi.mock("@/lib/hooks/use-api", () => ({
+  useAPI: () => ({ data: { items: [] } }),
+  useBranches: () => ({ data: { items: scopedBranches } }),
+}))
+// The neighbours are reduced to what this row hands them: the branch filter
+// shows the groups it was told to narrow to, and every multi-select offers one
+// button per option that picks exactly that option.
+vi.mock("@/components/reports/branch-filter", () => ({
+  BranchFilter: ({ groupIds }: any) => <div data-testid="branch-filter">{(groupIds ?? []).join(",")}</div>,
+}))
+vi.mock("@/components/reports/organization-filter", () => ({
+  OrganizationFilter: ({ onChange }: any) => (
+    <button type="button" onClick={() => onChange(["2"])}>Organization: Two</button>
+  ),
+}))
+vi.mock("@/components/reports/multi-select-filter", () => ({
+  MultiSelectFilter: ({ title, items, onChange }: any) => (
+    <div>
+      {items.map((item: any) => (
+        <button key={item.id} type="button" onClick={() => onChange([item.id])}>{`${title}: ${item.label}`}</button>
+      ))}
+    </div>
+  ),
+}))
 
 import { toCalendarDate } from "@/components/reports/quick-date-range"
 
-import { ExecutiveFilters, executiveDefaultDates, toQuery, type ExecutiveFilterState } from "./executive-filters"
+import {
+  ExecutiveFilters,
+  executiveDefaultDates,
+  groupOptionsFromBranches,
+  toQuery,
+  type ExecutiveFilterState,
+} from "./executive-filters"
 
 const baseFilters = (): ExecutiveFilterState => ({
   ...executiveDefaultDates(),
   organizationIds: [],
+  groupIds: [],
   branchIds: [],
   categoryIds: [],
   unit: null,
@@ -157,5 +195,71 @@ describe("the highlighted range matches the range applied", () => {
     const now = new Date()
     const quarterStart = new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1)
     expect(defaults.startDate).toBe(toCalendarDate(quarterStart))
+  })
+})
+
+describe("the group filter", () => {
+  const renderRow = (harness: ReturnType<typeof stateHarness>, role = "HEAD_OFFICE") => render(
+    <ExecutiveFilters
+      role={role}
+      value={harness.current}
+      onChange={harness.onChange}
+      availableUnits={[]}
+      unitConflict={false}
+    />,
+  )
+
+  it("offers one option per group that has a branch in scope, by name", () => {
+    expect(groupOptionsFromBranches(scopedBranches)).toEqual([
+      { id: "6", label: "Coast" },
+      { id: "5", label: "North" },
+    ])
+    // A group whose name has not arrived is still offered, under its id.
+    expect(groupOptionsFromBranches([{ groupId: 9, groupName: "  " }])).toEqual([{ id: "9", label: "Group #9" }])
+    expect(groupOptionsFromBranches([])).toEqual([])
+  })
+
+  it("carries the chosen groups into the query every endpoint receives", () => {
+    const harness = stateHarness(baseFilters())
+    renderRow(harness)
+
+    fireEvent.click(screen.getByText("Groups: North"))
+
+    expect(harness.current.groupIds).toEqual(["5"])
+    expect(new URLSearchParams(toQuery(harness.current)).get("groupIds")).toBe("5")
+    expect(new URLSearchParams(toQuery(baseFilters())).has("groupIds")).toBe(false)
+  })
+
+  it("drops a picked branch when the groups change, since it may fall outside them", () => {
+    const harness = stateHarness({ ...baseFilters(), branchIds: ["4"], categoryIds: ["21"] })
+    renderRow(harness)
+
+    fireEvent.click(screen.getByText("Groups: Coast"))
+
+    expect(harness.current.groupIds).toEqual(["6"])
+    expect(harness.current.branchIds).toEqual([])
+    // Only the branch selection depends on the group; the rest stays.
+    expect(harness.current.categoryIds).toEqual(["21"])
+  })
+
+  it("narrows the branch filter to the chosen groups", () => {
+    const harness = stateHarness({ ...baseFilters(), groupIds: ["5", "6"] })
+    renderRow(harness)
+    expect(screen.getByTestId("branch-filter").textContent).toBe("5,6")
+  })
+
+  it("goes with the organization, and with Clear", () => {
+    const changed = stateHarness({ ...baseFilters(), groupIds: ["5"], branchIds: ["4"] })
+    const first = renderRow(changed, "SUPER_ADMIN")
+    fireEvent.click(screen.getByText("Organization: Two"))
+    expect(changed.current.organizationIds).toEqual(["2"])
+    expect(changed.current.groupIds).toEqual([])
+    expect(changed.current.branchIds).toEqual([])
+    first.unmount()
+
+    const cleared = stateHarness({ ...baseFilters(), groupIds: ["5"] })
+    renderRow(cleared)
+    fireEvent.click(screen.getByRole("button", { name: /Clear/ }))
+    expect(cleared.current.groupIds).toEqual([])
   })
 })

@@ -2,8 +2,10 @@ import { fireEvent, render, screen, within } from "@testing-library/react"
 import { beforeAll, describe, expect, it } from "vitest"
 
 import {
+  BUDGET_COLUMN_WIDTH,
   BranchCategoryHeatmap,
   BudgetVsActualChart,
+  budgetChartMinWidth,
   PriceVariancePanel,
   StatusCompositionChart,
   UtilizationRankingChart,
@@ -69,12 +71,51 @@ describe("Budget vs Consumed", () => {
     expect(within(screen.getByRole("table")).getByText("no budget")).toBeTruthy()
   })
 
-  it("surfaces the exact figures in the table view", () => {
+  it("surfaces the exact figures in the table view, Consumed beside its two halves", () => {
     render(<BudgetVsActualChart rows={[branch()]} loading={false} error={null} />)
     showTable("Budget vs Consumed by Branch")
     const table = within(screen.getByRole("table"))
+    expect(table.getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
+      "Branch", "Total Budget", "Consumed", "Spent", "Committed", "Remaining", "Utilization",
+    ])
     expect(table.getByText("Airport Branch")).toBeTruthy()
     expect(table.getByText("6.1%")).toBeTruthy()
+  })
+
+  it("draws exactly two series — Total budget and Consumed — never a stacked split", () => {
+    // The client's ask, in the words of the legend: two bars per branch. The
+    // halves of Consumed are in the tooltip and the table, not on the axis.
+    render(<BudgetVsActualChart rows={[branch()]} loading={false} error={null} />)
+    const legend = screen.getByRole("list")
+    expect(within(legend).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "Total budget", "Consumed (spent + committed)",
+    ])
+  })
+
+  it("gives every branch room on the axis and scrolls sideways past the card rather than crushing labels", () => {
+    const many = Array.from({ length: 136 }, (_, index) => branch({ branchId: index + 1, branchName: `Branch ${index + 1}` }))
+    render(<BudgetVsActualChart rows={many} loading={false} error={null} />)
+    const scroll = screen.getByTestId("budget-vs-consumed-scroll")
+    expect(scroll.className).toContain("overflow-x-auto")
+    const canvas = screen.getByTestId("budget-vs-consumed-canvas")
+    expect(canvas.style.minWidth).toBe(`${budgetChartMinWidth(136)}px`)
+    expect(budgetChartMinWidth(136)).toBeGreaterThanOrEqual(136 * BUDGET_COLUMN_WIDTH)
+    // A short list asks for less than a card is wide, so nothing scrolls.
+    expect(budgetChartMinWidth(3)).toBeLessThan(400)
+  })
+
+  it("leaves a branch with neither budget nor activity off the axis", () => {
+    render(
+      <BudgetVsActualChart
+        rows={[branch(), branch({ branchId: 2, branchName: "Idle", totalBudgetCents: 0, consumedCents: 0, spentCents: 0, heldCents: 0 })]}
+        loading={false}
+        error={null}
+      />,
+    )
+    showTable("Budget vs Consumed by Branch")
+    const table = within(screen.getByRole("table"))
+    expect(table.getByText("Airport Branch")).toBeTruthy()
+    expect(table.queryByText("Idle")).toBeNull()
   })
 })
 

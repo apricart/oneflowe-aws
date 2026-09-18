@@ -3,18 +3,23 @@ import {
   MAX_COMPARE_ENTITIES,
   clampDrillDownLimit,
   clampDrillDownOffset,
+  clampMatrixLimit,
   clampRowLimit,
   isChartType,
   isDimensionAllowedForRole,
   isExecutiveDimension,
   isExecutiveMetric,
+  isMatrixDimension,
+  isMatrixMetric,
   isSupportedCombination,
+  isSupportedMatrix,
   resolveDrillDownSort,
   resolveSortDirection,
   type ChartTypeId,
   type DrillDownSortKey,
   type ExecutiveDimensionId,
   type ExecutiveMetricId,
+  type MatrixDimensionId,
 } from "@/lib/executive-analytics"
 
 /**
@@ -124,11 +129,12 @@ export function parseExecutiveRequest(
 /**
  * Where a dimension's selected entities belong once parsed.
  *
- * Branch and organization selections are routed into the *scope* parameters, so
- * they travel the same already-audited path as any other tenant narrowing and
- * are intersected with what the caller may see. The rest become ordinary
- * filters, which is safe because the branch fence has already decided which
- * rows exist at all.
+ * Branch, organization and group selections are routed into the *scope*
+ * parameters, so they travel the same already-audited path as any other tenant
+ * narrowing and are intersected with what the caller may see — a group is a
+ * set of branches, and the scope resolver turns it into one. The rest become
+ * ordinary filters, which is safe because the branch fence has already decided
+ * which rows exist at all.
  */
 export const ENTITY_KEY_PARAM: Record<ExecutiveDimensionId, string | null> = {
   branch: "branchIds",
@@ -141,6 +147,23 @@ export const ENTITY_KEY_PARAM: Record<ExecutiveDimensionId, string | null> = {
   // window instead. See `narrowWindowToPeriod`.
   month: null,
   day: null,
+}
+
+/**
+ * The dimensions whose picked entities must be folded into the scope
+ * parameters *before* the fence is resolved, so a picked entity can only ever
+ * narrow what the caller already had. Every route that accepts `keys` (or a
+ * drill-down `key`) consults this rather than naming the dimensions itself,
+ * so the list cannot drift between routes.
+ *
+ * The scope resolver reads exactly these three parameters — `branchIds`,
+ * `organizationIds`, `groupIds` — which is why the list is these dimensions
+ * and no other.
+ */
+export const SCOPE_KEYED_DIMENSIONS = ["branch", "organization", "group"] as const satisfies readonly ExecutiveDimensionId[]
+
+export function isScopeKeyedDimension(value: unknown): value is (typeof SCOPE_KEYED_DIMENSIONS)[number] {
+  return typeof value === "string" && (SCOPE_KEYED_DIMENSIONS as readonly string[]).includes(value)
 }
 
 /**
@@ -203,6 +226,52 @@ export function parseComparisonRequest(
   if (!base.ok) return base
 
   return { ...base, dimension, metric, chart }
+}
+
+export type ParsedMatrixRequest = ParsedExecutiveRequest & {
+  rows: MatrixDimensionId
+  columns: MatrixDimensionId
+  metric: ExecutiveMetricId
+  /** Entities per axis, clamped; the grid is at most `limit × limit`. */
+  limit: number
+}
+
+/**
+ * The two-way grid request: "<rows> against <columns>, by <metric>".
+ *
+ * There is no `keys` here. Both axes' selections travel as the ordinary
+ * `userIds` / `productIds` / `categoryIds` / `branchIds` filters, which is
+ * what the Product Performance screen already sends, so the grid narrows
+ * exactly as the panels beside it do and no second folding path exists to
+ * audit. The same refusals as the comparison: nothing outside the registry is
+ * answered, so a caller cannot probe for combinations.
+ */
+export function parseMatrixRequest(
+  searchParams: URLSearchParams,
+  now = new Date(),
+  role?: unknown,
+): ParsedMatrixRequest | ExecutiveRequestError {
+  const rows = searchParams.get("rows")
+  const columns = searchParams.get("columns")
+  const metric = searchParams.get("metric")
+
+  if (!isMatrixDimension(rows)) return { ok: false, error: "Unsupported row dimension" }
+  if (!isMatrixDimension(columns)) return { ok: false, error: "Unsupported column dimension" }
+  if (rows === columns) return { ok: false, error: "Rows and columns must be different dimensions" }
+  if (!isMatrixMetric(metric)) return { ok: false, error: "Unsupported metric" }
+  if (!isSupportedMatrix(rows, columns, metric)) {
+    return { ok: false, error: `Metric "${metric}" cannot be laid out by ${rows} and ${columns}` }
+  }
+  // No grid dimension is reserved to a role today; checked anyway so the rule
+  // cannot be forgotten if one ever is.
+  if (role !== undefined && (!isDimensionAllowedForRole(rows, role) || !isDimensionAllowedForRole(columns, role))) {
+    return { ok: false, error: "Forbidden: Insufficient permissions" }
+  }
+
+  const base = parseExecutiveRequest(searchParams, now)
+  if (!base.ok) return base
+
+  return { ...base, rows, columns, metric, limit: clampMatrixLimit(searchParams.get("limit")) }
 }
 
 /**

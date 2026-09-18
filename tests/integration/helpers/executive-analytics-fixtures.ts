@@ -20,7 +20,7 @@ import { db } from "@/lib/db"
 export { NO_DATABASE_REASON, hasTestDatabase } from "./pricing-fixtures"
 
 /**
- * Fixtures for the Executive Analytics Center — the Compare Side by Side tab
+ * Fixtures for the Executive Analytics Center — the Product Performance tab
  * in particular.
  *
  * Two tenants, so every read can be checked for leakage, and a small order

@@ -26,6 +26,11 @@ import { hasTestDatabase } from "./helpers/pricing-fixtures"
  * real cooldown and attempt logic without a server). Everything else — the
  * OTP table, the proof on `auth_sessions`, the password hash, the audit
  * rows — is the real code against the real schema.
+ *
+ * The emailed proof is pinned to *required* here, whatever
+ * `lib/password-change-policy.ts` currently says, so this path stays
+ * exercised while it is switched off. The current setting runs in
+ * `password-change-direct.test.ts`.
  */
 
 type SentMail = { to: string; code: string; type: string; details: unknown }
@@ -41,6 +46,9 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("next-auth", () => ({ getServerSession: vi.fn() }))
 vi.mock("@/lib/auth-options", () => ({ authOptions: {} }))
+vi.mock("@/lib/password-change-policy", () => ({
+  isEmailVerificationRequiredForPasswordChange: () => true,
+}))
 vi.mock("@/lib/rate-limiter", () => ({ withRateLimit: mocks.withRateLimit }))
 vi.mock("@/lib/server/current-session", () => ({ getCurrentSessionId: mocks.sessionId }))
 vi.mock("@/lib/email", () => ({

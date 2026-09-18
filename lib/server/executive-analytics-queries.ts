@@ -8,13 +8,14 @@ import { db } from "@/lib/db"
 import { buildAppMonthPeriods } from "@/lib/date-range-params"
 import { REVENUE_ELIGIBLE_FILTER, metricExpressions } from "@/lib/metric-utils"
 import type { ExecutiveScope } from "@/lib/server/executive-analytics-scope"
-import type { ExecutiveDimensionId, ExecutiveMetricId } from "@/lib/executive-analytics"
+import type { ExecutiveDimensionId, ExecutiveMetricId, MatrixDimensionId } from "@/lib/executive-analytics"
 import {
   EXECUTIVE_METRICS,
   MAX_TIME_AXIS_POINTS,
   isTimeAxisDimension,
   resolveDrillDownSort,
   resolveGrain,
+  resolveMatrixGrain,
   safeDivide,
   type DrillDownSortKey,
 } from "@/lib/executive-analytics"
@@ -1203,6 +1204,175 @@ export async function loadComparison(
         ? left.key.localeCompare(right.key)
         : right.value - left.value
     ))
+}
+
+// ── The grid: one figure per (row, column) pair ────────────────────────────
+
+export type MatrixAxisEntity = { key: string; label: string; total: number }
+export type MatrixPairCell = {
+  row: string
+  column: string
+  value: number
+  spendCents: number
+  quantity: number
+  orderCount: number
+}
+export type MatrixResult = {
+  rows: MatrixAxisEntity[]
+  columns: MatrixAxisEntity[]
+  cells: MatrixPairCell[]
+}
+
+/** A UUID as `users.id` holds it; the user dimension's keys are these. */
+const UUID_KEY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * The ranked keys of one axis, as the ids the cell query can bind.
+ *
+ * A key that is not an id — the `uncategorized` a category row gets when a
+ * product has none, or the text of a null product id — is dropped from the
+ * grid rather than matched loosely. Both are bound as parameters; the
+ * shape check here is only so Postgres does not raise on a malformed UUID.
+ */
+function matrixAxisIds(dimension: MatrixDimensionId, keys: string[]): { uuids: string[]; ids: number[] } {
+  if (dimension === "user") return { uuids: keys.filter((key) => UUID_KEY.test(key)), ids: [] }
+  // Only a key that is the canonical text of a positive integer, so the id
+  // pinned in SQL is exactly the key the margin will be labelled with.
+  const ids = keys
+    .map((key) => Number(key))
+    .filter((id, index) => Number.isInteger(id) && id > 0 && String(id) === keys[index])
+  return { uuids: [], ids }
+}
+
+/**
+ * The predicate that pins one axis to its ranked members. Every one of these
+ * names a column the cell query has joined at either grain: `orders.*` is the
+ * root or the first join, and `order_items.*` only appears for the two
+ * dimensions that force line grain.
+ */
+function matrixAxisCondition(dimension: MatrixDimensionId, axis: { uuids: string[]; ids: number[] }) {
+  switch (dimension) {
+    case "user": return inArray(orders.createdByUserId, axis.uuids)
+    case "branch": return inArray(orders.branchId, axis.ids)
+    case "product": return inArray(orderItems.globalProductId, axis.ids)
+    case "category": return categoryProductFilter(axis.ids)
+  }
+}
+
+/**
+ * Requester against product, uncombined — or any two grid dimensions.
+ *
+ * Three fenced reads. The two axes are ranked first with the same
+ * `loadComparison` the single-dimension panels use, so the grid's margins are
+ * *exactly* the bars of "By requester" and "By product" under the same
+ * filters, and every panel on the screen reconciles with every other by
+ * construction. Only then is one grouped read made for the cells, pinned to
+ * the ranked members on both sides — so it can return at most
+ * `limit × limit` rows whatever the tenant's size, and never a pair the
+ * margins do not name.
+ *
+ * The cells run at the grain the pair forces (`resolveMatrixGrain`), rooted at
+ * `order_items` the moment a product or category is on either axis, so a cell
+ * of money is that product's own lines and not the whole of every order that
+ * happened to contain it. For the `orders` metric the cells are distinct order
+ * counts per pair and do not sum to their margin: one order holding two
+ * products is one order in each cell and one order in the row.
+ */
+export async function loadMatrix(
+  scope: ExecutiveScope,
+  filters: ExecutiveFilters,
+  rows: MatrixDimensionId,
+  columns: MatrixDimensionId,
+  metric: ExecutiveMetricId,
+  limit: number,
+): Promise<MatrixResult> {
+  const [rankedRows, rankedColumns] = await Promise.all([
+    loadComparison(scope, filters, rows, metric, limit),
+    loadComparison(scope, filters, columns, metric, limit),
+  ])
+
+  const rowAxis = matrixAxisIds(rows, rankedRows.map((entity) => entity.key))
+  const columnAxis = matrixAxisIds(columns, rankedColumns.map((entity) => entity.key))
+  const pinnable = (axis: { uuids: string[]; ids: number[] }) => new Set([...axis.uuids, ...axis.ids.map(String)])
+  const rowKeys = pinnable(rowAxis)
+  const columnKeys = pinnable(columnAxis)
+
+  const toEntity = (entity: ComparisonRow): MatrixAxisEntity => ({ key: entity.key, label: entity.label, total: entity.value })
+  const axisRows = rankedRows.filter((entity) => rowKeys.has(entity.key)).map(toEntity)
+  const axisColumns = rankedColumns.filter((entity) => columnKeys.has(entity.key)).map(toEntity)
+  if (axisRows.length === 0 || axisColumns.length === 0) return { rows: axisRows, columns: axisColumns, cells: [] }
+
+  const grain = resolveMatrixGrain(rows, columns, metric, { lineScoped: isLineScoped(filters) })
+  const pinned = [matrixAxisCondition(rows, rowAxis), matrixAxisCondition(columns, columnAxis)]
+
+  const cellRows = grain === "line"
+    ? await db
+      .select({
+        row: lineDimensionColumns[rows].key,
+        column: lineDimensionColumns[columns].key,
+        valueCents: lineNetValue,
+        quantity: lineNetQuantity,
+        orderCount: sql<number>`COUNT(DISTINCT ${orders.id})`.mapWith(Number),
+      })
+      .from(orderItems)
+      .innerJoin(orders, eq(orderItems.orderId, orders.id))
+      .leftJoin(branches, eq(orders.branchId, branches.id))
+      .leftJoin(groups, eq(branches.groupId, groups.id))
+      .leftJoin(organizations, eq(orders.organizationId, organizations.id))
+      .leftJoin(users, eq(orders.createdByUserId, users.id))
+      .leftJoin(globalProducts, eq(orderItems.globalProductId, globalProducts.id))
+      .leftJoin(categories, eq(globalProducts.categoryId, categories.id))
+      .leftJoin(parentCategories, eq(categories.parentId, parentCategories.id))
+      .where(and(...lineConditions(scope, filters), ...pinned))
+      .groupBy(...lineDimensionColumns[rows].group, ...lineDimensionColumns[columns].group)
+    : await db
+      .select({
+        // Order grain is only reached when neither axis is a product or a
+        // category (`resolveMatrixGrain`), so both are order-grain dimensions.
+        row: orderDimensionColumns[rows as OrderGrainDimension].key,
+        column: orderDimensionColumns[columns as OrderGrainDimension].key,
+        valueCents: metricExpressions.revenue,
+        quantity: sql<number>`0`.mapWith(Number),
+        orderCount: metricExpressions.orderVolume,
+      })
+      .from(orders)
+      .leftJoin(branches, eq(orders.branchId, branches.id))
+      .leftJoin(groups, eq(branches.groupId, groups.id))
+      .leftJoin(organizations, eq(orders.organizationId, organizations.id))
+      .leftJoin(users, eq(orders.createdByUserId, users.id))
+      .where(and(...orderConditions(scope, filters), ...pinned))
+      .groupBy(
+        ...orderDimensionColumns[rows as OrderGrainDimension].group,
+        ...orderDimensionColumns[columns as OrderGrainDimension].group,
+      )
+
+  const valueOf = (cell: { valueCents: unknown; quantity: unknown; orderCount: unknown }) => {
+    const value = Number(cell.valueCents) || 0
+    const quantity = Number(cell.quantity) || 0
+    const orderCount = Number(cell.orderCount) || 0
+    switch (metric) {
+      case "quantity": return quantity
+      case "orders": return orderCount
+      case "avgUnitPrice": return Math.round(safeDivide(value, quantity))
+      default: return value
+    }
+  }
+
+  const cells = cellRows
+    .map((cell) => ({
+      row: String(cell.row),
+      column: String(cell.column),
+      value: valueOf(cell),
+      spendCents: Number(cell.valueCents) || 0,
+      quantity: Number(cell.quantity) || 0,
+      orderCount: Number(cell.orderCount) || 0,
+    }))
+    // The predicates already pin both sides; this only drops a row whose key
+    // rendered differently from its id (it cannot, but the grid must never
+    // show a cell its margins do not name).
+    .filter((cell) => rowKeys.has(cell.row) && columnKeys.has(cell.column))
+
+  return { rows: axisRows, columns: axisColumns, cells }
 }
 
 // ── Drill-down: the lines behind a bar ─────────────────────────────────────

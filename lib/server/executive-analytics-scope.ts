@@ -5,8 +5,10 @@ import { and, eq, inArray } from "drizzle-orm"
 import { branches, roles, users } from "@/db/schema"
 import { db } from "@/lib/db"
 import { isExecutiveAnalyticsRole, type ExecutiveAnalyticsRole } from "@/lib/executive-analytics"
+import { EXECUTIVE_MAX_ID_FILTERS } from "@/lib/executive-analytics-request"
 import {
   isMultiBranchAnalyticsRole,
+  narrowRequestedBranchIdsToGroups,
   normalizePositiveIds,
   parseRequestedOrganizationIds,
   resolveAnalyticsBranchIds,
@@ -22,8 +24,14 @@ import { scopedCacheKey } from "@/lib/cache-utils"
  * branch name in a tooltip, a row of the attention list — is drawn from the
  * branch set this module resolves, and that set is derived from the caller's
  * own user row, never from the request. A query parameter can only ever narrow
- * it: `organizationId` and `branchIds` are intersected with what the caller
- * already had, so no value a client can send widens the answer.
+ * it: `organizationId`, `branchIds` and `groupIds` are intersected with what
+ * the caller already had, so no value a client can send widens the answer.
+ *
+ * A group is a set of branches, so `groupIds` is resolved *here*, into the
+ * branch set, rather than left as an order-level filter downstream. That is
+ * what makes the budget side, the branch picker and every label lookup agree
+ * with the order side about which branches are on screen: all of them read
+ * `branchIds`, and none of them has to know a group was involved.
  *
  * The rules, and why each exists:
  *
@@ -114,6 +122,26 @@ async function loadTenantBranchIds(organizationIds: number[]): Promise<number[]>
   return rows.map((row) => row.id)
 }
 
+/**
+ * The member branches of the selected groups, read inside the tenant fence.
+ *
+ * The tenant predicate is applied here as well as in the intersection that
+ * follows, so a group id belonging to another organization matches no branch
+ * at all rather than matching branches the later intersection then drops —
+ * the two guards agree, and neither is the only one.
+ */
+async function loadGroupBranchIds(groupIds: number[], organizationIds: number[]): Promise<number[]> {
+  const conditions = [
+    inArray(branches.groupId, groupIds),
+    organizationIds.length > 0 ? inArray(branches.organizationId, organizationIds) : undefined,
+  ].filter(Boolean)
+  const rows = await db
+    .select({ id: branches.id })
+    .from(branches)
+    .where(conditions.length > 1 ? and(...conditions) : conditions[0])
+  return rows.map((row) => row.id)
+}
+
 export async function resolveExecutiveScope(
   session: unknown,
   searchParams: URLSearchParams,
@@ -163,9 +191,30 @@ export async function resolveExecutiveScope(
     ? tenantBranchIds
     : assignedBranchIds.filter((branchId) => tenantBranchIds.includes(branchId))
 
-  const requestedBranchIds = normalizePositiveIds(
+  const namedBranchIds = normalizePositiveIds(
     (searchParams.get("branchIds") || "").split(",").filter(Boolean),
   )
+  // Capped exactly as the filter parser caps the same parameter, so the fence
+  // and the downstream filter never disagree about which groups were asked
+  // for — and so no request can push an unbounded IN list at the database.
+  const requestedGroupIds = normalizePositiveIds(
+    (searchParams.get("groupIds") || "").split(",").filter(Boolean),
+  ).slice(0, EXECUTIVE_MAX_ID_FILTERS)
+
+  // A group selection becomes the branch selection it stands for, and takes
+  // the same path from here on. Nothing left after the narrowing is a refusal,
+  // not an unfiltered request: the resolver below reads an empty request as
+  // "every branch allowed", which is the one thing a group must never mean.
+  const requestedBranchIds = requestedGroupIds.length > 0
+    ? narrowRequestedBranchIdsToGroups({
+      requestedBranchIds: namedBranchIds,
+      groupBranchIds: await loadGroupBranchIds(requestedGroupIds, organizationIds),
+    })
+    : namedBranchIds
+
+  if (requestedGroupIds.length > 0 && requestedBranchIds.length === 0) {
+    return { ok: false, error: "No branches in scope", status: 403 }
+  }
 
   const isUnrestrictedSuperAdmin = caller.role === "SUPER_ADMIN"
     && organizationIds.length === 0

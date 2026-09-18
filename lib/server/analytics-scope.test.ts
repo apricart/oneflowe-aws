@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  narrowRequestedBranchIdsToGroups,
   normalizePositiveIds,
   parseRequestedOrganizationIds,
   resolveAnalyticsBranchIds,
@@ -67,5 +68,30 @@ describe("analytics tenant scope", () => {
       organizationIds: null,
       organizationId: "10",
     })).toEqual([10])
+  })
+})
+
+describe("group selection as a branch narrowing", () => {
+  it("stands in for the branch request when none was named", () => {
+    expect(narrowRequestedBranchIdsToGroups({
+      requestedBranchIds: [],
+      groupBranchIds: ["4", 5, 5],
+    })).toEqual([4, 5])
+  })
+
+  it("keeps only the named branches that are inside the groups", () => {
+    expect(narrowRequestedBranchIdsToGroups({
+      requestedBranchIds: [4, 9],
+      groupBranchIds: [4, 5],
+    })).toEqual([4])
+  })
+
+  it("returns empty, never everything, when nothing survives", () => {
+    // The resolver downstream reads an empty *request* as "every branch
+    // allowed"; the caller must turn this into a refusal, so it has to be
+    // empty here and not silently widened.
+    expect(narrowRequestedBranchIdsToGroups({ requestedBranchIds: [9], groupBranchIds: [4, 5] })).toEqual([])
+    expect(narrowRequestedBranchIdsToGroups({ requestedBranchIds: [], groupBranchIds: [] })).toEqual([])
+    expect(narrowRequestedBranchIdsToGroups({ requestedBranchIds: [9], groupBranchIds: [] })).toEqual([])
   })
 })
