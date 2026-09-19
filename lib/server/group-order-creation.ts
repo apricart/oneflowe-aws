@@ -25,6 +25,7 @@ import { generateReceiptData } from "@/lib/receipt-generator"
 import { resolveTaxRateBp, splitInclusiveCents } from "@/lib/tax"
 import { getOrganizationTaxRateBp } from "@/lib/server/tax-rate"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
+import { settleDueAddonsOnBudget } from "@/lib/server/budget-addon-expiry"
 import {
   attemptImmediateOrderEmailDelivery,
   queueOrderCreatedNotifications,
@@ -628,6 +629,9 @@ async function createBranchOrder(context: BranchCreationContext): Promise<Branch
 
   try {
     const created = await db.transaction(async (tx) => {
+      // A due add-on is withdrawn under the row lock before the hold, so a
+      // group submission cannot spend money that has expired.
+      await settleDueAddonsOnBudget(tx, budget.id, new Date(), { actorUserId: context.actor.userId })
       const [lockedBudget] = await tx
         .select()
         .from(budgets)

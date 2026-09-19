@@ -106,6 +106,7 @@ import { getOrganizationTaxRateBp } from "@/lib/server/tax-rate"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { generateReceiptData } from "@/lib/receipt-generator"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
+import { settleDueAddonsOnBudget } from "@/lib/server/budget-addon-expiry"
 import { orderUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
 import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
 import {
@@ -345,6 +346,10 @@ async function lockAndValidateOrderBudget(tx: any, context: any) {
     eq(budgets.period, orderPeriod),
   )).for("update").limit(1)
   if (!lockedBudget) throw new Error(`Budget not configured for order period (${orderPeriod})`)
+  // A due add-on is withdrawn under this lock before the edited total is
+  // checked, so an edit cannot grow into money that has expired.
+  const settlement = await settleDueAddonsOnBudget(tx, lockedBudget.id, new Date(), { actorUserId: context.userId })
+  if (settlement) lockedBudget.amountCreditedCents = settlement.plan.creditedAfterCents
   if (lockedBudget.amountHeldCents < context.existingOrder.totalCents) throw new Error("BUDGET_LEDGER_INVARIANT")
   const available = lockedBudget.amountAllocatedCents + lockedBudget.amountCreditedCents
     - lockedBudget.amountSpentCents - lockedBudget.amountHeldCents + context.existingOrder.totalCents

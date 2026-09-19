@@ -12,6 +12,7 @@ import { generateNextInvoiceNumber,hasInvoiceSequenceTable } from "@/lib/invoice
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
 import { parseEndDateParam,parseStartDateParam } from "@/lib/date-range-params"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
+import { settleDueAddonsOnBudget,settleDueBudgetAddons } from "@/lib/server/budget-addon-expiry"
 import { orderSelectColumns } from "@/lib/order-select"
 import { calculateLineCents,formatQuantity,roundQuantity,validateProductQuantity } from "@/lib/quantity"
 import { resolveTaxRateBp,splitInclusiveCents } from "@/lib/tax"
@@ -290,6 +291,10 @@ function getBudgetError(total: number, available: number, pricesHidden: boolean)
 }
 
 async function lockCreationMoneyBudget(tx: any, context: any) {
+  // An add-on whose validity has passed is withdrawn under this same lock,
+  // before the hold is taken, so it can never be spent whatever the page
+  // showed a moment ago.
+  await settleDueAddonsOnBudget(tx, context.budgetId, new Date(), { actorUserId: context.userId })
   const [budget] = await tx.select().from(budgets).where(eq(budgets.id, context.budgetId)).for('update')
   if (!budget) throw new Error(`Budget not configured for current month (${context.period})`)
   const lockedMoneyRemaining = budget.amountAllocatedCents + budget.amountCreditedCents - budget.amountSpentCents - budget.amountHeldCents
@@ -683,6 +688,9 @@ function calculateCreationItems(normalizedItems: any[], inventory: any) {
 }
 
 async function getOrCreateCurrentBudget(branchId: number, period: string) {
+  // Settle first so the pre-check below (and its error message) sees the
+  // same figure the locked check inside the transaction will.
+  await settleDueBudgetAddons(db, { branchIds: [branchId], periods: [period] })
   const [existing] = await db.select().from(budgets).where(and(
     eq(budgets.branchId, branchId),
     eq(budgets.period, period),

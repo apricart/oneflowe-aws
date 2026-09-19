@@ -34,6 +34,7 @@ import {
 import { RefundManagement } from "@/components/refund-management"
 import { getOrderDerivedStatus } from "@/lib/order-status"
 import { formatCountLabel } from "@/lib/count-label"
+import { formatAddonValidUntil } from "@/lib/budget-addon-expiry"
 import { MAX_PO_NUMBER_LENGTH, PO_NUMBER_HINT, normalizePoNumberInput } from "@/lib/purchase-order"
 import { ReceiptIconButton } from "@/components/receipts/receipt-icon-button"
 import { NotificationBell } from "@/components/notifications/notification-center"
@@ -639,6 +640,15 @@ export default function OrderPortalPage() {
   const remainingBudget = budget?.remainingCents || 0
   const budgetAvailableForCart = remainingBudget + (editingOrder?.totalCents || 0)
   const totalBudgetLimit = (budget?.amountAllocatedCents || 0) + (budget?.amountCreditedCents || 0)
+  // The soonest date any part of the budget stops being available, so the
+  // employee knows the figure above is not all theirs until month end.
+  const soonestAddonExpiry: string | null = (() => {
+    const dated = (Array.isArray(budget?.addons) ? budget.addons : [])
+      .map((addon: { validUntil?: string | null }) => addon?.validUntil)
+      .filter((value: unknown): value is string => typeof value === "string")
+      .sort()
+    return dated[0] ? formatAddonValidUntil(dated[0]) : null
+  })()
   const canCheckout = pricesHidden ? cart.length > 0 : cartTotal <= budgetAvailableForCart && cart.length > 0
   const rawBudgetPercent = ((((totalBudgetLimit || 0) - remainingBudget) / (totalBudgetLimit || 1)) * 100)
   const budgetPercent = Math.min(100, Math.max(0, rawBudgetPercent || 0))
@@ -1093,6 +1103,11 @@ export default function OrderPortalPage() {
                     style={{ width: `${budgetPercent}%` }}
                   />
                 </div>
+                {soonestAddonExpiry && (
+                  <p className="mt-1 text-[10px] text-amber-700 dark:text-amber-300">
+                    Includes an add-on valid until {soonestAddonExpiry}
+                  </p>
+                )}
               </div>
             </div>}
 

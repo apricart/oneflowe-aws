@@ -358,6 +358,17 @@ export const budgets = pgTable(
   ],
 )
 
+/**
+ * One row per one-time add-on ever credited to a monthly budget row. The
+ * credit itself lives in budgets.amount_credited_cents; this is its history.
+ *
+ * An add-on carries a validity: valid_until is the instant it stops being
+ * available (end of the chosen day, Asia/Karachi). When that passes, the
+ * settlement in lib/server/budget-addon-expiry.ts withdraws the unspent part
+ * from the budget row and records it here as forfeited_cents with expired_at.
+ * A NULL valid_until is an add-on granted before validity existed: it lasts
+ * the month, as it always did, and is never settled.
+ */
 export const budgetAddons = pgTable(
   "budget_addons",
   {
@@ -369,9 +380,14 @@ export const budgetAddons = pgTable(
     reason: text("reason"),
     createdByUserId: uuid("created_by_user_id").references(() => users.id),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    validUntil: timestamp("valid_until", { withTimezone: true }),
+    expiredAt: timestamp("expired_at", { withTimezone: true }),
+    forfeitedCents: bigint("forfeited_cents", { mode: "number" }).notNull().default(0),
   },
   (t) => [
     index("budget_addons_budget_idx").on(t.budgetId),
+    index("budget_addons_open_expiry_idx").on(t.validUntil).where(sql`${t.expiredAt} IS NULL`),
+    check("budget_addons_forfeit_bounds_ck", sql`${t.forfeitedCents} >= 0 AND ${t.forfeitedCents} <= ${t.amountCents}`),
   ],
 )
 

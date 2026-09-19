@@ -23,6 +23,12 @@ import {
 } from "@/lib/money-budget-access"
 import { resolveScopedBranchIds } from "@/lib/server/multi-branch-scope"
 import { isGroupUserBudgetAllocationEnabled } from "@/lib/server/group-user-budget-allocation"
+import { resolveAddonValidUntil } from "@/lib/budget-addon-expiry"
+import {
+  loadOpenBudgetAddons,
+  settleDueAddonsOnBudget,
+  settleDueBudgetAddons,
+} from "@/lib/server/budget-addon-expiry"
 
 type MoneyBudgetUpdate = ReturnType<typeof moneyBudgetUpdateSchema.parse>
 
@@ -52,6 +58,35 @@ async function loadAssignedBranchIds(role: unknown, userId: unknown): Promise<nu
 }
 
 /**
+ * The tenant fence every branch-keyed request passes: a tenant-pinned role
+ * reaches only branches of its own organization, whatever id it sent. The
+ * platform role is not pinned. Read and write paths share this so the
+ * refusal is the same on both and cannot be told apart.
+ */
+function tenantFenceError(role: unknown, branch: { organizationId: number | null }, orgId: unknown): NextResponse | null {
+  if (role === "SUPER_ADMIN") return null
+  if (branch.organizationId !== null && Number(branch.organizationId) === Number(orgId)) return null
+  return NextResponse.json({
+    error: "Unauthorized: Branch belongs to different organization"
+  }, { status: 403 })
+}
+
+/**
+ * The fence for a branch id that arrived on the query string: the branch
+ * must exist and sit inside the caller's tenant, checked before anything
+ * that could write. Returns the 404 or 403 to send, or null to proceed.
+ */
+async function queriedBranchAccessError(role: unknown, branchId: number, orgId: unknown): Promise<NextResponse | null> {
+  const [branch] = await db
+    .select({ organizationId: branches.organizationId })
+    .from(branches)
+    .where(eq(branches.id, branchId))
+    .limit(1)
+  if (!branch) return NextResponse.json({ error: "Branch not found" }, { status: 404 })
+  return tenantFenceError(role, branch, orgId)
+}
+
+/**
  * Whether this caller may write an allocation to this branch, as the response
  * to send when it may not. Two fences, in order: every tenant-pinned manager
  * stays inside its own organization, and the approver additionally reaches
@@ -64,11 +99,8 @@ async function allocationAccessError({ role, userId, orgId, branch }: {
   orgId: unknown
   branch: { id: number; organizationId: number | null }
 }): Promise<NextResponse | null> {
-  if (role !== "SUPER_ADMIN" && branch.organizationId !== orgId) {
-    return NextResponse.json({
-      error: "Unauthorized: Branch belongs to different organization"
-    }, { status: 403 })
-  }
+  const fence = tenantFenceError(role, branch, orgId)
+  if (fence) return fence
 
   const allowed = canAllocateToBranch({
     role,
@@ -82,6 +114,45 @@ async function allocationAccessError({ role, userId, orgId, branch }: {
   }
 
   return null
+}
+
+/**
+ * The validity an add-on credit is granted with, or the 400 to send. Every
+ * add-on that credits money carries the day it stops being available; the
+ * reset-to-zero calls and baseline updates carry none.
+ */
+/**
+ * The validity an add-on credit is granted with and the budget month it is
+ * filed on, or the 400 to send. Every add-on that credits money carries the
+ * day it stops being available and lands on that day's month; the
+ * reset-to-zero calls and baseline updates carry no date and stay on the
+ * month the engine is billing (`currentPeriod`).
+ */
+function resolveRequestedAddonValidity({ type, amountAllocatedCents, validUntilInput, now, currentPeriod }: {
+  type: "addon" | "monthly"
+  amountAllocatedCents: number
+  validUntilInput: string | undefined
+  now: Date
+  currentPeriod: string
+}): { creditsAddon: boolean; validUntil: Date | null; period: string } | NextResponse {
+  const creditsAddon = type === "addon" && amountAllocatedCents > 0
+  if (!creditsAddon) {
+    return validUntilInput === undefined
+      ? { creditsAddon, validUntil: null, period: currentPeriod }
+      : NextResponse.json({ error: "validUntil applies only to an add-on credit" }, { status: 400 })
+  }
+  if (validUntilInput === undefined) {
+    return NextResponse.json({ error: "validUntil is required for an add-on credit" }, { status: 400 })
+  }
+  const resolved = resolveAddonValidUntil(validUntilInput, now)
+  if (!resolved.ok) return NextResponse.json({ error: resolved.error }, { status: 400 })
+  return { creditsAddon, validUntil: resolved.validUntil, period: resolved.period }
+}
+
+/** The add-ons in force on one budget row; a placeholder row (no id yet) has none. */
+async function openAddonsForBudget(budgetId: unknown) {
+  if (typeof budgetId !== "number" || budgetId <= 0) return []
+  return (await loadOpenBudgetAddons(db, [budgetId])).get(budgetId) ?? []
 }
 
 /**
@@ -154,6 +225,7 @@ async function withBudgetAllocationModes<T extends { organizationId: number | nu
 }
 
 const budgetBranchSelection = {
+  budgetId: budgets.id,
   branchId: branches.id,
   branchName: branches.name,
   organizationId: branches.organizationId,
@@ -187,6 +259,7 @@ function resolveRequestedBudgetOrganization(role: string, sessionOrganizationId:
 }
 
 async function loadSingleBranchBudget(branchId: number, period: string) {
+  await settleDueBudgetAddons(db, { branchIds: [branchId], periods: [period] })
   let [budget] = await db.select({
     id: budgets.id,
     organizationId: budgets.organizationId,
@@ -292,6 +365,7 @@ async function loadAggregatedMoneyBudgets(context: any) {
   const branchIds = activeBranches.map((branch) => branch.branchId)
   const range = await resolveMoneyBudgetRange({ ...context, branchIds })
   if (range.periods.length === 0) return []
+  await settleDueBudgetAddons(db, { branchIds, periods: range.periods })
   const records = await db.select({
     branchId: budgets.branchId,
     period: budgets.period,
@@ -349,12 +423,29 @@ async function syncCurrentMoneyBudgets(rows: any[], period: string) {
   return missing.length > 0 || stale.length > 0
 }
 
+/**
+ * The add-ons still in force on each row, for the Budgets page to show next
+ * to the credited figure. Rows without a budget row yet carry an empty list.
+ */
+async function attachOpenAddons(rows: any[]) {
+  const budgetIds = rows.map((row) => row.budgetId).filter((id): id is number => typeof id === "number")
+  const byBudget = await loadOpenBudgetAddons(db, budgetIds)
+  return rows.map(({ budgetId, ...row }) => ({
+    ...row,
+    addons: (typeof budgetId === "number" ? byBudget.get(budgetId) : undefined) ?? [],
+  }))
+}
+
 async function loadCurrentMoneyBudgets(branchScope: any, period: string) {
   const load = () => db.select(budgetBranchSelection).from(branches).leftJoin(groups, eq(branches.groupId, groups.id))
     .leftJoin(budgets, and(eq(budgets.branchId, branches.id), eq(budgets.period, period))).where(branchScope)
   let rows = await load()
+  // Withdraw whatever expired before the figures are read, so the page never
+  // shows money the next order could not spend.
+  const settled = await settleDueBudgetAddons(db, { branchIds: rows.map((row) => row.branchId), periods: [period] })
+  if (settled.length > 0) rows = await load()
   if (await syncCurrentMoneyBudgets(rows, period)) rows = await load()
-  return addMoneyBudgetRemaining(rows)
+  return attachOpenAddons(addMoneyBudgetRemaining(rows))
 }
 
 async function handleAllMoneyBudgets(context: any) {
@@ -448,13 +539,21 @@ export async function GET(req: NextRequest) {
       })
     }
     // Single branch budget query - must be for current month period
-    const branchId = (role === "HEAD_OFFICE" || role === "SUPER_ADMIN") && branchIdParam
+    const branchFromQuery = (role === "HEAD_OFFICE" || role === "SUPER_ADMIN") && Boolean(branchIdParam)
+    const branchId = branchFromQuery
       ? validateNumericId(branchIdParam, "branchId")
       : validateNumericId(String(userBranchId), "branchId")
 
     if (!branchId) {
       return NextResponse.json({ error: "Valid branch ID required" }, { status: 400 })
     }
+
+    // An id from the query string is fenced to the caller's tenant before the
+    // load, which opens the period row when it is missing — a refused read
+    // must not write into another organization. The session's own branch
+    // needs no fence: it is the caller's scope by construction.
+    const fence = branchFromQuery ? await queriedBranchAccessError(role, branchId, orgId) : null
+    if (fence) return fence
 
     const currentMonth = new Date().toISOString().slice(0, 7) // YYYY-MM format
     const b = await loadSingleBranchBudget(branchId, currentMonth)
@@ -466,6 +565,7 @@ export async function GET(req: NextRequest) {
     const credited = b.amountCreditedCents ?? 0
 
     const remainingCents = (allocated + credited) - (spent + held)
+    const addons = await openAddonsForBudget(b.id)
 
     const budgetPayload = {
       branchId,
@@ -476,6 +576,7 @@ export async function GET(req: NextRequest) {
       remainingCents,
       baselineBudgetCents: b.baselineBudgetCents || 0,
       period: b.period || currentMonth,
+      addons,
     }
     // Product prices may be hidden for order portal users, but their own branch
     // budget remains visible so the portal can show the available limit.
@@ -533,10 +634,20 @@ export async function PUT(req: NextRequest) {
     if (!parsedBody.success) {
       return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
     }
-    const { branchId, amountAllocatedCents, resetAddons, type, reason } = parsedBody.data
+    const { branchId, amountAllocatedCents, resetAddons, type, reason, validUntil: validUntilInput } = parsedBody.data
 
     const validationError = validateMoneyBudgetUpdate(parsedBody.data)
     if (validationError) return validationError
+
+    // Update or create the budget row for the period this write belongs to:
+    // the month the engine is billing, or — for an add-on — the month its
+    // validity date is in (see resolveRequestedAddonValidity).
+    const now = new Date()
+    const currentMonth = now.toISOString().slice(0, 7) // YYYY-MM format
+
+    const validity = resolveRequestedAddonValidity({ type, amountAllocatedCents, validUntilInput, now, currentPeriod: currentMonth })
+    if (validity instanceof NextResponse) return validity
+    const { creditsAddon, validUntil, period } = validity
 
     // Verify branch exists and belongs to org
     const [branch] = await db
@@ -559,24 +670,37 @@ export async function PUT(req: NextRequest) {
       }, { status: 403 })
     }
 
-    // Update or create budget for current period
-    const currentMonth = new Date().toISOString().slice(0, 7) // YYYY-MM format
     try {
       const allocation = await db.transaction(async (tx) => {
         await tx.insert(budgets).values({
           organizationId: branch.organizationId,
           branchId,
-          period: currentMonth,
+          period,
           amountAllocatedCents: branch.baselineBudgetCents ?? 0,
           amountSpentCents: 0,
           amountHeldCents: 0,
           amountCreditedCents: 0,
         }).onConflictDoNothing()
 
+        const [existingRow] = await tx
+          .select({ id: budgets.id })
+          .from(budgets)
+          .where(and(eq(budgets.branchId, branchId), eq(budgets.period, period)))
+          .for('update')
+        if (!existingRow) throw new Error("BUDGET_ROW_MISSING")
+
+        // Whatever has already expired comes off first, so a new add-on is
+        // never stacked on a stale figure; a reset closes every open add-on
+        // in the ledger before the credit is zeroed below.
+        await settleDueAddonsOnBudget(tx, existingRow.id, now, {
+          actorUserId: userId,
+          closeAll: type === "addon" && resetAddons === true,
+        })
+
         const [lockedBudget] = await tx
           .select()
           .from(budgets)
-          .where(and(eq(budgets.branchId, branchId), eq(budgets.period, currentMonth)))
+          .where(eq(budgets.id, existingRow.id))
           .for('update')
         if (!lockedBudget) throw new Error("BUDGET_ROW_MISSING")
 
@@ -609,13 +733,16 @@ export async function PUT(req: NextRequest) {
           .where(eq(budgets.id, lockedBudget.id))
           .returning()
 
-        if (type === "addon") {
-          await tx.insert(budgetAddons).values({
+        let addonId: number | null = null
+        if (creditsAddon) {
+          const [addon] = await tx.insert(budgetAddons).values({
             budgetId: updatedBudget.id,
             amountCents: amountAllocatedCents,
             reason: reason || "Monthly Add-on Credit",
             createdByUserId: userId,
-          })
+            validUntil,
+          }).returning({ id: budgetAddons.id })
+          addonId = addon?.id ?? null
         }
 
         await tx.insert(auditLogs).values({
@@ -626,14 +753,16 @@ export async function PUT(req: NextRequest) {
           entityId: String(branchId),
           metadata: {
             branchName: branch.name,
-            period: currentMonth,
+            period,
             oldAmount: oldAmount / 100,
             newAmount: newAllocated / 100,
             addedAmount: type === "addon" ? amountAllocatedCents / 100 : undefined,
+            addonId: addonId ?? undefined,
+            validUntil: validUntil?.toISOString(),
           },
         })
 
-        return { oldAmount, newAllocated, newCredited }
+        return { oldAmount, newAllocated, newCredited, addonId }
       })
 
       return NextResponse.json(type === "monthly" ? {
@@ -644,11 +773,13 @@ export async function PUT(req: NextRequest) {
         budget: {
           branchId,
           branchName: branch.name,
-          period: currentMonth,
+          period,
           oldAmount: allocation.oldAmount / 100,
           newAmount: allocation.newAllocated / 100,
           newCredited: allocation.newCredited / 100,
           wasReset: allocation.newAllocated === 0,
+          addonId: allocation.addonId,
+          validUntil: validUntil?.toISOString() ?? null,
         },
       })
     } catch (allocationError: any) {

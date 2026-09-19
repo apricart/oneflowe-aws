@@ -22,6 +22,7 @@ import {
   users,
 } from "@/db/schema"
 import { closePool, db } from "@/lib/db"
+import { addonValidityBounds } from "@/lib/budget-addon-expiry"
 import { currentBudgetPeriod } from "@/lib/server/group-branch-budgets"
 import { resolveScopedBranchIds } from "@/lib/server/multi-branch-scope"
 
@@ -478,6 +479,9 @@ describe.skipIf(!hasTestDatabase)("group-based roles through their real API and 
 
   describe("Group User money budget allocation", () => {
     const period = currentBudgetPeriod()
+    // Every add-on credit carries the day it stops being available; the last
+    // day of the month keeps these tests about scope, not validity.
+    const validUntil = addonValidityBounds(new Date()).max
 
     async function listFor(query = "") {
       const response = await listMoneyBudgets(request(`/api/v1/budgets?all=true&period=${period}${query}`))
@@ -575,6 +579,7 @@ describe.skipIf(!hasTestDatabase)("group-based roles through their real API and 
         amountAllocatedCents: 12_500,
         type: "addon",
         reason: "Integration add-on",
+        validUntil,
       }))
       const addonBody = await addon.json()
       expect(addon.status).toBe(200)
@@ -652,6 +657,7 @@ describe.skipIf(!hasTestDatabase)("group-based roles through their real API and 
         branchId: fixtures.betaBranchId,
         amountAllocatedCents: 1_000,
         type: "addon",
+        validUntil,
       }))
       expect(beta.status).toBe(403)
       expect((await beta.json()).error).toBe("Unauthorized: Branch is outside your assigned scope")
@@ -660,6 +666,7 @@ describe.skipIf(!hasTestDatabase)("group-based roles through their real API and 
         branchId: fixtures.foreignBranchId,
         amountAllocatedCents: 1_000,
         type: "addon",
+        validUntil,
       }))
       expect(foreign.status).toBe(403)
       expect((await foreign.json()).error).toBe("Unauthorized: Branch belongs to different organization")
@@ -680,7 +687,7 @@ describe.skipIf(!hasTestDatabase)("group-based roles through their real API and 
     })
 
     it("refuses the assignment-less approver and the ordering role on write", async () => {
-      const body = { branchId: fixtures.alphaNorthId, amountAllocatedCents: 1_000, type: "addon" }
+      const body = { branchId: fixtures.alphaNorthId, amountAllocatedCents: 1_000, type: "addon", validUntil }
 
       signIn(actor("emptyApprover"))
       const empty = await allocateMoneyBudget(allocationRequest(body))
@@ -707,9 +714,48 @@ describe.skipIf(!hasTestDatabase)("group-based roles through their real API and 
         branchId: fixtures.alphaNorthId,
         amountAllocatedCents: 1_000,
         type: "addon",
+        validUntil,
       }))
       expect(response.status).toBe(403)
       expect((await response.json()).error).toBe("Unauthorized: Branch belongs to different organization")
+    })
+
+    it("keeps Head Office inside its own tenant on a single-branch read, and never opens a row for a refused one", async () => {
+      // A branch with no budget row yet: a read opens one at the baseline, so
+      // a refused read must not leave one behind in the other tenant.
+      const [probe] = await db
+        .insert(branches)
+        .values({
+          organizationId: fixtures.organizationId,
+          name: `Fence probe ${fixtures.suffix}`,
+          status: "active",
+          baselineBudgetCents: 12_345,
+        })
+        .returning({ id: branches.id })
+      const probeRows = () => db
+        .select({ id: budgets.id })
+        .from(budgets)
+        .where(and(eq(budgets.branchId, probe.id), eq(budgets.period, period)))
+
+      try {
+        signIn(actor("foreignHead"))
+        const foreign = await listMoneyBudgets(request(`/api/v1/budgets?branchId=${probe.id}`))
+        expect(foreign.status).toBe(403)
+        expect((await foreign.json()).error).toBe("Unauthorized: Branch belongs to different organization")
+        expect(await probeRows()).toEqual([])
+
+        const missing = await listMoneyBudgets(request("/api/v1/budgets?branchId=2147483646"))
+        expect(missing.status).toBe(404)
+
+        signIn(actor("head"))
+        const own = await listMoneyBudgets(request(`/api/v1/budgets?branchId=${probe.id}`))
+        expect(own.status).toBe(200)
+        expect(await own.json()).toMatchObject({ branchId: probe.id, amountAllocatedCents: 12_345, addons: [] })
+        expect(await probeRows()).toHaveLength(1)
+      } finally {
+        await db.delete(budgets).where(eq(budgets.branchId, probe.id))
+        await db.delete(branches).where(eq(branches.id, probe.id))
+      }
     })
 
     it("defaults a new Group User to denied, then grants and revokes only within its tenant and assigned branches", async () => {
@@ -738,6 +784,7 @@ describe.skipIf(!hasTestDatabase)("group-based roles through their real API and 
         branchId,
         amountAllocatedCents: 1,
         type: "addon",
+        validUntil,
       })
       signIn(newGroupUser)
       expect((await listFor()).status).toBe(403)

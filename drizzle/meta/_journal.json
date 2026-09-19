@@ -421,6 +421,13 @@
       "when": 1790164800000,
       "tag": "20260917120000_group_user_budget_allocation_permission",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1790424000000,
+      "tag": "20260919120000_budget_addon_validity",
+      "breakpoints": true
     }
   ]
 }
