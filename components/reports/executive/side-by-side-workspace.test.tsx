@@ -99,7 +99,7 @@ function comparisonResponse(url: string) {
     label: isQuantity ? "Quantity" : "Procurement Value",
     formula: "",
     mode: isSeries ? "series" : "rank",
-    chart: isSeries ? "line" : "bar",
+    chart: isSeries ? "line" : "column",
     concentrationEligible: true,
     quantityUnit: { selected: selectedUnit, conflict: false, available: [] },
     blocked,
@@ -112,12 +112,12 @@ vi.mock("./matrix-chart", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./matrix-chart")>()
   return {
     ...actual,
-    MatrixChart: ({ response, onDrillDown }: any) => (
+    MatrixChart: ({ response, onDrillDown, stacked }: any) => (
       <button
         type="button"
         onClick={() => onDrillDown(actual.cellDrillTarget(response, response.rows[1], response.columns[1]))}
       >
-        grid cell
+        {stacked ? "stacked" : "grid"} cell
       </button>
     ),
   }
@@ -193,6 +193,9 @@ function gridRequest() {
   return new URL(`http://x${url}`).searchParams
 }
 
+/** The distinct `/matrix` URLs asked for, in first-seen order. */
+const gridUrls = () => Array.from(new Set(requested.filter((entry) => entry.includes("/matrix?"))))
+
 function openPicker(name: RegExp) {
   fireEvent.click(screen.getByRole("button", { name }))
   return screen.getByRole("list")
@@ -235,7 +238,7 @@ describe("what the screen asks for", () => {
     ])
     const panels = panelRequests()
     expect([...panels.keys()].sort()).toEqual([
-      "branch:bar", "category:bar", "month:column", "product:bar", "product:line", "user:bar", "user:line",
+      "branch:column", "category:column", "month:column", "product:column", "product:line", "user:column", "user:line",
     ])
     for (const params of panels.values()) {
       expect(params.get("branchIds")).toBe("7")
@@ -278,11 +281,11 @@ describe("what the screen asks for", () => {
 
     expect(panels.size).toBe(7)
     for (const params of panels.values()) expect(params.get("userIds")).toBe("u2")
-    expect(panels.get("user:bar")?.get("keys")).toBe("u2")
+    expect(panels.get("user:column")?.get("keys")).toBe("u2")
     expect(panels.get("user:line")?.get("keys")).toBe("u2")
-    expect(panels.get("branch:bar")?.has("keys")).toBe(false)
-    expect(panels.get("product:bar")?.has("keys")).toBe(false)
-    expect(panels.get("category:bar")?.has("keys")).toBe(false)
+    expect(panels.get("branch:column")?.has("keys")).toBe(false)
+    expect(panels.get("product:column")?.has("keys")).toBe(false)
+    expect(panels.get("category:column")?.has("keys")).toBe(false)
 
     // The product picker follows the requester selection; the requester picker never narrows itself.
     const options = requested.filter((url) => url.includes("/options?"))
@@ -290,6 +293,42 @@ describe("what the screen asks for", () => {
     expect(options.at(-2)).toContain("userIds=u2")
     expect(options.at(-1)).toContain("dimension=user")
     expect(options.at(-1)).not.toContain("userIds=")
+  })
+
+  it("splits the product panel by requester once two people are compared, from the grid the screen already asks for", () => {
+    render(<SideBySideWorkspace filters={filters()} />)
+    // One person compared: the product panel is still its plain ranking.
+    const list = openPicker(/All requesters/)
+    let panels = after(() => fireEvent.click(within(list).getByText("Ahmed")))
+    expect(panels.has("product:column")).toBe(true)
+    expect(screen.getAllByRole("button", { name: "grid cell" })).toHaveLength(1)
+    expect(screen.queryByRole("button", { name: "stacked cell" })).toBeNull()
+
+    // Two: the product panel is served by the grid, stacked, and asks for
+    // nothing the grid panel was not already asking for — one URL, not two.
+    requested.length = 0
+    fireEvent.click(within(list).getByText("Sana"))
+    panels = panelRequests()
+    expect(panels.has("product:column")).toBe(false)
+    expect(panels.has("product:line")).toBe(true)
+    expect(screen.getAllByRole("button", { name: "grid cell" })).toHaveLength(1)
+    expect(screen.getAllByRole("button", { name: "stacked cell" })).toHaveLength(1)
+    expect(gridUrls()).toHaveLength(1)
+    const grid = gridRequest()
+    expect(grid.get("rows")).toBe("user")
+    expect(grid.get("columns")).toBe("product")
+    expect(grid.get("userIds")).toBe("u1,u2")
+    expect(grid.get("limit")).toBe("12")
+    // The panel keeps its place, its title and its question.
+    expect(panelTitles()).toEqual([
+      "By product", "By category", "By requester", "Requester × product", "By branch", "By month",
+      "Requesters over months", "Products over months",
+    ])
+
+    // Untick one and the plain ranking is back.
+    panels = after(() => fireEvent.click(within(list).getByText("Ahmed")))
+    expect(panels.has("product:column")).toBe(true)
+    expect(screen.queryByRole("button", { name: "stacked cell" })).toBeNull()
   })
 
   it("collapses to the single-product layout with day-by-day, and back", () => {
@@ -306,7 +345,7 @@ describe("what the screen asks for", () => {
     expect(screen.getByText("A4 Paper", { selector: "strong" })).toBeTruthy()
     expect(screen.getByText(/compared across requesters, branches and months at once/)).toBeTruthy()
     expect(screen.getByText(/Day-by-day consumption is shown below/)).toBeTruthy()
-    expect([...panels.keys()].sort()).toEqual(["branch:bar", "day:line", "month:column", "user:bar", "user:line"])
+    expect([...panels.keys()].sort()).toEqual(["branch:column", "day:line", "month:column", "user:column", "user:line"])
     for (const params of panels.values()) expect(params.get("productIds")).toBe("186")
 
     fireEvent.click(within(list).getByText("Toner"))
@@ -568,6 +607,27 @@ describe("download as Excel", () => {
     expect(workbook.SheetNames).toHaveLength(9)
     expect(workbook.Sheets["By product"].rows).toEqual([["Note"], ["Quantity cannot be totalled across Litre, Ream."]])
     expect(workbook.Sheets["Requester × product"].rows).toEqual([["Note"], ["Quantity cannot be totalled across Litre, Ream."]])
+  })
+
+  it("writes the split product panel as one row per product, the compared people as columns", async () => {
+    render(<SideBySideWorkspace filters={filters()} />)
+    const list = openPicker(/All requesters/)
+    fireEvent.click(within(list).getByText("Ahmed"))
+    fireEvent.click(within(list).getByText("Sana"))
+    fireEvent.click(downloadButton())
+
+    await waitFor(() => expect(writeFile).toHaveBeenCalledTimes(1))
+    const [workbook] = writeFile.mock.calls[0]
+    expect(workbook.SheetNames).toContain("By product")
+    // The grid turned round: what is a chart column here is a sheet row, and
+    // the product's total — the height of its column — is the row's last cell.
+    const sheet = workbook.Sheets["By product"].rows
+    expect(sheet[0]).toEqual(["Product / Requester", "Ahmed", "Sana", "Total Procurement Value (PKR)"])
+    expect(sheet[1]).toEqual(["A4 Paper", 4, 2, 6])
+    expect(sheet[2]).toEqual(["Toner", 3, 1, 4])
+    expect(sheet[3]).toEqual(["Total", 7, 3, null])
+    // The grid panel's own sheet is unchanged beside it.
+    expect(workbook.Sheets["Requester × product"].rows[1]).toEqual(["Ahmed", 4, 3, 7])
   })
 
   it("writes the grid as its own sheet, margins included", async () => {

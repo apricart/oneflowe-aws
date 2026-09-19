@@ -260,26 +260,68 @@ function RankedBars({
 
 // ── Columns ────────────────────────────────────────────────────────────────
 
+/**
+ * Past either of these an upright tick collides with its neighbour: twelve
+ * product names across half a row leave each column about sixty pixels, and a
+ * name like "Tapal Danedar Teabags (600 PCS)" is three times that on its own.
+ */
+const COLUMN_UPRIGHT_MAX_COLUMNS = 6
+const COLUMN_UPRIGHT_MAX_CHARS = 18
+/**
+ * The longest an angled tick is drawn. The tick only has to tell the columns
+ * apart — the full name is in the tooltip, the legend and the table.
+ */
+const COLUMN_TICK_MAX_CHARS = 22
+
+/** Whether the x-axis ticks are angled rather than upright, for these rows. */
+export function columnTicksAngled(rows: ReadonlyArray<Pick<ComparisonRow, "label">>): boolean {
+  return rows.length > COLUMN_UPRIGHT_MAX_COLUMNS
+    || rows.some((entry) => entry.label.length > COLUMN_UPRIGHT_MAX_CHARS)
+}
+
+/** The tick text for one angled column: the label, shortened with an ellipsis past the cap. */
+export function columnTickLabel(label: unknown): string {
+  const text = String(label ?? "")
+  if (text.length <= COLUMN_TICK_MAX_CHARS) return text
+  return `${text.slice(0, COLUMN_TICK_MAX_CHARS - 1).trimEnd()}…`
+}
+
+/**
+ * The category axis of every upright column chart, upright or angled.
+ *
+ * Spread onto a Recharts `XAxis` rather than wrapped in a component of its
+ * own: Recharts finds its axes by element type, so a wrapper would hide the
+ * axis from it. The chart height and bottom margin that go with the angled
+ * form are `columnChartHeight` and `columnBottomMargin`.
+ */
+export function columnAxisProps(angled: boolean) {
+  return {
+    tick: AXIS_STYLE,
+    axisLine: false,
+    tickLine: false,
+    interval: 0 as const,
+    angle: angled ? -45 : 0,
+    textAnchor: (angled ? "end" : "middle") as "end" | "middle",
+    height: angled ? 104 : 30,
+    tickFormatter: angled ? columnTickLabel : undefined,
+  }
+}
+
+/** Angled ticks need more of the card; the plot keeps its height either way. */
+export const columnChartHeight = (angled: boolean, upright: number) => (angled ? upright + 40 : upright)
+export const columnBottomMargin = (angled: boolean) => (angled ? 8 : 12)
+
 function ColumnChart({
   rows, format, metricLabel, colorful, dimension, onDrillDown, dimensionLabel,
 }: Readonly<ChartProps>) {
-  const crowded = rows.length > 6
+  const angled = columnTicksAngled(rows)
   const drill = drillHandler(dimension, onDrillDown)
   return (
     <>
-      <ResponsiveContainer width="100%" height={300}>
-        <BarChart data={rows} margin={{ top: 20, right: 12, bottom: crowded ? 72 : 12, left: 4 }}>
+      <ResponsiveContainer width="100%" height={columnChartHeight(angled, 300)}>
+        <BarChart data={rows} margin={{ top: 20, right: 12, bottom: columnBottomMargin(angled), left: 4 }}>
           <CartesianGrid {...GRID_STYLE} vertical={false} />
-          <XAxis
-            dataKey="label"
-            tick={AXIS_STYLE}
-            axisLine={false}
-            tickLine={false}
-            interval={0}
-            angle={crowded ? -28 : 0}
-            textAnchor={crowded ? "end" : "middle"}
-            height={crowded ? 76 : 30}
-          />
+          <XAxis dataKey="label" {...columnAxisProps(angled)} />
           <YAxis
             tickFormatter={(value) => formatShortByKind(value, format)}
             tick={AXIS_STYLE}

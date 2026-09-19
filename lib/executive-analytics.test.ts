@@ -26,6 +26,7 @@ import {
   growthPct,
   isExecutiveAnalyticsRole,
   isSupportedCombination,
+  orderComparisonRows,
   resolveGrain,
   resolveMatrixGrain,
   resolveQuantityUnit,
@@ -179,6 +180,35 @@ describe("unit-of-measure safety", () => {
 
   it("reports no conflict when there is nothing to measure", () => {
     expect(resolveQuantityUnit([], null)).toEqual({ unit: null, conflict: false, units: [] })
+  })
+})
+
+describe("row order", () => {
+  // Months whose figures rise, so size order and time order disagree.
+  const months = [
+    { key: "2026-03", value: 2350 },
+    { key: "2026-01", value: 6810 },
+    { key: "2026-02", value: 4370 },
+  ]
+
+  it("keeps a time axis in its own order, whatever the figures", () => {
+    expect(orderComparisonRows(months, "month").map((row) => row.key)).toEqual(["2026-01", "2026-02", "2026-03"])
+    const days = months.map((row) => ({ ...row, key: `${row.key}-15` }))
+    expect(orderComparisonRows(days, "day").map((row) => row.key)).toEqual(["2026-01-15", "2026-02-15", "2026-03-15"])
+  })
+
+  it("ranks every other dimension largest first", () => {
+    const entities = [{ key: "b", value: 5 }, { key: "a", value: 20 }, { key: "c", value: 15 }]
+    for (const dimension of ["branch", "user", "product", "category", "group", "organization"] as const) {
+      expect(orderComparisonRows(entities, dimension).map((row) => row.key), dimension).toEqual(["a", "c", "b"])
+    }
+  })
+
+  it("returns a new array and leaves the input alone", () => {
+    const input = [...months]
+    const output = orderComparisonRows(input, "month")
+    expect(output).not.toBe(input)
+    expect(input).toEqual(months)
   })
 })
 

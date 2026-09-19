@@ -662,6 +662,30 @@ export function classifyBudgetHealth(totalBudgetCents: number, consumedCents: nu
   return "healthy"
 }
 
+// ── Row order ──────────────────────────────────────────────────────────────
+
+/**
+ * The order comparison rows reach the reader in: a time axis in its own
+ * order, every other dimension largest first.
+ *
+ * Each grouped read is already ordered in SQL, but by its own value column —
+ * the line read by net value, whatever the metric — so a metric that is not
+ * that column (quantity, unit price, an order count) is re-ranked here by the
+ * value the reader asked for. A time axis is never re-ranked, under any
+ * metric: months in size order stop being months, and the one thing the
+ * panel can show — how consumption moved — is gone. That rule used to be
+ * gated on the metric's own grain, which put "By month" in size order the
+ * moment a product came into focus and the read moved to line grain.
+ */
+export function orderComparisonRows<T extends { key: string; value: number }>(
+  rows: readonly T[],
+  dimension: ExecutiveDimensionId,
+): T[] {
+  return [...rows].sort((left, right) => (
+    isTimeAxisDimension(dimension) ? left.key.localeCompare(right.key) : right.value - left.value
+  ))
+}
+
 // ── Concentration (Pareto) ─────────────────────────────────────────────────
 
 export type ParetoPoint<T> = T & { share: number; cumulativeShare: number }
@@ -929,6 +953,24 @@ export type SideBySidePanel = {
    * so everything that reasons about "which panels name products" still does.
    */
   matrix?: { rows: MatrixDimensionId }
+  /**
+   * When set, and at least `SEGMENT_MIN_COMPARED` entities of this dimension
+   * are picked to compare, each of the panel's columns is split into their
+   * shares — a stacked column served by `/matrix` with this dimension as the
+   * rows and `dimension` as the columns. The column keeps the entity's total,
+   * because the panel's question is still "which ranked highest"; the segments
+   * answer "and who, within it". Below the threshold the panel draws its
+   * ordinary `chart`, since one segment is no split and none is no comparison.
+   */
+  segmentBy?: MatrixDimensionId
+}
+
+/** Fewer compared entities than this and a split would show nothing to compare. */
+export const SEGMENT_MIN_COMPARED = 2
+
+/** The dimension a panel's columns are split by for this many compared entities, or null for none. */
+export function panelSegmentation(panel: SideBySidePanel, comparedCount: number): MatrixDimensionId | null {
+  return panel.segmentBy && comparedCount >= SEGMENT_MIN_COMPARED ? panel.segmentBy : null
 }
 
 export const SIDE_BY_SIDE_PANELS: SideBySidePanel[] = [
@@ -936,15 +978,23 @@ export const SIDE_BY_SIDE_PANELS: SideBySidePanel[] = [
    * Item-wise: products against each other. With no focus this ranks the top
    * products in scope; with several ticked it compares exactly those, because
    * the focus already travels as `productIds` and the ranking is drawn from it.
+   *
+   * The ranked panels draw upright columns rather than bars listed downward,
+   * so the comparison reads left to right like the month panel beside it.
+   *
+   * With several requesters picked to compare, each product's column is split
+   * into their shares, so "which product" and "who consumed it" are answered
+   * in one reading. "Requester × product" below keeps the uncombined view.
    */
   {
     id: "by-product",
     dimension: "product",
-    chart: "bar",
+    chart: "column",
     title: "By product",
     question: "Which products consumed the most?",
     colorful: true,
     hiddenForSingleProduct: true,
+    segmentBy: "user",
   },
   /**
    * The category angle the requirement lists beside the product one. Withheld
@@ -954,7 +1004,7 @@ export const SIDE_BY_SIDE_PANELS: SideBySidePanel[] = [
   {
     id: "by-category",
     dimension: "category",
-    chart: "bar",
+    chart: "column",
     title: "By category",
     question: "Which categories consumed the most?",
     colorful: true,
@@ -963,7 +1013,7 @@ export const SIDE_BY_SIDE_PANELS: SideBySidePanel[] = [
   {
     id: "by-requester",
     dimension: "user",
-    chart: "bar",
+    chart: "column",
     title: "By requester",
     question: "Who consumed the most?",
     colorful: true,
@@ -988,7 +1038,7 @@ export const SIDE_BY_SIDE_PANELS: SideBySidePanel[] = [
   {
     id: "by-branch",
     dimension: "branch",
-    chart: "bar",
+    chart: "column",
     title: "By branch",
     question: "Which branches consumed the most?",
     colorful: true,

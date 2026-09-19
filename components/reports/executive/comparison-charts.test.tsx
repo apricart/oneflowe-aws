@@ -1,7 +1,15 @@
 import { fireEvent, render, screen } from "@testing-library/react"
 import { beforeAll, describe, expect, it, vi } from "vitest"
 
-import { ComparisonChart, SeriesTable, entityColor, type ComparisonRow, type EntitySeries } from "./comparison-charts"
+import {
+  ComparisonChart,
+  SeriesTable,
+  columnTickLabel,
+  columnTicksAngled,
+  entityColor,
+  type ComparisonRow,
+  type EntitySeries,
+} from "./comparison-charts"
 
 /**
  * The renderers behind every panel on the Product Performance tab.
@@ -75,6 +83,28 @@ describe("ranked bars and columns", () => {
     render(<ComparisonChart {...base} chart="column" colorful={false} dimension="month" dimensionLabel="Month" />)
     expect(screen.getByText("Procurement Value")).toBeTruthy()
     expect(screen.queryByText(/Select any/)).toBeNull()
+  })
+
+  // Recharts does not draw the axis in jsdom, so the rule that decides how a
+  // column's tick is drawn is asserted directly. Upright ticks are for a
+  // handful of short names; the twelve product names the Product Performance
+  // panels carry, or a single long one, are angled and shortened so they do
+  // not overwrite each other — the full name stays in the legend and tooltip.
+  it("keeps a handful of short column ticks upright and angles a crowded or long-named axis", () => {
+    const short = (count: number) => Array.from({ length: count }, (_, index) => ({ label: `Row ${index}` }))
+    expect(columnTicksAngled(short(6))).toBe(false)
+    expect(columnTicksAngled(short(7))).toBe(true)
+    expect(columnTicksAngled([{ label: "Sugar" }, { label: "Tapal Danedar Teabags (600 PCS)" }])).toBe(true)
+    expect(columnTicksAngled([])).toBe(false)
+  })
+
+  it("shortens an angled tick with an ellipsis only past the cap, never mid-space", () => {
+    expect(columnTickLabel("Nestle Everyday (1 KG)")).toBe("Nestle Everyday (1 KG)")
+    expect(columnTickLabel("Tapal Danedar Teabags (600 PCS)")).toBe("Tapal Danedar Teabags…")
+    expect(columnTickLabel("Muhammad Nauman Liaqat Ahmed")).toBe("Muhammad Nauman Liaqa…")
+    // The cut lands on a space here; it is dropped rather than left dangling before the ellipsis.
+    expect(columnTickLabel("Nestle Everyday Milk Pack 2KG")).toBe("Nestle Everyday Milk…")
+    expect(columnTickLabel(undefined)).toBe("")
   })
 })
 

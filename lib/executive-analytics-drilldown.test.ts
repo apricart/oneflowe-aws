@@ -8,6 +8,7 @@ import {
   EXECUTIVE_DIMENSIONS,
   MAX_TIME_AXIS_POINTS,
   MEASURE_METRIC,
+  SEGMENT_MIN_COMPARED,
   SIDE_BY_SIDE_PANELS,
   chartTypesFor,
   clampDrillDownLimit,
@@ -18,6 +19,7 @@ import {
   isSupportedMatrix,
   isTimeAxisDimension,
   measureOfMetric,
+  panelSegmentation,
   panelsForFocus,
   resolveDrillDownSort,
   resolveSortDirection,
@@ -171,6 +173,37 @@ describe("the side-by-side panel registry", () => {
     expect(idsFor(2)).toEqual(expect.arrayContaining(productPanels))
     expect(idsFor(25)).toEqual(expect.arrayContaining(productPanels))
     for (const id of productPanels) expect(idsFor(1)).not.toContain(id)
+  })
+
+  it("splits the product panel by requester only once there are two or more people to compare", () => {
+    // One person is one segment — no split — and nobody picked means the panel
+    // ranks products across everyone, where a split by the top twelve would be
+    // noise. From two up, each product's column is their shares stacked.
+    const byProduct = SIDE_BY_SIDE_PANELS.find((panel) => panel.id === "by-product")!
+    expect(SEGMENT_MIN_COMPARED).toBe(2)
+    expect(panelSegmentation(byProduct, 0)).toBeNull()
+    expect(panelSegmentation(byProduct, 1)).toBeNull()
+    expect(panelSegmentation(byProduct, 2)).toBe("user")
+    expect(panelSegmentation(byProduct, 25)).toBe("user")
+  })
+
+  it("splits only a ranked panel, by a grid dimension other than its own, that the grid can answer", () => {
+    // The split is served by `/matrix` with the segment dimension as rows and
+    // the panel's own as columns, so the pair must be one the grid accepts —
+    // and a panel that is already a grid, or a trend, has nothing to split.
+    const segmented = SIDE_BY_SIDE_PANELS.filter((panel) => panel.segmentBy)
+    expect(segmented.map((panel) => panel.id)).toEqual(["by-product"])
+    for (const panel of segmented) {
+      expect(panel.matrix, panel.id).toBeUndefined()
+      expect(panel.chart, panel.id).not.toBe("line")
+      expect(panel.segmentBy, panel.id).not.toBe(panel.dimension)
+      for (const measure of ["amount", "quantity"] as const) {
+        expect(isSupportedMatrix(panel.segmentBy!, panel.dimension, MEASURE_METRIC[measure]), `${panel.id} under ${measure}`).toBe(true)
+      }
+    }
+    for (const panel of SIDE_BY_SIDE_PANELS.filter((entry) => !entry.segmentBy)) {
+      expect(panelSegmentation(panel, 25), panel.id).toBeNull()
+    }
   })
 
   it("never hides every panel, whatever the focus", () => {

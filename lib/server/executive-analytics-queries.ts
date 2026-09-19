@@ -13,6 +13,7 @@ import {
   EXECUTIVE_METRICS,
   MAX_TIME_AXIS_POINTS,
   isTimeAxisDimension,
+  orderComparisonRows,
   resolveDrillDownSort,
   resolveGrain,
   resolveMatrixGrain,
@@ -1189,8 +1190,8 @@ export async function loadComparison(
     }
   }
 
-  return rows
-    .map((row) => ({
+  return orderComparisonRows(
+    rows.map((row) => ({
       key: row.key,
       label: row.label,
       value: valueOf(row),
@@ -1198,12 +1199,9 @@ export async function loadComparison(
       quantity: row.quantity,
       orderCount: row.orderCount,
       avgUnitPriceCents: row.avgUnitPriceCents,
-    }))
-    .sort((left, right) => (
-      EXECUTIVE_METRICS[metric].grain === "line" && isTimeAxisDimension(dimension)
-        ? left.key.localeCompare(right.key)
-        : right.value - left.value
-    ))
+    })),
+    dimension,
+  )
 }
 
 // ── The grid: one figure per (row, column) pair ────────────────────────────
