@@ -1,5 +1,9 @@
 # OF-REPORTS — "By product" split by requester
 
+> **Superseded (2026-09-21)** by `OF-REPORTS-product-panel-grouped-by-requester.md`:
+> the split panel is now drawn grouped, not stacked, and the standing
+> "Requester × product" panel it deferred to has been removed.
+
 ## Requirement
 
 > If multiple products are selected and multiple requesters are selected, the

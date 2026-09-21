@@ -3,11 +3,12 @@
 import * as React from "react"
 import { useSession } from "next-auth/react"
 import { usePathname, useSearchParams } from "next/navigation"
-import { BarChart3, Compass, LayoutDashboard, LayoutGrid, ShieldAlert } from "lucide-react"
+import { Compass, LayoutDashboard, LayoutGrid, ShieldAlert } from "lucide-react"
 
 import { Card, CardContent } from "@/components/ui/card"
 import { useAPI } from "@/lib/hooks/use-api"
 import { cn } from "@/lib/utils"
+import { isBudgetBurnRole } from "@/lib/budget-burn-risk"
 import { EXECUTIVE_ANALYTICS_ROLES } from "@/lib/executive-analytics"
 import {
   ExecutiveVizStyles,
@@ -19,6 +20,14 @@ import {
   toQuery,
   type ExecutiveFilterState,
 } from "@/components/reports/executive/executive-filters"
+import {
+  BudgetBurnDrillNote,
+  BudgetBurnWatchlist,
+  type BudgetBurnDrillSelection,
+  type BudgetBurnItemDrillSelection,
+} from "@/components/reports/executive/budget-burn-watchlist"
+import { BudgetBurnItemComparisonPanel } from "@/components/reports/executive/budget-burn-item-comparison"
+import { DrillDownPanel } from "@/components/reports/executive/drill-down-panel"
 import { ExploreWorkspace } from "@/components/reports/executive/explore-workspace"
 import { SideBySideWorkspace } from "@/components/reports/executive/side-by-side-workspace"
 import {
@@ -50,6 +59,10 @@ import {
  * handful of high-value visuals, and an Explore workspace where a reader builds
  * a curated comparison without a developer adding a chart for it.
  *
+ * The level is chosen from the sidebar — the Visualize group has one entry
+ * per level — so the page carries no switch of its own; it reads `?tab=`,
+ * names the level in its heading, and renders that level.
+ *
  * The role check here decides what renders, never what is readable. Every
  * endpoint behind this page re-derives the caller's tenant and branch set from
  * their own user row — and, for a Group User, from their own assignment rows —
@@ -80,15 +93,32 @@ type OverviewResponse = {
  * months compare side by side, then an open-ended question of their own.
  *
  * The id is the `?tab=` value, so it is user-facing: `product-performance` is
- * the name the client gave that screen and what the sidebar links to.
+ * the name the client gave that screen and what the sidebar links to. The
+ * label is the page heading while that level is open.
  */
 type AnalyticsTab = "overview" | "product-performance" | "explore"
 
-const ANALYTICS_TABS = [
+/**
+ * Whether the Explore & Compare workbench is offered.
+ *
+ * Withdrawn for now at the client's request — hidden, not removed, so that
+ * flipping this back restores it whole. While it is withdrawn nothing reaches
+ * it: the sidebar offers no entry for it, `?tab=explore` falls back to the
+ * overview like any unknown value, and the Price Variance rows that opened it
+ * with a product pre-selected are not clickable. A constant in code rather than an
+ * environment variable, as `lib/password-change-policy.ts` argues: a
+ * one-word change here goes through review and shows in history.
+ * `page.test.tsx` pins what the reader gets while it is off.
+ */
+const EXPLORE_TAB_OFFERED = false
+
+const ALL_ANALYTICS_TABS = [
   { id: "overview", label: "Executive Overview", icon: LayoutDashboard },
   { id: "product-performance", label: "Product Performance", icon: LayoutGrid },
   { id: "explore", label: "Explore & Compare", icon: Compass },
 ] as const satisfies ReadonlyArray<{ id: AnalyticsTab; label: string; icon: typeof LayoutDashboard }>
+
+const ANALYTICS_TABS = ALL_ANALYTICS_TABS.filter((entry) => entry.id !== "explore" || EXPLORE_TAB_OFFERED)
 
 const DEFAULT_TAB: AnalyticsTab = "overview"
 const TAB_PARAM = "tab"
@@ -103,10 +133,13 @@ function isAnalyticsTab(value: string | null): value is AnalyticsTab {
  * The URL is the single source of truth, so a sidebar link straight to one
  * level opens on it, a bookmark returns to it, and a link followed while the
  * page is already open — which changes only the search params — still
- * switches. The URL is written with the native History API rather than
- * `router.replace`: Next syncs `useSearchParams` from it without a round trip,
- * so a tab click stays instant. An unknown value falls back to the overview
- * rather than rendering nothing.
+ * switches. An unknown value falls back to the overview rather than rendering
+ * nothing.
+ *
+ * The sidebar is how a reader moves between levels; the page writes the URL
+ * itself only when a visual leads into another level (the Price Variance
+ * drill-down into Explore). It writes with the native History API rather than
+ * `router.replace`: Next syncs `useSearchParams` from it without a round trip.
  */
 function useAnalyticsTab(): [AnalyticsTab, (next: AnalyticsTab) => void] {
   const pathname = usePathname()
@@ -161,6 +194,12 @@ function GraphicalReportsContent() {
   const [tab, setTab] = useAnalyticsTab()
   const [filters, setFilters] = React.useState<ExecutiveFilterState>(defaultFilters)
   const [priceProduct, setPriceProduct] = React.useState<{ productId: number; unit: string; name?: string } | null>(null)
+  // The requester × branch × month a watchlist row was clicked for. The role
+  // check decides whether the panel renders; the endpoint behind it refuses
+  // every other role on its own.
+  const [burnDrill, setBurnDrill] = React.useState<BudgetBurnDrillSelection | null>(null)
+  const [burnItemsDrill, setBurnItemsDrill] = React.useState<BudgetBurnItemDrillSelection | null>(null)
+  const showsWatchlist = isBudgetBurnRole(role)
 
   const overviewUrl = authorized ? `/api/v1/analytics/executive/overview?${toQuery(filters)}` : null
   const { data, error, isLoading } = useAPI<OverviewResponse>(overviewUrl)
@@ -211,44 +250,24 @@ function GraphicalReportsContent() {
   const warningPct = data?.thresholds?.budgetWarningPct ?? 90
   const priceSpreadPct = data?.thresholds?.priceSpreadPct ?? 15
   const selectedBranchId = filters.branchIds.length === 1 ? Number(filters.branchIds[0]) : null
+  // `tab` is always one of the offered levels — an unknown `?tab=` has already
+  // fallen back to the default — so the lookup cannot miss.
+  const level = ANALYTICS_TABS.find((entry) => entry.id === tab) ?? ANALYTICS_TABS[0]
 
   return (
     <div className={cn("space-y-4 p-4 md:p-6", VIZ_CLASS)}>
       <ExecutiveVizStyles />
 
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="flex items-center gap-2 text-lg font-bold text-slate-900 dark:text-slate-100">
-            <BarChart3 className="h-5 w-5 text-indigo-600" aria-hidden />
-            Graphical Reports
-          </h1>
-          <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-            Executive procurement analytics — budget position, product performance across products, categories, people,
-            branches and months, and the order lines behind any figure.
-            {data ? ` Covering ${data.scope.branchCount} branch${data.scope.branchCount === 1 ? "" : "es"} in your scope.` : ""}
-          </p>
-        </div>
-
-        <div role="tablist" aria-label="Analytics level" className="flex items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 p-1 dark:border-slate-700 dark:bg-slate-800/60">
-          {ANALYTICS_TABS.map((entry) => (
-            <button
-              key={entry.id}
-              type="button"
-              role="tab"
-              aria-selected={tab === entry.id}
-              onClick={() => setTab(entry.id)}
-              className={cn(
-                "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition",
-                tab === entry.id
-                  ? "bg-white text-indigo-600 shadow-sm ring-1 ring-slate-200 dark:bg-slate-700 dark:text-indigo-300 dark:ring-slate-600"
-                  : "text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200",
-              )}
-            >
-              <entry.icon className="h-3.5 w-3.5" aria-hidden />
-              {entry.label}
-            </button>
-          ))}
-        </div>
+      <header>
+        <h1 className="flex items-center gap-2 text-lg font-bold text-slate-900 dark:text-slate-100">
+          <level.icon className="h-5 w-5 text-indigo-600" aria-hidden />
+          {level.label}
+        </h1>
+        <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+          Executive procurement analytics — budget position, product performance across products, categories, people,
+          branches and months, and the order lines behind any figure.
+          {data ? ` Covering ${data.scope.branchCount} branch${data.scope.branchCount === 1 ? "" : "es"} in your scope.` : ""}
+        </p>
       </header>
 
       <ExecutiveFilters
@@ -303,6 +322,36 @@ function GraphicalReportsContent() {
             </div>
           </div>
 
+          {showsWatchlist ? (
+            <BudgetBurnWatchlist
+              filters={filters}
+              onDrill={setBurnDrill}
+              onDrillItems={setBurnItemsDrill}
+              selectedKey={burnDrill ? `${burnDrill.target.key}:${burnDrill.target.narrow?.branchIds?.[0] ?? ""}` : null}
+              selectedItemsKey={burnItemsDrill ? `${burnItemsDrill.userId}:${burnItemsDrill.branchId}:${burnItemsDrill.month}` : null}
+            />
+          ) : null}
+
+          {showsWatchlist && burnItemsDrill ? (
+            <BudgetBurnItemComparisonPanel
+              selection={burnItemsDrill}
+              onClose={() => setBurnItemsDrill(null)}
+            />
+          ) : null}
+
+          {showsWatchlist && burnDrill ? (
+            <div className="space-y-2">
+              <BudgetBurnDrillNote selection={burnDrill} onClose={() => setBurnDrill(null)} />
+              <DrillDownPanel
+                target={burnDrill.target}
+                filters={burnDrill.filters}
+                metric="spend"
+                statuses={burnDrill.statuses}
+                onClose={() => setBurnDrill(null)}
+              />
+            </div>
+          ) : null}
+
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
             <CategoryParetoChart
               rows={data?.categories ?? []}
@@ -332,10 +381,10 @@ function GraphicalReportsContent() {
               thresholdPct={priceSpreadPct}
               loading={isLoading}
               error={requestError}
-              onSelectProduct={(productId, unit) => {
+              onSelectProduct={EXPLORE_TAB_OFFERED ? (productId, unit) => {
                 const row = data?.priceVariance.find((entry) => entry.productId === productId)
                 openPriceDrilldown(productId, unit, row?.productName)
-              }}
+              } : undefined}
             />
           </div>
         </div>

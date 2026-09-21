@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils"
 import {
   EXECUTIVE_METRICS,
   MEASURE_METRIC,
+  budgetBesideWithheldReason,
   panelSegmentation,
   panelsForFocus,
   type ChartTypeId,
@@ -31,7 +32,7 @@ import {
 import { DrillDownPanel } from "./drill-down-panel"
 import { EntityPicker, type EntityOption } from "./entity-picker"
 import { groupOptionsFromBranches, toQuery, type ExecutiveFilterState } from "./executive-filters"
-import { MatrixChart, MatrixTable, transposeMatrix, type MatrixResponse } from "./matrix-chart"
+import { MatrixChart, MatrixTable, type MatrixResponse } from "./matrix-chart"
 import { MeasureToggle } from "./measure-toggle"
 import { SideBySideExportButton } from "./side-by-side-export-button"
 
@@ -49,22 +50,23 @@ import { SideBySideExportButton } from "./side-by-side-export-button"
  *
  * So this screen fixes the subject — a product, or a few — and varies the
  * dimension instead. Every ranking and trend panel is the *existing*
- * comparison endpoint with a different `dimension`; the one grid panel —
- * requester against product, uncombined — is the `/matrix` endpoint under the
- * same registry and the same scope, so there is no new authorization surface
- * behind any of it: the same whitelist decides what may be asked, and the same
- * fence decides which rows may answer.
+ * comparison endpoint with a different `dimension`; the one grid — requester
+ * against product, uncombined, which "By product" becomes once people are
+ * compared — is the `/matrix` endpoint under the same registry and the same
+ * scope, so there is no new authorization surface behind any of it: the same
+ * whitelist decides what may be asked, and the same fence decides which rows
+ * may answer.
  *
  * Products are also a dimension here, not only the subject: with no focus, or
  * with several products ticked, the product panels rank them against each
  * other. Ticking one product collapses those panels into the day-by-day view,
  * where a single bar would only restate the subject line.
  *
- * With several requesters picked to compare, "By product" splits each
- * product's column into their shares — the same `/matrix` answer the grid
- * panel draws, stacked instead of clustered, so "which product" and "who" are
- * read in one column. The registry decides which panel does this
- * (`segmentBy`), and below two people the panel draws its plain columns.
+ * With several requesters picked to compare, "By product" becomes that grid:
+ * one cluster per product, one column per person inside it, one figure per
+ * pair and never combined, so "who consumed how much of this product" is read
+ * across a cluster. The registry decides which panel does this (`segmentBy`),
+ * and below two people the panel draws its plain ranking.
  *
  * Two things are shared across every panel, deliberately:
  *
@@ -84,6 +86,8 @@ type ComparisonResponse = {
   mode: "rank" | "series"
   chart: ChartTypeId
   concentrationEligible: boolean
+  /** True when every row carries `totalBudgetCents` beside its figure, because `budget=1` was honoured. */
+  budgetBeside?: boolean
   quantityUnit: { selected: string | null; conflict: boolean; available: string[] }
   blocked?: { reason: string; message: string }
   error?: string
@@ -283,15 +287,14 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         {orderedPanels.map((panel) => {
-          // A grid panel, or a ranked panel split by the people picked to
-          // compare, is served by `/matrix`; the split one is drawn stacked.
-          const gridRows = panel.matrix?.rows ?? panelSegmentation(panel, compareUsers.length)
+          // A ranked panel split by the people picked to compare is served by
+          // `/matrix` as a grid, one column per person inside each cluster.
+          const gridRows = panelSegmentation(panel, compareUsers.length)
           return gridRows ? (
             <MatrixPanel
               key={panel.id}
               panel={panel}
               rows={gridRows}
-              stacked={!panel.matrix}
               filters={scopedFilters}
               metric={metric}
               expanded={expanded.includes(panel.id)}
@@ -406,12 +409,25 @@ function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggle
   // dimension ranks whatever is in scope.
   const keys = panel.dimension === "user" ? compareUsers.join(",") : ""
 
+  // A budget-bearing panel asks for the Total Budget beside each column only
+  // while the rule allows it — money, no product or requester narrowing — and
+  // otherwise tells the reader why the budget is not there. The server applies
+  // the same rule, so the panel never asks for what it would be refused.
+  const budgetWithheld = panel.budgetBeside
+    ? budgetBesideWithheldReason(panel.dimension, metric, {
+      lineScoped: (filters.productIds?.length ?? 0) > 0 || filters.categoryIds.length > 0,
+      userScoped: (filters.userIds?.length ?? 0) > 0,
+    })
+    : null
+  const askBudget = Boolean(panel.budgetBeside) && budgetWithheld === null
+
   const url = `/api/v1/analytics/executive/compare?${toQuery(filters, {
     dimension: panel.dimension,
     metric,
     chart: panel.chart,
     keys,
     limit: String(limit),
+    budget: askBudget ? "1" : "",
   })}`
 
   const { data, error, isLoading } = useAPI<ComparisonResponse>(url)
@@ -463,6 +479,7 @@ function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggle
             metricLabel={data?.label ?? EXECUTIVE_METRICS[metric].label}
             dimensionLabel={panelDimensionLabel(panel.dimension)}
             concentrationEligible={Boolean(data?.concentrationEligible)}
+            budgetBeside={Boolean(data?.budgetBeside)}
             dimension={panel.dimension}
             onDrillDown={onDrillDown}
           />
@@ -478,6 +495,7 @@ function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggle
         dimensionLabel={panelDimensionLabel(panel.dimension)}
         unit={data?.quantityUnit.selected ?? null}
         concentrationEligible={Boolean(data?.concentrationEligible)}
+        budgetBeside={Boolean(data?.budgetBeside)}
         colorful={panel.colorful}
         dimension={panel.dimension}
         onDrillDown={onDrillDown}
@@ -487,6 +505,9 @@ function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggle
           Measured in <strong>{data.quantityUnit.selected}</strong> only. Other units in this period are excluded rather
           than added to it.
         </p>
+      ) : null}
+      {budgetWithheld && !isEmpty ? (
+        <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">{budgetWithheld}</p>
       ) : null}
     </ChartCard>
   )
@@ -519,23 +540,19 @@ function FullWidthToggle({ id, title, checked, onChange }: Readonly<{
 const MATRIX_PANEL_ENTITIES = 12
 
 /**
- * The grid panel: requester against product, one figure per pair.
+ * A ranked panel worn as a grid: the columns are the panel's own dimension,
+ * the rows the people picked to compare, one figure per pair.
  *
  * It reads the same shared filters as every other panel — the focused
  * products as `productIds`, the compared people as `userIds` — so its axes
  * are exactly the entities the ranking panels show, and its margins are their
  * bars. What it adds is the cells between them, which no ranking can give.
- *
- * `stacked` is the same grid worn by a ranked panel: the columns are the
- * panel's own dimension, the rows the people picked to compare, and each
- * column is one stack. Its table and its sheet are the grid transposed — one
- * row per column entity — so they read the way the chart does. The request
- * is identical to the grid panel's, so the cache answers both from one call.
+ * Its table and its sheet are the grid as drawn: one row per person, one
+ * column per product, the person's total last.
  */
-function MatrixPanel({ panel, rows, stacked, filters, metric, expanded, onToggleExpanded, onDrillDown, onSnapshot }: Readonly<{
+function MatrixPanel({ panel, rows, filters, metric, expanded, onToggleExpanded, onDrillDown, onSnapshot }: Readonly<{
   panel: SideBySidePanel
   rows: MatrixDimensionId
-  stacked: boolean
   filters: ExecutiveFilterState
   metric: ExecutiveMetricId
   expanded: boolean
@@ -555,27 +572,21 @@ function MatrixPanel({ panel, rows, stacked, filters, metric, expanded, onToggle
   const requestError = error ? "This comparison could not be loaded." : data?.error ?? null
   const isEmpty = !data || data.rows.length === 0 || data.columns.length === 0
 
-  // What the table and the download read: the grid as drawn for the grouped
-  // form, and turned so each chart column is a table row for the stacked one.
-  const tabulated = React.useMemo(() => (data && stacked ? transposeMatrix(data) : data), [data, stacked])
-
   React.useEffect(() => {
     onSnapshot(panel.id, {
-      response: tabulated ? { ...tabulated, mode: "matrix" } : null,
+      response: data ? { ...data, mode: "matrix" } : null,
       loading: isLoading,
       error: requestError,
     })
-  }, [panel.id, tabulated, isLoading, requestError, onSnapshot])
+  }, [panel.id, data, isLoading, requestError, onSnapshot])
   React.useEffect(() => () => onSnapshot(panel.id, null), [panel.id, onSnapshot])
 
   // An axis that filled its cap may have left entities out; say so, rather
-  // than let a reader take twelve for everyone. The stacked form folds the
-  // people beyond the cap into its own "other" segment and says so itself,
-  // so only its column axis is reported here.
-  const columnsCapped = Boolean(data && !isEmpty && data.columns.length >= data.limits.columns)
-  const rowsCapped = Boolean(data && !isEmpty && data.rows.length >= data.limits.rows)
-  const truncated = stacked ? columnsCapped : columnsCapped || rowsCapped
+  // than let a reader take twelve for everyone.
+  const truncated = Boolean(data && !isEmpty
+    && (data.columns.length >= data.limits.columns || data.rows.length >= data.limits.rows))
   const columnNoun = `${panelDimensionLabel(panel.dimension).toLowerCase()}s`
+  const rowNoun = `${panelDimensionLabel(rows).toLowerCase()}s`
 
   return (
     <ChartCard
@@ -587,11 +598,9 @@ function MatrixPanel({ panel, rows, stacked, filters, metric, expanded, onToggle
       empty={data?.blocked?.message ?? (isEmpty ? "Nothing in the selected period under these filters." : null)}
       className={expanded ? "xl:col-span-2" : undefined}
       toolbar={<FullWidthToggle id={`expand-${panel.id}`} title={panel.title} checked={expanded} onChange={onToggleExpanded} />}
-      table={tabulated
-        ? <MatrixTable response={tabulated} onDrillDown={onDrillDown} seriesAxis={stacked ? "columns" : "rows"} />
-        : null}
+      table={data ? <MatrixTable response={data} onDrillDown={onDrillDown} /> : null}
     >
-      {data ? <MatrixChart response={data} onDrillDown={onDrillDown} stacked={stacked} /> : null}
+      {data ? <MatrixChart response={data} onDrillDown={onDrillDown} /> : null}
       {data?.quantityUnit.selected ? (
         <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
           Measured in <strong>{data.quantityUnit.selected}</strong> only. Other units in this period are excluded rather
@@ -600,9 +609,7 @@ function MatrixPanel({ panel, rows, stacked, filters, metric, expanded, onToggle
       ) : null}
       {truncated ? (
         <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
-          {stacked
-            ? `Showing the top ${MATRIX_PANEL_ENTITIES} ${columnNoun}. Choose specific ${columnNoun} above to see others.`
-            : `Showing the top ${MATRIX_PANEL_ENTITIES} on each axis. Choose specific products or requesters above to see others.`}
+          Showing the top {MATRIX_PANEL_ENTITIES} on each axis. Choose specific {columnNoun} or {rowNoun} above to see others.
         </p>
       ) : null}
     </ChartCard>

@@ -130,6 +130,18 @@ describe("the drill-down listing", () => {
     expect(body).not.toContain("inArray(orders.branchId")
   })
 
+  it("lists pending orders only through the allowlisted status set, and only the drill-down asks", () => {
+    // The status predicate is chosen from two pre-written filters by a typed
+    // flag; neither the flag nor a status name is ever interpolated.
+    expect(queries).toContain('return filters.statusSet === "consumed" ? CONSUMED_ELIGIBLE_FILTER : REVENUE_ELIGIBLE_FILTER')
+    expect(queries).not.toContain("REVENUE_ELIGIBLE_FILTER,\n")
+    // The charts never set it: only the drill-down route passes the parsed value through.
+    expect(drillDownRoute).toContain("statusSet: parsed.statusSet")
+    for (const route of ["compare", "overview", "matrix", "options"]) {
+      expect(source(`app/api/v1/analytics/executive/${route}/route.ts`), route).not.toContain("statusSet")
+    }
+  })
+
   it("sorts only through the allowlisted expression map", () => {
     const body = builderBody("loadDrillDownLines")
     expect(body).toContain("DRILLDOWN_SORT_EXPRESSIONS[sortKey]")

@@ -10,6 +10,7 @@ import {
   MEASURE_METRIC,
   SEGMENT_MIN_COMPARED,
   SIDE_BY_SIDE_PANELS,
+  canShowBudgetBeside,
   chartTypesFor,
   clampDrillDownLimit,
   clampDrillDownOffset,
@@ -166,7 +167,7 @@ describe("the side-by-side panel registry", () => {
     const productPanels = SIDE_BY_SIDE_PANELS
       .filter((panel) => panel.dimension === "product" || panel.dimension === "category")
       .map((panel) => panel.id)
-    expect(productPanels).toEqual(["by-product", "by-category", "requester-by-product", "products-over-months"])
+    expect(productPanels).toEqual(["by-product", "by-category", "products-over-months"])
 
     const idsFor = (count: number) => panelsForFocus(count).map((panel) => panel.id)
     expect(idsFor(0)).toEqual(expect.arrayContaining(productPanels))
@@ -176,9 +177,9 @@ describe("the side-by-side panel registry", () => {
   })
 
   it("splits the product panel by requester only once there are two or more people to compare", () => {
-    // One person is one segment — no split — and nobody picked means the panel
-    // ranks products across everyone, where a split by the top twelve would be
-    // noise. From two up, each product's column is their shares stacked.
+    // One person is no comparison, and nobody picked means the panel ranks
+    // products across everyone, where a split by the top twelve would be
+    // noise. From two up, each product is a cluster of one column per person.
     const byProduct = SIDE_BY_SIDE_PANELS.find((panel) => panel.id === "by-product")!
     expect(SEGMENT_MIN_COMPARED).toBe(2)
     expect(panelSegmentation(byProduct, 0)).toBeNull()
@@ -190,11 +191,10 @@ describe("the side-by-side panel registry", () => {
   it("splits only a ranked panel, by a grid dimension other than its own, that the grid can answer", () => {
     // The split is served by `/matrix` with the segment dimension as rows and
     // the panel's own as columns, so the pair must be one the grid accepts —
-    // and a panel that is already a grid, or a trend, has nothing to split.
+    // and a trend has nothing to split.
     const segmented = SIDE_BY_SIDE_PANELS.filter((panel) => panel.segmentBy)
     expect(segmented.map((panel) => panel.id)).toEqual(["by-product"])
     for (const panel of segmented) {
-      expect(panel.matrix, panel.id).toBeUndefined()
       expect(panel.chart, panel.id).not.toBe("line")
       expect(panel.segmentBy, panel.id).not.toBe(panel.dimension)
       for (const measure of ["amount", "quantity"] as const) {
@@ -223,24 +223,24 @@ describe("the side-by-side panel registry", () => {
     expect(dimensions).toContain("month")
   })
 
-  it("lays requesters against products as a grid the server will answer, under either measure", () => {
-    // The uncombined view: one figure per (person, product). It is the one
-    // panel that is not a ranking, so it has its own contract to satisfy.
-    const grid = SIDE_BY_SIDE_PANELS.find((panel) => panel.id === "requester-by-product")
-    expect(grid?.matrix).toEqual({ rows: "user" })
-    expect(grid?.dimension).toBe("product")
-    for (const measure of ["amount", "quantity"] as const) {
-      expect(isSupportedMatrix(grid?.matrix?.rows, grid?.dimension, MEASURE_METRIC[measure])).toBe(true)
+  it("sets the budget beside the two panels whose entities hold one, and no other", () => {
+    // A branch holds a budget directly; a month is the grain the ledger is
+    // kept at. A product, a person or a category has no budget of its own, so
+    // asking would only ever be refused.
+    const withBudget = SIDE_BY_SIDE_PANELS.filter((panel) => panel.budgetBeside).map((panel) => panel.id)
+    expect(withBudget).toEqual(["by-branch", "by-month"])
+    for (const panel of SIDE_BY_SIDE_PANELS.filter((entry) => entry.budgetBeside)) {
+      expect(panel.chart, panel.id).toBe("column")
+      expect(canShowBudgetBeside(panel.dimension, "spend", { lineScoped: false, userScoped: false }), panel.id).toBe(true)
     }
-    // Every other panel is a plain ranking.
-    expect(SIDE_BY_SIDE_PANELS.filter((panel) => panel.matrix).map((panel) => panel.id)).toEqual(["requester-by-product"])
   })
 
-  it("withholds the grid for a single focused product, where 'By requester' already is that answer", () => {
-    const idsFor = (count: number) => panelsForFocus(count).map((panel) => panel.id)
-    expect(idsFor(0)).toContain("requester-by-product")
-    expect(idsFor(3)).toContain("requester-by-product")
-    expect(idsFor(1)).not.toContain("requester-by-product")
+  it("has no standing grid panel: requester against product is 'By product' once people are compared", () => {
+    // The uncombined view used to be its own "Requester × product" panel
+    // beside a stacked "By product"; the two said the same thing twice, so the
+    // split product panel now draws the grid and the standing one is gone.
+    expect(SIDE_BY_SIDE_PANELS.map((panel) => panel.id)).not.toContain("requester-by-product")
+    expect(SIDE_BY_SIDE_PANELS.map((panel) => panel.title)).not.toContain("Requester × product")
   })
 })
 
@@ -466,6 +466,26 @@ describe("parseDrillDownRequest", () => {
       "SUPER_ADMIN",
     )
     expect(allowed.ok).toBe(true)
+  })
+
+  it("lists revenue-eligible orders unless told to list what was consumed, and refuses anything else", () => {
+    const base = { dimension: "user", metric: "spend", key: "3f7b5d2e-1a4c-4d5e-9f80-2b6c7d8e9f01" }
+    const byDefault = parseDrillDownRequest(params(base))
+    if (!byDefault.ok) throw new Error(byDefault.error)
+    expect(byDefault.statusSet).toBe("revenue")
+
+    const empty = parseDrillDownRequest(params({ ...base, statuses: "" }))
+    if (!empty.ok) throw new Error(empty.error)
+    expect(empty.statusSet).toBe("revenue")
+
+    const consumed = parseDrillDownRequest(params({ ...base, statuses: "consumed" }))
+    if (!consumed.ok) throw new Error(consumed.error)
+    expect(consumed.statusSet).toBe("consumed")
+
+    // Not defaulted: a status name is not something to probe for.
+    for (const statuses of ["PENDING", "all", "revenue,pending", "consumed "]) {
+      expect(parseDrillDownRequest(params({ ...base, statuses }))).toMatchObject({ ok: false, error: "Unsupported statuses" })
+    }
   })
 
   it("clamps a caller-supplied page size and offset", () => {

@@ -7,6 +7,7 @@ import {
   clampRowLimit,
   isChartType,
   isDimensionAllowedForRole,
+  isDrillDownStatusSet,
   isExecutiveDimension,
   isExecutiveMetric,
   isMatrixDimension,
@@ -17,6 +18,7 @@ import {
   resolveSortDirection,
   type ChartTypeId,
   type DrillDownSortKey,
+  type DrillDownStatusSet,
   type ExecutiveDimensionId,
   type ExecutiveMetricId,
   type MatrixDimensionId,
@@ -193,6 +195,12 @@ export type ParsedComparisonRequest = ParsedExecutiveRequest & {
   dimension: ExecutiveDimensionId
   metric: ExecutiveMetricId
   chart: ChartTypeId
+  /**
+   * `budget=1`: set each entity's Total Budget beside its figure. A request,
+   * not a grant — the route still applies `canShowBudgetBeside`, and omits the
+   * budget for a comparison it cannot honestly stand beside.
+   */
+  withBudget: boolean
 }
 
 /**
@@ -225,7 +233,7 @@ export function parseComparisonRequest(
   const base = parseExecutiveRequest(applyEntityKeys(searchParams, dimension), now)
   if (!base.ok) return base
 
-  return { ...base, dimension, metric, chart }
+  return { ...base, dimension, metric, chart, withBudget: searchParams.get("budget") === "1" }
 }
 
 export type ParsedMatrixRequest = ParsedExecutiveRequest & {
@@ -368,6 +376,8 @@ export type ParsedDrillDownRequest = ParsedExecutiveRequest & {
   sort: DrillDownSortKey
   direction: "asc" | "desc"
   offset: number
+  /** Which orders to list: the revenue rule by default, or consumed (pending included). */
+  statusSet: DrillDownStatusSet
 }
 
 /** The dimension/metric/role half of the drill-down request. */
@@ -469,6 +479,12 @@ export function parseDrillDownRequest(
   const period = narrowToClickedPeriod(window, rawPeriod)
   if ("ok" in period) return period
 
+  // Absent means the Center's own rule; anything not on the allowlist is
+  // refused rather than defaulted, so a caller cannot probe for status names.
+  const rawStatuses = searchParams.get("statuses")
+  const statusSet = rawStatuses === null || rawStatuses === "" ? "revenue" : rawStatuses
+  if (!isDrillDownStatusSet(statusSet)) return { ok: false, error: "Unsupported statuses" }
+
   return {
     ...base,
     startDate: period.startDate,
@@ -481,5 +497,6 @@ export function parseDrillDownRequest(
     period: rawPeriod || null,
     sort: resolveDrillDownSort(searchParams.get("sort")),
     direction: resolveSortDirection(searchParams.get("direction")),
+    statusSet,
   }
 }

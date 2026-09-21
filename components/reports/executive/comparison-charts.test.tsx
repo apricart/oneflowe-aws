@@ -1,9 +1,11 @@
-import { fireEvent, render, screen } from "@testing-library/react"
+import { fireEvent, render, screen, within } from "@testing-library/react"
 import { beforeAll, describe, expect, it, vi } from "vitest"
 
 import {
+  BUDGET_BESIDE_COLOR,
   ComparisonChart,
   SeriesTable,
+  budgetShareLabel,
   columnTickLabel,
   columnTicksAngled,
   entityColor,
@@ -105,6 +107,50 @@ describe("ranked bars and columns", () => {
     // The cut lands on a space here; it is dropped rather than left dangling before the ellipsis.
     expect(columnTickLabel("Nestle Everyday Milk Pack 2KG")).toBe("Nestle Everyday Milk…")
     expect(columnTickLabel(undefined)).toBe("")
+  })
+})
+
+describe("a budget beside the columns", () => {
+  // The same rows the branch panel draws, each carrying the Total Budget the
+  // server set beside its figure. South was given nothing.
+  const budgeted = [
+    row({ totalBudgetCents: 300_000 }),
+    row({ key: "2", label: "South", value: 100_000, share: 40, cumulativeShare: 100, changePct: null, totalBudgetCents: 0 }),
+  ]
+
+  it("legends the Total Budget in the track colour ahead of the entities, and says how to read the share", () => {
+    render(<ComparisonChart {...base} rows={budgeted} chart="column" colorful budgetBeside onDrillDown={() => {}} />)
+    const legend = screen.getByRole("list")
+    const items = within(legend).getAllByRole("listitem")
+    expect(items.map((item) => item.textContent)).toEqual(["Total budget", "North", "South"])
+    expect((items[0].querySelector("[aria-hidden]") as HTMLElement | null)?.style.background).toBe(BUDGET_BESIDE_COLOR)
+    expect(screen.getByText(/Total budget is allocated \+ add-ons for every month in the period/)).toBeTruthy()
+    expect(screen.getByText(/excludes pending orders, so its share of budget reads lower than the Overview/)).toBeTruthy()
+    // The drill-down hint still names the entity, not the budget.
+    expect(screen.getByText(/Select any branch to open the order lines/)).toBeTruthy()
+  })
+
+  it("draws no budget and prints no note when the response carried none", () => {
+    render(<ComparisonChart {...base} chart="column" colorful />)
+    expect(screen.queryByText("Total budget")).toBeNull()
+    expect(screen.queryByText(/allocated \+ add-ons/)).toBeNull()
+  })
+
+  it("reads the figure as a share of the budget, or says there is none", () => {
+    expect(budgetShareLabel(150_000, 300_000)).toBe("50.0%")
+    expect(budgetShareLabel(450_000, 300_000)).toBe("150.0%")
+    expect(budgetShareLabel(100_000, 0)).toBe("no budget")
+    expect(budgetShareLabel(100_000, undefined)).toBe("no budget")
+  })
+
+  it("adds the budget and its share to the table, blank-safe for an unbudgeted entity", () => {
+    render(<ComparisonChart {...base} rows={budgeted} chart="table" budgetBeside />)
+    const headers = screen.getAllByRole("columnheader").map((cell) => cell.textContent)
+    expect(headers).toEqual(["Branch", "Procurement Value", "Total Budget", "% of budget", "Share", "vs prior", "Orders"])
+    const north = within(screen.getByRole("row", { name: /North/ })).getAllByRole("cell").map((cell) => (cell.textContent ?? "").replace(/\u00a0/g, " "))
+    expect(north.slice(1, 4)).toEqual(["Rs 1,500", "Rs 3,000", "50.0%"])
+    const south = within(screen.getByRole("row", { name: /South/ })).getAllByRole("cell").map((cell) => (cell.textContent ?? "").replace(/\u00a0/g, " "))
+    expect(south.slice(1, 4)).toEqual(["Rs 1,000", "Rs 0", "no budget"])
   })
 })
 

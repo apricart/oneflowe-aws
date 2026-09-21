@@ -20,7 +20,7 @@ import {
   ZAxis,
 } from "recharts"
 
-import type { ChartTypeId, ExecutiveDimensionId } from "@/lib/executive-analytics"
+import { utilizationPct, type ChartTypeId, type ExecutiveDimensionId } from "@/lib/executive-analytics"
 import type { ExecutiveFilterState } from "./executive-filters"
 import {
   AXIS_STYLE,
@@ -115,6 +115,24 @@ type ChartProps = {
   onDrillDown?: (target: DrillTarget) => void
   /** The dimension being compared, carried into the drill target. */
   dimension?: ExecutiveDimensionId
+  /**
+   * Each row carries its entity's Total Budget beside its figure — the
+   * `/compare` response answered `budget=1`. The column form then draws the
+   * budget as a second column in the track colour, and the tooltip and table
+   * read it out. Explicit rather than inferred from `totalBudgetCents`, because
+   * the budget *metrics* also fill that field, on rows whose figure *is* the
+   * budget position; a companion budget on a spend row is a different thing.
+   */
+  budgetBeside?: boolean
+}
+
+/** The hue of the Total Budget column: a quantity given, not an entity, so it wears the track. */
+export const BUDGET_BESIDE_COLOR = "var(--viz-track)"
+
+/** The figure as a share of the budget beside it, or the reason there is none. */
+export function budgetShareLabel(valueCents: number, totalBudgetCents: number | undefined): string {
+  if (!totalBudgetCents || totalBudgetCents <= 0) return "no budget"
+  return percent(utilizationPct(valueCents, totalBudgetCents))
 }
 
 /** Long labels need vertical room; short lists should not stretch to fill. */
@@ -159,12 +177,13 @@ export function DrillHint({ enabled, noun }: Readonly<{ enabled: boolean; noun: 
   )
 }
 
-function EntityTooltip({ row, format, metricLabel, concentrationEligible, showChange }: Readonly<{
+function EntityTooltip({ row, format, metricLabel, concentrationEligible, showChange, budgetBeside }: Readonly<{
   row: ComparisonRow
   format: string
   metricLabel: string
   concentrationEligible: boolean
   showChange: boolean
+  budgetBeside?: boolean
 }>) {
   const rows = [
     { label: metricLabel, value: formatByKind(row.value, format), color: SERIES[0] },
@@ -172,7 +191,16 @@ function EntityTooltip({ row, format, metricLabel, concentrationEligible, showCh
     ...(showChange ? [{ label: "vs prior period", value: changeLabel(row.changePct).text }] : []),
   ]
 
-  if (row.totalBudgetCents !== undefined) {
+  // A companion budget first: the row's figure is still procurement value,
+  // and the budget is what it is read against. The `totalBudgetCents` test
+  // below is for the budget metrics, where the figure *is* the position.
+  if (budgetBeside) {
+    rows.push(
+      { label: "Total budget", value: money(row.totalBudgetCents ?? 0), color: BUDGET_BESIDE_COLOR } as any,
+      { label: "% of budget", value: budgetShareLabel(row.value, row.totalBudgetCents), muted: true } as any,
+      { label: "Orders", value: countShort(row.orderCount), muted: true } as any,
+    )
+  } else if (row.totalBudgetCents !== undefined) {
     rows.push(
       { label: "Total budget", value: money(row.totalBudgetCents), muted: true } as any,
       { label: "Consumed", value: money(row.consumedCents ?? 0), muted: true } as any,
@@ -311,15 +339,27 @@ export function columnAxisProps(angled: boolean) {
 export const columnChartHeight = (angled: boolean, upright: number) => (angled ? upright + 40 : upright)
 export const columnBottomMargin = (angled: boolean) => (angled ? 8 : 12)
 
+/**
+ * Upright columns, one per entity — and, with a budget beside, two: the
+ * entity's Total Budget in the track colour and its figure in its own hue,
+ * standing apart rather than stacked, because "how much was given against how
+ * much was used" is the comparison the reader is making. Same form as the
+ * Overview's Budget vs Consumed chart, so the two read alike.
+ */
 function ColumnChart({
-  rows, format, metricLabel, colorful, dimension, onDrillDown, dimensionLabel,
+  rows, format, metricLabel, colorful, dimension, onDrillDown, dimensionLabel, budgetBeside,
 }: Readonly<ChartProps>) {
   const angled = columnTicksAngled(rows)
   const drill = drillHandler(dimension, onDrillDown)
   return (
     <>
       <ResponsiveContainer width="100%" height={columnChartHeight(angled, 300)}>
-        <BarChart data={rows} margin={{ top: 20, right: 12, bottom: columnBottomMargin(angled), left: 4 }}>
+        <BarChart
+          data={rows}
+          margin={{ top: 20, right: 12, bottom: columnBottomMargin(angled), left: 4 }}
+          barCategoryGap={budgetBeside ? "24%" : undefined}
+          barGap={budgetBeside ? 3 : undefined}
+        >
           <CartesianGrid {...GRID_STYLE} vertical={false} />
           <XAxis dataKey="label" {...columnAxisProps(angled)} />
           <YAxis
@@ -332,14 +372,35 @@ function ColumnChart({
           <Tooltip
             cursor={{ fill: "var(--viz-track)", fillOpacity: 0.35 }}
             content={({ active, payload }: any) => (active && payload?.length
-              ? <EntityTooltip row={payload[0].payload} format={format} metricLabel={metricLabel} concentrationEligible showChange />
+              ? (
+                <EntityTooltip
+                  row={payload[0].payload}
+                  format={format}
+                  metricLabel={metricLabel}
+                  concentrationEligible
+                  showChange
+                  budgetBeside={budgetBeside}
+                />
+              )
               : null)}
           />
+          {budgetBeside ? (
+            <Bar
+              dataKey="totalBudgetCents"
+              name="Total budget"
+              fill={BUDGET_BESIDE_COLOR}
+              radius={[4, 4, 0, 0]}
+              maxBarSize={40}
+              isAnimationActive={false}
+              onClick={drill}
+              className={drill ? "cursor-pointer" : undefined}
+            />
+          ) : null}
           <Bar
             dataKey="value"
             fill={SERIES[0]}
             radius={[4, 4, 0, 0]}
-            maxBarSize={56}
+            maxBarSize={budgetBeside ? 40 : 56}
             isAnimationActive={false}
             onClick={drill}
             className={drill ? "cursor-pointer" : undefined}
@@ -356,10 +417,21 @@ function ColumnChart({
           </Bar>
         </BarChart>
       </ResponsiveContainer>
-      {colorful
-        ? <Legend items={rows.slice(0, 12).map((row, index) => ({ key: row.key, label: row.label, color: entityColor(index, true) }))} />
-        : <Legend items={[{ label: metricLabel, color: SERIES[0] }]} />}
+      <Legend
+        items={[
+          ...(budgetBeside ? [{ key: "total-budget", label: "Total budget", color: BUDGET_BESIDE_COLOR }] : []),
+          ...(colorful
+            ? rows.slice(0, 12).map((row, index) => ({ key: row.key, label: row.label, color: entityColor(index, true) }))
+            : [{ label: metricLabel, color: SERIES[0] }]),
+        ]}
+      />
       <DrillHint enabled={Boolean(drill)} noun={dimensionLabel.toLowerCase()} />
+      {budgetBeside ? (
+        <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+          Total budget is allocated + add-ons for every month in the period. {metricLabel} excludes pending orders, so its
+          share of budget reads lower than the Overview&apos;s Utilization, which counts them as committed.
+        </p>
+      ) : null}
     </>
   )
 }
@@ -688,7 +760,7 @@ function ScatterCompare({ rows, format, metricLabel, unit, dimension, onDrillDow
 /** What the ranked table reads; `ComparisonChart` hands it the full chart props. */
 export type ComparisonTableProps = Pick<
   ChartProps,
-  "rows" | "format" | "metricLabel" | "dimensionLabel" | "concentrationEligible" | "dimension" | "onDrillDown"
+  "rows" | "format" | "metricLabel" | "dimensionLabel" | "concentrationEligible" | "dimension" | "onDrillDown" | "budgetBeside"
 >
 
 /**
@@ -700,13 +772,14 @@ export type ComparisonTableProps = Pick<
  * the trends.
  */
 export function ComparisonTable({
-  rows, format, metricLabel, dimensionLabel, concentrationEligible, dimension, onDrillDown,
+  rows, format, metricLabel, dimensionLabel, concentrationEligible, dimension, onDrillDown, budgetBeside,
 }: Readonly<ComparisonTableProps>) {
   return (
     <DataTable
       columns={[
         dimensionLabel,
         metricLabel,
+        ...(budgetBeside ? ["Total Budget", "% of budget"] : []),
         ...(concentrationEligible ? ["Share"] : []),
         "vs prior",
         "Orders",
@@ -714,6 +787,7 @@ export function ComparisonTable({
       rows={rows.map((row) => [
         row.label,
         formatByKind(row.value, format),
+        ...(budgetBeside ? [money(row.totalBudgetCents ?? 0), budgetShareLabel(row.value, row.totalBudgetCents)] : []),
         ...(concentrationEligible ? [percent(row.share)] : []),
         changeLabel(row.changePct).text,
         countShort(row.orderCount),

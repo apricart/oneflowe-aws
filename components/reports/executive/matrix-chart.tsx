@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Bar, BarChart, CartesianGrid, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 
 import { cn } from "@/lib/utils"
 import type { MatrixDimensionId } from "@/lib/executive-analytics"
@@ -18,16 +18,14 @@ import {
 import type { ExecutiveFilterState } from "./executive-filters"
 
 /**
- * The requester × product grid: one figure per pair, drawn three ways.
+ * The requester × product grid: one figure per pair, drawn two ways.
  *
- * As grouped columns, the products run along the axis and each requester is a
- * series, so "who consumed more of this product" is read across one cluster
- * and "what did this person consume" across one colour. As stacked columns —
- * the "By product" panel with several requesters picked — each product is one
- * column whose height is its total and whose segments are the requesters'
- * shares, so the ranking and its composition are read together. As a table,
- * the same figures sit in a grid with the margins the server ranked them by,
- * for the reader who wants the numbers rather than their shape.
+ * As grouped columns — the "By product" panel with several requesters picked
+ * — the products run along the axis and each requester is a series, so "who
+ * consumed more of this product" is read across one cluster and "what did
+ * this person consume" across one colour. As a table, the same figures sit in
+ * a grid with the margins the server ranked them by, for the reader who wants
+ * the numbers rather than their shape.
  *
  * Both are pure presentation. Every figure, label and margin comes from the
  * `/matrix` response; nothing is summed here, so the grid cannot disagree with
@@ -102,27 +100,6 @@ export function indexCells(cells: MatrixCell[]): Map<string, MatrixCell> {
 
 const cellKey = (row: string, column: string) => `${row}|${column}`
 
-/**
- * The grid the other way round: rows become columns, columns rows, the cells
- * following. The stacked "By product" panel draws the grid one way — products
- * along the axis, requesters as segments — and tabulates it the other, one
- * row per product, so the table reads the same way as the chart above it.
- * Every figure is the same object; nothing is recomputed.
- */
-export function transposeMatrix(response: MatrixResponse): MatrixResponse {
-  return {
-    ...response,
-    rowDimension: response.columnDimension,
-    columnDimension: response.rowDimension,
-    rowLabel: response.columnLabel,
-    columnLabel: response.rowLabel,
-    limits: { rows: response.limits.columns, columns: response.limits.rows },
-    rows: response.columns,
-    columns: response.rows,
-    cells: response.cells.map((cell) => ({ ...cell, row: cell.column, column: cell.row })),
-  }
-}
-
 type Props = {
   response: MatrixResponse
   onDrillDown?: (target: DrillTarget) => void
@@ -134,46 +111,28 @@ export type ColumnDatum = {
   total: number
   /** Each row entity's figure for this column, under the row's key. */
   values: Record<string, number>
-  /**
-   * What the column's total holds beyond the rows on the axis.
-   *
-   * The axis carries at most the cap's worth of requesters. When more were
-   * picked to compare, a stack of only the shown ones would stop short of
-   * the product's own total, so the difference is drawn as one neutral
-   * "other" segment. A margin below its own cells folds to zero rather than
-   * to a negative segment.
-   */
-  other: number
 }
 
-/** One datum per column entity, which is what a column chart reads in either form. */
+/** One datum per column entity, which is what a column chart reads. */
 export function columnData(response: Pick<MatrixResponse, "rows" | "columns" | "cells">): ColumnDatum[] {
   const byPair = indexCells(response.cells)
-  return response.columns.map((column) => {
-    const values = Object.fromEntries(
+  return response.columns.map((column) => ({
+    key: column.key,
+    label: column.label,
+    total: column.total,
+    values: Object.fromEntries(
       response.rows.map((row) => [row.key, byPair.get(cellKey(row.key, column.key))?.value ?? 0]),
-    )
-    const shown = response.rows.reduce((sum, row) => sum + values[row.key], 0)
-    return { key: column.key, label: column.label, total: column.total, values, other: Math.max(0, column.total - shown) }
-  })
+    ),
+  }))
 }
-
-/** The legend and tooltip name for the folded remainder, e.g. "Other requesters". */
-export function otherSegmentLabel(rowLabel: string): string {
-  return `Other ${rowLabel.toLowerCase()}s`
-}
-
-/** The folded remainder wears the track colour: it is a quantity, not an entity. */
-const OTHER_SEGMENT_COLOR = "var(--viz-track)"
 
 // ── Columns ────────────────────────────────────────────────────────────────
 
-/** What one column holds, one line per row entity, the remainder when drawn, the total last. */
-function ColumnTooltip({ datum, response, byPair, hasOther }: Readonly<{
+/** What one cluster holds, one line per row entity, the column's total last. */
+function ColumnTooltip({ datum, response, byPair }: Readonly<{
   datum: ColumnDatum
   response: MatrixResponse
   byPair: Map<string, MatrixCell>
-  hasOther: boolean
 }>) {
   const { rows, format } = response
   return (
@@ -185,9 +144,6 @@ function ColumnTooltip({ datum, response, byPair, hasOther }: Readonly<{
           value: byPair.has(cellKey(row.key, datum.key)) ? formatByKind(datum.values[row.key], format) : "—",
           color: entityColor(index, true),
         })),
-        ...(hasOther
-          ? [{ label: otherSegmentLabel(response.rowLabel), value: formatByKind(datum.other, format), color: OTHER_SEGMENT_COLOR }]
-          : []),
         { label: `All ${response.rowLabel.toLowerCase()}s`, value: formatByKind(datum.total, format), muted: true },
       ]}
     />
@@ -214,69 +170,33 @@ function cellDrillHandler(
   }
 }
 
-/** How to read a column, in one sentence, for whichever form is drawn. */
-function ColumnFootnote({ response, stacked, hasOther }: Readonly<{
-  response: MatrixResponse
-  stacked: boolean
-  hasOther: boolean
-}>) {
+/** How to read a column, in one sentence. */
+function ColumnFootnote({ response }: Readonly<{ response: MatrixResponse }>) {
   const rowNoun = response.rowLabel.toLowerCase()
   const columnNoun = response.columnLabel.toLowerCase()
   const metricNoun = response.label.toLowerCase()
   return (
     <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
-      {stacked ? (
-        <>
-          Each column is one {columnNoun}&apos;s {metricNoun} in total; its segments are each {rowNoun}&apos;s share of it.
-          {hasOther ? ` ${otherSegmentLabel(response.rowLabel)} is the part from people beyond the ${response.rows.length} shown.` : ""}
-        </>
-      ) : (
-        <>
-          Each column is one {rowNoun}&apos;s {metricNoun} of one {columnNoun} — never combined across {rowNoun}s.
-        </>
-      )}
+      Each column is one {rowNoun}&apos;s {metricNoun} of one {columnNoun} — never combined across {rowNoun}s.
     </p>
   )
 }
 
-/**
- * @param stacked The row entities as segments of one column per column entity,
- * rather than as a cluster beside it. The column then reaches the entity's
- * total, labelled above it, and the "other" remainder is drawn when needed.
- */
-export function MatrixChart({ response, onDrillDown, stacked = false }: Readonly<Props & { stacked?: boolean }>) {
+/** The grid as grouped columns: one cluster per column entity, one column per row entity inside it. */
+export function MatrixChart({ response, onDrillDown }: Readonly<Props>) {
   const { rows, columns, format } = response
   const byPair = React.useMemo(() => indexCells(response.cells), [response.cells])
   const data = React.useMemo(() => columnData(response), [response])
 
-  const otherLabel = otherSegmentLabel(response.rowLabel)
-  const hasOther = stacked && data.some((datum) => datum.other > 0)
-  // Stacked segments are parted by a hairline of surface rather than rounded,
-  // so two neighbouring hues never touch; a cluster's columns stand apart.
-  const segmentStyle = stacked
-    ? { stackId: "column", stroke: "var(--viz-surface)", strokeWidth: 2, radius: 0, maxBarSize: 56 }
-    : { stackId: undefined, stroke: undefined, strokeWidth: 0, radius: [4, 4, 0, 0] as [number, number, number, number], maxBarSize: 40 }
   const angled = columnTicksAngled(columns)
   const drill = cellDrillHandler(response, byPair, onDrillDown)
-
-  // The total is labelled once, above the topmost segment of the stack —
-  // whichever series that is — never on every segment.
-  const totalLabel = (
-    <LabelList
-      dataKey="total"
-      position="top"
-      formatter={(value: any) => formatShortByKind(Number(value), format)}
-      style={{ fontSize: 11, fill: "var(--viz-ink)", fontWeight: 600 }}
-    />
-  )
-  const topSeriesIndex = hasOther ? rows.length : rows.length - 1
 
   return (
     <>
       <ResponsiveContainer width="100%" height={columnChartHeight(angled, 320)}>
         <BarChart
           data={data}
-          margin={{ top: stacked ? 20 : 12, right: 12, bottom: columnBottomMargin(angled), left: 4 }}
+          margin={{ top: 12, right: 12, bottom: columnBottomMargin(angled), left: 4 }}
           barCategoryGap="22%"
           barGap={2}
         >
@@ -292,7 +212,7 @@ export function MatrixChart({ response, onDrillDown, stacked = false }: Readonly
           <Tooltip
             cursor={{ fill: "var(--viz-track)", fillOpacity: 0.35 }}
             content={({ active, payload }: any) => (active && payload?.length
-              ? <ColumnTooltip datum={payload[0].payload} response={response} byPair={byPair} hasOther={hasOther} />
+              ? <ColumnTooltip datum={payload[0].payload} response={response} byPair={byPair} />
               : null)}
           />
           {rows.map((row, index) => (
@@ -303,29 +223,18 @@ export function MatrixChart({ response, onDrillDown, stacked = false }: Readonly
               dataKey={(datum: ColumnDatum) => datum.values[row.key] ?? 0}
               name={row.label}
               fill={entityColor(index, true)}
-              {...segmentStyle}
+              radius={[4, 4, 0, 0]}
+              maxBarSize={40}
               isAnimationActive={false}
               onClick={drill?.(row)}
               className={drill ? "cursor-pointer" : undefined}
-            >
-              {stacked && index === topSeriesIndex ? totalLabel : null}
-            </Bar>
+            />
           ))}
-          {hasOther ? (
-            <Bar dataKey="other" name={otherLabel} fill={OTHER_SEGMENT_COLOR} {...segmentStyle} isAnimationActive={false}>
-              {totalLabel}
-            </Bar>
-          ) : null}
         </BarChart>
       </ResponsiveContainer>
-      <Legend
-        items={[
-          ...rows.map((row, index) => ({ key: row.key, label: row.label, color: entityColor(index, true) })),
-          ...(hasOther ? [{ key: "other", label: otherLabel, color: OTHER_SEGMENT_COLOR }] : []),
-        ]}
-      />
-      <DrillHint enabled={Boolean(onDrillDown)} noun={stacked ? "segment" : "column"} />
-      <ColumnFootnote response={response} stacked={stacked} hasOther={hasOther} />
+      <Legend items={rows.map((row, index) => ({ key: row.key, label: row.label, color: entityColor(index, true) }))} />
+      <DrillHint enabled={Boolean(onDrillDown)} noun="column" />
+      <ColumnFootnote response={response} />
     </>
   )
 }
@@ -344,20 +253,15 @@ const CELL_BUTTON_CLASS = "rounded tabular-nums text-indigo-600 underline-offset
  * the "By requester" panel's bar and drills from there.
  */
 /**
- * @param seriesAxis Which axis the chart above colours — its entities carry
- * the swatches here, so one requester is one hue on the chart, in the legend
- * and in the table. Rows for the grouped form, columns for the stacked one.
+ * The row entities carry the swatches, because they are the chart's series:
+ * one requester is one hue on the chart, in the legend and in the table.
  */
-export function MatrixTable({ response, onDrillDown, seriesAxis = "rows" }: Readonly<Props & { seriesAxis?: "rows" | "columns" }>) {
+export function MatrixTable({ response, onDrillDown }: Readonly<Props>) {
   const { rows, columns, format } = response
   const byPair = React.useMemo(() => indexCells(response.cells), [response.cells])
   const isCount = format === "count"
 
   if (rows.length === 0 || columns.length === 0) return null
-
-  const swatch = (index: number) => (
-    <span aria-hidden className="h-2 w-2 shrink-0 rounded-[2px]" style={{ background: entityColor(index, true) }} />
-  )
 
   return (
     <div className="max-h-[320px] overflow-auto rounded-lg border border-slate-200 dark:border-slate-700">
@@ -367,12 +271,9 @@ export function MatrixTable({ response, onDrillDown, seriesAxis = "rows" }: Read
             <th scope="col" className="px-3 py-2 text-left font-semibold text-slate-600 dark:text-slate-300">
               {response.rowLabel}
             </th>
-            {columns.map((column, columnIndex) => (
+            {columns.map((column) => (
               <th key={column.key} scope="col" className="px-3 py-2 text-right font-semibold text-slate-600 dark:text-slate-300">
-                <span className="inline-flex items-center gap-1.5">
-                  {seriesAxis === "columns" ? swatch(columnIndex) : null}
-                  {column.label}
-                </span>
+                {column.label}
               </th>
             ))}
             <th scope="col" className="px-3 py-2 text-right font-semibold text-slate-600 dark:text-slate-300">
@@ -385,7 +286,7 @@ export function MatrixTable({ response, onDrillDown, seriesAxis = "rows" }: Read
             <tr key={row.key} className="border-t border-slate-100 dark:border-slate-800">
               <th scope="row" className="px-3 py-1.5 text-left font-medium text-slate-700 dark:text-slate-300">
                 <span className="flex items-center gap-1.5">
-                  {seriesAxis === "rows" ? swatch(rowIndex) : null}
+                  <span aria-hidden className="h-2 w-2 shrink-0 rounded-[2px]" style={{ background: entityColor(rowIndex, true) }} />
                   {row.label}
                 </span>
               </th>
