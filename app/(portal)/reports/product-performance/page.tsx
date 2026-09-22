@@ -71,6 +71,7 @@ const fetcher = (url: string) => fetch(url).then((r) => r.json())
 
 const CHART_COLORS = ['#6366f1', '#8b5cf6', '#a78bfa', '#c4b5fd', '#818cf8', '#7c3aed', '#4f46e5', '#4338ca', '#6d28d9', '#5b21b6']
 const ALL_MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+const CHART_MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 function ProductBarTooltip({ active, payload, pricesHidden, revenueLabel }: any) {
     if (!active || !payload?.length) {
@@ -139,9 +140,7 @@ export default function ProductPerformancePage() {
     const [activeTab, setActiveTab] = useState<"analytics" | "reports">(tabFromUrl)
 
     useEffect(() => {
-        if (tabFromUrl !== activeTab) {
-            setActiveTab(tabFromUrl)
-        }
+        setActiveTab(tabFromUrl)
     }, [tabFromUrl])
 
     const { data: session, status: sessionStatus } = useSession()
@@ -190,6 +189,7 @@ export default function ProductPerformancePage() {
     const [chartProductIds, setChartProductIds] = useState<string[]>([])
     const [globalGroupId] = useState<string>("")
     const hasInitializedChartDefaults = useRef(false)
+    const hasInitializedGlobalDate = useRef(false)
 
     // Report-local filters
     const [reportYears, setReportYears] = useState<number[]>([])
@@ -255,8 +255,6 @@ export default function ProductPerformancePage() {
     useEffect(() => {
         setReportProductIds([])
     }, [reportBranchIds])
-
-    const CHART_MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
     const toggleChartYear = (year: number) => setChartYears(prev => prev.includes(year) ? prev.filter(y => y !== year) : [...prev, year])
     const toggleChartMonth = (month: number) => setChartMonths(prev => prev.includes(month) ? prev.filter(m => m !== month) : [...prev, month])
@@ -505,11 +503,13 @@ export default function ProductPerformancePage() {
     }, [getDefaultReportYears, handleDateChange, mutateLedger, mutateTopProducts])
 
     useEffect(() => {
+        if (hasInitializedGlobalDate.current) return
+        hasInitializedGlobalDate.current = true
         setHasMounted(true)
         if (!startFromUrl && !endFromUrl && selectedMonths.length === 0 && selectedYears.length === 0) {
             handleDateChange({ range: null, preset: "all" })
         }
-    }, [])
+    }, [endFromUrl, handleDateChange, selectedMonths.length, selectedYears.length, startFromUrl])
 
     const products = useMemo(() => {
         const p = globalPerfData?.data || []
@@ -632,7 +632,7 @@ export default function ProductPerformancePage() {
                 fulfillRate: dataPoint?.qtyOrdered > 0 ? ((dataPoint.qtyFulfilled / dataPoint.qtyOrdered) * 100).toFixed(1) : "0.0"
             }
         });
-    }, [chartPerfData, chartYears, chartMonths, CHART_MONTH_NAMES, chartProductIds, isChartProductView])
+    }, [chartPerfData, chartYears, chartMonths, chartProductIds, isChartProductView])
 
     const isPriceCustom = reportGroupIds.length > 0 || reportOrganizationIds.length > 0
     const priceLabel = (() => {

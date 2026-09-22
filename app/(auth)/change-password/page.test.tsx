@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { createElement } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 /**
@@ -29,7 +30,7 @@ vi.mock("@/lib/password-change-policy", () => ({
   isEmailVerificationRequiredForPasswordChange: mocks.emailVerificationRequired,
 }))
 vi.mock("next/image", () => ({
-  default: ({ src, alt }: { src: string; alt: string }) => <img src={src} alt={alt} />,
+  default: ({ src, alt }: { src: string; alt: string }) => createElement("img", { src, alt }),
 }))
 vi.mock("@/lib/session-coordination", () => ({ securelySignOut: mocks.securelySignOut }))
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: mocks.toast }) }))

@@ -52,7 +52,7 @@ async function main() {
     writeFileSync(OUTPUT, `${JSON.stringify(report, null, 2)}\n`, "utf8")
     console.log(JSON.stringify({ output: OUTPUT, ...report }, null, 2))
   } catch (error) {
-    try { await client.query("rollback") } catch {}
+    try { await client.query("rollback") } catch { /* Preserve the original failure. */ }
     throw error
   } finally {
     client.release()

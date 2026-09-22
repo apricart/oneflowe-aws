@@ -393,7 +393,8 @@ export default function SubcategoriesPage() {
                                 placeholder="Enter subcategory name"
                                 onKeyDown={(e) => {
                                     if (e.key === "Enter" && !isSubmitting) {
-                                        dialogMode === "create" ? handleCreate() : handleEdit()
+                                        if (dialogMode === "create") handleCreate()
+                                        else handleEdit()
                                     }
                                 }}
                             />

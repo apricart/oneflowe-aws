@@ -63,25 +63,25 @@ describe("every live order asks the payment-control gate first", () => {
 })
 
 describe("the server module", () => {
-  const module = source("lib/server/payment-control.ts")
+  const moduleSource = source("lib/server/payment-control.ts")
 
   it("is server-only and reads the overdue count from the one seam", () => {
-    expect(module.startsWith('import "server-only"')).toBe(true)
-    expect(module).toContain('from "./overdue-payment-source"')
-    expect(module).toContain("await overduePaymentSource(client, scope, now)")
-    expect(module).not.toMatch(/paymentStatus|payment_status/)
+    expect(moduleSource.startsWith('import "server-only"')).toBe(true)
+    expect(moduleSource).toContain('from "./overdue-payment-source"')
+    expect(moduleSource).toContain("await overduePaymentSource(client, scope, now)")
+    expect(moduleSource).not.toMatch(/paymentStatus|payment_status/)
   })
 
   it("decides through the pure policy and nowhere else", () => {
-    expect(module).toContain("resolvePaymentControl({ overdue, exception, now })")
-    expect(module).not.toMatch(/overdueCount\s*>=/)
+    expect(moduleSource).toContain("resolvePaymentControl({ overdue, exception, now })")
+    expect(moduleSource).not.toMatch(/overdueCount\s*>=/)
   })
 
   it("serializes grants on the branch row and refuses a second live exception", () => {
-    const grantAt = module.indexOf("export async function grantPaymentControlException")
-    const lockAt = module.indexOf('.for("update")', grantAt)
-    const liveAt = module.indexOf("loadLiveException(tx, branch.id, now)", grantAt)
-    const insertAt = module.indexOf(".insert(paymentControlExceptions)", grantAt)
+    const grantAt = moduleSource.indexOf("export async function grantPaymentControlException")
+    const lockAt = moduleSource.indexOf('.for("update")', grantAt)
+    const liveAt = moduleSource.indexOf("loadLiveException(tx, branch.id, now)", grantAt)
+    const insertAt = moduleSource.indexOf(".insert(paymentControlExceptions)", grantAt)
     expect(lockAt).toBeGreaterThan(grantAt)
     expect(liveAt).toBeGreaterThan(lockAt)
     expect(insertAt).toBeGreaterThan(liveAt)
@@ -89,14 +89,14 @@ describe("the server module", () => {
 
   it("audits the grant and the revoke in the same transaction as the write", () => {
     for (const action of ["GRANT_PAYMENT_CONTROL_EXCEPTION", "REVOKE_PAYMENT_CONTROL_EXCEPTION"]) {
-      expect(module).toContain(action)
+      expect(moduleSource).toContain(action)
     }
-    expect(module.match(/tx\.insert\(auditLogs\)/g)?.length).toBe(2)
+    expect(moduleSource.match(/tx\.insert\(auditLogs\)/g)?.length).toBe(2)
   })
 
   it("takes the window from the policy, never from a caller", () => {
-    expect(module).toContain("const window = exceptionWindowFrom(now)")
-    expect(module).not.toMatch(/input\.expiresAt|input\.startAt/)
+    expect(moduleSource).toContain("const window = exceptionWindowFrom(now)")
+    expect(moduleSource).not.toMatch(/input\.expiresAt|input\.startAt/)
   })
 })
 

@@ -1,5 +1,10 @@
 import { stringifyPrimitive } from "./stringify-primitive"
-const DANGEROUS_SPREADSHEET_PREFIX = /^[\u0000-\u0020]*[=+\-@]/
+
+function hasDangerousSpreadsheetPrefix(value: string): boolean {
+  let index = 0
+  while (index < value.length && value.charCodeAt(index) <= 0x20) index += 1
+  return index < value.length && "=+-@".includes(value[index])
+}
 
 /**
  * Prefix formula-like strings with an apostrophe so spreadsheet software
@@ -7,7 +12,7 @@ const DANGEROUS_SPREADSHEET_PREFIX = /^[\u0000-\u0020]*[=+\-@]/
  */
 export function neutralizeSpreadsheetFormula<T>(value: T): T | string {
   if (typeof value !== "string") return value
-  return DANGEROUS_SPREADSHEET_PREFIX.test(value) ? `'${value}` : value
+  return hasDangerousSpreadsheetPrefix(value) ? `'${value}` : value
 }
 
 export function sanitizeSpreadsheetRow<T extends readonly unknown[]>(row: T): unknown[] {

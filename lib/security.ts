@@ -3,6 +3,14 @@ const SAFE_IMAGE_DATA_URL =
 
 export const MAX_STORED_IMAGE_URL_LENGTH = 6_000_000
 
+export function containsControlCharacters(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code <= 0x1f || code === 0x7f) return true
+  }
+  return false
+}
+
 /**
  * Product images are rendered in many browser locations. Keep their source
  * limited to same-origin paths, HTTPS URLs, or validated raster data URLs.
@@ -15,7 +23,7 @@ export function normalizeSafeImageUrl(value: unknown): string | null {
   const trimmed = value.trim()
   if (!trimmed) return null
   if (trimmed.length > MAX_STORED_IMAGE_URL_LENGTH) return null
-  if (/[\u0000-\u001f\u007f]/.test(trimmed)) return null
+  if (containsControlCharacters(trimmed)) return null
 
   if (trimmed.startsWith("/")) {
     if (trimmed.startsWith("//") || trimmed.includes("\\")) return null
@@ -51,7 +59,7 @@ export function safeInternalRedirectPath(
     !trimmed.startsWith("/") ||
     trimmed.startsWith("//") ||
     trimmed.includes("\\") ||
-    /[\u0000-\u001f\u007f]/.test(trimmed)
+    containsControlCharacters(trimmed)
   ) {
     return fallback
   }

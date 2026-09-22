@@ -1,6 +1,6 @@
 "use client"
 
-import { useState,useEffect } from "react"
+import { useCallback,useEffect,useState } from "react"
 import { Card,CardContent,CardDescription,CardHeader,CardTitle } from "@/components/ui/card"
 import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/hooks/use-toast"
@@ -21,12 +21,7 @@ export function MFASettings({ username }: Readonly<MFASettingsProps>) {
   const [pendingAction, setPendingAction] = useState<'enable' | 'disable' | null>(null)
   const { toast } = useToast()
 
-  // Load MFA status
-  useEffect(() => {
-    loadMFAStatus()
-  }, [])
-
-  const loadMFAStatus = async () => {
+  const loadMFAStatus = useCallback(async () => {
     try {
       const response = await jsonFetcher<any>("/api/v1/mfa/status")
       if (response.error) {
@@ -43,7 +38,12 @@ export function MFASettings({ username }: Readonly<MFASettingsProps>) {
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [toast])
+
+  // Load MFA status
+  useEffect(() => {
+    void loadMFAStatus()
+  }, [loadMFAStatus])
 
   const applyMfaAction = async (action: 'enable' | 'disable', otpCode?: string) => {
     console.log("MFA Settings - Verification success:", {

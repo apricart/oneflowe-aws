@@ -472,6 +472,58 @@ async function handleAllMoneyBudgets(context: any) {
   }
 }
 
+async function handleSingleMoneyBudget({
+  role,
+  normalizedRole,
+  userBranchId,
+  branchIdParam,
+  organizationId,
+}: {
+  role: unknown
+  normalizedRole: string
+  userBranchId: unknown
+  branchIdParam: string | null
+  organizationId: number | null
+}) {
+  const branchFromQuery = (role === "HEAD_OFFICE" || role === "SUPER_ADMIN") && Boolean(branchIdParam)
+  const branchId = branchFromQuery
+    ? validateNumericId(branchIdParam, "branchId")
+    : validateNumericId(String(userBranchId), "branchId")
+  if (!branchId) return NextResponse.json({ error: "Valid branch ID required" }, { status: 400 })
+
+  const fence = branchFromQuery ? await queriedBranchAccessError(role, branchId, organizationId) : null
+  if (fence) return fence
+
+  const currentMonth = new Date().toISOString().slice(0, 7)
+  const budget = await loadSingleBranchBudget(branchId, currentMonth)
+  if (!budget) return NextResponse.json({ error: "Branch not found" }, { status: 404 })
+
+  const allocated = budget.amountAllocatedCents ?? 0
+  const spent = budget.amountSpentCents ?? 0
+  const held = budget.amountHeldCents ?? 0
+  const credited = budget.amountCreditedCents ?? 0
+  const budgetPayload = {
+    branchId,
+    amountAllocatedCents: allocated,
+    amountSpentCents: spent,
+    amountHeldCents: held,
+    amountCreditedCents: credited,
+    remainingCents: (allocated + credited) - (spent + held),
+    baselineBudgetCents: budget.baselineBudgetCents || 0,
+    period: budget.period || currentMonth,
+    addons: await openAddonsForBudget(budget.id),
+  }
+  const hideBudgetPrices = normalizedRole === "ORDER_PORTAL"
+    ? false
+    : await shouldHidePricesForRole(normalizedRole, organizationId || budget.orgIdFromBranch || budget.organizationId)
+
+  return NextResponse.json(
+    hideBudgetPrices
+      ? redactAnalyticsPrices({ ...budgetPayload, pricesHidden: true })
+      : budgetPayload,
+  )
+}
+
 /**
  * GET /api/v1/budgets - Fetch budget information
  */
@@ -539,62 +591,130 @@ export async function GET(req: NextRequest) {
       })
     }
     // Single branch budget query - must be for current month period
-    const branchFromQuery = (role === "HEAD_OFFICE" || role === "SUPER_ADMIN") && Boolean(branchIdParam)
-    const branchId = branchFromQuery
-      ? validateNumericId(branchIdParam, "branchId")
-      : validateNumericId(String(userBranchId), "branchId")
-
-    if (!branchId) {
-      return NextResponse.json({ error: "Valid branch ID required" }, { status: 400 })
-    }
+    return handleSingleMoneyBudget({
+      role,
+      normalizedRole,
+      userBranchId,
+      branchIdParam,
+      organizationId: orgId,
+    })
 
     // An id from the query string is fenced to the caller's tenant before the
     // load, which opens the period row when it is missing — a refused read
     // must not write into another organization. The session's own branch
     // needs no fence: it is the caller's scope by construction.
-    const fence = branchFromQuery ? await queriedBranchAccessError(role, branchId, orgId) : null
-    if (fence) return fence
-
-    const currentMonth = new Date().toISOString().slice(0, 7) // YYYY-MM format
-    const b = await loadSingleBranchBudget(branchId, currentMonth)
-    if (!b) return NextResponse.json({ error: "Branch not found" }, { status: 404 })
-
-    const allocated = b.amountAllocatedCents ?? 0
-    const spent = b.amountSpentCents ?? 0
-    const held = b.amountHeldCents ?? 0
-    const credited = b.amountCreditedCents ?? 0
-
-    const remainingCents = (allocated + credited) - (spent + held)
-    const addons = await openAddonsForBudget(b.id)
-
-    const budgetPayload = {
-      branchId,
-      amountAllocatedCents: allocated,
-      amountSpentCents: spent,
-      amountHeldCents: held,
-      amountCreditedCents: credited,
-      remainingCents,
-      baselineBudgetCents: b.baselineBudgetCents || 0,
-      period: b.period || currentMonth,
-      addons,
-    }
-    // Product prices may be hidden for order portal users, but their own branch
-    // budget remains visible so the portal can show the available limit.
-    const hideBudgetPrices = normalizedRole === "ORDER_PORTAL"
-      ? false
-      : await shouldHidePricesForRole(normalizedRole, orgId || b.orgIdFromBranch || b.organizationId)
-
-    return NextResponse.json(
-      hideBudgetPrices
-        ? redactAnalyticsPrices({ ...budgetPayload, pricesHidden: true })
-        : budgetPayload
-    )
   } catch (e: any) {
-    logError(e, 'BUDGETS_GET')
     logError(e, 'BUDGETS_GET')
     const { status, ...errorBody } = handleError(e, 'BUDGETS_GET')
     return NextResponse.json(errorBody, { status })
   }
+}
+
+async function writeMoneyBudgetAllocation({
+  branch,
+  branchId,
+  period,
+  amountAllocatedCents,
+  resetAddons,
+  type,
+  reason,
+  creditsAddon,
+  validUntil,
+  now,
+  userId,
+}: {
+  branch: typeof branches.$inferSelect
+  branchId: number
+  period: string
+  amountAllocatedCents: number
+  resetAddons?: boolean
+  type: "addon" | "monthly"
+  reason?: string
+  creditsAddon: boolean
+  validUntil: Date | null
+  now: Date
+  userId: string
+}) {
+  return db.transaction(async (tx) => {
+    await tx.insert(budgets).values({
+      organizationId: branch.organizationId,
+      branchId,
+      period,
+      amountAllocatedCents: branch.baselineBudgetCents ?? 0,
+      amountSpentCents: 0,
+      amountHeldCents: 0,
+      amountCreditedCents: 0,
+    }).onConflictDoNothing()
+
+    const [existingRow] = await tx
+      .select({ id: budgets.id })
+      .from(budgets)
+      .where(and(eq(budgets.branchId, branchId), eq(budgets.period, period)))
+      .for('update')
+    if (!existingRow) throw new Error("BUDGET_ROW_MISSING")
+
+    await settleDueAddonsOnBudget(tx, existingRow.id, now, {
+      actorUserId: userId,
+      closeAll: type === "addon" && resetAddons === true,
+    })
+
+    const [lockedBudget] = await tx.select().from(budgets)
+      .where(eq(budgets.id, existingRow.id)).for('update')
+    if (!lockedBudget) throw new Error("BUDGET_ROW_MISSING")
+
+    const oldAmount = lockedBudget.amountAllocatedCents
+    const oldCredited = lockedBudget.amountCreditedCents
+    const newAllocated = type === "monthly" ? amountAllocatedCents : oldAmount
+    const newCredited = type === "addon"
+      ? (resetAddons ? 0 : oldCredited) + amountAllocatedCents
+      : oldCredited
+    const committed = lockedBudget.amountSpentCents + lockedBudget.amountHeldCents
+    if (newAllocated + newCredited < committed) {
+      throw new Error(`BUDGET_BELOW_COMMITTED:${newAllocated + newCredited}:${committed}`)
+    }
+
+    if (type === "monthly") {
+      await tx.update(branches)
+        .set({ baselineBudgetCents: newAllocated, updatedAt: new Date() })
+        .where(eq(branches.id, branchId))
+    }
+
+    const [updatedBudget] = await tx.update(budgets)
+      .set({ amountAllocatedCents: newAllocated, amountCreditedCents: newCredited, updatedAt: new Date() })
+      .where(eq(budgets.id, lockedBudget.id))
+      .returning()
+
+    let addonId: number | null = null
+    if (creditsAddon) {
+      const [addon] = await tx.insert(budgetAddons).values({
+        budgetId: updatedBudget.id,
+        amountCents: amountAllocatedCents,
+        reason: reason || "Monthly Add-on Credit",
+        createdByUserId: userId,
+        validUntil,
+      }).returning({ id: budgetAddons.id })
+      addonId = addon?.id ?? null
+    }
+
+    await tx.insert(auditLogs).values({
+      userId,
+      organizationId: branch.organizationId,
+      action: type === "monthly" ? "UPDATE_BRANCH_BASELINE" : "ADD_CREDIT",
+      entity: type === "monthly" ? "BRANCH" : "BUDGET",
+      entityId: String(branchId),
+      metadata: {
+        branchName: branch.name,
+        period,
+        oldAmount: oldAmount / 100,
+        newAmount: newAllocated / 100,
+        addedAmount: type === "addon" ? amountAllocatedCents / 100 : undefined,
+        addonId: addonId ?? undefined,
+        validUntil: validUntil?.toISOString(),
+      },
+    })
+
+    return { oldAmount, newAllocated, newCredited, addonId }
+  })
 }
 
 /**
@@ -671,98 +791,18 @@ export async function PUT(req: NextRequest) {
     }
 
     try {
-      const allocation = await db.transaction(async (tx) => {
-        await tx.insert(budgets).values({
-          organizationId: branch.organizationId,
-          branchId,
-          period,
-          amountAllocatedCents: branch.baselineBudgetCents ?? 0,
-          amountSpentCents: 0,
-          amountHeldCents: 0,
-          amountCreditedCents: 0,
-        }).onConflictDoNothing()
-
-        const [existingRow] = await tx
-          .select({ id: budgets.id })
-          .from(budgets)
-          .where(and(eq(budgets.branchId, branchId), eq(budgets.period, period)))
-          .for('update')
-        if (!existingRow) throw new Error("BUDGET_ROW_MISSING")
-
-        // Whatever has already expired comes off first, so a new add-on is
-        // never stacked on a stale figure; a reset closes every open add-on
-        // in the ledger before the credit is zeroed below.
-        await settleDueAddonsOnBudget(tx, existingRow.id, now, {
-          actorUserId: userId,
-          closeAll: type === "addon" && resetAddons === true,
-        })
-
-        const [lockedBudget] = await tx
-          .select()
-          .from(budgets)
-          .where(eq(budgets.id, existingRow.id))
-          .for('update')
-        if (!lockedBudget) throw new Error("BUDGET_ROW_MISSING")
-
-        const oldAmount = lockedBudget.amountAllocatedCents
-        const oldCredited = lockedBudget.amountCreditedCents
-        const newAllocated = type === "monthly" ? amountAllocatedCents : oldAmount
-        const newCredited = (() => {
-          if (type === "addon") {
-            return (resetAddons ? 0 : oldCredited) + amountAllocatedCents
-          }
-          return oldCredited
-        })()
-        const committed = lockedBudget.amountSpentCents + lockedBudget.amountHeldCents
-        if (newAllocated + newCredited < committed) {
-          throw new Error(`BUDGET_BELOW_COMMITTED:${newAllocated + newCredited}:${committed}`)
-        }
-
-        if (type === "monthly") {
-          await tx.update(branches)
-            .set({ baselineBudgetCents: newAllocated, updatedAt: new Date() })
-            .where(eq(branches.id, branchId))
-        }
-
-        const [updatedBudget] = await tx.update(budgets)
-          .set({
-            amountAllocatedCents: newAllocated,
-            amountCreditedCents: newCredited,
-            updatedAt: new Date(),
-          })
-          .where(eq(budgets.id, lockedBudget.id))
-          .returning()
-
-        let addonId: number | null = null
-        if (creditsAddon) {
-          const [addon] = await tx.insert(budgetAddons).values({
-            budgetId: updatedBudget.id,
-            amountCents: amountAllocatedCents,
-            reason: reason || "Monthly Add-on Credit",
-            createdByUserId: userId,
-            validUntil,
-          }).returning({ id: budgetAddons.id })
-          addonId = addon?.id ?? null
-        }
-
-        await tx.insert(auditLogs).values({
-          userId,
-          organizationId: branch.organizationId,
-          action: type === "monthly" ? "UPDATE_BRANCH_BASELINE" : "ADD_CREDIT",
-          entity: type === "monthly" ? "BRANCH" : "BUDGET",
-          entityId: String(branchId),
-          metadata: {
-            branchName: branch.name,
-            period,
-            oldAmount: oldAmount / 100,
-            newAmount: newAllocated / 100,
-            addedAmount: type === "addon" ? amountAllocatedCents / 100 : undefined,
-            addonId: addonId ?? undefined,
-            validUntil: validUntil?.toISOString(),
-          },
-        })
-
-        return { oldAmount, newAllocated, newCredited, addonId }
+      const allocation = await writeMoneyBudgetAllocation({
+        branch,
+        branchId,
+        period,
+        amountAllocatedCents,
+        resetAddons,
+        type,
+        reason,
+        creditsAddon,
+        validUntil,
+        now,
+        userId,
       })
 
       return NextResponse.json(type === "monthly" ? {
@@ -797,4 +837,3 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
   }
 }
-

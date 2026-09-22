@@ -278,10 +278,10 @@ export default function GroupsReportPage() {
         return ((summary.totalOrders - comparison.totalOrders) / comparison.totalOrders) * 100
     }, [summary.totalOrders, comparison?.totalOrders, compare])
 
-    const groups = reportData?.groups || []
     const filteredGroups = useMemo(() => {
+        const groups = reportData?.groups || []
         return groups.filter((g: any) => g.name?.toLowerCase().includes(reportSearch.toLowerCase()) || g.organizationName?.toLowerCase().includes(reportSearch.toLowerCase()))
-    }, [groups, reportSearch])
+    }, [reportData?.groups, reportSearch])
 
     const normalizedTrend = useMemo(() => {
         const trend = chartData?.trend || []

@@ -306,37 +306,10 @@ export async function PATCH(
     if (usernameUpdate.message) return error(usernameUpdate.message, 400)
     const nextUsername = usernameUpdate.nextUsername
 
-    const updateResponse = await (async () => {
-    const currentEmail = normalizeEmail(targetUser.email)
-    const nextEmail = input.email !== undefined ? normalizeEmail(input.email) : currentEmail
-    const nextPhone = input.phone !== undefined ? normalizeOptionalText(input.phone) : undefined
-    const nextEmployeeId = input.employeeId !== undefined ? normalizeOptionalText(input.employeeId) : undefined
-
-    if (!nextEmail) return error("Email is required", 400)
-
-    const uniqueFieldsToValidate = getUniqueProfileFields(input, nextEmail, nextPhone, nextEmployeeId)
-
-    await assertUniqueUserFields(uniqueFieldsToValidate, id)
+    const updateError = await updateUserProfile(id, input, targetUser, nextUsername)
+    if (updateError) return error(updateError, 400)
 
     // Determine if email actually changed (avoid unnecessary session invalidation)
-    const emailActuallyChanged = input.email !== undefined && nextEmail !== currentEmail
-    const usernameActuallyChanged = input.username !== undefined && nextUsername !== currentUsername
-
-    // Update full name if first or last name changed
-    const fullName = input.firstName !== undefined || input.lastName !== undefined
-      ? `${input.firstName ?? targetUser.firstName ?? ""} ${input.lastName ?? targetUser.lastName ?? ""}`.trim()
-      : undefined
-
-    // Update password if provided
-    const passwordHash = input.password ? await hashPassword(input.password) : undefined
-
-    // Only password changes should invalidate the current session.
-    const isSecurityChange = !!input.password
-    const sessionVersion = isSecurityChange ? targetUser.sessionVersion + 1 : undefined
-    if (isSecurityChange) {
-      console.log(`[API/Users] Password changed for user ${id}. Incrementing session version...`)
-    }
-
     // Execute update (includes sessionVersion bump if needed — single atomic write)
     await db.update(users).set({
       email: emailActuallyChanged ? nextEmail : undefined,

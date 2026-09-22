@@ -364,12 +364,12 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
           organizationId: organizationId || prev.organizationId,
           branchId: userRole === "BRANCH_ADMIN" ? (branchId || prev.branchId) : prev.branchId
         }))
-      } else if (userRole === "SUPER_ADMIN" && organizationId && !form.organizationId) {
+      } else if (userRole === "SUPER_ADMIN" && organizationId) {
         // Only pre-fill for Super Admin if it's currently empty
-        setForm(prev => ({
+        setForm(prev => prev.organizationId ? prev : {
           ...prev,
           organizationId: organizationId
-        }))
+        })
       }
     }
   }, [open, isInitialized, organizationId, branchId, userRole])

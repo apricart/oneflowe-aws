@@ -57,7 +57,7 @@ export function generateApprovalToken(length: number = DEFAULT_TOKEN_LENGTH): st
         return token
     } catch (error) {
         console.error('[ApprovalToken] Error generating token:', error)
-        throw new Error('Failed to generate secure approval token')
+        throw new Error('Failed to generate secure approval token', { cause: error })
     }
 }
 

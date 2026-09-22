@@ -1,5 +1,6 @@
 "use client"
 import { useState,useMemo } from "react"
+import Image from "next/image"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -68,7 +69,7 @@ export default function BranchAdminInventory({
 
   // Fetch categories
   const { data: categoriesData } = useSWR<{ items: { id: number; name: string }[] }>("/api/v1/categories", fetcher)
-  const categories = categoriesData?.items || []
+  const categories = useMemo(() => categoriesData?.items || [], [categoriesData?.items])
 
   // Fetch branch products with visibility data
   const { data, error, isLoading, mutate } = useSWR<{
@@ -80,7 +81,7 @@ export default function BranchAdminInventory({
     { revalidateOnFocus: false }
   )
 
-  const products = data?.items || []
+  const products = useMemo(() => data?.items || [], [data?.items])
   const pricesHidden = Boolean(data?.pricesHidden)
 
   // Filter products
@@ -315,9 +316,12 @@ export default function BranchAdminInventory({
                         <div className="flex items-center gap-4">
                           <div className="relative group-hover:scale-110 transition-transform duration-300">
                             {product.productImageUrl ? (
-                              <img
+                              <Image
                                 src={product.productImageUrl}
                                 alt={product.productName}
+                                width={56}
+                                height={56}
+                                unoptimized
                                 className="w-14 h-14 object-cover rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm"
                               />
                             ) : (

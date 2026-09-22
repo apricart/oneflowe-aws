@@ -13,6 +13,7 @@ import { useToast } from "@/hooks/use-toast"
 import { cn,formatPKR } from "@/lib/utils"
 import { AlertTriangle,CheckCircle,Edit,Loader,Package,Plus,RefreshCw,Search,Trash2,XCircle } from "lucide-react"
 import { useRouter } from "next/navigation"
+import Image from "next/image"
 import { useEffect,useMemo,useState } from "react"
 import useSWR from "swr"
 
@@ -107,7 +108,7 @@ export default function GlobalInventoryView() {
         { fallbackData: { items: [] }, revalidateOnFocus: false, dedupingInterval: 60000 }
     )
 
-    const paginatedProducts = data?.items ?? []
+    const paginatedProducts = useMemo(() => data?.items ?? [], [data?.items])
     const summary = data?.summary || { totalProducts: 0, activeProducts: 0, inactiveProducts: 0 }
     const visibleProductIds = useMemo(
         () => paginatedProducts.map((product) => product.id).filter((id) => Number.isInteger(id) && id > 0),
@@ -371,9 +372,12 @@ export default function GlobalInventoryView() {
                                             <TableCell className="max-w-[280px]">
                                                 <div className="flex min-w-0 items-center gap-3">
                                                     {imageMap.get(product.id) ? (
-                                                        <img
-                                                            src={imageMap.get(product.id)}
+                                                        <Image
+                                                            src={imageMap.get(product.id) || ""}
                                                             alt={product.name}
+                                                            width={48}
+                                                            height={48}
+                                                            unoptimized
                                                             className="h-12 w-12 shrink-0 rounded-lg border object-cover"
                                                         />
                                                     ) : (

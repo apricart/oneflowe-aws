@@ -160,6 +160,26 @@ async function resolveNextScope({
   }
 }
 
+async function applyResolvedScope(
+  tx: any,
+  scopeResolution: Awaited<ReturnType<typeof resolveNextScope>>,
+  targetUserId: string,
+  actorUserId: string,
+) {
+  if ("message" in scopeResolution || scopeResolution.action === "none") return
+  if (scopeResolution.action === "clear") {
+    await clearMultiBranchScope(tx, targetUserId)
+    return
+  }
+  await replaceMultiBranchScope(tx, {
+    userId: targetUserId,
+    organizationId: scopeResolution.organizationId,
+    groupIds: scopeResolution.groupIds,
+    branchIds: scopeResolution.branchIds,
+    createdByUserId: actorUserId,
+  })
+}
+
 /**
  * Administrative access changes are intentionally isolated from profile edits.
  * This route is the only HTTP operation allowed to change a user's role,
@@ -272,17 +292,7 @@ export async function PATCH(
         budgetAllocationEnabled: users.budgetAllocationEnabled,
       })
 
-    if (scopeResolution.action === "clear") {
-      await clearMultiBranchScope(tx, targetUserId)
-    } else if (scopeResolution.action === "replace") {
-      await replaceMultiBranchScope(tx, {
-        userId: targetUserId,
-        organizationId: scopeResolution.organizationId,
-        groupIds: scopeResolution.groupIds,
-        branchIds: scopeResolution.branchIds,
-        createdByUserId: scope.userId,
-      })
-    }
+    await applyResolvedScope(tx, scopeResolution, targetUserId, scope.userId)
 
     await tx.delete(sessions).where(eq(sessions.userId, targetUserId))
     await tx.insert(systemLogs).values({

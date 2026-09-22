@@ -7,6 +7,40 @@ import { and, eq, inArray, isNull, or, sql } from "drizzle-orm"
 import { ORDER_CREATOR_ROLES } from "@/lib/group-order-visibility"
 import { resolveUsersScopedToBranches } from "@/lib/server/multi-branch-scope"
 
+function parsePositiveIds(value: string | null): number[] {
+    return value?.split(",").map(Number).filter((id) => !Number.isNaN(id) && id > 0) ?? []
+}
+
+async function resolveRequestedBranchIds({
+    branchIdsParam,
+    groupIdsParam,
+    organizationIds,
+    userRole,
+    userBranchId,
+}: {
+    branchIdsParam: string | null
+    groupIdsParam: string | null
+    organizationIds: number[]
+    userRole: string
+    userBranchId: number
+}): Promise<number[]> {
+    const requestedBranchIds = parsePositiveIds(branchIdsParam)
+    if (requestedBranchIds.length > 0) return requestedBranchIds
+
+    const groupIds = parsePositiveIds(groupIdsParam)
+    if (groupIds.length > 0) {
+        const rows = await db.select({ id: branches.id }).from(branches).where(inArray(branches.groupId, groupIds))
+        return rows.map((branch) => branch.id)
+    }
+
+    const isBranchRole = userRole === "BRANCH_ADMIN" || userRole === "BRANCH_MANAGER"
+    if (isBranchRole) return [userBranchId]
+    if (organizationIds.length === 0) return []
+
+    const rows = await db.select({ id: branches.id }).from(branches).where(inArray(branches.organizationId, organizationIds))
+    return rows.map((branch) => branch.id)
+}
+
 export async function GET(req: NextRequest) {
     try {
         const session = await getServerSession(authOptions)
@@ -21,31 +55,17 @@ export async function GET(req: NextRequest) {
         const groupIdsParam = url.searchParams.get("groupIds")
         const branchIdsParam = url.searchParams.get("branchIds")
 
-        let organizationIds: number[] = []
-        if (organizationIdsParam) {
-            organizationIds = organizationIdsParam.split(",").map(Number).filter(id => !Number.isNaN(id) && id > 0)
-        } else if (userOrgId) {
-            organizationIds = [userOrgId]
-        }
-
-        let branchIds: number[] = []
-        if (branchIdsParam) {
-            branchIds = branchIdsParam.split(",").map(Number).filter(id => !Number.isNaN(id) && id > 0)
-        } else if (groupIdsParam) {
-            const gIds = groupIdsParam.split(",").map(Number).filter(id => !Number.isNaN(id) && id > 0)
-            if (gIds.length > 0) {
-                const b = await db.select({ id: branches.id }).from(branches).where(inArray(branches.groupId, gIds))
-                branchIds = b.map(br => br.id)
-            }
-        } 
-        
-        // If still no branchIds but we have org, and we are NOT branch admin, resolve all branches in org
-        if (branchIds.length === 0 && organizationIds.length > 0 && userRole !== "BRANCH_ADMIN" && userRole !== "BRANCH_MANAGER") {
-             const b = await db.select({ id: branches.id }).from(branches).where(inArray(branches.organizationId, organizationIds))
-             branchIds = b.map(br => br.id)
-        } else if (branchIds.length === 0 && (userRole === "BRANCH_ADMIN" || userRole === "BRANCH_MANAGER")) {
-             branchIds = [userBranchId]
-        }
+        const requestedOrganizationIds = parsePositiveIds(organizationIdsParam)
+        const organizationIds = requestedOrganizationIds.length > 0
+            ? requestedOrganizationIds
+            : userOrgId ? [userOrgId] : []
+        const branchIds = await resolveRequestedBranchIds({
+            branchIdsParam,
+            groupIdsParam,
+            organizationIds,
+            userRole,
+            userBranchId,
+        })
 
         const conditions: any[] = [isNull(users.deletedAt)]
         

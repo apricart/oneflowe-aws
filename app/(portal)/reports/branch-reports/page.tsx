@@ -286,8 +286,8 @@ export default function BranchReportsPage() {
         return ((summary.totalOrders - comparison.totalOrders) / comparison.totalOrders) * 100
     }, [summary.totalOrders, comparison?.totalOrders, compare])
 
-    const branches = reportData?.items || []
     const filteredBranches = useMemo(() => {
+        const branches = reportData?.items || []
         let list = branches.filter((b: any) => b.name?.toLowerCase().includes(reportSearch.toLowerCase()) || b.groupName?.toLowerCase().includes(reportSearch.toLowerCase()))
         
         // Security Fallback: Client-side filtering to ensure only authorized branch is shown
@@ -296,7 +296,7 @@ export default function BranchReportsPage() {
         }
         
         return list
-    }, [branches, reportSearch, role, userBranchId])
+    }, [reportData?.items, reportSearch, role, userBranchId])
 
     const normalizedTrend = useMemo(() => {
         const trend = chartData?.trend || []

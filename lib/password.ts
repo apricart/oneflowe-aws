@@ -131,7 +131,7 @@ export async function hashPassword(plain: string): Promise<string> {
     return hash
   } catch (error) {
     console.error('[Password] Hashing error:', error)
-    throw new Error(error instanceof Error ? error.message : 'Failed to hash password')
+    throw new Error(error instanceof Error ? error.message : 'Failed to hash password', { cause: error })
   }
 }
 
@@ -210,7 +210,7 @@ export function generateRandomPassword(length: number = 16): string {
     return arr.join('')
   } catch (error) {
     console.error('[Password] Error generating random password:', error)
-    throw new Error('Failed to generate random password')
+    throw new Error('Failed to generate random password', { cause: error })
   }
 }
 

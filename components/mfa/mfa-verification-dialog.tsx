@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useEffect, useRef } from "react"
+import React, { useCallback, useEffect, useRef, useState } from "react"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { OTPInput } from "./otp-input"
@@ -65,15 +65,6 @@ export function MFAVerificationDialog({
     }
   }, [timeLeft])
 
-  // Send OTP on dialog open (only once)
-  useEffect(() => {
-    if (open && !hasSentOTP.current) {
-      console.log("MFA Dialog: Sending OTP for", username)
-      hasSentOTP.current = true
-      sendOTP({ initial: true })
-    }
-  }, [open, username])
-
   // Reset flags when dialog closes
   useEffect(() => {
     if (!open) {
@@ -84,8 +75,8 @@ export function MFAVerificationDialog({
     }
   }, [open])
 
-  const sendOTP = async ({ initial = false }: { initial?: boolean } = {}) => {
-    if (isSending || isSendingRef.current) {
+  const sendOTP = useCallback(async ({ initial = false }: { initial?: boolean } = {}) => {
+    if (isSendingRef.current) {
       console.log("MFA Dialog: Already sending OTP, skipping")
       return // Prevent multiple simultaneous sends
     }
@@ -132,7 +123,16 @@ export function MFAVerificationDialog({
       setIsSending(false)
       setIsInitialSend(false)
     }
-  }
+  }, [toast, type, username])
+
+  // Send OTP on dialog open (only once)
+  useEffect(() => {
+    if (open && !hasSentOTP.current) {
+      console.log("MFA Dialog: Sending OTP for", username)
+      hasSentOTP.current = true
+      void sendOTP({ initial: true })
+    }
+  }, [open, sendOTP, username])
 
   const verifyLoginOtp = async (otpCode: string) => {
     const providerId = isEmployee ? "employee-mfa-credentials" : "mfa-credentials"

@@ -64,8 +64,8 @@ export default function BranchesPage() {
   const [viewMode, setViewMode] = useState<"grid" | "table">("grid")
   const [viewingBranch, setViewingBranch] = useState<Branch | null>(null)
 
-  const branches = (branchesRes?.items as Branch[] | undefined) || []
-  const users = (usersRes?.items as User[] | undefined) || []
+  const branches = useMemo(() => (branchesRes?.items as Branch[] | undefined) || [], [branchesRes?.items])
+  const users = useMemo(() => (usersRes?.items as User[] | undefined) || [], [usersRes?.items])
 
   const branchAdmins = useMemo(() => users.filter((u) => u.role === "BRANCH_ADMIN" && u.branchId), [users])
   const adminByBranch = useMemo(
@@ -103,10 +103,10 @@ export default function BranchesPage() {
 
   // Keep viewingBranch in sync when branches data refreshes
   useEffect(() => {
-    if (viewingBranch) {
-      const updated = branches.find((b) => b.id === viewingBranch.id)
-      if (updated) setViewingBranch(updated)
-    }
+    setViewingBranch((current) => {
+      if (!current) return current
+      return branches.find((branch) => branch.id === current.id) ?? current
+    })
   }, [branches])
 
   const paginatedBranches = useMemo(() => {

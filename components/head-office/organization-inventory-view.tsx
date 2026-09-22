@@ -8,6 +8,7 @@ import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from "@/comp
 import { useDebounce } from "@/hooks/use-debounce"
 import { cn,formatPKR } from "@/lib/utils"
 import { Building2,CheckCircle,ChevronLeft,ChevronRight,Package,Search,XCircle } from "lucide-react"
+import Image from "next/image"
 import { useEffect,useMemo,useState } from "react"
 import useSWR from "swr"
 
@@ -61,7 +62,7 @@ export default function HeadOfficeInventoryView() {
         keepPreviousData: true,
     })
 
-    const allProducts = data?.items ?? []
+    const allProducts = useMemo(() => data?.items ?? [], [data?.items])
     const totalAssigned = allProducts.length
 
     // Fetch categories and subcategories for filter dropdowns
@@ -270,9 +271,12 @@ export default function HeadOfficeInventoryView() {
                                             <TableCell className="pl-6 py-4">
                                                 <div className="flex items-center gap-3">
                                                     {item.customImageUrl || item.productImageUrl ? (
-                                                        <img
-                                                            src={item.customImageUrl || item.productImageUrl}
+                                                        <Image
+                                                            src={item.customImageUrl || item.productImageUrl || ""}
                                                             alt={item.productName}
+                                                            width={48}
+                                                            height={48}
+                                                            unoptimized
                                                             className="h-12 w-12 rounded-xl border border-slate-200 dark:border-slate-700 object-cover shadow-sm group-hover:scale-105 transition-transform"
                                                         />
                                                     ) : (
