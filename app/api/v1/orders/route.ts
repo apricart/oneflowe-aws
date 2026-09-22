@@ -13,6 +13,8 @@ import { shouldHidePricesForRole } from "@/lib/price-visibility"
 import { parseEndDateParam,parseStartDateParam } from "@/lib/date-range-params"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
 import { settleDueAddonsOnBudget,settleDueBudgetAddons } from "@/lib/server/budget-addon-expiry"
+import { assertBranchMayOrder } from "@/lib/server/payment-control"
+import { isPaymentControlBlockedError } from "@/lib/payment-control-policy"
 import { orderSelectColumns } from "@/lib/order-select"
 import { calculateLineCents,formatQuantity,roundQuantity,validateProductQuantity } from "@/lib/quantity"
 import { resolveTaxRateBp,splitInclusiveCents } from "@/lib/tax"
@@ -532,6 +534,10 @@ async function persistCreatedOrder(tx: any, context: any) {
 }
 
 async function processOrderCreationTransaction(tx: any, context: any) {
+  // The payment-control gate runs first: the branch is authoritative by now
+  // and nothing has been locked or written, so a blocked branch costs one
+  // read and holds no row.
+  await assertBranchMayOrder(tx, { organizationId: context.organizationId, branchId: context.branchId })
   const money = await lockCreationMoneyBudget(tx, context)
   const quantityBudgets = await lockCreationQuantityBudgets(tx, context)
   const lockedInventory = await lockCreationInventory(tx, context)
@@ -726,6 +732,12 @@ async function getOrderCreationErrorResponse(caughtError: any, replayContext: an
       )).limit(1)
     const replayResponse = getOrderReplayResponse(existingOrder, replayContext.requestFingerprint, replayContext.pricesHidden)
     if (replayResponse) return replayResponse
+  }
+  if (isPaymentControlBlockedError(caughtError)) {
+    return NextResponse.json(
+      { error: caughtError.message, code: caughtError.code, paymentControl: caughtError.details },
+      { status: 409 },
+    )
   }
   const message = String(caughtError.message || "")
   const normalized = message.toLowerCase()

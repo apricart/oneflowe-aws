@@ -755,6 +755,20 @@ export const supportThreadUpdateSchema = z.object({
   "Nothing to update",
 )
 
+/**
+ * A Head Office exception to the overdue-payment block. The window is the
+ * policy's (one month from now), never the client's: a body that names a
+ * start, an expiry, an organization or an actor is refused whole.
+ */
+export const paymentControlExceptionGrantSchema = z.object({
+  branchId: positiveId,
+  reason: z.string().trim().max(1_000).optional(),
+}).strict()
+
+export const paymentControlExceptionRevokeSchema = z.object({
+  reason: z.string().trim().max(1_000).optional(),
+}).strict()
+
 export function validationMessage(error: z.ZodError): string {
   const unknownKeys = error.issues
     .filter((issue) => issue.code === "unrecognized_keys")

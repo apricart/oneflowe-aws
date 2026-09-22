@@ -391,6 +391,44 @@ export const budgetAddons = pgTable(
   ],
 )
 
+/**
+ * A Head Office exception that lets a branch keep ordering while it is over
+ * the overdue-payment limit (plans/OF-PAYMENT-CONTROL-overdue-ordering-block.md).
+ *
+ * This is the only fact the payment-control feature persists. Whether the
+ * exception is in force is never stored: it is `revoked_at IS NULL AND
+ * start_at <= now < expires_at`, computed on every read and inside the order
+ * transaction, so an expiry takes effect at the instant without a job.
+ * expires_at is NOT NULL because an exception is never permanent. A branch
+ * has at most one live exception at a time; a later grant is a new row, and
+ * the old one stays as history.
+ */
+export const paymentControlExceptions = pgTable(
+  "payment_control_exceptions",
+  {
+    id: serial("id").primaryKey(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id)
+      .notNull(),
+    branchId: integer("branch_id")
+      .references(() => branches.id)
+      .notNull(),
+    grantedByUserId: uuid("granted_by_user_id").references(() => users.id).notNull(),
+    reason: text("reason"),
+    startAt: timestamp("start_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    revokedByUserId: uuid("revoked_by_user_id").references(() => users.id),
+    revokeReason: text("revoke_reason"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    index("payment_control_exceptions_org_idx").on(t.organizationId),
+    index("payment_control_exceptions_live_branch_idx").on(t.branchId, t.expiresAt).where(sql`${t.revokedAt} IS NULL`),
+    check("payment_control_exceptions_window_ck", sql`${t.expiresAt} > ${t.startAt}`),
+  ],
+)
+
 export const organizationSettings = pgTable(
   "organization_settings",
   {
