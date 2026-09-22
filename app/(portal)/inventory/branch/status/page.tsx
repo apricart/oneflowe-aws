@@ -12,6 +12,7 @@ import { formatPKR } from "@/lib/utils"
 import { Search,Package,Loader2,ToggleLeft } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { useAppContext } from "@/components/context/app-context"
+import Image from "next/image"
 
 import { fetcher,apiFetch } from "@/lib/fetcher"
 
@@ -54,7 +55,7 @@ export default function ProductStatusPage() {
         { fallbackData: { items: [] } }
     )
 
-    const orgProducts = productsData?.items ?? []
+    const orgProducts = useMemo(() => productsData?.items ?? [], [productsData?.items])
 
     // Search filtering
     const filteredProducts = useMemo(() => {
@@ -253,9 +254,12 @@ export default function ProductStatusPage() {
                                                 <TableCell>
                                                     <div className="flex items-center gap-3">
                                                         {product.productImageUrl ? (
-                                                            <img
+                                                            <Image
                                                                 src={product.productImageUrl}
                                                                 alt={product.productName}
+                                                                width={40}
+                                                                height={40}
+                                                                unoptimized
                                                                 className="h-10 w-10 rounded-lg border object-cover"
                                                             />
                                                         ) : (

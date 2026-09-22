@@ -1567,7 +1567,7 @@ function EditOrgDialog({
     return () => {
       cancelled = true
     }
-  }, [open, isSuperAdmin, org.id])
+  }, [open, isSuperAdmin, org.id, org.budgetAllocationMode])
 
   useEffect(() => {
     if (!open || !isSuperAdmin) return

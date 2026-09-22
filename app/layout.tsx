@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import Script from 'next/script'
 import { GeistSans } from 'geist/font/sans'
 import { GeistMono } from 'geist/font/mono'
 
@@ -31,7 +32,7 @@ export default function RootLayout({
         <link rel="shortcut icon" href="/logo-web.png" type="image/png" />
         <link rel="apple-touch-icon" href="/logo-web.png" />
         <meta name="theme-color" content="#1e3a8a" />
-        <script src="/theme-init.js" />
+        <Script src="/theme-init.js" strategy="beforeInteractive" />
       </head>
       <body className={`font-sans ${GeistSans.variable} ${GeistMono.variable} selection:bg-indigo-100 selection:text-indigo-900`} suppressHydrationWarning>
         <ThemeProvider>

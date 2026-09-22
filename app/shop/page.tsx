@@ -1,6 +1,7 @@
 "use client"
 import React,{ useMemo,useState } from "react"
 import Link from "next/link"
+import Image from "next/image"
 import { formatPKR,cn } from "@/lib/utils"
 import { calculateLineCents,formatQuantity,parseQuantity,roundQuantity,sanitizeQuantityStep } from "@/lib/quantity"
 import useSWR from "swr"
@@ -441,10 +442,11 @@ export default function OrderPortalPage() {
   )
   const pricesHidden = Boolean(inventoryData?.pricesHidden || ordersData?.pricesHidden || orderDetailsData?.pricesHidden)
   const budgetVisible = Boolean(budget && !budget.pricesHidden)
+  const selectedOrderId = selectedOrder?.id
 
   React.useEffect(() => {
     const freshOrder = orderDetailsData?.items?.[0]
-    if (!freshOrder || !selectedOrder || freshOrder.id !== selectedOrder.id) return
+    if (!freshOrder || !selectedOrderId || freshOrder.id !== selectedOrderId) return
 
     setSelectedOrder((current) => (
       current?.id === freshOrder.id
@@ -464,7 +466,7 @@ export default function OrderPortalPage() {
         )),
       }
     }, { revalidate: false })
-  }, [orderDetailsData, selectedOrder?.id, mutateOrders])
+  }, [orderDetailsData, selectedOrderId, mutateOrders])
 
   // Fetch names for header context
   const { data: orgsData } = useOrganizations()
@@ -1813,9 +1815,12 @@ export default function OrderPortalPage() {
                           className="relative h-48 w-full overflow-hidden text-left group-hover:bg-gradient-to-tl transition-all bg-gradient-to-br from-slate-100 to-slate-200 dark:from-slate-800 dark:to-slate-700"
                         >
                           {product.imageUrl ? (
-                            <img
+                            <Image
                               src={product.imageUrl}
                               alt={product.name}
+                              width={480}
+                              height={480}
+                              unoptimized
                               className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
                             />
                           ) : (
@@ -2133,9 +2138,12 @@ export default function OrderPortalPage() {
               {/* Product Image */}
               <div className="h-64 bg-gradient-to-br from-slate-200 to-slate-300 dark:from-slate-700 dark:to-slate-800 rounded-lg overflow-hidden">
                 {selectedProduct.imageUrl ? (
-                  <img
+                  <Image
                     src={selectedProduct.imageUrl}
                     alt={selectedProduct.name}
+                    width={640}
+                    height={640}
+                    unoptimized
                     className="w-full h-full object-cover"
                   />
                 ) : (

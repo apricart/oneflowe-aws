@@ -34,15 +34,18 @@ async function postJson(url: string, body: unknown) {
   return payload as PaymentControlView
 }
 
-/**
- * The Head Office view of one branch: its state, its timeline, the exception
- * on file, and — for a caller the server says may manage exceptions — the
- * grant and revoke actions, each behind a confirmation that spells out what
- * it does and for how long. The buttons are convenience; the server enforces.
- */
-export function PaymentControlPanel({ branchId, onChanged }: { branchId: number; onChanged?: () => void }) {
+function useExceptionDialog({
+  branchId,
+  view,
+  mutate,
+  onChanged,
+}: {
+  branchId: number
+  view: PaymentControlView | undefined
+  mutate: ReturnType<typeof usePaymentControl>["mutate"]
+  onChanged?: () => void
+}) {
   const { toast } = useToast()
-  const { data: view, error, isLoading, mutate } = usePaymentControl(branchId)
   const [dialog, setDialog] = useState<"grant" | "revoke" | null>(null)
   const [reason, setReason] = useState("")
   const [submitting, setSubmitting] = useState(false)
@@ -83,6 +86,89 @@ export function PaymentControlPanel({ branchId, onChanged }: { branchId: number;
     }
   }
 
+  return { close, dialog, reason, setDialog, setReason, submit, submitting }
+}
+
+function PaymentControlHeader({ view, openDialog }: {
+  view: PaymentControlView
+  openDialog: (dialog: "grant" | "revoke") => void
+}) {
+  const state = STATE_LABELS[view.state]
+  const canGrant = view.canManageExceptions && !view.exceptionActive
+  const canRevoke = view.canManageExceptions && view.exceptionActive && view.exception !== null
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge className={state.className}>{state.label}</Badge>
+        {view.configured && (
+          <span className="text-sm text-muted-foreground">
+            {view.overdueCount} of {view.threshold} overdue{view.limitReached ? " · limit reached" : ""}
+          </span>
+        )}
+        <Badge variant="outline" className={view.orderingAllowed ? "text-emerald-700 dark:text-emerald-300" : "text-rose-700 dark:text-rose-300"}>
+          {view.orderingAllowed ? "Ordering allowed" : "Ordering stopped"}
+        </Badge>
+        {view.exceptionActive && <Badge variant="outline" className="text-indigo-700 dark:text-indigo-300">Exception active</Badge>}
+      </div>
+      {view.canManageExceptions && (
+        <div className="flex gap-2">
+          {canGrant && (
+            <Button type="button" size="sm" variant="outline" className="gap-1" onClick={() => openDialog("grant")}>
+              <ShieldCheck className="h-4 w-4" /> Grant exception
+            </Button>
+          )}
+          {canRevoke && (
+            <Button type="button" size="sm" variant="outline" className="gap-1 text-rose-600" onClick={() => openDialog("revoke")}>
+              <ShieldOff className="h-4 w-4" /> Revoke exception
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function PaymentControlException({ exception }: { exception: NonNullable<PaymentControlView["exception"]> }) {
+  const statusLabel = exception.active
+    ? "Head Office exception in force"
+    : exception.revokedAt ? "Exception revoked" : "Exception expired"
+  return (
+    <div className="rounded-xl border p-3 text-sm dark:border-slate-700" data-testid="payment-control-exception">
+      <div className="flex items-start gap-2">
+        {exception.active ? <ShieldCheck className="mt-0.5 h-4 w-4 text-indigo-600" /> : <ShieldAlert className="mt-0.5 h-4 w-4 text-slate-500" />}
+        <div className="space-y-1">
+          <p className="font-medium">{statusLabel}</p>
+          <p className="text-xs text-muted-foreground">
+            From {formatDateTime(exception.startAt)} to {formatDateTime(exception.expiresAt)}
+            {exception.grantedBy ? ` · granted by ${exception.grantedBy.name || "Head Office"}` : ""}
+          </p>
+          {exception.reason && <p className="text-xs text-muted-foreground">Reason: {exception.reason}</p>}
+          {exception.revokedAt && (
+            <p className="text-xs text-muted-foreground">
+              Revoked {formatDateTime(exception.revokedAt)}{exception.revokeReason ? ` · ${exception.revokeReason}` : ""}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The Head Office view of one branch: its state, its timeline, the exception
+ * on file, and — for a caller the server says may manage exceptions — the
+ * grant and revoke actions, each behind a confirmation that spells out what
+ * it does and for how long. The buttons are convenience; the server enforces.
+ */
+export function PaymentControlPanel({ branchId, onChanged }: { branchId: number; onChanged?: () => void }) {
+  const { data: view, error, isLoading, mutate } = usePaymentControl(branchId)
+  const { close, dialog, reason, setDialog, setReason, submit, submitting } = useExceptionDialog({
+    branchId,
+    view,
+    mutate,
+    onChanged,
+  })
+
   if (isLoading && !view) {
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground" data-testid="payment-control-panel-loading">
@@ -98,41 +184,16 @@ export function PaymentControlPanel({ branchId, onChanged }: { branchId: number;
     )
   }
 
-  const state = STATE_LABELS[view.state]
   const exception = view.exception
-  const canGrant = view.canManageExceptions && !view.exceptionActive
-  const canRevoke = view.canManageExceptions && view.exceptionActive && exception !== null
 
   return (
     <div className="space-y-4" data-testid="payment-control-panel" data-state={view.state}>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge className={state.className}>{state.label}</Badge>
-          {view.configured && (
+      <PaymentControlHeader view={view} openDialog={setDialog} />
+          {/* Summary moved to PaymentControlHeader.
             <span className="text-sm text-muted-foreground">
               {view.overdueCount} of {view.threshold} overdue{view.limitReached ? " · limit reached" : ""}
             </span>
-          )}
-          <Badge variant="outline" className={view.orderingAllowed ? "text-emerald-700 dark:text-emerald-300" : "text-rose-700 dark:text-rose-300"}>
-            {view.orderingAllowed ? "Ordering allowed" : "Ordering stopped"}
-          </Badge>
-          {view.exceptionActive && <Badge variant="outline" className="text-indigo-700 dark:text-indigo-300">Exception active</Badge>}
-        </div>
-        {view.canManageExceptions && (
-          <div className="flex gap-2">
-            {canGrant && (
-              <Button type="button" size="sm" variant="outline" className="gap-1" onClick={() => setDialog("grant")}>
-                <ShieldCheck className="h-4 w-4" /> Grant exception
-              </Button>
-            )}
-            {canRevoke && (
-              <Button type="button" size="sm" variant="outline" className="gap-1 text-rose-600" onClick={() => setDialog("revoke")}>
-                <ShieldOff className="h-4 w-4" /> Revoke exception
-              </Button>
-            )}
-          </div>
-        )}
-      </div>
+          */}
 
       {!view.configured && (
         <p className="rounded-xl border border-dashed p-3 text-sm text-muted-foreground" data-testid="payment-control-not-configured">
@@ -142,7 +203,8 @@ export function PaymentControlPanel({ branchId, onChanged }: { branchId: number;
         </p>
       )}
 
-      {exception && (
+      {exception && <PaymentControlException exception={exception} />}
+      {/* Exception details moved to PaymentControlException.
         <div className="rounded-xl border p-3 text-sm dark:border-slate-700" data-testid="payment-control-exception">
           <div className="flex items-start gap-2">
             {exception.active ? <ShieldCheck className="mt-0.5 h-4 w-4 text-indigo-600" /> : <ShieldAlert className="mt-0.5 h-4 w-4 text-slate-500" />}
@@ -163,7 +225,7 @@ export function PaymentControlPanel({ branchId, onChanged }: { branchId: number;
             </div>
           </div>
         </div>
-      )}
+      */}
 
       {view.timeline.length > 0 && <PaymentControlTimeline steps={view.timeline} />}
 

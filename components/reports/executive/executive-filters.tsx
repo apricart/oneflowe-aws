@@ -152,7 +152,7 @@ export function ExecutiveFilters({ role, value, onChange, availableUnits, unitCo
         meaningless. Litres and packs cannot be added, so rather than printing a
         nonsense total the Center asks which unit the reader means.
       */}
-      {availableUnits.length > 1 ? (
+      {/* {availableUnits.length > 1 ? (
         <div
           className={cn(
             "flex items-center gap-1 rounded-lg border px-2 py-1.5",
@@ -177,7 +177,7 @@ export function ExecutiveFilters({ role, value, onChange, availableUnits, unitCo
             ))}
           </select>
         </div>
-      ) : null}
+      ) : null} */}
 
       {hasFilters ? (
         <button

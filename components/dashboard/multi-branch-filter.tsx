@@ -47,7 +47,7 @@ export function MultiBranchFilter({ organizationId, selectedBranchIds, onChange 
         revalidateOnFocus: false,
     })
 
-    const branches = data?.items || []
+    const branches = useMemo(() => data?.items || [], [data?.items])
 
     // Filter branches based on search query
     const filteredBranches = useMemo(() => {

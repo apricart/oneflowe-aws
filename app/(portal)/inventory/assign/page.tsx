@@ -118,18 +118,18 @@ export default function AssignProductPage() {
         { fallbackData: { items: [] } }
     )
 
-    const allProducts = productsData?.items ?? []
-    const assignedProducts = assignmentsData?.items ?? []
+    const allProducts = useMemo(() => productsData?.items ?? [], [productsData?.items])
+    const assignedProducts = useMemo(() => assignmentsData?.items ?? [], [assignmentsData?.items])
     // The endpoint reports the full count even when it has paged the items,
     // so the stat card reads it rather than the length of what came back.
     const assignedTotal = assignmentsData?.total ?? assignedProducts.length
-    const assignedProductIds = new Set(assignedProducts.map(a => a.globalProductId))
     const hasActiveSearchOrFilters = Boolean(searchQuery.trim()) || categoryFilter !== "all" || subCategoryFilter !== "all"
 
     // Filter products: Not assigned = products not in assignedProductIds
     const notAssignedProducts = useMemo(() => {
+        const assignedProductIds = new Set(assignedProducts.map(a => a.globalProductId))
         return allProducts.filter(p => !assignedProductIds.has(p.id))
-    }, [allProducts, assignedProductIds])
+    }, [allProducts, assignedProducts])
 
     const filteredNotAssigned = notAssignedProducts
     const filteredAssigned = assignedProducts

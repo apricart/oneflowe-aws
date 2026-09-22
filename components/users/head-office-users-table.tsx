@@ -547,11 +547,11 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
 
   const totalPages = Math.max(1, Math.ceil(filteredUsers.length / PAGE_SIZE))
 
-  useMemo(() => {
+  useEffect(() => {
     setPage(1)
   }, [searchQuery, roleFilter])
 
-  useMemo(() => {
+  useEffect(() => {
     if (page > totalPages) {
       setPage(totalPages)
     }

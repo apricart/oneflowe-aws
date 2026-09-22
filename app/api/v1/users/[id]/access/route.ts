@@ -8,6 +8,7 @@ import { db } from "@/lib/db"
 import { invalidateSessionValidationCache } from "@/lib/session-validation-cache"
 import {
   systemRoleSchema,
+  type SystemRole,
   userAccessUpdateSchema,
   validationMessage,
 } from "@/lib/server/mutation-validation"
@@ -160,6 +161,45 @@ async function resolveNextScope({
   }
 }
 
+async function applyResolvedScope(
+  tx: any,
+  scopeResolution: Awaited<ReturnType<typeof resolveNextScope>>,
+  targetUserId: string,
+  actorUserId: string,
+) {
+  if ("message" in scopeResolution || scopeResolution.action === "none") return
+  if (scopeResolution.action === "clear") {
+    await clearMultiBranchScope(tx, targetUserId)
+    return
+  }
+  await replaceMultiBranchScope(tx, {
+    userId: targetUserId,
+    organizationId: scopeResolution.organizationId,
+    groupIds: scopeResolution.groupIds,
+    branchIds: scopeResolution.branchIds,
+    createdByUserId: actorUserId,
+  })
+}
+
+function resolveAccessValues(input: any, target: any, targetRole: SystemRole, actorRole: unknown) {
+  const nextRole: SystemRole = input.role ?? targetRole
+  const parsedActorRole = systemRoleSchema.safeParse(actorRole)
+  if (input.role !== undefined && (!parsedActorRole.success || !canAssignRole(parsedActorRole.data, nextRole))) {
+    return { message: "You cannot assign this role", status: 403 } as const
+  }
+  if (input.budgetAllocationEnabled !== undefined && nextRole !== "GROUP_USER") {
+    return { message: "Budget allocation access applies only to Group Users", status: 400 } as const
+  }
+  return {
+    nextRole,
+    nextBudgetAllocationEnabled: nextRole === "GROUP_USER"
+      ? input.budgetAllocationEnabled ?? (targetRole === "GROUP_USER" && target.budgetAllocationEnabled)
+      : false,
+    nextOrganizationId: input.organizationId !== undefined ? input.organizationId : target.organizationId,
+    nextBranchId: input.branchId !== undefined ? input.branchId : target.branchId,
+  }
+}
+
 /**
  * Administrative access changes are intentionally isolated from profile edits.
  * This route is the only HTTP operation allowed to change a user's role,
@@ -210,23 +250,9 @@ export async function PATCH(
   const targetAccessError = getTargetAccessError(scope, target, targetRole)
   if (targetAccessError) return error(targetAccessError, 403)
 
-  const nextRole = input.role ?? targetRole
-  if (input.role !== undefined && !canAssignRole(scope.role, nextRole)) {
-    return error("You cannot assign this role", 403)
-  }
-  if (input.budgetAllocationEnabled !== undefined && nextRole !== "GROUP_USER") {
-    return error("Budget allocation access applies only to Group Users", 400)
-  }
-  const nextBudgetAllocationEnabled = nextRole === "GROUP_USER"
-    ? input.budgetAllocationEnabled ?? (targetRole === "GROUP_USER" && target.budgetAllocationEnabled)
-    : false
-
-  const nextOrganizationId = input.organizationId !== undefined
-    ? input.organizationId
-    : target.organizationId
-  const nextBranchId = input.branchId !== undefined
-    ? input.branchId
-    : target.branchId
+  const accessValues = resolveAccessValues(input, target, targetRole, scope.role)
+  if ("message" in accessValues && accessValues.message) return error(accessValues.message, accessValues.status)
+  const { nextRole, nextBudgetAllocationEnabled, nextOrganizationId, nextBranchId } = accessValues
 
   const assignmentError = await getAssignmentError({ scope, nextRole, nextOrganizationId, nextBranchId })
   if (assignmentError) return error(assignmentError, 400)
@@ -272,17 +298,7 @@ export async function PATCH(
         budgetAllocationEnabled: users.budgetAllocationEnabled,
       })
 
-    if (scopeResolution.action === "clear") {
-      await clearMultiBranchScope(tx, targetUserId)
-    } else if (scopeResolution.action === "replace") {
-      await replaceMultiBranchScope(tx, {
-        userId: targetUserId,
-        organizationId: scopeResolution.organizationId,
-        groupIds: scopeResolution.groupIds,
-        branchIds: scopeResolution.branchIds,
-        createdByUserId: scope.userId,
-      })
-    }
+    await applyResolvedScope(tx, scopeResolution, targetUserId, scope.userId)
 
     await tx.delete(sessions).where(eq(sessions.userId, targetUserId))
     await tx.insert(systemLogs).values({

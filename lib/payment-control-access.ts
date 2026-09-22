@@ -49,6 +49,26 @@ export type PaymentControlBranchAccess =
   | { ok: true; branchId: number }
   | { ok: false; error: string; status: number }
 
+function resolveOwnBranchAccess(sessionBranchId: unknown, requestedBranchId: number | undefined): PaymentControlBranchAccess {
+  const [own] = normalizePositiveIds([sessionBranchId])
+  if (!own) return { ok: false, error: "Branch context required", status: 400 }
+  if (requestedBranchId && requestedBranchId !== own) {
+    return { ok: false, error: "Branch is outside your scope", status: 403 }
+  }
+  return { ok: true, branchId: own }
+}
+
+function resolveAssignedBranchAccess(
+  assignedBranchIds: unknown[] | null | undefined,
+  requestedBranchId: number | undefined,
+): PaymentControlBranchAccess {
+  const assigned = normalizePositiveIds(assignedBranchIds ?? [])
+  if (assigned.length === 0) return { ok: false, error: "No branches are assigned to your account", status: 403 }
+  if (!requestedBranchId) return { ok: false, error: "branchId is required", status: 400 }
+  if (!assigned.includes(requestedBranchId)) return { ok: false, error: "Branch is outside your scope", status: 403 }
+  return { ok: true, branchId: requestedBranchId }
+}
+
 /**
  * Which branch a status read is for, and whether this caller may read it.
  * The tenant check on the branch row (it exists; for Head Office it is in
@@ -70,18 +90,11 @@ export function resolveViewableBranch({
   const [requested] = normalizePositiveIds([requestedBranchId])
 
   if (readsOwnBranchOnly(role)) {
-    const [own] = normalizePositiveIds([sessionBranchId])
-    if (!own) return { ok: false, error: "Branch context required", status: 400 }
-    if (requested && requested !== own) return { ok: false, error: "Branch is outside your scope", status: 403 }
-    return { ok: true, branchId: own }
+    return resolveOwnBranchAccess(sessionBranchId, requested)
   }
 
   if (readsAssignedBranchesOnly(role)) {
-    const assigned = normalizePositiveIds(assignedBranchIds ?? [])
-    if (assigned.length === 0) return { ok: false, error: "No branches are assigned to your account", status: 403 }
-    if (!requested) return { ok: false, error: "branchId is required", status: 400 }
-    if (!assigned.includes(requested)) return { ok: false, error: "Branch is outside your scope", status: 403 }
-    return { ok: true, branchId: requested }
+    return resolveAssignedBranchAccess(assignedBranchIds, requested)
   }
 
   if (role === "HEAD_OFFICE" || role === "SUPER_ADMIN") {

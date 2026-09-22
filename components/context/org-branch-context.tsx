@@ -45,14 +45,18 @@ export function OrgBranchProvider({
         setOrganizationId(parsed.organizationId ?? null)
         setBranchId(parsed.branchId ?? null)
       }
-    } catch {}
+    } catch {
+      // Ignore unavailable or malformed persisted context.
+    }
   }, [])
 
   // persist to localStorage
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({ organizationId, branchId }))
-    } catch {}
+    } catch {
+      // Storage can be unavailable in restricted browser contexts.
+    }
   }, [organizationId, branchId])
 
   const setOrganization = useCallback((id: string | null) => {
@@ -63,7 +67,9 @@ export function OrgBranchProvider({
       window.dispatchEvent(
         new CustomEvent("oneflowe:context-changed", { detail: { organizationId: id, branchId: null } }),
       )
-    } catch {}
+    } catch {
+      // Context events are best-effort for legacy listeners.
+    }
   }, [])
 
   const setBranch = useCallback((id: string | null) => {
@@ -71,7 +77,9 @@ export function OrgBranchProvider({
     setVersion((v) => v + 1)
     try {
       window.dispatchEvent(new CustomEvent("oneflowe:context-changed", { detail: { branchId: id } }))
-    } catch {}
+    } catch {
+      // Context events are best-effort for legacy listeners.
+    }
   }, [])
 
   const reset = useCallback(() => {
@@ -80,7 +88,9 @@ export function OrgBranchProvider({
     setVersion((v) => v + 1)
     try {
       window.dispatchEvent(new Event("oneflowe:context-reset"))
-    } catch {}
+    } catch {
+      // Context events are best-effort for legacy listeners.
+    }
   }, [])
 
   const level: OrgBranchContextValue["level"] = useMemo(() => {

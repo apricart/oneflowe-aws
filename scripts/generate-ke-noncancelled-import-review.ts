@@ -312,16 +312,16 @@ async function main() {
 
   const { pool } = await import("../lib/db-cli")
   const client = await pool.connect()
-  let organizationRows: JsonRow[] = []
-  let liveCountRows: JsonRow[] = []
-  let liveImportRows: JsonRow[] = []
-  let liveOrderRows: JsonRow[] = []
-  let branches: JsonRow[] = []
-  let users: JsonRow[] = []
+  let organizationRows: JsonRow[]
+  let liveCountRows: JsonRow[]
+  let liveImportRows: JsonRow[]
+  let liveOrderRows: JsonRow[]
+  let branches: JsonRow[]
+  let users: JsonRow[]
   let userMappings: JsonRow[] = []
-  let productMappings: JsonRow[] = []
-  let organizationProducts: JsonRow[] = []
-  let branchInventoryRows: JsonRow[] = []
+  let productMappings: JsonRow[]
+  let organizationProducts: JsonRow[]
+  let branchInventoryRows: JsonRow[]
   let liveSchemaRows: JsonRow[] = []
 
   try {

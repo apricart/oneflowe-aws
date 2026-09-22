@@ -189,7 +189,7 @@ export default function BudgetsPage() {
     mutate()
   }, [handleDateChange, mutate, setContextBranchIds])
 
-  const budgets: BudgetAllocation[] = budgetsData?.budgets || []
+  const budgets = useMemo<BudgetAllocation[]>(() => budgetsData?.budgets || [], [budgetsData?.budgets])
   // The organization's mode, from its settings where the caller may read them,
   // otherwise from the rows — the server resolves each row's mode from the same
   // setting, and a tenant-pinned caller's rows all belong to one organization.
@@ -312,13 +312,10 @@ export default function BudgetsPage() {
 
     // Client-side validation: Total Proposed Budget >= Current Total Spent
     const currentSpentCents = (editingBudget.amountSpentCents || 0) + (editingBudget.amountHeldCents || 0)
-    let proposedTotalCents = 0
-    if (allocationType === "monthly") {
-      proposedTotalCents = amountCents + (editingBudget.amountCreditedCents || 0)
-    } else {
+    const proposedTotalCents = allocationType === "monthly"
+      ? amountCents + (editingBudget.amountCreditedCents || 0)
       // Add-on type: adding to the current credits
-      proposedTotalCents = (editingBudget.amountAllocatedCents || 0) + (editingBudget.amountCreditedCents || 0) + amountCents
-    }
+      : (editingBudget.amountAllocatedCents || 0) + (editingBudget.amountCreditedCents || 0) + amountCents
 
     if (proposedTotalCents < currentSpentCents) {
       return toast({
@@ -1017,12 +1014,9 @@ export default function BudgetsPage() {
                 const amt = Number.parseFloat(newAmount || "0")
                 const amtCents = Math.round(amt * 100)
                 const currentSpentCents = (editingBudget?.amountSpentCents || 0) + (editingBudget?.amountHeldCents || 0)
-                let proposedTotalCents = 0
-                if (allocationType === "monthly") {
-                  proposedTotalCents = amtCents + (editingBudget?.amountCreditedCents || 0)
-                } else {
-                  proposedTotalCents = (editingBudget?.amountAllocatedCents || 0) + (editingBudget?.amountCreditedCents || 0) + amtCents
-                }
+                const proposedTotalCents = allocationType === "monthly"
+                  ? amtCents + (editingBudget?.amountCreditedCents || 0)
+                  : (editingBudget?.amountAllocatedCents || 0) + (editingBudget?.amountCreditedCents || 0) + amtCents
                 
                 if (proposedTotalCents < currentSpentCents && newAmount) {
                   return (

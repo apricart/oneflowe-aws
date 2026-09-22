@@ -306,77 +306,10 @@ export async function PATCH(
     if (usernameUpdate.message) return error(usernameUpdate.message, 400)
     const nextUsername = usernameUpdate.nextUsername
 
-    const updateResponse = await (async () => {
-    const currentEmail = normalizeEmail(targetUser.email)
-    const nextEmail = input.email !== undefined ? normalizeEmail(input.email) : currentEmail
-    const nextPhone = input.phone !== undefined ? normalizeOptionalText(input.phone) : undefined
-    const nextEmployeeId = input.employeeId !== undefined ? normalizeOptionalText(input.employeeId) : undefined
-
-    if (!nextEmail) return error("Email is required", 400)
-
-    const uniqueFieldsToValidate = getUniqueProfileFields(input, nextEmail, nextPhone, nextEmployeeId)
-
-    await assertUniqueUserFields(uniqueFieldsToValidate, id)
-
-    // Determine if email actually changed (avoid unnecessary session invalidation)
-    const emailActuallyChanged = input.email !== undefined && nextEmail !== currentEmail
-    const usernameActuallyChanged = input.username !== undefined && nextUsername !== currentUsername
-
-    // Update full name if first or last name changed
-    const fullName = input.firstName !== undefined || input.lastName !== undefined
-      ? `${input.firstName ?? targetUser.firstName ?? ""} ${input.lastName ?? targetUser.lastName ?? ""}`.trim()
-      : undefined
-
-    // Update password if provided
-    const passwordHash = input.password ? await hashPassword(input.password) : undefined
-
-    // Only password changes should invalidate the current session.
-    const isSecurityChange = !!input.password
-    const sessionVersion = isSecurityChange ? targetUser.sessionVersion + 1 : undefined
-    if (isSecurityChange) {
-      console.log(`[API/Users] Password changed for user ${id}. Incrementing session version...`)
-    }
+    const updateError = await updateUserProfile(id, input, targetUser, nextUsername)
+    if (updateError) return error(updateError, 400)
 
     // Execute update (includes sessionVersion bump if needed — single atomic write)
-    await db.update(users).set({
-      email: emailActuallyChanged ? nextEmail : undefined,
-      username: usernameActuallyChanged ? nextUsername : undefined,
-      firstName: input.firstName,
-      lastName: input.lastName,
-      phone: input.phone !== undefined ? nextPhone : undefined,
-      employeeId: input.employeeId !== undefined ? nextEmployeeId : undefined,
-      imprestHolder: input.imprestHolder,
-      contactPerson: input.contactPerson,
-      location: input.location,
-      address: input.address,
-      fullName,
-      passwordHash,
-      sessionVersion,
-      // An administrator resetting the password is the confirmed-identity
-      // branch of the lockout policy, so it releases the account.
-      failedLoginAttempts: isSecurityChange ? 0 : undefined,
-      lockoutUntil: isSecurityChange ? null : undefined,
-      updatedAt: new Date(),
-    }).where(eq(users.id, id))
-
-    // Drop the cached session-validation result so deactivation/password
-    // changes take effect on the target user's next session check
-    await invalidateSessionValidationCache(id)
-
-    // Also delete physical sessions if they exist (for database-bound sessions if used)
-    const deleteSessions = isSecurityChange
-      ? db.delete(sessions).where(eq(sessions.userId, id))
-      : Promise.resolve()
-    await deleteSessions
-
-    await writeUserUpdateAudit(id, input, isSecurityChange)
-
-    // Invalidate users cache so lists refresh immediately in production
-    await invalidateByPrefix('users')
-    return null
-    })()
-    if (updateResponse) return updateResponse
-
     return ok({ success: true })
   } catch (caughtError: any) {
     return handleUserUpdateError(caughtError)

@@ -339,7 +339,8 @@ export default function CategoriesPage() {
                                 placeholder="Enter category name"
                                 onKeyDown={(e) => {
                                     if (e.key === "Enter" && !isSubmitting) {
-                                        dialogMode === "create" ? handleCreateCategory() : handleEditCategory()
+                                        if (dialogMode === "create") handleCreateCategory()
+                                        else handleEditCategory()
                                     }
                                 }}
                             />

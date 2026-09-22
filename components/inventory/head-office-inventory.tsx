@@ -11,6 +11,7 @@ SelectTrigger,
 SelectValue,
 } from "@/components/ui/select"
 import { Table } from "@/components/ui/table"
+import Image from "next/image"
 import { fetcher } from "@/lib/fetcher"
 import { resolveEffectivePriceCents } from "@/lib/price-ladder"
 import { cn,formatPKR } from "@/lib/utils"
@@ -62,7 +63,7 @@ export default function HeadOfficeInventory({ organizationId }: Readonly<{ organ
 
   // Fetch categories
   const { data: categoriesData } = useSWR<{ items: { id: number; name: string }[] }>("/api/v1/categories", fetcher)
-  const categories = categoriesData?.items || []
+  const categories = useMemo(() => categoriesData?.items || [], [categoriesData?.items])
 
   // Fetch assigned products
   const { data: assignedProducts, error: assignedError, isLoading: assignedLoading } = useSWR<{
@@ -263,9 +264,12 @@ export default function HeadOfficeInventory({ organizationId }: Readonly<{ organ
                     <td className="p-4">
                       <div className="flex items-center gap-3">
                         {product.productImageUrl ? (
-                          <img
+                          <Image
                             src={product.productImageUrl}
                             alt={product.productName}
+                            width={48}
+                            height={48}
+                            unoptimized
                             className="w-12 h-12 object-cover rounded-lg border"
                           />
                         ) : (

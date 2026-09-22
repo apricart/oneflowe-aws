@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useAppContext } from "@/components/context/app-context"
 import { useSession } from "next-auth/react"
+import Image from "next/image"
 import { Role } from "@/lib/rbac"
 import { formatPKR, cn } from "@/lib/utils"
 import {
@@ -125,7 +126,7 @@ export default function BranchInventoryPage() {
   const inventory = data?.items ?? []
   const pricesHidden = Boolean(data?.pricesHidden)
   const totalProducts = data?.total ?? 0
-  const statsInventory = statsData?.items ?? []
+  const statsInventory = useMemo(() => statsData?.items ?? [], [statsData?.items])
   const totalAssigned = statsData?.total ?? statsInventory.length
   const activeCount = useMemo(() => statsInventory.filter((item) => item.isActive).length, [statsInventory])
   const inactiveCount = Math.max(totalAssigned - activeCount, 0)
@@ -273,9 +274,12 @@ export default function BranchInventoryPage() {
                           <div className="relative h-14 w-14 shrink-0 group-hover:scale-110 transition-transform duration-300">
                             {item.customImageUrl || item.productImageUrl ? (
                               <div className="h-full w-full overflow-hidden rounded-2xl border border-slate-200 shadow-sm dark:border-slate-800">
-                                <img
-                                  src={item.customImageUrl || item.productImageUrl}
+                                <Image
+                                  src={item.customImageUrl || item.productImageUrl || ""}
                                   alt={item.productName}
+                                  width={56}
+                                  height={56}
+                                  unoptimized
                                   className="h-full w-full object-cover"
                                 />
                               </div>

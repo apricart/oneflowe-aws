@@ -13,6 +13,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Search, Package, Trash2, Building2, Users, AlertTriangle, Info } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { useAppContext } from "@/components/context/app-context"
+import Image from "next/image"
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json())
 
@@ -77,7 +78,7 @@ export default function RemoveFromBranchPage() {
         { fallbackData: { items: [] } }
     )
 
-    const assignments = assignmentsData?.items ?? []
+    const assignments = useMemo(() => assignmentsData?.items ?? [], [assignmentsData?.items])
     const groups = groupsData?.groups ?? []
     const groupBranches = groupBranchesData?.branches ?? []
 
@@ -445,9 +446,12 @@ export default function RemoveFromBranchPage() {
                                                 <TableCell>
                                                     <div className="flex items-center gap-3">
                                                         {product.productImageUrl ? (
-                                                            <img
+                                                            <Image
                                                                 src={product.productImageUrl}
                                                                 alt={product.productName}
+                                                                width={40}
+                                                                height={40}
+                                                                unoptimized
                                                                 className="h-10 w-10 rounded-lg border object-cover"
                                                             />
                                                         ) : (

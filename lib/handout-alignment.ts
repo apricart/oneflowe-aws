@@ -167,13 +167,40 @@ export function isHandoutUsername(value: unknown, role: string): boolean {
     && username.endsWith(`-${roleSuffix(role) ?? ""}`)
 }
 
-/**
- * Resolves every hand-out row to at most one account. The employee code and
- * portal suffix identify a mirrored account directly; when the tenant's
- * `external_id` does not carry the code (truncated or a placeholder), the
- * email and role must identify it alone. Anything ambiguous is refused.
- */
-export function matchHandoutRows(rows: HandoutRow[], accounts: AlignmentAccount[]): MatchResult {
+function claimHandoutMatch({
+  row,
+  candidates,
+  matchedBy,
+  role,
+  matches,
+  skipped,
+  claimedBy,
+}: {
+  row: HandoutRow
+  candidates: AlignmentAccount[]
+  matchedBy: MatchedBy
+  role: string
+  matches: HandoutMatch[]
+  skipped: MatchSkippedRow[]
+  claimedBy: Map<string, number>
+}): void {
+  if (candidates.length > 1) {
+    skipped.push({ sheetIndex: row.index, username: row.username, name: row.name, reason: "AMBIGUOUS_ACCOUNT",
+      detail: `${candidates.length} ${role} accounts match by ${matchedBy}: ${candidates.map((candidate) => candidate.username ?? candidate.id).join(", ")}` })
+    return
+  }
+  const account = candidates[0]!
+  const earlier = claimedBy.get(account.id)
+  if (earlier !== undefined) {
+    skipped.push({ sheetIndex: row.index, username: row.username, name: row.name, reason: "ACCOUNT_CLAIMED_TWICE",
+      detail: `Account ${account.username ?? account.id} was already matched by sheet row ${earlier + 2}` })
+    return
+  }
+  claimedBy.set(account.id, row.index)
+  matches.push({ row, account, matchedBy })
+}
+
+function indexAccounts(accounts: AlignmentAccount[]) {
   const byCodeAndRole = new Map<string, AlignmentAccount[]>()
   const byEmailAndRole = new Map<string, AlignmentAccount[]>()
   for (const account of accounts) {
@@ -188,27 +215,21 @@ export function matchHandoutRows(rows: HandoutRow[], accounts: AlignmentAccount[
       byEmailAndRole.set(key, [...(byEmailAndRole.get(key) ?? []), account])
     }
   }
+  return { byCodeAndRole, byEmailAndRole }
+}
+
+/**
+ * Resolves every hand-out row to at most one account. The employee code and
+ * portal suffix identify a mirrored account directly; when the tenant's
+ * `external_id` does not carry the code (truncated or a placeholder), the
+ * email and role must identify it alone. Anything ambiguous is refused.
+ */
+export function matchHandoutRows(rows: HandoutRow[], accounts: AlignmentAccount[]): MatchResult {
+  const { byCodeAndRole, byEmailAndRole } = indexAccounts(accounts)
 
   const matches: HandoutMatch[] = []
   const skipped: MatchSkippedRow[] = []
   const claimedBy = new Map<string, number>()
-
-  const claim = (row: HandoutRow, candidates: AlignmentAccount[], matchedBy: MatchedBy, role: string): void => {
-    if (candidates.length > 1) {
-      skipped.push({ sheetIndex: row.index, username: row.username, name: row.name, reason: "AMBIGUOUS_ACCOUNT",
-        detail: `${candidates.length} ${role} accounts match by ${matchedBy}: ${candidates.map((c) => c.username ?? c.id).join(", ")}` })
-      return
-    }
-    const account = candidates[0]!
-    const earlier = claimedBy.get(account.id)
-    if (earlier !== undefined) {
-      skipped.push({ sheetIndex: row.index, username: row.username, name: row.name, reason: "ACCOUNT_CLAIMED_TWICE",
-        detail: `Account ${account.username ?? account.id} was already matched by sheet row ${earlier + 2}` })
-      return
-    }
-    claimedBy.set(account.id, row.index)
-    matches.push({ row, account, matchedBy })
-  }
 
   // Two passes: every login-code match is settled before any email fallback
   // runs, so a row whose own account is gone cannot take another row's account
@@ -224,7 +245,7 @@ export function matchHandoutRows(rows: HandoutRow[], accounts: AlignmentAccount[
     const code = codeKey(row.accountCode) || codeKey(row.loginCode)
     const candidates = code ? byCodeAndRole.get(`${code}|${role}`) ?? [] : []
     if (candidates.length === 0) fallback.push({ row, role })
-    else claim(row, candidates, "login_code", role)
+    else claimHandoutMatch({ row, candidates, matchedBy: "login_code", role, matches, skipped, claimedBy })
   }
 
   for (const { row, role } of fallback) {
@@ -235,7 +256,7 @@ export function matchHandoutRows(rows: HandoutRow[], accounts: AlignmentAccount[
         detail: `No ${role} account carries login code ${JSON.stringify(row.loginCode)}, and none with email ${JSON.stringify(row.email)} is unclaimed` })
       continue
     }
-    claim(row, candidates, "email", role)
+    claimHandoutMatch({ row, candidates, matchedBy: "email", role, matches, skipped, claimedBy })
   }
 
   matches.sort((a, b) => a.row.index - b.row.index)
@@ -251,6 +272,33 @@ function remainingIssues(row: HandoutRow, account: AlignmentAccount): RemainingI
   if (row.mustChangePassword !== account.mustChangePassword) issues.push("MUST_CHANGE_PASSWORD_DIFFERS")
   if (!account.isActive) issues.push("ACCOUNT_INACTIVE")
   return issues
+}
+
+function alignmentPlanSkip(
+  match: VerifiedMatch,
+  username: string,
+  after: NameParts,
+  holders: Map<string, string>,
+  plannedIds: Set<string>,
+): PlanSkippedRow | null {
+  const { row, account, passwordVerified } = match
+  const base = { sheetIndex: row.index, userId: account.id, username: row.username, name: row.name, role: account.role }
+  if (!passwordVerified) {
+    return { ...base, reason: "PASSWORD_MISMATCH", detail: "The hand-out password does not authenticate this account; the row cannot be trusted to describe it" }
+  }
+  if (!isHandoutUsername(username, account.role)) {
+    return { ...base, reason: "INVALID_TARGET_USERNAME", detail: `${JSON.stringify(username)} is not a <name>-<code>-${roleSuffix(account.role)} username` }
+  }
+  const holder = holders.get(username)
+  if (holder !== undefined && holder !== account.id && !plannedIds.has(holder)) {
+    return { ...base, reason: "USERNAME_TAKEN", detail: `${JSON.stringify(username)} is already held by account ${holder}, which this plan does not rename` }
+  }
+  if (!after.fullName) return { ...base, reason: "EMPTY_NAME", detail: "The hand-out Name is empty" }
+  if (after.fullName.length > MAX_FULL_NAME || after.firstName.length > MAX_PART_NAME
+    || (after.lastName ?? "").length > MAX_PART_NAME) {
+    return { ...base, reason: "NAME_TOO_LONG", detail: `Name exceeds ${MAX_FULL_NAME}/${MAX_PART_NAME} characters` }
+  }
+  return null
 }
 
 /**
@@ -279,36 +327,13 @@ export function buildAlignmentPlan(matches: VerifiedMatch[], existing: ExistingU
   const unchanged: AlignmentPlanRow[] = []
   const skipped: PlanSkippedRow[] = []
 
-  for (const { row, account, matchedBy, passwordVerified } of matches) {
-    const base = { sheetIndex: row.index, userId: account.id, username: row.username, name: row.name, role: account.role }
-    if (!passwordVerified) {
-      skipped.push({ ...base, reason: "PASSWORD_MISMATCH",
-        detail: "The hand-out password does not authenticate this account; the row cannot be trusted to describe it" })
-      continue
-    }
-
+  for (const match of matches) {
+    const { row, account, matchedBy } = match
     const username = text(row.username)
-    if (!isHandoutUsername(username, account.role)) {
-      skipped.push({ ...base, reason: "INVALID_TARGET_USERNAME",
-        detail: `${JSON.stringify(username)} is not a <name>-<code>-${roleSuffix(account.role)} username` })
-      continue
-    }
-
-    const holder = holders.get(username)
-    if (holder !== undefined && holder !== account.id && !plannedIds.has(holder)) {
-      skipped.push({ ...base, reason: "USERNAME_TAKEN",
-        detail: `${JSON.stringify(username)} is already held by account ${holder}, which this plan does not rename` })
-      continue
-    }
-
     const after = splitName(row.name)
-    if (!after.fullName) {
-      skipped.push({ ...base, reason: "EMPTY_NAME", detail: "The hand-out Name is empty" })
-      continue
-    }
-    if (after.fullName.length > MAX_FULL_NAME || after.firstName.length > MAX_PART_NAME
-      || (after.lastName ?? "").length > MAX_PART_NAME) {
-      skipped.push({ ...base, reason: "NAME_TOO_LONG", detail: `Name exceeds ${MAX_FULL_NAME}/${MAX_PART_NAME} characters` })
+    const skippedRow = alignmentPlanSkip(match, username, after, holders, plannedIds)
+    if (skippedRow) {
+      skipped.push(skippedRow)
       continue
     }
 
