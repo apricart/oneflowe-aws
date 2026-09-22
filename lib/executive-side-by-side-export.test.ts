@@ -172,7 +172,7 @@ describe("buildSideBySideWorkbookData", () => {
     expect(field("Products in focus")).toBe("A4 Paper")
     expect(field("Requesters compared")).toBe("Ahmed, Sana")
     expect(field("Exported at")).toBe("2026-09-14 10:30:00 UTC")
-    expect(field("Day-by-day consumption")).toBe("On which days was this product actually consumed?")
+    expect(field("Day-by-day consumption")).toBe("How much of this product was ordered on each day of the selected period.")
     expect(summary.rows.some((row) => row[0] === "By product")).toBe(false)
   })
 
