@@ -6,6 +6,8 @@ import * as mockedNextAuth from "next-auth"
 
 import { branches, budgets, groups } from "@/db/schema"
 
+import * as itemComparisonRoute from "@/app/api/v1/analytics/executive/budget-burn/item-comparison/route"
+import * as budgetBurnRoute from "@/app/api/v1/analytics/executive/budget-burn/route"
 import * as compareRoute from "@/app/api/v1/analytics/executive/compare/route"
 import * as drillDownRoute from "@/app/api/v1/analytics/executive/drill-down/route"
 import * as matrixRoute from "@/app/api/v1/analytics/executive/matrix/route"
@@ -67,6 +69,8 @@ const options = (query: Query) => call(optionsRoute.GET, "options", { ...WINDOW,
 const drillDown = (query: Query) => call(drillDownRoute.GET, "drill-down", { ...WINDOW, ...query })
 const overview = (query: Query) => call(overviewRoute.GET, "overview", { ...WINDOW, ...query })
 const matrix = (query: Query) => call(matrixRoute.GET, "matrix", { ...WINDOW, ...query })
+const budgetBurn = (query: Query) => call(budgetBurnRoute.GET, "budget-burn", { month: "2026-08", ...query })
+const itemComparison = (query: Query) => call(itemComparisonRoute.GET, "budget-burn/item-comparison", { month: "2026-08", ...query })
 
 /** `[label, value]` pairs, in the order the route ranked them. */
 const ranked = (body: any): Array<[string, number]> => body.rows.map((row: any) => [row.label, row.value])
@@ -108,6 +112,9 @@ describe.skipIf(!hasTestDatabase)("Product Performance — executive analytics r
       ["drill-down", () => drillDown({ dimension: "branch", key: String(f.northBranchId), metric: "spend" })],
       ["overview", () => overview({})],
       ["matrix", () => matrix({ rows: "user", columns: "product", metric: "spend" })],
+      // Narrower than the rest: its own suite pins that GROUP_USER is refused.
+      ["budget-burn", () => budgetBurn({})],
+      ["budget-burn item comparison", () => itemComparison({ userId: f.ahmedId, branchIds: f.northBranchId })],
     ] as const
 
     it.each(everyRoute)("%s refuses an unauthenticated caller with 401", async (_name, run) => {
@@ -899,6 +906,135 @@ describe.skipIf(!hasTestDatabase)("Product Performance — executive analytics r
         expect(row.requesterName).toBe(f.names.ahmed)
         expect(row.productName).toBe(f.names.paper)
       }
+    })
+  })
+
+  // ── Total Budget beside the bars ─────────────────────────────────────────
+
+  describe("the budget beside By branch and By month", () => {
+    /**
+     * A ledger for the window, all in cents. Every figure below is worked by
+     * hand from these rows and the order history in the fixture:
+     *
+     *   North  2026-06  allocated 20,000            → 20,000
+     *   North  2026-07  allocated 30,000 + 5,000 add-on → 35,000
+     *   South  2026-08  allocated  5,000            →  5,000
+     *   Foreign (tenant B) 2026-07 allocated 99,000 — must never appear
+     *
+     *   By branch over Jun–Aug:  North 55,000 · South 5,000
+     *   By month over Jun–Aug:   2026-06 20,000 · 2026-07 35,000 · 2026-08 5,000
+     *   May 2026 has no orders; with a budget row of 7,000 for North it is a
+     *   filled month: value 0, budget 7,000.
+     */
+    const ledgerIds: number[] = []
+
+    beforeAll(async () => {
+      const rows = await db
+        .insert(budgets)
+        .values([
+          { organizationId: f.organizationId, branchId: f.northBranchId, period: "2026-05", amountAllocatedCents: 7_000 },
+          { organizationId: f.organizationId, branchId: f.northBranchId, period: "2026-06", amountAllocatedCents: 20_000 },
+          { organizationId: f.organizationId, branchId: f.northBranchId, period: "2026-07", amountAllocatedCents: 30_000, amountCreditedCents: 5_000 },
+          { organizationId: f.organizationId, branchId: f.southBranchId, period: "2026-08", amountAllocatedCents: 5_000 },
+          { organizationId: f.neighbourOrganizationId, branchId: f.foreignBranchId, period: "2026-07", amountAllocatedCents: 99_000 },
+        ])
+        .returning({ id: budgets.id })
+      ledgerIds.push(...rows.map((row) => row.id))
+    })
+
+    afterAll(async () => {
+      await db.delete(budgets).where(inArray(budgets.id, ledgerIds))
+    })
+
+    const budgetsOf = (body: any): Array<[string, number, number]> =>
+      body.rows.map((row: any) => [row.label, row.value, row.totalBudgetCents])
+
+    it("sets each branch's Total Budget beside its Procurement Value, ranking unchanged", async () => {
+      const { status, body } = await compare({ dimension: "branch", metric: "spend", chart: "column", budget: 1 })
+      expect(status).toBe(200)
+      expect(body.budgetBeside).toBe(true)
+      // The same order and the same figures as without the budget; the budget
+      // is the Overview's per-branch total for the same window.
+      expect(budgetsOf(body)).toEqual([[f.names.south, 16500, 5_000], [f.names.north, 15000, 55_000]])
+      const overviewRows = (await overview({})).body.branches
+      for (const row of body.rows) {
+        expect(overviewRows.find((entry: any) => entry.branchName === row.label)?.totalBudgetCents).toBe(row.totalBudgetCents)
+      }
+    })
+
+    it("sets each month's Total Budget beside it, summed over the fenced branches, and fills a budgeted month nobody ordered in", async () => {
+      const { body } = await compare({ dimension: "month", metric: "spend", chart: "column", budget: 1 })
+      expect(body.budgetBeside).toBe(true)
+      expect(budgetsOf(body)).toEqual([["2026-06", 18000, 20_000], ["2026-07", 10000, 35_000], ["2026-08", 3500, 5_000]])
+
+      // Widen to May: no orders, a 7,000 budget — a zero column with a budget
+      // beside it, in its place at the start of the axis, not a missing month.
+      const widened = await compare({ dimension: "month", metric: "spend", chart: "column", budget: 1, startDate: "2026-05-01" })
+      expect(budgetsOf(widened.body)).toEqual([
+        ["2026-05", 0, 7_000], ["2026-06", 18000, 20_000], ["2026-07", 10000, 35_000], ["2026-08", 3500, 5_000],
+      ])
+      expect(widened.body.rows[0]).toMatchObject({ key: "2026-05", orderCount: 0, previousValue: 0, changePct: null, share: 0 })
+      // The filled month is not there when the budget was not asked for.
+      const plain = await compare({ dimension: "month", metric: "spend", chart: "column", startDate: "2026-05-01" })
+      expect(keysOf(plain.body)).toEqual(["2026-06", "2026-07", "2026-08"])
+    })
+
+    it("attaches nothing without the flag, and the response is otherwise identical", async () => {
+      const plain = await compare({ dimension: "branch", metric: "spend", chart: "column" })
+      expect(plain.body.budgetBeside).toBe(false)
+      for (const row of plain.body.rows) expect(row.totalBudgetCents).toBeUndefined()
+      const withBudget = await compare({ dimension: "branch", metric: "spend", chart: "column", budget: 1 })
+      expect(ranked(withBudget.body)).toEqual(ranked(plain.body))
+    })
+
+    it("withholds the budget under a product focus, a requester narrowing, a category, or Quantity — asked or not", async () => {
+      const refused = [
+        { productIds: f.paperProductId },
+        { userIds: f.ahmedId },
+        { categoryIds: f.stationeryCategoryId },
+        { metric: "quantity", unit: "Ream" },
+      ]
+      for (const narrowing of refused) {
+        const { status, body } = await compare({ dimension: "branch", metric: "spend", chart: "column", budget: 1, ...narrowing })
+        expect(status, JSON.stringify(narrowing)).toBe(200)
+        expect(body.budgetBeside, JSON.stringify(narrowing)).toBe(false)
+        for (const row of body.rows) expect(row.totalBudgetCents, JSON.stringify(narrowing)).toBeUndefined()
+      }
+      // Nor beside a dimension that holds no budget.
+      const byPerson = await compare({ dimension: "user", metric: "spend", chart: "column", budget: 1 })
+      expect(byPerson.body.budgetBeside).toBe(false)
+    })
+
+    it("stands beside a group and a tenant as the sum of their branches", async () => {
+      // No groups exist here, so the one ungrouped row is the whole tenant.
+      const byGroup = await compare({ dimension: "group", metric: "spend", chart: "column", budget: 1 })
+      expect(budgetsOf(byGroup.body)).toEqual([["No group", 31500, 60_000]])
+      signIn(superAdmin)
+      const byTenant = await compare({ dimension: "organization", metric: "spend", chart: "column", budget: 1, organizationIds: f.organizationId })
+      expect(budgetsOf(byTenant.body)).toHaveLength(1)
+      expect(byTenant.body.rows[0].totalBudgetCents).toBe(60_000)
+    })
+
+    it("never shows the neighbour's budget, and shows an approver only its own branch's", async () => {
+      // Head Office A: the neighbour's 99,000 is in no month and no branch.
+      const months = await compare({ dimension: "month", metric: "spend", chart: "column", budget: 1 })
+      expect(months.body.rows.find((row: any) => row.key === "2026-07").totalBudgetCents).toBe(35_000)
+
+      // The neighbour's Head Office sees its own 99,000 and nothing of tenant A's.
+      signIn(neighbourHeadOffice)
+      const theirs = await compare({ dimension: "branch", metric: "spend", chart: "column", budget: 1 })
+      expect(budgetsOf(theirs.body)).toEqual([[f.names.foreign, 7000, 99_000]])
+
+      // The South approver: South's 5,000 for August, and July — North's
+      // month — carries no budget at all, because North is outside its reach.
+      signIn(southApprover)
+      const south = await compare({ dimension: "branch", metric: "spend", chart: "column", budget: 1 })
+      expect(budgetsOf(south.body)).toEqual([[f.names.south, 16500, 5_000]])
+      const southMonths = await compare({ dimension: "month", metric: "spend", chart: "column", budget: 1 })
+      expect(budgetsOf(southMonths.body)).toEqual([["2026-06", 7000, 0], ["2026-07", 8000, 0], ["2026-08", 1500, 5_000]])
+      // Naming North's branch directly is refused at the fence, before any budget is read.
+      const reach = await compare({ dimension: "branch", metric: "spend", chart: "column", budget: 1, branchIds: f.northBranchId })
+      expect(reach.status).toBe(403)
     })
   })
 

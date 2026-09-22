@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  BUDGET_BESIDE_DIMENSIONS,
   DONUT_MAX_SLICES,
   EXECUTIVE_DIMENSIONS,
   EXECUTIVE_METRICS,
@@ -9,11 +10,14 @@ import {
   MATRIX_MAX_ENTITIES,
   MATRIX_METRICS,
   MAX_COMPARE_ENTITIES,
+  budgetBesideWithheldReason,
+  canShowBudgetBeside,
   chartMode,
   chartTypesFor,
   classifyBudgetHealth,
   clampMatrixLimit,
   dimensionsForRole,
+  isBudgetBesideDimension,
   isBudgetRollupDimension,
   isChartType,
   isDimensionAllowedForRole,
@@ -26,6 +30,7 @@ import {
   growthPct,
   isExecutiveAnalyticsRole,
   isSupportedCombination,
+  orderComparisonRows,
   resolveGrain,
   resolveMatrixGrain,
   resolveQuantityUnit,
@@ -182,6 +187,35 @@ describe("unit-of-measure safety", () => {
   })
 })
 
+describe("row order", () => {
+  // Months whose figures rise, so size order and time order disagree.
+  const months = [
+    { key: "2026-03", value: 2350 },
+    { key: "2026-01", value: 6810 },
+    { key: "2026-02", value: 4370 },
+  ]
+
+  it("keeps a time axis in its own order, whatever the figures", () => {
+    expect(orderComparisonRows(months, "month").map((row) => row.key)).toEqual(["2026-01", "2026-02", "2026-03"])
+    const days = months.map((row) => ({ ...row, key: `${row.key}-15` }))
+    expect(orderComparisonRows(days, "day").map((row) => row.key)).toEqual(["2026-01-15", "2026-02-15", "2026-03-15"])
+  })
+
+  it("ranks every other dimension largest first", () => {
+    const entities = [{ key: "b", value: 5 }, { key: "a", value: 20 }, { key: "c", value: 15 }]
+    for (const dimension of ["branch", "user", "product", "category", "group", "organization"] as const) {
+      expect(orderComparisonRows(entities, dimension).map((row) => row.key), dimension).toEqual(["a", "c", "b"])
+    }
+  })
+
+  it("returns a new array and leaves the input alone", () => {
+    const input = [...months]
+    const output = orderComparisonRows(input, "month")
+    expect(output).not.toBe(input)
+    expect(input).toEqual(months)
+  })
+})
+
 describe("concentration", () => {
   const rows = [{ v: 60 }, { v: 20 }, { v: 15 }, { v: 5 }]
 
@@ -233,6 +267,17 @@ describe("request parsing", () => {
     if (!result.ok) return
     expect(result.dimension).toBe("branch")
     expect(result.metric).toBe("utilization")
+    expect(result.withBudget).toBe(false)
+  })
+
+  it("reads the budget flag as an exact match and nothing looser", () => {
+    // `budget` is a request for the budget beside the bars, not a grant: the
+    // route still applies the withholding rule. Only the literal "1" counts.
+    const parse = (query: string) => parseComparisonRequest(new URLSearchParams(query), now)
+    expect(parse("dimension=branch&metric=spend&budget=1")).toMatchObject({ ok: true, withBudget: true })
+    for (const value of ["true", "yes", "0", "", "2"]) {
+      expect(parse(`dimension=branch&metric=spend&budget=${value}`), value).toMatchObject({ ok: true, withBudget: false })
+    }
   })
 
   it("rejects an inverted date range", () => {
@@ -369,6 +414,46 @@ describe("role-gated dimensions", () => {
     expect(parseComparisonRequest(params, new Date(), "GROUP_USER"))
       .toEqual({ ok: false, error: "Forbidden: Insufficient permissions" })
     expect(parseComparisonRequest(params, new Date(), "SUPER_ADMIN").ok).toBe(true)
+  })
+})
+
+describe("a budget beside the bars", () => {
+  const clear = { lineScoped: false, userScoped: false }
+
+  it("stands only beside the entities a budget is held against, and the month the ledger is kept by", () => {
+    expect(BUDGET_BESIDE_DIMENSIONS).toEqual(["branch", "group", "organization", "month"])
+    for (const dimension of BUDGET_BESIDE_DIMENSIONS) {
+      expect(isBudgetBesideDimension(dimension)).toBe(true)
+      expect(canShowBudgetBeside(dimension, "spend", clear), dimension).toBe(true)
+    }
+    for (const dimension of ["user", "product", "category", "day"] as const) {
+      expect(isBudgetBesideDimension(dimension)).toBe(false)
+      expect(canShowBudgetBeside(dimension, "spend", clear), dimension).toBe(false)
+      expect(budgetBesideWithheldReason(dimension, "spend", clear)).toMatch(/held per branch and per month/)
+    }
+    expect(isBudgetBesideDimension("supplier")).toBe(false)
+  })
+
+  it("is withheld for anything but money, and says so", () => {
+    // Budget is money. Quantity, order counts and averages have nothing to
+    // stand beside it — and the budget metrics themselves *are* the budget.
+    for (const metric of ["quantity", "orders", "avgOrderValue", "avgUnitPrice", "utilization", "budgetRemaining"] as const) {
+      expect(canShowBudgetBeside("branch", metric, clear), metric).toBe(false)
+      expect(budgetBesideWithheldReason("branch", metric, clear)).toMatch(/only when measuring by amount/)
+    }
+  })
+
+  it("is withheld under a product, category or requester narrowing it cannot follow, naming the narrowing", () => {
+    // A branch's whole budget beside its spend on one product, or beside two
+    // people's share of it, would be apples against oranges. Withheld, never
+    // approximated — and the reason names what to clear.
+    expect(budgetBesideWithheldReason("branch", "spend", { lineScoped: true, userScoped: false }))
+      .toMatch(/not per product.*Clear the product focus/)
+    expect(budgetBesideWithheldReason("month", "spend", { lineScoped: false, userScoped: true }))
+      .toMatch(/not per requester.*Clear the requesters/)
+    // The product reason wins when both apply: clearing it is the first step.
+    expect(budgetBesideWithheldReason("branch", "spend", { lineScoped: true, userScoped: true })).toMatch(/not per product/)
+    expect(canShowBudgetBeside("branch", "spend", { lineScoped: true, userScoped: false })).toBe(false)
   })
 })
 

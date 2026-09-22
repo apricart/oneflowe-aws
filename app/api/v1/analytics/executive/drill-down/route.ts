@@ -74,6 +74,7 @@ export async function GET(req: NextRequest) {
       groupIds: parsed.groupIds,
       userIds: parsed.userIds,
       unit: null,
+      statusSet: parsed.statusSet,
     }
 
     // The unit narrows the rows only when the reader has actually chosen one,
@@ -106,6 +107,7 @@ export async function GET(req: NextRequest) {
       direction: parsed.direction,
       limit: parsed.limit,
       offset: parsed.offset,
+      statuses: parsed.statusSet,
       quantityUnit: {
         selected: filters.unit,
         conflict: unitResolution.conflict,

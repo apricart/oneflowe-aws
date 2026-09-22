@@ -94,13 +94,12 @@ const context = (overrides: Partial<SideBySideExportContext> = {}): SideBySideEx
   ...overrides,
 })
 
-/** Every snapshot the default eight-panel screen holds, all answered. */
+/** Every snapshot the default seven-panel screen holds, all answered. */
 function defaultSnapshots(): Record<string, SideBySidePanelSnapshot> {
   return {
     "by-product": loaded(rankResponse()),
     "by-category": loaded(rankResponse()),
     "by-requester": loaded(rankResponse()),
-    "requester-by-product": loaded(matrixResponse()),
     "by-branch": loaded(rankResponse()),
     "by-month": loaded(rankResponse({
       rows: [
@@ -143,7 +142,7 @@ describe("buildSideBySideWorkbookData", () => {
     const panels = panelsForFocus(0)
     const sheets = buildSideBySideWorkbookData(panels, defaultSnapshots(), context())
     expect(sheets.map((sheet) => sheet.name)).toEqual([
-      SUMMARY_SHEET_NAME, "By product", "By category", "By requester", "Requester × product", "By branch", "By month",
+      SUMMARY_SHEET_NAME, "By product", "By category", "By requester", "By branch", "By month",
       "Requesters over months", "Products over months",
     ])
   })
@@ -234,9 +233,11 @@ describe("buildSideBySideWorkbookData", () => {
   })
 
   it("writes the grid with a blank for a pair that never happened, and the margins", () => {
+    // "By product" with two or more requesters compared answers as a grid,
+    // and its sheet is that grid: one row per person, one column per product.
     const [, grid] = buildSideBySideWorkbookData(
-      [byId("requester-by-product")],
-      { "requester-by-product": loaded(matrixResponse()) },
+      [byId("by-product")],
+      { "by-product": loaded(matrixResponse()) },
       context(),
     )
     expect(grid.columns).toEqual(["Requester / Product", "A4 Paper", "Toner", "Diesel", "Total Procurement Value (PKR)"])
@@ -249,8 +250,8 @@ describe("buildSideBySideWorkbookData", () => {
 
   it("names the order-count margins for what they are, since cells of orders do not add up", () => {
     const [, grid] = buildSideBySideWorkbookData(
-      [byId("requester-by-product")],
-      { "requester-by-product": loaded(matrixResponse({ format: "count", label: "Orders", cells: [{ row: "u1", column: "186", value: 2 }], rows: [{ key: "u1", label: "Ahmed", total: 2 }], columns: [{ key: "186", label: "A4 Paper", total: 2 }] })) },
+      [byId("by-product")],
+      { "by-product": loaded(matrixResponse({ format: "count", label: "Orders", cells: [{ row: "u1", column: "186", value: 2 }], rows: [{ key: "u1", label: "Ahmed", total: 2 }], columns: [{ key: "186", label: "A4 Paper", total: 2 }] })) },
       context(),
     )
     expect(grid.columns).toEqual(["Requester / Product", "A4 Paper", "Orders (whole row)"])
@@ -259,20 +260,50 @@ describe("buildSideBySideWorkbookData", () => {
 
   it("writes the screen's message for a blocked or empty grid", () => {
     const sheets = buildSideBySideWorkbookData(
-      [byId("requester-by-product"), byId("by-branch")],
+      [byId("by-product"), byId("by-branch")],
       {
-        "requester-by-product": loaded(matrixResponse({ rows: [], columns: [], cells: [], blocked: { reason: "unit-conflict", message: "Quantity cannot be totalled across Litre, Ream." } })),
+        "by-product": loaded(matrixResponse({ rows: [], columns: [], cells: [], blocked: { reason: "unit-conflict", message: "Quantity cannot be totalled across Litre, Ream." } })),
         "by-branch": loaded(rankResponse()),
       },
       context(),
     )
     expect(sheets[1].rows).toEqual([["Quantity cannot be totalled across Litre, Ream."]])
     const [, empty] = buildSideBySideWorkbookData(
-      [byId("requester-by-product")],
-      { "requester-by-product": loaded(matrixResponse({ rows: [], cells: [] })) },
+      [byId("by-product")],
+      { "by-product": loaded(matrixResponse({ rows: [], cells: [] })) },
       context(),
     )
     expect(empty.rows).toEqual([[EMPTY_PANEL_NOTE]])
+  })
+
+  it("writes the budget beside the figure, and its share, when the panel drew one", () => {
+    // The branch panel's sheet under Amount with no focus: Total Budget in
+    // rupees and the figure's share of it, before the share-of-shown columns
+    // the sheet already had. An unbudgeted branch gets a blank share, not 0.
+    const [, sheet] = buildSideBySideWorkbookData(
+      [byId("by-branch")],
+      {
+        "by-branch": loaded(rankResponse({
+          budgetBeside: true,
+          rows: [
+            { key: "7", label: "North", value: 1_250_050, previousValue: 1_000_000, changePct: 25.005, orderCount: 12, share: 62.5, cumulativeShare: 62.5, totalBudgetCents: 2_500_100 },
+            { key: "8", label: "South", value: 750_000, previousValue: 0, changePct: null, orderCount: 3, share: 37.5, cumulativeShare: 100, totalBudgetCents: 0 },
+          ],
+        })),
+      },
+      context(),
+    )
+    expect(sheet.columns).toEqual([
+      "Rank", "Branch", "Procurement Value (PKR)", "Total Budget (PKR)", "% of budget",
+      "Share %", "Cumulative share %", "Previous period Procurement Value (PKR)", "Change %", "Orders",
+    ])
+    expect(sheet.rows).toEqual([
+      [1, "North", 12500.5, 25001, 50, 62.5, 62.5, 10000, 25.01, 12],
+      [2, "South", 7500, 0, null, 37.5, 100, 0, null, 3],
+    ])
+    // Without the budget the sheet is exactly what it was.
+    const [, plain] = buildSideBySideWorkbookData([byId("by-branch")], { "by-branch": loaded(rankResponse()) }, context())
+    expect(plain.columns).not.toContain("Total Budget (PKR)")
   })
 
   it("writes the screen's message for a blocked, empty, failed or unanswered panel", () => {

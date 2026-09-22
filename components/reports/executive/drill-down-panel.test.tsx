@@ -80,6 +80,21 @@ beforeEach(() => {
   window.HTMLElement.prototype.scrollIntoView = vi.fn()
 })
 
+describe("the status set", () => {
+  it("sends nothing by default, so every existing request is unchanged", () => {
+    respond()
+    render(<DrillDownPanel target={{ dimension: "branch", key: "7", label: "North" }} filters={filters} metric="spend" onClose={vi.fn()} />)
+    expect(new URL(`http://localhost${requested.at(-1)}`).searchParams.has("statuses")).toBe(false)
+  })
+
+  it("asks for consumed lines when told to, and says pending orders are included", () => {
+    respond()
+    render(<DrillDownPanel target={{ dimension: "user", key: "6ec33598-9ec2-4a1a-86df-cd0801ee0178", label: "Sana" }} filters={filters} metric="spend" statuses="consumed" onClose={vi.fn()} />)
+    expect(new URL(`http://localhost${requested.at(-1)}`).searchParams.get("statuses")).toBe("consumed")
+    expect(screen.getByText(/Orders still awaiting approval are included and marked pending/)).toBeTruthy()
+  })
+})
+
 describe("the request behind the table", () => {
   it("carries every filter the chart was drawn with, plus the clicked entity", () => {
     render(<DrillDownPanel target={{ dimension: "branch", key: "7", label: "North Zone" }} filters={filters} metric="spend" onClose={() => {}} />)

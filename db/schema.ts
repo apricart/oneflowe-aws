@@ -358,6 +358,17 @@ export const budgets = pgTable(
   ],
 )
 
+/**
+ * One row per one-time add-on ever credited to a monthly budget row. The
+ * credit itself lives in budgets.amount_credited_cents; this is its history.
+ *
+ * An add-on carries a validity: valid_until is the instant it stops being
+ * available (end of the chosen day, Asia/Karachi). When that passes, the
+ * settlement in lib/server/budget-addon-expiry.ts withdraws the unspent part
+ * from the budget row and records it here as forfeited_cents with expired_at.
+ * A NULL valid_until is an add-on granted before validity existed: it lasts
+ * the month, as it always did, and is never settled.
+ */
 export const budgetAddons = pgTable(
   "budget_addons",
   {
@@ -369,9 +380,52 @@ export const budgetAddons = pgTable(
     reason: text("reason"),
     createdByUserId: uuid("created_by_user_id").references(() => users.id),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    validUntil: timestamp("valid_until", { withTimezone: true }),
+    expiredAt: timestamp("expired_at", { withTimezone: true }),
+    forfeitedCents: bigint("forfeited_cents", { mode: "number" }).notNull().default(0),
   },
   (t) => [
     index("budget_addons_budget_idx").on(t.budgetId),
+    index("budget_addons_open_expiry_idx").on(t.validUntil).where(sql`${t.expiredAt} IS NULL`),
+    check("budget_addons_forfeit_bounds_ck", sql`${t.forfeitedCents} >= 0 AND ${t.forfeitedCents} <= ${t.amountCents}`),
+  ],
+)
+
+/**
+ * A Head Office exception that lets a branch keep ordering while it is over
+ * the overdue-payment limit (plans/OF-PAYMENT-CONTROL-overdue-ordering-block.md).
+ *
+ * This is the only fact the payment-control feature persists. Whether the
+ * exception is in force is never stored: it is `revoked_at IS NULL AND
+ * start_at <= now < expires_at`, computed on every read and inside the order
+ * transaction, so an expiry takes effect at the instant without a job.
+ * expires_at is NOT NULL because an exception is never permanent. A branch
+ * has at most one live exception at a time; a later grant is a new row, and
+ * the old one stays as history.
+ */
+export const paymentControlExceptions = pgTable(
+  "payment_control_exceptions",
+  {
+    id: serial("id").primaryKey(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id)
+      .notNull(),
+    branchId: integer("branch_id")
+      .references(() => branches.id)
+      .notNull(),
+    grantedByUserId: uuid("granted_by_user_id").references(() => users.id).notNull(),
+    reason: text("reason"),
+    startAt: timestamp("start_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    revokedByUserId: uuid("revoked_by_user_id").references(() => users.id),
+    revokeReason: text("revoke_reason"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    index("payment_control_exceptions_org_idx").on(t.organizationId),
+    index("payment_control_exceptions_live_branch_idx").on(t.branchId, t.expiresAt).where(sql`${t.revokedAt} IS NULL`),
+    check("payment_control_exceptions_window_ck", sql`${t.expiresAt} > ${t.startAt}`),
   ],
 )
 

@@ -1,7 +1,14 @@
 import { fireEvent, render, screen, within } from "@testing-library/react"
 import { beforeAll, describe, expect, it, vi } from "vitest"
 
-import { MatrixChart, MatrixTable, cellDrillTarget, indexCells, type MatrixResponse } from "./matrix-chart"
+import {
+  MatrixChart,
+  MatrixTable,
+  cellDrillTarget,
+  columnData,
+  indexCells,
+  type MatrixResponse,
+} from "./matrix-chart"
 
 /**
  * The requester × product grid, as the reader sees it.
@@ -87,6 +94,15 @@ describe("a cell's drill target", () => {
   })
 })
 
+describe("the figures behind a column", () => {
+  it("carries every row's figure under its key, with a missing pair as zero, and the column's own total", () => {
+    const [paper, toner, diesel] = columnData(response())
+    expect(paper).toEqual({ key: "186", label: "Paper", total: 10500, values: { [AHMED]: 7000, [SANA]: 3500 } })
+    expect(toner.values).toEqual({ [AHMED]: 6000, [SANA]: 0 })
+    expect(diesel.values).toEqual({ [AHMED]: 0, [SANA]: 5000 })
+  })
+})
+
 describe("the grid table", () => {
   it("shows every pair as its own figure, a dash for a pair that never happened, and the margins", () => {
     render(<MatrixTable response={response()} />)
@@ -137,10 +153,25 @@ describe("the grid columns", () => {
     expect(within(legend).getAllByRole("listitem").map((item) => item.textContent)).toEqual(["Ahmed", "Sana"])
     expect(screen.getByText(/never combined across requesters/)).toBeTruthy()
     expect(screen.getByText(/Select any column to open the order lines/)).toBeTruthy()
+    // Grouped, never stacked: no column carries a product's total or a folded remainder.
+    expect(screen.queryByText(/share of it/)).toBeNull()
+    expect(screen.queryByText(/Other requesters/)).toBeNull()
   })
 
   it("does not invite a click when nothing handles it", () => {
     render(<MatrixChart response={response()} />)
     expect(screen.queryByText(/Select any column/)).toBeNull()
+  })
+})
+
+describe("the table's swatches", () => {
+  const swatchesIn = (cells: HTMLElement[]) => cells.map((cell) => cell.querySelector("[aria-hidden]") !== null)
+
+  it("sit on the rows, which are the chart's series, so a person keeps one hue", () => {
+    render(<MatrixTable response={response()} />)
+    const table = within(screen.getByRole("table"))
+    // Ahmed, Sana, Total: the two people carry the swatches; the margin does not.
+    expect(swatchesIn(table.getAllByRole("rowheader"))).toEqual([true, true, false])
+    expect(swatchesIn(table.getAllByRole("columnheader"))).toEqual([false, false, false, false, false])
   })
 })

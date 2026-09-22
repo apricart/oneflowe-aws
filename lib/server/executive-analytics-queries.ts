@@ -6,13 +6,21 @@ import { alias } from "drizzle-orm/pg-core"
 import { branches, budgets, categories, globalProducts, groups, orderItems, orders, organizations, users } from "@/db/schema"
 import { db } from "@/lib/db"
 import { buildAppMonthPeriods } from "@/lib/date-range-params"
-import { REVENUE_ELIGIBLE_FILTER, metricExpressions } from "@/lib/metric-utils"
+import { CONSUMED_ELIGIBLE_FILTER, REVENUE_ELIGIBLE_FILTER, metricExpressions } from "@/lib/metric-utils"
 import type { ExecutiveScope } from "@/lib/server/executive-analytics-scope"
-import type { ExecutiveDimensionId, ExecutiveMetricId, MatrixDimensionId } from "@/lib/executive-analytics"
+import type {
+  BudgetBesideDimension,
+  DrillDownStatusSet,
+  ExecutiveDimensionId,
+  ExecutiveMetricId,
+  MatrixDimensionId,
+} from "@/lib/executive-analytics"
 import {
   EXECUTIVE_METRICS,
   MAX_TIME_AXIS_POINTS,
+  isBudgetRollupDimension,
   isTimeAxisDimension,
+  orderComparisonRows,
   resolveDrillDownSort,
   resolveGrain,
   resolveMatrixGrain,
@@ -67,6 +75,17 @@ export type ExecutiveFilters = {
   userIds: string[]
   /** Unit of measure, when the caller has resolved a single one. */
   unit: string | null
+  /**
+   * Which orders count. Absent or `revenue` is the Center's rule and what
+   * every chart uses; `consumed` adds PENDING for a listing that has to
+   * reconcile with a budget's "spent + held". Only the drill-down sets it.
+   */
+  statusSet?: DrillDownStatusSet
+}
+
+/** The status predicate a filter set asks for; the revenue rule unless told otherwise. */
+function statusFilterFor(filters: Pick<ExecutiveFilters, "statusSet">) {
+  return filters.statusSet === "consumed" ? CONSUMED_ELIGIBLE_FILTER : REVENUE_ELIGIBLE_FILTER
 }
 
 /** Refunded value on one order line, counting approved refunds only. */
@@ -124,7 +143,7 @@ export function orderConditions(scope: ExecutiveScope, filters: ExecutiveFilters
     lte(orders.createdAt, filters.endDate),
   ]
 
-  if (options?.revenueEligible !== false) conditions.push(REVENUE_ELIGIBLE_FILTER)
+  if (options?.revenueEligible !== false) conditions.push(statusFilterFor(filters))
 
   const lineNarrowing = lineFilterConditions(filters)
   if (lineNarrowing.length > 0) {
@@ -211,7 +230,7 @@ export function lineConditions(scope: ExecutiveScope, filters: ExecutiveFilters)
     ...entityConditions(filters),
     gte(orders.createdAt, filters.startDate),
     lte(orders.createdAt, filters.endDate),
-    REVENUE_ELIGIBLE_FILTER,
+    statusFilterFor(filters),
     ...lineFilterConditions(filters),
   ]
 }
@@ -244,6 +263,19 @@ export type BranchBudgetRow = {
  * switches to order-scoped spending the moment a range is supplied — the two
  * reports therefore agree.
  */
+/**
+ * The caller's fence, as predicates on `branches` — for the readers that start
+ * from the branch table rather than from an order. One definition, so the
+ * ledger, the branch picker and the month budget can never disagree about
+ * which branches exist for this caller.
+ */
+function scopedBranchFence(scope: ExecutiveScope) {
+  return [
+    scope.branchIds ? inArray(branches.id, scope.branchIds) : undefined,
+    scope.organizationIds.length > 0 ? inArray(branches.organizationId, scope.organizationIds) : undefined,
+  ].filter(Boolean)
+}
+
 export async function loadBranchBudgets(
   scope: ExecutiveScope,
   filters: ExecutiveFilters,
@@ -251,10 +283,7 @@ export async function loadBranchBudgets(
   const periods = buildAppMonthPeriods(filters.startDate, filters.endDate)
   if (periods.length === 0) return []
 
-  const branchFence = [
-    scope.branchIds ? inArray(branches.id, scope.branchIds) : undefined,
-    scope.organizationIds.length > 0 ? inArray(branches.organizationId, scope.organizationIds) : undefined,
-  ].filter(Boolean)
+  const branchFence = scopedBranchFence(scope)
 
   const branchRows = await db
     .select({ id: branches.id, name: branches.name })
@@ -804,16 +833,92 @@ export async function loadBudgetRollup(
   return Array.from(buckets.values())
 }
 
+// ── Budget beside the bars ─────────────────────────────────────────────────
+
+/**
+ * Total Budget per month across the fenced branches: allocated + add-ons for
+ * every `YYYY-MM` the window touches, keyed by the ledger's own `period` —
+ * the same string the month comparison keys its rows with, so the two join
+ * on it directly.
+ *
+ * Fenced through `branches`, exactly as `loadBranchBudgets` is, so a month's
+ * figure is the sum of the same rows the Overview's per-branch chart draws.
+ */
+async function loadMonthBudgets(scope: ExecutiveScope, filters: ExecutiveFilters): Promise<Map<string, number>> {
+  const periods = buildAppMonthPeriods(filters.startDate, filters.endDate)
+  if (periods.length === 0) return new Map()
+
+  const rows = await db
+    .select({
+      period: budgets.period,
+      totalBudgetCents: sql<number>`COALESCE(SUM(${budgets.amountAllocatedCents} + ${budgets.amountCreditedCents}), 0)`.mapWith(Number),
+    })
+    .from(budgets)
+    .innerJoin(branches, eq(budgets.branchId, branches.id))
+    .where(and(inArray(budgets.period, periods), ...scopedBranchFence(scope)))
+    .groupBy(budgets.period)
+
+  return new Map(rows.map((row) => [row.period, row.totalBudgetCents]))
+}
+
+/**
+ * Sets each entity's Total Budget beside its ranked figure.
+ *
+ * A branch, group or tenant takes the rollup the Overview is built from, so
+ * the budget beside a bar is the same number as the budget on the Overview's
+ * chart for the same window. A month takes the ledger summed by period over
+ * the fenced branches.
+ *
+ * The month axis is also **filled**: a month inside the window that nobody
+ * ordered in has no row from the order read, but a budget it was given is
+ * exactly what the chart should show against an empty column, so a zero row
+ * is added for it. Ranked dimensions are not filled — a branch with a budget
+ * and no orders is the Overview's business; here the question is still which
+ * branches consumed the most.
+ *
+ * Whether a budget *may* stand beside this comparison at all is decided by
+ * `canShowBudgetBeside` before this is called; this only fetches and joins.
+ */
+export async function attachBudgetBeside(
+  scope: ExecutiveScope,
+  filters: ExecutiveFilters,
+  dimension: BudgetBesideDimension,
+  rows: ComparisonRow[],
+): Promise<ComparisonRow[]> {
+  if (isBudgetRollupDimension(dimension)) {
+    const rollup = await loadBudgetRollup(scope, filters, dimension)
+    const budgetOf = new Map(rollup.map((row) => [row.key, row.totalBudgetCents]))
+    return rows.map((row) => ({ ...row, totalBudgetCents: budgetOf.get(row.key) ?? 0 }))
+  }
+
+  const budgetOf = await loadMonthBudgets(scope, filters)
+  const byKey = new Map(rows.map((row) => [row.key, row]))
+  const filled = buildAppMonthPeriods(filters.startDate, filters.endDate).map((period) => {
+    const existing = byKey.get(period)
+    return existing
+      ? { ...existing, totalBudgetCents: budgetOf.get(period) ?? 0 }
+      : {
+        key: period,
+        label: period,
+        value: 0,
+        spendCents: 0,
+        quantity: 0,
+        orderCount: 0,
+        avgUnitPriceCents: 0,
+        totalBudgetCents: budgetOf.get(period) ?? 0,
+      }
+  })
+  // The same cap and the same order the month read itself applies.
+  return orderComparisonRows(filled, dimension).slice(0, MAX_TIME_AXIS_POINTS.month)
+}
+
 // ── Entity options ─────────────────────────────────────────────────────────
 
 export type EntityOption = { key: string; label: string; hint?: string }
 
 /** Branch rows inside the fence, shared by the picker and the label lookups. */
 async function loadScopedBranchRows(scope: ExecutiveScope) {
-  const conditions = [
-    scope.branchIds ? inArray(branches.id, scope.branchIds) : undefined,
-    scope.organizationIds.length > 0 ? inArray(branches.organizationId, scope.organizationIds) : undefined,
-  ].filter(Boolean)
+  const conditions = scopedBranchFence(scope)
   return db
     .select({ id: branches.id, name: branches.name })
     .from(branches)
@@ -1189,8 +1294,8 @@ export async function loadComparison(
     }
   }
 
-  return rows
-    .map((row) => ({
+  return orderComparisonRows(
+    rows.map((row) => ({
       key: row.key,
       label: row.label,
       value: valueOf(row),
@@ -1198,12 +1303,9 @@ export async function loadComparison(
       quantity: row.quantity,
       orderCount: row.orderCount,
       avgUnitPriceCents: row.avgUnitPriceCents,
-    }))
-    .sort((left, right) => (
-      EXECUTIVE_METRICS[metric].grain === "line" && isTimeAxisDimension(dimension)
-        ? left.key.localeCompare(right.key)
-        : right.value - left.value
-    ))
+    })),
+    dimension,
+  )
 }
 
 // ── The grid: one figure per (row, column) pair ────────────────────────────

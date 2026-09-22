@@ -11,6 +11,7 @@ import {
   DRILLDOWN_DEFAULT_ROWS,
   EXECUTIVE_METRICS,
   type DrillDownSortKey,
+  type DrillDownStatusSet,
   type ExecutiveMetricId,
 } from "@/lib/executive-analytics"
 import { ChartMessage, countShort, money } from "./chart-kit"
@@ -94,10 +95,25 @@ function periodLabel(period: { startDate: string; endDate: string } | undefined)
   return `${formatDay(period.startDate)} – ${formatDay(period.endDate)}`
 }
 
-export function DrillDownPanel({ target, filters, metric, onClose }: Readonly<{
+/**
+ * What a status set adds to the request and to the header — nothing for the
+ * default, so every existing request stays byte-identical.
+ */
+function statusSetCopy(statuses: DrillDownStatusSet): { param: string; note: string } {
+  if (statuses !== "consumed") return { param: "", note: "" }
+  return { param: "consumed", note: " Orders still awaiting approval are included and marked pending." }
+}
+
+export function DrillDownPanel({ target, filters, metric, statuses = "revenue", onClose }: Readonly<{
   target: DrillTarget
   filters: ExecutiveFilterState
   metric: ExecutiveMetricId
+  /**
+   * Which orders to list. The charts' own rule by default; `consumed` adds
+   * orders still awaiting approval, for a figure that is a budget's
+   * "spent + held" rather than a Procurement Value.
+   */
+  statuses?: DrillDownStatusSet
   onClose: () => void
 }>) {
   const [sort, setSort] = React.useState<DrillDownSortKey>("date")
@@ -131,6 +147,8 @@ export function DrillDownPanel({ target, filters, metric, onClose }: Readonly<{
     })
   }, [targetSignature])
 
+  const statusSet = statusSetCopy(statuses)
+
   // The click's own narrowing wins over the screen's: a grid cell is one
   // product, whatever the focus picker holds.
   const url = `/api/v1/analytics/executive/drill-down?${toQuery({ ...filters, ...target.narrow }, {
@@ -142,6 +160,7 @@ export function DrillDownPanel({ target, filters, metric, onClose }: Readonly<{
     direction,
     limit: String(DRILLDOWN_DEFAULT_ROWS),
     offset: String(page * DRILLDOWN_DEFAULT_ROWS),
+    statuses: statusSet.param,
   })}`
 
   const { data, error, isLoading } = useAPI<DrillDownResponse>(url)
@@ -193,6 +212,7 @@ export function DrillDownPanel({ target, filters, metric, onClose }: Readonly<{
             <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
               The order lines behind this selection{data ? `, ${periodLabel(data.period)}` : ""}. The period and every
               filter are carried over from the chart.
+              {statusSet.note}
             </p>
           </div>
           <button

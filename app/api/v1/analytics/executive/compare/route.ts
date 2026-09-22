@@ -4,15 +4,25 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import {
   EXECUTIVE_METRICS,
+  canShowBudgetBeside,
   chartMode,
   chartTypesFor,
   growthPct,
+  isBudgetBesideDimension,
   resolveGrain,
   resolveQuantityUnit,
   withCumulativeShare,
+  type BudgetBesideDimension,
 } from "@/lib/executive-analytics"
-import { applyEntityKeys, isScopeKeyedDimension, parseComparisonRequest, previousWindow } from "@/lib/executive-analytics-request"
 import {
+  applyEntityKeys,
+  isScopeKeyedDimension,
+  parseComparisonRequest,
+  previousWindow,
+  type ParsedComparisonRequest,
+} from "@/lib/executive-analytics-request"
+import {
+  attachBudgetBeside,
   isLineScoped,
   loadComparison,
   loadEntitySeries,
@@ -128,7 +138,7 @@ export async function GET(req: NextRequest) {
       })
     }
 
-    const [rows, previousRows] = await Promise.all([
+    const [rankedRows, previousRows] = await Promise.all([
       loadComparison(scope, filters, parsed.dimension, parsed.metric, parsed.limit),
       parsed.dimension === "month"
         ? Promise.resolve([])
@@ -140,6 +150,11 @@ export async function GET(req: NextRequest) {
           parsed.limit,
         ),
     ])
+
+    const budgetDimension = budgetBesideDimensionFor(parsed, filters)
+    const rows = budgetDimension
+      ? await attachBudgetBeside(scope, filters, budgetDimension, rankedRows)
+      : rankedRows
 
     const previousByKey = new Map(previousRows.map((row) => [row.key, row.value]))
     const enriched = rows.map((row) => ({
@@ -161,12 +176,34 @@ export async function GET(req: NextRequest) {
         ? withCumulativeShare(enriched, (row) => row.value)
         : enriched.map((row) => ({ ...row, share: 0, cumulativeShare: 0 })),
       concentrationEligible,
+      budgetBeside: budgetDimension !== null,
       chartTypes: chartTypesFor({ dimension: parsed.dimension, metric: parsed.metric, entityCount: rows.length }),
     })
   } catch (error) {
     console.error("Executive analytics comparison failed:", error)
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 })
   }
+}
+
+/**
+ * The dimension to set a Total Budget beside, or null for none.
+ *
+ * The budget is set beside the bars only when asked for (`budget=1`), and only
+ * where it honestly can be: money, against entities that hold a budget, with
+ * no product or requester narrowing it cannot follow. The same rule decides
+ * what the panel asks for, so a request the rule refuses simply gets the plain
+ * comparison back — never an error, never an approximation.
+ */
+function budgetBesideDimensionFor(
+  parsed: Pick<ParsedComparisonRequest, "withBudget" | "dimension" | "metric">,
+  filters: ExecutiveFilters,
+): BudgetBesideDimension | null {
+  if (!parsed.withBudget || !isBudgetBesideDimension(parsed.dimension)) return null
+  const allowed = canShowBudgetBeside(parsed.dimension, parsed.metric, {
+    lineScoped: isLineScoped(filters),
+    userScoped: filters.userIds.length > 0,
+  })
+  return allowed ? parsed.dimension : null
 }
 
 /** One product, one unit, every branch that bought it: the price comparison. */

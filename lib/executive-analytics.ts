@@ -589,6 +589,62 @@ export function resolveMatrixGrain(
   return forced ? "line" : "order"
 }
 
+// ── Budget beside the bars ─────────────────────────────────────────────────
+
+/**
+ * The dimensions a Total Budget column can stand beside a Procurement Value
+ * column: the entities a budget is held against, directly or by rollup, and
+ * the month — the grain the ledger itself is kept at, so a month's budget is
+ * the sum of the fenced branches' allocations for that period.
+ */
+export const BUDGET_BESIDE_DIMENSIONS = ["branch", "group", "organization", "month"] as const satisfies readonly ExecutiveDimensionId[]
+export type BudgetBesideDimension = (typeof BUDGET_BESIDE_DIMENSIONS)[number]
+
+export function isBudgetBesideDimension(value: unknown): value is BudgetBesideDimension {
+  return typeof value === "string" && (BUDGET_BESIDE_DIMENSIONS as readonly string[]).includes(value)
+}
+
+/** The narrowings a request may carry that a budget cannot follow. */
+export type BudgetBesideNarrowing = {
+  /** Narrowed to particular products or categories. */
+  lineScoped: boolean
+  /** Narrowed to particular requesters. */
+  userScoped: boolean
+}
+
+/**
+ * Why a budget cannot be set beside this comparison, in the reader's words —
+ * or null when it can.
+ *
+ * A budget is money held per branch per month, and nothing else: it has no
+ * quantity, no share for one product and no share for one person. So it is
+ * withheld — never approximated — the moment the comparison measures anything
+ * but money, or is narrowed to products, categories or requesters. One rule
+ * decides both what a panel asks for and what the server will attach, so
+ * neither side can show a budget the other would not.
+ */
+export function budgetBesideWithheldReason(
+  dimension: ExecutiveDimensionId,
+  metric: ExecutiveMetricId,
+  narrowing: BudgetBesideNarrowing,
+): string | null {
+  if (!isBudgetBesideDimension(dimension)) {
+    return `Budget is held per branch and per month, so there is no budget to set beside each ${EXECUTIVE_DIMENSIONS[dimension].label.toLowerCase()}.`
+  }
+  if (metric !== "spend") return "Budget is money, so it is shown beside the bars only when measuring by amount."
+  if (narrowing.lineScoped) return "Budget is held per branch, not per product, so it is shown only against all products. Clear the product focus to see it."
+  if (narrowing.userScoped) return "Budget is held per branch, not per requester, so it is shown only against all requesters. Clear the requesters to see it."
+  return null
+}
+
+export function canShowBudgetBeside(
+  dimension: ExecutiveDimensionId,
+  metric: ExecutiveMetricId,
+  narrowing: BudgetBesideNarrowing,
+): boolean {
+  return budgetBesideWithheldReason(dimension, metric, narrowing) === null
+}
+
 // ── Arithmetic ─────────────────────────────────────────────────────────────
 // Every one of these is written to survive a zero denominator, because a branch
 // with no budget and a period with no history are both ordinary states here.
@@ -660,6 +716,30 @@ export function classifyBudgetHealth(totalBudgetCents: number, consumedCents: nu
   if (pct >= EXECUTIVE_THRESHOLDS.budgetWarningPct) return "warning"
   if (pct < EXECUTIVE_THRESHOLDS.budgetUnderusedPct) return "underused"
   return "healthy"
+}
+
+// ── Row order ──────────────────────────────────────────────────────────────
+
+/**
+ * The order comparison rows reach the reader in: a time axis in its own
+ * order, every other dimension largest first.
+ *
+ * Each grouped read is already ordered in SQL, but by its own value column —
+ * the line read by net value, whatever the metric — so a metric that is not
+ * that column (quantity, unit price, an order count) is re-ranked here by the
+ * value the reader asked for. A time axis is never re-ranked, under any
+ * metric: months in size order stop being months, and the one thing the
+ * panel can show — how consumption moved — is gone. That rule used to be
+ * gated on the metric's own grain, which put "By month" in size order the
+ * moment a product came into focus and the read moved to line grain.
+ */
+export function orderComparisonRows<T extends { key: string; value: number }>(
+  rows: readonly T[],
+  dimension: ExecutiveDimensionId,
+): T[] {
+  return [...rows].sort((left, right) => (
+    isTimeAxisDimension(dimension) ? left.key.localeCompare(right.key) : right.value - left.value
+  ))
 }
 
 // ── Concentration (Pareto) ─────────────────────────────────────────────────
@@ -894,6 +974,23 @@ export function resolveSortDirection(value: unknown): "asc" | "desc" {
   return value === "asc" ? "asc" : "desc"
 }
 
+/**
+ * Which orders a drill-down lists, as an allowlist.
+ *
+ * `revenue` is the Center's own rule and the default: the lines behind a
+ * Procurement Value figure. `consumed` adds orders still awaiting approval,
+ * for the one surface whose figure is a budget's "spent + held" — the
+ * budget-burn watchlist — so a requester whose whole month is one pending
+ * order does not drill into an empty table. The value selects a pre-written
+ * status predicate and never reaches SQL as text.
+ */
+export const DRILLDOWN_STATUS_SETS = ["revenue", "consumed"] as const
+export type DrillDownStatusSet = (typeof DRILLDOWN_STATUS_SETS)[number]
+
+export function isDrillDownStatusSet(value: unknown): value is DrillDownStatusSet {
+  return typeof value === "string" && (DRILLDOWN_STATUS_SETS as readonly string[]).includes(value)
+}
+
 // ── The side-by-side screen ────────────────────────────────────────────────
 
 /**
@@ -923,12 +1020,31 @@ export type SideBySidePanel = {
    */
   hiddenForSingleProduct?: boolean
   /**
-   * When set, the panel is a two-way grid served by `/matrix` rather than a
-   * ranking served by `/compare`: `dimension` is the column axis and `rows`
-   * the row axis, one figure per pair. The dimension is kept in its usual slot
-   * so everything that reasons about "which panels name products" still does.
+   * When set, the panel asks for each entity's Total Budget beside its
+   * Procurement Value, and draws the two as a pair of columns. Only while
+   * `budgetBesideWithheldReason` allows it — money, and no product or
+   * requester narrowing — and only for a `BUDGET_BESIDE_DIMENSIONS` dimension;
+   * otherwise the panel draws its plain columns and says why.
    */
-  matrix?: { rows: MatrixDimensionId }
+  budgetBeside?: boolean
+  /**
+   * When set, and at least `SEGMENT_MIN_COMPARED` entities of this dimension
+   * are picked to compare, the panel becomes a two-way grid served by
+   * `/matrix` — this dimension as the rows, `dimension` as the columns, one
+   * figure per pair — drawn as grouped columns: one cluster per column entity,
+   * one column per compared entity inside it, never combined. Below the
+   * threshold the panel draws its ordinary ranking from `/compare`, since one
+   * person is no comparison and nobody picked would split by the top twelve.
+   */
+  segmentBy?: MatrixDimensionId
+}
+
+/** Fewer compared entities than this and a split would show nothing to compare. */
+export const SEGMENT_MIN_COMPARED = 2
+
+/** The dimension a panel's columns are split by for this many compared entities, or null for none. */
+export function panelSegmentation(panel: SideBySidePanel, comparedCount: number): MatrixDimensionId | null {
+  return panel.segmentBy && comparedCount >= SEGMENT_MIN_COMPARED ? panel.segmentBy : null
 }
 
 export const SIDE_BY_SIDE_PANELS: SideBySidePanel[] = [
@@ -936,15 +1052,26 @@ export const SIDE_BY_SIDE_PANELS: SideBySidePanel[] = [
    * Item-wise: products against each other. With no focus this ranks the top
    * products in scope; with several ticked it compares exactly those, because
    * the focus already travels as `productIds` and the ranking is drawn from it.
+   *
+   * The ranked panels draw upright columns rather than bars listed downward,
+   * so the comparison reads left to right like the month panel beside it.
+   *
+   * With several requesters picked to compare, the panel becomes requester
+   * against product, uncombined: one cluster per product, one column per
+   * person inside it, so "who consumed how much of this product" is read
+   * across a cluster and "what did this person consume" across one colour.
+   * "By requester" with three products in focus gives one bar per person
+   * summed over the three; this gives the nine figures behind those bars.
    */
   {
     id: "by-product",
     dimension: "product",
-    chart: "bar",
+    chart: "column",
     title: "By product",
     question: "Which products consumed the most?",
     colorful: true,
     hiddenForSingleProduct: true,
+    segmentBy: "user",
   },
   /**
    * The category angle the requirement lists beside the product one. Withheld
@@ -954,7 +1081,7 @@ export const SIDE_BY_SIDE_PANELS: SideBySidePanel[] = [
   {
     id: "by-category",
     dimension: "category",
-    chart: "bar",
+    chart: "column",
     title: "By category",
     question: "Which categories consumed the most?",
     colorful: true,
@@ -963,43 +1090,33 @@ export const SIDE_BY_SIDE_PANELS: SideBySidePanel[] = [
   {
     id: "by-requester",
     dimension: "user",
-    chart: "bar",
+    chart: "column",
     title: "By requester",
     question: "Who consumed the most?",
     colorful: true,
   },
   /**
-   * Requester against product, uncombined. "By requester" with three products
-   * in focus gives one bar per person summed over the three; this gives the
-   * nine figures behind those bars, one per (person, product), which is what
-   * "compare several people, product by product" actually asks for. Withheld
-   * for a single product, where "By requester" already is that answer.
+   * The two panels whose entities hold a budget — a branch directly, a month
+   * as the ledger's own grain — set the Total Budget beside each column, so
+   * "which consumed the most" is read against "and how much was it given".
    */
-  {
-    id: "requester-by-product",
-    dimension: "product",
-    matrix: { rows: "user" },
-    chart: "column",
-    title: "Requester × product",
-    question: "How much did each requester consume of each product — one figure per pair, never combined?",
-    colorful: true,
-    hiddenForSingleProduct: true,
-  },
   {
     id: "by-branch",
     dimension: "branch",
-    chart: "bar",
+    chart: "column",
     title: "By branch",
-    question: "Which branches consumed the most?",
+    question: "Which branches consumed the most, against the budget each was given?",
     colorful: true,
+    budgetBeside: true,
   },
   {
     id: "by-month",
     dimension: "month",
     chart: "column",
     title: "By month",
-    question: "How did consumption move month to month?",
+    question: "How did consumption move month to month, against each month's budget?",
     colorful: false,
+    budgetBeside: true,
   },
   {
     id: "requesters-over-months",

@@ -357,6 +357,10 @@ export const moneyBudgetUpdateSchema = z.object({
   setAbsolute: z.boolean().optional(),
   resetAddons: z.boolean().optional(),
   reason: z.string().trim().max(1_000).optional(),
+  // The day an add-on stops being available (YYYY-MM-DD, Asia/Karachi).
+  // Required for any add-on that credits money; the route resolves and
+  // bounds it through lib/budget-addon-expiry.ts.
+  validUntil: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "validUntil must be a date in YYYY-MM-DD format").optional(),
 }).strict()
 
 export const quantityBudgetResetSchema = z.object({
@@ -750,6 +754,20 @@ export const supportThreadUpdateSchema = z.object({
     || value.assignedToUserId !== undefined,
   "Nothing to update",
 )
+
+/**
+ * A Head Office exception to the overdue-payment block. The window is the
+ * policy's (one month from now), never the client's: a body that names a
+ * start, an expiry, an organization or an actor is refused whole.
+ */
+export const paymentControlExceptionGrantSchema = z.object({
+  branchId: positiveId,
+  reason: z.string().trim().max(1_000).optional(),
+}).strict()
+
+export const paymentControlExceptionRevokeSchema = z.object({
+  reason: z.string().trim().max(1_000).optional(),
+}).strict()
 
 export function validationMessage(error: z.ZodError): string {
   const unknownKeys = error.issues

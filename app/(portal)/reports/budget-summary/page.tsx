@@ -235,7 +235,7 @@ export default function BudgetSummaryPage() {
     const [chartMonths, setChartMonths] = useState<number[]>([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
     const [chartBranchIds, setChartBranchIds] = useState<string[]>([])
     const [chartGroupIds, setChartGroupIds] = useState<string[]>([])
-    const [showBudgetBar, setShowBudgetBar] = useState(false)
+    const [showBudgetBar, setShowBudgetBar] = useState(true)
     const hasInitializedChartDefaults = useRef(false)
 
     // Report-local filters
@@ -1288,7 +1288,7 @@ export default function BudgetSummaryPage() {
                                                     {showBudgetBar && (
                                                         <Bar
                                                             dataKey="totalLimit"
-                                                            name="Budget Allocated"
+                                                            name="Total Budget"
                                                             fill="url(#barGradientBudget)"
                                                             radius={[6, 6, 0, 0]}
                                                             isAnimationActive={true}

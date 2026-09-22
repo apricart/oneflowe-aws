@@ -25,6 +25,9 @@ import { generateReceiptData } from "@/lib/receipt-generator"
 import { resolveTaxRateBp, splitInclusiveCents } from "@/lib/tax"
 import { getOrganizationTaxRateBp } from "@/lib/server/tax-rate"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
+import { settleDueAddonsOnBudget } from "@/lib/server/budget-addon-expiry"
+import { assertBranchMayOrder } from "@/lib/server/payment-control"
+import { isPaymentControlBlockedError } from "@/lib/payment-control-policy"
 import {
   attemptImmediateOrderEmailDelivery,
   queueOrderCreatedNotifications,
@@ -181,6 +184,7 @@ export function groupOrderFingerprint(input: {
  * failure never leaks implementation detail into the portal.
  */
 function toUserFacingReason(caughtError: unknown): string {
+  if (isPaymentControlBlockedError(caughtError)) return caughtError.message
   const message = String((caughtError as { message?: unknown })?.message ?? "")
   const normalized = message.toLowerCase()
   const isCustomerError = message.startsWith("Insufficient stock")
@@ -628,6 +632,12 @@ async function createBranchOrder(context: BranchCreationContext): Promise<Branch
 
   try {
     const created = await db.transaction(async (tx) => {
+      // Per branch, because each branch commits on its own: a payment-blocked
+      // branch is reported as failed and the others still go through.
+      await assertBranchMayOrder(tx, { organizationId, branchId })
+      // A due add-on is withdrawn under the row lock before the hold, so a
+      // group submission cannot spend money that has expired.
+      await settleDueAddonsOnBudget(tx, budget.id, new Date(), { actorUserId: context.actor.userId })
       const [lockedBudget] = await tx
         .select()
         .from(budgets)
