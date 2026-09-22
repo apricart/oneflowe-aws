@@ -9,7 +9,7 @@ import { Upload,Package } from "lucide-react"
 import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/hooks/use-toast"
 import { useRouter } from "next/navigation"
-import Image from "next/image"
+import NextImage from "next/image"
 import useSWR,{ useSWRConfig } from "swr"
 import { fetcher } from "@/lib/fetcher"
 import {
@@ -757,7 +757,7 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Reado
               )}
               {productData.imageUrl && (
                 <div className="flex items-center gap-3 rounded-lg border bg-muted/20 p-2 text-xs text-muted-foreground">
-                  <Image
+                  <NextImage
                     src={productData.imageUrl}
                     alt={productData.name || "Product preview"}
                     width={40}

@@ -309,47 +309,7 @@ export async function PATCH(
     const updateError = await updateUserProfile(id, input, targetUser, nextUsername)
     if (updateError) return error(updateError, 400)
 
-    // Determine if email actually changed (avoid unnecessary session invalidation)
     // Execute update (includes sessionVersion bump if needed — single atomic write)
-    await db.update(users).set({
-      email: emailActuallyChanged ? nextEmail : undefined,
-      username: usernameActuallyChanged ? nextUsername : undefined,
-      firstName: input.firstName,
-      lastName: input.lastName,
-      phone: input.phone !== undefined ? nextPhone : undefined,
-      employeeId: input.employeeId !== undefined ? nextEmployeeId : undefined,
-      imprestHolder: input.imprestHolder,
-      contactPerson: input.contactPerson,
-      location: input.location,
-      address: input.address,
-      fullName,
-      passwordHash,
-      sessionVersion,
-      // An administrator resetting the password is the confirmed-identity
-      // branch of the lockout policy, so it releases the account.
-      failedLoginAttempts: isSecurityChange ? 0 : undefined,
-      lockoutUntil: isSecurityChange ? null : undefined,
-      updatedAt: new Date(),
-    }).where(eq(users.id, id))
-
-    // Drop the cached session-validation result so deactivation/password
-    // changes take effect on the target user's next session check
-    await invalidateSessionValidationCache(id)
-
-    // Also delete physical sessions if they exist (for database-bound sessions if used)
-    const deleteSessions = isSecurityChange
-      ? db.delete(sessions).where(eq(sessions.userId, id))
-      : Promise.resolve()
-    await deleteSessions
-
-    await writeUserUpdateAudit(id, input, isSecurityChange)
-
-    // Invalidate users cache so lists refresh immediately in production
-    await invalidateByPrefix('users')
-    return null
-    })()
-    if (updateResponse) return updateResponse
-
     return ok({ success: true })
   } catch (caughtError: any) {
     return handleUserUpdateError(caughtError)

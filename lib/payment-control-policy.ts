@@ -235,40 +235,29 @@ export function resolvePaymentControl(input: {
  * date is ever printed; a step whose date the data does not carry has
  * `at: null` and is still shown, undated.
  */
-export function buildPaymentControlTimeline(status: Omit<PaymentControlStatus, "timeline">): PaymentControlTimelineStep[] {
-  if (!status.configured) return []
+type TimelineStatus = Omit<PaymentControlStatus, "timeline">
 
+function clearTimeline(exception: PaymentControlException | null): PaymentControlTimelineStep[] {
   const steps: PaymentControlTimelineStep[] = []
-  const { exception, threshold } = status
-  const now = status.evaluatedAt
-
-  if (status.state === "CLEAR") {
-    if (exception) {
-      steps.push(grantedStep(exception, "complete"))
-      if (exception.revokedAt) steps.push(revokedStep(exception, "complete"))
-    }
-    steps.push({
-      key: "clear",
-      label: "No overdue payments",
-      description: "Ordering is available.",
-      at: null,
-      state: "current",
-    })
-    return steps
+  if (exception) {
+    steps.push(grantedStep(exception, "complete"))
+    if (exception.revokedAt) steps.push(revokedStep(exception, "complete"))
   }
+  steps.push({ key: "clear", label: "No overdue payments", description: "Ordering is available.", at: null, state: "current" })
+  return steps
+}
 
+function overdueTimeline(status: TimelineStatus): PaymentControlTimelineStep[] {
   const dated = status.overdueItems
     .filter((item) => item.overdueSince instanceof Date)
     .sort((left, right) => (left.overdueSince as Date).getTime() - (right.overdueSince as Date).getTime())
-  for (const item of dated) {
-    steps.push({
-      key: `overdue:${item.reference}`,
-      label: "Payment overdue",
-      description: item.reference,
-      at: item.overdueSince,
-      state: "complete",
-    })
-  }
+  const steps = dated.map((item): PaymentControlTimelineStep => ({
+    key: `overdue:${item.reference}`,
+    label: "Payment overdue",
+    description: item.reference,
+    at: item.overdueSince,
+    state: "complete",
+  }))
   const undated = status.overdueCount - dated.length
   if (undated > 0) {
     steps.push({
@@ -279,85 +268,67 @@ export function buildPaymentControlTimeline(status: Omit<PaymentControlStatus, "
       state: "complete",
     })
   }
+  return steps
+}
 
-  if (status.state === "WARNING") {
-    steps.push({
+function warningTimeline(status: TimelineStatus): PaymentControlTimelineStep[] {
+  return [
+    {
       key: "warning",
       label: "Warning",
-      description: `${status.overdueCount} of ${threshold} overdue payments. Ordering is still available.`,
+      description: `${status.overdueCount} of ${status.threshold} overdue payments. Ordering is still available.`,
       at: null,
       state: "current",
-    })
-    steps.push({
+    },
+    {
       key: "will-block",
       label: "Ordering stops if the limit is reached",
-      description: `New orders are refused once ${threshold} payments are overdue.`,
+      description: `New orders are refused once ${status.threshold} payments are overdue.`,
       at: null,
       state: "upcoming",
-    })
-    steps.push(clearedStep())
-    return steps
+    },
+    clearedStep(),
+  ]
+}
+
+function appendExceptionTimeline(steps: PaymentControlTimelineStep[], status: TimelineStatus): void {
+  const exception = status.exception
+  if (!exception) return
+  steps.push(grantedStep(exception, "complete"))
+  if (exception.revokedAt) {
+    steps.push(revokedStep(exception, "complete"), blockedAgainStep("current", exception.revokedAt))
+    return
   }
-
-  // BLOCKED
-  steps.push({
-    key: "limit-reached",
-    label: "Overdue limit reached",
-    description: `${status.overdueCount} overdue payments; the limit is ${threshold}.`,
-    at: status.blockedSince,
-    state: "complete",
-  })
-  const blockedIsCurrent = !exception
-  steps.push({
-    key: "blocked",
-    label: "Ordering stopped",
-    description: "New orders for this branch are refused until the overdue payments are cleared.",
-    at: status.blockedSince,
-    state: blockedIsCurrent ? "current" : "complete",
-  })
-
-  if (exception) {
-    steps.push(grantedStep(exception, "complete"))
-    if (exception.revokedAt) {
-      steps.push(revokedStep(exception, "complete"))
-      steps.push(blockedAgainStep("current", exception.revokedAt))
-    } else if (status.exceptionActive) {
-      steps.push({
-        key: "exception-active",
-        label: "Ordering allowed by exception",
-        description: "The overdue payments are still unresolved. Ordering is allowed only while the exception lasts.",
-        at: null,
-        state: "current",
-      })
-      steps.push({
-        key: "exception-expires",
-        label: "Exception expires",
-        description: "After this, ordering stops again unless the payments have been cleared.",
-        at: exception.expiresAt,
-        state: "upcoming",
-      })
-      steps.push(blockedAgainStep("upcoming", exception.expiresAt))
-    } else if (exception.expiresAt.getTime() <= now.getTime()) {
-      steps.push({
-        key: "exception-expired",
-        label: "Exception expired",
-        description: "The Head Office exception has ended.",
-        at: exception.expiresAt,
-        state: "complete",
-      })
-      steps.push(blockedAgainStep("current", exception.expiresAt))
-    } else {
-      // Granted for a window that has not opened yet.
-      steps.push({
-        key: "exception-pending",
-        label: "Exception starts",
-        description: "Ordering will be allowed from this time.",
-        at: exception.startAt,
-        state: "upcoming",
-      })
-    }
+  if (status.exceptionActive) {
+    steps.push(
+      { key: "exception-active", label: "Ordering allowed by exception", description: "The overdue payments are still unresolved. Ordering is allowed only while the exception lasts.", at: null, state: "current" },
+      { key: "exception-expires", label: "Exception expires", description: "After this, ordering stops again unless the payments have been cleared.", at: exception.expiresAt, state: "upcoming" },
+      blockedAgainStep("upcoming", exception.expiresAt),
+    )
+    return
   }
+  if (exception.expiresAt.getTime() <= status.evaluatedAt.getTime()) {
+    steps.push(
+      { key: "exception-expired", label: "Exception expired", description: "The Head Office exception has ended.", at: exception.expiresAt, state: "complete" },
+      blockedAgainStep("current", exception.expiresAt),
+    )
+    return
+  }
+  steps.push({ key: "exception-pending", label: "Exception starts", description: "Ordering will be allowed from this time.", at: exception.startAt, state: "upcoming" })
+}
 
+export function buildPaymentControlTimeline(status: TimelineStatus): PaymentControlTimelineStep[] {
+  if (!status.configured) return []
+  if (status.state === "CLEAR") return clearTimeline(status.exception)
+
+  const steps = overdueTimeline(status)
+  if (status.state === "WARNING") return [...steps, ...warningTimeline(status)]
+
+  steps.push(
+    { key: "limit-reached", label: "Overdue limit reached", description: `${status.overdueCount} overdue payments; the limit is ${status.threshold}.`, at: status.blockedSince, state: "complete" },
+    { key: "blocked", label: "Ordering stopped", description: "New orders for this branch are refused until the overdue payments are cleared.", at: status.blockedSince, state: status.exception ? "complete" : "current" },
+  )
+  appendExceptionTimeline(steps, status)
   steps.push(clearedStep())
   return steps
 }

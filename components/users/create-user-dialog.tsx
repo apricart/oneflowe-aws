@@ -277,6 +277,10 @@ function useUsernameAvailability(
   }, [setErrors, setUsernameStatus, username])
 }
 
+// The remaining branches are the three mutually exclusive wizard layouts and
+// their field-level feedback. Validation and username lookup live in focused
+// helpers above; keeping the layouts together preserves the step transitions.
+// eslint-disable-next-line sonarjs/cognitive-complexity
 export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>) {
   const [open, setOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)

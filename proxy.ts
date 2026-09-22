@@ -236,6 +236,24 @@ function isSupportArea(pathname: string): boolean {
   return pathMatchesPrefix(pathname, SUPPORT_AREA)
 }
 
+function isSharedPortalArea(pathname: string): boolean {
+  return isInvoiceArea(pathname) || isSupportArea(pathname)
+}
+
+function groupUserRedirect(pathname: string, budgetAllocationEnabled: boolean): string | null {
+  if (pathMatchesPrefix(pathname, "/budgets") && !budgetAllocationEnabled) return GROUP_USER_HOME
+  const allowed = isSharedPortalArea(pathname)
+    || GROUP_USER_AREAS.some((prefix) => pathMatchesPrefix(pathname, prefix))
+  return allowed ? null : GROUP_USER_HOME
+}
+
+function adminPortalRedirect(pathname: string): string | null {
+  const outsideAdminPortal = pathname.startsWith("/shop")
+    || pathname.startsWith("/group-portal")
+    || pathMatchesPrefix(pathname, APPROVALS_AREA)
+  return outsideAdminPortal ? "/dashboard" : null
+}
+
 /**
  * The portal each role is confined to, or null when the path is already inside
  * it. Each restricted role owns exactly one area and is redirected home from
@@ -252,17 +270,10 @@ function rolePortalRedirect(role: string | undefined, pathname: string, budgetAl
     // The store links each fulfilled order to its invoice, so the invoice page
     // stays reachable, as does the shared support area it raises queries from;
     // everything else still funnels back to /shop.
-    return pathname.startsWith("/shop") || isInvoiceArea(pathname) || isSupportArea(pathname) ? null : "/shop"
+    return pathname.startsWith("/shop") || isSharedPortalArea(pathname) ? null : "/shop"
   }
   if (role === "GROUP_USER") {
-    if (pathMatchesPrefix(pathname, "/budgets") && !budgetAllocationEnabled) return GROUP_USER_HOME
-    // The approval queue links each approved order to its invoice, and the
-    // support area is shared by every role.
-    return isInvoiceArea(pathname)
-      || isSupportArea(pathname)
-      || GROUP_USER_AREAS.some((prefix) => pathMatchesPrefix(pathname, prefix))
-      ? null
-      : GROUP_USER_HOME
+    return groupUserRedirect(pathname, budgetAllocationEnabled)
   }
   if (role === "GROUP_ORDER_PORTAL") {
     // The requester keeps its own workspace and never reaches the admin shell,
@@ -276,11 +287,7 @@ function rolePortalRedirect(role: string | undefined, pathname: string, budgetAl
   if (role && ADMIN_PORTAL_ROLES.includes(role)) {
     // Strict separation: administrators belong in the dashboard shell only, and
     // the approval queue is not theirs.
-    return pathname.startsWith("/shop")
-      || pathname.startsWith("/group-portal")
-      || pathMatchesPrefix(pathname, APPROVALS_AREA)
-      ? "/dashboard"
-      : null
+    return adminPortalRedirect(pathname)
   }
   return null
 }

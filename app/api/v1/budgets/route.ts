@@ -717,6 +717,20 @@ async function writeMoneyBudgetAllocation({
   })
 }
 
+async function parseMoneyBudgetUpdate(req: NextRequest): Promise<MoneyBudgetUpdate | NextResponse> {
+  let rawBody: unknown
+  try {
+    rawBody = await req.json()
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON in request body" }, { status: 400 })
+  }
+  const parsedBody = moneyBudgetUpdateSchema.safeParse(rawBody)
+  if (!parsedBody.success) {
+    return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
+  }
+  return validateMoneyBudgetUpdate(parsedBody.data) ?? parsedBody.data
+}
+
 /**
  * PUT /api/v1/budgets - Update or create budget allocation
  */
@@ -743,21 +757,9 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: "Budget allocation is not enabled for this user" }, { status: 403 })
     }
 
-    let rawBody
-    try {
-      rawBody = await req.json()
-    } catch (jsonError) {
-      return NextResponse.json({ error: "Invalid JSON in request body" }, { status: 400 })
-    }
-
-    const parsedBody = moneyBudgetUpdateSchema.safeParse(rawBody)
-    if (!parsedBody.success) {
-      return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
-    }
-    const { branchId, amountAllocatedCents, resetAddons, type, reason, validUntil: validUntilInput } = parsedBody.data
-
-    const validationError = validateMoneyBudgetUpdate(parsedBody.data)
-    if (validationError) return validationError
+    const parsedBody = await parseMoneyBudgetUpdate(req)
+    if (parsedBody instanceof NextResponse) return parsedBody
+    const { branchId, amountAllocatedCents, resetAddons, type, reason, validUntil: validUntilInput } = parsedBody
 
     // Update or create the budget row for the period this write belongs to:
     // the month the engine is billing, or — for an add-on — the month its
