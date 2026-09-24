@@ -42,7 +42,11 @@ import { loadScopedBranches, resolveExecutiveScope } from "@/lib/server/executiv
  * (`ORDER_CREATOR_ROLES`) are listed. Spend is the Center's Procurement Value
  * — exactly what the drill-down lists — and Pending is reported beside it
  * rather than folded in, so a click on a row reconciles with the figure that
- * was clicked. See `plans/OF-BUDGET-BURN-watchlist.md`.
+ * was clicked. The growth figure is the one exception to "this month": it
+ * spans `BUDGET_BURN_TREND_MONTHS` months against the same number before
+ * them, so the response carries both ranges for the panel to print. See
+ * `plans/OF-BUDGET-BURN-watchlist.md` and
+ * `plans/OF-BUDGET-BURN-three-month-trend.md`.
  */
 
 const querySchema = z.object({
@@ -82,9 +86,13 @@ export async function GET(req: NextRequest) {
     }
     const limit = clampWatchlistLimit(parsedQuery.data.limit)
 
-    const [currentRows, priorRows, budgetRows, branchList] = await Promise.all([
+    // Three aggregates, not two: the month feeds Spend, Share and the late
+    // window, and neither side of the growth comparison can be derived from
+    // it — the trend windows span months the month window does not cover.
+    const [currentRows, trendRows, priorTrendRows, budgetRows, branchList] = await Promise.all([
       loadCreatorMonth(scope, windows.current, windows.recent.start),
-      loadCreatorMonth(scope, windows.prior, null),
+      loadCreatorMonth(scope, windows.trend.current, null),
+      loadCreatorMonth(scope, windows.trend.prior, null),
       loadBranchBudgets(scope, budgetFiltersFor(windows.current)),
       loadScopedBranches(scope),
     ])
@@ -94,12 +102,14 @@ export async function GET(req: NextRequest) {
       { totalBudgetCents: row.totalBudgetCents, remainingCents: row.remainingCents },
     ]))
     const { requesters, branches } = summarizeCreators(currentRows, budgetByBranch)
-    const priorByKey = new Map(priorRows.map((row) => [creatorKey(row), consumedCents(row)]))
+    const trendConsumedByKey = new Map(trendRows.map((row) => [creatorKey(row), consumedCents(row)]))
+    const priorTrendConsumedByKey = new Map(priorTrendRows.map((row) => [creatorKey(row), consumedCents(row)]))
 
     const watchlist = buildWatchlist({
       requesters,
       branches,
-      priorByKey,
+      trendConsumedByKey,
+      priorTrendConsumedByKey,
       elapsedDays: windows.current.elapsedDays,
       limit,
     })
@@ -122,10 +132,20 @@ export async function GET(req: NextRequest) {
           elapsedDays: windows.current.elapsedDays,
           daysInMonth: windows.current.daysInMonth,
         },
-        prior: {
-          month: windows.prior.month,
-          startDate: windows.prior.start.toISOString(),
-          endDate: windows.prior.end.toISOString(),
+        trend: {
+          months: windows.trend.months,
+          current: {
+            startMonth: windows.trend.current.startMonth,
+            endMonth: windows.trend.current.endMonth,
+            startDate: windows.trend.current.start.toISOString(),
+            endDate: windows.trend.current.end.toISOString(),
+          },
+          prior: {
+            startMonth: windows.trend.prior.startMonth,
+            endMonth: windows.trend.prior.endMonth,
+            startDate: windows.trend.prior.start.toISOString(),
+            endDate: windows.trend.prior.end.toISOString(),
+          },
         },
         recent: {
           startDate: windows.recent.start.toISOString(),
@@ -161,7 +181,7 @@ export async function GET(req: NextRequest) {
       flaggedCount: watchlist.flaggedCount,
       unflaggedCount: watchlist.unflaggedCount,
       limit,
-      truncated: currentRows.length >= BUDGET_BURN_QUERY_ROW_CAP || priorRows.length >= BUDGET_BURN_QUERY_ROW_CAP,
+      truncated: [currentRows, trendRows, priorTrendRows].some((rows) => rows.length >= BUDGET_BURN_QUERY_ROW_CAP),
       thresholds: BUDGET_BURN_THRESHOLDS,
       points: BUDGET_BURN_POINTS,
       reasonLabels: BUDGET_BURN_REASON_LABELS,

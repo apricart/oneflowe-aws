@@ -22,7 +22,12 @@ import { isOrderCreatorRole } from "@/lib/group-order-visibility"
  *   Consumed     Spend + Pending — the budget ledger's own "spent + held".
  *   Share        a requester's Consumed over the branch's Consumed by *every*
  *                creator, because that is what the shared pot actually lost.
- *   MoM          Consumed this month against the prior month to the same day.
+ *   Trend        Consumed over the three months ending with the selected
+ *                month, against the three months before those. The only
+ *                figure on the panel that is not about the selected month
+ *                alone: one month is too short a baseline for a requester who
+ *                orders quarterly, who otherwise reads as a spike in the
+ *                month they order and a collapse in the two either side.
  *   Peers        **branches, not colleagues.** A branch's own budget
  *                utilization (Consumed over its total budget) compared
  *                against the *median* utilization of the other branches in
@@ -70,10 +75,16 @@ export const BUDGET_BURN_THRESHOLDS = {
   highShareMinBranchCents: 2_000_000,
   /** A share needs at least this many active requesters at the branch to mean anything. */
   highShareMinRequesters: 2,
-  /** Month-over-month growth at or above which a requester "spiked". */
-  momSpikePct: 15,
-  /** Prior-month consumption below this is too small a baseline: ₨5,000. */
-  momMinBaselineCents: 500_000,
+  /** Growth of the last three months over the three before them at or above which a requester "spiked". */
+  trendSpikePct: 15,
+  /**
+   * Prior three months' consumption below this is too small a baseline: ₨5,000.
+   * Deliberately left at the figure it held when the comparison was one month
+   * against one month, because only the time range was asked to change — so
+   * it is now a third of the bar it used to be, and the point is awarded more
+   * often. Raise it here if the old strictness is wanted back.
+   */
+  trendMinBaselineCents: 500_000,
   /** At or above this far past the peer branch median a branch is "above peers". */
   abovePeersPct: 50,
   /** Fewer other branches with a computable budget utilization than this and there is no peer figure. */
@@ -100,7 +111,7 @@ export type BudgetBurnThresholds = typeof BUDGET_BURN_THRESHOLDS
 
 export const BUDGET_BURN_POINTS = {
   high_share: 3,
-  mom_spike: 2,
+  trend_spike: 2,
   above_peers: 2,
   late_surge: 2,
   high_held: 1,
@@ -114,7 +125,7 @@ export const BUDGET_BURN_REASONS = Object.keys(BUDGET_BURN_POINTS) as BudgetBurn
 
 export const BUDGET_BURN_REASON_LABELS: Record<BudgetBurnReason, string> = {
   high_share: "High share",
-  mom_spike: "+MoM",
+  trend_spike: "+3M",
   above_peers: "Above peers",
   late_surge: "Late surge",
   high_held: "High held",
@@ -127,6 +138,13 @@ export const BUDGET_BURN_DEFAULT_ROWS = 25
 export const BUDGET_BURN_MAX_ROWS = 100
 /** How far back a month may be asked for. */
 export const BUDGET_BURN_MAX_MONTHS_BACK = 24
+/**
+ * Whole months on each side of the growth comparison. The prior side may
+ * therefore read rows up to `2 * this - 1` months before the selected month;
+ * that is a read of older orders and nothing more, so `BUDGET_BURN_MAX_MONTHS_BACK`
+ * still bounds only the month the caller may select.
+ */
+export const BUDGET_BURN_TREND_MONTHS = 3
 /** Safety cap on aggregate rows read from the database; never a page. */
 export const BUDGET_BURN_QUERY_ROW_CAP = 2000
 
@@ -182,8 +200,10 @@ function daysInMonth(year: number, month: number): number {
   return new Date(Date.UTC(year, month, 0)).getUTCDate()
 }
 
-function previousMonth(year: number, month: number): { year: number; month: number } {
-  return month === 1 ? { year: year - 1, month: 12 } : { year, month: month - 1 }
+/** The calendar month `delta` months away, carrying across year boundaries. */
+function shiftMonth(year: number, month: number, delta: number): { year: number; month: number } {
+  const index = year * 12 + (month - 1) + delta
+  return { year: Math.floor(index / 12), month: (index % 12) + 1 }
 }
 
 function startOfAppDay(year: number, month: number, day: number): Date {
@@ -201,6 +221,16 @@ export function monthsBetween(earlier: string, later: string): number {
   return (b.year - a.year) * 12 + (b.month - a.month)
 }
 
+/** One side of the growth comparison: a run of whole months, named and bounded. */
+export type TrendWindow = {
+  /** First month of the window, `YYYY-MM`. */
+  startMonth: string
+  /** Last month of the window, `YYYY-MM`. */
+  endMonth: string
+  start: Date
+  end: Date
+}
+
 export type MonthWindows = {
   month: string
   current: {
@@ -212,8 +242,12 @@ export type MonthWindows = {
     elapsedDays: number
     daysInMonth: number
   }
-  /** The prior month to the same elapsed day, or the whole prior month once this one is complete. */
-  prior: { month: string; start: Date; end: Date }
+  /**
+   * The growth comparison, and the only part of the watchlist that reaches
+   * outside the selected month: the `BUDGET_BURN_TREND_MONTHS` months ending
+   * with it, against the same number of months before those.
+   */
+  trend: { months: number; current: TrendWindow; prior: TrendWindow }
   /** The last `lateSurgeDays` of the current window, never before the month began. */
   recent: { start: Date; end: Date }
 }
@@ -226,10 +260,12 @@ export type MonthWindowError = { ok: false; error: string }
  * The Center's `previousWindow` — the equal-length window immediately before
  * the selection — is the wrong comparison here: for 1–20 September it yields
  * 12–31 August, setting the prior month's end-of-month rush against a quiet
- * month start. The watchlist compares like with like: this month to date
- * against the prior month to the same day (clamped to a shorter month), or
- * whole month against whole month once the month is over. The prior window
- * runs to the *end* of that day, so it is always a whole number of days.
+ * month start. The watchlist compares like with like, and the same rule
+ * governs both the month window every other figure uses and the trend windows
+ * the growth figure uses: to the same elapsed day on both sides (clamped when
+ * the older month is shorter), or whole months on both sides once the
+ * selected month is over. The older side runs to the *end* of that day, so
+ * each pair is always a whole number of days.
  */
 export function monthWindows(
   month: string,
@@ -253,9 +289,17 @@ export function monthWindows(
   const elapsedDays = complete ? days : appDateParts(now).day
   const currentEnd = complete ? monthEnd : now
 
-  const prior = previousMonth(year, monthNumber)
-  const priorDays = daysInMonth(prior.year, prior.month)
-  const priorEndDay = complete ? priorDays : Math.min(elapsedDays, priorDays)
+  const span = BUDGET_BURN_TREND_MONTHS
+  // The current run ends where the month window ends — now, or the last
+  // instant of the month — so the newest side never reaches into the future.
+  const trendStart = shiftMonth(year, monthNumber, -(span - 1))
+  // The older run is the same shape shifted a whole span back, so the two
+  // never overlap and the pair reads as "the last N months against the N
+  // before them".
+  const priorTrendStart = shiftMonth(year, monthNumber, -(2 * span - 1))
+  const priorTrendEnd = shiftMonth(year, monthNumber, -span)
+  const priorTrendEndDays = daysInMonth(priorTrendEnd.year, priorTrendEnd.month)
+  const priorTrendEndDay = complete ? priorTrendEndDays : Math.min(elapsedDays, priorTrendEndDays)
 
   const recentStart = new Date(Math.max(
     monthStart.getTime(),
@@ -265,10 +309,20 @@ export function monthWindows(
   return {
     month,
     current: { start: monthStart, end: currentEnd, complete, elapsedDays, daysInMonth: days },
-    prior: {
-      month: monthKeyOf(prior.year, prior.month),
-      start: startOfAppDay(prior.year, prior.month, 1),
-      end: endOfAppDay(prior.year, prior.month, priorEndDay),
+    trend: {
+      months: span,
+      current: {
+        startMonth: monthKeyOf(trendStart.year, trendStart.month),
+        endMonth: month,
+        start: startOfAppDay(trendStart.year, trendStart.month, 1),
+        end: currentEnd,
+      },
+      prior: {
+        startMonth: monthKeyOf(priorTrendStart.year, priorTrendStart.month),
+        endMonth: monthKeyOf(priorTrendEnd.year, priorTrendEnd.month),
+        start: startOfAppDay(priorTrendStart.year, priorTrendStart.month, 1),
+        end: endOfAppDay(priorTrendEnd.year, priorTrendEnd.month, priorTrendEndDay),
+      },
     },
     recent: { start: recentStart, end: currentEnd },
   }
@@ -385,9 +439,16 @@ export type WatchlistMetrics = {
   pendingCents: number
   consumedCents: number
   shareOfBranchPct: number
-  /** null when the prior month had nothing to grow from. */
-  momPct: number | null
-  priorConsumedCents: number
+  /**
+   * Growth of the last `BUDGET_BURN_TREND_MONTHS` months over the ones before
+   * them; null when the older run had nothing to grow from. Deliberately not
+   * a ratio of `consumedCents`, which is the selected month alone.
+   */
+  trendPct: number | null
+  /** Consumed across the trend window ending with the selected month. */
+  trendConsumedCents: number
+  /** Consumed across the run of months immediately before that window. */
+  priorTrendConsumedCents: number
   /** This branch's own consumption as a share of its budget; null with no budget. */
   branchUtilizationPct: number | null
   /** null when there are fewer than `branchPeersMinCount` other branches with a computable utilization. */
@@ -438,17 +499,21 @@ export function scoreRequester(input: {
   branch: BranchMonth
   /** The other branches in scope this month — never including `branch`. */
   peerBranches: readonly BranchMonth[]
-  priorConsumedCents: number
+  /** This requester's consumption across the trend window ending with the month. */
+  trendConsumedCents: number
+  /** The same across the run of months immediately before it. */
+  priorTrendConsumedCents: number
   elapsedDays: number
   thresholds?: BudgetBurnThresholds
 }): WatchlistRow {
   const t = input.thresholds ?? BUDGET_BURN_THRESHOLDS
   const { row, branch, peerBranches } = input
   const consumed = consumedCents(row)
-  const prior = Math.max(0, input.priorConsumedCents)
+  const trend = Math.max(0, input.trendConsumedCents)
+  const priorTrend = Math.max(0, input.priorTrendConsumedCents)
 
   const shareOfBranchPct = safeDivide(consumed, branch.consumedCents) * 100
-  const momPct = growthPct(consumed, prior)
+  const trendPct = growthPct(trend, priorTrend)
   const ownUtilizationPct = branchUtilizationPct(branch)
   const peerMedianUtilizationPct = peerBranchMedianUtilizationPct(peerBranches, t)
   const vsPeerPct = ownUtilizationPct === null || peerMedianUtilizationPct === null || peerMedianUtilizationPct <= 0
@@ -468,7 +533,7 @@ export function scoreRequester(input: {
   ) reasons.push("high_share")
 
   // Doubling a tiny base is not a spike.
-  if (prior >= t.momMinBaselineCents && momPct !== null && momPct >= t.momSpikePct) reasons.push("mom_spike")
+  if (priorTrend >= t.trendMinBaselineCents && trendPct !== null && trendPct >= t.trendSpikePct) reasons.push("trend_spike")
 
   if (vsPeerPct !== null && vsPeerPct >= t.abovePeersPct) reasons.push("above_peers")
 
@@ -494,8 +559,9 @@ export function scoreRequester(input: {
       pendingCents: Math.max(0, row.pendingCents),
       consumedCents: consumed,
       shareOfBranchPct,
-      momPct,
-      priorConsumedCents: prior,
+      trendPct,
+      trendConsumedCents: trend,
+      priorTrendConsumedCents: priorTrend,
       branchUtilizationPct: ownUtilizationPct,
       vsPeerPct,
       peerBranchMedianUtilizationPct: peerMedianUtilizationPct,
@@ -528,8 +594,10 @@ export function isFlagged(row: WatchlistRow, thresholds: Pick<BudgetBurnThreshol
 export function buildWatchlist(input: {
   requesters: readonly CreatorMonth[]
   branches: ReadonlyMap<number, BranchMonth>
-  /** Prior-month consumption keyed by `creatorKey`. */
-  priorByKey: ReadonlyMap<string, number>
+  /** Consumption across the trend window ending with the month, keyed by `creatorKey`. */
+  trendConsumedByKey: ReadonlyMap<string, number>
+  /** The same across the run of months before it, keyed by `creatorKey`. */
+  priorTrendConsumedByKey: ReadonlyMap<string, number>
   elapsedDays: number
   limit: number
   thresholds?: BudgetBurnThresholds
@@ -555,11 +623,13 @@ export function buildWatchlist(input: {
     }
     const peerBranches = peerBranchesByBranch.get(row.branchId)
       ?? allBranches.filter((peer) => peer.branchId !== row.branchId)
+    const key = creatorKey(row)
     return scoreRequester({
       row,
       branch,
       peerBranches,
-      priorConsumedCents: input.priorByKey.get(creatorKey(row)) ?? 0,
+      trendConsumedCents: input.trendConsumedByKey.get(key) ?? 0,
+      priorTrendConsumedCents: input.priorTrendConsumedByKey.get(key) ?? 0,
       elapsedDays: input.elapsedDays,
       thresholds: t,
     })

@@ -38,7 +38,13 @@ function windowFilters(window: { start: Date; end: Date }, userId: string): Exec
   }
 }
 
-/** Item-by-item detail behind one watchlist row's MoM figure. */
+/**
+ * Item-by-item detail behind one watchlist row's growth figure.
+ *
+ * It reads the *same two windows* the figure was computed from — the trend
+ * windows, not the selected month — so the table's two totals reconcile with
+ * the percentage that was clicked. See `plans/OF-BUDGET-BURN-three-month-trend.md`.
+ */
 export async function GET(req: NextRequest) {
   try {
     const session = await getServerSession(authOptions)
@@ -76,8 +82,8 @@ export async function GET(req: NextRequest) {
     }
 
     const [currentRows, priorRows] = await Promise.all([
-      loadProductWindow(scope, windowFilters(windows.current, parsedQuery.data.userId)),
-      loadProductWindow(scope, windowFilters(windows.prior, parsedQuery.data.userId)),
+      loadProductWindow(scope, windowFilters(windows.trend.current, parsedQuery.data.userId)),
+      loadProductWindow(scope, windowFilters(windows.trend.prior, parsedQuery.data.userId)),
     ])
     const items = buildItemComparison(currentRows, priorRows)
 
@@ -86,15 +92,19 @@ export async function GET(req: NextRequest) {
       branchId: scope.branchIds[0],
       month: windows.month,
       windows: {
+        months: windows.trend.months,
         current: {
-          startDate: windows.current.start.toISOString(),
-          endDate: windows.current.end.toISOString(),
+          startMonth: windows.trend.current.startMonth,
+          endMonth: windows.trend.current.endMonth,
+          startDate: windows.trend.current.start.toISOString(),
+          endDate: windows.trend.current.end.toISOString(),
           complete: windows.current.complete,
         },
         prior: {
-          month: windows.prior.month,
-          startDate: windows.prior.start.toISOString(),
-          endDate: windows.prior.end.toISOString(),
+          startMonth: windows.trend.prior.startMonth,
+          endMonth: windows.trend.prior.endMonth,
+          startDate: windows.trend.prior.start.toISOString(),
+          endDate: windows.trend.prior.end.toISOString(),
         },
       },
       items,

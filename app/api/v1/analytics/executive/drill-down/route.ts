@@ -77,15 +77,16 @@ export async function GET(req: NextRequest) {
       statusSet: parsed.statusSet,
     }
 
-    // The unit narrows the rows only when the reader has actually chosen one,
-    // matching the chart. A listing is never blocked by a unit conflict the way
-    // a total is — rows carry their own unit, so mixed units are readable here
-    // even where they cannot be added.
-    const unitsInScope = await loadUnitsInScope(scope, baseFilters)
-    const unitResolution = resolveQuantityUnit(unitsInScope, parsed.requestedUnit)
+    // Quantity comparisons count every ordered line quantity regardless of its
+    // unit label, and Amount is monetary, so neither retains the retired unit
+    // filter. Average Unit Price remains unit-sensitive.
+    const metricDefinition = EXECUTIVE_METRICS[parsed.metric]
+    const unitsInScope = metricDefinition.unitSensitive ? await loadUnitsInScope(scope, baseFilters) : []
+    const requestedUnit = metricDefinition.unitSensitive ? parsed.requestedUnit : null
+    const unitResolution = resolveQuantityUnit(unitsInScope, requestedUnit)
     const filters: ExecutiveFilters = {
       ...baseFilters,
-      unit: parsed.requestedUnit && unitResolution.unit ? unitResolution.unit : null,
+      unit: requestedUnit && unitResolution.unit ? unitResolution.unit : null,
     }
 
     const result = await loadDrillDownLines(scope, filters, {

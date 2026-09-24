@@ -134,9 +134,9 @@ export const EXECUTIVE_METRICS: Record<ExecutiveMetricId, MetricDefinition> = {
     label: "Quantity",
     format: "quantity",
     grain: "line",
-    unitSensitive: true,
-    formula: "SUM(orderItem.quantity) over lines of revenue-eligible orders, within one unit of measure",
-    decision: "Physical consumption, when money hides a price change.",
+    unitSensitive: false,
+    formula: "SUM(orderItem.quantity) over lines of revenue-eligible orders; each ordered item counts as one quantity regardless of its unit label",
+    decision: "Ordered item counts, when money hides a price change.",
   },
   avgUnitPrice: {
     id: "avgUnitPrice",
@@ -777,11 +777,11 @@ export function countToReachShare<T>(
 // ── Unit-of-measure safety ─────────────────────────────────────────────────
 
 /**
- * Whether a quantity figure may be totalled at all.
+ * Resolves a single unit for a unit-sensitive figure such as average unit price.
  *
- * "20 laptops + 400 litres" is not 420 of anything. When more than one unit is
- * in scope and the caller has not picked one, the API returns the unit list and
- * refuses the total rather than printing a meaningless number.
+ * Quantity itself is intentionally a raw ordered-item count and does not call
+ * this resolver. When a genuinely unit-sensitive metric spans more than one
+ * unit, the API returns the unit list and refuses the mixed denominator.
  */
 export function resolveQuantityUnit(
   unitsInScope: string[],

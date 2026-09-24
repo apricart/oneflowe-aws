@@ -37,6 +37,7 @@ import {
   SCOPE_NOTE_COPY,
   drillFiltersFor,
   monthLabel,
+  monthRangeLabel,
   reasonExplanation,
   type BudgetBurnDrillSelection,
   type BudgetBurnItemDrillSelection,
@@ -53,7 +54,6 @@ const filters = {
   categoryIds: ["21"],
   productIds: ["186"],
   userIds: ["6ec33598-9ec2-4a1a-86df-cd0801ee0178"],
-  unit: "Ream",
 }
 
 const AHMED = "0f0b3c1e-9a3d-4d47-8e2a-6a3f0e9b5c11"
@@ -61,7 +61,12 @@ const AHMED = "0f0b3c1e-9a3d-4d47-8e2a-6a3f0e9b5c11"
 const windows: BudgetBurnResponse["windows"] = {
   // 1 Aug 00:00 +05:00 … 31 Aug 23:59:59.999 +05:00
   current: { startDate: "2026-07-31T19:00:00.000Z", endDate: "2026-08-31T18:59:59.999Z", complete: true, elapsedDays: 31, daysInMonth: 31 },
-  prior: { month: "2026-07", startDate: "2026-06-30T19:00:00.000Z", endDate: "2026-07-31T18:59:59.999Z" },
+  // Jun–Aug against Mar–May, both whole months because August is over.
+  trend: {
+    months: 3,
+    current: { startMonth: "2026-06", endMonth: "2026-08", startDate: "2026-05-31T19:00:00.000Z", endDate: "2026-08-31T18:59:59.999Z" },
+    prior: { startMonth: "2026-03", endMonth: "2026-05", startDate: "2026-02-28T19:00:00.000Z", endDate: "2026-05-31T18:59:59.999Z" },
+  },
   recent: { startDate: "2026-08-24T18:59:59.999Z", endDate: "2026-08-31T18:59:59.999Z" },
 }
 
@@ -74,14 +79,15 @@ const row = (over: Partial<BudgetBurnRow> = {}): BudgetBurnRow => ({
   branchId: 12,
   branchName: "GSMP-KKI",
   score: 7,
-  reasons: ["high_share", "mom_spike", "late_surge"],
+  reasons: ["high_share", "trend_spike", "late_surge"],
   metrics: {
     spendCents: 220_000_000,
     pendingCents: 5_000_000,
     consumedCents: 225_000_000,
     shareOfBranchPct: 95.66,
-    momPct: 273.75,
-    priorConsumedCents: 60_200_000,
+    trendPct: 273.75,
+    trendConsumedCents: 225_000_000,
+    priorTrendConsumedCents: 60_200_000,
     branchUtilizationPct: 78.4,
     vsPeerPct: null,
     peerBranchMedianUtilizationPct: null,
@@ -154,7 +160,10 @@ describe("what the reader sees", () => {
     render(<BudgetBurnWatchlist filters={filters} onDrill={vi.fn()} />)
     expect(screen.getByText(NOT_PROOF_COPY)).toBeTruthy()
     expect(screen.getByText(SCOPE_NOTE_COPY, { exact: false })).toBeTruthy()
-    expect(screen.getByText(/prior month is July 2026/)).toBeTruthy()
+    // The growth column is the one figure that is not the selected month, so
+    // the panel names both of its ranges rather than leaving it implied.
+    expect(screen.getByText(/The 3M column compares Jun 2026–Aug 2026 against Mar 2026–May 2026/)).toBeTruthy()
+    expect(screen.getByText(/every other figure is the month alone/)).toBeTruthy()
   })
 
   it("renders each flagged row with its figures and a chip per reason", () => {
@@ -168,7 +177,7 @@ describe("what the reader sees", () => {
     // No peer figure is a dash, not a zero.
     expect(within(table).getAllByText("—").length).toBeGreaterThan(0)
     const chips = within(table).getByRole("list", { name: "Why flagged" })
-    expect(within(chips).getAllByRole("listitem").map((chip) => chip.textContent)).toEqual(["High share", "+MoM", "Late surge"])
+    expect(within(chips).getAllByRole("listitem").map((chip) => chip.textContent)).toEqual(["High share", "+3M", "Late surge"])
     // Every chip explains its threshold.
     expect(within(chips).getByText("High share").getAttribute("title")).toContain(`${BUDGET_BURN_THRESHOLDS.highSharePct}%`)
     expect(screen.getByText(/Showing 1 of 1 flagged · 14 below the review score of 4/)).toBeTruthy()
@@ -242,7 +251,7 @@ describe("the drill hand-off", () => {
     expect(selection.filters.categoryIds).toEqual([])
     expect(selection.filters.productIds).toEqual([])
     expect(selection.filters.userIds).toEqual([])
-    expect(selection.filters.unit).toBeNull()
+    expect("unit" in selection.filters).toBe(false)
     // Scope travels unchanged; the row's branch overrides it through `narrow`.
     expect(selection.filters.organizationIds).toEqual(["3"])
     expect(selection.filters.groupIds).toEqual(["4"])
@@ -261,7 +270,7 @@ describe("the drill hand-off", () => {
     expect(screen.getByRole("button", { name: "Ahmed Raza" }).getAttribute("aria-pressed")).toBe("true")
   })
 
-  it("opens an item-wise comparison from the MoM value without changing the name drill", () => {
+  it("opens an item-wise comparison from the growth value without changing the name drill", () => {
     respond()
     const onDrill = vi.fn<(selection: BudgetBurnDrillSelection) => void>()
     const onDrillItems = vi.fn<(selection: BudgetBurnItemDrillSelection) => void>()
@@ -274,8 +283,13 @@ describe("the drill hand-off", () => {
       />,
     )
 
-    const button = screen.getByRole("button", { name: "Compare Ahmed Raza items month over month" })
+    const button = screen.getByRole("button", { name: "Compare Ahmed Raza items over 3 months" })
     expect(button.textContent).toBe("+274%")
+    // The tooltip carries both runs of months and both totals, because the
+    // percentage is not a ratio of the Spend shown beside it.
+    const title = button.getAttribute("title") ?? ""
+    expect(title).toContain("Jun 2026–Aug 2026")
+    expect(title).toContain("Mar 2026–May 2026")
     expect(button.getAttribute("aria-pressed")).toBe("true")
     fireEvent.click(button)
     expect(onDrillItems).toHaveBeenCalledWith({
@@ -338,10 +352,18 @@ describe("labels", () => {
     expect(monthLabel("2026-01")).toBe("January 2026")
   })
 
+  it("names a run of months on both ends, so a run across a year is unambiguous", () => {
+    expect(monthRangeLabel("2026-06", "2026-08")).toBe("Jun 2026–Aug 2026")
+    expect(monthRangeLabel("2025-11", "2026-01")).toBe("Nov 2025–Jan 2026")
+    // A run of one is just the month, spelled out.
+    expect(monthRangeLabel("2026-08", "2026-08")).toBe("August 2026")
+  })
+
   it("explains every reason with its own threshold", () => {
     const t = BUDGET_BURN_THRESHOLDS
     expect(reasonExplanation("high_share", t)).toContain(`${t.highSharePct}%`)
-    expect(reasonExplanation("mom_spike", t)).toContain(`+${t.momSpikePct}%`)
+    expect(reasonExplanation("trend_spike", t)).toContain(`+${t.trendSpikePct}%`)
+    expect(reasonExplanation("trend_spike", t)).toContain("previous 3 months")
     expect(reasonExplanation("above_peers", t)).toContain(`${t.abovePeersPct}%`)
     expect(reasonExplanation("above_peers", t)).toContain("other branches in scope")
     expect(reasonExplanation("late_surge", t)).toContain(`${t.lateSurgeDays} days`)

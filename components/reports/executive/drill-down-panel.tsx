@@ -58,6 +58,7 @@ type DrillDownResponse = {
     lineCount: number
     orderCount: number
     valueCents: number
+    quantity: number
     quantityByUnit: Array<{ unit: string; quantity: number }>
   }
   hasMore: boolean
@@ -240,14 +241,7 @@ export function DrillDownPanel({ target, filters, metric, statuses = "revenue", 
             <Total term="Orders" value={countShort(totals.orderCount)} />
             <Total term="Lines" value={countShort(totals.lineCount)} />
             <Total term="Value" value={money(totals.valueCents)} />
-            {/*
-              Quantity is listed per unit rather than summed. Litres and packs
-              are not addable, and the charts above already refuse to total
-              them — a detail table that did would contradict its own chart.
-            */}
-            {totals.quantityByUnit.map((entry) => (
-              <Total key={entry.unit} term={`Qty (${entry.unit})`} value={countShort(entry.quantity)} />
-            ))}
+            <Total term="Quantity" value={countShort(totals.quantity)} />
           </dl>
         ) : null}
 

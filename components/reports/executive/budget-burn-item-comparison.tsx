@@ -4,22 +4,26 @@ import { AlertTriangle, GitCompareArrows, X } from "lucide-react"
 
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
+import { BUDGET_BURN_TREND_MONTHS } from "@/lib/budget-burn-risk"
 import type { ItemComparisonRow } from "@/lib/budget-burn-item-comparison"
 import { useAPI } from "@/lib/hooks/use-api"
 import { ChartMessage, countShort, money } from "./chart-kit"
 import {
-  monthLabel,
+  monthRangeLabel,
   signedPercent,
   type BudgetBurnItemDrillSelection,
 } from "./budget-burn-watchlist"
+
+type ItemComparisonWindow = { startMonth: string; endMonth: string; startDate: string; endDate: string }
 
 type ItemComparisonResponse = {
   userId: string
   branchId: number
   month: string
   windows: {
-    current: { startDate: string; endDate: string; complete: boolean }
-    prior: { month: string; startDate: string; endDate: string }
+    months: number
+    current: ItemComparisonWindow & { complete: boolean }
+    prior: ItemComparisonWindow
   }
   items: ItemComparisonRow[]
   currentTotalSpendCents: number
@@ -33,10 +37,21 @@ function signedQuantity(value: number): string {
   return `${value > 0 ? "+" : "-"}${countShort(Math.abs(value))}`
 }
 
-function previousMonth(month: string): string {
+/**
+ * The two runs of months the panel compares, derived locally only so the
+ * heading can be drawn before the response lands. The server's own
+ * `windows.trend` is authoritative and replaces this the moment it arrives.
+ */
+function fallbackRanges(month: string, span: number): { current: [string, string]; prior: [string, string] } {
   const [year, monthNumber] = month.split("-").map(Number)
-  const previous = new Date(Date.UTC(year, monthNumber - 2, 1))
-  return `${previous.getUTCFullYear()}-${String(previous.getUTCMonth() + 1).padStart(2, "0")}`
+  const shift = (delta: number) => {
+    const shifted = new Date(Date.UTC(year, monthNumber - 1 + delta, 1))
+    return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, "0")}`
+  }
+  return {
+    current: [shift(-(span - 1)), month],
+    prior: [shift(-(2 * span - 1)), shift(-span)],
+  }
 }
 
 export function BudgetBurnItemComparisonPanel({ selection, onClose }: Readonly<{
@@ -54,6 +69,14 @@ export function BudgetBurnItemComparisonPanel({ selection, onClose }: Readonly<{
     ? "The item comparison could not be loaded. Your session may have expired, or the selected month returned an error."
     : data?.error ?? null
   const rows = data?.items ?? []
+  const fallback = fallbackRanges(selection.month, BUDGET_BURN_TREND_MONTHS)
+  const currentRange = data
+    ? monthRangeLabel(data.windows.current.startMonth, data.windows.current.endMonth)
+    : monthRangeLabel(...fallback.current)
+  const priorRange = data
+    ? monthRangeLabel(data.windows.prior.startMonth, data.windows.prior.endMonth)
+    : monthRangeLabel(...fallback.prior)
+  const span = data?.windows.months ?? BUDGET_BURN_TREND_MONTHS
 
   return (
     <Card className="overflow-hidden ring-1 ring-indigo-200 dark:ring-indigo-900">
@@ -62,11 +85,11 @@ export function BudgetBurnItemComparisonPanel({ selection, onClose }: Readonly<{
           <div className="min-w-0">
             <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
               <GitCompareArrows className="h-4 w-4 text-indigo-600" aria-hidden />
-              Item-wise MoM comparison
+              Item-wise {span}-month comparison
             </h3>
             <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-              {selection.requesterName} at {selection.branchName}: {monthLabel(selection.month)} against the same window in {monthLabel(data?.windows.prior.month ?? previousMonth(selection.month))}.
-              {" "}Orders counted as consumed, including pending orders, are included to match the MoM figure you opened.
+              {selection.requesterName} at {selection.branchName}: {currentRange} against the equal-length window before it, {priorRange}.
+              {" "}Orders counted as consumed, including pending orders, are included to match the {span}M figure you opened.
             </p>
           </div>
           <button
@@ -82,17 +105,17 @@ export function BudgetBurnItemComparisonPanel({ selection, onClose }: Readonly<{
       <CardContent className="space-y-3">
         {data && !requestError ? (
           <dl className="flex flex-wrap gap-x-6 gap-y-2 rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/50">
-            <Total term={monthLabel(data.month)} value={money(data.currentTotalSpendCents)} />
-            <Total term={monthLabel(data.windows.prior.month)} value={money(data.priorTotalSpendCents)} />
+            <Total term={currentRange} value={money(data.currentTotalSpendCents)} />
+            <Total term={priorRange} value={money(data.priorTotalSpendCents)} />
           </dl>
         ) : null}
 
         {isLoading ? <Skeleton className="h-[220px] w-full rounded-lg" /> : null}
         {!isLoading && requestError ? <ChartMessage tone="error" message={requestError} /> : null}
         {!isLoading && !requestError && rows.length === 0 ? (
-          <ChartMessage tone="empty" message="No consumed items were found for this requester in either month." />
+          <ChartMessage tone="empty" message="No consumed items were found for this requester in either window." />
         ) : null}
-        {!isLoading && !requestError && rows.length > 0 ? <ItemTable rows={rows} /> : null}
+        {!isLoading && !requestError && rows.length > 0 ? <ItemTable rows={rows} span={span} /> : null}
 
         {data?.truncated && !requestError ? (
           <p className="flex items-center gap-1 text-[11px] text-amber-700 dark:text-amber-300">
@@ -114,8 +137,8 @@ function Total({ term, value }: Readonly<{ term: string; value: string }>) {
   )
 }
 
-function ItemTable({ rows }: Readonly<{ rows: ItemComparisonRow[] }>) {
-  const columns = ["Product", "Unit", "Qty this month", "Qty last month", "Δ Qty", "Δ%", "Spend this month", "Spend last month"]
+function ItemTable({ rows, span }: Readonly<{ rows: ItemComparisonRow[]; span: number }>) {
+  const columns = ["Product", "Unit", `Qty last ${span}M`, `Qty prior ${span}M`, "Δ Qty", "Δ%", `Spend last ${span}M`, `Spend prior ${span}M`]
   return (
     <div className="max-h-[420px] overflow-auto rounded-lg border border-slate-200 dark:border-slate-700">
       <table className="w-full text-xs">

@@ -34,26 +34,36 @@ import {
  *
  * ```
  *   #    date        branch  creator        status     total     note
- *   X1   2026-07-20  North   Ahmed          FULFILLED    600 000  prior-month baseline
+ *   X0c  2026-02-28  North   Ahmed          FULFILLED    777 777  before the older run opens — nowhere
+ *   X0   2026-04-10  North   Ahmed          FULFILLED    600 000  inside the older run (Mar–May)
+ *   X0b  2026-05-31  North   Ahmed          FULFILLED    100 000  its last day
+ *   X1   2026-07-20  North   Ahmed          FULFILLED    600 000
  *   X2   2026-08-05  North   Ahmed          FULFILLED    800 000
  *   X3   2026-08-28  North   Ahmed          FULFILLED  1 400 000  inside the last 7 days
  *   R1–3 2026-08-10  North   Ahmed          REJECTED      10 000  ×3 — approver said no
  *   C1   2026-08-13  North   Ahmed          CANCELLED    999 999  must appear nowhere
  *   BA1  2026-08-15  North   Branch Admin   FULFILLED    100 000  counts for the branch, never listed
- *   plus the shared fixtures' O5 (Group, APPROVED 2 000), O6 (Ahmed, PENDING 50 000),
- *   O7 (Sana, CANCELLED 15 000), O8 (Sana, FULFILLED 1 500), and O3 (Ahmed, July, net 2 000).
+ *   plus the shared fixtures' O1 (Ahmed, June, 11 000), O5 (Group, APPROVED 2 000),
+ *   O6 (Ahmed, PENDING 50 000), O7 (Sana, CANCELLED 15 000), O8 (Sana, FULFILLED 1 500),
+ *   and O3 (Ahmed, July, net 2 000).
  *   North's August budget: allocated 3 000 000.
  *   Each extra order carries one Paper line whose price × quantity is its total,
  *   so the drill-down can be checked against the row it was opened from.
  * ```
  *
- * August 2026, tenant A:
+ * August 2026, tenant A. Every figure but the growth column is August alone;
+ * the growth column is the three months ending with it against the three
+ * before those (Jun–Aug against Mar–May), which is why the fixture carries
+ * rows on both sides of 1 March and 1 June.
+ *
  *   North consumed  2 250 000 (Ahmed) + 2 000 (Group) + 100 000 (Branch Admin) = 2 352 000
  *   Ahmed           spend 2 200 000 · pending 50 000 · consumed 2 250 000 · share 95.66 %
- *                   prior (whole July) 600 000 + 2 000 = 602 000 → MoM +273.75 %
+ *                   trend Jun–Aug  11 000 (O1) + 602 000 (July) + 2 250 000 (Aug) = 2 863 000
+ *                   trend Mar–May  600 000 (X0) + 100 000 (X0b)                    =   700 000
+ *                                  → +309.00 %  (never +273.75 %, which is July alone)
  *                   recent (25–31 Aug) 1 400 000 → 62.22 % of consumed
  *                   2 revenue orders · 1 pending · 3 rejected
- *                   reasons: high_share (3) + mom_spike (2) + late_surge (2) + rejected_orders (1) = 8
+ *                   reasons: high_share (3) + trend_spike (2) + late_surge (2) + rejected_orders (1) = 8
  *                   above_peers: only one other requester at North → no peer figure
  *                   high_held: 50 000 < 20 % of 3 000 000 → no
  *   Group at North  2 000, nothing flagged
@@ -86,6 +96,8 @@ async function budgetBurn(query: Query) {
 }
 
 const MISSING_ORDER_VALUE = 999_999
+/** An order one day before the older trend run opens; it must reach no figure. */
+const BEFORE_TREND_VALUE = 777_777
 
 /** The drill-down a watchlist row opens: this requester, at this branch, for the month. */
 async function drillDown(query: Query) {
@@ -137,6 +149,11 @@ describe.skipIf(!hasTestDatabase)("budget-burn watchlist route", () => {
     const inserted = await db
       .insert(orders)
       .values([
+        // 17:00 Karachi on 28 February — hours before the older run opens at
+        // midnight on 1 March, so the run has a floor and not just a ceiling.
+        extra("X0c", f.ahmedId, "FULFILLED", at("2026-02-28"), BEFORE_TREND_VALUE),
+        extra("X0", f.ahmedId, "FULFILLED", at("2026-04-10"), 600_000),
+        extra("X0b", f.ahmedId, "FULFILLED", at("2026-05-31"), 100_000),
         extra("X1", f.ahmedId, "FULFILLED", at("2026-07-20"), 600_000),
         extra("X2", f.ahmedId, "FULFILLED", at("2026-08-05"), 800_000),
         extra("X3", f.ahmedId, "FULFILLED", at("2026-08-28"), 1_400_000),
@@ -248,7 +265,12 @@ describe.skipIf(!hasTestDatabase)("budget-burn watchlist route", () => {
       expect(body.month).toBe("2026-08")
       expect(body.windows.current.complete).toBe(true)
       expect(body.windows.current.elapsedDays).toBe(31)
-      expect(body.windows.prior.month).toBe("2026-07")
+      // Jun–Aug against Mar–May, both whole because August is over.
+      expect(body.windows.trend.months).toBe(3)
+      expect(body.windows.trend.current.startMonth).toBe("2026-06")
+      expect(body.windows.trend.current.endMonth).toBe("2026-08")
+      expect(body.windows.trend.prior.startMonth).toBe("2026-03")
+      expect(body.windows.trend.prior.endMonth).toBe("2026-05")
       expect(body.flaggedCount).toBe(1)
       // Group at North and Sana at South sat below the line.
       expect(body.unflaggedCount).toBe(2)
@@ -264,14 +286,17 @@ describe.skipIf(!hasTestDatabase)("budget-burn watchlist route", () => {
       expect(ahmed.branchId).toBe(f.northBranchId)
       expect(ahmed.branchName).toBe(f.names.north)
       expect(ahmed.score).toBe(8)
-      expect(ahmed.reasons).toEqual(["high_share", "mom_spike", "late_surge", "rejected_orders"])
+      expect(ahmed.reasons).toEqual(["high_share", "trend_spike", "late_surge", "rejected_orders"])
 
       expect(ahmed.metrics.spendCents).toBe(2_200_000)
       expect(ahmed.metrics.pendingCents).toBe(50_000)
       expect(ahmed.metrics.consumedCents).toBe(2_250_000)
       expect(ahmed.metrics.shareOfBranchPct).toBeCloseTo((2_250_000 / 2_352_000) * 100, 3)
-      expect(ahmed.metrics.priorConsumedCents).toBe(602_000)
-      expect(ahmed.metrics.momPct).toBeCloseTo(((2_250_000 - 602_000) / 602_000) * 100, 3)
+      // The growth is the two runs of months, not the month beside it: had it
+      // stayed month-over-month these would read 2 250 000 against 602 000.
+      expect(ahmed.metrics.trendConsumedCents).toBe(2_863_000)
+      expect(ahmed.metrics.priorTrendConsumedCents).toBe(700_000)
+      expect(ahmed.metrics.trendPct).toBeCloseTo(((2_863_000 - 700_000) / 700_000) * 100, 3)
       expect(ahmed.metrics.vsPeerPct).toBeNull()
       expect(ahmed.metrics.branchUtilizationPct).toBeCloseTo((2_352_000 / 3_000_000) * 100, 3)
       expect(ahmed.metrics.peerBranchMedianUtilizationPct).toBeNull()
@@ -281,10 +306,13 @@ describe.skipIf(!hasTestDatabase)("budget-burn watchlist route", () => {
       expect(ahmed.metrics.rejectedOrderCount).toBe(3)
     })
 
-    it("never lets a cancelled order into any figure", async () => {
+    it("never lets a cancelled order, or one before the older run, into any figure", async () => {
       const { body } = await budgetBurn({})
       const everyNumber = JSON.stringify(body)
       expect(everyNumber).not.toContain(String(MISSING_ORDER_VALUE))
+      // X0c sits hours before 1 March: the older run has a floor, so it is a
+      // run of three months and not "everything before the newer one".
+      expect(everyNumber).not.toContain(String(BEFORE_TREND_VALUE))
       // Sana's CANCELLED O7 (15 000) would have made South 16 500.
       const south = body.branches.find((branch: any) => branch.branchId === f.southBranchId)
       expect(south.consumedCents).toBe(1_500)
@@ -323,7 +351,13 @@ describe.skipIf(!hasTestDatabase)("budget-burn watchlist route", () => {
       expect(body.rows).toEqual([])
       expect(body.flaggedCount).toBe(0)
       expect(body.unflaggedCount).toBe(2)
-      expect(body.windows.prior.month).toBe("2026-05")
+      // June's runs step back with it: Apr–Jun against Jan–Mar. X0 and X0b
+      // (711 000 with O1) now sit in the newer run and X0c (777 777) alone in
+      // the older one, so June's growth is negative and nothing spikes.
+      expect(body.windows.trend.current.startMonth).toBe("2026-04")
+      expect(body.windows.trend.current.endMonth).toBe("2026-06")
+      expect(body.windows.trend.prior.startMonth).toBe("2026-01")
+      expect(body.windows.trend.prior.endMonth).toBe("2026-03")
     })
   })
 
@@ -357,31 +391,52 @@ describe.skipIf(!hasTestDatabase)("budget-burn watchlist route", () => {
     })
   })
 
-  describe("the item-wise MoM comparison", () => {
-    it("reconciles item quantity and spend with the clicked requester's two windows", async () => {
+  describe("the item-wise 3-month comparison", () => {
+    it("reconciles item quantity and spend with the two runs the growth figure was built from", async () => {
       const { status, body } = await itemComparison({ userId: f.ahmedId, branchIds: f.northBranchId })
       expect(status).toBe(200)
       expect(body.userId).toBe(f.ahmedId)
       expect(body.branchId).toBe(f.northBranchId)
       expect(body.month).toBe("2026-08")
-      expect(body.windows.prior.month).toBe("2026-07")
-      expect(body.currentTotalSpendCents).toBe(2_250_000)
-      expect(body.priorTotalSpendCents).toBe(602_000)
+      expect(body.windows.months).toBe(3)
+      expect(body.windows.current.startMonth).toBe("2026-06")
+      expect(body.windows.current.endMonth).toBe("2026-08")
+      expect(body.windows.prior.startMonth).toBe("2026-03")
+      expect(body.windows.prior.endMonth).toBe("2026-05")
+      // Both totals are the same two figures the row's growth % came from, so
+      // the panel that explains a percentage cannot disagree with it.
+      expect(body.currentTotalSpendCents).toBe(2_863_000)
+      expect(body.priorTotalSpendCents).toBe(700_000)
       expect(body.truncated).toBe(false)
-      expect(body.items).toHaveLength(1)
+
+      // Jun–Aug: Paper 10 (O1) + 4 net (O3) + 100 (O6) + 1 + 1 + 1 (X1–X3) = 117
+      //             at 5 000 + 2 000 + 50 000 + 600 000 + 800 000 + 1 400 000 = 2 857 000
+      // Mar–May: Paper 1 (X0) + 1 (X0b) = 2 at 700 000. Toner is a unit of its own.
+      expect(body.items).toHaveLength(2)
       expect(body.items[0]).toMatchObject({
         productId: f.paperProductId,
         productName: f.names.paper,
         unit: "Ream",
-        currentQuantity: 102,
-        priorQuantity: 5,
-        deltaQuantity: 97,
-        currentSpendCents: 2_250_000,
-        priorSpendCents: 602_000,
-        currentOrderCount: 3,
+        currentQuantity: 117,
+        priorQuantity: 2,
+        deltaQuantity: 115,
+        currentSpendCents: 2_857_000,
+        priorSpendCents: 700_000,
+        currentOrderCount: 6,
         priorOrderCount: 2,
       })
-      expect(body.items[0].deltaPct).toBeCloseTo(1940)
+      expect(body.items[0].deltaPct).toBeCloseTo(5750)
+      // O1's toner line is in the newer run only — "new since last quarter".
+      expect(body.items[1]).toMatchObject({
+        productName: f.names.toner,
+        unit: "Piece",
+        currentQuantity: 2,
+        priorQuantity: 0,
+        deltaQuantity: 2,
+        currentSpendCents: 6_000,
+        priorSpendCents: 0,
+        deltaPct: null,
+      })
     })
 
     it("requires one resolved branch and returns no rows for a foreign requester", async () => {

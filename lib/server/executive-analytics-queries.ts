@@ -118,7 +118,7 @@ export const lineNetValue = sql<number>`COALESCE(SUM(GREATEST(0,
   ROUND(${orderItems.priceCents} * ${orderItems.quantity}) - ${lineRefundValue}
 )), 0)`.mapWith(Number)
 
-/** Quantity, net of approved refunds. Only ever summed within one unit. */
+/** Ordered item count, net of approved refunds, regardless of each line's unit label. */
 export const lineNetQuantity = sql<number>`COALESCE(SUM(GREATEST(0,
   ${orderItems.quantity} - ${lineRefundQuantity}
 )), 0)`.mapWith(Number)
@@ -538,7 +538,7 @@ export async function loadLineGrainSeries(
   })
 }
 
-/** Which units of measure are in scope, so quantity is never added across them. */
+/** Which units are in scope for metrics, such as average unit price, that require one denominator. */
 export async function loadUnitsInScope(
   scope: ExecutiveScope,
   filters: ExecutiveFilters,
@@ -1501,7 +1501,7 @@ export type DrillDownLine = {
 
 export type DrillDownResult = {
   rows: DrillDownLine[]
-  totals: { lineCount: number; orderCount: number; valueCents: number; quantityByUnit: Array<{ unit: string; quantity: number }> }
+  totals: { lineCount: number; orderCount: number; valueCents: number; quantity: number; quantityByUnit: Array<{ unit: string; quantity: number }> }
   hasMore: boolean
 }
 
@@ -1593,14 +1593,14 @@ export async function loadDrillDownLines(
         lineCount: sql<number>`COUNT(*)`.mapWith(Number),
         orderCount: sql<number>`COUNT(DISTINCT ${orders.id})`.mapWith(Number),
         valueCents: lineNetValue,
+        quantity: lineNetQuantity,
       })
       .from(orderItems)
       .innerJoin(orders, eq(orderItems.orderId, orders.id))
       .where(and(...conditions)),
 
-    // Quantity is reported per unit rather than as one total: litres and packs
-    // are not addable, and a drill-down must not invent a number the charts
-    // above it refuse to print.
+    // Keep the per-unit breakdown in the API for line-level auditing. The
+    // primary `totals.quantity` above is the raw ordered count used by charts.
     db
       .select({ unit: orderItems.unit, quantity: lineNetQuantity })
       .from(orderItems)
@@ -1619,6 +1619,7 @@ export async function loadDrillDownLines(
       lineCount: Number(totals?.lineCount) || 0,
       orderCount: Number(totals?.orderCount) || 0,
       valueCents: Number(totals?.valueCents) || 0,
+      quantity: Number(totals?.quantity) || 0,
       quantityByUnit: units.map((row) => ({ unit: String(row.unit), quantity: Number(row.quantity) || 0 })),
     },
     rows: page.map((row) => ({

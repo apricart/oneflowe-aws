@@ -12,6 +12,7 @@ import {
   BUDGET_BURN_MAX_MONTHS_BACK,
   BUDGET_BURN_REASON_LABELS,
   BUDGET_BURN_THRESHOLDS,
+  BUDGET_BURN_TREND_MONTHS,
   appDayKey,
   currentAppMonth,
   monthsBetween,
@@ -53,11 +54,14 @@ export type BudgetBurnRow = {
   metrics: WatchlistMetrics
 }
 
+export type BudgetBurnTrendWindow = { startMonth: string; endMonth: string; startDate: string; endDate: string }
+
 export type BudgetBurnResponse = {
   month: string
   windows: {
     current: { startDate: string; endDate: string; complete: boolean; elapsedDays: number; daysInMonth: number }
-    prior: { month: string; startDate: string; endDate: string }
+    /** The growth comparison's two runs of months — the one figure not about the selected month alone. */
+    trend: { months: number; current: BudgetBurnTrendWindow; prior: BudgetBurnTrendWindow }
     recent: { startDate: string; endDate: string }
   }
   rows: BudgetBurnRow[]
@@ -89,7 +93,7 @@ export type BudgetBurnDrillSelection = {
   pendingOrderCount: number
 }
 
-/** The requester + branch + month whose item-wise MoM table should open. */
+/** The requester + branch + month whose item-wise trend table should open. */
 export type BudgetBurnItemDrillSelection = {
   userId: string
   branchId: number
@@ -108,6 +112,22 @@ export function monthLabel(month: string): string {
   return monthFormatter.format(new Date(`${month}-01T00:00:00.000+05:00`))
 }
 
+const shortMonthFormatter = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Karachi", month: "short", year: "numeric" })
+
+function shortMonthLabel(month: string): string {
+  return shortMonthFormatter.format(new Date(`${month}-01T00:00:00.000+05:00`))
+}
+
+/**
+ * A run of months as one label — `May 2026–Jul 2026`, or just the month when
+ * a run is one month long. The year is repeated on both ends deliberately: a
+ * run can straddle a year boundary, and `Nov–Jan 2026` would be ambiguous.
+ */
+export function monthRangeLabel(startMonth: string, endMonth: string): string {
+  if (startMonth === endMonth) return monthLabel(startMonth)
+  return `${shortMonthLabel(startMonth)}–${shortMonthLabel(endMonth)}`
+}
+
 export function signedPercent(value: number | null, digits = 0): string {
   if (value === null || !Number.isFinite(value)) return "—"
   const sign = value > 0 ? "+" : ""
@@ -123,8 +143,8 @@ export function reasonExplanation(reason: BudgetBurnReason, t: BudgetBurnThresho
   switch (reason) {
     case "high_share":
       return `At least ${t.highSharePct}% of everything the branch consumed this month, with at least ${t.highShareMinRequesters} active requesters there.`
-    case "mom_spike":
-      return `At least +${t.momSpikePct}% on the prior month to the same day, from a baseline of at least ${money(t.momMinBaselineCents)}.`
+    case "trend_spike":
+      return `At least +${t.trendSpikePct}% on the previous ${BUDGET_BURN_TREND_MONTHS} months, from a baseline of at least ${money(t.trendMinBaselineCents)}.`
     case "above_peers":
       return `The branch's budget utilization is at least ${t.abovePeersPct}% above the median budget utilization of the other branches in scope.`
     case "late_surge":
@@ -145,13 +165,12 @@ export function drillFiltersFor(filters: ExecutiveFilterState, windows: BudgetBu
     categoryIds: [],
     productIds: [],
     userIds: [],
-    unit: null,
   }
 }
 
 /** Only the scope filters reach the request. */
 function scopeOnly(filters: ExecutiveFilterState): ExecutiveFilterState {
-  return { ...filters, startDate: "", endDate: "", categoryIds: [], productIds: [], userIds: [], unit: null }
+  return { ...filters, startDate: "", endDate: "", categoryIds: [], productIds: [], userIds: [] }
 }
 
 function MonthNav({ month, current, onChange }: Readonly<{ month: string; current: string; onChange: (next: string) => void }>) {
@@ -201,7 +220,7 @@ const COLUMNS = [
   { label: "Spend", numeric: true },
   { label: "Pending", numeric: true },
   { label: "Share", numeric: true },
-  { label: "MoM", numeric: true },
+  { label: `${BUDGET_BURN_TREND_MONTHS}M`, numeric: true },
   { label: "vs peers", numeric: true },
   { label: "Orders", numeric: true },
   { label: "Why", numeric: false },
@@ -210,6 +229,21 @@ const COLUMNS = [
 
 function rowKey(row: Pick<BudgetBurnRow, "userId" | "branchId">): string {
   return `${row.userId}:${row.branchId}`
+}
+
+/**
+ * The growth cell's tooltip. It names both runs of months and both totals,
+ * because the percentage is no longer a ratio of the Spend beside it — a
+ * reader who cannot see where it came from would reasonably assume it was.
+ */
+export function trendCellTitle(
+  metrics: Pick<WatchlistMetrics, "trendPct" | "trendConsumedCents" | "priorTrendConsumedCents">,
+  trend: BudgetBurnResponse["windows"]["trend"],
+): string {
+  const current = `${monthRangeLabel(trend.current.startMonth, trend.current.endMonth)}: ${money(metrics.trendConsumedCents)}`
+  const prior = `${monthRangeLabel(trend.prior.startMonth, trend.prior.endMonth)}: ${money(metrics.priorTrendConsumedCents)}`
+  const baseline = metrics.trendPct === null ? " Nothing consumed in the earlier window to compare against." : ""
+  return `${current} · ${prior}.${baseline} Open item detail.`
 }
 
 function WatchlistTable({ data, selectedKey, selectedItemsKey, onSelect, onSelectItems }: Readonly<{
@@ -271,17 +305,17 @@ function WatchlistTable({ data, selectedKey, selectedItemsKey, onSelect, onSelec
                     <button
                       type="button"
                       onClick={() => onSelectItems(row)}
-                      aria-label={`Compare ${row.requesterName} items month over month`}
+                      aria-label={`Compare ${row.requesterName} items over ${data.windows.trend.months} months`}
                       aria-pressed={itemsSelected}
-                      title={m.momPct === null ? "No consumption in the prior month to compare against; open the item detail" : `Prior month to the same day: ${money(m.priorConsumedCents)}. Open item detail.`}
+                      title={trendCellTitle(m, data.windows.trend)}
                       className={cn(
                         "rounded px-1 font-semibold text-indigo-700 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-indigo-300",
                         itemsSelected && "bg-indigo-100 dark:bg-indigo-500/20",
                       )}
                     >
-                      {signedPercent(m.momPct)}
+                      {signedPercent(m.trendPct)}
                     </button>
-                  ) : signedPercent(m.momPct)}
+                  ) : signedPercent(m.trendPct)}
                 </td>
                 <td
                   className="px-2.5 py-2 text-right tabular-nums"
@@ -344,7 +378,7 @@ function WatchlistBody({ data, loading, error, thresholds, selectedKey, selected
       />
       <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
         Showing {data.rows.length} of {data.flaggedCount} flagged · {data.unflaggedCount} below the review score of {thresholds.flagScore}.
-        {" "}Click a name for the order lines behind Spend, or a MoM value for its item-wise comparison.
+        {" "}Click a name for the order lines behind Spend, or a {data.windows.trend.months}M value for its item-wise comparison.
       </p>
       {data.truncated ? (
         <p className="mt-1 flex items-center gap-1 text-[11px] text-amber-700 dark:text-amber-300">
@@ -359,6 +393,15 @@ function WatchlistBody({ data, loading, error, thresholds, selectedKey, selected
 function windowLabel(windows: BudgetBurnResponse["windows"]): string {
   if (windows.current.complete) return "whole month"
   return `to ${dayFormatter.format(new Date(windows.current.endDate))}, day ${windows.current.elapsedDays} of ${windows.current.daysInMonth}`
+}
+
+/**
+ * Says which months the growth column spans, because it is the one figure on
+ * the panel that is not the selected month.
+ */
+export function trendNote(trend: BudgetBurnResponse["windows"]["trend"]): string {
+  return `The ${trend.months}M column compares ${monthRangeLabel(trend.current.startMonth, trend.current.endMonth)}`
+    + ` against ${monthRangeLabel(trend.prior.startMonth, trend.prior.endMonth)}; every other figure is the month alone.`
 }
 
 export function BudgetBurnWatchlist({ filters, onDrill, onDrillItems, selectedKey = null, selectedItemsKey = null }: Readonly<{
@@ -429,7 +472,7 @@ export function BudgetBurnWatchlist({ filters, onDrill, onDrillItems, selectedKe
         </div>
         <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
           {SCOPE_NOTE_COPY}
-          {data ? ` Showing ${monthLabel(data.month)} ${windowLabel(data.windows)}; prior month is ${monthLabel(data.windows.prior.month)}.` : ""}
+          {data ? ` Showing ${monthLabel(data.month)} ${windowLabel(data.windows)}. ${trendNote(data.windows.trend)}` : ""}
         </p>
 
         <div className="mt-3">

@@ -34,7 +34,6 @@ const filters = {
   categoryIds: ["21"],
   productIds: ["186"],
   userIds: ["6ec33598-9ec2-4a1a-86df-cd0801ee0178"],
-  unit: "Ream",
 }
 
 const line = (over: Record<string, unknown> = {}) => ({
@@ -64,6 +63,7 @@ function respond(over: Record<string, unknown> = {}) {
       lineCount: 2,
       orderCount: 2,
       valueCents: 16_800_000,
+      quantity: 23,
       quantityByUnit: [{ unit: "Ream", quantity: 20 }, { unit: "Box", quantity: 3 }],
     },
     hasMore: false,
@@ -108,7 +108,6 @@ describe("the request behind the table", () => {
       categoryIds: "21",
       productIds: "186",
       userIds: "6ec33598-9ec2-4a1a-86df-cd0801ee0178",
-      unit: "Ream",
       dimension: "branch",
       key: "7",
       metric: "spend",
@@ -173,7 +172,7 @@ describe("the request behind the table", () => {
     expect(param("productIds")).toBe("187")
     // Everything the cell did not name is still the screen's.
     expect(param("branchIds")).toBe("7,9")
-    expect(param("unit")).toBe("Ream")
+    expect(param("unit")).toBeNull()
 
     fireEvent.click(screen.getByLabelText("Next page"))
     expect(param("offset")).toBe(String(DRILLDOWN_DEFAULT_ROWS))
@@ -185,17 +184,16 @@ describe("the request behind the table", () => {
 })
 
 describe("what the panel shows", () => {
-  it("names the selection, its dimension and the period, and lists quantity per unit", () => {
+  it("names the selection, its dimension and the period, and totals raw quantity", () => {
     render(<DrillDownPanel target={{ dimension: "branch", key: "7", label: "North Zone" }} filters={filters} metric="spend" onClose={() => {}} />)
     const heading = screen.getByRole("heading", { level: 3 })
     expect(heading.textContent).toContain("North Zone")
     // The dimension badge sits in the heading; "Branch" is also a column header.
     expect(heading.textContent).toContain("Branch")
     expect(screen.getByText(/01 Jul 2026 – 12 Sept? 2026/)).toBeTruthy()
-    expect(screen.getByText("Qty (Ream)")).toBeTruthy()
-    expect(screen.getByText("Qty (Box)")).toBeTruthy()
-    // Two units are never added into one figure.
-    expect(screen.queryByText("23")).toBeNull()
+    expect(screen.getByText("Quantity")).toBeTruthy()
+    expect(screen.getByText("23")).toBeTruthy()
+    expect(screen.queryByText("Qty (Ream)")).toBeNull()
     expect(screen.getAllByText(/ORD-248/)).toHaveLength(2)
   })
 
@@ -210,7 +208,7 @@ describe("what the panel shows", () => {
   })
 
   it("explains an empty selection and surfaces a request error", () => {
-    respond({ rows: [], totals: { lineCount: 0, orderCount: 0, valueCents: 0, quantityByUnit: [] } })
+    respond({ rows: [], totals: { lineCount: 0, orderCount: 0, valueCents: 0, quantity: 0, quantityByUnit: [] } })
     const { unmount } = render(<DrillDownPanel target={{ dimension: "branch", key: "7", label: "North Zone" }} filters={filters} metric="spend" onClose={() => {}} />)
     expect(screen.getByText("No order lines behind this selection, under this period and these filters.")).toBeTruthy()
     unmount()

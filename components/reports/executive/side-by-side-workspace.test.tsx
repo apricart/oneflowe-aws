@@ -44,7 +44,7 @@ vi.mock("@/lib/hooks/use-api", () => ({
           metricLabel: "Procurement Value",
           period: { startDate: "2026-07-01", endDate: "2026-09-12" },
           rows: [],
-          totals: { lineCount: 0, orderCount: 0, valueCents: 0, quantityByUnit: [] },
+          totals: { lineCount: 0, orderCount: 0, valueCents: 0, quantity: 0, quantityByUnit: [] },
           hasMore: false,
         },
         isLoading: false,
@@ -168,7 +168,6 @@ const filters = () => ({
   groupIds: [],
   branchIds: ["7"],
   categoryIds: [],
-  unit: null,
 })
 
 /**
