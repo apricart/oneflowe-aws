@@ -87,11 +87,18 @@ export async function GET(req: NextRequest) {
 
     const metricDefinition = EXECUTIVE_METRICS[parsed.metric]
     const grain = resolveGrain(parsed.dimension, parsed.metric, { lineScoped: isLineScoped(baseFilters) })
-
-    const unitsInScope = metricDefinition.unitSensitive || grain === "line"
+    // Quantity is the count entered on each order line. Product unit labels
+    // (kg, litre, 500 gm, and so on) do not scale or exclude that count: 30
+    // ordered items compare as 30 against 600 ordered items. Average unit price
+    // remains unit-sensitive because mixing its denominators would change what
+    // that price means.
+    const unitsInScope = metricDefinition.unitSensitive
       ? await loadUnitsInScope(scope, baseFilters)
       : []
-    const unitResolution = resolveQuantityUnit(unitsInScope, parsed.requestedUnit)
+    const unitResolution = resolveQuantityUnit(
+      unitsInScope,
+      metricDefinition.unitSensitive ? parsed.requestedUnit : null,
+    )
 
     // A unit-sensitive metric is refused across mixed units rather than
     // producing a total of incompatible things.

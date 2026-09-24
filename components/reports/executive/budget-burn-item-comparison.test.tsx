@@ -29,8 +29,10 @@ function respond(overrides: Record<string, unknown> = {}) {
     branchId: selection.branchId,
     month: selection.month,
     windows: {
-      current: { startDate: "2026-07-31T19:00:00.000Z", endDate: "2026-08-31T18:59:59.999Z", complete: true },
-      prior: { month: "2026-07", startDate: "2026-06-30T19:00:00.000Z", endDate: "2026-07-31T18:59:59.999Z" },
+      months: 3,
+      // Jun–Aug against Mar–May: the same two windows the 3M figure was built from.
+      current: { startMonth: "2026-06", endMonth: "2026-08", startDate: "2026-05-31T19:00:00.000Z", endDate: "2026-08-31T18:59:59.999Z", complete: true },
+      prior: { startMonth: "2026-03", endMonth: "2026-05", startDate: "2026-02-28T19:00:00.000Z", endDate: "2026-05-31T18:59:59.999Z" },
     },
     items: [{
       productId: 9,
@@ -71,8 +73,13 @@ describe("budget-burn item comparison panel", () => {
     expect(url.searchParams.get("month")).toBe("2026-08")
 
     expect(screen.getByText(/Ahmed Raza at GSMP-KKI/)).toBeTruthy()
-    expect(screen.getByText(/August 2026 against the same window in July 2026/)).toBeTruthy()
+    expect(screen.getByText(/Jun 2026–Aug 2026 against the equal-length window before it, Mar 2026–May 2026/)).toBeTruthy()
+    expect(screen.getByRole("heading", { name: /Item-wise 3-month comparison/ })).toBeTruthy()
     const table = screen.getByRole("table")
+    // The columns name the runs of months, never "this month" / "last month".
+    expect(within(table).getAllByRole("columnheader").map((cell) => cell.textContent)).toEqual([
+      "Product", "Unit", "Qty last 3M", "Qty prior 3M", "Δ Qty", "Δ%", "Spend last 3M", "Spend prior 3M",
+    ])
     expect(within(table).getByText("A4 Paper")).toBeTruthy()
     expect(within(table).getByText("15")).toBeTruthy()
     expect(within(table).getByText("10")).toBeTruthy()
@@ -80,6 +87,9 @@ describe("budget-burn item comparison panel", () => {
     expect(within(table).getByText("+50.0%")).toBeTruthy()
     expect(screen.getAllByText("Rs 2,250")).toHaveLength(2)
     expect(screen.getAllByText("Rs 602")).toHaveLength(2)
+    // The two totals are labelled with the ranges they cover, not with a month.
+    expect(screen.getByText("Jun 2026–Aug 2026")).toBeTruthy()
+    expect(screen.getByText("Mar 2026–May 2026")).toBeTruthy()
   })
 
   it("shows loading, empty, safe error and truncation states", () => {

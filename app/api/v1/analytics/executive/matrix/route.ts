@@ -68,12 +68,16 @@ export async function GET(req: NextRequest) {
     const metricDefinition = EXECUTIVE_METRICS[parsed.metric]
     const grain = resolveMatrixGrain(parsed.rows, parsed.columns, parsed.metric, { lineScoped: isLineScoped(baseFilters) })
 
-    // Every grid that touches order lines resolves its unit, exactly as the
-    // comparison does, so a quantity is never added across litres and packs.
-    const unitsInScope = metricDefinition.unitSensitive || grain === "line"
+    // Quantity compares the raw count entered on every order line, independent
+    // of product unit labels. Average unit price still resolves one unit because
+    // mixing price denominators would produce a misleading average.
+    const unitsInScope = metricDefinition.unitSensitive
       ? await loadUnitsInScope(scope, baseFilters)
       : []
-    const unitResolution = resolveQuantityUnit(unitsInScope, parsed.requestedUnit)
+    const unitResolution = resolveQuantityUnit(
+      unitsInScope,
+      metricDefinition.unitSensitive ? parsed.requestedUnit : null,
+    )
 
     const description = {
       rowDimension: parsed.rows,

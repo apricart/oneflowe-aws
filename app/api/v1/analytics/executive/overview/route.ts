@@ -7,7 +7,6 @@ import {
   classifyBudgetHealth,
   countToReachShare,
   growthPct,
-  resolveQuantityUnit,
   safeDivide,
   utilizationPct,
   withCumulativeShare,
@@ -21,7 +20,6 @@ import {
   loadOrderGrainSeries,
   loadPriceVariance,
   loadStatusComposition,
-  loadUnitsInScope,
   type ExecutiveFilters,
 } from "@/lib/server/executive-analytics-queries"
 import { loadScopedBranches, resolveExecutiveScope } from "@/lib/server/executive-analytics-scope"
@@ -60,12 +58,9 @@ export async function GET(req: NextRequest) {
       unit: null,
     }
 
-    // Quantity is only totalled inside one unit of measure. Resolve which unit
-    // applies before any quantity figure is computed, so a mixed scope reports
-    // the conflict instead of adding litres to packs.
-    const unitsInScope = await loadUnitsInScope(scope, baseFilters)
-    const unitResolution = resolveQuantityUnit(unitsInScope, parsed.requestedUnit)
-    const filters: ExecutiveFilters = { ...baseFilters, unit: unitResolution.unit }
+    // The overview has no unit filter. Quantity fields are raw ordered counts;
+    // price-variance queries keep units separated inside their own grouping.
+    const filters = baseFilters
 
     const { previousStart, previousEnd } = previousWindow(parsed.startDate, parsed.endDate)
     const previousFilters: ExecutiveFilters = { ...filters, startDate: previousStart, endDate: previousEnd }
@@ -223,9 +218,9 @@ export async function GET(req: NextRequest) {
         previousEndDate: previousEnd.toISOString(),
       },
       quantityUnit: {
-        selected: unitResolution.unit,
-        conflict: unitResolution.conflict,
-        available: unitResolution.units,
+        selected: null,
+        conflict: false,
+        available: [],
       },
       kpis: {
         ...totals,

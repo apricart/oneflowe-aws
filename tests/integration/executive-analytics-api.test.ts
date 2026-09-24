@@ -251,8 +251,7 @@ describe.skipIf(!hasTestDatabase)("Product Performance — executive analytics r
       expect(body.scope.branches).toEqual([{ id: f.southBranchId, name: f.names.south }])
       expect(body.kpis.spendCents).toBe(16500)
       expect(body.kpis.orderCount).toBe(3)
-      // The Unit list is built from South's lines alone — nothing of Foreign's.
-      expect(body.quantityUnit.available).toEqual(["Box", "Litre", "Piece", "Ream"])
+      expect(body.quantityUnit).toEqual({ selected: null, conflict: false, available: [] })
       expect(body.branches.map((row: any) => row.branchName)).toEqual([f.names.south])
     })
 
@@ -450,7 +449,7 @@ describe.skipIf(!hasTestDatabase)("Product Performance — executive analytics r
     it("deducts an approved refund from money and from quantity", async () => {
       const money = await compare({ dimension: "user", metric: "spend" })
       expect(money.body.rows.find((row: any) => row.label === f.names.ahmed).value).toBe(13000)
-      const units = await compare({ dimension: "user", metric: "quantity", productIds: f.paperProductId, unit: "Ream" })
+      const units = await compare({ dimension: "user", metric: "quantity", productIds: f.paperProductId })
       // Ahmed: 10 + (6 − 2 refunded) = 14 reams.
       expect(units.body.rows.find((row: any) => row.label === f.names.ahmed).value).toBe(14)
     })
@@ -461,10 +460,9 @@ describe.skipIf(!hasTestDatabase)("Product Performance — executive analytics r
 
       const focused = await compare({ dimension: "branch", metric: "spend", productIds: f.paperProductId })
       expect(ranked(focused.body)).toEqual([[f.names.south, 8500], [f.names.north, 7000]])
-      // Money is addable across units, so the mixed units do not block Amount…
+      // Money is addable across units, so unit labels neither block nor narrow Amount.
       expect(focused.body.blocked).toBeUndefined()
-      // …but the conflict is still reported, so the Unit control can appear.
-      expect(focused.body.quantityUnit).toEqual({ selected: null, conflict: true, available: ["Box", "Ream"] })
+      expect(focused.body.quantityUnit).toEqual({ selected: null, conflict: false, available: [] })
     })
 
     it("narrows every panel to the selected requesters", async () => {
@@ -487,53 +485,48 @@ describe.skipIf(!hasTestDatabase)("Product Performance — executive analytics r
     })
   })
 
-  describe("Quantity and the unit of measure", () => {
-    it("refuses to total quantity across units until one is chosen", async () => {
+  describe("Quantity as ordered item counts", () => {
+    it("compares raw quantities across different product unit labels", async () => {
       const { status, body } = await compare({ dimension: "branch", metric: "quantity", productIds: f.paperProductId })
       expect(status).toBe(200)
-      expect(body.rows).toEqual([])
-      expect(body.blocked.reason).toBe("unit-conflict")
-      expect(body.blocked.message).toContain("Box, Ream")
-      expect(body.quantityUnit).toEqual({ selected: null, conflict: true, available: ["Box", "Ream"] })
+      expect(body.blocked).toBeUndefined()
+      expect(body.quantityUnit).toEqual({ selected: null, conflict: false, available: [] })
+      expect(ranked(body)).toEqual([[f.names.north, 14], [f.names.south, 9]])
     })
 
-    it("blocks with every unit in scope when nothing is focused", async () => {
+    it("adds each ordered count without converting kg, litres, pieces, boxes, or reams", async () => {
       const { body } = await compare({ dimension: "branch", metric: "quantity" })
-      expect(body.blocked.reason).toBe("unit-conflict")
-      expect(body.quantityUnit.available).toEqual(["Box", "Litre", "Piece", "Ream"])
+      expect(body.blocked).toBeUndefined()
+      expect(ranked(body)).toEqual([[f.names.south, 60], [f.names.north, 36]])
     })
 
-    it("counts only the chosen unit once one is picked", async () => {
-      const reams = await compare({ dimension: "branch", metric: "quantity", productIds: f.paperProductId, unit: "Ream" })
-      expect(reams.body.format).toBe("quantity")
-      expect(reams.body.quantityUnit.selected).toBe("Ream")
-      expect(ranked(reams.body)).toEqual([[f.names.north, 14], [f.names.south, 7]])
-
-      const boxes = await compare({ dimension: "branch", metric: "quantity", productIds: f.paperProductId, unit: "Box" })
-      expect(ranked(boxes.body)).toEqual([[f.names.south, 2]])
+    it("ignores the retired unit parameter for quantity comparisons", async () => {
+      const result = await compare({ dimension: "branch", metric: "quantity", productIds: f.paperProductId, unit: "Ream" })
+      expect(result.body.format).toBe("quantity")
+      expect(result.body.quantityUnit).toEqual({ selected: null, conflict: false, available: [] })
+      expect(ranked(result.body)).toEqual([[f.names.north, 14], [f.names.south, 9]])
     })
 
-    it("resolves the unit itself when only one is in scope", async () => {
+    it("does not attach a unit even when the selected product has only one", async () => {
       const { body } = await compare({ dimension: "branch", metric: "quantity", productIds: f.dieselProductId })
       expect(body.blocked).toBeUndefined()
-      expect(body.quantityUnit).toEqual({ selected: "Litre", conflict: false, available: ["Litre"] })
+      expect(body.quantityUnit).toEqual({ selected: null, conflict: false, available: [] })
       expect(ranked(body)).toEqual([[f.names.south, 50], [f.names.north, 20]])
     })
 
-    it("ignores a unit for whole-order money, and applies it once money is counted line by line", async () => {
+    it("ignores the retired unit parameter for money at both order and line grain", async () => {
       const whole = await compare({ dimension: "branch", metric: "spend", unit: "Ream" })
       expect(ranked(whole.body)).toEqual([[f.names.south, 16500], [f.names.north, 15000]])
       expect(whole.body.quantityUnit.selected).toBeNull()
 
       const focused = await compare({ dimension: "branch", metric: "spend", productIds: f.paperProductId, unit: "Ream" })
-      // The Box line at South (5000) is excluded.
-      expect(ranked(focused.body)).toEqual([[f.names.north, 7000], [f.names.south, 3500]])
-      expect(focused.body.quantityUnit.selected).toBe("Ream")
+      expect(ranked(focused.body)).toEqual([[f.names.south, 8500], [f.names.north, 7000]])
+      expect(focused.body.quantityUnit.selected).toBeNull()
     })
 
-    it("drops a unit that is not in scope rather than matching nothing", async () => {
+    it("ignores an out-of-scope unit for quantity instead of filtering item counts", async () => {
       const { body } = await compare({ dimension: "branch", metric: "quantity", productIds: f.dieselProductId, unit: "Gallon" })
-      expect(body.quantityUnit.selected).toBe("Litre")
+      expect(body.quantityUnit.selected).toBeNull()
       expect(ranked(body)).toEqual([[f.names.south, 50], [f.names.north, 20]])
     })
   })
@@ -609,6 +602,7 @@ describe.skipIf(!hasTestDatabase)("Product Performance — executive analytics r
         orderCount: 3,
         lineCount: 4,
         valueCents: north.value,
+        quantity: 36,
         // Largest first, the order the totals strip prints them in.
         quantityByUnit: [{ unit: "Litre", quantity: 20 }, { unit: "Ream", quantity: 14 }, { unit: "Piece", quantity: 2 }],
       })
@@ -649,15 +643,17 @@ describe.skipIf(!hasTestDatabase)("Product Performance — executive analytics r
       for (const row of body.rows) expect(row.requesterName).toBe(f.names.ahmed)
     })
 
-    it("reconciles a quantity bar, per unit, and only applies a unit the reader chose", async () => {
+    it("reconciles a quantity bar across unit labels and ignores the retired unit parameter", async () => {
       const chosen = await drillDown({ dimension: "product", key: String(f.paperProductId), metric: "quantity", unit: "Ream" })
-      expect(chosen.body.totals.quantityByUnit).toEqual([{ unit: "Ream", quantity: 21 }])
-      expect(chosen.body.totals.lineCount).toBe(4)
+      expect(chosen.body.totals.quantity).toBe(23)
+      expect(chosen.body.totals.quantityByUnit).toEqual([{ unit: "Ream", quantity: 21 }, { unit: "Box", quantity: 2 }])
+      expect(chosen.body.totals.lineCount).toBe(5)
 
       const mixed = await drillDown({ dimension: "product", key: String(f.paperProductId), metric: "quantity" })
       expect(mixed.body.totals.lineCount).toBe(5)
       expect(mixed.body.totals.quantityByUnit).toEqual([{ unit: "Ream", quantity: 21 }, { unit: "Box", quantity: 2 }])
       expect(mixed.body.totals.valueCents).toBe(15500)
+      expect(chosen.body.totals).toEqual(mixed.body.totals)
     })
 
     it("sorts only by an allowlisted column, and pages deterministically", async () => {
@@ -687,16 +683,17 @@ describe.skipIf(!hasTestDatabase)("Product Performance — executive analytics r
     })
   })
 
-  // ── Overview: the unit list the filter bar is built from ───────────────
+  // ── Overview without the retired unit filter ───────────────────────────
 
-  describe("the overview the filter bar reads its Unit list from", () => {
-    it("reports every unit in scope, and which one is selected", async () => {
+  describe("the overview without a unit filter", () => {
+    it("does not expose or apply unit selection", async () => {
       const mixed = await overview({})
-      expect(mixed.body.quantityUnit).toEqual({ selected: null, conflict: true, available: ["Box", "Litre", "Piece", "Ream"] })
+      expect(mixed.body.quantityUnit).toEqual({ selected: null, conflict: false, available: [] })
       expect(mixed.body.scope.branches.map((b: any) => b.name).sort()).toEqual([f.names.north, f.names.south].sort())
 
       const chosen = await overview({ unit: "Ream" })
-      expect(chosen.body.quantityUnit).toEqual({ selected: "Ream", conflict: false, available: ["Box", "Litre", "Piece", "Ream"] })
+      expect(chosen.body.quantityUnit).toEqual({ selected: null, conflict: false, available: [] })
+      expect(chosen.body.categories).toEqual(mixed.body.categories)
     })
   })
 
@@ -806,22 +803,20 @@ describe.skipIf(!hasTestDatabase)("Product Performance — executive analytics r
       expect(margins(body.rows).find(([label]) => label === f.names.ahmed)?.[1]).toBe(2)
     })
 
-    it("refuses to total quantity across units until one is chosen, then counts only that unit", async () => {
-      const blocked = await matrix({ rows: "user", columns: "product", metric: "quantity", productIds: f.paperProductId })
-      expect(blocked.status).toBe(200)
-      expect(blocked.body.blocked?.reason).toBe("unit-conflict")
-      expect(blocked.body.quantityUnit).toEqual({ selected: null, conflict: true, available: ["Box", "Ream"] })
-      expect(blocked.body.cells).toEqual([])
-      expect(blocked.body.rows).toEqual([])
-
-      const reams = await matrix({ rows: "user", columns: "product", metric: "quantity", productIds: f.paperProductId, unit: "Ream" })
-      expect(reams.body.quantityUnit.selected).toBe("Ream")
-      expect(cellsOf(reams.body)).toEqual({
+    it("compares every requester's raw item count regardless of the product unit label", async () => {
+      const result = await matrix({ rows: "user", columns: "product", metric: "quantity", productIds: f.paperProductId })
+      expect(result.status).toBe(200)
+      expect(result.body.blocked).toBeUndefined()
+      expect(result.body.quantityUnit).toEqual({ selected: null, conflict: false, available: [] })
+      expect(cellsOf(result.body)).toEqual({
         [`${f.names.ahmed}|${f.names.paper}`]: 14,
         [`${f.names.sana}|${f.names.paper}`]: 7,
+        [`${f.names.group}|${f.names.paper}`]: 2,
       })
-      // The group requester bought Paper by the Box only, so it has no Ream row.
-      expect(margins(reams.body.rows)).toEqual([[f.names.ahmed, 14], [f.names.sana, 7]])
+      expect(margins(result.body.rows)).toEqual([[f.names.ahmed, 14], [f.names.sana, 7], [f.names.group, 2]])
+
+      const legacyUnit = await matrix({ rows: "user", columns: "product", metric: "quantity", productIds: f.paperProductId, unit: "Ream" })
+      expect(cellsOf(legacyUnit.body)).toEqual(cellsOf(result.body))
     })
 
     it("bounds each axis to the limit, keeping the largest", async () => {

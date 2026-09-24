@@ -17,12 +17,13 @@ import {
 import type { ExecutiveScope } from "@/lib/server/executive-analytics-scope"
 
 /**
- * Product/unit totals for one requester's month window.
+ * Product/unit totals for one requester over one window — called once per side
+ * of the growth comparison, so the window is whatever the caller hands it.
  *
  * This is deliberately line-grain and reuses the Center's refund-aware value,
  * quantity and tenant-fence expressions. `filters.statusSet` decides which
- * order statuses count; the MoM endpoint always passes `consumed` so these
- * rows reconcile with the Spend + Pending figure that was clicked.
+ * order statuses count; the item-comparison endpoint always passes `consumed`
+ * so these rows reconcile with the Spend + Pending figure that was clicked.
  */
 export async function loadProductWindow(
   scope: ExecutiveScope,

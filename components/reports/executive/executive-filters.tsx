@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { LayoutGrid, Ruler, X } from "lucide-react"
+import { LayoutGrid, X } from "lucide-react"
 
 import { BranchFilter } from "@/components/reports/branch-filter"
 import { OrganizationFilter } from "@/components/reports/organization-filter"
@@ -44,7 +44,6 @@ export type ExecutiveFilterState = {
    * same people the requester panel ranks rather than for everyone.
    */
   userIds?: string[]
-  unit: string | null
 }
 
 /** The default range, and the single source both the control and the page read. */
@@ -56,7 +55,7 @@ export function executiveDefaultDates() {
   return { startDate: range?.start ?? today, endDate: range?.end ?? today }
 }
 
-export function ExecutiveFilters({ role, value, onChange, availableUnits, unitConflict }: Readonly<{
+export function ExecutiveFilters({ role, value, onChange }: Readonly<{
   role: string
   value: ExecutiveFilterState
   /**
@@ -69,8 +68,6 @@ export function ExecutiveFilters({ role, value, onChange, availableUnits, unitCo
    * like the date filter doing nothing at all.
    */
   onChange: (next: (current: ExecutiveFilterState) => ExecutiveFilterState) => void
-  availableUnits: string[]
-  unitConflict: boolean
 }>) {
   const isSuperAdmin = role === "SUPER_ADMIN"
   const organizationQuery = value.organizationIds.length > 0 ? value.organizationIds.join(",") : undefined
@@ -95,7 +92,6 @@ export function ExecutiveFilters({ role, value, onChange, availableUnits, unitCo
     || value.groupIds.length > 0
     || value.categoryIds.length > 0
     || value.organizationIds.length > 0
-    || Boolean(value.unit)
 
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white/60 p-3 dark:border-slate-700 dark:bg-slate-900/40">
@@ -147,43 +143,11 @@ export function ExecutiveFilters({ role, value, onChange, availableUnits, unitCo
         className="w-[220px]"
       />
 
-      {/*
-        The unit selector only appears when quantity would otherwise be
-        meaningless. Litres and packs cannot be added, so rather than printing a
-        nonsense total the Center asks which unit the reader means.
-      */}
-      {availableUnits.length > 1 ? (
-        <div
-          className={cn(
-            "flex items-center gap-1 rounded-lg border px-2 py-1.5",
-            unitConflict && !value.unit
-              ? "border-amber-300 bg-amber-50 dark:border-amber-700/60 dark:bg-amber-900/20"
-              : "border-slate-200 dark:border-slate-700",
-          )}
-        >
-          <Ruler className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden />
-          <label htmlFor="executive-unit" className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
-            Unit
-          </label>
-          <select
-            id="executive-unit"
-            value={value.unit ?? ""}
-            onChange={(event) => patch({ unit: event.target.value || null })}
-            className="bg-transparent text-xs font-semibold text-slate-700 outline-none dark:text-slate-200"
-          >
-            <option value="">Not selected</option>
-            {availableUnits.map((unit) => (
-              <option key={unit} value={unit}>{unit}</option>
-            ))}
-          </select>
-        </div>
-      ) : null}
-
       {hasFilters ? (
         <button
           type="button"
           onClick={() => onChange((current) => ({
-            ...current, organizationIds: [], groupIds: [], branchIds: [], categoryIds: [], unit: null,
+            ...current, organizationIds: [], groupIds: [], branchIds: [], categoryIds: [],
           }))}
           className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-300"
         >
@@ -225,7 +189,6 @@ export function toQuery(filters: ExecutiveFilterState, extra: Record<string, str
   if (filters.categoryIds.length > 0) params.set("categoryIds", filters.categoryIds.join(","))
   if (filters.productIds && filters.productIds.length > 0) params.set("productIds", filters.productIds.join(","))
   if (filters.userIds && filters.userIds.length > 0) params.set("userIds", filters.userIds.join(","))
-  if (filters.unit) params.set("unit", filters.unit)
   Object.entries(extra).forEach(([key, entry]) => {
     if (entry) params.set(key, entry)
   })

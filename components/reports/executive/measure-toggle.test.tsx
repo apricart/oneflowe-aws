@@ -22,15 +22,8 @@ describe("MeasureToggle", () => {
     expect(onChange).toHaveBeenCalledWith("quantity")
   })
 
-  it("disables Quantity with the reason on show when it cannot be totalled", () => {
-    const onChange = vi.fn()
-    render(<MeasureToggle value="amount" onChange={onChange} disabledReason="Litres and packs cannot be added." />)
-    const quantity = screen.getByRole("button", { name: "Quantity" }) as HTMLButtonElement
-    expect(quantity.disabled).toBe(true)
-    expect(quantity.title).toBe("Litres and packs cannot be added.")
-    fireEvent.click(quantity)
-    expect(onChange).not.toHaveBeenCalled()
-    // Amount is never blocked: money is always addable.
-    expect((screen.getByRole("button", { name: "Amount" }) as HTMLButtonElement).disabled).toBe(false)
+  it("keeps Quantity available regardless of product unit labels", () => {
+    render(<MeasureToggle value="amount" onChange={() => {}} />)
+    expect((screen.getByRole("button", { name: "Quantity" }) as HTMLButtonElement).disabled).toBe(false)
   })
 })

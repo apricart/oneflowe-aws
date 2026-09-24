@@ -170,7 +170,6 @@ function defaultFilters(): ExecutiveFilterState {
     groupIds: [],
     branchIds: [],
     categoryIds: [],
-    unit: null,
   }
 }
 
@@ -274,8 +273,6 @@ function GraphicalReportsContent() {
         role={role}
         value={filters}
         onChange={setFilters}
-        availableUnits={data?.quantityUnit.available ?? []}
-        unitConflict={Boolean(data?.quantityUnit.conflict)}
       />
 
       {requestError ? (

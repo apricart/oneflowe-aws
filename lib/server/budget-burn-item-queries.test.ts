@@ -29,4 +29,14 @@ describe("budget-burn item query contract", () => {
     expect(routeSource).toContain('handleError(error, "EXECUTIVE_BUDGET_BURN_ITEM_COMPARISON")')
     expect(routeSource).not.toContain("error.message")
   })
+
+  it("reads the same two trend windows the growth figure was built from", () => {
+    // The panel exists to explain a percentage. Reading the selected month on
+    // one side and the trend window on the other would make its totals
+    // disagree with the figure that was clicked, silently.
+    expect(routeSource).toContain("windowFilters(windows.trend.current, parsedQuery.data.userId)")
+    expect(routeSource).toContain("windowFilters(windows.trend.prior, parsedQuery.data.userId)")
+    expect(routeSource).not.toContain("windowFilters(windows.current")
+    expect(routeSource).not.toContain("windowFilters(windows.prior")
+  })
 })

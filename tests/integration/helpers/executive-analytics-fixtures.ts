@@ -67,9 +67,8 @@ export { NO_DATABASE_REASON, hasTestDatabase } from "./pricing-fixtures"
  *   Procurement Value by product (line-by-line)
  *     Paper 15500 · Toner 9000 · Diesel 7000
  *   Paper in focus (line-by-line): North 7000 · South 8500 · Ahmed 7000 · Group 5000 · Sana 3500
- *   Quantity, Paper in focus: Ream and Box both present → blocked until a unit is chosen
- *     unit Ream: 21 (North 14, South 7) · unit Box: 2
- *   Quantity, Diesel in focus: only Litre → resolves itself: North 20, South 50
+ *   Quantity counts ordered items regardless of their unit label
+ *     Paper: 23 (North 14, South 9) · Diesel: 70 (North 20, South 50) · Toner: 3
  *
  *   The South approver (GROUP_USER assigned to South) sees O2, O4 and O8 only:
  *     total 16500 · Sana 8500 · Group 8000

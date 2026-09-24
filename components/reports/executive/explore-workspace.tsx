@@ -268,7 +268,7 @@ export function ExploreWorkspace({ filters, priceProduct, onClearPriceProduct }:
       dimension: "branch",
       metric: "avgUnitPrice",
       priceProductId: String(priceProduct.productId),
-      unit: priceProduct.unit || filters.unit || "",
+      unit: priceProduct.unit || "",
     })}`
     : null
   const { data: priceData, isLoading: priceLoading } = useAPI<PriceResponse>(priceUrl)

@@ -271,7 +271,7 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
               requesters: compareUsers.map(
                 (key) => userOptions.find((option) => option.key === key)?.label ?? "selected requester",
               ),
-              unit: filters.unit,
+              unit: null,
             }}
           />
         </div>

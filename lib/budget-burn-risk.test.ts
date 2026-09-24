@@ -8,6 +8,7 @@ import {
   BUDGET_BURN_REASONS,
   BUDGET_BURN_REASON_LABELS,
   BUDGET_BURN_THRESHOLDS,
+  BUDGET_BURN_TREND_MONTHS,
   appDayKey,
   branchUtilizationPct,
   buildWatchlist,
@@ -100,7 +101,7 @@ describe("bounds", () => {
   })
 
   it("names every reason once, with a label and a point value", () => {
-    expect(BUDGET_BURN_REASONS).toEqual(["high_share", "mom_spike", "above_peers", "late_surge", "high_held", "rejected_orders"])
+    expect(BUDGET_BURN_REASONS).toEqual(["high_share", "trend_spike", "above_peers", "late_surge", "high_held", "rejected_orders"])
     for (const reason of BUDGET_BURN_REASONS) {
       expect(BUDGET_BURN_POINTS[reason]).toBeGreaterThan(0)
       expect(BUDGET_BURN_REASON_LABELS[reason].length).toBeGreaterThan(0)
@@ -128,7 +129,7 @@ describe("the calendar", () => {
     expect(monthsBetween("2026-09", "2026-09")).toBe(0)
   })
 
-  it("builds a month-to-date window that ends now, with the prior month to the same day", () => {
+  it("builds a month-to-date window that ends now", () => {
     const now = karachi("2026-09-20", "15:00:00")
     const w = windows("2026-09", now)
     expect(w.current.start.toISOString()).toBe("2026-08-31T19:00:00.000Z") // 1 Sep 00:00 +05:00
@@ -136,38 +137,83 @@ describe("the calendar", () => {
     expect(w.current.complete).toBe(false)
     expect(w.current.elapsedDays).toBe(20)
     expect(w.current.daysInMonth).toBe(30)
-    expect(w.prior.month).toBe("2026-08")
-    expect(w.prior.start.toISOString()).toBe("2026-07-31T19:00:00.000Z") // 1 Aug 00:00 +05:00
-    expect(w.prior.end.toISOString()).toBe("2026-08-20T18:59:59.999Z")   // 20 Aug 23:59:59.999 +05:00
     // The last seven days, ending now.
     expect(w.recent.end).toEqual(now)
     expect(w.recent.start.toISOString()).toBe(new Date(now.getTime() - T.lateSurgeDays * 86_400_000).toISOString())
   })
 
-  it("compares whole month to whole month once the month is over", () => {
+  it("closes the month window at the last instant once the month is over", () => {
     const w = windows("2026-08", karachi("2026-09-20"))
     expect(w.current.complete).toBe(true)
     expect(w.current.elapsedDays).toBe(31)
     expect(w.current.end.toISOString()).toBe("2026-08-31T18:59:59.999Z")
-    expect(w.prior.month).toBe("2026-07")
-    expect(w.prior.end.toISOString()).toBe("2026-07-31T18:59:59.999Z")
     // Seven days back from the last instant of August lands on the last instant
     // of 24 August, so the recent window is 25–31 August.
     expect(w.recent.start.toISOString()).toBe("2026-08-24T18:59:59.999Z")
   })
 
-  it("clamps the prior window to a shorter month", () => {
-    // 30 March against February, which has 28 days in 2026.
-    const w = windows("2026-03", karachi("2026-03-30"))
-    expect(w.current.elapsedDays).toBe(30)
-    expect(w.prior.month).toBe("2026-02")
-    expect(w.prior.end.toISOString()).toBe("2026-02-28T18:59:59.999Z")
+  it("runs the trend windows to the same elapsed day while the month is open", () => {
+    const now = karachi("2026-09-20", "15:00:00")
+    const w = windows("2026-09", now)
+    expect(w.trend.months).toBe(BUDGET_BURN_TREND_MONTHS)
+    // Jul–Sep against Apr–Jun, both cut on the 20th.
+    expect(w.trend.current.startMonth).toBe("2026-07")
+    expect(w.trend.current.endMonth).toBe("2026-09")
+    expect(w.trend.current.start.toISOString()).toBe("2026-06-30T19:00:00.000Z") // 1 Jul 00:00 +05:00
+    expect(w.trend.current.end).toEqual(now)
+    expect(w.trend.prior.startMonth).toBe("2026-04")
+    expect(w.trend.prior.endMonth).toBe("2026-06")
+    expect(w.trend.prior.start.toISOString()).toBe("2026-03-31T19:00:00.000Z")  // 1 Apr 00:00 +05:00
+    expect(w.trend.prior.end.toISOString()).toBe("2026-06-20T18:59:59.999Z")    // 20 Jun 23:59:59.999 +05:00
   })
 
-  it("steps back across the year boundary", () => {
+  it("compares whole runs of months once the month is over, and never overlaps them", () => {
+    const w = windows("2026-08", karachi("2026-09-20"))
+    expect(w.trend.current.startMonth).toBe("2026-06")
+    expect(w.trend.current.endMonth).toBe("2026-08")
+    expect(w.trend.current.start.toISOString()).toBe("2026-05-31T19:00:00.000Z") // 1 Jun 00:00 +05:00
+    expect(w.trend.current.end.toISOString()).toBe("2026-08-31T18:59:59.999Z")
+    expect(w.trend.prior.startMonth).toBe("2026-03")
+    expect(w.trend.prior.endMonth).toBe("2026-05")
+    expect(w.trend.prior.start.toISOString()).toBe("2026-02-28T19:00:00.000Z")  // 1 Mar 00:00 +05:00
+    expect(w.trend.prior.end.toISOString()).toBe("2026-05-31T18:59:59.999Z")
+    // The older run ends the instant before the newer one begins.
+    expect(w.trend.prior.end.getTime()).toBeLessThan(w.trend.current.start.getTime())
+  })
+
+  it("clamps the older trend window to a shorter month", () => {
+    // 31 May to date; three months back is February, which has 28 days in 2026.
+    const w = windows("2026-05", karachi("2026-05-30"))
+    expect(w.current.elapsedDays).toBe(30)
+    expect(w.trend.current.startMonth).toBe("2026-03")
+    expect(w.trend.prior.endMonth).toBe("2026-02")
+    expect(w.trend.prior.end.toISOString()).toBe("2026-02-28T18:59:59.999Z")
+  })
+
+  it("steps the trend windows back across the year boundary", () => {
     const w = windows("2026-01", karachi("2026-01-10"))
-    expect(w.prior.month).toBe("2025-12")
-    expect(w.prior.end.toISOString()).toBe("2025-12-10T18:59:59.999Z")
+    expect(w.trend.current.startMonth).toBe("2025-11")
+    expect(w.trend.current.endMonth).toBe("2026-01")
+    expect(w.trend.prior.startMonth).toBe("2025-08")
+    expect(w.trend.prior.endMonth).toBe("2025-10")
+    expect(w.trend.prior.end.toISOString()).toBe("2025-10-10T18:59:59.999Z")
+  })
+
+  it("gives both trend windows the same number of days", () => {
+    const day = 86_400_000
+    for (const [month, now] of [
+      ["2026-09", karachi("2026-09-20", "23:59:59")],
+      ["2026-08", karachi("2026-09-20")],
+      ["2026-01", karachi("2026-01-10", "23:59:59")],
+    ] as const) {
+      const w = windows(month, now)
+      const currentDays = Math.round((w.trend.current.end.getTime() - w.trend.current.start.getTime()) / day)
+      const priorDays = Math.round((w.trend.prior.end.getTime() - w.trend.prior.start.getTime()) / day)
+      // Runs of whole calendar months differ by at most the days a month
+      // differs by; they are never the lopsided pair the Center's
+      // equal-length `previousWindow` would produce.
+      expect(Math.abs(currentDays - priorDays), month).toBeLessThanOrEqual(3)
+    }
   })
 
   it("keeps the recent window inside the month early on", () => {
@@ -287,7 +333,15 @@ describe("branch utilization and peer median", () => {
 
 describe("signals and their guards", () => {
   const score = (row: CreatorMonth, extra: Partial<Parameters<typeof scoreRequester>[0]> = {}) =>
-    scoreRequester({ row, branch: branch(), peerBranches: ordinaryPeerBranches, priorConsumedCents: 0, elapsedDays: 31, ...extra })
+    scoreRequester({
+      row,
+      branch: branch(),
+      peerBranches: ordinaryPeerBranches,
+      trendConsumedCents: 0,
+      priorTrendConsumedCents: 0,
+      elapsedDays: 31,
+      ...extra,
+    })
 
   it("high share needs the share, a meaningful branch total and at least two active requesters", () => {
     const row = requester({ userId: "x", spendCents: 4_500_000 })
@@ -305,19 +359,45 @@ describe("signals and their guards", () => {
     expect(score(row, { branch: branch({ consumedCents: 0 }) }).metrics.shareOfBranchPct).toBe(0)
   })
 
-  it("MoM spike needs the growth and a baseline worth measuring", () => {
+  it("trend spike needs the growth and a baseline worth measuring", () => {
     const row = requester({ userId: "x", spendCents: 1_150_000 })
-    expect(score(row, { priorConsumedCents: 1_000_000 }).reasons).toContain("mom_spike") // exactly +15 %
-    expect(score(row, { priorConsumedCents: 1_000_001 }).reasons).not.toContain("mom_spike")
+    const spike = { trendConsumedCents: 1_150_000, priorTrendConsumedCents: 1_000_000 }
+    expect(score(row, spike).reasons).toContain("trend_spike") // exactly +15 %
+    expect(score(row, { ...spike, priorTrendConsumedCents: 1_000_001 }).reasons).not.toContain("trend_spike")
 
-    // A tiny base that doubled: the percentage is reported, the chip is not.
-    const tiny = score(requester({ userId: "x", spendCents: 900_000 }), { priorConsumedCents: 300_000 })
-    expect(tiny.metrics.momPct).toBeCloseTo(200)
-    expect(tiny.reasons).not.toContain("mom_spike")
+    // A tiny base that trebled: the percentage is reported, the chip is not.
+    const tiny = score(row, { trendConsumedCents: 900_000, priorTrendConsumedCents: 300_000 })
+    expect(tiny.metrics.trendPct).toBeCloseTo(200)
+    expect(tiny.reasons).not.toContain("trend_spike")
 
-    // No prior month at all: "no baseline", not "no change".
-    expect(score(row).metrics.momPct).toBeNull()
-    expect(score(row).metrics.priorConsumedCents).toBe(0)
+    // No earlier window at all: "no baseline", not "no change".
+    expect(score(row, { trendConsumedCents: 5_000_000 }).metrics.trendPct).toBeNull()
+    expect(score(row).metrics.priorTrendConsumedCents).toBe(0)
+  })
+
+  it("measures growth over the trend windows, never the month shown beside it", () => {
+    // A heavy month whose three-month run is well down on the three before it.
+    // The old one-month rule could not express this; the guard against reading
+    // the month's own figure into the growth column lives here.
+    const result = score(
+      requester({ userId: "x", spendCents: 9_000_000 }),
+      { trendConsumedCents: 1_000_000, priorTrendConsumedCents: 4_000_000 },
+    )
+    expect(result.metrics.consumedCents).toBe(9_000_000)
+    expect(result.metrics.trendConsumedCents).toBe(1_000_000)
+    expect(result.metrics.priorTrendConsumedCents).toBe(4_000_000)
+    expect(result.metrics.trendPct).toBeCloseTo(-75)
+    expect(result.reasons).not.toContain("trend_spike")
+  })
+
+  it("floors negative trend figures at zero rather than reporting a negative baseline", () => {
+    const result = score(
+      requester({ userId: "x" }),
+      { trendConsumedCents: -5, priorTrendConsumedCents: -9 },
+    )
+    expect(result.metrics.trendConsumedCents).toBe(0)
+    expect(result.metrics.priorTrendConsumedCents).toBe(0)
+    expect(result.metrics.trendPct).toBeNull()
   })
 
   it("above peers compares branch utilization against the other branches' median", () => {
@@ -378,14 +458,15 @@ describe("signals and their guards", () => {
     const row = score(
       requester({ userId: "x", spendCents: 5_000_000, pendingCents: 4_000_000, recentConsumedCents: 6_000_000, rejectedOrderCount: 3 }),
       {
-        priorConsumedCents: 1_000_000,
+        trendConsumedCents: 9_000_000,
+        priorTrendConsumedCents: 1_000_000,
         peerBranches: [
           branch({ branchId: 2, consumedCents: 1_000_000, totalBudgetCents: 10_000_000 }),
           branch({ branchId: 3, consumedCents: 2_000_000, totalBudgetCents: 10_000_000 }),
         ],
       },
     )
-    expect(row.reasons).toEqual(["high_share", "mom_spike", "above_peers", "late_surge", "high_held", "rejected_orders"])
+    expect(row.reasons).toEqual(["high_share", "trend_spike", "above_peers", "late_surge", "high_held", "rejected_orders"])
     expect(row.score).toBe(3 + 2 + 2 + 2 + 1 + 1)
     expect(isFlagged(row)).toBe(true)
   })
@@ -432,7 +513,8 @@ describe("ranking and the list", () => {
     const { requesters, branches } = summarizeCreators([heavy, heavier, ...quietRequesters])
     const result = buildWatchlist({
       requesters, branches,
-      priorByKey: new Map([[creatorKey(heavy), 1_000_000], [creatorKey(heavier), 1_000_000]]),
+      trendConsumedByKey: new Map([[creatorKey(heavy), 5_000_000], [creatorKey(heavier), 6_000_000]]),
+      priorTrendConsumedByKey: new Map([[creatorKey(heavy), 1_000_000], [creatorKey(heavier), 1_000_000]]),
       elapsedDays: 31,
       limit: 1,
     })
@@ -440,7 +522,7 @@ describe("ranking and the list", () => {
     expect(result.unflaggedCount).toBe(3)
     expect(result.rows).toHaveLength(1)
     expect(result.rows[0].userId).toBe("heavier")
-    expect(result.rows[0].metrics.momPct).toBeCloseTo(500)
+    expect(result.rows[0].metrics.trendPct).toBeCloseTo(500)
   })
 
   it("shares one branch-vs-branch peer signal across every requester at that branch", () => {
@@ -460,8 +542,11 @@ describe("ranking and the list", () => {
         [3, { totalBudgetCents: 10_000_000, remainingCents: 8_000_000 }],
       ]),
     )
-    const priorByKey = new Map(high.map((entry) => [creatorKey(entry), 4_000_000]))
-    const result = buildWatchlist({ requesters, branches, priorByKey, elapsedDays: 31, limit: 10 })
+    const trendConsumedByKey = new Map(high.map((entry) => [creatorKey(entry), 9_000_000]))
+    const priorTrendConsumedByKey = new Map(high.map((entry) => [creatorKey(entry), 4_000_000]))
+    const result = buildWatchlist({
+      requesters, branches, trendConsumedByKey, priorTrendConsumedByKey, elapsedDays: 31, limit: 10,
+    })
     expect(result.rows.map((entry) => entry.userId).sort()).toEqual(["n1", "n2"])
     for (const entry of result.rows) {
       expect(entry.reasons).toContain("above_peers")
@@ -472,7 +557,14 @@ describe("ranking and the list", () => {
 
   it("scores a requester whose branch summary is missing against themselves alone", () => {
     const lone = requester({ userId: "lone", branchId: 9, spendCents: 5_000_000 })
-    const result = buildWatchlist({ requesters: [lone], branches: new Map(), priorByKey: new Map(), elapsedDays: 31, limit: 10 })
+    const result = buildWatchlist({
+      requesters: [lone],
+      branches: new Map(),
+      trendConsumedByKey: new Map(),
+      priorTrendConsumedByKey: new Map(),
+      elapsedDays: 31,
+      limit: 10,
+    })
     expect(result.rows).toEqual([])
     expect(result.unflaggedCount).toBe(1)
   })
