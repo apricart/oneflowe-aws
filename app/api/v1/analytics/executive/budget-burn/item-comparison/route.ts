@@ -5,7 +5,8 @@ import { z } from "zod"
 import { authOptions } from "@/lib/auth-options"
 import {
   BUDGET_BURN_ITEM_ROW_CAP,
-  buildItemComparison,
+  buildItemPattern,
+  itemPatternTotals,
 } from "@/lib/budget-burn-item-comparison"
 import {
   MONTH_KEY_PATTERN,
@@ -39,11 +40,14 @@ function windowFilters(window: { start: Date; end: Date }, userId: string): Exec
 }
 
 /**
- * Item-by-item detail behind one watchlist row's growth figure.
+ * Item-by-item detail behind one watchlist row.
  *
- * It reads the *same two windows* the figure was computed from — the trend
- * windows, not the selected month — so the table's two totals reconcile with
- * the percentage that was clicked. See `plans/OF-BUDGET-BURN-three-month-trend.md`.
+ * It reads the *same month buckets* the row was drawn from, in the same
+ * order, so each column total reconciles with the month cell above it and the
+ * per-product highlight is decided by the same rule as the row's own. Reading
+ * a different window on either side would let this panel contradict, silently,
+ * the figure that was clicked to open it.
+ * See `plans/OF-BUDGET-BURN-three-month-pattern-mom-flag.md`.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -81,36 +85,28 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: windows.error, field: "month" }, { status: 400 })
     }
 
-    const [currentRows, priorRows] = await Promise.all([
-      loadProductWindow(scope, windowFilters(windows.trend.current, parsedQuery.data.userId)),
-      loadProductWindow(scope, windowFilters(windows.trend.prior, parsedQuery.data.userId)),
-    ])
-    const items = buildItemComparison(currentRows, priorRows)
+    const buckets = await Promise.all(windows.pattern.map((bucket) => (
+      loadProductWindow(scope, windowFilters(bucket, parsedQuery.data.userId))
+    )))
+    const patternMonths = windows.pattern.map((bucket) => bucket.month)
+    const items = buildItemPattern(patternMonths, buckets)
 
     return NextResponse.json({
       userId: parsedQuery.data.userId,
       branchId: scope.branchIds[0],
       month: windows.month,
       windows: {
-        months: windows.trend.months,
-        current: {
-          startMonth: windows.trend.current.startMonth,
-          endMonth: windows.trend.current.endMonth,
-          startDate: windows.trend.current.start.toISOString(),
-          endDate: windows.trend.current.end.toISOString(),
-          complete: windows.current.complete,
-        },
-        prior: {
-          startMonth: windows.trend.prior.startMonth,
-          endMonth: windows.trend.prior.endMonth,
-          startDate: windows.trend.prior.start.toISOString(),
-          endDate: windows.trend.prior.end.toISOString(),
-        },
+        pattern: windows.pattern.map((bucket) => ({
+          month: bucket.month,
+          startDate: bucket.start.toISOString(),
+          endDate: bucket.end.toISOString(),
+          complete: bucket.complete,
+        })),
       },
       items,
-      currentTotalSpendCents: currentRows.reduce((sum, row) => sum + row.valueCents, 0),
-      priorTotalSpendCents: priorRows.reduce((sum, row) => sum + row.valueCents, 0),
-      truncated: currentRows.length >= BUDGET_BURN_ITEM_ROW_CAP || priorRows.length >= BUDGET_BURN_ITEM_ROW_CAP,
+      /** Per month across every product — what the row's month cells must equal. */
+      monthTotals: itemPatternTotals(patternMonths, items),
+      truncated: buckets.some((rows) => rows.length >= BUDGET_BURN_ITEM_ROW_CAP),
     })
   } catch (error) {
     const { status, ...errorBody } = handleError(error, "EXECUTIVE_BUDGET_BURN_ITEM_COMPARISON")

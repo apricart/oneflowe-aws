@@ -30,13 +30,19 @@ describe("budget-burn item query contract", () => {
     expect(routeSource).not.toContain("error.message")
   })
 
-  it("reads the same two trend windows the growth figure was built from", () => {
-    // The panel exists to explain a percentage. Reading the selected month on
-    // one side and the trend window on the other would make its totals
-    // disagree with the figure that was clicked, silently.
-    expect(routeSource).toContain("windowFilters(windows.trend.current, parsedQuery.data.userId)")
-    expect(routeSource).toContain("windowFilters(windows.trend.prior, parsedQuery.data.userId)")
+  it("reads the same month buckets the row above it was drawn from", () => {
+    // The panel exists to explain the months beside it. Reading any other
+    // window would let its column totals disagree, silently, with the cells
+    // that were clicked to open it.
+    expect(routeSource).toContain("windows.pattern.map((bucket) => (")
+    expect(routeSource).toContain("windowFilters(bucket, parsedQuery.data.userId)")
     expect(routeSource).not.toContain("windowFilters(windows.current")
-    expect(routeSource).not.toContain("windowFilters(windows.prior")
+    expect(routeSource).not.toContain("windows.trend")
+    // Consumed, not revenue: the month cells include pending, so these must too.
+    expect(routeSource).toContain('statusSet: "consumed"')
+  })
+
+  it("bounds every bucket it reads and reports truncation across all of them", () => {
+    expect(routeSource).toContain("buckets.some((rows) => rows.length >= BUDGET_BURN_ITEM_ROW_CAP)")
   })
 })

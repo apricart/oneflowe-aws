@@ -14,6 +14,7 @@ import { ADMIN_OPERATIONS_EMAIL } from "@/lib/email/recipients"
 import { buildRefundSuccessPayload, redactRefundHistoryForPriceHidden } from "@/lib/refund-visibility"
 import { refundRequestSchema, validationMessage } from "@/lib/server/mutation-validation"
 import { isOrderPortalRefundEligible, isRefundEligibleOrderStatus } from "@/lib/business-rules"
+import { budgetPeriodOf, isSameBudgetPeriod } from "@/lib/budget-consumption"
 import {
   canRequesterActOnOrder,
   describeOrderWrite,
@@ -122,9 +123,9 @@ function canAccessOrderForRefund(
 function getRefundEligibilityError(orderData: any, role: string) {
   const status = String(orderData.status || "").toUpperCase()
   if (!isRefundEligibleOrderStatus(status)) return `Order in ${status || "unknown"} state is not eligible for a refund`
-  const orderDate = new Date(orderData.createdAt)
-  const now = new Date()
-  if (orderDate.getMonth() !== now.getMonth() || orderDate.getFullYear() !== now.getFullYear()) {
+  // The same UTC period the order's money sits in, so a refund can only ever
+  // be admitted against the budget row it will actually be debited from.
+  if (!isSameBudgetPeriod(orderData.createdAt, new Date())) {
     return "Refund period ended. Refunds are only allowed within the calendar month of the order."
   }
   if (isOrderWriteRole(role) && !isOrderPortalRefundEligible(status, orderData.fulfillmentStatus)) {
@@ -278,9 +279,11 @@ async function createApprovedRefund(tx: any, context: any) {
     processedByUserId: context.userId,
   }).returning({ id: refunds.id })
   await tx.update(refunds).set({ refundNumber: `Refund-${String(inserted.id).padStart(6, "0")}` }).where(eq(refunds.id, inserted.id))
+  // The order's own period, not today's: this money was held or spent on that
+  // row, and withdrawing it from any other would leave both months wrong.
   const [budget] = await tx.select().from(budgets).where(and(
     eq(budgets.branchId, context.order.branchId),
-    eq(budgets.period, new Date().toISOString().slice(0, 7)),
+    eq(budgets.period, budgetPeriodOf(context.lockedOrder.createdAt ?? context.order.createdAt)),
   )).limit(1)
   const status = String(context.lockedOrder.status || "").toUpperCase()
   if (budget) await tx.update(budgets).set(status === "FULFILLED" ? {

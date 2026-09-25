@@ -8,6 +8,7 @@ import {
   type BranchBudgetSummary,
 } from "@/lib/branch-budget-summary"
 import { db } from "@/lib/db"
+import { budgetPeriodOf } from "@/lib/budget-consumption"
 
 /**
  * Read-only money-budget figures for a set of branches the caller has already
@@ -34,7 +35,7 @@ import { db } from "@/lib/db"
  * against, not the one a report would total.
  */
 export function currentBudgetPeriod(now: Date = new Date()): string {
-  return now.toISOString().slice(0, 7)
+  return budgetPeriodOf(now)
 }
 
 export async function loadBranchBudgetSummaries({

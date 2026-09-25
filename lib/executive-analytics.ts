@@ -1037,6 +1037,16 @@ export type SideBySidePanel = {
    * person is no comparison and nobody picked would split by the top twelve.
    */
   segmentBy?: MatrixDimensionId
+  /**
+   * Each column is labelled with both of its figures — quantity above value
+   * — rather than with the one measure the columns are drawn from.
+   *
+   * For the panel people flip the Amount ⇄ Quantity toggle on: "twelve reams
+   * for 142,800" is one reading, and made of two columns' worth of flipping
+   * otherwise. Only the printing changes; the height is still the selected
+   * measure, and the tooltip and table are untouched.
+   */
+  dualValueLabels?: boolean
 }
 
 /** Fewer compared entities than this and a split would show nothing to compare. */
@@ -1072,6 +1082,7 @@ export const SIDE_BY_SIDE_PANELS: SideBySidePanel[] = [
     colorful: true,
     hiddenForSingleProduct: true,
     segmentBy: "user",
+    dualValueLabels: true,
   },
   /**
    * The category angle the requirement lists beside the product one. Withheld

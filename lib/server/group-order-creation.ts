@@ -28,6 +28,7 @@ import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allo
 import { settleDueAddonsOnBudget } from "@/lib/server/budget-addon-expiry"
 import { assertBranchMayOrder } from "@/lib/server/payment-control"
 import { isPaymentControlBlockedError } from "@/lib/payment-control-policy"
+import { budgetPeriodOf } from "@/lib/budget-consumption"
 import {
   attemptImmediateOrderEmailDelivery,
   queueOrderCreatedNotifications,
@@ -863,7 +864,7 @@ export async function createGroupOrder(
     throw insertError
   }
 
-  const period = new Date().toISOString().slice(0, 7)
+  const period = budgetPeriodOf(new Date())
   const [mode, invoiceSequenceReady] = await Promise.all([
     getBudgetAllocationModeForOrganization(input.organizationId),
     hasInvoiceSequenceTable(db),

@@ -23,6 +23,7 @@ import {
   panelSegmentation,
   panelsForFocus,
   resolveDrillDownSort,
+  resolveGrain,
   resolveSortDirection,
 } from "./executive-analytics"
 import {
@@ -186,6 +187,32 @@ describe("the side-by-side panel registry", () => {
     expect(panelSegmentation(byProduct, 1)).toBeNull()
     expect(panelSegmentation(byProduct, 2)).toBe("user")
     expect(panelSegmentation(byProduct, 25)).toBe("user")
+  })
+
+  it("labels the product columns with both figures, and only a column panel with both to print", () => {
+    // "Twelve reams for 142,800" is one reading of the product panel; without
+    // it the reader flips Amount ⇄ Quantity and holds the first figure in
+    // their head. Only the printing changes — the column height is still
+    // whichever measure the toggle is on.
+    const dual = SIDE_BY_SIDE_PANELS.filter((panel) => panel.dualValueLabels)
+    expect(dual.map((panel) => panel.id)).toEqual(["by-product"])
+    for (const panel of dual) {
+      expect(panel.chart, panel.id).toBe("column")
+      // A budget beside already gives the column a companion; a second pair of
+      // figures over the pair would read as four.
+      expect(panel.budgetBeside ?? false, panel.id).toBe(false)
+      // Load-bearing: both figures are read off the row, and an order-grain row
+      // carries `quantity: 0`. Under either measure, and focused or not, this
+      // panel has to resolve to line grain or the quantity line prints a zero.
+      for (const measure of ["amount", "quantity"] as const) {
+        for (const lineScoped of [false, true]) {
+          expect(
+            resolveGrain(panel.dimension, MEASURE_METRIC[measure], { lineScoped }),
+            `${panel.id} under ${measure}${lineScoped ? ", focused" : ""}`,
+          ).toBe("line")
+        }
+      }
+    }
   })
 
   it("splits only a ranked panel, by a grid dimension other than its own, that the grid can answer", () => {

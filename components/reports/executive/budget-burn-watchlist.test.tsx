@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import {
   BUDGET_BURN_DEFAULT_ROWS,
-  BUDGET_BURN_REASON_LABELS,
   BUDGET_BURN_THRESHOLDS,
   currentAppMonth,
 } from "@/lib/budget-burn-risk"
@@ -12,10 +11,11 @@ import {
  * The "Users to review" panel.
  *
  * What matters here is the request it makes — scope filters only, the month,
- * the bounded limit — and what a click hands the drill-down, because a table
- * asking a different question from the one it drills into is the failure this
- * panel must never have. The figures come from the server and are covered by
- * the integration suite.
+ * the bounded limit — what a click hands the drill-down, and that the
+ * highlight is never carried by colour alone. A table asking a different
+ * question from the one it drills into is the failure this panel must never
+ * have. The figures come from the server and are covered by the integration
+ * suite.
  */
 
 const requested: string[] = []
@@ -33,17 +33,31 @@ vi.mock("@/lib/hooks/use-api", () => ({
 import {
   BudgetBurnDrillNote,
   BudgetBurnWatchlist,
+  HIGHLIGHT_MARKER,
   NOT_PROOF_COPY,
   SCOPE_NOTE_COPY,
   drillFiltersFor,
+  highlightNote,
+  momCellTitle,
   monthLabel,
   monthRangeLabel,
-  reasonExplanation,
+  shortMonthLabel,
   type BudgetBurnDrillSelection,
   type BudgetBurnItemDrillSelection,
   type BudgetBurnResponse,
   type BudgetBurnRow,
 } from "./budget-burn-watchlist"
+import { money } from "./chart-kit"
+
+/**
+ * `money` separates "Rs" from the amount with a non-breaking space. Testing
+ * Library normalizes it inside `getByText`, but an accessible name matched by
+ * regex, and a raw `toContain`, do not — so expected amounts are built from
+ * the formatter itself rather than typed out.
+ */
+function rsPattern(cents: number): string {
+  return money(cents).replace(/[\u00a0 ]/g, "\\s")
+}
 
 const filters = {
   startDate: "2026-03-01",
@@ -61,15 +75,16 @@ const AHMED = "0f0b3c1e-9a3d-4d47-8e2a-6a3f0e9b5c11"
 const windows: BudgetBurnResponse["windows"] = {
   // 1 Aug 00:00 +05:00 … 31 Aug 23:59:59.999 +05:00
   current: { startDate: "2026-07-31T19:00:00.000Z", endDate: "2026-08-31T18:59:59.999Z", complete: true, elapsedDays: 31, daysInMonth: 31 },
-  // Jun–Aug against Mar–May, both whole months because August is over.
-  trend: {
-    months: 3,
-    current: { startMonth: "2026-06", endMonth: "2026-08", startDate: "2026-05-31T19:00:00.000Z", endDate: "2026-08-31T18:59:59.999Z" },
-    prior: { startMonth: "2026-03", endMonth: "2026-05", startDate: "2026-02-28T19:00:00.000Z", endDate: "2026-05-31T18:59:59.999Z" },
-  },
+  // June, July, August — all whole months because August is over.
+  pattern: [
+    { month: "2026-06", startDate: "2026-05-31T19:00:00.000Z", endDate: "2026-06-30T18:59:59.999Z", complete: true },
+    { month: "2026-07", startDate: "2026-06-30T19:00:00.000Z", endDate: "2026-07-31T18:59:59.999Z", complete: true },
+    { month: "2026-08", startDate: "2026-07-31T19:00:00.000Z", endDate: "2026-08-31T18:59:59.999Z", complete: true },
+  ],
   recent: { startDate: "2026-08-24T18:59:59.999Z", endDate: "2026-08-31T18:59:59.999Z" },
 }
 
+/** Ahmed: ₨110 → ₨6,020 → ₨22,500, a highlighted month-over-month rise. */
 const row = (over: Partial<BudgetBurnRow> = {}): BudgetBurnRow => ({
   userId: AHMED,
   requesterName: "Ahmed Raza",
@@ -78,16 +93,18 @@ const row = (over: Partial<BudgetBurnRow> = {}): BudgetBurnRow => ({
   accountStatus: "ACTIVE" as const,
   branchId: 12,
   branchName: "GSMP-KKI",
-  score: 7,
-  reasons: ["high_share", "trend_spike", "late_surge"],
   metrics: {
-    spendCents: 220_000_000,
-    pendingCents: 5_000_000,
-    consumedCents: 225_000_000,
+    spendCents: 2_200_000,
+    pendingCents: 50_000,
+    consumedCents: 2_250_000,
     shareOfBranchPct: 95.66,
-    trendPct: 273.75,
-    trendConsumedCents: 225_000_000,
-    priorTrendConsumedCents: 60_200_000,
+    months: [
+      { month: "2026-06", spendCents: 11_000, pendingCents: 0, consumedCents: 11_000 },
+      { month: "2026-07", spendCents: 602_000, pendingCents: 0, consumedCents: 602_000 },
+      { month: "2026-08", spendCents: 2_200_000, pendingCents: 50_000, consumedCents: 2_250_000 },
+    ],
+    momPct: 273.75,
+    momFlagged: true,
     branchUtilizationPct: 78.4,
     vsPeerPct: null,
     peerBranchMedianUtilizationPct: null,
@@ -99,18 +116,42 @@ const row = (over: Partial<BudgetBurnRow> = {}): BudgetBurnRow => ({
   ...over,
 })
 
+/** The same person, quiet: no highlight, and a previous month too small to read. */
+const quietRow = (): BudgetBurnRow => row({
+  userId: "quiet-user",
+  requesterName: "Sana Iqbal",
+  employeeId: "8810",
+  branchId: 13,
+  branchName: "REGION 2",
+  metrics: {
+    ...row().metrics,
+    spendCents: 1_500,
+    pendingCents: 0,
+    consumedCents: 1_500,
+    months: [
+      { month: "2026-06", spendCents: 700_000, pendingCents: 0, consumedCents: 700_000 },
+      { month: "2026-07", spendCents: 1_000, pendingCents: 0, consumedCents: 1_000 },
+      { month: "2026-08", spendCents: 1_500, pendingCents: 0, consumedCents: 1_500 },
+    ],
+    momPct: 50,
+    momFlagged: false,
+    orderCount: 1,
+    pendingOrderCount: 0,
+    rejectedOrderCount: 0,
+  },
+})
+
 function respond(over: Partial<BudgetBurnResponse> = {}) {
   response = {
     month: "2026-08",
     windows,
     rows: [row()],
     branches: [],
-    flaggedCount: 1,
-    unflaggedCount: 14,
+    highlightedCount: 1,
+    requesterCount: 15,
     limit: BUDGET_BURN_DEFAULT_ROWS,
     truncated: false,
     thresholds: BUDGET_BURN_THRESHOLDS,
-    reasonLabels: BUDGET_BURN_REASON_LABELS,
     ...over,
   }
 }
@@ -155,46 +196,99 @@ describe("the request", () => {
 })
 
 describe("what the reader sees", () => {
-  it("carries the review copy and the scope note", () => {
+  it("carries the review copy, the scope note and the rule behind the highlight", () => {
     respond()
     render(<BudgetBurnWatchlist filters={filters} onDrill={vi.fn()} />)
     expect(screen.getByText(NOT_PROOF_COPY)).toBeTruthy()
     expect(screen.getByText(SCOPE_NOTE_COPY, { exact: false })).toBeTruthy()
-    // The growth column is the one figure that is not the selected month, so
-    // the panel names both of its ranges rather than leaving it implied.
-    expect(screen.getByText(/The 3M column compares Jun 2026–Aug 2026 against Mar 2026–May 2026/)).toBeTruthy()
-    expect(screen.getByText(/every other figure is the month alone/)).toBeTruthy()
+    // A colour with no stated rule is a rumour; the rule is printed.
+    expect(screen.getByText(/Jun 2026–Aug 2026 shown, each month on its own/)).toBeTruthy()
+    expect(screen.getByText(new RegExp(`at least ${BUDGET_BURN_THRESHOLDS.momSpikePct}% above the previous month`))).toBeTruthy()
+    expect(screen.getByText(/from a previous month of at least Rs 5,000/)).toBeTruthy()
   })
 
-  it("renders each flagged row with its figures and a chip per reason", () => {
+  it("names one column per month of the pattern, oldest first", () => {
+    respond()
+    render(<BudgetBurnWatchlist filters={filters} onDrill={vi.fn()} />)
+    const table = screen.getByRole("table")
+    expect(within(table).getAllByRole("columnheader").map((cell) => cell.textContent)).toEqual([
+      "Requester", "Branch", "Jun 2026", "Jul 2026", "Aug 2026", "vs prev month", "Orders",
+    ])
+  })
+
+  it("draws each month's consumption and the percentage between the last two", () => {
     respond()
     render(<BudgetBurnWatchlist filters={filters} onDrill={vi.fn()} />)
     const table = screen.getByRole("table")
     expect(within(table).getByRole("button", { name: "Ahmed Raza" })).toBeTruthy()
     expect(within(table).getByText("GSMP-KKI")).toBeTruthy()
-    expect(within(table).getByText("95.7%")).toBeTruthy()
-    expect(within(table).getByText("+274%")).toBeTruthy()
-    // No peer figure is a dash, not a zero.
-    expect(within(table).getAllByText("—").length).toBeGreaterThan(0)
-    const chips = within(table).getByRole("list", { name: "Why flagged" })
-    expect(within(chips).getAllByRole("listitem").map((chip) => chip.textContent)).toEqual(["High share", "+3M", "Late surge"])
-    // Every chip explains its threshold.
-    expect(within(chips).getByText("High share").getAttribute("title")).toContain(`${BUDGET_BURN_THRESHOLDS.highSharePct}%`)
-    expect(screen.getByText(/Showing 1 of 1 flagged · 14 below the review score of 4/)).toBeTruthy()
+    // 11,000 → 602,000 → 2,250,000 cents.
+    expect(within(table).getByText(/Rs 110$/)).toBeTruthy()
+    expect(within(table).getByText(/Rs 6,020$/)).toBeTruthy()
+    expect(within(table).getByText(/Rs 22,500$/)).toBeTruthy()
+    // Pending is broken out where it exists, never folded away silently.
+    expect(within(table).getByText("incl. Rs 500 pending")).toBeTruthy()
+    expect(within(table).getByText(/\+274%/)).toBeTruthy()
+    expect(screen.getByText(/Showing 1 of 15 requesters · 1 highlighted/)).toBeTruthy()
   })
 
-  it("shows the empty state with the count below the line", () => {
-    respond({ rows: [], flaggedCount: 0, unflaggedCount: 31 })
+  it("never carries the highlight on colour alone", () => {
+    respond({ rows: [row(), quietRow()] })
+    render(<BudgetBurnWatchlist filters={filters} onDrill={vi.fn()} onDrillItems={vi.fn()} />)
+
+    // The highlighted row's newest month and its percentage both carry a marker.
+    const highlighted = screen.getByRole("button", { name: new RegExp(`Ahmed Raza, August 2026: ${rsPattern(2_250_000)} — highlighted`) })
+    expect(highlighted.textContent).toContain(HIGHLIGHT_MARKER)
+    const percent = screen.getByRole("button", { name: new RegExp(`Ahmed Raza: July 2026: ${rsPattern(602_000)} → August 2026: ${rsPattern(2_250_000)}`) })
+    expect(percent.textContent).toContain(HIGHLIGHT_MARKER)
+    expect(percent.getAttribute("aria-label")).toContain(`At or above the ${BUDGET_BURN_THRESHOLDS.momSpikePct}% review threshold`)
+
+    // The quiet row carries neither marker nor "highlighted" in its label.
+    // `[.]` rather than an escaped dot: the amount is Rs 15 and the sentence
+    // ends there, so an unanchored match would also accept Rs 150.
+    const quiet = screen.getByRole("button", { name: new RegExp(`Sana Iqbal, August 2026: ${rsPattern(1_500)}[.] Open`) })
+    expect(quiet.textContent).not.toContain(HIGHLIGHT_MARKER)
+    expect(quiet.getAttribute("aria-label")).not.toContain("highlighted")
+  })
+
+  it("lists a requester who consumed nothing in the selected month", () => {
+    // The shape the panel exists to show: heavy last month, silent this month.
+    const lapsed = row({
+      userId: "lapsed-user",
+      requesterName: "Faisal Khan",
+      metrics: {
+        ...row().metrics,
+        spendCents: 0, pendingCents: 0, consumedCents: 0,
+        months: [
+          { month: "2026-06", spendCents: 0, pendingCents: 0, consumedCents: 0 },
+          { month: "2026-07", spendCents: 20_000_000, pendingCents: 0, consumedCents: 20_000_000 },
+          { month: "2026-08", spendCents: 0, pendingCents: 0, consumedCents: 0 },
+        ],
+        momPct: -100,
+        momFlagged: false,
+        orderCount: 0, pendingOrderCount: 0, rejectedOrderCount: 0,
+      },
+    })
+    respond({ rows: [lapsed] })
+    render(<BudgetBurnWatchlist filters={filters} onDrill={vi.fn()} />)
+    expect(screen.getByRole("button", { name: "Faisal Khan" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: new RegExp(`Faisal Khan, July 2026: ${rsPattern(20_000_000)}`) })).toBeTruthy()
+    expect(screen.getByText("-100%")).toBeTruthy()
+  })
+
+  it("shows a dash where there is no previous month to compare against", () => {
+    respond({ rows: [row({ metrics: { ...row().metrics, momPct: null, momFlagged: false } })] })
+    render(<BudgetBurnWatchlist filters={filters} onDrill={vi.fn()} onDrillItems={vi.fn()} />)
+    const percent = screen.getByRole("button", { name: /Ahmed Raza: July 2026/ })
+    expect(percent.textContent).toBe("—")
+  })
+
+  it("shows the empty state when nobody consumed anything", () => {
+    respond({ rows: [], highlightedCount: 0, requesterCount: 0 })
     render(<BudgetBurnWatchlist filters={filters} onDrill={vi.fn()} />)
     expect(screen.getByText("Nothing to review")).toBeTruthy()
-    expect(screen.getByText(/31 requesters consumed budget; none reached the review score of 4/)).toBeTruthy()
-    expect(screen.queryByRole("table")).toBeNull()
-  })
-
-  it("says so when nobody consumed anything", () => {
-    respond({ rows: [], flaggedCount: 0, unflaggedCount: 0 })
-    render(<BudgetBurnWatchlist filters={filters} onDrill={vi.fn()} />)
     expect(screen.getByText(/No requester consumed budget/)).toBeTruthy()
+    expect(screen.queryByRole("table")).toBeNull()
   })
 
   it("shows a skeleton while loading and a safe message on failure", () => {
@@ -231,7 +325,7 @@ describe("what the reader sees", () => {
 })
 
 describe("the drill hand-off", () => {
-  it("names the requester and the row's branch for the month, and clears every non-scope filter", () => {
+  it("drills the selected month from the name, clearing every non-scope filter", () => {
     respond()
     const onDrill = vi.fn<(selection: BudgetBurnDrillSelection) => void>()
     render(<BudgetBurnWatchlist filters={filters} onDrill={onDrill} />)
@@ -256,12 +350,30 @@ describe("the drill hand-off", () => {
     expect(selection.filters.organizationIds).toEqual(["3"])
     expect(selection.filters.groupIds).toEqual(["4"])
     expect(selection.filters.branchIds).toEqual(["7", "9"])
-    // The row's figure is Spend + Pending, so the listing must include pending orders.
+    // The cell is Spend + Pending, so the listing must include pending orders.
     expect(selection.statuses).toBe("consumed")
-    expect(selection.spendCents).toBe(220_000_000)
-    expect(selection.pendingCents).toBe(5_000_000)
+    expect(selection.spendCents).toBe(2_200_000)
+    expect(selection.pendingCents).toBe(50_000)
     expect(selection.pendingOrderCount).toBe(1)
     expect(selection.month).toBe("2026-08")
+  })
+
+  it("drills an older month from its own cell, on that month's dates", () => {
+    respond()
+    const onDrill = vi.fn<(selection: BudgetBurnDrillSelection) => void>()
+    render(<BudgetBurnWatchlist filters={filters} onDrill={onDrill} />)
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(`Ahmed Raza, July 2026: ${rsPattern(602_000)}`) }))
+
+    const selection = onDrill.mock.calls[0][0]
+    expect(selection.month).toBe("2026-07")
+    expect(selection.filters.startDate).toBe("2026-07-01")
+    expect(selection.filters.endDate).toBe("2026-07-31")
+    expect(selection.spendCents).toBe(602_000)
+    expect(selection.pendingCents).toBe(0)
+    // The aggregate counts orders for the selected month only — never invent one.
+    expect(selection.pendingOrderCount).toBeNull()
+    // The row's branch still narrows the read.
+    expect(selection.target.narrow).toEqual({ branchIds: ["12"] })
   })
 
   it("marks the row whose drill-down is open", () => {
@@ -270,7 +382,7 @@ describe("the drill hand-off", () => {
     expect(screen.getByRole("button", { name: "Ahmed Raza" }).getAttribute("aria-pressed")).toBe("true")
   })
 
-  it("opens an item-wise comparison from the growth value without changing the name drill", () => {
+  it("opens an item-wise comparison from the percentage without changing the name drill", () => {
     respond()
     const onDrill = vi.fn<(selection: BudgetBurnDrillSelection) => void>()
     const onDrillItems = vi.fn<(selection: BudgetBurnItemDrillSelection) => void>()
@@ -283,13 +395,8 @@ describe("the drill hand-off", () => {
       />,
     )
 
-    const button = screen.getByRole("button", { name: "Compare Ahmed Raza items over 3 months" })
-    expect(button.textContent).toBe("+274%")
-    // The tooltip carries both runs of months and both totals, because the
-    // percentage is not a ratio of the Spend shown beside it.
-    const title = button.getAttribute("title") ?? ""
-    expect(title).toContain("Jun 2026–Aug 2026")
-    expect(title).toContain("Mar 2026–May 2026")
+    const button = screen.getByRole("button", { name: new RegExp(`Ahmed Raza: July 2026: ${rsPattern(602_000)} → August 2026: ${rsPattern(2_250_000)}`) })
+    expect(button.textContent).toContain("+274%")
     expect(button.getAttribute("aria-pressed")).toBe("true")
     fireEvent.click(button)
     expect(onDrillItems).toHaveBeenCalledWith({
@@ -306,11 +413,9 @@ describe("the drill hand-off", () => {
   })
 
   it("turns a month-to-date window into today's date, in Karachi", () => {
-    const mtd = {
-      ...windows,
-      current: { ...windows.current, endDate: "2026-09-19T21:30:00.000Z", complete: false, elapsedDays: 20, daysInMonth: 30 },
-    }
     // 21:30 UTC on the 19th is 02:30 on the 20th in Karachi.
+    const mtd = { startDate: "2026-08-31T19:00:00.000Z", endDate: "2026-09-19T21:30:00.000Z" }
+    expect(drillFiltersFor(filters, mtd).startDate).toBe("2026-09-01")
     expect(drillFiltersFor(filters, mtd).endDate).toBe("2026-09-20")
   })
 })
@@ -337,6 +442,12 @@ describe("the note above the drill-down", () => {
     expect(screen.getByText(/Nothing pending is counted until it is approved/)).toBeTruthy()
   })
 
+  it("states the pending money without a count for an older month", () => {
+    render(<BudgetBurnDrillNote selection={{ ...selection, pendingOrderCount: null }} onClose={vi.fn()} />)
+    expect(screen.getByText(/plus Rs 50,000 in pending orders/)).toBeTruthy()
+    expect(screen.queryByText(/pending order totalling/)).toBeNull()
+  })
+
   it("says plainly when nothing is pending, and closes", () => {
     const onClose = vi.fn()
     render(<BudgetBurnDrillNote selection={{ ...selection, pendingCents: 0, pendingOrderCount: 0 }} onClose={onClose} />)
@@ -347,9 +458,10 @@ describe("the note above the drill-down", () => {
 })
 
 describe("labels", () => {
-  it("names the month in words", () => {
+  it("names the month in words, and short for a column head", () => {
     expect(monthLabel("2026-08")).toBe("August 2026")
     expect(monthLabel("2026-01")).toBe("January 2026")
+    expect(shortMonthLabel("2026-08")).toBe("Aug 2026")
   })
 
   it("names a run of months on both ends, so a run across a year is unambiguous", () => {
@@ -359,15 +471,25 @@ describe("labels", () => {
     expect(monthRangeLabel("2026-08", "2026-08")).toBe("August 2026")
   })
 
-  it("explains every reason with its own threshold", () => {
-    const t = BUDGET_BURN_THRESHOLDS
-    expect(reasonExplanation("high_share", t)).toContain(`${t.highSharePct}%`)
-    expect(reasonExplanation("trend_spike", t)).toContain(`+${t.trendSpikePct}%`)
-    expect(reasonExplanation("trend_spike", t)).toContain("previous 3 months")
-    expect(reasonExplanation("above_peers", t)).toContain(`${t.abovePeersPct}%`)
-    expect(reasonExplanation("above_peers", t)).toContain("other branches in scope")
-    expect(reasonExplanation("late_surge", t)).toContain(`${t.lateSurgeDays} days`)
-    expect(reasonExplanation("high_held", t)).toContain(`${t.highHeldPctOfBudget}%`)
-    expect(reasonExplanation("rejected_orders", t)).toContain(String(t.rejectedOrdersMin))
+  it("prints the whole rule behind the highlight, thresholds included", () => {
+    const note = highlightNote(windows.pattern, BUDGET_BURN_THRESHOLDS)
+    expect(note).toContain("Jun 2026–Aug 2026")
+    expect(note).toContain(`${BUDGET_BURN_THRESHOLDS.momSpikePct}%`)
+    expect(note).toContain(money(BUDGET_BURN_THRESHOLDS.momMinBaselineCents))
+  })
+
+  it("explains a percentage by naming both months, both amounts and the verdict", () => {
+    const flagged = momCellTitle(row().metrics, BUDGET_BURN_THRESHOLDS)
+    expect(flagged).toContain(`July 2026: ${money(602_000)}`)
+    expect(flagged).toContain(`August 2026: ${money(2_250_000)}`)
+    expect(flagged).toContain("At or above the 15% review threshold")
+
+    const quiet = momCellTitle(quietRow().metrics, BUDGET_BURN_THRESHOLDS)
+    expect(quiet).toContain("Below the 15% review threshold")
+    // It rose 50%, but off ₨10 — the baseline guard is the reason and says so.
+    expect(quiet).toContain(`under the ${money(BUDGET_BURN_THRESHOLDS.momMinBaselineCents)} baseline`)
+
+    const noBaseline = momCellTitle({ ...row().metrics, momPct: null, momFlagged: false }, BUDGET_BURN_THRESHOLDS)
+    expect(noBaseline).toContain("no baseline to compare against")
   })
 })

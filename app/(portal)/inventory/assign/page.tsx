@@ -247,7 +247,7 @@ export default function AssignProductPage() {
                         <Building2 className="h-6 w-6 text-blue-600 dark:text-blue-400" />
                     </div>
                     <div>
-                        <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100">Group Inventory</h1>
+                        <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100">Group Products</h1>
                         <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Manage organization product assignments</p>
                     </div>
                 </div>

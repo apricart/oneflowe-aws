@@ -25,6 +25,7 @@ import { AnimatePresence,motion } from "framer-motion"
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
 import {
+BarChart3,
 Building2,
 Calendar,
 ChevronDown,
@@ -33,6 +34,7 @@ FileText,
 Filter,
 LayoutDashboard,
 LayoutGrid,
+LineChart as LineChartIcon,
 Loader2,
 PiggyBank,
 ReceiptText,
@@ -59,7 +61,9 @@ import {
 Bar,
 CartesianGrid,
 ComposedChart,
+LabelList,
 Legend,
+Line,
 Tooltip as RechartsTooltip,
 ResponsiveContainer,
 XAxis,
@@ -118,7 +122,47 @@ const formatChartAxisPKR = (value: number) => {
     return `₨ ${Number.isInteger(value) ? value : value.toFixed(0)}`;
 }
 
+// Value printed on top of each bar. No currency prefix — the axis already
+// states it, and the prefix is wide enough to wrap the label onto two lines at
+// this bar width. Empty for a bar with nothing in it, so the months with no
+// data do not carry a stray "0".
+const formatChartBarLabel = (value: number) => {
+    if (!Number.isFinite(value) || value <= 0) {
+        return "";
+    }
+
+    if (value >= 1000000) {
+        return `${(value / 1000000).toFixed(2)}M`;
+    }
+
+    if (value >= 1000) {
+        return `${(value / 1000).toFixed(0)}k`;
+    }
+
+    return `${Math.round(value)}`;
+}
+
 const ALL_MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+
+// The expenditure graph renders the same two series either as grouped bars or
+// as trend lines. Both live in one ComposedChart so the axes, tooltip, legend
+// and labels stay identical across the two views.
+type ChartView = "bars" | "trend"
+
+const CHART_SERIES_COLORS = {
+    budget: "#14b8a6",
+    spent: "#6366f1"
+} as const
+
+const CHART_VIEW_OPTIONS: Array<{
+    value: ChartView
+    label: string
+    title: string
+    icon: typeof BarChart3
+}> = [
+    { value: "bars", label: "Bars", title: "Show as grouped bars", icon: BarChart3 },
+    { value: "trend", label: "Trend", title: "Show as trend lines", icon: LineChartIcon }
+]
 
 interface BudgetChartBranch {
     id: string | number
@@ -139,8 +183,10 @@ function BudgetChartTooltip({ active, payload, label, branches }: Readonly<Budge
 
     const data = payload[0].payload
     const totalLimit = Number(data.totalLimit) || 0
-    const totalSpent = Number(data.totalSpent) || 0
-    const utilization = totalLimit > 0 ? (totalSpent / totalLimit) * 100 : 0
+    // totalSpent already carries fulfilled spend plus the hold behind pending and
+    // approved orders — see buildBudgetChart in the budgets summary route.
+    const totalConsumption = Number(data.totalSpent) || 0
+    const utilization = totalLimit > 0 ? (totalConsumption / totalLimit) * 100 : 0
     let utilizationColor = "text-emerald-500"
     if (utilization > 90) {
         utilizationColor = "text-rose-500"
@@ -166,9 +212,12 @@ function BudgetChartTooltip({ active, payload, label, branches }: Readonly<Budge
                 <div className="flex justify-between items-center bg-indigo-50/50 dark:bg-indigo-900/20 p-2.5 rounded-xl border border-indigo-100/50 dark:border-indigo-900/50">
                     <div className="flex items-center gap-2">
                         <div className="w-3 h-3 rounded-sm bg-gradient-to-b from-indigo-400 to-indigo-600 shadow-sm shadow-indigo-500/20" />
-                        <span className="text-[11px] font-bold text-indigo-700 dark:text-indigo-400 uppercase tracking-tight">Total Spent</span>
+                        <span className="text-[11px] font-bold text-indigo-700 dark:text-indigo-400 uppercase tracking-tight">Total Consumption</span>
                     </div>
-                    <span className="text-[13px] font-black text-indigo-600">{formatPKR(totalSpent)}</span>
+                    <div className="flex flex-col items-end">
+                        <span className="text-[13px] font-black text-indigo-600">{formatPKR(totalConsumption)}</span>
+                        <span className="text-[8px] font-bold uppercase tracking-tighter text-indigo-400/80">incl. pending orders</span>
+                    </div>
                 </div>
 
                 <div className="flex justify-between items-center pt-1 px-2">
@@ -185,7 +234,7 @@ function BudgetChartTooltip({ active, payload, label, branches }: Readonly<Budge
                             <span className="text-[8px] font-bold text-emerald-500 tracking-tighter uppercase opacity-70">Base</span>
                             <span className="text-[8px] font-bold text-amber-500 tracking-tighter uppercase opacity-70">Addon</span>
                             <span className="text-[8px] font-bold text-indigo-500 tracking-tighter uppercase opacity-70">Total</span>
-                            <span className="text-[8px] font-bold text-violet-500 tracking-tighter uppercase opacity-70">Spent</span>
+                            <span className="text-[8px] font-bold text-violet-500 tracking-tighter uppercase opacity-70">Consumed</span>
                         </div>
                     </div>
                     <div className="space-y-1.5">
@@ -236,6 +285,7 @@ export default function BudgetSummaryPage() {
     const [chartBranchIds, setChartBranchIds] = useState<string[]>([])
     const [chartGroupIds, setChartGroupIds] = useState<string[]>([])
     const [showBudgetBar, setShowBudgetBar] = useState(true)
+    const [chartView, setChartView] = useState<ChartView>("bars")
     const hasInitializedChartDefaults = useRef(false)
 
     // Report-local filters
@@ -587,6 +637,7 @@ export default function BudgetSummaryPage() {
         setChartBranchIds(contextBranchIds.length > 0 ? [...contextBranchIds] : [])
         setChartGroupIds([])
         setShowBudgetBar(false)
+        setChartView("bars")
     }, [contextBranchIds, getDefaultChartYears])
 
     const resetReportFilters = useCallback(() => {
@@ -757,7 +808,7 @@ export default function BudgetSummaryPage() {
             { label: "Monthly Base (PKR)", value: (b: any) => ((b.baselineAmount || 0) / 100).toFixed(2) },
             { label: "Add-On Credit (PKR)",value: (b: any) => ((b.credited || 0) / 100).toFixed(2) },
             { label: "Total Budget (PKR)", value: (b: any) => (((b.baselineAmount || 0) + (b.credited || 0)) / 100).toFixed(2) },
-            { label: "Spent (PKR)",        value: (b: any) => ((b.spent || 0) / 100).toFixed(2) },
+            { label: "Total Consumption (PKR)", value: (b: any) => ((b.spent || 0) / 100).toFixed(2) },
             { label: "Remaining (PKR)",    value: (b: any) => ((((b.baselineAmount || 0) + (b.credited || 0)) - (b.spent || 0)) / 100).toFixed(2) },
             { label: "Utilization %",      value: (b: any) => {
                 const total = (b.baselineAmount || 0) + (b.credited || 0)
@@ -873,11 +924,11 @@ export default function BudgetSummaryPage() {
                         isLoading={!pageData}
                     />
                     <KPICard
-                        title="Total Spent"
+                        title="Total Consumption"
                         value={formatPKR(summary.totalSpent / 100)}
                         icon={ReceiptText}
                         colorScheme="blue"
-                        subtitle="Total purchases processed"
+                        subtitle="Fulfilled spend + pending orders"
                         isLoading={!pageData}
                     />
                     <KPICard
@@ -924,7 +975,7 @@ export default function BudgetSummaryPage() {
                                                 <div className="p-1.5 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-lg shadow-indigo-500/20">
                                                     <ReceiptText className="h-3.5 w-3.5" />
                                                 </div>
-                                                Expenditure Graph
+                                                Consumption Graph
                                                 <Badge variant="outline" className="text-[9px] font-bold tracking-widest border-indigo-200 dark:border-indigo-800 text-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/30 ml-1">{isChartAggregated ? 'yearly (auto)' : granularity}</Badge>
                                             </CardTitle>
 
@@ -939,6 +990,36 @@ export default function BudgetSummaryPage() {
                                                     onCheckedChange={setShowBudgetBar}
                                                     className="data-[state=checked]:bg-teal-500 scale-75"
                                                 />
+                                            </div>
+
+                                            {/* Bars ⇄ trend line, same series either way */}
+                                            <div
+                                                role="group"
+                                                aria-label="Consumption graph view"
+                                                className="hidden sm:flex items-center gap-0.5 p-0.5 rounded-lg bg-slate-100 dark:bg-slate-800/60"
+                                            >
+                                                {CHART_VIEW_OPTIONS.map(option => {
+                                                    const Icon = option.icon
+                                                    const isActive = chartView === option.value
+                                                    return (
+                                                        <button
+                                                            key={option.value}
+                                                            type="button"
+                                                            onClick={() => setChartView(option.value)}
+                                                            aria-pressed={isActive}
+                                                            title={option.title}
+                                                            className={cn(
+                                                                "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all duration-200",
+                                                                isActive
+                                                                    ? "bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm"
+                                                                    : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                                                            )}
+                                                        >
+                                                            <Icon className="h-3 w-3" />
+                                                            {option.label}
+                                                        </button>
+                                                    )
+                                                })}
                                             </div>
                                         </div>
                                         <Button
@@ -1158,7 +1239,7 @@ export default function BudgetSummaryPage() {
                                                                 <div className="absolute -top-2 -right-2 w-12 h-12 bg-amber-200/20 rounded-full blur-xl" />
                                                             </div>
                                                             <div className="relative overflow-hidden min-w-0 bg-gradient-to-br from-indigo-50 to-violet-50 dark:from-indigo-950/30 dark:to-violet-950/20 rounded-xl p-3 border border-indigo-100 dark:border-indigo-900/50">
-                                                                <p className="relative z-10 whitespace-nowrap text-[8px] sm:text-[9px] font-black uppercase tracking-[0.14em] sm:tracking-widest text-indigo-500 mb-1">Total Spent</p>
+                                                                <p className="relative z-10 whitespace-nowrap text-[8px] sm:text-[9px] font-black uppercase tracking-[0.14em] sm:tracking-widest text-indigo-500 mb-1">Total Consumption</p>
                                                                 <p className="relative z-10 whitespace-nowrap text-[clamp(0.72rem,1.05vw,1rem)] leading-tight font-black tracking-tight text-indigo-700 dark:text-indigo-300">{formatPKR(totalSpent)}</p>
                                                                 <div className="absolute -top-2 -right-2 w-12 h-12 bg-indigo-200/20 rounded-full blur-xl" />
                                                             </div>
@@ -1215,7 +1296,7 @@ export default function BudgetSummaryPage() {
                                           if (chartDisplayData.length > 0) {
                                             return (
                                             <ResponsiveContainer width="100%" height="100%">
-                                                <ComposedChart data={chartDisplayData} margin={{ top: 5, right: 15, left: 5, bottom: 20 }} barGap={6} barCategoryGap="25%">
+                                                <ComposedChart data={chartDisplayData} margin={{ top: 24, right: 15, left: 5, bottom: 20 }} barGap={6} barCategoryGap="25%">
                                                     <defs>
                                                         <linearGradient id="barGradientBudget" x1="0" y1="0" x2="0" y2="1">
                                                             <stop offset="0%" stopColor="#14b8a6" stopOpacity={0.9} />
@@ -1284,8 +1365,8 @@ export default function BudgetSummaryPage() {
                                                         wrapperStyle={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.08em', paddingBottom: '16px' }}
                                                     />
 
-                                                    {/* Budget Allocated Bar */}
-                                                    {showBudgetBar && (
+                                                    {/* Budget Allocated — bar or trend line */}
+                                                    {showBudgetBar && chartView === "bars" && (
                                                         <Bar
                                                             dataKey="totalLimit"
                                                             name="Total Budget"
@@ -1295,21 +1376,86 @@ export default function BudgetSummaryPage() {
                                                             animationDuration={800}
                                                             animationEasing="ease-out"
                                                             animationBegin={0}
-                                                        />
+                                                        >
+                                                            <LabelList
+                                                                dataKey="totalLimit"
+                                                                position="top"
+                                                                offset={6}
+                                                                formatter={formatChartBarLabel}
+                                                                style={{ fontSize: 9, fill: '#64748b', fontWeight: 700 }}
+                                                            />
+                                                        </Bar>
+                                                    )}
+                                                    {showBudgetBar && chartView === "trend" && (
+                                                        <Line
+                                                            type="monotone"
+                                                            dataKey="totalLimit"
+                                                            name="Total Budget"
+                                                            stroke={CHART_SERIES_COLORS.budget}
+                                                            strokeWidth={2.5}
+                                                            dot={{ r: 3, strokeWidth: 2, fill: '#ffffff', stroke: CHART_SERIES_COLORS.budget }}
+                                                            activeDot={{ r: 5, strokeWidth: 2 }}
+                                                            isAnimationActive={true}
+                                                            animationDuration={800}
+                                                            animationEasing="ease-out"
+                                                            animationBegin={0}
+                                                        >
+                                                            <LabelList
+                                                                dataKey="totalLimit"
+                                                                position="top"
+                                                                offset={10}
+                                                                formatter={formatChartBarLabel}
+                                                                style={{ fontSize: 9, fill: '#64748b', fontWeight: 700 }}
+                                                            />
+                                                        </Line>
                                                     )}
 
-                                                    {/* Total Expenditure Bar */}
-                                                    <Bar
-                                                        dataKey="totalSpent"
-                                                        name="Total Expenditure"
-                                                        fill="url(#barGradientSpent)"
-                                                        radius={[6, 6, 0, 0]}
-                                                        filter="url(#barShadow)"
-                                                        isAnimationActive={true}
-                                                        animationDuration={800}
-                                                        animationEasing="ease-out"
-                                                        animationBegin={showBudgetBar ? 200 : 0}
-                                                    />
+                                                    {/* Total Consumption — bar or trend line */}
+                                                    {chartView === "bars" ? (
+                                                        <Bar
+                                                            dataKey="totalSpent"
+                                                            name="Total Consumption"
+                                                            fill="url(#barGradientSpent)"
+                                                            radius={[6, 6, 0, 0]}
+                                                            filter="url(#barShadow)"
+                                                            isAnimationActive={true}
+                                                            animationDuration={800}
+                                                            animationEasing="ease-out"
+                                                            animationBegin={showBudgetBar ? 200 : 0}
+                                                        >
+                                                            <LabelList
+                                                                dataKey="totalSpent"
+                                                                position="top"
+                                                                offset={6}
+                                                                formatter={formatChartBarLabel}
+                                                                style={{ fontSize: 9, fill: '#64748b', fontWeight: 700 }}
+                                                            />
+                                                        </Bar>
+                                                    ) : (
+                                                        <Line
+                                                            type="monotone"
+                                                            dataKey="totalSpent"
+                                                            name="Total Consumption"
+                                                            stroke={CHART_SERIES_COLORS.spent}
+                                                            strokeWidth={2.5}
+                                                            dot={{ r: 3, strokeWidth: 2, fill: '#ffffff', stroke: CHART_SERIES_COLORS.spent }}
+                                                            activeDot={{ r: 5, strokeWidth: 2 }}
+                                                            isAnimationActive={true}
+                                                            animationDuration={800}
+                                                            animationEasing="ease-out"
+                                                            animationBegin={showBudgetBar ? 200 : 0}
+                                                        >
+                                                            {/* Labelled below the line while the budget line is on:
+                                                                it normally sits above, so the two do not collide. */}
+                                                            <LabelList
+                                                                dataKey="totalSpent"
+                                                                position={showBudgetBar ? "bottom" : "top"}
+                                                                offset={10}
+                                                                formatter={formatChartBarLabel}
+                                                                style={{ fontSize: 9, fill: '#64748b', fontWeight: 700 }}
+                                                            />
+                                                        </Line>
+                                                    )}
                                                 </ComposedChart>
                                             </ResponsiveContainer>
                                         )
@@ -1354,7 +1500,7 @@ export default function BudgetSummaryPage() {
                                                         <div>
                                                             <p className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-tighter">{b.branchName}</p>
                                                             <div className="flex items-center gap-1 mt-0.5">
-                                                                <span className="text-[9px] font-bold text-slate-400">SPENT: {formatPKR(b.spent / 100)}</span>
+                                                                <span className="text-[9px] font-bold text-slate-400">CONSUMED: {formatPKR(b.spent / 100)}</span>
                                                             </div>
                                                         </div>
                                                     </div>
@@ -1603,7 +1749,7 @@ export default function BudgetSummaryPage() {
                                                             <TableHead className="h-12 text-[10px] font-black uppercase tracking-[0.25em] text-emerald-600/70 text-right">Standard BASE</TableHead>
                                                             <TableHead className="h-12 text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600/70 text-right">Add-On (Adj)</TableHead>
                                                             <TableHead className="h-12 text-[10px] font-black uppercase tracking-[0.25em] text-slate-900 dark:text-white text-right">TOTAL BUDGET</TableHead>
-                                                            <TableHead className="h-12 text-[10px] font-black uppercase tracking-[0.25em] text-rose-500/70 text-right">NET SPENT</TableHead>
+                                                            <TableHead className="h-12 text-[10px] font-black uppercase tracking-[0.25em] text-rose-500/70 text-right">TOTAL CONSUMPTION</TableHead>
                                                             <TableHead className="h-12 text-[10px] font-black uppercase tracking-[0.25em] text-slate-900 dark:text-white text-right">LIQUID REMAINING</TableHead>
                                                             <TableHead className="h-12 text-[10px] font-black uppercase tracking-[0.25em] text-slate-400 text-center pr-6">Utilization</TableHead>
                                                         </TableRow>
@@ -1621,9 +1767,12 @@ export default function BudgetSummaryPage() {
                                                                 const baseline = b.baselineAmount || 0;
                                                                 const addon = b.credited || 0;
                                                                 const totalLimit = baseline + addon;
-                                                                const spent = b.spent || 0;
-                                                                const remaining = totalLimit - spent;
-                                                                const utilization = totalLimit > 0 ? (spent / totalLimit) * 100 : 0;
+                                                                // b.spent is allocated-ledger spend plus the hold behind
+                                                                // pending and approved orders — the same definition the
+                                                                // graph plots. See buildBranchBreakdown in the route.
+                                                                const consumption = b.spent || 0;
+                                                                const remaining = totalLimit - consumption;
+                                                                const utilization = totalLimit > 0 ? (consumption / totalLimit) * 100 : 0;
                                                                 return (
                                                                     <motion.tr
                                                                         key={b.branchId}
@@ -1657,7 +1806,7 @@ export default function BudgetSummaryPage() {
                                                                             <span className="font-black text-xs text-slate-900 dark:text-white font-mono">{formatPKR(totalLimit / 100)}</span>
                                                                         </TableCell>
                                                                         <TableCell className="text-right py-4">
-                                                                            <span className="font-black text-xs text-rose-500 font-mono">{formatPKR(spent / 100)}</span>
+                                                                            <span className="font-black text-xs text-rose-500 font-mono">{formatPKR(consumption / 100)}</span>
                                                                         </TableCell>
                                                                         <TableCell className="text-right py-4">
                                                                             <span className={cn("text-[11px] font-black uppercase tracking-widest font-mono px-3 py-1.5 rounded-xl border-2 transition-all", remaining < 0 ? "bg-rose-50 border-rose-100 text-rose-600 shadow-sm shadow-rose-100" : "bg-emerald-50 border-emerald-100 text-emerald-600 shadow-sm shadow-emerald-100 dark:bg-emerald-500/10 dark:border-emerald-500/20")}>

@@ -6,6 +6,7 @@ import { budgets,orders,orderItems,branches,globalProducts,categories } from "@/
 import { and,eq,gte,lte,inArray,sql,desc,asc,isNotNull } from "drizzle-orm"
 import { redactAnalyticsPrices,shouldHidePricesForRole } from "@/lib/price-visibility"
 import { buildAppMonthPeriods,getAppMonthPeriod,parseEndDateParam,parseStartDateParam } from "@/lib/date-range-params"
+import { consumedHeldCentsSql,consumedSpentCentsSql,orderBudgetMonthSql,orderBudgetPeriodSql,orderBudgetYearSql } from "@/lib/server/budget-consumption-sql"
 
 const emptyBudgetSummary = {
     summary: { totalAllocated: 0, totalSpent: 0, totalHeld: 0, totalCredited: 0, totalRemaining: 0 },
@@ -24,6 +25,9 @@ function resolveAllowedBudgetOrganization(userRole: string, userOrgId: number | 
     return userRole === "SUPER_ADMIN" && requested ? Number(requested) : userOrgId
 }
 
+/** Roles whose budget view is their own branch and nothing else. */
+const SINGLE_BRANCH_BUDGET_ROLES = ["BRANCH_ADMIN", "BRANCH_MANAGER", "ORDER_PORTAL"]
+
 async function resolveBudgetBranchIds(context: any) {
     let branchIds: number[] = []
     if (context.branchIdsParam) {
@@ -31,9 +35,13 @@ async function resolveBudgetBranchIds(context: any) {
     } else if (context.branchIdParam && context.branchIdParam !== "all") {
         branchIds = [Number(context.branchIdParam)]
     }
-    if (branchIds.length === 0 && ["BRANCH_ADMIN", "BRANCH_MANAGER", "ORDER_PORTAL"].includes(context.userRole)) {
-        branchIds = [context.userBranchId]
-    } else if (branchIds.length === 0 && context.allowedOrgId) {
+    // A single-branch role is pinned to its own branch even when the query
+    // string names another: the request states a preference, the session
+    // states the right.
+    if (SINGLE_BRANCH_BUDGET_ROLES.includes(context.userRole)) {
+        return context.userBranchId ? [Number(context.userBranchId)] : []
+    }
+    if (branchIds.length === 0 && context.allowedOrgId) {
         const rows = await db.select({ id: branches.id }).from(branches).where(eq(branches.organizationId, context.allowedOrgId))
         branchIds = rows.map((branch) => branch.id)
     } else if (branchIds.length === 0 && context.userRole === "SUPER_ADMIN") {
@@ -155,6 +163,18 @@ function buildBranchBreakdown(branchList: any[], periods: string[], budgetLookup
     })
 }
 
+/**
+ * The branches this response may report on.
+ *
+ * `branchIds` can reach here straight from the query string, so the tenant
+ * predicate is applied here and not left to the caller: a branch outside the
+ * caller's organization is dropped rather than refused, which keeps an
+ * out-of-scope id indistinguishable from one that does not exist. Every
+ * downstream read — the ledger, the order-scoped spending, the category
+ * breakdown — is keyed on what this returns, so this is the fence for all of
+ * them. `allowedOrgId` is null only for a Super Admin with no organization of
+ * their own, which is the one genuinely global caller.
+ */
 async function loadActiveBudgetBranches(branchIds: number[], allowedOrgId: number | null) {
     const selection = {
         id: branches.id,
@@ -163,7 +183,10 @@ async function loadActiveBudgetBranches(branchIds: number[], allowedOrgId: numbe
         organizationId: branches.organizationId,
     }
     if (branchIds.length > 0) {
-        return db.select(selection).from(branches).where(inArray(branches.id, branchIds))
+        return db.select(selection).from(branches).where(and(
+            inArray(branches.id, branchIds),
+            allowedOrgId ? eq(branches.organizationId, allowedOrgId) : undefined,
+        ))
     }
     if (allowedOrgId) {
         return db.select(selection).from(branches).where(and(
@@ -180,15 +203,18 @@ async function loadOrderScopedSpending(context: any) {
         inArray(orders.branchId, context.branchIds),
         context.hasExplicitRange ? gte(orders.createdAt, context.startDate) : undefined,
         context.hasExplicitRange ? lte(orders.createdAt, context.endDate) : undefined,
-        context.months.length > 0 ? sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(context.months, sql.raw(", "))})` : undefined,
-        context.years.length > 0 ? sql`EXTRACT(YEAR FROM ${orders.createdAt}) IN (${sql.join(context.years, sql.raw(", "))})` : undefined,
+        context.months.length > 0 ? sql`${orderBudgetMonthSql()} IN (${sql.join(context.months, sql.raw(", "))})` : undefined,
+        context.years.length > 0 ? sql`${orderBudgetYearSql()} IN (${sql.join(context.years, sql.raw(", "))})` : undefined,
     ].filter(Boolean) as any
+    // Statuses, refund netting and the period bucket all come from the shared
+    // consumption rules, so this sum lands on the same UTC-month rows the order
+    // lifecycle wrote its holds against and the ledger path reads.
     return db.select({
         branchId: orders.branchId,
-        period: sql<string>`TO_CHAR(${orders.createdAt}, 'YYYY-MM')`,
-        spentCents: sql<number>`COALESCE(SUM(CASE WHEN UPPER(${orders.status}) IN ('FULFILLED', 'PARTIAL', 'PARTIALLY_FULFILLED') THEN GREATEST(0, ${orders.totalCents} - COALESCE(${orders.refundAmountCents}, 0)) ELSE 0 END), 0)`.mapWith(Number),
-        heldCents: sql<number>`COALESCE(SUM(CASE WHEN UPPER(${orders.status}) IN ('PENDING', 'APPROVED') THEN GREATEST(0, ${orders.totalCents} - COALESCE(${orders.refundAmountCents}, 0)) ELSE 0 END), 0)`.mapWith(Number),
-    }).from(orders).where(and(...conditions)).groupBy(orders.branchId, sql`TO_CHAR(${orders.createdAt}, 'YYYY-MM')`)
+        period: orderBudgetPeriodSql(),
+        spentCents: consumedSpentCentsSql(),
+        heldCents: consumedHeldCentsSql(),
+    }).from(orders).where(and(...conditions)).groupBy(orders.branchId, orderBudgetPeriodSql())
 }
 
 export async function GET(req: NextRequest) {
