@@ -360,7 +360,7 @@ export default function OrganizationReportPage() {
     const chartYearsAvailable = allYears
     const reportYearsAvailable = allYears
 
-    const stats = reportData?.items || []
+    const stats = useMemo(() => reportData?.items || [], [reportData?.items])
     const normalizedTrend = useMemo(() => {
         const trend = chartData?.trend || []
         const comparisonTrend = chartData?.comparisonTrend || []

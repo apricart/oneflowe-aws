@@ -283,6 +283,8 @@ interface ResolvedOrder {
     priceCents: number
     taxRateBp: number
     taxCents: number
+    netCents: number
+    grossCents: number
   }>
 }
 
@@ -543,6 +545,8 @@ async function buildPlan(
           priceCents: line.priceCents,
           taxRateBp: tax.lines[index].taxRateBp,
           taxCents: tax.lines[index].taxCents,
+          netCents: tax.lines[index].netCents,
+          grossCents: tax.lines[index].grossCents,
         }
       }),
     })
@@ -571,8 +575,11 @@ function receiptData(entry: ResolvedOrder) {
     description: line.productName,
     quantity: line.quantity,
     rate: line.priceCents / 100,
+    netRate: line.quantity > 0 ? line.netCents / 100 / line.quantity : 0,
     tax: line.taxCents / 100,
-    total: (line.priceCents * line.quantity) / 100,
+    taxPercent: line.taxRateBp / 100,
+    total: line.grossCents / 100,
+    netAmount: line.netCents / 100,
     unit: line.unit,
   }))
   return {

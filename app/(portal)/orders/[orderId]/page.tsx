@@ -1,6 +1,7 @@
 "use client"
 
 import { useParams,useRouter } from "next/navigation"
+import Image from "next/image"
 import useSWR from "swr"
 import { useSession } from "next-auth/react"
 import { useState } from "react"
@@ -409,9 +410,12 @@ export default function SuperAdminOrderDetailsPage() {
                           >
                             <div className="flex h-16 w-16 items-center justify-center rounded-lg border bg-slate-50 dark:bg-slate-600 dark:border-slate-500">
                               {item.imageUrl ? (
-                                <img
+                                <Image
                                   src={item.imageUrl}
                                   alt={item.productName}
+                                  width={64}
+                                  height={64}
+                                  unoptimized
                                   className="h-full w-full rounded-lg object-cover"
                                 />
                               ) : (

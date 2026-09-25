@@ -9,6 +9,8 @@ import { cn } from "@/lib/utils"
 import {
   EXECUTIVE_METRICS,
   MEASURE_METRIC,
+  budgetBesideWithheldReason,
+  panelSegmentation,
   panelsForFocus,
   type ChartTypeId,
   type ExecutiveDimensionId,
@@ -17,6 +19,7 @@ import {
   type MeasureId,
   type SideBySidePanel,
 } from "@/lib/executive-analytics"
+import { retainAvailable } from "@/lib/executive-entity-selection"
 import { isPanelSnapshotReady, type SideBySidePanelSnapshot } from "@/lib/executive-side-by-side-export"
 import { ChartCard } from "./chart-kit"
 import {
@@ -48,16 +51,23 @@ import { SideBySideExportButton } from "./side-by-side-export-button"
  *
  * So this screen fixes the subject — a product, or a few — and varies the
  * dimension instead. Every ranking and trend panel is the *existing*
- * comparison endpoint with a different `dimension`; the one grid panel —
- * requester against product, uncombined — is the `/matrix` endpoint under the
- * same registry and the same scope, so there is no new authorization surface
- * behind any of it: the same whitelist decides what may be asked, and the same
- * fence decides which rows may answer.
+ * comparison endpoint with a different `dimension`; the one grid — requester
+ * against product, uncombined, which "By product" becomes once people are
+ * compared — is the `/matrix` endpoint under the same registry and the same
+ * scope, so there is no new authorization surface behind any of it: the same
+ * whitelist decides what may be asked, and the same fence decides which rows
+ * may answer.
  *
  * Products are also a dimension here, not only the subject: with no focus, or
  * with several products ticked, the product panels rank them against each
  * other. Ticking one product collapses those panels into the day-by-day view,
  * where a single bar would only restate the subject line.
+ *
+ * With several requesters picked to compare, "By product" becomes that grid:
+ * one cluster per product, one column per person inside it, one figure per
+ * pair and never combined, so "who consumed how much of this product" is read
+ * across a cluster. The registry decides which panel does this (`segmentBy`),
+ * and below two people the panel draws its plain ranking.
  *
  * Two things are shared across every panel, deliberately:
  *
@@ -77,6 +87,8 @@ type ComparisonResponse = {
   mode: "rank" | "series"
   chart: ChartTypeId
   concentrationEligible: boolean
+  /** True when every row carries `totalBudgetCents` beside its figure, because `budget=1` was honoured. */
+  budgetBeside?: boolean
   quantityUnit: { selected: string | null; conflict: boolean; available: string[] }
   blocked?: { reason: string; message: string }
   error?: string
@@ -89,7 +101,11 @@ const SERIES_PANEL_ROWS = 6
 export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFilterState }>) {
   const [measure, setMeasure] = React.useState<MeasureId>("amount")
   const [focusProducts, setFocusProducts] = React.useState<string[]>([])
-  const [compareUsers, setCompareUsers] = React.useState<string[]>([])
+  /**
+   * The requesters ticked in the picker, before the current option list has had
+   * its say. Everything downstream reads `compareUsers` below, never this.
+   */
+  const [pickedUsers, setPickedUsers] = React.useState<string[]>([])
   const [drillTarget, setDrillTarget] = React.useState<DrillTarget | null>(null)
   /**
    * Panels the reader has widened to the full row.
@@ -138,6 +154,57 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
   }, [])
   const readSnapshots = React.useCallback(() => ({ ...snapshotsRef.current }), [])
 
+  // Both pickers list only what is inside the caller's fence, and neither
+  // narrows itself — a list that hid everything already picked could never be
+  // changed.
+  //
+  // The requester list is resolved first because the requester selection is
+  // read back through it, and the product list is asked for under that
+  // selection.
+  const { data: userData, isLoading: usersLoading } = useAPI<{ options: EntityOption[] }>(
+    `/api/v1/analytics/executive/options?${toQuery(
+      { ...filters, productIds: focusProducts },
+      { dimension: "user" },
+    )}`,
+  )
+
+  const userOptions = userData?.options ?? []
+
+  /**
+   * The requesters actually being compared: the ticked ones the current list
+   * still offers.
+   *
+   * Selecting a branch re-asks the options endpoint, which answers with the
+   * people who ordered *there*. Someone ticked at the branch before it would
+   * otherwise stay ticked and narrow all seven panels to a person with nothing
+   * in scope — seven empty charts under a trigger naming a list that no longer
+   * contains them. The rule is pure and lives in `lib/executive-entity-selection.ts`.
+   *
+   * Only once an answer is in hand: while the request is in flight, or after it
+   * failed, `userData` is absent and the selection is left exactly as picked
+   * rather than dropped against an empty list.
+   */
+  const compareUsers = userData ? retainAvailable(pickedUsers, userOptions) : pickedUsers
+
+  /*
+   * A drop is written back to the picker's own state, so the narrowing is what
+   * the reader ticked from here on and returning to the earlier branch does not
+   * quietly bring the old comparison back. `retainAvailable` hands back the
+   * same array when nothing was dropped, so this settles in one pass.
+   */
+  React.useEffect(() => {
+    if (compareUsers !== pickedUsers) setPickedUsers(compareUsers)
+  }, [compareUsers, pickedUsers])
+
+  const { data: productData, isLoading: productsLoading } = useAPI<{ options: EntityOption[] }>(
+    `/api/v1/analytics/executive/options?${toQuery(
+      { ...filters, userIds: compareUsers },
+      { dimension: "product" },
+    )}`,
+  )
+
+  const productOptions = productData?.options ?? []
+
   /**
    * The filter set every panel shares.
    *
@@ -149,25 +216,6 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
     () => ({ ...filters, productIds: focusProducts, userIds: compareUsers }),
     [filters, focusProducts, compareUsers],
   )
-
-  // Both pickers list only what is inside the caller's fence, and neither
-  // narrows itself — a list that hid everything already picked could never be
-  // changed.
-  const { data: productData, isLoading: productsLoading } = useAPI<{ options: EntityOption[] }>(
-    `/api/v1/analytics/executive/options?${toQuery(
-      { ...filters, userIds: compareUsers },
-      { dimension: "product" },
-    )}`,
-  )
-  const { data: userData, isLoading: usersLoading } = useAPI<{ options: EntityOption[] }>(
-    `/api/v1/analytics/executive/options?${toQuery(
-      { ...filters, productIds: focusProducts },
-      { dimension: "user" },
-    )}`,
-  )
-
-  const productOptions = productData?.options ?? []
-  const userOptions = userData?.options ?? []
   const panels = panelsForFocus(focusProducts.length)
   const filterNames = useFilterNames(filters)
 
@@ -221,7 +269,7 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
             noun="people"
             options={userOptions}
             selected={compareUsers}
-            onChange={setCompareUsers}
+            onChange={setPickedUsers}
             loading={usersLoading}
             emptyLabel="All requesters (top ranked)"
             className="w-[260px]"
@@ -236,7 +284,7 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
         {focusProducts.length > 0 || compareUsers.length > 0 ? (
           <button
             type="button"
-            onClick={() => { setFocusProducts([]); setCompareUsers([]); setDrillTarget(null) }}
+            onClick={() => { setFocusProducts([]); setPickedUsers([]); setDrillTarget(null) }}
             className="flex items-center gap-1 rounded-lg px-2 py-2 text-[11px] font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800"
           >
             <X className="h-3 w-3" aria-hidden />
@@ -260,7 +308,7 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
               requesters: compareUsers.map(
                 (key) => userOptions.find((option) => option.key === key)?.label ?? "selected requester",
               ),
-              unit: filters.unit,
+              unit: null,
             }}
           />
         </div>
@@ -275,33 +323,38 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
       </p>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        {orderedPanels.map((panel) => (panel.matrix ? (
-          <MatrixPanel
-            key={panel.id}
-            panel={panel}
-            rows={panel.matrix.rows}
-            filters={scopedFilters}
-            metric={metric}
-            expanded={expanded.includes(panel.id)}
-            onToggleExpanded={(next) => toggleExpanded(panel.id, next)}
-            onDrillDown={setDrillTarget}
-            onSnapshot={reportSnapshot}
-          />
-        ) : (
-          <ComparePanel
-            key={panel.id}
-            panel={panel}
-            filters={scopedFilters}
-            metric={metric}
-            compareUsers={compareUsers}
-            // The single-product panel is always the full row; every other
-            // panel widens only when its own checkbox says so.
-            expanded={panel.requiresSingleProduct ? null : expanded.includes(panel.id)}
-            onToggleExpanded={(next) => toggleExpanded(panel.id, next)}
-            onDrillDown={setDrillTarget}
-            onSnapshot={reportSnapshot}
-          />
-        )))}
+        {orderedPanels.map((panel) => {
+          // A ranked panel split by the people picked to compare is served by
+          // `/matrix` as a grid, one column per person inside each cluster.
+          const gridRows = panelSegmentation(panel, compareUsers.length)
+          return gridRows ? (
+            <MatrixPanel
+              key={panel.id}
+              panel={panel}
+              rows={gridRows}
+              filters={scopedFilters}
+              metric={metric}
+              expanded={expanded.includes(panel.id)}
+              onToggleExpanded={(next) => toggleExpanded(panel.id, next)}
+              onDrillDown={setDrillTarget}
+              onSnapshot={reportSnapshot}
+            />
+          ) : (
+            <ComparePanel
+              key={panel.id}
+              panel={panel}
+              filters={scopedFilters}
+              metric={metric}
+              compareUsers={compareUsers}
+              // The single-product panel is always the full row; every other
+              // panel widens only when its own checkbox says so.
+              expanded={panel.requiresSingleProduct ? null : expanded.includes(panel.id)}
+              onToggleExpanded={(next) => toggleExpanded(panel.id, next)}
+              onDrillDown={setDrillTarget}
+              onSnapshot={reportSnapshot}
+            />
+          )
+        })}
       </div>
 
       {drillTarget ? (
@@ -393,12 +446,25 @@ function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggle
   // dimension ranks whatever is in scope.
   const keys = panel.dimension === "user" ? compareUsers.join(",") : ""
 
+  // A budget-bearing panel asks for the Total Budget beside each column only
+  // while the rule allows it — money, no product or requester narrowing — and
+  // otherwise tells the reader why the budget is not there. The server applies
+  // the same rule, so the panel never asks for what it would be refused.
+  const budgetWithheld = panel.budgetBeside
+    ? budgetBesideWithheldReason(panel.dimension, metric, {
+      lineScoped: (filters.productIds?.length ?? 0) > 0 || filters.categoryIds.length > 0,
+      userScoped: (filters.userIds?.length ?? 0) > 0,
+    })
+    : null
+  const askBudget = Boolean(panel.budgetBeside) && budgetWithheld === null
+
   const url = `/api/v1/analytics/executive/compare?${toQuery(filters, {
     dimension: panel.dimension,
     metric,
     chart: panel.chart,
     keys,
     limit: String(limit),
+    budget: askBudget ? "1" : "",
   })}`
 
   const { data, error, isLoading } = useAPI<ComparisonResponse>(url)
@@ -450,6 +516,7 @@ function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggle
             metricLabel={data?.label ?? EXECUTIVE_METRICS[metric].label}
             dimensionLabel={panelDimensionLabel(panel.dimension)}
             concentrationEligible={Boolean(data?.concentrationEligible)}
+            budgetBeside={Boolean(data?.budgetBeside)}
             dimension={panel.dimension}
             onDrillDown={onDrillDown}
           />
@@ -465,7 +532,10 @@ function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggle
         dimensionLabel={panelDimensionLabel(panel.dimension)}
         unit={data?.quantityUnit.selected ?? null}
         concentrationEligible={Boolean(data?.concentrationEligible)}
+        budgetBeside={Boolean(data?.budgetBeside)}
         colorful={panel.colorful}
+        dualValueLabels={panel.dualValueLabels}
+        fullWidth={fullWidth}
         dimension={panel.dimension}
         onDrillDown={onDrillDown}
       />
@@ -474,6 +544,9 @@ function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggle
           Measured in <strong>{data.quantityUnit.selected}</strong> only. Other units in this period are excluded rather
           than added to it.
         </p>
+      ) : null}
+      {budgetWithheld && !isEmpty ? (
+        <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">{budgetWithheld}</p>
       ) : null}
     </ChartCard>
   )
@@ -506,12 +579,15 @@ function FullWidthToggle({ id, title, checked, onChange }: Readonly<{
 const MATRIX_PANEL_ENTITIES = 12
 
 /**
- * The grid panel: requester against product, one figure per pair.
+ * A ranked panel worn as a grid: the columns are the panel's own dimension,
+ * the rows the people picked to compare, one figure per pair.
  *
  * It reads the same shared filters as every other panel — the focused
  * products as `productIds`, the compared people as `userIds` — so its axes
  * are exactly the entities the ranking panels show, and its margins are their
  * bars. What it adds is the cells between them, which no ranking can give.
+ * Its table and its sheet are the grid as drawn: one row per person, one
+ * column per product, the person's total last.
  */
 function MatrixPanel({ panel, rows, filters, metric, expanded, onToggleExpanded, onDrillDown, onSnapshot }: Readonly<{
   panel: SideBySidePanel
@@ -546,8 +622,10 @@ function MatrixPanel({ panel, rows, filters, metric, expanded, onToggleExpanded,
 
   // An axis that filled its cap may have left entities out; say so, rather
   // than let a reader take twelve for everyone.
-  const truncated = data && !isEmpty
-    && (data.rows.length >= data.limits.rows || data.columns.length >= data.limits.columns)
+  const truncated = Boolean(data && !isEmpty
+    && (data.columns.length >= data.limits.columns || data.rows.length >= data.limits.rows))
+  const columnNoun = `${panelDimensionLabel(panel.dimension).toLowerCase()}s`
+  const rowNoun = `${panelDimensionLabel(rows).toLowerCase()}s`
 
   return (
     <ChartCard
@@ -570,7 +648,7 @@ function MatrixPanel({ panel, rows, filters, metric, expanded, onToggleExpanded,
       ) : null}
       {truncated ? (
         <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
-          Showing the top {MATRIX_PANEL_ENTITIES} on each axis. Choose specific products or requesters above to see others.
+          Showing the top {MATRIX_PANEL_ENTITIES} on each axis. Choose specific {columnNoun} or {rowNoun} above to see others.
         </p>
       ) : null}
     </ChartCard>

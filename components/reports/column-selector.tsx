@@ -48,7 +48,9 @@ function readStoredPreference(storageKey: string): StoredColumnPreference | null
         if (parsed && typeof parsed === "object") {
             return { visible: asKeyList(parsed.visible), known: asKeyList(parsed.known) }
         }
-    } catch { }
+    } catch {
+        // Ignore unavailable or malformed saved preferences.
+    }
     return null
 }
 
@@ -86,7 +88,9 @@ export function useColumnSelector(columns: ColumnDef[], storageKey: string) {
                 `col-selector-${storageKey}`,
                 JSON.stringify({ visible: visibleKeys, known: knownSignature.split(",").filter(Boolean) }),
             )
-        } catch { }
+        } catch {
+            // Persistence is best-effort when storage is unavailable.
+        }
     }, [visibleKeys, storageKey, knownSignature])
 
     const toggleColumn = useCallback((key: string) => {

@@ -365,8 +365,8 @@ export default function OrderReportPage() {
 
     // ━━━ DATA PROCESSING ━━━
     const summary = globalData?.summary || { totalSales: 0, totalRefunds: 0, totalTax: 0, totalSubtotal: 0, orderCount: 0, totalOrderCount: 0 }
-    const chartOrders = chartData?.orders || []
-    const reportOrders = reportData?.orders || []
+    const chartOrders = useMemo(() => chartData?.orders || [], [chartData?.orders])
+    const reportOrders = useMemo(() => reportData?.orders || [], [reportData?.orders])
     const totalReportOrders = Number(reportData?.pagination?.total || 0)
     const totalReportPages = Math.max(
         1,

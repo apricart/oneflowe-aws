@@ -1,16 +1,17 @@
-import { fireEvent, render, screen } from "@testing-library/react"
+import { act, render, screen } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 /**
- * The Graphical Reports page: who gets a page at all, and how the three levels
- * are reached.
+ * The Graphical Reports page: who gets a page at all, and how the levels are
+ * reached.
  *
  * The role check here only decides what renders — every endpoint behind the
  * page re-derives the caller's role from the database and refuses on its own
  * (see `tests/integration/executive-analytics-api.test.ts`). So the assertions
  * here are about the reader's experience: an unauthorised role is told why,
- * the Product Performance tab mounts the workspace with the shared filters,
- * and the tab is a URL.
+ * the level is the `?tab=` the sidebar links to and is named in the heading,
+ * Product Performance mounts the workspace with the shared filters, and the
+ * withdrawn Explore & Compare level is reachable by no route at all.
  */
 
 const mocks = vi.hoisted(() => ({
@@ -60,6 +61,9 @@ vi.mock("@/components/reports/executive/side-by-side-workspace", () => ({
 vi.mock("@/components/reports/executive/explore-workspace", () => ({
   ExploreWorkspace: () => <div data-testid="explore" />,
 }))
+const overviewCharts = vi.hoisted(() => ({
+  PriceVariancePanel: vi.fn((_props: { onSelectProduct?: unknown }) => null),
+}))
 vi.mock("@/components/reports/executive/overview-charts", () => ({
   BudgetVsActualChart: () => null,
   ProcurementTrendChart: () => null,
@@ -67,7 +71,7 @@ vi.mock("@/components/reports/executive/overview-charts", () => ({
   CategoryParetoChart: () => null,
   BranchCategoryHeatmap: () => null,
   StatusCompositionChart: () => null,
-  PriceVariancePanel: () => null,
+  PriceVariancePanel: overviewCharts.PriceVariancePanel,
 }))
 vi.mock("@/components/reports/executive/summary-panels", () => ({
   KpiRow: () => <div data-testid="kpis" />,
@@ -84,6 +88,7 @@ function signIn(role: string | null, status: "authenticated" | "loading" = "auth
 const replaceState = vi.fn<(state: unknown, unused: string, url?: string | URL | null) => void>()
 
 beforeEach(() => {
+  overviewCharts.PriceVariancePanel.mockClear()
   mocks.useAPI.mockReset()
   mocks.useAPI.mockReturnValue({ data: undefined, error: undefined, isLoading: false })
   location.set("")
@@ -94,6 +99,12 @@ beforeEach(() => {
   window.history.replaceState = replaceState
 })
 
+/** The page heading, which names the level that is open. */
+const heading = () => screen.getByRole("heading", { level: 1 }).textContent
+
+/** What following a sidebar link does while the page is already open. */
+const follow = (search: string) => act(() => location.set(search))
+
 describe("who gets the page", () => {
   it.each(["BRANCH_ADMIN", "ORDER_PORTAL", "GROUP_ORDER_PORTAL"])(
     "tells %s the report is not available for their role, and fetches nothing",
@@ -101,20 +112,20 @@ describe("who gets the page", () => {
       signIn(role)
       render(<GraphicalReportsPage />)
       expect(screen.getByText("Graphical Reports is not available for your role")).toBeTruthy()
-      expect(screen.queryByRole("tab")).toBeNull()
+      expect(screen.queryByTestId("kpis")).toBeNull()
+      expect(screen.queryByTestId("filters")).toBeNull()
       // No request is made on the reader's behalf; the URL is null.
       for (const call of mocks.useAPI.mock.calls) expect(call[0]).toBeNull()
     },
   )
 
-  // The multi-branch approver reads the same three levels over the branches
-  // its assignments reach; the endpoints behind them fence every figure.
-  it.each(["SUPER_ADMIN", "HEAD_OFFICE", "head_office", "GROUP_USER"])("gives %s the three levels", (role) => {
+  // The multi-branch approver reads the same levels over the branches its
+  // assignments reach; the endpoints behind them fence every figure.
+  it.each(["SUPER_ADMIN", "HEAD_OFFICE", "head_office", "GROUP_USER"])("opens %s on the overview, named as such", (role) => {
     signIn(role)
     render(<GraphicalReportsPage />)
-    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
-      "Executive Overview", "Product Performance", "Explore & Compare",
-    ])
+    expect(heading()).toBe("Executive Overview")
+    expect(screen.getByTestId("kpis")).toBeTruthy()
     expect(mocks.useAPI).toHaveBeenCalledWith(expect.stringContaining("/api/v1/analytics/executive/overview?"))
   })
 
@@ -126,51 +137,73 @@ describe("who gets the page", () => {
 })
 
 describe("the levels", () => {
-  it("opens on the overview and switches to Product Performance with the shared filters", () => {
+  it("offers no switch of its own — the sidebar is the way between levels", () => {
     signIn("HEAD_OFFICE")
     render(<GraphicalReportsPage />)
-    expect(screen.getByTestId("kpis")).toBeTruthy()
+    expect(screen.queryByRole("tablist")).toBeNull()
+    expect(screen.queryByRole("tab")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Product Performance" })).toBeNull()
+  })
+
+  it("switches to Product Performance, renamed, when its sidebar link is followed from the open page", () => {
+    signIn("HEAD_OFFICE")
+    render(<GraphicalReportsPage />)
+    expect(heading()).toBe("Executive Overview")
     expect(screen.queryByTestId("side-by-side")).toBeNull()
 
-    fireEvent.click(screen.getByRole("tab", { name: "Product Performance" }))
-    expect(screen.getByRole("tab", { name: "Product Performance" }).getAttribute("aria-selected")).toBe("true")
+    follow("?tab=product-performance")
+    expect(heading()).toBe("Product Performance")
     expect(screen.getByTestId("side-by-side").textContent).toBe("all")
     expect(screen.queryByTestId("kpis")).toBeNull()
 
-    fireEvent.click(screen.getByRole("tab", { name: "Explore & Compare" }))
-    expect(screen.getByTestId("explore")).toBeTruthy()
-    expect(screen.queryByTestId("side-by-side")).toBeNull()
-  })
-
-  it("writes the chosen tab to the URL, and clears it for the overview", () => {
-    signIn("HEAD_OFFICE")
-    render(<GraphicalReportsPage />)
-
-    fireEvent.click(screen.getByRole("tab", { name: "Product Performance" }))
-    expect(replaceState).toHaveBeenLastCalledWith(null, "", "/reports/graphical?tab=product-performance")
-
-    fireEvent.click(screen.getByRole("tab", { name: "Executive Overview" }))
-    expect(replaceState).toHaveBeenLastCalledWith(null, "", "/reports/graphical")
+    follow("")
+    expect(heading()).toBe("Executive Overview")
     expect(screen.getByTestId("kpis")).toBeTruthy()
-  })
-
-  it("opens straight on the tab the URL names, which is what the sidebar entry links to", () => {
-    signIn("GROUP_USER")
-    location.set("?tab=product-performance")
-    render(<GraphicalReportsPage />)
-    expect(screen.getByRole("tab", { name: "Product Performance" }).getAttribute("aria-selected")).toBe("true")
-    expect(screen.getByTestId("side-by-side")).toBeTruthy()
-    expect(screen.queryByTestId("kpis")).toBeNull()
-    // Arriving on a tab is not a navigation of its own; nothing is written back.
+    expect(screen.queryByTestId("side-by-side")).toBeNull()
+    // Following a link is the router's navigation, not the page's; it writes nothing.
     expect(replaceState).not.toHaveBeenCalled()
   })
 
-  it("falls back to the overview for a tab the URL names that does not exist", () => {
+  it("opens straight on the level the URL names, which is what the sidebar entry links to", () => {
+    signIn("GROUP_USER")
+    location.set("?tab=product-performance")
+    render(<GraphicalReportsPage />)
+    expect(heading()).toBe("Product Performance")
+    expect(screen.getByTestId("side-by-side")).toBeTruthy()
+    expect(screen.queryByTestId("kpis")).toBeNull()
+    // Arriving on a level is not a navigation of its own; nothing is written back.
+    expect(replaceState).not.toHaveBeenCalled()
+  })
+
+  it("falls back to the overview for a level the URL names that does not exist", () => {
     signIn("SUPER_ADMIN")
     location.set("?tab=nonsense")
     render(<GraphicalReportsPage />)
-    expect(screen.getByRole("tab", { name: "Executive Overview" }).getAttribute("aria-selected")).toBe("true")
+    expect(heading()).toBe("Executive Overview")
     expect(screen.getByTestId("kpis")).toBeTruthy()
+  })
+
+  // Explore & Compare is withdrawn for now (`EXPLORE_TAB_OFFERED` in the
+  // page). Hidden means unreachable: not opened by a bookmark, and not opened
+  // from the one visual that used to lead there.
+  describe("the withdrawn Explore & Compare level", () => {
+    it("is not opened by a URL naming it — the overview opens instead", () => {
+      signIn("SUPER_ADMIN")
+      location.set("?tab=explore")
+      render(<GraphicalReportsPage />)
+      expect(heading()).toBe("Executive Overview")
+      expect(screen.queryByTestId("explore")).toBeNull()
+      expect(screen.getByTestId("kpis")).toBeTruthy()
+    })
+
+    it("is not opened from a Price Variance row: the panel gets no click handler", () => {
+      signIn("SUPER_ADMIN")
+      render(<GraphicalReportsPage />)
+      expect(overviewCharts.PriceVariancePanel).toHaveBeenCalled()
+      for (const [props] of overviewCharts.PriceVariancePanel.mock.calls) {
+        expect(props.onSelectProduct).toBeUndefined()
+      }
+    })
   })
 
   it("keeps the same filter row above every level, opening on this quarter", () => {
@@ -180,15 +213,16 @@ describe("the levels", () => {
     quarterStart.setMonth(Math.floor(quarterStart.getMonth() / 3) * 3, 1)
     const expected = toCalendarDate(quarterStart)
     expect(screen.getByTestId("filters").textContent).toBe(expected)
-    fireEvent.click(screen.getByRole("tab", { name: "Product Performance" }))
+    follow("?tab=product-performance")
     expect(screen.getByTestId("filters").textContent).toBe(expected)
   })
 
-  it("surfaces a failed overview request without hiding the tabs", () => {
+  it("surfaces a failed overview request without hiding the heading or the filters", () => {
     signIn("HEAD_OFFICE")
     mocks.useAPI.mockReturnValue({ data: undefined, error: new Error("boom"), isLoading: false })
     render(<GraphicalReportsPage />)
     expect(screen.getByText(/The analytics could not be loaded/)).toBeTruthy()
-    expect(screen.getAllByRole("tab")).toHaveLength(3)
+    expect(heading()).toBe("Executive Overview")
+    expect(screen.getByTestId("filters")).toBeTruthy()
   })
 })

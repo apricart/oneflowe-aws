@@ -35,6 +35,8 @@ export interface InvoiceTotals {
   total: number | null
 }
 
+type SnapshotTaxMode = "inclusive" | "exclusive" | null
+
 /** Prices are nulled out by the redaction layer for price-restricted roles. */
 function toMoney(value: unknown): number | null {
   if (value === null) return null
@@ -68,29 +70,93 @@ function collectSnapshotItems(receiptData: any): any[] {
   })
 }
 
+function toCents(value: unknown): number | null {
+  const money = toMoney(value)
+  return money === null ? null : Math.round(money * 100)
+}
+
 /**
- * `netRate` and `netAmount` are only present on snapshots written since tax
- * was recorded. Older ones fall back to the gross rate and total they have
- * always stored, which is exactly what those invoices print today.
+ * Some K-Electric legacy snapshots have a complete per-line tax breakdown but
+ * predate the explicit `netAmount`, `netRate`, and `taxPercent` fields. Identify
+ * whether their stored item totals are gross (tax-inclusive) or net
+ * (tax-exclusive) from the snapshot's own reconciled totals. This keeps the
+ * fallback evidence-based and leaves snapshots with only order-level tax alone.
  */
-function toInvoiceLine(item: any, serial: number): InvoiceLine {
-  const rate = item?.netRate === undefined ? toMoney(item?.rate) : toMoney(item.netRate)
-  const amount = item?.netAmount === undefined ? toMoney(item?.total) : toMoney(item.netAmount)
-  const taxPercent = toMoney(item?.taxPercent)
+function getSnapshotTaxMode(receiptData: any, items: any[]): SnapshotTaxMode {
+  const subtotalCents = toCents(receiptData?.subtotal)
+  const receiptTaxCents = toCents(receiptData?.tax)
+  if (subtotalCents === null || receiptTaxCents === null || receiptTaxCents <= 0 || items.length === 0) {
+    return null
+  }
+
+  let itemTotalCents = 0
+  let itemTaxCents = 0
+  for (const item of items) {
+    const totalCents = toCents(item?.total)
+    const taxCents = toCents(item?.tax)
+    if (totalCents === null || taxCents === null || taxCents < 0 || taxCents > totalCents) return null
+    itemTotalCents += totalCents
+    itemTaxCents += taxCents
+  }
+
+  if (itemTaxCents !== receiptTaxCents) return null
+  if (itemTotalCents - itemTaxCents === subtotalCents) return "inclusive"
+  if (itemTotalCents === subtotalCents) return "exclusive"
+  return null
+}
+
+/** Infer a basis-point-precise rate only when the recorded cents reconstruct it. */
+function inferTaxPercent(tax: number | null, netAmount: number | null): number | null {
+  const taxCents = toCents(tax)
+  const netCents = toCents(netAmount)
+  if (taxCents === null || netCents === null || taxCents <= 0 || netCents <= 0) return null
+
+  const rateBp = Math.round((taxCents * 10_000) / netCents)
+  if (rateBp <= 0 || rateBp > 10_000) return null
+
+  const reconstructedTaxCents = Math.round((netCents * rateBp) / 10_000)
+  return Math.abs(reconstructedTaxCents - taxCents) <= 1 ? rateBp / 100 : null
+}
+
+/**
+ * `netRate` and `netAmount` are present on current snapshots. A legacy snapshot
+ * with reconciled per-line tax can recover those net figures from its own
+ * recorded cents; an older snapshot without that evidence still falls back to
+ * the gross rate and total it has always stored.
+ */
+function toInvoiceLine(item: any, serial: number, taxMode: SnapshotTaxMode): InvoiceLine {
+  const quantity = toAmount(item?.quantity)
+  const storedAmount = toMoney(item?.total)
+  const tax = toMoney(item?.tax)
+  const inferredNetAmount = taxMode === "inclusive" && storedAmount !== null && tax !== null
+    ? roundToPaisa(storedAmount - tax)
+    : storedAmount
+  const rate = item?.netRate === undefined
+    ? taxMode === "inclusive" && inferredNetAmount !== null && quantity > 0
+      ? inferredNetAmount / quantity
+      : toMoney(item?.rate)
+    : toMoney(item.netRate)
+  const amount = item?.netAmount === undefined ? inferredNetAmount : toMoney(item.netAmount)
+  const recordedTaxPercent = toMoney(item?.taxPercent)
+  const taxPercent = item?.taxPercent === undefined || item?.taxPercent === null
+    ? inferTaxPercent(tax, inferredNetAmount)
+    : recordedTaxPercent
 
   return {
     serial,
     description: typeof item?.description === "string" ? item.description : "",
-    quantity: toAmount(item?.quantity),
+    quantity,
     rate,
     taxPercent: taxPercent === null || taxPercent === 0 ? null : taxPercent,
-    tax: toMoney(item?.tax),
+    tax,
     amount,
   }
 }
 
 export function buildInvoiceLines(receiptData: any): InvoiceLine[] {
-  return collectSnapshotItems(receiptData).map((item, index) => toInvoiceLine(item, index + 1))
+  const items = collectSnapshotItems(receiptData)
+  const taxMode = getSnapshotTaxMode(receiptData, items)
+  return items.map((item, index) => toInvoiceLine(item, index + 1, taxMode))
 }
 
 /**

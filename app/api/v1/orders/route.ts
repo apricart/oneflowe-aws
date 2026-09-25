@@ -12,6 +12,9 @@ import { generateNextInvoiceNumber,hasInvoiceSequenceTable } from "@/lib/invoice
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
 import { parseEndDateParam,parseStartDateParam } from "@/lib/date-range-params"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
+import { settleDueAddonsOnBudget,settleDueBudgetAddons } from "@/lib/server/budget-addon-expiry"
+import { assertBranchMayOrder } from "@/lib/server/payment-control"
+import { isPaymentControlBlockedError } from "@/lib/payment-control-policy"
 import { orderSelectColumns } from "@/lib/order-select"
 import { calculateLineCents,formatQuantity,roundQuantity,validateProductQuantity } from "@/lib/quantity"
 import { resolveTaxRateBp,splitInclusiveCents } from "@/lib/tax"
@@ -26,6 +29,7 @@ import { loadGroupPriceOverrides,resolveBranchGroupId,resolveEffectivePriceCents
 import { isValidRole } from "@/lib/rbac"
 import { metricExpressions } from "@/lib/metric-utils"
 import { getOrderStatusesForFilter,getOrderStatusFilter } from "@/lib/order-status"
+import { budgetPeriodOf } from "@/lib/budget-consumption"
 import { isGroupPortalOrder,type OrderCreatorRole } from "@/lib/group-order-visibility"
 import { parseOrderCreatorRoleFilter } from "@/lib/order-creator-filter"
 
@@ -290,6 +294,10 @@ function getBudgetError(total: number, available: number, pricesHidden: boolean)
 }
 
 async function lockCreationMoneyBudget(tx: any, context: any) {
+  // An add-on whose validity has passed is withdrawn under this same lock,
+  // before the hold is taken, so it can never be spent whatever the page
+  // showed a moment ago.
+  await settleDueAddonsOnBudget(tx, context.budgetId, new Date(), { actorUserId: context.userId })
   const [budget] = await tx.select().from(budgets).where(eq(budgets.id, context.budgetId)).for('update')
   if (!budget) throw new Error(`Budget not configured for current month (${context.period})`)
   const lockedMoneyRemaining = budget.amountAllocatedCents + budget.amountCreditedCents - budget.amountSpentCents - budget.amountHeldCents
@@ -527,6 +535,10 @@ async function persistCreatedOrder(tx: any, context: any) {
 }
 
 async function processOrderCreationTransaction(tx: any, context: any) {
+  // The payment-control gate runs first: the branch is authoritative by now
+  // and nothing has been locked or written, so a blocked branch costs one
+  // read and holds no row.
+  await assertBranchMayOrder(tx, { organizationId: context.organizationId, branchId: context.branchId })
   const money = await lockCreationMoneyBudget(tx, context)
   const quantityBudgets = await lockCreationQuantityBudgets(tx, context)
   const lockedInventory = await lockCreationInventory(tx, context)
@@ -683,6 +695,9 @@ function calculateCreationItems(normalizedItems: any[], inventory: any) {
 }
 
 async function getOrCreateCurrentBudget(branchId: number, period: string) {
+  // Settle first so the pre-check below (and its error message) sees the
+  // same figure the locked check inside the transaction will.
+  await settleDueBudgetAddons(db, { branchIds: [branchId], periods: [period] })
   const [existing] = await db.select().from(budgets).where(and(
     eq(budgets.branchId, branchId),
     eq(budgets.period, period),
@@ -718,6 +733,12 @@ async function getOrderCreationErrorResponse(caughtError: any, replayContext: an
       )).limit(1)
     const replayResponse = getOrderReplayResponse(existingOrder, replayContext.requestFingerprint, replayContext.pricesHidden)
     if (replayResponse) return replayResponse
+  }
+  if (isPaymentControlBlockedError(caughtError)) {
+    return NextResponse.json(
+      { error: caughtError.message, code: caughtError.code, paymentControl: caughtError.details },
+      { status: 409 },
+    )
   }
   const message = String(caughtError.message || "")
   const normalized = message.toLowerCase()
@@ -1005,7 +1026,7 @@ export async function POST(req: NextRequest) {
     const total = calculated.total
 
     // budget check and hold - must be for current month period
-    const currentMonth = new Date().toISOString().slice(0, 7) // YYYY-MM format
+    const currentMonth = budgetPeriodOf(new Date())
     const currentBudget = await getOrCreateCurrentBudget(branchId, currentMonth)
     if (!currentBudget) return NextResponse.json({
       error: `Budget not configured for current month (${currentMonth}). Please contact head office to allocate budget.`,

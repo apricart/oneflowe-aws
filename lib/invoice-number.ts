@@ -1,11 +1,13 @@
-import { invoiceSequences } from "@/db/schema"
+import { invoiceSequences, organizations } from "@/db/schema"
 import { eq, sql } from "drizzle-orm"
 
 const INVOICE_PREFIX = "APR"
 const INVOICE_SEQUENCE_WIDTH = 6
 const MAX_INVOICE_SEQUENCE = 999999
+const TENANT_SHORT_NAME_PATTERN = /^[A-Z0-9_]+$/
 
 type InvoiceSequenceClient = {
+  select: (fields: { tenantShortName: typeof organizations.code }) => any
   insert: (table: typeof invoiceSequences) => any
   update: (table: typeof invoiceSequences) => any
 }
@@ -14,17 +16,31 @@ type InvoiceSequenceReadClient = {
   execute: (query: any) => Promise<any>
 }
 
-export function formatInvoiceNumber(sequenceValue: number) {
+export function formatInvoiceNumber(tenantShortName: string, sequenceValue: number) {
+  const normalizedTenantShortName = tenantShortName.trim().toUpperCase()
+  if (!normalizedTenantShortName || !TENANT_SHORT_NAME_PATTERN.test(normalizedTenantShortName)) {
+    throw new Error("Tenant short name must contain only letters, numbers, and underscores")
+  }
   if (!Number.isInteger(sequenceValue) || sequenceValue < 1 || sequenceValue > MAX_INVOICE_SEQUENCE) {
     throw new Error(`Invoice sequence must be between 1 and ${MAX_INVOICE_SEQUENCE}`)
   }
 
-  return `${INVOICE_PREFIX}-${String(sequenceValue).padStart(INVOICE_SEQUENCE_WIDTH, "0")}`
+  return `${normalizedTenantShortName}-${INVOICE_PREFIX}-${String(sequenceValue).padStart(INVOICE_SEQUENCE_WIDTH, "0")}`
 }
 
 export async function generateNextInvoiceNumber(client: InvoiceSequenceClient, tenantId: number) {
   if (!Number.isInteger(tenantId) || tenantId < 1) {
     throw new Error("A valid tenant ID is required to generate an invoice number")
+  }
+
+  const [tenant] = await client
+    .select({ tenantShortName: organizations.code })
+    .from(organizations)
+    .where(eq(organizations.id, tenantId))
+    .limit(1)
+
+  if (!tenant?.tenantShortName) {
+    throw new Error("Tenant short name is required to generate an invoice number")
   }
 
   await client
@@ -45,7 +61,7 @@ export async function generateNextInvoiceNumber(client: InvoiceSequenceClient, t
     throw new Error("Failed to generate invoice number")
   }
 
-  return formatInvoiceNumber(Number(row.nextValue))
+  return formatInvoiceNumber(tenant.tenantShortName, Number(row.nextValue))
 }
 
 export async function hasInvoiceSequenceTable(client: InvoiceSequenceReadClient) {

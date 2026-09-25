@@ -144,8 +144,6 @@ async function main(): Promise<void> {
 
   const { db, closePool } = await import("../lib/db-cli")
   const { organizations, branches, roles, users, employeeCredentials, systemLogs } = await import("../db/schema")
-  let credentialFileCreated = false
-
   try {
     const [organization] = await db
       .select({ id: organizations.id, name: organizations.name, code: organizations.code, status: organizations.status })
@@ -274,8 +272,6 @@ async function main(): Promise<void> {
     })
 
     writeFileSync(input.credentialOutput, createCredentialWorkbook(allCredentialRows), { flag: "wx", mode: 0o600 })
-    credentialFileCreated = true
-
     try {
       await db.transaction(async (tx) => {
         await tx.execute(sql`select pg_advisory_xact_lock(hashtext('oneflowe:user-import'))`)
@@ -326,9 +322,7 @@ async function main(): Promise<void> {
         }
       }, { isolationLevel: "serializable" })
     } catch (error) {
-      if (credentialFileCreated) {
-        try { unlinkSync(input.credentialOutput) } catch { /* preserve original error */ }
-      }
+      try { unlinkSync(input.credentialOutput) } catch { /* preserve original error */ }
       throw error
     }
 

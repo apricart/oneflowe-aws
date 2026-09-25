@@ -10,6 +10,7 @@ export default defineConfig(
   {
     ignores: [
       ".next/**",
+      ".codex-doc-work/**",
       "coverage/**",
       "node_modules/**",
       "out/**",

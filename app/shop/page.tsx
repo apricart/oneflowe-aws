@@ -1,6 +1,7 @@
 "use client"
 import React,{ useMemo,useState } from "react"
 import Link from "next/link"
+import Image from "next/image"
 import { formatPKR,cn } from "@/lib/utils"
 import { calculateLineCents,formatQuantity,parseQuantity,roundQuantity,sanitizeQuantityStep } from "@/lib/quantity"
 import useSWR from "swr"
@@ -34,6 +35,7 @@ import {
 import { RefundManagement } from "@/components/refund-management"
 import { getOrderDerivedStatus } from "@/lib/order-status"
 import { formatCountLabel } from "@/lib/count-label"
+import { formatAddonValidUntil } from "@/lib/budget-addon-expiry"
 import { MAX_PO_NUMBER_LENGTH, PO_NUMBER_HINT, normalizePoNumberInput } from "@/lib/purchase-order"
 import { ReceiptIconButton } from "@/components/receipts/receipt-icon-button"
 import { NotificationBell } from "@/components/notifications/notification-center"
@@ -440,10 +442,11 @@ export default function OrderPortalPage() {
   )
   const pricesHidden = Boolean(inventoryData?.pricesHidden || ordersData?.pricesHidden || orderDetailsData?.pricesHidden)
   const budgetVisible = Boolean(budget && !budget.pricesHidden)
+  const selectedOrderId = selectedOrder?.id
 
   React.useEffect(() => {
     const freshOrder = orderDetailsData?.items?.[0]
-    if (!freshOrder || !selectedOrder || freshOrder.id !== selectedOrder.id) return
+    if (!freshOrder || !selectedOrderId || freshOrder.id !== selectedOrderId) return
 
     setSelectedOrder((current) => (
       current?.id === freshOrder.id
@@ -463,7 +466,7 @@ export default function OrderPortalPage() {
         )),
       }
     }, { revalidate: false })
-  }, [orderDetailsData, selectedOrder?.id, mutateOrders])
+  }, [orderDetailsData, selectedOrderId, mutateOrders])
 
   // Fetch names for header context
   const { data: orgsData } = useOrganizations()
@@ -639,6 +642,15 @@ export default function OrderPortalPage() {
   const remainingBudget = budget?.remainingCents || 0
   const budgetAvailableForCart = remainingBudget + (editingOrder?.totalCents || 0)
   const totalBudgetLimit = (budget?.amountAllocatedCents || 0) + (budget?.amountCreditedCents || 0)
+  // The soonest date any part of the budget stops being available, so the
+  // employee knows the figure above is not all theirs until month end.
+  const soonestAddonExpiry: string | null = (() => {
+    const dated = (Array.isArray(budget?.addons) ? budget.addons : [])
+      .map((addon: { validUntil?: string | null }) => addon?.validUntil)
+      .filter((value: unknown): value is string => typeof value === "string")
+      .sort()
+    return dated[0] ? formatAddonValidUntil(dated[0]) : null
+  })()
   const canCheckout = pricesHidden ? cart.length > 0 : cartTotal <= budgetAvailableForCart && cart.length > 0
   const rawBudgetPercent = ((((totalBudgetLimit || 0) - remainingBudget) / (totalBudgetLimit || 1)) * 100)
   const budgetPercent = Math.min(100, Math.max(0, rawBudgetPercent || 0))
@@ -1093,6 +1105,11 @@ export default function OrderPortalPage() {
                     style={{ width: `${budgetPercent}%` }}
                   />
                 </div>
+                {soonestAddonExpiry && (
+                  <p className="mt-1 text-[10px] text-amber-700 dark:text-amber-300">
+                    Includes an add-on valid until {soonestAddonExpiry}
+                  </p>
+                )}
               </div>
             </div>}
 
@@ -1798,9 +1815,12 @@ export default function OrderPortalPage() {
                           className="relative h-48 w-full overflow-hidden text-left group-hover:bg-gradient-to-tl transition-all bg-gradient-to-br from-slate-100 to-slate-200 dark:from-slate-800 dark:to-slate-700"
                         >
                           {product.imageUrl ? (
-                            <img
+                            <Image
                               src={product.imageUrl}
                               alt={product.name}
+                              width={480}
+                              height={480}
+                              unoptimized
                               className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
                             />
                           ) : (
@@ -2118,9 +2138,12 @@ export default function OrderPortalPage() {
               {/* Product Image */}
               <div className="h-64 bg-gradient-to-br from-slate-200 to-slate-300 dark:from-slate-700 dark:to-slate-800 rounded-lg overflow-hidden">
                 {selectedProduct.imageUrl ? (
-                  <img
+                  <Image
                     src={selectedProduct.imageUrl}
                     alt={selectedProduct.name}
+                    width={640}
+                    height={640}
+                    unoptimized
                     className="w-full h-full object-cover"
                   />
                 ) : (

@@ -60,7 +60,9 @@ export function ContextSwitcher({ type, className, disabled = false, showResetBu
             const contextData = JSON.parse(saved)
             setOrgIdForBranches(contextData.organizationId || null)
           }
-        } catch {}
+        } catch {
+          // Ignore unavailable or malformed persisted context.
+        }
       }
     }
   }, [type, userRole, userOrgId])
@@ -86,7 +88,9 @@ export function ContextSwitcher({ type, className, disabled = false, showResetBu
       if (savedContext) {
         try {
           contextData = JSON.parse(savedContext)
-        } catch {}
+        } catch {
+          // Ignore unavailable or malformed persisted context.
+        }
       }
       
       // For HEAD_OFFICE, use their assigned organizationId
@@ -154,7 +158,9 @@ export function ContextSwitcher({ type, className, disabled = false, showResetBu
       try {
         const saved = localStorage.getItem(contextKey)
         if (saved) contextData = JSON.parse(saved)
-      } catch {}
+      } catch {
+        // Ignore unavailable or malformed persisted context.
+      }
       
       if (type === "organization") {
         contextData.organizationId = id
@@ -184,7 +190,9 @@ export function ContextSwitcher({ type, className, disabled = false, showResetBu
       try {
         const saved = localStorage.getItem(contextKey)
         if (saved) contextData = JSON.parse(saved)
-      } catch {}
+      } catch {
+        // Ignore unavailable or malformed persisted context.
+      }
       
       if (type === "organization") {
         contextData.organizationId = null

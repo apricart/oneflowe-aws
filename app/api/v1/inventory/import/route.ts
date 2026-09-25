@@ -8,7 +8,7 @@ import { db } from "@/lib/db"
 import { auditLogs, categories, globalProducts, productImportBatches } from "@/db/schema"
 import { cascadeGlobalProductFieldUpdate } from "@/lib/inventory-cascade"
 import { withRateLimit } from "@/lib/rate-limiter"
-import { normalizeSafeImageUrl } from "@/lib/security"
+import { containsControlCharacters, normalizeSafeImageUrl } from "@/lib/security"
 
 const importRowSchema = z.object({
   productCode: z.string().trim().min(1).max(128),
@@ -23,7 +23,14 @@ const importRowSchema = z.object({
 
 const importPayloadSchema = z.object({
   fileName: z.string().trim().min(1).max(255)
-    .regex(/^[^\\/\u0000-\u001f]+\.csv$/i, "fileName must be a plain .csv file name"),
+    .refine(
+      (fileName) => fileName.length > 4
+        && fileName.toLowerCase().endsWith(".csv")
+        && !fileName.includes("/")
+        && !fileName.includes("\\")
+        && !containsControlCharacters(fileName),
+      "fileName must be a plain .csv file name",
+    ),
   rows: z.array(importRowSchema).min(1).max(1000),
 }).strict()
 

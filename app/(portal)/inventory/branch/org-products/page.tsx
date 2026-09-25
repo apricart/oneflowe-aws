@@ -10,6 +10,7 @@ import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from "@/com
 import { formatPKR } from "@/lib/utils"
 import { Search,Package,Building2 } from "lucide-react"
 import { useAppContext } from "@/components/context/app-context"
+import Image from "next/image"
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json())
 
@@ -67,7 +68,7 @@ export default function ViewOrgProductsPage() {
         { keepPreviousData: true }
     )
 
-    const orgProducts = productsData?.items ?? []
+    const orgProducts = useMemo(() => productsData?.items ?? [], [productsData?.items])
     const orgName = allOrgsData?.items?.find((o) => o.id.toString() === selectedOrgId?.toString())?.name || "Organization"
 
     // Search filtering
@@ -199,9 +200,12 @@ export default function ViewOrgProductsPage() {
                                                 <TableCell>
                                                     <div className="flex items-center gap-3">
                                                         {product.customImageUrl || product.productImageUrl ? (
-                                                            <img
+                                                            <Image
                                                                 src={product.customImageUrl || product.productImageUrl || ""}
                                                                 alt={product.productName}
+                                                                width={40}
+                                                                height={40}
+                                                                unoptimized
                                                                 className="h-10 w-10 rounded-lg border object-cover"
                                                             />
                                                         ) : (

@@ -1,5 +1,10 @@
 # OF-REPORTS — Requester × Product, and the Budget vs Consumed columns
 
+> **Note (2026-09-21)**: the standing "Requester × product" panel described
+> under *UI* was removed by `OF-REPORTS-product-panel-grouped-by-requester.md`;
+> "By product" draws the same grid once two or more requesters are compared.
+> The `/matrix` route, chart, table, drill-down and export are unchanged.
+
 ## Where the five asks stand
 
 The client's five asks were reviewed against `main` on 2026-09-16. Two of

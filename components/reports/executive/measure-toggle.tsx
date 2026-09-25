@@ -21,11 +21,9 @@ import { cn } from "@/lib/utils"
  * across untouched, because losing them would make the comparison the reader
  * had just built have to be rebuilt to ask half of the question.
  */
-export function MeasureToggle({ value, onChange, disabledReason, className }: Readonly<{
+export function MeasureToggle({ value, onChange, className }: Readonly<{
   value: MeasureId
   onChange: (next: MeasureId) => void
-  /** Set when quantity cannot be totalled here — shown rather than hidden. */
-  disabledReason?: string | null
   className?: string
 }>) {
   const options: Array<{ id: MeasureId; icon: typeof Coins }> = [
@@ -43,22 +41,18 @@ export function MeasureToggle({ value, onChange, disabledReason, className }: Re
       )}
     >
       {options.map((option) => {
-        const blocked = option.id === "quantity" && Boolean(disabledReason)
         return (
           <button
             key={option.id}
             type="button"
             aria-pressed={value === option.id}
-            disabled={blocked}
-            title={blocked ? disabledReason ?? undefined : `Measure by ${MEASURE_LABEL[option.id].toLowerCase()}`}
+            title={`Measure by ${MEASURE_LABEL[option.id].toLowerCase()}`}
             onClick={() => onChange(option.id)}
             className={cn(
               "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition",
-              blocked
-                ? "cursor-not-allowed text-slate-300 dark:text-slate-600"
-                : value === option.id
-                  ? "bg-white text-indigo-600 shadow-sm ring-1 ring-slate-200 dark:bg-slate-700 dark:text-indigo-300 dark:ring-slate-600"
-                  : "text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200",
+              value === option.id
+                ? "bg-white text-indigo-600 shadow-sm ring-1 ring-slate-200 dark:bg-slate-700 dark:text-indigo-300 dark:ring-slate-600"
+                : "text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200",
             )}
           >
             <option.icon className="h-3.5 w-3.5" aria-hidden />

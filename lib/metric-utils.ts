@@ -83,6 +83,14 @@ export const metricExpressions = {
  */
 export const REVENUE_ELIGIBLE_FILTER = sql`UPPER(${orders.status}) IN ('FULFILLED', 'APPROVED', 'PARTIAL', 'PARTIALLY_FULFILLED')`
 
+/**
+ * Status filter for what a budget has *consumed*: the revenue-eligible orders
+ * plus those still awaiting approval. This is the ledger's own "spent + held",
+ * and the only place PENDING joins a money query — use it where a figure has
+ * to reconcile with a budget position, never for revenue.
+ */
+export const CONSUMED_ELIGIBLE_FILTER = sql`UPPER(${orders.status}) IN ('FULFILLED', 'APPROVED', 'PARTIAL', 'PARTIALLY_FULFILLED', 'PENDING')`
+
 /** @deprecated Use REVENUE_ELIGIBLE_FILTER instead */
 export const FULFILLED_ONLY_FILTER = REVENUE_ELIGIBLE_FILTER
 

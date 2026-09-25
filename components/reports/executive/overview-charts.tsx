@@ -19,6 +19,7 @@ import {
 import { cn } from "@/lib/utils"
 import {
   AXIS_STYLE,
+  BUDGET_BESIDE_COLOR,
   ChartCard,
   DataTable,
   GRID_STYLE,
@@ -158,7 +159,7 @@ export function BudgetVsActualChart({ rows, loading, error, onSelectBranch, sele
                     <VizTooltip
                       title={row.branchName}
                       rows={[
-                        { label: "Total budget", value: money(row.totalBudgetCents), color: "var(--viz-track)" },
+                        { label: "Total budget", value: money(row.totalBudgetCents), color: BUDGET_BESIDE_COLOR },
                         { label: "Consumed", value: money(row.consumedCents), color: SERIES[0] },
                         { label: "Spent", value: money(row.spentCents), muted: true },
                         { label: "Committed", value: money(row.heldCents), muted: true },
@@ -177,7 +178,7 @@ export function BudgetVsActualChart({ rows, loading, error, onSelectBranch, sele
               <Bar
                 dataKey="totalBudgetCents"
                 name="Total budget"
-                fill="var(--viz-track)"
+                fill={BUDGET_BESIDE_COLOR}
                 radius={[4, 4, 0, 0]}
                 maxBarSize={28}
                 isAnimationActive={false}
@@ -204,7 +205,7 @@ export function BudgetVsActualChart({ rows, loading, error, onSelectBranch, sele
       </div>
       <Legend
         items={[
-          { label: "Total budget", color: "var(--viz-track)" },
+          { label: "Total budget", color: BUDGET_BESIDE_COLOR },
           { label: "Consumed (spent + committed)", color: SERIES[0] },
         ]}
       />

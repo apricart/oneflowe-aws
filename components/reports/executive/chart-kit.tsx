@@ -20,6 +20,17 @@ import { cn, formatPKR } from "@/lib/utils"
  * labels or a table view — which is why `ChartCard` ships a table toggle on
  * every visual and the bar charts are directly labelled. Colour is never the
  * only channel: status is always paired with an icon and a word.
+ *
+ * `--viz-reference` is the one mark that is neither an entity nor a status: a
+ * quantity *given*, such as the Total Budget a bar is read against. It is
+ * deliberately not a seventh `SERIES` slot — it stands beside every one of the
+ * six at once, and no added hue clears the all-pairs floors against all six in
+ * both modes. It wins its separation on lightness instead, sitting outside the
+ * series band in each theme: darker than them on the light surface, lighter on
+ * the dark one. Validated against each of the six — worst normal-vision
+ * ΔE 19.2 light / 17.7 dark (≥15 floor), worst CVD ΔE 12.7 / 10.9 (≥8
+ * target), contrast 6.6:1 / 6.9:1 — and recessive enough that the taller
+ * reference bar does not out-shout the shorter coloured one beside it.
  */
 export const VIZ_CLASS = "exec-viz"
 
@@ -36,6 +47,7 @@ const VIZ_CSS = `
         --viz-serious: #ec835a;
         --viz-critical: #d03b3b;
         --viz-track: #e8e8e4;
+        --viz-reference: #79506b;
         --viz-grid: #e1e0d9;
         --viz-axis: #898781;
         --viz-ink: #52514e;
@@ -58,6 +70,7 @@ const VIZ_CSS = `
         --viz-serious: #ec835a;
         --viz-critical: #d03b3b;
         --viz-track: #2c2f3a;
+        --viz-reference: #b59fbc;
         --viz-grid: #2c2c2a;
         --viz-axis: #898781;
         --viz-ink: #c3c2b7;
@@ -96,6 +109,17 @@ export const STATUS_COLOR = {
   critical: "var(--viz-critical)",
 } as const
 
+/**
+ * The hue of a quantity *given* — a Total Budget a bar is read against.
+ *
+ * Neither an entity nor a status, so it is neither a `SERIES` slot nor a
+ * `STATUS_COLOR`. It was `--viz-track` until it turned out to be the wrong job
+ * for that token: at 1.1:1 against a white card the tallest bar on the chart
+ * read as background. Shared by the Overview's Budget vs Consumed chart and
+ * the Product Performance columns, which are deliberately the same form.
+ */
+export const BUDGET_BESIDE_COLOR = "var(--viz-reference)"
+
 /** One hue, light to dark — the only correct encoding for a magnitude grid. */
 export const SEQUENTIAL = [
   "var(--viz-seq-100)",
@@ -129,6 +153,19 @@ export function moneyShort(cents: number): string {
   return `${sign}₨${absolute.toFixed(0)}`
 }
 
+/**
+ * Abbreviated money without the currency mark, for a label that has no room
+ * for one.
+ *
+ * Used where a column already carries two figures stacked above it: twelve
+ * columns across half a row leave each about sixty pixels, and the mark is the
+ * first thing to go because the axis, the tooltip and the table all still
+ * carry it. Never used where the figure stands alone.
+ */
+export function moneyShortBare(cents: number): string {
+  return moneyShort(cents).replace("₨", "")
+}
+
 export function percent(value: number, digits = 1): string {
   if (!Number.isFinite(value)) return "—"
   return `${value.toFixed(digits)}%`
@@ -155,6 +192,20 @@ export function formatShortByKind(value: number, format: string): string {
     case "percent": return percent(value, 0)
     default: return countShort(value)
   }
+}
+
+/**
+ * `formatShortByKind` for a label drawn *on* a mark, where the currency mark
+ * costs more than it carries.
+ *
+ * Upright columns are the crowded case: twelve of them across half a card, and
+ * a pair of them per category once a budget stands beside each, leave a label
+ * about fifty pixels. ₨ is two of those characters, and it was pushing
+ * neighbouring labels into each other. The axis beside the columns still reads
+ * ₨, as do the tooltip and the table.
+ */
+export function formatMarkLabelByKind(value: number, format: string): string {
+  return format === "currency" ? moneyShortBare(value) : formatShortByKind(value, format)
 }
 
 /** Signed change, or a plain dash when there was no previous period to compare against. */

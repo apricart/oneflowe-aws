@@ -1,6 +1,7 @@
 "use client"
 
 import { Package } from "lucide-react"
+import Image from "next/image"
 import { Tooltip,TooltipContent,TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 
@@ -20,9 +21,12 @@ export function ProductNameCell({ name,imageUrl,className }: Readonly<ProductNam
     return (
         <div className="flex items-center gap-3">
             {imageUrl ? (
-                <img
+                <Image
                     src={imageUrl}
                     alt={name}
+                    width={40}
+                    height={40}
+                    unoptimized
                     className="h-10 w-10 shrink-0 rounded-lg border object-cover"
                 />
             ) : (

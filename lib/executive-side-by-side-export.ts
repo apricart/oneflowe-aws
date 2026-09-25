@@ -2,6 +2,7 @@ import {
   EXECUTIVE_DIMENSIONS,
   MEASURE_LABEL,
   isTimeAxisDimension,
+  utilizationPct,
   type MeasureId,
   type SideBySidePanel,
 } from "@/lib/executive-analytics"
@@ -29,6 +30,8 @@ export type ExportRankRow = {
   orderCount: number
   share: number
   cumulativeShare: number
+  /** Present on every row when the response carries the budget beside the figure. */
+  totalBudgetCents?: number
 }
 
 /** The subset of a `/compare` series entity the sheet reads. */
@@ -48,6 +51,8 @@ export type SideBySideComparisonResponse = {
   formula: string
   mode: "rank" | "series"
   concentrationEligible: boolean
+  /** True when every row carries `totalBudgetCents` beside its figure. */
+  budgetBeside?: boolean
   quantityUnit: { selected: string | null }
   blocked?: { reason: string; message: string }
 }
@@ -159,6 +164,12 @@ function pct(value: number | null | undefined): number | null {
   return Math.round(value * 100) / 100
 }
 
+/** The figure as a share of the budget beside it; blank, not 0, where there is no budget. */
+function budgetSharePct(valueCents: number, totalBudgetCents: number | undefined): number | null {
+  if (!totalBudgetCents || totalBudgetCents <= 0) return null
+  return pct(utilizationPct(valueCents, totalBudgetCents))
+}
+
 const nameList = (names: string[]) => (names.length === 0 ? "All" : names.join(", "))
 
 const formatExportedAt = (date: Date) => `${date.toISOString().slice(0, 19).replace("T", " ")} UTC`
@@ -175,21 +186,26 @@ function rankSheet(name: string, panel: SideBySidePanel, response: SideBySideCom
   // axis, so "this month against the equivalent month before it" is nonsense.
   const withPrior = !isTimeAxisDimension(panel.dimension)
   const withShare = response.concentrationEligible
+  // The budget beside the figure, as the panel drew it: the same two columns
+  // its table shows, in rupees and as the figure's share of the budget.
+  const withBudget = Boolean(response.budgetBeside)
 
   const columns = [
     "Rank",
     dimensionLabel,
     metricHeader,
+    ...(withBudget ? ["Total Budget (PKR)", "% of budget"] : []),
     ...(withShare ? ["Share %", "Cumulative share %"] : []),
     ...(withPrior ? [`Previous period ${metricHeader}`, "Change %"] : []),
     "Orders",
   ]
-  const widths = [6, 36, 22, ...(withShare ? [10, 18] : []), ...(withPrior ? [26, 10] : []), 8]
+  const widths = [6, 36, 22, ...(withBudget ? [20, 12] : []), ...(withShare ? [10, 18] : []), ...(withPrior ? [26, 10] : []), 8]
 
   const rows = response.rows.map((row, index) => [
     index + 1,
     row.label,
     cellValue(row.value, response.format),
+    ...(withBudget ? [cellValue(row.totalBudgetCents ?? 0, "currency"), budgetSharePct(row.value, row.totalBudgetCents)] : []),
     ...(withShare ? [pct(row.share), pct(row.cumulativeShare)] : []),
     ...(withPrior ? [cellValue(row.previousValue, response.format), pct(row.changePct)] : []),
     Number(row.orderCount) || 0,

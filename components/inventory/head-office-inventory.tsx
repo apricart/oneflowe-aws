@@ -11,6 +11,7 @@ SelectTrigger,
 SelectValue,
 } from "@/components/ui/select"
 import { Table } from "@/components/ui/table"
+import Image from "next/image"
 import { fetcher } from "@/lib/fetcher"
 import { resolveEffectivePriceCents } from "@/lib/price-ladder"
 import { cn,formatPKR } from "@/lib/utils"
@@ -62,7 +63,7 @@ export default function HeadOfficeInventory({ organizationId }: Readonly<{ organ
 
   // Fetch categories
   const { data: categoriesData } = useSWR<{ items: { id: number; name: string }[] }>("/api/v1/categories", fetcher)
-  const categories = categoriesData?.items || []
+  const categories = useMemo(() => categoriesData?.items || [], [categoriesData?.items])
 
   // Fetch assigned products
   const { data: assignedProducts, error: assignedError, isLoading: assignedLoading } = useSWR<{
@@ -153,7 +154,7 @@ export default function HeadOfficeInventory({ organizationId }: Readonly<{ organ
             <Package className="h-6 w-6 text-blue-600 dark:text-blue-400" />
           </div>
           <div>
-            <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100">Organization Inventory</h1>
+            <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100">Organization Products</h1>
             <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Manage products assigned to your organization</p>
           </div>
         </div>
@@ -263,9 +264,12 @@ export default function HeadOfficeInventory({ organizationId }: Readonly<{ organ
                     <td className="p-4">
                       <div className="flex items-center gap-3">
                         {product.productImageUrl ? (
-                          <img
+                          <Image
                             src={product.productImageUrl}
                             alt={product.productName}
+                            width={48}
+                            height={48}
+                            unoptimized
                             className="w-12 h-12 object-cover rounded-lg border"
                           />
                         ) : (

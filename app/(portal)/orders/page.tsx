@@ -252,7 +252,7 @@ function OrdersManagementContent() {
     { keepPreviousData: true },
   )
 
-  const orders = ordersData?.items || []
+  const orders = useMemo(() => ordersData?.items || [], [ordersData?.items])
   const canDecideOrders = Boolean(
     ordersData?.capabilities?.canApproveOrders
     && ordersData?.capabilities?.canRejectOrders,

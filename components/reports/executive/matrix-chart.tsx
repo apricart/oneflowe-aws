@@ -6,17 +6,26 @@ import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxi
 import { cn } from "@/lib/utils"
 import type { MatrixDimensionId } from "@/lib/executive-analytics"
 import { AXIS_STYLE, GRID_STYLE, Legend, VizTooltip, formatByKind, formatShortByKind } from "./chart-kit"
-import { DrillHint, entityColor, type DrillTarget } from "./comparison-charts"
+import {
+  DrillHint,
+  columnAxisProps,
+  columnBottomMargin,
+  columnChartHeight,
+  columnTicksAngled,
+  entityColor,
+  type DrillTarget,
+} from "./comparison-charts"
 import type { ExecutiveFilterState } from "./executive-filters"
 
 /**
  * The requester × product grid: one figure per pair, drawn two ways.
  *
- * As columns, the products run along the axis and each requester is a series,
- * so "who consumed more of this product" is read across one cluster and "what
- * did this person consume" across one colour. As a table, the same figures
- * sit in a grid with the margins the server ranked them by, for the reader
- * who wants the numbers rather than their shape.
+ * As grouped columns — the "By product" panel with several requesters picked
+ * — the products run along the axis and each requester is a series, so "who
+ * consumed more of this product" is read across one cluster and "what did
+ * this person consume" across one colour. As a table, the same figures sit in
+ * a grid with the margins the server ranked them by, for the reader who wants
+ * the numbers rather than their shape.
  *
  * Both are pure presentation. Every figure, label and margin comes from the
  * `/matrix` response; nothing is summed here, so the grid cannot disagree with
@@ -96,47 +105,103 @@ type Props = {
   onDrillDown?: (target: DrillTarget) => void
 }
 
-type ColumnDatum = { key: string; label: string; total: number; values: Record<string, number> }
+export type ColumnDatum = {
+  key: string
+  label: string
+  total: number
+  /** Each row entity's figure for this column, under the row's key. */
+  values: Record<string, number>
+}
 
-// ── Columns ────────────────────────────────────────────────────────────────
-
-export function MatrixChart({ response, onDrillDown }: Readonly<Props>) {
-  const { rows, columns, format, label: metricLabel } = response
-  const byPair = React.useMemo(() => indexCells(response.cells), [response.cells])
-
-  // One datum per column entity, carrying every row's value under the row's
-  // key, which is what a grouped column chart reads.
-  const data: ColumnDatum[] = columns.map((column) => ({
+/** One datum per column entity, which is what a column chart reads. */
+export function columnData(response: Pick<MatrixResponse, "rows" | "columns" | "cells">): ColumnDatum[] {
+  const byPair = indexCells(response.cells)
+  return response.columns.map((column) => ({
     key: column.key,
     label: column.label,
     total: column.total,
-    values: Object.fromEntries(rows.map((row) => [row.key, byPair.get(cellKey(row.key, column.key))?.value ?? 0])),
+    values: Object.fromEntries(
+      response.rows.map((row) => [row.key, byPair.get(cellKey(row.key, column.key))?.value ?? 0]),
+    ),
   }))
+}
 
-  const crowded = columns.length > 6
-  const drill = onDrillDown
-    ? (row: MatrixEntity) => (entry: any) => {
-      const columnKey = entry?.payload?.key ?? entry?.key
-      const column = columns.find((candidate) => candidate.key === columnKey)
-      if (column && byPair.has(cellKey(row.key, column.key))) onDrillDown(cellDrillTarget(response, row, column))
-    }
-    : undefined
+// ── Columns ────────────────────────────────────────────────────────────────
+
+/** What one cluster holds, one line per row entity, the column's total last. */
+function ColumnTooltip({ datum, response, byPair }: Readonly<{
+  datum: ColumnDatum
+  response: MatrixResponse
+  byPair: Map<string, MatrixCell>
+}>) {
+  const { rows, format } = response
+  return (
+    <VizTooltip
+      title={datum.label}
+      rows={[
+        ...rows.map((row, index) => ({
+          label: row.label,
+          value: byPair.has(cellKey(row.key, datum.key)) ? formatByKind(datum.values[row.key], format) : "—",
+          color: entityColor(index, true),
+        })),
+        { label: `All ${response.rowLabel.toLowerCase()}s`, value: formatByKind(datum.total, format), muted: true },
+      ]}
+    />
+  )
+}
+
+/**
+ * The click on one row entity's column or segment, opening the pair's lines.
+ *
+ * Recharts hands the clicked datum; the column is looked up from it, and a
+ * pair the server sent no cell for opens nothing — there are no lines behind
+ * a segment that is not there.
+ */
+function cellDrillHandler(
+  response: MatrixResponse,
+  byPair: Map<string, MatrixCell>,
+  onDrillDown: ((target: DrillTarget) => void) | undefined,
+) {
+  if (!onDrillDown) return undefined
+  return (row: MatrixEntity) => (entry: any) => {
+    const columnKey = entry?.payload?.key ?? entry?.key
+    const column = response.columns.find((candidate) => candidate.key === columnKey)
+    if (column && byPair.has(cellKey(row.key, column.key))) onDrillDown(cellDrillTarget(response, row, column))
+  }
+}
+
+/** How to read a column, in one sentence. */
+function ColumnFootnote({ response }: Readonly<{ response: MatrixResponse }>) {
+  const rowNoun = response.rowLabel.toLowerCase()
+  const columnNoun = response.columnLabel.toLowerCase()
+  const metricNoun = response.label.toLowerCase()
+  return (
+    <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+      Each column is one {rowNoun}&apos;s {metricNoun} of one {columnNoun} — never combined across {rowNoun}s.
+    </p>
+  )
+}
+
+/** The grid as grouped columns: one cluster per column entity, one column per row entity inside it. */
+export function MatrixChart({ response, onDrillDown }: Readonly<Props>) {
+  const { rows, columns, format } = response
+  const byPair = React.useMemo(() => indexCells(response.cells), [response.cells])
+  const data = React.useMemo(() => columnData(response), [response])
+
+  const angled = columnTicksAngled(columns)
+  const drill = cellDrillHandler(response, byPair, onDrillDown)
 
   return (
     <>
-      <ResponsiveContainer width="100%" height={320}>
-        <BarChart data={data} margin={{ top: 12, right: 12, bottom: crowded ? 72 : 12, left: 4 }} barCategoryGap="22%" barGap={2}>
+      <ResponsiveContainer width="100%" height={columnChartHeight(angled, 320)}>
+        <BarChart
+          data={data}
+          margin={{ top: 12, right: 12, bottom: columnBottomMargin(angled), left: 4 }}
+          barCategoryGap="22%"
+          barGap={2}
+        >
           <CartesianGrid {...GRID_STYLE} vertical={false} />
-          <XAxis
-            dataKey="label"
-            tick={AXIS_STYLE}
-            axisLine={false}
-            tickLine={false}
-            interval={0}
-            angle={crowded ? -28 : 0}
-            textAnchor={crowded ? "end" : "middle"}
-            height={crowded ? 76 : 30}
-          />
+          <XAxis dataKey="label" {...columnAxisProps(angled)} />
           <YAxis
             tickFormatter={(value) => formatShortByKind(value, format)}
             tick={AXIS_STYLE}
@@ -146,23 +211,9 @@ export function MatrixChart({ response, onDrillDown }: Readonly<Props>) {
           />
           <Tooltip
             cursor={{ fill: "var(--viz-track)", fillOpacity: 0.35 }}
-            content={({ active, payload }: any) => {
-              if (!active || !payload?.length) return null
-              const datum: ColumnDatum = payload[0].payload
-              return (
-                <VizTooltip
-                  title={datum.label}
-                  rows={[
-                    ...rows.map((row, index) => ({
-                      label: row.label,
-                      value: byPair.has(cellKey(row.key, datum.key)) ? formatByKind(datum.values[row.key], format) : "—",
-                      color: entityColor(index, true),
-                    })),
-                    { label: `All ${response.rowLabel.toLowerCase()}s`, value: formatByKind(datum.total, format), muted: true },
-                  ]}
-                />
-              )
-            }}
+            content={({ active, payload }: any) => (active && payload?.length
+              ? <ColumnTooltip datum={payload[0].payload} response={response} byPair={byPair} />
+              : null)}
           />
           {rows.map((row, index) => (
             <Bar
@@ -183,10 +234,7 @@ export function MatrixChart({ response, onDrillDown }: Readonly<Props>) {
       </ResponsiveContainer>
       <Legend items={rows.map((row, index) => ({ key: row.key, label: row.label, color: entityColor(index, true) }))} />
       <DrillHint enabled={Boolean(onDrillDown)} noun="column" />
-      <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
-        Each column is one {response.rowLabel.toLowerCase()}&apos;s {metricLabel.toLowerCase()} of one{" "}
-        {response.columnLabel.toLowerCase()} — never combined across {response.rowLabel.toLowerCase()}s.
-      </p>
+      <ColumnFootnote response={response} />
     </>
   )
 }
@@ -203,6 +251,10 @@ const CELL_BUTTON_CLASS = "rounded tabular-nums text-indigo-600 underline-offset
  * amount" are different facts. Every cell with a figure is a button to its
  * own order lines; the margins are read-only, because a row total is already
  * the "By requester" panel's bar and drills from there.
+ */
+/**
+ * The row entities carry the swatches, because they are the chart's series:
+ * one requester is one hue on the chart, in the legend and in the table.
  */
 export function MatrixTable({ response, onDrillDown }: Readonly<Props>) {
   const { rows, columns, format } = response

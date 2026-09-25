@@ -9,6 +9,7 @@ import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from "@/comp
 import { formatPKR } from "@/lib/utils"
 import { AlertCircle,Building2,GitBranch,Loader2,Package,Search } from "lucide-react"
 import { useSession } from "next-auth/react"
+import Image from "next/image"
 import { useRouter } from "next/navigation"
 import { useEffect,useMemo,useState } from "react"
 import useSWR from "swr"
@@ -94,7 +95,7 @@ export default function ViewBranchProductsPage() {
         fetcher,
     )
 
-    const groupProducts = productsData?.items ?? []
+    const groupProducts = useMemo(() => productsData?.items ?? [], [productsData?.items])
 
     // Search filtering
     const filteredProducts = useMemo(() => {
@@ -262,9 +263,12 @@ export default function ViewBranchProductsPage() {
                                                 <TableCell>
                                                     <div className="flex items-center gap-3">
                                                         {product.productImageUrl ? (
-                                                            <img
+                                                            <Image
                                                                 src={product.productImageUrl}
                                                                 alt={product.productName}
+                                                                width={40}
+                                                                height={40}
+                                                                unoptimized
                                                                 className="h-10 w-10 rounded-lg border object-cover"
                                                             />
                                                         ) : (

@@ -27,6 +27,7 @@
     "prepare:ke-post-cutoff": "tsx scripts/prepare-ke-post-cutoff-import-source.ts",
     "import:ke-post-cutoff": "tsx scripts/import-ke-post-cutoff-orders.ts",
     "backfill:ke-budget-spend": "tsx scripts/backfill-ke-budget-spend.ts",
+    "audit:ke-budget-periods": "tsx scripts/audit-ke-budget-period-parity.ts",
     "validate:ke-post-cutoff": "tsx scripts/validate-ke-post-cutoff-import.ts",
     "prepare:ke-tax-refunds": "tsx scripts/prepare-ke-tax-refund-import-source.ts",
     "import:ke-refunds": "tsx scripts/import-ke-legacy-refunded-orders.ts",

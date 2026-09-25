@@ -1,6 +1,7 @@
 "use client"
 
 import React,{ useState,useEffect } from "react"
+import Image from "next/image"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -419,9 +420,12 @@ export function ProductForm({
                 <div>
                   <Label>Image Preview</Label>
                   <div className="mt-2">
-                    <img
+                    <Image
                       src={formData.imageUrl}
                       alt="Product preview"
+                      width={128}
+                      height={128}
+                      unoptimized
                       className="w-32 h-32 object-cover rounded-md border"
                       onError={(e) => {
                         e.currentTarget.style.display = 'none'

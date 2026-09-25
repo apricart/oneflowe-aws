@@ -235,10 +235,10 @@ export default function BudgetByQuantityPage() {
   const { data: quantityBudgetsData, mutate: mutateQuantityBudgets } = useSWR<any>(quantityBudgetsEndpoint, fetcher)
   const { data: dialogProductsData, isLoading: productsLoading } = useSWR<any>(dialogProductsEndpoint, fetcher)
 
-  const budgets: BudgetAllocation[] = budgetsData?.budgets || []
-  const quantityBranchSummaries: QuantityBranchSummary[] = quantityBudgetsData?.branches || []
-  const quantityProductSummaries: QuantityProductSummary[] = quantityBudgetsData?.products || []
-  const dialogProducts: ProductOption[] = dialogProductsData?.items || []
+  const budgets = useMemo<BudgetAllocation[]>(() => budgetsData?.budgets || [], [budgetsData?.budgets])
+  const quantityBranchSummaries = useMemo<QuantityBranchSummary[]>(() => quantityBudgetsData?.branches || [], [quantityBudgetsData?.branches])
+  const quantityProductSummaries = useMemo<QuantityProductSummary[]>(() => quantityBudgetsData?.products || [], [quantityBudgetsData?.products])
+  const dialogProducts = useMemo<ProductOption[]>(() => dialogProductsData?.items || [], [dialogProductsData?.items])
   const productsById = useMemo(() => {
     return new Map(dialogProducts.map((product) => [String(product.id), product]))
   }, [dialogProducts])

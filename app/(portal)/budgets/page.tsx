@@ -19,8 +19,15 @@ import { GroupFilter } from "@/components/reports/group-filter"
 import { type DateRange } from "@/lib/hooks/use-sales-performance"
 import { BUDGET_ALLOCATION_MODE_SETTING_KEY,parseBudgetAllocationMode,type BudgetAllocationMode } from "@/lib/budget-allocation-mode"
 import { canManageMoneyBudgetsForAccount,managesAssignedBranchesOnly } from "@/lib/money-budget-access"
+import { addonValidityBounds,formatAddonValidUntil } from "@/lib/budget-addon-expiry"
 
 const fetcher = (url: string) => fetch(url).then(r => r.json())
+
+interface OpenBudgetAddon {
+  id: number
+  amountCents: number
+  validUntil: string | null
+}
 
 interface BudgetAllocation {
   branchId: number
@@ -35,7 +42,10 @@ interface BudgetAllocation {
   remainingCents: number
   baselineBudgetCents: number
   budgetAllocationMode?: BudgetAllocationMode
+  /** Add-ons still in force this month; present on the single-period list only. */
+  addons?: OpenBudgetAddon[]
 }
+
 
 const BUDGET_ALLOCATION_MODE_LABELS: Record<BudgetAllocationMode, string> = {
   money: "Money-based",
@@ -128,6 +138,7 @@ export default function BudgetsPage() {
   const [showEmptyAllDialog, setShowEmptyAllDialog] = useState(false)
   const [emptyingBudget, setEmptyingBudget] = useState<BudgetAllocation | null>(null)
   const [allocationType, setAllocationType] = useState<"monthly" | "addon">("addon")
+  const [addonValidUntil, setAddonValidUntil] = useState("")
 
   // ━━━ GLOBAL FILTERS ━━━
   const [dateRange, setDateRange] = useState<DateRange | null>(null)
@@ -178,7 +189,7 @@ export default function BudgetsPage() {
     mutate()
   }, [handleDateChange, mutate, setContextBranchIds])
 
-  const budgets: BudgetAllocation[] = budgetsData?.budgets || []
+  const budgets = useMemo<BudgetAllocation[]>(() => budgetsData?.budgets || [], [budgetsData?.budgets])
   // The organization's mode, from its settings where the caller may read them,
   // otherwise from the rows — the server resolves each row's mode from the same
   // setting, and a tenant-pinned caller's rows all belong to one organization.
@@ -279,6 +290,7 @@ export default function BudgetsPage() {
 
     setEditingBudget(budget)
     setNewAmount("") // Start with empty field since we're adding, not replacing
+    setAddonValidUntil("")
     setAllocationType("addon")
     setShowDialog(true)
   }
@@ -300,19 +312,26 @@ export default function BudgetsPage() {
 
     // Client-side validation: Total Proposed Budget >= Current Total Spent
     const currentSpentCents = (editingBudget.amountSpentCents || 0) + (editingBudget.amountHeldCents || 0)
-    let proposedTotalCents = 0
-    if (allocationType === "monthly") {
-      proposedTotalCents = amountCents + (editingBudget.amountCreditedCents || 0)
-    } else {
+    const proposedTotalCents = allocationType === "monthly"
+      ? amountCents + (editingBudget.amountCreditedCents || 0)
       // Add-on type: adding to the current credits
-      proposedTotalCents = (editingBudget.amountAllocatedCents || 0) + (editingBudget.amountCreditedCents || 0) + amountCents
-    }
+      : (editingBudget.amountAllocatedCents || 0) + (editingBudget.amountCreditedCents || 0) + amountCents
 
     if (proposedTotalCents < currentSpentCents) {
       return toast({
         title: "Allocation Blocked",
         description: `Total budget (₨${(proposedTotalCents / 100).toFixed(2)}) cannot be lower than current spending (₨${(currentSpentCents / 100).toFixed(2)}).`,
         variant: "destructive"
+      })
+    }
+
+    // An add-on is granted for a stated number of days; the server refuses
+    // one without a date, so ask here rather than round-trip.
+    if (allocationType === "addon" && amountCents > 0 && !addonValidUntil) {
+      return toast({
+        title: "Validity required",
+        description: "Choose the last day this add-on can be used.",
+        variant: "destructive",
       })
     }
 
@@ -324,6 +343,7 @@ export default function BudgetsPage() {
           branchId: editingBudget.branchId,
           amountAllocatedCents: amountCents,
           type: allocationType,
+          ...(allocationType === "addon" && amountCents > 0 ? { validUntil: addonValidUntil } : {}),
         })
       })
 
@@ -785,9 +805,20 @@ export default function BudgetsPage() {
 
                     <TableCell className="text-right py-2.5">
                       {(budget.amountCreditedCents || 0) > 0 ? (
-                        <span className="text-[13px] font-bold text-amber-600 dark:text-amber-400 tabular-nums">
-                          +{formatAmount(budget.amountCreditedCents)}
-                        </span>
+                        <div className="flex flex-col items-end gap-0.5">
+                          <span className="text-[13px] font-bold text-amber-600 dark:text-amber-400 tabular-nums">
+                            +{formatAmount(budget.amountCreditedCents)}
+                          </span>
+                          {budget.addons?.filter((addon) => addon.validUntil).map((addon) => (
+                            <span
+                              key={addon.id}
+                              className="text-[10px] font-medium text-amber-700/80 dark:text-amber-300/80 tabular-nums whitespace-nowrap"
+                              title={`${formatAmount(addon.amountCents)} valid until ${formatAddonValidUntil(addon.validUntil)}`}
+                            >
+                              {formatAmount(addon.amountCents)} until {formatAddonValidUntil(addon.validUntil)}
+                            </span>
+                          ))}
+                        </div>
                       ) : (
                         <span className="text-[13px] text-slate-300 dark:text-slate-700">—</span>
                       )}
@@ -931,7 +962,7 @@ export default function BudgetsPage() {
             ) : (
               <div className="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-100 dark:border-amber-800/30 rounded-lg">
                 <p className="text-[11px] text-amber-700 dark:text-amber-300 font-medium">
-                  <strong>One-time Add-on:</strong> This adds extra budget for the current month ONLY. It will reset at the end of the month.
+                  <strong>One-time Add-on:</strong> This adds extra budget until the date you choose, within the current month. Whatever is still unspent on that date is withdrawn.
                 </p>
               </div>
             )}
@@ -949,6 +980,21 @@ export default function BudgetsPage() {
                 <span>Remaining</span>
                 <span className="text-green-600">{formatAmount(editingBudget?.remainingCents || 0)}</span>
               </div>
+              {(editingBudget?.addons?.length ?? 0) > 0 && (
+                <div className="pt-2 space-y-1">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Active add-ons</p>
+                  <ul className="space-y-0.5">
+                    {editingBudget?.addons?.map((addon) => (
+                      <li key={addon.id} className="flex justify-between text-xs">
+                        <span className="text-amber-700 dark:text-amber-300 font-semibold">+{formatAmount(addon.amountCents)}</span>
+                        <span className="text-muted-foreground">
+                          {addon.validUntil ? `until ${formatAddonValidUntil(addon.validUntil)}` : "until month end"}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
             <div>
               <label htmlFor="budget-adjustment-amount" className="block text-sm font-semibold mb-2 text-slate-900 dark:text-white">
@@ -968,12 +1014,9 @@ export default function BudgetsPage() {
                 const amt = Number.parseFloat(newAmount || "0")
                 const amtCents = Math.round(amt * 100)
                 const currentSpentCents = (editingBudget?.amountSpentCents || 0) + (editingBudget?.amountHeldCents || 0)
-                let proposedTotalCents = 0
-                if (allocationType === "monthly") {
-                  proposedTotalCents = amtCents + (editingBudget?.amountCreditedCents || 0)
-                } else {
-                  proposedTotalCents = (editingBudget?.amountAllocatedCents || 0) + (editingBudget?.amountCreditedCents || 0) + amtCents
-                }
+                const proposedTotalCents = allocationType === "monthly"
+                  ? amtCents + (editingBudget?.amountCreditedCents || 0)
+                  : (editingBudget?.amountAllocatedCents || 0) + (editingBudget?.amountCreditedCents || 0) + amtCents
                 
                 if (proposedTotalCents < currentSpentCents && newAmount) {
                   return (
@@ -991,6 +1034,29 @@ export default function BudgetsPage() {
                   : "This amount will be added to the current month's allocation."}
               </p>
             </div>
+            {allocationType === "addon" && (() => {
+              const bounds = addonValidityBounds(new Date())
+              return (
+                <div>
+                  <label htmlFor="budget-addon-valid-until" className="block text-sm font-semibold mb-2 text-slate-900 dark:text-white">
+                    Valid until
+                  </label>
+                  <Input
+                    id="budget-addon-valid-until"
+                    type="date"
+                    value={addonValidUntil}
+                    min={bounds.min}
+                    max={bounds.max}
+                    required
+                    onChange={(e) => setAddonValidUntil(e.target.value)}
+                    className="h-11"
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Last day the add-on can be used (until midnight, Pakistan time). Must be within the current month; whatever is unspent on that date is withdrawn.
+                  </p>
+                </div>
+              )
+            })()}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowDialog(false)}>Cancel</Button>

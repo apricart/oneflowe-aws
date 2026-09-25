@@ -66,7 +66,7 @@ export default function ShowAssignedProductsPage() {
         { fallbackData: { items: [] } }
     )
 
-    const assignedProducts = assignmentsData?.items ?? []
+    const assignedProducts = useMemo(() => assignmentsData?.items ?? [], [assignmentsData?.items])
     const assignedTotal = assignmentsData?.total ?? assignedProducts.length
 
     // Search filtering

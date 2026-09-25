@@ -13,6 +13,7 @@ import { formatPKR } from "@/lib/utils"
 import { Search,Package,Building2,GitBranch,Users,Loader2,CheckCircle2 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { useAppContext } from "@/components/context/app-context"
+import Image from "next/image"
 
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json())
@@ -84,7 +85,7 @@ export default function AssignToBranchPage() {
         { fallbackData: { branches: [] } }
     )
 
-    const orgProducts = productsData?.items ?? []
+    const orgProducts = useMemo(() => productsData?.items ?? [], [productsData?.items])
     const groups = groupsData?.groups ?? []
     const branchesToShow = groupBranchesData?.branches ?? []
 
@@ -147,7 +148,7 @@ export default function AssignToBranchPage() {
         fetchAssignments()
 
         return () => controller.abort()
-    }, [selectedGroup, selectedOrgId])
+    }, [selectedGroup, selectedOrgId, toast])
 
     // Search filtering
     const filteredProducts = useMemo(() => {
@@ -448,9 +449,12 @@ export default function AssignToBranchPage() {
                                                     <TableCell>
                                                         <div className="flex items-center gap-3">
                                                             {product.productImageUrl ? (
-                                                                <img
+                                                                <Image
                                                                     src={product.productImageUrl}
                                                                     alt={product.productName}
+                                                                    width={40}
+                                                                    height={40}
+                                                                    unoptimized
                                                                     className="h-10 w-10 rounded-lg border object-cover"
                                                                 />
                                                             ) : (

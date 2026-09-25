@@ -421,6 +421,27 @@
       "when": 1790164800000,
       "tag": "20260917120000_group_user_budget_allocation_permission",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1790424000000,
+      "tag": "20260919120000_budget_addon_validity",
+      "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1790596800000,
+      "tag": "20260921120000_payment_control_exceptions",
+      "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1790600400000,
+      "tag": "20260924120000_prefix_invoice_number_with_tenant_code",
+      "breakpoints": true
     }
   ]
 }

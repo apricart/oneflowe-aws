@@ -68,7 +68,6 @@ const baseFilters = (): ExecutiveFilterState => ({
   groupIds: [],
   branchIds: [],
   categoryIds: [],
-  unit: null,
 })
 
 /**
@@ -87,6 +86,12 @@ beforeEach(() => {
   window.localStorage.clear()
 })
 
+it("does not offer a unit filter", () => {
+  render(<ExecutiveFilters role="HEAD_OFFICE" value={baseFilters()} onChange={() => {}} />)
+  expect(screen.queryByLabelText("Unit")).toBeNull()
+  expect(new URLSearchParams(toQuery(baseFilters())).has("unit")).toBe(false)
+})
+
 describe("date range filtering", () => {
   it("applies both ends of a picked range, not just the last one", () => {
     const harness = stateHarness(baseFilters())
@@ -95,8 +100,6 @@ describe("date range filtering", () => {
         role="SUPER_ADMIN"
         value={harness.current}
         onChange={harness.onChange}
-        availableUnits={[]}
-        unitConflict={false}
       />,
     )
 
@@ -116,8 +119,6 @@ describe("date range filtering", () => {
         role="SUPER_ADMIN"
         value={harness.current}
         onChange={harness.onChange}
-        availableUnits={[]}
-        unitConflict={false}
       />,
     )
 
@@ -137,8 +138,6 @@ describe("date range filtering", () => {
         role="SUPER_ADMIN"
         value={harness.current}
         onChange={harness.onChange}
-        availableUnits={[]}
-        unitConflict={false}
       />,
     )
 
@@ -151,14 +150,12 @@ describe("date range filtering", () => {
   })
 
   it("leaves the other filters untouched when only the dates change", () => {
-    const harness = stateHarness({ ...baseFilters(), branchIds: ["4"], categoryIds: ["9"], unit: "kg" })
+    const harness = stateHarness({ ...baseFilters(), branchIds: ["4"], categoryIds: ["9"] })
     render(
       <ExecutiveFilters
         role="SUPER_ADMIN"
         value={harness.current}
         onChange={harness.onChange}
-        availableUnits={["kg", "ltr"]}
-        unitConflict={false}
       />,
     )
 
@@ -166,7 +163,6 @@ describe("date range filtering", () => {
 
     expect(harness.current.branchIds).toEqual(["4"])
     expect(harness.current.categoryIds).toEqual(["9"])
-    expect(harness.current.unit).toBe("kg")
   })
 })
 
@@ -178,8 +174,6 @@ describe("the highlighted range matches the range applied", () => {
         role="SUPER_ADMIN"
         value={{ ...baseFilters(), ...defaults }}
         onChange={() => {}}
-        availableUnits={[]}
-        unitConflict={false}
       />,
     )
 
@@ -204,8 +198,6 @@ describe("the group filter", () => {
       role={role}
       value={harness.current}
       onChange={harness.onChange}
-      availableUnits={[]}
-      unitConflict={false}
     />,
   )
 

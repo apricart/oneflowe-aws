@@ -277,6 +277,10 @@ function useUsernameAvailability(
   }, [setErrors, setUsernameStatus, username])
 }
 
+// The remaining branches are the three mutually exclusive wizard layouts and
+// their field-level feedback. Validation and username lookup live in focused
+// helpers above; keeping the layouts together preserves the step transitions.
+// eslint-disable-next-line sonarjs/cognitive-complexity
 export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>) {
   const [open, setOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -364,12 +368,12 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
           organizationId: organizationId || prev.organizationId,
           branchId: userRole === "BRANCH_ADMIN" ? (branchId || prev.branchId) : prev.branchId
         }))
-      } else if (userRole === "SUPER_ADMIN" && organizationId && !form.organizationId) {
+      } else if (userRole === "SUPER_ADMIN" && organizationId) {
         // Only pre-fill for Super Admin if it's currently empty
-        setForm(prev => ({
+        setForm(prev => prev.organizationId ? prev : {
           ...prev,
           organizationId: organizationId
-        }))
+        })
       }
     }
   }, [open, isInitialized, organizationId, branchId, userRole])

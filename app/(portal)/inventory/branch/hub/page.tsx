@@ -100,7 +100,7 @@ export default function BranchAssignmentsPage() {
                         <GitBranch className="h-4 w-4" />
                         Group Management
                     </p>
-                    <CardTitle className="text-2xl font-semibold text-white">Group Inventory</CardTitle>
+                    <CardTitle className="text-2xl font-semibold text-white">Group Products</CardTitle>
                 </CardHeader>
             </Card>
 

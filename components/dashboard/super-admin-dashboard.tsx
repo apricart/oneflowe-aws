@@ -144,7 +144,7 @@ export function SuperAdminDashboard() {
   }
 
   const { data: orgsData } = useOrganizations()
-  const orgs = orgsData?.items || []
+  const orgs = useMemo(() => orgsData?.items || [], [orgsData?.items])
 
   // Initialize chartYears with all available years on first load
   useEffect(() => {

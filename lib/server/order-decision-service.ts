@@ -8,6 +8,7 @@ import { generateApprovalToken, hashApprovalToken } from "@/lib/approval-token"
 import { db } from "@/lib/db"
 import { logTokenGenerated } from "@/lib/global-logger"
 import { orderSelectColumns } from "@/lib/order-select"
+import { budgetPeriodOf } from "@/lib/budget-consumption"
 import { authorizeOrderDecision } from "@/lib/server/order-decision-policy"
 import {
   queueOrderDecisionNotification,
@@ -210,9 +211,7 @@ export async function rejectOrder({
       if (!rejectedOrder) throw new Error("ORDER_TRANSITION_CONFLICT")
 
       // 2. Restore budget
-      const orderMonth = rejectedOrder.createdAt
-        ? new Date(rejectedOrder.createdAt).toISOString().slice(0, 7)
-        : new Date().toISOString().slice(0, 7)
+      const orderMonth = budgetPeriodOf(rejectedOrder.createdAt)
 
       const [budget] = await tx.select().from(budgets).where(
         and(

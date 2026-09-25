@@ -1,6 +1,7 @@
 "use client"
 
 import { AlertTriangle, Package, Plus, RefreshCw, ShoppingBag, Zap } from "lucide-react"
+import Image from "next/image"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -115,10 +116,12 @@ export function StorefrontProductCard({
     >
       <div className="relative h-40 w-full overflow-hidden bg-gradient-to-br from-slate-100 to-slate-200 dark:from-slate-800 dark:to-slate-700">
         {item.imageUrl ? (
-          <img
+          <Image
             src={item.imageUrl}
             alt=""
-            loading="lazy"
+            width={480}
+            height={480}
+            unoptimized
             className="h-full w-full object-cover transition-transform duration-300 hover:scale-105"
           />
         ) : (

@@ -64,6 +64,7 @@ import * as XLSX from "xlsx"
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
 
 const ALL_MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+const CHART_MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 export default function UserReportPage() {
 
@@ -350,11 +351,9 @@ export default function UserReportPage() {
 
     // ━━━ DATA PROCESSING ━━━
     const summary = globalData?.data || {}
-    const trend = chartData?.trend || []
-    const compareTrend = chartData?.compareTrend || []
+    const trend = useMemo(() => chartData?.trend || [], [chartData?.trend])
+    const compareTrend = useMemo(() => chartData?.compareTrend || [], [chartData?.compareTrend])
     const reportItems = reportData?.data || []
-    const CHART_MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-
     const filteredUsers = reportItems.filter((u: any) =>
         (u.userName || "").toLowerCase().includes(reportSearch.toLowerCase()) ||
         (u.userEmail || "").toLowerCase().includes(reportSearch.toLowerCase()) ||

@@ -2,15 +2,21 @@ import { fireEvent, render, screen } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 
 import {
+  BUDGET_BESIDE_COLOR,
   ChartCard,
   DataTable,
+  ExecutiveVizStyles,
   Legend,
+  SERIES,
+  STATUS_COLOR,
   changeLabel,
   countShort,
   formatByKind,
+  formatMarkLabelByKind,
   formatShortByKind,
   money,
   moneyShort,
+  moneyShortBare,
   percent,
   sequentialStep,
 } from "./chart-kit"
@@ -50,6 +56,19 @@ describe("formatters", () => {
     expect(formatByKind(7, "count")).toBe("7")
     expect(formatShortByKind(150_000, "currency")).toBe("₨1.5K")
     expect(formatShortByKind(42.5, "percent")).toBe("43%")
+  })
+
+  it("drops the currency mark for a label drawn on a mark, and only there", () => {
+    // Upright columns are the crowded case — twelve across half a card, two
+    // per category once a budget stands beside each. The axis keeps the mark.
+    expect(moneyShortBare(14_280_000)).toBe("142.8K")
+    expect(moneyShortBare(-420_000)).toBe("-4.2K")
+    expect(formatMarkLabelByKind(150_000, "currency")).toBe("1.5K")
+    expect(formatShortByKind(150_000, "currency")).toBe("₨1.5K")
+    // Every other kind is untouched — there was never a mark to drop.
+    for (const kind of ["quantity", "count", "percent"]) {
+      expect(formatMarkLabelByKind(2_100, kind)).toBe(formatShortByKind(2_100, kind))
+    }
   })
 
   it("tells 'no prior period' apart from 'no change'", () => {
@@ -151,5 +170,28 @@ describe("Legend", () => {
     expect(screen.getAllByText("Ahmed")).toHaveLength(2)
     expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("same key"), expect.anything(), expect.anything())
     warn.mockRestore()
+  })
+})
+
+describe("the reference role", () => {
+  it("is its own token, never a series slot, a status, or the track", () => {
+    // A Total Budget is a quantity given: not an entity, not a state. Sharing
+    // a token with any of those would let one be mistaken for the other.
+    expect(BUDGET_BESIDE_COLOR).toBe("var(--viz-reference)")
+    expect(SERIES as readonly string[]).not.toContain(BUDGET_BESIDE_COLOR)
+    expect(Object.values(STATUS_COLOR)).not.toContain(BUDGET_BESIDE_COLOR)
+    expect(BUDGET_BESIDE_COLOR).not.toBe("var(--viz-track)")
+  })
+
+  it("is defined in both themes, with its own step for each surface", () => {
+    // Dark mode is selected, never an automatic flip: the reference sits
+    // outside the series lightness band in each theme — darker than them on
+    // the light surface, lighter on the dark one — which is where its
+    // separation from all six series hues comes from.
+    const { container } = render(<ExecutiveVizStyles />)
+    const css = container.querySelector("style")?.innerHTML ?? ""
+    const steps = Array.from(css.matchAll(/--viz-reference:\s*(#[0-9a-f]{6})/g)).map((match) => match[1])
+    expect(steps).toHaveLength(2)
+    expect(steps[0]).not.toBe(steps[1])
   })
 })
