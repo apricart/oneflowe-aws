@@ -29,6 +29,7 @@ import { loadGroupPriceOverrides,resolveBranchGroupId,resolveEffectivePriceCents
 import { isValidRole } from "@/lib/rbac"
 import { metricExpressions } from "@/lib/metric-utils"
 import { getOrderStatusesForFilter,getOrderStatusFilter } from "@/lib/order-status"
+import { budgetPeriodOf } from "@/lib/budget-consumption"
 import { isGroupPortalOrder,type OrderCreatorRole } from "@/lib/group-order-visibility"
 import { parseOrderCreatorRoleFilter } from "@/lib/order-creator-filter"
 
@@ -1025,7 +1026,7 @@ export async function POST(req: NextRequest) {
     const total = calculated.total
 
     // budget check and hold - must be for current month period
-    const currentMonth = new Date().toISOString().slice(0, 7) // YYYY-MM format
+    const currentMonth = budgetPeriodOf(new Date())
     const currentBudget = await getOrCreateCurrentBudget(branchId, currentMonth)
     if (!currentBudget) return NextResponse.json({
       error: `Budget not configured for current month (${currentMonth}). Please contact head office to allocate budget.`,

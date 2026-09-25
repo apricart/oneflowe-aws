@@ -6,6 +6,7 @@ import { budgets, orders } from "@/db/schema"
 import { db } from "@/lib/db"
 import { isTokenHandoffEligible, tokenHandoffSettlesNow } from "@/lib/order-token-handoff"
 import { orderSelectColumns, updateOrderFulfillmentStatusColumn } from "@/lib/order-select"
+import { budgetPeriodOf } from "@/lib/budget-consumption"
 import { moveHeldQuantityBudgetToUsedForOrder } from "@/lib/server/product-quantity-budget-ledger"
 import {
   findPendingTokenHandoff,
@@ -100,9 +101,7 @@ async function moveBudgetHeldToSpent(
   tx: any,
   fulfilledOrder: { branchId: number; totalCents: number; createdAt: Date | string | null },
 ) {
-  const orderMonth = fulfilledOrder.createdAt
-    ? new Date(fulfilledOrder.createdAt).toISOString().slice(0, 7)
-    : new Date().toISOString().slice(0, 7)
+  const orderMonth = budgetPeriodOf(fulfilledOrder.createdAt)
 
   const [budget] = await tx.select().from(budgets).where(
     and(

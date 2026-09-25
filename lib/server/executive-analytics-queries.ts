@@ -7,6 +7,7 @@ import { branches, budgets, categories, globalProducts, groups, orderItems, orde
 import { db } from "@/lib/db"
 import { buildAppMonthPeriods } from "@/lib/date-range-params"
 import { CONSUMED_ELIGIBLE_FILTER, REVENUE_ELIGIBLE_FILTER, metricExpressions } from "@/lib/metric-utils"
+import { consumedHeldCentsSql, consumedSpentCentsSql } from "@/lib/server/budget-consumption-sql"
 import type { ExecutiveScope } from "@/lib/server/executive-analytics-scope"
 import type {
   BudgetBesideDimension,
@@ -259,9 +260,10 @@ export type BranchBudgetRow = {
  *
  * Spend and commitment are derived from the orders inside the window rather
  * than from the ledger's running totals, so a date filter narrows them
- * honestly. This mirrors `app/api/v1/analytics/budgets/summary/route.ts`, which
- * switches to order-scoped spending the moment a range is supplied — the two
- * reports therefore agree.
+ * honestly. The statuses and the refund netting come from
+ * `lib/server/budget-consumption-sql.ts`, which is also what
+ * `app/api/v1/analytics/budgets/summary/route.ts` uses when a range is
+ * supplied — one rule, so the two reports cannot disagree.
  */
 /**
  * The caller's fence, as predicates on `branches` — for the readers that start
@@ -306,8 +308,8 @@ export async function loadBranchBudgets(
     db
       .select({
         branchId: orders.branchId,
-        spentCents: sql<number>`COALESCE(SUM(CASE WHEN UPPER(${orders.status}) IN ('FULFILLED', 'PARTIAL', 'PARTIALLY_FULFILLED') THEN GREATEST(0, ${orders.totalCents} - COALESCE(${orders.refundAmountCents}, 0)) ELSE 0 END), 0)`.mapWith(Number),
-        heldCents: sql<number>`COALESCE(SUM(CASE WHEN UPPER(${orders.status}) IN ('PENDING', 'APPROVED') THEN GREATEST(0, ${orders.totalCents} - COALESCE(${orders.refundAmountCents}, 0)) ELSE 0 END), 0)`.mapWith(Number),
+        spentCents: consumedSpentCentsSql(),
+        heldCents: consumedHeldCentsSql(),
       })
       .from(orders)
       .where(and(...orderConditions(scope, filters, { revenueEligible: false })))

@@ -73,7 +73,7 @@ export default function OrganizationInventoryPage() {
                         <Building2 className="h-4 w-4" />
                         Inventory
                     </p>
-                    <CardTitle className="text-2xl font-semibold text-white">Organization Inventory</CardTitle>
+                    <CardTitle className="text-2xl font-semibold text-white">Organization Products</CardTitle>
                 </CardHeader>
             </Card>
 

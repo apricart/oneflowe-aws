@@ -154,7 +154,7 @@ export default function HeadOfficeInventory({ organizationId }: Readonly<{ organ
             <Package className="h-6 w-6 text-blue-600 dark:text-blue-400" />
           </div>
           <div>
-            <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100">Organization Inventory</h1>
+            <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100">Organization Products</h1>
             <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Manage products assigned to your organization</p>
           </div>
         </div>

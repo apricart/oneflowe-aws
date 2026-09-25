@@ -115,11 +115,11 @@ export async function createGroupRoleFixtures(): Promise<GroupRoleFixtures> {
 
   const [organization] = await db
     .insert(organizations)
-    .values({ name: names.organization, code: `ITGR-${suffix}` })
+    .values({ name: names.organization, code: `ITGR_${suffix}` })
     .returning({ id: organizations.id })
   const [foreignOrganization] = await db
     .insert(organizations)
-    .values({ name: `IT Group Roles Foreign ${suffix}`, code: `ITGF-${suffix}` })
+    .values({ name: `IT Group Roles Foreign ${suffix}`, code: `ITGF_${suffix}` })
     .returning({ id: organizations.id })
 
   async function person(

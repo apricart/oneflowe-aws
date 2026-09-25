@@ -34,40 +34,45 @@ import {
  *
  * ```
  *   #    date        branch  creator        status     total     note
- *   X0c  2026-02-28  North   Ahmed          FULFILLED    777 777  before the older run opens — nowhere
- *   X0   2026-04-10  North   Ahmed          FULFILLED    600 000  inside the older run (Mar–May)
- *   X0b  2026-05-31  North   Ahmed          FULFILLED    100 000  its last day
+ *   X0c  2026-02-28  North   Ahmed          FULFILLED    777 777  before every bucket — nowhere
+ *   X0   2026-04-10  North   Ahmed          FULFILLED    600 000  before every bucket — nowhere
+ *   X0b  2026-05-31  North   Ahmed          FULFILLED    555 555  hours before June opens — nowhere
  *   X1   2026-07-20  North   Ahmed          FULFILLED    600 000
  *   X2   2026-08-05  North   Ahmed          FULFILLED    800 000
  *   X3   2026-08-28  North   Ahmed          FULFILLED  1 400 000  inside the last 7 days
  *   R1–3 2026-08-10  North   Ahmed          REJECTED      10 000  ×3 — approver said no
  *   C1   2026-08-13  North   Ahmed          CANCELLED    999 999  must appear nowhere
  *   BA1  2026-08-15  North   Branch Admin   FULFILLED    100 000  counts for the branch, never listed
- *   plus the shared fixtures' O1 (Ahmed, June, 11 000), O5 (Group, APPROVED 2 000),
- *   O6 (Ahmed, PENDING 50 000), O7 (Sana, CANCELLED 15 000), O8 (Sana, FULFILLED 1 500),
- *   and O3 (Ahmed, July, net 2 000).
+ *   plus the shared fixtures' O1 (Ahmed, June, 11 000), O2 (Sana, June, 7 000),
+ *   O3 (Ahmed, July, net 2 000), O4 (Group at South, July, 8 000),
+ *   O5 (Group at North, APPROVED 2 000), O6 (Ahmed, PENDING 50 000),
+ *   O7 (Sana, CANCELLED 15 000) and O8 (Sana, FULFILLED 1 500).
  *   North's August budget: allocated 3 000 000.
  *   Each extra order carries one Paper line whose price × quantity is its total,
- *   so the drill-down can be checked against the row it was opened from.
+ *   so the drill-down can be checked against the cell it was opened from.
  * ```
  *
- * August 2026, tenant A. Every figure but the growth column is August alone;
- * the growth column is the three months ending with it against the three
- * before those (Jun–Aug against Mar–May), which is why the fixture carries
- * rows on both sides of 1 March and 1 June.
+ * August 2026, tenant A. The pattern is June, July and August, each on its own;
+ * Share, Orders, the late window and the branch denominators are August alone.
+ * X0b sits hours before June opens, so the oldest bucket has a floor and the
+ * pattern is three months rather than "everything up to August".
  *
  *   North consumed  2 250 000 (Ahmed) + 2 000 (Group) + 100 000 (Branch Admin) = 2 352 000
- *   Ahmed           spend 2 200 000 · pending 50 000 · consumed 2 250 000 · share 95.66 %
- *                   trend Jun–Aug  11 000 (O1) + 602 000 (July) + 2 250 000 (Aug) = 2 863 000
- *                   trend Mar–May  600 000 (X0) + 100 000 (X0b)                    =   700 000
- *                                  → +309.00 %  (never +273.75 %, which is July alone)
- *                   recent (25–31 Aug) 1 400 000 → 62.22 % of consumed
+ *   Ahmed at North  Jun    11 000 (O1)
+ *                   Jul   602 000 (O3 net 2 000 + X1 600 000)
+ *                   Aug 2 250 000 (X2 800 000 + X3 1 400 000 + O6 pending 50 000)
+ *                   → MoM (2 250 000 − 602 000) / 602 000 = +273.75 %, highlighted
+ *                     (previous month 602 000 clears the 500 000 baseline)
+ *                   share 95.66 % · recent (25–31 Aug) 1 400 000 → 62.22 % of consumed
  *                   2 revenue orders · 1 pending · 3 rejected
- *                   reasons: high_share (3) + trend_spike (2) + late_surge (2) + rejected_orders (1) = 8
- *                   above_peers: only one other requester at North → no peer figure
+ *                   reasons: high_share (3) + mom_spike (2) + late_surge (2) + rejected_orders (1) = 8
+ *                   above_peers: South has no budget row → no peer figure
  *                   high_held: 50 000 < 20 % of 3 000 000 → no
- *   Group at North  2 000, nothing flagged
- *   Sana at South   1 500, sole requester, nothing flagged
+ *   Group at North  Jun 0 · Jul 0 · Aug 2 000 — no previous month, so no percentage
+ *   Sana at South   Jun 7 000 · Jul 0 · Aug 1 500 — no previous month, so no percentage
+ *   Group at South  Jun 0 · Jul 8 000 · Aug 0 — **listed although August is empty**,
+ *                   at −100 %, which is the union rule this panel turns on
+ *   → 4 requesters, 1 highlighted, 1 still above the retired score line
  *   North remaining 3 000 000 − (spent 2 300 000 + held 52 000) = 648 000
  */
 vi.mock("next-auth", () => ({ getServerSession: vi.fn() }))
@@ -96,8 +101,10 @@ async function budgetBurn(query: Query) {
 }
 
 const MISSING_ORDER_VALUE = 999_999
-/** An order one day before the older trend run opens; it must reach no figure. */
-const BEFORE_TREND_VALUE = 777_777
+/** An order months before the oldest bucket opens; it must reach no figure. */
+const BEFORE_PATTERN_VALUE = 777_777
+/** An order hours before the oldest bucket opens — the floor, not just the ceiling. */
+const JUST_BEFORE_PATTERN_VALUE = 555_555
 
 /** The drill-down a watchlist row opens: this requester, at this branch, for the month. */
 async function drillDown(query: Query) {
@@ -149,11 +156,11 @@ describe.skipIf(!hasTestDatabase)("budget-burn watchlist route", () => {
     const inserted = await db
       .insert(orders)
       .values([
-        // 17:00 Karachi on 28 February — hours before the older run opens at
-        // midnight on 1 March, so the run has a floor and not just a ceiling.
-        extra("X0c", f.ahmedId, "FULFILLED", at("2026-02-28"), BEFORE_TREND_VALUE),
+        extra("X0c", f.ahmedId, "FULFILLED", at("2026-02-28"), BEFORE_PATTERN_VALUE),
         extra("X0", f.ahmedId, "FULFILLED", at("2026-04-10"), 600_000),
-        extra("X0b", f.ahmedId, "FULFILLED", at("2026-05-31"), 100_000),
+        // 17:00 Karachi on 31 May — hours before the oldest bucket opens at
+        // midnight on 1 June, so the pattern has a floor and not just a ceiling.
+        extra("X0b", f.ahmedId, "FULFILLED", at("2026-05-31"), JUST_BEFORE_PATTERN_VALUE),
         extra("X1", f.ahmedId, "FULFILLED", at("2026-07-20"), 600_000),
         extra("X2", f.ahmedId, "FULFILLED", at("2026-08-05"), 800_000),
         extra("X3", f.ahmedId, "FULFILLED", at("2026-08-28"), 1_400_000),
@@ -258,45 +265,44 @@ describe.skipIf(!hasTestDatabase)("budget-burn watchlist route", () => {
   // ── The list ───────────────────────────────────────────────────────────
 
   describe("the watchlist for August 2026", () => {
-    it("lists Ahmed at North with every reason the oracle predicts, and nobody else", async () => {
+    it("draws Ahmed's three months, highlights the newest, and reports every signal the oracle predicts", async () => {
       const { status, body } = await budgetBurn({})
       expect(status).toBe(200)
 
       expect(body.month).toBe("2026-08")
       expect(body.windows.current.complete).toBe(true)
       expect(body.windows.current.elapsedDays).toBe(31)
-      // Jun–Aug against Mar–May, both whole because August is over.
-      expect(body.windows.trend.months).toBe(3)
-      expect(body.windows.trend.current.startMonth).toBe("2026-06")
-      expect(body.windows.trend.current.endMonth).toBe("2026-08")
-      expect(body.windows.trend.prior.startMonth).toBe("2026-03")
-      expect(body.windows.trend.prior.endMonth).toBe("2026-05")
-      expect(body.flaggedCount).toBe(1)
-      // Group at North and Sana at South sat below the line.
-      expect(body.unflaggedCount).toBe(2)
+      // June, July, August — all whole months because August is over.
+      expect(body.windows.pattern.map((bucket: any) => bucket.month)).toEqual(["2026-06", "2026-07", "2026-08"])
+      expect(body.windows.pattern.every((bucket: any) => bucket.complete)).toBe(true)
+      expect(body.windows.pattern.at(-1).startDate).toBe(body.windows.current.startDate)
+      expect(body.windows.pattern.at(-1).endDate).toBe(body.windows.current.endDate)
       expect(body.truncated).toBe(false)
       expect(body.limit).toBe(BUDGET_BURN_DEFAULT_ROWS)
 
-      expect(body.rows).toHaveLength(1)
-      const [ahmed] = body.rows
-      expect(ahmed.userId).toBe(f.ahmedId)
+      const ahmed = body.rows.find((row: any) => row.userId === f.ahmedId)
       expect(ahmed.requesterName).toBe(f.names.ahmed)
       expect(ahmed.role).toBe("ORDER_PORTAL")
       expect(ahmed.accountStatus).toBe("ACTIVE")
       expect(ahmed.branchId).toBe(f.northBranchId)
       expect(ahmed.branchName).toBe(f.names.north)
-      expect(ahmed.score).toBe(8)
-      expect(ahmed.reasons).toEqual(["high_share", "trend_spike", "late_surge", "rejected_orders"])
+
+      // The three cells the reader sees, and the percentage that is a ratio of
+      // the last two of them — checkable on the row, which is the point.
+      expect(ahmed.metrics.months).toEqual([
+        { month: "2026-06", spendCents: 11_000, pendingCents: 0, consumedCents: 11_000 },
+        { month: "2026-07", spendCents: 602_000, pendingCents: 0, consumedCents: 602_000 },
+        { month: "2026-08", spendCents: 2_200_000, pendingCents: 50_000, consumedCents: 2_250_000 },
+      ])
+      expect(ahmed.metrics.momPct).toBeCloseTo(((2_250_000 - 602_000) / 602_000) * 100, 6)
+      expect(ahmed.metrics.momFlagged).toBe(true)
+      // The newest cell is the row's own month figure; they cannot drift apart.
+      expect(ahmed.metrics.months.at(-1).consumedCents).toBe(ahmed.metrics.consumedCents)
 
       expect(ahmed.metrics.spendCents).toBe(2_200_000)
       expect(ahmed.metrics.pendingCents).toBe(50_000)
       expect(ahmed.metrics.consumedCents).toBe(2_250_000)
       expect(ahmed.metrics.shareOfBranchPct).toBeCloseTo((2_250_000 / 2_352_000) * 100, 3)
-      // The growth is the two runs of months, not the month beside it: had it
-      // stayed month-over-month these would read 2 250 000 against 602 000.
-      expect(ahmed.metrics.trendConsumedCents).toBe(2_863_000)
-      expect(ahmed.metrics.priorTrendConsumedCents).toBe(700_000)
-      expect(ahmed.metrics.trendPct).toBeCloseTo(((2_863_000 - 700_000) / 700_000) * 100, 3)
       expect(ahmed.metrics.vsPeerPct).toBeNull()
       expect(ahmed.metrics.branchUtilizationPct).toBeCloseTo((2_352_000 / 3_000_000) * 100, 3)
       expect(ahmed.metrics.peerBranchMedianUtilizationPct).toBeNull()
@@ -304,15 +310,62 @@ describe.skipIf(!hasTestDatabase)("budget-burn watchlist route", () => {
       expect(ahmed.metrics.orderCount).toBe(2)
       expect(ahmed.metrics.pendingOrderCount).toBe(1)
       expect(ahmed.metrics.rejectedOrderCount).toBe(3)
+
+      // The retired multi-signal rule is still computed and still reported —
+      // nothing on the panel reads it, and it must not change silently.
+      expect(ahmed.score).toBe(8)
+      expect(ahmed.reasons).toEqual(["high_share", "mom_spike", "late_surge", "rejected_orders"])
+      expect(body.scoreFlaggedCount).toBe(1)
     })
 
-    it("never lets a cancelled order, or one before the older run, into any figure", async () => {
+    it("lists every requester of the pattern, highlighted first and then by this month's money", async () => {
+      const { body } = await budgetBurn({})
+      // Four rows, not one: the list is no longer a shortlist.
+      expect(body.requesterCount).toBe(4)
+      expect(body.highlightedCount).toBe(1)
+      expect(body.rows).toHaveLength(4)
+      expect(body.rows.map((row: any) => [row.userId, row.branchId])).toEqual([
+        [f.ahmedId, f.northBranchId],          // highlighted
+        [f.groupRequesterId, f.northBranchId], // 2 000 in August
+        [f.sanaId, f.southBranchId],           // 1 500 in August
+        [f.groupRequesterId, f.southBranchId], // nothing in August
+      ])
+      expect(body.rows.filter((row: any) => row.metrics.momFlagged)).toHaveLength(1)
+    })
+
+    it("lists a requester who consumed in an earlier month and nothing in the selected one", async () => {
+      // The Group requester ordered at South in July (O4, 8 000) and nowhere in
+      // August. Keying the list off the selected month alone would drop them,
+      // and with them the only shape this panel exists to show.
+      const { body } = await budgetBurn({})
+      const lapsed = body.rows.find((row: any) => row.userId === f.groupRequesterId && row.branchId === f.southBranchId)
+      expect(lapsed).toBeDefined()
+      expect(lapsed.requesterName).toBe(f.names.group)
+      expect(lapsed.branchName).toBe(f.names.south)
+      expect(lapsed.metrics.months.map((month: any) => month.consumedCents)).toEqual([0, 8_000, 0])
+      // No money of July's leaks into the selected month's own figures.
+      expect(lapsed.metrics.consumedCents).toBe(0)
+      expect(lapsed.metrics.orderCount).toBe(0)
+      expect(lapsed.metrics.momPct).toBeCloseTo(-100)
+      expect(lapsed.metrics.momFlagged).toBe(false)
+    })
+
+    it("calls a first month no baseline rather than no change", async () => {
+      const { body } = await budgetBurn({})
+      const groupAtNorth = body.rows.find((row: any) => row.userId === f.groupRequesterId && row.branchId === f.northBranchId)
+      expect(groupAtNorth.metrics.months.map((month: any) => month.consumedCents)).toEqual([0, 0, 2_000])
+      expect(groupAtNorth.metrics.momPct).toBeNull()
+      expect(groupAtNorth.metrics.momFlagged).toBe(false)
+    })
+
+    it("never lets a cancelled order, or one before the oldest bucket, into any figure", async () => {
       const { body } = await budgetBurn({})
       const everyNumber = JSON.stringify(body)
       expect(everyNumber).not.toContain(String(MISSING_ORDER_VALUE))
-      // X0c sits hours before 1 March: the older run has a floor, so it is a
-      // run of three months and not "everything before the newer one".
-      expect(everyNumber).not.toContain(String(BEFORE_TREND_VALUE))
+      expect(everyNumber).not.toContain(String(BEFORE_PATTERN_VALUE))
+      // X0b sits hours before 1 June: the oldest bucket has a floor, so the
+      // pattern is three months and not "everything up to the selection".
+      expect(everyNumber).not.toContain(String(JUST_BEFORE_PATTERN_VALUE))
       // Sana's CANCELLED O7 (15 000) would have made South 16 500.
       const south = body.branches.find((branch: any) => branch.branchId === f.southBranchId)
       expect(south.consumedCents).toBe(1_500)
@@ -344,20 +397,24 @@ describe.skipIf(!hasTestDatabase)("budget-burn watchlist route", () => {
       expect(JSON.stringify(body)).not.toContain("@example.test")
     })
 
-    it("returns nothing flagged for a quiet month, with the requesters counted below the line", async () => {
+    it("still lists the quiet requesters of a quiet month, with nothing highlighted", async () => {
       // June: O1 (Ahmed, 11 000) and O2 (Sana, 7 000), each alone at their branch.
       const { status, body } = await budgetBurn({ month: "2026-06" })
       expect(status).toBe(200)
-      expect(body.rows).toEqual([])
-      expect(body.flaggedCount).toBe(0)
-      expect(body.unflaggedCount).toBe(2)
-      // June's runs step back with it: Apr–Jun against Jan–Mar. X0 and X0b
-      // (711 000 with O1) now sit in the newer run and X0c (777 777) alone in
-      // the older one, so June's growth is negative and nothing spikes.
-      expect(body.windows.trend.current.startMonth).toBe("2026-04")
-      expect(body.windows.trend.current.endMonth).toBe("2026-06")
-      expect(body.windows.trend.prior.startMonth).toBe("2026-01")
-      expect(body.windows.trend.prior.endMonth).toBe("2026-03")
+      // The pattern steps back with the selection: April, May, June.
+      expect(body.windows.pattern.map((bucket: any) => bucket.month)).toEqual(["2026-04", "2026-05", "2026-06"])
+      expect(body.requesterCount).toBe(2)
+      expect(body.highlightedCount).toBe(0)
+      expect(body.scoreFlaggedCount).toBe(0)
+      expect(body.rows).toHaveLength(2)
+
+      // X0 (April, 600 000) and X0b (May, 555 555) now sit inside the pattern;
+      // X0c (February) is outside it, so the oldest bucket still has a floor.
+      const ahmed = body.rows.find((row: any) => row.userId === f.ahmedId)
+      expect(ahmed.metrics.months.map((month: any) => month.consumedCents)).toEqual([600_000, 555_555, 11_000])
+      expect(ahmed.metrics.momPct).toBeCloseTo(((11_000 - 555_555) / 555_555) * 100, 6)
+      expect(ahmed.metrics.momFlagged).toBe(false)
+      expect(JSON.stringify(body)).not.toContain(String(BEFORE_PATTERN_VALUE))
     })
   })
 
@@ -366,7 +423,7 @@ describe.skipIf(!hasTestDatabase)("budget-burn watchlist route", () => {
   describe("the drill-down behind a row", () => {
     it("adds up to the row's Spend + Pending when asked for consumed lines, and to Spend alone by default", async () => {
       const { body: list } = await budgetBurn({})
-      const [ahmed] = list.rows
+      const ahmed = list.rows.find((row: any) => row.userId === f.ahmedId)
 
       const consumed = await drillDown({ key: f.ahmedId, branchIds: f.northBranchId, statuses: "consumed" })
       expect(consumed.status).toBe(200)
@@ -384,6 +441,27 @@ describe.skipIf(!hasTestDatabase)("budget-burn watchlist route", () => {
       expect(revenue.body.rows.map((row: any) => row.status)).toEqual(["FULFILLED", "FULFILLED"])
     })
 
+    it("adds up to an older month's cell when that cell is the one clicked", async () => {
+      // Each month cell drills into its own month, so a three-column table
+      // answers its own question rather than pointing at the newest one.
+      const { body: list } = await budgetBurn({})
+      const ahmed = list.rows.find((row: any) => row.userId === f.ahmedId)
+
+      for (const cell of ahmed.metrics.months) {
+        const [year, month] = cell.month.split("-").map(Number)
+        const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate()
+        const drill = await drillDown({
+          key: f.ahmedId,
+          branchIds: f.northBranchId,
+          statuses: "consumed",
+          startDate: `${cell.month}-01`,
+          endDate: `${cell.month}-${String(lastDay).padStart(2, "0")}`,
+        })
+        expect(drill.status, cell.month).toBe(200)
+        expect(drill.body.totals.valueCents, cell.month).toBe(cell.consumedCents)
+      }
+    })
+
     it("refuses a status set that is not on the allowlist", async () => {
       const { status, body } = await drillDown({ key: f.ahmedId, branchIds: f.northBranchId, statuses: "PENDING" })
       expect(status).toBe(400)
@@ -391,52 +469,44 @@ describe.skipIf(!hasTestDatabase)("budget-burn watchlist route", () => {
     })
   })
 
-  describe("the item-wise 3-month comparison", () => {
-    it("reconciles item quantity and spend with the two runs the growth figure was built from", async () => {
+  describe("the item-wise 3-month consumption", () => {
+    it("reads the same buckets as the row, so its totals equal the month cells above it", async () => {
+      const { body: list } = await budgetBurn({})
+      const ahmed = list.rows.find((row: any) => row.userId === f.ahmedId)
+
       const { status, body } = await itemComparison({ userId: f.ahmedId, branchIds: f.northBranchId })
       expect(status).toBe(200)
       expect(body.userId).toBe(f.ahmedId)
       expect(body.branchId).toBe(f.northBranchId)
       expect(body.month).toBe("2026-08")
-      expect(body.windows.months).toBe(3)
-      expect(body.windows.current.startMonth).toBe("2026-06")
-      expect(body.windows.current.endMonth).toBe("2026-08")
-      expect(body.windows.prior.startMonth).toBe("2026-03")
-      expect(body.windows.prior.endMonth).toBe("2026-05")
-      // Both totals are the same two figures the row's growth % came from, so
-      // the panel that explains a percentage cannot disagree with it.
-      expect(body.currentTotalSpendCents).toBe(2_863_000)
-      expect(body.priorTotalSpendCents).toBe(700_000)
+      expect(body.windows.pattern.map((bucket: any) => bucket.month)).toEqual(["2026-06", "2026-07", "2026-08"])
       expect(body.truncated).toBe(false)
 
-      // Jun–Aug: Paper 10 (O1) + 4 net (O3) + 100 (O6) + 1 + 1 + 1 (X1–X3) = 117
-      //             at 5 000 + 2 000 + 50 000 + 600 000 + 800 000 + 1 400 000 = 2 857 000
-      // Mar–May: Paper 1 (X0) + 1 (X0b) = 2 at 700 000. Toner is a unit of its own.
+      // The panel that explains the months cannot disagree with them.
+      expect(body.monthTotals.map((total: any) => total.spendCents)).toEqual([11_000, 602_000, 2_250_000])
+      expect(body.monthTotals.map((total: any) => total.spendCents))
+        .toEqual(ahmed.metrics.months.map((month: any) => month.consumedCents))
+
+      // Paper per month: 10 (O1) · 4 net (O3) + 1 (X1) · 100 (O6) + 1 + 1 (X2, X3)
+      //   at 5 000 · 2 000 + 600 000 · 50 000 + 800 000 + 1 400 000
+      // Toner is a unit of its own and was bought in June alone.
       expect(body.items).toHaveLength(2)
-      expect(body.items[0]).toMatchObject({
-        productId: f.paperProductId,
-        productName: f.names.paper,
-        unit: "Ream",
-        currentQuantity: 117,
-        priorQuantity: 2,
-        deltaQuantity: 115,
-        currentSpendCents: 2_857_000,
-        priorSpendCents: 700_000,
-        currentOrderCount: 6,
-        priorOrderCount: 2,
-      })
-      expect(body.items[0].deltaPct).toBeCloseTo(5750)
-      // O1's toner line is in the newer run only — "new since last quarter".
-      expect(body.items[1]).toMatchObject({
-        productName: f.names.toner,
-        unit: "Piece",
-        currentQuantity: 2,
-        priorQuantity: 0,
-        deltaQuantity: 2,
-        currentSpendCents: 6_000,
-        priorSpendCents: 0,
-        deltaPct: null,
-      })
+      const [paper, toner] = body.items
+      expect(paper).toMatchObject({ productId: f.paperProductId, productName: f.names.paper, unit: "Ream", momFlagged: true })
+      expect(paper.months).toEqual([
+        { month: "2026-06", quantity: 10, spendCents: 5_000, orderCount: 1 },
+        { month: "2026-07", quantity: 5, spendCents: 602_000, orderCount: 2 },
+        { month: "2026-08", quantity: 102, spendCents: 2_250_000, orderCount: 3 },
+      ])
+      // The product's own percentage is the same rule as the row's, on the
+      // same two months — and here the same figure, because Paper is nearly
+      // all of it.
+      expect(paper.momPct).toBeCloseTo(((2_250_000 - 602_000) / 602_000) * 100, 6)
+      expect(paper.momPct).toBeCloseTo(ahmed.metrics.momPct, 6)
+
+      // Bought in June and never again: no previous month, so no percentage.
+      expect(toner).toMatchObject({ productName: f.names.toner, unit: "Piece", momPct: null, momFlagged: false })
+      expect(toner.months.map((month: any) => month.spendCents)).toEqual([6_000, 0, 0])
     })
 
     it("requires one resolved branch and returns no rows for a foreign requester", async () => {
@@ -447,8 +517,7 @@ describe.skipIf(!hasTestDatabase)("budget-burn watchlist route", () => {
       const foreign = await itemComparison({ userId: f.foreignUserId, branchIds: f.northBranchId })
       expect(foreign.status).toBe(200)
       expect(foreign.body.items).toEqual([])
-      expect(foreign.body.currentTotalSpendCents).toBe(0)
-      expect(foreign.body.priorTotalSpendCents).toBe(0)
+      expect(foreign.body.monthTotals.map((total: any) => total.spendCents)).toEqual([0, 0, 0])
     })
 
     it("validates the requester and month", async () => {
@@ -462,15 +531,29 @@ describe.skipIf(!hasTestDatabase)("budget-burn watchlist route", () => {
   // ── Tenant isolation ───────────────────────────────────────────────────
 
   describe("tenant isolation", () => {
-    it("shows the neighbour's Head Office nothing of tenant A", async () => {
+    it("shows the neighbour's Head Office its own rows and nothing of tenant A", async () => {
       signIn(neighbourHeadOffice)
       const { status, body } = await budgetBurn({})
       expect(status).toBe(200)
-      expect(body.rows).toEqual([])
-      expect(body.branches).toEqual([])
-      expect(body.unflaggedCount).toBe(0)
       expect(body.scope.organizationIds).toEqual([f.neighbourOrganizationId])
       expect(body.scope.branchCount).toBe(1)
+
+      // OB (July, 7 000) is inside the pattern, so the neighbour's own
+      // requester is listed although August is empty for them. August has no
+      // tenant-B orders at all, so there is no branch summary.
+      expect(body.rows.map((row: any) => row.userId)).toEqual([f.foreignUserId])
+      expect(body.rows[0].branchName).toBe(f.names.foreign)
+      expect(body.rows[0].metrics.months.map((month: any) => month.consumedCents)).toEqual([0, 7_000, 0])
+      expect(body.requesterCount).toBe(1)
+      expect(body.branches).toEqual([])
+
+      // Nothing of tenant A reaches them — not a name, not a branch, not a figure.
+      const everything = JSON.stringify(body)
+      for (const leak of [f.ahmedId, f.sanaId, f.groupRequesterId, f.names.north, f.names.south, f.names.ahmed]) {
+        expect(everything, String(leak)).not.toContain(String(leak))
+      }
+      expect(everything).not.toContain("2352000")
+      expect(everything).not.toContain("2250000")
     })
 
     it("narrows a foreign branch to nothing instead of reaching it", async () => {
@@ -484,21 +567,29 @@ describe.skipIf(!hasTestDatabase)("budget-burn watchlist route", () => {
     it("ignores an organizationId pointing at the neighbour", async () => {
       const { body } = await budgetBurn({ organizationId: f.neighbourOrganizationId })
       expect(body.scope.organizationIds).toEqual([f.organizationId])
-      expect(body.rows.map((row: any) => row.userId)).toEqual([f.ahmedId])
+      expect(body.rows[0].userId).toBe(f.ahmedId)
+      expect(body.rows.some((row: any) => row.userId === f.foreignUserId)).toBe(false)
+      expect(JSON.stringify(body)).not.toContain(f.names.foreign)
     })
 
     it("lets a branch selection narrow the list, budgets included", async () => {
       const { body } = await budgetBurn({ branchIds: f.southBranchId })
-      expect(body.rows).toEqual([])
       expect(body.branches.map((branch: any) => branch.branchId)).toEqual([f.southBranchId])
-      expect(body.unflaggedCount).toBe(1)
+      // South's own requesters across the pattern: Sana (June and August) and
+      // the Group requester (July only). North's are outside the selection.
+      expect(body.requesterCount).toBe(2)
+      expect(body.rows.map((row: any) => row.userId).sort()).toEqual([f.groupRequesterId, f.sanaId].sort())
+      expect(body.rows.every((row: any) => row.branchId === f.southBranchId)).toBe(true)
+      expect(body.highlightedCount).toBe(0)
     })
 
     it("answers SUPER_ADMIN for a selected tenant exactly as its Head Office is answered", async () => {
       signIn(superAdmin)
       const { body } = await budgetBurn({ organizationId: f.organizationId })
       expect(body.scope.organizationIds).toEqual([f.organizationId])
-      expect(body.rows.map((row: any) => row.userId)).toEqual([f.ahmedId])
+      expect(body.requesterCount).toBe(4)
+      expect(body.rows[0].userId).toBe(f.ahmedId)
+      expect(body.rows[0].metrics.momFlagged).toBe(true)
       expect(body.rows[0].score).toBe(8)
     })
   })

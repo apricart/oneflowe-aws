@@ -74,6 +74,30 @@ const legacySnapshot = {
   ],
 }
 
+/**
+ * Shape produced by the recurring K-Electric importer before it started
+ * recording the explicit rate/net fields. Its item totals are tax-inclusive,
+ * and its per-line tax already proves the rate that was charged.
+ */
+const taxedLegacySnapshot = {
+  subtotal: 10_135.59,
+  tax: 1_824.41,
+  discount: 0,
+  deliveryCharges: 0,
+  totalAmount: 11_960,
+  items: [{
+    categoryName: "General",
+    items: [
+      { description: "Lipton Yellow Label Pouch (1600 GM)", quantity: 1, rate: 3_650, total: 3_650, tax: 556.78 },
+      { description: "Nescafe Classic Coffee (100 GM)", quantity: 1, rate: 2_100, total: 2_100, tax: 320.34 },
+      { description: "Nestle Everyday (2 KG)", quantity: 1, rate: 3_850, total: 3_850, tax: 587.29 },
+      { description: "Olper Milk (1 Litre)", quantity: 5, rate: 355, total: 1_775, tax: 270.76 },
+      { description: "Sugar", quantity: 1, rate: 195, total: 195, tax: 29.75 },
+      { description: "Zeera Plus Biscuits Snack Pack (Lu)", quantity: 1, rate: 390, total: 390, tax: 59.49 },
+    ],
+  }],
+}
+
 describe("invoice lines", () => {
   it("flattens the category nesting into one numbered list", () => {
     const lines = buildInvoiceLines(currentSnapshot)
@@ -135,6 +159,44 @@ describe("invoices issued before tax was recorded", () => {
     expect(totals.taxAmount).toBe(0)
     expect(totals.total).toBe(5_000)
     expect(totals.rounding).toBe(0)
+  })
+})
+
+describe("taxed legacy invoices without explicit rate fields", () => {
+  it("derives the recorded 18% rate and net figures from an inclusive breakdown", () => {
+    const lines = buildInvoiceLines(taxedLegacySnapshot)
+
+    expect(lines[0]).toMatchObject({
+      rate: 3_093.22,
+      amount: 3_093.22,
+      tax: 556.78,
+      taxPercent: 18,
+    })
+    expect(lines[3].rate).toBeCloseTo(300.848)
+    expect(lines.every((line) => line.taxPercent === 18)).toBe(true)
+    expect(getInvoiceTaxLabel(lines)).toBe("Standard Rate (18%)")
+  })
+
+  it("also derives a rate when legacy item totals are tax-exclusive", () => {
+    const lines = buildInvoiceLines({
+      subtotal: 100,
+      tax: 18,
+      totalAmount: 118,
+      items: [{ items: [{ description: "A", quantity: 1, rate: 100, total: 100, tax: 18 }] }],
+    })
+
+    expect(lines[0]).toMatchObject({ rate: 100, amount: 100, tax: 18, taxPercent: 18 })
+  })
+
+  it("does not infer a line rate from order-level tax alone", () => {
+    const [line] = buildInvoiceLines({
+      subtotal: 100,
+      tax: 18,
+      totalAmount: 118,
+      items: [{ items: [{ description: "A", quantity: 1, rate: 100, total: 100 }] }],
+    })
+
+    expect(line.taxPercent).toBeNull()
   })
 })
 

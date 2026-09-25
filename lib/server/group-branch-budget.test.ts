@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { describe, expect, it } from "vitest"
 
+import { budgetPeriodOf } from "@/lib/budget-consumption"
 import {
   budgetRemainingRatio,
   summarizeBranchBudget,
@@ -137,10 +138,17 @@ describe("group portal budget endpoint", () => {
 
   it("bills against the same period the ordering engine does", () => {
     // Not the Asia/Karachi analytics month: the figure shown has to be the one
-    // the next order is checked against.
-    expect(loader).toContain('return now.toISOString().slice(0, 7)')
+    // the next order is checked against. Both sites now name that month through
+    // the one definition in `lib/budget-consumption.ts` rather than slicing
+    // their own ISO string, which is what keeps them equal — see
+    // `plans/OF-BUDGET-ledger-orders-parity.md`.
+    expect(loader).toContain('return budgetPeriodOf(now)')
     expect(source("lib/server/group-order-creation.ts"))
-      .toContain('const period = new Date().toISOString().slice(0, 7)')
+      .toContain('const period = budgetPeriodOf(new Date())')
+    // And that definition is still the UTC month, not the Karachi one.
+    expect(source("lib/budget-consumption.ts"))
+      .toContain('return usable.toISOString().slice(0, 7)')
+    expect(budgetPeriodOf(new Date("2026-09-30T21:00:00.000Z"))).toBe("2026-09")
   })
 
   it("leaves the other roles' budget surfaces untouched", () => {

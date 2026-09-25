@@ -19,6 +19,8 @@ let selectedUnit: string | null = null
 let emptyRows = false
 /** When set, every comparison is still in flight and has no answer yet. */
 let panelsLoading = false
+/** When set, the requester option list is still in flight and has no answer yet. */
+let optionsPending = false
 
 vi.mock("@/lib/hooks/use-api", () => ({
   useAPI: (url: string | null) => {
@@ -28,14 +30,19 @@ vi.mock("@/lib/hooks/use-api", () => ({
       return { data: { items: [{ id: 7, name: "North Zone", groupId: 4, groupName: "Distribution" }] }, isLoading: false }
     }
     if (url.includes("/options?")) {
-      return {
-        data: {
-          options: url.includes("dimension=product")
-            ? [{ key: "186", label: "A4 Paper" }, { key: "187", label: "Toner" }, { key: "188", label: "Diesel" }]
-            : [{ key: "u1", label: "Ahmed" }, { key: "u2", label: "Sana" }],
-        },
-        isLoading: false,
+      if (url.includes("dimension=product")) {
+        return {
+          data: {
+            options: [{ key: "186", label: "A4 Paper" }, { key: "187", label: "Toner" }, { key: "188", label: "Diesel" }],
+          },
+          isLoading: false,
+        }
       }
+      // As the server answers it: the people who ordered at the branches in
+      // scope, so changing the branch changes who may be compared at all.
+      if (optionsPending) return { data: undefined, isLoading: true }
+      const branchIds = new URL(`http://x${url}`).searchParams.get("branchIds")
+      return { data: { options: REQUESTERS_BY_BRANCH[branchIds ?? "7"] ?? [] }, isLoading: false }
     }
     if (url.includes("/drill-down?")) {
       return {
@@ -55,6 +62,12 @@ vi.mock("@/lib/hooks/use-api", () => ({
     return { data: comparisonResponse(url), isLoading: false }
   },
 }))
+
+/** Who the options endpoint lists per branch. Sana ordered at both; Ahmed only at 7. */
+const REQUESTERS_BY_BRANCH: Record<string, Array<{ key: string; label: string }>> = {
+  "7": [{ key: "u1", label: "Ahmed" }, { key: "u2", label: "Sana" }],
+  "9": [{ key: "u2", label: "Sana" }, { key: "u3", label: "Bilal" }],
+}
 
 /** The canned answer to the one `/matrix` request, shaped by the same flags. */
 function matrixResponse(url: string) {
@@ -235,6 +248,7 @@ beforeEach(() => {
   selectedUnit = null
   emptyRows = false
   panelsLoading = false
+  optionsPending = false
   writeFile.mockClear()
   scrollIntoView.mockClear()
   window.HTMLElement.prototype.scrollIntoView = scrollIntoView
@@ -303,10 +317,55 @@ describe("what the screen asks for", () => {
 
     // The product picker follows the requester selection; the requester picker never narrows itself.
     const options = requested.filter((url) => url.includes("/options?"))
-    expect(options.at(-2)).toContain("dimension=product")
-    expect(options.at(-2)).toContain("userIds=u2")
-    expect(options.at(-1)).toContain("dimension=user")
-    expect(options.at(-1)).not.toContain("userIds=")
+    const productOptions = options.filter((url) => url.includes("dimension=product")).at(-1)
+    const userOptions = options.filter((url) => url.includes("dimension=user")).at(-1)
+    expect(productOptions).toContain("userIds=u2")
+    expect(userOptions).not.toContain("userIds=")
+  })
+
+  it("drops a compared requester the newly selected branch does not list, and keeps the rest", () => {
+    const { rerender } = render(<SideBySideWorkspace filters={filters()} />)
+    compareAhmedAndSana()
+    expect(panelRequests().get("user:column")?.get("userIds")).toBe("u1,u2")
+
+    // Branch 9 lists Sana and Bilal; Ahmed ordered nothing there, so comparing
+    // him would narrow all seven panels to a person with no rows in scope.
+    requested.length = 0
+    rerender(<SideBySideWorkspace filters={{ ...filters(), branchIds: ["9"] }} />)
+
+    const panels = panelRequests()
+    expect(panels.size).toBe(7)
+    for (const params of panels.values()) {
+      expect(params.get("branchIds")).toBe("9")
+      expect(params.get("userIds")).toBe("u2")
+    }
+    // One person left, so the trigger names them rather than counting.
+    fireEvent.keyDown(document.body, { key: "Escape" })
+    expect(screen.getByRole("button", { name: /Sana/ })).toBeTruthy()
+  })
+
+  it("keeps the whole comparison when every compared requester orders at the new branch too", () => {
+    const { rerender } = render(<SideBySideWorkspace filters={filters()} />)
+    const list = openPicker(/All requesters/)
+    fireEvent.click(within(list).getByText("Sana"))
+
+    requested.length = 0
+    rerender(<SideBySideWorkspace filters={{ ...filters(), branchIds: ["9"] }} />)
+
+    for (const params of panelRequests().values()) expect(params.get("userIds")).toBe("u2")
+  })
+
+  it("leaves the comparison alone while the new requester list is still in flight", () => {
+    const { rerender } = render(<SideBySideWorkspace filters={filters()} />)
+    compareAhmedAndSana()
+
+    // No answer yet for the new branch: dropping against an empty list would
+    // silently discard a selection the reader made a moment ago.
+    optionsPending = true
+    requested.length = 0
+    rerender(<SideBySideWorkspace filters={{ ...filters(), branchIds: ["9"] }} />)
+
+    for (const params of panelRequests().values()) expect(params.get("userIds")).toBe("u1,u2")
   })
 
   it("turns the product panel into the requester × product grid once two people are compared", () => {

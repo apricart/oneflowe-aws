@@ -11,13 +11,14 @@ import {
   MONTH_KEY_PATTERN,
   buildWatchlist,
   clampWatchlistLimit,
-  consumedCents,
   creatorKey,
   currentAppMonth,
   isBudgetBurnRole,
   isMonthWindowError,
   monthWindows,
+  patternByCreator,
   summarizeCreators,
+  unionCreators,
 } from "@/lib/budget-burn-risk"
 import { handleError } from "@/lib/error-handler"
 import { withRateLimit } from "@/lib/rate-limiter"
@@ -26,27 +27,30 @@ import { loadBranchBudgets } from "@/lib/server/executive-analytics-queries"
 import { loadScopedBranches, resolveExecutiveScope } from "@/lib/server/executive-analytics-scope"
 
 /**
- * "Users to review": requesters whose consumption of a shared branch budget
- * looks unusual this month, ranked by a documented score.
+ * "Users to review": each requester's consumption in the
+ * `BUDGET_BURN_PATTERN_MONTHS` months ending with the selected one, with the
+ * newest month highlighted where it is at least `momSpikePct` above the one
+ * before it.
  *
  * Read-only, and presentation only — nothing is approved, blocked or charged
- * differently because a person appears here. The list names employees, so it
- * is narrower than the rest of the Center: `resolveExecutiveScope` decides
- * which rows exist for the caller exactly as it does for every executive
- * route, and `isBudgetBurnRole` then admits only the two tenant-wide
- * administrative roles. Scope parameters (`organizationId`, `branchIds`,
- * `groupIds`) can only ever narrow; the month and the row limit are the only
- * inputs of this route's own, and both are validated and bounded.
+ * differently because a person appears here or is highlighted. The list names
+ * employees, so it is narrower than the rest of the Center:
+ * `resolveExecutiveScope` decides which rows exist for the caller exactly as
+ * it does for every executive route, and `isBudgetBurnRole` then admits only
+ * the two tenant-wide administrative roles. Scope parameters
+ * (`organizationId`, `branchIds`, `groupIds`) can only ever narrow; the month
+ * and the row limit are the only inputs of this route's own, and both are
+ * validated and bounded.
  *
  * Every creator's orders count toward a branch's consumption; only requesters
- * (`ORDER_CREATOR_ROLES`) are listed. Spend is the Center's Procurement Value
- * — exactly what the drill-down lists — and Pending is reported beside it
- * rather than folded in, so a click on a row reconciles with the figure that
- * was clicked. The growth figure is the one exception to "this month": it
- * spans `BUDGET_BURN_TREND_MONTHS` months against the same number before
- * them, so the response carries both ranges for the panel to print. See
- * `plans/OF-BUDGET-BURN-watchlist.md` and
- * `plans/OF-BUDGET-BURN-three-month-trend.md`.
+ * (`ORDER_CREATOR_ROLES`) are listed, and they are listed if they consumed in
+ * *any* month of the pattern, not only the selected one — dropping the person
+ * who spent heavily last month and nothing this month would hide the most
+ * telling shape the panel exists to show. Spend is the Center's Procurement
+ * Value — exactly what the drill-down lists — and Pending is carried beside
+ * it in every month cell, so a click on a cell reconciles with the figure
+ * that was clicked. See `plans/OF-BUDGET-BURN-watchlist.md` and
+ * `plans/OF-BUDGET-BURN-three-month-pattern-mom-flag.md`.
  */
 
 const querySchema = z.object({
@@ -86,35 +90,46 @@ export async function GET(req: NextRequest) {
     }
     const limit = clampWatchlistLimit(parsedQuery.data.limit)
 
-    // Three aggregates, not two: the month feeds Spend, Share and the late
-    // window, and neither side of the growth comparison can be derived from
-    // it — the trend windows span months the month window does not cover.
-    const [currentRows, trendRows, priorTrendRows, budgetRows, branchList] = await Promise.all([
-      loadCreatorMonth(scope, windows.current, windows.recent.start),
-      loadCreatorMonth(scope, windows.trend.current, null),
-      loadCreatorMonth(scope, windows.trend.prior, null),
+    // One aggregate per month of the pattern, oldest first. The newest bucket
+    // covers exactly the selected month, so it also feeds Spend, Share, the
+    // late window and the branch denominators — no month is read twice.
+    const lastBucket = windows.pattern.length - 1
+    const [patternRows, budgetRows, branchList] = await Promise.all([
+      Promise.all(windows.pattern.map((bucket, index) => loadCreatorMonth(
+        scope,
+        bucket,
+        index === lastBucket ? windows.recent.start : null,
+      ))),
       loadBranchBudgets(scope, budgetFiltersFor(windows.current)),
       loadScopedBranches(scope),
     ])
+    const currentRows = patternRows[lastBucket] ?? []
 
     const budgetByBranch = new Map(budgetRows.map((row) => [
       row.branchId,
       { totalBudgetCents: row.totalBudgetCents, remainingCents: row.remainingCents },
     ]))
-    const { requesters, branches } = summarizeCreators(currentRows, budgetByBranch)
-    const trendConsumedByKey = new Map(trendRows.map((row) => [creatorKey(row), consumedCents(row)]))
-    const priorTrendConsumedByKey = new Map(priorTrendRows.map((row) => [creatorKey(row), consumedCents(row)]))
+    // Denominators stay on the selected month — Share, peers and high-held are
+    // all about the pot as it stands now — while the listed set is the union
+    // across every month of the pattern, carrying the selected month's figures.
+    const { branches } = summarizeCreators(currentRows, budgetByBranch)
+    const everyCreator = unionCreators(patternRows)
+    const { requesters } = summarizeCreators(everyCreator)
+    const patternMonths = windows.pattern.map((bucket) => bucket.month)
+    const monthsByKey = patternByCreator(patternMonths, patternRows)
 
     const watchlist = buildWatchlist({
       requesters,
       branches,
-      trendConsumedByKey,
-      priorTrendConsumedByKey,
+      patternMonths,
+      monthsByKey,
       elapsedDays: windows.current.elapsedDays,
       limit,
     })
 
-    const identity = new Map(currentRows.map((row) => [creatorKey(row), row]))
+    // `unionCreators` resolves newest-first, so a person absent from the
+    // selected month is still named from the most recent month holding them.
+    const identity = new Map(everyCreator.map((row) => [creatorKey(row), row]))
     const branchName = new Map(branchList.map((branch) => [branch.id, branch.name]))
 
     return NextResponse.json({
@@ -132,21 +147,12 @@ export async function GET(req: NextRequest) {
           elapsedDays: windows.current.elapsedDays,
           daysInMonth: windows.current.daysInMonth,
         },
-        trend: {
-          months: windows.trend.months,
-          current: {
-            startMonth: windows.trend.current.startMonth,
-            endMonth: windows.trend.current.endMonth,
-            startDate: windows.trend.current.start.toISOString(),
-            endDate: windows.trend.current.end.toISOString(),
-          },
-          prior: {
-            startMonth: windows.trend.prior.startMonth,
-            endMonth: windows.trend.prior.endMonth,
-            startDate: windows.trend.prior.start.toISOString(),
-            endDate: windows.trend.prior.end.toISOString(),
-          },
-        },
+        pattern: windows.pattern.map((bucket) => ({
+          month: bucket.month,
+          startDate: bucket.start.toISOString(),
+          endDate: bucket.end.toISOString(),
+          complete: bucket.complete,
+        })),
         recent: {
           startDate: windows.recent.start.toISOString(),
           endDate: windows.recent.end.toISOString(),
@@ -178,10 +184,14 @@ export async function GET(req: NextRequest) {
           remainingCents: branch.remainingCents,
         }))
         .sort((left, right) => right.consumedCents - left.consumedCents),
-      flaggedCount: watchlist.flaggedCount,
-      unflaggedCount: watchlist.unflaggedCount,
+      /** Requesters whose newest month is at least `momSpikePct` above the one before it. */
+      highlightedCount: watchlist.highlightedCount,
+      /** How many the retired multi-signal score would have listed; nothing on the panel uses it. */
+      scoreFlaggedCount: watchlist.scoreFlaggedCount,
+      /** Every requester in scope across the pattern, of which `rows` is the top `limit`. */
+      requesterCount: watchlist.requesterCount,
       limit,
-      truncated: [currentRows, trendRows, priorTrendRows].some((rows) => rows.length >= BUDGET_BURN_QUERY_ROW_CAP),
+      truncated: patternRows.some((rows) => rows.length >= BUDGET_BURN_QUERY_ROW_CAP),
       thresholds: BUDGET_BURN_THRESHOLDS,
       points: BUDGET_BURN_POINTS,
       reasonLabels: BUDGET_BURN_REASON_LABELS,

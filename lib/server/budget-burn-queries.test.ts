@@ -59,7 +59,8 @@ describe("the route", () => {
     const rateLimit = route.indexOf('withRateLimit("search"')
     const scope = route.indexOf("resolveExecutiveScope(session, url.searchParams)")
     const role = route.indexOf("isBudgetBurnRole(scope.role)")
-    const read = route.indexOf("loadCreatorMonth(scope")
+    // The call site, not the import — the import carries no parenthesis.
+    const read = route.indexOf("loadCreatorMonth(")
     expect(rateLimit).toBeGreaterThan(-1)
     expect(scope).toBeGreaterThan(rateLimit)
     expect(role).toBeGreaterThan(scope)
@@ -70,6 +71,26 @@ describe("the route", () => {
     expect(route).toContain("querySchema.safeParse(")
     expect(route).toContain("clampWatchlistLimit(")
     expect(route).toContain("monthWindows(month, now)")
+  })
+
+  it("reads one aggregate per pattern month, and reads the selected month once", () => {
+    // Every month the panel draws is its own bounded aggregate, and the newest
+    // bucket *is* the month window — reading `windows.current` separately
+    // would double the largest query on the page for nothing.
+    expect(route).toContain("windows.pattern.map((bucket, index) => loadCreatorMonth(")
+    expect(route).not.toContain("loadCreatorMonth(scope, windows.current")
+    // Only the newest bucket needs the late window; the others must not pay for it.
+    expect(route).toContain("index === lastBucket ? windows.recent.start : null")
+  })
+
+  it("lists everyone seen in any pattern month, while the denominators stay on the selected one", () => {
+    // A requester who consumed last month and nothing this month is the shape
+    // the panel exists to show; keying the list off the selected month alone
+    // would silently drop them. Share and the peer figures are the opposite
+    // case — they are about the pot as it stands now.
+    expect(route).toContain("unionCreators(patternRows)")
+    expect(route).toContain("summarizeCreators(currentRows, budgetByBranch)")
+    expect(route).toContain("summarizeCreators(everyCreator)")
   })
 
   it("never reads a branch, tenant or user id from the request itself", () => {

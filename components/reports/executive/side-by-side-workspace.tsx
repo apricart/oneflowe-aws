@@ -19,6 +19,7 @@ import {
   type MeasureId,
   type SideBySidePanel,
 } from "@/lib/executive-analytics"
+import { retainAvailable } from "@/lib/executive-entity-selection"
 import { isPanelSnapshotReady, type SideBySidePanelSnapshot } from "@/lib/executive-side-by-side-export"
 import { ChartCard } from "./chart-kit"
 import {
@@ -100,7 +101,11 @@ const SERIES_PANEL_ROWS = 6
 export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFilterState }>) {
   const [measure, setMeasure] = React.useState<MeasureId>("amount")
   const [focusProducts, setFocusProducts] = React.useState<string[]>([])
-  const [compareUsers, setCompareUsers] = React.useState<string[]>([])
+  /**
+   * The requesters ticked in the picker, before the current option list has had
+   * its say. Everything downstream reads `compareUsers` below, never this.
+   */
+  const [pickedUsers, setPickedUsers] = React.useState<string[]>([])
   const [drillTarget, setDrillTarget] = React.useState<DrillTarget | null>(null)
   /**
    * Panels the reader has widened to the full row.
@@ -149,6 +154,57 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
   }, [])
   const readSnapshots = React.useCallback(() => ({ ...snapshotsRef.current }), [])
 
+  // Both pickers list only what is inside the caller's fence, and neither
+  // narrows itself — a list that hid everything already picked could never be
+  // changed.
+  //
+  // The requester list is resolved first because the requester selection is
+  // read back through it, and the product list is asked for under that
+  // selection.
+  const { data: userData, isLoading: usersLoading } = useAPI<{ options: EntityOption[] }>(
+    `/api/v1/analytics/executive/options?${toQuery(
+      { ...filters, productIds: focusProducts },
+      { dimension: "user" },
+    )}`,
+  )
+
+  const userOptions = userData?.options ?? []
+
+  /**
+   * The requesters actually being compared: the ticked ones the current list
+   * still offers.
+   *
+   * Selecting a branch re-asks the options endpoint, which answers with the
+   * people who ordered *there*. Someone ticked at the branch before it would
+   * otherwise stay ticked and narrow all seven panels to a person with nothing
+   * in scope — seven empty charts under a trigger naming a list that no longer
+   * contains them. The rule is pure and lives in `lib/executive-entity-selection.ts`.
+   *
+   * Only once an answer is in hand: while the request is in flight, or after it
+   * failed, `userData` is absent and the selection is left exactly as picked
+   * rather than dropped against an empty list.
+   */
+  const compareUsers = userData ? retainAvailable(pickedUsers, userOptions) : pickedUsers
+
+  /*
+   * A drop is written back to the picker's own state, so the narrowing is what
+   * the reader ticked from here on and returning to the earlier branch does not
+   * quietly bring the old comparison back. `retainAvailable` hands back the
+   * same array when nothing was dropped, so this settles in one pass.
+   */
+  React.useEffect(() => {
+    if (compareUsers !== pickedUsers) setPickedUsers(compareUsers)
+  }, [compareUsers, pickedUsers])
+
+  const { data: productData, isLoading: productsLoading } = useAPI<{ options: EntityOption[] }>(
+    `/api/v1/analytics/executive/options?${toQuery(
+      { ...filters, userIds: compareUsers },
+      { dimension: "product" },
+    )}`,
+  )
+
+  const productOptions = productData?.options ?? []
+
   /**
    * The filter set every panel shares.
    *
@@ -160,25 +216,6 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
     () => ({ ...filters, productIds: focusProducts, userIds: compareUsers }),
     [filters, focusProducts, compareUsers],
   )
-
-  // Both pickers list only what is inside the caller's fence, and neither
-  // narrows itself — a list that hid everything already picked could never be
-  // changed.
-  const { data: productData, isLoading: productsLoading } = useAPI<{ options: EntityOption[] }>(
-    `/api/v1/analytics/executive/options?${toQuery(
-      { ...filters, userIds: compareUsers },
-      { dimension: "product" },
-    )}`,
-  )
-  const { data: userData, isLoading: usersLoading } = useAPI<{ options: EntityOption[] }>(
-    `/api/v1/analytics/executive/options?${toQuery(
-      { ...filters, productIds: focusProducts },
-      { dimension: "user" },
-    )}`,
-  )
-
-  const productOptions = productData?.options ?? []
-  const userOptions = userData?.options ?? []
   const panels = panelsForFocus(focusProducts.length)
   const filterNames = useFilterNames(filters)
 
@@ -232,7 +269,7 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
             noun="people"
             options={userOptions}
             selected={compareUsers}
-            onChange={setCompareUsers}
+            onChange={setPickedUsers}
             loading={usersLoading}
             emptyLabel="All requesters (top ranked)"
             className="w-[260px]"
@@ -247,7 +284,7 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
         {focusProducts.length > 0 || compareUsers.length > 0 ? (
           <button
             type="button"
-            onClick={() => { setFocusProducts([]); setCompareUsers([]); setDrillTarget(null) }}
+            onClick={() => { setFocusProducts([]); setPickedUsers([]); setDrillTarget(null) }}
             className="flex items-center gap-1 rounded-lg px-2 py-2 text-[11px] font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800"
           >
             <X className="h-3 w-3" aria-hidden />
@@ -497,6 +534,8 @@ function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggle
         concentrationEligible={Boolean(data?.concentrationEligible)}
         budgetBeside={Boolean(data?.budgetBeside)}
         colorful={panel.colorful}
+        dualValueLabels={panel.dualValueLabels}
+        fullWidth={fullWidth}
         dimension={panel.dimension}
         onDrillDown={onDrillDown}
       />

@@ -22,12 +22,14 @@ import { isOrderCreatorRole } from "@/lib/group-order-visibility"
  *   Consumed     Spend + Pending — the budget ledger's own "spent + held".
  *   Share        a requester's Consumed over the branch's Consumed by *every*
  *                creator, because that is what the shared pot actually lost.
- *   Trend        Consumed over the three months ending with the selected
- *                month, against the three months before those. The only
- *                figure on the panel that is not about the selected month
- *                alone: one month is too short a baseline for a requester who
- *                orders quarterly, who otherwise reads as a spike in the
- *                month they order and a collapse in the two either side.
+ *   Pattern      Consumed in each of the `BUDGET_BURN_PATTERN_MONTHS` months
+ *                ending with the selected one, newest last. Shown in full so
+ *                the reader sees the shape rather than a single derived
+ *                number, and so the one comparison that *is* derived can be
+ *                checked against the cells beside it.
+ *   MoM          the growth of the newest of those months over the one before
+ *                it. This is the only figure that decides a highlight, and it
+ *                is a ratio of two cells that are both on the row.
  *   Peers        **branches, not colleagues.** A branch's own budget
  *                utilization (Consumed over its total budget) compared
  *                against the *median* utilization of the other branches in
@@ -75,16 +77,17 @@ export const BUDGET_BURN_THRESHOLDS = {
   highShareMinBranchCents: 2_000_000,
   /** A share needs at least this many active requesters at the branch to mean anything. */
   highShareMinRequesters: 2,
-  /** Growth of the last three months over the three before them at or above which a requester "spiked". */
-  trendSpikePct: 15,
   /**
-   * Prior three months' consumption below this is too small a baseline: ₨5,000.
-   * Deliberately left at the figure it held when the comparison was one month
-   * against one month, because only the time range was asked to change — so
-   * it is now a third of the bar it used to be, and the point is awarded more
-   * often. Raise it here if the old strictness is wanted back.
+   * Growth of the selected month over the one before it at or above which the
+   * row is highlighted. The only threshold the panel's red state depends on.
    */
-  trendMinBaselineCents: 500_000,
+  momSpikePct: 15,
+  /**
+   * A previous month below this is too small a baseline to read a spike from:
+   * ₨5,000. One month against one month is the comparison this figure was
+   * originally set for, so it is exactly as strict as it was designed to be.
+   */
+  momMinBaselineCents: 500_000,
   /** At or above this far past the peer branch median a branch is "above peers". */
   abovePeersPct: 50,
   /** Fewer other branches with a computable budget utilization than this and there is no peer figure. */
@@ -103,7 +106,12 @@ export const BUDGET_BURN_THRESHOLDS = {
   highHeldFloorCents: 2_500_000,
   /** Orders REJECTED by an approver this month at or above which the chip shows. */
   rejectedOrdersMin: 3,
-  /** Score at or above which a requester is listed. */
+  /**
+   * Score at or above which the retired multi-signal rule would have listed a
+   * requester. The panel no longer lists by score — it lists every requester
+   * and highlights on `momSpikePct` — but the score is still computed and
+   * reported so the signals behind it stay available and testable.
+   */
   flagScore: 4,
 } as const
 
@@ -111,7 +119,7 @@ export type BudgetBurnThresholds = typeof BUDGET_BURN_THRESHOLDS
 
 export const BUDGET_BURN_POINTS = {
   high_share: 3,
-  trend_spike: 2,
+  mom_spike: 2,
   above_peers: 2,
   late_surge: 2,
   high_held: 1,
@@ -125,7 +133,7 @@ export const BUDGET_BURN_REASONS = Object.keys(BUDGET_BURN_POINTS) as BudgetBurn
 
 export const BUDGET_BURN_REASON_LABELS: Record<BudgetBurnReason, string> = {
   high_share: "High share",
-  trend_spike: "+3M",
+  mom_spike: "+MoM",
   above_peers: "Above peers",
   late_surge: "Late surge",
   high_held: "High held",
@@ -139,12 +147,12 @@ export const BUDGET_BURN_MAX_ROWS = 100
 /** How far back a month may be asked for. */
 export const BUDGET_BURN_MAX_MONTHS_BACK = 24
 /**
- * Whole months on each side of the growth comparison. The prior side may
- * therefore read rows up to `2 * this - 1` months before the selected month;
- * that is a read of older orders and nothing more, so `BUDGET_BURN_MAX_MONTHS_BACK`
+ * How many consecutive months the panel shows, ending with the selected one.
+ * The oldest is therefore `this - 1` months before the selection; that is a
+ * read of older orders and nothing more, so `BUDGET_BURN_MAX_MONTHS_BACK`
  * still bounds only the month the caller may select.
  */
-export const BUDGET_BURN_TREND_MONTHS = 3
+export const BUDGET_BURN_PATTERN_MONTHS = 3
 /** Safety cap on aggregate rows read from the database; never a page. */
 export const BUDGET_BURN_QUERY_ROW_CAP = 2000
 
@@ -221,14 +229,14 @@ export function monthsBetween(earlier: string, later: string): number {
   return (b.year - a.year) * 12 + (b.month - a.month)
 }
 
-/** One side of the growth comparison: a run of whole months, named and bounded. */
-export type TrendWindow = {
-  /** First month of the window, `YYYY-MM`. */
-  startMonth: string
-  /** Last month of the window, `YYYY-MM`. */
-  endMonth: string
+/** One month of the pattern, bounded to the elapsed day when the selection is open. */
+export type PatternBucket = {
+  /** The calendar month this bucket covers, `YYYY-MM`. */
+  month: string
   start: Date
   end: Date
+  /** False only where the bucket was cut short — the selected month while it is still open. */
+  complete: boolean
 }
 
 export type MonthWindows = {
@@ -243,11 +251,11 @@ export type MonthWindows = {
     daysInMonth: number
   }
   /**
-   * The growth comparison, and the only part of the watchlist that reaches
-   * outside the selected month: the `BUDGET_BURN_TREND_MONTHS` months ending
-   * with it, against the same number of months before those.
+   * The `BUDGET_BURN_PATTERN_MONTHS` months the panel shows, oldest first. The
+   * last is always the selected month and covers exactly the same instants as
+   * `current`, so one read serves both.
    */
-  trend: { months: number; current: TrendWindow; prior: TrendWindow }
+  pattern: PatternBucket[]
   /** The last `lateSurgeDays` of the current window, never before the month began. */
   recent: { start: Date; end: Date }
 }
@@ -261,11 +269,11 @@ export type MonthWindowError = { ok: false; error: string }
  * the selection — is the wrong comparison here: for 1–20 September it yields
  * 12–31 August, setting the prior month's end-of-month rush against a quiet
  * month start. The watchlist compares like with like, and the same rule
- * governs both the month window every other figure uses and the trend windows
- * the growth figure uses: to the same elapsed day on both sides (clamped when
- * the older month is shorter), or whole months on both sides once the
- * selected month is over. The older side runs to the *end* of that day, so
- * each pair is always a whole number of days.
+ * governs the month window every other figure uses and every bucket of the
+ * pattern: to the same elapsed day in each month (clamped where a month is
+ * shorter), or whole months throughout once the selected month is over. An
+ * older bucket runs to the *end* of that day, so every pair of buckets covers
+ * the same whole number of days.
  */
 export function monthWindows(
   month: string,
@@ -289,17 +297,23 @@ export function monthWindows(
   const elapsedDays = complete ? days : appDateParts(now).day
   const currentEnd = complete ? monthEnd : now
 
-  const span = BUDGET_BURN_TREND_MONTHS
-  // The current run ends where the month window ends — now, or the last
-  // instant of the month — so the newest side never reaches into the future.
-  const trendStart = shiftMonth(year, monthNumber, -(span - 1))
-  // The older run is the same shape shifted a whole span back, so the two
-  // never overlap and the pair reads as "the last N months against the N
-  // before them".
-  const priorTrendStart = shiftMonth(year, monthNumber, -(2 * span - 1))
-  const priorTrendEnd = shiftMonth(year, monthNumber, -span)
-  const priorTrendEndDays = daysInMonth(priorTrendEnd.year, priorTrendEnd.month)
-  const priorTrendEndDay = complete ? priorTrendEndDays : Math.min(elapsedDays, priorTrendEndDays)
+  const span = BUDGET_BURN_PATTERN_MONTHS
+  // Oldest first, ending with the selected month. An older bucket is cut on
+  // the same elapsed day as the selection so the columns are comparable; the
+  // newest never reaches past `now`.
+  const pattern: PatternBucket[] = []
+  for (let back = span - 1; back >= 1; back -= 1) {
+    const older = shiftMonth(year, monthNumber, -back)
+    const olderDays = daysInMonth(older.year, older.month)
+    const lastDay = complete ? olderDays : Math.min(elapsedDays, olderDays)
+    pattern.push({
+      month: monthKeyOf(older.year, older.month),
+      start: startOfAppDay(older.year, older.month, 1),
+      end: endOfAppDay(older.year, older.month, lastDay),
+      complete: complete || lastDay === olderDays,
+    })
+  }
+  pattern.push({ month, start: monthStart, end: currentEnd, complete })
 
   const recentStart = new Date(Math.max(
     monthStart.getTime(),
@@ -309,21 +323,7 @@ export function monthWindows(
   return {
     month,
     current: { start: monthStart, end: currentEnd, complete, elapsedDays, daysInMonth: days },
-    trend: {
-      months: span,
-      current: {
-        startMonth: monthKeyOf(trendStart.year, trendStart.month),
-        endMonth: month,
-        start: startOfAppDay(trendStart.year, trendStart.month, 1),
-        end: currentEnd,
-      },
-      prior: {
-        startMonth: monthKeyOf(priorTrendStart.year, priorTrendStart.month),
-        endMonth: monthKeyOf(priorTrendEnd.year, priorTrendEnd.month),
-        start: startOfAppDay(priorTrendStart.year, priorTrendStart.month, 1),
-        end: endOfAppDay(priorTrendEnd.year, priorTrendEnd.month, priorTrendEndDay),
-      },
-    },
+    pattern,
     recent: { start: recentStart, end: currentEnd },
   }
 }
@@ -370,6 +370,83 @@ export type BranchMonth = {
 
 export function consumedCents(row: Pick<CreatorMonth, "spendCents" | "pendingCents">): number {
   return Math.max(0, row.spendCents) + Math.max(0, row.pendingCents)
+}
+
+/** One requester's consumption in one month of the pattern. Money in integer cents. */
+export type MonthConsumption = {
+  month: string
+  spendCents: number
+  pendingCents: number
+  /** `spendCents + pendingCents` — carried rather than derived, so the client cannot disagree. */
+  consumedCents: number
+}
+
+/** A month with nothing in it, so an absent bucket reads as zero and never as missing. */
+export function emptyMonthConsumption(month: string): MonthConsumption {
+  return { month, spendCents: 0, pendingCents: 0, consumedCents: 0 }
+}
+
+export function monthConsumptionOf(month: string, row: Pick<CreatorMonth, "spendCents" | "pendingCents">): MonthConsumption {
+  return {
+    month,
+    spendCents: Math.max(0, row.spendCents),
+    pendingCents: Math.max(0, row.pendingCents),
+    consumedCents: consumedCents(row),
+  }
+}
+
+/**
+ * Every creator seen in any month of the pattern, as one row per
+ * `userId:branchId` carrying the **selected month's** figures.
+ *
+ * The listed set is the union rather than the selected month alone, because a
+ * panel whose purpose is a three-month shape must not silently drop the person
+ * who spent heavily last month and nothing this month — the most interesting
+ * shape there is. Where the newest bucket has no row for a creator, their
+ * month figures are zero and their identity comes from the newest bucket that
+ * does have them, so a name is never invented and never stale.
+ *
+ * Buckets are oldest first; `branches`, `Share` and every other selected-month
+ * figure keep reading the newest bucket alone through `summarizeCreators`.
+ */
+export function unionCreators<T extends CreatorMonth>(buckets: readonly (readonly T[])[]): T[] {
+  const byKey = new Map<string, T>()
+  // Newest first, so the first row found for a key is the freshest identity
+  // and, where it exists, the selected month's own figures.
+  for (let index = buckets.length - 1; index >= 0; index -= 1) {
+    for (const row of buckets[index] ?? []) {
+      const key = creatorKey(row)
+      if (byKey.has(key)) continue
+      byKey.set(key, index === buckets.length - 1
+        ? row
+        : { ...row, spendCents: 0, pendingCents: 0, orderCount: 0, pendingOrderCount: 0, rejectedOrderCount: 0, recentConsumedCents: 0 })
+    }
+  }
+  return Array.from(byKey.values())
+}
+
+/**
+ * The pattern each creator is drawn with: one entry per bucket, oldest first,
+ * zero-filled so every row has the same number of columns whatever months the
+ * person actually ordered in.
+ */
+export function patternByCreator(
+  months: readonly string[],
+  buckets: readonly (readonly CreatorMonth[])[],
+): Map<string, MonthConsumption[]> {
+  const byKey = new Map<string, MonthConsumption[]>()
+  const blank = () => months.map(emptyMonthConsumption)
+  buckets.forEach((rows, index) => {
+    const month = months[index]
+    if (month === undefined) return
+    for (const row of rows ?? []) {
+      const key = creatorKey(row)
+      const entry = byKey.get(key) ?? blank()
+      entry[index] = monthConsumptionOf(month, row)
+      byKey.set(key, entry)
+    }
+  })
+  return byKey
 }
 
 /** A branch's own consumption as a share of its budget, or null with no budget to divide by. */
@@ -440,15 +517,20 @@ export type WatchlistMetrics = {
   consumedCents: number
   shareOfBranchPct: number
   /**
-   * Growth of the last `BUDGET_BURN_TREND_MONTHS` months over the ones before
-   * them; null when the older run had nothing to grow from. Deliberately not
-   * a ratio of `consumedCents`, which is the selected month alone.
+   * The `BUDGET_BURN_PATTERN_MONTHS` months the panel draws, oldest first. The
+   * last is the selected month and its `consumedCents` equals `consumedCents`
+   * above; the whole column set is carried so the reader compares cells that
+   * are on the row rather than a number they cannot check.
    */
-  trendPct: number | null
-  /** Consumed across the trend window ending with the selected month. */
-  trendConsumedCents: number
-  /** Consumed across the run of months immediately before that window. */
-  priorTrendConsumedCents: number
+  months: MonthConsumption[]
+  /**
+   * Growth of the newest month over the one before it; null when the previous
+   * month had nothing to grow from. This is a ratio of the last two cells of
+   * `months`, and of nothing else.
+   */
+  momPct: number | null
+  /** `momPct` at or above `momSpikePct`, from a previous month worth measuring. */
+  momFlagged: boolean
   /** This branch's own consumption as a share of its budget; null with no budget. */
   branchUtilizationPct: number | null
   /** null when there are fewer than `branchPeersMinCount` other branches with a computable utilization. */
@@ -490,30 +572,54 @@ function highHeldFloor(branch: BranchMonth, thresholds: BudgetBurnThresholds): n
 }
 
 /**
+ * The month-over-month figure and whether it earns a highlight.
+ *
+ * Pure and exported on its own because it is the single rule the panel's red
+ * state depends on: the newest month against the one before it, from a
+ * previous month large enough that the ratio means something. A first month
+ * has no previous month and is never highlighted — "no baseline", not "no
+ * change".
+ */
+export function monthOverMonth(
+  months: readonly MonthConsumption[],
+  thresholds: Pick<BudgetBurnThresholds, "momSpikePct" | "momMinBaselineCents"> = BUDGET_BURN_THRESHOLDS,
+): { momPct: number | null; momFlagged: boolean } {
+  const current = Math.max(0, months.at(-1)?.consumedCents ?? 0)
+  const previous = months.length >= 2 ? Math.max(0, months.at(-2)?.consumedCents ?? 0) : 0
+  const momPct = growthPct(current, previous)
+  return {
+    momPct,
+    momFlagged: previous >= thresholds.momMinBaselineCents && momPct !== null && momPct >= thresholds.momSpikePct,
+  }
+}
+
+/**
  * One requester at one branch, scored against the branch, their peers and
- * their own prior month. Every guard that suppresses a signal is here, next to
- * the signal it guards.
+ * their own previous month. Every guard that suppresses a signal is here, next
+ * to the signal it guards.
  */
 export function scoreRequester(input: {
   row: CreatorMonth
   branch: BranchMonth
   /** The other branches in scope this month — never including `branch`. */
   peerBranches: readonly BranchMonth[]
-  /** This requester's consumption across the trend window ending with the month. */
-  trendConsumedCents: number
-  /** The same across the run of months immediately before it. */
-  priorTrendConsumedCents: number
+  /** This requester's consumption in each month of the pattern, oldest first. */
+  months: readonly MonthConsumption[]
   elapsedDays: number
   thresholds?: BudgetBurnThresholds
 }): WatchlistRow {
   const t = input.thresholds ?? BUDGET_BURN_THRESHOLDS
   const { row, branch, peerBranches } = input
   const consumed = consumedCents(row)
-  const trend = Math.max(0, input.trendConsumedCents)
-  const priorTrend = Math.max(0, input.priorTrendConsumedCents)
+  const months = input.months.map((entry) => ({
+    month: entry.month,
+    spendCents: Math.max(0, entry.spendCents),
+    pendingCents: Math.max(0, entry.pendingCents),
+    consumedCents: Math.max(0, entry.consumedCents),
+  }))
 
   const shareOfBranchPct = safeDivide(consumed, branch.consumedCents) * 100
-  const trendPct = growthPct(trend, priorTrend)
+  const { momPct, momFlagged } = monthOverMonth(months, t)
   const ownUtilizationPct = branchUtilizationPct(branch)
   const peerMedianUtilizationPct = peerBranchMedianUtilizationPct(peerBranches, t)
   const vsPeerPct = ownUtilizationPct === null || peerMedianUtilizationPct === null || peerMedianUtilizationPct <= 0
@@ -532,8 +638,8 @@ export function scoreRequester(input: {
     && shareOfBranchPct >= t.highSharePct
   ) reasons.push("high_share")
 
-  // Doubling a tiny base is not a spike.
-  if (priorTrend >= t.trendMinBaselineCents && trendPct !== null && trendPct >= t.trendSpikePct) reasons.push("trend_spike")
+  // Doubling a tiny base is not a spike; the guard lives in `monthOverMonth`.
+  if (momFlagged) reasons.push("mom_spike")
 
   if (vsPeerPct !== null && vsPeerPct >= t.abovePeersPct) reasons.push("above_peers")
 
@@ -559,9 +665,9 @@ export function scoreRequester(input: {
       pendingCents: Math.max(0, row.pendingCents),
       consumedCents: consumed,
       shareOfBranchPct,
-      trendPct,
-      trendConsumedCents: trend,
-      priorTrendConsumedCents: priorTrend,
+      months,
+      momPct,
+      momFlagged,
       branchUtilizationPct: ownUtilizationPct,
       vsPeerPct,
       peerBranchMedianUtilizationPct: peerMedianUtilizationPct,
@@ -573,35 +679,57 @@ export function scoreRequester(input: {
   }
 }
 
-/** Score desc, then consumed desc, then a stable key so equal rows keep one order. */
+/** Highlighted rows sort among themselves by how far above the previous month they are. */
+function highlightOrder(row: WatchlistRow): number {
+  return row.metrics.momFlagged ? (row.metrics.momPct ?? 0) : 0
+}
+
+/**
+ * Highlighted first and steepest first, then everyone else by what they
+ * consumed this month, then a stable key so equal rows keep one order.
+ *
+ * The second term matters: ordering the whole list by growth would put a
+ * requester who went from ₨6,000 to ₨7,000 above one who spent ₨400,000
+ * steadily. Growth decides the top of the list; money decides the rest.
+ */
 export function rankWatchlist(rows: readonly WatchlistRow[]): WatchlistRow[] {
   return [...rows].sort((left, right) => (
-    right.score - left.score
+    Number(right.metrics.momFlagged) - Number(left.metrics.momFlagged)
+    || highlightOrder(right) - highlightOrder(left)
     || right.metrics.consumedCents - left.metrics.consumedCents
     || creatorKey(left).localeCompare(creatorKey(right))
   ))
 }
 
-export function isFlagged(row: WatchlistRow, thresholds: Pick<BudgetBurnThresholds, "flagScore"> = BUDGET_BURN_THRESHOLDS): boolean {
+/**
+ * Whether the retired multi-signal rule would have listed this row.
+ *
+ * Nothing on the panel is decided by it any more — the list is every
+ * requester and the highlight is `momFlagged` — but the count is still
+ * reported so the signals stay observable and the change stays reversible.
+ */
+export function isScoreFlagged(row: WatchlistRow, thresholds: Pick<BudgetBurnThresholds, "flagScore"> = BUDGET_BURN_THRESHOLDS): boolean {
   return row.score >= thresholds.flagScore
 }
 
 /**
- * Every requester scored and ranked. The caller decides how many flagged rows
- * to return; the unflagged remainder is counted so the panel can say how many
- * people sat below the line rather than implying the list is everyone.
+ * Every requester drawn with their pattern and ranked.
+ *
+ * The list is no longer a shortlist: the caller's `limit` takes the top of a
+ * ranked whole, and `requesterCount` says how many there were, so the panel
+ * states what it is showing rather than implying it is everyone.
  */
 export function buildWatchlist(input: {
   requesters: readonly CreatorMonth[]
   branches: ReadonlyMap<number, BranchMonth>
-  /** Consumption across the trend window ending with the month, keyed by `creatorKey`. */
-  trendConsumedByKey: ReadonlyMap<string, number>
-  /** The same across the run of months before it, keyed by `creatorKey`. */
-  priorTrendConsumedByKey: ReadonlyMap<string, number>
+  /** The months the pattern covers, oldest first. */
+  patternMonths: readonly string[]
+  /** Each creator's consumption per pattern month, keyed by `creatorKey`. */
+  monthsByKey: ReadonlyMap<string, readonly MonthConsumption[]>
   elapsedDays: number
   limit: number
   thresholds?: BudgetBurnThresholds
-}): { rows: WatchlistRow[]; flaggedCount: number; unflaggedCount: number } {
+}): { rows: WatchlistRow[]; highlightedCount: number; scoreFlaggedCount: number; requesterCount: number } {
   const t = input.thresholds ?? BUDGET_BURN_THRESHOLDS
   // Every branch's peers are "every other branch in scope" — the same list
   // for every requester at that branch, so it is built once rather than
@@ -628,18 +756,17 @@ export function buildWatchlist(input: {
       row,
       branch,
       peerBranches,
-      trendConsumedCents: input.trendConsumedByKey.get(key) ?? 0,
-      priorTrendConsumedCents: input.priorTrendConsumedByKey.get(key) ?? 0,
+      months: input.monthsByKey.get(key) ?? input.patternMonths.map(emptyMonthConsumption),
       elapsedDays: input.elapsedDays,
       thresholds: t,
     })
   })
 
   const ranked = rankWatchlist(scored)
-  const flagged = ranked.filter((row) => isFlagged(row, t))
   return {
-    rows: flagged.slice(0, Math.max(0, input.limit)),
-    flaggedCount: flagged.length,
-    unflaggedCount: ranked.length - flagged.length,
+    rows: ranked.slice(0, Math.max(0, input.limit)),
+    highlightedCount: ranked.filter((row) => row.metrics.momFlagged).length,
+    scoreFlaggedCount: ranked.filter((row) => isScoreFlagged(row, t)).length,
+    requesterCount: ranked.length,
   }
 }

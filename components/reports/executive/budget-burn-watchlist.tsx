@@ -10,14 +10,12 @@ import { cn } from "@/lib/utils"
 import {
   BUDGET_BURN_DEFAULT_ROWS,
   BUDGET_BURN_MAX_MONTHS_BACK,
-  BUDGET_BURN_REASON_LABELS,
   BUDGET_BURN_THRESHOLDS,
-  BUDGET_BURN_TREND_MONTHS,
   appDayKey,
   currentAppMonth,
   monthsBetween,
-  type BudgetBurnReason,
   type BudgetBurnThresholds,
+  type MonthConsumption,
   type WatchlistMetrics,
 } from "@/lib/budget-burn-risk"
 import type { DrillDownStatusSet } from "@/lib/executive-analytics"
@@ -26,21 +24,36 @@ import type { DrillTarget } from "./comparison-charts"
 import { toQuery, type ExecutiveFilterState } from "./executive-filters"
 
 /**
- * "Users to review" — requesters whose consumption of a shared branch budget
- * looks unusual this month, ranked by a documented score.
+ * "Users to review" — what each requester consumed in each of the last
+ * few months (the server decides how many), with the newest month highlighted
+ * where it is at least `momSpikePct` above the one before it.
  *
  * Everything here is presentation. The server decides who may read the list
  * (`isBudgetBurnRole`, after the executive scope), which rows exist for them,
- * and what each figure is; this component draws the answer and hands a click
- * on a row to the existing drill-down as a requester × branch target for the
- * same month. The copy is part of the contract: the list shows patterns for a
- * human to look at and says so, because a score is not evidence of intent.
+ * and what every figure is; this component draws the answer and hands a click
+ * to the existing drill-down. The copy is part of the contract: the panel
+ * shows patterns for a human to look at and says so, because a percentage is
+ * not evidence of intent.
+ *
+ * Two rules the design turns on. The three month cells and the percentage are
+ * the *same* numbers — the percentage is a ratio of the last two cells, so a
+ * reader can check it without leaving the row. And the highlight is never
+ * carried by colour alone: a highlighted cell also carries a marker and an
+ * accessible label naming both amounts and the threshold, so the row reads
+ * correctly to a screen reader, in print and in monochrome.
  *
  * Only the scope filters travel with the request. Category, product and
- * requester focus would turn "share of the branch budget" into a different
- * (line-grain) question, so they are dropped here and the panel says so.
+ * requester focus would turn "consumption of the branch budget" into a
+ * different (line-grain) question, so they are dropped here and the panel
+ * says so.
  */
 
+/**
+ * The fields this panel draws. The response also carries `score`, `reasons`,
+ * `points` and `reasonLabels` from the retired multi-signal rule — still
+ * computed and still tested, but deliberately not drawn here, because the
+ * client asked for a screen that needs no second signal to read.
+ */
 export type BudgetBurnRow = {
   userId: string
   requesterName: string
@@ -49,40 +62,42 @@ export type BudgetBurnRow = {
   accountStatus: "ACTIVE" | "INACTIVE" | "DELETED"
   branchId: number
   branchName: string
-  score: number
-  reasons: BudgetBurnReason[]
   metrics: WatchlistMetrics
 }
 
-export type BudgetBurnTrendWindow = { startMonth: string; endMonth: string; startDate: string; endDate: string }
+export type BudgetBurnPatternBucket = {
+  month: string
+  startDate: string
+  endDate: string
+  complete: boolean
+}
 
 export type BudgetBurnResponse = {
   month: string
   windows: {
     current: { startDate: string; endDate: string; complete: boolean; elapsedDays: number; daysInMonth: number }
-    /** The growth comparison's two runs of months — the one figure not about the selected month alone. */
-    trend: { months: number; current: BudgetBurnTrendWindow; prior: BudgetBurnTrendWindow }
+    /** The months the panel draws, oldest first; the last is the selected month. */
+    pattern: BudgetBurnPatternBucket[]
     recent: { startDate: string; endDate: string }
   }
   rows: BudgetBurnRow[]
   branches: Array<{ branchId: number; branchName: string; consumedCents: number; otherCreatorsConsumedCents: number; activeRequesterCount: number; totalBudgetCents: number; remainingCents: number }>
-  flaggedCount: number
-  unflaggedCount: number
+  highlightedCount: number
+  requesterCount: number
   limit: number
   truncated: boolean
   thresholds: BudgetBurnThresholds
-  reasonLabels: Record<BudgetBurnReason, string>
   error?: string
 }
 
-/** What a row click hands the page: the drill target and the filters that reconcile with it. */
+/** What a cell click hands the page: the drill target and the filters that reconcile with it. */
 export type BudgetBurnDrillSelection = {
   target: DrillTarget
   filters: ExecutiveFilterState
   /**
-   * Always `consumed`: the row's figure is Spend + Pending, so the listing
-   * must include the pending orders or a pending-only month drills into an
-   * empty table.
+   * Always `consumed`: a month cell is Spend + Pending, so the listing must
+   * include the pending orders or a pending-only month drills into an empty
+   * table.
    */
   statuses: DrillDownStatusSet
   month: string
@@ -90,10 +105,15 @@ export type BudgetBurnDrillSelection = {
   branchName: string
   spendCents: number
   pendingCents: number
-  pendingOrderCount: number
+  /**
+   * Null for a month other than the selected one — the aggregate counts
+   * orders for the selected month only, and a note must not invent a number
+   * it was not given.
+   */
+  pendingOrderCount: number | null
 }
 
-/** The requester + branch + month whose item-wise trend table should open. */
+/** The requester + branch + month whose item-wise pattern should open. */
 export type BudgetBurnItemDrillSelection = {
   userId: string
   branchId: number
@@ -102,7 +122,7 @@ export type BudgetBurnItemDrillSelection = {
   month: string
 }
 
-export const NOT_PROOF_COPY = "Unusual consumption patterns for review — not proof of intent."
+export const NOT_PROOF_COPY = "Three months of consumption per requester — for review, not proof of intent."
 export const SCOPE_NOTE_COPY = "Organization, group and branch filters apply. Category, product and requester focus do not."
 
 const monthFormatter = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Karachi", month: "long", year: "numeric" })
@@ -114,7 +134,7 @@ export function monthLabel(month: string): string {
 
 const shortMonthFormatter = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Karachi", month: "short", year: "numeric" })
 
-function shortMonthLabel(month: string): string {
+export function shortMonthLabel(month: string): string {
   return shortMonthFormatter.format(new Date(`${month}-01T00:00:00.000+05:00`))
 }
 
@@ -134,34 +154,44 @@ export function signedPercent(value: number | null, digits = 0): string {
   return `${sign}${value.toFixed(digits)}%`
 }
 
-function percent(value: number, digits = 1): string {
-  return `${(Number.isFinite(value) ? value : 0).toFixed(digits)}%`
-}
+/** Shown beside a highlighted figure, so the highlight never depends on colour alone. */
+export const HIGHLIGHT_MARKER = "▲"
 
-/** The threshold behind each chip, in the reader's words, so a chip is never just a colour. */
-export function reasonExplanation(reason: BudgetBurnReason, t: BudgetBurnThresholds): string {
-  switch (reason) {
-    case "high_share":
-      return `At least ${t.highSharePct}% of everything the branch consumed this month, with at least ${t.highShareMinRequesters} active requesters there.`
-    case "trend_spike":
-      return `At least +${t.trendSpikePct}% on the previous ${BUDGET_BURN_TREND_MONTHS} months, from a baseline of at least ${money(t.trendMinBaselineCents)}.`
-    case "above_peers":
-      return `The branch's budget utilization is at least ${t.abovePeersPct}% above the median budget utilization of the other branches in scope.`
-    case "late_surge":
-      return `At least ${t.lateSurgePct}% of the month's consumption landed in the last ${t.lateSurgeDays} days.`
-    case "high_held":
-      return `Pending orders holding at least ${t.highHeldPctOfBudget}% of the branch's budget (or ${money(t.highHeldFloorCents)} where it has none).`
-    case "rejected_orders":
-      return `At least ${t.rejectedOrdersMin} orders rejected by an approver this month.`
+const HIGHLIGHT_CELL_CLASS = "bg-rose-50 font-semibold text-rose-700 dark:bg-rose-500/15 dark:text-rose-300"
+
+/**
+ * What a highlighted row means, in full, for the cell's accessible label and
+ * tooltip. Names both months, both amounts and the threshold, so a reader who
+ * cannot see the colour still learns everything the colour was carrying.
+ */
+export function momCellTitle(metrics: Pick<WatchlistMetrics, "months" | "momPct" | "momFlagged">, thresholds: BudgetBurnThresholds): string {
+  const current = metrics.months.at(-1)
+  const previous = metrics.months.at(-2)
+  if (!current || !previous) return "No earlier month to compare against."
+  const pair = `${monthLabel(previous.month)}: ${money(previous.consumedCents)} → ${monthLabel(current.month)}: ${money(current.consumedCents)}.`
+  if (metrics.momPct === null) {
+    return `${pair} Nothing consumed in ${monthLabel(previous.month)}, so there is no baseline to compare against.`
   }
+  const verdict = metrics.momFlagged
+    ? `At or above the ${thresholds.momSpikePct}% review threshold.`
+    : `Below the ${thresholds.momSpikePct}% review threshold${previous.consumedCents < thresholds.momMinBaselineCents
+      ? `, and the previous month is under the ${money(thresholds.momMinBaselineCents)} baseline`
+      : ""}.`
+  return `${pair} ${signedPercent(metrics.momPct, 1)}. ${verdict} Open the item-wise detail.`
 }
 
-/** The month window as the date-only filters the drill-down parses in Asia/Karachi. */
-export function drillFiltersFor(filters: ExecutiveFilterState, windows: BudgetBurnResponse["windows"]): ExecutiveFilterState {
+/** One month cell's tooltip: what it is made of, and what a click on it opens. */
+export function monthCellTitle(cell: MonthConsumption): string {
+  const pending = cell.pendingCents > 0 ? ` — Spend ${money(cell.spendCents)} plus ${money(cell.pendingCents)} still pending` : ""
+  return `${monthLabel(cell.month)}: ${money(cell.consumedCents)}${pending}. Open the order lines behind it.`
+}
+
+/** A pattern month as the date-only filters the drill-down parses in Asia/Karachi. */
+export function drillFiltersFor(filters: ExecutiveFilterState, bucket: Pick<BudgetBurnPatternBucket, "startDate" | "endDate">): ExecutiveFilterState {
   return {
     ...filters,
-    startDate: appDayKey(new Date(windows.current.startDate)),
-    endDate: appDayKey(new Date(windows.current.endDate)),
+    startDate: appDayKey(new Date(bucket.startDate)),
+    endDate: appDayKey(new Date(bucket.endDate)),
     categoryIds: [],
     productIds: [],
     userIds: [],
@@ -194,75 +224,58 @@ function MonthNav({ month, current, onChange }: Readonly<{ month: string; curren
   )
 }
 
-function ReasonChips({ reasons, thresholds, labels }: Readonly<{
-  reasons: BudgetBurnReason[]
-  thresholds: BudgetBurnThresholds
-  labels: Record<BudgetBurnReason, string>
-}>) {
-  return (
-    <ul className="flex flex-wrap gap-1" aria-label="Why flagged">
-      {reasons.map((reason) => (
-        <li
-          key={reason}
-          title={reasonExplanation(reason, thresholds)}
-          className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200"
-        >
-          {labels[reason] ?? BUDGET_BURN_REASON_LABELS[reason]}
-        </li>
-      ))}
-    </ul>
-  )
-}
-
-const COLUMNS = [
-  { label: "Requester", numeric: false },
-  { label: "Branch", numeric: false },
-  { label: "Spend", numeric: true },
-  { label: "Pending", numeric: true },
-  { label: "Share", numeric: true },
-  { label: `${BUDGET_BURN_TREND_MONTHS}M`, numeric: true },
-  { label: "vs peers", numeric: true },
-  { label: "Orders", numeric: true },
-  { label: "Why", numeric: false },
-  { label: "Score", numeric: true },
-] as const
-
 function rowKey(row: Pick<BudgetBurnRow, "userId" | "branchId">): string {
   return `${row.userId}:${row.branchId}`
 }
 
-/**
- * The growth cell's tooltip. It names both runs of months and both totals,
- * because the percentage is no longer a ratio of the Spend beside it — a
- * reader who cannot see where it came from would reasonably assume it was.
- */
-export function trendCellTitle(
-  metrics: Pick<WatchlistMetrics, "trendPct" | "trendConsumedCents" | "priorTrendConsumedCents">,
-  trend: BudgetBurnResponse["windows"]["trend"],
-): string {
-  const current = `${monthRangeLabel(trend.current.startMonth, trend.current.endMonth)}: ${money(metrics.trendConsumedCents)}`
-  const prior = `${monthRangeLabel(trend.prior.startMonth, trend.prior.endMonth)}: ${money(metrics.priorTrendConsumedCents)}`
-  const baseline = metrics.trendPct === null ? " Nothing consumed in the earlier window to compare against." : ""
-  return `${current} · ${prior}.${baseline} Open item detail.`
+/** One month's consumption, clickable into the order lines behind that month alone. */
+function MonthCell({ cell, highlighted, requesterName, onOpen }: Readonly<{
+  cell: MonthConsumption
+  highlighted: boolean
+  requesterName: string
+  onOpen: () => void
+}>) {
+  return (
+    <td className={cn("px-2.5 py-2 text-right tabular-nums", highlighted && HIGHLIGHT_CELL_CLASS)}>
+      <button
+        type="button"
+        onClick={onOpen}
+        title={monthCellTitle(cell)}
+        aria-label={`${requesterName}, ${monthLabel(cell.month)}: ${money(cell.consumedCents)}${highlighted ? " — highlighted" : ""}. Open the order lines behind it.`}
+        className="rounded px-1 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+      >
+        {highlighted ? <span aria-hidden className="mr-0.5">{HIGHLIGHT_MARKER}</span> : null}
+        {money(cell.consumedCents)}
+      </button>
+      {cell.pendingCents > 0 ? (
+        <div className="text-[10px] font-normal text-slate-500 dark:text-slate-400">incl. {money(cell.pendingCents)} pending</div>
+      ) : null}
+    </td>
+  )
 }
 
 function WatchlistTable({ data, selectedKey, selectedItemsKey, onSelect, onSelectItems }: Readonly<{
   data: BudgetBurnResponse
   selectedKey: string | null
   selectedItemsKey: string | null
-  onSelect: (row: BudgetBurnRow) => void
+  onSelect: (row: BudgetBurnRow, index: number) => void
   onSelectItems?: (row: BudgetBurnRow) => void
 }>) {
+  const lastIndex = data.windows.pattern.length - 1
   return (
     <div className="max-h-[420px] overflow-auto rounded-lg border border-slate-200 dark:border-slate-700">
       <table className="w-full text-xs">
         <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800">
           <tr>
-            {COLUMNS.map((column) => (
-              <th key={column.label} scope="col" className={cn("px-2.5 py-2 font-semibold text-slate-600 dark:text-slate-300", column.numeric ? "text-right" : "text-left")}>
-                {column.label}
+            <th scope="col" className="px-2.5 py-2 text-left font-semibold text-slate-600 dark:text-slate-300">Requester</th>
+            <th scope="col" className="px-2.5 py-2 text-left font-semibold text-slate-600 dark:text-slate-300">Branch</th>
+            {data.windows.pattern.map((bucket) => (
+              <th key={bucket.month} scope="col" className="whitespace-nowrap px-2.5 py-2 text-right font-semibold text-slate-600 dark:text-slate-300">
+                {shortMonthLabel(bucket.month)}
               </th>
             ))}
+            <th scope="col" className="whitespace-nowrap px-2.5 py-2 text-right font-semibold text-slate-600 dark:text-slate-300">vs prev month</th>
+            <th scope="col" className="px-2.5 py-2 text-right font-semibold text-slate-600 dark:text-slate-300">Orders</th>
           </tr>
         </thead>
         <tbody>
@@ -282,7 +295,7 @@ function WatchlistTable({ data, selectedKey, selectedItemsKey, onSelect, onSelec
                 <td className="px-2.5 py-2">
                   <button
                     type="button"
-                    onClick={() => onSelect(row)}
+                    onClick={() => onSelect(row, lastIndex)}
                     aria-pressed={selected}
                     className="text-left font-semibold text-indigo-700 underline-offset-2 hover:underline dark:text-indigo-300"
                   >
@@ -295,41 +308,42 @@ function WatchlistTable({ data, selectedKey, selectedItemsKey, onSelect, onSelec
                   </div>
                 </td>
                 <td className="px-2.5 py-2 text-slate-700 dark:text-slate-300">{row.branchName}</td>
-                <td className="px-2.5 py-2 text-right tabular-nums">{money(m.spendCents)}</td>
-                <td className="px-2.5 py-2 text-right tabular-nums text-slate-600 dark:text-slate-400">
-                  {m.pendingCents > 0 ? `${money(m.pendingCents)} (${m.pendingOrderCount})` : "—"}
-                </td>
-                <td className="px-2.5 py-2 text-right tabular-nums">{percent(m.shareOfBranchPct)}</td>
-                <td className="px-2.5 py-2 text-right tabular-nums">
+                {m.months.map((cell, index) => (
+                  <MonthCell
+                    key={cell.month}
+                    cell={cell}
+                    highlighted={m.momFlagged && index === lastIndex}
+                    requesterName={row.requesterName}
+                    onOpen={() => onSelect(row, index)}
+                  />
+                ))}
+                <td className={cn("px-2.5 py-2 text-right tabular-nums", m.momFlagged && HIGHLIGHT_CELL_CLASS)}>
                   {onSelectItems ? (
                     <button
                       type="button"
                       onClick={() => onSelectItems(row)}
-                      aria-label={`Compare ${row.requesterName} items over ${data.windows.trend.months} months`}
+                      aria-label={`${row.requesterName}: ${momCellTitle(m, data.thresholds)}`}
                       aria-pressed={itemsSelected}
-                      title={trendCellTitle(m, data.windows.trend)}
+                      title={momCellTitle(m, data.thresholds)}
                       className={cn(
-                        "rounded px-1 font-semibold text-indigo-700 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-indigo-300",
-                        itemsSelected && "bg-indigo-100 dark:bg-indigo-500/20",
+                        "rounded px-1 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500",
+                        !m.momFlagged && "text-indigo-700 dark:text-indigo-300",
+                        itemsSelected && !m.momFlagged && "bg-indigo-100 dark:bg-indigo-500/20",
                       )}
                     >
-                      {signedPercent(m.trendPct)}
+                      {m.momFlagged ? <span aria-hidden className="mr-0.5">{HIGHLIGHT_MARKER}</span> : null}
+                      {signedPercent(m.momPct)}
                     </button>
-                  ) : signedPercent(m.trendPct)}
+                  ) : (
+                    <span title={momCellTitle(m, data.thresholds)}>
+                      {m.momFlagged ? <span aria-hidden className="mr-0.5">{HIGHLIGHT_MARKER}</span> : null}
+                      {signedPercent(m.momPct)}
+                    </span>
+                  )}
                 </td>
-                <td
-                  className="px-2.5 py-2 text-right tabular-nums"
-                  title={m.vsPeerPct === null
-                    ? `Fewer than ${data.thresholds.branchPeersMinCount} other branches with a budget to compare against`
-                    : `This branch: ${percent(m.branchUtilizationPct ?? 0)} of budget · peer branch median: ${percent(m.peerBranchMedianUtilizationPct ?? 0)}`}
-                >
-                  {signedPercent(m.vsPeerPct)}
-                </td>
-                <td className="px-2.5 py-2 text-right tabular-nums" title={`${m.orderCount} counted · ${m.pendingOrderCount} pending · ${m.rejectedOrderCount} rejected`}>
+                <td className="px-2.5 py-2 text-right tabular-nums" title={`${m.orderCount} counted · ${m.pendingOrderCount} pending · ${m.rejectedOrderCount} rejected, in ${monthLabel(data.month)}`}>
                   {m.orderCount}{m.pendingOrderCount > 0 ? ` · ${m.pendingOrderCount} pending` : ""}{m.rejectedOrderCount > 0 ? ` · ${m.rejectedOrderCount} rej.` : ""}
                 </td>
-                <td className="px-2.5 py-2"><ReasonChips reasons={row.reasons} thresholds={data.thresholds} labels={data.reasonLabels} /></td>
-                <td className="px-2.5 py-2 text-right font-semibold tabular-nums">{row.score}</td>
               </tr>
             )
           })}
@@ -339,34 +353,31 @@ function WatchlistTable({ data, selectedKey, selectedItemsKey, onSelect, onSelec
   )
 }
 
-function EmptyState({ unflaggedCount, flagScore }: Readonly<{ unflaggedCount: number; flagScore: number }>) {
+function EmptyState() {
   return (
     <div className="flex min-h-[160px] flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-slate-200 px-6 text-center dark:border-slate-700">
       <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">Nothing to review</p>
       <p className="max-w-sm text-xs text-slate-500 dark:text-slate-400">
-        {unflaggedCount === 0
-          ? "No requester consumed budget in this month and scope."
-          : `${unflaggedCount} requester${unflaggedCount === 1 ? "" : "s"} consumed budget; none reached the review score of ${flagScore}.`}
+        No requester consumed budget in these months and this scope.
       </p>
     </div>
   )
 }
 
 /** Loading, error, empty and rows are mutually exclusive; this picks one. */
-function WatchlistBody({ data, loading, error, thresholds, selectedKey, selectedItemsKey, onSelect, onSelectItems }: Readonly<{
+function WatchlistBody({ data, loading, error, selectedKey, selectedItemsKey, onSelect, onSelectItems }: Readonly<{
   data: BudgetBurnResponse | undefined
   loading: boolean
   error: string | null
-  thresholds: BudgetBurnThresholds
   selectedKey: string | null
   selectedItemsKey: string | null
-  onSelect: (row: BudgetBurnRow) => void
+  onSelect: (row: BudgetBurnRow, index: number) => void
   onSelectItems?: (row: BudgetBurnRow) => void
 }>) {
   if (loading && !data) return <Skeleton className="h-[240px] w-full rounded-lg" />
   if (error) return <ChartMessage tone="error" message={error} />
   if (!data) return null
-  if (data.rows.length === 0) return <EmptyState unflaggedCount={data.unflaggedCount} flagScore={thresholds.flagScore} />
+  if (data.rows.length === 0) return <EmptyState />
   return (
     <>
       <WatchlistTable
@@ -377,8 +388,9 @@ function WatchlistBody({ data, loading, error, thresholds, selectedKey, selected
         onSelectItems={onSelectItems}
       />
       <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
-        Showing {data.rows.length} of {data.flaggedCount} flagged · {data.unflaggedCount} below the review score of {thresholds.flagScore}.
-        {" "}Click a name for the order lines behind Spend, or a {data.windows.trend.months}M value for its item-wise comparison.
+        Showing {data.rows.length} of {data.requesterCount} requester{data.requesterCount === 1 ? "" : "s"}
+        {" · "}{data.highlightedCount} highlighted.
+        {" "}Click a month for the order lines behind it, or the percentage for the item-wise comparison.
       </p>
       {data.truncated ? (
         <p className="mt-1 flex items-center gap-1 text-[11px] text-amber-700 dark:text-amber-300">
@@ -396,12 +408,15 @@ function windowLabel(windows: BudgetBurnResponse["windows"]): string {
 }
 
 /**
- * Says which months the growth column spans, because it is the one figure on
- * the panel that is not the selected month.
+ * What the highlight means, printed rather than implied. A colour with no
+ * stated rule is a rumour; this is the rule.
  */
-export function trendNote(trend: BudgetBurnResponse["windows"]["trend"]): string {
-  return `The ${trend.months}M column compares ${monthRangeLabel(trend.current.startMonth, trend.current.endMonth)}`
-    + ` against ${monthRangeLabel(trend.prior.startMonth, trend.prior.endMonth)}; every other figure is the month alone.`
+export function highlightNote(pattern: BudgetBurnPatternBucket[], thresholds: BudgetBurnThresholds): string {
+  const first = pattern[0]?.month
+  const last = pattern.at(-1)?.month
+  const span = first && last ? `${monthRangeLabel(first, last)} shown, each month on its own. ` : ""
+  return `${span}Highlighted when the selected month is at least ${thresholds.momSpikePct}% above the previous month,`
+    + ` from a previous month of at least ${money(thresholds.momMinBaselineCents)}.`
 }
 
 export function BudgetBurnWatchlist({ filters, onDrill, onDrillItems, selectedKey = null, selectedItemsKey = null }: Readonly<{
@@ -424,8 +439,12 @@ export function BudgetBurnWatchlist({ filters, onDrill, onDrillItems, selectedKe
     ? "The watchlist could not be loaded. Your session may have expired, or the selected month returned an error."
     : data?.error ?? null
 
-  const select = React.useCallback((row: BudgetBurnRow) => {
+  const select = React.useCallback((row: BudgetBurnRow, index: number) => {
     if (!data) return
+    const bucket = data.windows.pattern[index]
+    const cell = row.metrics.months[index]
+    if (!bucket || !cell) return
+    const isSelectedMonth = index === data.windows.pattern.length - 1
     onDrill({
       target: {
         dimension: "user",
@@ -433,14 +452,15 @@ export function BudgetBurnWatchlist({ filters, onDrill, onDrillItems, selectedKe
         label: row.requesterName,
         narrow: { branchIds: [String(row.branchId)] },
       },
-      filters: drillFiltersFor(filters, data.windows),
+      filters: drillFiltersFor(filters, bucket),
       statuses: "consumed",
-      month: data.month,
+      month: cell.month,
       requesterName: row.requesterName,
       branchName: row.branchName,
-      spendCents: row.metrics.spendCents,
-      pendingCents: row.metrics.pendingCents,
-      pendingOrderCount: row.metrics.pendingOrderCount,
+      spendCents: cell.spendCents,
+      pendingCents: cell.pendingCents,
+      // The aggregate counts orders for the selected month alone.
+      pendingOrderCount: isSelectedMonth ? row.metrics.pendingOrderCount : null,
     })
   }, [data, filters, onDrill])
 
@@ -472,7 +492,7 @@ export function BudgetBurnWatchlist({ filters, onDrill, onDrillItems, selectedKe
         </div>
         <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
           {SCOPE_NOTE_COPY}
-          {data ? ` Showing ${monthLabel(data.month)} ${windowLabel(data.windows)}. ${trendNote(data.windows.trend)}` : ""}
+          {data ? ` ${monthLabel(data.month)} is the ${windowLabel(data.windows)}. ${highlightNote(data.windows.pattern, thresholds)}` : ""}
         </p>
 
         <div className="mt-3">
@@ -480,7 +500,6 @@ export function BudgetBurnWatchlist({ filters, onDrill, onDrillItems, selectedKe
             data={data}
             loading={isLoading}
             error={requestError}
-            thresholds={thresholds}
             selectedKey={selectedKey}
             selectedItemsKey={selectedItemsKey}
             onSelect={select}
@@ -494,7 +513,7 @@ export function BudgetBurnWatchlist({ filters, onDrill, onDrillItems, selectedKe
 
 /**
  * The line above the drill-down that keeps it honest: the table lists every
- * order line behind Spend + Pending, and says which part is still only
+ * order line behind that month's figure, and says which part is still only
  * pending, because a pending line looks like a purchase and is not one yet.
  */
 export function BudgetBurnDrillNote({ selection, onClose }: Readonly<{
@@ -507,13 +526,23 @@ export function BudgetBurnDrillNote({ selection, onClose }: Readonly<{
       <p>
         <span className="font-semibold">{selection.requesterName}</span> at {selection.branchName}, {monthLabel(selection.month)}: the lines below add up to
         {" "}<span className="font-semibold tabular-nums">{money(consumed)}</span> — Spend {money(selection.spendCents)}
-        {selection.pendingOrderCount > 0
-          ? ` plus ${selection.pendingOrderCount} pending order${selection.pendingOrderCount === 1 ? "" : "s"} totalling ${money(selection.pendingCents)}, marked pending below. Nothing pending is counted until it is approved.`
-          : ". There are no pending orders for this requester in the month."}
+        {pendingSentence(selection)}
       </p>
       <button type="button" onClick={onClose} className="text-[11px] font-semibold text-indigo-700 hover:underline dark:text-indigo-300">
         Close
       </button>
     </div>
   )
+}
+
+/** The pending half of the note — with the order count where the month reported one. */
+function pendingSentence(selection: BudgetBurnDrillSelection): string {
+  if (selection.pendingCents <= 0) {
+    return ". There are no pending orders for this requester in the month."
+  }
+  const count = selection.pendingOrderCount
+  const orders = count === null
+    ? `${money(selection.pendingCents)} in pending orders`
+    : `${count} pending order${count === 1 ? "" : "s"} totalling ${money(selection.pendingCents)}`
+  return ` plus ${orders}, marked pending below. Nothing pending is counted until it is approved.`
 }

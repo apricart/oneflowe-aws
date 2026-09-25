@@ -74,12 +74,13 @@ export const getNavigationByRole = (role: string, budgetAllocationEnabled = fals
       { href: "/refunds", label: "Refunds", icon: Wallet },
       {
         href: "/inventory",
-        label: "Inventory Management",
+        label: "Product Catalog",
         icon: Boxes,
         subItems: [
           { href: "/inventory", label: "Global Products" },
-          { href: "/inventory/org", label: "Organization Inventory" },
-          { href: "/inventory/branch/hub", label: "Group Inventory" },
+          { href: "/inventory/price-history", label: "Product Price History" },
+          { href: "/inventory/org", label: "Organization Products" },
+          { href: "/inventory/branch/hub", label: "Group Products" },
           { href: "/products/categories", label: "Categories" },
           { href: "/products/subcategories", label: "Subcategories" },
         ]
@@ -114,7 +115,15 @@ export const getNavigationByRole = (role: string, budgetAllocationEnabled = fals
       { href: "/branches", label: "My Branches", icon: Building2 },
       { href: "/users", label: "Users", icon: Users },
       { href: "/orders", label: "Orders", icon: Package },
-      { href: "/inventory", label: "Inventory", icon: Boxes },
+      {
+        href: "/inventory",
+        label: "Product Catalog",
+        icon: Boxes,
+        subItems: [
+          { href: "/inventory", label: "Organization's Products" },
+          { href: "/inventory/price-history", label: "Product Price History" },
+        ],
+      },
       { href: "/groups", label: "Group Management", icon: FolderTree },
       { href: "/budgets", label: "Budgets", icon: Wallet },
       { href: "/budget-by-quantity", label: "Budget by Quantity", icon: Wallet },

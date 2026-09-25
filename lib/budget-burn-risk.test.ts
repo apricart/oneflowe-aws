@@ -4,11 +4,11 @@ import {
   BUDGET_BURN_DEFAULT_ROWS,
   BUDGET_BURN_MAX_MONTHS_BACK,
   BUDGET_BURN_MAX_ROWS,
+  BUDGET_BURN_PATTERN_MONTHS,
   BUDGET_BURN_POINTS,
   BUDGET_BURN_REASONS,
   BUDGET_BURN_REASON_LABELS,
   BUDGET_BURN_THRESHOLDS,
-  BUDGET_BURN_TREND_MONTHS,
   appDayKey,
   branchUtilizationPct,
   buildWatchlist,
@@ -16,22 +16,29 @@ import {
   consumedCents,
   creatorKey,
   currentAppMonth,
+  emptyMonthConsumption,
   isBudgetBurnRole,
-  isFlagged,
   isMonthKey,
   isMonthWindowError,
+  isScoreFlagged,
+  monthConsumptionOf,
+  monthOverMonth,
   monthWindows,
   monthsBetween,
+  patternByCreator,
   peerBranchMedianUtilizationPct,
   rankWatchlist,
   scoreRequester,
   summarizeCreators,
+  unionCreators,
   type BranchMonth,
   type CreatorMonth,
+  type MonthConsumption,
   type MonthWindows,
 } from "./budget-burn-risk"
 
 const T = BUDGET_BURN_THRESHOLDS
+const DAY = 86_400_000
 
 /** A Karachi wall-clock instant. */
 function karachi(day: string, time = "12:00:00"): Date {
@@ -70,6 +77,18 @@ function branch(overrides: Partial<BranchMonth> = {}): BranchMonth {
   }
 }
 
+const PATTERN_MONTHS = ["2026-06", "2026-07", "2026-08"]
+
+/** A pattern from consumed figures, oldest first — the shape the panel draws. */
+function months(...consumed: number[]): MonthConsumption[] {
+  return consumed.map((value, index) => ({
+    month: PATTERN_MONTHS[index] ?? `2026-${String(index + 1).padStart(2, "0")}`,
+    spendCents: value,
+    pendingCents: 0,
+    consumedCents: value,
+  }))
+}
+
 /** Three ordinarily utilized peer branches; their median matches `branch()` at 50%. */
 const ordinaryPeerBranches = [
   branch({ branchId: 2, consumedCents: 4_000_000, totalBudgetCents: 10_000_000 }),
@@ -81,8 +100,8 @@ describe("role gate", () => {
   it("admits Super Admin and Head Office only", () => {
     expect(isBudgetBurnRole("SUPER_ADMIN")).toBe(true)
     expect(isBudgetBurnRole("HEAD_OFFICE")).toBe(true)
-    // The approver reads the Center but not, for now, a list that names people
-    // with a score; the single-branch and ordering roles have no Center at all.
+    // The approver reads the Center but not, for now, a list that names people;
+    // the single-branch and ordering roles have no Center at all.
     for (const role of ["GROUP_USER", "BRANCH_ADMIN", "ORDER_PORTAL", "GROUP_ORDER_PORTAL", "head_office", "", null, undefined, 3]) {
       expect(isBudgetBurnRole(role), String(role)).toBe(false)
     }
@@ -101,7 +120,7 @@ describe("bounds", () => {
   })
 
   it("names every reason once, with a label and a point value", () => {
-    expect(BUDGET_BURN_REASONS).toEqual(["high_share", "trend_spike", "above_peers", "late_surge", "high_held", "rejected_orders"])
+    expect(BUDGET_BURN_REASONS).toEqual(["high_share", "mom_spike", "above_peers", "late_surge", "high_held", "rejected_orders"])
     for (const reason of BUDGET_BURN_REASONS) {
       expect(BUDGET_BURN_POINTS[reason]).toBeGreaterThan(0)
       expect(BUDGET_BURN_REASON_LABELS[reason].length).toBeGreaterThan(0)
@@ -139,7 +158,7 @@ describe("the calendar", () => {
     expect(w.current.daysInMonth).toBe(30)
     // The last seven days, ending now.
     expect(w.recent.end).toEqual(now)
-    expect(w.recent.start.toISOString()).toBe(new Date(now.getTime() - T.lateSurgeDays * 86_400_000).toISOString())
+    expect(w.recent.start.toISOString()).toBe(new Date(now.getTime() - T.lateSurgeDays * DAY).toISOString())
   })
 
   it("closes the month window at the last instant once the month is over", () => {
@@ -152,67 +171,72 @@ describe("the calendar", () => {
     expect(w.recent.start.toISOString()).toBe("2026-08-24T18:59:59.999Z")
   })
 
-  it("runs the trend windows to the same elapsed day while the month is open", () => {
+  it("draws one bucket per pattern month, oldest first, ending with the selection", () => {
+    const w = windows("2026-08", karachi("2026-09-20"))
+    expect(w.pattern).toHaveLength(BUDGET_BURN_PATTERN_MONTHS)
+    expect(w.pattern.map((bucket) => bucket.month)).toEqual(["2026-06", "2026-07", "2026-08"])
+    expect(w.pattern.at(-1)!.month).toBe(w.month)
+    // The newest bucket is the month window itself — one read serves both.
+    expect(w.pattern.at(-1)!.start).toEqual(w.current.start)
+    expect(w.pattern.at(-1)!.end).toEqual(w.current.end)
+  })
+
+  it("gives every bucket a whole month once the selected month is over", () => {
+    const w = windows("2026-08", karachi("2026-09-20"))
+    expect(w.pattern.map((bucket) => bucket.complete)).toEqual([true, true, true])
+    expect(w.pattern[0].start.toISOString()).toBe("2026-05-31T19:00:00.000Z") // 1 Jun 00:00 +05:00
+    expect(w.pattern[0].end.toISOString()).toBe("2026-06-30T18:59:59.999Z")
+    expect(w.pattern[1].start.toISOString()).toBe("2026-06-30T19:00:00.000Z")
+    expect(w.pattern[1].end.toISOString()).toBe("2026-07-31T18:59:59.999Z")
+  })
+
+  it("cuts the older buckets on the same elapsed day while the month is open", () => {
     const now = karachi("2026-09-20", "15:00:00")
     const w = windows("2026-09", now)
-    expect(w.trend.months).toBe(BUDGET_BURN_TREND_MONTHS)
-    // Jul–Sep against Apr–Jun, both cut on the 20th.
-    expect(w.trend.current.startMonth).toBe("2026-07")
-    expect(w.trend.current.endMonth).toBe("2026-09")
-    expect(w.trend.current.start.toISOString()).toBe("2026-06-30T19:00:00.000Z") // 1 Jul 00:00 +05:00
-    expect(w.trend.current.end).toEqual(now)
-    expect(w.trend.prior.startMonth).toBe("2026-04")
-    expect(w.trend.prior.endMonth).toBe("2026-06")
-    expect(w.trend.prior.start.toISOString()).toBe("2026-03-31T19:00:00.000Z")  // 1 Apr 00:00 +05:00
-    expect(w.trend.prior.end.toISOString()).toBe("2026-06-20T18:59:59.999Z")    // 20 Jun 23:59:59.999 +05:00
+    expect(w.pattern.map((bucket) => bucket.month)).toEqual(["2026-07", "2026-08", "2026-09"])
+    expect(w.pattern[0].end.toISOString()).toBe("2026-07-20T18:59:59.999Z") // 20 Jul 23:59:59.999 +05:00
+    expect(w.pattern[1].end.toISOString()).toBe("2026-08-20T18:59:59.999Z")
+    expect(w.pattern[2].end).toEqual(now)
+    expect(w.pattern.map((bucket) => bucket.complete)).toEqual([false, false, false])
+    // Both older buckets cover exactly the elapsed twenty days, so a mid-month
+    // reading is never set against a full month.
+    for (const bucket of w.pattern.slice(0, 2)) {
+      expect(Math.round((bucket.end.getTime() - bucket.start.getTime()) / DAY), bucket.month).toBe(20)
+    }
   })
 
-  it("compares whole runs of months once the month is over, and never overlaps them", () => {
-    const w = windows("2026-08", karachi("2026-09-20"))
-    expect(w.trend.current.startMonth).toBe("2026-06")
-    expect(w.trend.current.endMonth).toBe("2026-08")
-    expect(w.trend.current.start.toISOString()).toBe("2026-05-31T19:00:00.000Z") // 1 Jun 00:00 +05:00
-    expect(w.trend.current.end.toISOString()).toBe("2026-08-31T18:59:59.999Z")
-    expect(w.trend.prior.startMonth).toBe("2026-03")
-    expect(w.trend.prior.endMonth).toBe("2026-05")
-    expect(w.trend.prior.start.toISOString()).toBe("2026-02-28T19:00:00.000Z")  // 1 Mar 00:00 +05:00
-    expect(w.trend.prior.end.toISOString()).toBe("2026-05-31T18:59:59.999Z")
-    // The older run ends the instant before the newer one begins.
-    expect(w.trend.prior.end.getTime()).toBeLessThan(w.trend.current.start.getTime())
-  })
-
-  it("clamps the older trend window to a shorter month", () => {
-    // 31 May to date; three months back is February, which has 28 days in 2026.
-    const w = windows("2026-05", karachi("2026-05-30"))
+  it("clamps an older bucket to a shorter month, and calls it complete when it covers one", () => {
+    // 30 April to date; two months back is February, which has 28 days in 2026.
+    const w = windows("2026-04", karachi("2026-04-30"))
     expect(w.current.elapsedDays).toBe(30)
-    expect(w.trend.current.startMonth).toBe("2026-03")
-    expect(w.trend.prior.endMonth).toBe("2026-02")
-    expect(w.trend.prior.end.toISOString()).toBe("2026-02-28T18:59:59.999Z")
+    expect(w.pattern.map((bucket) => bucket.month)).toEqual(["2026-02", "2026-03", "2026-04"])
+    expect(w.pattern[0].end.toISOString()).toBe("2026-02-28T18:59:59.999Z")
+    // February is shorter than the elapsed day, so the bucket holds all of it.
+    expect(w.pattern[0].complete).toBe(true)
+    // March is longer, so its bucket stops on the 30th and is not whole.
+    expect(w.pattern[1].end.toISOString()).toBe("2026-03-30T18:59:59.999Z")
+    expect(w.pattern[1].complete).toBe(false)
   })
 
-  it("steps the trend windows back across the year boundary", () => {
+  it("steps the buckets back across the year boundary", () => {
     const w = windows("2026-01", karachi("2026-01-10"))
-    expect(w.trend.current.startMonth).toBe("2025-11")
-    expect(w.trend.current.endMonth).toBe("2026-01")
-    expect(w.trend.prior.startMonth).toBe("2025-08")
-    expect(w.trend.prior.endMonth).toBe("2025-10")
-    expect(w.trend.prior.end.toISOString()).toBe("2025-10-10T18:59:59.999Z")
+    expect(w.pattern.map((bucket) => bucket.month)).toEqual(["2025-11", "2025-12", "2026-01"])
+    expect(w.pattern[0].end.toISOString()).toBe("2025-11-10T18:59:59.999Z")
+    expect(w.pattern[1].end.toISOString()).toBe("2025-12-10T18:59:59.999Z")
   })
 
-  it("gives both trend windows the same number of days", () => {
-    const day = 86_400_000
+  it("never lets two buckets overlap, whatever the selection", () => {
     for (const [month, now] of [
       ["2026-09", karachi("2026-09-20", "23:59:59")],
       ["2026-08", karachi("2026-09-20")],
       ["2026-01", karachi("2026-01-10", "23:59:59")],
+      ["2026-04", karachi("2026-04-30")],
     ] as const) {
       const w = windows(month, now)
-      const currentDays = Math.round((w.trend.current.end.getTime() - w.trend.current.start.getTime()) / day)
-      const priorDays = Math.round((w.trend.prior.end.getTime() - w.trend.prior.start.getTime()) / day)
-      // Runs of whole calendar months differ by at most the days a month
-      // differs by; they are never the lopsided pair the Center's
-      // equal-length `previousWindow` would produce.
-      expect(Math.abs(currentDays - priorDays), month).toBeLessThanOrEqual(3)
+      for (let index = 1; index < w.pattern.length; index += 1) {
+        expect(w.pattern[index - 1].end.getTime(), `${month} bucket ${index}`)
+          .toBeLessThan(w.pattern[index].start.getTime())
+      }
     }
   })
 
@@ -301,6 +325,68 @@ describe("summarising creators", () => {
   })
 })
 
+describe("the union across the pattern", () => {
+  const june = [requester({ userId: "gone", spendCents: 900_000 }), requester({ userId: "ahmed", spendCents: 11_000 })]
+  const july = [requester({ userId: "ahmed", spendCents: 602_000 })]
+  const august = [
+    requester({ userId: "ahmed", spendCents: 2_200_000, pendingCents: 50_000, orderCount: 2, pendingOrderCount: 1, rejectedOrderCount: 3, recentConsumedCents: 1_400_000 }),
+    requester({ userId: "new", spendCents: 2_000 }),
+  ]
+
+  it("lists everyone seen in any month, not only the selected one", () => {
+    const union = unionCreators([june, july, august])
+    expect(union.map((row) => row.userId).sort()).toEqual(["ahmed", "gone", "new"])
+  })
+
+  it("keeps the selected month's figures for those in it, and zeroes for those who are not", () => {
+    const union = unionCreators([june, july, august])
+    const byId = new Map(union.map((row) => [row.userId, row]))
+    expect(byId.get("ahmed")).toMatchObject({
+      spendCents: 2_200_000, pendingCents: 50_000, orderCount: 2, pendingOrderCount: 1, rejectedOrderCount: 3, recentConsumedCents: 1_400_000,
+    })
+    // Present only in June: named, but nothing of June's money leaks into the month.
+    expect(byId.get("gone")).toMatchObject({
+      userId: "gone", branchId: 1, role: "ORDER_PORTAL",
+      spendCents: 0, pendingCents: 0, orderCount: 0, pendingOrderCount: 0, rejectedOrderCount: 0, recentConsumedCents: 0,
+    })
+  })
+
+  it("resolves identity from the newest month that holds the person", () => {
+    type Named = CreatorMonth & { requesterName: string }
+    const older: Named[] = [{ ...requester({ userId: "x", spendCents: 5 }), requesterName: "Old Name" }]
+    const newer: Named[] = [{ ...requester({ userId: "x", spendCents: 9 }), requesterName: "New Name" }]
+    expect(unionCreators([older, newer])[0].requesterName).toBe("New Name")
+    // And where only the older month holds them, that name is used rather than none.
+    expect(unionCreators([older, []])[0].requesterName).toBe("Old Name")
+  })
+
+  it("separates the same person at two branches", () => {
+    const union = unionCreators([
+      [requester({ userId: "x", branchId: 1, spendCents: 5 })],
+      [requester({ userId: "x", branchId: 2, spendCents: 9 })],
+    ])
+    expect(union).toHaveLength(2)
+    expect(union.map((row) => row.branchId).sort()).toEqual([1, 2])
+  })
+
+  it("zero-fills each creator's months so every row has the same columns", () => {
+    const byKey = patternByCreator(PATTERN_MONTHS, [june, july, august])
+    expect(byKey.get("ahmed:1")?.map((entry) => entry.consumedCents)).toEqual([11_000, 602_000, 2_250_000])
+    expect(byKey.get("gone:1")?.map((entry) => entry.consumedCents)).toEqual([900_000, 0, 0])
+    expect(byKey.get("new:1")?.map((entry) => entry.consumedCents)).toEqual([0, 0, 2_000])
+    expect(byKey.get("ahmed:1")?.map((entry) => entry.month)).toEqual(PATTERN_MONTHS)
+    // Pending is carried beside spend, never folded away.
+    expect(byKey.get("ahmed:1")?.at(-1)).toEqual({ month: "2026-08", spendCents: 2_200_000, pendingCents: 50_000, consumedCents: 2_250_000 })
+  })
+
+  it("builds an empty month and a month from a row the same way", () => {
+    expect(emptyMonthConsumption("2026-08")).toEqual({ month: "2026-08", spendCents: 0, pendingCents: 0, consumedCents: 0 })
+    expect(monthConsumptionOf("2026-08", { spendCents: -5, pendingCents: 10 })).toEqual({
+      month: "2026-08", spendCents: 0, pendingCents: 10, consumedCents: 10,
+    })
+  })
+})
+
 describe("branch utilization and peer median", () => {
   it("computes utilization only for a branch with a budget", () => {
     expect(branchUtilizationPct(branch())).toBe(50)
@@ -331,14 +417,51 @@ describe("branch utilization and peer median", () => {
   })
 })
 
+describe("the month-over-month rule", () => {
+  it("compares the newest month with the one before it, and nothing else", () => {
+    // The oldest month is deliberately huge: it must not enter the figure.
+    expect(monthOverMonth(months(90_000_000, 1_000_000, 1_150_000)).momPct).toBeCloseTo(15)
+  })
+
+  it("flags at exactly the threshold and not a hair below", () => {
+    expect(monthOverMonth(months(0, 1_000_000, 1_150_000)).momFlagged).toBe(true)
+    expect(monthOverMonth(months(0, 1_000_000, 1_149_999)).momFlagged).toBe(false)
+    expect(monthOverMonth(months(0, 1_000_000, 1_149_999)).momPct).toBeLessThan(T.momSpikePct)
+  })
+
+  it("reports a spike on a tiny base but never flags it", () => {
+    const tiny = monthOverMonth(months(0, T.momMinBaselineCents - 1, 90_000_000))
+    expect(tiny.momPct).toBeGreaterThan(1000)
+    expect(tiny.momFlagged).toBe(false)
+    // One cent more of baseline and the same growth does flag.
+    expect(monthOverMonth(months(0, T.momMinBaselineCents, 90_000_000)).momFlagged).toBe(true)
+  })
+
+  it("calls a first month no baseline, not no change", () => {
+    const first = monthOverMonth(months(0, 0, 5_000_000))
+    expect(first.momPct).toBeNull()
+    expect(first.momFlagged).toBe(false)
+  })
+
+  it("never flags a fall, however far it falls", () => {
+    const fell = monthOverMonth(months(0, 90_000_000, 0))
+    expect(fell.momPct).toBeCloseTo(-100)
+    expect(fell.momFlagged).toBe(false)
+  })
+
+  it("has no baseline with fewer than two months", () => {
+    expect(monthOverMonth(months(5_000_000))).toEqual({ momPct: null, momFlagged: false })
+    expect(monthOverMonth([])).toEqual({ momPct: null, momFlagged: false })
+  })
+})
+
 describe("signals and their guards", () => {
   const score = (row: CreatorMonth, extra: Partial<Parameters<typeof scoreRequester>[0]> = {}) =>
     scoreRequester({
       row,
       branch: branch(),
       peerBranches: ordinaryPeerBranches,
-      trendConsumedCents: 0,
-      priorTrendConsumedCents: 0,
+      months: months(0, 0, consumedCents(row)),
       elapsedDays: 31,
       ...extra,
     })
@@ -359,45 +482,22 @@ describe("signals and their guards", () => {
     expect(score(row, { branch: branch({ consumedCents: 0 }) }).metrics.shareOfBranchPct).toBe(0)
   })
 
-  it("trend spike needs the growth and a baseline worth measuring", () => {
-    const row = requester({ userId: "x", spendCents: 1_150_000 })
-    const spike = { trendConsumedCents: 1_150_000, priorTrendConsumedCents: 1_000_000 }
-    expect(score(row, spike).reasons).toContain("trend_spike") // exactly +15 %
-    expect(score(row, { ...spike, priorTrendConsumedCents: 1_000_001 }).reasons).not.toContain("trend_spike")
-
-    // A tiny base that trebled: the percentage is reported, the chip is not.
-    const tiny = score(row, { trendConsumedCents: 900_000, priorTrendConsumedCents: 300_000 })
-    expect(tiny.metrics.trendPct).toBeCloseTo(200)
-    expect(tiny.reasons).not.toContain("trend_spike")
-
-    // No earlier window at all: "no baseline", not "no change".
-    expect(score(row, { trendConsumedCents: 5_000_000 }).metrics.trendPct).toBeNull()
-    expect(score(row).metrics.priorTrendConsumedCents).toBe(0)
+  it("carries the whole pattern on the row, so the percentage can be checked against it", () => {
+    const row = score(requester({ userId: "x", spendCents: 1_150_000 }), { months: months(11_000, 1_000_000, 1_150_000) })
+    expect(row.metrics.months.map((entry) => entry.consumedCents)).toEqual([11_000, 1_000_000, 1_150_000])
+    expect(row.metrics.months.map((entry) => entry.month)).toEqual(PATTERN_MONTHS)
+    expect(row.metrics.momPct).toBeCloseTo(15)
+    expect(row.metrics.momFlagged).toBe(true)
+    expect(row.reasons).toContain("mom_spike")
+    // The newest cell and the row's own month figure are the same money.
+    expect(row.metrics.months.at(-1)!.consumedCents).toBe(row.metrics.consumedCents)
   })
 
-  it("measures growth over the trend windows, never the month shown beside it", () => {
-    // A heavy month whose three-month run is well down on the three before it.
-    // The old one-month rule could not express this; the guard against reading
-    // the month's own figure into the growth column lives here.
-    const result = score(
-      requester({ userId: "x", spendCents: 9_000_000 }),
-      { trendConsumedCents: 1_000_000, priorTrendConsumedCents: 4_000_000 },
-    )
-    expect(result.metrics.consumedCents).toBe(9_000_000)
-    expect(result.metrics.trendConsumedCents).toBe(1_000_000)
-    expect(result.metrics.priorTrendConsumedCents).toBe(4_000_000)
-    expect(result.metrics.trendPct).toBeCloseTo(-75)
-    expect(result.reasons).not.toContain("trend_spike")
-  })
-
-  it("floors negative trend figures at zero rather than reporting a negative baseline", () => {
-    const result = score(
-      requester({ userId: "x" }),
-      { trendConsumedCents: -5, priorTrendConsumedCents: -9 },
-    )
-    expect(result.metrics.trendConsumedCents).toBe(0)
-    expect(result.metrics.priorTrendConsumedCents).toBe(0)
-    expect(result.metrics.trendPct).toBeNull()
+  it("floors a negative month at zero rather than reporting a negative baseline", () => {
+    const row = score(requester({ userId: "x" }), { months: months(0, -9, -5) })
+    expect(row.metrics.months.map((entry) => entry.consumedCents)).toEqual([0, 0, 0])
+    expect(row.metrics.momPct).toBeNull()
+    expect(row.metrics.momFlagged).toBe(false)
   })
 
   it("above peers compares branch utilization against the other branches' median", () => {
@@ -405,7 +505,7 @@ describe("signals and their guards", () => {
       branch({ branchId: 2, consumedCents: 10_000_000, totalBudgetCents: 10_000_000 }),
       branch({ branchId: 3, consumedCents: 10_000_000, totalBudgetCents: 10_000_000 }),
     ]
-    // Peer median is 1,000,000; 1.5× is the line.
+    // Peer median is 100%; 1.5× is the line.
     expect(score(requester({ userId: "x" }), { branch: branch({ consumedCents: 15_000_000, totalBudgetCents: 10_000_000 }), peerBranches: peers }).reasons).toContain("above_peers")
     expect(score(requester({ userId: "x" }), { branch: branch({ consumedCents: 14_999_999, totalBudgetCents: 10_000_000 }), peerBranches: peers }).reasons).not.toContain("above_peers")
 
@@ -416,7 +516,7 @@ describe("signals and their guards", () => {
   })
 
   it("reports the branch and peer utilization, independent of the person being scored", () => {
-    // The scored row is huge; the median of the *peers* is still 1,000,000.
+    // The scored row is huge; the median of the *peers* is still 50 %.
     const row = score(requester({ userId: "x", spendCents: 50_000_000 }))
     expect(row.metrics.branchUtilizationPct).toBe(50)
     expect(row.metrics.peerBranchMedianUtilizationPct).toBe(50)
@@ -458,71 +558,100 @@ describe("signals and their guards", () => {
     const row = score(
       requester({ userId: "x", spendCents: 5_000_000, pendingCents: 4_000_000, recentConsumedCents: 6_000_000, rejectedOrderCount: 3 }),
       {
-        trendConsumedCents: 9_000_000,
-        priorTrendConsumedCents: 1_000_000,
+        months: months(0, 1_000_000, 9_000_000),
         peerBranches: [
           branch({ branchId: 2, consumedCents: 1_000_000, totalBudgetCents: 10_000_000 }),
           branch({ branchId: 3, consumedCents: 2_000_000, totalBudgetCents: 10_000_000 }),
         ],
       },
     )
-    expect(row.reasons).toEqual(["high_share", "trend_spike", "above_peers", "late_surge", "high_held", "rejected_orders"])
+    expect(row.reasons).toEqual(["high_share", "mom_spike", "above_peers", "late_surge", "high_held", "rejected_orders"])
     expect(row.score).toBe(3 + 2 + 2 + 2 + 1 + 1)
-    expect(isFlagged(row)).toBe(true)
+    expect(isScoreFlagged(row)).toBe(true)
   })
 
-  it("a quiet requester scores nothing and is not flagged", () => {
+  it("a quiet requester scores nothing", () => {
     const row = score(requester({ userId: "x", spendCents: 900_000, orderCount: 2 }))
     expect(row.score).toBe(0)
     expect(row.reasons).toEqual([])
-    expect(isFlagged(row)).toBe(false)
+    expect(isScoreFlagged(row)).toBe(false)
     expect(row.metrics.orderCount).toBe(2)
   })
 
-  it("flags at the score line exactly", () => {
+  it("reads the retired score line exactly, for the count the response still reports", () => {
     const base = { userId: "x", branchId: 1, reasons: [], metrics: {} as never }
-    expect(isFlagged({ ...base, score: T.flagScore })).toBe(true)
-    expect(isFlagged({ ...base, score: T.flagScore - 1 })).toBe(false)
+    expect(isScoreFlagged({ ...base, score: T.flagScore })).toBe(true)
+    expect(isScoreFlagged({ ...base, score: T.flagScore - 1 })).toBe(false)
   })
 })
 
 describe("ranking and the list", () => {
-  const row = (userId: string, score: number, consumed: number) => ({
-    userId, branchId: 1, score, reasons: [],
-    metrics: { consumedCents: consumed } as never,
+  const row = (userId: string, momFlagged: boolean, momPct: number | null, consumed: number) => ({
+    userId, branchId: 1, score: 0, reasons: [],
+    metrics: { momFlagged, momPct, consumedCents: consumed } as never,
   })
 
-  it("orders by score, then consumption, then a stable key", () => {
-    const ranked = rankWatchlist([row("b", 4, 100), row("a", 4, 100), row("c", 7, 1), row("d", 4, 500)])
-    expect(ranked.map((entry) => entry.userId)).toEqual(["c", "d", "a", "b"])
+  it("puts highlighted rows first, steepest first", () => {
+    const ranked = rankWatchlist([
+      row("quiet", false, 2, 900_000),
+      row("spike-small", true, 400, 6_000),
+      row("spike-big", true, 20, 5_000_000),
+    ])
+    expect(ranked.map((entry) => entry.userId)).toEqual(["spike-small", "spike-big", "quiet"])
   })
 
-  it("returns a new array", () => {
-    const input = [row("a", 1, 1)]
-    expect(rankWatchlist(input)).not.toBe(input)
+  it("orders everyone else by money, never by growth", () => {
+    // Without the second term, +14 % on ₨6,000 would outrank ₨4,000,000 flat.
+    const ranked = rankWatchlist([
+      row("nearly", false, 14, 600_000),
+      row("heavy", false, 0, 400_000_000),
+    ])
+    expect(ranked.map((entry) => entry.userId)).toEqual(["heavy", "nearly"])
   })
 
-  it("builds the flagged list, bounded, and counts the rest", () => {
-    const heavy = requester({ userId: "heavy", spendCents: 5_000_000, recentConsumedCents: 5_000_000 })
-    const heavier = requester({ userId: "heavier", spendCents: 6_000_000, recentConsumedCents: 6_000_000 })
-    const quietRequesters = [
+  it("keeps equal rows in a stable key order and returns a new array", () => {
+    const input = [row("b", false, null, 100), row("a", false, null, 100)]
+    const ranked = rankWatchlist(input)
+    expect(ranked.map((entry) => entry.userId)).toEqual(["a", "b"])
+    expect(ranked).not.toBe(input)
+  })
+
+  it("lists every requester, bounded by the limit, and counts them all", () => {
+    const spiking = requester({ userId: "spiking", spendCents: 5_000_000 })
+    const quiet = [
       requester({ userId: "p1", spendCents: 1_000_000 }),
       requester({ userId: "p2", spendCents: 1_200_000 }),
       requester({ userId: "p3", spendCents: 800_000 }),
     ]
-    const { requesters, branches } = summarizeCreators([heavy, heavier, ...quietRequesters])
+    const { requesters, branches } = summarizeCreators([spiking, ...quiet])
+    const monthsByKey = new Map([
+      [creatorKey(spiking), months(0, 1_000_000, 5_000_000)],
+      [creatorKey(quiet[0]), months(0, 1_000_000, 1_000_000)],
+      [creatorKey(quiet[1]), months(0, 1_200_000, 1_200_000)],
+      [creatorKey(quiet[2]), months(0, 800_000, 800_000)],
+    ])
     const result = buildWatchlist({
-      requesters, branches,
-      trendConsumedByKey: new Map([[creatorKey(heavy), 5_000_000], [creatorKey(heavier), 6_000_000]]),
-      priorTrendConsumedByKey: new Map([[creatorKey(heavy), 1_000_000], [creatorKey(heavier), 1_000_000]]),
-      elapsedDays: 31,
-      limit: 1,
+      requesters, branches, patternMonths: PATTERN_MONTHS, monthsByKey, elapsedDays: 31, limit: 2,
     })
-    expect(result.flaggedCount).toBe(2)
-    expect(result.unflaggedCount).toBe(3)
-    expect(result.rows).toHaveLength(1)
-    expect(result.rows[0].userId).toBe("heavier")
-    expect(result.rows[0].metrics.trendPct).toBeCloseTo(500)
+
+    expect(result.requesterCount).toBe(4)
+    expect(result.highlightedCount).toBe(1)
+    expect(result.rows).toHaveLength(2)
+    // The highlight leads; the quietest of the rest is still counted but not shown.
+    expect(result.rows.map((entry) => entry.userId)).toEqual(["spiking", "p2"])
+    expect(result.rows[0].metrics.momPct).toBeCloseTo(400)
+    expect(result.rows[0].metrics.momFlagged).toBe(true)
+  })
+
+  it("draws a requester with no pattern entry as three empty months", () => {
+    const silent = requester({ userId: "silent" })
+    const { requesters, branches } = summarizeCreators([silent])
+    const result = buildWatchlist({
+      requesters, branches, patternMonths: PATTERN_MONTHS, monthsByKey: new Map(), elapsedDays: 31, limit: 10,
+    })
+    expect(result.rows[0].metrics.months.map((entry) => entry.consumedCents)).toEqual([0, 0, 0])
+    expect(result.rows[0].metrics.months.map((entry) => entry.month)).toEqual(PATTERN_MONTHS)
+    expect(result.rows[0].metrics.momPct).toBeNull()
   })
 
   it("shares one branch-vs-branch peer signal across every requester at that branch", () => {
@@ -542,13 +671,14 @@ describe("ranking and the list", () => {
         [3, { totalBudgetCents: 10_000_000, remainingCents: 8_000_000 }],
       ]),
     )
-    const trendConsumedByKey = new Map(high.map((entry) => [creatorKey(entry), 9_000_000]))
-    const priorTrendConsumedByKey = new Map(high.map((entry) => [creatorKey(entry), 4_000_000]))
     const result = buildWatchlist({
-      requesters, branches, trendConsumedByKey, priorTrendConsumedByKey, elapsedDays: 31, limit: 10,
+      requesters, branches, patternMonths: PATTERN_MONTHS,
+      monthsByKey: new Map(high.map((entry) => [creatorKey(entry), months(0, 4_000_000, 9_000_000)])),
+      elapsedDays: 31, limit: 10,
     })
-    expect(result.rows.map((entry) => entry.userId).sort()).toEqual(["n1", "n2"])
-    for (const entry of result.rows) {
+    const northern = result.rows.filter((entry) => entry.branchId === 1)
+    expect(northern.map((entry) => entry.userId).sort()).toEqual(["n1", "n2"])
+    for (const entry of northern) {
       expect(entry.reasons).toContain("above_peers")
       expect(entry.metrics.branchUtilizationPct).toBe(90)
       expect(entry.metrics.peerBranchMedianUtilizationPct).toBe(15)
@@ -560,12 +690,17 @@ describe("ranking and the list", () => {
     const result = buildWatchlist({
       requesters: [lone],
       branches: new Map(),
-      trendConsumedByKey: new Map(),
-      priorTrendConsumedByKey: new Map(),
+      patternMonths: PATTERN_MONTHS,
+      monthsByKey: new Map(),
       elapsedDays: 31,
       limit: 10,
     })
-    expect(result.rows).toEqual([])
-    expect(result.unflaggedCount).toBe(1)
+    // Listed — the panel shows everyone — but with no signal and no highlight.
+    expect(result.rows).toHaveLength(1)
+    expect(result.rows[0].score).toBe(0)
+    expect(result.rows[0].metrics.shareOfBranchPct).toBe(100)
+    expect(result.requesterCount).toBe(1)
+    expect(result.highlightedCount).toBe(0)
+    expect(result.scoreFlaggedCount).toBe(0)
   })
 })
