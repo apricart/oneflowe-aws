@@ -25,6 +25,12 @@ export type AuthAuditAction =
   | "AUTH_LOGIN_FAILURE"
   | "AUTH_MFA_CHALLENGE"
   | "AUTH_MFA_FAILURE"
+  | "AUTH_MFA_VERIFIED"
+  // Turning the second factor on or off is a change to a security control, not
+  // a use of one. Both are recorded because disabling MFA is among the first
+  // things someone holding a stolen session would do.
+  | "AUTH_MFA_ENABLED"
+  | "AUTH_MFA_DISABLED"
   | "AUTH_ACCOUNT_LOCKED"
   | "AUTH_LOCKOUT_BLOCKED"
   | "AUTH_LOCKOUT_CLEARED"

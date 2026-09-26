@@ -1,41 +1,48 @@
-import { readFileSync } from "node:fs"
-import { join } from "node:path"
+import { readFileSync, readdirSync, statSync } from "node:fs"
+import { join, relative } from "node:path"
 
 import { describe, expect, it } from "vitest"
 
 /**
- * Which mutating routes record what they did.
+ * Which mutating routes record what they did — **all of them**.
  *
- * An audit review found 94 of 135 route files under `app/api/v1/` writing no
- * audit row at all. This change retrofitted the seven listed below through
- * `lib/server/activity-audit.ts`; this is the **control** that keeps them
- * recorded, in the same shape as `lib/pricing-access.test.ts`.
+ * An audit review found the trail scattered and absent from most of the API.
+ * This is the control that keeps it complete. Every route file under
+ * `app/api/v1/**` that exports a POST, PUT, PATCH or DELETE handler must appear
+ * in exactly one of the three lists below, and `every mutating route is
+ * classified` is the test that makes it so: a **new** mutating route fails this
+ * suite until somebody says which list it belongs in.
  *
- * Two things are asserted, and the second is the one that matters:
+ * That is the point. The previous version of this file listed only the seven
+ * routes one change had retrofitted, which said nothing about the rest.
  *
- *  1. Each listed file writes an audit row for each mutating handler it has.
- *  2. Each of those writes is **inside a transaction**, so the record commits
- *     with the change or neither does. A write through `db.insert` rather than
- *     `tx.insert` is the "best effort" pattern the review flagged, and it would
- *     pass a naive grep for `recordAuditEvent`.
- *
- * `app/api/v1/settings/route.ts` is deliberately absent: it already wrote a
- * transactional audit row with a previous value before this change, and is the
- * pattern the writer generalizes.
- *
- * **When you audit another route, add it here.** A route missing from this list
- * is silently free to stop recording.
+ *  * `DIRECT` — the handler calls `recordAuditEvent` itself, inside the
+ *    transaction that performs the change.
+ *  * `VIA_LIB` — the write happens in a shared `lib/` module the route
+ *    delegates to. That is the better place when several routes reach the same
+ *    transition: `fulfillApprovedOrder` is reached from three of them, and
+ *    recording it per route would have meant three spellings of one event.
+ *  * `LEGACY_DIRECT` — audited already, but with a hand-written
+ *    `insert(auditLogs)` rather than through the writer.
+ *  * `NOT_AUDITED` — deliberately not recorded, each with the reason. A gap
+ *    that is written down is a decision; a gap that is not is an oversight.
  */
 
-type Covered = {
+type DirectRoute = {
   file: string
   /** The handlers that mutate and must each record. */
   handlers: readonly string[]
-  /** The action strings the handlers write, so a rename cannot go unnoticed. */
+  /** The action strings written, so a rename cannot go unnoticed. */
   actions: readonly string[]
+  /**
+   * True when the write cannot share a transaction with the change — an S3
+   * object, a `CREATE INDEX`. Those call `recordAuditEvent(db, …)` by necessity,
+   * and the reason is in a comment at the call site.
+   */
+  nonTransactional?: true
 }
 
-const COVERED: readonly Covered[] = [
+const DIRECT: readonly DirectRoute[] = [
   {
     file: "app/api/v1/categories/route.ts",
     handlers: ["POST", "PUT", "DELETE"],
@@ -71,21 +78,248 @@ const COVERED: readonly Covered[] = [
     handlers: ["POST", "DELETE"],
     actions: ["CREATE_REPORT_SCHEDULE", "UPDATE_REPORT_SCHEDULE", "DELETE_REPORT_SCHEDULE"],
   },
+  {
+    file: "app/api/v1/admin/cleanup-inventory/route.ts",
+    handlers: ["POST"],
+    actions: ["CLEANUP_ORGANIZATION_INVENTORY_NAMES"],
+  },
+  {
+    file: "app/api/v1/admin/repair-budgets/route.ts",
+    handlers: ["POST"],
+    actions: ["RESET_BRANCH_BUDGETS", "REBUILD_BRANCH_BUDGETS"],
+  },
+  {
+    file: "app/api/v1/reports/process-schedules/route.ts",
+    handlers: ["POST"],
+    actions: ["SEND_SCHEDULED_REPORT"],
+  },
+  {
+    file: "app/api/v1/support/attachments/route.ts",
+    handlers: ["POST"],
+    actions: ["UPLOAD_SUPPORT_ATTACHMENT"],
+  },
+  {
+    // S3 is not transactional; see the comment at the call site.
+    file: "app/api/v1/upload/image/route.ts",
+    handlers: ["POST"],
+    actions: ["UPLOAD_IMAGE"],
+    nonTransactional: true,
+  },
+  {
+    // Also the route that used to delete the order's `system_logs` history. It
+    // no longer does — audit rows are append-only (rule 06), and a hard delete
+    // is the one case where that history matters most.
+    file: "app/api/v1/admin/delete-order/route.ts",
+    handlers: ["DELETE"],
+    actions: ["DELETE_ORDER"],
+  },
+  {
+    // `CREATE INDEX` is not a row write; see the comment at the call site.
+    file: "app/api/v1/admin/migrate-product-code/route.ts",
+    handlers: ["POST"],
+    actions: ["MIGRATE_SCHEMA"],
+    nonTransactional: true,
+  },
 ]
+
+/**
+ * Routes whose audit write lives in a module they import. The module is named so
+ * a reader can follow it, and asserted to still write.
+ */
+const VIA_LIB: readonly { file: string; module: string }[] = [
+  // Authentication events go to `system_logs` through `recordAuthAuditEvent`,
+  // whose looser columns suit an event with no verified tenant or account.
+  { file: "app/api/v1/mfa/toggle/route.ts", module: "lib/server/auth-audit.ts" },
+  { file: "app/api/v1/mfa/send-otp/route.ts", module: "lib/server/auth-audit.ts" },
+  { file: "app/api/v1/mfa/verify-otp/route.ts", module: "lib/server/auth-audit.ts" },
+  { file: "app/api/v1/mfa/login/send-otp/route.ts", module: "lib/server/auth-audit.ts" },
+  { file: "app/api/v1/mfa/login/verify-otp/route.ts", module: "lib/server/auth-audit.ts" },
+  { file: "app/api/v1/users/me/change-password/route.ts", module: "lib/server/password-change.ts" },
+  { file: "app/api/v1/users/me/email-verification/send/route.ts", module: "lib/server/email-verification.ts" },
+  { file: "app/api/v1/users/me/email-verification/verify/route.ts", module: "lib/server/email-verification.ts" },
+
+  // The APPROVED → FULFILLED transition. Three routes reach it; the record
+  // belongs with the ledger move, not with any one of them.
+  { file: "app/api/v1/orders/[id]/fulfill/route.ts", module: "lib/server/order-fulfillment.ts" },
+
+  { file: "app/api/v1/orders/[id]/approve/route.ts", module: "lib/server/order-decision-service.ts" },
+  { file: "app/api/v1/orders/[id]/reject/route.ts", module: "lib/server/order-decision-service.ts" },
+  { file: "app/api/v1/group-portal/approvals/decide/route.ts", module: "lib/server/order-decision-service.ts" },
+  { file: "app/api/v1/group-portal/orders/route.ts", module: "lib/server/group-order-creation.ts" },
+  { file: "app/api/v1/group-portal/refunds/route.ts", module: "lib/server/group-order-refunds.ts" },
+  { file: "app/api/v1/group-portal/orders/[groupOrderId]/tokens/route.ts", module: "lib/server/group-order-tokens.ts" },
+  { file: "app/api/v1/budgets/cron/expire-addons/route.ts", module: "lib/server/budget-addon-expiry.ts" },
+  { file: "app/api/v1/payment-control/exceptions/route.ts", module: "lib/server/payment-control.ts" },
+  { file: "app/api/v1/payment-control/exceptions/[id]/revoke/route.ts", module: "lib/server/payment-control.ts" },
+  { file: "app/api/v1/support/threads/route.ts", module: "lib/server/support-threads.ts" },
+  { file: "app/api/v1/support/threads/[id]/route.ts", module: "lib/server/support-threads.ts" },
+  { file: "app/api/v1/support/threads/[id]/messages/route.ts", module: "lib/server/support-threads.ts" },
+]
+
+/**
+ * Routes that already audited before the centralized writer existed, with a
+ * direct `insert(auditLogs)` (or `system_logs` / `group_audit_logs`).
+ *
+ * They are audited, so they are not gaps — but they are not going through
+ * `recordAuditEvent` either, which means each spells its own action however its
+ * author chose (`CREATE`, `import_products`, `CASCADE_UPDATE`) and none of them
+ * masks its metadata or records an IP. `lib/activity-log.ts` classifies those
+ * spellings precisely because these rows exist.
+ *
+ * Migrating them is a separate change, deliberately not attempted here:
+ * thirty-eight files across orders, budgets, pricing and RBAC, every one of them
+ * money- or permission-bearing, is not a diff anybody can review alongside a new
+ * screen. What this list does is make them visible and keep them writing.
+ */
+const LEGACY_DIRECT: readonly string[] = [
+  "app/api/v1/admin/clear-branch-inventory/route.ts",
+  "app/api/v1/admin/global-inventory/import/route.ts",
+  "app/api/v1/admin/global-inventory/route.ts",
+  "app/api/v1/admin/organization-assignments/import/route.ts",
+  "app/api/v1/admin/organization-assignments/route.ts",
+  "app/api/v1/admin/refunds/[id]/route.ts",
+  "app/api/v1/admin/refunds/route.ts",
+  "app/api/v1/branch/inventory/route.ts",
+  "app/api/v1/branches/route.ts",
+  "app/api/v1/budget-quantity/route.ts",
+  "app/api/v1/budgets/route.ts",
+  "app/api/v1/groups/[id]/branches/clean/route.ts",
+  "app/api/v1/groups/[id]/branches/route.ts",
+  "app/api/v1/groups/[id]/prices/route.ts",
+  "app/api/v1/groups/[id]/route.ts",
+  "app/api/v1/groups/route.ts",
+  "app/api/v1/head-office/branch-assignments/route.ts",
+  "app/api/v1/head-office/branch-assignments/toggle/route.ts",
+  "app/api/v1/head-office/organization-inventory/route.ts",
+  "app/api/v1/inventory/branch-products/route.ts",
+  "app/api/v1/inventory/global-products/[id]/route.ts",
+  "app/api/v1/inventory/import/route.ts",
+  "app/api/v1/inventory/organization-products/route.ts",
+  "app/api/v1/orders/[id]/fulfillment-status/route.ts",
+  "app/api/v1/orders/[id]/payment-status/route.ts",
+  "app/api/v1/orders/[id]/refunds/route.ts",
+  "app/api/v1/orders/[id]/route.ts",
+  "app/api/v1/orders/[id]/send-token-email/route.ts",
+  "app/api/v1/orders/cron/auto-fulfill/route.ts",
+  "app/api/v1/orders/route.ts",
+  "app/api/v1/organizations/[id]/network-policy/route.ts",
+  "app/api/v1/organizations/[id]/route.ts",
+  "app/api/v1/organizations/route.ts",
+  "app/api/v1/roles/permissions/route.ts",
+  "app/api/v1/settings/route.ts",
+  "app/api/v1/users/[id]/access/route.ts",
+  "app/api/v1/users/[id]/route.ts",
+  "app/api/v1/users/route.ts",
+]
+
+/** Deliberately not recorded. Every entry states why. */
+const NOT_AUDITED: readonly { file: string; reason: string }[] = [
+  {
+    file: "app/api/v1/notifications/route.ts",
+    reason:
+      "PATCH is mark-all-read on the caller's own notifications — per-viewer UI "
+      + "state. A row every time somebody opens the bell menu would be thousands "
+      + "a day, and the signal the screen exists to show would drown in it.",
+  },
+  {
+    file: "app/api/v1/notifications/email-outbox/process/route.ts",
+    reason:
+      "`email_outbox` already carries status, attempts, recipient, template and "
+      + "payload for every message, which *is* the delivery record. A row per "
+      + "cron sweep would add nothing a reviewer cannot read there.",
+  },
+  {
+    file: "app/api/v1/group-portal/draft/route.ts",
+    reason:
+      "A scratch draft, upserted repeatedly while somebody composes an order. "
+      + "The submission is audited (lib/server/group-order-creation.ts); auditing "
+      + "the keystrokes before it would bury that.",
+  },
+  {
+    file: "app/api/v1/inventory/transactions/route.ts",
+    reason: "POST is a stub that always answers 501. Nothing is written.",
+  },
+  {
+    file: "app/api/v1/inventory/branch-products/restock/route.ts",
+    reason:
+      "POST is a deprecated stub that always answers 400 — stock is global-only. "
+      + "Nothing is written.",
+  },
+]
+
+const API_ROOT = "app/api/v1"
+const MUTATING = /export\s+async\s+function\s+(POST|PUT|PATCH|DELETE)\b/
 
 function read(file: string): string {
   return readFileSync(join(process.cwd(), file), "utf8")
 }
 
-describe("retrofitted audit coverage", () => {
-  it.each(COVERED)("$file records every mutation it performs", ({ file, handlers, actions }) => {
+/** Every `route.ts` under the v1 API, as a repo-relative POSIX path. */
+function routeFiles(directory: string): string[] {
+  const found: string[] = []
+  for (const name of readdirSync(directory)) {
+    const path = join(directory, name)
+    if (statSync(path).isDirectory()) {
+      found.push(...routeFiles(path))
+    } else if (name === "route.ts") {
+      found.push(relative(process.cwd(), path).split("\\").join("/"))
+    }
+  }
+  return found
+}
+
+const MUTATING_ROUTES = routeFiles(join(process.cwd(), API_ROOT)).filter((file) =>
+  MUTATING.test(read(file)),
+)
+
+describe("every mutating route is classified", () => {
+  it("finds the mutating routes at all, so a broken scan cannot pass vacuously", () => {
+    expect(MUTATING_ROUTES.length).toBeGreaterThan(50)
+  })
+
+  it("accounts for every one of them exactly once", () => {
+    const classified = new Map<string, string>()
+    const duplicates: string[] = []
+    const add = (file: string, list: string) => {
+      if (classified.has(file)) duplicates.push(`${file} is in both ${classified.get(file)} and ${list}`)
+      else classified.set(file, list)
+    }
+    for (const entry of DIRECT) add(entry.file, "DIRECT")
+    for (const entry of VIA_LIB) add(entry.file, "VIA_LIB")
+    for (const file of LEGACY_DIRECT) add(file, "LEGACY_DIRECT")
+    for (const entry of NOT_AUDITED) add(entry.file, "NOT_AUDITED")
+
+    expect(duplicates).toEqual([])
+
+    const unclassified = MUTATING_ROUTES.filter((file) => !classified.has(file))
+    expect(
+      unclassified,
+      "These routes mutate and are in no list. Add each to DIRECT (it records "
+        + "itself through recordAuditEvent), VIA_LIB (a module it imports "
+        + "records), LEGACY_DIRECT (it writes insert(auditLogs) by hand), or "
+        + "NOT_AUDITED (with a reason).",
+    ).toEqual([])
+  })
+
+  it("lists nothing that has stopped mutating or moved", () => {
+    const stale = [
+      ...DIRECT.map((entry) => entry.file),
+      ...VIA_LIB.map((entry) => entry.file),
+      ...LEGACY_DIRECT,
+      ...NOT_AUDITED.map((entry) => entry.file),
+    ].filter((file) => !MUTATING_ROUTES.includes(file))
+    expect(stale, "Listed but no longer a mutating route — remove the entry.").toEqual([])
+  })
+})
+
+describe("routes that record for themselves", () => {
+  it.each(DIRECT)("$file records every mutation it performs", ({ file, handlers, actions }) => {
     const source = read(file)
 
     expect(source, `${file} must import the centralized writer`).toContain(
       "@/lib/server/activity-audit",
     )
 
-    // One audit write per mutating handler, at least.
     const writes = source.match(/recordAuditEvent\(/g) ?? []
     expect(
       writes.length,
@@ -97,32 +331,82 @@ describe("retrofitted audit coverage", () => {
     }
   })
 
-  it.each(COVERED)("$file writes its audit row inside the transaction", ({ file }) => {
-    const source = read(file)
+  it.each(DIRECT.filter((entry) => !entry.nonTransactional))(
+    "$file writes its audit row inside the transaction",
+    ({ file }) => {
+      const source = read(file)
 
-    // Every call must be handed a transaction handle, never the module-level
-    // client: `recordAuditEvent(db, …)` would commit independently of the change
-    // it claims to describe.
-    const executors = [...source.matchAll(/recordAuditEvent\(\s*([A-Za-z_$][\w$]*)/g)].map(
-      (match) => match[1],
-    )
-    expect(executors.length).toBeGreaterThan(0)
-    for (const executor of executors) {
-      expect(executor, `${file} passes "${executor}" instead of a transaction handle`).toBe("tx")
-    }
+      // `recordAuditEvent(db, …)` would commit independently of the change it
+      // claims to describe — the "best effort" pattern the review flagged.
+      const executors = [...source.matchAll(/recordAuditEvent\(\s*([A-Za-z_$][\w$]*)/g)].map(
+        (match) => match[1],
+      )
+      expect(executors.length).toBeGreaterThan(0)
+      for (const executor of executors) {
+        expect(executor, `${file} passes "${executor}" instead of a transaction handle`).toBe("tx")
+      }
 
-    expect(source, `${file} must open a transaction around the change and its record`).toMatch(
-      /db\.transaction\(/,
-    )
-  })
+      expect(source, `${file} must open a transaction around the change and its record`).toMatch(
+        /db\.transaction\(/,
+      )
+    },
+  )
+
+  it.each(DIRECT.filter((entry) => entry.nonTransactional))(
+    "$file says why its write cannot be transactional",
+    ({ file }) => {
+      // The exemption is only legitimate with the reason written down beside it.
+      const source = read(file)
+      expect(source).toMatch(/recordAuditEvent\(\s*db\b/)
+      expect(source.toLowerCase()).toMatch(/not transactional|cannot join a transaction|no transaction/)
+    },
+  )
 
   it("keeps the writer the only way these routes reach audit_logs", () => {
-    // A direct `insert(auditLogs)` alongside the writer means two spellings of
-    // one event again, which is what the centralization was for.
-    for (const { file } of COVERED) {
-      const source = read(file)
-      expect(source, `${file} bypasses the writer`).not.toMatch(/insert\(auditLogs\)/)
+    for (const { file } of DIRECT) {
+      expect(read(file), `${file} bypasses the writer`).not.toMatch(/insert\(auditLogs\)/)
     }
+  })
+})
+
+describe("routes whose record is written by a module they delegate to", () => {
+  it.each(VIA_LIB)("$file delegates to $module, which still writes", ({ file, module }) => {
+    const source = read(file)
+    const importPath = `@/${module.replace(/\.ts$/, "")}`
+    expect(source, `${file} no longer imports ${module}`).toContain(importPath)
+
+    const moduleSource = read(module)
+    expect(
+      moduleSource,
+      `${module} no longer writes an audit row, so ${file} is now unaudited`,
+    ).toMatch(/recordAuditEvent\(|recordAuthAuditEvent\(|insert\((auditLogs|systemLogs|groupAuditLogs)\)/)
+  })
+})
+
+describe("routes that still audit by hand", () => {
+  it.each(LEGACY_DIRECT)("%s still writes its own audit row", (file) => {
+    // Not required to use the writer — but it must not quietly stop recording,
+    // which is the regression this list exists to catch.
+    expect(read(file)).toMatch(/insert\((auditLogs|systemLogs|groupAuditLogs)\)/)
+  })
+
+  it("is shrinking, not growing", () => {
+    // A number, so migrating one of these to `recordAuditEvent` is a visible,
+    // deliberate edit to this file rather than something nobody notices.
+    expect(LEGACY_DIRECT).toHaveLength(38)
+  })
+})
+
+describe("routes deliberately not audited", () => {
+  it.each(NOT_AUDITED)("$file states why", ({ reason }) => {
+    // A reason long enough to be an argument rather than a shrug.
+    expect(reason.length).toBeGreaterThan(40)
+  })
+
+  it.each(NOT_AUDITED)("$file really writes nothing to the trail", ({ file }) => {
+    const source = read(file)
+    expect(source).not.toMatch(/recordAuditEvent\(|recordAuthAuditEvent\(/)
+    expect(source).not.toMatch(/insert\((auditLogs|systemLogs|groupAuditLogs)\)/)
   })
 })
 
@@ -134,8 +418,6 @@ describe("the writer itself", () => {
   })
 
   it("does not fall back to its own client when given an executor", () => {
-    // `recordAuditEvent(executor, …)` must use `executor`, so there is no path
-    // on which a caller inside a transaction silently writes outside it.
     expect(source).toMatch(/executor\.insert\(auditLogs\)/)
     expect(source).not.toMatch(/executor: AuditExecutor = db/)
   })

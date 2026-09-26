@@ -2,16 +2,22 @@ import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
-import { orders, orderItems, budgets, systemLogs, globalProducts, refunds } from "@/db/schema"
+import { orders, orderItems, budgets, globalProducts, refunds } from "@/db/schema"
 import { eq, and, gte, sql } from "drizzle-orm"
 import { releaseQuantityBudgetForDeletedOrder } from "@/lib/server/product-quantity-budget-ledger"
 import { orderSelectColumns } from "@/lib/order-select"
+import { auditActorFromSession, recordAuditEvent } from "@/lib/server/activity-audit"
 
 /**
  * DELETE /api/v1/admin/delete-order?id=94
  * 
- * Deletes an order and all related data (items, logs, budget adjustments, stock restoration)
- * SUPER_ADMIN only
+ * Deletes an order and its items, releases its budget hold and restores its stock.
+ *
+ * The order's `system_logs` history is deliberately **not** deleted, and the
+ * deletion itself is recorded in `audit_logs` — after this runs, that entry is
+ * the only place the order existed.
+ *
+ * SUPER_ADMIN, or HEAD_OFFICE within its own organization.
  */
 export async function DELETE(req: NextRequest) {
     try {
@@ -126,15 +132,48 @@ export async function DELETE(req: NextRequest) {
                 }
             }
 
-            // 7. Delete system logs
-            await tx.delete(systemLogs).where(
-                and(
-                    eq(systemLogs.resourceType, 'order'),
-                    eq(systemLogs.resourceId, String(orderIdNum))
-                )
-            )
+            // 7. The order's `system_logs` rows stay.
+            //
+            // This step used to delete them. Audit rows are append-only by policy
+            // (rule 06) precisely so that deleting the subject cannot erase the
+            // history of it, and an administrative hard delete is the single case
+            // where that history matters most. `system_logs.resource_id` carries
+            // no foreign key, so the rows simply outlive the order, which is the
+            // point of them.
 
-            // 8. Delete the order
+            // 8. Delete the order, recording what it was.
+            //
+            // In the same transaction, and before the row goes: afterwards this
+            // entry is the only place the order existed. It carries the money and
+            // the lines, because those are what a reviewer will be asked about.
+            await recordAuditEvent(tx, {
+                action: "DELETE_ORDER",
+                entity: "order",
+                entityId: orderIdNum,
+                actor: auditActorFromSession(session),
+                organizationId: lockedOrder.organizationId,
+                branchId: lockedOrder.branchId,
+                before: {
+                    tid: lockedOrder.tid,
+                    status: lockedOrder.status,
+                    paymentStatus: lockedOrder.paymentStatus,
+                    totalCents: lockedOrder.totalCents,
+                    createdAt: lockedOrder.createdAt,
+                    createdByUserId: lockedOrder.createdByUserId,
+                    items: items.map((item) => ({
+                        globalProductId: item.globalProductId,
+                        quantity: item.quantity,
+                        priceCents: item.priceCents,
+                    })),
+                },
+                context: {
+                    budgetPeriod: currentMonth,
+                    releasedHeldCents: budget ? lockedOrder.totalCents : 0,
+                    stockRestoredForProducts: items.map((item) => item.globalProductId),
+                    deletedByRole: role,
+                },
+            })
+
             await tx.delete(orders).where(eq(orders.id, orderIdNum))
         })
 

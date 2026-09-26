@@ -1,8 +1,8 @@
 import { NextRequest } from "next/server"
-import { and,eq,gte,lte,sql,or,inArray,desc } from "drizzle-orm"
+import { and,count,desc,eq,gte,inArray,isNull,lte,ne,or,sql } from "drizzle-orm"
 import { requireApiRole,ok,error } from "@/lib/api"
 import { db } from "@/lib/db"
-import { orders,branches,organizations,orderItems,refunds,refundItems } from "@/db/schema"
+import { orders,branches,organizations,orderItems,refunds,refundItems,roles,users } from "@/db/schema"
 import { getRequestScope } from "@/lib/auth"
 import { getCached,generateCacheKey,CACHE_TTL } from "@/lib/cache-utils"
 import { metricExpressions } from "@/lib/metric-utils"
@@ -18,6 +18,22 @@ import { loadAnalyticsAssignedBranchIds } from "@/lib/server/analytics-branch-sc
 const allowedRoles = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER"] as const
 type Role = typeof allowedRoles[number]
 type SalesGranularity = "hourly" | "daily" | "monthly" | "yearly"
+
+const dashboardStatusMetricSelection = {
+    pendingCount: sql<number>`COALESCE(COUNT(CASE WHEN UPPER(${orders.status}) = 'PENDING' THEN 1 END), 0)`.mapWith(Number),
+    approvedCount: metricExpressions.approvedCount,
+    fulfilledCount: metricExpressions.fulfilledCount,
+    partialCount: metricExpressions.partialCount,
+    refundedCount: metricExpressions.refundedCount,
+    rejectedCount: metricExpressions.rejectedCount,
+    deliveredCount: sql<number>`COALESCE(COUNT(CASE WHEN UPPER(${orders.status}) = 'APPROVED' AND UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED')) = 'DELIVERED' THEN 1 END), 0)`.mapWith(Number),
+    notDeliveredCount: sql<number>`COALESCE(COUNT(CASE WHEN UPPER(${orders.status}) = 'APPROVED' AND UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED')) <> 'DELIVERED' THEN 1 END), 0)`.mapWith(Number),
+    pendingAmountCents: sql<number>`COALESCE(SUM(CASE WHEN UPPER(${orders.status}) = 'PENDING' THEN ${orders.totalCents} ELSE 0 END), 0)`.mapWith(Number),
+    approvedAmountCents: sql<number>`COALESCE(SUM(CASE WHEN UPPER(${orders.status}) = 'APPROVED' THEN GREATEST(${orders.totalCents} - COALESCE(${orders.refundAmountCents}, 0), 0) ELSE 0 END), 0)`.mapWith(Number),
+    valueFulfilledCents: sql<number>`COALESCE(SUM(CASE WHEN UPPER(${orders.status}) IN ('FULFILLED', 'PARTIAL', 'PARTIALLY_FULFILLED') THEN GREATEST(${orders.totalCents} - COALESCE(${orders.refundAmountCents}, 0), 0) ELSE 0 END), 0)`.mapWith(Number),
+    valueRefundedCents: sql<number>`COALESCE(SUM(CASE WHEN UPPER(${orders.status}) = 'REFUNDED' THEN COALESCE(${orders.refundAmountCents}, 0) ELSE 0 END), 0)`.mapWith(Number),
+    valueRejectedCents: sql<number>`COALESCE(SUM(CASE WHEN UPPER(${orders.status}) IN ('REJECTED', 'CANCELLED') THEN ${orders.totalCents} ELSE 0 END), 0)`.mapWith(Number),
+}
 
 function parseNumberList(value: string | null, isValid = (number: number) => number > 0) {
     return value ? value.split(",").map(Number).filter((number) => !Number.isNaN(number) && isValid(number)) : []
@@ -242,17 +258,59 @@ function buildComparisonConditions(context: any) {
 
 async function loadComparisonStatusCounts(whereClause: any) {
     const [counts] = await db.select({
-        fulfilledCount: metricExpressions.fulfilledCount,
-        partialCount: metricExpressions.partialCount,
+        ...dashboardStatusMetricSelection,
         fulfilledNetSales: metricExpressions.revenue,
-        refundedCount: metricExpressions.refundedCount,
-        rejectedCount: metricExpressions.rejectedCount,
-        approvedCount: metricExpressions.approvedCount,
-        pendingCount: sql<number>`COALESCE(COUNT(CASE WHEN UPPER(${orders.status}) = 'PENDING' THEN 1 END), 0)`.mapWith(Number),
-        deliveredCount: sql<number>`COALESCE(COUNT(CASE WHEN UPPER(${orders.status}) = 'APPROVED' AND UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED')) = 'DELIVERED' THEN 1 END), 0)`.mapWith(Number),
-        notDeliveredCount: sql<number>`COALESCE(COUNT(CASE WHEN UPPER(${orders.status}) = 'APPROVED' AND UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED')) <> 'DELIVERED' THEN 1 END), 0)`.mapWith(Number),
     }).from(orders).leftJoin(branches, eq(orders.branchId, branches.id)).where(whereClause)
     return counts
+}
+
+async function loadScopedUserCount(context: {
+    organizationIds: number[]
+    organizationId: number | null
+    branchIds: number[]
+    branchId: number | null
+    groupIds: number[]
+    groupId: number | null
+}) {
+    const conditions: any[] = [
+        isNull(users.deletedAt),
+        ne(roles.name, "SUPER_ADMIN"),
+    ]
+    if (context.organizationIds.length > 0) conditions.push(inArray(users.organizationId, context.organizationIds))
+    else if (context.organizationId) conditions.push(eq(users.organizationId, context.organizationId))
+    if (context.branchIds.length > 0) conditions.push(inArray(users.branchId, context.branchIds))
+    else if (context.branchId) conditions.push(eq(users.branchId, context.branchId))
+    if (context.groupIds.length > 0) conditions.push(inArray(branches.groupId, context.groupIds))
+    else if (context.groupId) conditions.push(eq(branches.groupId, context.groupId))
+
+    const [result] = await db.select({ totalUsers: count(users.id) })
+        .from(users)
+        .leftJoin(roles, eq(users.roleId, roles.id))
+        .leftJoin(branches, eq(users.branchId, branches.id))
+        .where(and(...conditions))
+    return Number(result?.totalUsers || 0)
+}
+
+async function loadScopedBranchCount(context: {
+    organizationIds: number[]
+    organizationId: number | null
+    branchIds: number[]
+    branchId: number | null
+    groupIds: number[]
+    groupId: number | null
+}) {
+    const conditions: any[] = []
+    if (context.organizationIds.length > 0) conditions.push(inArray(branches.organizationId, context.organizationIds))
+    else if (context.organizationId) conditions.push(eq(branches.organizationId, context.organizationId))
+    if (context.branchIds.length > 0) conditions.push(inArray(branches.id, context.branchIds))
+    else if (context.branchId) conditions.push(eq(branches.id, context.branchId))
+    if (context.groupIds.length > 0) conditions.push(inArray(branches.groupId, context.groupIds))
+    else if (context.groupId) conditions.push(eq(branches.groupId, context.groupId))
+
+    const [result] = await db.select({ totalBranches: count(branches.id) })
+        .from(branches)
+        .where(conditions.length > 0 ? and(...conditions) : undefined)
+    return Number(result?.totalBranches || 0)
 }
 
 async function loadSalesComparison(context: any) {
@@ -275,6 +333,11 @@ async function loadSalesComparison(context: any) {
         pendingCount: counts?.pendingCount || 0,
         deliveredCount: counts?.deliveredCount || 0,
         notDeliveredCount: counts?.notDeliveredCount || 0,
+        pendingAmountCents: counts?.pendingAmountCents || 0,
+        approvedAmountCents: counts?.approvedAmountCents || 0,
+        valueFulfilledCents: counts?.valueFulfilledCents || 0,
+        valueRefundedCents: counts?.valueRefundedCents || 0,
+        valueRejectedCents: counts?.valueRejectedCents || 0,
         seriesData,
     }
 }
@@ -631,19 +694,15 @@ export async function GET(req: NextRequest) {
             rejectedCount: number
             deliveredCount: number
             notDeliveredCount: number
+            pendingAmountCents: number
+            approvedAmountCents: number
+            valueFulfilledCents: number
+            valueRefundedCents: number
+            valueRejectedCents: number
         } | null> => {
 
         if (includeStatusCounts && (!statusParam || statusParam.toUpperCase() === "ALL")) {
-            const [counts] = await db.select({
-                pendingCount: sql<number>`COALESCE(COUNT(CASE WHEN UPPER(${orders.status}) = 'PENDING' THEN 1 END), 0)`.mapWith(Number),
-                approvedCount: metricExpressions.approvedCount,
-                fulfilledCount: metricExpressions.fulfilledCount,
-                partialCount: metricExpressions.partialCount,
-                refundedCount: metricExpressions.refundedCount,
-                rejectedCount: metricExpressions.rejectedCount,
-                deliveredCount: sql<number>`COALESCE(COUNT(CASE WHEN UPPER(${orders.status}) = 'APPROVED' AND UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED')) = 'DELIVERED' THEN 1 END), 0)`.mapWith(Number),
-                notDeliveredCount: sql<number>`COALESCE(COUNT(CASE WHEN UPPER(${orders.status}) = 'APPROVED' AND UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED')) <> 'DELIVERED' THEN 1 END), 0)`.mapWith(Number),
-            })
+            const [counts] = await db.select(dashboardStatusMetricSelection)
             .from(orders)
             .leftJoin(branches, eq(orders.branchId, branches.id))
             .where(whereClause)
@@ -658,11 +717,24 @@ export async function GET(req: NextRequest) {
                     rejectedCount: counts.rejectedCount,
                     deliveredCount: counts.deliveredCount,
                     notDeliveredCount: counts.notDeliveredCount,
+                    pendingAmountCents: counts.pendingAmountCents,
+                    approvedAmountCents: counts.approvedAmountCents,
+                    valueFulfilledCents: counts.valueFulfilledCents,
+                    valueRefundedCents: counts.valueRefundedCents,
+                    valueRejectedCents: counts.valueRejectedCents,
                 }
             }
         }
         return null
         })()
+
+        const metricScope = { organizationIds, organizationId, branchIds, branchId, groupIds, groupId }
+        const [totalUsers, totalBranches] = includeStatusCounts
+            ? await Promise.all([
+                loadScopedUserCount(metricScope),
+                loadScopedBranchCount(metricScope),
+            ])
+            : [undefined, undefined]
 
         return {
             granularity,
@@ -679,6 +751,8 @@ export async function GET(req: NextRequest) {
             organizationSales,
             comparison,
             statusCounts,
+            totalUsers,
+            totalBranches,
         }
     }
 

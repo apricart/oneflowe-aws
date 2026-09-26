@@ -3,6 +3,8 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { sanitizeRasterUpload } from "@/lib/server/upload-security"
 import { withRateLimit } from "@/lib/rate-limiter"
+import { db } from "@/lib/db"
+import { auditActorFromSession, recordAuditEvent } from "@/lib/server/activity-audit"
 import {
   buildImageKey,
   extensionForMime,
@@ -81,6 +83,30 @@ export async function POST(req: NextRequest) {
       key,
       body: validation.buffer,
       contentType: validation.image.mime,
+    })
+
+    // Recorded after the object lands, and a failure here propagates.
+    //
+    // There is no transaction to share with an S3 write, so the two cannot be
+    // made atomic. Of the two failure modes, an orphaned object the caller
+    // retries past is better than a file silently accepted with no record of
+    // who put it there — and an orphan was already possible whenever a client
+    // disconnects mid-upload.
+    await recordAuditEvent(db, {
+      action: "UPLOAD_IMAGE",
+      entity: "image",
+      entityId: key,
+      actor: auditActorFromSession(session),
+      after: {
+        path: imagePathForKey(key),
+        type: validation.image.mime,
+        sizeBytes: validation.buffer.length,
+        width: validation.image.width,
+        height: validation.image.height,
+      },
+      // The name the browser sent, kept because it is the only clue to what the
+      // file was meant to be; the stored key is deliberately not derived from it.
+      context: { originalFileName: validation.generatedFileName },
     })
 
     return NextResponse.json({

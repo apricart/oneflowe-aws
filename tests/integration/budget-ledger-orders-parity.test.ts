@@ -4,7 +4,7 @@ import * as mockedNextAuth from "next-auth"
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
 import * as budgetSummaryRoute from "@/app/api/v1/analytics/budgets/summary/route"
-import { branches, budgets, orderItems, orders, roles, users } from "@/db/schema"
+import { auditLogs, branches, budgets, orderItems, orders, roles, users } from "@/db/schema"
 import { budgetPeriodOf, summarizeOrderConsumption } from "@/lib/budget-consumption"
 import { closePool, db } from "@/lib/db"
 import { fulfillApprovedOrder } from "@/lib/server/order-fulfillment"
@@ -325,7 +325,16 @@ describe.skipIf(!hasTestDatabase)("ledger and order-derived consumption agree", 
     await db.delete(budgets).where(
       inArray(budgets.branchId, [parityBranchId, carriedBranchId]),
     )
-    if (branchAdminId) await db.delete(users).where(eq(users.id, branchAdminId))
+    // `fulfillApprovedOrder` now records an ORDER_FULFILLED row, and
+    // `audit_logs` carries foreign keys to `users` and `branches`. Release the
+    // trail before the identities it names.
+    await db.delete(auditLogs).where(
+      inArray(auditLogs.branchId, [parityBranchId, carriedBranchId]),
+    )
+    if (branchAdminId) {
+      await db.delete(auditLogs).where(eq(auditLogs.userId, branchAdminId))
+      await db.delete(users).where(eq(users.id, branchAdminId))
+    }
     await db.delete(branches).where(inArray(branches.id, [parityBranchId, carriedBranchId]))
     await destroyGroupRoleFixtures(fixtures)
     await closePool()

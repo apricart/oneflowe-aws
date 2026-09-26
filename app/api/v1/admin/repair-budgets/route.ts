@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { budgets,orders,branches } from "@/db/schema"
 import { eq,sql,inArray } from "drizzle-orm"
+import { auditActorFromSession, recordAuditEvent } from "@/lib/server/activity-audit"
 
 async function resolveTargetBranchIds(branchId: unknown, organizationId: unknown): Promise<number[]> {
   if (branchId) return [Number(branchId)]
@@ -54,17 +55,47 @@ export async function POST(req: NextRequest) {
 
     console.log(`[REPAIR] Repairing budget data for branches: ${targetBranchIds.join(", ")}`)
 
-    // 2. Delete all existing budget addon records for these branches
-    const existingBudgets = await db.select({ id: budgets.id })
+    // 2. Read every budget row about to be destroyed, in full.
+    //
+    // This endpoint deletes a branch's entire budget history, and until now it
+    // recorded nothing at all. The rows themselves go into the audit entry: once
+    // the delete has run, the trail is the only place the allocations, spend and
+    // holds that were here still exist.
+    const existingBudgets = await db.select()
       .from(budgets)
       .where(inArray(budgets.branchId, targetBranchIds))
-    
-    const budgetIds = existingBudgets.map(b => b.id)
-    
-    const addonsDeleted = budgetIds.length
 
-    // 3. Delete all existing budget records
-    await db.delete(budgets).where(inArray(budgets.branchId, targetBranchIds))
+    const addonsDeleted = existingBudgets.length
+
+    // 3. Delete all existing budget records, with the record of what was here.
+    await db.transaction(async (tx) => {
+      await tx.delete(budgets).where(inArray(budgets.branchId, targetBranchIds))
+
+      await recordAuditEvent(tx, {
+        action: "RESET_BRANCH_BUDGETS",
+        entity: "budget",
+        // One scope per request, so a single id names it: the branch when one was
+        // asked for, otherwise the organization. The branches reached are listed
+        // in metadata, because `entity_id` holds one id.
+        entityId: branchId ? Number(branchId) : null,
+        actor: auditActorFromSession(session),
+        organizationId: organizationId ? Number(organizationId) : null,
+        branchId: branchId ? Number(branchId) : null,
+        before: {
+          budgets: existingBudgets.map((row) => ({
+            id: row.id,
+            branchId: row.branchId,
+            period: row.period,
+            allocatedCents: row.amountAllocatedCents,
+            spentCents: row.amountSpentCents,
+            heldCents: row.amountHeldCents,
+            creditedCents: row.amountCreditedCents,
+          })),
+        },
+        context: { mode, branchIds: targetBranchIds, budgetsDeleted: existingBudgets.length },
+      })
+    })
+
     const budgetsDeleted = existingBudgets.length
     console.log(`[REPAIR] Deleted ${budgetsDeleted} budget records and associated addons`)
 
@@ -102,50 +133,79 @@ export async function POST(req: NextRequest) {
 
     const branchMap = new Map(branchData.map(b => [b.id, b]))
 
-    // 6. Create new budget records
+    // 6. Create new budget records.
+    //
+    // One transaction for the whole rebuild and its audit row. Two reasons: the
+    // record must commit with the rebuild rather than be best effort, and a
+    // failure part-way through used to leave a branch with some months rebuilt
+    // and the rest simply gone.
     let budgetsCreated = 0
     const currentMonth = new Date().toISOString().slice(0, 7)
 
-    for (const row of orderSpending) {
-      const branch = branchMap.get(row.branchId)
-      if (!branch) continue
+    budgetsCreated = await db.transaction(async (tx) => {
+      let created = 0
 
-      // For the current month, use baseline. For past months, set allocated to 0
-      // (we don't know what was allocated historically since we deleted the records)
-      const isCurrentMonth = row.period === currentMonth
-      const allocated = isCurrentMonth ? (branch.baselineBudgetCents || 0) : 0
+      for (const row of orderSpending) {
+        const branch = branchMap.get(row.branchId)
+        if (!branch) continue
 
-      await db.insert(budgets).values({
-        organizationId: branch.organizationId,
-        branchId: row.branchId,
-        period: row.period,
-        amountAllocatedCents: allocated,
-        amountSpentCents: row.totalSpentCents,
-        amountHeldCents: row.totalHeldCents,
-        amountCreditedCents: 0,
-      }).onConflictDoNothing()
+        // For the current month, use baseline. For past months, set allocated to 0
+        // (we don't know what was allocated historically since we deleted the records)
+        const isCurrentMonth = row.period === currentMonth
+        const allocated = isCurrentMonth ? (branch.baselineBudgetCents || 0) : 0
 
-      budgetsCreated++
-    }
-
-    // Also create current month record for branches that have no orders this month
-    for (const branch of branchData) {
-      const hasCurrentMonth = orderSpending.some(
-        r => r.branchId === branch.id && r.period === currentMonth
-      )
-      if (!hasCurrentMonth) {
-        await db.insert(budgets).values({
+        await tx.insert(budgets).values({
           organizationId: branch.organizationId,
-          branchId: branch.id,
-          period: currentMonth,
-          amountAllocatedCents: 0, // Start fresh at 0
-          amountSpentCents: 0,
-          amountHeldCents: 0,
+          branchId: row.branchId,
+          period: row.period,
+          amountAllocatedCents: allocated,
+          amountSpentCents: row.totalSpentCents,
+          amountHeldCents: row.totalHeldCents,
           amountCreditedCents: 0,
         }).onConflictDoNothing()
-        budgetsCreated++
+
+        created++
       }
-    }
+
+      // Also create current month record for branches that have no orders this month
+      for (const branch of branchData) {
+        const hasCurrentMonth = orderSpending.some(
+          r => r.branchId === branch.id && r.period === currentMonth
+        )
+        if (!hasCurrentMonth) {
+          await tx.insert(budgets).values({
+            organizationId: branch.organizationId,
+            branchId: branch.id,
+            period: currentMonth,
+            amountAllocatedCents: 0, // Start fresh at 0
+            amountSpentCents: 0,
+            amountHeldCents: 0,
+            amountCreditedCents: 0,
+          }).onConflictDoNothing()
+          created++
+        }
+      }
+
+      await recordAuditEvent(tx, {
+        action: "REBUILD_BRANCH_BUDGETS",
+        entity: "budget",
+        entityId: branchId ? Number(branchId) : null,
+        actor: auditActorFromSession(session),
+        organizationId: organizationId ? Number(organizationId) : null,
+        branchId: branchId ? Number(branchId) : null,
+        after: {
+          budgets: orderSpending.map((row) => ({
+            branchId: row.branchId,
+            period: row.period,
+            spentCents: row.totalSpentCents,
+            heldCents: row.totalHeldCents,
+          })),
+        },
+        context: { budgetsCreated: created, branchIds: targetBranchIds, rebuiltFrom: "orders" },
+      })
+
+      return created
+    })
 
     return NextResponse.json({
       message: "Budget data recalculated successfully",

@@ -74,6 +74,7 @@ export const ACTIVITY_CATEGORIES = [
   "catalogue",
   "settings",
   "reports",
+  "support",
   "system",
 ] as const
 
@@ -149,11 +150,13 @@ export const OPERATION_RULES: readonly ActionRule<ActivityOperation>[] = [
 
   // Reads that are recorded. `VIEW_GROUP_REPORT` is the only one today.
   { kind: "contains", value: "EXPORT", result: "export" },
+  { kind: "contains", value: "SEND_SCHEDULED_REPORT", result: "export" },
   { kind: "prefix", value: "VIEW_", result: "export" },
 
   // Removal, including every word this codebase uses for it.
   { kind: "contains", value: "DELETE", result: "delete" },
   { kind: "contains", value: "REMOVE", result: "delete" },
+  { kind: "prefix", value: "CLEANUP", result: "update" },
   { kind: "prefix", value: "CLEAN_", result: "delete" },
   { kind: "prefix", value: "CLEAR_", result: "delete" },
   // A soft delete is still a removal to the person reading the page. This must
@@ -169,6 +172,9 @@ export const OPERATION_RULES: readonly ActionRule<ActivityOperation>[] = [
   { kind: "contains", value: "GENERATED", result: "create" },
   { kind: "contains", value: "SENT", result: "create" },
   { kind: "prefix", value: "SEND_", result: "create" },
+  { kind: "prefix", value: "UPLOAD", result: "create" },
+  { kind: "prefix", value: "REPLY", result: "create" },
+  { kind: "prefix", value: "REBUILD", result: "create" },
 
   // Change, last, because most action strings that reach here are one.
   { kind: "contains", value: "UPDATE", result: "update" },
@@ -184,6 +190,7 @@ export const OPERATION_RULES: readonly ActionRule<ActivityOperation>[] = [
   { kind: "contains", value: "EXPIRE", result: "update" },
   { kind: "contains", value: "ACTIVATE", result: "update" },
   { kind: "contains", value: "ENABLE", result: "update" },
+  { kind: "prefix", value: "MIGRATE", result: "update" },
 ]
 
 /**
@@ -211,8 +218,12 @@ export const CATEGORY_RULES: readonly ActionRule<ActivityCategory>[] = [
   { kind: "contains", value: "PRICE", result: "pricing" },
   { kind: "contains", value: "REFUND", result: "refund" },
   { kind: "contains", value: "BUDGET", result: "budget" },
+  { kind: "contains", value: "SUPPORT", result: "support" },
   { kind: "contains", value: "ORDER", result: "order" },
   { kind: "contains", value: "GROUP", result: "group" },
+  // A tenant's stocked catalogue is inventory, not tenant administration —
+  // ahead of the bare ORGANIZATION rule, which would otherwise claim it.
+  { kind: "contains", value: "ORGANIZATION_INVENTORY", result: "inventory" },
   { kind: "contains", value: "ORGANIZATION", result: "organization" },
   // A branch's catalogue and stock are not branch administration. Both are
   // ahead of the bare BRANCH rule, which would otherwise claim them.
@@ -253,7 +264,16 @@ export const SEVERITY_RULES: readonly ActionRule<ActivitySeverity>[] = [
   { kind: "prefix", value: "CASCADE_", result: "critical" },
   { kind: "prefix", value: "CLEAN_", result: "critical" },
   { kind: "prefix", value: "RESET_", result: "critical" },
+  { kind: "prefix", value: "REBUILD", result: "critical" },
+  { kind: "prefix", value: "CLEANUP", result: "critical" },
   { kind: "prefix", value: "CREATE_ORGANIZATION", result: "critical" },
+  // Removing a second factor is removing a security control, and is the first
+  // thing someone holding a stolen session would do.
+  { kind: "contains", value: "MFA_DISABLED", result: "critical" },
+  // A schema change applied over HTTP rather than through a migration.
+  { kind: "prefix", value: "MIGRATE", result: "critical" },
+  // A tenant's figures leaving the application by email.
+  { kind: "contains", value: "SCHEDULED_REPORT", result: "notice" },
 ]
 
 /**

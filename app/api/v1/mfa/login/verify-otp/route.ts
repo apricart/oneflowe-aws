@@ -7,6 +7,34 @@ import {
   getClientIdentifier,
   rateLimitResponse,
 } from "@/lib/rate-limiter"
+import { recordAuthAuditEvent, type AuthFailureReason } from "@/lib/server/auth-audit"
+
+/**
+ * Record the attempt. The caller's reply is unchanged: every refusal here
+ * already answers "Invalid or expired OTP code" whether the account is unknown,
+ * has no second factor, or simply got the code wrong — the trail is where those
+ * are told apart, not the response.
+ */
+async function recordVerification(
+  identifier: string,
+  outcome: {
+    subjectId?: string | null
+    email?: string | null
+    success: boolean
+    reason?: AuthFailureReason
+    remainingAttempts?: number | null
+  },
+) {
+  await recordAuthAuditEvent({
+    action: outcome.success ? "AUTH_MFA_VERIFIED" : "AUTH_MFA_FAILURE",
+    attemptedIdentifier: identifier,
+    subjectId: outcome.subjectId ?? null,
+    email: outcome.email ?? null,
+    success: outcome.success,
+    reason: outcome.reason,
+    details: { stage: "login", remainingAttempts: outcome.remainingAttempts ?? null },
+  })
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -65,14 +93,28 @@ export async function POST(req: NextRequest) {
     }
 
     if (!user) {
+      await recordVerification(identifier, { success: false, reason: "unknown_account" })
       return error("Invalid or expired OTP code", 400)
     }
 
     if (!user.mfaEnabled) {
+      await recordVerification(identifier, {
+        subjectId: user.id,
+        email: user.email,
+        success: false,
+        reason: "mfa_not_enrolled",
+      })
       return error("Invalid or expired OTP code", 400)
     }
 
     const result = await verifyOTP(user.id, code, type)
+    await recordVerification(identifier, {
+      subjectId: user.id,
+      email: user.email,
+      success: result.success,
+      reason: result.success ? undefined : "mfa_invalid",
+      remainingAttempts: result.remainingAttempts ?? null,
+    })
 
     if (result.success) {
       return ok({

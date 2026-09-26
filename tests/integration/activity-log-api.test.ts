@@ -1,12 +1,19 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { NextRequest } from "next/server"
 import * as mockedNextAuth from "next-auth"
 
 import * as activityRoute from "@/app/api/v1/activity-logs/route"
 import * as categoriesRoute from "@/app/api/v1/categories/route"
-import { auditLogs, categories } from "@/db/schema"
+import {
+  auditLogs,
+  categories,
+  emailOutbox,
+  supportMessages,
+  supportThreadReads,
+  supportThreads,
+} from "@/db/schema"
 import {
   ACTIVITY_MAX_WINDOW_DAYS,
   ACTIVITY_PAGE_SIZE_MAX,
@@ -467,6 +474,80 @@ describe.skipIf(!hasTestDatabase)("GET /api/v1/activity-logs", () => {
       } finally {
         await db.delete(auditLogs).where(eq(auditLogs.entityId, String(categoryId)))
         await db.delete(categories).where(eq(categories.id, categoryId))
+      }
+    })
+
+    it("records a support thread, its reply and its status change, from the shared module", async () => {
+      // `lib/server/support-threads.ts` is where three routes' audit rows are
+      // written, so this exercises the module rather than each route — the same
+      // pattern as `fulfillApprovedOrder`.
+      const { createSupportThread, postSupportMessage, updateSupportThread } = await import(
+        "@/lib/server/support-threads"
+      )
+
+      const author = {
+        userId: fixtures.branchAdminId,
+        role: "BRANCH_ADMIN" as const,
+        organizationId: fixtures.organizationId,
+        branchId: fixtures.northBranchId,
+        fullName: `Activity branchadmin ${fixtures.suffix}`,
+      }
+
+      const created = await createSupportThread({
+        author,
+        subject: `Activity audit thread ${fixtures.suffix}`,
+        category: "OTHER",
+        priority: "NORMAL",
+        body: "This body must never reach the audit trail.",
+        orderId: null,
+        productId: null,
+        attachmentIds: [],
+      })
+      expect(created.ok).toBe(true)
+      if (!created.ok) return
+      const threadId = created.threadId
+
+      try {
+        const replied = await postSupportMessage({
+          author,
+          threadId,
+          body: "A reply.",
+          attachmentIds: [],
+        })
+        expect(replied.ok).toBe(true)
+
+        const updated = await updateSupportThread(
+          { actor: author, threadId, priority: "HIGH" },
+          () => ({ ok: true as const }),
+        )
+        expect(updated.ok).toBe(true)
+
+        const rows = await db
+          .select({ action: auditLogs.action, metadata: auditLogs.metadata })
+          .from(auditLogs)
+          .where(and(eq(auditLogs.entity, "support_thread"), eq(auditLogs.entityId, String(threadId))))
+          .orderBy(auditLogs.id)
+
+        expect(rows.map((row) => row.action)).toEqual([
+          "CREATE_SUPPORT_THREAD",
+          "REPLY_SUPPORT_THREAD",
+          "UPDATE_SUPPORT_THREAD",
+        ])
+
+        // The customer's words stay out of the trail; the change to the thread
+        // does not.
+        expect(JSON.stringify(rows)).not.toContain("must never reach the audit trail")
+        const priorityChange = rows[2].metadata as { before?: { priority?: string }; after?: { priority?: string } }
+        expect(priorityChange.before?.priority).toBe("NORMAL")
+        expect(priorityChange.after?.priority).toBe("HIGH")
+      } finally {
+        await db.delete(auditLogs).where(
+          and(eq(auditLogs.entity, "support_thread"), eq(auditLogs.entityId, String(threadId))),
+        )
+        await db.delete(supportThreadReads).where(eq(supportThreadReads.threadId, threadId))
+        await db.delete(supportMessages).where(eq(supportMessages.threadId, threadId))
+        await db.delete(emailOutbox).where(eq(emailOutbox.supportThreadId, threadId))
+        await db.delete(supportThreads).where(eq(supportThreads.id, threadId))
       }
     })
 

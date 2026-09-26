@@ -19,7 +19,14 @@ type BankingKPICardProps = {
     comparisonValue?: string | number
     comparisonLabel?: string
     isLoading?: boolean
-    details?: Array<{ label: string; value: string | number }>
+    amount?: string | number | null
+    amountLabel?: string
+    details?: Array<{
+        label: string
+        value: string | number
+        align?: "left" | "right"
+        onClick?: () => void
+    }>
 }
 
 /* Decorative background glow */
@@ -50,6 +57,8 @@ export const BankingKPICard = ({
     comparisonValue,
     comparisonLabel,
     isLoading = false,
+    amount,
+    amountLabel = "Amount",
     details,
 }: BankingKPICardProps) => {
     const isPositive = trend === "up"
@@ -135,6 +144,17 @@ export const BankingKPICard = ({
                         </p>
                     )}
                 </div>
+
+                {!isLoading && amount !== undefined && amount !== null && (
+                    <div className="mt-1 flex items-baseline gap-1.5">
+                        <span className="text-[8px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                            {amountLabel}
+                        </span>
+                        <span className="text-[11px] font-extrabold text-slate-700 dark:text-slate-200">
+                            {amount}
+                        </span>
+                    </div>
+                )}
                 
                 {subtitle && (
                     <motion.p 
@@ -148,19 +168,50 @@ export const BankingKPICard = ({
 
                 {!isLoading && details && details.length > 0 && (
                     <div className="mt-2 grid grid-cols-2 gap-1.5">
-                        {details.map((detail) => (
-                            <div
-                                key={detail.label}
-                                className="rounded-lg border border-slate-200/60 bg-white/45 px-2 py-1 dark:border-slate-700/50 dark:bg-slate-900/35"
-                            >
-                                <p className="text-[8px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
-                                    {detail.label}
-                                </p>
-                                <p className="text-xs font-extrabold leading-tight text-slate-700 dark:text-slate-200">
-                                    {detail.value}
-                                </p>
-                            </div>
-                        ))}
+                        {details.map((detail) => {
+                            const isRightAligned = detail.align === "right"
+                            const content = (
+                                <>
+                                    <p
+                                        title={detail.label}
+                                        className={cn(
+                                            "min-h-5 min-w-0 break-words text-[8px] font-bold uppercase leading-tight tracking-normal text-slate-400 dark:text-slate-500",
+                                            isRightAligned ? "text-right" : "text-left",
+                                        )}
+                                    >
+                                        {detail.label}
+                                    </p>
+                                    <p className={cn(
+                                        "text-xs font-extrabold leading-tight text-slate-700 dark:text-slate-200",
+                                        isRightAligned ? "text-right" : "text-left",
+                                    )}>
+                                        {detail.value}
+                                    </p>
+                                </>
+                            )
+                            const detailClassName = cn(
+                                "min-w-0 overflow-hidden rounded-lg border border-slate-200/60 bg-white/45 px-2 py-1 dark:border-slate-700/50 dark:bg-slate-900/35",
+                                detail.onClick && "cursor-pointer transition-colors hover:border-slate-300 hover:bg-white/70 dark:hover:border-slate-600 dark:hover:bg-slate-900/60",
+                            )
+
+                            return detail.onClick ? (
+                                <button
+                                    key={detail.label}
+                                    type="button"
+                                    className={detailClassName}
+                                    onClick={(event) => {
+                                        event.stopPropagation()
+                                        detail.onClick?.()
+                                    }}
+                                >
+                                    {content}
+                                </button>
+                            ) : (
+                                <div key={detail.label} className={detailClassName}>
+                                    {content}
+                                </div>
+                            )
+                        })}
                     </div>
                 )}
 
