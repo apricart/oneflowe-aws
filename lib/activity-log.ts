@@ -190,7 +190,6 @@ export const OPERATION_RULES: readonly ActionRule<ActivityOperation>[] = [
   { kind: "contains", value: "EXPIRE", result: "update" },
   { kind: "contains", value: "ACTIVATE", result: "update" },
   { kind: "contains", value: "ENABLE", result: "update" },
-  { kind: "prefix", value: "MIGRATE", result: "update" },
 ]
 
 /**
@@ -270,8 +269,6 @@ export const SEVERITY_RULES: readonly ActionRule<ActivitySeverity>[] = [
   // Removing a second factor is removing a security control, and is the first
   // thing someone holding a stolen session would do.
   { kind: "contains", value: "MFA_DISABLED", result: "critical" },
-  // A schema change applied over HTTP rather than through a migration.
-  { kind: "prefix", value: "MIGRATE", result: "critical" },
   // A tenant's figures leaving the application by email.
   { kind: "contains", value: "SCHEDULED_REPORT", result: "notice" },
 ]

@@ -36,8 +36,8 @@ type DirectRoute = {
   actions: readonly string[]
   /**
    * True when the write cannot share a transaction with the change — an S3
-   * object, a `CREATE INDEX`. Those call `recordAuditEvent(db, …)` by necessity,
-   * and the reason is in a comment at the call site.
+   * object. Those call `recordAuditEvent(db, …)` by necessity, and the reason is
+   * in a comment at the call site.
    */
   nonTransactional?: true
 }
@@ -112,13 +112,6 @@ const DIRECT: readonly DirectRoute[] = [
     file: "app/api/v1/admin/delete-order/route.ts",
     handlers: ["DELETE"],
     actions: ["DELETE_ORDER"],
-  },
-  {
-    // `CREATE INDEX` is not a row write; see the comment at the call site.
-    file: "app/api/v1/admin/migrate-product-code/route.ts",
-    handlers: ["POST"],
-    actions: ["MIGRATE_SCHEMA"],
-    nonTransactional: true,
   },
 ]
 

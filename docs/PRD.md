@@ -1001,7 +1001,6 @@ graph TD
 | `GET /api/v1/health` | System health check | System | Infrastructure |
 | `POST /api/v1/admin/cleanup-inventory` | Admin: clean orphaned inventory | SUPER_ADMIN | Admin Ops |
 | `POST /api/v1/admin/clear-branch-inventory` | Admin: clear branch inventory | SUPER_ADMIN | Admin Ops |
-| `POST /api/v1/admin/migrate-product-code` | Admin: migrate product codes | SUPER_ADMIN | Admin Ops |
 | `POST /api/v1/admin/repair-budgets` | Admin: repair budget inconsistencies | SUPER_ADMIN | Admin Ops |
 | `DELETE /api/v1/admin/delete-order` | Admin: hard-delete an order | SUPER_ADMIN | Admin Ops |
 

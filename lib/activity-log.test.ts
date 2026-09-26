@@ -129,7 +129,6 @@ describe("operationOf", () => {
     ["RESET_BRANCH_BUDGETS", "update"],
     ["REBUILD_BRANCH_BUDGETS", "create"],
     ["CLEANUP_ORGANIZATION_INVENTORY_NAMES", "update"],
-    ["MIGRATE_SCHEMA", "update"],
     ["SEND_SCHEDULED_REPORT", "export"],
     ["AUTH_MFA_ENABLED", "auth"],
     ["AUTH_MFA_DISABLED", "auth"],
@@ -262,8 +261,6 @@ describe("severityOf", () => {
     ["REBUILD_BRANCH_BUDGETS", "critical"],
     // Reaches every matching row in the table.
     ["CLEANUP_ORGANIZATION_INVENTORY_NAMES", "critical"],
-    // A schema change applied over HTTP instead of through a migration.
-    ["MIGRATE_SCHEMA", "critical"],
     // A hard delete of an order.
     ["DELETE_ORDER", "critical"],
   ] as const)("marks %s critical", (action, expected) => {

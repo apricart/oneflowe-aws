@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
-import { and, asc, desc, eq, gte, sql, type SQL } from "drizzle-orm"
+import { and, asc, desc, eq, gt, gte, isNull, or, sql, type SQL } from "drizzle-orm"
 
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
@@ -8,9 +8,8 @@ import {
   branches,
   globalProducts,
   groups,
-  orderItems,
-  orders,
   organizations,
+  productPriceHistory,
 } from "@/db/schema"
 import {
   isProductPriceHistoryRange,
@@ -23,7 +22,6 @@ import {
 
 const ALLOWED_ROLES = new Set<ProductPriceHistoryRole>(["SUPER_ADMIN", "HEAD_OFFICE"])
 const MAX_HISTORY_POINTS = 5_000
-const INCLUDED_ORDER = sql`upper(${orders.status}) not in ('CANCELLED', 'REJECTED')`
 
 function parseOptionalId(value: string | null) {
   if (value === null || value === "" || value === "all") return { value: null, valid: true }
@@ -36,6 +34,50 @@ function parseOptionalId(value: string | null) {
 
 function noStoreJson(body: ProductPriceHistoryResponse) {
   return NextResponse.json(body, { headers: { "Cache-Control": "private, no-store" } })
+}
+
+type HistoryGroup = { id: number; organizationId: number }
+type HistoryBranch = { id: number; organizationId: number; groupId: number | null }
+
+/**
+ * A specific tenant filter intentionally excludes GLOBAL rows. The trigger
+ * materializes inherited global changes as ORGANIZATION rows, so Head Office
+ * gets a complete effective-price history without gaining access to the
+ * supplier/global tier. Group and branch filters retain their parent tiers.
+ */
+function historyScopeCondition(input: {
+  organizationId: number | null
+  group: HistoryGroup | null
+  branch: HistoryBranch | null
+}): SQL | undefined {
+  const { organizationId, group, branch } = input
+
+  if (branch) {
+    return and(
+      eq(productPriceHistory.organizationId, branch.organizationId),
+      or(
+        and(isNull(productPriceHistory.groupId), isNull(productPriceHistory.branchId)),
+        branch.groupId === null
+          ? undefined
+          : and(eq(productPriceHistory.groupId, branch.groupId), isNull(productPriceHistory.branchId)),
+        eq(productPriceHistory.branchId, branch.id),
+      ),
+    )
+  }
+
+  if (group) {
+    return and(
+      eq(productPriceHistory.organizationId, group.organizationId),
+      or(
+        and(isNull(productPriceHistory.groupId), isNull(productPriceHistory.branchId)),
+        eq(productPriceHistory.groupId, group.id),
+      ),
+    )
+  }
+
+  return organizationId === null
+    ? undefined
+    : eq(productPriceHistory.organizationId, organizationId)
 }
 
 // Access checks and dependent filter validation stay together so every query
@@ -130,24 +172,78 @@ async function getProductPriceHistory(request: NextRequest) {
     return NextResponse.json({ error: role === "HEAD_OFFICE" ? "Forbidden" : "Branch not found" }, { status: role === "HEAD_OFFICE" ? 403 : 404 })
   }
 
-  const historyConditions: SQL[] = [INCLUDED_ORDER]
-  if (range.startAt) historyConditions.push(gte(orders.createdAt, range.startAt))
-  if (organizationId !== null) historyConditions.push(eq(orders.organizationId, organizationId))
-  if (groupId !== null) historyConditions.push(eq(branches.groupId, groupId))
-  if (branchId !== null) historyConditions.push(eq(orders.branchId, branchId))
+  const selectedGroup = groupId === null
+    ? null
+    : groupRows.find((group) => group.id === groupId) ?? null
+  const selectedBranch = branchId === null
+    ? null
+    : branchRows.find((branch) => branch.id === branchId) ?? null
+  const scopeCondition = historyScopeCondition({
+    organizationId,
+    group: selectedGroup,
+    branch: selectedBranch,
+  })
+  // Rank the complete visible timeline before applying the requested date
+  // range. Historical order evidence used to contain one row per branch/order;
+  // the window treats organization and group pricing as consumer-price streams
+  // and retains only the initial known value plus real transitions. Ranking
+  // before the date filter also prevents the first duplicate inside a range
+  // from being mistaken for a change.
+  const ledgerConditions: SQL[] = [gt(productPriceHistory.priceCents, 0)]
+  if (scopeCondition) ledgerConditions.push(scopeCondition)
+
+  const rankedHistory = db
+    .select({
+      id: productPriceHistory.id,
+      globalProductId: productPriceHistory.globalProductId,
+      changedAt: productPriceHistory.changedAt,
+      priceCents: productPriceHistory.priceCents,
+      recordedPreviousPriceCents: productPriceHistory.previousPriceCents,
+      previousTimelinePriceCents: sql<number | null>`lag(${productPriceHistory.priceCents}) over (
+        partition by
+          ${productPriceHistory.globalProductId},
+          coalesce(${productPriceHistory.organizationId}, -1),
+          coalesce(${productPriceHistory.groupId}, -1)
+        order by ${productPriceHistory.changedAt}, ${productPriceHistory.id}
+      )`.as("previous_timeline_price_cents"),
+      scope: productPriceHistory.scope,
+      changeType: productPriceHistory.changeType,
+      source: productPriceHistory.source,
+      organizationId: productPriceHistory.organizationId,
+      groupId: productPriceHistory.groupId,
+      branchId: productPriceHistory.branchId,
+    })
+    .from(productPriceHistory)
+    .where(and(...ledgerConditions))
+    .as("ranked_product_price_history")
+
+  const changeConditions: SQL[] = [
+    sql`(
+      (
+        ${rankedHistory.source} = 'CATALOG_CHANGE'
+        AND ${rankedHistory.recordedPreviousPriceCents} > 0
+        AND ${rankedHistory.recordedPreviousPriceCents} <> ${rankedHistory.priceCents}
+      )
+      OR
+      (
+        ${rankedHistory.source} <> 'CATALOG_CHANGE'
+        AND ${rankedHistory.previousTimelinePriceCents} > 0
+        AND ${rankedHistory.previousTimelinePriceCents} <> ${rankedHistory.priceCents}
+      )
+    )`,
+  ]
+  if (range.startAt) changeConditions.push(gte(rankedHistory.changedAt, range.startAt))
 
   const coverage = db
     .select({
-      globalProductId: orderItems.globalProductId,
-      snapshotCount: sql<number>`count(*)::int`.as("snapshot_count"),
-      firstRecordedAt: sql<Date>`min(${orders.createdAt})`.as("first_recorded_at"),
-      lastRecordedAt: sql<Date>`max(${orders.createdAt})`.as("last_recorded_at"),
+      globalProductId: rankedHistory.globalProductId,
+      recordCount: sql<number>`count(*)::int`.as("record_count"),
+      firstRecordedAt: sql<Date>`min(${rankedHistory.changedAt})`.as("first_recorded_at"),
+      lastRecordedAt: sql<Date>`max(${rankedHistory.changedAt})`.as("last_recorded_at"),
     })
-    .from(orderItems)
-    .innerJoin(orders, eq(orderItems.orderId, orders.id))
-    .innerJoin(branches, eq(orders.branchId, branches.id))
-    .where(and(...historyConditions))
-    .groupBy(orderItems.globalProductId)
+    .from(rankedHistory)
+    .where(and(...changeConditions))
+    .groupBy(rankedHistory.globalProductId)
     .as("price_history_coverage")
 
   const productRows = await db
@@ -157,17 +253,17 @@ async function getProductPriceHistory(request: NextRequest) {
       name: globalProducts.name,
       unit: globalProducts.unit,
       status: globalProducts.status,
-      snapshotCount: coverage.snapshotCount,
+      recordCount: coverage.recordCount,
       firstRecordedAt: coverage.firstRecordedAt,
       lastRecordedAt: coverage.lastRecordedAt,
     })
     .from(globalProducts)
     .innerJoin(coverage, eq(globalProducts.id, coverage.globalProductId))
-    .orderBy(desc(coverage.snapshotCount), asc(globalProducts.name))
+    .orderBy(desc(coverage.recordCount), asc(globalProducts.name))
 
   const products = productRows.map((product) => ({
     ...product,
-    snapshotCount: Number(product.snapshotCount) || 0,
+    recordCount: Number(product.recordCount) || 0,
     firstRecordedAt: toIsoTimestamp(product.firstRecordedAt),
     lastRecordedAt: toIsoTimestamp(product.lastRecordedAt),
   }))
@@ -191,8 +287,10 @@ async function getProductPriceHistory(request: NextRequest) {
     selection: { organizationId, groupId, branchId },
     range: { ...range, startAt: range.startAt?.toISOString() ?? null },
     source: {
-      description: "Exact unit price charged on each order line when the order was placed.",
-      excludes: ["Cancelled orders", "Rejected orders"],
+      description: role === "HEAD_OFFICE"
+        ? "Consumer-facing organization and group price changes. Global catalogue rows are never included."
+        : "Consumer-facing price changes recorded at the global, organization, or group tier.",
+      backfillDescription: "Earlier change points were inferred from eligible order prices during migration.",
     },
   }
 
@@ -202,41 +300,51 @@ async function getProductPriceHistory(request: NextRequest) {
 
   const pointRows = await db
     .select({
-      orderItemId: orderItems.id,
-      orderId: orders.id,
-      orderReference: orders.tid,
-      orderedAt: orders.createdAt,
-      chargedPriceCents: orderItems.priceCents,
-      quantity: orderItems.quantity,
-      organizationId: organizations.id,
+      id: rankedHistory.id,
+      changedAt: rankedHistory.changedAt,
+      previousPriceCents: sql<number | null>`case
+        when ${rankedHistory.source} = 'CATALOG_CHANGE'
+          then ${rankedHistory.recordedPreviousPriceCents}
+        else ${rankedHistory.previousTimelinePriceCents}
+      end`,
+      priceCents: rankedHistory.priceCents,
+      scope: rankedHistory.scope,
+      changeType: rankedHistory.changeType,
+      source: rankedHistory.source,
+      organizationId: rankedHistory.organizationId,
       organizationName: organizations.name,
-      groupId: groups.id,
+      groupId: rankedHistory.groupId,
       groupName: groups.name,
-      branchId: branches.id,
+      branchId: rankedHistory.branchId,
       branchName: branches.name,
     })
-    .from(orderItems)
-    .innerJoin(orders, eq(orderItems.orderId, orders.id))
-    .innerJoin(organizations, eq(orders.organizationId, organizations.id))
-    .innerJoin(branches, eq(orders.branchId, branches.id))
-    .leftJoin(groups, eq(branches.groupId, groups.id))
-    .where(and(eq(orderItems.globalProductId, selectedProduct.id), ...historyConditions))
-    .orderBy(desc(orders.createdAt), desc(orderItems.id))
+    .from(rankedHistory)
+    .leftJoin(organizations, eq(rankedHistory.organizationId, organizations.id))
+    .leftJoin(groups, eq(rankedHistory.groupId, groups.id))
+    .leftJoin(branches, eq(rankedHistory.branchId, branches.id))
+    .where(and(eq(rankedHistory.globalProductId, selectedProduct.id), ...changeConditions))
+    .orderBy(desc(rankedHistory.changedAt), desc(rankedHistory.id))
     .limit(MAX_HISTORY_POINTS + 1)
 
   const truncated = pointRows.length > MAX_HISTORY_POINTS
   const points: ProductPriceHistoryPoint[] = pointRows
     .slice(0, MAX_HISTORY_POINTS)
     .map((point) => {
-      const orderedAt = toIsoTimestamp(point.orderedAt)
-      if (!orderedAt) throw new TypeError("Price history query returned an invalid order timestamp")
+      const changedAt = toIsoTimestamp(point.changedAt)
+      if (!changedAt) throw new TypeError("Price history query returned an invalid change timestamp")
       return {
         ...point,
-        orderedAt,
-        chargedPriceCents: Number(point.chargedPriceCents) || 0,
-        quantity: Number(point.quantity) || 0,
+        changedAt,
+        previousPriceCents: point.previousPriceCents === null ? null : Number(point.previousPriceCents),
+        priceCents: Number(point.priceCents),
+        scope: point.scope as ProductPriceHistoryPoint["scope"],
+        source: point.source as ProductPriceHistoryPoint["source"],
+        organizationId: point.organizationId ?? null,
+        organizationName: point.organizationName ?? null,
         groupId: point.groupId ?? null,
         groupName: point.groupName ?? null,
+        branchId: point.branchId ?? null,
+        branchName: point.branchName ?? null,
       }
     })
     .reverse()

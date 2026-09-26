@@ -11,7 +11,10 @@ An audit review found the trail is real but partial and scattered:
 * Records live in three tables with three different shapes — `audit_logs`
   (business mutations), `system_logs` (authentication, via
   `lib/server/auth-audit.ts`), `group_audit_logs` (group operations).
-* 94 of 135 route files under `app/api/v1/` write no audit row at all.
+* Of the routes under `app/api/v1/` that mutate, 31 wrote no audit row at all —
+  including order fulfilment, budget repair, and turning off a second factor.
+  (An earlier count of "94 of 135 files" was wrong: it counted read-only routes
+  too.)
 * There is no working viewer. `components/admin/audit-log-viewer.tsx` and
   `useAuditLogs` in `lib/hooks/use-api.ts` both call `/api/v1/audit-logs`,
   which **does not exist**, and the component is imported by nothing.
@@ -24,7 +27,8 @@ In:
    across the three tables. Super Admin only.
 2. `/activity` — the screen.
 3. `recordAuditEvent` — one centralized, transaction-aware writer, retrofitted
-   into the seven highest-value unaudited route files.
+   until **every** mutating route is audited or deliberately excluded, with a
+   contract test that keeps it that way.
 4. Unit, contract, integration and one Playwright end-to-end test.
 
 Out, and deliberately so:
@@ -185,7 +189,7 @@ somebody classifies it, which is what makes the coverage keep itself.
 
 | List | Count | What it means |
 |---|---|---|
-| `DIRECT` | 14 | The handler calls `recordAuditEvent` itself, inside the transaction that performs the change. |
+| `DIRECT` | 13 | The handler calls `recordAuditEvent` itself, inside the transaction that performs the change. |
 | `VIA_LIB` | 21 | The write lives in a shared `lib/` module the route delegates to. |
 | `LEGACY_DIRECT` | 38 | Already audited, by hand, before the writer existed. |
 | `NOT_AUDITED` | 5 | Deliberately not recorded, each with its reason. |
@@ -194,7 +198,7 @@ Retrofitted in this change — `DIRECT`:
 `categories`, `subcategories`, `modifiers`, `suppliers` (+`[id]`),
 `branches/[id]`, `reports/schedule`, `reports/process-schedules`,
 `admin/cleanup-inventory`, `admin/repair-budgets`, `admin/delete-order`,
-`admin/migrate-product-code`, `support/attachments`, `upload/image`.
+`support/attachments`, `upload/image`.
 
 **Where several routes reach one transition, the record goes with the
 transition, not the route.** Three routes fulfil an order — the Super Admin
@@ -229,6 +233,20 @@ account-enumeration oracle and the *trail* is where a probe is told apart.
 * **`admin/repair-budgets` rebuilds inside one transaction.** It deletes a
   branch's whole budget history; a failure part-way through the rebuild used to
   leave some months restored and the rest simply gone.
+* **`admin/migrate-product-code` is deleted.** It ran
+  `CREATE UNIQUE INDEX … ON global_products (product_code) WHERE deleted_at IS NULL`
+  over HTTP against the live database — a schema change through a request rather
+  than a migration in CI (rule 06), and its own first line said
+  `DELETE THIS FILE AFTER RUNNING`. It was also **redundant**:
+  `drizzle/20260713010000_add_normalized_global_product_code_uniqueness.sql`
+  already creates `global_products_code_active_normalized_uq` on
+  `lower(btrim(product_code))` under the same `WHERE deleted_at IS NULL`, which
+  is strictly stronger — identical strings normalise identically, so every
+  duplicate the endpoint's index would have rejected is already rejected.
+  Nothing called it, nothing referenced its index name, and deleting the route
+  does not drop an index a past run may have created (a redundant one, harmless
+  where it exists). The `docs/PRD.md` row went with it, as did the
+  `MIGRATE_SCHEMA` classifier rules, which nothing writes any more.
 
 ## The screen
 
@@ -351,9 +369,6 @@ Every mutating route is now audited or deliberately excluded. What remains:
 * **Read auditing**, with its own retention story.
 * **Retention and archival.** Nothing prunes these three tables, and the keyset
   reader is what makes that survivable rather than urgent.
-* **`admin/migrate-product-code` should be deleted.** Its own header says so. It
-  runs DDL over HTTP, which rule 06 says must reach production through a
-  migration in CI. It is audited now; that is a mitigation, not a fix.
 * **`mfa/toggle` disables a second factor without re-proving identity** — the
   route's comment argues the session is proof enough. Recording it does not make
   that true. Worth a decision of its own.

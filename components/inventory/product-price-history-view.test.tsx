@@ -25,7 +25,7 @@ const fixture: ProductPriceHistoryResponse = {
     name: "Premium Paper",
     unit: "ream",
     status: "active",
-    snapshotCount: 2,
+    recordCount: 2,
     firstRecordedAt: "2026-08-01T08:00:00.000Z",
     lastRecordedAt: "2026-09-01T09:00:00.000Z",
   }],
@@ -35,7 +35,7 @@ const fixture: ProductPriceHistoryResponse = {
     name: "Premium Paper",
     unit: "ream",
     status: "active",
-    snapshotCount: 2,
+    recordCount: 2,
     firstRecordedAt: "2026-08-01T08:00:00.000Z",
     lastRecordedAt: "2026-09-01T09:00:00.000Z",
   },
@@ -48,12 +48,43 @@ const fixture: ProductPriceHistoryResponse = {
   range: { key: "1y", label: "Last 12 months", startAt: "2025-09-25T00:00:00.000Z" },
   points: [
     {
-      orderItemId: 71,
-      orderId: 81,
-      orderReference: "ORD-081",
-      orderedAt: "2026-08-01T08:00:00.000Z",
-      chargedPriceCents: 20_000,
-      quantity: 2,
+      id: 70,
+      changedAt: "2026-07-01T08:00:00.000Z",
+      previousPriceCents: 18_000,
+      priceCents: 0,
+      scope: "ORGANIZATION",
+      changeType: "PRICE_CHANGED",
+      source: "CATALOG_CHANGE",
+      organizationId: 2,
+      organizationName: "Acme Foods",
+      groupId: null,
+      groupName: null,
+      branchId: null,
+      branchName: null,
+    },
+    {
+      id: 71,
+      changedAt: "2026-08-01T08:00:00.000Z",
+      previousPriceCents: 18_000,
+      priceCents: 20_000,
+      scope: "ORGANIZATION",
+      changeType: "PRICE_CHANGED",
+      source: "CATALOG_CHANGE",
+      organizationId: 2,
+      organizationName: "Acme Foods",
+      groupId: null,
+      groupName: null,
+      branchId: null,
+      branchName: null,
+    },
+    {
+      id: 72,
+      changedAt: "2026-09-01T09:00:00.000Z",
+      previousPriceCents: 20_000,
+      priceCents: 23_000,
+      scope: "BRANCH",
+      changeType: "BACKFILLED_ORDER_PRICE",
+      source: "ORDER_BACKFILL",
       organizationId: 2,
       organizationName: "Acme Foods",
       groupId: 3,
@@ -62,24 +93,25 @@ const fixture: ProductPriceHistoryResponse = {
       branchName: "Main Branch",
     },
     {
-      orderItemId: 72,
-      orderId: 82,
-      orderReference: "ORD-082",
-      orderedAt: "2026-09-01T09:00:00.000Z",
-      chargedPriceCents: 23_000,
-      quantity: 1,
+      id: 73,
+      changedAt: "2026-09-02T09:00:00.000Z",
+      previousPriceCents: 23_000,
+      priceCents: 23_000,
+      scope: "BRANCH",
+      changeType: "BACKFILLED_ORDER_PRICE",
+      source: "ORDER_BACKFILL",
       organizationId: 2,
       organizationName: "Acme Foods",
       groupId: 3,
       groupName: "North",
-      branchId: 4,
-      branchName: "Main Branch",
+      branchId: 5,
+      branchName: "Second Branch",
     },
   ],
   truncated: false,
   source: {
-    description: "Exact unit price charged on each order line when the order was placed.",
-    excludes: ["Cancelled orders", "Rejected orders"],
+    description: "Catalogue price changes recorded when a price changed.",
+    backfillDescription: "Earlier changes were inferred from eligible order prices.",
   },
 }
 
@@ -98,29 +130,40 @@ afterEach(() => {
 })
 
 describe("Product Price History", () => {
-  it("shows exact charged prices, all four filters, and no KPI or aggregate metrics", () => {
+  it("shows ledger prices, all four filters, and no order-line columns or aggregate metrics", () => {
     swr.response = fixture
     render(<ProductPriceHistoryView role="SUPER_ADMIN" />)
 
     expect(screen.getByRole("heading", { name: "Product Price History" })).toBeTruthy()
-    expect(screen.getByText(/exact unit price stored on an order line/i)).toBeTruthy()
+    expect(screen.getByText(/catalogue price change at the global/i)).toBeTruthy()
     for (const label of ["Organization", "Group", "Branch", "Date range"]) {
       expect(screen.getByRole("combobox", { name: label })).toBeTruthy()
     }
 
     const table = within(screen.getByRole("table"))
     expect(table.getAllByRole("columnheader").map((cell) => cell.textContent)).toEqual([
-      "Ordered", "Charged price", "Organization", "Group", "Branch", "Quantity", "Order",
+      "Changed", "New price", "Scope", "Organization", "Group", "Branch", "Source",
     ])
+    expect(table.getAllByRole("row")).toHaveLength(3)
     expect(table.getAllByText(/(?:PKR|Rs)\s*200/).length).toBeGreaterThan(0)
     expect(table.getAllByText(/(?:PKR|Rs)\s*230/).length).toBeGreaterThan(0)
-    expect(table.getByText("ORD-082")).toBeTruthy()
+    expect(table.queryByText(/(?:PKR|Rs)\s*0(?:\.00)?$/)).toBeNull()
+    expect(table.getByText("Historical backfill")).toBeTruthy()
+    expect(table.queryByText("ORD-082")).toBeNull()
 
     expect(screen.queryByText(/weighted average/i)).toBeNull()
     expect(screen.queryByText(/lowest recorded/i)).toBeNull()
     expect(screen.queryByText(/highest recorded/i)).toBeNull()
     expect(screen.queryByText(/current global price/i)).toBeNull()
     expect(screen.queryByText(/period movement/i)).toBeNull()
+  })
+
+  it("explains tenant history without presenting global catalogue rows", () => {
+    swr.response = { ...fixture, role: "HEAD_OFFICE" }
+    render(<ProductPriceHistoryView role="HEAD_OFFICE" />)
+
+    expect(screen.getByText(/consumer-facing organization or group prices changed/i)).toBeTruthy()
+    expect(screen.getByText(/global catalogue rows are excluded/i)).toBeTruthy()
   })
 
   it("keeps Head Office locked to the organization returned by the scoped API", () => {
@@ -153,7 +196,7 @@ describe("Product Price History", () => {
     swr.response = { ...fixture, products: [], selectedProduct: null, points: [] }
     render(<ProductPriceHistoryView role="SUPER_ADMIN" />)
 
-    expect(screen.getByText("No recorded order prices in this range")).toBeTruthy()
+    expect(screen.getByText("No price changes in this range")).toBeTruthy()
     expect(screen.getByText(/broaden the organization, group, or branch filters/i)).toBeTruthy()
     expect(screen.queryByText(/(?:PKR|Rs)\s*0(?:\.00)?$/)).toBeNull()
   })
