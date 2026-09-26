@@ -173,7 +173,7 @@ describe("buildSideBySideWorkbookData", () => {
     expect(field("Requesters compared")).toBe("Ahmed, Sana")
     expect(field("Exported at")).toBe("2026-09-14 10:30:00 UTC")
     expect(field("Day-by-day consumption")).toBe("How much of this product was ordered on each day of the selected period.")
-    expect(summary.rows.some((row) => row[0] === "By product")).toBe(false)
+    expect(field("By product")).toBe("Which products were ordered the most? The tallest bar is the product with the highest total.")
   })
 
   it("says All where no filter is set, and describes several products by count", () => {

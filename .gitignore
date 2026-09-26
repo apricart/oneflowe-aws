@@ -35,6 +35,8 @@ next-env.d.ts
 # playwright
 /playwright-report/
 /test-results/
+# the e2e dev server's own build dir, so it can run beside `npm run dev`
+/.next-e2e/
 /blob-report/
 /LoadTestingReport/
 /deliverables

@@ -1,6 +1,13 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  
+
+  // Build output directory. Overridable only so a second dev server can run
+  // beside the one a developer already has open: the dev-server lock lives at
+  // `<distDir>/dev/lock`, and Next refuses to start twice against the same one.
+  // The Playwright suite sets it (`playwright.config.ts`) so `npm run e2e` does
+  // not require stopping `npm run dev`. Unset everywhere else, which is `.next`.
+  distDir: process.env.NEXT_DIST_DIR || '.next',
+
   // Security: Remove X-Powered-By header
   poweredByHeader: false,
   typescript: {

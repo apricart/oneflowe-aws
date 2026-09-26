@@ -60,8 +60,8 @@ import { SideBySideExportButton } from "./side-by-side-export-button"
  *
  * Products are also a dimension here, not only the subject: with no focus, or
  * with several products ticked, the product panels rank them against each
- * other. Ticking one product collapses those panels into the day-by-day view,
- * where a single bar would only restate the subject line.
+ * other. With one product ticked, "By product" stays visible with that
+ * product's total while the broader product views give way to day-by-day.
  *
  * With several requesters picked to compare, "By product" becomes that grid:
  * one cluster per product, one column per person inside it, one figure per
@@ -129,7 +129,8 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
    *
    * The workbook is built from these rather than from a request of its own, so
    * it can only ever contain what the screen shows. A panel that leaves the
-   * grid (the product panels under a single focus) withdraws its entry.
+   * grid (category and product-over-time under a single focus) withdraws its
+   * entry.
    *
    * The responses live in a ref, not in state: a panel reports on every
    * answer, and routing six responses through state would redraw every chart
@@ -241,12 +242,11 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
     return `${focusLabels.length} products`
   })()
 
-  // Products and categories are named among the compared dimensions only while
-  // their panels are on screen; with one product in focus it is the subject
-  // alone, and its category would be a single bar.
-  const comparedAcross = panels.some((panel) => panel.dimension === "product")
+  // Category is named only while its panel is on screen. "By product" remains
+  // visible for one focused product, while its one-category view is withheld.
+  const comparedAcross = panels.some((panel) => panel.dimension === "category")
     ? "products, categories, requesters, branches and months"
-    : "requesters, branches and months"
+    : "products, requesters, branches and months"
 
   return (
     <div className="space-y-4">

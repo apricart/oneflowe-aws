@@ -442,6 +442,13 @@
       "when": 1790600400000,
       "tag": "20260924120000_prefix_invoice_number_with_tenant_code",
       "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1790773200000,
+      "tag": "20260926120000_fix_budget_addon_forfeit_bounds",
+      "breakpoints": true
     }
   ]
 }

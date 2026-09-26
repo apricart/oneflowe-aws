@@ -6,6 +6,7 @@ import { categories, globalProducts } from "@/db/schema"
 import { eq, and, desc, sql, isNull } from "drizzle-orm"
 import { escapeLikePattern } from "@/lib/utils"
 import { getCached, invalidateByPrefix, CACHE_TTL } from "@/lib/cache-utils"
+import { auditActorFromSession, recordAuditEvent } from "@/lib/server/activity-audit"
 
 // GET /api/v1/categories - List all categories with optional filtering
 export async function GET(req: NextRequest) {
@@ -130,19 +131,32 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Category with this name already exists" }, { status: 409 })
     }
 
-    const newCategory = await db
-      .insert(categories)
-      .values({
-        name: name.trim(),
-        parentId: null, // Always null - no subcategories
-        organizationId: null, // Global categories for Super Admin
+    // The row and its audit record commit together or neither does.
+    const created = await db.transaction(async (tx) => {
+      const [inserted] = await tx
+        .insert(categories)
+        .values({
+          name: name.trim(),
+          parentId: null, // Always null - no subcategories
+          organizationId: null, // Global categories for Super Admin
+        })
+        .returning()
+
+      await recordAuditEvent(tx, {
+        action: "CREATE_CATEGORY",
+        entity: "category",
+        entityId: inserted.id,
+        actor: auditActorFromSession(session),
+        after: { name: inserted.name },
       })
-      .returning()
+
+      return inserted
+    })
 
     await invalidateByPrefix('categories')
     await invalidateByPrefix('subcategories')
 
-    return NextResponse.json({ item: newCategory[0] }, { status: 201 })
+    return NextResponse.json({ item: created }, { status: 201 })
   } catch (error) {
     console.error("Categories POST error:", error)
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
@@ -217,20 +231,36 @@ export async function PUT(req: NextRequest) {
       }
     }
 
-    const updatedCategory = await db
-      .update(categories)
-      .set({
-        name: name.trim(),
-        parentId: parentId || null,
-        updatedAt: new Date(),
+    const previous = existingCategory[0]
+    const updated = await db.transaction(async (tx) => {
+      const [saved] = await tx
+        .update(categories)
+        .set({
+          name: name.trim(),
+          parentId: parentId || null,
+          updatedAt: new Date(),
+        })
+        .where(eq(categories.id, id))
+        .returning()
+
+      await recordAuditEvent(tx, {
+        action: "UPDATE_CATEGORY",
+        entity: "category",
+        entityId: saved.id,
+        actor: auditActorFromSession(session),
+        // Both sides, so a reviewer can see what the change actually was rather
+        // than only which fields were touched.
+        before: { name: previous.name, parentId: previous.parentId },
+        after: { name: saved.name, parentId: saved.parentId },
       })
-      .where(eq(categories.id, id))
-      .returning()
+
+      return saved
+    })
 
     await invalidateByPrefix('categories')
     await invalidateByPrefix('subcategories')
 
-    return NextResponse.json({ item: updatedCategory[0] })
+    return NextResponse.json({ item: updated })
   } catch (error) {
     console.error("Categories PUT error:", error)
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
@@ -296,9 +326,19 @@ export async function DELETE(req: NextRequest) {
       }, { status: 400 })
     }
 
-    await db
-      .delete(categories)
-      .where(eq(categories.id, Number.parseInt(id)))
+    const removed = existingCategory[0]
+    await db.transaction(async (tx) => {
+      await tx.delete(categories).where(eq(categories.id, Number.parseInt(id)))
+
+      await recordAuditEvent(tx, {
+        action: "DELETE_CATEGORY",
+        entity: "category",
+        entityId: removed.id,
+        actor: auditActorFromSession(session),
+        // The whole row: after a delete the trail is the only place it exists.
+        before: { name: removed.name, parentId: removed.parentId, organizationId: removed.organizationId },
+      })
+    })
 
     await invalidateByPrefix('categories')
     await invalidateByPrefix('subcategories')
