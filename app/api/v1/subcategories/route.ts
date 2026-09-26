@@ -5,6 +5,7 @@ import { db } from "@/lib/db"
 import { categories, globalProducts } from "@/db/schema"
 import { eq, and, ilike, desc, sql, isNotNull, inArray } from "drizzle-orm"
 import { getCached, invalidateByPrefix, CACHE_TTL } from "@/lib/cache-utils"
+import { auditActorFromSession, recordAuditEvent } from "@/lib/server/activity-audit"
 
 // GET /api/v1/subcategories - List subcategories
 export async function GET(req: NextRequest) {
@@ -151,19 +152,33 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Subcategory with this name already exists in this category" }, { status: 409 })
     }
 
-    const newSubcategory = await db
-      .insert(categories)
-      .values({
-        name: name.trim(),
-        parentId: categoryId,
-        organizationId: null,
+    // The row and its audit record commit together or neither does.
+    const created = await db.transaction(async (tx) => {
+      const [inserted] = await tx
+        .insert(categories)
+        .values({
+          name: name.trim(),
+          parentId: categoryId,
+          organizationId: null,
+        })
+        .returning()
+
+      await recordAuditEvent(tx, {
+        action: "CREATE_SUBCATEGORY",
+        entity: "subcategory",
+        entityId: inserted.id,
+        actor: auditActorFromSession(session),
+        after: { name: inserted.name, parentId: inserted.parentId },
+        context: { parentCategoryName: parentCategory[0].name },
       })
-      .returning()
+
+      return inserted
+    })
 
     await invalidateByPrefix('subcategories')
     await invalidateByPrefix('categories')
 
-    return NextResponse.json({ item: newSubcategory[0] }, { status: 201 })
+    return NextResponse.json({ item: created }, { status: 201 })
   } catch (error) {
     console.error("Subcategories POST error:", error)
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
@@ -229,16 +244,30 @@ export async function PUT(req: NextRequest) {
       updateData.parentId = categoryId
     }
 
-    const updated = await db
-      .update(categories)
-      .set(updateData)
-      .where(eq(categories.id, id))
-      .returning()
+    const previous = existing[0]
+    const updated = await db.transaction(async (tx) => {
+      const [saved] = await tx
+        .update(categories)
+        .set(updateData)
+        .where(eq(categories.id, id))
+        .returning()
+
+      await recordAuditEvent(tx, {
+        action: "UPDATE_SUBCATEGORY",
+        entity: "subcategory",
+        entityId: saved.id,
+        actor: auditActorFromSession(session),
+        before: { name: previous.name, parentId: previous.parentId },
+        after: { name: saved.name, parentId: saved.parentId },
+      })
+
+      return saved
+    })
 
     await invalidateByPrefix('subcategories')
     await invalidateByPrefix('categories')
 
-    return NextResponse.json({ item: updated[0] })
+    return NextResponse.json({ item: updated })
   } catch (error) {
     console.error("Subcategories PUT error:", error)
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
@@ -291,9 +320,19 @@ export async function DELETE(req: NextRequest) {
       }, { status: 400 })
     }
 
-    await db
-      .delete(categories)
-      .where(eq(categories.id, Number.parseInt(id)))
+    const removed = existing[0]
+    await db.transaction(async (tx) => {
+      await tx.delete(categories).where(eq(categories.id, Number.parseInt(id)))
+
+      await recordAuditEvent(tx, {
+        action: "DELETE_SUBCATEGORY",
+        entity: "subcategory",
+        entityId: removed.id,
+        actor: auditActorFromSession(session),
+        // The whole row: after a delete the trail is the only place it exists.
+        before: { name: removed.name, parentId: removed.parentId, organizationId: removed.organizationId },
+      })
+    })
 
     await invalidateByPrefix('subcategories')
     await invalidateByPrefix('categories')

@@ -22,6 +22,8 @@ export const sharedAlias = {
 export const sharedExclude = [
   'node_modules/**',
   '.next/**',
+  // The Playwright suite's own dev-server build dir (`NEXT_DIST_DIR`).
+  '.next-e2e/**',
   'dist/**',
   'tmp/**',
 ]

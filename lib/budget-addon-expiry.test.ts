@@ -100,6 +100,39 @@ describe("planAddonSettlement — the ceiling model", () => {
     expect(plan.creditedAfterCents).toBe(10_000)
   })
 
+  it("forfeits nothing for a compensating reversal row, and reports it floored at zero", () => {
+    // Production carries reversal rows with a negative amount_cents, written
+    // to cancel an earlier add-on to a net zero. The walk floors the amount,
+    // so such a row can only ever forfeit zero -- which is the bound
+    // budget_addons_forfeit_bounds_ck states as GREATEST(amount_cents, 0).
+    const before = ledger({ amountCreditedCents: 10_000 })
+    const plan = planAddonSettlement(before, [addon({ id: 1, amountCents: -22_000_000 })], NOW)
+    expect(plan.forfeits).toEqual([{ addonId: 1, amountCents: 0, forfeitedCents: 0 }])
+    expect(plan.withdrawnCents).toBe(0)
+    expect(plan.creditedAfterCents).toBe(10_000)
+    expect(invariantHolds(before, plan.creditedAfterCents)).toBe(true)
+  })
+
+  it("does not let a reversal row eat the cap a later add-on needs", () => {
+    // 12k remaining. The reversal contributes nothing and must not consume
+    // any of the shared cap, so the real add-on still forfeits its full 10k.
+    const before = ledger({ amountCreditedCents: 10_000, amountSpentCents: 98_000 })
+    const plan = planAddonSettlement(
+      before,
+      [
+        addon({ id: 1, amountCents: -5_000, validUntil: new Date("2026-09-17T18:59:59.999Z") }),
+        addon({ id: 2, amountCents: 10_000 }),
+      ],
+      NOW,
+    )
+    expect(plan.forfeits).toEqual([
+      { addonId: 1, amountCents: 0, forfeitedCents: 0 },
+      { addonId: 2, amountCents: 10_000, forfeitedCents: 10_000 },
+    ])
+    expect(plan.withdrawnCents).toBe(10_000)
+    expect(invariantHolds(before, plan.creditedAfterCents)).toBe(true)
+  })
+
   it("closes earlier validity first and shares the cap down the walk", () => {
     // 12k remaining; A (8k, older date) takes 8k, B (10k) gets the 4k that is left.
     const before = ledger({ amountCreditedCents: 18_000, amountSpentCents: 106_000 })

@@ -5,6 +5,7 @@ import { db } from "@/lib/db"
 import { modifiers,productModifiers } from "@/db/schema"
 import { eq,and,like,or,desc,sql } from "drizzle-orm"
 import { escapeLikePattern } from "@/lib/utils"
+import { auditActorFromSession, recordAuditEvent } from "@/lib/server/activity-audit"
 
 // GET /api/v1/modifiers - List all modifiers with search/filter
 export async function GET(req: NextRequest) {
@@ -130,18 +131,31 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Modifier with this name and type already exists" }, { status: 409 })
     }
 
-    const newModifier = await db
-      .insert(modifiers)
-      .values({
-        name: name.trim(),
-        description: description?.trim() || null,
-        type: type.trim(),
-        status: status || "active",
-        createdByUserId: (session.user as any).id,
-      })
-      .returning()
+    // The row and its audit record commit together or neither does.
+    const created = await db.transaction(async (tx) => {
+      const [inserted] = await tx
+        .insert(modifiers)
+        .values({
+          name: name.trim(),
+          description: description?.trim() || null,
+          type: type.trim(),
+          status: status || "active",
+          createdByUserId: (session.user as any).id,
+        })
+        .returning()
 
-    return NextResponse.json({ item: newModifier[0] }, { status: 201 })
+      await recordAuditEvent(tx, {
+        action: "CREATE_MODIFIER",
+        entity: "modifier",
+        entityId: inserted.id,
+        actor: auditActorFromSession(session),
+        after: { name: inserted.name, type: inserted.type, status: inserted.status },
+      })
+
+      return inserted
+    })
+
+    return NextResponse.json({ item: created }, { status: 201 })
   } catch (error) {
     console.error("Modifiers POST error:", error)
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
@@ -202,19 +216,43 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: "Modifier with this name and type already exists" }, { status: 409 })
     }
 
-    const updatedModifier = await db
-      .update(modifiers)
-      .set({
-        name: name.trim(),
-        description: description?.trim() || null,
-        type: type.trim(),
-        status: status || "active",
-        updatedAt: new Date(),
-      })
-      .where(eq(modifiers.id, id))
-      .returning()
+    const previous = existingModifier[0]
+    const updated = await db.transaction(async (tx) => {
+      const [saved] = await tx
+        .update(modifiers)
+        .set({
+          name: name.trim(),
+          description: description?.trim() || null,
+          type: type.trim(),
+          status: status || "active",
+          updatedAt: new Date(),
+        })
+        .where(eq(modifiers.id, id))
+        .returning()
 
-    return NextResponse.json({ item: updatedModifier[0] })
+      await recordAuditEvent(tx, {
+        action: "UPDATE_MODIFIER",
+        entity: "modifier",
+        entityId: saved.id,
+        actor: auditActorFromSession(session),
+        before: {
+          name: previous.name,
+          description: previous.description,
+          type: previous.type,
+          status: previous.status,
+        },
+        after: {
+          name: saved.name,
+          description: saved.description,
+          type: saved.type,
+          status: saved.status,
+        },
+      })
+
+      return saved
+    })
+
+    return NextResponse.json({ item: updated })
   } catch (error) {
     console.error("Modifiers PUT error:", error)
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
@@ -263,9 +301,24 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: "Cannot delete modifier that is being used by products" }, { status: 400 })
     }
 
-    await db
-      .delete(modifiers)
-      .where(eq(modifiers.id, Number.parseInt(id)))
+    const removed = existingModifier[0]
+    await db.transaction(async (tx) => {
+      await tx.delete(modifiers).where(eq(modifiers.id, Number.parseInt(id)))
+
+      await recordAuditEvent(tx, {
+        action: "DELETE_MODIFIER",
+        entity: "modifier",
+        entityId: removed.id,
+        actor: auditActorFromSession(session),
+        // The whole row: after a delete the trail is the only place it exists.
+        before: {
+          name: removed.name,
+          description: removed.description,
+          type: removed.type,
+          status: removed.status,
+        },
+      })
+    })
 
     return NextResponse.json({ message: "Modifier deleted successfully" })
   } catch (error) {

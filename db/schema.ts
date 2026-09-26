@@ -387,7 +387,11 @@ export const budgetAddons = pgTable(
   (t) => [
     index("budget_addons_budget_idx").on(t.budgetId),
     index("budget_addons_open_expiry_idx").on(t.validUntil).where(sql`${t.expiredAt} IS NULL`),
-    check("budget_addons_forfeit_bounds_ck", sql`${t.forfeitedCents} >= 0 AND ${t.forfeitedCents} <= ${t.amountCents}`),
+    // GREATEST(amount_cents, 0) mirrors the floor planAddonSettlement applies
+    // before it forfeits anything, so a compensating reversal row (negative
+    // amount) can only ever forfeit zero rather than being unsatisfiable.
+    // See drizzle/20260926120000_fix_budget_addon_forfeit_bounds.sql.
+    check("budget_addons_forfeit_bounds_ck", sql`${t.forfeitedCents} >= 0 AND ${t.forfeitedCents} <= GREATEST(${t.amountCents}, 0)`),
   ],
 )
 

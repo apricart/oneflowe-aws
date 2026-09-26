@@ -4,6 +4,7 @@ import { branches, suppliers } from "@/db/schema"
 import { and, desc, eq } from "drizzle-orm"
 import { getRequestScope } from "@/lib/auth"
 import { supplierCreateSchema, validationMessage } from "@/lib/server/mutation-validation"
+import { recordAuditEvent } from "@/lib/server/activity-audit"
 
 export async function GET(req: Request) {
   const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE"])
@@ -64,18 +65,40 @@ export async function POST(req: Request) {
     .limit(1)
   if (!branch) return error("Branch does not belong to the selected organization", 400)
 
-  const [item] = await db
-    .insert(suppliers)
-    .values({
-      organizationId: input.organizationId,
-      branchId: input.branchId,
-      name: input.name,
-      address: input.address ?? null,
-      contact: input.contact ?? null,
-      email: input.email ?? null,
-      description: input.description ?? null,
+  // The row and its audit record commit together or neither does. The actor
+  // comes from the resolved scope, never from the body.
+  const item = await db.transaction(async (tx) => {
+    const [inserted] = await tx
+      .insert(suppliers)
+      .values({
+        organizationId: input.organizationId,
+        branchId: input.branchId,
+        name: input.name,
+        address: input.address ?? null,
+        contact: input.contact ?? null,
+        email: input.email ?? null,
+        description: input.description ?? null,
+      })
+      .returning()
+
+    await recordAuditEvent(tx, {
+      action: "CREATE_SUPPLIER",
+      entity: "supplier",
+      entityId: inserted.id,
+      actor: { id: scope?.userId ?? null, role: scope?.role ?? null },
+      organizationId: inserted.organizationId,
+      branchId: inserted.branchId,
+      after: {
+        name: inserted.name,
+        contact: inserted.contact,
+        email: inserted.email,
+        address: inserted.address,
+      },
     })
-    .returning()
+
+    return inserted
+  })
+
   return ok({ item }, { status: 201 })
 }
 

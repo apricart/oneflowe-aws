@@ -2,7 +2,7 @@
 import Link from "next/link"
 import { usePathname, useSearchParams } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { Home,Building2,Users,Package,Boxes,Wallet,BarChart3,Settings,FolderTree,ChevronDown,ClipboardCheck,LifeBuoy,PanelLeftClose,PanelLeftOpen } from "lucide-react"
+import { Home,Building2,Users,Package,Boxes,Wallet,BarChart3,Settings,FolderTree,ChevronDown,ClipboardCheck,LifeBuoy,PanelLeftClose,PanelLeftOpen,ScrollText } from "lucide-react"
 import Image from "next/image"
 import { useCallback,useEffect,useState,type ReactNode } from "react"
 import { Tooltip,TooltipContent,TooltipTrigger } from "@/components/ui/tooltip"
@@ -105,6 +105,9 @@ export const getNavigationByRole = (role: string, budgetAllocationEnabled = fals
         ]
       },
       { href: "/support", label: "Support", icon: LifeBuoy },
+      // Super Admin only. The trail spans every tenant, so no other role's menu
+      // carries it — see `lib/activity-log-access.ts`.
+      { href: "/activity", label: "Activity Log", icon: ScrollText },
       { href: "/settings", label: "Settings", icon: Settings },
     ]
   }

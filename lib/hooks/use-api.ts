@@ -112,11 +112,8 @@ export function useOrganizationSettings(organizationId?: number) {
   return useAPI<{ data: any[] }>(url)
 }
 
-export function useAuditLogs(params?: { limit?: number; entity?: string; action?: string }) {
-  const qs = new URLSearchParams()
-  if (params?.limit) qs.set('limit', params.limit.toString())
-  if (params?.entity) qs.set('entity', params.entity)
-  if (params?.action) qs.set('action', params.action)
-  const url = `/api/v1/audit-logs${qs.toString() ? ("?" + String(qs.toString())) : ''}`
-  return useAPI<{ data: any[] }>(url)
-}
+// `useAuditLogs` was removed with `components/admin/audit-log-viewer.tsx`. Both
+// called `/api/v1/audit-logs`, an endpoint that never existed, and nothing
+// imported either. The activity log reads `/api/v1/activity-logs` directly from
+// `components/activity/activity-log-screen.tsx`, which accumulates cursor pages
+// and so cannot use a URL-keyed SWR cache.

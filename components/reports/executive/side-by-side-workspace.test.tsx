@@ -404,21 +404,21 @@ describe("what the screen asks for", () => {
     expect(screen.queryByRole("button", { name: "grid cell" })).toBeNull()
   })
 
-  it("collapses to the single-product layout with day-by-day, and back", () => {
+  it("keeps By product in the single-product layout with day-by-day, and back", () => {
     render(<SideBySideWorkspace filters={filters()} />)
     const list = openPicker(/All products/)
     const panels = after(() => fireEvent.click(within(list).getByText("A4 Paper")))
 
-    // One product against one product is a bar restating the subject: the
-    // product and category panels are withheld.
+    // The selected product's total remains visible; only the redundant
+    // category and product-over-time panels are withheld.
     expect(panelTitles()).toEqual([
-      "By requester", "By branch", "By month", "Requesters over months", "Day-by-day consumption",
+      "By product", "By requester", "By branch", "By month", "Requesters over months", "Day-by-day consumption",
     ])
     expect(requested.filter((url) => url.includes("/matrix?"))).toHaveLength(0)
     expect(screen.getByText("A4 Paper", { selector: "strong" })).toBeTruthy()
-    expect(screen.getByText(/compared across requesters, branches and months at once/)).toBeTruthy()
+    expect(screen.getByText(/compared across products, requesters, branches and months at once/)).toBeTruthy()
     expect(screen.getByText(/Day-by-day consumption is shown below/)).toBeTruthy()
-    expect([...panels.keys()].sort()).toEqual(["branch:column", "day:line", "month:column", "user:column", "user:line"])
+    expect([...panels.keys()].sort()).toEqual(["branch:column", "day:line", "month:column", "product:column", "user:column", "user:line"])
     for (const params of panels.values()) expect(params.get("productIds")).toBe("186")
 
     fireEvent.click(within(list).getByText("Toner"))
@@ -441,7 +441,7 @@ describe("what the screen asks for", () => {
 
     const panels = after(() => fireEvent.click(screen.getByRole("button", { name: "Quantity" })))
 
-    expect(panels.size).toBe(5)
+    expect(panels.size).toBe(6)
     for (const params of panels.values()) {
       expect(params.get("metric")).toBe("quantity")
       expect(params.get("productIds")).toBe("186")
@@ -714,7 +714,7 @@ describe("download as Excel", () => {
 
     // Exactly the single-focus layout, in registry order, behind a cover sheet.
     expect(workbook.SheetNames).toEqual([
-      "Report", "By requester", "By branch", "By month", "Requesters over months", "Day-by-day consumption",
+      "Report", "By product", "By requester", "By branch", "By month", "Requesters over months", "Day-by-day consumption",
     ])
     expect(filename).toMatch(/^product-performance-amount-\d{4}-\d{2}-\d{2}-to-\d{4}-\d{2}-\d{2}\.xlsx$/)
 
