@@ -1015,8 +1015,8 @@ export type SideBySidePanel = {
   /**
    * Withheld when exactly one product is in focus.
    *
-   * A product comparison with one product in it is a single bar restating the
-   * subject line; the day-by-day panel is the useful view of that case.
+   * Used for panels whose single-product form is replaced by the more useful
+   * day-by-day view.
    */
   hiddenForSingleProduct?: boolean
   /**
@@ -1080,14 +1080,13 @@ export const SIDE_BY_SIDE_PANELS: SideBySidePanel[] = [
     title: "By product",
     question: "Which products were ordered the most? The tallest bar is the product with the highest total.",
     colorful: true,
-    hiddenForSingleProduct: true,
     segmentBy: "user",
     dualValueLabels: true,
   },
   /**
    * The category angle the requirement lists beside the product one. Withheld
-   * for a single focused product for the same reason the product panels are:
-   * one product belongs to one category, so the panel would be one bar.
+   * for a single focused product because one product belongs to one category,
+   * so the panel would be one bar.
    */
   {
     id: "by-category",

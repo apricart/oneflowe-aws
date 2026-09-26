@@ -160,21 +160,20 @@ describe("the side-by-side panel registry", () => {
     expect(panelsForFocus(1).map((panel) => panel.id)).toContain("day-by-day")
   })
 
-  it("withholds the product-vs-product and category panels only for a single focused product", () => {
-    // One product against itself is a single bar restating the subject line,
-    // and one product belongs to one category, so that panel would be too.
-    // With nothing focused the panels rank the top products in scope; with
-    // several focused they compare exactly those.
-    const productPanels = SIDE_BY_SIDE_PANELS
-      .filter((panel) => panel.dimension === "product" || panel.dimension === "category")
+  it("keeps By product but withholds category and product-over-time only for a single focused product", () => {
+    // The focused product's total remains visible in By product. Its category
+    // would only repeat a single bar, and day-by-day replaces product-over-time.
+    const hiddenForOne = SIDE_BY_SIDE_PANELS
+      .filter((panel) => panel.hiddenForSingleProduct)
       .map((panel) => panel.id)
-    expect(productPanels).toEqual(["by-product", "by-category", "products-over-months"])
+    expect(hiddenForOne).toEqual(["by-category", "products-over-months"])
 
     const idsFor = (count: number) => panelsForFocus(count).map((panel) => panel.id)
-    expect(idsFor(0)).toEqual(expect.arrayContaining(productPanels))
-    expect(idsFor(2)).toEqual(expect.arrayContaining(productPanels))
-    expect(idsFor(25)).toEqual(expect.arrayContaining(productPanels))
-    for (const id of productPanels) expect(idsFor(1)).not.toContain(id)
+    expect(idsFor(1)).toContain("by-product")
+    expect(idsFor(0)).toEqual(expect.arrayContaining(hiddenForOne))
+    expect(idsFor(2)).toEqual(expect.arrayContaining(hiddenForOne))
+    expect(idsFor(25)).toEqual(expect.arrayContaining(hiddenForOne))
+    for (const id of hiddenForOne) expect(idsFor(1)).not.toContain(id)
   })
 
   it("splits the product panel by requester only once there are two or more people to compare", () => {

@@ -356,9 +356,18 @@ export async function proxy(req: NextRequest) {
     const redirectRes = NextResponse.redirect(url)
     return withSecurityHeaders(redirectRes, pathname)
   }
+  // The activity log spans every tenant. Navigation is gated here; the
+  // authorization that decides what is returned is in the route handler
+  // (`lib/activity-log-access.ts`), which this does not replace.
+  if (pathname.startsWith("/activity") && role !== "SUPER_ADMIN") {
+    logger("middleware", { reason: "insufficient_role", path: pathname, role })
+    const url = new URL("/dashboard", req.url || "http://localhost")
+    const redirectRes = NextResponse.redirect(url)
+    return withSecurityHeaders(redirectRes, pathname)
+  }
   // /users performs its role check in a server layout so authenticated users
   // receive an explicit access-denied state without mounting the management UI.
-  // Head Office only routes  
+  // Head Office only routes
   if (pathname.startsWith("/branches") && role !== "HEAD_OFFICE") {
     logger("middleware", { reason: "insufficient_role", path: pathname, role })
     const url = new URL("/dashboard", req.url || "http://localhost")

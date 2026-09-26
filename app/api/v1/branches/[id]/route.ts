@@ -5,6 +5,7 @@ import { branches, groups } from "@/db/schema"
 import { and, eq, ne, sql } from "drizzle-orm"
 import { getRequestScope } from "@/lib/auth"
 import { branchUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
+import { recordAuditEvent } from "@/lib/server/activity-audit"
 
 async function hasDuplicateBranchName(currentBranch: any, branchId: number, requestedName: unknown) {
   if (requestedName === undefined) return false
@@ -143,12 +144,11 @@ export async function PATCH(
 
     const scope = await getRequestScope()
 
+    // The whole row rather than three columns: the audit entry records the
+    // previous value of every field the patch touches, and this is already a
+    // single primary-key lookup.
     const [currentBranch] = await db
-      .select({
-        organizationId: branches.organizationId,
-        externalSource: branches.externalSource,
-        externalId: branches.externalId,
-      })
+      .select()
       .from(branches)
       .where(eq(branches.id, Number(id)))
     if (!currentBranch) return error("Not found", 404)
@@ -168,7 +168,29 @@ export async function PATCH(
     const patchResult = buildBranchPatch(body)
     if (patchResult.error) return error(patchResult.error, 400)
     const patch = patchResult.patch
-    const [item] = await db.update(branches).set(patch).where(eq(branches.id, Number(id))).returning()
+    const item = await db.transaction(async (tx) => {
+      const [saved] = await tx.update(branches).set(patch).where(eq(branches.id, Number(id))).returning()
+
+      // Only the fields this request actually set, on both sides: a whole-row
+      // dump would bury the change a reviewer is looking for.
+      const touched = Object.keys(patch).filter((key) => key !== "updatedAt")
+      const asRecord = (row: Record<string, unknown>) =>
+        Object.fromEntries(touched.map((key) => [key, row[key] ?? null]))
+
+      await recordAuditEvent(tx, {
+        action: "UPDATE_BRANCH",
+        entity: "branch",
+        entityId: saved.id,
+        actor: { id: scope?.userId ?? null, role: scope?.role ?? null },
+        organizationId: saved.organizationId,
+        branchId: saved.id,
+        before: asRecord(currentBranch as unknown as Record<string, unknown>),
+        after: asRecord(saved as unknown as Record<string, unknown>),
+        context: { fields: touched },
+      })
+
+      return saved
+    })
 
     // Invalidate branches and groups cache so GET returns fresh data immediately
     await invalidateByPrefix('branches')
@@ -213,13 +235,31 @@ export async function DELETE(
 
     // Soft-delete: mark as inactive instead of hard-deleting
     // All historical data (budgets, orders, audit logs, etc.) is preserved
-    const [updated] = await db.update(branches)
-      .set({
-        status: 'inactive',
-        updatedAt: new Date(),
+    const scope = await getRequestScope()
+    const updated = await db.transaction(async (tx) => {
+      const [saved] = await tx.update(branches)
+        .set({
+          status: 'inactive',
+          updatedAt: new Date(),
+        })
+        .where(eq(branches.id, branchId))
+        .returning()
+
+      await recordAuditEvent(tx, {
+        action: "DEACTIVATE_BRANCH",
+        entity: "branch",
+        entityId: saved.id,
+        actor: { id: scope?.userId ?? null, role: scope?.role ?? null },
+        organizationId: saved.organizationId,
+        branchId: saved.id,
+        before: { status: existing.status },
+        after: { status: saved.status },
+        // A soft delete: named so the trail does not claim the row was removed.
+        context: { name: existing.name, softDelete: true },
       })
-      .where(eq(branches.id, branchId))
-      .returning()
+
+      return saved
+    })
 
     // Invalidate caches
     await invalidateByPrefix('branches')

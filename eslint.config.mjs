@@ -10,6 +10,9 @@ export default defineConfig(
   {
     ignores: [
       ".next/**",
+      // The e2e dev server's own build output (`NEXT_DIST_DIR`), generated code
+      // like `.next/**` and no more lintable.
+      ".next-e2e/**",
       ".codex-doc-work/**",
       "coverage/**",
       "node_modules/**",
