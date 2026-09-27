@@ -96,6 +96,28 @@ function periodLabel(period: { startDate: string; endDate: string } | undefined)
   return `${formatDay(period.startDate)} – ${formatDay(period.endDate)}`
 }
 
+/** Keep order states scannable while retaining their text label for accessibility. */
+function statusBadgeClass(status: string): string {
+  switch (status.trim().toUpperCase()) {
+    case "PENDING":
+      return "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
+    case "APPROVED":
+      return "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300"
+    case "FULFILLED":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
+    case "PARTIAL":
+    case "PARTIALLY_FULFILLED":
+      return "border-teal-200 bg-teal-50 text-teal-700 dark:border-teal-800 dark:bg-teal-950/40 dark:text-teal-300"
+    case "REFUNDED":
+      return "border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-800 dark:bg-violet-950/40 dark:text-violet-300"
+    case "REJECTED":
+    case "CANCELLED":
+      return "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300"
+    default:
+      return "border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+  }
+}
+
 /**
  * What a status set adds to the request and to the header — nothing for the
  * default, so every existing request stays byte-identical.
@@ -363,7 +385,16 @@ function LineTable({ rows, sort, direction, onSort }: Readonly<{
               <td className="whitespace-nowrap px-3 py-1.5 text-right font-semibold tabular-nums text-slate-900 dark:text-slate-100">
                 {money(row.valueCents)}
               </td>
-              <td className="whitespace-nowrap px-3 py-1.5 text-slate-600 dark:text-slate-400">{row.status}</td>
+              <td className="whitespace-nowrap px-3 py-1.5">
+                <span
+                  className={cn(
+                    "inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                    statusBadgeClass(row.status),
+                  )}
+                >
+                  {row.status}
+                </span>
+              </td>
             </tr>
           ))}
         </tbody>

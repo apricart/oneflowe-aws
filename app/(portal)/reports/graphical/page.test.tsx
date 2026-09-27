@@ -145,6 +145,12 @@ describe("the levels", () => {
     expect(screen.queryByRole("button", { name: "Product Performance" })).toBeNull()
   })
 
+  it("does not render the Users to review feature after its relocation", () => {
+    signIn("SUPER_ADMIN")
+    render(<GraphicalReportsPage />)
+    expect(screen.queryByText("Users to review")).toBeNull()
+  })
+
   it("switches to Product Performance, renamed, when its sidebar link is followed from the open page", () => {
     signIn("HEAD_OFFICE")
     render(<GraphicalReportsPage />)
