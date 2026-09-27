@@ -3,6 +3,7 @@ import { authOptions } from "@/lib/auth-options"
 import { parseEndDateParam,parseStartDateParam } from "@/lib/date-range-params"
 import { db } from "@/lib/db"
 import { redactAnalyticsPrices,shouldHidePricesForRole } from "@/lib/price-visibility"
+import { productTrendMonthKey } from "@/lib/product-consumption-trend"
 import {
 parseProductPerformanceLimit,
 parseProductPerformanceRankBy,
@@ -10,9 +11,9 @@ rankProductPerformanceRows,
 } from "@/lib/product-performance-ranking"
 import {
 isBranchScopedAnalyticsRole,
-resolveAnalyticsBranchIds,
 resolveAnalyticsOrganizationIds,
 } from "@/lib/server/analytics-scope"
+import { resolveProductBranches } from "@/lib/server/product-analytics-scope"
 import { loadAnalyticsAssignedBranchIds } from "@/lib/server/analytics-branch-scope"
 import { resolveEffectivePriceCents } from "@/lib/server/effective-price"
 import { escapeLikePattern } from "@/lib/utils"
@@ -32,51 +33,6 @@ function getRequestedOrganizationIds(searchParams: URLSearchParams) {
     const organizationIds = parseNumberList(searchParams.get("organizationIds"))
     if (organizationIds.length > 0) return organizationIds
     return parseNumberList(searchParams.get("organizationId"))
-}
-
-async function resolveProductBranches({
-    role,
-    userBranchId,
-    userOrganizationId,
-    organizationIds,
-    requestedBranchIds,
-    groupIds,
-    assignedBranchIds,
-}: {
-    role: string
-    userBranchId: unknown
-    userOrganizationId: number | null
-    organizationIds: number[]
-    requestedBranchIds: number[]
-    groupIds: number[]
-    assignedBranchIds: number[] | null
-}) {
-    let allowedBranchQuery = db.select({ id: branches.id }).from(branches)
-    if (organizationIds.length > 0) {
-        allowedBranchQuery = allowedBranchQuery.where(inArray(branches.organizationId, organizationIds)) as any
-    }
-    const allowedBranches = await allowedBranchQuery
-    let branchIds = resolveAnalyticsBranchIds({
-        role,
-        userBranchId,
-        requestedBranchIds,
-        allowedBranchIds: allowedBranches.map((branch) => branch.id),
-        assignedBranchIds,
-    })
-    if (groupIds.length === 0) return branchIds
-
-    let organizationCondition = organizationIds.length > 0
-        ? inArray(branches.organizationId, organizationIds)
-        : undefined
-    if (organizationIds.length === 0 && userOrganizationId) {
-        organizationCondition = eq(branches.organizationId, userOrganizationId)
-    }
-    const groupBranches = await db.select({ id: branches.id })
-        .from(branches)
-        .where(and(inArray(branches.groupId, groupIds), organizationCondition))
-    const groupBranchIds = new Set(groupBranches.map((branch) => branch.id))
-    branchIds = branchIds.filter((branchId) => groupBranchIds.has(branchId))
-    return branchIds
 }
 
 function applyDateFilters(conditions: any[], months: number[], years: number[], start?: Date, end?: Date) {
@@ -376,8 +332,10 @@ function buildProductTrend(rows: any[], refundQuantities: Record<number, number>
         qtyRefunded: number
     }> = {}
     rows.forEach((row) => {
-        const date = new Date(row.createdAt)
-        const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+        // Shared with the consumption-trend route: the two charts sit on the
+        // same screen under the same filters and must bucket an order the same
+        // way, or the lines contradict the bars above them.
+        const key = productTrendMonthKey(row.createdAt)
         trend[key] ||= { date: key, revenue: 0, compareRevenue: 0, qtyOrdered: 0, qtyFulfilled: 0, qtyRefunded: 0 }
         trend[key].qtyOrdered += row.qtyOrdered
         if (!PERFORMANCE_STATUSES.has((row.status || "").toUpperCase())) return

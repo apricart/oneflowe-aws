@@ -18,6 +18,21 @@ import {
  * `tests/integration/activity-log-api.test.ts`; nothing here duplicates them.
  */
 
+/**
+ * Open `/activity` narrowed to this run's own actor.
+ *
+ * `oneflowe_test` is shared with the integration suites, so the newest fifty
+ * events are not this run's. Every test that asserts on a *specific* seeded row
+ * narrows first; without it these tests pass or fail depending on what else had
+ * run against the database, which is the worst kind of test.
+ */
+async function openScopedToThisRun(page: Page): Promise<void> {
+  await page.goto("/activity")
+  await expect(page.getByRole("heading", { name: "Activity log" })).toBeVisible()
+  await page.getByLabel("Search").fill(SUPER_ADMIN_USERNAME)
+  await expect(page.getByText(`Search: ${SUPER_ADMIN_USERNAME}`)).toBeVisible()
+}
+
 async function signIn(page: Page, username: string): Promise<void> {
   await page.goto("/login")
   await page.getByLabel("Username or Email").fill(username)
@@ -36,8 +51,20 @@ test.describe("the activity log", () => {
     await expect(page).toHaveURL(/\/activity$/)
 
     await expect(page.getByRole("heading", { name: "Activity log" })).toBeVisible()
+    await expect(page.getByText(/\d+ events? loaded/)).toBeVisible()
 
-    // The seeded rows, from all three tables.
+    // Narrowed to this run's own actor before asserting on specific rows.
+    //
+    // The unfiltered first page is the newest fifty events in a database the
+    // integration suites also write to, so the seeded rows are not reliably on
+    // it — asserting they are made this test depend on whatever else had run.
+    // Searching by the actor is deterministic, and it also exercises in a real
+    // browser the lookup that resolves a person's name to the two tables which
+    // store only their id.
+    await page.getByLabel("Search").fill(SUPER_ADMIN_USERNAME)
+    await expect(page.getByText(`Search: ${SUPER_ADMIN_USERNAME}`)).toBeVisible()
+
+    // One row from each of the three tables behind the screen.
     await expect(page.getByText("Delete category").first()).toBeVisible()
     await expect(page.getByText("Update supplier").first()).toBeVisible()
     await expect(page.getByText("Auth login failure").first()).toBeVisible()
@@ -50,7 +77,7 @@ test.describe("the activity log", () => {
 
   test("filtering narrows the list and says what is filtered", async ({ page }) => {
     await signIn(page, SUPER_ADMIN_USERNAME)
-    await page.goto("/activity")
+    await openScopedToThisRun(page)
     await expect(page.getByText("Update supplier").first()).toBeVisible()
 
     await page.getByLabel("Operation").click()
@@ -70,8 +97,9 @@ test.describe("the activity log", () => {
   test("searching finds a record by its id", async ({ page }) => {
     await signIn(page, SUPER_ADMIN_USERNAME)
     await page.goto("/activity")
-    await expect(page.getByText("Delete category").first()).toBeVisible()
+    await expect(page.getByRole("heading", { name: "Activity log" })).toBeVisible()
 
+    // Deterministic on its own: the id belongs to one seeded row.
     await page.getByLabel("Search").fill(SEEDED_ENTITY_ID)
 
     await expect(page.getByText(`Search: ${SEEDED_ENTITY_ID}`)).toBeVisible()
@@ -81,7 +109,7 @@ test.describe("the activity log", () => {
 
   test("a row opens the detail panel with the actor, the address and the diff", async ({ page }) => {
     await signIn(page, SUPER_ADMIN_USERNAME)
-    await page.goto("/activity")
+    await openScopedToThisRun(page)
 
     await page.getByRole("button", { name: /Delete category, Deleted, Critical/ }).first().click()
 
@@ -98,7 +126,7 @@ test.describe("the activity log", () => {
 
   test("a failed sign-in reads as a failure, with its reason", async ({ page }) => {
     await signIn(page, SUPER_ADMIN_USERNAME)
-    await page.goto("/activity")
+    await openScopedToThisRun(page)
 
     await page.getByLabel("Outcome").click()
     await page.getByRole("option", { name: "Failed" }).click()

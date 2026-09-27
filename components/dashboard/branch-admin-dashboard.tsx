@@ -9,7 +9,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { NotificationRail } from "@/components/notifications/notification-center"
 import { formatPKR, cn } from "@/lib/utils"
 import {
-  TrendingUp, Package, RefreshCw, Filter, CheckCircle2, RotateCcw, XCircle, Activity,
+  TrendingUp, Package, RefreshCw, Filter, CheckCircle2, RotateCcw, Activity, Users, Building2,
   Layers, Clock, Calendar
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -310,6 +310,19 @@ export function BranchAdminDashboard({ scope }: Readonly<{ scope?: BranchDashboa
   const approvedCount = perfData?.statusCounts?.approvedCount ?? 0
   const deliveredCount = perfData?.statusCounts?.deliveredCount ?? 0
   const notDeliveredCount = perfData?.statusCounts?.notDeliveredCount ?? 0
+  const totalUsers = perfData?.totalUsers ?? 0
+  const totalBranches = perfData?.totalBranches ?? 0
+  const pendingAmount = (perfData?.statusCounts?.pendingAmountCents ?? 0) / 100
+  const approvedAmount = (perfData?.statusCounts?.approvedAmountCents ?? 0) / 100
+  const fulfilledAmount = (perfData?.statusCounts?.valueFulfilledCents ?? 0) / 100
+  const exceptionAmount = (
+    (perfData?.statusCounts?.valueRefundedCents ?? 0)
+    + (perfData?.statusCounts?.valueRejectedCents ?? 0)
+  ) / 100
+  const exceptionCount = refundedCount + rejectedCount
+  const previousExceptionCount = perfData?.comparison
+    ? (perfData.comparison.refundedCount ?? 0) + (perfData.comparison.rejectedCount ?? 0)
+    : undefined
 
   return (
     <motion.main 
@@ -411,6 +424,7 @@ export function BranchAdminDashboard({ scope }: Readonly<{ scope?: BranchDashboa
         <BankingKPICard
           icon={Activity} title="Pending Approval"
           value={pendingCount.toLocaleString()}
+          amount={pricesHidden ? undefined : formatPKR(pendingAmount, { maximumFractionDigits: 0 })}
           subtitle={getPresetLabel(activePreset, dateRange)}
           gradient="from-amber-400 to-orange-500" iconBg="text-amber-600 bg-amber-600" delay={75}
           onClick={() => handleKPIOpen("PENDING" as any)}
@@ -423,6 +437,7 @@ export function BranchAdminDashboard({ scope }: Readonly<{ scope?: BranchDashboa
         <BankingKPICard
           icon={CheckCircle2} title="Active"
           value={approvedCount.toLocaleString()}
+          amount={pricesHidden ? undefined : formatPKR(approvedAmount, { maximumFractionDigits: 0 })}
           subtitle={getPresetLabel(activePreset, dateRange)}
           gradient="from-blue-400 to-indigo-500" iconBg="text-blue-600 bg-blue-600" delay={100}
           onClick={() => handleKPIOpen("APPROVED")}
@@ -431,14 +446,15 @@ export function BranchAdminDashboard({ scope }: Readonly<{ scope?: BranchDashboa
           comparisonValue={buildTrend(approvedCount, perfData?.comparison?.approvedCount)?.label}
           comparisonLabel="VS LAST"
           details={[
-            { label: "Delivered", value: deliveredCount.toLocaleString() },
-            { label: "Not Delivered", value: notDeliveredCount.toLocaleString() },
+            { label: "Delivered/Unacknowledged", value: deliveredCount.toLocaleString(), align: "left" },
+            { label: "Not Delivered", value: notDeliveredCount.toLocaleString(), align: "right" },
           ]}
           isLoading={!perfData}
         />
         <BankingKPICard
           icon={CheckCircle2} title="Fulfilled"
           value={fulfilledCount.toLocaleString()}
+          amount={pricesHidden ? undefined : formatPKR(fulfilledAmount, { maximumFractionDigits: 0 })}
           subtitle={getPresetLabel(activePreset, dateRange)}
           gradient="from-teal-500 to-cyan-600" iconBg="text-teal-600 bg-teal-600" delay={125}
           onClick={() => handleKPIOpen("FULFILLED")}
@@ -449,27 +465,33 @@ export function BranchAdminDashboard({ scope }: Readonly<{ scope?: BranchDashboa
           isLoading={!perfData}
         />
         <BankingKPICard
-          icon={RotateCcw} title="Refunded"
-          value={refundedCount.toLocaleString()}
+          icon={RotateCcw} title="Refunded / Rejected"
+          value={exceptionCount.toLocaleString()}
+          amount={pricesHidden ? undefined : formatPKR(exceptionAmount, { maximumFractionDigits: 0 })}
           subtitle={getPresetLabel(activePreset, dateRange)}
-          gradient="from-red-500 to-rose-600" iconBg="text-red-600 bg-red-600" delay={150}
-          onClick={() => handleKPIOpen("REFUNDED")}
-          trend={buildTrend(refundedCount, perfData?.comparison?.refundedCount)?.type}
-          trendValue={buildTrend(refundedCount, perfData?.comparison?.refundedCount)?.value}
-          comparisonValue={buildTrend(refundedCount, perfData?.comparison?.refundedCount)?.label}
+          gradient="from-red-500 to-slate-700" iconBg="text-red-600 bg-red-600" delay={150}
+          trend={buildTrend(exceptionCount, previousExceptionCount)?.type}
+          trendValue={buildTrend(exceptionCount, previousExceptionCount)?.value}
+          comparisonValue={buildTrend(exceptionCount, previousExceptionCount)?.label}
           comparisonLabel="VS LAST"
+          details={[
+            { label: "Refunded", value: refundedCount.toLocaleString(), onClick: pricesHidden ? undefined : () => handleKPIOpen("REFUNDED") },
+            { label: "Rejected", value: rejectedCount.toLocaleString(), onClick: pricesHidden ? undefined : () => handleKPIOpen("REJECTED") },
+          ]}
           isLoading={!perfData}
         />
         <BankingKPICard
-          icon={XCircle} title="Rejected"
-          value={rejectedCount.toLocaleString()}
-          subtitle={getPresetLabel(activePreset, dateRange)}
-          gradient="from-slate-500 to-slate-700" iconBg="text-slate-600 bg-slate-600" delay={175}
-          onClick={() => handleKPIOpen("REJECTED")}
-          trend={buildTrend(rejectedCount, perfData?.comparison?.rejectedCount)?.type}
-          trendValue={buildTrend(rejectedCount, perfData?.comparison?.rejectedCount)?.value}
-          comparisonValue={buildTrend(rejectedCount, perfData?.comparison?.rejectedCount)?.label}
-          comparisonLabel="VS LAST"
+          icon={Users} title="Total Users"
+          value={totalUsers.toLocaleString()}
+          subtitle="Current scope"
+          gradient="from-violet-500 to-purple-600" iconBg="text-violet-600 bg-violet-600" delay={175}
+          isLoading={!perfData}
+        />
+        <BankingKPICard
+          icon={Building2} title="Total Branches"
+          value={totalBranches.toLocaleString()}
+          subtitle="Current scope"
+          gradient="from-cyan-500 to-sky-600" iconBg="text-cyan-600 bg-cyan-600" delay={200}
           isLoading={!perfData}
         />
       </div>

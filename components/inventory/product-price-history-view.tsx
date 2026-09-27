@@ -42,7 +42,6 @@ const RANGE_OPTIONS: Array<{ key: ProductPriceHistoryRangeKey; label: string }> 
   { key: "all", label: "All time" },
 ]
 
-const numberFormatter = new Intl.NumberFormat("en-PK", { maximumFractionDigits: 3 })
 const shortNumberFormatter = new Intl.NumberFormat("en-PK", { notation: "compact", maximumFractionDigits: 1 })
 
 function money(cents: number) {
@@ -66,17 +65,61 @@ function dateTimeLabel(value: string, includeTime = true) {
 
 type ChartPoint = ProductPriceHistoryPoint & { axisLabel: string }
 
+function scopeLabel(scope: ProductPriceHistoryPoint["scope"]) {
+  return {
+    GLOBAL: "Global",
+    ORGANIZATION: "Organization",
+    GROUP: "Group",
+    BRANCH: "Historical branch",
+  }[scope]
+}
+
+function sourceLabel(source: ProductPriceHistoryPoint["source"]) {
+  return {
+    CATALOG_CHANGE: "Recorded change",
+    ORDER_BACKFILL: "Historical backfill",
+    MIGRATION_BASELINE: "Migration baseline",
+  }[source]
+}
+
+function contextLabel(point: ProductPriceHistoryPoint) {
+  if (point.scope === "GLOBAL") return "All organizations"
+  const context = [point.organizationName, point.groupName, point.branchName].filter(Boolean)
+  return context.length > 0 ? context.join(" · ") : "Archived catalogue scope"
+}
+
+function onlyConsumerPriceChanges(points: ProductPriceHistoryPoint[]) {
+  const lastPriceByStream = new Map<string, number>()
+
+  return points.filter((point) => {
+    if (
+      point.priceCents <= 0
+      || point.previousPriceCents === null
+      || point.previousPriceCents <= 0
+      || point.previousPriceCents === point.priceCents
+    ) return false
+    const stream = point.groupId !== null
+      ? `group:${point.groupId}`
+      : point.organizationId !== null
+        ? `organization:${point.organizationId}`
+        : "global"
+    if (lastPriceByStream.get(stream) === point.priceCents) return false
+    lastPriceByStream.set(stream, point.priceCents)
+    return true
+  })
+}
+
 function PriceTooltip({ active, payload }: Readonly<{ active?: boolean; payload?: Array<{ payload: ChartPoint }> }>) {
   if (!active || !payload?.length) return null
   const point = payload[0].payload
   return (
     <div className="min-w-64 rounded-xl border border-slate-200 bg-white p-3 text-xs shadow-xl dark:border-slate-700 dark:bg-slate-900">
-      <p className="font-semibold text-slate-950 dark:text-white">{money(point.chargedPriceCents)}</p>
-      <p className="mt-1 text-slate-500 dark:text-slate-400">Charged unit price · {dateTimeLabel(point.orderedAt)}</p>
+      <p className="font-semibold text-slate-950 dark:text-white">{money(point.priceCents)}</p>
+      <p className="mt-1 text-slate-500 dark:text-slate-400">Recorded price · {dateTimeLabel(point.changedAt)}</p>
       <div className="mt-3 space-y-1 border-t border-slate-100 pt-2 text-slate-600 dark:border-slate-800 dark:text-slate-300">
-        <p>{point.organizationName}</p>
-        <p>{point.groupName ?? "Ungrouped"} · {point.branchName}</p>
-        <p>{numberFormatter.format(point.quantity)} {point.quantity === 1 ? "unit" : "units"} · Order {point.orderReference}</p>
+        <p>{scopeLabel(point.scope)} · {sourceLabel(point.source)}</p>
+        <p>{contextLabel(point)}</p>
+        <p>Previous price: {point.previousPriceCents === null || point.previousPriceCents <= 0 ? "Not available" : money(point.previousPriceCents)}</p>
       </div>
     </div>
   )
@@ -88,7 +131,7 @@ function PriceHistoryChart({ data, productName }: Readonly<{ data: ChartPoint[];
     <div
       className="h-[360px] w-full"
       role="img"
-      aria-label={`Exact charged unit prices for ${productName}. A table with the same records follows the chart.`}
+      aria-label={`Recorded catalogue prices for ${productName}. A table with the same records follows the chart.`}
     >
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={data} margin={{ top: 14, right: 24, bottom: 8, left: 12 }}>
@@ -113,8 +156,8 @@ function PriceHistoryChart({ data, productName }: Readonly<{ data: ChartPoint[];
           <Tooltip content={<PriceTooltip />} />
           <Line
             type="linear"
-            dataKey="chargedPriceCents"
-            name="Charged unit price"
+            dataKey="priceCents"
+            name="Recorded price"
             stroke="#2563eb"
             strokeWidth={3}
             dot={showDots ? { r: 3, fill: "#2563eb", strokeWidth: 0 } : false}
@@ -190,10 +233,13 @@ export default function ProductPriceHistoryView({ role }: Readonly<{ role: Produ
     )
   }, [data?.products, search])
 
-  const chartData = useMemo<ChartPoint[]>(() => (data?.points ?? []).map((point) => ({
-    ...point,
-    axisLabel: dateTimeLabel(point.orderedAt, false),
-  })), [data?.points])
+  const chartData = useMemo<ChartPoint[]>(() => onlyConsumerPriceChanges(data?.points ?? [])
+    // The endpoint already performs the same transition filtering. Retain this
+    // guard so a stale browser cache cannot draw zero or repeated-price points.
+    .map((point) => ({
+      ...point,
+      axisLabel: dateTimeLabel(point.changedAt, false),
+    })), [data?.points])
 
   const activeProductId = selectedProductId ?? data?.selectedProduct?.id ?? null
   const effectiveOrganizationId = organizationId ?? data?.selection.organizationId ?? null
@@ -240,7 +286,11 @@ export default function ProductPriceHistoryView({ role }: Readonly<{ role: Produ
               <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100">Product Price History</h1>
               {isValidating && data ? <Badge variant="outline" className="gap-1 text-[10px]"><RefreshCw className="h-3 w-3 animate-spin" /> Updating</Badge> : null}
             </div>
-            <p className="mt-1 text-xs font-medium text-slate-500 dark:text-slate-400">See the exact unit price charged on each eligible order.</p>
+            <p className="mt-1 text-xs font-medium text-slate-500 dark:text-slate-400">
+              {role === "HEAD_OFFICE"
+                ? "See when consumer-facing organization or group prices changed."
+                : "See when catalogue prices changed across each pricing tier."}
+            </p>
           </div>
         </div>
         <Button variant="outline" size="sm" className="gap-2 self-start md:self-auto" onClick={() => mutate()} disabled={isValidating}>
@@ -254,7 +304,9 @@ export default function ProductPriceHistoryView({ role }: Readonly<{ role: Produ
         <div>
           <p className="font-semibold text-blue-950 dark:text-blue-100">What this history represents</p>
           <p className="mt-0.5 leading-5 text-blue-800/80 dark:text-blue-200/80">
-            Each point is the exact unit price stored on an order line when its order was placed. Cancelled and rejected orders are excluded; catalogue prices are not mixed into this graph.
+            {role === "HEAD_OFFICE"
+              ? "Each point is an organization or group consumer-price change. Global catalogue rows are excluded. Earlier changes were backfilled from eligible charged order prices without treating every order as a change."
+              : "Each point is a catalogue price change at the global, organization, or group tier. Earlier changes were backfilled from eligible charged order prices without treating every order as a change."}
           </p>
         </div>
       </div>
@@ -318,7 +370,7 @@ export default function ProductPriceHistoryView({ role }: Readonly<{ role: Produ
                 >
                   <span className="block truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{product.name}</span>
                   <span className="mt-0.5 block text-[11px] text-slate-500">{product.productCode} · {product.unit}</span>
-                  <span className="mt-2 block text-[10px] font-medium text-slate-400">{product.snapshotCount.toLocaleString()} charged price {product.snapshotCount === 1 ? "record" : "records"}</span>
+                  <span className="mt-2 block text-[10px] font-medium text-slate-400">{product.recordCount.toLocaleString()} price {product.recordCount === 1 ? "record" : "records"}</span>
                 </button>
               ))}
             </CardContent>
@@ -335,7 +387,7 @@ export default function ProductPriceHistoryView({ role }: Readonly<{ role: Produ
                       <h2 className="truncate text-lg font-bold text-slate-950 dark:text-white">{data.selectedProduct.name}</h2>
                       <Badge variant="outline" className="font-mono text-[10px]">{data.selectedProduct.productCode}</Badge>
                     </div>
-                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{data.range.label} · {data.selectedProduct.snapshotCount.toLocaleString()} exact order-line prices</p>
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{data.range.label} · {data.selectedProduct.recordCount.toLocaleString()} price-change records</p>
                   </>
                 ) : <p className="text-sm text-slate-500">No product price records are available for this selection.</p>}
               </CardContent>
@@ -344,8 +396,8 @@ export default function ProductPriceHistoryView({ role }: Readonly<{ role: Produ
             <Card className="gap-4 border-slate-200 py-5 shadow-sm dark:border-slate-800">
               <CardHeader className="flex-row items-start justify-between gap-4 px-5 py-0">
                 <div>
-                  <CardTitle className="text-base">Charged unit price over time</CardTitle>
-                  <CardDescription className="mt-1 text-xs">One point per order line. Connecting lines make changes easier to follow.</CardDescription>
+                  <CardTitle className="text-base">Catalogue price over time</CardTitle>
+                  <CardDescription className="mt-1 text-xs">One point per recorded change or migration baseline.</CardDescription>
                 </div>
                 <CalendarDays className="h-5 w-5 shrink-0 text-slate-400" />
               </CardHeader>
@@ -353,13 +405,13 @@ export default function ProductPriceHistoryView({ role }: Readonly<{ role: Produ
                 {isLoading && !data ? <Skeleton className="h-[360px] w-full rounded-xl" /> : chartData.length === 0 ? (
                   <div className="flex h-[300px] flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50/50 px-6 text-center dark:border-slate-800 dark:bg-slate-900/40">
                     <PackageSearch className="h-9 w-9 text-slate-300 dark:text-slate-600" />
-                    <p className="mt-3 font-semibold text-slate-700 dark:text-slate-200">No recorded order prices in this range</p>
+                    <p className="mt-3 font-semibold text-slate-700 dark:text-slate-200">No price changes in this range</p>
                     <p className="mt-1 max-w-md text-sm text-slate-500">Try a longer date range or broaden the organization, group, or branch filters.</p>
                   </div>
                 ) : (
                   <>
                     <div className="mb-2 flex items-center gap-2 px-2 text-xs text-slate-600 dark:text-slate-300">
-                      <span className="h-0.5 w-5 bg-blue-600" /> Charged unit price
+                      <span className="h-0.5 w-5 bg-blue-600" /> Recorded catalogue price
                     </div>
                     <PriceHistoryChart data={chartData} productName={data?.selectedProduct?.name ?? "selected product"} />
                     {data?.truncated ? <p className="mt-2 px-2 text-xs text-amber-700 dark:text-amber-300">Showing the latest 5,000 records. Narrow the filters to inspect a smaller set.</p> : null}
@@ -370,35 +422,35 @@ export default function ProductPriceHistoryView({ role }: Readonly<{ role: Produ
 
             <Card className="gap-4 overflow-hidden border-slate-200 py-0 shadow-sm dark:border-slate-800">
               <CardHeader className="border-b border-slate-100 px-5 py-4 dark:border-slate-800">
-                <CardTitle className="text-base">Charged price records</CardTitle>
-                <CardDescription className="text-xs">Exact order-line records, newest first.</CardDescription>
+                <CardTitle className="text-base">Price change records</CardTitle>
+                <CardDescription className="text-xs">Catalogue ledger entries, newest first.</CardDescription>
               </CardHeader>
               <CardContent className="overflow-x-auto p-0">
                 {chartData.length === 0 ? (
-                  <p className="px-5 py-8 text-center text-sm text-slate-500">No charged price records are available for this selection.</p>
+                  <p className="px-5 py-8 text-center text-sm text-slate-500">No price change records are available for this selection.</p>
                 ) : (
                   <Table>
                     <TableHeader>
                       <TableRow className="bg-slate-50/80 dark:bg-slate-900/70">
-                        <TableHead className="pl-5">Ordered</TableHead>
-                        <TableHead className="text-right">Charged price</TableHead>
+                        <TableHead className="pl-5">Changed</TableHead>
+                        <TableHead className="text-right">New price</TableHead>
+                        <TableHead>Scope</TableHead>
                         <TableHead>Organization</TableHead>
                         <TableHead>Group</TableHead>
                         <TableHead>Branch</TableHead>
-                        <TableHead className="text-right">Quantity</TableHead>
-                        <TableHead className="pr-5">Order</TableHead>
+                        <TableHead className="pr-5">Source</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {[...chartData].reverse().map((point) => (
-                        <TableRow key={point.orderItemId}>
-                          <TableCell className="whitespace-nowrap pl-5 font-medium">{dateTimeLabel(point.orderedAt)}</TableCell>
-                          <TableCell className="text-right font-semibold tabular-nums text-blue-700 dark:text-blue-300">{money(point.chargedPriceCents)}</TableCell>
-                          <TableCell>{point.organizationName}</TableCell>
-                          <TableCell>{point.groupName ?? "Ungrouped"}</TableCell>
-                          <TableCell>{point.branchName}</TableCell>
-                          <TableCell className="text-right tabular-nums">{numberFormatter.format(point.quantity)}</TableCell>
-                          <TableCell className="pr-5 font-mono text-xs">{point.orderReference}</TableCell>
+                        <TableRow key={point.id}>
+                          <TableCell className="whitespace-nowrap pl-5 font-medium">{dateTimeLabel(point.changedAt)}</TableCell>
+                          <TableCell className="text-right font-semibold tabular-nums text-blue-700 dark:text-blue-300">{money(point.priceCents)}</TableCell>
+                          <TableCell><Badge variant="outline">{scopeLabel(point.scope)}</Badge></TableCell>
+                          <TableCell>{point.organizationName ?? (point.scope === "GLOBAL" ? "All organizations" : "—")}</TableCell>
+                          <TableCell>{point.groupName ?? "—"}</TableCell>
+                          <TableCell>{point.branchName ?? "—"}</TableCell>
+                          <TableCell className="pr-5 text-xs">{sourceLabel(point.source)}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>

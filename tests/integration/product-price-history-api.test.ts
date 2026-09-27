@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { inArray } from "drizzle-orm"
+import { eq } from "drizzle-orm"
 import { NextRequest } from "next/server"
 import * as mockedNextAuth from "next-auth"
 
 import * as priceHistoryRoute from "@/app/api/v1/admin/product-price-history/route"
-import { orderItems, orders } from "@/db/schema"
+import { productPriceHistory } from "@/db/schema"
 import { closePool, db } from "@/lib/db"
 import type { ProductPriceHistoryResponse } from "@/lib/product-price-history"
 
@@ -42,7 +42,6 @@ async function read(query: Record<string, string> = {}) {
 
 describe.skipIf(!hasTestDatabase)("product price history endpoint", () => {
   let fixtures: PricingFixtures
-  const orderIds: number[] = []
   let headOffice: Actor
   let superAdmin: Actor
 
@@ -51,43 +50,121 @@ describe.skipIf(!hasTestDatabase)("product price history endpoint", () => {
     headOffice = { id: fixtures.userId, role: "HEAD_OFFICE", organizationId: fixtures.organizationId }
     superAdmin = { id: fixtures.userId, role: "SUPER_ADMIN", organizationId: null }
 
+    // Fixture creation is itself captured by the database triggers. Replace
+    // those rows with a small, deterministic ledger for endpoint assertions.
+    await db.delete(productPriceHistory)
+      .where(eq(productPriceHistory.globalProductId, fixtures.globalProductId))
+
     const now = Date.now()
-    const orderSpecs = [
-      { suffix: "grouped", organizationId: fixtures.organizationId, branchId: fixtures.groupedBranchId, status: "APPROVED", price: 11_000, daysAgo: 20, inventoryId: fixtures.organizationInventoryId },
-      { suffix: "loose", organizationId: fixtures.organizationId, branchId: fixtures.looseBranchId, status: "FULFILLED", price: 13_000, daysAgo: 10, inventoryId: fixtures.organizationInventoryId },
-      { suffix: "foreign", organizationId: fixtures.neighbourOrganizationId, branchId: fixtures.foreignBranchId, status: "APPROVED", price: 22_000, daysAgo: 5, inventoryId: fixtures.neighbourOrganizationInventoryId },
-      { suffix: "rejected", organizationId: fixtures.organizationId, branchId: fixtures.groupedBranchId, status: "REJECTED", price: 99_000, daysAgo: 2, inventoryId: fixtures.organizationInventoryId },
-      { suffix: "old", organizationId: fixtures.organizationId, branchId: fixtures.groupedBranchId, status: "APPROVED", price: 9_000, daysAgo: 400, inventoryId: fixtures.organizationInventoryId },
-    ]
-
-    for (const spec of orderSpecs) {
-      const createdAt = new Date(now - spec.daysAgo * 24 * 60 * 60 * 1_000)
-      const [order] = await db.insert(orders).values({
-        tid: `PH-${fixtures.suffix}-${spec.suffix}`.slice(0, 26),
-        organizationId: spec.organizationId,
-        branchId: spec.branchId,
-        status: spec.status,
-        subtotalCents: spec.price,
-        taxCents: 0,
-        totalCents: spec.price,
-        createdByUserId: fixtures.userId,
-        createdAt,
-      }).returning({ id: orders.id })
-      orderIds.push(order.id)
-
-      await db.insert(orderItems).values({
-        organizationId: spec.organizationId,
-        organizationInventoryId: spec.inventoryId,
-        orderId: order.id,
+    const daysAgo = (days: number) => new Date(now - days * 24 * 60 * 60 * 1_000)
+    await db.insert(productPriceHistory).values([
+      {
         globalProductId: fixtures.globalProductId,
-        productName: `Integration Pricing Product ${fixtures.suffix}`,
-        productCode: `ITP-${fixtures.suffix}`,
-        unit: "unit",
-        quantity: 1,
-        priceCents: spec.price,
-        createdAt,
-      })
-    }
+        organizationId: fixtures.organizationId,
+        groupId: fixtures.groupId,
+        branchId: fixtures.groupedBranchId,
+        previousPriceCents: null,
+        priceCents: 9_000,
+        scope: "BRANCH",
+        changeType: "BACKFILLED_ORDER_PRICE",
+        source: "ORDER_BACKFILL",
+        changedAt: daysAgo(400),
+        sourceKey: `integration-history:${fixtures.suffix}:old`,
+      },
+      {
+        globalProductId: fixtures.globalProductId,
+        organizationId: fixtures.organizationId,
+        previousPriceCents: 10_000,
+        priceCents: 15_000,
+        scope: "ORGANIZATION",
+        changeType: "PRICE_CHANGED",
+        source: "CATALOG_CHANGE",
+        changedAt: daysAgo(30),
+      },
+      {
+        globalProductId: fixtures.globalProductId,
+        organizationId: fixtures.organizationId,
+        previousPriceCents: 15_000,
+        priceCents: 0,
+        scope: "ORGANIZATION",
+        changeType: "PRICE_CHANGED",
+        source: "CATALOG_CHANGE",
+        changedAt: daysAgo(25),
+      },
+      {
+        globalProductId: fixtures.globalProductId,
+        organizationId: fixtures.organizationId,
+        groupId: fixtures.groupId,
+        branchId: fixtures.groupedBranchId,
+        previousPriceCents: 9_000,
+        priceCents: 11_000,
+        scope: "BRANCH",
+        changeType: "BACKFILLED_ORDER_PRICE",
+        source: "ORDER_BACKFILL",
+        changedAt: daysAgo(20),
+        sourceKey: `integration-history:${fixtures.suffix}:grouped`,
+      },
+      {
+        globalProductId: fixtures.globalProductId,
+        organizationId: fixtures.organizationId,
+        groupId: fixtures.groupId,
+        branchId: fixtures.groupedBranchId,
+        previousPriceCents: 11_000,
+        priceCents: 11_000,
+        scope: "BRANCH",
+        changeType: "BACKFILLED_ORDER_PRICE",
+        source: "ORDER_BACKFILL",
+        changedAt: daysAgo(15),
+        sourceKey: `integration-history:${fixtures.suffix}:grouped-duplicate`,
+      },
+      {
+        globalProductId: fixtures.globalProductId,
+        organizationId: fixtures.organizationId,
+        branchId: fixtures.looseBranchId,
+        previousPriceCents: 11_000,
+        priceCents: 13_000,
+        scope: "BRANCH",
+        changeType: "BACKFILLED_ORDER_PRICE",
+        source: "ORDER_BACKFILL",
+        changedAt: daysAgo(10),
+        sourceKey: `integration-history:${fixtures.suffix}:loose`,
+      },
+      {
+        globalProductId: fixtures.globalProductId,
+        organizationId: fixtures.neighbourOrganizationId,
+        groupId: fixtures.neighbourGroupId,
+        branchId: fixtures.foreignBranchId,
+        previousPriceCents: null,
+        priceCents: 22_000,
+        scope: "BRANCH",
+        changeType: "BACKFILLED_ORDER_PRICE",
+        source: "ORDER_BACKFILL",
+        changedAt: daysAgo(5),
+        sourceKey: `integration-history:${fixtures.suffix}:foreign`,
+      },
+      {
+        globalProductId: fixtures.globalProductId,
+        organizationId: fixtures.neighbourOrganizationId,
+        groupId: fixtures.neighbourGroupId,
+        branchId: fixtures.foreignBranchId,
+        previousPriceCents: 22_000,
+        priceCents: 24_000,
+        scope: "BRANCH",
+        changeType: "BACKFILLED_ORDER_PRICE",
+        source: "ORDER_BACKFILL",
+        changedAt: daysAgo(3),
+        sourceKey: `integration-history:${fixtures.suffix}:foreign-change`,
+      },
+      {
+        globalProductId: fixtures.globalProductId,
+        previousPriceCents: 40_000,
+        priceCents: 50_000,
+        scope: "GLOBAL",
+        changeType: "PRICE_CHANGED",
+        source: "CATALOG_CHANGE",
+        changedAt: daysAgo(1),
+      },
+    ])
   })
 
   beforeEach(() => {
@@ -96,10 +173,6 @@ describe.skipIf(!hasTestDatabase)("product price history endpoint", () => {
   })
 
   afterAll(async () => {
-    if (orderIds.length > 0) {
-      await db.delete(orderItems).where(inArray(orderItems.orderId, orderIds))
-      await db.delete(orders).where(inArray(orders.id, orderIds))
-    }
     if (fixtures) await destroyPricingFixtures(fixtures)
     await closePool()
   })
@@ -113,7 +186,7 @@ describe.skipIf(!hasTestDatabase)("product price history endpoint", () => {
       expect((await GET(request())).status).toBe(403)
     })
 
-    it("hard-scopes Head Office to its session organization", async () => {
+    it("hard-scopes Head Office to its organization and never exposes the global tier", async () => {
       const body = await read()
 
       expect(body.role).toBe("HEAD_OFFICE")
@@ -122,50 +195,55 @@ describe.skipIf(!hasTestDatabase)("product price history endpoint", () => {
         expect.objectContaining({ id: fixtures.organizationId }),
       ])
       expect(body.points.every((point) => point.organizationId === fixtures.organizationId)).toBe(true)
+      expect(body.points.some((point) => point.scope === "GLOBAL")).toBe(false)
 
       const crossTenant = await GET(request({ organizationId: String(fixtures.neighbourOrganizationId) }))
       expect(crossTenant.status).toBe(403)
     })
 
-    it("lets Super Admin select another organization without leaking other tenants into the result", async () => {
+    it("lets Super Admin select another organization without leaking other tenants", async () => {
       signIn(superAdmin)
       const body = await read({ organizationId: String(fixtures.neighbourOrganizationId), range: "all" })
 
-      expect(body.points.map((point) => point.chargedPriceCents)).toEqual([22_000])
+      expect(body.points.map((point) => point.priceCents)).toEqual([24_000])
       expect(body.points.every((point) => point.organizationId === fixtures.neighbourOrganizationId)).toBe(true)
     })
   })
 
-  describe("exact charged prices and filters", () => {
-    it("returns raw order-line prices without aggregate or KPI fields", async () => {
+  describe("ledger records and filters", () => {
+    it("returns price changes from the ledger, not order-line fields", async () => {
       const body = await read({ range: "1y" })
 
-      expect(body.points.map((point) => point.chargedPriceCents)).toEqual([11_000, 13_000])
-      expect(body.points.some((point) => point.chargedPriceCents === 99_000)).toBe(false)
+      expect(body.points.map((point) => point.priceCents)).toEqual([15_000, 11_000, 13_000])
+      expect(body.points.map((point) => point.source)).toEqual([
+        "CATALOG_CHANGE", "ORDER_BACKFILL", "ORDER_BACKFILL",
+      ])
+      expect(body.points.every((point) => point.priceCents > 0)).toBe(true)
+      expect(body.selectedProduct?.recordCount).toBe(3)
       expect(body).not.toHaveProperty("stats")
       for (const point of body.points) {
-        expect(point).not.toHaveProperty("averagePriceCents")
-        expect(point).not.toHaveProperty("minimumPriceCents")
-        expect(point).not.toHaveProperty("maximumPriceCents")
+        expect(point).not.toHaveProperty("orderId")
+        expect(point).not.toHaveProperty("quantity")
+        expect(point).not.toHaveProperty("orderReference")
       }
     })
 
-    it("filters by group and branch", async () => {
+    it("retains parent-tier changes when filtering by group or branch", async () => {
       const grouped = await read({ groupId: String(fixtures.groupId), range: "1y" })
-      expect(grouped.points.map((point) => point.chargedPriceCents)).toEqual([11_000])
-      expect(grouped.points[0].groupId).toBe(fixtures.groupId)
+      expect(grouped.points.map((point) => point.priceCents)).toEqual([15_000, 11_000])
 
       const branch = await read({ branchId: String(fixtures.looseBranchId), range: "1y" })
-      expect(branch.points.map((point) => point.chargedPriceCents)).toEqual([13_000])
-      expect(branch.points[0].branchId).toBe(fixtures.looseBranchId)
+      expect(branch.points.map((point) => point.priceCents)).toEqual([15_000, 13_000])
+      expect(branch.points.at(-1)?.branchId).toBe(fixtures.looseBranchId)
     })
 
-    it("applies the date range to the product and its exact records", async () => {
+    it("applies the date range to products and their price-change records", async () => {
       const year = await read({ range: "1y" })
-      expect(year.points.map((point) => point.chargedPriceCents)).toEqual([11_000, 13_000])
+      expect(year.points.map((point) => point.priceCents)).toEqual([15_000, 11_000, 13_000])
 
       const allTime = await read({ range: "all" })
-      expect(allTime.points.map((point) => point.chargedPriceCents)).toEqual([9_000, 11_000, 13_000])
+      expect(allTime.points.map((point) => point.priceCents)).toEqual([15_000, 11_000, 13_000])
+      expect(allTime.points.some((point) => point.previousPriceCents === null)).toBe(false)
     })
   })
 })

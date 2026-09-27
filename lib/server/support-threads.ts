@@ -38,6 +38,7 @@ import {
   type SupportStats,
 } from "@/lib/support-stats"
 import { escapeLikePattern } from "@/lib/utils"
+import { recordAuditEvent } from "@/lib/server/activity-audit"
 import { resolveScopedBranchIds } from "@/lib/server/multi-branch-scope"
 import {
   queueSupportMessageNotifications,
@@ -634,6 +635,32 @@ export async function createSupportThread(
         })
       : { eventKeys: [], recipientCount: 0 }
 
+    // Inside the same transaction as the thread, so a rolled-back creation
+    // never announces itself in the trail. The message body is deliberately
+    // absent: it is the customer's own words, it can be long, and the trail
+    // records that a channel was opened rather than duplicating its contents.
+    await recordAuditEvent(tx, {
+      action: "CREATE_SUPPORT_THREAD",
+      entity: "support_thread",
+      entityId: thread.id,
+      actor: { id: input.author.userId, role: input.author.role },
+      organizationId: input.author.organizationId,
+      branchId: input.author.branchId,
+      after: {
+        reference: supportThreadReference(thread.id),
+        subject: input.subject,
+        category: input.category,
+        priority: input.priority,
+      },
+      context: {
+        authorSide: side,
+        orderId,
+        productId,
+        attachmentCount: input.attachmentIds.length,
+        notifiedRecipients: queued.recipientCount,
+      },
+    })
+
     return {
       ok: true as const,
       threadId: thread.id,
@@ -836,6 +863,27 @@ export async function postSupportMessage(
         })
       : { eventKeys: [], recipientCount: 0 }
 
+    // The thread, not the message, is the record this names: `entity_id` holds
+    // one id and a reader looking for a conversation looks for its thread. The
+    // message id is in the metadata, and the body is not — see the note on
+    // `createSupportThread`.
+    await recordAuditEvent(tx, {
+      action: "REPLY_SUPPORT_THREAD",
+      entity: "support_thread",
+      entityId: thread.id,
+      actor: { id: input.author.userId, role: input.author.role },
+      organizationId: thread.organizationId,
+      branchId: thread.branchId,
+      before: { status: thread.status },
+      after: { status: nextStatus },
+      context: {
+        messageId: message.id,
+        authorSide: side,
+        attachmentCount: input.attachmentIds.length,
+        notifiedRecipients: queued.recipientCount,
+      },
+    })
+
     return { ok: true as const, messageId: message.id, status: nextStatus, queued }
   })
 }
@@ -873,6 +921,10 @@ export async function updateSupportThread(
         id: supportThreads.id,
         status: supportThreads.status,
         priority: supportThreads.priority,
+        // Carried so the audit row below can name the tenant this happened in.
+        organizationId: supportThreads.organizationId,
+        branchId: supportThreads.branchId,
+        assignedToUserId: supportThreads.assignedToUserId,
       })
       .from(supportThreads)
       .where(eq(supportThreads.id, input.threadId))
@@ -904,6 +956,33 @@ export async function updateSupportThread(
     }
 
     await tx.update(supportThreads).set(changes).where(eq(supportThreads.id, thread.id))
+
+    // Written here, before the two returns below, so a reprioritise or a
+    // reassignment is recorded as surely as a resolve or a close — those are
+    // the ones that also send mail, and auditing only the noisy half would have
+    // left the quiet changes invisible.
+    await recordAuditEvent(tx, {
+      action: "UPDATE_SUPPORT_THREAD",
+      entity: "support_thread",
+      entityId: thread.id,
+      actor: { id: input.actor.userId, role: input.actor.role },
+      organizationId: thread.organizationId,
+      branchId: thread.branchId,
+      before: {
+        status: currentStatus,
+        priority: thread.priority,
+        assignedToUserId: thread.assignedToUserId,
+      },
+      after: {
+        status: nextStatus,
+        priority: input.priority ?? thread.priority,
+        assignedToUserId:
+          input.assignedToUserId === undefined
+            ? thread.assignedToUserId
+            : (changes.assignedToUserId as string | null),
+      },
+      context: { actorSide: side },
+    })
 
     const settled = nextStatus === "RESOLVED" || nextStatus === "CLOSED"
     if (!settled || nextStatus === currentStatus) {

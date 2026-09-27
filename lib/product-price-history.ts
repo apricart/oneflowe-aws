@@ -2,6 +2,8 @@ export const PRODUCT_PRICE_HISTORY_RANGE_KEYS = ["90d", "180d", "1y", "all"] as 
 
 export type ProductPriceHistoryRangeKey = (typeof PRODUCT_PRICE_HISTORY_RANGE_KEYS)[number]
 export type ProductPriceHistoryRole = "SUPER_ADMIN" | "HEAD_OFFICE"
+export type ProductPriceHistoryScope = "GLOBAL" | "ORGANIZATION" | "GROUP" | "BRANCH"
+export type ProductPriceHistorySource = "CATALOG_CHANGE" | "ORDER_BACKFILL" | "MIGRATION_BASELINE"
 
 export type ProductPriceHistoryRange = {
   key: ProductPriceHistoryRangeKey
@@ -15,7 +17,7 @@ export type ProductPriceHistoryProduct = {
   name: string
   unit: string
   status: string
-  snapshotCount: number
+  recordCount: number
   firstRecordedAt: string | null
   lastRecordedAt: string | null
 }
@@ -29,18 +31,19 @@ export type ProductPriceHistoryFilterOption = {
 }
 
 export type ProductPriceHistoryPoint = {
-  orderItemId: number
-  orderId: number
-  orderReference: string
-  orderedAt: string
-  chargedPriceCents: number
-  quantity: number
-  organizationId: number
-  organizationName: string
+  id: number
+  changedAt: string
+  previousPriceCents: number | null
+  priceCents: number
+  scope: ProductPriceHistoryScope
+  changeType: string
+  source: ProductPriceHistorySource
+  organizationId: number | null
+  organizationName: string | null
   groupId: number | null
   groupName: string | null
-  branchId: number
-  branchName: string
+  branchId: number | null
+  branchName: string | null
 }
 
 export type ProductPriceHistoryResponse = {
@@ -66,7 +69,7 @@ export type ProductPriceHistoryResponse = {
   truncated: boolean
   source: {
     description: string
-    excludes: string[]
+    backfillDescription: string
   }
 }
 

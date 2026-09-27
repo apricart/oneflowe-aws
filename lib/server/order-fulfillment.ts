@@ -7,6 +7,7 @@ import { db } from "@/lib/db"
 import { isTokenHandoffEligible, tokenHandoffSettlesNow } from "@/lib/order-token-handoff"
 import { orderSelectColumns, updateOrderFulfillmentStatusColumn } from "@/lib/order-select"
 import { budgetPeriodOf } from "@/lib/budget-consumption"
+import { recordAuditEvent } from "@/lib/server/activity-audit"
 import { moveHeldQuantityBudgetToUsedForOrder } from "@/lib/server/product-quantity-budget-ledger"
 import {
   findPendingTokenHandoff,
@@ -166,6 +167,34 @@ export async function fulfillApprovedOrder({
 
       await moveBudgetHeldToSpent(tx, fulfilledOrder)
       await moveHeldQuantityBudgetToUsedForOrder(tx, fulfilledOrder)
+
+      // The audit row belongs here rather than in each route, because this is
+      // where the transition happens: the Super Admin fulfilment route, a token
+      // hand-off whose goods had already arrived, and a delivery that settles a
+      // waiting hand-off all reach this one function. Recording it per caller
+      // would have meant three spellings and, as it was, none at all — this is
+      // the moment a branch's held money becomes spent money.
+      //
+      // Inside the transaction, so the record and the ledger move commit
+      // together. `fulfilledByUserId` is the actor the caller authorized, which
+      // for a hand-off is whoever handed the token over rather than whoever
+      // recorded the delivery.
+      await recordAuditEvent(tx, {
+        action: "ORDER_FULFILLED",
+        entity: "order",
+        entityId: fulfilledOrder.id,
+        actor: { id: fulfilledByUserId },
+        organizationId: fulfilledOrder.organizationId,
+        branchId: fulfilledOrder.branchId,
+        before: { status: "APPROVED" },
+        after: { status: "FULFILLED", fulfilledAt: fulfilledAt.toISOString() },
+        context: {
+          tid: fulfilledOrder.tid,
+          totalCents: fulfilledOrder.totalCents,
+          period: budgetPeriodOf(fulfilledOrder.createdAt),
+          delivery,
+        },
+      })
     })
   } catch (transitionError: any) {
     const outcome = fulfillmentFailureOutcome(transitionError)

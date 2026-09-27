@@ -32,6 +32,9 @@ export type SalesPerformanceResponse = {
     peakQuantityPeriod?: { label: string; sales: number; orders: number; itemQuantity?: number } | null
     branchSales: BranchSalesPoint[]
     organizationSales?: { organizationId: number; organizationName: string; sales: number; orders: number }[]
+    totalUsers?: number
+    totalBranches?: number
+    pricesHidden?: boolean
     comparison?: {
         totalSales: number
         totalNetSales?: number
@@ -46,6 +49,11 @@ export type SalesPerformanceResponse = {
         deliveredCount?: number
         notDeliveredCount?: number
         partialCount?: number
+        pendingAmountCents?: number | null
+        approvedAmountCents?: number | null
+        valueFulfilledCents?: number | null
+        valueRefundedCents?: number | null
+        valueRejectedCents?: number | null
         seriesData?: SalesSeriesPoint[]
     } | null
     statusCounts?: {
@@ -57,6 +65,11 @@ export type SalesPerformanceResponse = {
         rejectedCount: number
         deliveredCount: number
         notDeliveredCount: number
+        pendingAmountCents: number | null
+        approvedAmountCents: number | null
+        valueFulfilledCents: number | null
+        valueRefundedCents: number | null
+        valueRejectedCents: number | null
     } | null
 }
 

@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
+
 import { describe, expect, it } from "vitest"
 
 import {
@@ -40,5 +43,40 @@ describe("database timestamp normalization", () => {
     expect(toIsoTimestamp(null)).toBeNull()
     expect(toIsoTimestamp(undefined)).toBeNull()
     expect(toIsoTimestamp("not-a-timestamp")).toBeNull()
+  })
+})
+
+describe("product price history persistence contract", () => {
+  const source = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8")
+
+  it("uses the dedicated ledger rather than rebuilding the feature from orders", () => {
+    const route = source("app/api/v1/admin/product-price-history/route.ts")
+
+    expect(route).toContain("productPriceHistory")
+    expect(route).not.toContain("orderItems")
+    expect(route).not.toContain("orders.createdAt")
+  })
+
+  it("backfills transitions idempotently and installs triggers for every price tier", () => {
+    const migration = source("drizzle/20260926180000_add_product_price_history.sql")
+
+    expect(migration).toContain("LAG(oi.price_cents)")
+    expect(migration).toContain("PARTITION BY oi.global_product_id, o.organization_id, b.group_id")
+    expect(migration).toContain("oi.price_cents > 0")
+    expect(migration).toContain("previous_price_cents IS DISTINCT FROM price_cents")
+    expect(migration).toContain("ON CONFLICT (source_key) WHERE source_key IS NOT NULL DO NOTHING")
+    expect(migration).toContain("global_product_price_history_trg")
+    expect(migration).toContain("organization_price_history_trg")
+    expect(migration).toContain("group_price_history_trg")
+    expect(migration).not.toMatch(/UPDATE\s+(global_products|organization_inventory|group_inventory_prices)/i)
+  })
+
+  it("repairs previously backfilled branch duplicates without deleting live changes", () => {
+    const migration = source("drizzle/20260926200000_compact_product_price_history.sql")
+
+    expect(migration).toContain("COALESCE(group_id, -1)")
+    expect(migration).toContain("source IN ('ORDER_BACKFILL', 'MIGRATION_BASELINE')")
+    expect(migration).toContain("previous_timeline_price_cents = price_cents")
+    expect(migration).not.toContain("source IN ('CATALOG_CHANGE'")
   })
 })
