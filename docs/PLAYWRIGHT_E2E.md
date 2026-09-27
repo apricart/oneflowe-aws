@@ -8,14 +8,19 @@ shared target is test-only.
 
 ## Scope
 
-One suite today: `tests/e2e/activity-log.spec.ts`, covering the admin activity
-log (`plans/OF-AUDIT-admin-activity-log.md`).
+Two suites run in the browser:
 
-This is deliberately narrow. An earlier, broader harness was removed in the two
-"sonar" commits; what exists now was written for one screen and is not a
-restoration of it. A browser test is the slowest and most brittle kind, so keep
-it for journeys where rendering and navigation are the thing under test —
-anything provable without a browser belongs in `npm test` or
+- `tests/e2e/role-smoke.spec.ts` is the deployment gate. It signs in as Super
+  Admin, Head Office, Branch Admin, Order Portal, Group Order Portal, Group
+  User, and Employee; probes each persona's primary data path; verifies the
+  group roles' assigned scope; and completes an order from creation through
+  approval and Super Admin fulfillment. It also proves the requester cannot
+  approve and the approver cannot fulfill.
+- `tests/e2e/activity-log.spec.ts` covers the Super Admin activity log and its
+  Head Office access boundary.
+
+Keep browser coverage focused on critical journeys and rendered role routing.
+Detailed arithmetic, SQL behavior, and edge cases belong in `npm test` or
 `npm run test:integration`.
 
 ## One-time setup
@@ -43,6 +48,12 @@ npm run e2e:install
 npm run e2e
 ```
 
+Run only the deployment smoke gate:
+
+```powershell
+npm run e2e:smoke
+```
+
 Other modes:
 
 ```powershell
@@ -63,11 +74,11 @@ npm run e2e
 ## What the run does
 
 1. `tests/e2e/global-setup.ts` loads `.env.test.local` (then `.env.test`),
-   validates the connection, and seeds deterministic fixtures
-   (`tests/e2e/support/seed.ts`): two accounts and events in all three audit
-   tables.
-2. Starts `next dev` on `http://127.0.0.1:3101`, with `DATABASE_URL` pointed at
-   the test database.
+   validates the connection, and seeds deterministic activity fixtures plus
+   idempotent role, assignment, catalog, inventory, and budget fixtures. The
+   smoke-only command seeds only its non-destructive role fixtures.
+2. Starts an isolated `next dev --webpack` server on `http://127.0.0.1:3101`,
+   with `DATABASE_URL` pointed at the test database.
 3. Runs Chromium with one worker and no retries.
 
 The fixture password is `OneFloweE2E!2026`. It is test-only and must never be
@@ -79,6 +90,13 @@ report goes to `playwright-report`. Open a trace with:
 ```powershell
 npx playwright show-trace test-results\<folder>\trace.zip
 ```
+
+## Deployment gate
+
+The production, staging, and `dev` pull-request workflows install Chromium and
+run `npm run e2e:smoke` against their fresh migrated Postgres service. A smoke
+failure stops the job before image build/deployment, and the Playwright report,
+trace, screenshot, and video are uploaded as a workflow artifact.
 
 ## Two things worth knowing
 

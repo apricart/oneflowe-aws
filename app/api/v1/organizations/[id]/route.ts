@@ -130,6 +130,7 @@ export async function PATCH(
       const [existingOrganization] = await tx
         .select({
           id: organizations.id,
+          code: organizations.code,
           orderApproverRole: organizations.orderApproverRole,
         })
         .from(organizations)
@@ -138,6 +139,25 @@ export async function PATCH(
         .limit(1)
 
       if (!existingOrganization) return null
+
+      const requestedCode = typeof patch.code === "string" ? patch.code : null
+      if (requestedCode !== null && requestedCode !== existingOrganization.code) {
+        // Invoice issuance takes a shared lock on this organization row. Since
+        // this transaction holds FOR UPDATE, a concurrent first invoice either
+        // finishes before this check (and blocks the change) or waits and uses
+        // the newly committed code. A tenant's invoice prefix is therefore
+        // never reusable or changed halfway through issuance.
+        const [issuedInvoice] = await tx
+          .select({ id: orders.id })
+          .from(orders)
+          .where(and(
+            eq(orders.organizationId, orgId),
+            isNotNull(orders.receiptData),
+          ))
+          .limit(1)
+
+        if (issuedInvoice) return { kind: "invoice-prefix-locked" } as const
+      }
 
       const [updatedOrganization] = await tx
         .update(organizations)
@@ -176,10 +196,16 @@ export async function PATCH(
         })
       }
 
-      return updatedOrganization
+      return { kind: "updated", item: updatedOrganization } as const
     })
     if (!transactionResult) return error("Organization not found", 404)
-    const item = transactionResult
+    if (transactionResult.kind === "invoice-prefix-locked") {
+      return error(
+        "Organization code cannot be changed after the organization has issued its first invoice.",
+        409,
+      )
+    }
+    const item = transactionResult.item
 
     // Invalidate organizations cache so GET returns fresh data immediately
     await invalidateByPrefix('organizations')

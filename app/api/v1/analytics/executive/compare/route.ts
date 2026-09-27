@@ -3,12 +3,12 @@ import { getServerSession } from "next-auth"
 
 import { authOptions } from "@/lib/auth-options"
 import {
-  EXECUTIVE_METRICS,
   canShowBudgetBeside,
   chartMode,
   chartTypesFor,
   growthPct,
   isBudgetBesideDimension,
+  metricDefinitionForStatusSet,
   resolveGrain,
   resolveQuantityUnit,
   withCumulativeShare,
@@ -71,8 +71,7 @@ export async function GET(req: NextRequest) {
 
     const parsed = parseComparisonRequest(url.searchParams, new Date(), scope.role)
     if (!parsed.ok) {
-      const forbidden = parsed.error.startsWith("Forbidden")
-      return NextResponse.json({ error: parsed.error }, { status: forbidden ? 403 : 400 })
+      return NextResponse.json({ error: parsed.error }, { status: comparisonErrorStatus(parsed.error) })
     }
 
     const baseFilters: ExecutiveFilters = {
@@ -83,9 +82,10 @@ export async function GET(req: NextRequest) {
       groupIds: parsed.groupIds,
       userIds: parsed.userIds,
       unit: null,
+      statusSet: parsed.statusSet,
     }
 
-    const metricDefinition = EXECUTIVE_METRICS[parsed.metric]
+    const metricDefinition = metricDefinitionForStatusSet(parsed.metric, parsed.statusSet)
     const grain = resolveGrain(parsed.dimension, parsed.metric, { lineScoped: isLineScoped(baseFilters) })
     // Quantity is the count entered on each order line. Product unit labels
     // (kg, litre, 500 gm, and so on) do not scale or exclude that count: 30
@@ -192,6 +192,10 @@ export async function GET(req: NextRequest) {
   }
 }
 
+function comparisonErrorStatus(error: string): 400 | 403 {
+  return error.startsWith("Forbidden") ? 403 : 400
+}
+
 /**
  * The dimension to set a Total Budget beside, or null for none.
  *
@@ -236,12 +240,12 @@ async function priceDrilldown(
 }
 
 function describeRequest(
-  parsed: { dimension: any; metric: any; chart: any; startDate: Date; endDate: Date },
+  parsed: Pick<ParsedComparisonRequest, "dimension" | "metric" | "chart" | "startDate" | "endDate" | "statusSet">,
   grain: string,
   unitResolution: { unit: string | null; conflict: boolean; units: string[] },
 ) {
   const { previousStart, previousEnd } = previousWindow(parsed.startDate, parsed.endDate)
-  const metricDefinition = EXECUTIVE_METRICS[parsed.metric as keyof typeof EXECUTIVE_METRICS]
+  const metricDefinition = metricDefinitionForStatusSet(parsed.metric, parsed.statusSet)
   return {
     dimension: parsed.dimension,
     metric: parsed.metric,
@@ -250,6 +254,7 @@ function describeRequest(
     format: metricDefinition.format,
     label: metricDefinition.label,
     formula: metricDefinition.formula,
+    statuses: parsed.statusSet,
     period: {
       startDate: parsed.startDate.toISOString(),
       endDate: parsed.endDate.toISOString(),

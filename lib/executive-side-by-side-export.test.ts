@@ -30,7 +30,7 @@ const rankResponse = (overrides: Partial<SideBySideComparisonResponse> = {}): Si
   series: [],
   periods: [],
   format: "currency",
-  label: "Procurement Value",
+  label: "Consumed",
   formula: "SUM(...)",
   mode: "rank",
   concentrationEligible: true,
@@ -47,7 +47,7 @@ const seriesResponse = (overrides: Partial<SideBySideComparisonResponse> = {}): 
   ],
   periods: ["2026-07", "2026-08", "2026-09"],
   format: "currency",
-  label: "Procurement Value",
+  label: "Consumed",
   formula: "SUM(...)",
   mode: "series",
   concentrationEligible: true,
@@ -69,7 +69,7 @@ const matrixResponse = (overrides: Partial<SideBySideMatrixResponse> = {}): Side
     { row: "u2", column: "188", value: 500_000 },
   ],
   format: "currency",
-  label: "Procurement Value",
+  label: "Consumed",
   formula: "SUM(...)",
   quantityUnit: { selected: null },
   ...overrides,
@@ -81,8 +81,8 @@ const context = (overrides: Partial<SideBySideExportContext> = {}): SideBySideEx
   startDate: "2026-07-01",
   endDate: "2026-09-12",
   measure: "amount",
-  metricLabel: "Procurement Value",
-  metricFormula: "SUM(order.totalCents - order.refundAmountCents) over revenue-eligible orders",
+  metricLabel: "Consumed",
+  metricFormula: "SUM(order total - refunds) over consumed orders, including pending",
   organizations: [],
   groups: [],
   branches: ["North Zone"],
@@ -131,7 +131,7 @@ describe("excelSheetName", () => {
 
 describe("metricColumnHeader", () => {
   it("names the currency, or the unit of measure when one is selected", () => {
-    expect(metricColumnHeader("Procurement Value", "currency", null)).toBe("Procurement Value (PKR)")
+    expect(metricColumnHeader("Consumed", "currency", null)).toBe("Consumed (PKR)")
     expect(metricColumnHeader("Quantity", "quantity", "Ream")).toBe("Quantity (Ream)")
     expect(metricColumnHeader("Quantity", "quantity", null)).toBe("Quantity")
   })
@@ -189,8 +189,8 @@ describe("buildSideBySideWorkbookData", () => {
   it("writes a ranked panel in rupees with rank, share, prior period, change and orders", () => {
     const [, product] = buildSideBySideWorkbookData([byId("by-product")], { "by-product": loaded(rankResponse()) }, context())
     expect(product.columns).toEqual([
-      "Rank", "Product", "Procurement Value (PKR)", "Share %", "Cumulative share %",
-      "Previous period Procurement Value (PKR)", "Change %", "Orders",
+      "Rank", "Product", "Consumed (PKR)", "Share %", "Cumulative share %",
+      "Previous period Consumed (PKR)", "Change %", "Orders",
     ])
     expect(product.rows).toEqual([
       [1, "A4 Paper", 12500.5, 62.5, 62.5, 10000, 25.01, 12],
@@ -215,7 +215,7 @@ describe("buildSideBySideWorkbookData", () => {
   it("omits the prior-period columns on the month panel, which has no prior window", () => {
     const snapshots = defaultSnapshots()
     const [, month] = buildSideBySideWorkbookData([byId("by-month")], snapshots, context())
-    expect(month.columns).toEqual(["Rank", "Month", "Procurement Value (PKR)", "Share %", "Cumulative share %", "Orders"])
+    expect(month.columns).toEqual(["Rank", "Month", "Consumed (PKR)", "Share %", "Cumulative share %", "Orders"])
     expect(month.rows[0]).toEqual([1, "Jul 2026", 500, 50, 50, 4])
   })
 
@@ -225,7 +225,7 @@ describe("buildSideBySideWorkbookData", () => {
       { "requesters-over-months": loaded(seriesResponse()) },
       context(),
     )
-    expect(trend.columns).toEqual(["Requester", "2026-07", "2026-08", "2026-09", "Total Procurement Value (PKR)"])
+    expect(trend.columns).toEqual(["Requester", "2026-07", "2026-08", "2026-09", "Total Consumed (PKR)"])
     expect(trend.rows).toEqual([
       ["Ahmed", 100, 200, 50, 350],
       ["Sana", 10, 0, 30, 40],
@@ -240,7 +240,7 @@ describe("buildSideBySideWorkbookData", () => {
       { "by-product": loaded(matrixResponse()) },
       context(),
     )
-    expect(grid.columns).toEqual(["Requester / Product", "A4 Paper", "Toner", "Diesel", "Total Procurement Value (PKR)"])
+    expect(grid.columns).toEqual(["Requester / Product", "A4 Paper", "Toner", "Diesel", "Total Consumed (PKR)"])
     expect(grid.rows).toEqual([
       ["Ahmed", 7000, 6000, null, 13000],
       ["Sana", 3500, null, 5000, 8500],
@@ -294,8 +294,8 @@ describe("buildSideBySideWorkbookData", () => {
       context(),
     )
     expect(sheet.columns).toEqual([
-      "Rank", "Branch", "Procurement Value (PKR)", "Total Budget (PKR)", "% of budget",
-      "Share %", "Cumulative share %", "Previous period Procurement Value (PKR)", "Change %", "Orders",
+      "Rank", "Branch", "Consumed (PKR)", "Total Budget (PKR)", "% of budget",
+      "Share %", "Cumulative share %", "Previous period Consumed (PKR)", "Change %", "Orders",
     ])
     expect(sheet.rows).toEqual([
       [1, "North", 12500.5, 25001, 50, 62.5, 62.5, 10000, 25.01, 12],

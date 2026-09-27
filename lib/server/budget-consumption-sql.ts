@@ -25,6 +25,14 @@ function statusTuple(statuses: readonly string[]) {
 /** `max(0, total - refund)` — the per-order net, matching `orderConsumptionCents`. */
 const netOrderCents = sql`GREATEST(0, ${orders.totalCents} - COALESCE(${orders.refundAmountCents}, 0))`
 
+/**
+ * Sum of net order value after the caller has selected an allowlisted status
+ * population in its WHERE clause.
+ */
+export function netOrderCentsSql() {
+  return sql<number>`COALESCE(SUM(${netOrderCents}), 0)`.mapWith(Number)
+}
+
 /** Sum of the orders that are money already spent, net of refunds. */
 export function consumedSpentCentsSql() {
   return sql<number>`COALESCE(SUM(CASE WHEN UPPER(${orders.status}) IN (${statusTuple(CONSUMED_SPENT_STATUSES)}) THEN ${netOrderCents} ELSE 0 END), 0)`.mapWith(Number)

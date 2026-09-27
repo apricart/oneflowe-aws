@@ -110,7 +110,7 @@ and fills in throwaway NextAuth/Redis/cron values the server env schema demands.
 |---|---|
 | `group-price-ladder`, `group-pricing-api`, `organization-price-propagation` | The price ladder and its endpoints |
 | `group-roles-api` | `GROUP_ORDER_PORTAL` and `GROUP_USER` end to end: authentication and mutually exclusive role gates, group-plus-branch assignment resolution, stale/cross-tenant assignment isolation, displayed budget arithmetic, approval-queue visibility and token rules, group-report quantity/gross/refund/net reconciliation, empty-scope fail-closed behavior, and Super Admin/Head Office provisioning of both roles. |
-| `executive-analytics-api` | The Product Performance tab's four routes (`compare`, `options`, `drill-down`, `overview`): 401/403 per role, the user row overriding the session claim, tenant isolation, every panel's figures against a hand-computed order history, refund netting, whole-order vs line-by-line money, the unit-of-measure rule, the pickers, and drill-down reconciliation. `helpers/executive-analytics-fixtures.ts` documents the history and the expected answers. |
+| `executive-analytics-api` | The Product Performance tab's four routes (`compare`, `options`, `drill-down`, `overview`): 401/403 per role, the user row overriding the session claim, tenant isolation, every panel's figures against a hand-computed order history, Consumed Amount (including pending and excluding refunded), refund netting, whole-order vs line-by-line money, the unit-of-measure rule, date and dimension filters, the pickers, and drill-down reconciliation. `helpers/executive-analytics-fixtures.ts` documents the history and the expected answers. |
 
 ### Writing them
 
@@ -125,7 +125,12 @@ and fills in throwaway NextAuth/Redis/cron values the server env schema demands.
 
 ## End-to-end
 
-`@playwright/test` and the `npm run e2e:*` scripts exist, but there is no
-`playwright.config.ts` and no `tests/e2e/` yet, so those scripts do not run
-anything. Both Vitest projects already exclude `tests/e2e/**`, so adding a
-Playwright config later will not collide with them.
+Playwright runs the real Next.js application against the same kind of isolated,
+migrated test database used by the integration project. The role smoke suite
+logs in as every application persona and exercises the complete
+create/approve/fulfill order chain with denial checks between roles. The
+activity-log suite covers its browser rendering and Super Admin boundary.
+
+Use `npm run e2e:smoke` for the deployment gate or `npm run e2e` for every
+browser suite. Full setup, safety guards, fixture behavior, and debugging steps
+are documented in `docs/PLAYWRIGHT_E2E.md`.

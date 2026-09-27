@@ -99,7 +99,12 @@ describe.skipIf(!hasTestDatabase)("Product Performance — executive analytics r
   })
 
   afterAll(async () => {
-    if (f) await destroyExecutiveAnalyticsFixtures(f)
+    // The normal suite cleans up its disposable fixtures. A non-destructive
+    // verification run can preserve them to comply with environments where
+    // database DELETEs are forbidden.
+    if (f && process.env.INTEGRATION_PRESERVE_FIXTURES !== "1") {
+      await destroyExecutiveAnalyticsFixtures(f)
+    }
     await closePool()
   })
 
@@ -434,6 +439,110 @@ describe.skipIf(!hasTestDatabase)("Product Performance — executive analytics r
       expect((await compare({ dimension: "product", metric: "spend", limit: 2 })).body.rows).toHaveLength(2)
       // A limit past the ceiling is clamped, not honoured.
       expect((await compare({ dimension: "product", metric: "spend", limit: 100000 })).status).toBe(200)
+    })
+  })
+
+  describe("Product Performance Amount as Consumed", () => {
+    const consumedCompare = (query: Query) => compare({ ...query, statuses: "consumed" })
+
+    it("includes pending and excludes cancelled/refunded orders across every panel", async () => {
+      const product = await consumedCompare({ dimension: "product", metric: "spend", chart: "column" })
+      expect(product.body.label).toBe("Consumed")
+      expect(product.body.formula).toContain("including pending")
+      expect(ranked(product.body)).toEqual([
+        [f.names.paper, 65_500], [f.names.toner, 9_000], [f.names.diesel, 7_000],
+      ])
+      expect(product.body.rows[0].orderCount).toBe(6)
+      expect(product.body.rows[0].share).toBeCloseTo((65_500 / 81_500) * 100, 5)
+
+      const requester = await consumedCompare({ dimension: "user", metric: "spend", chart: "column" })
+      expect(ranked(requester.body)).toEqual([
+        [f.names.ahmed, 63_000], [f.names.group, 10_000], [f.names.sana, 8_500],
+      ])
+
+      const branch = await consumedCompare({ dimension: "branch", metric: "spend", chart: "column" })
+      expect(ranked(branch.body)).toEqual([[f.names.north, 65_000], [f.names.south, 16_500]])
+
+      const month = await consumedCompare({ dimension: "month", metric: "spend", chart: "column" })
+      expect(ranked(month.body)).toEqual([["2026-06", 18_000], ["2026-07", 10_000], ["2026-08", 53_500]])
+
+      const requesterTrend = await consumedCompare({ dimension: "user", metric: "spend", chart: "line" })
+      const requesterSeries = Object.fromEntries(
+        requesterTrend.body.series.map((series: any) => [series.label, series.points.map((point: any) => point.value)]),
+      )
+      expect(requesterSeries[f.names.ahmed]).toEqual([11_000, 2_000, 50_000])
+
+      const productTrend = await consumedCompare({ dimension: "product", metric: "spend", chart: "line" })
+      const productSeries = Object.fromEntries(
+        productTrend.body.series.map((series: any) => [series.label, series.points.map((point: any) => point.value)]),
+      )
+      expect(productSeries[f.names.paper]).toEqual([7_000, 7_000, 51_500])
+
+      const day = await consumedCompare({
+        dimension: "day", metric: "spend", chart: "line", productIds: f.paperProductId,
+      })
+      expect(day.body.series[0].label).toBe("Consumed")
+      expect(day.body.periods).toEqual([
+        "2026-06-10", "2026-06-20", "2026-07-05", "2026-07-15", "2026-08-12", "2026-08-20",
+      ])
+      expect(day.body.series[0].points.map((point: any) => point.value))
+        .toEqual([5_000, 2_000, 2_000, 5_000, 50_000, 1_500])
+
+      const category = await consumedCompare({ dimension: "category", metric: "spend", chart: "column" })
+      expect(ranked(category.body)).toEqual([
+        [`Stationery ${f.suffix}`, 74_500], [`Fuel ${f.suffix}`, 7_000],
+      ])
+    })
+
+    it("keeps branch, category, requester, and exact date boundaries on the consumed population", async () => {
+      const beforePending = await consumedCompare({
+        dimension: "product", metric: "spend", branchIds: f.northBranchId,
+        startDate: "2026-08-01", endDate: "2026-08-11",
+      })
+      expect(ranked(beforePending.body)).toEqual([[f.names.diesel, 2_000]])
+
+      const throughPending = await consumedCompare({
+        dimension: "product", metric: "spend", branchIds: f.northBranchId,
+        startDate: "2026-08-01", endDate: "2026-08-12",
+      })
+      expect(ranked(throughPending.body)).toEqual([[f.names.paper, 50_000], [f.names.diesel, 2_000]])
+
+      const filtered = await consumedCompare({
+        dimension: "month",
+        metric: "spend",
+        categoryIds: f.stationeryCategoryId,
+        userIds: f.ahmedId,
+        branchIds: f.northBranchId,
+      })
+      expect(ranked(filtered.body)).toEqual([["2026-06", 11_000], ["2026-07", 2_000], ["2026-08", 50_000]])
+    })
+
+    it("keeps the requester-product grid and its drill-down on the same consumed total", async () => {
+      const grid = await matrix({ rows: "user", columns: "product", metric: "spend", statuses: "consumed" })
+      expect(grid.body.label).toBe("Consumed")
+      expect(grid.body.rows.map((row: any) => [row.label, row.total])).toEqual([
+        [f.names.ahmed, 63_000], [f.names.group, 10_000], [f.names.sana, 8_500],
+      ])
+      const ahmedRow = grid.body.rows.find((row: any) => row.label === f.names.ahmed)
+      const paperColumn = grid.body.columns.find((column: any) => column.label === f.names.paper)
+      expect(grid.body.cells.find((cell: any) => cell.row === ahmedRow.key && cell.column === paperColumn.key)?.value)
+        .toBe(57_000)
+
+      const detail = await drillDown({
+        dimension: "user",
+        key: f.ahmedId,
+        metric: "spend",
+        productIds: f.paperProductId,
+        statuses: "consumed",
+      })
+      expect(detail.body.metricLabel).toBe("Consumed")
+      expect(detail.body.totals).toMatchObject({ valueCents: 57_000, orderCount: 3, lineCount: 3 })
+      expect(detail.body.rows.map((row: any) => row.status)).toContain("PENDING")
+      expect(detail.body.rows.map((row: any) => row.status)).not.toContain("REFUNDED")
+    })
+
+    it("rejects a raw status name instead of treating it as a query predicate", async () => {
+      expect((await compare({ dimension: "branch", metric: "spend", statuses: "PENDING" })).status).toBe(400)
     })
   })
 
@@ -944,33 +1053,43 @@ describe.skipIf(!hasTestDatabase)("Product Performance — executive analytics r
     const budgetsOf = (body: any): Array<[string, number, number]> =>
       body.rows.map((row: any) => [row.label, row.value, row.totalBudgetCents])
 
-    it("sets each branch's Total Budget beside its Procurement Value, ranking unchanged", async () => {
-      const { status, body } = await compare({ dimension: "branch", metric: "spend", chart: "column", budget: 1 })
+    it("sets each branch's Total Budget beside Consumed, including pending in both", async () => {
+      const { status, body } = await compare({
+        dimension: "branch", metric: "spend", chart: "column", budget: 1, statuses: "consumed",
+      })
       expect(status).toBe(200)
       expect(body.budgetBeside).toBe(true)
-      // The same order and the same figures as without the budget; the budget
-      // is the Overview's per-branch total for the same window.
-      expect(budgetsOf(body)).toEqual([[f.names.south, 16500, 5_000], [f.names.north, 15000, 55_000]])
+      expect(body.label).toBe("Consumed")
+      expect(budgetsOf(body)).toEqual([[f.names.north, 65_000, 55_000], [f.names.south, 16_500, 5_000]])
       const overviewRows = (await overview({})).body.branches
       for (const row of body.rows) {
-        expect(overviewRows.find((entry: any) => entry.branchName === row.label)?.totalBudgetCents).toBe(row.totalBudgetCents)
+        const overviewRow = overviewRows.find((entry: any) => entry.branchName === row.label)
+        expect(overviewRow?.totalBudgetCents).toBe(row.totalBudgetCents)
+        expect(overviewRow?.consumedCents).toBe(row.value)
       }
     })
 
     it("sets each month's Total Budget beside it, summed over the fenced branches, and fills a budgeted month nobody ordered in", async () => {
-      const { body } = await compare({ dimension: "month", metric: "spend", chart: "column", budget: 1 })
+      const { body } = await compare({
+        dimension: "month", metric: "spend", chart: "column", budget: 1, statuses: "consumed",
+      })
       expect(body.budgetBeside).toBe(true)
-      expect(budgetsOf(body)).toEqual([["2026-06", 18000, 20_000], ["2026-07", 10000, 35_000], ["2026-08", 3500, 5_000]])
+      expect(budgetsOf(body)).toEqual([["2026-06", 18000, 20_000], ["2026-07", 10000, 35_000], ["2026-08", 53500, 5_000]])
 
       // Widen to May: no orders, a 7,000 budget — a zero column with a budget
       // beside it, in its place at the start of the axis, not a missing month.
-      const widened = await compare({ dimension: "month", metric: "spend", chart: "column", budget: 1, startDate: "2026-05-01" })
+      const widened = await compare({
+        dimension: "month", metric: "spend", chart: "column", budget: 1,
+        startDate: "2026-05-01", statuses: "consumed",
+      })
       expect(budgetsOf(widened.body)).toEqual([
-        ["2026-05", 0, 7_000], ["2026-06", 18000, 20_000], ["2026-07", 10000, 35_000], ["2026-08", 3500, 5_000],
+        ["2026-05", 0, 7_000], ["2026-06", 18000, 20_000], ["2026-07", 10000, 35_000], ["2026-08", 53500, 5_000],
       ])
       expect(widened.body.rows[0]).toMatchObject({ key: "2026-05", orderCount: 0, previousValue: 0, changePct: null, share: 0 })
       // The filled month is not there when the budget was not asked for.
-      const plain = await compare({ dimension: "month", metric: "spend", chart: "column", startDate: "2026-05-01" })
+      const plain = await compare({
+        dimension: "month", metric: "spend", chart: "column", startDate: "2026-05-01", statuses: "consumed",
+      })
       expect(keysOf(plain.body)).toEqual(["2026-06", "2026-07", "2026-08"])
     })
 

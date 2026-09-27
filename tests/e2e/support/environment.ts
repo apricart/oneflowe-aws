@@ -80,6 +80,9 @@ export function serverEnv(testDatabaseUrl: string): Record<string, string> {
     ...(process.env as Record<string, string>),
     NODE_ENV: "development",
     NEXT_DIST_DIR: E2E_DIST_DIR,
+    // Keep browser tests self-contained. Cache/rate-limit fallbacks stay in
+    // process and no test run depends on an external Redis service.
+    ONEFLOWE_OFFLINE_MODE: "true",
     // Authoritative: `@next/env` never overwrites a variable already present in
     // the process environment, so `.env.local` — which on a developer machine
     // may well point at a real database — cannot replace this.
