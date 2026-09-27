@@ -2,6 +2,7 @@ import { categories, globalProducts, orderItems, orders, refundItems, refunds } 
 import { authOptions } from "@/lib/auth-options"
 import { parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
 import { db } from "@/lib/db"
+import { REVENUE_ELIGIBLE_FILTER } from "@/lib/metric-utils"
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
 import {
   buildConsumptionTrend,
@@ -45,14 +46,6 @@ import { NextResponse, type NextRequest } from "next/server"
  * of approved refunds — a count of units, not the budget module's `spent +
  * held`.
  */
-const PERFORMANCE_STATUSES = new Set([
-  "FULFILLED",
-  "REFUNDED",
-  "APPROVED",
-  "PARTIAL",
-  "PARTIALLY_FULFILLED",
-])
-
 function parseIdList(value: string | null, isValid: (candidate: number) => boolean = () => true) {
   if (!value) return []
   return normalizePositiveIds(value.split(",")).filter(isValid)
@@ -203,7 +196,7 @@ export async function GET(req: NextRequest) {
 
     const conditions: any[] = [
       inArray(orders.branchId, branchIds),
-      sql`UPPER(${orders.status}) IN ('FULFILLED', 'REFUNDED', 'APPROVED', 'PARTIAL', 'PARTIALLY_FULFILLED')`,
+      REVENUE_ELIGIBLE_FILTER,
       ...windowConditions(request),
     ]
     if (request.productIds.length > 0) {
@@ -219,7 +212,6 @@ export async function GET(req: NextRequest) {
         productId: orderItems.globalProductId,
         productName: globalProducts.name,
         productCode: globalProducts.productCode,
-        status: orders.status,
         createdAt: orders.createdAt,
         qtyOrdered: orderItems.quantity,
       })
@@ -231,7 +223,6 @@ export async function GET(req: NextRequest) {
     const refundQuantities = await loadRefundQuantities(lines.map((line) => line.orderItemId))
 
     const rows: ConsumptionTrendRow[] = lines.map((line) => {
-      const counted = PERFORMANCE_STATUSES.has((line.status || "").toUpperCase())
       const refunded = refundQuantities.get(line.orderItemId) || 0
       return {
         productId: line.productId ?? 0,
@@ -239,7 +230,7 @@ export async function GET(req: NextRequest) {
         productCode: line.productCode,
         monthKey: productTrendMonthKey(line.createdAt ?? new Date(0)),
         qtyOrdered: line.qtyOrdered,
-        qtyConsumed: counted ? Math.max(0, line.qtyOrdered - refunded) : 0,
+        qtyConsumed: Math.max(0, line.qtyOrdered - refunded),
       }
     })
 

@@ -53,6 +53,19 @@ describe("productTrendMonthKey", () => {
     expect(route).not.toContain("date.getMonth() + 1")
   })
 
+  it("keeps both product reports on the shared revenue-status population", async () => {
+    const { readFileSync } = await import("node:fs")
+    const { resolve } = await import("node:path")
+    for (const path of [
+      "app/api/v1/analytics/products/performance/route.ts",
+      "app/api/v1/analytics/products/consumption-trend/route.ts",
+    ]) {
+      const route = readFileSync(resolve(process.cwd(), path), "utf8")
+      expect(route, path).toContain('REVENUE_ELIGIBLE_FILTER } from "@/lib/metric-utils"')
+      expect(route, path).not.toContain("'REFUNDED'")
+    }
+  })
+
   it("returns an empty key rather than throwing on an unusable date", () => {
     expect(productTrendMonthKey("not a date")).toBe("")
   })
@@ -231,7 +244,7 @@ describe("buildConsumptionTrend", () => {
     expect(trend.series[0].totalConsumed).toBe(4)
   })
 
-  it("keeps a fully refunded product visible at zero consumed", () => {
+  it("keeps an eligible product whose approved line refund reduces consumption to zero", () => {
     const trend = buildConsumptionTrend([
       row({ productId: 7, productName: "Returned lot", qtyOrdered: 12, qtyConsumed: 0 }),
     ], { months })

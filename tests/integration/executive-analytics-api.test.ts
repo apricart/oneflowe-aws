@@ -657,9 +657,10 @@ describe.skipIf(!hasTestDatabase)("Product Performance — executive analytics r
       const byKey = Object.fromEntries(body.options.map((o: any) => [o.key, o]))
       expect(Object.keys(byKey)).toHaveLength(3)
       expect(byKey[f.groupRequesterId].hint).toBe(`${f.names.north}, ${f.names.south} · 2 orders`)
-      // The pending order counts here: the picker lists activity, not revenue.
+      // Pending, cancelled, and refunded orders count here: the picker lists
+      // all activity, not only orders that contribute to a value metric.
       expect(byKey[f.ahmedId].hint).toBe(`${f.names.north} · 3 orders`)
-      expect(byKey[f.sanaId].hint).toBe(`${f.names.south} · 3 orders`)
+      expect(byKey[f.sanaId].hint).toBe(`${f.names.south} · 4 orders`)
     })
 
     it("narrows each picker by the other's selection, never by its own", async () => {
