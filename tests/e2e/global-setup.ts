@@ -3,6 +3,8 @@ import { existsSync } from "node:fs"
 import { resolve } from "node:path"
 
 import { resolveTestDatabaseUrl } from "./support/environment"
+import { seedRoleSmokeE2E } from "./support/role-smoke-seed"
+import { seedActivityLogE2E } from "./support/seed"
 
 /**
  * Runs once, before the browser or the Next.js server starts.
@@ -12,11 +14,10 @@ import { resolveTestDatabaseUrl } from "./support/environment"
  * the running application — then refuses anything that is not obviously a
  * scratch database and seeds the fixtures.
  *
- * `@/lib/db` builds its pool from `DATABASE_URL` at import time, so the
- * override has to happen before either seed module is imported. Those imports
- * remain dynamic; the environment helper has no database dependency and is
- * imported statically so Playwright's CommonJS loader preserves its named
- * export in CI.
+ * The seed modules deliberately do not import `@/lib/db`: each builds a short-
+ * lived pool from the validated URL passed to it. That makes every helper safe
+ * to import statically, which is required because Playwright's CommonJS loader
+ * cannot natively import these TypeScript modules at runtime in CI.
  */
 export default async function globalSetup(): Promise<void> {
   const projectRoot = process.cwd()
@@ -35,11 +36,9 @@ export default async function globalSetup(): Promise<void> {
   // here holds a handle open while the browser runs.
   const smokeOnly = process.env.npm_lifecycle_event === "e2e:smoke"
   if (!smokeOnly) {
-    const { seedActivityLogE2E } = await import("./support/seed")
     await seedActivityLogE2E(testDatabaseUrl)
   }
 
-  const { seedRoleSmokeE2E } = await import("./support/role-smoke-seed")
   await seedRoleSmokeE2E(testDatabaseUrl)
 
   process.stderr.write(
