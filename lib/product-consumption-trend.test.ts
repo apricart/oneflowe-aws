@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import {
   buildConsumptionTrend,
@@ -115,6 +115,18 @@ describe("resolveTrendMonths", () => {
       startDate: new Date(2025, 10, 20),
       endDate: new Date(2026, 1, 3),
     })).toEqual(["2025-11", "2025-12", "2026-01", "2026-02"])
+  })
+
+  it("expands date-only bounds in the application timezone on a UTC server", () => {
+    vi.stubEnv("TZ", "UTC")
+    try {
+      expect(resolveTrendMonths({
+        startDate: new Date("2026-07-01T00:00:00.000+05:00"),
+        endDate: new Date("2026-08-31T23:59:59.999+05:00"),
+      })).toEqual(["2026-07", "2026-08"])
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 
   it("falls back to whatever months the rows landed in", () => {

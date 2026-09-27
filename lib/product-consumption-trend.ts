@@ -12,6 +12,8 @@
  * which months the axis carries, and what each cell holds.
  */
 
+import { buildAppMonthPeriods } from "@/lib/date-range-params"
+
 /** Lines drawn unless the caller asks for more. */
 export const CONSUMPTION_TREND_DEFAULT_SERIES = 5
 
@@ -119,14 +121,12 @@ function monthsBetween(start: Date, end: Date): string[] {
   if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return []
   if (start.getTime() > end.getTime()) return []
 
-  const months: string[] = []
-  const cursor = new Date(start.getFullYear(), start.getMonth(), 1)
-  const last = new Date(end.getFullYear(), end.getMonth(), 1)
-  while (cursor.getTime() <= last.getTime()) {
-    months.push(productTrendMonthKey(cursor))
-    cursor.setMonth(cursor.getMonth() + 1)
-  }
-  return months
+  // Date-only request bounds are instants at the edges of an Asia/Karachi
+  // calendar day. Reading them through the host's local Date getters makes a
+  // July 1 start look like June 30 on a UTC server (including CI), adding an
+  // extra month to the axis. Keep range expansion in the application's
+  // timezone, just like the SQL window parsed from the same parameters.
+  return buildAppMonthPeriods(start, end)
 }
 
 /**
