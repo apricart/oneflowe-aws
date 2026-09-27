@@ -197,6 +197,23 @@ describe("what the panel shows", () => {
     expect(screen.getAllByText(/ORD-248/)).toHaveLength(2)
   })
 
+  it("uses distinct status badges while keeping every status named", () => {
+    respond({
+      rows: [
+        line({ lineId: 1, status: "PENDING" }),
+        line({ lineId: 2, status: "APPROVED" }),
+        line({ lineId: 3, status: "FULFILLED" }),
+        line({ lineId: 4, status: "REJECTED" }),
+      ],
+    })
+    render(<DrillDownPanel target={{ dimension: "branch", key: "7", label: "North Zone" }} filters={filters} metric="spend" onClose={() => {}} />)
+
+    expect(screen.getByText("PENDING").className).toContain("bg-amber-50")
+    expect(screen.getByText("APPROVED").className).toContain("bg-blue-50")
+    expect(screen.getByText("FULFILLED").className).toContain("bg-emerald-50")
+    expect(screen.getByText("REJECTED").className).toContain("bg-rose-50")
+  })
+
   it("shows the pager only once there is more than one page", () => {
     render(<DrillDownPanel target={{ dimension: "branch", key: "7", label: "North Zone" }} filters={filters} metric="spend" onClose={() => {}} />)
     expect(screen.queryByLabelText("Next page")).toBeNull()
