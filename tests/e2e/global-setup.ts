@@ -2,6 +2,8 @@ import { config as loadDotenv } from "dotenv"
 import { existsSync } from "node:fs"
 import { resolve } from "node:path"
 
+import { resolveTestDatabaseUrl } from "./support/environment"
+
 /**
  * Runs once, before the browser or the Next.js server starts.
  *
@@ -11,8 +13,10 @@ import { resolve } from "node:path"
  * scratch database and seeds the fixtures.
  *
  * `@/lib/db` builds its pool from `DATABASE_URL` at import time, so the
- * override has to happen before the seed module is imported. That is why the
- * import below is dynamic.
+ * override has to happen before either seed module is imported. Those imports
+ * remain dynamic; the environment helper has no database dependency and is
+ * imported statically so Playwright's CommonJS loader preserves its named
+ * export in CI.
  */
 export default async function globalSetup(): Promise<void> {
   const projectRoot = process.cwd()
@@ -22,7 +26,6 @@ export default async function globalSetup(): Promise<void> {
     if (existsSync(path)) loadDotenv({ path })
   }
 
-  const { resolveTestDatabaseUrl } = await import("./support/environment")
   const testDatabaseUrl = resolveTestDatabaseUrl()
 
   process.env.DATABASE_URL = testDatabaseUrl
