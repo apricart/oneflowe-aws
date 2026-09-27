@@ -7,12 +7,13 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { useAPI } from "@/lib/hooks/use-api"
 import { cn } from "@/lib/utils"
 import {
-  EXECUTIVE_METRICS,
   MEASURE_METRIC,
   budgetBesideWithheldReason,
+  metricDefinitionForStatusSet,
   panelSegmentation,
   panelsForFocus,
   type ChartTypeId,
+  type DrillDownStatusSet,
   type ExecutiveDimensionId,
   type ExecutiveMetricId,
   type MatrixDimensionId,
@@ -98,6 +99,10 @@ type ComparisonResponse = {
 const RANK_PANEL_ROWS = 12
 const SERIES_PANEL_ROWS = 6
 
+function productPerformanceStatusSet(metric: ExecutiveMetricId): DrillDownStatusSet {
+  return metric === "spend" ? "consumed" : "revenue"
+}
+
 export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFilterState }>) {
   const [measure, setMeasure] = React.useState<MeasureId>("amount")
   const [focusProducts, setFocusProducts] = React.useState<string[]>([])
@@ -123,6 +128,10 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
   }, [])
 
   const metric: ExecutiveMetricId = MEASURE_METRIC[measure]
+  // Amount is the budget-facing Consumed metric (spent + held). Quantity keeps
+  // its established fulfilled/approved order population and vocabulary.
+  const statusSet = productPerformanceStatusSet(metric)
+  const metricDefinition = metricDefinitionForStatusSet(metric, statusSet)
 
   /**
    * What each panel currently holds, for the Excel download.
@@ -165,7 +174,7 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
   const { data: userData, isLoading: usersLoading } = useAPI<{ options: EntityOption[] }>(
     `/api/v1/analytics/executive/options?${toQuery(
       { ...filters, productIds: focusProducts },
-      { dimension: "user" },
+      { dimension: "user", statuses: statusSet },
     )}`,
   )
 
@@ -200,7 +209,7 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
   const { data: productData, isLoading: productsLoading } = useAPI<{ options: EntityOption[] }>(
     `/api/v1/analytics/executive/options?${toQuery(
       { ...filters, userIds: compareUsers },
-      { dimension: "product" },
+      { dimension: "product", statuses: statusSet },
     )}`,
   )
 
@@ -301,8 +310,8 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
               startDate: filters.startDate,
               endDate: filters.endDate,
               measure,
-              metricLabel: EXECUTIVE_METRICS[metric].label,
-              metricFormula: EXECUTIVE_METRICS[metric].formula,
+              metricLabel: metricDefinition.label,
+              metricFormula: metricDefinition.formula,
               ...filterNames,
               products: focusLabels,
               requesters: compareUsers.map(
@@ -316,7 +325,7 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
 
       <p className="text-xs text-slate-500 dark:text-slate-400">
         <strong className="text-slate-700 dark:text-slate-200">{subject}</strong>, measured by{" "}
-        {EXECUTIVE_METRICS[metric].label.toLowerCase()}, compared across {comparedAcross} at once. Select
+        {metricDefinition.label.toLowerCase()}, compared across {comparedAcross} at once. Select
         any bar, column or point to open the order lines behind it.
         {focusProducts.length === 1 ? " Day-by-day consumption is shown below." : ""}
         {focusProducts.length > 1 ? " Choose a single product to see day-by-day consumption." : ""}
@@ -362,6 +371,7 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
           target={drillTarget}
           filters={scopedFilters}
           metric={metric}
+          statuses={statusSet}
           onClose={() => setDrillTarget(null)}
         />
       ) : null}
@@ -441,6 +451,8 @@ function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggle
   const limit = isSeries ? SERIES_PANEL_ROWS : RANK_PANEL_ROWS
   const fullWidth = expanded === null || expanded
   const expandId = `expand-${panel.id}`
+  const statusSet = productPerformanceStatusSet(metric)
+  const panelMetric = metricDefinitionForStatusSet(metric, statusSet)
 
   // A requester panel honours the people picked to compare; every other
   // dimension ranks whatever is in scope.
@@ -465,6 +477,7 @@ function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggle
     keys,
     limit: String(limit),
     budget: askBudget ? "1" : "",
+    statuses: statusSet,
   })}`
 
   const { data, error, isLoading } = useAPI<ComparisonResponse>(url)
@@ -486,7 +499,7 @@ function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggle
     <ChartCard
       title={panel.title}
       question={panel.question}
-      formula={data?.formula ?? EXECUTIVE_METRICS[metric].formula}
+      formula={data?.formula ?? panelMetric.formula}
       loading={isLoading}
       error={requestError}
       empty={data?.blocked?.message ?? (isEmpty ? "Nothing in the selected period under these filters." : null)}
@@ -513,7 +526,7 @@ function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggle
           <ComparisonTable
             rows={rows}
             format={data?.format ?? "currency"}
-            metricLabel={data?.label ?? EXECUTIVE_METRICS[metric].label}
+            metricLabel={data?.label ?? panelMetric.label}
             dimensionLabel={panelDimensionLabel(panel.dimension)}
             concentrationEligible={Boolean(data?.concentrationEligible)}
             budgetBeside={Boolean(data?.budgetBeside)}
@@ -528,7 +541,7 @@ function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggle
         series={series}
         periods={data?.periods ?? []}
         format={data?.format ?? "currency"}
-        metricLabel={data?.label ?? EXECUTIVE_METRICS[metric].label}
+        metricLabel={data?.label ?? panelMetric.label}
         dimensionLabel={panelDimensionLabel(panel.dimension)}
         unit={data?.quantityUnit.selected ?? null}
         concentrationEligible={Boolean(data?.concentrationEligible)}
@@ -599,11 +612,14 @@ function MatrixPanel({ panel, rows, filters, metric, expanded, onToggleExpanded,
   onDrillDown: (target: DrillTarget) => void
   onSnapshot: (panelId: string, snapshot: SideBySidePanelSnapshot | null) => void
 }>) {
+  const statusSet = productPerformanceStatusSet(metric)
+  const panelMetric = metricDefinitionForStatusSet(metric, statusSet)
   const url = `/api/v1/analytics/executive/matrix?${toQuery(filters, {
     rows,
     columns: panel.dimension,
     metric,
     limit: String(MATRIX_PANEL_ENTITIES),
+    statuses: statusSet,
   })}`
 
   const { data, error, isLoading } = useAPI<MatrixResponse>(url)
@@ -631,7 +647,7 @@ function MatrixPanel({ panel, rows, filters, metric, expanded, onToggleExpanded,
     <ChartCard
       title={panel.title}
       question={panel.question}
-      formula={data?.formula ?? EXECUTIVE_METRICS[metric].formula}
+      formula={data?.formula ?? panelMetric.formula}
       loading={isLoading}
       error={requestError}
       empty={data?.blocked?.message ?? (isEmpty ? "Nothing in the selected period under these filters." : null)}

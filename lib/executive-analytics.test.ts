@@ -24,6 +24,7 @@ import {
   isMatrixDimension,
   isMatrixMetric,
   isSupportedMatrix,
+  metricDefinitionForStatusSet,
   metricsUnderLineFocus,
   clampRowLimit,
   countToReachShare,
@@ -148,6 +149,22 @@ describe("arithmetic survives the empty cases", () => {
     const weighted = weightedAverageUnitPrice(100 * 10 + 1 * 1000, 101)
     expect(Math.round(weighted)).toBe(20)
     expect(weighted).toBeLessThan((10 + 1000) / 2)
+  })
+})
+
+describe("status-aware metric copy", () => {
+  it("calls the amount metric Consumed only for the spent + held population", () => {
+    expect(metricDefinitionForStatusSet("spend", "revenue").label).toBe("Procurement Value")
+    const consumed = metricDefinitionForStatusSet("spend", "consumed")
+    expect(consumed.label).toBe("Consumed")
+    expect(consumed.formula).toContain("including pending")
+    expect(consumed.formula).toContain("refunds")
+  })
+
+  it("keeps Quantity named Quantity while describing the selected population", () => {
+    const quantity = metricDefinitionForStatusSet("quantity", "consumed")
+    expect(quantity.label).toBe("Quantity")
+    expect(quantity.formula).toContain("refunded quantity")
   })
 })
 
@@ -316,6 +333,14 @@ describe("request parsing", () => {
     if (!result.ok) return
     expect(result.startDate.getFullYear()).toBe(2026)
     expect(result.startDate.getMonth()).toBe(2) // March, six months inclusive
+    expect(result.statusSet).toBe("revenue")
+  })
+
+  it("accepts only the allowlisted consumed population", () => {
+    const consumed = parseExecutiveRequest(new URLSearchParams("statuses=consumed"), now)
+    expect(consumed).toMatchObject({ ok: true, statusSet: "consumed" })
+    expect(parseExecutiveRequest(new URLSearchParams("statuses=PENDING"), now))
+      .toEqual({ ok: false, error: "Unsupported statuses" })
   })
 })
 
@@ -326,7 +351,7 @@ describe("grid request parsing", () => {
   it("accepts requesters against products and carries every shared filter through", () => {
     const result = parse(
       "rows=user&columns=product&metric=spend&productIds=186,187&userIds=8b1a0d3e-5a2f-4c1d-9e7b-1f2a3b4c5d6e"
-      + "&categoryIds=4&groupIds=2&startDate=2026-06-01&endDate=2026-08-31&limit=5",
+      + "&categoryIds=4&groupIds=2&startDate=2026-06-01&endDate=2026-08-31&limit=5&statuses=consumed",
     )
     expect(result.ok).toBe(true)
     if (!result.ok) return
@@ -338,6 +363,7 @@ describe("grid request parsing", () => {
     expect(result.userIds).toEqual(["8b1a0d3e-5a2f-4c1d-9e7b-1f2a3b4c5d6e"])
     expect(result.categoryIds).toEqual([4])
     expect(result.groupIds).toEqual([2])
+    expect(result.statusSet).toBe("consumed")
     expect(result.startDate.toISOString().slice(0, 10)).toBe("2026-05-31")
   })
 

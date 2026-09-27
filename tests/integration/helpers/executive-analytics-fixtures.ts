@@ -52,8 +52,9 @@ export { NO_DATABASE_REASON, hasTestDatabase } from "./pricing-fixtures"
  *                                                 ↳ APPROVED refund: 2 Ream, 1000
  *   O4  2026-07-15  South   Group      FULFILLED  Toner 1 Piece @3000; Paper 2 Box @2500     8000
  *   O5  2026-08-03  North   Group      APPROVED   Diesel 20 Litre @100                       2000
- *   O6  2026-08-12  North   Ahmed      PENDING    Paper 100 Ream @500                       50000  (never counted)
+ *   O6  2026-08-12  North   Ahmed      PENDING    Paper 100 Ream @500                       50000  (Consumed only)
  *   O7  2026-08-14  South   Sana       CANCELLED  Toner 5 Piece @3000                       15000  (never counted)
+ *   O9  2026-08-16  South   Sana       REFUNDED   Paper 80 Ream @500                        40000  (never counted)
  *   O8  2026-08-20  South   Sana       FULFILLED  Paper 3 Ream @500                          1500
  *   OB  2026-07-10  Foreign Foreign    FULFILLED  Foreign Product 7 Piece @1000              7000  (tenant B)
  * ```
@@ -66,6 +67,11 @@ export { NO_DATABASE_REASON, hasTestDatabase } from "./pricing-fixtures"
  *     2026-06 18000 · 2026-07 10000 · 2026-08 3500
  *   Procurement Value by product (line-by-line)
  *     Paper 15500 · Toner 9000 · Diesel 7000
+ *   Consumed (spent + held), with pending included and refunded orders excluded
+ *     total 81500 · North 65000 · South 16500
+ *     Ahmed 63000 · Group 10000 · Sana 8500
+ *     2026-06 18000 · 2026-07 10000 · 2026-08 53500
+ *     by product: Paper 65500 · Toner 9000 · Diesel 7000
  *   Paper in focus (line-by-line): North 7000 · South 8500 · Ahmed 7000 · Group 5000 · Sana 3500
  *   Quantity counts ordered items regardless of their unit label
  *     Paper: 23 (North 14, South 9) · Diesel: 70 (North 20, South 50) · Toner: 3
@@ -106,7 +112,7 @@ export type ExecutiveAnalyticsFixtures = {
   tonerProductId: number
   dieselProductId: number
   foreignProductId: number
-  orderIds: Record<"O1" | "O2" | "O3" | "O4" | "O5" | "O6" | "O7" | "O8" | "OB", number>
+  orderIds: Record<"O1" | "O2" | "O3" | "O4" | "O5" | "O6" | "O7" | "O8" | "O9" | "OB", number>
   /** Every order line, keyed by order then position, for drill-down assertions. */
   lineIds: number[]
   refundId: number
@@ -320,6 +326,7 @@ export async function createExecutiveAnalyticsFixtures(): Promise<ExecutiveAnaly
   const O6 = await order("O6", { organizationId: A, branchId: north.id, createdByUserId: ahmedId, status: "PENDING", createdAt: at("2026-08-12"), lines: [paper(100)] })
   const O7 = await order("O7", { organizationId: A, branchId: south.id, createdByUserId: sanaId, status: "CANCELLED", createdAt: at("2026-08-14"), lines: [toner(5)] })
   const O8 = await order("O8", { organizationId: A, branchId: south.id, createdByUserId: sanaId, status: "FULFILLED", createdAt: at("2026-08-20"), lines: [paper(3)] })
+  const O9 = await order("O9", { organizationId: A, branchId: south.id, createdByUserId: sanaId, status: "REFUNDED", createdAt: at("2026-08-16"), lines: [paper(80)] })
   const OB = await order("OB", {
     organizationId: neighbour.id, branchId: foreign.id, createdByUserId: foreignUserId, status: "FULFILLED", createdAt: at("2026-07-10"),
     lines: [{ productId: foreignProductId, name: `Foreign Product ${suffix}`, unit: "Piece", quantity: 7, priceCents: 1000 }],
@@ -365,7 +372,7 @@ export async function createExecutiveAnalyticsFixtures(): Promise<ExecutiveAnaly
     tonerProductId,
     dieselProductId,
     foreignProductId,
-    orderIds: { O1: O1.id, O2: O2.id, O3: O3.id, O4: O4.id, O5: O5.id, O6: O6.id, O7: O7.id, O8: O8.id, OB: OB.id },
+    orderIds: { O1: O1.id, O2: O2.id, O3: O3.id, O4: O4.id, O5: O5.id, O6: O6.id, O7: O7.id, O8: O8.id, O9: O9.id, OB: OB.id },
     lineIds,
     refundId: refund.id,
     names,

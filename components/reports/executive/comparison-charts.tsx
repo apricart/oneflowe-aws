@@ -209,7 +209,7 @@ function EntityTooltip({ row, format, metricLabel, concentrationEligible, showCh
     ...(showChange ? [{ label: "vs prior period", value: changeLabel(row.changePct).text }] : []),
   ]
 
-  // A companion budget first: the row's figure is still procurement value,
+  // A companion budget first: the row's figure is the selected money metric,
   // and the budget is what it is read against. The `totalBudgetCents` test
   // below is for the budget metrics, where the figure *is* the position.
   if (budgetBeside) {
@@ -226,7 +226,7 @@ function EntityTooltip({ row, format, metricLabel, concentrationEligible, showCh
     )
   } else {
     rows.push(
-      { label: "Procurement value", value: money(row.spendCents), muted: true } as any,
+      { label: metricLabel === "Consumed" ? "Consumed" : "Procurement value", value: money(row.spendCents), muted: true } as any,
       { label: "Orders", value: countShort(row.orderCount), muted: true } as any,
     )
   }
@@ -745,13 +745,17 @@ function ColumnChart({
         </p>
       ) : null}
       {budgetBeside ? (
-        <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
-          Total budget is allocated + add-ons for every month in the period. {metricLabel} excludes pending orders, so its
-          share of budget reads lower than the Overview&apos;s Utilization, which counts them as committed.
-        </p>
+        <BudgetBesideNote metricLabel={metricLabel} />
       ) : null}
     </>
   )
+}
+
+function BudgetBesideNote({ metricLabel }: Readonly<{ metricLabel: string }>) {
+  const copy = metricLabel === "Consumed"
+    ? "Total budget is allocated + add-ons for every month in the period. Consumed includes pending orders as committed and excludes cancelled, rejected, and refunded orders."
+    : `Total budget is allocated + add-ons for every month in the period. ${metricLabel} excludes pending orders, so its share of budget reads lower than the Overview's Utilization, which counts them as committed.`
+  return <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">{copy}</p>
 }
 
 // ── This period vs prior ───────────────────────────────────────────────────

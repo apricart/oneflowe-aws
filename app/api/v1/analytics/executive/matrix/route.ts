@@ -2,7 +2,12 @@ import { NextResponse, type NextRequest } from "next/server"
 import { getServerSession } from "next-auth"
 
 import { authOptions } from "@/lib/auth-options"
-import { EXECUTIVE_DIMENSIONS, EXECUTIVE_METRICS, resolveMatrixGrain, resolveQuantityUnit } from "@/lib/executive-analytics"
+import {
+  EXECUTIVE_DIMENSIONS,
+  metricDefinitionForStatusSet,
+  resolveMatrixGrain,
+  resolveQuantityUnit,
+} from "@/lib/executive-analytics"
 import { parseMatrixRequest } from "@/lib/executive-analytics-request"
 import { withRateLimit } from "@/lib/rate-limiter"
 import {
@@ -63,9 +68,10 @@ export async function GET(req: NextRequest) {
       groupIds: parsed.groupIds,
       userIds: parsed.userIds,
       unit: null,
+      statusSet: parsed.statusSet,
     }
 
-    const metricDefinition = EXECUTIVE_METRICS[parsed.metric]
+    const metricDefinition = metricDefinitionForStatusSet(parsed.metric, parsed.statusSet)
     const grain = resolveMatrixGrain(parsed.rows, parsed.columns, parsed.metric, { lineScoped: isLineScoped(baseFilters) })
 
     // Quantity compares the raw count entered on every order line, independent
@@ -89,6 +95,7 @@ export async function GET(req: NextRequest) {
       format: metricDefinition.format,
       label: metricDefinition.label,
       formula: metricDefinition.formula,
+      statuses: parsed.statusSet,
       period: {
         startDate: parsed.startDate.toISOString(),
         endDate: parsed.endDate.toISOString(),

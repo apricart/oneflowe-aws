@@ -130,16 +130,25 @@ describe("the drill-down listing", () => {
     expect(body).not.toContain("inArray(orders.branchId")
   })
 
-  it("lists pending orders only through the allowlisted status set, and only the drill-down asks", () => {
+  it("includes pending only through the allowlisted consumed status set", () => {
     // The status predicate is chosen from two pre-written filters by a typed
     // flag; neither the flag nor a status name is ever interpolated.
     expect(queries).toContain('return filters.statusSet === "consumed" ? CONSUMED_ELIGIBLE_FILTER : REVENUE_ELIGIBLE_FILTER')
     expect(queries).not.toContain("REVENUE_ELIGIBLE_FILTER,\n")
-    // The charts never set it: only the drill-down route passes the parsed value through.
-    expect(drillDownRoute).toContain("statusSet: parsed.statusSet")
-    for (const route of ["compare", "overview", "matrix", "options"]) {
-      expect(source(`app/api/v1/analytics/executive/${route}/route.ts`), route).not.toContain("statusSet")
+    // Product Performance's aggregates, pickers, grid, and detail all pass the
+    // same parsed selection. Overview remains on its established mixed metrics.
+    for (const route of ["compare", "matrix", "options", "drill-down"]) {
+      expect(source(`app/api/v1/analytics/executive/${route}/route.ts`), route)
+        .toContain("statusSet: parsed.statusSet")
     }
+    expect(source("app/api/v1/analytics/executive/overview/route.ts")).not.toContain("statusSet: parsed.statusSet")
+  })
+
+  it("aggregates the status-filtered order rows without a second revenue-only CASE", () => {
+    expect(queries).toContain("const filteredOrderNetValue")
+    expect(queries).toContain("const filteredOrderCount")
+    expect(queries).not.toContain("metricExpressions.revenue")
+    expect(queries).not.toContain("metricExpressions.orderVolume")
   })
 
   it("sorts only through the allowlisted expression map", () => {
