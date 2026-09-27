@@ -125,7 +125,12 @@ and fills in throwaway NextAuth/Redis/cron values the server env schema demands.
 
 ## End-to-end
 
-`@playwright/test` and the `npm run e2e:*` scripts exist, but there is no
-`playwright.config.ts` and no `tests/e2e/` yet, so those scripts do not run
-anything. Both Vitest projects already exclude `tests/e2e/**`, so adding a
-Playwright config later will not collide with them.
+Playwright runs the real Next.js application against the same kind of isolated,
+migrated test database used by the integration project. The role smoke suite
+logs in as every application persona and exercises the complete
+create/approve/fulfill order chain with denial checks between roles. The
+activity-log suite covers its browser rendering and Super Admin boundary.
+
+Use `npm run e2e:smoke` for the deployment gate or `npm run e2e` for every
+browser suite. Full setup, safety guards, fixture behavior, and debugging steps
+are documented in `docs/PLAYWRIGHT_E2E.md`.

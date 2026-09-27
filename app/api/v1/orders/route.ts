@@ -8,7 +8,11 @@ import { headers } from "next/headers"
 import { and,desc,eq,exists,gte,ilike,lte,or,sql,inArray,isNotNull,isNull } from "drizzle-orm"
 import { logOrderActivity } from "@/lib/global-logger"
 import { generateReceiptData } from "@/lib/receipt-generator"
-import { generateNextInvoiceNumber,hasInvoiceSequenceTable } from "@/lib/invoice-number"
+import {
+  generateNextInvoiceNumber,
+  hasInvoiceSequenceTable,
+  lockInvoiceTenantForIssuance,
+} from "@/lib/invoice-number"
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
 import { parseEndDateParam,parseStartDateParam } from "@/lib/date-range-params"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
@@ -429,30 +433,27 @@ function validateCreationStock(items: any[], productById: Map<number, any>) {
 }
 
 async function saveOrderReceipt(tx: any, context: any) {
-  let receiptData: Awaited<ReturnType<typeof generateReceiptData>> | null = null
-  try {
-    receiptData = await generateReceiptData({
-      orderId: context.order.id,
-      orderTid: context.tid,
-      status: "PENDING",
-      organizationId: context.organizationId,
-      branchId: context.branchId,
-      orderItemsData: context.items,
-      subtotalCents: context.subtotal,
-      taxCents: context.tax,
-      totalCents: context.total,
-      discountCents: 0,
-      deliveryChargesCents: 0,
-    })
-  } catch (receiptError) {
-    console.error("Receipt generation failed during order creation", receiptError)
-  }
-  if (!receiptData) return
+  const receiptData = await generateReceiptData({
+    orderId: context.order.id,
+    orderTid: context.tid,
+    status: "PENDING",
+    organizationId: context.organizationId,
+    branchId: context.branchId,
+    orderItemsData: context.items,
+    subtotalCents: context.subtotal,
+    taxCents: context.tax,
+    totalCents: context.total,
+    discountCents: 0,
+    deliveryChargesCents: 0,
+  })
   // Snapshot the buyer's own reference beside the invoice number so a reissued
   // invoice prints exactly what was agreed when the order was placed.
   if (context.poNumber) receiptData.poNumber = context.poNumber
   if (context.invoiceSequenceReady) receiptData.invoiceNumber = await generateNextInvoiceNumber(tx, context.organizationId)
   else {
+    // Even the emergency TID fallback participates in the organization-row
+    // lock, so a code update cannot race past the tenant's first invoice.
+    await lockInvoiceTenantForIssuance(tx, context.organizationId)
     console.error("Invoice sequence table is missing; falling back to order TID for invoice number. Run the invoice sequence migration.")
     receiptData.invoiceNumber = context.tid
   }

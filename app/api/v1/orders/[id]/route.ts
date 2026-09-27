@@ -434,35 +434,30 @@ async function updateOrderStock(tx: any, context: any) {
 }
 
 async function regenerateEditedOrderReceipt(tx: any, context: any) {
-  try {
-    const receiptData = await generateReceiptData({
-      orderId: context.orderId,
-      orderTid: context.existingOrder.tid,
-      status: "PENDING",
-      organizationId: context.organizationId,
-      branchId: context.branchId,
-      orderItemsData: context.calculatedItems,
-      subtotalCents: context.subtotalCents,
-      taxCents: context.taxCents,
-      totalCents: context.totalCents,
-      discountCents: 0,
-      deliveryChargesCents: 0,
-    })
-    const previousReceipt = context.existingOrder.receiptData as any
-    receiptData.invoiceNumber = previousReceipt?.invoiceNumber || context.existingOrder.tid
-    receiptData.date = previousReceipt?.date || receiptData.date
-    // The invoice identity survives an edit, and so does the buyer's purchase
-    // order reference: the edited value when one was sent, the recorded one
-    // otherwise.
-    const poNumber = context.poNumber !== undefined
-      ? context.poNumber
-      : (context.existingOrder.poNumber || previousReceipt?.poNumber)
-    if (poNumber) receiptData.poNumber = poNumber
-    await tx.update(orders).set({ receiptData: receiptData as any }).where(eq(orders.id, context.orderId))
-  } catch (receiptError) {
-    console.error("Receipt regeneration failed during order edit", receiptError)
-    await tx.update(orders).set({ receiptData: null }).where(eq(orders.id, context.orderId))
-  }
+  const receiptData = await generateReceiptData({
+    orderId: context.orderId,
+    orderTid: context.existingOrder.tid,
+    status: "PENDING",
+    organizationId: context.organizationId,
+    branchId: context.branchId,
+    orderItemsData: context.calculatedItems,
+    subtotalCents: context.subtotalCents,
+    taxCents: context.taxCents,
+    totalCents: context.totalCents,
+    discountCents: 0,
+    deliveryChargesCents: 0,
+  })
+  const previousReceipt = context.existingOrder.receiptData as any
+  receiptData.invoiceNumber = previousReceipt?.invoiceNumber || context.existingOrder.tid
+  receiptData.date = previousReceipt?.date || receiptData.date
+  // The invoice identity survives an edit, and so does the buyer's purchase
+  // order reference: the edited value when one was sent, the recorded one
+  // otherwise.
+  const poNumber = context.poNumber !== undefined
+    ? context.poNumber
+    : (context.existingOrder.poNumber || previousReceipt?.poNumber)
+  if (poNumber) receiptData.poNumber = poNumber
+  await tx.update(orders).set({ receiptData: receiptData as any }).where(eq(orders.id, context.orderId))
 }
 
 async function persistEditedOrder(tx: any, context: any) {

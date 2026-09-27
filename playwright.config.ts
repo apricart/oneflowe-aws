@@ -6,15 +6,9 @@ import { resolve } from "node:path"
 import { E2E_BASE_URL, E2E_PORT, serverEnv } from "./tests/e2e/support/environment"
 
 /**
- * A minimal end-to-end harness, for the admin activity log.
- *
- * Deliberately narrow. The repository's former Playwright suite was removed in
- * the two "sonar" commits, and this is not a restoration of it — it covers the
- * one journey this change adds, in a real browser, and nothing else. Anything
- * that can be proved without a browser is proved in `npm test` or
- * `npm run test:integration`; a browser test is the slowest and most brittle
- * kind, so it earns its place only where rendering and navigation are the thing
- * under test.
+ * End-to-end coverage for the role deployment smoke suite and the admin
+ * activity-log journey. Anything that can be proved without a browser remains
+ * in `npm test` or `npm run test:integration`.
  *
  * The run starts its own Next.js server with `DATABASE_URL` pointed at
  * `TEST_DATABASE_URL`, so the application under test can never reach the
@@ -40,7 +34,8 @@ export default defineConfig({
   // A flake here is a defect to diagnose, not to retry away.
   retries: 0,
   reporter: [["list"], ["html", { open: "never" }]],
-  timeout: 60_000,
+  // A cold Next.js compiler can spend most of a minute on the first role page.
+  timeout: 120_000,
   expect: { timeout: 15_000 },
   use: {
     baseURL: E2E_BASE_URL,
@@ -50,10 +45,11 @@ export default defineConfig({
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
-    // Dev rather than a production build: the suite is one journey, and a build
-    // would dominate its run time. Turbopack's first compile is slow, hence the
-    // generous timeout.
-    command: `npx next dev --hostname 127.0.0.1 --port ${E2E_PORT}`,
+    // CI already runs a production build as its own gate. The browser suite uses
+    // an isolated Webpack dev server so failures identify the journey rather
+    // than spend another build's worth of time. Webpack also avoids Turbopack
+    // treating unrelated tool workspaces as CSS source globs on Windows.
+    command: `npx next dev --webpack --hostname 127.0.0.1 --port ${E2E_PORT}`,
     url: E2E_BASE_URL,
     timeout: 240_000,
     reuseExistingServer: false,

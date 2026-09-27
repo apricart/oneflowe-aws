@@ -63,6 +63,7 @@
     "dev": "next dev --hostname 127.0.0.1",
     "dev:legacy": "next dev --webpack --hostname 127.0.0.1",
     "e2e": "playwright test",
+    "e2e:smoke": "playwright test tests/e2e/role-smoke.spec.ts",
     "e2e:headed": "playwright test --headed",
     "e2e:ui": "playwright test --ui",
     "e2e:debug": "playwright test --debug",

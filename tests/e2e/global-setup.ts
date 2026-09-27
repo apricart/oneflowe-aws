@@ -30,10 +30,16 @@ export default async function globalSetup(): Promise<void> {
 
   // The seed builds its own pool from this connection and closes it, so nothing
   // here holds a handle open while the browser runs.
-  const { seedActivityLogE2E } = await import("./support/seed")
-  await seedActivityLogE2E(testDatabaseUrl)
+  const smokeOnly = process.env.npm_lifecycle_event === "e2e:smoke"
+  if (!smokeOnly) {
+    const { seedActivityLogE2E } = await import("./support/seed")
+    await seedActivityLogE2E(testDatabaseUrl)
+  }
+
+  const { seedRoleSmokeE2E } = await import("./support/role-smoke-seed")
+  await seedRoleSmokeE2E(testDatabaseUrl)
 
   process.stderr.write(
-    `[e2e] seeded activity fixtures in ${new URL(testDatabaseUrl).pathname.replace(/^\//, "")}\n`,
+    `[e2e] seeded ${smokeOnly ? "role smoke" : "activity and role smoke"} fixtures in ${new URL(testDatabaseUrl).pathname.replace(/^\//, "")}\n`,
   )
 }
