@@ -22,8 +22,8 @@ import {
  * bucketing all run for real.
  *
  * The oracle, worked by hand from the shared executive fixtures. Only orders in
- * a fulfilment status count, so O6 (PENDING) and O7 (CANCELLED) reach nothing
- * at all, and OB belongs to the neighbour tenant:
+ * a fulfilment status count, so O6 (PENDING), O7 (CANCELLED), and O9
+ * (REFUNDED) reach nothing at all, and OB belongs to the neighbour tenant:
  *
  * ```
  *   order  month     branch  status     lines                       counted
@@ -34,6 +34,7 @@ import {
  *   O5     2026-08   North   APPROVED   diesel ×20                  yes
  *   O6     2026-08   North   PENDING    paper ×100                  no
  *   O7     2026-08   South   CANCELLED  toner ×5                    no
+ *   O9     2026-08   South   REFUNDED   paper ×80                   no
  *   O8     2026-08   South   FULFILLED  paper ×3                    yes
  *   OB     2026-07   Foreign FULFILLED  foreign ×7                  other tenant
  *
@@ -114,7 +115,9 @@ describe.skipIf(!hasTestDatabase)("product consumption trend route", () => {
   }, 120_000)
 
   afterAll(async () => {
-    if (f) await destroyExecutiveAnalyticsFixtures(f)
+    if (f && process.env.INTEGRATION_PRESERVE_FIXTURES !== "1") {
+      await destroyExecutiveAnalyticsFixtures(f)
+    }
     await closePool()
   }, 120_000)
 
@@ -220,11 +223,11 @@ describe.skipIf(!hasTestDatabase)("product consumption trend route", () => {
       expect(paper.totalConsumed).toBe(23)
     })
 
-    it("counts no pending or cancelled order", async () => {
+    it("counts no pending, cancelled, or refunded order", async () => {
       const { body } = await trend()
       const paper = body.series.find((entry: any) => entry.productName === f.names.paper)
-      // O6's 100 reams are PENDING and O7's 5 toners CANCELLED: neither reaches
-      // any figure, ordered or consumed.
+      // O6's 100 reams are PENDING, O7's 5 toners are CANCELLED, and O9's 80
+      // reams are REFUNDED: none reaches any figure, ordered or consumed.
       expect(paper.points[2].ordered).toBe(3)
       const toner = body.series.find((entry: any) => entry.productName === f.names.toner)
       expect(toner.points[2].consumed).toBe(0)
