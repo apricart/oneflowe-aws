@@ -7,10 +7,37 @@ import {
   getClientIdentifier,
   rateLimitResponse,
 } from "@/lib/rate-limiter"
+import { recordAuthAuditEvent, type AuthFailureReason } from "@/lib/server/auth-audit"
 
 const genericResponse = () => ok({
   message: "If MFA is enabled for this account, a verification code has been sent.",
 })
+
+/**
+ * Record the challenge, then answer identically whatever happened.
+ *
+ * The response must not distinguish an unknown account from one without MFA
+ * from a code actually sent — that difference is an account-enumeration oracle,
+ * which `genericResponse` exists to close. The *trail* may and should
+ * distinguish them: a burst of `unknown_account` challenges from one address is
+ * precisely the probe a reviewer needs to see, and it is invisible if only the
+ * successful sends are kept.
+ */
+async function recordChallenge(
+  identifier: string,
+  outcome: { subjectId?: string | null; email?: string | null; success: boolean; reason?: AuthFailureReason },
+) {
+  await recordAuthAuditEvent({
+    action: "AUTH_MFA_CHALLENGE",
+    attemptedIdentifier: identifier,
+    subjectId: outcome.subjectId ?? null,
+    email: outcome.email ?? null,
+    success: outcome.success,
+    reason: outcome.reason,
+    details: { stage: "login" },
+  })
+  return genericResponse()
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -69,11 +96,16 @@ export async function POST(req: NextRequest) {
     }
 
     if (!user) {
-      return genericResponse()
+      return recordChallenge(identifier, { success: false, reason: "unknown_account" })
     }
 
     if (!user.mfaEnabled) {
-      return genericResponse()
+      return recordChallenge(identifier, {
+        subjectId: user.id,
+        email: user.email,
+        success: false,
+        reason: "mfa_not_enrolled",
+      })
     }
 
     const result = await generateAndSendOTP(user.id, user.email, type)
@@ -82,7 +114,12 @@ export async function POST(req: NextRequest) {
         account: accountIdentifier,
       })
     }
-    return genericResponse()
+    return recordChallenge(identifier, {
+      subjectId: user.id,
+      email: user.email,
+      success: result.success,
+      reason: result.success ? undefined : "email_unroutable",
+    })
 
   } catch (err) {
     console.error("Error sending OTP:", err)

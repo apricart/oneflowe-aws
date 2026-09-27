@@ -62,6 +62,7 @@ import { useOrganizations } from "@/lib/hooks/use-api"
 
 import type { ColumnDef } from "@/components/reports/column-selector"
 import { KPICard } from "@/components/reports/kpi-card"
+import { MonthlyConsumptionChart } from "@/components/reports/monthly-consumption-chart"
 import { OrganizationFilter } from "@/components/reports/organization-filter"
 import { ProductFilter } from "@/components/reports/product-filter"
 import { TopProductsRanking } from "@/components/reports/top-products-ranking"
@@ -380,6 +381,10 @@ export default function ProductPerformancePage() {
         const latestYear = availableChartYears.at(-1)
         return latestYear ? [latestYear] : []
     }, [availableChartYears])
+
+    // Stable identity so the consumption card's effects do not re-run on
+    // every render of this page.
+    const defaultChartYears = useMemo(() => getDefaultChartYears(), [getDefaultChartYears])
 
     // ━━━ GLOBAL DATA (Bento Grid) ━━━
     const globalQueryParams = new URLSearchParams()
@@ -1058,6 +1063,21 @@ export default function ProductPerformancePage() {
                                 })()}
                             </CardContent>
                         </Card>
+
+                        {/*
+                          When, not just how much. The bar chart above totals
+                          the selection; this follows each product month by
+                          month, which is the question a reader asks next.
+                          Its filters are its own, as the bar chart's are.
+                        */}
+                        <MonthlyConsumptionChart
+                            role={role}
+                            organizationId={organizationId}
+                            contextBranchIds={contextBranchIds}
+                            sessionBranchId={contextBranchId || (session?.user as any)?.branchId}
+                            availableYears={availableChartYears}
+                            defaultYears={defaultChartYears}
+                        />
 
                         {/* Product Table */}
                         <Card className="overflow-hidden border border-slate-200 dark:border-slate-800 shadow-sm bg-white dark:bg-slate-900">

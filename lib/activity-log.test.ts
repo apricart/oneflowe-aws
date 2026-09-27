@@ -115,6 +115,40 @@ describe("operationOf", () => {
     expect(operationOf("DEACTIVATE_BRANCH")).toBe("delete")
     expect(operationOf("ACTIVATE_BRANCH")).toBe("update")
   })
+
+  // Every action string the centralized writer emits. A new one that classifies
+  // as `other` is one the screen cannot group or filter, so each is pinned here.
+  it.each([
+    ["ORDER_FULFILLED", "approve"],
+    ["DELETE_ORDER", "delete"],
+    ["UPLOAD_IMAGE", "create"],
+    ["UPLOAD_SUPPORT_ATTACHMENT", "create"],
+    ["CREATE_SUPPORT_THREAD", "create"],
+    ["REPLY_SUPPORT_THREAD", "create"],
+    ["UPDATE_SUPPORT_THREAD", "update"],
+    ["RESET_BRANCH_BUDGETS", "update"],
+    ["REBUILD_BRANCH_BUDGETS", "create"],
+    ["CLEANUP_ORGANIZATION_INVENTORY_NAMES", "update"],
+    ["SEND_SCHEDULED_REPORT", "export"],
+    ["AUTH_MFA_ENABLED", "auth"],
+    ["AUTH_MFA_DISABLED", "auth"],
+    ["AUTH_MFA_VERIFIED", "auth"],
+  ] as const)("classifies the written action %s as %s", (action, expected) => {
+    expect(operationOf(action)).toBe(expected)
+  })
+
+  it("tells a bulk field clear from a bulk row removal", () => {
+    // `CLEANUP_` nulls a column; `CLEAN_` deletes rows. They differ by one
+    // underscore, so the order of the two rules is what keeps them apart.
+    expect(operationOf("CLEANUP_ORGANIZATION_INVENTORY_NAMES")).toBe("update")
+    expect(operationOf("CLEAN_BRANCH_PRODUCTS")).toBe("delete")
+  })
+
+  it("reads a report leaving the application as an export, not a send", () => {
+    expect(operationOf("SEND_SCHEDULED_REPORT")).toBe("export")
+    // While an ordinary send stays a create.
+    expect(operationOf("SEND_ORDER_TOKEN_EMAIL")).toBe("create")
+  })
 })
 
 describe("categoryOf", () => {
@@ -156,6 +190,28 @@ describe("categoryOf", () => {
   it("falls back to system", () => {
     expect(categoryOf("SOMETHING_ELSE")).toBe("system")
   })
+
+  it.each([
+    ["CREATE_SUPPORT_THREAD", "support"],
+    ["REPLY_SUPPORT_THREAD", "support"],
+    ["UPDATE_SUPPORT_THREAD", "support"],
+    ["UPLOAD_SUPPORT_ATTACHMENT", "support"],
+    ["ORDER_FULFILLED", "order"],
+    ["DELETE_ORDER", "order"],
+    ["RESET_BRANCH_BUDGETS", "budget"],
+    ["REBUILD_BRANCH_BUDGETS", "budget"],
+    ["CLEANUP_ORGANIZATION_INVENTORY_NAMES", "inventory"],
+    ["SEND_SCHEDULED_REPORT", "reports"],
+    ["AUTH_MFA_DISABLED", "authentication"],
+  ] as const)("files the written action %s under %s", (action, expected) => {
+    expect(categoryOf(action)).toBe(expected)
+  })
+
+  it("keeps a support thread about an order under support", () => {
+    // Support is matched before ORDER on purpose: the thread is the thing that
+    // was touched, and a reviewer looking for support activity wants it there.
+    expect(categoryOf("CREATE_SUPPORT_THREAD_FOR_ORDER")).toBe("support")
+  })
 })
 
 describe("severityOf", () => {
@@ -190,6 +246,29 @@ describe("severityOf", () => {
   it("leaves routine activity as info", () => {
     expect(severityOf("UPDATE_CATEGORY")).toBe("info")
     expect(severityOf("AUTH_MFA_CHALLENGE")).toBe("info")
+  })
+
+  it("marks removing a second factor critical, and adding one merely notable", () => {
+    // Turning MFA off is removing a security control, and is among the first
+    // things somebody holding a stolen session would do.
+    expect(severityOf("AUTH_MFA_DISABLED")).toBe("critical")
+    expect(severityOf("AUTH_MFA_ENABLED")).toBe("info")
+  })
+
+  it.each([
+    // Destroys a branch's entire budget history.
+    ["RESET_BRANCH_BUDGETS", "critical"],
+    ["REBUILD_BRANCH_BUDGETS", "critical"],
+    // Reaches every matching row in the table.
+    ["CLEANUP_ORGANIZATION_INVENTORY_NAMES", "critical"],
+    // A hard delete of an order.
+    ["DELETE_ORDER", "critical"],
+  ] as const)("marks %s critical", (action, expected) => {
+    expect(severityOf(action)).toBe(expected)
+  })
+
+  it("marks a tenant's figures leaving the application notable", () => {
+    expect(severityOf("SEND_SCHEDULED_REPORT")).toBe("notice")
   })
 })
 

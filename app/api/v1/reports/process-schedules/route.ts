@@ -10,6 +10,7 @@ import { getRequestScope } from "@/lib/auth"
 import { env } from "@/lib/server/env"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { createCsv } from "@/lib/spreadsheet"
+import { recordAuditEvent } from "@/lib/server/activity-audit"
 
 const processScheduleSchema = z.object({
     scheduleId: z.coerce.number().int().positive().optional(),
@@ -40,7 +41,11 @@ async function authorizeScheduleProcessing(
     return { userId: scope.userId, isTest: true }
 }
 
-async function processSchedule(schedule: typeof scheduledReports.$inferSelect, isTest: boolean) {
+async function processSchedule(
+    schedule: typeof scheduledReports.$inferSelect,
+    isTest: boolean,
+    actorUserId: string | null,
+) {
     try {
         const reportData = await fetchReportData(schedule.reportName, schedule.organizationId)
         const csv = convertToCSV(reportData)
@@ -53,11 +58,39 @@ async function processSchedule(schedule: typeof scheduledReports.$inferSelect, i
             csv,
             fileName,
         )
-        if (sent && !isTest) {
-            await db.update(scheduledReports)
-                .set({ lastExecutedAt: new Date(), updatedAt: new Date() })
-                .where(eq(scheduledReports.id, schedule.id))
-        }
+
+        // This is a tenant's order history leaving the application by email to a
+        // recipient list somebody configured, so every send — and every failed
+        // send — is recorded, naming the addresses it went to. A cron run has no
+        // signed-in actor, which is why `actorUserId` may be null.
+        await db.transaction(async (tx) => {
+            if (sent && !isTest) {
+                await tx.update(scheduledReports)
+                    .set({ lastExecutedAt: new Date(), updatedAt: new Date() })
+                    .where(eq(scheduledReports.id, schedule.id))
+            }
+
+            await recordAuditEvent(tx, {
+                action: "SEND_SCHEDULED_REPORT",
+                entity: "scheduled_report",
+                entityId: schedule.id,
+                actor: { id: actorUserId },
+                organizationId: schedule.organizationId,
+                context: {
+                    reportName: schedule.reportName,
+                    frequency: schedule.frequency,
+                    format: schedule.format,
+                    recipients: schedule.emails,
+                    recipientCount: schedule.emails.length,
+                    rowsIncluded: reportData.length,
+                    fileName,
+                    delivered: sent,
+                    trigger: actorUserId ? "manual" : "cron",
+                    isTest,
+                },
+            })
+        })
+
         return { id: schedule.id, status: sent ? "sent" : "failed" }
     } catch (processingError) {
         console.error(`Error processing schedule ${schedule.id}:`, processingError)
@@ -102,7 +135,7 @@ export async function POST(req: NextRequest) {
     const results = []
 
     for (const schedule of schedules) {
-        results.push(await processSchedule(schedule, isTest ?? parsedBody.data.isTest))
+        results.push(await processSchedule(schedule, isTest ?? parsedBody.data.isTest, userId ?? null))
     }
 
     return ok({ processed: results.length, details: results })

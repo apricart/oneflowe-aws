@@ -14,6 +14,7 @@ import {
   putImage,
 } from "@/lib/server/image-storage"
 import { sanitizeRasterUpload } from "@/lib/server/upload-security"
+import { recordAuditEvent } from "@/lib/server/activity-audit"
 import { getSupportThreadForViewer } from "@/lib/server/support-threads"
 import { resolveSupportAuthor, supportViewerFromSession } from "@/lib/server/support-session"
 
@@ -98,21 +99,44 @@ export async function POST(req: NextRequest) {
     await putImage({ key, body: validation.buffer, contentType: validation.image.mime })
 
     const fileName = safeFileName(file.name, extension)
-    const [attachment] = await db
-      .insert(supportAttachments)
-      .values({
-        threadId: null,
-        messageId: null,
+    // The object is already in S3 and cannot join a transaction, but the row and
+    // its audit entry can — so the trail never disagrees with the attachment
+    // table about what was accepted.
+    const attachment = await db.transaction(async (tx) => {
+      const [row] = await tx
+        .insert(supportAttachments)
+        .values({
+          threadId: null,
+          messageId: null,
+          organizationId: tenant.organizationId,
+          uploadedByUserId: viewer.userId,
+          storageKey: key,
+          // The client's filename is recorded for display only. It never builds a
+          // key, a path, or a header.
+          fileName,
+          contentType: validation.image.mime,
+          sizeBytes: validation.buffer.length,
+        })
+        .returning({ id: supportAttachments.id })
+
+      await recordAuditEvent(tx, {
+        action: "UPLOAD_SUPPORT_ATTACHMENT",
+        entity: "support_attachment",
+        entityId: row.id,
+        actor: { id: viewer.userId, role: viewer.role },
         organizationId: tenant.organizationId,
-        uploadedByUserId: viewer.userId,
-        storageKey: key,
-        // The client's filename is recorded for display only. It never builds a
-        // key, a path, or a header.
-        fileName,
-        contentType: validation.image.mime,
-        sizeBytes: validation.buffer.length,
+        after: {
+          fileName,
+          contentType: validation.image.mime,
+          sizeBytes: validation.buffer.length,
+          storageKey: key,
+        },
+        // Unclaimed at this point: the message that takes it is a later event.
+        context: { claimed: false },
       })
-      .returning({ id: supportAttachments.id })
+
+      return row
+    })
 
     return NextResponse.json(
       {

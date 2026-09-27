@@ -3,6 +3,7 @@ import { ok, error, requireApiRole, readJson } from "@/lib/api"
 import { getRequestScope } from "@/lib/auth"
 import { generateAndSendOTP } from "@/lib/mfa"
 import { withRateLimit } from "@/lib/rate-limiter"
+import { recordAuthAuditEvent } from "@/lib/server/auth-audit"
 import { MFA_SELF_SERVICE_ROLES } from "@/lib/server/mfa-self-service-access"
 
 export async function POST(req: NextRequest) {
@@ -39,6 +40,21 @@ export async function POST(req: NextRequest) {
     }
 
     const result = await generateAndSendOTP(scope.userId, user.email, type)
+
+    // Recorded either way: a run of refused challenges on one account is the
+    // shape a reviewer is looking for, and it is invisible if only the
+    // successes are kept. The code itself never reaches the trail.
+    await recordAuthAuditEvent({
+      action: "AUTH_MFA_CHALLENGE",
+      subjectId: scope.userId,
+      email: user.email,
+      role: scope.role,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      success: result.success,
+      reason: result.success ? undefined : "mfa_required",
+      details: { type, selfService: true },
+    })
 
     if (result.success) {
       return ok({

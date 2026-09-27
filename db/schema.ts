@@ -1247,6 +1247,69 @@ export const groupInventoryPrices = pgTable(
   ],
 )
 
+/**
+ * Append-only history of catalogue price changes.
+ *
+ * Database triggers on the three authoritative tiers keep this ledger in the
+ * same transaction as the price write. `BRANCH` rows are historical change
+ * points inferred once from pre-ledger order data; new live rows are GLOBAL,
+ * ORGANIZATION or GROUP changes and never depend on an order being placed.
+ */
+export const productPriceHistory = pgTable(
+  "product_price_history",
+  {
+    id: serial("id").primaryKey(),
+    globalProductId: integer("global_product_id")
+      .references(() => globalProducts.id, { onDelete: "cascade" })
+      .notNull(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id, { onDelete: "set null" }),
+    groupId: integer("group_id")
+      .references(() => groups.id, { onDelete: "set null" }),
+    branchId: integer("branch_id")
+      .references(() => branches.id, { onDelete: "set null" }),
+    previousPriceCents: bigint("previous_price_cents", { mode: "number" }),
+    priceCents: bigint("price_cents", { mode: "number" }).notNull(),
+    scope: varchar("scope", { length: 24 }).notNull(),
+    changeType: varchar("change_type", { length: 40 }).notNull(),
+    source: varchar("source", { length: 32 }).notNull(),
+    changedByUserId: uuid("changed_by_user_id")
+      .references(() => users.id, { onDelete: "set null" }),
+    changedAt: timestamp("changed_at", { withTimezone: true }).defaultNow().notNull(),
+    sourceKey: varchar("source_key", { length: 160 }),
+  },
+  (t) => [
+    uniqueIndex("product_price_history_source_key_uq")
+      .on(t.sourceKey)
+      .where(sql`${t.sourceKey} IS NOT NULL`),
+    index("product_price_history_product_time_idx").on(t.globalProductId, t.changedAt, t.id),
+    index("product_price_history_stream_time_idx")
+      .on(t.globalProductId, t.organizationId, t.groupId, t.changedAt, t.id)
+      .where(sql`${t.priceCents} > 0`),
+    index("product_price_history_org_time_idx")
+      .on(t.organizationId, t.changedAt)
+      .where(sql`${t.organizationId} IS NOT NULL`),
+    index("product_price_history_group_time_idx")
+      .on(t.groupId, t.changedAt)
+      .where(sql`${t.groupId} IS NOT NULL`),
+    index("product_price_history_branch_time_idx")
+      .on(t.branchId, t.changedAt)
+      .where(sql`${t.branchId} IS NOT NULL`),
+    check(
+      "product_price_history_prices_valid_ck",
+      sql`${t.priceCents} >= 0 AND (${t.previousPriceCents} IS NULL OR ${t.previousPriceCents} >= 0)`,
+    ),
+    check(
+      "product_price_history_scope_valid_ck",
+      sql`${t.scope} IN ('GLOBAL', 'ORGANIZATION', 'GROUP', 'BRANCH')`,
+    ),
+    check(
+      "product_price_history_source_valid_ck",
+      sql`${t.source} IN ('CATALOG_CHANGE', 'ORDER_BACKFILL', 'MIGRATION_BASELINE')`,
+    ),
+  ],
+)
+
 export const productQuantityBudgets = pgTable(
   "product_quantity_budgets",
   {

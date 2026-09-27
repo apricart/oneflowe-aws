@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto"
 import { eq, inArray } from "drizzle-orm"
 
 import {
+  auditLogs,
   branches,
   globalProducts,
   orders,
@@ -257,6 +258,12 @@ export async function destroySupportFixtures(f: SupportFixtures): Promise<void> 
   await db.delete(orders).where(inArray(orders.id, [f.ahmedOrderId, f.sanaOrderId, f.foreignOrderId]))
   await db.delete(organizationInventory).where(inArray(organizationInventory.id, f.inventoryIds))
   await db.delete(userBranchAssignments).where(inArray(userBranchAssignments.userId, userIds))
+  // Support writes are audited now (`lib/server/support-threads.ts`), and
+  // `audit_logs` carries foreign keys to both `users` and `branches`. The rows
+  // go before the identities they name, exactly as `hardDeleteUser` releases
+  // them in the application.
+  await db.delete(auditLogs).where(inArray(auditLogs.organizationId, organizationIds))
+  await db.delete(auditLogs).where(inArray(auditLogs.userId, userIds))
   await db.delete(users).where(inArray(users.id, userIds))
   await db.delete(branches).where(inArray(branches.id, [f.northBranchId, f.southBranchId, f.foreignBranchId]))
   await db.delete(globalProducts).where(inArray(globalProducts.id, [

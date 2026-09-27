@@ -11,7 +11,10 @@ An audit review found the trail is real but partial and scattered:
 * Records live in three tables with three different shapes — `audit_logs`
   (business mutations), `system_logs` (authentication, via
   `lib/server/auth-audit.ts`), `group_audit_logs` (group operations).
-* 94 of 135 route files under `app/api/v1/` write no audit row at all.
+* Of the routes under `app/api/v1/` that mutate, 31 wrote no audit row at all —
+  including order fulfilment, budget repair, and turning off a second factor.
+  (An earlier count of "94 of 135 files" was wrong: it counted read-only routes
+  too.)
 * There is no working viewer. `components/admin/audit-log-viewer.tsx` and
   `useAuditLogs` in `lib/hooks/use-api.ts` both call `/api/v1/audit-logs`,
   which **does not exist**, and the component is imported by nothing.
@@ -24,15 +27,20 @@ In:
    across the three tables. Super Admin only.
 2. `/activity` — the screen.
 3. `recordAuditEvent` — one centralized, transaction-aware writer, retrofitted
-   into the seven highest-value unaudited route files.
+   until **every** mutating route is audited or deliberately excluded, with a
+   contract test that keeps it that way.
 4. Unit, contract, integration and one Playwright end-to-end test.
 
 Out, and deliberately so:
 
-* **Retrofitting all ~94 files.** Touching nearly every endpoint in a live
-  production application is a larger, separately reviewable change. The
-  contract test added here is the control that makes the remaining gaps
-  visible and keeps the retrofitted ones from regressing.
+* **Rewriting the 38 routes that already audit by hand.** They write
+  `insert(auditLogs)` directly rather than through the writer, so their action
+  strings are unnormalised and their metadata is unmasked. Migrating them is a
+  separate change: thirty-eight files across orders, budgets, pricing and RBAC,
+  every one money- or permission-bearing, is not a diff anybody can review
+  alongside a new screen. `LEGACY_DIRECT` in
+  `lib/server/activity-audit-coverage.test.ts` names them and holds them to
+  still writing.
 * **Auditing reads.** No read in this application is audited. Recording the
   activity screen's own queries would make the newest page of the trail mostly
   the reader's own searches, and the screen is Super-Admin-only and rate
@@ -171,24 +179,74 @@ route re-checks.
 * IP and user agent are resolved from request headers, and a failure to
   resolve them never fails the write.
 
-### Retrofitted
+### Coverage
 
-| File | Handlers |
-|---|---|
-| `app/api/v1/categories/route.ts` | POST, PUT, DELETE |
-| `app/api/v1/subcategories/route.ts` | POST, PUT, DELETE |
-| `app/api/v1/modifiers/route.ts` | POST, PUT, DELETE |
-| `app/api/v1/suppliers/route.ts` | POST |
-| `app/api/v1/suppliers/[id]/route.ts` | PATCH, DELETE |
-| `app/api/v1/branches/[id]/route.ts` | PATCH, DELETE |
-| `app/api/v1/reports/schedule/route.ts` | POST, DELETE |
+**Every mutating route is now accounted for.** The scan is
+`grep -lE 'export async function (POST|PUT|PATCH|DELETE)' app/api/v1/**/route.ts`,
+and `lib/server/activity-audit-coverage.test.ts` asserts each of those files sits
+in exactly one of four lists. A *new* mutating route fails that test until
+somebody classifies it, which is what makes the coverage keep itself.
 
-`app/api/v1/settings/route.ts` already writes a transactional audit row with a
-`previousValue`; it is the pattern the writer generalizes, and it is left
-alone. Branch *creation* is already audited in `app/api/v1/branches/route.ts`.
+| List | Count | What it means |
+|---|---|---|
+| `DIRECT` | 13 | The handler calls `recordAuditEvent` itself, inside the transaction that performs the change. |
+| `VIA_LIB` | 21 | The write lives in a shared `lib/` module the route delegates to. |
+| `LEGACY_DIRECT` | 38 | Already audited, by hand, before the writer existed. |
+| `NOT_AUDITED` | 5 | Deliberately not recorded, each with its reason. |
 
-`lib/server/activity-audit-coverage.test.ts` lists those files as a contract.
-A handler that stops writing its audit row fails that test.
+Retrofitted in this change — `DIRECT`:
+`categories`, `subcategories`, `modifiers`, `suppliers` (+`[id]`),
+`branches/[id]`, `reports/schedule`, `reports/process-schedules`,
+`admin/cleanup-inventory`, `admin/repair-budgets`, `admin/delete-order`,
+`support/attachments`, `upload/image`.
+
+**Where several routes reach one transition, the record goes with the
+transition, not the route.** Three routes fulfil an order — the Super Admin
+route, a token hand-off whose goods had arrived, and a delivery that settles a
+waiting hand-off — and all three call `fulfillApprovedOrder`. That function had
+no audit row at all, so the moment a branch's *held* money became *spent* money
+was unrecorded. The row now sits inside its transaction, beside the ledger move.
+`lib/server/support-threads.ts` was given the same treatment for the three
+support routes.
+
+Authentication events go to `system_logs` through `recordAuthAuditEvent`, whose
+looser columns suit an event with no verified tenant or account. Three actions
+were added to that closed set: `AUTH_MFA_ENABLED`, `AUTH_MFA_DISABLED` and
+`AUTH_MFA_VERIFIED`. **Turning MFA off recorded nothing before**, which is the
+one an attacker holding a session would do first; it is now `critical`. The two
+login OTP routes record every attempt — including an unknown account — while
+answering identically, because the *response* must not become an
+account-enumeration oracle and the *trail* is where a probe is told apart.
+
+`app/api/v1/settings/route.ts` already wrote a transactional audit row with a
+`previousValue`; it is the pattern the writer generalizes, and is left alone.
+
+### Two rules restored along the way
+
+* **`admin/delete-order` no longer deletes the order's `system_logs` history.**
+  Rule 06 makes audit rows append-only precisely so that deleting the subject
+  cannot erase the record of it, and an administrative hard delete is the case
+  where that matters most. The deletion is itself recorded now, carrying the
+  order, its lines and the money released — afterwards that entry is the only
+  place the order existed. **This is a behaviour change**: the rows outlive the
+  order, which `system_logs.resource_id` (no foreign key) allows.
+* **`admin/repair-budgets` rebuilds inside one transaction.** It deletes a
+  branch's whole budget history; a failure part-way through the rebuild used to
+  leave some months restored and the rest simply gone.
+* **`admin/migrate-product-code` is deleted.** It ran
+  `CREATE UNIQUE INDEX … ON global_products (product_code) WHERE deleted_at IS NULL`
+  over HTTP against the live database — a schema change through a request rather
+  than a migration in CI (rule 06), and its own first line said
+  `DELETE THIS FILE AFTER RUNNING`. It was also **redundant**:
+  `drizzle/20260713010000_add_normalized_global_product_code_uniqueness.sql`
+  already creates `global_products_code_active_normalized_uq` on
+  `lower(btrim(product_code))` under the same `WHERE deleted_at IS NULL`, which
+  is strictly stronger — identical strings normalise identically, so every
+  duplicate the endpoint's index would have rejected is already rejected.
+  Nothing called it, nothing referenced its index name, and deleting the route
+  does not drop an index a past run may have created (a redundant one, harmless
+  where it exists). The `docs/PRD.md` row went with it, as did the
+  `MIGRATE_SCHEMA` classifier rules, which nothing writes any more.
 
 ## The screen
 
@@ -223,7 +281,7 @@ Unit and contract (`npm test`):
 | `lib/activity-log-view.test.ts` | window presets, a tone and label for every value, the before/after diff, CSV escaping and formula neutralisation |
 | `lib/server/activity-log-sql.test.ts` | SQL generated from the rule tables covers every rule in order; no user value reaches the template except as a parameter; no `OFFSET`, no `COUNT` |
 | `lib/server/activity-audit.test.ts` | action normalization, single `entityId`, masking, before/after shape, executor is honoured |
-| `lib/server/activity-audit-coverage.test.ts` | the retrofitted routes still write their row |
+| `lib/server/activity-audit-coverage.test.ts` | **every** mutating route is classified exactly once; each records; each `DIRECT` write passes `tx`, not `db`; the two that cannot say why; the legacy 38 still write; each exclusion states a reason |
 | `components/activity/activity-log-screen.test.tsx` | loading / empty / error, filters become query parameters, a row opens the detail panel |
 | `components/shell/sidebar.activity.test.ts` | only Super Admin gets the entry |
 
@@ -300,15 +358,17 @@ All green as shipped:
 
 ## Still open
 
-The screen now has a working reader and seven audited route files behind it.
-What it does **not** yet have:
+Every mutating route is now audited or deliberately excluded. What remains:
 
-* **The other 87 route files.** `lib/server/activity-audit-coverage.test.ts` is
-  the control; a route added to it has to record. Until then the empty state on
-  the screen says out loud that not every operation writes a record yet, because
-  a reader must not read "nothing shown" as "nothing happened".
+* **The 38 `LEGACY_DIRECT` routes**, which audit by hand rather than through the
+  writer — so their actions are unnormalised, their metadata unmasked, and they
+  record no IP. Migrating them is the natural next change, and the list is the
+  work order.
 * **`ip_address` / `user_agent` as columns on `audit_logs`**, so an address can
   be filtered rather than only displayed.
 * **Read auditing**, with its own retention story.
 * **Retention and archival.** Nothing prunes these three tables, and the keyset
   reader is what makes that survivable rather than urgent.
+* **`mfa/toggle` disables a second factor without re-proving identity** — the
+  route's comment argues the session is proof enough. Recording it does not make
+  that true. Worth a decision of its own.

@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { organizationInventory } from "@/db/schema"
 import { and,isNull,sql } from "drizzle-orm"
+import { auditActorFromSession, recordAuditEvent } from "@/lib/server/activity-audit"
 
 // POST /api/v1/admin/cleanup-inventory - Run cleanup script
 export async function POST(req: NextRequest) {
@@ -20,20 +21,40 @@ export async function POST(req: NextRequest) {
 
         console.log("🧹 Starting inventory cleanup...")
 
-        // Clean up customName where it matches globalProducts.name
-        const nameResult = await db
-            .update(organizationInventory)
-            .set({ customName: null, updatedAt: new Date() })
-            .where(
-                and(
-                    isNull(organizationInventory.deletedAt),
-                    sql`${organizationInventory.customName} = (
-            SELECT name FROM global_products 
+        // Clean up customName where it matches globalProducts.name.
+        //
+        // A bulk write, so the rows it reached are named in the audit entry's
+        // metadata rather than in `entity_id`, which holds one id and would
+        // overflow. The record commits with the update or neither does.
+        const nameResult = await db.transaction(async (tx) => {
+            const cleared = await tx
+                .update(organizationInventory)
+                .set({ customName: null, updatedAt: new Date() })
+                .where(
+                    and(
+                        isNull(organizationInventory.deletedAt),
+                        sql`${organizationInventory.customName} = (
+            SELECT name FROM global_products
             WHERE id = ${organizationInventory.globalProductId}
           )`
+                    )
                 )
-            )
-            .returning({ id: organizationInventory.id })
+                .returning({ id: organizationInventory.id })
+
+            await recordAuditEvent(tx, {
+                action: "CLEANUP_ORGANIZATION_INVENTORY_NAMES",
+                entity: "organization_inventory",
+                entityId: null,
+                actor: auditActorFromSession(session),
+                context: {
+                    clearedNames: cleared.length,
+                    clearedInventoryIds: cleared.map((row) => row.id),
+                    reason: "customName equalled the global product name",
+                },
+            })
+
+            return cleared
+        })
 
         const nameCount = nameResult.length
 
