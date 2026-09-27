@@ -8,6 +8,7 @@ import { KPICard } from "@/components/reports/kpi-card"
 import { MultiSelectFilter } from "@/components/reports/multi-select-filter"
 import { OrganizationFilter } from "@/components/reports/organization-filter"
 import { UserFilter } from "@/components/reports/user-filter"
+import { UsersToReviewTab } from "@/components/reports/users-to-review-tab"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card,CardContent } from "@/components/ui/card"
@@ -21,6 +22,7 @@ import { Input } from "@/components/ui/input"
 import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from "@/components/ui/table"
 import { Tabs,TabsContent,TabsList,TabsTrigger } from "@/components/ui/tabs"
 import type { DateRange } from "@/lib/hooks/use-sales-performance"
+import { isBudgetBurnRole } from "@/lib/budget-burn-risk"
 import { Role } from "@/lib/rbac"
 import { sanitizeSpreadsheetRow } from "@/lib/spreadsheet"
 import { cn,formatPKR } from "@/lib/utils"
@@ -42,7 +44,7 @@ RefreshCw,Search,
 ShieldCheck,ShieldX,
 TrendingUp,
 Upload,
-Users
+UserSearch,Users
 } from "lucide-react"
 import { useSession } from "next-auth/react"
 import { useCallback,useEffect,useMemo,useRef,useState } from "react"
@@ -76,6 +78,7 @@ export default function UserReportPage() {
 
     const { data: session, status: sessionStatus } = useSession()
     const role = (session?.user as any)?.role as Role
+    const showsUsersToReview = isBudgetBurnRole(role)
     const isBuyer = role === "HEAD_OFFICE" || role === "BRANCH_ADMIN"
     const userOrgId = (session?.user as any)?.organizationId
 
@@ -545,6 +548,12 @@ export default function UserReportPage() {
                                 <Database className="h-4 w-4 mr-2" />
                                 Reports
                             </TabsTrigger>
+                            {showsUsersToReview && (
+                                <TabsTrigger value="users-to-review" className="bg-transparent border-b-2 border-transparent data-[state=active]:border-indigo-500 data-[state=active]:bg-transparent rounded-none px-0 pb-4 text-sm font-black uppercase tracking-widest text-slate-400 data-[state=active]:text-slate-900 dark:data-[state=active]:text-white transition-all">
+                                    <UserSearch className="h-4 w-4 mr-2" />
+                                    Users to review
+                                </TabsTrigger>
+                            )}
                         </TabsList>
                     </div>
 
@@ -990,6 +999,16 @@ export default function UserReportPage() {
 
 
                     </TabsContent>
+
+                    {showsUsersToReview && (
+                        <TabsContent value="users-to-review" className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
+                            <UsersToReviewTab
+                                role={role}
+                                organizationId={organizationId}
+                                branchIds={contextBranchIds}
+                            />
+                        </TabsContent>
+                    )}
                 </Tabs>
             </div>
         </div>

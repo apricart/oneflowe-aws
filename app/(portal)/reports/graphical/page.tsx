@@ -8,7 +8,6 @@ import { Compass, LayoutDashboard, LayoutGrid, ShieldAlert } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { useAPI } from "@/lib/hooks/use-api"
 import { cn } from "@/lib/utils"
-import { isBudgetBurnRole } from "@/lib/budget-burn-risk"
 import { EXECUTIVE_ANALYTICS_ROLES } from "@/lib/executive-analytics"
 import {
   ExecutiveVizStyles,
@@ -20,14 +19,6 @@ import {
   toQuery,
   type ExecutiveFilterState,
 } from "@/components/reports/executive/executive-filters"
-import {
-  BudgetBurnDrillNote,
-  BudgetBurnWatchlist,
-  type BudgetBurnDrillSelection,
-  type BudgetBurnItemDrillSelection,
-} from "@/components/reports/executive/budget-burn-watchlist"
-import { BudgetBurnItemComparisonPanel } from "@/components/reports/executive/budget-burn-item-comparison"
-import { DrillDownPanel } from "@/components/reports/executive/drill-down-panel"
 import { ExploreWorkspace } from "@/components/reports/executive/explore-workspace"
 import { SideBySideWorkspace } from "@/components/reports/executive/side-by-side-workspace"
 import {
@@ -193,13 +184,6 @@ function GraphicalReportsContent() {
   const [tab, setTab] = useAnalyticsTab()
   const [filters, setFilters] = React.useState<ExecutiveFilterState>(defaultFilters)
   const [priceProduct, setPriceProduct] = React.useState<{ productId: number; unit: string; name?: string } | null>(null)
-  // The requester × branch × month a watchlist row was clicked for. The role
-  // check decides whether the panel renders; the endpoint behind it refuses
-  // every other role on its own.
-  const [burnDrill, setBurnDrill] = React.useState<BudgetBurnDrillSelection | null>(null)
-  const [burnItemsDrill, setBurnItemsDrill] = React.useState<BudgetBurnItemDrillSelection | null>(null)
-  const showsWatchlist = isBudgetBurnRole(role)
-
   const overviewUrl = authorized ? `/api/v1/analytics/executive/overview?${toQuery(filters)}` : null
   const { data, error, isLoading } = useAPI<OverviewResponse>(overviewUrl)
 
@@ -318,36 +302,6 @@ function GraphicalReportsContent() {
               />
             </div>
           </div>
-
-          {showsWatchlist ? (
-            <BudgetBurnWatchlist
-              filters={filters}
-              onDrill={setBurnDrill}
-              onDrillItems={setBurnItemsDrill}
-              selectedKey={burnDrill ? `${burnDrill.target.key}:${burnDrill.target.narrow?.branchIds?.[0] ?? ""}` : null}
-              selectedItemsKey={burnItemsDrill ? `${burnItemsDrill.userId}:${burnItemsDrill.branchId}:${burnItemsDrill.month}` : null}
-            />
-          ) : null}
-
-          {showsWatchlist && burnItemsDrill ? (
-            <BudgetBurnItemComparisonPanel
-              selection={burnItemsDrill}
-              onClose={() => setBurnItemsDrill(null)}
-            />
-          ) : null}
-
-          {showsWatchlist && burnDrill ? (
-            <div className="space-y-2">
-              <BudgetBurnDrillNote selection={burnDrill} onClose={() => setBurnDrill(null)} />
-              <DrillDownPanel
-                target={burnDrill.target}
-                filters={burnDrill.filters}
-                metric="spend"
-                statuses={burnDrill.statuses}
-                onClose={() => setBurnDrill(null)}
-              />
-            </div>
-          ) : null}
 
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
             <CategoryParetoChart
