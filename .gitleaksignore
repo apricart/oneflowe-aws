@@ -6,3 +6,37 @@
 # generate approval tokens. It omits look-alike characters (0/O, 1/I/L) and is
 # public by design, but its 5.0 entropy trips the generic-api-key rule.
 f5575e5ec24e75a3ed937a43fc4f89c674755ffb:lib/approval-token.ts:generic-api-key:12
+
+# Historical analytics tests use UUID fixture values beside fields named
+# `key`. They are inert test data, not credentials.
+e7ad328e9351bfcf52b3294d62eb30e6403562e1:components/reports/executive/drill-down-panel.test.tsx:generic-api-key:92
+e7ad328e9351bfcf52b3294d62eb30e6403562e1:lib/executive-analytics-drilldown.test.ts:generic-api-key:472
+447024064b458314b4f8381081623b16bc813fcf:components/reports/executive/drill-down-panel.test.tsx:generic-api-key:151
+77422e07791625af0859f9458574bb1e20de57d6:lib/executive-analytics-drilldown.test.ts:generic-api-key:304
+77422e07791625af0859f9458574bb1e20de57d6:lib/executive-analytics-drilldown.test.ts:generic-api-key:320
+77422e07791625af0859f9458574bb1e20de57d6:lib/executive-analytics-drilldown.test.ts:generic-api-key:339
+
+# The KE merge script and its archived reports use product slugs in fields
+# named `key`. Gitleaks mistakes the two Tapal slugs for generic API keys.
+ef3f923871946012d494ecba7320d11572471a83:scripts/merge-ke-confirmed-products.ts:generic-api-key:75
+ef3f923871946012d494ecba7320d11572471a83:scripts/merge-ke-confirmed-products.ts:generic-api-key:81
+ef3f923871946012d494ecba7320d11572471a83:outputs/ke-confirmed-product-merge-commit-2026-09-15-prechange.json:generic-api-key:1207
+ef3f923871946012d494ecba7320d11572471a83:outputs/ke-confirmed-product-merge-commit-2026-09-15-prechange.json:generic-api-key:1403
+ef3f923871946012d494ecba7320d11572471a83:outputs/ke-confirmed-product-merge-commit-2026-09-15-v2-prechange.json:generic-api-key:1222
+ef3f923871946012d494ecba7320d11572471a83:outputs/ke-confirmed-product-merge-commit-2026-09-15-v2-prechange.json:generic-api-key:1421
+ef3f923871946012d494ecba7320d11572471a83:outputs/ke-confirmed-product-merge-commit-2026-09-15-v3-prechange.json:generic-api-key:1222
+ef3f923871946012d494ecba7320d11572471a83:outputs/ke-confirmed-product-merge-commit-2026-09-15-v3-prechange.json:generic-api-key:1421
+ef3f923871946012d494ecba7320d11572471a83:outputs/ke-confirmed-product-merge-commit-2026-09-15-v3.json:generic-api-key:1236
+ef3f923871946012d494ecba7320d11572471a83:outputs/ke-confirmed-product-merge-commit-2026-09-15-v3.json:generic-api-key:1435
+ef3f923871946012d494ecba7320d11572471a83:outputs/ke-confirmed-product-merge-commit-2026-09-15-v3.json:generic-api-key:54220
+ef3f923871946012d494ecba7320d11572471a83:outputs/ke-confirmed-product-merge-commit-2026-09-15-v3.json:generic-api-key:54231
+ef3f923871946012d494ecba7320d11572471a83:outputs/ke-confirmed-product-merge-preflight-2026-09-15.json:generic-api-key:1221
+ef3f923871946012d494ecba7320d11572471a83:outputs/ke-confirmed-product-merge-preflight-2026-09-15.json:generic-api-key:1417
+ef3f923871946012d494ecba7320d11572471a83:outputs/ke-confirmed-product-merge-preflight-2026-09-15-v2.json:generic-api-key:1221
+ef3f923871946012d494ecba7320d11572471a83:outputs/ke-confirmed-product-merge-preflight-2026-09-15-v2.json:generic-api-key:1417
+ef3f923871946012d494ecba7320d11572471a83:outputs/ke-confirmed-product-merge-preflight-2026-09-15-v3.json:generic-api-key:1221
+ef3f923871946012d494ecba7320d11572471a83:outputs/ke-confirmed-product-merge-preflight-2026-09-15-v3.json:generic-api-key:1417
+ef3f923871946012d494ecba7320d11572471a83:outputs/ke-confirmed-product-merge-preflight-2026-09-15-v4.json:generic-api-key:1236
+ef3f923871946012d494ecba7320d11572471a83:outputs/ke-confirmed-product-merge-preflight-2026-09-15-v4.json:generic-api-key:1435
+ef3f923871946012d494ecba7320d11572471a83:outputs/ke-confirmed-product-merge-preflight-2026-09-15-v5.json:generic-api-key:1236
+ef3f923871946012d494ecba7320d11572471a83:outputs/ke-confirmed-product-merge-preflight-2026-09-15-v5.json:generic-api-key:1435
