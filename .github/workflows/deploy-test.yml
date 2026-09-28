@@ -140,6 +140,11 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+      # This disposable webpack cache can exceed 1 GB. It is not needed by
+      # later checks, the Docker context, or the production image.
+      - name: Reclaim browser-test build output
+        run: rm -rf -- .next-e2e
+
       - name: Run TypeScript checks
         run: npm run typecheck
 

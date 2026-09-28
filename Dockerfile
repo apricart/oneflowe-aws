@@ -12,21 +12,13 @@ ENV NEXT_TELEMETRY_DISABLED=1
 
 # Build-time placeholders only (satisfy env validation during `next build`).
 # Real secrets come from compose env_file at runtime — do not bake them here.
-ARG DATABASE_URL=postgresql://build:build@127.0.0.1:5432/builddb
-ARG NEXTAUTH_URL=https://build.invalid
-ARG NEXTAUTH_SECRET=docker-build-only-nextauth-secret-value
-ARG UPSTASH_REDIS_REST_URL=https://build.upstash.invalid
-ARG UPSTASH_REDIS_REST_TOKEN=docker-build-only-upstash-token-value
-ARG CRON_SECRET=docker-build-only-cron-secret-value-32
-
-ENV DATABASE_URL=$DATABASE_URL \
-    NEXTAUTH_URL=$NEXTAUTH_URL \
-    NEXTAUTH_SECRET=$NEXTAUTH_SECRET \
-    UPSTASH_REDIS_REST_URL=$UPSTASH_REDIS_REST_URL \
-    UPSTASH_REDIS_REST_TOKEN=$UPSTASH_REDIS_REST_TOKEN \
-    CRON_SECRET=$CRON_SECRET
-
-RUN npm run build
+RUN DATABASE_URL=postgresql://build:build@127.0.0.1:5432/builddb \
+    NEXTAUTH_URL=https://build.invalid \
+    NEXTAUTH_SECRET=docker-build-only-nextauth-secret-value \
+    UPSTASH_REDIS_REST_URL=https://build.upstash.invalid \
+    UPSTASH_REDIS_REST_TOKEN=docker-build-only-upstash-token-value \
+    CRON_SECRET=docker-build-only-cron-secret-value-32 \
+    npm run build
 
 FROM node:20.19-alpine AS runner
 WORKDIR /app
