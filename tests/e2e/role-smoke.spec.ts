@@ -38,17 +38,46 @@ async function signIn(page: Page, username: string, landingPath: RegExp): Promis
   await page.getByLabel("Username or Email").fill(username)
   await page.getByLabel("Password", { exact: true }).fill(E2E_PASSWORD)
   await page.getByRole("button", { name: /sign in/i }).click()
-  await page.waitForURL(landingPath, { timeout: 90_000, waitUntil: "commit" })
+  // A cold Next development server may reload while compiling the first role
+  // workspace. Poll the browser's current URL instead of attaching to one
+  // particular navigation event, which can be replaced by that reload.
+  await expect(page).toHaveURL(landingPath, { timeout: 150_000 })
 }
 
 async function authenticatedContext(
   browser: Browser,
   username: string,
-  landingPath: RegExp,
+  landingPath: string,
 ): Promise<{ context: BrowserContext; page: Page }> {
   const context = await browser.newContext({ baseURL: E2E_BASE_URL })
+  // The role cases above exercise the login form itself. This multi-context
+  // workflow authenticates through NextAuth directly so React hydration on a
+  // freshly compiled login page cannot clear one field between two fills.
+  const csrf = await expectJsonStatus(
+    await context.request.get(`${E2E_BASE_URL}/api/auth/csrf`),
+  )
+  const callback = await context.request.post(
+    `${E2E_BASE_URL}/api/auth/callback/credentials`,
+    {
+      form: {
+        csrfToken: csrf.csrfToken,
+        username,
+        password: E2E_PASSWORD,
+        callbackUrl: `${E2E_BASE_URL}${landingPath}`,
+      },
+      headers: { "X-Auth-Return-Redirect": "1" },
+      maxRedirects: 0,
+    },
+  )
+  expect([200, 302], `${callback.status()} ${callback.url()}`).toContain(
+    callback.status(),
+  )
+  const session = await expectJsonStatus(
+    await context.request.get(`${E2E_BASE_URL}/api/auth/session`),
+  )
+  expect(session.user?.id).toBeTruthy()
+
   const page = await context.newPage()
-  await signIn(page, username, landingPath)
   return { context, page }
 }
 
@@ -168,20 +197,24 @@ test.describe("role deployment smoke checks", () => {
 })
 
 test("an order can be created, approved, and fulfilled only by the correct roles", async ({ browser }) => {
+  // This API-focused RBAC journey compiles several routes on a cold Next dev
+  // server. Keep its budget independent from the shorter UI role checks.
+  test.setTimeout(300_000)
+
   const requester = await authenticatedContext(
     browser,
     SMOKE_USERNAMES.orderPortal,
-    /\/shop$/,
+    "/shop",
   )
   const approver = await authenticatedContext(
     browser,
     SMOKE_USERNAMES.branchAdmin,
-    /\/dashboard$/,
+    "/dashboard",
   )
   const fulfiller = await authenticatedContext(
     browser,
     SMOKE_USERNAMES.superAdmin,
-    /\/dashboard$/,
+    "/dashboard",
   )
 
   try {

@@ -34,8 +34,9 @@ export default defineConfig({
   // A flake here is a defect to diagnose, not to retry away.
   retries: 0,
   reporter: [["list"], ["html", { open: "never" }]],
-  // A cold Next.js compiler can spend most of a minute on the first role page.
-  timeout: 120_000,
+  // A cold Next.js compiler can replace the first navigation while it builds a
+  // role workspace. Leave enough time for the web-first landing assertion.
+  timeout: 180_000,
   expect: { timeout: 15_000 },
   use: {
     baseURL: E2E_BASE_URL,
