@@ -48,7 +48,7 @@ vi.mock("@/lib/hooks/use-api", () => ({
       return {
         data: {
           dimensionLabel: "Branch",
-          metricLabel: "Procurement Value",
+          metricLabel: "Consumed",
           period: { startDate: "2026-07-01", endDate: "2026-09-12" },
           rows: [],
           totals: { lineCount: 0, orderCount: 0, valueCents: 0, quantity: 0, quantityByUnit: [] },
@@ -80,7 +80,7 @@ function matrixResponse(url: string) {
     metric: isQuantity ? "quantity" : "spend",
     grain: "line",
     format: isQuantity ? "quantity" : "currency",
-    label: isQuantity ? "Quantity" : "Procurement Value",
+    label: isQuantity ? "Quantity" : "Consumed",
     formula: "",
     period: { startDate: "2026-07-01", endDate: "2026-09-12" },
     quantityUnit: { selected: selectedUnit, conflict: false, available: [] },
@@ -113,7 +113,7 @@ function comparisonResponse(url: string) {
     series: isSeries && !emptyRows ? [{ key: "u1", label: "Ahmed", points: [{ period: "2026-07", value: 1 }] }] : [],
     periods: isSeries ? ["2026-07"] : [],
     format: isQuantity ? "quantity" : "currency",
-    label: isQuantity ? "Quantity" : "Procurement Value",
+    label: isQuantity ? "Quantity" : "Consumed",
     formula: "",
     mode: isSeries ? "series" : "rank",
     chart: isSeries ? "line" : "column",
@@ -268,6 +268,7 @@ describe("what the screen asks for", () => {
     for (const params of panels.values()) {
       expect(params.get("branchIds")).toBe("7")
       expect(params.get("metric")).toBe("spend")
+      expect(params.get("statuses")).toBe("consumed")
       expect(params.get("limit")).toBe(params.get("chart") === "line" ? "6" : "12")
       expect(params.has("productIds")).toBe(false)
       expect(params.has("userIds")).toBe(false)
@@ -276,6 +277,8 @@ describe("what the screen asks for", () => {
     const askingForBudget = [...panels.entries()].filter(([, params]) => params.get("budget") === "1").map(([id]) => id).sort()
     expect(askingForBudget).toEqual(["branch:column", "month:column"])
     expect(screen.getByText(/All products/, { selector: "strong" })).toBeTruthy()
+    expect(screen.getByText(/measured by consumed/)).toBeTruthy()
+    expect(screen.queryByText(/Procurement Value/i)).toBeNull()
     expect(screen.getByText(/compared across products, categories, requesters, branches and months at once/)).toBeTruthy()
 
     // With nobody compared there is no grid to ask for: every panel is a ranking or a trend.
@@ -295,6 +298,7 @@ describe("what the screen asks for", () => {
     expect(grid.get("rows")).toBe("user")
     expect(grid.get("columns")).toBe("product")
     expect(grid.get("metric")).toBe("spend")
+    expect(grid.get("statuses")).toBe("consumed")
     expect(grid.get("limit")).toBe("12")
     expect(grid.get("branchIds")).toBe("7")
     expect(grid.get("userIds")).toBe("u1,u2")
@@ -320,6 +324,8 @@ describe("what the screen asks for", () => {
     const productOptions = options.filter((url) => url.includes("dimension=product")).at(-1)
     const userOptions = options.filter((url) => url.includes("dimension=user")).at(-1)
     expect(productOptions).toContain("userIds=u2")
+    expect(productOptions).toContain("statuses=consumed")
+    expect(userOptions).toContain("statuses=consumed")
     expect(userOptions).not.toContain("userIds=")
   })
 
@@ -444,6 +450,7 @@ describe("what the screen asks for", () => {
     expect(panels.size).toBe(6)
     for (const params of panels.values()) {
       expect(params.get("metric")).toBe("quantity")
+      expect(params.get("statuses")).toBe("revenue")
       expect(params.get("productIds")).toBe("186")
       expect(params.get("userIds")).toBe("u1")
     }
@@ -451,6 +458,7 @@ describe("what the screen asks for", () => {
     expect(document.getElementById("executive-drill-down")).not.toBeNull()
     const drill = new URL(`http://x${requested.filter((u) => u.includes("/drill-down?")).at(-1)}`).searchParams
     expect(drill.get("metric")).toBe("quantity")
+    expect(drill.has("statuses")).toBe(false)
     expect(drill.get("productIds")).toBe("186")
     expect(drill.get("userIds")).toBe("u1")
   })
@@ -487,7 +495,7 @@ describe("the budget beside By branch and By month", () => {
     fireEvent.click(screen.getByRole("button", { name: "Show By branch as a table" }))
     let table = screen.getByRole("table")
     expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
-      "Branch", "Procurement Value", "Total Budget", "% of budget", "Share", "vs prior", "Orders",
+      "Branch", "Consumed", "Total Budget", "% of budget", "Share", "vs prior", "Orders",
     ])
     expect(within(table).getByText("25.0%")).toBeTruthy()
     fireEvent.click(screen.getByRole("button", { name: "Show By branch as a chart" }))
@@ -573,7 +581,7 @@ describe("what the panels say", () => {
     const table = screen.getByRole("table")
     // The branch panel carries its budget beside the figure under Amount.
     expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
-      "Branch", "Procurement Value", "Total Budget", "% of budget", "Share", "vs prior", "Orders",
+      "Branch", "Consumed", "Total Budget", "% of budget", "Share", "vs prior", "Orders",
     ])
     expect(within(table).getByRole("button", { name: "North Zone" })).toBeTruthy()
     // The chart of that one panel has given way to its rows; the others still draw.
@@ -585,6 +593,7 @@ describe("what the panels say", () => {
     const drill = new URL(`http://x${requested.filter((u) => u.includes("/drill-down?")).at(-1)}`).searchParams
     expect(drill.get("dimension")).toBe("branch")
     expect(drill.get("key")).toBe("7")
+    expect(drill.get("statuses")).toBe("consumed")
 
     fireEvent.click(screen.getByRole("button", { name: "Show By branch as a chart" }))
     expect(screen.getByRole("button", { name: "bar branch" })).toBeTruthy()
@@ -673,6 +682,7 @@ describe("drill-down from the grid", () => {
     // The cell's product replaces the screen's two-product focus for this table alone.
     expect(drill.get("productIds")).toBe("187")
     expect(drill.get("branchIds")).toBe("7")
+    expect(drill.get("statuses")).toBe("consumed")
   })
 
   it("offers the same from the grid's table, one button per pair with a figure", () => {
@@ -724,19 +734,19 @@ describe("download as Excel", () => {
     expect(cover).toContainEqual(["Requesters compared", "Sana"])
     expect(cover).toContainEqual(["Groups", "Distribution"])
     expect(cover).toContainEqual(["Branches", "North Zone"])
-    expect(cover).toContainEqual(["Measured by", "Amount (Procurement Value)"])
+    expect(cover).toContainEqual(["Measured by", "Amount (Consumed)"])
 
     // A ranked sheet: header, then the mocked row with money in rupees.
     const branch = workbook.Sheets["By branch"].rows
     expect(branch[0]).toEqual([
-      "Rank", "Branch", "Procurement Value (PKR)", "Share %", "Cumulative share %",
-      "Previous period Procurement Value (PKR)", "Change %", "Orders",
+      "Rank", "Branch", "Consumed (PKR)", "Share %", "Cumulative share %",
+      "Previous period Consumed (PKR)", "Change %", "Orders",
     ])
     expect(branch[1]).toEqual([1, "North Zone", 1, 100, 100, 0, null, 1])
 
     // A trend sheet: one column per period and a total.
     const trend = workbook.Sheets["Requesters over months"].rows
-    expect(trend[0]).toEqual(["Requester", "2026-07", "Total Procurement Value (PKR)"])
+    expect(trend[0]).toEqual(["Requester", "2026-07", "Total Consumed (PKR)"])
     expect(trend[1]).toEqual(["Ahmed", 0.01, 0.01])
   })
 
@@ -762,7 +772,7 @@ describe("download as Excel", () => {
     // The grid as drawn: one row per requester, one column per product, the
     // person's total last and the products' totals along the bottom.
     const grid = workbook.Sheets["By product"].rows
-    expect(grid[0]).toEqual(["Requester / Product", "A4 Paper", "Toner", "Total Procurement Value (PKR)"])
+    expect(grid[0]).toEqual(["Requester / Product", "A4 Paper", "Toner", "Total Consumed (PKR)"])
     expect(grid[1]).toEqual(["Ahmed", 4, 3, 7])
     expect(grid[2]).toEqual(["Sana", 2, 1, 3])
     expect(grid[3]).toEqual(["Total", 6, 4, null])

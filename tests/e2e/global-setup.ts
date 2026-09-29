@@ -2,6 +2,10 @@ import { config as loadDotenv } from "dotenv"
 import { existsSync } from "node:fs"
 import { resolve } from "node:path"
 
+import { resolveTestDatabaseUrl } from "./support/environment"
+import { seedRoleSmokeE2E } from "./support/role-smoke-seed"
+import { seedActivityLogE2E } from "./support/seed"
+
 /**
  * Runs once, before the browser or the Next.js server starts.
  *
@@ -10,9 +14,10 @@ import { resolve } from "node:path"
  * the running application — then refuses anything that is not obviously a
  * scratch database and seeds the fixtures.
  *
- * `@/lib/db` builds its pool from `DATABASE_URL` at import time, so the
- * override has to happen before the seed module is imported. That is why the
- * import below is dynamic.
+ * The seed modules deliberately do not import `@/lib/db`: each builds a short-
+ * lived pool from the validated URL passed to it. That makes every helper safe
+ * to import statically, which is required because Playwright's CommonJS loader
+ * cannot natively import these TypeScript modules at runtime in CI.
  */
 export default async function globalSetup(): Promise<void> {
   const projectRoot = process.cwd()
@@ -22,7 +27,6 @@ export default async function globalSetup(): Promise<void> {
     if (existsSync(path)) loadDotenv({ path })
   }
 
-  const { resolveTestDatabaseUrl } = await import("./support/environment")
   const testDatabaseUrl = resolveTestDatabaseUrl()
 
   process.env.DATABASE_URL = testDatabaseUrl
@@ -30,10 +34,14 @@ export default async function globalSetup(): Promise<void> {
 
   // The seed builds its own pool from this connection and closes it, so nothing
   // here holds a handle open while the browser runs.
-  const { seedActivityLogE2E } = await import("./support/seed")
-  await seedActivityLogE2E(testDatabaseUrl)
+  const smokeOnly = process.env.npm_lifecycle_event === "e2e:smoke"
+  if (!smokeOnly) {
+    await seedActivityLogE2E(testDatabaseUrl)
+  }
+
+  await seedRoleSmokeE2E(testDatabaseUrl)
 
   process.stderr.write(
-    `[e2e] seeded activity fixtures in ${new URL(testDatabaseUrl).pathname.replace(/^\//, "")}\n`,
+    `[e2e] seeded ${smokeOnly ? "role smoke" : "activity and role smoke"} fixtures in ${new URL(testDatabaseUrl).pathname.replace(/^\//, "")}\n`,
   )
 }

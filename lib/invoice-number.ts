@@ -16,6 +16,34 @@ type InvoiceSequenceReadClient = {
   execute: (query: any) => Promise<any>
 }
 
+/**
+ * Hold a shared lock on the tenant while an invoice is being attached.
+ *
+ * Organization-code updates take a FOR UPDATE lock on this same row. The two
+ * locks serialize "issue the first invoice" with "change the invoice prefix":
+ * either the code changes first and the invoice uses the new value, or the
+ * invoice commits first and the organization update sees that invoicing has
+ * started and refuses the change.
+ */
+export async function lockInvoiceTenantForIssuance(client: InvoiceSequenceClient, tenantId: number) {
+  if (!Number.isInteger(tenantId) || tenantId < 1) {
+    throw new Error("A valid tenant ID is required to generate an invoice number")
+  }
+
+  const [tenant] = await client
+    .select({ tenantShortName: organizations.code })
+    .from(organizations)
+    .where(eq(organizations.id, tenantId))
+    .for("share")
+    .limit(1)
+
+  if (!tenant?.tenantShortName) {
+    throw new Error("Tenant short name is required to generate an invoice number")
+  }
+
+  return tenant.tenantShortName
+}
+
 export function formatInvoiceNumber(tenantShortName: string, sequenceValue: number) {
   const normalizedTenantShortName = tenantShortName.trim().toUpperCase()
   if (!normalizedTenantShortName || !TENANT_SHORT_NAME_PATTERN.test(normalizedTenantShortName)) {
@@ -29,19 +57,7 @@ export function formatInvoiceNumber(tenantShortName: string, sequenceValue: numb
 }
 
 export async function generateNextInvoiceNumber(client: InvoiceSequenceClient, tenantId: number) {
-  if (!Number.isInteger(tenantId) || tenantId < 1) {
-    throw new Error("A valid tenant ID is required to generate an invoice number")
-  }
-
-  const [tenant] = await client
-    .select({ tenantShortName: organizations.code })
-    .from(organizations)
-    .where(eq(organizations.id, tenantId))
-    .limit(1)
-
-  if (!tenant?.tenantShortName) {
-    throw new Error("Tenant short name is required to generate an invoice number")
-  }
+  const tenantShortName = await lockInvoiceTenantForIssuance(client, tenantId)
 
   await client
     .insert(invoiceSequences)
@@ -61,7 +77,7 @@ export async function generateNextInvoiceNumber(client: InvoiceSequenceClient, t
     throw new Error("Failed to generate invoice number")
   }
 
-  return formatInvoiceNumber(tenant.tenantShortName, Number(row.nextValue))
+  return formatInvoiceNumber(tenantShortName, Number(row.nextValue))
 }
 
 export async function hasInvoiceSequenceTable(client: InvoiceSequenceReadClient) {

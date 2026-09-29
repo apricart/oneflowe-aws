@@ -20,11 +20,15 @@ describe("formatInvoiceNumber", () => {
 
   it("returns unique values for simultaneous invoice requests", async () => {
     let sequence = 0
+    const lockStrengths: string[] = []
     const client = {
       select: () => ({
         from: () => ({
           where: () => ({
-            limit: async () => [{ tenantShortName: "UBL" }],
+            for: (strength: string) => {
+              lockStrengths.push(strength)
+              return { limit: async () => [{ tenantShortName: "UBL" }] }
+            },
           }),
         }),
       }),
@@ -46,6 +50,7 @@ describe("formatInvoiceNumber", () => {
     expect(new Set(values).size).toBe(100)
     expect(values).toContain("UBL-APR-000001")
     expect(values).toContain("UBL-APR-000100")
+    expect(lockStrengths).toEqual(Array.from({ length: 100 }, () => "share"))
   })
 
   it("requires the tenant to have a short name", async () => {
@@ -53,7 +58,7 @@ describe("formatInvoiceNumber", () => {
       select: () => ({
         from: () => ({
           where: () => ({
-            limit: async () => [{ tenantShortName: null }],
+            for: () => ({ limit: async () => [{ tenantShortName: null }] }),
           }),
         }),
       }),

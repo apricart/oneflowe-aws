@@ -121,6 +121,30 @@ jobs:
             exit 1
           fi
 
+      - name: Install Chromium for role smoke tests
+        run: npx playwright install --with-deps chromium
+
+      - name: Run role deployment smoke tests
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/oneflowe_test
+        run: npm run e2e:smoke
+
+      - name: Upload role smoke failure evidence
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: role-smoke-staging-${{ github.sha }}
+          path: |
+            playwright-report
+            test-results
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # This disposable webpack cache can exceed 1 GB. It is not needed by
+      # later checks, the Docker context, or the production image.
+      - name: Reclaim browser-test build output
+        run: rm -rf -- .next-e2e
+
       - name: Run TypeScript checks
         run: npm run typecheck
 

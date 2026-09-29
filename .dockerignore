@@ -1,5 +1,6 @@
 node_modules
 .next
+.next-*
 .git
 .gitignore
 .env
@@ -17,6 +18,16 @@ docs
 .idea
 README.md
 docker-compose.yml
+
+# Generated migration, reporting, and agent workspaces are never runtime
+# dependencies. Some contain large binaries or sensitive local exports.
+tmp
+backups
+outputs
+deliverables
+updatedReports
+logs
+.codex-doc-work
 
 # CI scan output. Written into the workspace before `docker build .`, so it
 # would otherwise be uploaded with the build context.

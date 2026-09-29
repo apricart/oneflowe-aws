@@ -73,6 +73,7 @@ export async function GET(req: NextRequest) {
       groupIds: parsed.groupIds,
       userIds: parsed.userIds,
       unit: null,
+      statusSet: parsed.statusSet,
     }
 
     const options = await loadEntityOptions(scope, filters, dimension)

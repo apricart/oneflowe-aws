@@ -6,27 +6,26 @@ import { alias } from "drizzle-orm/pg-core"
 import { branches, budgets, categories, globalProducts, groups, orderItems, orders, organizations, users } from "@/db/schema"
 import { db } from "@/lib/db"
 import { buildAppMonthPeriods } from "@/lib/date-range-params"
-import { CONSUMED_ELIGIBLE_FILTER, REVENUE_ELIGIBLE_FILTER, metricExpressions } from "@/lib/metric-utils"
-import { consumedHeldCentsSql, consumedSpentCentsSql } from "@/lib/server/budget-consumption-sql"
+import { CONSUMED_ELIGIBLE_FILTER, REVENUE_ELIGIBLE_FILTER } from "@/lib/metric-utils"
+import { consumedHeldCentsSql, consumedSpentCentsSql, netOrderCentsSql } from "@/lib/server/budget-consumption-sql"
 import type { ExecutiveScope } from "@/lib/server/executive-analytics-scope"
-import type {
-  BudgetBesideDimension,
-  DrillDownStatusSet,
-  ExecutiveDimensionId,
-  ExecutiveMetricId,
-  MatrixDimensionId,
-} from "@/lib/executive-analytics"
 import {
   EXECUTIVE_METRICS,
   MAX_TIME_AXIS_POINTS,
   isBudgetRollupDimension,
   isTimeAxisDimension,
+  metricDefinitionForStatusSet,
   orderComparisonRows,
   resolveDrillDownSort,
   resolveGrain,
   resolveMatrixGrain,
   safeDivide,
+  type BudgetBesideDimension,
   type DrillDownSortKey,
+  type DrillDownStatusSet,
+  type ExecutiveDimensionId,
+  type ExecutiveMetricId,
+  type MatrixDimensionId,
 } from "@/lib/executive-analytics"
 
 /**
@@ -77,9 +76,9 @@ export type ExecutiveFilters = {
   /** Unit of measure, when the caller has resolved a single one. */
   unit: string | null
   /**
-   * Which orders count. Absent or `revenue` is the Center's rule and what
-   * every chart uses; `consumed` adds PENDING for a listing that has to
-   * reconcile with a budget's "spent + held". Only the drill-down sets it.
+   * Which orders count. Absent or `revenue` is the Center's default rule;
+   * `consumed` adds PENDING so Product Performance and budget details reconcile
+   * with a budget's "spent + held".
    */
   statusSet?: DrillDownStatusSet
 }
@@ -88,6 +87,15 @@ export type ExecutiveFilters = {
 function statusFilterFor(filters: Pick<ExecutiveFilters, "statusSet">) {
   return filters.statusSet === "consumed" ? CONSUMED_ELIGIBLE_FILTER : REVENUE_ELIGIBLE_FILTER
 }
+
+/**
+ * Whole-order value and count after `orderConditions` has selected the status
+ * population. Keeping status out of these expressions is what lets the same
+ * builders answer revenue and consumed requests without pending rows being
+ * selected by WHERE and then silently zeroed by a second revenue-only CASE.
+ */
+const filteredOrderNetValue = netOrderCentsSql()
+const filteredOrderCount = sql<number>`COUNT(${orders.id})`.mapWith(Number)
 
 /** Refunded value on one order line, counting approved refunds only. */
 const lineRefundValue = sql`COALESCE((
@@ -442,8 +450,8 @@ export async function loadOrderGrainSeries(
     .select({
       key: column.key,
       label: column.label,
-      spendCents: metricExpressions.revenue,
-      orderCount: metricExpressions.orderVolume,
+      spendCents: filteredOrderNetValue,
+      orderCount: filteredOrderCount,
     })
     .from(orders)
     .leftJoin(branches, eq(orders.branchId, branches.id))
@@ -452,7 +460,7 @@ export async function loadOrderGrainSeries(
     .leftJoin(users, eq(orders.createdByUserId, users.id))
     .where(and(...orderConditions(scope, filters)))
     .groupBy(...column.group)
-    .orderBy(isTimeAxisDimension(dimension) ? asc(column.key) : desc(metricExpressions.revenue))
+    .orderBy(isTimeAxisDimension(dimension) ? asc(column.key) : desc(filteredOrderNetValue))
     .limit(groupedRowLimit(dimension, limit))
 
   return rows.map((row) => ({
@@ -961,6 +969,12 @@ export async function loadEntityOptions(
     // Listing what exists must not depend on which unit is being measured.
     unit: null,
   }
+  // The legacy pickers list every requester/group that raised an order. A
+  // consumed picker is tighter: cancelled, rejected, and refunded-only activity
+  // cannot produce a figure and therefore must not be offered as one.
+  const optionOrderConditions = () => filters.statusSet === "consumed"
+    ? orderConditions(scope, unfiltered)
+    : orderConditions(scope, unfiltered, { revenueEligible: false })
 
   if (dimension === "branch") {
     // With no product or category focus the picker lists every branch in scope,
@@ -1009,7 +1023,7 @@ export async function loadEntityOptions(
       .from(orders)
       .innerJoin(branches, eq(orders.branchId, branches.id))
       .innerJoin(groups, eq(branches.groupId, groups.id))
-      .where(and(...orderConditions(scope, unfiltered, { revenueEligible: false })))
+      .where(and(...optionOrderConditions()))
       .orderBy(groups.name)
       .limit(limit)
     return rows.map((row) => ({ key: String(row.id), label: row.name }))
@@ -1030,7 +1044,7 @@ export async function loadEntityOptions(
       .from(orders)
       .innerJoin(users, eq(orders.createdByUserId, users.id))
       .leftJoin(branches, eq(orders.branchId, branches.id))
-      .where(and(...orderConditions(scope, unfiltered, { revenueEligible: false })))
+      .where(and(...optionOrderConditions()))
       .groupBy(orders.createdByUserId, users.fullName, users.employeeId, users.email)
       .orderBy(desc(sql`COUNT(${orders.id})`))
       .limit(limit)
@@ -1131,7 +1145,7 @@ export async function loadEntitySeries(
       periods: chronological.map((row) => row.key),
       series: [{
         key: dimension,
-        label: EXECUTIVE_METRICS[metric].label,
+        label: metricDefinitionForStatusSet(metric, filters.statusSet).label,
         points: chronological.map((row) => ({ period: row.key, value: row.value })),
       }],
     }
@@ -1167,9 +1181,9 @@ export async function loadEntitySeries(
       .select({
         key: orderDimensionColumns[dimension as OrderGrainDimension].key,
         period: monthKey,
-        valueCents: metricExpressions.revenue,
+        valueCents: filteredOrderNetValue,
         quantity: sql<number>`0`.mapWith(Number),
-        orderCount: metricExpressions.orderVolume,
+        orderCount: filteredOrderCount,
       })
       .from(orders)
       .leftJoin(branches, eq(orders.branchId, branches.id))
@@ -1435,9 +1449,9 @@ export async function loadMatrix(
         // category (`resolveMatrixGrain`), so both are order-grain dimensions.
         row: orderDimensionColumns[rows as OrderGrainDimension].key,
         column: orderDimensionColumns[columns as OrderGrainDimension].key,
-        valueCents: metricExpressions.revenue,
+        valueCents: filteredOrderNetValue,
         quantity: sql<number>`0`.mapWith(Number),
-        orderCount: metricExpressions.orderVolume,
+        orderCount: filteredOrderCount,
       })
       .from(orders)
       .leftJoin(branches, eq(orders.branchId, branches.id))

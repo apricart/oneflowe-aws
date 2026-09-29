@@ -83,6 +83,8 @@ export type ParsedExecutiveRequest = {
   userIds: string[]
   requestedUnit: string | null
   limit: number
+  /** Which allowlisted order population the caller is asking to aggregate. */
+  statusSet: DrillDownStatusSet
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -115,6 +117,12 @@ export function parseExecutiveRequest(
     return { ok: false, error: "startDate must be on or before endDate" }
   }
 
+  // Anything outside the allowlist is refused rather than defaulted, so a
+  // caller cannot turn a status name into a query predicate.
+  const rawStatuses = searchParams.get("statuses")
+  const statusSet = rawStatuses === null || rawStatuses === "" ? "revenue" : rawStatuses
+  if (!isDrillDownStatusSet(statusSet)) return { ok: false, error: "Unsupported statuses" }
+
   return {
     ok: true,
     startDate,
@@ -125,6 +133,7 @@ export function parseExecutiveRequest(
     userIds: parseUuidList(searchParams.get("userIds")),
     requestedUnit: sanitizeUnit(searchParams.get("unit")),
     limit: clampRowLimit(searchParams.get("limit")),
+    statusSet,
   }
 }
 
@@ -479,12 +488,6 @@ export function parseDrillDownRequest(
   const period = narrowToClickedPeriod(window, rawPeriod)
   if ("ok" in period) return period
 
-  // Absent means the Center's own rule; anything not on the allowlist is
-  // refused rather than defaulted, so a caller cannot probe for status names.
-  const rawStatuses = searchParams.get("statuses")
-  const statusSet = rawStatuses === null || rawStatuses === "" ? "revenue" : rawStatuses
-  if (!isDrillDownStatusSet(statusSet)) return { ok: false, error: "Unsupported statuses" }
-
   return {
     ...base,
     startDate: period.startDate,
@@ -497,6 +500,6 @@ export function parseDrillDownRequest(
     period: rawPeriod || null,
     sort: resolveDrillDownSort(searchParams.get("sort")),
     direction: resolveSortDirection(searchParams.get("direction")),
-    statusSet,
+    statusSet: base.statusSet,
   }
 }

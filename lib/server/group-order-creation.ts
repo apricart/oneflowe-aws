@@ -19,7 +19,11 @@ import {
   systemLogs,
 } from "@/db/schema"
 import { db } from "@/lib/db"
-import { generateNextInvoiceNumber, hasInvoiceSequenceTable } from "@/lib/invoice-number"
+import {
+  generateNextInvoiceNumber,
+  hasInvoiceSequenceTable,
+  lockInvoiceTenantForIssuance,
+} from "@/lib/invoice-number"
 import { calculateLineCents, formatQuantity, roundQuantity, validateProductQuantity } from "@/lib/quantity"
 import { generateReceiptData } from "@/lib/receipt-generator"
 import { resolveTaxRateBp, splitInclusiveCents } from "@/lib/tax"
@@ -551,32 +555,29 @@ async function attachReceipt(
     invoiceSequenceReady: boolean
   },
 ) {
-  let receiptData: Awaited<ReturnType<typeof generateReceiptData>> | null = null
-  try {
-    receiptData = await generateReceiptData({
-      orderId: context.orderId,
-      orderTid: context.tid,
-      status: "PENDING",
-      organizationId: context.organizationId,
-      branchId: context.branchId,
-      orderItemsData: context.items,
-      subtotalCents: context.subtotal,
-      taxCents: context.tax,
-      totalCents: context.total,
-      discountCents: 0,
-      deliveryChargesCents: 0,
-    })
-  } catch (receiptError) {
-    console.error("Receipt generation failed during group order creation", receiptError)
-  }
-  if (!receiptData) return
+  const receiptData = await generateReceiptData({
+    orderId: context.orderId,
+    orderTid: context.tid,
+    status: "PENDING",
+    organizationId: context.organizationId,
+    branchId: context.branchId,
+    orderItemsData: context.items,
+    subtotalCents: context.subtotal,
+    taxCents: context.tax,
+    totalCents: context.total,
+    discountCents: 0,
+    deliveryChargesCents: 0,
+  })
 
   // The buyer's own reference, recorded with the invoice so a reissue prints
   // what was agreed rather than the invoice number over again.
   if (context.poNumber) receiptData.poNumber = context.poNumber
-  receiptData.invoiceNumber = context.invoiceSequenceReady
-    ? await generateNextInvoiceNumber(tx, context.organizationId)
-    : context.tid
+  if (context.invoiceSequenceReady) {
+    receiptData.invoiceNumber = await generateNextInvoiceNumber(tx, context.organizationId)
+  } else {
+    await lockInvoiceTenantForIssuance(tx, context.organizationId)
+    receiptData.invoiceNumber = context.tid
+  }
   await tx.update(orders).set({ receiptData: receiptData as never }).where(eq(orders.id, context.orderId))
 }
 

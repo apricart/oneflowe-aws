@@ -327,6 +327,12 @@ describe("a budget beside the columns", () => {
     const south = within(screen.getByRole("row", { name: /South/ })).getAllByRole("cell").map((cell) => (cell.textContent ?? "").replace(/\u00a0/g, " "))
     expect(south.slice(1, 4)).toEqual(["Rs 1,000", "Rs 0", "no budget"])
   })
+
+  it("explains that Consumed includes pending commitments beside the budget", () => {
+    render(<ComparisonChart {...base} rows={budgeted} chart="column" budgetBeside metricLabel="Consumed" />)
+    expect(screen.getByText(/Consumed includes pending orders as committed/)).toBeTruthy()
+    expect(screen.getByText(/excludes cancelled, rejected, and refunded orders/)).toBeTruthy()
+  })
 })
 
 describe("the table form", () => {

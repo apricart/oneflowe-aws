@@ -126,6 +126,25 @@ jobs:
             exit 1
           fi
 
+      - name: Install Chromium for role smoke tests
+        run: npx playwright install --with-deps chromium
+
+      - name: Run role deployment smoke tests
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/oneflowe_test
+        run: npm run e2e:smoke
+
+      - name: Upload role smoke failure evidence
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: role-smoke-dev-${{ github.sha }}
+          path: |
+            playwright-report
+            test-results
+          if-no-files-found: ignore
+          retention-days: 14
+
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run build

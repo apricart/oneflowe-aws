@@ -2,6 +2,7 @@ import { branches,branchInventory,categories,globalProducts,groups,orderItems,or
 import { authOptions } from "@/lib/auth-options"
 import { parseEndDateParam,parseStartDateParam } from "@/lib/date-range-params"
 import { db } from "@/lib/db"
+import { REVENUE_ELIGIBLE_FILTER } from "@/lib/metric-utils"
 import { redactAnalyticsPrices,shouldHidePricesForRole } from "@/lib/price-visibility"
 import { productTrendMonthKey } from "@/lib/product-consumption-trend"
 import {
@@ -20,8 +21,6 @@ import { escapeLikePattern } from "@/lib/utils"
 import { aliasedTable,and,eq,exists,gte,ilike,inArray,lte,or,sql } from "drizzle-orm"
 import { getServerSession } from "next-auth"
 import { NextResponse,type NextRequest } from "next/server"
-
-const PERFORMANCE_STATUSES = new Set(['FULFILLED', 'REFUNDED', 'APPROVED', 'PARTIAL', 'PARTIALLY_FULFILLED'])
 
 function parseNumberList(value: string | null, isValid = (number: number) => number > 0) {
     return value
@@ -228,7 +227,6 @@ function aggregateProductRows(productMap: Record<number, any>, rows: any[], refu
         if (!product) return
         product.totalOrders.add(row.orderId)
         product.qtyOrdered += row.qtyOrdered
-        if (!PERFORMANCE_STATUSES.has((row.status || "").toUpperCase())) return
         const refundedCount = refundQuantities[row.orderItemId] || 0
         const fulfilledCount = Math.max(0, row.qtyOrdered - refundedCount)
         product.qtyRefunded += refundedCount
@@ -263,7 +261,6 @@ async function loadComparisonRows(
     return db
         .select({
             globalProductId: orderItems.globalProductId,
-            status: orders.status,
             createdAt: orders.createdAt,
             qtyOrdered: orderItems.quantity,
             priceCents: orderItems.priceCents,
@@ -273,7 +270,7 @@ async function loadComparisonRows(
         .innerJoin(orders, eq(orderItems.orderId, orders.id))
         .where(and(
             inArray(orders.branchId, branchIds),
-            sql`UPPER(${orders.status}) IN ('FULFILLED', 'REFUNDED', 'APPROVED', 'PARTIAL', 'PARTIALLY_FULFILLED')`,
+            REVENUE_ELIGIBLE_FILTER,
             productIds.length > 0 ? inArray(orderItems.globalProductId, productIds) : undefined,
             and(...dateConditions),
         ))
@@ -284,7 +281,7 @@ function summarizeComparison(rows: any[], refundQuantities: Record<number, numbe
     const productMap: Record<number, { qtyFulfilled: number; revenueGeneratedCents: number }> = {}
     const uniqueProducts = new Set<number>()
     rows.forEach((row) => {
-        if (!row.globalProductId || !PERFORMANCE_STATUSES.has((row.status || "").toUpperCase())) return
+        if (!row.globalProductId) return
         const refunded = refundQuantities[row.orderItemId] || 0
         const fulfilled = Math.max(0, row.qtyOrdered - refunded)
         totals.totalRefunds += refunded
@@ -338,7 +335,6 @@ function buildProductTrend(rows: any[], refundQuantities: Record<number, number>
         const key = productTrendMonthKey(row.createdAt)
         trend[key] ||= { date: key, revenue: 0, compareRevenue: 0, qtyOrdered: 0, qtyFulfilled: 0, qtyRefunded: 0 }
         trend[key].qtyOrdered += row.qtyOrdered
-        if (!PERFORMANCE_STATUSES.has((row.status || "").toUpperCase())) return
         const refunded = refundQuantities[row.orderItemId] || 0
         const fulfilled = Math.max(0, row.qtyOrdered - refunded)
         trend[key].qtyRefunded += refunded
@@ -421,7 +417,7 @@ export async function GET(req: NextRequest) {
 
         const baseConditions: any[] = [
             inArray(orders.branchId, branchIds),
-            sql`UPPER(${orders.status}) IN ('FULFILLED', 'REFUNDED', 'APPROVED', 'PARTIAL', 'PARTIALLY_FULFILLED')`
+            REVENUE_ELIGIBLE_FILTER,
         ]
 
         if (parsedProductIds.length > 0) {
@@ -438,7 +434,6 @@ export async function GET(req: NextRequest) {
         const q = db
             .select({
                 orderId: orders.id,
-                status: orders.status,
                 createdAt: orders.createdAt,
                 globalProductId: orderItems.globalProductId,
                 itemCode: globalProducts.productCode,

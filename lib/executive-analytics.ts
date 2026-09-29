@@ -30,9 +30,9 @@
  *   Variance                 total - consumed
  *   Growth %                 (current - previous) / previous * 100
  *
- * A cancelled or rejected order is worth nothing in any money metric: it is
- * outside both the revenue-eligible set and the committed set. A pending order
- * is a commitment, never consumption.
+ * A cancelled, rejected, or fully refunded order is worth nothing in either
+ * money metric. A pending order is excluded from Procurement Value but is a
+ * commitment in Consumed, where Consumed is spent + held.
  */
 
 /**
@@ -975,20 +975,49 @@ export function resolveSortDirection(value: unknown): "asc" | "desc" {
 }
 
 /**
- * Which orders a drill-down lists, as an allowlist.
+ * Which orders an analytics request counts, as an allowlist.
  *
  * `revenue` is the Center's own rule and the default: the lines behind a
  * Procurement Value figure. `consumed` adds orders still awaiting approval,
- * for the one surface whose figure is a budget's "spent + held" — the
- * budget-burn watchlist — so a requester whose whole month is one pending
- * order does not drill into an empty table. The value selects a pre-written
- * status predicate and never reaches SQL as text.
+ * so a figure reconciles with the budget's "spent + held". The Product
+ * Performance Amount view and the budget-burn watchlist use it. The value
+ * selects a pre-written status predicate and never reaches SQL as text.
  */
 export const DRILLDOWN_STATUS_SETS = ["revenue", "consumed"] as const
 export type DrillDownStatusSet = (typeof DRILLDOWN_STATUS_SETS)[number]
 
 export function isDrillDownStatusSet(value: unknown): value is DrillDownStatusSet {
   return typeof value === "string" && (DRILLDOWN_STATUS_SETS as readonly string[]).includes(value)
+}
+
+/**
+ * Reader-facing metric copy for the selected order population.
+ *
+ * The registry remains the revenue-default vocabulary used by Overview and
+ * Explore. Product Performance opts into `consumed`, so every API response,
+ * chart fallback, detail table, and export receives the same name and formula
+ * without relabelling unrelated reports.
+ */
+export function metricDefinitionForStatusSet(
+  metric: ExecutiveMetricId,
+  statusSet: DrillDownStatusSet = "revenue",
+): MetricDefinition {
+  const definition = EXECUTIVE_METRICS[metric]
+  if (statusSet !== "consumed") return definition
+
+  const consumedFormula: Partial<Record<ExecutiveMetricId, string>> = {
+    spend: "SUM(max(0, order total - approved/completed refunds)) over consumed orders, including pending",
+    orders: "COUNT(order) over consumed orders, including pending",
+    avgOrderValue: "Consumed / Orders (0 when there are no orders)",
+    quantity: "SUM(max(0, ordered quantity - approved/completed refunded quantity)) over consumed order lines, including pending",
+    avgUnitPrice: "Consumed line value / consumed quantity - a weighted average, never an average of averages",
+  }
+
+  return {
+    ...definition,
+    label: metric === "spend" ? "Consumed" : definition.label,
+    formula: consumedFormula[metric] ?? definition.formula,
+  }
 }
 
 // ── The side-by-side screen ────────────────────────────────────────────────

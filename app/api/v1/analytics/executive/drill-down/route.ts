@@ -2,7 +2,12 @@ import { NextResponse, type NextRequest } from "next/server"
 import { getServerSession } from "next-auth"
 
 import { authOptions } from "@/lib/auth-options"
-import { EXECUTIVE_DIMENSIONS, EXECUTIVE_METRICS, resolveQuantityUnit } from "@/lib/executive-analytics"
+import {
+  EXECUTIVE_DIMENSIONS,
+  EXECUTIVE_METRICS,
+  metricDefinitionForStatusSet,
+  resolveQuantityUnit,
+} from "@/lib/executive-analytics"
 import { applyEntityKeys, isScopeKeyedDimension, parseDrillDownRequest } from "@/lib/executive-analytics-request"
 import { withRateLimit } from "@/lib/rate-limiter"
 import {
@@ -100,7 +105,7 @@ export async function GET(req: NextRequest) {
       dimension: parsed.dimension,
       dimensionLabel: EXECUTIVE_DIMENSIONS[parsed.dimension].label,
       metric: parsed.metric,
-      metricLabel: EXECUTIVE_METRICS[parsed.metric].label,
+      metricLabel: metricDefinitionForStatusSet(parsed.metric, parsed.statusSet).label,
       entityKey: parsed.entityKey,
       periodKey: parsed.period,
       period: { startDate: parsed.startDate.toISOString(), endDate: parsed.endDate.toISOString() },
