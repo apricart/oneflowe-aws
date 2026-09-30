@@ -393,8 +393,8 @@ export default function OrganizationsPage() {
     return result
   }, [visibleBranches, branchStatusFilter, branchSearch])
 
-  const orgCount = orgs?.items.length ?? 0
-  const branchCount = branches?.items.length ?? 0
+  const orgCount = orgs?.items?.length ?? 0
+  const branchCount = branches?.items?.length ?? 0
 
   return (
     <>
