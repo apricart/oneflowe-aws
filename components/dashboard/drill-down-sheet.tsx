@@ -77,7 +77,7 @@ import { useAppContext } from "@/components/context/app-context"
 import { GlobalDateFilter,getPresetRange,type FilterPreset,type GlobalDateFilterChange } from "@/components/dashboard/global-date-filter"
 import type { DateRange } from "@/lib/hooks/use-sales-performance"
 
-export type DrillDownType = "REVENUE" | "REJECTED" | "FULFILLED" | "ORDERS" | "REFUNDED" | "PENDING" | "APPROVED" | "PARTIAL" | "DELIVERED" | "NOT_DELIVERED"
+export type DrillDownType = "REVENUE" | "REJECTED" | "FULFILLED" | "ORDERS" | "REFUNDED" | "PENDING" | "APPROVED" | "PARTIAL" | "DELIVERED" | "NOT_DELIVERED" | "DELIVERED_UNACKNOWLEDGED" | "UNFULFILLED"
 
 interface DrillDownSheetProps {
     isOpen: boolean
@@ -151,6 +151,16 @@ const TYPE_CONFIG = {
     },
     NOT_DELIVERED: {
         title: "Not Delivered Orders",
+        icon: Clock,
+        color: "text-sky-600 bg-sky-50 dark:bg-sky-900/20",
+    },
+    DELIVERED_UNACKNOWLEDGED: {
+        title: "Delivered, Pending Acknowledgment",
+        icon: Truck,
+        color: "text-amber-600 bg-amber-50 dark:bg-amber-900/20",
+    },
+    UNFULFILLED: {
+        title: "Unfulfilled Orders",
         icon: Clock,
         color: "text-sky-600 bg-sky-50 dark:bg-sky-900/20",
     },

@@ -684,6 +684,9 @@ async function createBranchOrder(context: BranchCreationContext): Promise<Branch
           notes: context.notes,
           poNumber: context.poNumber,
           createdByUserId: context.actor.userId,
+          // Pinned at creation, as on the single-branch path. A group order is
+          // an ordinary order of the branch's and is attributed the same way.
+          createdByRole: context.actor.role,
         })
         .returning({ id: orders.id, tid: orders.tid, totalCents: orders.totalCents })
 

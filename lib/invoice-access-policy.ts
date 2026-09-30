@@ -51,7 +51,7 @@ export type InvoiceAccessDenial = {
  */
 type InvoiceRoleRule = {
   tenant: "platform" | "own-organization"
-  branches: "all" | "own-organization" | "own-branch" | "assigned"
+  branches: "all" | "own-organization" | "own-branch" | "assigned" | "none"
   ownOrdersOnly: boolean
   /**
    * Relaxes `ownOrdersOnly` for one narrow case: an order the Group Order Portal
@@ -80,6 +80,10 @@ type InvoiceRoleRule = {
  *                          for, like its group order history.
  *  - GROUP_USER          — every order in its assigned branches, like its
  *                          approval queue.
+ *  - VIEWER              — nothing. It reads aggregates on its dashboard and
+ *                          never reaches the invoice page, which is not in its
+ *                          areas at all; this entry is the server-side half of
+ *                          that and fails closed on its own.
  */
 const INVOICE_ROLE_RULES: Record<Role, InvoiceRoleRule> = {
   SUPER_ADMIN: { tenant: "platform", branches: "all", ownOrdersOnly: false },
@@ -93,6 +97,7 @@ const INVOICE_ROLE_RULES: Record<Role, InvoiceRoleRule> = {
   },
   GROUP_ORDER_PORTAL: { tenant: "own-organization", branches: "own-organization", ownOrdersOnly: true },
   GROUP_USER: { tenant: "own-organization", branches: "assigned", ownOrdersOnly: false },
+  VIEWER: { tenant: "own-organization", branches: "none", ownOrdersOnly: true },
 }
 
 /** Roles whose branch reach comes from group and branch assignments. */
@@ -133,6 +138,9 @@ function isWithinBranchScope(
       return Boolean(order.branchId)
         && Array.isArray(scope.scopedBranchIds)
         && scope.scopedBranchIds.includes(order.branchId as number)
+    case "none":
+      // A role that reads no invoice at all.
+      return false
   }
 }
 

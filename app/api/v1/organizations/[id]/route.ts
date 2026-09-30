@@ -64,6 +64,8 @@ async function buildOrganizationPatch(body: OrganizationUpdateInput, organizatio
   if (body.ntnNumber !== undefined) {
     patch.ntnNumber = normalizeNtnNumber(body.ntnNumber)
   }
+  // Already normalised by the schema, where null and a blank string both clear it.
+  if (body.emailDomain !== undefined) patch.emailDomain = body.emailDomain
   if (body.status !== undefined) {
     const status = String(body.status).toLowerCase()
     const validStatuses = ["active", "inactive", "suspended"]
@@ -132,6 +134,7 @@ export async function PATCH(
           id: organizations.id,
           code: organizations.code,
           orderApproverRole: organizations.orderApproverRole,
+          emailDomain: organizations.emailDomain,
         })
         .from(organizations)
         .where(eq(organizations.id, orgId))
@@ -192,6 +195,25 @@ export async function PATCH(
           metadata: {
             previousOrderApproverRole: existingOrganization.orderApproverRole,
             orderApproverRole: body.orderApproverRole,
+          },
+        })
+      }
+
+      // The domain decides who may apply to join this tenant, so every change
+      // to it is on the trail with what it replaced.
+      if (
+        body.emailDomain !== undefined
+        && body.emailDomain !== existingOrganization.emailDomain
+      ) {
+        await tx.insert(auditLogs).values({
+          userId: scope.userId,
+          organizationId: orgId,
+          action: "UPDATE_ORGANIZATION_EMAIL_DOMAIN",
+          entity: "organization",
+          entityId: String(orgId),
+          metadata: {
+            previousEmailDomain: existingOrganization.emailDomain,
+            emailDomain: body.emailDomain,
           },
         })
       }

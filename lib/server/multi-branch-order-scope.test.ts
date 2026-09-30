@@ -109,9 +109,18 @@ describe("order list creator-role filter", () => {
 
   it("takes the role from an allowlist and binds it as a parameter", () => {
     expect(orders).toContain("parseOrderCreatorRoleFilter(params.createdByRole)")
-    expect(orders).toContain("eq(roles.name, creatorRole)")
+    // The predicate itself moved to `lib/server/order-creator-role-sql.ts` when
+    // the filter began reading the role recorded on the order rather than the
+    // creator's role today. The guarantee is unchanged and is asserted where
+    // the expression now lives: the value is bound through drizzle's `eq`,
+    // never interpolated.
+    expect(orders).toContain("orderCreatedByRoleMatches(creatorRole)")
+    const creatorRoleSql = source("lib/server/order-creator-role-sql.ts")
+    expect(creatorRoleSql).toContain("eq(orders.createdByRole, creatorRole)")
+    expect(creatorRoleSql).toContain("eq(roles.name, creatorRole)")
     // Nothing the caller sends is ever concatenated into the fragment.
     expect(orders).not.toContain("sql.raw(params.createdByRole")
+    expect(creatorRoleSql).not.toContain("sql.raw(")
   })
 
   it("refuses a malformed value rather than ignoring it", () => {

@@ -1,4 +1,5 @@
 import { ok, error, readJson, requireApiRole } from "@/lib/api"
+import { isViewerRole } from "@/lib/viewer-access"
 export const dynamic = 'force-dynamic'
 import { NextResponse } from "next/server"
 import { db } from "@/lib/db"
@@ -123,7 +124,10 @@ function getBranchConstraintResponse(exception: any) {
  */
 export async function GET(req: Request) {
   try {
-    const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "ORDER_PORTAL"])
+    // VIEWER is on the GET alone, for the branch filter on its dashboard. Branch
+    // creation and every other method below keep their own narrower allowlists,
+    // so a read-only account cannot reach them.
+    const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "ORDER_PORTAL", "VIEWER"])
     if (err) return err
 
     const { searchParams } = new URL(req.url)
@@ -150,12 +154,17 @@ export async function GET(req: Request) {
     // Determine which organizations to query based on role
     const scopedOrgIds = getScopedOrganizationIds(scope, orgIds)
 
-    const scopedBranchId = scope.role === "BRANCH_ADMIN"
+    // A Viewer pinned to a branch lists that branch alone, so its dashboard
+    // filter cannot even name a sibling. An unpinned one lists its tenant.
+    const scopedBranchId = scope.role === "BRANCH_ADMIN" || isViewerRole(scope.role)
       ? scope.branchId
       : undefined
 
-    // HEAD_OFFICE and BRANCH_ADMIN must have organization context
-    if ((scope.role === "HEAD_OFFICE" || scope.role === "BRANCH_ADMIN") && (!scopedOrgIds || scopedOrgIds.length === 0)) {
+    // HEAD_OFFICE, BRANCH_ADMIN and VIEWER must have organization context
+    if (
+      (scope.role === "HEAD_OFFICE" || scope.role === "BRANCH_ADMIN" || isViewerRole(scope.role))
+      && (!scopedOrgIds || scopedOrgIds.length === 0)
+    ) {
       return error("Organization context required", 403)
     }
 

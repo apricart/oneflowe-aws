@@ -36,6 +36,10 @@ export const organizations = pgTable(
       .notNull()
       .default(false),
     logoUrl: varchar("logo_url", { length: 512 }),
+    // The domain an applicant's address must be at, e.g. `ke.com.pk`. Set by
+    // Super Admin; null means self-service applications are refused. Not
+    // unique: tenants that share a mail system share a domain.
+    emailDomain: varchar("email_domain", { length: 253 }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
@@ -46,6 +50,12 @@ export const organizations = pgTable(
     check(
       "organizations_order_approver_role_ck",
       sql`${t.orderApproverRole} IN ('BRANCH_ADMIN', 'HEAD_OFFICE')`,
+    ),
+    // `EMAIL_DOMAIN_PATTERN` in lib/organization-email-domain.ts, held here too
+    // so no writer can store a spelling the comparison would never match.
+    check(
+      "organizations_email_domain_shape_ck",
+      sql`${t.emailDomain} IS NULL OR (${t.emailDomain} = lower(${t.emailDomain}) AND ${t.emailDomain} ~ '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$')`,
     ),
   ],
 )
@@ -215,6 +225,60 @@ export const mfaCodes = pgTable(
   ],
 )
 
+/**
+ * One short-lived, single-use self-service password reset.
+ *
+ * `subject_id` is deliberately a string without a foreign key: normal users
+ * are UUIDs while Order Portal employee principals are `emp_<number>`. The
+ * service resolves that subject against the correct account table before any
+ * mutation. Neither the six-digit OTP nor the bearer reset token is stored;
+ * both columns hold an HMAC-SHA256 digest bound to this challenge id.
+ */
+export const passwordResetChallenges = pgTable(
+  "password_reset_challenges",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    subjectType: varchar("subject_type", { length: 16 }).notNull(),
+    subjectId: varchar("subject_id", { length: 128 }).notNull(),
+    codeDigest: varchar("code_digest", { length: 64 }).notNull(),
+    attempts: integer("attempts").notNull().default(0),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    resetTokenDigest: varchar("reset_token_digest", { length: 64 }),
+    resetTokenExpiresAt: timestamp("reset_token_expires_at", { withTimezone: true }),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("password_reset_challenges_subject_idx").on(t.subjectType, t.subjectId, t.createdAt),
+    index("password_reset_challenges_expiry_idx").on(t.expiresAt),
+    uniqueIndex("password_reset_challenges_active_subject_uq")
+      .on(t.subjectType, t.subjectId)
+      .where(sql`${t.consumedAt} IS NULL`),
+    check(
+      "password_reset_challenges_subject_type_ck",
+      sql`${t.subjectType} IN ('user', 'employee')`,
+    ),
+    check(
+      "password_reset_challenges_attempts_ck",
+      sql`${t.attempts} >= 0 AND ${t.attempts} <= 5`,
+    ),
+    check(
+      "password_reset_challenges_digest_shape_ck",
+      sql`${t.codeDigest} ~ '^[0-9a-f]{64}$' AND (${t.resetTokenDigest} IS NULL OR ${t.resetTokenDigest} ~ '^[0-9a-f]{64}$')`,
+    ),
+    check(
+      "password_reset_challenges_time_order_ck",
+      sql`${t.createdAt} < ${t.expiresAt} AND (${t.resetTokenExpiresAt} IS NULL OR ${t.verifiedAt} <= ${t.resetTokenExpiresAt})`,
+    ),
+    check(
+      "password_reset_challenges_verification_ck",
+      sql`(${t.verifiedAt} IS NULL AND ${t.resetTokenDigest} IS NULL AND ${t.resetTokenExpiresAt} IS NULL)
+        OR (${t.verifiedAt} IS NOT NULL AND ${t.resetTokenDigest} IS NOT NULL AND ${t.resetTokenExpiresAt} IS NOT NULL)`,
+    ),
+  ],
+)
+
 export const categories = pgTable(
   "categories",
   {
@@ -329,6 +393,88 @@ export const suppliers = pgTable(
     index("suppliers_org_idx").on(t.organizationId),
     index("suppliers_branch_idx").on(t.branchId),
     index("suppliers_name_idx").on(t.name),
+  ],
+)
+
+/**
+ * The extra places a branch needs goods delivered to, and the queue that lets
+ * one exist.
+ *
+ * A branch already has one address of its own — `branches.address` — and that
+ * stays the default and is not copied here. A row in this table is an
+ * *additional* destination: a yard, a site office, a second gate. Somebody
+ * assigned to the branch raises it, Head Office approves it, and only an
+ * approved row may be delivered to (`lib/delivery-address.ts`,
+ * `lib/delivery-address-access.ts`).
+ *
+ * The request and the address are **one row**, not two tables. "The address
+ * that was approved" and "the address this order used" are then the same id
+ * and cannot drift apart.
+ *
+ * `label_key` is the normalized spelling of `label`, written by the server
+ * through `deliveryAddressLabelKey`. Storing it lets the duplicate index below
+ * be a plain column index rather than a functional one, exactly as
+ * `organization_join_requests.email` is stored already lower-cased — and makes
+ * a duplicate a database error rather than a race between two readers.
+ */
+export const branchDeliveryAddresses = pgTable(
+  "branch_delivery_addresses",
+  {
+    id: serial("id").primaryKey(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id)
+      .notNull(),
+    branchId: integer("branch_id")
+      .references(() => branches.id)
+      .notNull(),
+    // What a person picks it by on the checkout selector.
+    label: varchar("label", { length: 120 }).notNull(),
+    labelKey: varchar("label_key", { length: 120 }).notNull(),
+    address: text("address").notNull(),
+    city: varchar("city", { length: 100 }),
+    province: varchar("province", { length: 100 }),
+    contactPerson: varchar("contact_person", { length: 255 }),
+    contactPhone: varchar("contact_phone", { length: 32 }),
+    status: varchar("status", { length: 16 }).notNull().default("pending"),
+    // Why the branch says it needs another destination. Shown to the approver.
+    requestReason: text("request_reason"),
+    requestedByUserId: uuid("requested_by_user_id")
+      .references(() => users.id)
+      .notNull(),
+    decisionReason: text("decision_reason"),
+    decidedByUserId: uuid("decided_by_user_id").references(() => users.id),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("branch_delivery_addresses_branch_status_idx").on(t.branchId, t.status, t.createdAt),
+    index("branch_delivery_addresses_org_status_idx").on(t.organizationId, t.status, t.createdAt),
+    index("branch_delivery_addresses_requested_by_idx").on(t.requestedByUserId),
+    // One live address per name per branch. Partial, so a rejected label may be
+    // requested again once whatever was wrong with it has been fixed, while a
+    // second request for a name already pending or already approved is refused
+    // by the database rather than by a check some future endpoint might skip.
+    uniqueIndex("branch_delivery_addresses_live_label_uq")
+      .on(t.branchId, t.labelKey)
+      .where(sql`${t.status} IN ('pending', 'approved')`),
+    check(
+      "branch_delivery_addresses_status_ck",
+      sql`${t.status} IN ('pending', 'approved', 'rejected')`,
+    ),
+    // A pending row carries no decision; a decided one names its decider. No
+    // endpoint can approve an address without recording who approved it.
+    check(
+      "branch_delivery_addresses_decision_ck",
+      sql`CASE WHEN ${t.status} = 'pending'
+            THEN ${t.decidedAt} IS NULL AND ${t.decidedByUserId} IS NULL
+            ELSE ${t.decidedAt} IS NOT NULL AND ${t.decidedByUserId} IS NOT NULL
+          END`,
+    ),
+    check(
+      "branch_delivery_addresses_text_ck",
+      sql`length(btrim(${t.label})) > 0 AND length(btrim(${t.labelKey})) > 0 AND length(btrim(${t.address})) > 0`,
+    ),
   ],
 )
 
@@ -550,9 +696,32 @@ export const orders = pgTable(
     // envelope. NULL for every order created by any other role or flow, so no
     // existing behaviour reads or depends on it.
     groupOrderId: integer("group_order_id").references(() => groupOrders.id),
+    // Where this order is to be delivered, when the requester chose somewhere
+    // other than the branch's own address.
+    //
+    // Nullable, and that is load-bearing: every order raised before this column
+    // existed has none, and so does every order from a flow that does not offer
+    // the selector. All of them mean "the branch's own address", which is
+    // exactly what they already render. Nothing is backfilled.
+    //
+    // Only an approved row may be named here, checked inside the creation
+    // transaction against (id, organization, branch, status) — see
+    // `loadApprovedDeliveryAddress` in `lib/server/delivery-addresses.ts`.
+    deliveryAddressId: integer("delivery_address_id").references(() => branchDeliveryAddresses.id),
     createdByUserId: uuid("created_by_user_id")
       .references(() => users.id)
       .notNull(),
+    // The role the creator held **at the moment the order was raised**.
+    //
+    // A person's role can change; what they were when they ordered cannot.
+    // Attribution reports key on the requester role, so reading it live from
+    // `users`/`roles` lets a promotion retroactively add or remove historical
+    // orders from a report. Same reasoning as `status_at_refund` below.
+    //
+    // Nullable: rows written before this column existed have none, and every
+    // reader falls back to the live join for those (see
+    // `lib/server/order-creator-role-sql.ts`) until the backfill has run.
+    createdByRole: varchar("created_by_role", { length: 32 }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
     fulfilledAt: timestamp("fulfilled_at", { withTimezone: true }),
@@ -591,6 +760,13 @@ export const orders = pgTable(
       date: string
       buyerName: string
       buyerAddress: string
+      /**
+       * The approved delivery address this order was sent to, when it was sent
+       * somewhere other than the branch's own address. Absent on every order
+       * that used the branch default, which is every order placed before
+       * delivery addresses existed.
+       */
+      deliveryAddressLabel?: string
       buyerPhone?: string
       organizationName: string
       organizationContact?: string
@@ -631,6 +807,14 @@ export const orders = pgTable(
     index("orders_group_order_idx")
       .on(t.groupOrderId)
       .where(sql`${t.groupOrderId} IS NOT NULL`),
+    // Partial for the same reason: only an order sent somewhere other than its
+    // branch's own address carries the column, so the index stays the size of
+    // that choice rather than the size of the orders table. It exists so
+    // "which orders went to this address" stays cheap when Head Office is
+    // deciding whether an address is still needed.
+    index("orders_delivery_address_idx")
+      .on(t.deliveryAddressId)
+      .where(sql`${t.deliveryAddressId} IS NOT NULL`),
     uniqueIndex("orders_creator_idempotency_uq").on(t.createdByUserId, t.idempotencyKey),
     check("orders_amounts_nonnegative_ck", sql`${t.subtotalCents} >= 0 AND ${t.taxCents} >= 0 AND ${t.totalCents} >= 0 AND COALESCE(${t.refundAmountCents}, 0) >= 0 AND COALESCE(${t.refundAmountCents}, 0) <= ${t.totalCents}`),
     check("orders_idempotency_pair_ck", sql`(${t.idempotencyKey} IS NULL AND ${t.requestFingerprint} IS NULL) OR (${t.idempotencyKey} IS NOT NULL AND ${t.requestFingerprint} IS NOT NULL)`),
@@ -1958,5 +2142,154 @@ export const supportThreadReads = pgTable(
   (t) => [
     uniqueIndex("support_thread_reads_thread_user_uq").on(t.threadId, t.userId),
     index("support_thread_reads_user_idx").on(t.userId),
+  ],
+)
+
+/**
+ * The code an organization hands out so people can ask to join it.
+ *
+ * Deliberately a table of its own rather than a column on `organizations`:
+ * `GET /api/v1/organizations` and `GET /api/v1/organizations/[id]` both select
+ * the whole organization row and both admit BRANCH_ADMIN, GROUP_USER and
+ * ORDER_PORTAL, so a column here would be handed to every employee in the
+ * tenant on page load. Reaching this table goes through
+ * `/api/v1/organizations/join-code`, which admits Head Office alone.
+ *
+ * One row per organization: the row's presence is what makes a tenant joinable,
+ * and deleting it closes joining without disturbing anything else. The code is
+ * stored as typed after `normalizeJoinCode` — upper case, no whitespace — so a
+ * lookup is an exact index probe and one code cannot be recorded twice under
+ * two spellings.
+ */
+export const organizationJoinCodes = pgTable(
+  "organization_join_codes",
+  {
+    id: serial("id").primaryKey(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id, { onDelete: "cascade" })
+      .notNull(),
+    code: varchar("code", { length: 64 }).notNull(),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id),
+    updatedByUserId: uuid("updated_by_user_id").references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("organization_join_codes_org_uq").on(t.organizationId),
+    uniqueIndex("organization_join_codes_code_uq").on(t.code),
+    // The floor on guessing work, held in the database as well as in
+    // `lib/organization-join.ts`, so no future writer can shorten it.
+    check(
+      "organization_join_codes_code_shape_ck",
+      sql`${t.code} ~ '^[A-Z0-9-]{8,32}$'`,
+    ),
+  ],
+)
+
+/**
+ * Somebody asking to join an organization, from the public join form.
+ *
+ * This is not a user and never becomes one on its own. Head Office approves it,
+ * and only then is a `users` row written — see `lib/server/organization-join.ts`.
+ *
+ * `password_hash` holds bcrypt output from the moment of submission; the
+ * applicant's password is never persisted in any other form and cannot be read
+ * back. The requested role is confined to `JOINABLE_ROLES` here as well as in
+ * Zod, because a check constraint is the one layer a new endpoint cannot forget.
+ */
+export const organizationJoinRequests = pgTable(
+  "organization_join_requests",
+  {
+    id: serial("id").primaryKey(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id)
+      .notNull(),
+    requestedRole: varchar("requested_role", { length: 32 }).notNull(),
+    // Single-branch roles only. A group role leaves this null and carries its
+    // reach in the two id lists instead.
+    requestedBranchId: integer("requested_branch_id").references(() => branches.id),
+    requestedGroupIds: jsonb("requested_group_ids").$type<number[]>().notNull().default([]),
+    requestedBranchIds: jsonb("requested_branch_ids").$type<number[]>().notNull().default([]),
+    firstName: varchar("first_name", { length: 100 }).notNull(),
+    lastName: varchar("last_name", { length: 100 }).notNull(),
+    // Stored already lower-cased by `normalizeEmail`, which is what lets the
+    // pending-duplicate index below be a plain column index.
+    email: varchar("email", { length: 255 }).notNull(),
+    username: varchar("username", { length: 255 }).notNull(),
+    phone: varchar("phone", { length: 32 }),
+    employeeId: varchar("employee_id", { length: 64 }),
+    imprestHolder: varchar("imprest_holder", { length: 255 }),
+    contactPerson: varchar("contact_person", { length: 255 }),
+    location: varchar("location", { length: 255 }),
+    address: text("address"),
+    passwordHash: varchar("password_hash", { length: 255 }).notNull(),
+    status: varchar("status", { length: 16 }).notNull().default("pending"),
+    decisionReason: text("decision_reason"),
+    decidedByUserId: uuid("decided_by_user_id").references(() => users.id),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    createdUserId: uuid("created_user_id").references(() => users.id),
+    // Kept for abuse investigation on a public endpoint. Never rendered.
+    submittedIp: varchar("submitted_ip", { length: 64 }),
+    submittedUserAgent: varchar("submitted_user_agent", { length: 512 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("organization_join_requests_org_status_idx").on(t.organizationId, t.status, t.createdAt),
+    index("organization_join_requests_created_user_idx").on(t.createdUserId),
+    // One pending request per identity **per tenant**. Partial, so a rejected
+    // applicant may reapply, and an approved one leaves the identity to the
+    // `users` indexes and to `assertUniqueUserFields`.
+    //
+    // Keyed on the organization deliberately. A global index here would let a
+    // pending request in one tenant block the same person from applying to a
+    // different tenant — a cross-tenant channel neither tenant can see or
+    // clear, reachable by anyone holding one tenant's join code. Two tenants may
+    // therefore each queue the same person; whichever approves first creates the
+    // account, and the other approval is refused with a 409 because
+    // `assertUniqueUserFields` and the `users` unique indexes remain
+    // application-wide.
+    uniqueIndex("organization_join_requests_pending_email_uq")
+      .on(t.organizationId, t.email)
+      .where(sql`${t.status} = 'pending'`),
+    uniqueIndex("organization_join_requests_pending_username_uq")
+      .on(t.organizationId, t.username)
+      .where(sql`${t.status} = 'pending'`),
+    check(
+      "organization_join_requests_status_ck",
+      sql`${t.status} IN ('pending', 'approved', 'rejected')`,
+    ),
+    // The four roles the public form may ask for. HEAD_OFFICE and SUPER_ADMIN
+    // are unreachable from this table by construction.
+    check(
+      "organization_join_requests_role_ck",
+      sql`${t.requestedRole} IN ('BRANCH_ADMIN', 'ORDER_PORTAL', 'GROUP_USER', 'GROUP_ORDER_PORTAL')`,
+    ),
+    // A single-branch role names one branch and no lists; a group role names at
+    // least one group or branch and no single branch. The same rule as
+    // `joinRequestScopeShapeError`, held where it cannot be bypassed.
+    check(
+      "organization_join_requests_scope_shape_ck",
+      sql`CASE WHEN ${t.requestedRole} IN ('BRANCH_ADMIN', 'ORDER_PORTAL')
+            THEN ${t.requestedBranchId} IS NOT NULL
+              AND jsonb_array_length(${t.requestedGroupIds}) = 0
+              AND jsonb_array_length(${t.requestedBranchIds}) = 0
+            ELSE ${t.requestedBranchId} IS NULL
+              AND jsonb_array_length(${t.requestedGroupIds}) + jsonb_array_length(${t.requestedBranchIds}) > 0
+          END`,
+    ),
+    // A pending request carries no decision, and a decided one carries both a
+    // decider and a time. An approved request also names the user it created.
+    check(
+      "organization_join_requests_decision_ck",
+      sql`CASE WHEN ${t.status} = 'pending'
+            THEN ${t.decidedAt} IS NULL AND ${t.decidedByUserId} IS NULL AND ${t.createdUserId} IS NULL
+            ELSE ${t.decidedAt} IS NOT NULL AND ${t.decidedByUserId} IS NOT NULL
+          END`,
+    ),
+    check(
+      "organization_join_requests_approved_user_ck",
+      sql`${t.status} <> 'approved' OR ${t.createdUserId} IS NOT NULL`,
+    ),
   ],
 )

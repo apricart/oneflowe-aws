@@ -455,6 +455,16 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
                         {receiptData.organizationName && (
                             <p className="party-line">{receiptData.organizationName}</p>
                         )}
+                        {/* `buyerAddress` already is the chosen delivery address
+                            when the order named one. The label is shown beside
+                            it so a reader can tell which of the branch's
+                            addresses the goods went to. */}
+                        {receiptData.deliveryAddressLabel && (
+                            <p className="party-line">
+                                <span className="party-label">Deliver to:</span>{" "}
+                                {toDisplayNameCase(receiptData.deliveryAddressLabel)}
+                            </p>
+                        )}
                         <p className="party-line">
                             <span className="party-label">Address:</span>{" "}
                             {toDisplayNameCase(receiptData.buyerAddress || "—")}

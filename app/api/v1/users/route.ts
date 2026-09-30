@@ -1,6 +1,6 @@
 import { ok,error,readJson,requireApiRole } from "@/lib/api"
 import { db } from "@/lib/db"
-import { users as usersTable,roles as rolesTable,systemLogs,employeeCredentials,branches,organizations } from "@/db/schema"
+import { users as usersTable,roles as rolesTable,systemLogs,branches,organizations } from "@/db/schema"
 import { and,desc,eq,ne,isNull } from "drizzle-orm"
 import { getRequestScope } from "@/lib/auth"
 import { headers } from "next/headers"
@@ -10,8 +10,10 @@ import { assertUniqueUserFields,normalizeEmail,normalizeOptionalText,UserUniqueF
 import { sendWelcomeEmail } from "@/lib/email"
 import { userCreateSchema,validationMessage } from "@/lib/server/mutation-validation"
 import { canAssignRole } from "@/lib/server/user-access-policy"
+import { isViewerRole } from "@/lib/viewer-access"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { USER_MANAGEMENT_ROLES } from "@/lib/user-management-access"
+import { usernameExists } from "@/lib/user-username-uniqueness"
 import type { SystemRole } from "@/lib/server/mutation-validation"
 import {
   usesMultiBranchScope,
@@ -42,6 +44,13 @@ function getRoleShapeError(
 ) {
   if (role === "HEAD_OFFICE" && !organizationId) {
     return { message: "organizationId required for HEAD_OFFICE", status: 400 }
+  }
+  // A Viewer always belongs to one tenant. Its branch is optional and decides
+  // reach rather than shape: with one it reads that branch alone, without one
+  // it reads the whole tenant. `resolveViewerScope` applies the same rule on
+  // every endpoint the role is admitted to.
+  if (isViewerRole(role) && !organizationId) {
+    return { message: "organizationId required for VIEWER", status: 400 }
   }
   if (["BRANCH_ADMIN", "ORDER_PORTAL"].includes(role) && (!organizationId || !branchId)) {
     return { message: "organizationId and branchId required for BRANCH_ADMIN and ORDER_PORTAL", status: 400 }
@@ -95,14 +104,6 @@ async function validateUserAssignment(
   }
   return getRoleShapeError(role, organizationId, branchId)
     ?? await getTenantReferenceError(organizationId, branchId)
-}
-
-async function usernameExists(username: string) {
-  const [[user], [employee]] = await Promise.all([
-    db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.username, username)).limit(1),
-    db.select({ id: employeeCredentials.id }).from(employeeCredentials).where(eq(employeeCredentials.username, username)).limit(1),
-  ])
-  return Boolean(user || employee)
 }
 
 async function writeUserCreationAudit(createdUser: any, scope: any, role: string, organizationId: number | null, branchId: number | null) {
@@ -195,6 +196,7 @@ export async function GET(req: Request) {
         imprestHolder: usersTable.imprestHolder,
         contactPerson: usersTable.contactPerson,
         address: usersTable.address,
+        externalSource: usersTable.externalSource,
       })
       .from(usersTable)
       .leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
@@ -221,6 +223,9 @@ export async function GET(req: Request) {
       imprestHolder: r.imprestHolder || null,
       contactPerson: r.contactPerson || null,
       address: r.address || null,
+      // Present so the admin UI can tell a mirrored account apart: its role is
+      // managed by the source system and cannot be switched here.
+      externalSource: r.externalSource || null,
     }))
   }
 

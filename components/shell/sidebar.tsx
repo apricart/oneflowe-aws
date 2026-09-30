@@ -2,13 +2,14 @@
 import Link from "next/link"
 import { usePathname, useSearchParams } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { Home,Building2,Users,Package,Boxes,Wallet,BarChart3,Settings,FolderTree,ChevronDown,ClipboardCheck,LifeBuoy,PanelLeftClose,PanelLeftOpen,ScrollText } from "lucide-react"
+import { Home,Building2,Users,Package,Boxes,Wallet,BarChart3,Settings,FolderTree,ChevronDown,ClipboardCheck,DoorOpen,LifeBuoy,MapPinned,PanelLeftClose,PanelLeftOpen,ScrollText } from "lucide-react"
 import Image from "next/image"
 import { useCallback,useEffect,useState,type ReactNode } from "react"
 import { Tooltip,TooltipContent,TooltipTrigger } from "@/components/ui/tooltip"
 import { HoverCard,HoverCardContent,HoverCardTrigger } from "@/components/ui/hover-card"
 
 import { useSession } from "next-auth/react"
+import { isViewerRole } from "@/lib/viewer-access"
 
 const COLLAPSED_STORAGE_KEY = "oneflowe.sidebar.collapsed"
 
@@ -117,6 +118,14 @@ export const getNavigationByRole = (role: string, budgetAllocationEnabled = fals
       ...baseNav,
       { href: "/branches", label: "My Branches", icon: Building2 },
       { href: "/users", label: "Users", icon: Users },
+      // Head Office only: the tenant's own join code and its join queue. No
+      // other role has this entry, and `proxy.ts` plus the page layout refuse
+      // the area to anyone who reaches the URL directly.
+      { href: "/join-requests", label: "Join Requests", icon: DoorOpen },
+      // Head Office decides every delivery-address request in the tenant. The
+      // page is shared with the branches that raise them; who may decide one is
+      // `lib/delivery-address-access.ts`, on the handlers.
+      { href: "/delivery-addresses", label: "Delivery Addresses", icon: MapPinned },
       { href: "/orders", label: "Orders", icon: Package },
       {
         href: "/inventory",
@@ -156,6 +165,7 @@ export const getNavigationByRole = (role: string, budgetAllocationEnabled = fals
       ...baseNav,
       { href: "/orders", label: "Orders", icon: Package },
       { href: "/branch-inventory", label: "Inventory", icon: Boxes },
+      { href: "/delivery-addresses", label: "Delivery Addresses", icon: MapPinned },
       {
         href: "/reports",
         label: "Reports",
@@ -186,6 +196,7 @@ export const getNavigationByRole = (role: string, budgetAllocationEnabled = fals
       ...baseNav,
       { href: "/orders", label: "Orders", icon: Package },
       { href: "/approvals", label: "Approvals", icon: ClipboardCheck },
+      { href: "/delivery-addresses", label: "Delivery Addresses", icon: MapPinned },
       ...(budgetAllocationEnabled ? [{ href: "/budgets", label: "Budgets", icon: Wallet }] : []),
       {
         href: "/reports",
@@ -206,6 +217,12 @@ export const getNavigationByRole = (role: string, budgetAllocationEnabled = fals
     ]
   }
 
+  // The read-only account has one page. Stated rather than left to the fallback
+  // below, so that widening the fallback later cannot widen this role's menu.
+  if (isViewerRole(role)) {
+    return baseNav
+  }
+
   return baseNav
 }
 
@@ -221,6 +238,9 @@ const describeRole = (role: string) => {
   }
   if (role === "GROUP_USER") {
     return "Group User"
+  }
+  if (isViewerRole(role)) {
+    return "Viewer"
   }
   return ""
 }

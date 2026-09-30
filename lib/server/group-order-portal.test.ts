@@ -459,13 +459,23 @@ describe("group order portal access contracts", () => {
     // scoped per order by lib/invoice-access-policy rather than by area.
     expect(proxySource).toContain('const GROUP_ORDER_PORTAL_HOME = "/group-portal"')
     expect(proxySource).toContain('if (role === "GROUP_ORDER_PORTAL") {')
-    expect(proxySource).toContain("return pathname.startsWith(GROUP_ORDER_PORTAL_HOME) || isInvoiceArea(pathname)")
+    // Matched on the terms rather than on one line of source, because the
+    // allowlist has outgrown a single line: what matters is that the home is
+    // the only *area* the requester holds and every addition is a named shared
+    // surface, not how the expression happens to be wrapped.
+    expect(proxySource).toContain("return pathname.startsWith(GROUP_ORDER_PORTAL_HOME)")
     expect(proxySource).toContain(": GROUP_ORDER_PORTAL_HOME")
+    expect(proxySource).toContain("|| isInvoiceArea(pathname)")
     // The support area joined the invoice page as a second shared surface: a
     // requester raises a query about its own order from here, and which threads
     // it may read is decided by lib/support-access rather than by area.
     expect(proxySource).toContain("isSupportArea(pathname)")
     expect(proxySource).toContain('const SUPPORT_AREA = "/support"')
+    // And delivery addresses as a third: the requester asks for a destination
+    // for the branches it orders for, and which branches those are is
+    // re-resolved from its own assignments on every call rather than by area.
+    expect(proxySource).toContain("|| isDeliveryAddressArea(pathname)")
+    expect(proxySource).toContain('const DELIVERY_ADDRESS_AREA = "/delivery-addresses"')
     // The gate that used to sit on the retired wizard route now guards the area
     // itself, and still fails closed: only the requester renders the
     // storefront. Every other role — the approver included — is sent to the

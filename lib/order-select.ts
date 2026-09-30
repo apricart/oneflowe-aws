@@ -22,6 +22,12 @@ export const orderSelectColumns = {
   totalCents: orders.totalCents,
   notes: orders.notes,
   poNumber: orders.poNumber,
+  // Read the same defensive way as the columns above, so an environment whose
+  // delivery-address migration has not been applied reports "sent to the
+  // branch's own address" rather than failing every order read. Production
+  // migrations here are applied by hand and the application can be running
+  // ahead of them.
+  deliveryAddressId: sql<number | null>`NULLIF(to_jsonb("orders") ->> 'delivery_address_id', '')::int`,
   createdByUserId: orders.createdByUserId,
   createdAt: orders.createdAt,
   deliveredAt: orders.deliveredAt,

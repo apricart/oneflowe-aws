@@ -8,7 +8,7 @@ import { useSession } from "next-auth/react"
 // is a set of branches resolved on the server from its own assignments, so it
 // is pinned to its organization here and never to a branch — the branch filter
 // it would otherwise carry is not the client's to decide.
-type Role = "SUPER_ADMIN" | "HEAD_OFFICE" | "BRANCH_ADMIN" | "GROUP_USER"
+type Role = "SUPER_ADMIN" | "HEAD_OFFICE" | "BRANCH_ADMIN" | "GROUP_USER" | "VIEWER"
 
 interface AppContextValue {
   // Current context
@@ -75,6 +75,14 @@ function initializeRoleContext(options: {
     setOrganizationId(String(userOrgId))
     setBranchId(null)
     setBranchIds([])
+  } else if (userRole === "VIEWER" && userOrgId) {
+    // Read-only. Always pinned to its tenant; pinned to a branch as well when
+    // the account carries one, in which case the filter is not offered. The
+    // endpoints apply the same rule server-side (`resolveViewerScope`), so this
+    // only decides what the dashboard asks for, never what it may have.
+    setOrganizationId(String(userOrgId))
+    setBranchId(userBranchId ? String(userBranchId) : null)
+    setBranchIds(userBranchId ? [String(userBranchId)] : savedContext?.branchIds || [])
   }
 }
 
@@ -176,6 +184,12 @@ export function AppContextProvider({ children }: Readonly<{ children: ReactNode 
       setOrganizationIdState(String(userOrgId))
       setBranchIdState(null)
       setBranchIdsState([])
+    } else if (userRole === "VIEWER" && userOrgId) {
+      // Resetting a pinned Viewer returns it to its own branch, not to the
+      // whole tenant.
+      setOrganizationIdState(String(userOrgId))
+      setBranchIdState(userBranchId ? String(userBranchId) : null)
+      setBranchIdsState(userBranchId ? [String(userBranchId)] : [])
     }
   }, [userRole, userOrgId, userBranchId])
 

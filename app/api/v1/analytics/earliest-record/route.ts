@@ -4,7 +4,9 @@ import { orders } from "@/db/schema"
 import { asc } from "drizzle-orm"
 import { requireApiRole } from "@/lib/api"
 
-const allowedRoles = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"] as const
+// VIEWER reads this to learn which years its month filter may offer. It returns
+// one timestamp and no tenant rows.
+const allowedRoles = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "VIEWER"] as const
 
 export async function GET() {
     const err = await requireApiRole(allowedRoles as any)

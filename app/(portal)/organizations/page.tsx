@@ -2,6 +2,11 @@
 import { useAppContext } from "@/components/context/app-context"
 import { BranchExcelExportButton } from "@/components/organizations/branch-excel-export-button"
 import { BranchListExcelExportButton } from "@/components/organizations/branch-list-excel-export-button"
+import {
+EmailDomainField,
+emailDomainDraftError,
+toEmailDomainPayload,
+} from "@/components/organizations/email-domain-field"
 import { OrganizationExcelExportButton } from "@/components/organizations/organization-excel-export-button"
 import { OrganizationListExcelExportButton } from "@/components/organizations/organization-list-excel-export-button"
 import {
@@ -46,10 +51,16 @@ type Organization = {
   name: string
   code: string
   ntnNumber?: string | null
+  emailDomain?: string | null
   status?: "active" | "inactive"
   budgetAllocationMode?: BudgetAllocationMode
   orderApproverRole?: OrderApproverRole
 }
+
+const CREATE_EMAIL_DOMAIN_HINT =
+  "People joining through the join page must use an address at this domain. Leave blank and nobody can join this way."
+const EDIT_EMAIL_DOMAIN_HINT =
+  "People joining through the join page must use an address at this domain. Clear it to stop anyone joining this way."
 type Branch = {
   id: number
   name: string
@@ -1029,6 +1040,7 @@ function CreateOrgDialog({
   const [name, setName] = useState("")
   const [code, setCode] = useState("")
   const [ntnNumber, setNtnNumber] = useState("")
+  const [emailDomain, setEmailDomain] = useState("")
   const [status, setStatus] = useState<boolean>(true)
   const [budgetAllocationMode, setBudgetAllocationMode] = useState<BudgetAllocationMode>("money")
   const [orderApproverRole, setOrderApproverRole] = useState<OrderApproverRole>(DEFAULT_ORDER_APPROVER_ROLE)
@@ -1040,9 +1052,11 @@ function CreateOrgDialog({
   const [saving, setSaving] = useState(false)
 
   const networkError = privateNetworkDraftError(privateNetworkEnabled, networkEntries)
+  const emailDomainError = emailDomainDraftError(emailDomain)
 
   async function createCompany() {
     setSaving(true)
+    const emailDomainPayload = toEmailDomainPayload(emailDomain)
     try {
       const res = await fetch("/api/v1/organizations", {
         method: "POST",
@@ -1051,6 +1065,7 @@ function CreateOrgDialog({
           code,
           // Optional: only sent when filled in, so a blank field stays absent.
           ...(ntnNumber.trim() ? { ntnNumber: ntnNumber.trim() } : {}),
+          ...(emailDomainPayload ? { emailDomain: emailDomainPayload } : {}),
           status: status ? "active" : "inactive",
           budgetAllocationMode,
           orderApproverRole,
@@ -1072,6 +1087,7 @@ function CreateOrgDialog({
       setName("")
       setCode("")
       setNtnNumber("")
+      setEmailDomain("")
       setStatus(true)
       setBudgetAllocationMode("money")
       setOrderApproverRole(DEFAULT_ORDER_APPROVER_ROLE)
@@ -1089,7 +1105,7 @@ function CreateOrgDialog({
   }
 
   function submit() {
-    if (!name || !code || saving || networkError) return
+    if (!name || !code || saving || networkError || emailDomainError) return
     setConfirmModeOpen(true)
   }
 
@@ -1145,6 +1161,13 @@ function CreateOrgDialog({
                 />
                 <p className="text-xs text-muted-foreground">Tax registration number. Leave blank if not applicable.</p>
               </div>
+              <EmailDomainField
+                id="email-domain"
+                value={emailDomain}
+                onChange={setEmailDomain}
+                disabled={saving}
+                hint={CREATE_EMAIL_DOMAIN_HINT}
+              />
               <div className="space-y-2">
                 <Label>Budget allocation model</Label>
                 <div className="grid gap-2 sm:grid-cols-2">
@@ -1265,7 +1288,7 @@ function CreateOrgDialog({
             <Button
               onClick={submit}
               className="gap-2 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100 disabled:shadow-none"
-              disabled={!name || !code || saving || Boolean(networkError)}
+              disabled={!name || !code || saving || Boolean(networkError) || Boolean(emailDomainError)}
             >
               <Save className="h-4 w-4" />
               Save Company
@@ -1505,6 +1528,7 @@ function EditOrgDialog({
   const [name, setName] = useState(org.name)
   const [code, setCode] = useState(org.code)
   const [ntnNumber, setNtnNumber] = useState(org.ntnNumber ?? "")
+  const [emailDomain, setEmailDomain] = useState(org.emailDomain ?? "")
   const [status, setStatus] = useState<boolean>(isActiveStatus(org.status))
   const [budgetAllocationMode, setBudgetAllocationMode] = useState<BudgetAllocationMode>(
     parseBudgetAllocationMode(org.budgetAllocationMode)
@@ -1524,15 +1548,25 @@ function EditOrgDialog({
   const networkError = networkLoadFailed
     ? null
     : privateNetworkDraftError(privateNetworkEnabled, networkEntries)
+  const emailDomainError = emailDomainDraftError(emailDomain)
 
   useEffect(() => {
     setName(org.name)
     setCode(org.code)
     setNtnNumber(org.ntnNumber ?? "")
+    setEmailDomain(org.emailDomain ?? "")
     setStatus(isActiveStatus(org.status))
     setBudgetAllocationMode(parseBudgetAllocationMode(org.budgetAllocationMode))
     setOrderApproverRole(parseOrderApproverRole(org.orderApproverRole))
-  }, [org.name, org.code, org.ntnNumber, org.status, org.budgetAllocationMode, org.orderApproverRole])
+  }, [
+    org.name,
+    org.code,
+    org.ntnNumber,
+    org.emailDomain,
+    org.status,
+    org.budgetAllocationMode,
+    org.orderApproverRole,
+  ])
 
   useEffect(() => {
     if (!open || !isSuperAdmin) return
@@ -1650,6 +1684,13 @@ function EditOrgDialog({
               />
               <p className="text-xs text-muted-foreground">Tax registration number. Clear the field to remove it.</p>
             </div>
+            <EmailDomainField
+              id="eemail-domain"
+              value={emailDomain}
+              onChange={setEmailDomain}
+              disabled={saving}
+              hint={EDIT_EMAIL_DOMAIN_HINT}
+            />
             <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
               <div>
                 <Label htmlFor="org-status-edit">Status</Label>
@@ -1789,7 +1830,8 @@ function EditOrgDialog({
               loadingNetwork ||
               !name.trim() ||
               !code.trim() ||
-              Boolean(networkError)
+              Boolean(networkError) ||
+              Boolean(emailDomainError)
             }
             onClick={async () => {
               setSaving(true)
@@ -1800,6 +1842,7 @@ function EditOrgDialog({
                     code,
                     // Optional: an emptied field clears the stored value.
                     ntnNumber: ntnNumber.trim() || null,
+                    emailDomain: toEmailDomainPayload(emailDomain),
                     status: status ? "active" : "inactive",
                     ...(isSuperAdmin ? { budgetAllocationMode, orderApproverRole } : {}),
                   },

@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Search, RefreshCcw, Loader2, AlertTriangle, Building2, Calendar, User, DollarSign, Clock, XCircle } from "lucide-react"
+import { Search, RefreshCcw, Loader2, AlertTriangle, Building2, Calendar, User, DollarSign, Clock, XCircle, MessageSquare } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { calculateLineCents, formatQuantity, parseQuantity, roundQuantity, sanitizeQuantityStep } from "@/lib/quantity"
 
@@ -668,6 +668,23 @@ export default function RefundsPage() {
                                 <p className="font-medium">{order.createdByUserName}</p>
                             </div>
                         </div>
+
+                        {reviewingRefund && (
+                            <div className="p-4 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg">
+                                <h4 className="font-medium text-blue-800 dark:text-blue-200 mb-1 flex items-center gap-2">
+                                    <MessageSquare className="h-4 w-4" />
+                                    Refund Reason
+                                </h4>
+                                {reviewingRefund.requestedByName && (
+                                    <p className="text-xs text-blue-700/80 dark:text-blue-300/80 mb-2">
+                                        Requested by {reviewingRefund.requestedByName}
+                                    </p>
+                                )}
+                                <p className="text-sm text-blue-900 dark:text-blue-100 whitespace-pre-wrap break-words">
+                                    {reviewingRefund.reason || "No reason was given."}
+                                </p>
+                            </div>
+                        )}
 
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-4 bg-slate-50 dark:bg-slate-900/50 rounded-lg">
                             <div className="space-y-1">

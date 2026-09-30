@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic"
 import { useSession } from "next-auth/react"
 import { DashboardSkeleton } from "@/components/dashboard/dashboard-skeleton"
+import { isViewerRole } from "@/lib/viewer-access"
 
 const SuperAdminDashboard = dynamic(
   () => import("@/components/dashboard/super-admin-dashboard").then(mod => ({ default: mod.SuperAdminDashboard })),
@@ -26,6 +27,14 @@ const GroupUserDashboard = dynamic(
   { loading: () => <DashboardSkeleton /> }
 )
 
+// The read-only account has a dashboard of its own rather than a stripped-down
+// copy of somebody else's, so the other four cannot be changed by accident
+// while changing this one.
+const ViewerDashboard = dynamic(
+  () => import("@/components/dashboard/viewer-dashboard").then(mod => ({ default: mod.ViewerDashboard })),
+  { loading: () => <DashboardSkeleton /> }
+)
+
 export default function DashboardPage() {
   const { data: session, status } = useSession()
   const role = (session?.user as any)?.role
@@ -42,6 +51,7 @@ export default function DashboardPage() {
   if (role === "HEAD_OFFICE") return <HeadOfficeDashboard />
   if (role === "BRANCH_ADMIN") return <BranchAdminDashboard />
   if (role === "GROUP_USER") return <GroupUserDashboard />
+  if (isViewerRole(role)) return <ViewerDashboard />
 
   return (
     <div className="p-6 text-sm text-muted-foreground">

@@ -128,6 +128,11 @@ const VIA_LIB: readonly { file: string; module: string }[] = [
   { file: "app/api/v1/mfa/login/send-otp/route.ts", module: "lib/server/auth-audit.ts" },
   { file: "app/api/v1/mfa/login/verify-otp/route.ts", module: "lib/server/auth-audit.ts" },
   { file: "app/api/v1/users/me/change-password/route.ts", module: "lib/server/password-change.ts" },
+  // Public recovery. Every outcome — including requests for accounts that do
+  // not exist — is recorded by the service, never by the route.
+  { file: "app/api/v1/auth/password-reset/request/route.ts", module: "lib/server/password-reset.ts" },
+  { file: "app/api/v1/auth/password-reset/verify/route.ts", module: "lib/server/password-reset.ts" },
+  { file: "app/api/v1/auth/password-reset/complete/route.ts", module: "lib/server/password-reset.ts" },
   { file: "app/api/v1/users/me/email-verification/send/route.ts", module: "lib/server/email-verification.ts" },
   { file: "app/api/v1/users/me/email-verification/verify/route.ts", module: "lib/server/email-verification.ts" },
 
@@ -147,6 +152,19 @@ const VIA_LIB: readonly { file: string; module: string }[] = [
   { file: "app/api/v1/support/threads/route.ts", module: "lib/server/support-threads.ts" },
   { file: "app/api/v1/support/threads/[id]/route.ts", module: "lib/server/support-threads.ts" },
   { file: "app/api/v1/support/threads/[id]/messages/route.ts", module: "lib/server/support-threads.ts" },
+
+  // Self-service joining. Opening a tenant to outsiders and deciding who gets in
+  // are both privileged, and both record through one module so the two halves of
+  // the story cannot be spelled differently.
+  { file: "app/api/v1/organizations/join-code/route.ts", module: "lib/server/organization-join-audit.ts" },
+  { file: "app/api/v1/join-requests/[id]/route.ts", module: "lib/server/organization-join-audit.ts" },
+
+  // Delivery addresses. Asking for a destination and granting one are both on
+  // the trail — an approved address diverts stock to somewhere the branch's own
+  // record does not mention — and both record through one module so the two
+  // halves of the story cannot be spelled differently.
+  { file: "app/api/v1/delivery-addresses/route.ts", module: "lib/server/delivery-address-audit.ts" },
+  { file: "app/api/v1/delivery-addresses/[id]/route.ts", module: "lib/server/delivery-address-audit.ts" },
 ]
 
 /**
@@ -237,6 +255,25 @@ const NOT_AUDITED: readonly { file: string; reason: string }[] = [
     reason:
       "POST is a deprecated stub that always answers 400 — stock is global-only. "
       + "Nothing is written.",
+  },
+  {
+    file: "app/api/v1/join/lookup/route.ts",
+    reason:
+      "A read that is a POST only so the join code never reaches a URL, a log "
+      + "line or a Referer. It changes nothing: it resolves an organization from "
+      + "a code and returns branch and group names. Its abuse signal is the rate "
+      + "limiter, which is where a burst of wrong codes shows up.",
+  },
+  {
+    file: "app/api/v1/join/requests/route.ts",
+    reason:
+      "Anonymous, and the `organization_join_requests` row it writes IS the "
+      + "record: who applied, from which address, with which agent, when, and "
+      + "later who decided it and what was granted. A second row per submission "
+      + "would duplicate that and hand anybody holding a leaked code a way to "
+      + "flood audit_logs. The privileged half — the decision that actually "
+      + "creates an account — is audited through "
+      + "lib/server/organization-join-audit.ts.",
   },
 ]
 

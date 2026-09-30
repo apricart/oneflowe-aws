@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Dialog,DialogContent,DialogHeader,DialogTitle,DialogFooter,DialogDescription } from "@/components/ui/dialog"
-import { ShoppingBag,Search,Plus,Minus,Trash2,Home,CheckCircle,Clock,AlertTriangle,DollarSign,Zap,Package,TrendingDown,Grid,LogOut,ArrowRight,ArrowLeft,Calendar,MapPin,RefreshCw,Building2,Copy,Send,Pencil,Loader2,ArrowDownUp,X,SlidersHorizontal,LifeBuoy } from "lucide-react"
+import { ShoppingBag,Search,Plus,Minus,Trash2,Home,CheckCircle,Clock,AlertTriangle,DollarSign,Zap,Package,TrendingDown,Grid,ArrowRight,ArrowLeft,Calendar,MapPin,RefreshCw,Building2,Copy,Send,Pencil,Loader2,ArrowDownUp,X,SlidersHorizontal,LifeBuoy } from "lucide-react"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from "@/components/ui/select"
 import { CategoryFilter } from "@/components/shop/category-filter"
@@ -37,9 +37,13 @@ import { getOrderDerivedStatus } from "@/lib/order-status"
 import { formatCountLabel } from "@/lib/count-label"
 import { formatAddonValidUntil } from "@/lib/budget-addon-expiry"
 import { MAX_PO_NUMBER_LENGTH, PO_NUMBER_HINT, normalizePoNumberInput } from "@/lib/purchase-order"
+import { DeliveryAddressRequestDialog, type RequestableBranch } from "@/components/delivery-addresses/delivery-address-request-dialog"
+import { describeDeliveryAddress } from "@/lib/delivery-address"
 import { ReceiptIconButton } from "@/components/receipts/receipt-icon-button"
+import { PendingInvoiceAlert } from "@/components/orders/pending-invoice-alert"
 import { NotificationBell } from "@/components/notifications/notification-center"
-import { securelySignOut } from "@/lib/session-coordination"
+import { usePendingInvoiceGuard } from "@/lib/hooks/use-pending-invoice-guard"
+import { OrderPortalProfileMenu } from "@/components/auth/order-portal-profile-menu"
 import {
   buildShopCartStorageKey,
   readStoredCartEntries,
@@ -130,6 +134,12 @@ interface Order {
   refundReason?: string | null
   rejectionReason?: string | null
   poNumber?: string | null
+  /**
+   * The approved delivery address this order is to be sent to, or null/absent
+   * when it goes to the branch's own address — which is every order raised
+   * before delivery addresses existed.
+   */
+  deliveryAddressId?: number | null
   statusAtRefund?: string | null
   approvalToken?: string | null
   /**
@@ -272,6 +282,10 @@ export default function OrderPortalPage() {
   const [showCheckout, setShowCheckout] = useState(false)
   /** The buyer's own purchase order reference for this order. Optional. */
   const [poNumber, setPoNumber] = useState("")
+  // "" means the branch's own address, which is what an order carries when it
+  // names no delivery address at all. The selector never invents an id.
+  const [deliveryAddressId, setDeliveryAddressId] = useState("")
+  const [requestingAddress, setRequestingAddress] = useState(false)
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null)
   const [showProductDetail, setShowProductDetail] = useState(false)
   const [tempQuantity, setTempQuantity] = useState(1)
@@ -341,6 +355,35 @@ export default function OrderPortalPage() {
     fetcher,
     SHOP_RESOURCE_SWR_OPTIONS,
   )
+  // The approved delivery addresses for the branch being ordered for. Scoped
+  // server-side whatever `branchId` says: a requester's own branches, or Head
+  // Office's tenant. SUPER_ADMIN is not admitted by the endpoint and simply
+  // gets no selector — its orders go to the branch's own address.
+  const deliveryAddressesUrl = activeBranchId
+    ? `/api/v1/delivery-addresses?branchId=${activeBranchId}`
+    : null
+  const { data: deliveryAddressData, mutate: mutateDeliveryAddresses } = useSWR<any>(
+    deliveryAddressesUrl,
+    fetcher,
+    SHOP_RESOURCE_SWR_OPTIONS,
+  )
+  const approvedDeliveryAddresses = useMemo(
+    () => (Array.isArray(deliveryAddressData?.items) ? deliveryAddressData.items : [])
+      .filter((address: any) => address?.status === "approved"),
+    [deliveryAddressData],
+  )
+  const pendingDeliveryAddressCount = useMemo(
+    () => (Array.isArray(deliveryAddressData?.items) ? deliveryAddressData.items : [])
+      .filter((address: any) => address?.status === "pending").length,
+    [deliveryAddressData],
+  )
+  const requestableBranches: RequestableBranch[] = useMemo(
+    () => (Array.isArray(deliveryAddressData?.requestableBranches)
+      ? deliveryAddressData.requestableBranches
+      : []).filter((branch: RequestableBranch) => branch.id === Number(activeBranchId)),
+    [deliveryAddressData, activeBranchId],
+  )
+
   const ordersUrl = "/api/v1/orders"
   const isViewingOrders = activeTab === "orders" || activeTab === "refunded"
   const { data: ordersData, mutate: mutateOrders } = useSWR<any>(ordersUrl, fetcher, {
@@ -881,6 +924,7 @@ export default function OrderPortalPage() {
       setEditingOriginalQuantities(originalQuantities)
       setEditingOrder({ ...order, ...freshOrder })
       setPoNumber(normalizePoNumberInput(freshOrder.poNumber || ""))
+      setDeliveryAddressId(freshOrder.deliveryAddressId ? String(freshOrder.deliveryAddressId) : "")
       setCart(editableItems.map((item) => ({
         ...item,
         stock: roundQuantity((item.stock || 0) + (originalQuantities[item.id] || 0)),
@@ -932,6 +976,14 @@ export default function OrderPortalPage() {
           // endpoints: it means "no purchase order" on a new order, and clears
           // one recorded earlier on an edit.
           poNumber: trimmedPoNumber,
+          // On a new order the field is omitted entirely when the branch's own
+          // address is wanted, so the request is byte-identical to one sent
+          // before delivery addresses existed. On an edit `null` is a real
+          // instruction — send it back to the branch's own address — so it is
+          // always present there.
+          ...(editingOrder
+            ? { deliveryAddressId: deliveryAddressId ? Number(deliveryAddressId) : null }
+            : (deliveryAddressId ? { deliveryAddressId: Number(deliveryAddressId) } : {})),
           ...(!editingOrder && isAdmin && activeBranchId && { branchId: activeBranchId, organizationId: activeOrgId }),
         })
       })
@@ -963,6 +1015,7 @@ export default function OrderPortalPage() {
       })
       setCart([])
       setPoNumber("")
+      setDeliveryAddressId("")
       orderIdempotencyKeyRef.current = null
       setEditingOrder(null)
       setEditingOriginalQuantities({})
@@ -979,6 +1032,17 @@ export default function OrderPortalPage() {
       setIsPlacingOrder(false)
     }
   }
+
+  const pendingInvoiceGuard = usePendingInvoiceGuard({
+    onConfirmed: placeOrder,
+    onCheckFailed: (message) => {
+      toast({
+        title: "Unable to check pending invoices",
+        description: message,
+        variant: "destructive",
+      })
+    },
+  })
 
   // Show loading only if truly loading AND not yet authenticated
   // If status is loading but we'll eventually be authenticated, don't block the UI
@@ -1134,22 +1198,19 @@ export default function OrderPortalPage() {
               <span className="font-semibold">{cart.length}</span>
             </Button>
 
-            {/* Home / Logout Button */}
-            <Button
-              onClick={async () => {
-                const targetUrl = "/login"
-                try {
-                  await securelySignOut({ callbackUrl: targetUrl })
-                } catch {
-                  window.alert("Logout could not be completed securely. Please retry.")
-                }
-              }}
-              variant="ghost"
-              size="icon"
-              title={isAdmin ? "Back to Dashboard" : "Logout / Exit Order Portal"}
-            >
-              {isAdmin ? <Home className="h-4 w-4" /> : <LogOut className="h-4 w-4" />}
-            </Button>
+            {/* Administrators return to their shell. Order Portal users get a
+                real account menu here, including self-service recovery. */}
+            {isAdmin ? (
+              <Button asChild variant="ghost" size="icon" title="Back to Dashboard">
+                <Link href="/dashboard"><Home className="h-4 w-4" /></Link>
+              </Button>
+            ) : (
+              <OrderPortalProfileMenu
+                name={userName}
+                email={(session?.user as any)?.email ?? null}
+                role={isEmployee ? "EMPLOYEE" : userRole}
+              />
+            )}
           </div>
         </div>
       </header>
@@ -2316,6 +2377,48 @@ export default function OrderPortalPage() {
             <div className="h-px bg-slate-200 dark:bg-slate-700" />
 
             <div className="space-y-1.5">
+              <label htmlFor="order-delivery-address" className="text-sm font-medium">
+                Deliver to
+              </label>
+              <Select
+                value={deliveryAddressId || "branch-default"}
+                onValueChange={(value) => setDeliveryAddressId(value === "branch-default" ? "" : value)}
+                disabled={isPlacingOrder}
+              >
+                <SelectTrigger id="order-delivery-address">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {/* The branch's own address, which is where an order with no
+                      delivery address goes — the behaviour every order has had
+                      until now, kept as the default. */}
+                  <SelectItem value="branch-default">Branch&apos;s own address (default)</SelectItem>
+                  {approvedDeliveryAddresses.map((address: any) => (
+                    <SelectItem key={address.id} value={String(address.id)}>
+                      {describeDeliveryAddress(address)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                <span>Only addresses Head Office has approved can be chosen.</span>
+                {pendingDeliveryAddressCount > 0 && (
+                  <span>{pendingDeliveryAddressCount} still waiting for approval.</span>
+                )}
+                {requestableBranches.length > 0 && (
+                  <button
+                    type="button"
+                    className="font-medium text-blue-600 underline-offset-2 hover:underline dark:text-blue-400"
+                    onClick={() => setRequestingAddress(true)}
+                    disabled={isPlacingOrder}
+                  >
+                    Request a new address
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
               <label htmlFor="order-po-number" className="text-sm font-medium">
                 Purchase order number <span className="text-muted-foreground font-normal">(optional)</span>
               </label>
@@ -2353,8 +2456,12 @@ export default function OrderPortalPage() {
             >
               Back
             </Button>
-            <Button onClick={placeOrder} disabled={!canCheckout || isPlacingOrder}>
+            <Button
+              onClick={editingOrder ? placeOrder : pendingInvoiceGuard.attempt}
+              disabled={!canCheckout || isPlacingOrder || pendingInvoiceGuard.checking}
+            >
               {(() => {
+                if (pendingInvoiceGuard.checking) return "Checking invoices..."
                 if (isPlacingOrder) {
                   return (editingOrder ? "Saving Changes..." : "Placing Order...")
                 }
@@ -2364,6 +2471,24 @@ export default function OrderPortalPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <PendingInvoiceAlert
+        invoice={pendingInvoiceGuard.pendingInvoice}
+        continuing={isPlacingOrder}
+        onCancel={pendingInvoiceGuard.dismiss}
+        onContinue={() => { void pendingInvoiceGuard.continueAfterNotice() }}
+      />
+
+      {/* Raising a delivery-address request without leaving the store.
+          ORDER_PORTAL is confined to /shop by `proxy.ts`, so the affordance has
+          to be here and not only on /delivery-addresses. Whatever is submitted
+          arrives pending; nothing here can approve it. */}
+      <DeliveryAddressRequestDialog
+        open={requestingAddress}
+        branches={requestableBranches}
+        onOpenChange={setRequestingAddress}
+        onRequested={() => mutateDeliveryAddresses()}
+      />
 
       {/* Order Detail Dialog */}
       <Dialog open={showOrderDetail} onOpenChange={setShowOrderDetail}>

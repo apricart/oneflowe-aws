@@ -615,6 +615,27 @@ export const ROLE_TEMPLATES = {
       Permission.SUPPORT_REPLY,
     ],
   },
+  VIEWER: {
+    name: "Viewer",
+    description: "Read-only dashboard access. Cannot create, edit or delete anything",
+    permissions: [
+      // Every key here is a read. The role holds no *_CREATE, *_EDIT, *_DELETE,
+      // *_APPROVE or *_MANAGE key of any kind, and that is the whole point of
+      // it — see `plans/OF-VIEWER-readonly-dashboard-role.md`.
+      //
+      // Authorization in this codebase is still role-name matching rather than
+      // permission evaluation (see
+      // `plans/OF-CUSTOM-ROLES-rbac-permission-engine.md`), so what actually
+      // keeps this role read-only is its absence from every mutating route's
+      // allowlist. These keys describe the role; they do not enforce it.
+      Permission.ORG_VIEW_METRICS,
+      // The KPI cards drill into the orders behind the number.
+      Permission.ORDER_VIEW,
+      Permission.REPORTS_VIEW_ORGANIZATION,
+      // Deliberately no SUPPORT_* keys, unlike every other client role: this
+      // account is confined to its dashboard and raises nothing.
+    ],
+  },
   ORDER_PORTAL: {
     name: "Order Portal User",
     description: "Restricted access for placing orders only",

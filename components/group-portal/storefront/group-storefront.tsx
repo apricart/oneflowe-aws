@@ -8,9 +8,11 @@ import { AlertTriangle, Grid, History, Loader2, Package, RotateCcw } from "lucid
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
+import { PendingInvoiceAlert } from "@/components/orders/pending-invoice-alert"
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { useToast } from "@/hooks/use-toast"
 import { fetcher } from "@/lib/fetcher"
+import { usePendingInvoiceGuard } from "@/lib/hooks/use-pending-invoice-guard"
 import { formatQuantity } from "@/lib/quantity"
 
 import { GroupOrderHistory } from "../group-order-history"
@@ -359,6 +361,17 @@ export function GroupStorefront() {
     }
   }
 
+  const pendingInvoiceGuard = usePendingInvoiceGuard({
+    onConfirmed: submit,
+    onCheckFailed: (message) => {
+      toast({
+        title: "Unable to check pending invoices",
+        description: message,
+        variant: "destructive",
+      })
+    },
+  })
+
   const startAnother = () => {
     setSubmission(null)
     setTab("shop")
@@ -402,7 +415,9 @@ export function GroupStorefront() {
       />
 
       <StorefrontHeader
-        userName={session?.user?.name ?? "there"}
+        userName={(session?.user as any)?.fullName ?? session?.user?.name ?? "Account"}
+        userEmail={session?.user?.email ?? null}
+        userRole={(session?.user as any)?.role ?? "GROUP_ORDER_PORTAL"}
         organizationName={scopeData?.item?.organization?.name ?? "Your organization"}
         groupName={selectedGroup?.name ?? null}
         locationCount={branches.length}
@@ -435,6 +450,7 @@ export function GroupStorefront() {
             poNumber={poNumber}
             groupName={selectedGroup?.name ?? ""}
             submitting={submitting}
+            checkingInvoices={pendingInvoiceGuard.checking}
             onTabChange={setTab}
             onSetQuantity={changeQuantity}
             onOpenCart={openCart}
@@ -442,7 +458,7 @@ export function GroupStorefront() {
             onPoNumberChange={setPoNumber}
             onCommitPlans={commitReviewPlans}
             onLeaveReview={() => setReviewing(false)}
-            onSubmit={() => { void submit() }}
+            onSubmit={() => { void pendingInvoiceGuard.attempt() }}
             onStartAnother={startAnother}
           />
         </main>
@@ -480,6 +496,13 @@ export function GroupStorefront() {
           setPendingSelection(null)
         }}
       />
+
+      <PendingInvoiceAlert
+        invoice={pendingInvoiceGuard.pendingInvoice}
+        continuing={submitting}
+        onCancel={pendingInvoiceGuard.dismiss}
+        onContinue={() => { void pendingInvoiceGuard.continueAfterNotice() }}
+      />
     </div>
   )
 }
@@ -502,6 +525,7 @@ function StorefrontBody({
   poNumber,
   groupName,
   submitting,
+  checkingInvoices,
   onTabChange,
   onSetQuantity,
   onOpenCart,
@@ -522,6 +546,7 @@ function StorefrontBody({
   poNumber: string
   groupName: string
   submitting: boolean
+  checkingInvoices: boolean
   onTabChange: (tab: StorefrontTab) => void
   onSetQuantity: (item: CatalogItem, quantity: number) => void
   onOpenCart: () => void
@@ -553,6 +578,7 @@ function StorefrontBody({
         notes={notes}
         poNumber={poNumber}
         submitting={submitting}
+        checkingInvoices={checkingInvoices}
         onNotesChange={onNotesChange}
         onPoNumberChange={onPoNumberChange}
         onQuantityChange={(inventoryId, quantity, branchId) => {

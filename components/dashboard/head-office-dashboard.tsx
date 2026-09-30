@@ -279,10 +279,8 @@ export function HeadOfficeDashboard() {
   const pendingAmount = (perfData?.statusCounts?.pendingAmountCents ?? 0) / 100
   const approvedAmount = (perfData?.statusCounts?.approvedAmountCents ?? 0) / 100
   const fulfilledAmount = (perfData?.statusCounts?.valueFulfilledCents ?? 0) / 100
-  const exceptionAmount = (
-    (perfData?.statusCounts?.valueRefundedCents ?? 0)
-    + (perfData?.statusCounts?.valueRejectedCents ?? 0)
-  ) / 100
+  const refundedAmount = (perfData?.statusCounts?.valueRefundedCents ?? 0) / 100
+  const rejectedAmount = (perfData?.statusCounts?.valueRejectedCents ?? 0) / 100
   const exceptionCount = refundedCount + rejectedCount
   const previousExceptionCount = perfData?.comparison
     ? (perfData.comparison.refundedCount ?? 0) + (perfData.comparison.rejectedCount ?? 0)
@@ -407,7 +405,6 @@ export function HeadOfficeDashboard() {
         <BankingKPICard
           icon={RotateCcw} title="Refunded / Rejected"
           value={exceptionCount.toLocaleString()}
-          amount={formatPKR(exceptionAmount, { maximumFractionDigits: 0 })}
           subtitle={getPresetLabel(activePreset, dateRange)}
           gradient="from-red-500 to-slate-700" iconBg="text-red-600 bg-red-600" delay={150}
           trend={buildTrend(exceptionCount, previousExceptionCount)?.type}
@@ -415,8 +412,18 @@ export function HeadOfficeDashboard() {
           comparisonValue={buildTrend(exceptionCount, previousExceptionCount)?.label}
           comparisonLabel="VS LAST"
           details={[
-            { label: "Refunded", value: refundedCount.toLocaleString(), onClick: () => handleKPIOpen("REFUNDED") },
-            { label: "Rejected", value: rejectedCount.toLocaleString(), onClick: () => handleKPIOpen("REJECTED") },
+            {
+              label: "Refunded",
+              value: refundedCount.toLocaleString(),
+              amount: formatPKR(refundedAmount, { maximumFractionDigits: 0 }),
+              onClick: () => handleKPIOpen("REFUNDED"),
+            },
+            {
+              label: "Rejected",
+              value: rejectedCount.toLocaleString(),
+              amount: formatPKR(rejectedAmount, { maximumFractionDigits: 0 }),
+              onClick: () => handleKPIOpen("REJECTED"),
+            },
           ]}
           isLoading={!perfData}
         />

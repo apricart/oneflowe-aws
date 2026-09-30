@@ -48,6 +48,8 @@ export type SalesPerformanceResponse = {
         pendingCount?: number
         deliveredCount?: number
         notDeliveredCount?: number
+        /** Delivered at any order status — see `lib/order-delivery-status.ts`. */
+        deliveredTotalCount?: number
         partialCount?: number
         pendingAmountCents?: number | null
         approvedAmountCents?: number | null
@@ -65,6 +67,8 @@ export type SalesPerformanceResponse = {
         rejectedCount: number
         deliveredCount: number
         notDeliveredCount: number
+        /** Delivered at any order status — see `lib/order-delivery-status.ts`. */
+        deliveredTotalCount: number
         pendingAmountCents: number | null
         approvedAmountCents: number | null
         valueFulfilledCents: number | null
@@ -114,6 +118,11 @@ export interface SalesPerformanceOptions {
         // Keep showing the previous result while a new key (filter change)
         // is being fetched, instead of resetting data to undefined.
         keepPreviousData?: boolean
+        // How often to re-fetch, in milliseconds. Omitted, it stays at the
+        // two-minute default every existing dashboard runs on; 0 turns polling
+        // off. Only the Viewer dashboard passes it, where the refresh cadence
+        // is a control the reader sets.
+        refreshInterval?: number
     }
 }
 
@@ -218,7 +227,7 @@ export function useSalesPerformance({
     return useSWR<SalesPerformanceResponse>(request?.enabled === false ? null : url, fetcher, {
         revalidateOnFocus: false,
         revalidateOnReconnect: true,
-        refreshInterval: 120_000, // 2 minutes
+        refreshInterval: request?.refreshInterval ?? 120_000, // 2 minutes
         keepPreviousData: request?.keepPreviousData === true,
     })
 }

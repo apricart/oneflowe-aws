@@ -41,6 +41,13 @@ export type AuthAuditAction =
   | "AUTH_EMAIL_VERIFICATION_FAILURE"
   | "AUTH_PASSWORD_CHANGED"
   | "AUTH_PASSWORD_CHANGE_FAILURE"
+  // Public self-service recovery. Request failures intentionally do not reveal
+  // whether the typed identifier exists, but the durable audit still records
+  // the attempt and every subsequent challenge outcome.
+  | "AUTH_PASSWORD_RESET_REQUESTED"
+  | "AUTH_PASSWORD_RESET_VERIFIED"
+  | "AUTH_PASSWORD_RESET_COMPLETED"
+  | "AUTH_PASSWORD_RESET_FAILURE"
   // Written by `scripts/force-password-rotation.ts`, one row per account.
   | "AUTH_PASSWORD_ROTATION_FORCED"
   | "AUTH_PASSWORD_ROTATION_REVERSED"
@@ -66,6 +73,9 @@ export type AuthFailureReason =
   // The token named a session that is revoked, or another account's.
   | "session_invalid"
   | "password_unchanged"
+  | "reset_challenge_invalid"
+  | "reset_token_invalid"
+  | "password_reset_unavailable"
 
 export type AuthAuditEvent = {
   action: AuthAuditAction

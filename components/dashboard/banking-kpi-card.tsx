@@ -24,6 +24,7 @@ type BankingKPICardProps = {
     details?: Array<{
         label: string
         value: string | number
+        amount?: string | number
         align?: "left" | "right"
         onClick?: () => void
     }>
@@ -187,6 +188,20 @@ export const BankingKPICard = ({
                                     )}>
                                         {detail.value}
                                     </p>
+                                    {detail.amount !== undefined && (
+                                        <p className={cn(
+                                            "mt-1 min-w-0 break-words text-[9px] font-semibold leading-tight text-slate-500 dark:text-slate-400",
+                                            isRightAligned ? "text-right" : "text-left",
+                                        )}>
+                                            <span className="mr-1 text-[7px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                                                Amount
+                                            </span>
+                                            {" "}
+                                            <span className="font-extrabold text-slate-700 dark:text-slate-200">
+                                                {detail.amount}
+                                            </span>
+                                        </p>
+                                    )}
                                 </>
                             )
                             const detailClassName = cn(

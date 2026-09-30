@@ -221,6 +221,8 @@ export async function POST(req: Request) {
           name,
           code,
           ntnNumber,
+          // Already normalised by the schema; absent or blank is null.
+          emailDomain: body.emailDomain ?? null,
           status,
           orderApproverRole: body.orderApproverRole,
           privateNetworkLoginEnabled: privateNetworkLogin.enabled,
@@ -260,6 +262,7 @@ export async function POST(req: Request) {
         metadata: {
           orderApproverRole: body.orderApproverRole,
           budgetAllocationMode,
+          emailDomain: createdOrganization.emailDomain,
           privateNetworkLoginEnabled: privateNetworkLogin.enabled,
           allowedNetworks: resolvedNetworkRows.rows.map(formatAllowlistEntry),
         },

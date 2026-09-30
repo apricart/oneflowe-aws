@@ -209,8 +209,16 @@ describe("group orders notify the branch's approver", () => {
 describe("reports attribute group orders to the person who raised them", () => {
   it("counts both requester roles in user performance", () => {
     const performance = source("app/api/v1/analytics/users/performance/route.ts")
-    expect(performance).toContain("inArray(roles.name, [...ORDER_CREATOR_ROLES])")
+    // The guarantee is unchanged — both requester roles count, and ORDER_PORTAL
+    // is never named alone. Only the expression carrying it moved: this report
+    // now keys on the role recorded on the order rather than the creator's role
+    // today, so a requester who is promoted does not take their order history
+    // out of the report with them. `isRequesterCreatedOrderSql` is built from
+    // ORDER_CREATOR_ROLES, and `lib/server/order-creator-role.test.ts` holds it
+    // to that along with every other reader.
+    expect(performance).toContain("isRequesterCreatedOrderSql")
     expect(performance).not.toContain('eq(roles.name, "ORDER_PORTAL")')
+    expect(source("lib/server/order-creator-role-sql.ts")).toContain("ORDER_CREATOR_ROLES")
   })
 
   it("offers both requester roles in the user filter list", () => {

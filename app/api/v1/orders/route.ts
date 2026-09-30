@@ -3,9 +3,9 @@ import { createHash,randomBytes } from "node:crypto"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
-import { budgets,orders,orderItems,organizationInventory,branchInventory,branches,globalProducts,productQuantityBudgets,refunds,roles,systemLogs,groupAuditLogs,organizations,refundItems,users } from "@/db/schema"
+import { budgets,orders,orderItems,organizationInventory,branchInventory,branches,globalProducts,productQuantityBudgets,refunds,systemLogs,groupAuditLogs,organizations,refundItems } from "@/db/schema"
 import { headers } from "next/headers"
-import { and,desc,eq,exists,gte,ilike,lte,or,sql,inArray,isNotNull,isNull } from "drizzle-orm"
+import { and,desc,eq,gte,ilike,lte,or,sql,inArray,isNotNull,isNull } from "drizzle-orm"
 import { logOrderActivity } from "@/lib/global-logger"
 import { generateReceiptData } from "@/lib/receipt-generator"
 import {
@@ -36,8 +36,9 @@ import { getOrderStatusesForFilter,getOrderStatusFilter } from "@/lib/order-stat
 import { budgetPeriodOf } from "@/lib/budget-consumption"
 import { isGroupPortalOrder,type OrderCreatorRole } from "@/lib/group-order-visibility"
 import { parseOrderCreatorRoleFilter } from "@/lib/order-creator-filter"
-
-
+import { orderCreatedByRoleMatches } from "@/lib/server/order-creator-role-sql"
+import { loadApprovedDeliveryAddress } from "@/lib/server/delivery-addresses"
+import { DELIVERY_ADDRESS_UNAVAILABLE } from "@/lib/delivery-address"
 
 function generateTid(): string {
   // Simple ULID-like: timestamp base36 + cryptographically secure random hex
@@ -179,16 +180,11 @@ function addOrderDimensionConditions(conditions: any[], params: ReturnType<typeo
  */
 function addOrderCreatorRoleCondition(conditions: any[], creatorRole: OrderCreatorRole | null) {
   if (!creatorRole) return
-  conditions.push(exists(
-    db
-      .select({ one: sql`1` })
-      .from(users)
-      .innerJoin(roles, eq(users.roleId, roles.id))
-      .where(and(
-        eq(users.id, orders.createdByUserId),
-        eq(roles.name, creatorRole),
-      )),
-  ))
+  // The role recorded on the order, not the creator's role today. A requester
+  // who has since been promoted must not have their past orders vanish from
+  // this tab. `orderCreatedByRoleMatches` falls back to the live join only for
+  // rows written before the column existed.
+  conditions.push(orderCreatedByRoleMatches(creatorRole))
 }
 
 function addOrderDateConditions(conditions: any[], params: ReturnType<typeof getOrderListParams>) {
@@ -445,6 +441,10 @@ async function saveOrderReceipt(tx: any, context: any) {
     totalCents: context.total,
     discountCents: 0,
     deliveryChargesCents: 0,
+    // Already verified against the tenant, the branch and `approved` inside
+    // this transaction. Passed in rather than re-read, so the invoice cannot
+    // print an address the order guard did not allow.
+    deliveryAddress: context.deliveryAddress ?? null,
   })
   // Snapshot the buyer's own reference beside the invoice number so a reissued
   // invoice prints exactly what was agreed when the order was placed.
@@ -519,7 +519,15 @@ async function persistCreatedOrder(tx: any, context: any) {
     totalCents: context.total,
     notes: context.notes || null,
     poNumber: context.poNumber || null,
+    // Added only when an address was chosen, so an order placed against the
+    // branch's own address produces exactly the INSERT it produced before this
+    // column existed — which matters while the migration is being applied by
+    // hand ahead of, or behind, the deploy.
+    ...(context.deliveryAddress ? { deliveryAddressId: context.deliveryAddress.id } : {}),
     createdByUserId: context.userId,
+    // Pinned at creation: the creator's role can change afterwards, what they
+    // were when they raised this cannot. See `lib/server/order-creator-role-sql.ts`.
+    createdByRole: context.role ?? null,
   }).returning(orderSelectColumns)
   await tx.insert(orderItems).values(context.items.map((item: any) => ({
     ...item,
@@ -535,11 +543,34 @@ async function persistCreatedOrder(tx: any, context: any) {
   return { order, queuedNotifications }
 }
 
+/**
+ * The chosen delivery address, verified, or null when the order goes to the
+ * branch's own address.
+ *
+ * Read **inside** the creation transaction rather than beside the selector: an
+ * address that was approved when the page rendered and rejected before the
+ * order committed must not slip through. Every part of the tuple is asserted by
+ * `loadApprovedDeliveryAddress` — the id, the tenant, the branch this order is
+ * actually for, and `status = 'approved'` — so a pending, rejected,
+ * other-branch or other-tenant id is refused here and nowhere else.
+ */
+async function resolveCreationDeliveryAddress(tx: any, context: any) {
+  if (!context.deliveryAddressId) return null
+  const address = await loadApprovedDeliveryAddress(tx, {
+    organizationId: context.organizationId,
+    branchId: context.branchId,
+    addressId: context.deliveryAddressId,
+  })
+  if (!address) throw new Error(DELIVERY_ADDRESS_UNAVAILABLE)
+  return address
+}
+
 async function processOrderCreationTransaction(tx: any, context: any) {
   // The payment-control gate runs first: the branch is authoritative by now
   // and nothing has been locked or written, so a blocked branch costs one
   // read and holds no row.
   await assertBranchMayOrder(tx, { organizationId: context.organizationId, branchId: context.branchId })
+  const deliveryAddress = await resolveCreationDeliveryAddress(tx, context)
   const money = await lockCreationMoneyBudget(tx, context)
   const quantityBudgets = await lockCreationQuantityBudgets(tx, context)
   const lockedInventory = await lockCreationInventory(tx, context)
@@ -555,6 +586,7 @@ async function processOrderCreationTransaction(tx: any, context: any) {
     tax: calculated.tax,
     total: calculated.total,
     quantityBudgets,
+    deliveryAddress,
   })
 }
 
@@ -743,7 +775,8 @@ async function getOrderCreationErrorResponse(caughtError: any, replayContext: an
   }
   const message = String(caughtError.message || "")
   const normalized = message.toLowerCase()
-  const isCustomerError = message.startsWith("Insufficient stock")
+  const isCustomerError = message === DELIVERY_ADDRESS_UNAVAILABLE
+    || message.startsWith("Insufficient stock")
     || message.startsWith("Budget not configured")
     || message.includes("Insufficient budget")
     || normalized.includes("quantity budget")
@@ -974,7 +1007,14 @@ export async function POST(req: NextRequest) {
     if (!parsedBody.success) {
       return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
     }
-    const { items, branchId: branchIdInput, organizationId: orgIdInput, notes, poNumber } = parsedBody.data
+    const {
+      items,
+      branchId: branchIdInput,
+      organizationId: orgIdInput,
+      notes,
+      poNumber,
+      deliveryAddressId,
+    } = parsedBody.data
 
     const normalizedItems = items.map((item) => ({
       organizationInventoryId: item.organizationInventoryId,
@@ -1002,6 +1042,7 @@ export async function POST(req: NextRequest) {
       branchId,
       notes,
       poNumber,
+      deliveryAddressId,
       items: normalizedItems,
     })
     replayContext = { userId, idempotencyKey, requestFingerprint, pricesHidden }
@@ -1057,6 +1098,7 @@ export async function POST(req: NextRequest) {
       requestFingerprint,
       notes,
       poNumber,
+      deliveryAddressId,
       userId,
       role,
       userEmail: session.user?.email,
@@ -1092,6 +1134,7 @@ function orderRequestFingerprint(input: {
   branchId: number
   notes?: string
   poNumber?: string
+  deliveryAddressId?: number
   items: Array<{ organizationInventoryId: number; quantity: number }>
 }) {
   const canonical = {
@@ -1099,6 +1142,12 @@ function orderRequestFingerprint(input: {
     branchId: input.branchId,
     notes: input.notes || null,
     poNumber: input.poNumber || null,
+    // Present only when an address was chosen, which keeps the canonical object
+    // byte-identical to what it was before delivery addresses existed for every
+    // order that uses the branch default. Writing `?? null` instead would
+    // change the hash of every such request, turning an idempotent retry that
+    // spanned the deploy into a 409 "key already used for a different order".
+    ...(input.deliveryAddressId ? { deliveryAddressId: input.deliveryAddressId } : {}),
     items: input.items.slice().sort((a, b) => a.organizationInventoryId - b.organizationInventoryId),
   }
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex")

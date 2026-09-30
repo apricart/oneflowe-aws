@@ -1,0 +1,48 @@
+-- Snapshot baseline. Deliberately applies no schema change.
+--
+-- ## Why this file exists
+--
+-- `drizzle-kit generate` produces a migration by diffing `db/schema.ts` against
+-- the newest snapshot in `drizzle/meta`. Snapshots stopped being written after
+-- `20260709000000`: every migration since then was hand-written, and a
+-- hand-written migration does not update the snapshot.
+--
+-- By 2026-09-28 that snapshot was eleven weeks stale — it knew 42 tables and a
+-- 32-column `orders`, and had never heard of `auth_sessions`, `email_outbox`,
+-- `group_inventory_prices` or fifteen other tables. So `npm run db:generate`
+-- emitted a 44 KB "migration" containing 18 CREATE TABLE, 76 CREATE INDEX and
+-- 118 ALTER TABLE statements for objects that already exist in every
+-- environment. Applying it to a live database would have failed on the first
+-- already-existing object; the real danger was that it looked like a normal
+-- migration.
+--
+-- ## What was done
+--
+-- The generated snapshot was kept — it is an accurate picture of the current
+-- schema — and the generated SQL was replaced by this file. From here,
+-- `db:generate` diffs against reality and emits ordinary incremental
+-- migrations again.
+--
+-- ## Why applying nothing is safe
+--
+-- The discarded SQL was verified redundant before it was discarded, not assumed
+-- to be. `db/schema.ts` was compared column by column against a database
+-- migrated from this journal alone: 662 columns on each side, nothing in the
+-- schema missing from the database, nothing in the database missing from the
+-- schema. The diff contained no DROP of any kind. Every object it described
+-- already existed, because the hand-written migrations in this journal created
+-- them — they simply were not recorded in a snapshot.
+--
+-- A fresh database is unaffected: the 67 real migrations before this one still
+-- create the whole schema, which is what CI exercises on every run.
+--
+-- ## Note for whoever writes the next migration
+--
+-- Use `npm run db:generate` and let it write both the SQL and the snapshot. If
+-- you hand-write a migration instead, the snapshot goes stale again and the
+-- next person inherits this same problem. Ten `.sql` files in this directory
+-- are not in `_journal.json` at all (`0019_add_performance_indexes.sql`,
+-- `MANUAL_RUN_THIS.sql` and eight others) and are therefore never applied by
+-- `db:migrate`; they are historical one-offs, left alone here.
+
+SELECT 1;
