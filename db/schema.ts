@@ -29,6 +29,11 @@ export const organizations = pgTable(
     orderApproverRole: varchar("order_approver_role", { length: 32 })
       .notNull()
       .default("BRANCH_ADMIN"),
+    // Existing tenants retain the approval workflow. A Super Admin may opt a
+    // tenant into immediate approval for orders created after the change.
+    orderApprovalRequired: boolean("order_approval_required")
+      .notNull()
+      .default(true),
     // When enabled, members of this tenant may only authenticate from an
     // address in organizationAllowedIps. Defaults to false so every existing
     // organization keeps unrestricted login until a Super Admin opts in.

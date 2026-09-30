@@ -25,9 +25,14 @@ import { resolveTaxRateBp,splitInclusiveCents } from "@/lib/tax"
 import { getOrganizationTaxRateBp } from "@/lib/server/tax-rate"
 import { orderCreateSchema,validationMessage } from "@/lib/server/mutation-validation"
 import { withRateLimit } from "@/lib/rate-limiter"
-import { attemptImmediateOrderEmailDelivery,queueOrderCreatedNotifications as enqueueCreatedOrderEvents } from "@/lib/server/order-notifications"
+import {
+  attemptImmediateOrderEmailDelivery,
+  queueOrderCreatedNotifications as enqueueCreatedOrderEvents,
+  queueSuperAdminAutoApprovalNotifications as enqueueAutoApprovedOrderEvents,
+} from "@/lib/server/order-notifications"
 import { canViewFulfillmentToken } from "@/lib/fulfillment-token-access"
 import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
+import { resolveInitialOrderApproval } from "@/lib/server/order-creation-approval"
 import { resolveScopedBranchIds,usesMultiBranchScope } from "@/lib/server/multi-branch-scope"
 import { loadGroupPriceOverrides,resolveBranchGroupId,resolveEffectivePriceCents } from "@/lib/server/effective-price"
 import { isValidRole } from "@/lib/rbac"
@@ -436,7 +441,7 @@ async function saveOrderReceipt(tx: any, context: any) {
   const receiptData = await generateReceiptData({
     orderId: context.order.id,
     orderTid: context.tid,
-    status: "PENDING",
+    status: context.order.status,
     organizationId: context.organizationId,
     branchId: context.branchId,
     orderItemsData: context.items,
@@ -499,7 +504,12 @@ async function logCreatedOrder(tx: any, context: any) {
     action: "ORDER_CREATE",
     resourceType: "order",
     resourceId: String(context.order.id),
-    details: { tid: context.tid, total: context.total, items: context.itemCount },
+    details: {
+      tid: context.tid,
+      total: context.total,
+      items: context.itemCount,
+      autoApproved: context.order.status === "APPROVED",
+    },
     ipAddress: forwardedFor ? forwardedFor.split(",")[0] : "unknown",
     userAgent: headersList.get("user-agent"),
     success: true,
@@ -507,13 +517,14 @@ async function logCreatedOrder(tx: any, context: any) {
 }
 
 async function persistCreatedOrder(tx: any, context: any) {
+  const initialApproval = await resolveInitialOrderApproval(tx, context.organizationId)
   const [order] = await tx.insert(orders).values({
     tid: context.tid,
     idempotencyKey: context.idempotencyKey,
     requestFingerprint: context.requestFingerprint,
     organizationId: context.organizationId,
     branchId: context.branchId,
-    status: "PENDING",
+    ...initialApproval.values,
     subtotalCents: context.subtotal,
     taxCents: context.tax,
     totalCents: context.total,
@@ -529,10 +540,24 @@ async function persistCreatedOrder(tx: any, context: any) {
   await saveCreationLedgers(tx, { ...context, order })
   await saveOrderReceipt(tx, { ...context, order })
   await logCreatedOrder(tx, { ...context, order })
-  const queuedNotifications = context.role === "ORDER_PORTAL"
-    ? await enqueueCreatedOrderEvents(tx, { order, requestedBy: context.requestedBy })
+  return {
+    order,
+    queuedNotifications: await queueCreationNotifications(tx, context, order, initialApproval.approvalRequired),
+    approvalRequired: initialApproval.approvalRequired,
+  }
+}
+
+/**
+ * A pending order asks its approvers to decide it. An order approved at
+ * creation has nobody to ask, so Super Admins are told it is ready for review
+ * instead — whoever raised it, since it is now as fulfilment-ready as any
+ * manually approved order.
+ */
+async function queueCreationNotifications(tx: any, context: any, order: any, approvalRequired: boolean) {
+  if (!approvalRequired) return enqueueAutoApprovedOrderEvents(tx, { order })
+  return context.role === "ORDER_PORTAL"
+    ? enqueueCreatedOrderEvents(tx, { order, requestedBy: context.requestedBy })
     : { eventKeys: [], recipientCount: 0 }
-  return { order, queuedNotifications }
 }
 
 async function processOrderCreationTransaction(tx: any, context: any) {
@@ -563,7 +588,11 @@ function getOrderReplayResponse(existingOrder: any, requestFingerprint: string, 
   if (existingOrder.requestFingerprint !== requestFingerprint) {
     return NextResponse.json({ error: "Idempotency key was already used for a different order" }, { status: 409 })
   }
-  const { requestFingerprint: _requestFingerprint, ...replayedOrder } = existingOrder
+  const {
+    requestFingerprint: _requestFingerprint,
+    approvalTokenHash: _approvalTokenHash,
+    ...replayedOrder
+  } = existingOrder
   return NextResponse.json({
     message: "Order already created",
     order: pricesHidden
@@ -599,9 +628,12 @@ async function validateCreationBranch(organizationId: number, branchId: number) 
 }
 
 function getCreatedOrderResponse(order: any, pricesHidden: boolean) {
+  const { approvalTokenHash: _approvalTokenHash, ...safeOrder } = order
   return NextResponse.json({
     message: "Order created",
-    order: pricesHidden ? { ...order, subtotalCents: null, taxCents: null, totalCents: null } : order,
+    order: pricesHidden
+      ? { ...safeOrder, subtotalCents: null, taxCents: null, totalCents: null }
+      : safeOrder,
   })
 }
 
@@ -610,7 +642,11 @@ function getTenantErrorStatus(message: string) {
 }
 
 function warnAboutMissingOrderApprover(role: string, result: any) {
-  if (role !== "ORDER_PORTAL" || result.queuedNotifications.recipientCount > 0) return
+  if (
+    role !== "ORDER_PORTAL"
+    || !result.approvalRequired
+    || result.queuedNotifications.recipientCount > 0
+  ) return
   console.warn("[OrderNotifications] No active configured order approver recipient was available", {
     orderId: result.order.id,
     organizationId: result.order.organizationId,

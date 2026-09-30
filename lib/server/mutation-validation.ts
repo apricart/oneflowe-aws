@@ -201,6 +201,7 @@ export const organizationCreateSchema = z.object({
   ntnNumber: organizationNtnNumber.optional(),
   status: z.enum(["active", "inactive", "suspended"]).optional().default("active"),
   orderApproverRole: z.enum(ORDER_APPROVER_ROLES).optional().default("BRANCH_ADMIN"),
+  orderApprovalRequired: z.boolean().optional().default(true),
   budgetAllocationMode: z.enum(["money", "quantity"]).optional(),
   priceVisibility: z.object({
     hideBranchAdminPrices: z.boolean().optional(),
@@ -215,6 +216,7 @@ export const organizationUpdateSchema = z.object({
   ntnNumber: organizationNtnNumber.nullable().optional(),
   status: z.enum(["active", "inactive", "suspended"]).optional(),
   orderApproverRole: z.enum(ORDER_APPROVER_ROLES).optional(),
+  orderApprovalRequired: z.boolean().optional(),
   budgetAllocationMode: z.enum(["money", "quantity"]).optional(),
 }).strict().refine((input) => Object.keys(input).length > 0, {
   message: "At least one organization field is required",

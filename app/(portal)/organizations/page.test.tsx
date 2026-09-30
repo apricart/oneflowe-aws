@@ -99,4 +99,19 @@ describe("OrganizationsPage organization selection", () => {
       "Set up a new tenant with a memorable code, status, and budget allocation model.",
     )
   })
+
+  it("defaults to requiring approval and disables approver selection when switched off", () => {
+    render(<OrganizationsPage />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Company" }))
+
+    const approvalSwitch = screen.getByRole("switch", { name: "Require order approval" })
+    expect((approvalSwitch as HTMLButtonElement).getAttribute("data-state")).toBe("checked")
+
+    fireEvent.click(approvalSwitch)
+
+    expect((approvalSwitch as HTMLButtonElement).getAttribute("data-state")).toBe("unchecked")
+    expect((screen.getByRole("button", { name: /Branch Admin/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText("Saved for use if approval is required again later.")).toBeTruthy()
+  })
 })

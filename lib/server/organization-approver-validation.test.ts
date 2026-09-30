@@ -12,6 +12,7 @@ describe("organization order approver validation", () => {
       code: "EXAMPLE",
     })
     expect(parsed.orderApproverRole).toBe("BRANCH_ADMIN")
+    expect(parsed.orderApprovalRequired).toBe(true)
   })
 
   it("accepts Head Office and rejects every other approver value", () => {
@@ -23,6 +24,20 @@ describe("organization order approver validation", () => {
     }).success).toBe(false)
     expect(organizationUpdateSchema.safeParse({
       orderApproverRole: "ORDER_PORTAL",
+    }).success).toBe(false)
+  })
+
+  it("accepts only booleans for the order approval policy", () => {
+    expect(organizationCreateSchema.safeParse({
+      name: "Immediate Approval Company",
+      code: "IMMEDIATE",
+      orderApprovalRequired: false,
+    }).success).toBe(true)
+    expect(organizationUpdateSchema.safeParse({
+      orderApprovalRequired: false,
+    }).success).toBe(true)
+    expect(organizationUpdateSchema.safeParse({
+      orderApprovalRequired: "false",
     }).success).toBe(false)
   })
 })

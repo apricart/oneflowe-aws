@@ -223,6 +223,7 @@ export async function POST(req: Request) {
           ntnNumber,
           status,
           orderApproverRole: body.orderApproverRole,
+          orderApprovalRequired: body.orderApprovalRequired,
           privateNetworkLoginEnabled: privateNetworkLogin.enabled,
         })
         .returning()
@@ -259,6 +260,7 @@ export async function POST(req: Request) {
         entityId: String(createdOrganization.id),
         metadata: {
           orderApproverRole: body.orderApproverRole,
+          orderApprovalRequired: body.orderApprovalRequired,
           budgetAllocationMode,
           privateNetworkLoginEnabled: privateNetworkLogin.enabled,
           allowedNetworks: resolvedNetworkRows.rows.map(formatAllowlistEntry),

@@ -73,6 +73,9 @@ async function buildOrganizationPatch(body: OrganizationUpdateInput, organizatio
     patch.status = status
   }
   if (body.orderApproverRole !== undefined) patch.orderApproverRole = body.orderApproverRole
+  if (body.orderApprovalRequired !== undefined) {
+    patch.orderApprovalRequired = body.orderApprovalRequired
+  }
 
   const budgetAllocationMode = body.budgetAllocationMode === undefined
     ? undefined
@@ -132,6 +135,7 @@ export async function PATCH(
           id: organizations.id,
           code: organizations.code,
           orderApproverRole: organizations.orderApproverRole,
+          orderApprovalRequired: organizations.orderApprovalRequired,
         })
         .from(organizations)
         .where(eq(organizations.id, orgId))
@@ -192,6 +196,23 @@ export async function PATCH(
           metadata: {
             previousOrderApproverRole: existingOrganization.orderApproverRole,
             orderApproverRole: body.orderApproverRole,
+          },
+        })
+      }
+
+      if (
+        body.orderApprovalRequired !== undefined
+        && body.orderApprovalRequired !== existingOrganization.orderApprovalRequired
+      ) {
+        await tx.insert(auditLogs).values({
+          userId: scope.userId,
+          organizationId: orgId,
+          action: "UPDATE_ORDER_APPROVAL_POLICY",
+          entity: "organization",
+          entityId: String(orgId),
+          metadata: {
+            previousOrderApprovalRequired: existingOrganization.orderApprovalRequired,
+            orderApprovalRequired: body.orderApprovalRequired,
           },
         })
       }

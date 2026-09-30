@@ -49,6 +49,7 @@ type Organization = {
   status?: "active" | "inactive"
   budgetAllocationMode?: BudgetAllocationMode
   orderApproverRole?: OrderApproverRole
+  orderApprovalRequired?: boolean
 }
 type Branch = {
   id: number
@@ -1032,6 +1033,7 @@ function CreateOrgDialog({
   const [status, setStatus] = useState<boolean>(true)
   const [budgetAllocationMode, setBudgetAllocationMode] = useState<BudgetAllocationMode>("money")
   const [orderApproverRole, setOrderApproverRole] = useState<OrderApproverRole>(DEFAULT_ORDER_APPROVER_ROLE)
+  const [orderApprovalRequired, setOrderApprovalRequired] = useState(true)
   const [hideBranchAdminPrices, setHideBranchAdminPrices] = useState(false)
   const [hideOrderPortalPrices, setHideOrderPortalPrices] = useState(false)
   const [privateNetworkEnabled, setPrivateNetworkEnabled] = useState(false)
@@ -1054,6 +1056,7 @@ function CreateOrgDialog({
           status: status ? "active" : "inactive",
           budgetAllocationMode,
           orderApproverRole,
+          orderApprovalRequired,
           priceVisibility: {
             hideBranchAdminPrices,
             hideOrderPortalPrices,
@@ -1075,6 +1078,7 @@ function CreateOrgDialog({
       setStatus(true)
       setBudgetAllocationMode("money")
       setOrderApproverRole(DEFAULT_ORDER_APPROVER_ROLE)
+      setOrderApprovalRequired(true)
       setHideBranchAdminPrices(false)
       setHideOrderPortalPrices(false)
       setPrivateNetworkEnabled(false)
@@ -1174,16 +1178,32 @@ function CreateOrgDialog({
                   </button>
                 </div>
               </div>
-              <div className="space-y-2">
+              <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
+                <div className="pr-4">
+                  <Label htmlFor="create-order-approval-required">Require order approval</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Turn this off to approve new Order Portal and Group Order Portal orders immediately.
+                  </p>
+                </div>
+                <Switch
+                  id="create-order-approval-required"
+                  checked={orderApprovalRequired}
+                  onCheckedChange={setOrderApprovalRequired}
+                  disabled={saving}
+                />
+              </div>
+              <div className={cn("space-y-2", !orderApprovalRequired && "opacity-60")}>
                 <Label>Order approver</Label>
                 <p className="text-xs text-muted-foreground">
-                  Exactly one role can approve or reject pending orders for this company.
+                  {orderApprovalRequired
+                    ? "Exactly one role can approve or reject pending orders for this company."
+                    : "Saved for use if approval is required again later."}
                 </p>
                 <div className="grid gap-2 sm:grid-cols-2">
                   <button
                     type="button"
                     onClick={() => setOrderApproverRole("BRANCH_ADMIN")}
-                    disabled={saving}
+                    disabled={saving || !orderApprovalRequired}
                     className={cn(
                       "rounded-md border bg-background p-3 text-left transition-colors",
                       orderApproverRole === "BRANCH_ADMIN" ? "border-indigo-500 ring-2 ring-indigo-100 dark:ring-indigo-900/40" : "hover:bg-muted/50",
@@ -1195,7 +1215,7 @@ function CreateOrgDialog({
                   <button
                     type="button"
                     onClick={() => setOrderApproverRole("HEAD_OFFICE")}
-                    disabled={saving}
+                    disabled={saving || !orderApprovalRequired}
                     className={cn(
                       "rounded-md border bg-background p-3 text-left transition-colors",
                       orderApproverRole === "HEAD_OFFICE" ? "border-indigo-500 ring-2 ring-indigo-100 dark:ring-indigo-900/40" : "hover:bg-muted/50",
@@ -1279,7 +1299,7 @@ function CreateOrgDialog({
         onOpenChange={setConfirmModeOpen}
         onConfirm={createCompany}
         title="Confirm Budget Model"
-        description={`This company will use ${budgetAllocationMode === "quantity" ? "quantity-based" : "money-value"} budget allocation. ${ORDER_APPROVER_ROLE_LABELS[orderApproverRole]} will be the only role allowed to approve or reject orders. Super Admins can change this later from Edit Company.`}
+        description={`This company will use ${budgetAllocationMode === "quantity" ? "quantity-based" : "money-value"} budget allocation. ${orderApprovalRequired ? `${ORDER_APPROVER_ROLE_LABELS[orderApproverRole]} will approve or reject new orders.` : "New orders will be approved immediately when they are created."} Super Admins can change this later from Edit Company.`}
         confirmText="Create Company"
         cancelText="Review"
         type="warning"
@@ -1512,6 +1532,9 @@ function EditOrgDialog({
   const [orderApproverRole, setOrderApproverRole] = useState<OrderApproverRole>(
     parseOrderApproverRole(org.orderApproverRole)
   )
+  const [orderApprovalRequired, setOrderApprovalRequired] = useState(
+    org.orderApprovalRequired !== false,
+  )
   const [hideBranchAdminPrices, setHideBranchAdminPrices] = useState(false)
   const [hideOrderPortalPrices, setHideOrderPortalPrices] = useState(false)
   const [privateNetworkEnabled, setPrivateNetworkEnabled] = useState(false)
@@ -1532,7 +1555,16 @@ function EditOrgDialog({
     setStatus(isActiveStatus(org.status))
     setBudgetAllocationMode(parseBudgetAllocationMode(org.budgetAllocationMode))
     setOrderApproverRole(parseOrderApproverRole(org.orderApproverRole))
-  }, [org.name, org.code, org.ntnNumber, org.status, org.budgetAllocationMode, org.orderApproverRole])
+    setOrderApprovalRequired(org.orderApprovalRequired !== false)
+  }, [
+    org.name,
+    org.code,
+    org.ntnNumber,
+    org.status,
+    org.budgetAllocationMode,
+    org.orderApproverRole,
+    org.orderApprovalRequired,
+  ])
 
   useEffect(() => {
     if (!open || !isSuperAdmin) return
@@ -1667,16 +1699,35 @@ function EditOrgDialog({
             </div>
             {isSuperAdmin && (
               <div className="space-y-3">
-                <div className="space-y-2 rounded-md border bg-background px-3 py-2">
+                <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
+                  <div className="pr-4">
+                    <Label htmlFor={`edit-order-approval-required-${org.id}`}>Require order approval</Label>
+                    <p className="text-xs text-muted-foreground">
+                      When off, newly created orders are approved immediately. Existing orders are unchanged.
+                    </p>
+                  </div>
+                  <Switch
+                    id={`edit-order-approval-required-${org.id}`}
+                    checked={orderApprovalRequired}
+                    onCheckedChange={setOrderApprovalRequired}
+                    disabled={loadingSettings || saving}
+                  />
+                </div>
+                <div className={cn(
+                  "space-y-2 rounded-md border bg-background px-3 py-2",
+                  !orderApprovalRequired && "opacity-60",
+                )}>
                   <Label>Order approver</Label>
                   <p className="text-xs text-muted-foreground">
-                    This role alone can approve or reject pending orders.
+                    {orderApprovalRequired
+                      ? "This role alone can approve or reject pending orders."
+                      : "Saved for use if approval is required again later."}
                   </p>
                   <div className="grid gap-2 sm:grid-cols-2">
                     <button
                       type="button"
                       onClick={() => setOrderApproverRole("BRANCH_ADMIN")}
-                      disabled={loadingSettings || saving}
+                      disabled={loadingSettings || saving || !orderApprovalRequired}
                       className={cn(
                         "rounded-md border bg-background p-3 text-left transition-colors",
                         orderApproverRole === "BRANCH_ADMIN" ? "border-indigo-500 ring-2 ring-indigo-100 dark:ring-indigo-900/40" : "hover:bg-muted/50",
@@ -1688,7 +1739,7 @@ function EditOrgDialog({
                     <button
                       type="button"
                       onClick={() => setOrderApproverRole("HEAD_OFFICE")}
-                      disabled={loadingSettings || saving}
+                      disabled={loadingSettings || saving || !orderApprovalRequired}
                       className={cn(
                         "rounded-md border bg-background p-3 text-left transition-colors",
                         orderApproverRole === "HEAD_OFFICE" ? "border-indigo-500 ring-2 ring-indigo-100 dark:ring-indigo-900/40" : "hover:bg-muted/50",
@@ -1801,7 +1852,9 @@ function EditOrgDialog({
                     // Optional: an emptied field clears the stored value.
                     ntnNumber: ntnNumber.trim() || null,
                     status: status ? "active" : "inactive",
-                    ...(isSuperAdmin ? { budgetAllocationMode, orderApproverRole } : {}),
+                    ...(isSuperAdmin
+                      ? { budgetAllocationMode, orderApproverRole, orderApprovalRequired }
+                      : {}),
                   },
                   isSuperAdmin
                     ? {

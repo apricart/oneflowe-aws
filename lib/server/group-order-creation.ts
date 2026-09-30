@@ -29,6 +29,7 @@ import { generateReceiptData } from "@/lib/receipt-generator"
 import { resolveTaxRateBp, splitInclusiveCents } from "@/lib/tax"
 import { getOrganizationTaxRateBp } from "@/lib/server/tax-rate"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
+import { resolveInitialOrderApproval } from "@/lib/server/order-creation-approval"
 import { settleDueAddonsOnBudget } from "@/lib/server/budget-addon-expiry"
 import { assertBranchMayOrder } from "@/lib/server/payment-control"
 import { isPaymentControlBlockedError } from "@/lib/payment-control-policy"
@@ -36,6 +37,7 @@ import { budgetPeriodOf } from "@/lib/budget-consumption"
 import {
   attemptImmediateOrderEmailDelivery,
   queueOrderCreatedNotifications,
+  queueSuperAdminAutoApprovalNotifications,
 } from "@/lib/server/order-notifications"
 import {
   loadGroupPriceOverrides,
@@ -551,6 +553,7 @@ async function attachReceipt(
     subtotal: number
     tax: number
     total: number
+    status: "PENDING" | "APPROVED"
     poNumber: string | null
     invoiceSequenceReady: boolean
   },
@@ -558,7 +561,7 @@ async function attachReceipt(
   const receiptData = await generateReceiptData({
     orderId: context.orderId,
     orderTid: context.tid,
-    status: "PENDING",
+    status: context.status,
     organizationId: context.organizationId,
     branchId: context.branchId,
     orderItemsData: context.items,
@@ -666,6 +669,7 @@ async function createBranchOrder(context: BranchCreationContext): Promise<Branch
       })
 
       const tid = generateTid()
+      const initialApproval = await resolveInitialOrderApproval(tx, organizationId)
       const [order] = await tx
         .insert(orders)
         .values({
@@ -677,7 +681,7 @@ async function createBranchOrder(context: BranchCreationContext): Promise<Branch
           organizationId,
           branchId,
           groupOrderId: context.groupOrderId,
-          status: "PENDING",
+          ...initialApproval.values,
           subtotalCents: priced.subtotal,
           taxCents: priced.tax,
           totalCents: priced.total,
@@ -709,6 +713,7 @@ async function createBranchOrder(context: BranchCreationContext): Promise<Branch
         subtotal: priced.subtotal,
         tax: priced.tax,
         total: priced.total,
+        status: initialApproval.values.status,
         poNumber: context.poNumber,
         invoiceSequenceReady: context.invoiceSequenceReady,
       })
@@ -727,6 +732,7 @@ async function createBranchOrder(context: BranchCreationContext): Promise<Branch
           items: priced.items.length,
           groupOrderId: context.groupOrderId,
           groupOrderReference: context.reference,
+          autoApproved: !initialApproval.approvalRequired,
         },
         ipAddress: context.actor.ipAddress,
         userAgent: context.actor.userAgent,
@@ -736,21 +742,26 @@ async function createBranchOrder(context: BranchCreationContext): Promise<Branch
       // The approver has to learn about this order the same way it learns about
       // a single-branch one: a bell notification and an "awaiting approval"
       // email, addressed to the tenant's configured approver for this branch.
+      // An order the tenant's policy approved at creation has no approver to
+      // ask, so Super Admins are told it is ready for review instead.
       // Queued inside the branch's own transaction so an order and its event
       // are committed together, and never allowed to fail an order that is
       // otherwise complete — branches stay independent.
       let eventKeys: string[] = []
+      const notificationOrder = {
+        id: order.id,
+        tid: order.tid,
+        organizationId,
+        branchId,
+        createdByUserId: context.actor.userId,
+      }
       try {
-        const queued = await queueOrderCreatedNotifications(tx, {
-          order: {
-            id: order.id,
-            tid: order.tid,
-            organizationId,
-            branchId,
-            createdByUserId: context.actor.userId,
-          },
-          requestedBy: "Group Order Portal user",
-        })
+        const queued = initialApproval.approvalRequired
+          ? await queueOrderCreatedNotifications(tx, {
+            order: notificationOrder,
+            requestedBy: "Group Order Portal user",
+          })
+          : await queueSuperAdminAutoApprovalNotifications(tx, { order: notificationOrder })
         eventKeys = queued.eventKeys
       } catch (notificationError) {
         console.error("Group order approval notification could not be queued", notificationError)
