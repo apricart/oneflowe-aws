@@ -124,6 +124,9 @@ const CONSUMPTION_QUERY = `
     on br.id = o.branch_id
    and br.organization_id = o.organization_id
   where o.organization_id = $1
+    -- Only orders that took a budget hold (plans/OF-BUDGET-organization-budget-toggle.md):
+    -- one placed while the tenant had budgets off was never charged to a budget.
+    and o.budget_tracked
   group by o.branch_id, br.name,
     to_char(o.created_at at time zone 'Asia/Karachi', 'YYYY-MM')
   order by period, br.name, o.branch_id

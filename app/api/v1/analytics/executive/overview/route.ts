@@ -23,6 +23,7 @@ import {
   type ExecutiveFilters,
 } from "@/lib/server/executive-analytics-queries"
 import { loadScopedBranches, resolveExecutiveScope } from "@/lib/server/executive-analytics-scope"
+import { budgetTrackingCoverage } from "@/lib/organization-budget-policy"
 
 /**
  * Level 1 of the Executive Analytics Center: "what is happening right now?"
@@ -107,6 +108,7 @@ export async function GET(req: NextRequest) {
       return {
         branchId: budget.branchId,
         branchName: budget.branchName,
+        budgetTracked: budget.budgetTracked,
         allocatedCents: budget.allocatedCents,
         creditedCents: budget.creditedCents,
         totalBudgetCents: budget.totalBudgetCents,
@@ -233,6 +235,10 @@ export async function GET(req: NextRequest) {
         previousSpendCents,
         previousOrderCount,
         previousConsumedCents: previousTotals.consumedCents,
+        // Whether the budget figures above cover every tenant on screen, some,
+        // or none — "none" is a tenant with budget allocation switched off,
+        // which the page says in words rather than as "no budget".
+        budgetTracking: budgetTrackingCoverage(budgetRows.map((row) => row.budgetTracked)),
       },
       branches: rankedBranches,
       trend: {

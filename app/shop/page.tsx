@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Dialog,DialogContent,DialogHeader,DialogTitle,DialogFooter,DialogDescription } from "@/components/ui/dialog"
-import { ShoppingBag,Search,Plus,Minus,Trash2,Home,CheckCircle,Clock,AlertTriangle,DollarSign,Zap,Package,TrendingDown,Grid,ArrowRight,ArrowLeft,Calendar,MapPin,RefreshCw,Building2,Copy,Send,Pencil,Loader2,ArrowDownUp,X,SlidersHorizontal,LifeBuoy } from "lucide-react"
+import { ShoppingBag,Search,Plus,Minus,Trash2,Home,CheckCircle,Clock,AlertTriangle,DollarSign,Zap,Package,TrendingDown,Grid,ArrowRight,ArrowLeft,Calendar,MapPin,RefreshCw,Building2,Copy,Send,Pencil,Loader2,PackageCheck,ArrowDownUp,X,SlidersHorizontal,LifeBuoy } from "lucide-react"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from "@/components/ui/select"
 import { CategoryFilter } from "@/components/shop/category-filter"
@@ -43,6 +43,26 @@ import { ReceiptIconButton } from "@/components/receipts/receipt-icon-button"
 import { PendingInvoiceAlert } from "@/components/orders/pending-invoice-alert"
 import { NotificationBell } from "@/components/notifications/notification-center"
 import { usePendingInvoiceGuard } from "@/lib/hooks/use-pending-invoice-guard"
+import { UnpaidInvoicesDialog } from "@/components/payment-control/unpaid-invoices-dialog"
+import { checkOrderingBlock } from "@/lib/ordering-block-check"
+import {
+  noticeForBlock,
+  parseOrderingBlockedResponse,
+  type UnpaidInvoicesNotice,
+} from "@/lib/unpaid-invoice-block"
+import { UnacknowledgedDeliveriesDialog } from "@/components/orders/unacknowledged-deliveries-dialog"
+import { checkDeliveryAcknowledgementBlock } from "@/lib/delivery-acknowledgement-check"
+import { UnacknowledgedOrdersTable, type UnacknowledgedOrderRow } from "@/components/orders/unacknowledged-orders-table"
+import {
+  UNACKNOWLEDGED_ORDERS_SOURCE_URL,
+  UNACKNOWLEDGED_ORDERS_TAB_LABEL,
+  selectUnacknowledgedOrders,
+} from "@/lib/unacknowledged-orders"
+import { isUnacknowledgedDelivery } from "@/lib/unacknowledged-delivery-block"
+import {
+  parseUnacknowledgedDeliveriesResponse,
+  type UnacknowledgedDeliveriesNotice,
+} from "@/lib/unacknowledged-delivery-block"
 import { OrderPortalProfileMenu } from "@/components/auth/order-portal-profile-menu"
 import {
   buildShopCartStorageKey,
@@ -192,6 +212,8 @@ const isRefundRelatedOrder = (order: RefundableOrder) =>
 const isActiveOrder = (order: RefundableOrder) =>
   getRefundState(order) === "none"
 
+type ShopTab = "shop" | "orders" | "refunded" | "unacknowledged"
+
 const getProductStep = (product: Pick<Product, "allowDecimalQuantity" | "quantityStep">) =>
   sanitizeQuantityStep(Boolean(product.allowDecimalQuantity), product.quantityStep ?? 1)
 
@@ -290,7 +312,7 @@ export default function OrderPortalPage() {
   const [showProductDetail, setShowProductDetail] = useState(false)
   const [tempQuantity, setTempQuantity] = useState(1)
   const [cardQuantities, setCardQuantities] = useState<Record<number, number>>({})
-  const [activeTab, setActiveTab] = useState<"shop" | "orders" | "refunded">("shop")
+  const [activeTab, setActiveTab] = useState<ShopTab>("shop")
   const [showOrderDetail, setShowOrderDetail] = useState(false)
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null)
   const [editingOrder, setEditingOrder] = useState<Order | null>(null)
@@ -300,7 +322,11 @@ export default function OrderPortalPage() {
   const [currentPage, setCurrentPage] = useState(1)
   const [categorySelection, setCategorySelection] = useState<CategorySelection>(ALL_CATEGORIES_SELECTION)
   const [isPlacingOrder, setIsPlacingOrder] = useState(false)
-  const [isSendingTokenEmail, setIsSendingTokenEmail] = useState(false)
+  const [unpaidInvoicesNotice, setUnpaidInvoicesNotice] = useState<UnpaidInvoicesNotice | null>(null)
+  const [unacknowledgedDeliveriesNotice, setUnacknowledgedDeliveriesNotice] = useState<UnacknowledgedDeliveriesNotice | null>(null)
+  const [checkingDues, setCheckingDues] = useState(false)
+  /** The order whose token is being emailed; one at a time, from any surface. */
+  const [sendingTokenOrderId, setSendingTokenOrderId] = useState<number | null>(null)
   const orderIdempotencyKeyRef = React.useRef<string | null>(null)
   const orderSubmissionInFlightRef = React.useRef(false)
 
@@ -392,11 +418,33 @@ export default function OrderPortalPage() {
     revalidateOnReconnect: true,
   })
 
-  const handleTabChange = async (tab: "shop" | "orders" | "refunded") => {
+  // Delivered orders awaiting acknowledgement. Read from the approved orders
+  // alone, so a long history cannot push one past the list's page limit. The
+  // tab badge reads it too, so it is always fetched; it polls only while shown.
+  const { data: unacknowledgedSource, mutate: mutateUnacknowledgedSource } = useSWR<any>(
+    UNACKNOWLEDGED_ORDERS_SOURCE_URL,
+    fetcher,
+    {
+      refreshInterval: activeTab === "unacknowledged" ? ORDER_STATUS_REFRESH_INTERVAL_MS : 0,
+      revalidateOnFocus: true,
+      revalidateOnReconnect: true,
+    },
+  )
+  const unacknowledgedOrders = useMemo(
+    () => selectUnacknowledgedOrders<Order & UnacknowledgedOrderRow>(unacknowledgedSource?.items),
+    [unacknowledgedSource],
+  )
+
+  const handleTabChange = async (tab: ShopTab) => {
     setActiveTab(tab)
 
     if (tab === "shop") {
       await Promise.all([mutateBranchInventory(), mutateBudget()])
+      return
+    }
+
+    if (tab === "unacknowledged") {
+      await mutateUnacknowledgedSource()
       return
     }
 
@@ -407,8 +455,7 @@ export default function OrderPortalPage() {
     }
   }
 
-  const copyFulfillmentToken = async () => {
-    const token = selectedOrder?.approvalToken
+  const copyFulfillmentToken = async (token?: string | null) => {
     if (!token) return
 
     try {
@@ -426,12 +473,12 @@ export default function OrderPortalPage() {
     }
   }
 
-  const sendFulfillmentToken = async () => {
-    if (!selectedOrder?.approvalToken) return
+  const sendFulfillmentToken = async (order: Pick<Order, "id" | "approvalToken"> | null) => {
+    if (!order?.approvalToken || sendingTokenOrderId !== null) return
 
-    setIsSendingTokenEmail(true)
+    setSendingTokenOrderId(order.id)
     try {
-      const response = await fetch(`/api/v1/orders/${selectedOrder.id}/send-token-email`, {
+      const response = await fetch(`/api/v1/orders/${order.id}/send-token-email`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       })
@@ -454,12 +501,14 @@ export default function OrderPortalPage() {
       })
 
       // Sending the token settles the order only once it has been delivered,
-      // so the open detail and the list behind it are refreshed when it did.
+      // so the open detail and the lists behind it are refreshed when it did —
+      // which is also what lifts the ordering block once enough are settled.
       if (data?.fulfilled) {
         setSelectedOrder((current) => (
-          current ? { ...current, status: "FULFILLED" } : current
+          current?.id === order.id ? { ...current, status: "FULFILLED" } : current
         ))
         void mutateOrders()
+        void mutateUnacknowledgedSource()
         void mutateBudget()
       }
     } catch (error) {
@@ -469,7 +518,7 @@ export default function OrderPortalPage() {
         variant: "destructive",
       })
     } finally {
-      setIsSendingTokenEmail(false)
+      setSendingTokenOrderId(null)
     }
   }
 
@@ -484,7 +533,11 @@ export default function OrderPortalPage() {
     }
   )
   const pricesHidden = Boolean(inventoryData?.pricesHidden || ordersData?.pricesHidden || orderDetailsData?.pricesHidden)
-  const budgetVisible = Boolean(budget && !budget.pricesHidden)
+  // The tenant has budget allocation switched off: there is no budget to show,
+  // and the cart is never held back by one. The server decides this again on
+  // every order; this only keeps the page from gating on a figure that is not real.
+  const budgetsOff = budget?.budgetsEnabled === false
+  const budgetVisible = Boolean(budget && !budget.pricesHidden && !budgetsOff)
   const selectedOrderId = selectedOrder?.id
 
   React.useEffect(() => {
@@ -694,7 +747,8 @@ export default function OrderPortalPage() {
       .sort()
     return dated[0] ? formatAddonValidUntil(dated[0]) : null
   })()
-  const canCheckout = pricesHidden ? cart.length > 0 : cartTotal <= budgetAvailableForCart && cart.length > 0
+  const budgetExceeded = !pricesHidden && !budgetsOff && cartTotal > budgetAvailableForCart
+  const canCheckout = cart.length > 0 && !budgetExceeded
   const rawBudgetPercent = ((((totalBudgetLimit || 0) - remainingBudget) / (totalBudgetLimit || 1)) * 100)
   const budgetPercent = Math.min(100, Math.max(0, rawBudgetPercent || 0))
   const isLoadingInventory = !inventoryData && !inventoryError
@@ -990,6 +1044,17 @@ export default function OrderPortalPage() {
       const json = await res.json()
       if (!res.ok) {
         if (!editingOrder) orderIdempotencyKeyRef.current = null
+        // The server's gate is the control; the pre-check below only saves a trip.
+        const block = editingOrder ? null : parseOrderingBlockedResponse(res.status, json)
+        if (block) {
+          setUnpaidInvoicesNotice(noticeForBlock(block))
+          return
+        }
+        const deliveriesNotice = editingOrder ? null : parseUnacknowledgedDeliveriesResponse(res.status, json)
+        if (deliveriesNotice) {
+          setUnacknowledgedDeliveriesNotice(deliveriesNotice)
+          return
+        }
         if (json.error?.toLowerCase().includes("stock") || json.error?.toLowerCase().includes("budget")) {
           mutateBranchInventory()
           mutateBudget()
@@ -1043,6 +1108,32 @@ export default function OrderPortalPage() {
       })
     },
   })
+
+  // A branch blocked for unpaid invoices, or for delivered orders awaiting
+  // acknowledgement, is told so before the pending-invoice notice, which would
+  // otherwise offer to continue with an order that the server will refuse.
+  // Both checks fail open; the server still decides. Unpaid invoices are
+  // reported first, matching the order of the gates on the server.
+  const attemptNewOrder = async () => {
+    if (checkingDues) return
+    setCheckingDues(true)
+    try {
+      const branchForCheck = isAdmin ? activeBranchId : null
+      const block = await checkOrderingBlock(branchForCheck)
+      if (block) {
+        setUnpaidInvoicesNotice(noticeForBlock(block))
+        return
+      }
+      const deliveriesNotice = await checkDeliveryAcknowledgementBlock(branchForCheck)
+      if (deliveriesNotice) {
+        setUnacknowledgedDeliveriesNotice(deliveriesNotice)
+        return
+      }
+    } finally {
+      setCheckingDues(false)
+    }
+    await pendingInvoiceGuard.attempt()
+  }
 
   // Show loading only if truly loading AND not yet authenticated
   // If status is loading but we'll eventually be authenticated, don't block the UI
@@ -1354,12 +1445,14 @@ export default function OrderPortalPage() {
                       <span>Total</span>
                       <span>PKR {(cartTotal / 100).toFixed(2)}</span>
                     </div>
-                    <p className="text-xs text-muted-foreground">
-                      Remaining budget after {editingOrder ? "update" : "checkout"}: PKR {((budgetAvailableForCart - cartTotal) / 100).toFixed(2)}
-                    </p>
+                    {!budgetsOff && (
+                      <p className="text-xs text-muted-foreground">
+                        Remaining budget after {editingOrder ? "update" : "checkout"}: PKR {((budgetAvailableForCart - cartTotal) / 100).toFixed(2)}
+                      </p>
+                    )}
                   </>
                 )}
-                {!pricesHidden && cartTotal > budgetAvailableForCart && (
+                {budgetExceeded && (
                   <div className="flex items-center gap-2 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-600 dark:border-red-900 dark:bg-red-950">
                     <AlertTriangle className="h-4 w-4" />
                     Cart exceeds remaining budget.
@@ -1446,6 +1539,14 @@ export default function OrderPortalPage() {
             <TrendingDown className="h-4 w-4" />
             Refunded ({ordersData?.items?.filter(isRefundRelatedOrder).length || 0})
           </Button>
+          <Button
+            onClick={() => { void handleTabChange("unacknowledged") }}
+            variant={activeTab === "unacknowledged" ? "default" : "outline"}
+            className="gap-2"
+          >
+            <PackageCheck className="h-4 w-4" />
+            {UNACKNOWLEDGED_ORDERS_TAB_LABEL} ({unacknowledgedOrders.length})
+          </Button>
         </div>
 
         {editingOrder && !isLoadingOrderForEdit && (
@@ -1475,6 +1576,21 @@ export default function OrderPortalPage() {
         )}
 
         {(() => {
+          if (activeTab === "unacknowledged") {
+            return (
+              <UnacknowledgedOrdersTable
+                orders={unacknowledgedOrders}
+                loading={!unacknowledgedSource}
+                sendingOrderId={sendingTokenOrderId}
+                onSendToken={(order) => { void sendFulfillmentToken(order) }}
+                onCopyToken={(token) => { void copyFulfillmentToken(token) }}
+                onViewDetails={(order) => {
+                  setSelectedOrder(order)
+                  setShowOrderDetail(true)
+                }}
+              />
+            )
+          }
           if (activeTab === "orders" || activeTab === "refunded") {
             return (
           // Orders View
@@ -1539,6 +1655,15 @@ export default function OrderPortalPage() {
                               {['FULFILLED', 'PARTIAL', 'PARTIALLY_FULFILLED'].includes(order.status?.toUpperCase()) && Number(order.refundAmountCents || 0) > 0 && (
                                 <Badge variant="outline" className="px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400">
                                   Partial Refund
+                                </Badge>
+                              )}
+                              {isUnacknowledgedDelivery(order) && (
+                                <Badge
+                                  variant="outline"
+                                  title="Delivered to your branch — send the fulfilment token to acknowledge it"
+                                  className="px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300"
+                                >
+                                  Delivered · Awaiting acknowledgement
                                 </Badge>
                               )}
                               {order.placedByGroupPortal && (
@@ -1804,7 +1929,7 @@ export default function OrderPortalPage() {
               )}
 
               {/* Budget Warning */}
-              {!pricesHidden && cartTotal > budgetAvailableForCart && (
+              {budgetExceeded && (
                 <div className="p-3 bg-red-50/50 backdrop-blur-sm dark:bg-red-950/30 border border-red-200/50 dark:border-red-800/50 rounded-xl flex items-center gap-2">
                   <AlertTriangle className="h-4 w-4 text-red-600 dark:text-red-400" />
                   <p className="text-sm font-medium text-red-700 dark:text-red-300">Cart exceeds remaining budget</p>
@@ -2443,9 +2568,11 @@ export default function OrderPortalPage() {
                   PKR {(cartTotal / 100).toFixed(2)}
                 </span>
               </div>
-              <p className="text-xs text-muted-foreground">
-                Remaining Budget: PKR {((budgetAvailableForCart - cartTotal) / 100).toFixed(2)}
-              </p>
+              {!budgetsOff && (
+                <p className="text-xs text-muted-foreground">
+                  Remaining Budget: PKR {((budgetAvailableForCart - cartTotal) / 100).toFixed(2)}
+                </p>
+              )}
             </div>}
           </div>
 
@@ -2457,11 +2584,11 @@ export default function OrderPortalPage() {
               Back
             </Button>
             <Button
-              onClick={editingOrder ? placeOrder : pendingInvoiceGuard.attempt}
-              disabled={!canCheckout || isPlacingOrder || pendingInvoiceGuard.checking}
+              onClick={editingOrder ? placeOrder : attemptNewOrder}
+              disabled={!canCheckout || isPlacingOrder || checkingDues || pendingInvoiceGuard.checking}
             >
               {(() => {
-                if (pendingInvoiceGuard.checking) return "Checking invoices..."
+                if (checkingDues || pendingInvoiceGuard.checking) return "Checking invoices..."
                 if (isPlacingOrder) {
                   return (editingOrder ? "Saving Changes..." : "Placing Order...")
                 }
@@ -2477,6 +2604,22 @@ export default function OrderPortalPage() {
         continuing={isPlacingOrder}
         onCancel={pendingInvoiceGuard.dismiss}
         onContinue={() => { void pendingInvoiceGuard.continueAfterNotice() }}
+      />
+
+      <UnpaidInvoicesDialog
+        notice={unpaidInvoicesNotice}
+        onClose={() => setUnpaidInvoicesNotice(null)}
+      />
+
+      <UnacknowledgedDeliveriesDialog
+        notice={unacknowledgedDeliveriesNotice}
+        onClose={() => setUnacknowledgedDeliveriesNotice(null)}
+        onReview={() => {
+          setUnacknowledgedDeliveriesNotice(null)
+          setShowCheckout(false)
+          setShowCart(false)
+          void handleTabChange("unacknowledged")
+        }}
       />
 
       {/* Raising a delivery-address request without leaving the store.
@@ -2675,7 +2818,7 @@ export default function OrderPortalPage() {
                         type="button"
                         size="icon"
                         variant="outline"
-                        onClick={copyFulfillmentToken}
+                        onClick={() => { void copyFulfillmentToken(selectedOrder.approvalToken) }}
                         aria-label="Copy fulfillment token"
                         title="Copy fulfillment token"
                         className="h-auto min-h-12 w-12 shrink-0 rounded-xl border-indigo-200 bg-white text-indigo-600 hover:bg-indigo-100 dark:border-indigo-800 dark:bg-slate-950 dark:text-indigo-300 dark:hover:bg-indigo-950/50"
@@ -2686,12 +2829,12 @@ export default function OrderPortalPage() {
                     <Button
                       type="button"
                       variant="outline"
-                      disabled={isSendingTokenEmail}
-                      onClick={sendFulfillmentToken}
+                      disabled={sendingTokenOrderId !== null}
+                      onClick={() => { void sendFulfillmentToken(selectedOrder) }}
                       className="h-11 w-full rounded-xl border-indigo-200 bg-white font-semibold text-indigo-700 hover:bg-indigo-100 dark:border-indigo-800 dark:bg-slate-950 dark:text-indigo-300 dark:hover:bg-indigo-950/50"
                     >
-                      <Send className={cn("mr-2 h-4 w-4", isSendingTokenEmail && "animate-pulse")} />
-                      {isSendingTokenEmail ? "Sending Token..." : "Send Token to Admin"}
+                      <Send className={cn("mr-2 h-4 w-4", sendingTokenOrderId === selectedOrder.id && "animate-pulse")} />
+                      {sendingTokenOrderId === selectedOrder.id ? "Sending Token..." : "Send Token to Admin"}
                     </Button>
                     <p className="text-xs leading-relaxed text-muted-foreground">
                       Sending this token to the admin marks your order fulfilled. Copy it if you need to hand it over another way.

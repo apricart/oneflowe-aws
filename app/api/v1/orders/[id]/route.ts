@@ -108,6 +108,7 @@ import { withRateLimit } from "@/lib/rate-limiter"
 import { generateReceiptData } from "@/lib/receipt-generator"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
 import { settleDueAddonsOnBudget } from "@/lib/server/budget-addon-expiry"
+import { orderTakesBudget } from "@/lib/organization-budget-policy"
 import { orderUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
 import { DELIVERY_ADDRESS_UNAVAILABLE } from "@/lib/delivery-address"
 import { loadApprovedDeliveryAddress } from "@/lib/server/delivery-addresses"
@@ -492,10 +493,13 @@ async function persistEditedOrder(tx: any, context: any) {
     sql`UPPER(${orders.status}) = 'PENDING'`,
   )).returning(orderSelectColumns)
   if (!updatedOrder) throw new Error("ORDER_EDIT_CONFLICT")
-  await tx.update(budgets).set({
-    amountHeldCents: lockedBudget.amountHeldCents - existingOrder.totalCents + totalCents,
-    updatedAt: new Date(),
-  }).where(eq(budgets.id, lockedBudget.id))
+  // Null for an order that took no hold: there is nothing to move.
+  if (lockedBudget) {
+    await tx.update(budgets).set({
+      amountHeldCents: lockedBudget.amountHeldCents - existingOrder.totalCents + totalCents,
+      updatedAt: new Date(),
+    }).where(eq(budgets.id, lockedBudget.id))
+  }
   await updateOrderQuantityBudgets(tx, context)
   await updateOrderStock(tx, context)
   await tx.delete(orderItems).where(eq(orderItems.orderId, context.orderId))
@@ -585,13 +589,21 @@ async function processOrderEditTransaction(tx: any, baseContext: any) {
   const inventory = await loadOrderEditInventory(tx, context)
   const orgTaxRateBp = await getOrganizationTaxRateBp(context.organizationId)
   const calculated = calculateEditedItems(context.normalizedItems, inventory, orgTaxRateBp)
-  const budget = await lockAndValidateOrderBudget(tx, { ...context, ...access, ...calculated })
-  const quantityBudgets = await lockOrderQuantityBudgets(tx, {
-    ...context,
-    orderPeriod: budget.orderPeriod,
-    calculatedItems: calculated.items,
-    oldByInventory: inventory.oldQuantities.byInventory,
-  })
+  // An order placed while its tenant had budgets off took no hold, so an edit
+  // neither checks nor moves one — whatever the tenant's setting is now. Stock
+  // is still re-validated above.
+  const tracked = orderTakesBudget(access.existingOrder)
+  const budget = tracked
+    ? await lockAndValidateOrderBudget(tx, { ...context, ...access, ...calculated })
+    : null
+  const quantityBudgets = budget
+    ? await lockOrderQuantityBudgets(tx, {
+      ...context,
+      orderPeriod: budget.orderPeriod,
+      calculatedItems: calculated.items,
+      oldByInventory: inventory.oldQuantities.byInventory,
+    })
+    : { rows: [], nextByInventory: new Map() }
   return persistEditedOrder(tx, {
     ...context,
     ...access,
@@ -602,7 +614,7 @@ async function processOrderEditTransaction(tx: any, baseContext: any) {
     productById: inventory.productById,
     oldByProduct: inventory.oldQuantities.byProduct,
     oldByInventory: inventory.oldQuantities.byInventory,
-    lockedBudget: budget.lockedBudget,
+    lockedBudget: budget?.lockedBudget ?? null,
     rows: quantityBudgets.rows,
     nextByInventory: quantityBudgets.nextByInventory,
     deliveryAddress,

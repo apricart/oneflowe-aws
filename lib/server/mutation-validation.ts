@@ -245,6 +245,12 @@ export const organizationCreateSchema = z.object({
   emailDomain: organizationEmailDomain.optional(),
   status: z.enum(["active", "inactive", "suspended"]).optional().default("active"),
   orderApproverRole: z.enum(ORDER_APPROVER_ROLES).optional().default("BRANCH_ADMIN"),
+  orderApprovalRequired: z.boolean().optional().default(true),
+  blockOrderingOnUnpaidInvoices: z.boolean().optional().default(false),
+  blockOrderingOnUnacknowledgedDeliveries: z.boolean().optional().default(false),
+  // Off unless asked for: an organization created in the application starts
+  // without budget allocation (DEFAULT_ORGANIZATION_BUDGETS_ENABLED).
+  budgetsEnabled: z.boolean().optional().default(false),
   budgetAllocationMode: z.enum(["money", "quantity"]).optional(),
   priceVisibility: z.object({
     hideBranchAdminPrices: z.boolean().optional(),
@@ -262,6 +268,10 @@ export const organizationUpdateSchema = z.object({
   emailDomain: organizationEmailDomain.nullable().optional(),
   status: z.enum(["active", "inactive", "suspended"]).optional(),
   orderApproverRole: z.enum(ORDER_APPROVER_ROLES).optional(),
+  orderApprovalRequired: z.boolean().optional(),
+  blockOrderingOnUnpaidInvoices: z.boolean().optional(),
+  blockOrderingOnUnacknowledgedDeliveries: z.boolean().optional(),
+  budgetsEnabled: z.boolean().optional(),
   budgetAllocationMode: z.enum(["money", "quantity"]).optional(),
 }).strict().refine((input) => Object.keys(input).length > 0, {
   message: "At least one organization field is required",

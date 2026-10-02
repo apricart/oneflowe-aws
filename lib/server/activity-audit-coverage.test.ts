@@ -153,6 +153,11 @@ const VIA_LIB: readonly { file: string; module: string }[] = [
   { file: "app/api/v1/support/threads/[id]/route.ts", module: "lib/server/support-threads.ts" },
   { file: "app/api/v1/support/threads/[id]/messages/route.ts", module: "lib/server/support-threads.ts" },
 
+  // New-product requests. Head Office raising one and Super Admin deciding it
+  // record through one module, inside the transaction that writes the row.
+  { file: "app/api/v1/product-requests/route.ts", module: "lib/server/product-requests.ts" },
+  { file: "app/api/v1/product-requests/[id]/route.ts", module: "lib/server/product-requests.ts" },
+
   // Self-service joining. Opening a tenant to outsiders and deciding who gets in
   // are both privileged, and both record through one module so the two halves of
   // the story cannot be spelled differently.

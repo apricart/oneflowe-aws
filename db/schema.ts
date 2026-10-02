@@ -29,6 +29,32 @@ export const organizations = pgTable(
     orderApproverRole: varchar("order_approver_role", { length: 32 })
       .notNull()
       .default("BRANCH_ADMIN"),
+    // Existing tenants retain the approval workflow. A Super Admin may opt a
+    // tenant into immediate approval for orders created after the change.
+    orderApprovalRequired: boolean("order_approval_required")
+      .notNull()
+      .default(true),
+    // When enabled, a branch of this tenant holding two unpaid invoices may not
+    // place a new order (lib/server/overdue-payment-source.ts). Set by Super
+    // Admin only; defaults to false so no existing tenant is blocked on deploy.
+    blockOrderingOnUnpaidInvoices: boolean("block_ordering_on_unpaid_invoices")
+      .notNull()
+      .default(false),
+    // When enabled, a branch of this tenant holding two orders that are
+    // delivered but not yet acknowledged may not place a new order
+    // (lib/server/unacknowledged-delivery-block.ts). Super Admin only; off by
+    // default so no existing tenant is blocked on deploy.
+    blockOrderingOnUnacknowledgedDeliveries: boolean("block_ordering_on_unacknowledged_deliveries")
+      .notNull()
+      .default(false),
+    // Whether this tenant's orders are checked against, and held from, a branch
+    // budget (lib/server/organization-budget-policy.ts). The column default is
+    // true so existing tenants and directly inserted rows keep their budget
+    // control; the application creates organizations with an explicit false.
+    // Super Admin only.
+    budgetsEnabled: boolean("budgets_enabled")
+      .notNull()
+      .default(true),
     // When enabled, members of this tenant may only authenticate from an
     // address in organizationAllowedIps. Defaults to false so every existing
     // organization keeps unrestricted login until a Super Admin opts in.
@@ -722,6 +748,12 @@ export const orders = pgTable(
     // reader falls back to the live join for those (see
     // `lib/server/order-creator-role-sql.ts`) until the backfill has run.
     createdByRole: varchar("created_by_role", { length: 32 }),
+    // Whether this order took a budget hold when it was created — fixed then,
+    // from its organization's `budgets_enabled`. Every later ledger move keys on
+    // this rather than on the organization's current setting, so switching
+    // budgets on or off can never release or spend a hold the order did not
+    // take. See `orderTakesBudget` in lib/organization-budget-policy.ts.
+    budgetTracked: boolean("budget_tracked").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
     fulfilledAt: timestamp("fulfilled_at", { withTimezone: true }),
@@ -2290,6 +2322,77 @@ export const organizationJoinRequests = pgTable(
     check(
       "organization_join_requests_approved_user_ck",
       sql`${t.status} <> 'approved' OR ${t.createdUserId} IS NOT NULL`,
+    ),
+  ],
+)
+
+/**
+ * A Head Office request for a product the catalogue does not carry, and Super
+ * Admin's decision on it. Information only: approving one creates no product
+ * and sets no price — see `lib/product-request.ts` and
+ * `plans/OF-PRODUCT-REQUEST-head-office-new-product-requests.md`.
+ *
+ * Every descriptive column is nullable because every field on the form is
+ * optional; the route refuses a request with nothing in it at all.
+ */
+export const productRequests = pgTable(
+  "product_requests",
+  {
+    id: serial("id").primaryKey(),
+    // The requester's tenant, read from their user row on the server.
+    organizationId: integer("organization_id")
+      .references(() => organizations.id)
+      .notNull(),
+    requestedByUserId: uuid("requested_by_user_id")
+      .references(() => users.id)
+      .notNull(),
+    status: varchar("status", { length: 32 }).notNull().default("PENDING"),
+    productName: varchar("product_name", { length: 255 }),
+    brand: varchar("brand", { length: 255 }),
+    description: text("description"),
+    // Nulled rather than cascaded, so a request outlives a category being
+    // removed: it is the record of what was asked.
+    categoryId: integer("category_id").references(() => categories.id, { onDelete: "set null" }),
+    subcategoryId: integer("subcategory_id").references(() => categories.id, { onDelete: "set null" }),
+    unit: varchar("unit", { length: 64 }),
+    packSize: varchar("pack_size", { length: 128 }),
+    barcode: varchar("barcode", { length: 64 }),
+    // What Head Office expects to pay, for Super Admin's information. Nothing
+    // in the price ladder reads it.
+    expectedPriceCents: integer("expected_price_cents"),
+    estimatedMonthlyQuantity: numeric("estimated_monthly_quantity", { precision: 12, scale: 3, mode: "number" }),
+    preferredSupplier: varchar("preferred_supplier", { length: 255 }),
+    referenceUrl: text("reference_url"),
+    notes: text("notes"),
+    // A stored image path from `POST /api/v1/upload/image`, never a `data:`
+    // URL or an external address.
+    imageUrl: text("image_url"),
+    reviewNote: text("review_note"),
+    reviewedByUserId: uuid("reviewed_by_user_id").references(() => users.id),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("product_requests_org_created_idx").on(t.organizationId, t.createdAt),
+    index("product_requests_status_created_idx").on(t.status, t.createdAt),
+    index("product_requests_requester_idx").on(t.requestedByUserId),
+    check("product_requests_status_ck", sql`${t.status} IN ('PENDING', 'APPROVED', 'REJECTED')`),
+    check(
+      "product_requests_values_valid_ck",
+      sql`COALESCE(${t.expectedPriceCents}, 0) >= 0 AND COALESCE(${t.estimatedMonthlyQuantity}, 0) >= 0`,
+    ),
+    check(
+      "product_requests_image_path_ck",
+      sql`${t.imageUrl} IS NULL OR ${t.imageUrl} LIKE '/api/v1/images/products/%'`,
+    ),
+    // A pending request carries no decision; a decided one names who and when.
+    check(
+      "product_requests_review_ck",
+      sql`CASE WHEN ${t.status} = 'PENDING'
+            THEN ${t.reviewedAt} IS NULL AND ${t.reviewedByUserId} IS NULL AND ${t.reviewNote} IS NULL
+            ELSE ${t.reviewedAt} IS NOT NULL AND ${t.reviewedByUserId} IS NOT NULL
+          END`,
     ),
   ],
 )

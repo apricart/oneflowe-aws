@@ -336,8 +336,23 @@ describe("the refusal", () => {
     expect(error.message).toContain("exception has expired")
   })
 
-  it("the message is plain language and prints the limit", () => {
+  // The only connected source counts unpaid invoices
+  // (plans/OF-PAYMENT-CONTROL-unpaid-invoice-ordering-block.md), so the refusal
+  // names them and asks for payment, as the requirement words it.
+  it("the message names the unpaid invoices and asks for the dues", () => {
     expect(blockedMessageOf({ reason: "THRESHOLD_REACHED", overdueCount: 2, threshold: 2 }))
-      .toBe("Ordering is temporarily unavailable for this branch because the overdue payment limit (2) has been reached.")
+      .toBe("You have 2 unpaid invoices. Please pay your dues before placing a new order.")
+  })
+
+  it("the message prints the real count, singular or plural", () => {
+    expect(blockedMessageOf({ reason: "THRESHOLD_REACHED", overdueCount: 5, threshold: 2 }))
+      .toBe("You have 5 unpaid invoices. Please pay your dues before placing a new order.")
+    expect(blockedMessageOf({ reason: "THRESHOLD_REACHED", overdueCount: 1, threshold: 1 }))
+      .toBe("You have 1 unpaid invoice. Please pay your dues before placing a new order.")
+  })
+
+  it("the message says when a Head Office exception was revoked", () => {
+    expect(blockedMessageOf({ reason: "EXCEPTION_REVOKED", overdueCount: 2, threshold: 2 }))
+      .toBe("You have 2 unpaid invoices. Please pay your dues before placing a new order. The Head Office exception was revoked.")
   })
 })

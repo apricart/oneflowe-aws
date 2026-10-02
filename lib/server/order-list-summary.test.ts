@@ -29,6 +29,19 @@ describe("order-list summary contract", () => {
     expect(page).toContain("selectedYears, statusFilter, isInitialized")
   })
 
+  it("asks the API for delivered-but-unfulfilled orders and reads their count from the summary", () => {
+    const page = source("app/(portal)/orders/page.tsx")
+    const route = source("app/api/v1/orders/route.ts")
+
+    expect(page).toContain('params.set("delivery", deliveryFilter)')
+    expect(page).toContain("statusCounts.deliveredUnacknowledged")
+    expect(route).toContain('deliveredUnacknowledged: viewerStatusBucketCount("DELIVERED_UNACKNOWLEDGED")')
+    expect(route).toContain('conditions.push(viewerStatusBucketCondition("DELIVERED_UNACKNOWLEDGED"))')
+    // The row filter goes after the summary snapshot, so the count is the whole scope.
+    expect(route.indexOf("const summaryConditions = [...conditions]"))
+      .toBeLessThan(route.indexOf("addOrderStatusConditions(conditions, statusFilter, deliveryFilter.filter)"))
+  })
+
   it("keeps summary conditions independent from the selected list status", () => {
     const route = source("app/api/v1/orders/route.ts")
 

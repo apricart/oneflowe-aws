@@ -5,6 +5,7 @@ import { db } from "@/lib/db"
 import { orders, orderItems, budgets, globalProducts, refunds } from "@/db/schema"
 import { eq, and, gte, sql } from "drizzle-orm"
 import { releaseQuantityBudgetForDeletedOrder } from "@/lib/server/product-quantity-budget-ledger"
+import { orderTakesBudget } from "@/lib/organization-budget-policy"
 import { orderSelectColumns } from "@/lib/order-select"
 import { auditActorFromSession, recordAuditEvent } from "@/lib/server/activity-audit"
 
@@ -85,18 +86,21 @@ export async function DELETE(req: NextRequest) {
             // 1. Get order items (need this to restore stock)
             const items = await tx.select().from(orderItems).where(eq(orderItems.orderId, orderIdNum))
 
-            // 2. Get the budget period in which this order was created.
+            // 2. Get the budget period in which this order was created. An
+            // order that took no hold when it was placed (its tenant had budgets
+            // off) has nothing to release, so no budget row is read for it.
+            const releasesBudget = orderTakesBudget(lockedOrder)
             const currentMonth = lockedOrder.createdAt
                 ? new Date(lockedOrder.createdAt).toISOString().slice(0, 7)
                 : new Date().toISOString().slice(0, 7)
-            const [budget] = await tx.select().from(budgets).where(
+            const [budget] = releasesBudget ? await tx.select().from(budgets).where(
                 and(
                     eq(budgets.branchId, order.branchId),
                     eq(budgets.period, currentMonth)
                 )
-            )
+            ) : []
 
-            await releaseQuantityBudgetForDeletedOrder(tx, lockedOrder)
+            if (releasesBudget) await releaseQuantityBudgetForDeletedOrder(tx, lockedOrder)
 
             // 3. Delete refunds first (foreign key to order_items)
             await tx.delete(refunds).where(eq(refunds.orderId, orderIdNum))

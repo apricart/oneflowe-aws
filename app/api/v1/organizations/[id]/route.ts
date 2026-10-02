@@ -32,8 +32,29 @@ import {
 import { eq, count, and, ne, isNull, isNotNull } from "drizzle-orm"
 import { organizationUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
 import { getRequestScope } from "@/lib/auth"
+import { UNPAID_INVOICE_ORDERING_BLOCK_AUDIT_ACTION } from "@/lib/unpaid-invoice-block"
+import { UNACKNOWLEDGED_DELIVERY_ORDERING_BLOCK_AUDIT_ACTION } from "@/lib/unacknowledged-delivery-block"
+import { ORGANIZATION_BUDGETS_AUDIT_ACTION } from "@/lib/organization-budget-policy"
 
 type OrganizationUpdateInput = ReturnType<typeof organizationUpdateSchema.parse>
+
+// An explicit allowlist, never a spread of the body.
+const VERBATIM_ORGANIZATION_FIELDS = [
+  "emailDomain",
+  "orderApproverRole",
+  "orderApprovalRequired",
+  "blockOrderingOnUnpaidInvoices",
+  "blockOrderingOnUnacknowledgedDeliveries",
+  "budgetsEnabled",
+] as const satisfies ReadonlyArray<keyof OrganizationUpdateInput>
+
+// Already fully validated by the schema (the email domain normalised, null and
+// a blank string both clearing it), so these are copied through as sent.
+function copyVerbatimFields(body: OrganizationUpdateInput, patch: Record<string, unknown>) {
+  for (const field of VERBATIM_ORGANIZATION_FIELDS) {
+    if (body[field] !== undefined) patch[field] = body[field]
+  }
+}
 
 // Optional field: an empty (or explicitly null) value clears it, so a wrong
 // NTN can be removed without leaving an empty string behind.
@@ -64,8 +85,7 @@ async function buildOrganizationPatch(body: OrganizationUpdateInput, organizatio
   if (body.ntnNumber !== undefined) {
     patch.ntnNumber = normalizeNtnNumber(body.ntnNumber)
   }
-  // Already normalised by the schema, where null and a blank string both clear it.
-  if (body.emailDomain !== undefined) patch.emailDomain = body.emailDomain
+  copyVerbatimFields(body, patch)
   if (body.status !== undefined) {
     const status = String(body.status).toLowerCase()
     const validStatuses = ["active", "inactive", "suspended"]
@@ -74,7 +94,6 @@ async function buildOrganizationPatch(body: OrganizationUpdateInput, organizatio
     }
     patch.status = status
   }
-  if (body.orderApproverRole !== undefined) patch.orderApproverRole = body.orderApproverRole
 
   const budgetAllocationMode = body.budgetAllocationMode === undefined
     ? undefined
@@ -135,6 +154,10 @@ export async function PATCH(
           code: organizations.code,
           orderApproverRole: organizations.orderApproverRole,
           emailDomain: organizations.emailDomain,
+          orderApprovalRequired: organizations.orderApprovalRequired,
+          blockOrderingOnUnpaidInvoices: organizations.blockOrderingOnUnpaidInvoices,
+          blockOrderingOnUnacknowledgedDeliveries: organizations.blockOrderingOnUnacknowledgedDeliveries,
+          budgetsEnabled: organizations.budgetsEnabled,
         })
         .from(organizations)
         .where(eq(organizations.id, orgId))
@@ -218,6 +241,47 @@ export async function PATCH(
         })
       }
 
+      if (
+        body.orderApprovalRequired !== undefined
+        && body.orderApprovalRequired !== existingOrganization.orderApprovalRequired
+      ) {
+        await tx.insert(auditLogs).values({
+          userId: scope.userId,
+          organizationId: orgId,
+          action: "UPDATE_ORDER_APPROVAL_POLICY",
+          entity: "organization",
+          entityId: String(orgId),
+          metadata: {
+            previousOrderApprovalRequired: existingOrganization.orderApprovalRequired,
+            orderApprovalRequired: body.orderApprovalRequired,
+          },
+        })
+      }
+
+      await auditOrderingBlockToggles(tx, { userId: scope.userId, orgId, body, existingOrganization })
+
+      // Switching budgets off removes a spending control from every branch of
+      // the tenant, and switching them on can stop a branch without an
+      // allocation from ordering, so both directions are on the trail. The
+      // FOR UPDATE above is what order creation's FOR SHARE waits on, so no
+      // order commits half under each setting.
+      if (
+        body.budgetsEnabled !== undefined
+        && body.budgetsEnabled !== existingOrganization.budgetsEnabled
+      ) {
+        await tx.insert(auditLogs).values({
+          userId: scope.userId,
+          organizationId: orgId,
+          action: ORGANIZATION_BUDGETS_AUDIT_ACTION,
+          entity: "organization",
+          entityId: String(orgId),
+          metadata: {
+            previousBudgetsEnabled: existingOrganization.budgetsEnabled,
+            budgetsEnabled: body.budgetsEnabled,
+          },
+        })
+      }
+
       return { kind: "updated", item: updatedOrganization } as const
     })
     if (!transactionResult) return error("Organization not found", 404)
@@ -232,7 +296,7 @@ export async function PATCH(
     // Invalidate organizations cache so GET returns fresh data immediately
     await invalidateByPrefix('organizations')
     await invalidateByPrefix('settings')
-    if (budgetAllocationMode !== undefined) {
+    if (budgetAllocationMode !== undefined || body.budgetsEnabled !== undefined) {
       await invalidateByPrefix('branch-inv')
       await invalidateByPrefix('budgets')
       await invalidateByPrefix('analytics')
@@ -247,6 +311,54 @@ export async function PATCH(
   } catch (e: any) {
     console.error("Update organization failed:", e)
     return error("Update failed", 400)
+  }
+}
+
+type OrganizationTx = Parameters<Parameters<typeof db.transaction>[0]>[0]
+
+/**
+ * Either ordering-block toggle can stop a branch ordering the moment it is
+ * switched on, so each change is on the trail with what it replaced. Called
+ * from inside the PATCH transaction with its `tx`, so the audit row commits or
+ * rolls back with the change itself.
+ */
+async function auditOrderingBlockToggles(
+  tx: OrganizationTx,
+  { userId, orgId, body, existingOrganization }: {
+    userId: string
+    orgId: number
+    body: OrganizationUpdateInput
+    existingOrganization: { blockOrderingOnUnpaidInvoices: boolean; blockOrderingOnUnacknowledgedDeliveries: boolean }
+  },
+): Promise<void> {
+  const base = { userId, organizationId: orgId, entity: "organization", entityId: String(orgId) }
+
+  if (
+    body.blockOrderingOnUnpaidInvoices !== undefined
+    && body.blockOrderingOnUnpaidInvoices !== existingOrganization.blockOrderingOnUnpaidInvoices
+  ) {
+    await tx.insert(auditLogs).values({
+      ...base,
+      action: UNPAID_INVOICE_ORDERING_BLOCK_AUDIT_ACTION,
+      metadata: {
+        previousBlockOrderingOnUnpaidInvoices: existingOrganization.blockOrderingOnUnpaidInvoices,
+        blockOrderingOnUnpaidInvoices: body.blockOrderingOnUnpaidInvoices,
+      },
+    })
+  }
+
+  if (
+    body.blockOrderingOnUnacknowledgedDeliveries !== undefined
+    && body.blockOrderingOnUnacknowledgedDeliveries !== existingOrganization.blockOrderingOnUnacknowledgedDeliveries
+  ) {
+    await tx.insert(auditLogs).values({
+      ...base,
+      action: UNACKNOWLEDGED_DELIVERY_ORDERING_BLOCK_AUDIT_ACTION,
+      metadata: {
+        previousBlockOrderingOnUnacknowledgedDeliveries: existingOrganization.blockOrderingOnUnacknowledgedDeliveries,
+        blockOrderingOnUnacknowledgedDeliveries: body.blockOrderingOnUnacknowledgedDeliveries,
+      },
+    })
   }
 }
 

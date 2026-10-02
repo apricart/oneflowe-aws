@@ -72,6 +72,11 @@ import {
   shouldShowOrderFulfillmentStatus,
   shouldShowOrderPaymentStatus,
 } from "@/lib/order-status-display"
+import { isUnacknowledgedDelivery } from "@/lib/unacknowledged-delivery-block"
+import {
+  DELIVERED_UNFULFILLED_LABEL,
+  orderRowFulfilmentAction,
+} from "@/lib/unacknowledged-orders"
 
 type OrderTableColumn = ColumnDef & { width: number }
 
@@ -88,6 +93,16 @@ const ORDER_TABLE_COLUMNS: OrderTableColumn[] = [
   { key: "deliveryDate", label: "Delivery Date", width: 130 },
   { key: "amount", label: "Amount", width: 130 },
 ]
+
+/**
+ * The two columns that complete an active order. They are not in the column
+ * picker and are pinned to the table's right edge, so they stay on screen
+ * however far the other columns scroll.
+ */
+const TOKEN_COLUMN_WIDTH = 190
+const ACTION_COLUMN_WIDTH = 150
+const PINNED_CELL_CLASS = "sticky z-10 bg-white group-hover:bg-slate-50 dark:bg-slate-900 dark:group-hover:bg-slate-800"
+const PINNED_HEAD_CLASS = "sticky z-10 bg-slate-50 dark:bg-slate-800"
 
 type OrdersDirectoryProps = {
   orders: any[]
@@ -116,6 +131,23 @@ function GroupOrderBadge() {
       className="mt-1 rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-indigo-600 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-400"
     >
       Group Order
+    </Badge>
+  )
+}
+
+/**
+ * Marks an active order whose goods have arrived but which has not been
+ * fulfilled yet — the same rule the ordering block and the dashboard's
+ * "Delivered/Unacknowledged" figure use.
+ */
+function DeliveredUnfulfilledBadge() {
+  return (
+    <Badge
+      variant="outline"
+      title="Delivered to the branch, not yet fulfilled"
+      className="mt-1 rounded-lg border border-amber-300 bg-amber-50 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-700 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
+    >
+      {DELIVERED_UNFULFILLED_LABEL}
     </Badge>
   )
 }
@@ -159,7 +191,10 @@ export function OrdersDirectory({
   const [isProcessing, setIsProcessing] = useState(false)
   const [isUpdatingProgress, setIsUpdatingProgress] = useState(false)
   const [isUpdatingPayment, setIsUpdatingPayment] = useState(false)
-  const [isSendingTokenEmail, setIsSendingTokenEmail] = useState(false)
+  /** The order whose token is being emailed; one at a time, from the row or the drawer. */
+  const [sendingTokenOrderId, setSendingTokenOrderId] = useState<number | null>(null)
+  /** The fulfil dialog was opened from a table row, so closing it must not open the drawer. */
+  const [actionOpenedFromRow, setActionOpenedFromRow] = useState(false)
   const [isOrderDetailsExpanded, setIsOrderDetailsExpanded] = useState(false)
   const [orderDetails, setOrderDetails] = useState<OrderDetails | null>(null)
   const [isOrderDetailsLoading, setIsOrderDetailsLoading] = useState(false)
@@ -182,7 +217,7 @@ export function OrdersDirectory({
   const tableMinWidth = Math.max(
     720,
     selectedTableColumns.reduce((total, column) => total + column.width, 0),
-  )
+  ) + TOKEN_COLUMN_WIDTH + ACTION_COLUMN_WIDTH
   const isTableColumnVisible = (key: string) => availableTableColumnKeys.has(key) && isVisible(key)
   const setSelectedTableColumns = (nextKeys: string[]) => {
     const unavailableKeys = visibleKeys.filter((key) => !availableTableColumnKeys.has(key))
@@ -404,6 +439,7 @@ export function OrdersDirectory({
       }
 
       setActionType(null)
+      setActionOpenedFromRow(false)
       setViewingOrder(null)
       setRejectReason("")
       setFulfillToken("")
@@ -420,12 +456,43 @@ export function OrdersDirectory({
     }
   }
 
-  const sendTokenToAdmin = async () => {
-    if (!viewingOrder) return
+  const closeActionDialog = () => {
+    setActionType(null)
+    if (actionOpenedFromRow) {
+      setViewingOrder(null)
+      setFulfillToken("")
+    }
+    setActionOpenedFromRow(false)
+  }
 
-    setIsSendingTokenEmail(true)
+  // Super Admin fulfils from the row: the same dialog and the same token check
+  // as the drawer, with the token the list already handed this viewer filled in.
+  const openRowFulfilment = (order: any) => {
+    setViewingOrder(order)
+    setFulfillToken(order.approvalToken || "")
+    setActionOpenedFromRow(true)
+    setActionType("fulfill")
+  }
+
+  const copyToken = async (token: string) => {
     try {
-      const res = await fetch(`/api/v1/orders/${viewingOrder.id}/send-token-email`, {
+      await navigator.clipboard.writeText(token)
+      toast({ title: "Copied", description: "Fulfillment token copied to clipboard." })
+    } catch {
+      toast({
+        title: "Copy failed",
+        description: "Could not copy the fulfillment token. Please select and copy it manually.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  const sendTokenToAdmin = async (order: any) => {
+    if (!order || sendingTokenOrderId !== null) return
+
+    setSendingTokenOrderId(order.id)
+    try {
+      const res = await fetch(`/api/v1/orders/${order.id}/send-token-email`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       })
@@ -452,7 +519,7 @@ export function OrdersDirectory({
       // open panel and the list behind it are refreshed when it actually did.
       if (data?.fulfilled) {
         setViewingOrder((current: any) => (
-          current ? { ...current, status: "FULFILLED" } : current
+          current?.id === order.id ? { ...current, status: "FULFILLED" } : current
         ))
         onUpdate()
       }
@@ -463,7 +530,7 @@ export function OrdersDirectory({
         variant: "destructive",
       })
     } finally {
-      setIsSendingTokenEmail(false)
+      setSendingTokenOrderId(null)
     }
   }
 
@@ -546,6 +613,7 @@ export function OrdersDirectory({
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">TID</p>
                       <p className="truncate font-mono text-sm font-bold text-slate-800 dark:text-slate-100">{order.tid}</p>
                       {order.placedByGroupPortal && <GroupOrderBadge />}
+                      {isUnacknowledgedDelivery(order) && <DeliveredUnfulfilledBadge />}
                     </div>
                     <Badge
                       variant="outline"
@@ -626,6 +694,8 @@ export function OrdersDirectory({
                 {selectedTableColumns.map((column) => (
                   <col key={column.key} style={{ width: `${column.width}px` }} />
                 ))}
+                <col style={{ width: `${TOKEN_COLUMN_WIDTH}px` }} />
+                <col style={{ width: `${ACTION_COLUMN_WIDTH}px` }} />
               </colgroup>
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50/70 text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:border-slate-800 dark:bg-slate-800/50">
@@ -640,6 +710,18 @@ export function OrdersDirectory({
                   {isTableColumnVisible("approvalDate") && <th className="h-14 whitespace-nowrap px-4 py-3 text-left font-bold">Approval Date</th>}
                   {isTableColumnVisible("deliveryDate") && <th className="h-14 whitespace-nowrap px-4 py-3 text-left font-bold">Delivery Date</th>}
                   {isTableColumnVisible("amount") && <th className="h-14 whitespace-nowrap py-3 pl-4 pr-6 text-right font-bold">Amount</th>}
+                  <th
+                    className={cn(PINNED_HEAD_CLASS, "h-14 whitespace-nowrap border-l border-slate-200 px-4 py-3 text-left font-bold dark:border-slate-700")}
+                    style={{ right: ACTION_COLUMN_WIDTH }}
+                  >
+                    Fulfillment Token
+                  </th>
+                  <th
+                    className={cn(PINNED_HEAD_CLASS, "h-14 whitespace-nowrap py-3 pl-4 pr-6 text-right font-bold")}
+                    style={{ right: 0 }}
+                  >
+                    Action
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -647,6 +729,15 @@ export function OrdersDirectory({
                   const statusDisplay = getOrderStatusDisplay(order, statusContext)
                   const derivedStatus = statusDisplay.orderStatus
                   const statusColors = getStatusColor(derivedStatus.key)
+                  const isActiveOrder = String(order.status || "").toUpperCase() === "APPROVED"
+                  const rowToken = isActiveOrder && typeof order.approvalToken === "string" && order.approvalToken
+                    ? order.approvalToken
+                    : null
+                  const rowAction = orderRowFulfilmentAction({
+                    canFulfilWithToken: isSuperAdmin,
+                    status: order.status,
+                    approvalToken: order.approvalToken,
+                  })
                   return (
                     <motion.tr
                       initial={{ opacity: 0, x: -10 }}
@@ -659,6 +750,7 @@ export function OrdersDirectory({
                       {isTableColumnVisible("tid") && <td className="py-5 pl-6 pr-4">
                         <span className="block truncate font-mono text-xs font-bold text-slate-700 dark:text-slate-300 group-hover:text-indigo-600 transition-colors uppercase tracking-wider" title={order.tid}>{order.tid}</span>
                         {order.placedByGroupPortal && <GroupOrderBadge />}
+                        {isUnacknowledgedDelivery(order) && <DeliveredUnfulfilledBadge />}
                       </td>}
                       {isTableColumnVisible("branch") && <td className="px-4 py-5">
                         <div className="flex items-center gap-2">
@@ -726,12 +818,78 @@ export function OrdersDirectory({
                       {isTableColumnVisible("amount") && <td className="whitespace-nowrap py-5 pl-4 pr-6 text-right font-bold text-slate-800 dark:text-slate-200">
                         {order.totalCents !== null && order.totalCents !== undefined ? formatPKR(order.totalCents / 100) : "-"}
                       </td>}
+                      <td
+                        className={cn(PINNED_CELL_CLASS, "border-l border-slate-100 px-4 py-5 dark:border-slate-800")}
+                        style={{ right: ACTION_COLUMN_WIDTH }}
+                      >
+                        {rowToken ? (
+                          <div className="flex min-w-0 items-center gap-1.5">
+                            <code
+                              className="min-w-0 truncate rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1 font-mono text-xs font-bold tracking-[0.12em] text-indigo-700 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-300"
+                              title={rowToken}
+                            >
+                              {rowToken}
+                            </code>
+                            <Button
+                              type="button"
+                              size="icon"
+                              variant="ghost"
+                              className="h-7 w-7 shrink-0"
+                              aria-label={`Copy fulfillment token for order ${order.tid}`}
+                              title="Copy fulfillment token"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                void copyToken(rowToken)
+                              }}
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        ) : <span className="text-slate-300 dark:text-slate-600">—</span>}
+                      </td>
+                      <td
+                        className={cn(PINNED_CELL_CLASS, "py-5 pl-4 pr-6 text-right")}
+                        style={{ right: 0 }}
+                      >
+                        {rowAction === "fulfil-with-token" && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="h-8 gap-1.5 rounded-lg bg-indigo-600 px-3 text-xs font-bold text-white hover:bg-indigo-500"
+                            aria-label={`Fulfil order ${order.tid}`}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              openRowFulfilment(order)
+                            }}
+                          >
+                            <CheckCircle className="h-3.5 w-3.5" />
+                            Fulfil
+                          </Button>
+                        )}
+                        {rowAction === "send-token" && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            disabled={sendingTokenOrderId !== null}
+                            className="h-8 gap-1.5 rounded-lg bg-indigo-600 px-3 text-xs font-bold text-white hover:bg-indigo-500"
+                            aria-label={`Fulfil order ${order.tid} by emailing its token`}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              void sendTokenToAdmin(order)
+                            }}
+                          >
+                            <Send className={cn("h-3.5 w-3.5", sendingTokenOrderId === order.id && "animate-pulse")} />
+                            {sendingTokenOrderId === order.id ? "Sending..." : "Send token"}
+                          </Button>
+                        )}
+                        {!rowAction && <span className="text-slate-300 dark:text-slate-600">—</span>}
+                      </td>
                     </motion.tr>
                   )
                 })}
                 {orders.length === 0 && (
                   <tr>
-                    <td colSpan={Math.max(selectedTableColumns.length, 1)}>
+                    <td colSpan={selectedTableColumns.length + 2}>
                       <EmptyOrdersState compact />
                     </td>
                   </tr>
@@ -766,8 +924,8 @@ export function OrdersDirectory({
               detailsError={orderDetailsError}
               onToggleDetails={() => setIsOrderDetailsExpanded((expanded) => !expanded)}
               onRetryDetails={() => setOrderDetailsRequestKey((key) => key + 1)}
-              onSendToken={sendTokenToAdmin}
-              isSendingToken={isSendingTokenEmail}
+              onSendToken={() => { void sendTokenToAdmin(viewingOrder) }}
+              isSendingToken={sendingTokenOrderId !== null}
               actions={(() => {
                 const isRefundRelated =
                   viewingOrder.status?.toLowerCase() === "refunded" ||
@@ -887,7 +1045,7 @@ export function OrdersDirectory({
       </Sheet>
 
       {/* Action Dialogs (Replacing the old ones) */}
-      <Dialog open={!!actionType} onOpenChange={(open) => !open && setActionType(null)}>
+      <Dialog open={!!actionType} onOpenChange={(open) => !open && closeActionDialog()}>
         <DialogContent className="max-w-md border-0 shadow-2xl bg-white/90 dark:bg-slate-900/95 backdrop-blur-xl rounded-[2rem]">
           <DialogHeader>
             <DialogTitle className="text-xl font-black tracking-tight flex items-center gap-2">
@@ -935,7 +1093,7 @@ export function OrdersDirectory({
           </div>
 
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setActionType(null)} disabled={isProcessing} className="h-11 rounded-xl">Cancel</Button>
+            <Button variant="ghost" onClick={closeActionDialog} disabled={isProcessing} className="h-11 rounded-xl">Cancel</Button>
             <Button
               onClick={executeAction}
               disabled={isProcessing || (actionType === 'reject' && !rejectReason) || (actionType === 'fulfill' && !fulfillToken)}

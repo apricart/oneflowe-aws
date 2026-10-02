@@ -4,8 +4,17 @@ import { E2E_BASE_URL, E2E_PASSWORD } from "./support/environment"
 import {
   SMOKE_BRANCH_NAME,
   SMOKE_GROUP_NAME,
+  SMOKE_PRODUCT_CODE,
   SMOKE_USERNAMES,
 } from "./support/role-smoke-seed"
+import {
+  apiSession,
+  approveOrder,
+  expectStatus,
+  fulfilOrder,
+  markDelivered,
+  placeOrder,
+} from "./support/session"
 
 /**
  * Changing a user's role, through the browser.
@@ -18,8 +27,10 @@ import {
  * and `proxy.ts` routing on it, none of which a route-level test exercises
  * together.
  *
- * Seed state this relies on (`role-smoke-seed.ts`): the Order Portal user has an
- * APPROVED, unfulfilled order, and the Branch Admin and Group User have none.
+ * Seed state this relies on (`role-smoke-seed.ts`): the Branch Admin and Group
+ * User have no order in flight. The first test raises and approves an order for
+ * the Order Portal user itself, and settles it again before it ends, because the
+ * seed creates no orders and the smoke journey fulfils the one it raises.
  *
  * This file changes the roles of two seeded users and does not put them back. It
  * sorts last of the E2E specs, so nothing else in a run depends on those roles
@@ -95,29 +106,49 @@ async function saveDialog(page: Page): Promise<void> {
 }
 
 test.describe("changing a user's role", () => {
-  test("the lifecycle guard stops the switch while an order is still in flight", async ({ page }) => {
-    // The seeded Order Portal user has an APPROVED, unfulfilled order — money
-    // still held against their branch's budget.
-    await signIn(page, SMOKE_USERNAMES.headOffice, /\/dashboard/)
-    await openEditDialog(page, SMOKE_USERNAMES.orderPortal)
+  test("the lifecycle guard stops the switch while an order is still in flight", async ({ page, browser }) => {
+    // An APPROVED, unfulfilled order — money still held against the branch's
+    // budget — raised by the user whose role is about to be changed.
+    const requester = await apiSession(browser, SMOKE_USERNAMES.orderPortal)
+    const approver = await apiSession(browser, SMOKE_USERNAMES.branchAdmin)
+    const superAdmin = await apiSession(browser, SMOKE_USERNAMES.superAdmin)
+    let inFlight: { id: number; token: string } | null = null
+    try {
+      const inventory = await expectStatus(
+        await requester.page.request.get(`/api/v1/branch/inventory?limit=10&search=${SMOKE_PRODUCT_CODE}`),
+      )
+      const product = inventory.items.find((item: { productCode: string }) => item.productCode === SMOKE_PRODUCT_CODE)
+      const order = await placeOrder(requester.page, [{ organizationInventoryId: product.organizationInventoryId, quantity: 1 }])
+      inFlight = { id: Number(order.id), token: await approveOrder(approver.page, Number(order.id)) }
 
-    const role = editDialog(page).getByLabel("Role *")
-    await expect(role).toBeVisible()
-    // The readiness check is a network round trip, and on a cold development
-    // server this is the first request to that route, so wait it out rather than
-    // reading the select while it is still "Checking...".
-    await expect(
-      editDialog(page).getByText(/checking whether this role can be changed/i),
-    ).toBeHidden({ timeout: 150_000 })
-    // Refused in the UI, and the server refuses it again on submit — the select
-    // is a courtesy, never the control.
-    await expect(role).toBeDisabled()
-    await expect(
-      editDialog(page).getByText(/order\(s\) still in progress/i),
-    ).toBeVisible()
-    await expect(
-      editDialog(page).getByText(/approved but not yet fulfilled/i),
-    ).toBeVisible()
+      await signIn(page, SMOKE_USERNAMES.headOffice, /\/dashboard/)
+      await openEditDialog(page, SMOKE_USERNAMES.orderPortal)
+
+      const role = editDialog(page).getByLabel("Role *")
+      await expect(role).toBeVisible()
+      // The readiness check is a network round trip, and on a cold development
+      // server this is the first request to that route, so wait it out rather than
+      // reading the select while it is still "Checking...".
+      await expect(
+        editDialog(page).getByText(/checking whether this role can be changed/i),
+      ).toBeHidden({ timeout: 150_000 })
+      // Refused in the UI, and the server refuses it again on submit — the select
+      // is a courtesy, never the control.
+      await expect(role).toBeDisabled()
+      await expect(
+        editDialog(page).getByText(/order\(s\) still in progress/i),
+      ).toBeVisible()
+      await expect(
+        editDialog(page).getByText(/approved but not yet fulfilled/i),
+      ).toBeVisible()
+    } finally {
+      // Leave the shared smoke tenant as the seed made it: nothing in flight.
+      if (inFlight) {
+        await markDelivered(superAdmin.page, inFlight.id)
+        await fulfilOrder(superAdmin.page, inFlight.id, inFlight.token)
+      }
+      await Promise.all([requester.close(), approver.close(), superAdmin.close()])
+    }
   })
 
   test("a clean Branch Admin becomes an Order Portal user and lands in the store", async ({ page }) => {

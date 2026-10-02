@@ -223,7 +223,7 @@ describe.skipIf(!hasTestDatabase)("branch payment control", () => {
         threshold: 2,
         exceptionExpiredAt: null,
       })
-      expect(body.error).toContain("overdue payment limit (2) has been reached")
+      expect(body.error).toBe("You have 2 unpaid invoices. Please pay your dues before placing a new order.")
       const after = (await db.select({ id: orders.id }).from(orders).where(eq(orders.branchId, f.alphaNorthId))).length
       expect(after).toBe(before)
     })
@@ -250,7 +250,12 @@ describe.skipIf(!hasTestDatabase)("branch payment control", () => {
       const byBranch = new Map<number, { status: string; reason?: string; orderId?: number }>(
         body.item.results.map((result: { branchId: number; status: string; reason?: string; orderId?: number }) => [result.branchId, result]),
       )
-      expect(byBranch.get(f.alphaNorthId)).toMatchObject({ status: "failed", reason: expect.stringContaining("overdue payment limit") })
+      expect(byBranch.get(f.alphaNorthId)).toMatchObject({
+        status: "failed",
+        reason: "You have 2 unpaid invoices. Please pay your dues before placing a new order.",
+        code: "PAYMENT_CONTROL_BLOCKED",
+        unpaidInvoiceCount: 2,
+      })
       expect(byBranch.get(f.alphaSouthId)).toMatchObject({ status: "created" })
     })
 

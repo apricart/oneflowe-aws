@@ -8,20 +8,57 @@ shared target is test-only.
 
 ## Scope
 
-Two suites run in the browser:
+Browser coverage is held to **one journey per user-facing feature**: the
+critical path a person takes through the screens, plus the access boundary
+(who is not offered it, and that the endpoint refuses them too). Arithmetic,
+SQL behaviour and edge cases stay in `npm test` and `npm run test:integration`,
+which every spec's header names.
 
-- `tests/e2e/role-smoke.spec.ts` is the deployment gate. It signs in as Super
-  Admin, Head Office, Branch Admin, Order Portal, Group Order Portal, Group
-  User, and Employee; probes each persona's primary data path; verifies the
-  group roles' assigned scope; and completes an order from creation through
-  approval and Super Admin fulfillment. It also proves the requester cannot
-  approve and the approver cannot fulfill.
-- `tests/e2e/activity-log.spec.ts` covers the Super Admin activity log and its
-  Head Office access boundary.
+| Spec | Feature (plan under `plans/`) |
+|---|---|
+| `role-smoke.spec.ts` | Deployment gate: every role signs in to its workspace; an order is created, approved and fulfilled only by the right roles |
+| `role-switch.spec.ts` | `OF-ROLE-branch-admin-order-portal-switch` |
+| `activity-log.spec.ts` | `OF-AUDIT-admin-activity-log` |
+| `organization-budget-toggle.spec.ts` | `OF-BUDGET-organization-budget-toggle` |
+| `organization-join-domain.spec.ts` | `OF-JOIN-email-domain-lock` |
+| `organization-join.spec.ts` | `OF-JOIN-organization-self-service-join` (code → request → approval → sign-in) |
+| `order-auto-approval.spec.ts` | `OF-ORDERS-organization-auto-approval` |
+| `ordering-gates.spec.ts` | `OF-ORDERS-pending-invoice-notice`, `OF-PAYMENT-CONTROL-unpaid-invoice-ordering-block`, `OF-ORDERS-unacknowledged-delivery-ordering-block` |
+| `delivery-addresses.spec.ts` | `OF-ADDR-multiple-delivery-addresses` |
+| `product-requests.spec.ts` | `OF-PRODUCT-REQUEST-head-office-new-product-requests` |
+| `support-threads.spec.ts` | `OF-SUPPORT-portal-to-apricart-threads`, `-order-search`, `-product-reference`, `-shell-and-kpis` |
+| `password-recovery.spec.ts` | `OF-AUTH-self-service-password-reset`, `OF-KE-password-change-without-email-verification` |
+| `viewer-role.spec.ts` | `OF-VIEWER-readonly-dashboard-role` |
+| `budget-allocation.spec.ts` | `OF-BUDGET-addon-validity`, `OF-GROUP-USER-budget-allocation`, `-per-user` |
+| `group-orders.spec.ts` | `OF-GROUP-ORDER-CROSS-ROLE-VISIBILITY`, `OF-GROUP-branch-owns-order-writes`, `OF-GROUP-PORTAL-other-orders-tab`, `OF-GROUP-USER-other-orders-tab` |
+| `executive-analytics.spec.ts` | `OF-EXEC-ANALYTICS-*`, `OF-REPORTS-*`, `OF-GROUP-USER-graphical-reports`, `OF-BUDGET-BURN-*`, `OF-PRODUCT-monthly-consumption-trend` |
 
-Keep browser coverage focused on critical journeys and rendered role routing.
-Detailed arithmetic, SQL behavior, and edge cases belong in `npm test` or
-`npm run test:integration`.
+Plans with no screen of their own are deliberately not here: the K-Electric
+sync and repair scripts (`KE-*`, `OF-KE-*` other than the password change), the
+ledger/orders parity rule, the custom-roles investigation (not built), and the
+coverage plans themselves.
+
+### Each feature spec owns a tenant
+
+`tests/e2e/support/tenant.ts` seeds an organization of the spec's own, keyed by
+a short feature key (`E2E <key> Org`, users `e2e-<key>-…`, products
+`E2E-<KEY>-…`), with a Super Admin of its own. Nothing a journey switches on or
+orders can reach another spec or the shared role-smoke tenant. Its teardown
+reads the database's foreign keys and removes every row reachable from that
+tenant, its users and its products, so a new table never needs adding to a
+cleanup list. Pick a key no other spec uses, and never one that matches the
+start of another organization's name (`Role`, `Budget`, `Activity`).
+
+Two things a seed cannot do for you:
+
+- **The company list is cached server-side for a minute.** A Super Admin who
+  must find a freshly seeded company in `/organizations` goes through
+  `openEditCompany` in `support/admin-ui.ts`, which clears that cache the way
+  any company edit does.
+- **There is no email service.** Password-reset delivery fails closed and the
+  server retires the challenge; `password-recovery.spec.ts` stands in for the
+  inbox by planting a known code with the server's own HMAC. Nothing else
+  depends on email arriving.
 
 ## One-time setup
 

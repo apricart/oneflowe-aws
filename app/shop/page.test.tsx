@@ -533,3 +533,376 @@ describe("OrderPortalPage category filter", () => {
     })
   })
 })
+
+describe("OrderPortalPage unpaid-invoice ordering block", () => {
+  const BLOCKED_MESSAGE = "You have 2 unpaid invoices. Please pay your dues before placing a new order."
+  const blockedView = { orderingAllowed: false, overdueCount: 2, threshold: 2, reason: "THRESHOLD_REACHED" }
+  const clearView = { orderingAllowed: true, overdueCount: 0, threshold: 2, reason: "NO_OVERDUE_PAYMENTS" }
+  const reply = (status: number, body: unknown) =>
+    ({ ok: status >= 200 && status < 300, status, json: async () => body }) as Response
+
+  /** Answers the pre-check, the pending-invoice check and the order POST. */
+  function stubFetch(answers: { paymentControl: () => Response; order?: () => Response }) {
+    const calls: Array<{ url: string; method: string }> = []
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET"
+      calls.push({ url, method })
+      if (url.startsWith("/api/v1/payment-control")) return answers.paymentControl()
+      if (url === "/api/v1/orders/pending-invoice") return reply(200, { hasPendingInvoice: false, pendingInvoice: null })
+      if (url === "/api/v1/orders" && method === "POST") {
+        return answers.order ? answers.order() : reply(200, { order: { tid: "TID-1" } })
+      }
+      return reply(200, {})
+    }))
+    return calls
+  }
+
+  async function placeOrder() {
+    render(<OrderPortalPage />)
+    fireEvent.click(screen.getByRole("button", { name: /Add .* to Cart/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Open Cart" }))
+    fireEvent.click(screen.getByRole("button", { name: /Proceed to checkout/ }))
+    fireEvent.click(await screen.findByRole("button", { name: "Place Order" }))
+  }
+
+  beforeEach(() => {
+    localStorage.clear()
+    mockStockedShop()
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  it("shows the popup and submits nothing when the branch is blocked", async () => {
+    const calls = stubFetch({ paymentControl: () => reply(200, blockedView) })
+    await placeOrder()
+
+    const popup = await screen.findByRole("alertdialog", { name: "Unpaid invoices" })
+    expect(popup.textContent).toContain(BLOCKED_MESSAGE)
+    // The Order Portal user asks for its own branch; the server resolves it.
+    expect(calls.some((call) => call.url === "/api/v1/payment-control")).toBe(true)
+    expect(calls.some((call) => call.url === "/api/v1/orders/pending-invoice")).toBe(false)
+    expect(calls.some((call) => call.url === "/api/v1/orders" && call.method === "POST")).toBe(false)
+  })
+
+  it("places the order when the branch is clear", async () => {
+    const calls = stubFetch({ paymentControl: () => reply(200, clearView) })
+    await placeOrder()
+
+    await waitFor(() => {
+      expect(calls.some((call) => call.url === "/api/v1/orders" && call.method === "POST")).toBe(true)
+    })
+    expect(screen.queryByRole("alertdialog", { name: "Unpaid invoices" })).toBeNull()
+  })
+
+  it("shows the same popup when the server refuses the order, instead of a generic error", async () => {
+    // The pre-check failed, so it let the order through; the server's gate is the control.
+    stubFetch({
+      paymentControl: () => reply(500, { error: "Unable to load payment control" }),
+      order: () => reply(409, {
+        error: BLOCKED_MESSAGE,
+        code: "PAYMENT_CONTROL_BLOCKED",
+        paymentControl: { code: "PAYMENT_CONTROL_BLOCKED", state: "BLOCKED", reason: "THRESHOLD_REACHED", overdueCount: 2, threshold: 2, exceptionExpiredAt: null },
+      }),
+    })
+    const toast = vi.fn()
+    mocks.useToast.mockReturnValue({ toast })
+    await placeOrder()
+
+    const popup = await screen.findByRole("alertdialog", { name: "Unpaid invoices" })
+    expect(popup.textContent).toContain(BLOCKED_MESSAGE)
+    expect(toast).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Failed" }))
+  })
+
+  it("closes the popup on OK", async () => {
+    stubFetch({ paymentControl: () => reply(200, blockedView) })
+    await placeOrder()
+
+    fireEvent.click(await screen.findByRole("button", { name: "OK" }))
+    await waitFor(() => expect(screen.queryByRole("alertdialog", { name: "Unpaid invoices" })).toBeNull())
+  })
+})
+
+describe("OrderPortalPage unacknowledged-delivery ordering block", () => {
+  const TITLE = "Delivered orders awaiting acknowledgement"
+  const BLOCKED_MESSAGE = "Your branch has 2 delivered orders awaiting acknowledgement. Please acknowledge/fulfil your delivered orders to place a new order."
+  const blockedView = { branchId: 7, enabled: true, orderingAllowed: false, unacknowledgedCount: 2, threshold: 2 }
+  const clearView = { branchId: 7, enabled: true, orderingAllowed: true, unacknowledgedCount: 1, threshold: 2 }
+  const paymentClear = { orderingAllowed: true, overdueCount: 0, threshold: 2, reason: "NO_OVERDUE_PAYMENTS" }
+  const paymentBlocked = { orderingAllowed: false, overdueCount: 2, threshold: 2, reason: "THRESHOLD_REACHED" }
+  const reply = (status: number, body: unknown) =>
+    ({ ok: status >= 200 && status < 300, status, json: async () => body }) as Response
+
+  /** Answers both pre-checks, the pending-invoice check and the order POST. */
+  function stubFetch(answers: { deliveries: () => Response; paymentControl?: () => Response; order?: () => Response }) {
+    const calls: Array<{ url: string; method: string }> = []
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET"
+      calls.push({ url, method })
+      if (url.startsWith("/api/v1/orders/delivery-acknowledgement")) return answers.deliveries()
+      if (url.startsWith("/api/v1/payment-control")) return answers.paymentControl ? answers.paymentControl() : reply(200, paymentClear)
+      if (url === "/api/v1/orders/pending-invoice") return reply(200, { hasPendingInvoice: false, pendingInvoice: null })
+      if (url === "/api/v1/orders" && method === "POST") {
+        return answers.order ? answers.order() : reply(200, { order: { tid: "TID-1" } })
+      }
+      return reply(200, {})
+    }))
+    return calls
+  }
+
+  async function placeOrder() {
+    render(<OrderPortalPage />)
+    fireEvent.click(screen.getByRole("button", { name: /Add .* to Cart/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Open Cart" }))
+    fireEvent.click(screen.getByRole("button", { name: /Proceed to checkout/ }))
+    fireEvent.click(await screen.findByRole("button", { name: "Place Order" }))
+  }
+
+  beforeEach(() => {
+    localStorage.clear()
+    mockStockedShop()
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  it("shows the popup and submits nothing when the branch is blocked", async () => {
+    const calls = stubFetch({ deliveries: () => reply(200, blockedView) })
+    await placeOrder()
+
+    const popup = await screen.findByRole("alertdialog", { name: TITLE })
+    expect(popup.textContent).toContain(BLOCKED_MESSAGE)
+    // The Order Portal user asks for its own branch; the server resolves it.
+    expect(calls.some((call) => call.url === "/api/v1/orders/delivery-acknowledgement")).toBe(true)
+    expect(calls.some((call) => call.url === "/api/v1/orders/pending-invoice")).toBe(false)
+    expect(calls.some((call) => call.url === "/api/v1/orders" && call.method === "POST")).toBe(false)
+  })
+
+  it("places the order when the branch has fewer than two", async () => {
+    const calls = stubFetch({ deliveries: () => reply(200, clearView) })
+    await placeOrder()
+
+    await waitFor(() => {
+      expect(calls.some((call) => call.url === "/api/v1/orders" && call.method === "POST")).toBe(true)
+    })
+    expect(screen.queryByRole("alertdialog", { name: TITLE })).toBeNull()
+  })
+
+  it("places the order when the organization has the toggle off", async () => {
+    const calls = stubFetch({ deliveries: () => reply(200, { branchId: 7, enabled: false, orderingAllowed: true, unacknowledgedCount: 0, threshold: 2 }) })
+    await placeOrder()
+
+    await waitFor(() => {
+      expect(calls.some((call) => call.url === "/api/v1/orders" && call.method === "POST")).toBe(true)
+    })
+  })
+
+  it("shows the same popup when the server refuses the order, instead of a generic error", async () => {
+    // The pre-check failed, so it let the order through; the server's gate is the control.
+    stubFetch({
+      deliveries: () => reply(500, { error: "Unable to load delivery acknowledgement status" }),
+      order: () => reply(409, {
+        error: BLOCKED_MESSAGE,
+        code: "UNACKNOWLEDGED_DELIVERIES_BLOCKED",
+        deliveryAcknowledgement: { code: "UNACKNOWLEDGED_DELIVERIES_BLOCKED", unacknowledgedCount: 2, threshold: 2 },
+      }),
+    })
+    const toast = vi.fn()
+    mocks.useToast.mockReturnValue({ toast })
+    await placeOrder()
+
+    const popup = await screen.findByRole("alertdialog", { name: TITLE })
+    expect(popup.textContent).toContain(BLOCKED_MESSAGE)
+    expect(toast).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Failed" }))
+  })
+
+  it("when both blocks apply, shows the unpaid-invoices popup only, as the server would", async () => {
+    const calls = stubFetch({ deliveries: () => reply(200, blockedView), paymentControl: () => reply(200, paymentBlocked) })
+    await placeOrder()
+
+    expect(await screen.findByRole("alertdialog", { name: "Unpaid invoices" })).toBeTruthy()
+    expect(screen.queryByRole("alertdialog", { name: TITLE })).toBeNull()
+    expect(calls.some((call) => call.url.startsWith("/api/v1/orders/delivery-acknowledgement"))).toBe(false)
+  })
+
+  it("closes the popup on OK", async () => {
+    stubFetch({ deliveries: () => reply(200, blockedView) })
+    await placeOrder()
+
+    fireEvent.click(await screen.findByRole("button", { name: "OK" }))
+    await waitFor(() => expect(screen.queryByRole("alertdialog", { name: TITLE })).toBeNull())
+  })
+})
+
+describe("OrderPortalPage unacknowledged orders tab", () => {
+  const TAB_NAME = /Unacknowledged Orders \(\d+\)/
+  const reply = (status: number, body: unknown) =>
+    ({ ok: status >= 200 && status < 300, status, text: async () => JSON.stringify(body), json: async () => body }) as Response
+
+  const delivered = (id: number, overrides: Record<string, unknown> = {}) => ({
+    id,
+    tid: `TID-${id}`,
+    status: "APPROVED",
+    fulfillmentStatus: "DELIVERED",
+    deliveredAt: "2026-09-20T10:00:00.000Z",
+    createdAt: "2026-09-18T10:00:00.000Z",
+    totalCents: 1_000,
+    approvalToken: `TOKEN${id}XYZ`,
+    itemNames: "Test product",
+    ...overrides,
+  })
+
+  function mockShopWithApprovedOrders(items: unknown[]) {
+    mockStockedShop()
+    const mutateSource = vi.fn()
+    const base = mocks.useSWR.getMockImplementation()!
+    mocks.useSWR.mockImplementation((url: string | null, ...rest: unknown[]) => {
+      if (url === "/api/v1/orders?status=approved&limit=500") return { data: { items }, mutate: mutateSource }
+      return (base as any)(url, ...rest)
+    })
+    return { mutateSource }
+  }
+
+  beforeEach(() => localStorage.clear())
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  it("counts only delivered orders that are still unacknowledged", () => {
+    mockShopWithApprovedOrders([
+      delivered(1),
+      delivered(2, { fulfillmentStatus: "DISPATCHED" }),
+      delivered(3),
+    ])
+    render(<OrderPortalPage />)
+    expect(screen.getByRole("button", { name: "Unacknowledged Orders (2)" })).toBeTruthy()
+  })
+
+  it("lists them in a table with the full token and a send action", async () => {
+    mockShopWithApprovedOrders([delivered(1), delivered(2, { approvalToken: null, placedByGroupPortal: true })])
+    render(<OrderPortalPage />)
+    fireEvent.click(screen.getByRole("button", { name: TAB_NAME }))
+
+    const table = await screen.findByRole("table", { name: "Delivered orders awaiting acknowledgement" })
+    expect(table.textContent).toContain("TOKEN1XYZ")
+    expect(screen.getByRole("button", { name: "Fulfil order TID-1 by emailing its token" })).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Fulfil order TID-2 by emailing its token" })).toBeNull()
+  })
+
+  it("emails the token for that order and refreshes the tab once it is fulfilled", async () => {
+    const { mutateSource } = mockShopWithApprovedOrders([delivered(1)])
+    const fetchMock = vi.fn(async () => reply(200, { fulfilled: true, message: "Token sent" }))
+    vi.stubGlobal("fetch", fetchMock)
+    render(<OrderPortalPage />)
+    fireEvent.click(screen.getByRole("button", { name: TAB_NAME }))
+    fireEvent.click(await screen.findByRole("button", { name: "Fulfil order TID-1 by emailing its token" }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/v1/orders/1/send-token-email", expect.objectContaining({ method: "POST" }))
+    })
+    await waitFor(() => expect(mutateSource.mock.calls.length).toBeGreaterThanOrEqual(2))
+  })
+
+  it("takes a blocked user from the popup to the tab", async () => {
+    mockShopWithApprovedOrders([delivered(1), delivered(2)])
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (url.startsWith("/api/v1/orders/delivery-acknowledgement")) {
+        return reply(200, { branchId: 2, enabled: true, orderingAllowed: false, unacknowledgedCount: 2, threshold: 2 })
+      }
+      if (url.startsWith("/api/v1/payment-control")) {
+        return reply(200, { orderingAllowed: true, overdueCount: 0, threshold: 2, reason: "NO_OVERDUE_PAYMENTS" })
+      }
+      return reply(200, {})
+    }))
+    render(<OrderPortalPage />)
+    fireEvent.click(screen.getByRole("button", { name: /Add .* to Cart/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Open Cart" }))
+    fireEvent.click(screen.getByRole("button", { name: /Proceed to checkout/ }))
+    fireEvent.click(await screen.findByRole("button", { name: "Place Order" }))
+
+    fireEvent.click(await screen.findByRole("button", { name: "View unacknowledged orders" }))
+    expect(await screen.findByRole("table", { name: "Delivered orders awaiting acknowledgement" })).toBeTruthy()
+  })
+})
+
+describe("OrderPortalPage with budget allocation off", () => {
+  const reply = (status: number, body: unknown) =>
+    ({ ok: status >= 200 && status < 300, status, json: async () => body }) as Response
+
+  /** The stocked one-product shop, with the budget read answering `budget`. */
+  function mockShopWithBudget(budget: Record<string, unknown>) {
+    mockStockedShop()
+    const stocked = mocks.useSWR.getMockImplementation()!
+    mocks.useSWR.mockImplementation((url: string | null, ...rest: unknown[]) =>
+      url?.startsWith("/api/v1/budgets")
+        ? { data: budget, mutate: vi.fn() }
+        : stocked(url, ...rest))
+  }
+
+  function stubFetch() {
+    const calls: Array<{ url: string; method: string }> = []
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET"
+      calls.push({ url, method })
+      if (url.startsWith("/api/v1/payment-control")) {
+        return reply(200, { orderingAllowed: true, overdueCount: 0, threshold: 2, reason: "NOT_CONFIGURED" })
+      }
+      if (url === "/api/v1/orders/pending-invoice") return reply(200, { hasPendingInvoice: false, pendingInvoice: null })
+      if (url === "/api/v1/orders" && method === "POST") return reply(200, { order: { tid: "TID-1" } })
+      return reply(200, {})
+    }))
+    return calls
+  }
+
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  it("shows no budget figures and places an order the old budget check would have refused", async () => {
+    localStorage.clear()
+    // No figures at all, as the server answers a tenant with budgets off.
+    mockShopWithBudget({ branchId: 2, budgetsEnabled: false })
+    const calls = stubFetch()
+    render(<OrderPortalPage />)
+
+    fireEvent.click(screen.getByRole("button", { name: /Add .* to Cart/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Open Cart" }))
+
+    expect(screen.queryByText(/Remaining budget after/)).toBeNull()
+    expect(screen.queryByText(/Cart exceeds remaining budget/)).toBeNull()
+    expect(screen.queryByText(/of PKR/)).toBeNull()
+    const proceed = screen.getByRole("button", { name: /Proceed to checkout/ }) as HTMLButtonElement
+    expect(proceed.disabled).toBe(false)
+
+    fireEvent.click(proceed)
+    expect(screen.queryByText(/Remaining Budget:/)).toBeNull()
+    fireEvent.click(await screen.findByRole("button", { name: "Place Order" }))
+    await waitFor(() => {
+      expect(calls.some((call) => call.url === "/api/v1/orders" && call.method === "POST")).toBe(true)
+    })
+  })
+
+  it("still holds the cart back when budgets are on and the cart exceeds what is left", () => {
+    localStorage.clear()
+    // 5.00 left against a 10.00 product.
+    mockShopWithBudget({ branchId: 2, budgetsEnabled: true, remainingCents: 500, amountAllocatedCents: 500, amountCreditedCents: 0 })
+    stubFetch()
+    render(<OrderPortalPage />)
+
+    fireEvent.click(screen.getByRole("button", { name: /Add .* to Cart/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Open Cart" }))
+
+    expect(screen.getAllByText(/Cart exceeds remaining budget/).length).toBeGreaterThan(0)
+    expect((screen.getByRole("button", { name: /Proceed to checkout/ }) as HTMLButtonElement).disabled).toBe(true)
+  })
+})

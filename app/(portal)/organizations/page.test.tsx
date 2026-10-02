@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 const mocks = vi.hoisted(() => ({
   mutateOrganizations: vi.fn(),
   mutateBranches: vi.fn(),
+  role: "SUPER_ADMIN",
 }))
 
 vi.mock("@/lib/hooks/use-api", () => ({
@@ -18,7 +19,16 @@ vi.mock("@/lib/hooks/use-api", () => ({
           budgetAllocationMode: "money",
           emailDomain: "zomato.com",
         },
-        { id: 2, name: "Panacloud", code: "0002", status: "active", budgetAllocationMode: "money" },
+        {
+          id: 2,
+          name: "Panacloud",
+          code: "0002",
+          status: "active",
+          budgetAllocationMode: "money",
+          blockOrderingOnUnpaidInvoices: true,
+          blockOrderingOnUnacknowledgedDeliveries: true,
+          budgetsEnabled: false,
+        },
       ],
     },
     mutate: mocks.mutateOrganizations,
@@ -40,7 +50,7 @@ vi.mock("@/components/context/app-context", () => ({
 }))
 
 vi.mock("next-auth/react", () => ({
-  useSession: () => ({ data: { user: { role: "SUPER_ADMIN" } } }),
+  useSession: () => ({ data: { user: { role: mocks.role } } }),
 }))
 
 import OrganizationsPage from "./page"
@@ -48,6 +58,7 @@ import OrganizationsPage from "./page"
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+  mocks.role = "SUPER_ADMIN"
 })
 
 describe("OrganizationsPage organization selection", () => {
@@ -105,6 +116,21 @@ describe("OrganizationsPage organization selection", () => {
     expect(document.getElementById(descriptionId!)?.textContent).toContain(
       "Set up a new tenant with a memorable code, status, and budget allocation model.",
     )
+  })
+
+  it("defaults to requiring approval and disables approver selection when switched off", () => {
+    render(<OrganizationsPage />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Company" }))
+
+    const approvalSwitch = screen.getByRole("switch", { name: "Require order approval" })
+    expect((approvalSwitch as HTMLButtonElement).getAttribute("data-state")).toBe("checked")
+
+    fireEvent.click(approvalSwitch)
+
+    expect((approvalSwitch as HTMLButtonElement).getAttribute("data-state")).toBe("unchecked")
+    expect((screen.getByRole("button", { name: /Branch Admin/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText("Saved for use if approval is required again later.")).toBeTruthy()
   })
 })
 
@@ -227,5 +253,355 @@ describe("OrganizationsPage email domain", () => {
     })
     expect(save.disabled).toBe(true)
     expect(within(dialog).getByText(/without a name or @/)).toBeTruthy()
+  })
+})
+
+describe("OrganizationsPage unpaid-invoice ordering block", () => {
+  const TOGGLE = "Block ordering on unpaid invoices"
+
+  async function createCompany() {
+    fireEvent.click(screen.getByRole("button", { name: "Save Company" }))
+    const confirm = await screen.findByRole("alertdialog")
+    await act(async () => {
+      fireEvent.click(within(confirm).getByRole("button", { name: "Create Company" }))
+    })
+  }
+
+  it("is off by default in Create Company and is sent as false", async () => {
+    const calls = stubOrganizationApi()
+    render(<OrganizationsPage />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Company" }))
+    const toggle = screen.getByRole("switch", { name: TOGGLE })
+    expect(toggle.getAttribute("data-state")).toBe("unchecked")
+    expect(screen.getByText(/2 or more unpaid invoices/)).toBeTruthy()
+
+    fireEvent.change(screen.getByLabelText("Company name"), { target: { value: "Acme Inc." } })
+    fireEvent.change(screen.getByLabelText("Code"), { target: { value: "ACME" } })
+    await createCompany()
+
+    await waitFor(() => expect(calls.some((call) => call.method === "POST")).toBe(true))
+    const created = calls.find((call) => call.url === "/api/v1/organizations")!
+    expect(created.body.blockOrderingOnUnpaidInvoices).toBe(false)
+  })
+
+  it("sends true from Create Company when switched on", async () => {
+    const calls = stubOrganizationApi()
+    render(<OrganizationsPage />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Company" }))
+    fireEvent.click(screen.getByRole("switch", { name: TOGGLE }))
+    fireEvent.change(screen.getByLabelText("Company name"), { target: { value: "Acme Inc." } })
+    fireEvent.change(screen.getByLabelText("Code"), { target: { value: "ACME" } })
+    await createCompany()
+
+    await waitFor(() => expect(calls.some((call) => call.method === "POST")).toBe(true))
+    const created = calls.find((call) => call.url === "/api/v1/organizations")!
+    expect(created.body.blockOrderingOnUnpaidInvoices).toBe(true)
+  })
+
+  it("Edit Company shows the stored value and sends the change", async () => {
+    const calls = stubOrganizationApi()
+    render(<OrganizationsPage />)
+
+    // Zomato (first) has the block off; switch it on.
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0])
+    const dialog = await screen.findByRole("dialog", { name: "Edit Company" })
+    const toggle = within(dialog).getByRole("switch", { name: TOGGLE })
+    await waitFor(() => expect((toggle as HTMLButtonElement).disabled).toBe(false))
+    expect(toggle.getAttribute("data-state")).toBe("unchecked")
+
+    fireEvent.click(toggle)
+    const save = within(dialog).getByRole("button", { name: "Save Changes" }) as HTMLButtonElement
+    await waitFor(() => expect(save.disabled).toBe(false))
+    await act(async () => {
+      fireEvent.click(save)
+    })
+
+    await waitFor(() => {
+      expect(calls.some((call) => call.url === "/api/v1/organizations/1" && call.method === "PATCH")).toBe(true)
+    })
+    const patch = calls.find((call) => call.url === "/api/v1/organizations/1" && call.method === "PATCH")!
+    expect(patch.body.blockOrderingOnUnpaidInvoices).toBe(true)
+  })
+
+  it("Edit Company prefills an organization that already blocks", async () => {
+    stubOrganizationApi()
+    render(<OrganizationsPage />)
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[1])
+    const dialog = await screen.findByRole("dialog", { name: "Edit Company" })
+    expect(within(dialog).getByRole("switch", { name: TOGGLE }).getAttribute("data-state")).toBe("checked")
+  })
+
+  it("a Head Office user neither sees nor sends the toggle", async () => {
+    mocks.role = "HEAD_OFFICE"
+    const calls = stubOrganizationApi()
+    render(<OrganizationsPage />)
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0])
+    const dialog = await screen.findByRole("dialog", { name: "Edit Company" })
+    expect(within(dialog).queryByRole("switch", { name: TOGGLE })).toBeNull()
+
+    const save = within(dialog).getByRole("button", { name: "Save Changes" }) as HTMLButtonElement
+    await waitFor(() => expect(save.disabled).toBe(false))
+    await act(async () => {
+      fireEvent.click(save)
+    })
+    await waitFor(() => {
+      expect(calls.some((call) => call.url === "/api/v1/organizations/1" && call.method === "PATCH")).toBe(true)
+    })
+    const patch = calls.find((call) => call.url === "/api/v1/organizations/1" && call.method === "PATCH")!
+    expect(patch.body).not.toHaveProperty("blockOrderingOnUnpaidInvoices")
+  })
+})
+
+describe("OrganizationsPage unacknowledged-delivery ordering block", () => {
+  const TOGGLE = "Block ordering on unacknowledged deliveries"
+  const UNPAID_TOGGLE = "Block ordering on unpaid invoices"
+
+  async function createCompany() {
+    fireEvent.click(screen.getByRole("button", { name: "Save Company" }))
+    const confirm = await screen.findByRole("alertdialog")
+    await act(async () => {
+      fireEvent.click(within(confirm).getByRole("button", { name: "Create Company" }))
+    })
+  }
+
+  function nameTheCompany() {
+    fireEvent.change(screen.getByLabelText("Company name"), { target: { value: "Acme Inc." } })
+    fireEvent.change(screen.getByLabelText("Code"), { target: { value: "ACME" } })
+  }
+
+  it("is off by default in Create Company, says what it counts, and is sent as false", async () => {
+    const calls = stubOrganizationApi()
+    render(<OrganizationsPage />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Company" }))
+    expect(screen.getByRole("switch", { name: TOGGLE }).getAttribute("data-state")).toBe("unchecked")
+    expect(screen.getByText(/2 or more orders that are delivered but not yet acknowledged/)).toBeTruthy()
+
+    nameTheCompany()
+    await createCompany()
+
+    await waitFor(() => expect(calls.some((call) => call.method === "POST")).toBe(true))
+    const created = calls.find((call) => call.url === "/api/v1/organizations")!
+    expect(created.body.blockOrderingOnUnacknowledgedDeliveries).toBe(false)
+  })
+
+  it("sends true from Create Company when switched on, independently of the unpaid-invoice toggle", async () => {
+    const calls = stubOrganizationApi()
+    render(<OrganizationsPage />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Company" }))
+    fireEvent.click(screen.getByRole("switch", { name: TOGGLE }))
+    expect(screen.getByRole("switch", { name: UNPAID_TOGGLE }).getAttribute("data-state")).toBe("unchecked")
+    nameTheCompany()
+    await createCompany()
+
+    await waitFor(() => expect(calls.some((call) => call.method === "POST")).toBe(true))
+    const created = calls.find((call) => call.url === "/api/v1/organizations")!
+    expect(created.body.blockOrderingOnUnacknowledgedDeliveries).toBe(true)
+    expect(created.body.blockOrderingOnUnpaidInvoices).toBe(false)
+  })
+
+  it("Edit Company shows the stored value and sends the change", async () => {
+    const calls = stubOrganizationApi()
+    render(<OrganizationsPage />)
+
+    // Zomato (first) has the block off; switch it on.
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0])
+    const dialog = await screen.findByRole("dialog", { name: "Edit Company" })
+    const toggle = within(dialog).getByRole("switch", { name: TOGGLE })
+    await waitFor(() => expect((toggle as HTMLButtonElement).disabled).toBe(false))
+    expect(toggle.getAttribute("data-state")).toBe("unchecked")
+
+    fireEvent.click(toggle)
+    const save = within(dialog).getByRole("button", { name: "Save Changes" }) as HTMLButtonElement
+    await waitFor(() => expect(save.disabled).toBe(false))
+    await act(async () => {
+      fireEvent.click(save)
+    })
+
+    await waitFor(() => {
+      expect(calls.some((call) => call.url === "/api/v1/organizations/1" && call.method === "PATCH")).toBe(true)
+    })
+    const patch = calls.find((call) => call.url === "/api/v1/organizations/1" && call.method === "PATCH")!
+    expect(patch.body.blockOrderingOnUnacknowledgedDeliveries).toBe(true)
+  })
+
+  it("Edit Company prefills an organization that already blocks, and switching it off sends false", async () => {
+    const calls = stubOrganizationApi()
+    render(<OrganizationsPage />)
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[1])
+    const dialog = await screen.findByRole("dialog", { name: "Edit Company" })
+    const toggle = within(dialog).getByRole("switch", { name: TOGGLE })
+    expect(toggle.getAttribute("data-state")).toBe("checked")
+    await waitFor(() => expect((toggle as HTMLButtonElement).disabled).toBe(false))
+
+    fireEvent.click(toggle)
+    const save = within(dialog).getByRole("button", { name: "Save Changes" }) as HTMLButtonElement
+    await waitFor(() => expect(save.disabled).toBe(false))
+    await act(async () => {
+      fireEvent.click(save)
+    })
+
+    await waitFor(() => {
+      expect(calls.some((call) => call.url === "/api/v1/organizations/2" && call.method === "PATCH")).toBe(true)
+    })
+    const patch = calls.find((call) => call.url === "/api/v1/organizations/2" && call.method === "PATCH")!
+    expect(patch.body.blockOrderingOnUnacknowledgedDeliveries).toBe(false)
+  })
+
+  it("a Head Office user neither sees nor sends the toggle", async () => {
+    mocks.role = "HEAD_OFFICE"
+    const calls = stubOrganizationApi()
+    render(<OrganizationsPage />)
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0])
+    const dialog = await screen.findByRole("dialog", { name: "Edit Company" })
+    expect(within(dialog).queryByRole("switch", { name: TOGGLE })).toBeNull()
+
+    const save = within(dialog).getByRole("button", { name: "Save Changes" }) as HTMLButtonElement
+    await waitFor(() => expect(save.disabled).toBe(false))
+    await act(async () => {
+      fireEvent.click(save)
+    })
+    await waitFor(() => {
+      expect(calls.some((call) => call.url === "/api/v1/organizations/1" && call.method === "PATCH")).toBe(true)
+    })
+    const patch = calls.find((call) => call.url === "/api/v1/organizations/1" && call.method === "PATCH")!
+    expect(patch.body).not.toHaveProperty("blockOrderingOnUnacknowledgedDeliveries")
+  })
+})
+
+describe("OrganizationsPage budget allocation switch", () => {
+  const TOGGLE = "Budget allocation"
+
+  function nameTheCompany() {
+    fireEvent.change(screen.getByLabelText("Company name"), { target: { value: "Acme Inc." } })
+    fireEvent.change(screen.getByLabelText("Code"), { target: { value: "ACME" } })
+  }
+
+  async function saveEdit(dialog: HTMLElement) {
+    const save = within(dialog).getByRole("button", { name: "Save Changes" }) as HTMLButtonElement
+    await waitFor(() => expect(save.disabled).toBe(false))
+    await act(async () => {
+      fireEvent.click(save)
+    })
+  }
+
+  it("is off by default in Create Company, hides the model, and is sent as false", async () => {
+    const calls = stubOrganizationApi()
+    render(<OrganizationsPage />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Company" }))
+    expect(screen.getByRole("switch", { name: TOGGLE }).getAttribute("data-state")).toBe("unchecked")
+    expect(screen.queryByRole("button", { name: /Money value/ })).toBeNull()
+    expect(screen.getByText(/When off, orders are placed without a budget/)).toBeTruthy()
+
+    nameTheCompany()
+    fireEvent.click(screen.getByRole("button", { name: "Save Company" }))
+    const confirm = await screen.findByRole("alertdialog")
+    // The confirmation says what will actually happen, not a model that will not.
+    expect(within(confirm).getByText(/will order without budget allocation/)).toBeTruthy()
+    await act(async () => {
+      fireEvent.click(within(confirm).getByRole("button", { name: "Create Company" }))
+    })
+
+    await waitFor(() => expect(calls.some((call) => call.method === "POST")).toBe(true))
+    const created = calls.find((call) => call.url === "/api/v1/organizations")!
+    expect(created.body.budgetsEnabled).toBe(false)
+  })
+
+  it("shows the model once switched on and sends both", async () => {
+    const calls = stubOrganizationApi()
+    render(<OrganizationsPage />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Company" }))
+    fireEvent.click(screen.getByRole("switch", { name: TOGGLE }))
+    const quantity = screen.getByRole("button", { name: /Quantity/ })
+    fireEvent.click(quantity)
+    expect(quantity.getAttribute("aria-pressed")).toBe("true")
+    nameTheCompany()
+    fireEvent.click(screen.getByRole("button", { name: "Save Company" }))
+    const confirm = await screen.findByRole("alertdialog")
+    expect(within(confirm).getByText(/will use quantity-based budget allocation/)).toBeTruthy()
+    await act(async () => {
+      fireEvent.click(within(confirm).getByRole("button", { name: "Create Company" }))
+    })
+
+    await waitFor(() => expect(calls.some((call) => call.method === "POST")).toBe(true))
+    const created = calls.find((call) => call.url === "/api/v1/organizations")!
+    expect(created.body.budgetsEnabled).toBe(true)
+    expect(created.body.budgetAllocationMode).toBe("quantity")
+  })
+
+  it("Edit Company reads a record without the field as on — never hides a live budget — and sends a switch-off", async () => {
+    const calls = stubOrganizationApi()
+    render(<OrganizationsPage />)
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0])
+    const dialog = await screen.findByRole("dialog", { name: "Edit Company" })
+    const toggle = within(dialog).getByRole("switch", { name: TOGGLE })
+    await waitFor(() => expect((toggle as HTMLButtonElement).disabled).toBe(false))
+    expect(toggle.getAttribute("data-state")).toBe("checked")
+
+    fireEvent.click(toggle)
+    expect(within(dialog).getByText(/Orders already holding budget keep it until they are decided/)).toBeTruthy()
+    await saveEdit(dialog)
+
+    await waitFor(() => {
+      expect(calls.some((call) => call.url === "/api/v1/organizations/1" && call.method === "PATCH")).toBe(true)
+    })
+    const patch = calls.find((call) => call.url === "/api/v1/organizations/1" && call.method === "PATCH")!
+    expect(patch.body.budgetsEnabled).toBe(false)
+  })
+
+  it("Edit Company prefills an organization with budgets off and sends a switch-on", async () => {
+    const calls = stubOrganizationApi()
+    render(<OrganizationsPage />)
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[1])
+    const dialog = await screen.findByRole("dialog", { name: "Edit Company" })
+    const toggle = within(dialog).getByRole("switch", { name: TOGGLE })
+    await waitFor(() => expect((toggle as HTMLButtonElement).disabled).toBe(false))
+    expect(toggle.getAttribute("data-state")).toBe("unchecked")
+    expect(within(dialog).queryByRole("button", { name: /Money value/ })).toBeNull()
+
+    fireEvent.click(toggle)
+    expect(within(dialog).getByRole("button", { name: /Money value/ })).toBeTruthy()
+    await saveEdit(dialog)
+
+    await waitFor(() => {
+      expect(calls.some((call) => call.url === "/api/v1/organizations/2" && call.method === "PATCH")).toBe(true)
+    })
+    const patch = calls.find((call) => call.url === "/api/v1/organizations/2" && call.method === "PATCH")!
+    expect(patch.body.budgetsEnabled).toBe(true)
+  })
+
+  it("marks an organization with budgets off in the list rather than naming a model", () => {
+    stubOrganizationApi()
+    render(<OrganizationsPage />)
+
+    expect(screen.getAllByText("Budget off")).toHaveLength(1)
+  })
+
+  it("a Head Office user neither sees nor sends the switch", async () => {
+    mocks.role = "HEAD_OFFICE"
+    const calls = stubOrganizationApi()
+    render(<OrganizationsPage />)
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0])
+    const dialog = await screen.findByRole("dialog", { name: "Edit Company" })
+    expect(within(dialog).queryByRole("switch", { name: TOGGLE })).toBeNull()
+    await saveEdit(dialog)
+
+    await waitFor(() => {
+      expect(calls.some((call) => call.url === "/api/v1/organizations/1" && call.method === "PATCH")).toBe(true)
+    })
+    const patch = calls.find((call) => call.url === "/api/v1/organizations/1" && call.method === "PATCH")!
+    expect(patch.body).not.toHaveProperty("budgetsEnabled")
   })
 })

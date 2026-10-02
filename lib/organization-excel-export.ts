@@ -6,6 +6,8 @@ export type OrganizationExportData = {
   code: string
   status?: string | null
   budgetAllocationMode?: string | null
+  /** False when the tenant has budget allocation switched off; absent reads as on. */
+  budgetsEnabled?: boolean | null
   orderApproverRole?: string | null
   createdAt?: string | Date | null
   updatedAt?: string | Date | null
@@ -80,6 +82,15 @@ const isActive = (status: unknown) =>
     ? status.trim().toLowerCase() === "active"
     : Boolean(status)
 
+/**
+ * "Off" for a tenant with budget allocation switched off — its stored mode has
+ * no effect, and printing "Money-based" would say it budgets when it does not.
+ */
+const formatBudgetAllocation = (organization: OrganizationExportData) => {
+  if (organization.budgetsEnabled === false) return "Off"
+  return organization.budgetAllocationMode === "quantity" ? "Quantity-based" : "Money-based"
+}
+
 const formatOrderApproverRole = (value: unknown) => {
   if (value === "HEAD_OFFICE") return "Head Office"
   if (value === "BRANCH_ADMIN") return "Branch Admin"
@@ -116,9 +127,7 @@ export function buildOrganizationListWorkbookData(
       "Organization Name": organization.name,
       "Organization Code": organization.code,
       "Status": formatStatus(organization.status),
-      "Budget Allocation Mode": organization.budgetAllocationMode === "quantity"
-        ? "Quantity-based"
-        : "Money-based",
+      "Budget Allocation Mode": formatBudgetAllocation(organization),
       "Order Approver": formatOrderApproverRole(organization.orderApproverRole),
       "Total Branches": counts.total,
       "Active Branches": counts.active,
@@ -145,7 +154,7 @@ export function buildOrganizationWorkbookData(
     { Field: "Status", Value: formatStatus(organization.status) },
     {
       Field: "Budget Allocation Mode",
-      Value: organization.budgetAllocationMode === "quantity" ? "Quantity-based" : "Money-based",
+      Value: formatBudgetAllocation(organization),
     },
     { Field: "Total Branches", Value: organizationBranches.length },
     { Field: "Active Branches", Value: activeBranchCount },

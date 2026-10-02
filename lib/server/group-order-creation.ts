@@ -29,13 +29,22 @@ import { generateReceiptData } from "@/lib/receipt-generator"
 import { resolveTaxRateBp, splitInclusiveCents } from "@/lib/tax"
 import { getOrganizationTaxRateBp } from "@/lib/server/tax-rate"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
+import { resolveInitialOrderApproval } from "@/lib/server/order-creation-approval"
+import { isOrganizationBudgetEnabled, resolveOrderBudgetTracking } from "@/lib/server/organization-budget-policy"
+import { BUDGET_POLICY_CHANGED_MESSAGE } from "@/lib/organization-budget-policy"
 import { settleDueAddonsOnBudget } from "@/lib/server/budget-addon-expiry"
 import { assertBranchMayOrder } from "@/lib/server/payment-control"
-import { isPaymentControlBlockedError } from "@/lib/payment-control-policy"
+import { PAYMENT_CONTROL_BLOCKED_CODE, isPaymentControlBlockedError } from "@/lib/payment-control-policy"
+import { assertBranchDeliveriesAcknowledged } from "@/lib/server/unacknowledged-delivery-block"
+import {
+  UNACKNOWLEDGED_DELIVERIES_BLOCKED_CODE,
+  isDeliveryAcknowledgementBlockedError,
+} from "@/lib/unacknowledged-delivery-block"
 import { budgetPeriodOf } from "@/lib/budget-consumption"
 import {
   attemptImmediateOrderEmailDelivery,
   queueOrderCreatedNotifications,
+  queueSuperAdminAutoApprovalNotifications,
 } from "@/lib/server/order-notifications"
 import {
   loadGroupPriceOverrides,
@@ -88,6 +97,12 @@ export type GroupOrderBranchResult =
     branchId: number
     branchName: string
     reason: string
+    /** Present only when the branch was refused by an ordering block. */
+    code?: typeof PAYMENT_CONTROL_BLOCKED_CODE | typeof UNACKNOWLEDGED_DELIVERIES_BLOCKED_CODE
+    /** With PAYMENT_CONTROL_BLOCKED. */
+    unpaidInvoiceCount?: number
+    /** With UNACKNOWLEDGED_DELIVERIES_BLOCKED. */
+    unacknowledgedDeliveryCount?: number
   }
 
 export type GroupOrderSubmission = {
@@ -190,9 +205,11 @@ export function groupOrderFingerprint(input: {
  */
 function toUserFacingReason(caughtError: unknown): string {
   if (isPaymentControlBlockedError(caughtError)) return caughtError.message
+  if (isDeliveryAcknowledgementBlockedError(caughtError)) return caughtError.message
   const message = String((caughtError as { message?: unknown })?.message ?? "")
   const normalized = message.toLowerCase()
   const isCustomerError = message.startsWith("Insufficient stock")
+    || message === BUDGET_POLICY_CHANGED_MESSAGE
     || message.startsWith("Budget not configured")
     || message.includes("Insufficient budget")
     || normalized.includes("quantity budget")
@@ -507,7 +524,8 @@ async function applyLedgerHolds(
   tx: Transaction,
   context: {
     items: PricedLine[]
-    budgetId: number
+    /** Null for an order of a tenant with budgets off: stock only, no hold. */
+    budgetId: number | null
     total: number
     quantityBudgets: Map<number, { id: number }>
   },
@@ -521,6 +539,8 @@ async function applyLedgerHolds(
       })
       .where(eq(globalProducts.id, item.globalProductId))
   }
+
+  if (context.budgetId === null) return
 
   await tx
     .update(budgets)
@@ -551,6 +571,7 @@ async function attachReceipt(
     subtotal: number
     tax: number
     total: number
+    status: "PENDING" | "APPROVED"
     poNumber: string | null
     invoiceSequenceReady: boolean
   },
@@ -558,7 +579,7 @@ async function attachReceipt(
   const receiptData = await generateReceiptData({
     orderId: context.orderId,
     orderTid: context.tid,
-    status: "PENDING",
+    status: context.status,
     organizationId: context.organizationId,
     branchId: context.branchId,
     orderItemsData: context.items,
@@ -590,6 +611,8 @@ type BranchCreationContext = {
   poNumber: string | null
   period: string
   mode: string
+  /** The pre-flight's reading of the tenant's budget switch; the transaction re-reads it under lock. */
+  budgetsEnabled: boolean
   actor: { userId: string; role: string; ipAddress: string; userAgent: string | null }
   invoiceSequenceReady: boolean
 }
@@ -619,8 +642,9 @@ async function createBranchOrder(context: BranchCreationContext): Promise<Branch
   const inventoryIds = plan.items.map((item) => item.organizationInventoryId)
 
   const orgTaxRateBp = await getOrganizationTaxRateBp(organizationId)
-  const budget = await getOrCreateBranchBudget(branchId, context.period)
-  if (!budget) {
+  // A tenant with budgets off needs no budget row; none is read or opened.
+  const budget = context.budgetsEnabled ? await getOrCreateBranchBudget(branchId, context.period) : null
+  if (context.budgetsEnabled && !budget) {
     return {
       result: {
         status: "failed",
@@ -637,35 +661,49 @@ async function createBranchOrder(context: BranchCreationContext): Promise<Branch
       // Per branch, because each branch commits on its own: a payment-blocked
       // branch is reported as failed and the others still go through.
       await assertBranchMayOrder(tx, { organizationId, branchId })
-      // A due add-on is withdrawn under the row lock before the hold, so a
-      // group submission cannot spend money that has expired.
-      await settleDueAddonsOnBudget(tx, budget.id, new Date(), { actorUserId: context.actor.userId })
-      const [lockedBudget] = await tx
-        .select()
-        .from(budgets)
-        .where(eq(budgets.id, budget.id))
-        .for("update")
-      if (!lockedBudget) throw new Error(`Budget not configured for ${context.period}`)
+      await assertBranchDeliveriesAcknowledged(tx, { organizationId, branchId })
+      // Read under the organization row's shared lock, as on the single-branch
+      // path, and stored on the order for every later ledger move.
+      const budgetTracked = await resolveOrderBudgetTracking(tx, organizationId)
+      if (budgetTracked && !budget) throw new Error(BUDGET_POLICY_CHANGED_MESSAGE)
 
-      const available = lockedBudget.amountAllocatedCents + lockedBudget.amountCreditedCents
-        - lockedBudget.amountSpentCents - lockedBudget.amountHeldCents
+      let lockedBudget: typeof budgets.$inferSelect | null = null
+      if (budgetTracked && budget) {
+        // A due add-on is withdrawn under the row lock before the hold, so a
+        // group submission cannot spend money that has expired.
+        await settleDueAddonsOnBudget(tx, budget.id, new Date(), { actorUserId: context.actor.userId })
+        const [lockedRow] = await tx
+          .select()
+          .from(budgets)
+          .where(eq(budgets.id, budget.id))
+          .for("update")
+        if (!lockedRow) throw new Error(`Budget not configured for ${context.period}`)
+        lockedBudget = lockedRow
+      }
 
       const locked = await lockBranchCatalogue(tx, { organizationId, branchId, inventoryIds })
       const priced = priceLockedLines(plan.items, locked, orgTaxRateBp)
 
-      const shortfall = budgetShortfallMessage(priced.total, available)
-      if (shortfall) throw new Error(shortfall)
+      if (lockedBudget) {
+        const available = lockedBudget.amountAllocatedCents + lockedBudget.amountCreditedCents
+          - lockedBudget.amountSpentCents - lockedBudget.amountHeldCents
+        const shortfall = budgetShortfallMessage(priced.total, available)
+        if (shortfall) throw new Error(shortfall)
+      }
       assertStockAvailable(priced.items, locked)
 
-      const quantityBudgets = await lockQuantityBudgets(tx, {
-        mode: context.mode,
-        organizationId,
-        branchId,
-        period: context.period,
-        items: priced.items,
-      })
+      const quantityBudgets = budgetTracked
+        ? await lockQuantityBudgets(tx, {
+          mode: context.mode,
+          organizationId,
+          branchId,
+          period: context.period,
+          items: priced.items,
+        })
+        : new Map<number, { id: number }>()
 
       const tid = generateTid()
+      const initialApproval = await resolveInitialOrderApproval(tx, organizationId)
       const [order] = await tx
         .insert(orders)
         .values({
@@ -677,7 +715,7 @@ async function createBranchOrder(context: BranchCreationContext): Promise<Branch
           organizationId,
           branchId,
           groupOrderId: context.groupOrderId,
-          status: "PENDING",
+          ...initialApproval.values,
           subtotalCents: priced.subtotal,
           taxCents: priced.tax,
           totalCents: priced.total,
@@ -687,6 +725,7 @@ async function createBranchOrder(context: BranchCreationContext): Promise<Branch
           // Pinned at creation, as on the single-branch path. A group order is
           // an ordinary order of the branch's and is attributed the same way.
           createdByRole: context.actor.role,
+          ...(budgetTracked ? {} : { budgetTracked: false }),
         })
         .returning({ id: orders.id, tid: orders.tid, totalCents: orders.totalCents })
 
@@ -698,7 +737,7 @@ async function createBranchOrder(context: BranchCreationContext): Promise<Branch
 
       await applyLedgerHolds(tx, {
         items: priced.items,
-        budgetId: lockedBudget.id,
+        budgetId: lockedBudget?.id ?? null,
         total: priced.total,
         quantityBudgets,
       })
@@ -712,6 +751,7 @@ async function createBranchOrder(context: BranchCreationContext): Promise<Branch
         subtotal: priced.subtotal,
         tax: priced.tax,
         total: priced.total,
+        status: initialApproval.values.status,
         poNumber: context.poNumber,
         invoiceSequenceReady: context.invoiceSequenceReady,
       })
@@ -730,6 +770,7 @@ async function createBranchOrder(context: BranchCreationContext): Promise<Branch
           items: priced.items.length,
           groupOrderId: context.groupOrderId,
           groupOrderReference: context.reference,
+          autoApproved: !initialApproval.approvalRequired,
         },
         ipAddress: context.actor.ipAddress,
         userAgent: context.actor.userAgent,
@@ -739,21 +780,26 @@ async function createBranchOrder(context: BranchCreationContext): Promise<Branch
       // The approver has to learn about this order the same way it learns about
       // a single-branch one: a bell notification and an "awaiting approval"
       // email, addressed to the tenant's configured approver for this branch.
+      // An order the tenant's policy approved at creation has no approver to
+      // ask, so Super Admins are told it is ready for review instead.
       // Queued inside the branch's own transaction so an order and its event
       // are committed together, and never allowed to fail an order that is
       // otherwise complete — branches stay independent.
       let eventKeys: string[] = []
+      const notificationOrder = {
+        id: order.id,
+        tid: order.tid,
+        organizationId,
+        branchId,
+        createdByUserId: context.actor.userId,
+      }
       try {
-        const queued = await queueOrderCreatedNotifications(tx, {
-          order: {
-            id: order.id,
-            tid: order.tid,
-            organizationId,
-            branchId,
-            createdByUserId: context.actor.userId,
-          },
-          requestedBy: "Group Order Portal user",
-        })
+        const queued = initialApproval.approvalRequired
+          ? await queueOrderCreatedNotifications(tx, {
+            order: notificationOrder,
+            requestedBy: "Group Order Portal user",
+          })
+          : await queueSuperAdminAutoApprovalNotifications(tx, { order: notificationOrder })
         eventKeys = queued.eventKeys
       } catch (notificationError) {
         console.error("Group order approval notification could not be queued", notificationError)
@@ -781,6 +827,12 @@ async function createBranchOrder(context: BranchCreationContext): Promise<Branch
         branchId,
         branchName: plan.branch.name,
         reason: toUserFacingReason(branchError),
+        ...(isPaymentControlBlockedError(branchError)
+          ? { code: branchError.code, unpaidInvoiceCount: branchError.details.overdueCount }
+          : {}),
+        ...(isDeliveryAcknowledgementBlockedError(branchError)
+          ? { code: branchError.code, unacknowledgedDeliveryCount: branchError.details.unacknowledgedCount }
+          : {}),
       },
       eventKeys: [],
     }
@@ -869,9 +921,10 @@ export async function createGroupOrder(
   }
 
   const period = budgetPeriodOf(new Date())
-  const [mode, invoiceSequenceReady] = await Promise.all([
+  const [mode, invoiceSequenceReady, budgetsEnabled] = await Promise.all([
     getBudgetAllocationModeForOrganization(input.organizationId),
     hasInvoiceSequenceTable(db),
+    isOrganizationBudgetEnabled(input.organizationId),
   ])
   const childNotes = buildChildOrderNotes(envelope.reference, input.notes)
 
@@ -889,6 +942,7 @@ export async function createGroupOrder(
       poNumber: envelope.poNumber,
       period,
       mode,
+      budgetsEnabled,
       actor: input.actor,
       invoiceSequenceReady,
     })

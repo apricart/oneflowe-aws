@@ -923,8 +923,8 @@ export default function RefundsPage() {
                         </DialogTitle>
                         <DialogDescription>
                             {reviewingRefund
-                                ? `This will approve ${reviewingRefund.refundNumber || ("Refund-" + String(String(reviewingRefund.id).padStart(6, '0')))} and credit the branch budget.`
-                                : "This will refund the selected items and credit the branch budget."}
+                                ? `This will approve ${reviewingRefund.refundNumber || ("Refund-" + String(String(reviewingRefund.id).padStart(6, '0')))} and credit the branch budget if the order used one.`
+                                : "This will refund the selected items and credit the branch budget if the order used one."}
                         </DialogDescription>
                     </DialogHeader>
                     <div className="space-y-4 py-4">
@@ -960,7 +960,7 @@ export default function RefundsPage() {
                             </p>
                             <ul className="text-sm text-amber-700 dark:text-amber-300 list-disc ml-4 mt-1">
                                 <li>Refund PKR {(refundAmountCents / 100).toFixed(2)}</li>
-                                <li>Credit the branch budget</li>
+                                <li>Credit the branch budget, if the order was placed against one</li>
                                 <li>Update order status if full refund</li>
                                 <li>Create audit log entry</li>
                             </ul>

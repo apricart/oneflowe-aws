@@ -512,6 +512,41 @@
       "when": 1790992800000,
       "tag": "20260930120000_add_organization_email_domain",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1790996400000,
+      "tag": "20260930150000_add_order_approval_required",
+      "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1791000000000,
+      "tag": "20260930160000_add_block_ordering_on_unpaid_invoices",
+      "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1791003600000,
+      "tag": "20260930170000_add_block_ordering_on_unacknowledged_deliveries",
+      "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1791007200000,
+      "tag": "20260930180000_add_product_requests",
+      "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1791010800000,
+      "tag": "20261001120000_add_organization_budgets_enabled",
+      "breakpoints": true
     }
   ]
 }

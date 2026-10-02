@@ -49,6 +49,7 @@ import { useSession } from "next-auth/react"
 import { usePathname,useRouter,useSearchParams } from "next/navigation"
 import { useCallback,useEffect,useMemo,useRef,useState } from "react"
 import useSWR from "swr"
+import { BudgetsDisabledNotice } from "@/components/budgets/budgets-disabled-notice"
 import * as XLSX from "xlsx"
 
 import { GlobalDateFilter,type FilterPreset,type GlobalDateFilterChange } from "@/components/dashboard/global-date-filter"
@@ -72,6 +73,8 @@ YAxis
 
 interface BudgetSummaryResponse {
     pricesHidden?: boolean;
+    /** False for an organization with budget allocation switched off. */
+    budgetsEnabled?: boolean;
     summary: {
         totalAllocated: number;
         totalSpent: number;
@@ -867,6 +870,14 @@ export default function BudgetSummaryPage() {
                         Financial budget reports are hidden by organization settings.
                     </CardContent>
                 </Card>
+            </div>
+        )
+    }
+
+    if (pageData?.budgetsEnabled === false || budgetReportData?.budgetsEnabled === false) {
+        return (
+            <div className="min-h-screen bg-[#f8fafc] dark:bg-[#020617] p-6">
+                <BudgetsDisabledNotice className="mt-10" />
             </div>
         )
     }

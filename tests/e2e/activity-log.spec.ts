@@ -28,9 +28,12 @@ import {
  */
 async function openScopedToThisRun(page: Page): Promise<void> {
   await page.goto("/activity")
-  await expect(page.getByRole("heading", { name: "Activity log" })).toBeVisible()
+  // The first visit on a cold development server waits for the page and its
+  // endpoint to compile.
+  await expect(page.getByRole("heading", { name: "Activity log" })).toBeVisible({ timeout: 150_000 })
   await page.getByLabel("Search").fill(SUPER_ADMIN_USERNAME)
   await expect(page.getByText(`Search: ${SUPER_ADMIN_USERNAME}`)).toBeVisible()
+  await expect(page.getByText(/\d+ events? loaded/)).toBeVisible({ timeout: 150_000 })
 }
 
 async function signIn(page: Page, username: string): Promise<void> {
@@ -38,20 +41,26 @@ async function signIn(page: Page, username: string): Promise<void> {
   await page.getByLabel("Username or Email").fill(username)
   await page.getByLabel("Password", { exact: true }).fill(E2E_PASSWORD)
   await page.getByRole("button", { name: /sign in/i }).click()
-  await page.waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: 30_000 })
+  // A cold development server compiles the landing workspace first.
+  await page.waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: 150_000 })
 }
 
 test.describe("the activity log", () => {
+  // The first test of a run meets a cold development server.
+  test.beforeEach(() => {
+    test.slow()
+  })
+
   test("a Super Admin reaches it from the menu and sees the trail", async ({ page }) => {
     await signIn(page, SUPER_ADMIN_USERNAME)
 
     // Through the sidebar, because the entry being there for this role is part
     // of what is being checked.
     await page.getByRole("link", { name: "Activity Log" }).click()
-    await expect(page).toHaveURL(/\/activity$/)
+    await expect(page).toHaveURL(/\/activity$/, { timeout: 150_000 })
 
-    await expect(page.getByRole("heading", { name: "Activity log" })).toBeVisible()
-    await expect(page.getByText(/\d+ events? loaded/)).toBeVisible()
+    await expect(page.getByRole("heading", { name: "Activity log" })).toBeVisible({ timeout: 150_000 })
+    await expect(page.getByText(/\d+ events? loaded/)).toBeVisible({ timeout: 150_000 })
 
     // Narrowed to this run's own actor before asserting on specific rows.
     //
