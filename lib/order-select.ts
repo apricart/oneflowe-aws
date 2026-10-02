@@ -22,7 +22,18 @@ export const orderSelectColumns = {
   totalCents: orders.totalCents,
   notes: orders.notes,
   poNumber: orders.poNumber,
+  // Read the same defensive way as the columns above, so an environment whose
+  // delivery-address migration has not been applied reports "sent to the
+  // branch's own address" rather than failing every order read. Production
+  // migrations here are applied by hand and the application can be running
+  // ahead of them.
+  deliveryAddressId: sql<number | null>`NULLIF(to_jsonb("orders") ->> 'delivery_address_id', '')::int`,
   createdByUserId: orders.createdByUserId,
+  // Whether the order took a budget hold — what every ledger move after
+  // creation keys on (`orderTakesBudget`). Read defensively like the columns
+  // above: before the migration every order took a hold, so a missing column
+  // honestly reads "tracked".
+  budgetTracked: sql<boolean>`COALESCE((to_jsonb("orders") ->> 'budget_tracked')::boolean, true)`,
   createdAt: orders.createdAt,
   deliveredAt: orders.deliveredAt,
   fulfilledAt: orders.fulfilledAt,

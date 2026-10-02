@@ -27,7 +27,10 @@ const DEFAULT_SETTINGS = [
 async function seed() {
   console.log('Starting database seed...')
 
-  const roleNames = ['SUPER_ADMIN', 'HEAD_OFFICE', 'GROUP_USER', 'BRANCH_ADMIN', 'GROUP_ORDER_PORTAL', 'ORDER_PORTAL'] as const
+  // Derived from the templates rather than re-listed here: this list used to be
+  // hardcoded, so a role added to ROLE_TEMPLATES was never given its `roles`
+  // row and every attempt to assign it failed with "Invalid role".
+  const roleNames = Object.keys(ROLE_TEMPLATES) as Array<keyof typeof ROLE_TEMPLATES>
   for (const roleName of roleNames) {
     const [existingRole] = await db
       .select()

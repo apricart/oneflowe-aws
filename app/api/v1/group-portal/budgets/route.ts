@@ -5,6 +5,7 @@ import {
   loadBranchBudgetSummaries,
 } from "@/lib/server/group-branch-budgets"
 import { loadScopedBranches } from "@/lib/server/group-order-portal"
+import { isOrganizationBudgetEnabled } from "@/lib/server/organization-budget-policy"
 
 export const dynamic = "force-dynamic"
 
@@ -26,6 +27,12 @@ export async function GET() {
 
   const period = currentBudgetPeriod()
 
+  // A tenant with budget allocation off has no budget to report; the
+  // storefront hides its budget panel on this flag.
+  if (!await isOrganizationBudgetEnabled(actor.organizationId)) {
+    return ok({ items: [], period, budgetsEnabled: false })
+  }
+
   // Fail closed: no assigned branches means there is no budget to report.
   const scopedBranches = await loadScopedBranches(actor.scope.userId, actor.organizationId)
   if (scopedBranches.length === 0) return ok({ items: [], period })
@@ -36,5 +43,5 @@ export async function GET() {
     period,
   })
 
-  return ok({ items, period })
+  return ok({ items, period, budgetsEnabled: true })
 }

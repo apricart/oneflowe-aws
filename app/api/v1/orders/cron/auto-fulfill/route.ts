@@ -4,6 +4,8 @@ import { db } from "@/lib/db"
 import { orders, auditLogs, budgets } from "@/db/schema"
 import { ok, error } from "@/lib/api"
 import { moveHeldQuantityBudgetToUsedForOrder } from "@/lib/server/product-quantity-budget-ledger"
+import { orderTakesBudget } from "@/lib/organization-budget-policy"
+import { orderSelectColumns } from "@/lib/order-select"
 import { env } from "@/lib/server/env"
 
 const BATCH_SIZE = 50
@@ -32,6 +34,7 @@ async function runAutoFulfill(dryRun = false) {
       totalCents: orders.totalCents,
       createdAt: orders.createdAt,
       status: orders.status,
+      budgetTracked: orderSelectColumns.budgetTracked,
     })
     .from(orders)
     .where(
@@ -97,26 +100,28 @@ async function runAutoFulfill(dryRun = false) {
 
         if (!claimedOrder) return false
 
-        // 2. Move budget: held → spent (mirrors the manual fulfill route exactly)
-        const orderMonth = order.createdAt
-          ? new Date(order.createdAt).toISOString().slice(0, 7)
-          : now.toISOString().slice(0, 7)
+        // 2 & 3. Move budget: held → spent, money and quantity (mirrors the
+        // manual fulfill route exactly) — only for an order that took a hold.
+        if (orderTakesBudget(order)) {
+          const orderMonth = order.createdAt
+            ? new Date(order.createdAt).toISOString().slice(0, 7)
+            : now.toISOString().slice(0, 7)
 
-        const [budget] = await tx
-          .select()
-          .from(budgets)
-          .where(and(eq(budgets.branchId, order.branchId), eq(budgets.period, orderMonth)))
-          .limit(1)
+          const [budget] = await tx
+            .select()
+            .from(budgets)
+            .where(and(eq(budgets.branchId, order.branchId), eq(budgets.period, orderMonth)))
+            .limit(1)
 
-        if (budget) {
-          await tx.update(budgets).set({
-            amountHeldCents: sql`${budgets.amountHeldCents} - ${order.totalCents}`,
-            amountSpentCents: sql`${budgets.amountSpentCents} + ${order.totalCents}`,
-          }).where(eq(budgets.id, budget.id))
+          if (budget) {
+            await tx.update(budgets).set({
+              amountHeldCents: sql`${budgets.amountHeldCents} - ${order.totalCents}`,
+              amountSpentCents: sql`${budgets.amountSpentCents} + ${order.totalCents}`,
+            }).where(eq(budgets.id, budget.id))
+          }
+
+          await moveHeldQuantityBudgetToUsedForOrder(tx, order)
         }
-
-        // 3. Move quantity budget: held → used
-        await moveHeldQuantityBudgetToUsedForOrder(tx, order)
 
         // 4. Audit log
         await tx.insert(auditLogs).values({

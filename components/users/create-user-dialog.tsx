@@ -19,6 +19,7 @@ import { cn } from "../../lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
 import { PremiumAlert, AlertType } from "@/components/premium/premium-alert"
+import { MultiAssignSelector } from "@/components/users/multi-assign-selector"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -67,6 +68,7 @@ function getRoleLabel(role: string) {
   if (role === "BRANCH_ADMIN") return "Branch Admin User"
   if (role === "GROUP_ORDER_PORTAL") return "Group Order Portal User"
   if (role === "GROUP_USER") return "Group User"
+  if (role === "VIEWER") return "Viewer (read-only)"
   return "Order Portal User"
 }
 
@@ -77,8 +79,18 @@ const SINGLE_BRANCH_ROLES = ["BRANCH_ADMIN", "ORDER_PORTAL"]
 // Roles whose reach is defined by group and branch assignments.
 const MULTI_BRANCH_ROLES = ["GROUP_ORDER_PORTAL", "GROUP_USER"]
 
+// Roles that may carry a branch but do not require one. A Viewer with a branch
+// reads that branch alone; without one it reads the whole organization. The
+// server applies the same rule in `lib/viewer-access.ts`, so leaving this blank
+// grants tenant-wide *reading*, never any ability to act.
+const OPTIONAL_BRANCH_ROLES = ["VIEWER"]
+
 function isSingleBranchRole(role: string) {
   return SINGLE_BRANCH_ROLES.includes(role)
+}
+
+function usesOptionalBranch(role: string) {
+  return OPTIONAL_BRANCH_ROLES.includes(role)
 }
 
 function usesMultiBranchScope(role: string) {
@@ -177,7 +189,7 @@ function getBasicUserErrors(form: CreateUserForm, usernameAvailable: boolean | n
 function getAssignmentErrors(form: CreateUserForm) {
   const errors: Record<string, string> = {}
   if (!form.role) errors.role = "Role is required"
-  const needsOrganization = ["HEAD_OFFICE", ...SINGLE_BRANCH_ROLES, ...MULTI_BRANCH_ROLES].includes(form.role)
+  const needsOrganization = ["HEAD_OFFICE", ...SINGLE_BRANCH_ROLES, ...MULTI_BRANCH_ROLES, ...OPTIONAL_BRANCH_ROLES].includes(form.role)
   if (needsOrganization && !form.organizationId) {
     errors.organizationId = "Organization is required for this role"
   }
@@ -436,7 +448,9 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
           phone: form.phone.trim() || null,
           role: form.role,
           organizationId: form.organizationId ? Number.parseInt(form.organizationId) : null,
-          branchId: isSingleBranchRole(form.role) && form.branchId ? Number.parseInt(form.branchId) : null,
+          branchId: (isSingleBranchRole(form.role) || usesOptionalBranch(form.role)) && form.branchId
+            ? Number.parseInt(form.branchId)
+            : null,
           groupIds: usesMultiBranchScope(form.role) ? form.groupIds.map(Number) : [],
           branchIds: usesMultiBranchScope(form.role) ? form.branchIds.map(Number) : [],
           ...(form.role === "GROUP_USER" ? { budgetAllocationEnabled: form.budgetAllocationEnabled } : {}),
@@ -895,6 +909,7 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                       <SelectItem value="ORDER_PORTAL">Order Portal User</SelectItem>
                       <SelectItem value="GROUP_ORDER_PORTAL">Group Order Portal User</SelectItem>
                       <SelectItem value="GROUP_USER">Group User</SelectItem>
+                      <SelectItem value="VIEWER">Viewer (read-only)</SelectItem>
                     </SelectContent>
                   </Select>
                   {errors.role && (
@@ -916,10 +931,19 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                   </div>
                 )}
 
-                {/* Branch Selector - Only for Branch Admin and Order Portal */}
-                {isSingleBranchRole(form.role) && (
+                {/* Branch Selector - required for Branch Admin and Order Portal,
+                    offered but optional for a Viewer. */}
+                {(isSingleBranchRole(form.role) || usesOptionalBranch(form.role)) && (
                   <div className="space-y-2">
-                    <Label htmlFor="branch">Branch Assignment *</Label>
+                    <Label htmlFor="branch">
+                      {usesOptionalBranch(form.role) ? "Branch Assignment (optional)" : "Branch Assignment *"}
+                    </Label>
+                    {usesOptionalBranch(form.role) && (
+                      <p className="text-xs text-muted-foreground">
+                        Leave empty for organization-wide figures. Pick a branch to restrict this
+                        account to that branch alone.
+                      </p>
+                    )}
                     <Popover open={branchOpen} onOpenChange={setBranchOpen}>
                       <PopoverTrigger asChild>
                         <Button
@@ -1045,11 +1069,18 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                               <span>Organization: {getSelectedOrganizationName()}</span>
                             </div>
                           )}
-                          {isSingleBranchRole(form.role) && form.branchId && (
+                          {(isSingleBranchRole(form.role) || usesOptionalBranch(form.role)) && form.branchId && (
                             <div className="flex items-center gap-1">
                               <MapPin className="h-3 w-3" />
                               <span>Branch: {getSelectedBranchName()}</span>
                             </div>
+                          )}
+                          {usesOptionalBranch(form.role) && (
+                            <p>
+                              Read-only. Sees the dashboard for{" "}
+                              {form.branchId ? "this branch" : "the whole organization"} and can
+                              create, edit or delete nothing.
+                            </p>
                           )}
                           {form.role === "HEAD_OFFICE" && (
                             <p>Can manage organization-wide settings and create branch admins</p>
@@ -1218,133 +1249,3 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
   )
 }
 
-type AssignOption = {
-  id: string
-  label: string
-  hint?: string
-}
-
-/**
- * Searchable multi-select used for the Group Order Portal scope. Selection is
- * additive and every chosen item stays visible as a removable chip, so an
- * administrator can always see the full reach they are granting.
- */
-function MultiAssignSelector({
-  id,
-  label,
-  placeholder,
-  emptyLabel,
-  disabledLabel,
-  disabled,
-  options,
-  selectedIds,
-  onToggle,
-  onClear,
-  helpText,
-}: Readonly<{
-  id: string
-  label: string
-  placeholder: string
-  emptyLabel: string
-  disabledLabel: string
-  disabled: boolean
-  options: AssignOption[]
-  selectedIds: string[]
-  onToggle: (id: string) => void
-  onClear: () => void
-  helpText: string
-}>) {
-  const [open, setOpen] = useState(false)
-  const [search, setSearch] = useState("")
-
-  const selectedSet = new Set(selectedIds)
-  const selectedOptions = options.filter((option) => selectedSet.has(option.id))
-
-  const triggerLabel = (() => {
-    if (disabled) return disabledLabel
-    if (selectedIds.length === 0) return placeholder
-    return `${selectedIds.length} selected`
-  })()
-
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between">
-        <Label htmlFor={id}>{label}</Label>
-        {selectedIds.length > 0 && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="h-6 px-2 text-xs text-muted-foreground"
-            onClick={onClear}
-          >
-            Clear
-          </Button>
-        )}
-      </div>
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <Button
-            id={id}
-            name={id}
-            variant="outline"
-            role="combobox"
-            aria-expanded={open}
-            disabled={disabled}
-            className={cn(
-              "w-full justify-between font-normal",
-              selectedIds.length === 0 && "text-muted-foreground",
-            )}
-          >
-            {triggerLabel}
-            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
-          <Command>
-            <CommandInput placeholder={placeholder} value={search} onValueChange={setSearch} />
-            <CommandList>
-              <CommandEmpty>{emptyLabel}</CommandEmpty>
-              <CommandGroup>
-                {options.map((option) => (
-                  <CommandItem
-                    key={option.id}
-                    value={`${option.label}__${option.id}`}
-                    onSelect={() => onToggle(option.id)}
-                  >
-                    <Check
-                      className={cn(
-                        "mr-2 h-4 w-4",
-                        selectedSet.has(option.id) ? "opacity-100" : "opacity-0",
-                      )}
-                    />
-                    <span className="flex-1">{option.label}</span>
-                    {option.hint && (
-                      <span className="ml-2 text-xs text-muted-foreground">{option.hint}</span>
-                    )}
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            </CommandList>
-          </Command>
-        </PopoverContent>
-      </Popover>
-      {selectedOptions.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {selectedOptions.map((option) => (
-            <Badge
-              key={option.id}
-              variant="secondary"
-              className="cursor-pointer gap-1"
-              onClick={() => onToggle(option.id)}
-            >
-              {option.label}
-              <span aria-hidden="true">×</span>
-            </Badge>
-          ))}
-        </div>
-      )}
-      <p className="text-[10px] text-muted-foreground">{helpText}</p>
-    </div>
-  )
-}

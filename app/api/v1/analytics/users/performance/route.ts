@@ -9,15 +9,20 @@ import { and, eq, gte, lte, inArray, desc, sql } from "drizzle-orm"
 import { metricExpressions } from "@/lib/metric-utils"
 import { redactAnalyticsPrices, shouldHidePricesForRole } from "@/lib/price-visibility"
 import { parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
-import { ORDER_CREATOR_ROLES } from "@/lib/group-order-visibility"
+import { isRequesterCreatedOrderSql } from "@/lib/server/order-creator-role-sql"
 
 /**
  * This report attributes orders to the person who raised them, so it has to
  * recognise both requester roles. Restricting it to ORDER_PORTAL alone dropped
  * every order a Group Order Portal user placed for a branch out of the branch's
  * own performance figures.
+ *
+ * Keyed on the role recorded on the order, not the creator's role today: a
+ * requester who is later promoted to BRANCH_ADMIN must not take their entire
+ * order history out of this report with them. Every query using this filter
+ * joins `users` and `roles`, which the fallback for pre-migration rows needs.
  */
-const orderCreatorRoleFilter = inArray(roles.name, [...ORDER_CREATOR_ROLES])
+const orderCreatorRoleFilter = isRequesterCreatedOrderSql
 
 function parseNumberList(value: string | null, isValid = (number: number) => number > 0) {
     return value

@@ -2,13 +2,16 @@
 import Link from "next/link"
 import { usePathname, useSearchParams } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { Home,Building2,Users,Package,Boxes,Wallet,BarChart3,Settings,FolderTree,ChevronDown,ClipboardCheck,LifeBuoy,PanelLeftClose,PanelLeftOpen,ScrollText } from "lucide-react"
+import { Home,Building2,Users,Package,Boxes,Wallet,BarChart3,Settings,FolderTree,ChevronDown,ClipboardCheck,DoorOpen,LifeBuoy,MapPinned,PanelLeftClose,PanelLeftOpen,ScrollText } from "lucide-react"
 import Image from "next/image"
 import { useCallback,useEffect,useState,type ReactNode } from "react"
 import { Tooltip,TooltipContent,TooltipTrigger } from "@/components/ui/tooltip"
 import { HoverCard,HoverCardContent,HoverCardTrigger } from "@/components/ui/hover-card"
 
 import { useSession } from "next-auth/react"
+import useSWR from "swr"
+import { fetcher } from "@/lib/fetcher"
+import { isViewerRole } from "@/lib/viewer-access"
 
 const COLLAPSED_STORAGE_KEY = "oneflowe.sidebar.collapsed"
 
@@ -60,7 +63,34 @@ export function activeEntryHref(
   return plain
 }
 
-export const getNavigationByRole = (role: string, budgetAllocationEnabled = false) => {
+/** Entries that exist only to manage or report a budget. */
+const BUDGET_ONLY_HREFS = new Set(["/budgets", "/budget-by-quantity", "/reports/budget-summary"])
+
+type NavigationEntry = { href: string; subItems?: Array<{ href: string }> }
+
+/**
+ * The navigation with every budget-only entry removed, for a tenant whose
+ * budget allocation is switched off. Presentation only: the budget pages and
+ * APIs refuse such a tenant on their own.
+ */
+export function withoutBudgetNavigation<T extends NavigationEntry>(nav: T[]): T[] {
+  return nav
+    .filter((item) => !BUDGET_ONLY_HREFS.has(item.href))
+    .map((item) => item.subItems
+      ? { ...item, subItems: item.subItems.filter((sub) => !BUDGET_ONLY_HREFS.has(sub.href)) }
+      : item)
+}
+
+export const getNavigationByRole = (
+  role: string,
+  budgetAllocationEnabled = false,
+  organizationBudgetsEnabled = true,
+) => {
+  const nav = navigationByRole(role, budgetAllocationEnabled)
+  return organizationBudgetsEnabled ? nav : withoutBudgetNavigation(nav)
+}
+
+const navigationByRole = (role: string, budgetAllocationEnabled: boolean) => {
   const baseNav = [
     { href: "/dashboard", label: "Dashboard", icon: Home },
   ]
@@ -83,6 +113,8 @@ export const getNavigationByRole = (role: string, budgetAllocationEnabled = fals
           { href: "/inventory/branch/hub", label: "Group Products" },
           { href: "/products/categories", label: "Categories" },
           { href: "/products/subcategories", label: "Subcategories" },
+          // The queue of what Head Office has asked the catalogue to carry.
+          { href: "/inventory/product-requests", label: "Product Requests" },
         ]
       },
       { href: "/groups", label: "Group Management", icon: FolderTree },
@@ -117,6 +149,14 @@ export const getNavigationByRole = (role: string, budgetAllocationEnabled = fals
       ...baseNav,
       { href: "/branches", label: "My Branches", icon: Building2 },
       { href: "/users", label: "Users", icon: Users },
+      // Head Office only: the tenant's own join code and its join queue. No
+      // other role has this entry, and `proxy.ts` plus the page layout refuse
+      // the area to anyone who reaches the URL directly.
+      { href: "/join-requests", label: "Join Requests", icon: DoorOpen },
+      // Head Office decides every delivery-address request in the tenant. The
+      // page is shared with the branches that raise them; who may decide one is
+      // `lib/delivery-address-access.ts`, on the handlers.
+      { href: "/delivery-addresses", label: "Delivery Addresses", icon: MapPinned },
       { href: "/orders", label: "Orders", icon: Package },
       {
         href: "/inventory",
@@ -125,6 +165,9 @@ export const getNavigationByRole = (role: string, budgetAllocationEnabled = fals
         subItems: [
           { href: "/inventory", label: "Organization's Products" },
           { href: "/inventory/price-history", label: "Product Price History" },
+          // Head Office cannot add a product; it asks Super Admin for one here.
+          // Who may raise, read and decide is `lib/product-request-access.ts`.
+          { href: "/inventory/product-requests", label: "Product Requests" },
         ],
       },
       { href: "/groups", label: "Group Management", icon: FolderTree },
@@ -156,6 +199,7 @@ export const getNavigationByRole = (role: string, budgetAllocationEnabled = fals
       ...baseNav,
       { href: "/orders", label: "Orders", icon: Package },
       { href: "/branch-inventory", label: "Inventory", icon: Boxes },
+      { href: "/delivery-addresses", label: "Delivery Addresses", icon: MapPinned },
       {
         href: "/reports",
         label: "Reports",
@@ -186,6 +230,7 @@ export const getNavigationByRole = (role: string, budgetAllocationEnabled = fals
       ...baseNav,
       { href: "/orders", label: "Orders", icon: Package },
       { href: "/approvals", label: "Approvals", icon: ClipboardCheck },
+      { href: "/delivery-addresses", label: "Delivery Addresses", icon: MapPinned },
       ...(budgetAllocationEnabled ? [{ href: "/budgets", label: "Budgets", icon: Wallet }] : []),
       {
         href: "/reports",
@@ -206,6 +251,12 @@ export const getNavigationByRole = (role: string, budgetAllocationEnabled = fals
     ]
   }
 
+  // The read-only account has one page. Stated rather than left to the fallback
+  // below, so that widening the fallback later cannot widen this role's menu.
+  if (isViewerRole(role)) {
+    return baseNav
+  }
+
   return baseNav
 }
 
@@ -221,6 +272,9 @@ const describeRole = (role: string) => {
   }
   if (role === "GROUP_USER") {
     return "Group User"
+  }
+  if (isViewerRole(role)) {
+    return "Viewer"
   }
   return ""
 }
@@ -302,7 +356,18 @@ export function Sidebar() {
   const { data: session, status } = useSession()
   const role = (session?.user as any)?.role
   const isLoading = status === "loading"
-  const nav = getNavigationByRole(role || "", (session?.user as any)?.budgetAllocationEnabled === true)
+  // Only the tenant-pinned roles that are shown budget entries need to know
+  // whether their tenant has budgets; a Super Admin's pages are per tenant.
+  const needsBudgetPolicy = role === "HEAD_OFFICE" || role === "GROUP_USER"
+  const { data: budgetPolicy } = useSWR<{ budgetsEnabled?: boolean }>(
+    needsBudgetPolicy ? "/api/v1/organizations/budget-policy" : null,
+    fetcher,
+  )
+  const nav = getNavigationByRole(
+    role || "",
+    (session?.user as any)?.budgetAllocationEnabled === true,
+    budgetPolicy?.budgetsEnabled !== false,
+  )
   const [expandedItems, setExpandedItems] = useState<string[]>([])
   const { collapsed, changeCollapsed } = useCollapsedRail()
 

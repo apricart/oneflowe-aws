@@ -384,9 +384,14 @@ export function blockedDetailsOf(status: PaymentControlStatus): PaymentControlBl
   }
 }
 
-/** The one sentence an ordering user is shown when an order is refused. */
+/**
+ * The sentence an ordering user is shown when an order is refused. The only
+ * connected source counts unpaid invoices
+ * (plans/OF-PAYMENT-CONTROL-unpaid-invoice-ordering-block.md), so it says so.
+ */
 export function blockedMessageOf(status: Pick<PaymentControlStatus, "reason" | "overdueCount" | "threshold">): string {
-  const base = `Ordering is temporarily unavailable for this branch because the overdue payment limit (${status.threshold}) has been reached.`
+  const invoices = `${status.overdueCount} unpaid invoice${status.overdueCount === 1 ? "" : "s"}`
+  const base = `You have ${invoices}. Please pay your dues before placing a new order.`
   if (status.reason === "EXCEPTION_EXPIRED") return `${base} The Head Office exception has expired.`
   if (status.reason === "EXCEPTION_REVOKED") return `${base} The Head Office exception was revoked.`
   return base

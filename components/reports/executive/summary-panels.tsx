@@ -18,6 +18,7 @@ import {
 import { Card, CardContent } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
+import type { BudgetTrackingCoverage } from "@/lib/organization-budget-policy"
 import { STATUS_COLOR, changeLabel, countShort, money, percent } from "./chart-kit"
 
 /**
@@ -45,6 +46,12 @@ export type ExecutiveKpis = {
   consumedGrowthPct: number | null
   spendGrowthPct: number | null
   orderGrowthPct: number | null
+  /**
+   * Whether the budget figures cover every tenant on screen, some, or none —
+   * "none" being a tenant with budget allocation switched off. Absent from an
+   * older response, which reads as "all".
+   */
+  budgetTracking?: BudgetTrackingCoverage
 }
 
 type KpiSpec = {
@@ -57,13 +64,44 @@ type KpiSpec = {
   accent?: string
 }
 
+const BUDGET_OFF_HINT = "Budget allocation is off for this organization"
+
+/**
+ * The budget cards for a view whose tenants all have budget allocation off:
+ * "Off" in words, never a zero budget, a negative remaining or "no budget".
+ */
+function budgetOffKpis(): KpiSpec[] {
+  return [
+    { key: "budget", label: "Total Budget", value: "Off", hint: BUDGET_OFF_HINT, change: null, icon: Wallet },
+    { key: "consumed", label: "Consumed", value: "Off", hint: BUDGET_OFF_HINT, change: null, icon: Receipt },
+    { key: "remaining", label: "Remaining", value: "Off", hint: BUDGET_OFF_HINT, change: null, icon: PiggyBank },
+    { key: "utilization", label: "Utilization", value: "Off", hint: BUDGET_OFF_HINT, change: null, icon: Gauge },
+  ]
+}
+
 function buildKpis(kpis: ExecutiveKpis): KpiSpec[] {
+  if (kpis.budgetTracking === "none") {
+    return [
+      ...budgetOffKpis(),
+      {
+        key: "orders",
+        label: "Orders",
+        value: countShort(kpis.orderCount),
+        hint: `${money(kpis.avgOrderValueCents)} average order value`,
+        change: kpis.orderGrowthPct,
+        icon: ShoppingCart,
+      },
+    ]
+  }
+  const partial = kpis.budgetTracking === "some"
   return [
     {
       key: "budget",
       label: "Total Budget",
       value: money(kpis.totalBudgetCents),
-      hint: `${money(kpis.allocatedCents)} allocated + ${money(kpis.creditedCents)} add-ons`,
+      hint: partial
+        ? `${money(kpis.allocatedCents)} allocated + ${money(kpis.creditedCents)} add-ons; organizations with budget allocation off are not included`
+        : `${money(kpis.allocatedCents)} allocated + ${money(kpis.creditedCents)} add-ons`,
       change: null,
       icon: Wallet,
     },

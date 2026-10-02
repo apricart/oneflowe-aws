@@ -34,6 +34,7 @@ export function ReviewStep({
   notes,
   poNumber,
   submitting,
+  checkingInvoices,
   onNotesChange,
   onPoNumberChange,
   onQuantityChange,
@@ -47,6 +48,7 @@ export function ReviewStep({
   notes: string
   poNumber: string
   submitting: boolean
+  checkingInvoices: boolean
   onNotesChange: (notes: string) => void
   onPoNumberChange: (poNumber: string) => void
   onQuantityChange: (organizationInventoryId: number, quantity: number, branchId: number) => void
@@ -57,6 +59,7 @@ export function ReviewStep({
 }>) {
   const grandTotalCents = branchPlans.reduce((sum, plan) => sum + plan.totalCents, 0)
   const totalLines = branchPlans.reduce((sum, plan) => sum + plan.lines.length, 0)
+  const busy = submitting || checkingInvoices
 
   /** How many branches receive each product, so "apply to all" can say how many. */
   const branchesPerProduct = useMemo(() => {
@@ -100,7 +103,7 @@ export function ReviewStep({
           </h2>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{groupName}</p>
         </div>
-        <Button type="button" variant="outline" size="sm" className="w-fit gap-2" onClick={onBack} disabled={submitting}>
+        <Button type="button" variant="outline" size="sm" className="w-fit gap-2" onClick={onBack} disabled={busy}>
           <ArrowLeft className="h-4 w-4" />
           Keep adding
         </Button>
@@ -163,7 +166,7 @@ export function ReviewStep({
                     className="h-7 w-7 text-slate-400 hover:text-rose-600"
                     aria-label={`Remove ${plan.branch.name} from this group order`}
                     title="Remove this location from the group order"
-                    disabled={submitting}
+                    disabled={busy}
                     onClick={() => onRemoveBranch(plan.branch.id)}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
@@ -192,7 +195,7 @@ export function ReviewStep({
                         line={line}
                         branchName={plan.branch.name}
                         sharedBranchCount={branchesPerProduct.get(line.organizationInventoryId) ?? 1}
-                        disabled={submitting}
+                        disabled={busy}
                         onQuantityChange={(quantity) =>
                           onQuantityChange(line.organizationInventoryId, quantity, plan.branch.id)}
                         onApplyToAll={() =>
@@ -218,7 +221,7 @@ export function ReviewStep({
           maxLength={MAX_PO_NUMBER_LENGTH}
           placeholder="e.g. PO-2026-0148"
           autoComplete="off"
-          disabled={submitting}
+          disabled={busy}
         />
         <p className="text-xs text-slate-500 dark:text-slate-400">
           Your own reference. Printed as P.O.# on the invoice for every location in this group order.
@@ -237,17 +240,19 @@ export function ReviewStep({
           maxLength={2000}
           rows={3}
           placeholder="Anything the approver should know. Added to every branch order in this group."
-          disabled={submitting}
+          disabled={busy}
         />
       </div>
 
       <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-        <Button type="button" variant="outline" onClick={onBack} disabled={submitting}>
+        <Button type="button" variant="outline" onClick={onBack} disabled={busy}>
           Back
         </Button>
-        <Button type="button" className="gap-2" onClick={onSubmit} disabled={submitting || branchPlans.length === 0}>
-          {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-          {submitting ? "Submitting…" : `Submit group order (${branchPlans.length})`}
+        <Button type="button" className="gap-2" onClick={onSubmit} disabled={busy || branchPlans.length === 0}>
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+          {checkingInvoices
+            ? "Checking invoices…"
+            : (submitting ? "Submitting…" : `Submit group order (${branchPlans.length})`)}
         </Button>
       </div>
     </div>

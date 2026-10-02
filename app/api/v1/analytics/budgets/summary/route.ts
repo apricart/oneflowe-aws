@@ -7,6 +7,7 @@ import { and,eq,gte,lte,inArray,sql,desc,asc,isNotNull } from "drizzle-orm"
 import { redactAnalyticsPrices,shouldHidePricesForRole } from "@/lib/price-visibility"
 import { buildAppMonthPeriods,getAppMonthPeriod,parseEndDateParam,parseStartDateParam } from "@/lib/date-range-params"
 import { consumedHeldCentsSql,consumedSpentCentsSql,orderBudgetMonthSql,orderBudgetPeriodSql,orderBudgetYearSql } from "@/lib/server/budget-consumption-sql"
+import { budgetEnabledBranchSql,budgetTrackedOrderSql,isOrganizationBudgetEnabled } from "@/lib/server/organization-budget-policy"
 
 const emptyBudgetSummary = {
     summary: { totalAllocated: 0, totalSpent: 0, totalHeld: 0, totalCredited: 0, totalRemaining: 0 },
@@ -182,16 +183,21 @@ async function loadActiveBudgetBranches(branchIds: number[], allowedOrgId: numbe
         baselineBudgetCents: branches.baselineBudgetCents,
         organizationId: branches.organizationId,
     }
+    // A tenant with budget allocation off has no budget to report. Its branches
+    // drop out here, which is the fence every read below is keyed on, so a
+    // Super Admin's cross-tenant view never adds its kept rows to the totals.
     if (branchIds.length > 0) {
         return db.select(selection).from(branches).where(and(
             inArray(branches.id, branchIds),
             allowedOrgId ? eq(branches.organizationId, allowedOrgId) : undefined,
+            budgetEnabledBranchSql(),
         ))
     }
     if (allowedOrgId) {
         return db.select(selection).from(branches).where(and(
             eq(branches.organizationId, allowedOrgId),
             eq(branches.status, "active"),
+            budgetEnabledBranchSql(),
         ))
     }
     return []
@@ -201,6 +207,9 @@ async function loadOrderScopedSpending(context: any) {
     if (!context.enabled) return []
     const conditions = [
         inArray(orders.branchId, context.branchIds),
+        // Only orders that took a budget hold, so this path and the ledger path
+        // agree: an order placed while budgets were off was never charged.
+        budgetTrackedOrderSql(),
         context.hasExplicitRange ? gte(orders.createdAt, context.startDate) : undefined,
         context.hasExplicitRange ? lte(orders.createdAt, context.endDate) : undefined,
         context.months.length > 0 ? sql`${orderBudgetMonthSql()} IN (${sql.join(context.months, sql.raw(", "))})` : undefined,
@@ -215,6 +224,15 @@ async function loadOrderScopedSpending(context: any) {
         spentCents: consumedSpentCentsSql(),
         heldCents: consumedHeldCentsSql(),
     }).from(orders).where(and(...conditions)).groupBy(orders.branchId, orderBudgetPeriodSql())
+}
+
+/**
+ * Whether the report is for one tenant that has budget allocation off. The
+ * page reads the flag this answers to say so, rather than show a report of
+ * zeroes as though they were a budget.
+ */
+async function isBudgetDisabledTenant(allowedOrgId: number | null): Promise<boolean> {
+    return Boolean(allowedOrgId) && !await isOrganizationBudgetEnabled(Number(allowedOrgId))
 }
 
 export async function GET(req: NextRequest) {
@@ -244,6 +262,8 @@ export async function GET(req: NextRequest) {
         const respond = (payload: any) => NextResponse.json(
             pricesHidden ? redactAnalyticsPrices({ ...payload, pricesHidden: true }) : payload
         )
+
+        if (await isBudgetDisabledTenant(allowedOrgId)) return respond({ ...emptyBudgetSummary, budgetsEnabled: false })
 
         const branchIds = await resolveBudgetBranchIds({
             branchIdsParam, branchIdParam, userRole, userBranchId, allowedOrgId, groupIds,
@@ -349,7 +369,8 @@ export async function GET(req: NextRequest) {
                         lte(orders.createdAt, endDate),
                         inArray(orders.status, ['PENDING', 'APPROVED', 'FULFILLED']),
                         // Only include branches that have an active budget record in the current result set
-                        inArray(orders.branchId, actualBranchIds)
+                        inArray(orders.branchId, actualBranchIds),
+                        budgetTrackedOrderSql(),
                     )
                 )
             .groupBy(globalProducts.categoryId, categories.name)
@@ -416,7 +437,8 @@ export async function GET(req: NextRequest) {
             },
             categories: categorySpendingRows,
             chartData: finalChartData,
-            branchBreakdown
+            branchBreakdown,
+            budgetsEnabled: true,
         })
     } catch (error: any) {
         console.error("Budget Summary API Error:", error)

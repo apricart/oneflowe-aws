@@ -1,7 +1,8 @@
 "use client"
-import { useEffect,useState,useMemo } from "react"
+import { useEffect,useRef,useState,useMemo } from "react"
 import useSWR from "swr"
 import { jsonFetcher } from "@/lib/fetcher"
+import { MultiAssignSelector } from "@/components/users/multi-assign-selector"
 import { Button } from "@/components/ui/button"
 import { Table,TableHeader,TableRow,TableHead,TableBody,TableCell } from "@/components/ui/table"
 import { Input } from "@/components/ui/input"
@@ -49,6 +50,8 @@ type UserRow = {
   contactPerson?: string | null
   address?: string | null
   username?: string | null
+  /** Set when the account is mirrored from another system; its role is managed there. */
+  externalSource?: string | null
 }
 
 type HeadOfficeUsersTableProps = {
@@ -71,6 +74,10 @@ type EditFormState = {
   mfaEnabled: boolean
   isActive: boolean
   budgetAllocationEnabled: boolean
+  // Group-based roles only. Empty for every single-branch role, and never sent
+  // for one — `resolveNextScope` rejects a stray list outright.
+  groupIds: string[]
+  branchIds: string[]
   password: string
   confirmPassword: string
   employeeId: string
@@ -124,6 +131,18 @@ const validateEditForm = (
   } else if (form.phone && (form.phone.length < 7 || form.phone.length > 15)) {
     errors.phone = "Phone number must be between 7 and 15 digits"
   }
+
+  // The role's row shape. The server enforces all of this independently and is
+  // the actual control; checking here only saves a round trip and lets the
+  // message sit against the field the administrator has to fix.
+  if (MULTI_BRANCH_ROLES.includes(form.role)) {
+    if (form.groupIds.length === 0 && form.branchIds.length === 0) {
+      errors.groupScope = "Assign at least one group or one branch to this user"
+    }
+  } else if (SINGLE_BRANCH_ROLES.includes(form.role) && !form.branchId) {
+    errors.branchId = "A branch is required for this role"
+  }
+
   return errors
 }
 
@@ -149,7 +168,44 @@ const addChangedValue = (
   if (nextValue !== currentValue) body[key] = nextValue
 }
 
-const buildUserUpdate = (form: EditFormState, user: UserRow, includePassword: boolean) => {
+/**
+ * The scope lists to send with an access change, or null to send none.
+ *
+ * Sent when the target role is group-based **and** either the role is changing
+ * (the server needs a scope for a role that has none yet) or the administrator
+ * edited the lists. A group→group switch that leaves the scope alone sends
+ * nothing, so `resolveNextScope` returns `action: "none"` and the existing
+ * assignment rows — including who granted them and when — are left intact
+ * rather than deleted and reinserted identically.
+ *
+ * Never sent for a single-branch role: `resolveNextScope` rejects a stray list
+ * with a 400 rather than ignoring it.
+ */
+const resolveScopeListsForUpdate = (
+  form: EditFormState,
+  user: UserRow,
+  loadedScope: { groupIds: string[]; branchIds: string[] } | null,
+) => {
+  if (!MULTI_BRANCH_ROLES.includes(form.role)) return null
+  const roleChanged = form.role !== (user.role || "")
+  const sameList = (a: string[], b: string[]) =>
+    a.length === b.length && [...a].sort().join(",") === [...b].sort().join(",")
+  const scopeEdited = loadedScope === null
+    || !sameList(form.groupIds, loadedScope.groupIds)
+    || !sameList(form.branchIds, loadedScope.branchIds)
+  if (!roleChanged && !scopeEdited) return null
+  return {
+    groupIds: form.groupIds.map(Number),
+    branchIds: form.branchIds.map(Number),
+  }
+}
+
+const buildUserUpdate = (
+  form: EditFormState,
+  user: UserRow,
+  includePassword: boolean,
+  loadedScope: { groupIds: string[]; branchIds: string[] } | null = null,
+) => {
   const body: Record<string, unknown> = {}
   addChangedValue(body, "firstName", form.firstName.trim(), (user.firstName || "").trim())
   addChangedValue(body, "lastName", form.lastName.trim(), (user.lastName || "").trim())
@@ -158,7 +214,12 @@ const buildUserUpdate = (form: EditFormState, user: UserRow, includePassword: bo
   addChangedValue(body, "phone", form.phone.trim() || null, user.phone?.trim() || null)
   addChangedValue(body, "role", form.role, user.role || "")
   addChangedValue(body, "organizationId", form.organizationId ? Number.parseInt(form.organizationId) : null, user.organizationId ?? null)
-  addChangedValue(body, "branchId", form.branchId ? Number.parseInt(form.branchId) : null, user.branchId ?? null)
+  // A group-based role is never pinned to one branch; the server refuses the
+  // change if a branch survives the switch, so it is explicitly cleared.
+  const nextBranchId = MULTI_BRANCH_ROLES.includes(form.role)
+    ? null
+    : (form.branchId ? Number.parseInt(form.branchId) : null)
+  addChangedValue(body, "branchId", nextBranchId, user.branchId ?? null)
   addChangedValue(body, "mfaEnabled", form.mfaEnabled, Boolean(user.mfaEnabled))
   addChangedValue(body, "isActive", form.isActive, user.isActive)
   if (form.role === "GROUP_USER") {
@@ -168,12 +229,20 @@ const buildUserUpdate = (form: EditFormState, user: UserRow, includePassword: bo
   addChangedValue(body, "imprestHolder", form.imprestHolder.trim() || null, user.imprestHolder?.trim() || null)
   addChangedValue(body, "contactPerson", form.contactPerson.trim() || null, user.contactPerson?.trim() || null)
   addChangedValue(body, "address", form.address.trim() || null, user.address?.trim() || null)
+  const scopeLists = resolveScopeListsForUpdate(form, user, loadedScope)
+  if (scopeLists) {
+    body.groupIds = scopeLists.groupIds
+    body.branchIds = scopeLists.branchIds
+  }
   if (includePassword && form.password) body.password = form.password
   return body
 }
 
 const splitUserUpdate = (body: Record<string, unknown>) => {
-  const accessKeys = new Set(["role", "organizationId", "branchId", "mfaEnabled", "isActive", "budgetAllocationEnabled"])
+  const accessKeys = new Set([
+    "role", "organizationId", "branchId", "mfaEnabled", "isActive",
+    "budgetAllocationEnabled", "groupIds", "branchIds",
+  ])
   const accessBody: Record<string, unknown> = {}
   const profileBody: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(body)) {
@@ -335,10 +404,56 @@ type RoleAssignmentFieldsProps = {
   branchOpen: boolean
   setBranchOpen: (open: boolean) => void
   userId?: string
+  /** The role the user holds on the server, not the one selected in the form. */
+  currentRole: string
+  /** Set when the account is mirrored from another system. */
+  externalSource?: string | null
 }
 
 // Roles whose reach is defined by group and branch assignments.
 const MULTI_BRANCH_ROLES = ["GROUP_ORDER_PORTAL", "GROUP_USER"]
+
+/**
+ * The role changes this dialog can make.
+ *
+ * Four roles, two shapes. `BRANCH_ADMIN` and `ORDER_PORTAL` are pinned to one
+ * branch; `GROUP_ORDER_PORTAL` and `GROUP_USER` carry no branch and draw their
+ * reach from group/branch assignments instead. Switching between shapes needs
+ * information from the administrator — a branch one way, at least one group or
+ * branch the other — which is what the fields below collect and what the
+ * server independently requires.
+ *
+ * `HEAD_OFFICE` is deliberately absent: it is a tenant-wide role rather than a
+ * branch or group one, and `canAssignRole` refuses it to a Head Office
+ * administrator anyway.
+ */
+const SWITCHABLE_ROLES = [
+  "BRANCH_ADMIN",
+  "ORDER_PORTAL",
+  "GROUP_ORDER_PORTAL",
+  "GROUP_USER",
+] as const
+
+/** The roles pinned to exactly one branch. */
+const SINGLE_BRANCH_ROLES = ["BRANCH_ADMIN", "ORDER_PORTAL"]
+
+/** Add or remove one id from a selection, preserving order. */
+function toggleAssignedId(current: string[], id: string): string[] {
+  return current.includes(id) ? current.filter((value) => value !== id) : [...current, id]
+}
+
+function canOfferRoleSwitch(currentRole: string): boolean {
+  return (SWITCHABLE_ROLES as readonly string[]).includes(currentRole)
+}
+
+type RoleChangeReadinessResponse = {
+  item?: {
+    roleChangeAllowed: boolean
+    reason: string | null
+    blockers: { pendingOrderCount: number; approvedOrderCount: number } | null
+    ordersAwaitingApproval?: number
+  }
+}
 
 type GroupScopeResponse = {
   item?: {
@@ -353,6 +468,167 @@ type GroupScopeResponse = {
  * this dialog yet; it is shown so an administrator can confirm what a user was
  * granted at creation time.
  */
+/**
+ * The user's existing group/branch scope, loaded once when the dialog opens.
+ *
+ * Two jobs: it seeds the pickers so an administrator editing a group user sees
+ * what they already have rather than an empty form, and it is the baseline
+ * `resolveScopeListsForUpdate` compares against to decide whether the scope was
+ * actually edited. Returns empty lists for a single-branch role, which is what
+ * the endpoint itself returns for one.
+ */
+function useExistingScope(userId: string | undefined) {
+  const { data, isLoading } = useSWR<GroupScopeResponse>(
+    userId ? `/api/v1/users/${userId}/scope` : null,
+    jsonFetcher,
+  )
+  const item = data?.item
+  return {
+    loading: isLoading,
+    scope: item
+      ? {
+          groupIds: item.groups.map((group) => String(group.id)),
+          branchIds: item.branches.map((branch) => String(branch.id)),
+        }
+      : null,
+  }
+}
+
+type RoleSwitchReadiness = {
+  allowed: boolean
+  reason: string | null
+  loading: boolean
+  failed: boolean
+  /** Advisory only — orders a departing Group User would stop being able to decide. */
+  ordersAwaitingApproval: number
+}
+
+/**
+ * Ask the server whether this user's role may be changed right now.
+ *
+ * Read-only preview so the administrator sees the obstruction before filling
+ * the form. It fails **closed**: if the check cannot be loaded we do not offer
+ * the switch, because offering it would only produce a 409 on submit.
+ */
+function useRoleChangeReadiness(userId: string | undefined, enabled: boolean): RoleSwitchReadiness {
+  const { data, error, isLoading } = useSWR<RoleChangeReadinessResponse>(
+    userId && enabled ? `/api/v1/users/${userId}/access` : null,
+    jsonFetcher,
+  )
+
+  if (!enabled) {
+    return { allowed: false, reason: null, loading: false, failed: false, ordersAwaitingApproval: 0 }
+  }
+  if (isLoading) {
+    return { allowed: false, reason: null, loading: true, failed: false, ordersAwaitingApproval: 0 }
+  }
+  if (error || !data?.item) {
+    return {
+      allowed: false,
+      reason: "The role change check could not be loaded, so the role cannot be changed right now.",
+      loading: false,
+      failed: true,
+      ordersAwaitingApproval: 0,
+    }
+  }
+
+  return {
+    allowed: data.item.roleChangeAllowed,
+    reason: data.item.reason,
+    loading: false,
+    failed: false,
+    ordersAwaitingApproval: data.item.ordersAwaitingApproval ?? 0,
+  }
+}
+
+/**
+ * A mirrored username ends in `-ba` or `-op` for the role it was created for.
+ * Switching the role does not rename the account, so the suffix stops matching.
+ * Cosmetic — the username is only an identifier — but worth saying, because
+ * support reads that suffix as the role.
+ */
+function usernameSuffixWarning(username: string, nextRole: string): string | null {
+  const suffix = /-(ba|op)$/i.exec(username.trim())?.[1]?.toLowerCase()
+  if (!suffix) return null
+  const expected = nextRole === "BRANCH_ADMIN" ? "ba" : "op"
+  if (suffix === expected) return null
+  return `This user signs in as "${username.trim()}". The "-${suffix}" suffix will no longer match `
+    + "their role — the username is not renamed, and they keep signing in with it."
+}
+
+function RoleSwitchNotice({
+  offered,
+  readiness,
+  roleChanged,
+  mirrored,
+  username,
+  nextRole,
+  currentRole,
+}: Readonly<{
+  offered: boolean
+  readiness: RoleSwitchReadiness
+  roleChanged: boolean
+  mirrored: boolean
+  username: string
+  nextRole: string
+  currentRole: string
+}>) {
+  if (!offered) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        This role cannot be changed here. Only Branch Admin and Order Portal users can be switched.
+      </p>
+    )
+  }
+  if (readiness.loading) {
+    return <p className="text-xs text-muted-foreground">Checking whether this role can be changed...</p>
+  }
+  if (!readiness.allowed) {
+    return <p className="text-xs text-amber-700 dark:text-amber-500">{readiness.reason}</p>
+  }
+  if (roleChanged) {
+    const suffixWarning = usernameSuffixWarning(username, nextRole)
+    const leavingApprover = currentRole === "GROUP_USER" && nextRole !== "GROUP_USER"
+    const leavingGroupScope = MULTI_BRANCH_ROLES.includes(currentRole)
+      && !MULTI_BRANCH_ROLES.includes(nextRole)
+    return (
+      <div className="space-y-1">
+        <p className="text-xs text-amber-700 dark:text-amber-500">
+          Changing the role signs this user out of every device immediately. They will sign back in
+          to the portal for their new role.
+        </p>
+        {leavingGroupScope && (
+          <p className="text-xs text-amber-700 dark:text-amber-500">
+            Their group and branch assignments will be removed. Orders they already raised stay with
+            the branches that received them and keep counting toward those branches&apos; figures.
+          </p>
+        )}
+        {leavingApprover && readiness.ordersAwaitingApproval > 0 && (
+          <p className="text-xs text-amber-700 dark:text-amber-500">
+            {readiness.ordersAwaitingApproval} order(s) across their assigned branches are still
+            awaiting approval. They will no longer be able to decide those — a Branch Admin or Head
+            Office user still can.
+          </p>
+        )}
+        {suffixWarning && (
+          <p className="text-xs text-amber-700 dark:text-amber-500">{suffixWarning}</p>
+        )}
+        {mirrored && (
+          <p className="text-xs text-muted-foreground">
+            This account came from the legacy system. It signs in by username only, which the role
+            change does not affect.
+          </p>
+        )}
+      </div>
+    )
+  }
+  return (
+    <p className="text-xs text-muted-foreground">
+      This user has no orders in progress, so their role can be changed.
+    </p>
+  )
+}
+
 function GroupOrderPortalScopeSummary({ userId }: Readonly<{ userId?: string }>) {
   const { data, error } = useSWR<GroupScopeResponse>(
     userId ? `/api/v1/users/${userId}/scope` : null,
@@ -392,6 +668,87 @@ function GroupOrderPortalScopeSummary({ userId }: Readonly<{ userId?: string }>)
   )
 }
 
+/**
+ * The group and branch scope a group-based role reaches.
+ *
+ * Uses the same control as the create dialog, because it grants the same thing
+ * and the server validates it identically: `validateMultiBranchScope` requires
+ * at least one group or one branch, and rejects any that belong to another
+ * tenant. Every branch in a chosen group is included automatically and stays
+ * included as the group changes, which is why groups and individual branches
+ * are offered separately rather than flattened into one list.
+ */
+function GroupScopeFields({
+  form,
+  setForm,
+  organizationId,
+  branches,
+  disabled,
+}: Readonly<{
+  form: EditFormState
+  setForm: (form: EditFormState) => void
+  organizationId: number | null
+  branches: any[]
+  disabled: boolean
+}>) {
+  // `GET /api/v1/groups` answers under `groups`, not `items` — the same key the
+  // create dialog reads. Reading `items` here left the picker permanently empty,
+  // which made every move into a group role impossible from this screen.
+  const { data: groupsData } = useSWR<{ groups?: any[] }>(
+    organizationId ? `/api/v1/groups?organizationId=${organizationId}` : null,
+    jsonFetcher,
+  )
+  const groups = groupsData?.groups ?? []
+  const nothingSelected = form.groupIds.length === 0 && form.branchIds.length === 0
+
+  return (
+    <div className="space-y-4">
+      <MultiAssignSelector
+        id="editGroupIds"
+        label="Groups"
+        placeholder="Search groups..."
+        emptyLabel="No group found."
+        disabledLabel="Select organization first"
+        disabled={disabled || !organizationId}
+        options={groups.map((group: any) => ({
+          id: String(group.id),
+          label: group.name,
+          hint: typeof group.branchCount === "number" ? `${group.branchCount} branches` : undefined,
+        }))}
+        selectedIds={form.groupIds}
+        onToggle={(id) => setForm({ ...form, groupIds: toggleAssignedId(form.groupIds, id) })}
+        onClear={() => setForm({ ...form, groupIds: [] })}
+        helpText="Every branch in a selected group is included automatically, including branches added to the group later."
+      />
+
+      <MultiAssignSelector
+        id="editBranchIds"
+        label="Additional branches"
+        placeholder="Search branches..."
+        emptyLabel="No branch found."
+        disabledLabel="Select organization first"
+        disabled={disabled || !organizationId}
+        options={branches.map((branch: any) => ({
+          id: String(branch.id),
+          label: branch.name,
+          hint: branch.city || undefined,
+        }))}
+        selectedIds={form.branchIds}
+        onToggle={(id) => setForm({ ...form, branchIds: toggleAssignedId(form.branchIds, id) })}
+        onClear={() => setForm({ ...form, branchIds: [] })}
+        helpText="Individually assigned branches, added on top of the selected groups."
+      />
+
+      {nothingSelected && (
+        <p className="text-xs text-red-600">
+          Assign at least one group or one branch. A group-based user with no assignments can
+          reach nothing at all.
+        </p>
+      )}
+    </div>
+  )
+}
+
 function RoleAssignmentFields({
   form,
   setForm,
@@ -399,8 +756,13 @@ function RoleAssignmentFields({
   branchOpen,
   setBranchOpen,
   userId,
+  currentRole,
+  externalSource,
 }: Readonly<RoleAssignmentFieldsProps>) {
+  const roleSwitchOffered = canOfferRoleSwitch(currentRole)
+  const readiness = useRoleChangeReadiness(userId, roleSwitchOffered)
   const needsBranch = form.role === "BRANCH_ADMIN" || form.role === "ORDER_PORTAL"
+  const needsGroupScope = MULTI_BRANCH_ROLES.includes(form.role)
   const organizationId = form.organizationId ? Number.parseInt(form.organizationId) : null
   const selectedBranchId = Number.parseInt(form.branchId)
   const selectedBranchName = branches.find((branch) => branch.id === selectedBranchId)?.name
@@ -413,24 +775,78 @@ function RoleAssignmentFields({
       <h3 className="text-sm font-semibold">Role & Assignment</h3>
       <div className="space-y-2">
         <Label htmlFor="role">Role *</Label>
-        <Select disabled value={form.role} onValueChange={(role) => setForm({ ...form, role, branchId: "" })}>
-          <SelectTrigger><SelectValue placeholder="Select role" /></SelectTrigger>
+        <Select
+          // Only the two single-branch roles can be switched here, and only
+          // once the server says this user has nothing in flight. The select is
+          // never the control — `PATCH .../access` re-checks immediately before
+          // the write, because an order can settle or be raised in between.
+          disabled={!roleSwitchOffered || !readiness.allowed}
+          value={form.role}
+          onValueChange={(role) => setForm({
+            ...form,
+            role,
+            // A group-based role carries no branch, and a single-branch role
+            // carries no assignments. Clearing the other shape's fields here is
+            // what stops a stale value being submitted and refused.
+            branchId: MULTI_BRANCH_ROLES.includes(role) ? "" : form.branchId,
+            groupIds: MULTI_BRANCH_ROLES.includes(role) ? form.groupIds : [],
+            branchIds: MULTI_BRANCH_ROLES.includes(role) ? form.branchIds : [],
+            budgetAllocationEnabled: role === "GROUP_USER" && form.budgetAllocationEnabled,
+          })}
+        >
+          {/* `id` matches the Label's htmlFor: without it the control is
+              unlabelled for assistive technology. */}
+          <SelectTrigger id="role"><SelectValue placeholder="Select role" /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="HEAD_OFFICE">Head Office</SelectItem>
-            <SelectItem value="BRANCH_ADMIN">Branch Admin</SelectItem>
-            <SelectItem value="ORDER_PORTAL">Order Portal User</SelectItem>
-            <SelectItem value="GROUP_ORDER_PORTAL">Group Order Portal User</SelectItem>
-            <SelectItem value="GROUP_USER">Group User</SelectItem>
+            {roleSwitchOffered ? (
+              <>
+                <SelectItem value="BRANCH_ADMIN">Branch Admin</SelectItem>
+                <SelectItem value="ORDER_PORTAL">Order Portal User</SelectItem>
+                <SelectItem value="GROUP_ORDER_PORTAL">Group Order Portal User</SelectItem>
+                <SelectItem value="GROUP_USER">Group User</SelectItem>
+              </>
+            ) : (
+              <>
+                <SelectItem value="HEAD_OFFICE">Head Office</SelectItem>
+                <SelectItem value="BRANCH_ADMIN">Branch Admin</SelectItem>
+                <SelectItem value="ORDER_PORTAL">Order Portal User</SelectItem>
+                <SelectItem value="GROUP_ORDER_PORTAL">Group Order Portal User</SelectItem>
+                <SelectItem value="GROUP_USER">Group User</SelectItem>
+                {/* Present so a Viewer's own role renders in this disabled
+                    select. VIEWER is not in SWITCHABLE_ROLES, so the control is
+                    read-only for it, exactly as it is for Head Office. */}
+                <SelectItem value="VIEWER">Viewer (read-only)</SelectItem>
+              </>
+            )}
           </SelectContent>
         </Select>
+        <RoleSwitchNotice
+          offered={roleSwitchOffered}
+          readiness={readiness}
+          roleChanged={form.role !== currentRole}
+          mirrored={Boolean(externalSource)}
+          username={form.username}
+          nextRole={form.role}
+          currentRole={currentRole}
+        />
       </div>
-      {MULTI_BRANCH_ROLES.includes(form.role) && <GroupOrderPortalScopeSummary userId={userId} />}
+      {needsGroupScope && !roleSwitchOffered && <GroupOrderPortalScopeSummary userId={userId} />}
+      {needsGroupScope && roleSwitchOffered && (
+        <GroupScopeFields
+          form={form}
+          setForm={setForm}
+          organizationId={organizationId}
+          branches={availableBranches}
+          disabled={!readiness.allowed}
+        />
+      )}
       {needsBranch && (
         <div className="space-y-2">
           <Label htmlFor="branch">Branch Assignment *</Label>
           <Popover open={branchOpen} onOpenChange={setBranchOpen}>
             <PopoverTrigger asChild>
               <Button
+                id="branch"
                 variant="outline"
                 role="combobox"
                 className={cn("w-full justify-between", !form.branchId && "text-muted-foreground")}
@@ -463,6 +879,9 @@ function RoleAssignmentFields({
               </Command>
             </PopoverContent>
           </Popover>
+          {!form.branchId && (
+            <p className="text-xs text-red-600">A branch is required for this role.</p>
+          )}
         </div>
       )}
     </div>
@@ -495,6 +914,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [branchOpen, setBranchOpen] = useState(false)
+  const existingScope = useExistingScope(editingUser?.id)
   const [editUsernameStatus, setEditUsernameStatus] = useState<{
     available: boolean | null
     loading: boolean
@@ -505,6 +925,8 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
     suggestions: []
   })
   const [editForm, setEditForm] = useState<EditFormState>({
+    groupIds: [],
+    branchIds: [],
     firstName: "",
     lastName: "",
     email: "",
@@ -620,6 +1042,8 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
       mfaEnabled: user.mfaEnabled || false,
       isActive: user.isActive,
       budgetAllocationEnabled: user.budgetAllocationEnabled === true,
+      groupIds: [],
+      branchIds: [],
       password: "",
       confirmPassword: "",
       employeeId: user.employeeId || "",
@@ -648,6 +1072,8 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
       mfaEnabled: false,
       isActive: true,
       budgetAllocationEnabled: false,
+      groupIds: [],
+      branchIds: [],
       password: "",
       confirmPassword: "",
       employeeId: "",
@@ -711,6 +1137,24 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
     }
   }, [editForm.username, editingUser])
 
+  // Seed the scope pickers from the server once, when the dialog opens for a
+  // user who already has assignments. Keyed on the loaded lists rather than on
+  // the dialog, so an administrator's own edits are never overwritten by a
+  // late-arriving response.
+  const seededScopeFor = useRef<string | null>(null)
+  useEffect(() => {
+    const scope = existingScope.scope
+    if (!editingUser || !scope) return
+    if (seededScopeFor.current === editingUser.id) return
+    seededScopeFor.current = editingUser.id
+    if (scope.groupIds.length === 0 && scope.branchIds.length === 0) return
+    setEditForm((previous) => ({
+      ...previous,
+      groupIds: scope.groupIds,
+      branchIds: scope.branchIds,
+    }))
+  }, [editingUser, existingScope.scope])
+
   // Save user changes
   const saveUser = async () => {
     if (!editingUser) return
@@ -731,7 +1175,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
     setSubmittingUserId(editingUser.id)
     try {
       setEditErrors({})
-      const body = buildUserUpdate(editForm, editingUser, showPasswordReset)
+      const body = buildUserUpdate(editForm, editingUser, showPasswordReset, existingScope.scope)
       await submitUserUpdates(editingUser.id, body)
 
       onUserUpdate()
@@ -806,6 +1250,8 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
         return <Badge className="bg-teal-100 text-teal-800">Group Order Portal</Badge>
       case "GROUP_USER":
         return <Badge className="bg-cyan-100 text-cyan-800">Group User</Badge>
+      case "VIEWER":
+        return <Badge className="bg-slate-100 text-slate-800">Viewer</Badge>
       default:
         return <Badge variant="outline">{role}</Badge>
     }
@@ -915,6 +1361,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
             <SelectItem value="ORDER_PORTAL">Order Portal User</SelectItem>
             <SelectItem value="GROUP_ORDER_PORTAL">Group Order Portal User</SelectItem>
             <SelectItem value="GROUP_USER">Group User</SelectItem>
+            <SelectItem value="VIEWER">Viewer (read-only)</SelectItem>
           </SelectContent>
         </Select>
 
@@ -1614,6 +2061,8 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
               branchOpen={branchOpen}
               setBranchOpen={setBranchOpen}
               userId={editingUser?.id}
+              currentRole={editingUser?.role ?? ""}
+              externalSource={editingUser?.externalSource}
             />
 
             {/* Security & Access */}

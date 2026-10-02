@@ -72,10 +72,16 @@ async function upsertUser(
     budgetAllocationEnabled?: boolean
   },
 ): Promise<string> {
+  // First and last name are derived rather than asked for: the user edit dialog
+  // requires both before it will save, so a fixture carrying only `fullName`
+  // cannot be edited at all and no UI journey that saves a user can run.
+  const nameParts = input.fullName.trim().split(/\s+/)
   const values = {
     email: `${input.username}@example.test`,
     username: input.username,
     fullName: input.fullName,
+    firstName: nameParts.slice(0, -1).join(" ") || nameParts[0],
+    lastName: nameParts.length > 1 ? nameParts[nameParts.length - 1] : "Smoke",
     passwordHash: input.passwordHash,
     roleId: input.roleId,
     organizationId: input.organizationId,

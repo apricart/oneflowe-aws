@@ -2,11 +2,33 @@ import { z } from "zod"
 import { ORDER_APPROVER_ROLES } from "@/lib/order-approver-role"
 import { MAX_BUSINESS_QUANTITY, isUniquePositiveIdList } from "@/lib/business-rules"
 import {
+  DELIVERY_ADDRESS_DECISIONS,
+  MAX_DELIVERY_ADDRESS_CITY,
+  MAX_DELIVERY_ADDRESS_CONTACT_PERSON,
+  MAX_DELIVERY_ADDRESS_CONTACT_PHONE,
+  MAX_DELIVERY_ADDRESS_LABEL,
+  MAX_DELIVERY_ADDRESS_LINE,
+  MAX_DELIVERY_ADDRESS_PROVINCE,
+  MAX_DELIVERY_ADDRESS_REASON,
+} from "@/lib/delivery-address"
+import {
   MAX_GROUP_REFUND_REASON_LENGTH,
   MAX_ITEMS_PER_REFUNDED_ORDER,
   MAX_ORDERS_PER_GROUP_REFUND,
 } from "@/lib/server/group-refund-rules"
 import { PROPAGATION_MODES } from "@/lib/group-price-propagation"
+import {
+  EMAIL_DOMAIN_MAX_LENGTH,
+  emailDomainError,
+  normalizeEmailDomain,
+} from "@/lib/organization-email-domain"
+import {
+  JOINABLE_ROLES,
+  JOIN_CODE_MAX_LENGTH,
+  JOIN_DECISIONS,
+  joinCodeError,
+  normalizeJoinCode,
+} from "@/lib/organization-join"
 import { MAX_PRICE_CENTS } from "@/lib/price-ladder"
 import { MAX_ALLOWLIST_ENTRIES } from "@/lib/security/ip-allowlist"
 import {
@@ -35,6 +57,10 @@ export const systemRoleSchema = z.enum([
   "BRANCH_ADMIN",
   "GROUP_ORDER_PORTAL",
   "ORDER_PORTAL",
+  // Read-only dashboard account. Holds no write permission anywhere and is
+  // admitted only to the analytics reads its dashboard needs
+  // (`lib/viewer-access.ts`).
+  "VIEWER",
 ])
 
 export type SystemRole = z.infer<typeof systemRoleSchema>
@@ -195,13 +221,36 @@ const organizationNtnNumber = z
   .max(32)
   .regex(/^[A-Za-z0-9-]*$/, "NTN number may contain only letters, numbers, and hyphens")
 
+/**
+ * The domain self-service applicants must use. Normalised through the single
+ * `normalizeEmailDomain` and judged by `emailDomainError`, so the dialog, this
+ * schema and `organizations_email_domain_shape_ck` agree. A blank value means
+ * "no domain" and becomes null; bounded before normalisation so an oversized
+ * string is refused without being processed.
+ */
+const organizationEmailDomain = z
+  .string()
+  .max(EMAIL_DOMAIN_MAX_LENGTH + 16)
+  .transform(normalizeEmailDomain)
+  .superRefine((domain, context) => {
+    const problem = domain === "" ? null : emailDomainError(domain)
+    if (problem) context.addIssue({ code: "custom", message: problem })
+  })
+  .transform((domain) => domain || null)
+
 export const organizationCreateSchema = z.object({
   name: z.string().trim().min(2).max(100),
   code: z.string().trim().min(2).max(20).regex(/^\w+$/),
   ntnNumber: organizationNtnNumber.optional(),
+  emailDomain: organizationEmailDomain.optional(),
   status: z.enum(["active", "inactive", "suspended"]).optional().default("active"),
   orderApproverRole: z.enum(ORDER_APPROVER_ROLES).optional().default("BRANCH_ADMIN"),
   orderApprovalRequired: z.boolean().optional().default(true),
+  blockOrderingOnUnpaidInvoices: z.boolean().optional().default(false),
+  blockOrderingOnUnacknowledgedDeliveries: z.boolean().optional().default(false),
+  // Off unless asked for: an organization created in the application starts
+  // without budget allocation (DEFAULT_ORGANIZATION_BUDGETS_ENABLED).
+  budgetsEnabled: z.boolean().optional().default(false),
   budgetAllocationMode: z.enum(["money", "quantity"]).optional(),
   priceVisibility: z.object({
     hideBranchAdminPrices: z.boolean().optional(),
@@ -214,9 +263,15 @@ export const organizationUpdateSchema = z.object({
   name: z.string().trim().min(2).max(100).optional(),
   code: z.string().trim().min(2).max(20).regex(/^\w+$/).optional(),
   ntnNumber: organizationNtnNumber.nullable().optional(),
+  // `null` or a blank string clears the domain, which closes self-service
+  // joining for the organization.
+  emailDomain: organizationEmailDomain.nullable().optional(),
   status: z.enum(["active", "inactive", "suspended"]).optional(),
   orderApproverRole: z.enum(ORDER_APPROVER_ROLES).optional(),
   orderApprovalRequired: z.boolean().optional(),
+  blockOrderingOnUnpaidInvoices: z.boolean().optional(),
+  blockOrderingOnUnacknowledgedDeliveries: z.boolean().optional(),
+  budgetsEnabled: z.boolean().optional(),
   budgetAllocationMode: z.enum(["money", "quantity"]).optional(),
 }).strict().refine((input) => Object.keys(input).length > 0, {
   message: "At least one organization field is required",
@@ -269,12 +324,30 @@ export const orderCreateSchema = z.object({
   branchId: positiveId.optional(),
   notes: z.string().trim().max(2_000).optional(),
   poNumber: optionalPurchaseOrderNumber,
+  /**
+   * An approved delivery address for this order's branch, when the requester
+   * wants the goods somewhere other than the branch's own address.
+   *
+   * Optional, and omitting it is the default everywhere: absent means "the
+   * branch's own address", exactly as every order placed before delivery
+   * addresses existed. The id is not trusted here — the route re-reads it
+   * inside the creation transaction against the tenant, the branch and
+   * `status = 'approved'`.
+   */
+  deliveryAddressId: positiveId.optional(),
 }).strict()
 
 export const orderUpdateSchema = z.object({
   items: orderMutationItemsSchema,
   notes: z.string().trim().max(2_000).optional(),
   poNumber: clearablePurchaseOrderNumber.optional(),
+  /**
+   * The same choice on an edit, where `null` is a real instruction: it sends
+   * the order back to the branch's own address. `undefined` leaves whatever
+   * the order already carries alone — the same distinction
+   * `clearablePurchaseOrderNumber` draws.
+   */
+  deliveryAddressId: nullablePositiveId.optional(),
 }).strict()
 
 export const rejectionSchema = z.object({
@@ -769,6 +842,136 @@ export const paymentControlExceptionGrantSchema = z.object({
 
 export const paymentControlExceptionRevokeSchema = z.object({
   reason: z.string().trim().max(1_000).optional(),
+}).strict()
+
+/* ── Joining an organization ─────────────────────────────────────────────── */
+
+/**
+ * The code, as an anonymous caller sends it.
+ *
+ * Normalised through the single `normalizeJoinCode` before it is checked, so
+ * the endpoint, the join page and the check constraint on
+ * `organization_join_codes.code` all judge the same string. Bounded before
+ * normalisation too, so a megabyte of text is rejected without being upper-cased
+ * first.
+ */
+const joinCodeSchema = z.string()
+  .max(JOIN_CODE_MAX_LENGTH * 4)
+  .transform(normalizeJoinCode)
+  .refine((code) => joinCodeError(code) === null, {
+    message: "Enter a valid join code",
+  })
+
+export const joinLookupSchema = z.object({
+  code: joinCodeSchema,
+}).strict()
+
+/**
+ * A join submission.
+ *
+ * Deliberately **not** `userCreateSchema`:
+ *
+ *   * there is no `organizationId` — the tenant is resolved from the code, so an
+ *     applicant has no tenant to name and therefore none to tamper with;
+ *   * `role` is `JOINABLE_ROLES`, not `systemRoleSchema`, so HEAD_OFFICE and
+ *     SUPER_ADMIN cannot be asked for;
+ *   * `isActive`, `mfaEnabled` and `budgetAllocationEnabled` are simply absent.
+ *     `.strict()` turns each of them into a 400 rather than something silently
+ *     applied — an applicant cannot activate themselves, disable MFA, or grant
+ *     themselves the Group User budget-allocation right, which moves money.
+ *
+ * The password rules are the same `passwordSchema` an administrator is held to.
+ */
+export const joinRequestSubmitSchema = z.object({
+  code: joinCodeSchema,
+  firstName: z.string().trim().min(1).max(100),
+  lastName: z.string().trim().min(1).max(100),
+  email: z.string().trim().pipe(z.email().max(255)),
+  username: z.string().trim().min(3).max(255),
+  password: passwordSchema,
+  role: z.enum(JOINABLE_ROLES),
+  branchId: nullablePositiveId.optional().default(null),
+  groupIds: assignedIdList.optional().default([]),
+  branchIds: assignedIdList.optional().default([]),
+  phone: nullableText(32).optional(),
+  employeeId: nullableText(64).optional(),
+  imprestHolder: nullableText(255).optional(),
+  contactPerson: nullableText(255).optional(),
+  location: nullableText(255).optional(),
+  address: nullableText(2_000).optional(),
+}).strict()
+
+/**
+ * Head Office setting its organization's code.
+ *
+ * Omitting `code` asks the server to generate one — the recommended path, and
+ * the reason generation lives on the server rather than in the browser.
+ */
+export const joinCodeSetSchema = z.object({
+  code: joinCodeSchema.optional(),
+}).strict()
+
+/**
+ * Head Office deciding a request.
+ *
+ * The four optional assignment fields let Head Office correct what was asked
+ * for before letting somebody in. Every one of them is re-validated against the
+ * organization exactly as the submission was, so an override can never reach
+ * further than a submission could; `role` is the same `JOINABLE_ROLES`
+ * allowlist. `budgetAllocationEnabled` is only here — it is never on the public
+ * submission — because it grants the right to allocate money.
+ */
+export const joinRequestDecisionSchema = z.object({
+  decision: z.enum(JOIN_DECISIONS),
+  reason: nullableText(1_000).optional(),
+  role: z.enum(JOINABLE_ROLES).optional(),
+  branchId: nullablePositiveId.optional(),
+  groupIds: assignedIdList.optional(),
+  branchIds: assignedIdList.optional(),
+  budgetAllocationEnabled: z.boolean().optional(),
+}).strict().refine(
+  (input) => input.decision === "approve" || (
+    input.role === undefined
+    && input.branchId === undefined
+    && input.groupIds === undefined
+    && input.branchIds === undefined
+    && input.budgetAllocationEnabled === undefined
+  ),
+  { message: "Assignment fields apply only when approving a request" },
+)
+
+/**
+ * Asking for an extra delivery address at a branch.
+ *
+ * `.strict()` and deliberately narrow: there is **no `status`, no
+ * `decidedBy`, no `decidedAt` and no `organizationId`** here, so none of them
+ * can be mass assigned. A request is always created `pending` by the server,
+ * which is what stops a requester approving its own address.
+ *
+ * `branchId` is present because a group-role requester acts across several
+ * branches and has to say which one — it is intersected with the caller's own
+ * resolved set before anything is read, never trusted on its own.
+ */
+export const deliveryAddressCreateSchema = z.object({
+  branchId: positiveId,
+  label: z.string().trim().min(1).max(MAX_DELIVERY_ADDRESS_LABEL),
+  address: z.string().trim().min(1).max(MAX_DELIVERY_ADDRESS_LINE),
+  city: nullableText(MAX_DELIVERY_ADDRESS_CITY).optional(),
+  province: nullableText(MAX_DELIVERY_ADDRESS_PROVINCE).optional(),
+  contactPerson: nullableText(MAX_DELIVERY_ADDRESS_CONTACT_PERSON).optional(),
+  contactPhone: nullableText(MAX_DELIVERY_ADDRESS_CONTACT_PHONE).optional(),
+  reason: nullableText(MAX_DELIVERY_ADDRESS_REASON).optional(),
+}).strict()
+
+/**
+ * Head Office's decision on one. Nothing but the verdict and why — the address
+ * itself is not editable through this route, because an approver who could
+ * rewrite the address before approving it would be approving something the
+ * branch never asked for.
+ */
+export const deliveryAddressDecisionSchema = z.object({
+  decision: z.enum(DELIVERY_ADDRESS_DECISIONS),
+  reason: nullableText(MAX_DELIVERY_ADDRESS_REASON).optional(),
 }).strict()
 
 export function validationMessage(error: z.ZodError): string {

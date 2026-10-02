@@ -49,6 +49,23 @@ describe("selectOrdersForListView", () => {
     expect(ids(selectOrdersForListView(rows, { statusFilter: "pending", splitFilter: "full" }))).toEqual([1])
   })
 
+  it("narrows to delivered-but-unfulfilled orders on the delivery tab", () => {
+    const delivered = [
+      { ...order(10, "APPROVED", "2026-02-01T00:00:00.000Z"), fulfillmentStatus: "DELIVERED" },
+      { ...order(11, "APPROVED", "2026-02-02T00:00:00.000Z"), fulfillmentStatus: "DISPATCHED" },
+      { ...order(12, "FULFILLED", "2026-02-03T00:00:00.000Z"), fulfillmentStatus: "DELIVERED" },
+      { ...order(13, "APPROVED", "2026-02-04T00:00:00.000Z"), fulfillmentStatus: "DELIVERED" },
+    ]
+
+    expect(ids(selectOrdersForListView(delivered, {
+      statusFilter: "approved",
+      splitFilter: "all",
+      deliveryFilter: "unacknowledged",
+    }))).toEqual([13, 10])
+    expect(ids(selectOrdersForListView(delivered, { statusFilter: "approved", splitFilter: "all" })))
+      .toEqual([13, 11, 10])
+  })
+
   it("tolerates a missing status rather than throwing on it", () => {
     const withoutStatus = [{ id: 8, createdAt: "2026-01-08T00:00:00.000Z" }]
 

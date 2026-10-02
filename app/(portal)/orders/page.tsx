@@ -20,7 +20,8 @@ import {
   CheckCircle,
   Clock,
   TrendingDown,RefreshCw,XCircle,ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  PackageCheck
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAppContext } from "@/components/context/app-context"
@@ -37,6 +38,12 @@ import {
   type OrderStatusFilter,
 } from "@/lib/order-status"
 import { selectOrdersForListView } from "@/lib/order-list-view"
+import {
+  DELIVERED_UNFULFILLED_LABEL,
+  ORDER_DELIVERY_FILTER_UNACKNOWLEDGED,
+  parseOrderDeliveryFilter,
+  type OrderDeliveryFilter,
+} from "@/lib/unacknowledged-orders"
 
 type DateRange = {
   startDate: Date
@@ -98,9 +105,26 @@ export default function OrdersManagementPage() {
   )
 }
 
+/**
+ * The tab a link asks for. `?delivery=unacknowledged` opens the
+ * "Delivered · Unfulfilled" tab, which rides on the approved status filter;
+ * any other delivery value is ignored here and refused by the API.
+ */
+function requestedListTab(searchParams: Pick<URLSearchParams, "get">): {
+  statusFilter: OrderStatusFilter
+  deliveryFilter: OrderDeliveryFilter | null
+} {
+  const delivery = parseOrderDeliveryFilter(searchParams.get("delivery"))
+  const deliveryFilter = delivery.ok ? delivery.filter : null
+  return {
+    statusFilter: deliveryFilter ? "approved" : getOrderStatusFilter(searchParams.get("status")),
+    deliveryFilter,
+  }
+}
+
 function OrdersManagementContent() {
   const searchParams = useSearchParams()
-  const requestedStatusFilter = getOrderStatusFilter(searchParams.get("status"))
+  const { statusFilter: requestedStatusFilter, deliveryFilter: requestedDeliveryFilter } = requestedListTab(searchParams)
   const { data: session } = useSession()
   const {
     organizationId,
@@ -125,6 +149,9 @@ function OrdersManagementContent() {
   const [selectedYears, setSelectedYears] = useState<number[]>([])
   const [statusFilter, setStatusFilter] = useState<OrderStatusFilter>(requestedStatusFilter)
   const [splitFilter, setSplitFilter] = useState<OrderSplitFilter>("all")
+  // Delivered orders still waiting to be fulfilled are a slice of Active, shown
+  // as their own tab. It rides on the approved status filter.
+  const [deliveryFilter, setDeliveryFilter] = useState<OrderDeliveryFilter | null>(requestedDeliveryFilter)
   // Local Hierarchical Filter State
   const [reportBranchIds, setReportBranchIds] = useState<string[]>([])
   const [reportGroupIds, setReportGroupIds] = useState<string[]>([])
@@ -132,7 +159,8 @@ function OrdersManagementContent() {
   useEffect(() => {
     setCurrentPage(1)
     setStatusFilter(requestedStatusFilter)
-  }, [requestedStatusFilter])
+    setDeliveryFilter(requestedDeliveryFilter)
+  }, [requestedStatusFilter, requestedDeliveryFilter])
 
 
   const handleDateChange = useCallback(({ range, preset, months = [], years = [] }: GlobalDateFilterChange) => {
@@ -152,6 +180,7 @@ function OrdersManagementContent() {
     selectedMonths.length > 0 ||
     selectedYears.length > 0 ||
     statusFilter !== "all" ||
+    deliveryFilter !== null ||
     splitFilter !== "all"
 
   const resetOrderFilters = useCallback(() => {
@@ -164,6 +193,7 @@ function OrdersManagementContent() {
     setSelectedMonths([])
     setSelectedYears([])
     setStatusFilter("all")
+    setDeliveryFilter(null)
     setSplitFilter("all")
   }, [])
 
@@ -230,12 +260,16 @@ function OrdersManagementContent() {
       params.set("status", statusFilter)
     }
 
+    if (deliveryFilter) {
+      params.set("delivery", deliveryFilter)
+    }
+
     if (debouncedSearchQuery) {
       params.set("q", debouncedSearchQuery)
     }
 
     return params.toString()
-  }, [organizationId, branchId, branchIds, reportBranchIds, reportGroupIds, dateRange, selectedMonths, selectedYears, statusFilter, isInitialized, debouncedSearchQuery])
+  }, [organizationId, branchId, branchIds, reportBranchIds, reportGroupIds, dateRange, selectedMonths, selectedYears, statusFilter, isInitialized, debouncedSearchQuery, deliveryFilter])
 
   const ordersEndpoint = useMemo(() => {
     if (ordersQuery === null) return null
@@ -267,8 +301,8 @@ function OrdersManagementContent() {
 
   // Filter and search orders
   const filteredOrders = useMemo(
-    () => selectOrdersForListView<OrderItem>(orders, { statusFilter, splitFilter }),
-    [orders, splitFilter, statusFilter],
+    () => selectOrdersForListView<OrderItem>(orders, { statusFilter, splitFilter, deliveryFilter }),
+    [orders, splitFilter, statusFilter, deliveryFilter],
   )
 
   // Export covers the whole filtered scope, not the page on screen. The list is
@@ -301,8 +335,8 @@ function OrdersManagementContent() {
       pages.forEach((data) => collected.push(...(data?.items || [])))
     }
 
-    return selectOrdersForListView<OrderItem>(collected, { statusFilter, splitFilter })
-  }, [ordersQuery, splitFilter, statusFilter])
+    return selectOrdersForListView<OrderItem>(collected, { statusFilter, splitFilter, deliveryFilter })
+  }, [ordersQuery, splitFilter, statusFilter, deliveryFilter])
 
   // Approve order
 
@@ -471,23 +505,49 @@ function OrdersManagementContent() {
                     ["fulfilled", "Fulfilled"],
                     ["rejected", "Rejected"],
                     ["refunded", "Refunded"],
-                  ] as [OrderStatusFilter, string][]).map(([status, label]) => (
+                  ] as [OrderStatusFilter, string][]).map(([status, label]) => {
+                    const isSelected = statusFilter === status && deliveryFilter === null
+                    return (
                     <Button
                       key={status}
                       onClick={() => {
                         setCurrentPage(1)
                         setStatusFilter(status)
+                        setDeliveryFilter(null)
                       }}
-                      variant={statusFilter === status ? "secondary" : "ghost"}
+                      variant={isSelected ? "secondary" : "ghost"}
                       size="sm"
-                      className={`px-3 h-8 text-xs font-bold rounded-lg transition-all duration-200 shrink-0 ${statusFilter === status
+                      className={`px-3 h-8 text-xs font-bold rounded-lg transition-all duration-200 shrink-0 ${isSelected
                         ? "bg-white dark:bg-slate-700 shadow-sm text-slate-900 dark:text-white"
                         : "text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200"
                         }`}
                     >
                       {label}
                     </Button>
-                  ))}
+                    )
+                  })}
+                  <Button
+                    onClick={() => {
+                      setCurrentPage(1)
+                      setStatusFilter("approved")
+                      setDeliveryFilter(ORDER_DELIVERY_FILTER_UNACKNOWLEDGED)
+                    }}
+                    variant={deliveryFilter ? "secondary" : "ghost"}
+                    size="sm"
+                    title="Active orders whose goods have been delivered but which are not yet fulfilled"
+                    className={cn(
+                      "h-8 shrink-0 gap-1.5 rounded-lg px-3 text-xs font-bold transition-all duration-200",
+                      deliveryFilter
+                        ? "bg-white text-amber-700 shadow-sm dark:bg-slate-700 dark:text-amber-300"
+                        : "text-amber-700 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-300",
+                    )}
+                  >
+                    <PackageCheck className="h-3.5 w-3.5" aria-hidden="true" />
+                    {DELIVERED_UNFULFILLED_LABEL}
+                    <span className="rounded-full bg-amber-100 px-1.5 text-[10px] text-amber-800 dark:bg-amber-900/50 dark:text-amber-200">
+                      {Number(statusCounts.deliveredUnacknowledged || 0)}
+                    </span>
+                  </Button>
                 </div>
 
                 <div className="group relative w-full min-w-0 sm:w-[280px] sm:shrink-0">

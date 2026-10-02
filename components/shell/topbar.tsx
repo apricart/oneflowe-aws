@@ -13,7 +13,7 @@ DropdownMenuLabel,
 DropdownMenuSeparator,
 DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { BarChart3,LogOut,Moon,Settings as SettingsIcon,Sun } from "lucide-react"
+import { BarChart3,KeyRound,LogOut,Moon,Settings as SettingsIcon,Sun } from "lucide-react"
 import { useSession } from "next-auth/react"
 import { useTheme } from "next-themes"
 import Image from "next/image"
@@ -163,6 +163,12 @@ export function Topbar() {
             >
               <SettingsIcon className="h-4 w-4" />
               Settings
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild className="gap-2 px-3 py-2 cursor-pointer">
+              <Link href="/forgot-password">
+                <KeyRound className="h-4 w-4" />
+                Reset password
+              </Link>
             </DropdownMenuItem>
             <DropdownMenuItem
               onClick={logout}

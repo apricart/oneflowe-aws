@@ -86,6 +86,7 @@ const getOrderEditErrorResponse = (editError: any) => {
   if (message === "ORDER_EDIT_CONFLICT") {
     return error("Order was already approved, rejected, or otherwise changed", 409)
   }
+  if (message === DELIVERY_ADDRESS_UNAVAILABLE) return error(message, 400)
   if (["BUDGET_LEDGER_INVARIANT", "QUANTITY_BUDGET_LEDGER_INVARIANT", "STOCK_LEDGER_INVARIANT"].includes(message)) {
     return error("Order reservations are inconsistent; the order was not changed", 409)
   }
@@ -107,7 +108,10 @@ import { withRateLimit } from "@/lib/rate-limiter"
 import { generateReceiptData } from "@/lib/receipt-generator"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
 import { settleDueAddonsOnBudget } from "@/lib/server/budget-addon-expiry"
+import { orderTakesBudget } from "@/lib/organization-budget-policy"
 import { orderUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
+import { DELIVERY_ADDRESS_UNAVAILABLE } from "@/lib/delivery-address"
+import { loadApprovedDeliveryAddress } from "@/lib/server/delivery-addresses"
 import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
 import {
   canUseScopedBranch,
@@ -446,6 +450,10 @@ async function regenerateEditedOrderReceipt(tx: any, context: any) {
     totalCents: context.totalCents,
     discountCents: 0,
     deliveryChargesCents: 0,
+    // Resolved and verified above — the order's own address when the edit did
+    // not mention it, the newly chosen one when it did, null when the edit
+    // sent it back to the branch's own address.
+    deliveryAddress: context.deliveryAddress ?? null,
   })
   const previousReceipt = context.existingOrder.receiptData as any
   receiptData.invoiceNumber = previousReceipt?.invoiceNumber || context.existingOrder.tid
@@ -468,6 +476,12 @@ async function persistEditedOrder(tx: any, context: any) {
     totalCents: context.totalCents,
     ...(context.notes !== undefined ? { notes: context.notes || null } : {}),
     ...(context.poNumber !== undefined ? { poNumber: context.poNumber || null } : {}),
+    // Written only when the client said something about the address, so an
+    // ordinary edit of an order placed before this column existed still
+    // produces the UPDATE it always did.
+    ...(context.deliveryAddressId !== undefined
+      ? { deliveryAddressId: context.deliveryAddress?.id ?? null }
+      : {}),
     updatedAt: new Date(),
     // The creator is deliberately not a predicate here: the branch owns the
     // order. Id, tenant, branch and PENDING still make this the optimistic
@@ -479,10 +493,13 @@ async function persistEditedOrder(tx: any, context: any) {
     sql`UPPER(${orders.status}) = 'PENDING'`,
   )).returning(orderSelectColumns)
   if (!updatedOrder) throw new Error("ORDER_EDIT_CONFLICT")
-  await tx.update(budgets).set({
-    amountHeldCents: lockedBudget.amountHeldCents - existingOrder.totalCents + totalCents,
-    updatedAt: new Date(),
-  }).where(eq(budgets.id, lockedBudget.id))
+  // Null for an order that took no hold: there is nothing to move.
+  if (lockedBudget) {
+    await tx.update(budgets).set({
+      amountHeldCents: lockedBudget.amountHeldCents - existingOrder.totalCents + totalCents,
+      updatedAt: new Date(),
+    }).where(eq(budgets.id, lockedBudget.id))
+  }
   await updateOrderQuantityBudgets(tx, context)
   await updateOrderStock(tx, context)
   await tx.delete(orderItems).where(eq(orderItems.orderId, context.orderId))
@@ -525,6 +542,39 @@ async function persistEditedOrder(tx: any, context: any) {
   return { kind: "updated", order: updatedOrder } as const
 }
 
+/**
+ * Where this edited order is to be delivered, and whether that changed.
+ *
+ * Three cases, matching the three states `orderUpdateSchema` can send:
+ *   * `undefined` — the client said nothing about the address, so the order
+ *     keeps the one it has. It is re-read (not assumed) because the receipt is
+ *     regenerated from scratch on every edit, and dropping it here would
+ *     silently send the invoice back to the branch's own address.
+ *   * `null` — an explicit instruction to deliver to the branch's own address
+ *     again.
+ *   * an id — verified exactly as creation verifies it, against the tenant,
+ *     **the branch that owns this order** (not the actor's), and `approved`.
+ *
+ * Runs after `lockOrderEditAccess`, because until that lock the order's branch
+ * is not yet authoritative and an address must never be checked against the
+ * wrong one.
+ */
+async function resolveEditDeliveryAddress(tx: any, context: any) {
+  const requested = context.deliveryAddressId === undefined
+    ? context.existingOrder?.deliveryAddressId ?? null
+    : context.deliveryAddressId
+
+  if (!requested) return null
+
+  const address = await loadApprovedDeliveryAddress(tx, {
+    organizationId: context.organizationId,
+    branchId: context.branchId,
+    addressId: Number(requested),
+  })
+  if (!address) throw new Error(DELIVERY_ADDRESS_UNAVAILABLE)
+  return address
+}
+
 async function processOrderEditTransaction(tx: any, baseContext: any) {
   const access = await lockOrderEditAccess(tx, baseContext)
   if ("kind" in access) return access
@@ -532,16 +582,28 @@ async function processOrderEditTransaction(tx: any, baseContext: any) {
   // a group requester has no branch of its own, and a branch colleague editing
   // a group order must still move that branch's budget and stock.
   const context = { ...baseContext, branchId: access.existingOrder.branchId }
+  const deliveryAddress = await resolveEditDeliveryAddress(tx, {
+    ...context,
+    existingOrder: access.existingOrder,
+  })
   const inventory = await loadOrderEditInventory(tx, context)
   const orgTaxRateBp = await getOrganizationTaxRateBp(context.organizationId)
   const calculated = calculateEditedItems(context.normalizedItems, inventory, orgTaxRateBp)
-  const budget = await lockAndValidateOrderBudget(tx, { ...context, ...access, ...calculated })
-  const quantityBudgets = await lockOrderQuantityBudgets(tx, {
-    ...context,
-    orderPeriod: budget.orderPeriod,
-    calculatedItems: calculated.items,
-    oldByInventory: inventory.oldQuantities.byInventory,
-  })
+  // An order placed while its tenant had budgets off took no hold, so an edit
+  // neither checks nor moves one — whatever the tenant's setting is now. Stock
+  // is still re-validated above.
+  const tracked = orderTakesBudget(access.existingOrder)
+  const budget = tracked
+    ? await lockAndValidateOrderBudget(tx, { ...context, ...access, ...calculated })
+    : null
+  const quantityBudgets = budget
+    ? await lockOrderQuantityBudgets(tx, {
+      ...context,
+      orderPeriod: budget.orderPeriod,
+      calculatedItems: calculated.items,
+      oldByInventory: inventory.oldQuantities.byInventory,
+    })
+    : { rows: [], nextByInventory: new Map() }
   return persistEditedOrder(tx, {
     ...context,
     ...access,
@@ -552,9 +614,10 @@ async function processOrderEditTransaction(tx: any, baseContext: any) {
     productById: inventory.productById,
     oldByProduct: inventory.oldQuantities.byProduct,
     oldByInventory: inventory.oldQuantities.byInventory,
-    lockedBudget: budget.lockedBudget,
+    lockedBudget: budget?.lockedBudget ?? null,
     rows: quantityBudgets.rows,
     nextByInventory: quantityBudgets.nextByInventory,
+    deliveryAddress,
   })
 }
 
@@ -753,6 +816,7 @@ export async function PUT(
       pricesHidden,
       notes: parsedBody.data.notes,
       poNumber: parsedBody.data.poNumber,
+      deliveryAddressId: parsedBody.data.deliveryAddressId,
     }))
 
 

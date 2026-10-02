@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
+import { canRaiseProductRequest } from "@/lib/product-request-access"
 import { sanitizeRasterUpload } from "@/lib/server/upload-security"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { db } from "@/lib/db"
@@ -20,9 +21,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
+    // Super Admin uploads catalogue images. Head Office uploads the picture on a
+    // new-product request — through this path rather than one of its own,
+    // because it is the one raster upload the production WAF lets through
+    // (see `plans/OF-PRODUCT-REQUEST-head-office-new-product-requests.md`).
+    // That grants Head Office no new reach: it already sets its catalogue's
+    // `custom_image_url` through `PUT /api/v1/head-office/organization-inventory`.
     const userRole = (session.user as any).role
-    if (userRole !== "SUPER_ADMIN") {
-      return NextResponse.json({ error: "Forbidden - Super Admin access required" }, { status: 403 })
+    if (userRole !== "SUPER_ADMIN" && !canRaiseProductRequest(userRole)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
 
     const rateLimit = await withRateLimit("upload", (session.user as any).id)

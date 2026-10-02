@@ -16,7 +16,20 @@ export interface ReceiptData {
     date: string
     status: string
     buyerName: string
+    /**
+     * Where the goods were to be sent. The branch's own address unless the
+     * requester chose an approved delivery address for the branch, in which
+     * case it is that one — snapshotted here at creation, so a reissued
+     * invoice prints where the order actually went rather than where the
+     * branch happens to be today.
+     */
     buyerAddress: string
+    /**
+     * The chosen address's label, when one was chosen. Absent on every order
+     * that used the branch default, which is every order placed before
+     * delivery addresses existed.
+     */
+    deliveryAddressLabel?: string
     buyerPhone?: string
     organizationName: string
     organizationNtn?: string
@@ -76,6 +89,18 @@ export async function generateReceiptData(params: {
     totalCents: number
     discountCents?: number
     deliveryChargesCents?: number
+    /**
+     * An approved delivery address for this branch, when the requester chose
+     * one. Supplied by the caller — which has already verified it inside the
+     * creation transaction — rather than read here, so this function cannot be
+     * the place an unapproved address reaches an invoice.
+     */
+    deliveryAddress?: {
+        label: string
+        address: string
+        city: string | null
+        province: string | null
+    } | null
 }): Promise<ReceiptData> {
     const {
         orderTid,
@@ -87,6 +112,7 @@ export async function generateReceiptData(params: {
         totalCents,
         discountCents = 0,
         deliveryChargesCents = 0,
+        deliveryAddress = null,
     } = params
 
     // Fetch organization and branch details
@@ -150,7 +176,12 @@ export async function generateReceiptData(params: {
         }),
         status: params.status,
         buyerName: branch.name,
-        buyerAddress: formatBranchAddress(branch),
+        // The chosen delivery address wins over the branch's own. Both are
+        // formatted by `formatBranchAddress` so the two read alike on the
+        // invoice — see `formatDeliveryAddress` in `lib/delivery-address.ts`,
+        // which delegates here for the same reason.
+        buyerAddress: formatBranchAddress(deliveryAddress ?? branch),
+        ...(deliveryAddress ? { deliveryAddressLabel: deliveryAddress.label } : {}),
         organizationName: org.name,
         organizationNtn: org.ntnNumber || undefined,
         items: groupedItems,

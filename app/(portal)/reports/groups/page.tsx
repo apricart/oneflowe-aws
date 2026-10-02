@@ -346,7 +346,7 @@ export default function GroupsReportPage() {
             const groupRow = [
                 `GROUP: ${group.name || "-"}`,
                 ...(role === "SUPER_ADMIN" ? [group.organizationName || "-"] : []),
-                money(group.totalBudget),
+                group.budgetsEnabled === false ? "Off" : money(group.totalBudget),
                 group.branchCount || 0,
                 money(group.totalAmountCents),
                 money(group.totalRefundCents),
@@ -367,7 +367,7 @@ export default function GroupsReportPage() {
             const branchRows = branches.map((branch: any) => [
                 `  - ${branch.name || "-"}`,
                 ...(role === "SUPER_ADMIN" ? [group.organizationName || "-"] : []),
-                money(branch.totalBudget),
+                group.budgetsEnabled === false ? "Off" : money(branch.totalBudget),
                 branch.status || "Unknown",
                 money(branch.revenue),
                 money(branch.refunds),
@@ -762,7 +762,7 @@ export default function GroupsReportPage() {
                                                                 </div>
                                                             </TableCell>
                                                             <TableCell className="text-center font-black">
-                                                                <span className="text-sm font-black text-slate-900 dark:text-white tracking-tight">{formatPKR(group.totalBudget / 100)}</span>
+                                                                <span className="text-sm font-black text-slate-900 dark:text-white tracking-tight">{group.budgetsEnabled === false ? "Off" : formatPKR(group.totalBudget / 100)}</span>
                                                             </TableCell>
                                                             <TableCell className="text-center font-black">
                                                                 <div className="inline-flex items-center gap-2 px-3 py-1 bg-indigo-50 dark:bg-indigo-500/10 rounded-full text-[10px]">
@@ -790,7 +790,7 @@ export default function GroupsReportPage() {
                                                                     </div>
                                                                 </TableCell>
                                                                 <TableCell className="text-center font-black">
-                                                                    <span className="text-xs font-bold text-slate-400 tracking-tight">{formatPKR(branch.totalBudget / 100)}</span>
+                                                                    <span className="text-xs font-bold text-slate-400 tracking-tight">{group.budgetsEnabled === false ? "Off" : formatPKR(branch.totalBudget / 100)}</span>
                                                                 </TableCell>
                                                                 <TableCell className="text-center font-black">
                                                                     <Badge variant="outline" className={cn("text-[9px] font-black uppercase tracking-widest scale-90", (() => {

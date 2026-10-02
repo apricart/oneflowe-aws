@@ -649,14 +649,19 @@ async function applyPlan(
     }
   })
 
+  // `created_by_role` is the literal ORDER_PORTAL because that is the only role
+  // this importer will resolve a legacy order's user to — see the user lookup
+  // above, which joins `r.name = 'ORDER_PORTAL'`. Recording it keeps imported
+  // history attributed to a requester even if that account's role is changed
+  // later. `lib/server/order-creator-role-sql.ts` explains the column.
   const createdOrders = await rows(client, `insert into orders (
       tid, organization_id, branch_id, status, fulfillment_status, payment_status,
-      subtotal_cents, tax_cents, total_cents, created_by_user_id, created_at,
+      subtotal_cents, tax_cents, total_cents, created_by_user_id, created_by_role, created_at,
       delivered_at, fulfilled_at, updated_at, approved_by_user_id, approved_at,
       approval_token, approval_token_hash, approval_token_created_at, receipt_data
     ) select
       x.tid, x.organization_id, x.branch_id, x.status, x.fulfillment_status, 'UNPAID',
-      x.subtotal_cents, x.tax_cents, x.total_cents, x.created_by_user_id, x.created_at,
+      x.subtotal_cents, x.tax_cents, x.total_cents, x.created_by_user_id, 'ORDER_PORTAL', x.created_at,
       x.delivered_at, x.fulfilled_at, x.updated_at, x.approved_by_user_id, x.approved_at,
       x.approval_token, x.approval_token_hash, x.approval_token_created_at, x.receipt_data
     from jsonb_to_recordset($1::jsonb) as x(

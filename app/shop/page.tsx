@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Dialog,DialogContent,DialogHeader,DialogTitle,DialogFooter,DialogDescription } from "@/components/ui/dialog"
-import { ShoppingBag,Search,Plus,Minus,Trash2,Home,CheckCircle,Clock,AlertTriangle,DollarSign,Zap,Package,TrendingDown,Grid,LogOut,ArrowRight,ArrowLeft,Calendar,MapPin,RefreshCw,Building2,Copy,Send,Pencil,Loader2,ArrowDownUp,X,SlidersHorizontal,LifeBuoy } from "lucide-react"
+import { ShoppingBag,Search,Plus,Minus,Trash2,Home,CheckCircle,Clock,AlertTriangle,DollarSign,Zap,Package,TrendingDown,Grid,ArrowRight,ArrowLeft,Calendar,MapPin,RefreshCw,Building2,Copy,Send,Pencil,Loader2,PackageCheck,ArrowDownUp,X,SlidersHorizontal,LifeBuoy } from "lucide-react"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from "@/components/ui/select"
 import { CategoryFilter } from "@/components/shop/category-filter"
@@ -37,9 +37,33 @@ import { getOrderDerivedStatus } from "@/lib/order-status"
 import { formatCountLabel } from "@/lib/count-label"
 import { formatAddonValidUntil } from "@/lib/budget-addon-expiry"
 import { MAX_PO_NUMBER_LENGTH, PO_NUMBER_HINT, normalizePoNumberInput } from "@/lib/purchase-order"
+import { DeliveryAddressRequestDialog, type RequestableBranch } from "@/components/delivery-addresses/delivery-address-request-dialog"
+import { describeDeliveryAddress } from "@/lib/delivery-address"
 import { ReceiptIconButton } from "@/components/receipts/receipt-icon-button"
+import { PendingInvoiceAlert } from "@/components/orders/pending-invoice-alert"
 import { NotificationBell } from "@/components/notifications/notification-center"
-import { securelySignOut } from "@/lib/session-coordination"
+import { usePendingInvoiceGuard } from "@/lib/hooks/use-pending-invoice-guard"
+import { UnpaidInvoicesDialog } from "@/components/payment-control/unpaid-invoices-dialog"
+import { checkOrderingBlock } from "@/lib/ordering-block-check"
+import {
+  noticeForBlock,
+  parseOrderingBlockedResponse,
+  type UnpaidInvoicesNotice,
+} from "@/lib/unpaid-invoice-block"
+import { UnacknowledgedDeliveriesDialog } from "@/components/orders/unacknowledged-deliveries-dialog"
+import { checkDeliveryAcknowledgementBlock } from "@/lib/delivery-acknowledgement-check"
+import { UnacknowledgedOrdersTable, type UnacknowledgedOrderRow } from "@/components/orders/unacknowledged-orders-table"
+import {
+  UNACKNOWLEDGED_ORDERS_SOURCE_URL,
+  UNACKNOWLEDGED_ORDERS_TAB_LABEL,
+  selectUnacknowledgedOrders,
+} from "@/lib/unacknowledged-orders"
+import { isUnacknowledgedDelivery } from "@/lib/unacknowledged-delivery-block"
+import {
+  parseUnacknowledgedDeliveriesResponse,
+  type UnacknowledgedDeliveriesNotice,
+} from "@/lib/unacknowledged-delivery-block"
+import { OrderPortalProfileMenu } from "@/components/auth/order-portal-profile-menu"
 import {
   buildShopCartStorageKey,
   readStoredCartEntries,
@@ -130,6 +154,12 @@ interface Order {
   refundReason?: string | null
   rejectionReason?: string | null
   poNumber?: string | null
+  /**
+   * The approved delivery address this order is to be sent to, or null/absent
+   * when it goes to the branch's own address — which is every order raised
+   * before delivery addresses existed.
+   */
+  deliveryAddressId?: number | null
   statusAtRefund?: string | null
   approvalToken?: string | null
   /**
@@ -181,6 +211,8 @@ const isRefundRelatedOrder = (order: RefundableOrder) =>
 
 const isActiveOrder = (order: RefundableOrder) =>
   getRefundState(order) === "none"
+
+type ShopTab = "shop" | "orders" | "refunded" | "unacknowledged"
 
 const getProductStep = (product: Pick<Product, "allowDecimalQuantity" | "quantityStep">) =>
   sanitizeQuantityStep(Boolean(product.allowDecimalQuantity), product.quantityStep ?? 1)
@@ -272,11 +304,15 @@ export default function OrderPortalPage() {
   const [showCheckout, setShowCheckout] = useState(false)
   /** The buyer's own purchase order reference for this order. Optional. */
   const [poNumber, setPoNumber] = useState("")
+  // "" means the branch's own address, which is what an order carries when it
+  // names no delivery address at all. The selector never invents an id.
+  const [deliveryAddressId, setDeliveryAddressId] = useState("")
+  const [requestingAddress, setRequestingAddress] = useState(false)
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null)
   const [showProductDetail, setShowProductDetail] = useState(false)
   const [tempQuantity, setTempQuantity] = useState(1)
   const [cardQuantities, setCardQuantities] = useState<Record<number, number>>({})
-  const [activeTab, setActiveTab] = useState<"shop" | "orders" | "refunded">("shop")
+  const [activeTab, setActiveTab] = useState<ShopTab>("shop")
   const [showOrderDetail, setShowOrderDetail] = useState(false)
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null)
   const [editingOrder, setEditingOrder] = useState<Order | null>(null)
@@ -286,7 +322,11 @@ export default function OrderPortalPage() {
   const [currentPage, setCurrentPage] = useState(1)
   const [categorySelection, setCategorySelection] = useState<CategorySelection>(ALL_CATEGORIES_SELECTION)
   const [isPlacingOrder, setIsPlacingOrder] = useState(false)
-  const [isSendingTokenEmail, setIsSendingTokenEmail] = useState(false)
+  const [unpaidInvoicesNotice, setUnpaidInvoicesNotice] = useState<UnpaidInvoicesNotice | null>(null)
+  const [unacknowledgedDeliveriesNotice, setUnacknowledgedDeliveriesNotice] = useState<UnacknowledgedDeliveriesNotice | null>(null)
+  const [checkingDues, setCheckingDues] = useState(false)
+  /** The order whose token is being emailed; one at a time, from any surface. */
+  const [sendingTokenOrderId, setSendingTokenOrderId] = useState<number | null>(null)
   const orderIdempotencyKeyRef = React.useRef<string | null>(null)
   const orderSubmissionInFlightRef = React.useRef(false)
 
@@ -341,6 +381,35 @@ export default function OrderPortalPage() {
     fetcher,
     SHOP_RESOURCE_SWR_OPTIONS,
   )
+  // The approved delivery addresses for the branch being ordered for. Scoped
+  // server-side whatever `branchId` says: a requester's own branches, or Head
+  // Office's tenant. SUPER_ADMIN is not admitted by the endpoint and simply
+  // gets no selector — its orders go to the branch's own address.
+  const deliveryAddressesUrl = activeBranchId
+    ? `/api/v1/delivery-addresses?branchId=${activeBranchId}`
+    : null
+  const { data: deliveryAddressData, mutate: mutateDeliveryAddresses } = useSWR<any>(
+    deliveryAddressesUrl,
+    fetcher,
+    SHOP_RESOURCE_SWR_OPTIONS,
+  )
+  const approvedDeliveryAddresses = useMemo(
+    () => (Array.isArray(deliveryAddressData?.items) ? deliveryAddressData.items : [])
+      .filter((address: any) => address?.status === "approved"),
+    [deliveryAddressData],
+  )
+  const pendingDeliveryAddressCount = useMemo(
+    () => (Array.isArray(deliveryAddressData?.items) ? deliveryAddressData.items : [])
+      .filter((address: any) => address?.status === "pending").length,
+    [deliveryAddressData],
+  )
+  const requestableBranches: RequestableBranch[] = useMemo(
+    () => (Array.isArray(deliveryAddressData?.requestableBranches)
+      ? deliveryAddressData.requestableBranches
+      : []).filter((branch: RequestableBranch) => branch.id === Number(activeBranchId)),
+    [deliveryAddressData, activeBranchId],
+  )
+
   const ordersUrl = "/api/v1/orders"
   const isViewingOrders = activeTab === "orders" || activeTab === "refunded"
   const { data: ordersData, mutate: mutateOrders } = useSWR<any>(ordersUrl, fetcher, {
@@ -349,11 +418,33 @@ export default function OrderPortalPage() {
     revalidateOnReconnect: true,
   })
 
-  const handleTabChange = async (tab: "shop" | "orders" | "refunded") => {
+  // Delivered orders awaiting acknowledgement. Read from the approved orders
+  // alone, so a long history cannot push one past the list's page limit. The
+  // tab badge reads it too, so it is always fetched; it polls only while shown.
+  const { data: unacknowledgedSource, mutate: mutateUnacknowledgedSource } = useSWR<any>(
+    UNACKNOWLEDGED_ORDERS_SOURCE_URL,
+    fetcher,
+    {
+      refreshInterval: activeTab === "unacknowledged" ? ORDER_STATUS_REFRESH_INTERVAL_MS : 0,
+      revalidateOnFocus: true,
+      revalidateOnReconnect: true,
+    },
+  )
+  const unacknowledgedOrders = useMemo(
+    () => selectUnacknowledgedOrders<Order & UnacknowledgedOrderRow>(unacknowledgedSource?.items),
+    [unacknowledgedSource],
+  )
+
+  const handleTabChange = async (tab: ShopTab) => {
     setActiveTab(tab)
 
     if (tab === "shop") {
       await Promise.all([mutateBranchInventory(), mutateBudget()])
+      return
+    }
+
+    if (tab === "unacknowledged") {
+      await mutateUnacknowledgedSource()
       return
     }
 
@@ -364,8 +455,7 @@ export default function OrderPortalPage() {
     }
   }
 
-  const copyFulfillmentToken = async () => {
-    const token = selectedOrder?.approvalToken
+  const copyFulfillmentToken = async (token?: string | null) => {
     if (!token) return
 
     try {
@@ -383,12 +473,12 @@ export default function OrderPortalPage() {
     }
   }
 
-  const sendFulfillmentToken = async () => {
-    if (!selectedOrder?.approvalToken) return
+  const sendFulfillmentToken = async (order: Pick<Order, "id" | "approvalToken"> | null) => {
+    if (!order?.approvalToken || sendingTokenOrderId !== null) return
 
-    setIsSendingTokenEmail(true)
+    setSendingTokenOrderId(order.id)
     try {
-      const response = await fetch(`/api/v1/orders/${selectedOrder.id}/send-token-email`, {
+      const response = await fetch(`/api/v1/orders/${order.id}/send-token-email`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       })
@@ -411,12 +501,14 @@ export default function OrderPortalPage() {
       })
 
       // Sending the token settles the order only once it has been delivered,
-      // so the open detail and the list behind it are refreshed when it did.
+      // so the open detail and the lists behind it are refreshed when it did —
+      // which is also what lifts the ordering block once enough are settled.
       if (data?.fulfilled) {
         setSelectedOrder((current) => (
-          current ? { ...current, status: "FULFILLED" } : current
+          current?.id === order.id ? { ...current, status: "FULFILLED" } : current
         ))
         void mutateOrders()
+        void mutateUnacknowledgedSource()
         void mutateBudget()
       }
     } catch (error) {
@@ -426,7 +518,7 @@ export default function OrderPortalPage() {
         variant: "destructive",
       })
     } finally {
-      setIsSendingTokenEmail(false)
+      setSendingTokenOrderId(null)
     }
   }
 
@@ -441,7 +533,11 @@ export default function OrderPortalPage() {
     }
   )
   const pricesHidden = Boolean(inventoryData?.pricesHidden || ordersData?.pricesHidden || orderDetailsData?.pricesHidden)
-  const budgetVisible = Boolean(budget && !budget.pricesHidden)
+  // The tenant has budget allocation switched off: there is no budget to show,
+  // and the cart is never held back by one. The server decides this again on
+  // every order; this only keeps the page from gating on a figure that is not real.
+  const budgetsOff = budget?.budgetsEnabled === false
+  const budgetVisible = Boolean(budget && !budget.pricesHidden && !budgetsOff)
   const selectedOrderId = selectedOrder?.id
 
   React.useEffect(() => {
@@ -651,7 +747,8 @@ export default function OrderPortalPage() {
       .sort()
     return dated[0] ? formatAddonValidUntil(dated[0]) : null
   })()
-  const canCheckout = pricesHidden ? cart.length > 0 : cartTotal <= budgetAvailableForCart && cart.length > 0
+  const budgetExceeded = !pricesHidden && !budgetsOff && cartTotal > budgetAvailableForCart
+  const canCheckout = cart.length > 0 && !budgetExceeded
   const rawBudgetPercent = ((((totalBudgetLimit || 0) - remainingBudget) / (totalBudgetLimit || 1)) * 100)
   const budgetPercent = Math.min(100, Math.max(0, rawBudgetPercent || 0))
   const isLoadingInventory = !inventoryData && !inventoryError
@@ -881,6 +978,7 @@ export default function OrderPortalPage() {
       setEditingOriginalQuantities(originalQuantities)
       setEditingOrder({ ...order, ...freshOrder })
       setPoNumber(normalizePoNumberInput(freshOrder.poNumber || ""))
+      setDeliveryAddressId(freshOrder.deliveryAddressId ? String(freshOrder.deliveryAddressId) : "")
       setCart(editableItems.map((item) => ({
         ...item,
         stock: roundQuantity((item.stock || 0) + (originalQuantities[item.id] || 0)),
@@ -932,12 +1030,31 @@ export default function OrderPortalPage() {
           // endpoints: it means "no purchase order" on a new order, and clears
           // one recorded earlier on an edit.
           poNumber: trimmedPoNumber,
+          // On a new order the field is omitted entirely when the branch's own
+          // address is wanted, so the request is byte-identical to one sent
+          // before delivery addresses existed. On an edit `null` is a real
+          // instruction — send it back to the branch's own address — so it is
+          // always present there.
+          ...(editingOrder
+            ? { deliveryAddressId: deliveryAddressId ? Number(deliveryAddressId) : null }
+            : (deliveryAddressId ? { deliveryAddressId: Number(deliveryAddressId) } : {})),
           ...(!editingOrder && isAdmin && activeBranchId && { branchId: activeBranchId, organizationId: activeOrgId }),
         })
       })
       const json = await res.json()
       if (!res.ok) {
         if (!editingOrder) orderIdempotencyKeyRef.current = null
+        // The server's gate is the control; the pre-check below only saves a trip.
+        const block = editingOrder ? null : parseOrderingBlockedResponse(res.status, json)
+        if (block) {
+          setUnpaidInvoicesNotice(noticeForBlock(block))
+          return
+        }
+        const deliveriesNotice = editingOrder ? null : parseUnacknowledgedDeliveriesResponse(res.status, json)
+        if (deliveriesNotice) {
+          setUnacknowledgedDeliveriesNotice(deliveriesNotice)
+          return
+        }
         if (json.error?.toLowerCase().includes("stock") || json.error?.toLowerCase().includes("budget")) {
           mutateBranchInventory()
           mutateBudget()
@@ -963,6 +1080,7 @@ export default function OrderPortalPage() {
       })
       setCart([])
       setPoNumber("")
+      setDeliveryAddressId("")
       orderIdempotencyKeyRef.current = null
       setEditingOrder(null)
       setEditingOriginalQuantities({})
@@ -978,6 +1096,43 @@ export default function OrderPortalPage() {
       orderSubmissionInFlightRef.current = false
       setIsPlacingOrder(false)
     }
+  }
+
+  const pendingInvoiceGuard = usePendingInvoiceGuard({
+    onConfirmed: placeOrder,
+    onCheckFailed: (message) => {
+      toast({
+        title: "Unable to check pending invoices",
+        description: message,
+        variant: "destructive",
+      })
+    },
+  })
+
+  // A branch blocked for unpaid invoices, or for delivered orders awaiting
+  // acknowledgement, is told so before the pending-invoice notice, which would
+  // otherwise offer to continue with an order that the server will refuse.
+  // Both checks fail open; the server still decides. Unpaid invoices are
+  // reported first, matching the order of the gates on the server.
+  const attemptNewOrder = async () => {
+    if (checkingDues) return
+    setCheckingDues(true)
+    try {
+      const branchForCheck = isAdmin ? activeBranchId : null
+      const block = await checkOrderingBlock(branchForCheck)
+      if (block) {
+        setUnpaidInvoicesNotice(noticeForBlock(block))
+        return
+      }
+      const deliveriesNotice = await checkDeliveryAcknowledgementBlock(branchForCheck)
+      if (deliveriesNotice) {
+        setUnacknowledgedDeliveriesNotice(deliveriesNotice)
+        return
+      }
+    } finally {
+      setCheckingDues(false)
+    }
+    await pendingInvoiceGuard.attempt()
   }
 
   // Show loading only if truly loading AND not yet authenticated
@@ -1134,22 +1289,19 @@ export default function OrderPortalPage() {
               <span className="font-semibold">{cart.length}</span>
             </Button>
 
-            {/* Home / Logout Button */}
-            <Button
-              onClick={async () => {
-                const targetUrl = "/login"
-                try {
-                  await securelySignOut({ callbackUrl: targetUrl })
-                } catch {
-                  window.alert("Logout could not be completed securely. Please retry.")
-                }
-              }}
-              variant="ghost"
-              size="icon"
-              title={isAdmin ? "Back to Dashboard" : "Logout / Exit Order Portal"}
-            >
-              {isAdmin ? <Home className="h-4 w-4" /> : <LogOut className="h-4 w-4" />}
-            </Button>
+            {/* Administrators return to their shell. Order Portal users get a
+                real account menu here, including self-service recovery. */}
+            {isAdmin ? (
+              <Button asChild variant="ghost" size="icon" title="Back to Dashboard">
+                <Link href="/dashboard"><Home className="h-4 w-4" /></Link>
+              </Button>
+            ) : (
+              <OrderPortalProfileMenu
+                name={userName}
+                email={(session?.user as any)?.email ?? null}
+                role={isEmployee ? "EMPLOYEE" : userRole}
+              />
+            )}
           </div>
         </div>
       </header>
@@ -1293,12 +1445,14 @@ export default function OrderPortalPage() {
                       <span>Total</span>
                       <span>PKR {(cartTotal / 100).toFixed(2)}</span>
                     </div>
-                    <p className="text-xs text-muted-foreground">
-                      Remaining budget after {editingOrder ? "update" : "checkout"}: PKR {((budgetAvailableForCart - cartTotal) / 100).toFixed(2)}
-                    </p>
+                    {!budgetsOff && (
+                      <p className="text-xs text-muted-foreground">
+                        Remaining budget after {editingOrder ? "update" : "checkout"}: PKR {((budgetAvailableForCart - cartTotal) / 100).toFixed(2)}
+                      </p>
+                    )}
                   </>
                 )}
-                {!pricesHidden && cartTotal > budgetAvailableForCart && (
+                {budgetExceeded && (
                   <div className="flex items-center gap-2 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-600 dark:border-red-900 dark:bg-red-950">
                     <AlertTriangle className="h-4 w-4" />
                     Cart exceeds remaining budget.
@@ -1385,6 +1539,14 @@ export default function OrderPortalPage() {
             <TrendingDown className="h-4 w-4" />
             Refunded ({ordersData?.items?.filter(isRefundRelatedOrder).length || 0})
           </Button>
+          <Button
+            onClick={() => { void handleTabChange("unacknowledged") }}
+            variant={activeTab === "unacknowledged" ? "default" : "outline"}
+            className="gap-2"
+          >
+            <PackageCheck className="h-4 w-4" />
+            {UNACKNOWLEDGED_ORDERS_TAB_LABEL} ({unacknowledgedOrders.length})
+          </Button>
         </div>
 
         {editingOrder && !isLoadingOrderForEdit && (
@@ -1414,6 +1576,21 @@ export default function OrderPortalPage() {
         )}
 
         {(() => {
+          if (activeTab === "unacknowledged") {
+            return (
+              <UnacknowledgedOrdersTable
+                orders={unacknowledgedOrders}
+                loading={!unacknowledgedSource}
+                sendingOrderId={sendingTokenOrderId}
+                onSendToken={(order) => { void sendFulfillmentToken(order) }}
+                onCopyToken={(token) => { void copyFulfillmentToken(token) }}
+                onViewDetails={(order) => {
+                  setSelectedOrder(order)
+                  setShowOrderDetail(true)
+                }}
+              />
+            )
+          }
           if (activeTab === "orders" || activeTab === "refunded") {
             return (
           // Orders View
@@ -1478,6 +1655,15 @@ export default function OrderPortalPage() {
                               {['FULFILLED', 'PARTIAL', 'PARTIALLY_FULFILLED'].includes(order.status?.toUpperCase()) && Number(order.refundAmountCents || 0) > 0 && (
                                 <Badge variant="outline" className="px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400">
                                   Partial Refund
+                                </Badge>
+                              )}
+                              {isUnacknowledgedDelivery(order) && (
+                                <Badge
+                                  variant="outline"
+                                  title="Delivered to your branch — send the fulfilment token to acknowledge it"
+                                  className="px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300"
+                                >
+                                  Delivered · Awaiting acknowledgement
                                 </Badge>
                               )}
                               {order.placedByGroupPortal && (
@@ -1743,7 +1929,7 @@ export default function OrderPortalPage() {
               )}
 
               {/* Budget Warning */}
-              {!pricesHidden && cartTotal > budgetAvailableForCart && (
+              {budgetExceeded && (
                 <div className="p-3 bg-red-50/50 backdrop-blur-sm dark:bg-red-950/30 border border-red-200/50 dark:border-red-800/50 rounded-xl flex items-center gap-2">
                   <AlertTriangle className="h-4 w-4 text-red-600 dark:text-red-400" />
                   <p className="text-sm font-medium text-red-700 dark:text-red-300">Cart exceeds remaining budget</p>
@@ -2316,6 +2502,48 @@ export default function OrderPortalPage() {
             <div className="h-px bg-slate-200 dark:bg-slate-700" />
 
             <div className="space-y-1.5">
+              <label htmlFor="order-delivery-address" className="text-sm font-medium">
+                Deliver to
+              </label>
+              <Select
+                value={deliveryAddressId || "branch-default"}
+                onValueChange={(value) => setDeliveryAddressId(value === "branch-default" ? "" : value)}
+                disabled={isPlacingOrder}
+              >
+                <SelectTrigger id="order-delivery-address">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {/* The branch's own address, which is where an order with no
+                      delivery address goes — the behaviour every order has had
+                      until now, kept as the default. */}
+                  <SelectItem value="branch-default">Branch&apos;s own address (default)</SelectItem>
+                  {approvedDeliveryAddresses.map((address: any) => (
+                    <SelectItem key={address.id} value={String(address.id)}>
+                      {describeDeliveryAddress(address)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                <span>Only addresses Head Office has approved can be chosen.</span>
+                {pendingDeliveryAddressCount > 0 && (
+                  <span>{pendingDeliveryAddressCount} still waiting for approval.</span>
+                )}
+                {requestableBranches.length > 0 && (
+                  <button
+                    type="button"
+                    className="font-medium text-blue-600 underline-offset-2 hover:underline dark:text-blue-400"
+                    onClick={() => setRequestingAddress(true)}
+                    disabled={isPlacingOrder}
+                  >
+                    Request a new address
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
               <label htmlFor="order-po-number" className="text-sm font-medium">
                 Purchase order number <span className="text-muted-foreground font-normal">(optional)</span>
               </label>
@@ -2340,9 +2568,11 @@ export default function OrderPortalPage() {
                   PKR {(cartTotal / 100).toFixed(2)}
                 </span>
               </div>
-              <p className="text-xs text-muted-foreground">
-                Remaining Budget: PKR {((budgetAvailableForCart - cartTotal) / 100).toFixed(2)}
-              </p>
+              {!budgetsOff && (
+                <p className="text-xs text-muted-foreground">
+                  Remaining Budget: PKR {((budgetAvailableForCart - cartTotal) / 100).toFixed(2)}
+                </p>
+              )}
             </div>}
           </div>
 
@@ -2353,8 +2583,12 @@ export default function OrderPortalPage() {
             >
               Back
             </Button>
-            <Button onClick={placeOrder} disabled={!canCheckout || isPlacingOrder}>
+            <Button
+              onClick={editingOrder ? placeOrder : attemptNewOrder}
+              disabled={!canCheckout || isPlacingOrder || checkingDues || pendingInvoiceGuard.checking}
+            >
               {(() => {
+                if (checkingDues || pendingInvoiceGuard.checking) return "Checking invoices..."
                 if (isPlacingOrder) {
                   return (editingOrder ? "Saving Changes..." : "Placing Order...")
                 }
@@ -2364,6 +2598,40 @@ export default function OrderPortalPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <PendingInvoiceAlert
+        invoice={pendingInvoiceGuard.pendingInvoice}
+        continuing={isPlacingOrder}
+        onCancel={pendingInvoiceGuard.dismiss}
+        onContinue={() => { void pendingInvoiceGuard.continueAfterNotice() }}
+      />
+
+      <UnpaidInvoicesDialog
+        notice={unpaidInvoicesNotice}
+        onClose={() => setUnpaidInvoicesNotice(null)}
+      />
+
+      <UnacknowledgedDeliveriesDialog
+        notice={unacknowledgedDeliveriesNotice}
+        onClose={() => setUnacknowledgedDeliveriesNotice(null)}
+        onReview={() => {
+          setUnacknowledgedDeliveriesNotice(null)
+          setShowCheckout(false)
+          setShowCart(false)
+          void handleTabChange("unacknowledged")
+        }}
+      />
+
+      {/* Raising a delivery-address request without leaving the store.
+          ORDER_PORTAL is confined to /shop by `proxy.ts`, so the affordance has
+          to be here and not only on /delivery-addresses. Whatever is submitted
+          arrives pending; nothing here can approve it. */}
+      <DeliveryAddressRequestDialog
+        open={requestingAddress}
+        branches={requestableBranches}
+        onOpenChange={setRequestingAddress}
+        onRequested={() => mutateDeliveryAddresses()}
+      />
 
       {/* Order Detail Dialog */}
       <Dialog open={showOrderDetail} onOpenChange={setShowOrderDetail}>
@@ -2550,7 +2818,7 @@ export default function OrderPortalPage() {
                         type="button"
                         size="icon"
                         variant="outline"
-                        onClick={copyFulfillmentToken}
+                        onClick={() => { void copyFulfillmentToken(selectedOrder.approvalToken) }}
                         aria-label="Copy fulfillment token"
                         title="Copy fulfillment token"
                         className="h-auto min-h-12 w-12 shrink-0 rounded-xl border-indigo-200 bg-white text-indigo-600 hover:bg-indigo-100 dark:border-indigo-800 dark:bg-slate-950 dark:text-indigo-300 dark:hover:bg-indigo-950/50"
@@ -2561,12 +2829,12 @@ export default function OrderPortalPage() {
                     <Button
                       type="button"
                       variant="outline"
-                      disabled={isSendingTokenEmail}
-                      onClick={sendFulfillmentToken}
+                      disabled={sendingTokenOrderId !== null}
+                      onClick={() => { void sendFulfillmentToken(selectedOrder) }}
                       className="h-11 w-full rounded-xl border-indigo-200 bg-white font-semibold text-indigo-700 hover:bg-indigo-100 dark:border-indigo-800 dark:bg-slate-950 dark:text-indigo-300 dark:hover:bg-indigo-950/50"
                     >
-                      <Send className={cn("mr-2 h-4 w-4", isSendingTokenEmail && "animate-pulse")} />
-                      {isSendingTokenEmail ? "Sending Token..." : "Send Token to Admin"}
+                      <Send className={cn("mr-2 h-4 w-4", sendingTokenOrderId === selectedOrder.id && "animate-pulse")} />
+                      {sendingTokenOrderId === selectedOrder.id ? "Sending Token..." : "Send Token to Admin"}
                     </Button>
                     <p className="text-xs leading-relaxed text-muted-foreground">
                       Sending this token to the admin marks your order fulfilled. Copy it if you need to hand it over another way.

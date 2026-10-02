@@ -1,12 +1,16 @@
 import type { SystemRole } from "@/lib/server/mutation-validation"
 
+// Mirrors ROLE_HIERARCHY in `lib/rbac.ts`. VIEWER sits at the floor: it can act
+// on nothing, so every acting role outranks it and both administrators who may
+// manage users (`USER_MANAGEMENT_ROLES`) may assign it.
 const ROLE_LEVEL: Record<SystemRole, number> = {
-  ORDER_PORTAL: 1,
-  GROUP_ORDER_PORTAL: 2,
-  BRANCH_ADMIN: 3,
-  GROUP_USER: 4,
-  HEAD_OFFICE: 5,
-  SUPER_ADMIN: 6,
+  VIEWER: 1,
+  ORDER_PORTAL: 2,
+  GROUP_ORDER_PORTAL: 3,
+  BRANCH_ADMIN: 4,
+  GROUP_USER: 5,
+  HEAD_OFFICE: 6,
+  SUPER_ADMIN: 7,
 }
 
 /**

@@ -10,8 +10,10 @@ import { Card,CardHeader,CardTitle,CardContent } from "@/components/ui/card"
 import { Spinner } from "@/components/ui/skeleton"
 import { MFAVerificationDialog } from "@/components/mfa/mfa-verification-dialog"
 import Image from "next/image"
-import { Eye,EyeOff } from "lucide-react"
+import Link from "next/link"
+import { Building2,CircleCheck,Eye,EyeOff } from "lucide-react"
 import { safeInternalRedirectPath } from "@/lib/security"
+import { isViewerRole, VIEWER_HOME } from "@/lib/viewer-access"
 
 /**
  * Clear stale NextAuth session cookies to prevent "Invalid URL" errors.
@@ -117,6 +119,9 @@ function roleLandingPath(role: unknown): string | null {
   // The approver works inside the shared shell and starts on its dashboard,
   // which reports only the branches assigned to it.
   if (role === "GROUP_USER") return "/dashboard"
+  // The read-only account has exactly one page, so it is named here rather than
+  // left to honour a `callbackUrl` the proxy would only bounce.
+  if (isViewerRole(role)) return VIEWER_HOME
   return null
 }
 
@@ -131,6 +136,7 @@ function redirectAuthenticatedUser(session: any, callbackUrl: string | null): vo
 
 function LoginForm() {
   const searchParams = useSearchParams()
+  const passwordResetSucceeded = searchParams.get("password-reset") === "success"
   const [username, setUsername] = useState("")
   const [password, setPassword] = useState("")
   const [showPassword, setShowPassword] = useState(false)
@@ -257,6 +263,12 @@ function LoginForm() {
           </div>
         </CardHeader>
         <CardContent>
+          {passwordResetSucceeded && (
+            <div role="status" className="mb-4 flex items-start gap-2 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm font-medium text-emerald-700">
+              <CircleCheck className="mt-0.5 h-4 w-4 shrink-0" />
+              Password reset complete. Sign in with your new password.
+            </div>
+          )}
           <form onSubmit={onSubmit} className="grid gap-4" suppressHydrationWarning>
             <div className="grid gap-2">
               <label htmlFor="username" className="text-sm font-medium text-slate-700">
@@ -274,9 +286,17 @@ function LoginForm() {
               />
             </div>
             <div className="grid gap-2">
-              <label htmlFor="password" className="text-sm font-medium text-slate-700">
-                Password
-              </label>
+              <div className="flex items-center justify-between gap-3">
+                <label htmlFor="password" className="text-sm font-medium text-slate-700">
+                  Password
+                </label>
+                <Link
+                  href="/forgot-password"
+                  className="rounded text-xs font-semibold text-blue-600 hover:text-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                >
+                  Forgot password?
+                </Link>
+              </div>
               <div className="relative">
                 <Input
                   id="password"
@@ -331,6 +351,25 @@ function LoginForm() {
               })()}
             </Button>
           </form>
+
+          {/*
+            Self-service joining. The page behind this link can create nothing:
+            it takes the organization's join code, records a pending request,
+            and that tenant's head office decides it. See
+            plans/OF-JOIN-organization-self-service-join.md.
+          */}
+          <div className="mt-5 border-t border-slate-200 pt-4 text-center">
+            <p className="text-sm text-slate-600">
+              Don&apos;t have an account yet?
+            </p>
+            <Link
+              href="/join"
+              className="mt-1 inline-flex items-center gap-1.5 text-sm font-semibold text-blue-600 hover:text-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 rounded"
+            >
+              <Building2 className="h-4 w-4" aria-hidden="true" />
+              Join an organization
+            </Link>
+          </div>
         </CardContent>
 
       </Card>

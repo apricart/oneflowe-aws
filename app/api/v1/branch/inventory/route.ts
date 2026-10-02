@@ -9,6 +9,7 @@ import { escapeLikePattern } from "@/lib/utils"
 import { coalesceInFlight,getCached,invalidateByPrefix,scopedCacheKey,CACHE_TTL } from "@/lib/cache-utils"
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
+import { isOrganizationBudgetEnabled } from "@/lib/server/organization-budget-policy"
 import { groupPriceJoinOn,groupPriceTier,resolveBranchGroupId,scopedOverrideCentsSql } from "@/lib/server/effective-price"
 
 function parseOptionalId(value: unknown) {
@@ -148,7 +149,11 @@ export async function GET(req: NextRequest) {
 
     const pricesHidden = await shouldHidePricesForRole(userRole, orgIdNum)
     const budgetAllocationMode = await getBudgetAllocationModeForOrganization(orgIdNum)
-    const shouldApplyQuantityBudget = includeQuantityBudget && budgetAllocationMode === "quantity"
+    // Quantity budgets narrow the catalogue only while the tenant has budget
+    // allocation switched on; with it off every visible product is orderable.
+    const shouldApplyQuantityBudget = includeQuantityBudget
+      && budgetAllocationMode === "quantity"
+      && await isOrganizationBudgetEnabled(orgIdNum)
     const currentPeriod = new Date().toISOString().slice(0, 7)
     const positiveQuantityBudgetTotal = sql`(${productQuantityBudgets.allocatedQuantity} + ${productQuantityBudgets.creditedQuantity}) > 0`
     const quantityBudgetCatalogState = shouldApplyQuantityBudget

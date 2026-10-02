@@ -1,5 +1,6 @@
 "use client"
 import { useState,useMemo,ReactNode,useEffect,useCallback } from "react"
+import { BudgetsDisabledNotice } from "@/components/budgets/budgets-disabled-notice"
 import useSWR,{ useSWRConfig } from "swr"
 import { useSession } from "next-auth/react"
 import { useToast } from "@/hooks/use-toast"
@@ -534,6 +535,14 @@ export default function BudgetsPage() {
           <AlertCircle className="h-12 w-12 text-destructive mx-auto mb-4" />
           <p className="text-muted-foreground">You do not have permission to access this page</p>
         </Card>
+      </div>
+    )
+  }
+
+  if (budgetsData?.budgetsEnabled === false) {
+    return (
+      <div className="min-h-screen bg-[#f8fafc] p-6 dark:bg-[#020617]">
+        <BudgetsDisabledNotice className="mt-10" />
       </div>
     )
   }

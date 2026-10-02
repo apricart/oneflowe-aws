@@ -6,6 +6,8 @@ import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { calculateLineCents, formatQuantity, parseQuantity, validateProductQuantity } from "@/lib/quantity"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
+import { isOrganizationBudgetEnabled } from "@/lib/server/organization-budget-policy"
+import { BUDGETS_DISABLED_CODE, BUDGETS_DISABLED_MESSAGE } from "@/lib/organization-budget-policy"
 import { groupPriceJoinOn, groupPriceTier, scopedOverrideCentsSql } from "@/lib/server/effective-price"
 import { buildAppMonthPeriods, getAppMonthPeriod, parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
 import {
@@ -240,6 +242,24 @@ async function upsertQuantityBudgetLine(tx: any, context: any) {
   return quantityBudget
 }
 
+/**
+ * Why this tenant has no quantity budgets to read or write, or null when it
+ * does. Checked after the tenant is resolved and fenced. Budgets off comes
+ * first: a tenant with budget allocation off has none, whatever mode it stores.
+ */
+async function quantityBudgetRefusal(
+  organizationId: number,
+  moneyModeMessage = "This organization uses money-value budgeting",
+): Promise<NextResponse | null> {
+  if (!await isOrganizationBudgetEnabled(organizationId)) {
+    return NextResponse.json({ error: BUDGETS_DISABLED_MESSAGE, code: BUDGETS_DISABLED_CODE }, { status: 409 })
+  }
+  if (await getBudgetAllocationModeForOrganization(organizationId) !== "quantity") {
+    return NextResponse.json({ error: moneyModeMessage }, { status: 403 })
+  }
+  return null
+}
+
 export async function GET(req: NextRequest) {
   try {
     const session = await getServerSession(authOptions)
@@ -278,10 +298,8 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Select an organization to view quantity budgets" }, { status: 400 })
     }
 
-    const budgetAllocationMode = await getBudgetAllocationModeForOrganization(scopedOrganizationId)
-    if (budgetAllocationMode !== "quantity") {
-      return NextResponse.json({ error: "This organization uses money-value budgeting" }, { status: 403 })
-    }
+    const refusal = await quantityBudgetRefusal(scopedOrganizationId)
+    if (refusal) return refusal
 
     const groupIds = parseNumberList(searchParams.get("groupIds"))
     const branchIds = parseNumberList(searchParams.get("branchIds"))
@@ -373,10 +391,8 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: "Select an organization before resetting quantity budgets" }, { status: 400 })
     }
 
-    const budgetAllocationMode = await getBudgetAllocationModeForOrganization(scopedOrganizationId)
-    if (budgetAllocationMode !== "quantity") {
-      return NextResponse.json({ error: "This organization uses money-value budgeting" }, { status: 403 })
-    }
+    const refusal = await quantityBudgetRefusal(scopedOrganizationId)
+    if (refusal) return refusal
 
     const requestedBranchIds = body.branchIds ?? []
     const requestedGroupIds = body.groupIds ?? []
@@ -557,12 +573,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized: Branch belongs to different organization" }, { status: 403 })
     }
 
-    const budgetAllocationMode = await getBudgetAllocationModeForOrganization(branch.organizationId)
-    if (budgetAllocationMode !== "quantity") {
-      return NextResponse.json({
-        error: "This organization uses money-value budgeting. Quantity budget allocation is not available."
-      }, { status: 403 })
-    }
+    const refusal = await quantityBudgetRefusal(
+      branch.organizationId,
+      "This organization uses money-value budgeting. Quantity budget allocation is not available.",
+    )
+    if (refusal) return refusal
 
     const assignedProducts = await db
       .select({

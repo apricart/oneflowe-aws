@@ -8,6 +8,7 @@ import { db } from "@/lib/db"
 import { buildAppMonthPeriods } from "@/lib/date-range-params"
 import { CONSUMED_ELIGIBLE_FILTER, REVENUE_ELIGIBLE_FILTER } from "@/lib/metric-utils"
 import { consumedHeldCentsSql, consumedSpentCentsSql, netOrderCentsSql } from "@/lib/server/budget-consumption-sql"
+import { budgetEnabledBranchSql, budgetTrackedOrderSql } from "@/lib/server/organization-budget-policy"
 import type { ExecutiveScope } from "@/lib/server/executive-analytics-scope"
 import {
   EXECUTIVE_METRICS,
@@ -249,6 +250,12 @@ export function lineConditions(scope: ExecutiveScope, filters: ExecutiveFilters)
 export type BranchBudgetRow = {
   branchId: number
   branchName: string
+  /**
+   * False when the branch's organization has budget allocation switched off.
+   * Every figure on such a row is zero: the tenant has no budget to report,
+   * and its kept ledger rows are not a live one.
+   */
+  budgetTracked: boolean
   allocatedCents: number
   creditedCents: number
   totalBudgetCents: number
@@ -296,14 +303,22 @@ export async function loadBranchBudgets(
   const branchFence = scopedBranchFence(scope)
 
   const branchRows = await db
-    .select({ id: branches.id, name: branches.name })
+    .select({
+      id: branches.id,
+      name: branches.name,
+      budgetTracked: sql<boolean>`${budgetEnabledBranchSql()}`,
+    })
     .from(branches)
     .where(branchFence.length > 0 ? and(...branchFence) : undefined)
 
   if (branchRows.length === 0) return []
   const branchIds = branchRows.map((row) => row.id)
+  const trackedBranchIds = branchRows.filter((row) => row.budgetTracked === true).map((row) => row.id)
 
-  const [ledgerRows, orderRows] = await Promise.all([
+  // Neither the ledger nor the orders are read for a branch whose tenant has
+  // budgets off, and only orders that took a hold count toward consumption —
+  // a budget figure is compared with money that was actually charged to it.
+  const [ledgerRows, orderRows] = trackedBranchIds.length === 0 ? [[], []] : await Promise.all([
     db
       .select({
         branchId: budgets.branchId,
@@ -311,7 +326,7 @@ export async function loadBranchBudgets(
         creditedCents: sql<number>`COALESCE(SUM(${budgets.amountCreditedCents}), 0)`.mapWith(Number),
       })
       .from(budgets)
-      .where(and(inArray(budgets.branchId, branchIds), inArray(budgets.period, periods)))
+      .where(and(inArray(budgets.branchId, trackedBranchIds), inArray(budgets.period, periods)))
       .groupBy(budgets.branchId),
     db
       .select({
@@ -320,7 +335,11 @@ export async function loadBranchBudgets(
         heldCents: consumedHeldCentsSql(),
       })
       .from(orders)
-      .where(and(...orderConditions(scope, filters, { revenueEligible: false })))
+      .where(and(
+        ...orderConditions(scope, filters, { revenueEligible: false }),
+        inArray(orders.branchId, trackedBranchIds),
+        budgetTrackedOrderSql(),
+      ))
       .groupBy(orders.branchId),
   ])
 
@@ -337,6 +356,7 @@ export async function loadBranchBudgets(
     return {
       branchId: branch.id,
       branchName: branch.name,
+      budgetTracked: branch.budgetTracked === true,
       allocatedCents,
       creditedCents,
       totalBudgetCents,
@@ -822,6 +842,7 @@ export async function loadBudgetRollup(
       branchName: label,
       key,
       label,
+      budgetTracked: false,
       allocatedCents: 0,
       creditedCents: 0,
       totalBudgetCents: 0,
@@ -830,6 +851,7 @@ export async function loadBudgetRollup(
       consumedCents: 0,
       remainingCents: 0,
     }
+    bucket.budgetTracked = bucket.budgetTracked || row.budgetTracked
     bucket.allocatedCents += row.allocatedCents
     bucket.creditedCents += row.creditedCents
     bucket.totalBudgetCents += row.totalBudgetCents
@@ -865,7 +887,7 @@ async function loadMonthBudgets(scope: ExecutiveScope, filters: ExecutiveFilters
     })
     .from(budgets)
     .innerJoin(branches, eq(budgets.branchId, branches.id))
-    .where(and(inArray(budgets.period, periods), ...scopedBranchFence(scope)))
+    .where(and(inArray(budgets.period, periods), ...scopedBranchFence(scope), budgetEnabledBranchSql()))
     .groupBy(budgets.period)
 
   return new Map(rows.map((row) => [row.period, row.totalBudgetCents]))
@@ -1266,7 +1288,11 @@ export async function loadComparison(
     // The registry only pairs budget metrics with budget-bearing dimensions, so
     // this cast is checked by `isSupportedCombination` before we get here.
     const rows = await loadBudgetRollup(scope, filters, dimension as "branch" | "group" | "organization")
+    // A budget metric ranks only entities that have a budget to measure: an
+    // organization with budget allocation off would otherwise rank as a real
+    // zero remaining, or zero utilization, beside ones that hold budgets.
     return rows
+      .filter((row) => row.budgetTracked)
       .map((row) => ({
         key: row.key,
         label: row.label,

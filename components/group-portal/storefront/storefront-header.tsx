@@ -1,10 +1,10 @@
 "use client"
 
 import Link from "next/link"
-import { Building2, Cloud, CloudOff, Layers, LifeBuoy, Loader2, LogOut, Menu, ShoppingBag } from "lucide-react"
+import { Building2, Cloud, CloudOff, Layers, LifeBuoy, Loader2, Menu, ShoppingBag } from "lucide-react"
 
+import { OrderPortalProfileMenu } from "@/components/auth/order-portal-profile-menu"
 import { Button } from "@/components/ui/button"
-import { securelySignOut } from "@/lib/session-coordination"
 import { formatPKR } from "@/lib/utils"
 
 import type { DraftSaveState } from "./use-storefront-draft"
@@ -51,6 +51,8 @@ function DraftSaveIndicator({ state }: Readonly<{ state: DraftSaveState }>) {
  */
 export function StorefrontHeader({
   userName,
+  userEmail,
+  userRole,
   organizationName,
   groupName,
   locationCount,
@@ -62,6 +64,8 @@ export function StorefrontHeader({
   onOpenMenu,
 }: Readonly<{
   userName: string
+  userEmail?: string | null
+  userRole?: string | null
   organizationName: string
   groupName: string | null
   locationCount: number
@@ -73,14 +77,6 @@ export function StorefrontHeader({
   onOpenCart: () => void
   onOpenMenu: () => void
 }>) {
-  const signOut = async () => {
-    try {
-      await securelySignOut({ callbackUrl: "/login" })
-    } catch {
-      window.alert("Logout could not be completed securely. Please retry.")
-    }
-  }
-
   return (
     <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/80 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-900/80">
       <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-3 px-4 py-4">
@@ -181,16 +177,7 @@ export function StorefrontHeader({
             </Link>
           </Button>
 
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            title="Sign out"
-            aria-label="Sign out"
-            onClick={() => { void signOut() }}
-          >
-            <LogOut className="h-4 w-4" />
-          </Button>
+          <OrderPortalProfileMenu name={userName} email={userEmail} role={userRole} />
         </div>
       </div>
     </header>

@@ -9,6 +9,7 @@ import { orderSelectColumns, updateOrderFulfillmentStatusColumn } from "@/lib/or
 import { budgetPeriodOf } from "@/lib/budget-consumption"
 import { recordAuditEvent } from "@/lib/server/activity-audit"
 import { moveHeldQuantityBudgetToUsedForOrder } from "@/lib/server/product-quantity-budget-ledger"
+import { orderTakesBudget } from "@/lib/organization-budget-policy"
 import {
   findPendingTokenHandoff,
   recordOrderTokenHandoff,
@@ -165,8 +166,13 @@ export async function fulfillApprovedOrder({
         if (!migrationReady) throw new Error("FULFILLMENT_MIGRATION_MISSING")
       }
 
-      await moveBudgetHeldToSpent(tx, fulfilledOrder)
-      await moveHeldQuantityBudgetToUsedForOrder(tx, fulfilledOrder)
+      // Only an order that took a hold at creation has one to settle; an order
+      // placed while its tenant had budgets off moves no ledger here, whatever
+      // the tenant's setting is now.
+      if (orderTakesBudget(fulfilledOrder)) {
+        await moveBudgetHeldToSpent(tx, fulfilledOrder)
+        await moveHeldQuantityBudgetToUsedForOrder(tx, fulfilledOrder)
+      }
 
       // The audit row belongs here rather than in each route, because this is
       // where the transition happens: the Super Admin fulfilment route, a token

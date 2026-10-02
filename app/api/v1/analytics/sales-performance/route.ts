@@ -10,12 +10,14 @@ import { redactAnalyticsPrices,shouldHidePricesForRole } from "@/lib/price-visib
 import { parseEndDateParam,parseStartDateParam } from "@/lib/date-range-params"
 import { isMultiBranchAnalyticsRole,resolveMultiBranchAnalyticsIds } from "@/lib/server/analytics-scope"
 import { loadAnalyticsAssignedBranchIds } from "@/lib/server/analytics-branch-scope"
+import { deliveredTotalCountExpression } from "@/lib/server/order-delivery-status-sql"
+import { isViewerRole,resolveViewerBranchIds,resolveViewerScope } from "@/lib/viewer-access"
 
 // GROUP_USER reads the same dashboard as an administrator, but over the branch
 // set assigned to it rather than a tenant or a single branch. It is resolved
 // separately below and never through the ladder the other roles use, so their
 // behaviour is untouched.
-const allowedRoles = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER"] as const
+const allowedRoles = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "VIEWER"] as const
 type Role = typeof allowedRoles[number]
 type SalesGranularity = "hourly" | "daily" | "monthly" | "yearly"
 
@@ -28,6 +30,12 @@ const dashboardStatusMetricSelection = {
     rejectedCount: metricExpressions.rejectedCount,
     deliveredCount: sql<number>`COALESCE(COUNT(CASE WHEN UPPER(${orders.status}) = 'APPROVED' AND UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED')) = 'DELIVERED' THEN 1 END), 0)`.mapWith(Number),
     notDeliveredCount: sql<number>`COALESCE(COUNT(CASE WHEN UPPER(${orders.status}) = 'APPROVED' AND UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED')) <> 'DELIVERED' THEN 1 END), 0)`.mapWith(Number),
+    // Delivered at any order status, which `deliveredCount` above is not — that
+    // one is the narrower approved-and-delivered bucket the three existing
+    // dashboards print as "Delivered/Unacknowledged". Added for the Viewer
+    // dashboard, which reports both; the older field is untouched so its
+    // readers do not move. See `lib/order-delivery-status.ts`.
+    deliveredTotalCount: deliveredTotalCountExpression,
     pendingAmountCents: sql<number>`COALESCE(SUM(CASE WHEN UPPER(${orders.status}) = 'PENDING' THEN ${orders.totalCents} ELSE 0 END), 0)`.mapWith(Number),
     approvedAmountCents: sql<number>`COALESCE(SUM(CASE WHEN UPPER(${orders.status}) = 'APPROVED' THEN GREATEST(${orders.totalCents} - COALESCE(${orders.refundAmountCents}, 0), 0) ELSE 0 END), 0)`.mapWith(Number),
     valueFulfilledCents: sql<number>`COALESCE(SUM(CASE WHEN UPPER(${orders.status}) IN ('FULFILLED', 'PARTIAL', 'PARTIALLY_FULFILLED') THEN GREATEST(${orders.totalCents} - COALESCE(${orders.refundAmountCents}, 0), 0) ELSE 0 END), 0)`.mapWith(Number),
@@ -39,9 +47,31 @@ function parseNumberList(value: string | null, isValid = (number: number) => num
     return value ? value.split(",").map(Number).filter((number) => !Number.isNaN(number) && isValid(number)) : []
 }
 
-async function resolveSalesScope(role: Role | undefined, scope: any, searchParams: URLSearchParams) {
+/** An organization/branch pair, or the refusal to send back instead. */
+type ResolvedSalesScope = {
+    organizationId?: number | null
+    branchId?: number | null
+    error?: string
+}
+
+async function resolveSalesScope(role: Role | undefined, scope: any, searchParams: URLSearchParams): Promise<ResolvedSalesScope> {
     if (role === "BRANCH_ADMIN") {
         return { organizationId: scope?.organizationId ?? null, branchId: scope?.branchId ?? null }
+    }
+    // Read-only account: its organization is always the session's, and its
+    // branch is the session's whenever it is pinned to one — so a pinned Viewer
+    // naming a sibling branch on the query string still reads its own. An
+    // unpinned Viewer's requested branch is verified against the tenant below,
+    // by the same path Head Office takes.
+    if (isViewerRole(role)) {
+        const viewerScope = resolveViewerScope({
+            organizationId: scope?.organizationId,
+            branchId: scope?.branchId,
+            requestedBranchId: Number(searchParams.get("branchId")) || null,
+        })
+        if (viewerScope.error) return { error: viewerScope.error }
+        if (!viewerScope.branchId || scope?.branchId) return viewerScope
+        return verifyBranchInOrganization(viewerScope.organizationId, viewerScope.branchId)
     }
     // The branch filter for a multi-branch role comes from its assignments, not
     // from the request; it is applied by the caller as an explicit branch list.
@@ -58,6 +88,23 @@ async function resolveSalesScope(role: Role | undefined, scope: any, searchParam
     const organizationId = scope?.organizationId ?? null
     const branchId = Number(searchParams.get("branchId")) || null
     if (!branchId) return { organizationId, branchId: null }
+    return verifyBranchInOrganization(organizationId, branchId)
+}
+
+/**
+ * A requested branch, confirmed to belong to the caller's own tenant. Shared by
+ * Head Office and by an unpinned Viewer, which get the same treatment: the
+ * organization comes from the session, and the branch on the query string is
+ * only honoured once it is shown to be inside it.
+ */
+async function verifyBranchInOrganization(
+    organizationId: number | null,
+    branchId: number,
+): Promise<ResolvedSalesScope> {
+    // A caller with no tenant of its own cannot own a branch either. Refused
+    // here rather than comparing against NULL in SQL, which matches nothing and
+    // reached the same refusal a row later.
+    if (!organizationId) return { error: "Access denied: Branch not found in your organization" }
     try {
         const [allowedBranch] = await db.select({ id: branches.id }).from(branches).where(and(
             eq(branches.id, branchId),
@@ -67,7 +114,7 @@ async function resolveSalesScope(role: Role | undefined, scope: any, searchParam
             ? { organizationId, branchId }
             : { error: "Access denied: Branch not found in your organization" }
     } catch (caughtError) {
-        console.error("[Security] Error verifying branch access for Head Office:", caughtError)
+        console.error("[Security] Error verifying branch access:", caughtError)
         return { error: "Access verification failed" }
     }
 }
@@ -333,6 +380,7 @@ async function loadSalesComparison(context: any) {
         pendingCount: counts?.pendingCount || 0,
         deliveredCount: counts?.deliveredCount || 0,
         notDeliveredCount: counts?.notDeliveredCount || 0,
+        deliveredTotalCount: counts?.deliveredTotalCount || 0,
         pendingAmountCents: counts?.pendingAmountCents || 0,
         approvedAmountCents: counts?.approvedAmountCents || 0,
         valueFulfilledCents: counts?.valueFulfilledCents || 0,
@@ -391,10 +439,24 @@ export async function GET(req: NextRequest) {
         return error("Access denied: no branches are assigned to your account", 403)
     }
 
-    const branchIds = scopedBranchIds ?? parseNumberList(branchIdsParam)
-    // The tenant is re-asserted from the session for a multi-branch role rather
-    // than read from the request.
-    const organizationIds = scopedBranchIds === null ? parseNumberList(organizationIdsParam) : []
+    // A pinned Viewer collapses to its own branch whatever `branchIds` asked
+    // for; an unpinned one may narrow within its own tenant, which the
+    // organization predicate below fences.
+    const viewerBranchIds = isViewerRole(role)
+        ? resolveViewerBranchIds({
+            branchId: scope?.branchId,
+            requestedBranchIds: parseNumberList(branchIdsParam),
+        })
+        : null
+
+    const branchIds = viewerBranchIds ?? scopedBranchIds ?? parseNumberList(branchIdsParam)
+    // The tenant is re-asserted from the session for a multi-branch role and
+    // for a Viewer, rather than read from the request: `organizationIds` on the
+    // query string takes precedence over the session's organization in
+    // `addSalesScopeConditions`, so a read-only account must never reach it.
+    const organizationIds = scopedBranchIds === null && !isViewerRole(role)
+        ? parseNumberList(organizationIdsParam)
+        : []
 
     if (groupIdParam && groupIdParam !== "null" && groupIdParam !== "0") {
         groupId = Number(groupIdParam)
@@ -694,6 +756,7 @@ export async function GET(req: NextRequest) {
             rejectedCount: number
             deliveredCount: number
             notDeliveredCount: number
+            deliveredTotalCount: number
             pendingAmountCents: number
             approvedAmountCents: number
             valueFulfilledCents: number
@@ -717,6 +780,7 @@ export async function GET(req: NextRequest) {
                     rejectedCount: counts.rejectedCount,
                     deliveredCount: counts.deliveredCount,
                     notDeliveredCount: counts.notDeliveredCount,
+                    deliveredTotalCount: counts.deliveredTotalCount,
                     pendingAmountCents: counts.pendingAmountCents,
                     approvedAmountCents: counts.approvedAmountCents,
                     valueFulfilledCents: counts.valueFulfilledCents,

@@ -3,7 +3,8 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { budgets,orders,branches } from "@/db/schema"
-import { eq,sql,inArray } from "drizzle-orm"
+import { and,eq,sql,inArray } from "drizzle-orm"
+import { budgetTrackedOrderSql } from "@/lib/server/organization-budget-policy"
 import { auditActorFromSession, recordAuditEvent } from "@/lib/server/activity-audit"
 
 async function resolveTargetBranchIds(branchId: unknown, organizationId: unknown): Promise<number[]> {
@@ -109,7 +110,9 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    // 4. Recalculate from orders — group fulfilled orders by branch + month
+    // 4. Recalculate from orders — group fulfilled orders by branch + month.
+    // Only orders that took a budget hold: one placed while the tenant had
+    // budgets off was never charged to a budget and must not be rebuilt into one.
     const orderSpending = await db
       .select({
         branchId: orders.branchId,
@@ -119,7 +122,7 @@ export async function POST(req: NextRequest) {
         totalHeldCents: sql<number>`COALESCE(SUM(CASE WHEN UPPER(${orders.status}) IN ('PENDING', 'APPROVED') THEN ${orders.totalCents} - COALESCE(${orders.refundAmountCents}, 0) ELSE 0 END), 0)`.mapWith(Number),
       })
       .from(orders)
-      .where(inArray(orders.branchId, targetBranchIds))
+      .where(and(inArray(orders.branchId, targetBranchIds), budgetTrackedOrderSql()))
       .groupBy(orders.branchId, orders.organizationId, sql`TO_CHAR(${orders.createdAt}, 'YYYY-MM')`)
 
     console.log(`[REPAIR] Found ${orderSpending.length} month-branch combinations with orders`)

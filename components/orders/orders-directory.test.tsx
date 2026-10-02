@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 vi.mock("next/navigation", () => ({
@@ -217,5 +217,115 @@ describe("OrdersDirectory", () => {
     fireEvent.click(screen.getByText("Approval Date", { selector: "span" }))
 
     expect(tableQueries.queryByRole("columnheader", { name: "Approval Date" })).toBeNull()
+  })
+})
+
+describe("OrdersDirectory fulfilment columns", () => {
+  const activeDelivered = {
+    id: 50,
+    tid: "ORD-0050",
+    status: "APPROVED",
+    fulfillmentStatus: "DELIVERED",
+    branchId: 8,
+    branchName: "North Branch",
+    createdAt: "2026-07-28T10:00:00.000Z",
+    totalCents: 125000,
+    approvalToken: "TOKEN0050",
+  }
+  const fulfilled = {
+    ...activeDelivered,
+    id: 51,
+    tid: "ORD-0051",
+    status: "FULFILLED",
+    approvalToken: null,
+  }
+
+  afterEach(() => {
+    cleanup()
+    localStorage.clear()
+    vi.unstubAllGlobals()
+  })
+
+  function cellsFor(tid: string) {
+    const table = screen.getByRole("table")
+    const headers = within(table).getAllByRole("columnheader").map((header) => header.textContent)
+    const cells = within(within(table).getByText(tid).closest("tr")!).getAllByRole("cell")
+    return {
+      token: cells[headers.indexOf("Fulfillment Token")],
+      action: cells[headers.indexOf("Action")],
+    }
+  }
+
+  it("always shows the token and action columns, outside the column picker", () => {
+    render(
+      <OrdersDirectory orders={[activeDelivered]} userRole="SUPER_ADMIN" isSuperAdmin isBranchAdmin={false} onUpdate={vi.fn()} />,
+    )
+    const headers = within(screen.getByRole("table")).getAllByRole("columnheader").map((header) => header.textContent)
+    expect(headers.slice(-2)).toEqual(["Fulfillment Token", "Action"])
+
+    fireEvent.click(screen.getByRole("button", { name: /Columns/ }))
+    expect(screen.queryByText("Fulfillment Token", { selector: "span" })).toBeNull()
+  })
+
+  it("shows the full token for an active order and marks it delivered but unfulfilled", () => {
+    render(
+      <OrdersDirectory orders={[activeDelivered, fulfilled]} userRole="SUPER_ADMIN" isSuperAdmin isBranchAdmin={false} onUpdate={vi.fn()} />,
+    )
+    expect(cellsFor("ORD-0050").token?.textContent).toContain("TOKEN0050")
+    expect(screen.getAllByText("Delivered · Unfulfilled")).toHaveLength(1)
+
+    const done = cellsFor("ORD-0051")
+    expect(done.token?.textContent).toBe("—")
+    expect(done.action?.textContent).toBe("—")
+  })
+
+  it("lets Super Admin fulfil from the row with the token filled in, without opening the drawer", async () => {
+    render(
+      <OrdersDirectory orders={[activeDelivered]} userRole="SUPER_ADMIN" isSuperAdmin isBranchAdmin={false} onUpdate={vi.fn()} />,
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Fulfil order ORD-0050" }))
+
+    const dialog = await screen.findByRole("dialog", { name: "Fulfill Order" })
+    expect((within(dialog).getByPlaceholderText("e.g. A1B2C3D4") as HTMLInputElement).value).toBe("TOKEN0050")
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }))
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+  })
+
+  it("lets an approver who holds the token fulfil by emailing it", async () => {
+    const onUpdate = vi.fn()
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ fulfilled: true, message: "Token sent" }),
+    }))
+    vi.stubGlobal("fetch", fetchMock)
+    render(
+      <OrdersDirectory orders={[activeDelivered]} userRole="BRANCH_ADMIN" isSuperAdmin={false} isBranchAdmin canDecideOrders onUpdate={onUpdate} />,
+    )
+    expect(screen.queryByRole("button", { name: "Fulfil order ORD-0050" })).toBeNull()
+
+    fireEvent.click(screen.getByRole("button", { name: "Fulfil order ORD-0050 by emailing its token" }))
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/v1/orders/50/send-token-email", expect.objectContaining({ method: "POST" }))
+    })
+    await waitFor(() => expect(onUpdate).toHaveBeenCalled())
+    expect(screen.queryByRole("dialog", { name: "Order details" })).toBeNull()
+  })
+
+  it("offers no action when the server withheld the token", () => {
+    render(
+      <OrdersDirectory
+        orders={[{ ...activeDelivered, approvalToken: null }]}
+        userRole="HEAD_OFFICE"
+        isSuperAdmin={false}
+        isBranchAdmin={false}
+        isHeadOffice
+        onUpdate={vi.fn()}
+      />,
+    )
+    const row = cellsFor("ORD-0050")
+    expect(row.token?.textContent).toBe("—")
+    expect(row.action?.textContent).toBe("—")
   })
 })

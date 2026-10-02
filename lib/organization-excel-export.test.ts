@@ -133,3 +133,22 @@ describe("getOrganizationExportFilename", () => {
     )).toBe("organizations-2026-07-31.xlsx")
   })
 })
+
+describe("an organization with budget allocation off", () => {
+  const base = { id: 7, name: "Acme", code: "ACME", status: "active" }
+
+  it("exports 'Off' rather than the stored model, which has no effect", () => {
+    const [row] = buildOrganizationListWorkbookData([{ ...base, budgetAllocationMode: "quantity", budgetsEnabled: false }], [])
+    expect(row["Budget Allocation Mode"]).toBe("Off")
+
+    const { organizationDetails } = buildOrganizationWorkbookData({ ...base, budgetsEnabled: false }, [])
+    expect(organizationDetails.find((entry) => entry.Field === "Budget Allocation Mode")?.Value).toBe("Off")
+  })
+
+  it("exports the model when budgets are on, or when an older record does not say", () => {
+    expect(buildOrganizationListWorkbookData([{ ...base, budgetAllocationMode: "quantity", budgetsEnabled: true }], [])[0]["Budget Allocation Mode"])
+      .toBe("Quantity-based")
+    expect(buildOrganizationListWorkbookData([{ ...base, budgetAllocationMode: "money" }], [])[0]["Budget Allocation Mode"])
+      .toBe("Money-based")
+  })
+})

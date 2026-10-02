@@ -2,6 +2,7 @@
 
 import React,{ useCallback,useEffect,useMemo,useState } from "react"
 import useSWR,{ useSWRConfig } from "swr"
+import { BudgetsDisabledNotice } from "@/components/budgets/budgets-disabled-notice"
 import { useSession } from "next-auth/react"
 import {
   AlertCircle,ChevronDown,
@@ -189,6 +190,13 @@ export default function BudgetByQuantityPage() {
     return `/api/v1/settings?organizationId=${organizationId}`
   }, [isHeadOffice, isInitialized, organizationId])
   const { data: settingsData, isLoading: settingsLoading } = useSWR<any>(settingsEndpoint, fetcher)
+  // The organization row carries the budget switch; a tenant with budgets off
+  // has no quantity budgets whatever mode it has stored.
+  const { data: organizationData, isLoading: organizationLoading } = useSWR<any>(
+    settingsEndpoint ? `/api/v1/organizations/${organizationId}` : null,
+    fetcher,
+  )
+  const budgetsOff = organizationData?.item?.budgetsEnabled === false
   const budgetAllocationMode = parseBudgetAllocationMode(
     settingsData?.data?.find((setting: any) => setting.key === BUDGET_ALLOCATION_MODE_SETTING_KEY)?.value
   )
@@ -486,7 +494,7 @@ export default function BudgetByQuantityPage() {
     }
   }
 
-  if (status === "loading" || settingsLoading) {
+  if (status === "loading" || settingsLoading || organizationLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <RefreshCw className="h-8 w-8 animate-spin text-slate-400" />
@@ -512,6 +520,14 @@ export default function BudgetByQuantityPage() {
           <AlertCircle className="mx-auto mb-4 h-12 w-12 text-muted-foreground" />
           <p className="text-muted-foreground">Select an organization to manage quantity budgets.</p>
         </Card>
+      </div>
+    )
+  }
+
+  if (budgetsOff) {
+    return (
+      <div className="min-h-screen p-6">
+        <BudgetsDisabledNotice className="mt-10" />
       </div>
     )
   }
