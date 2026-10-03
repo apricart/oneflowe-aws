@@ -71,6 +71,15 @@ import {
   toStoredCartEntries,
   writeStoredCartEntries,
 } from "@/lib/shop-cart-storage"
+import {
+  SHOP_ORDER_TABS,
+  SHOP_ORDER_TAB_EMPTY_LABELS,
+  SHOP_ORDER_TAB_LABELS,
+  countShopOrdersByTab,
+  isShopOrderTab,
+  shopOrderTabOf,
+  type ShopOrderTab,
+} from "@/lib/shop-order-tabs"
 
 const ORDER_STATUS_REFRESH_INTERVAL_MS = 5000
 
@@ -206,13 +215,15 @@ const getRefundState = (order: RefundableOrder): RefundState => {
   return refundAmount >= order.totalCents ? "full" : "partial"
 }
 
-const isRefundRelatedOrder = (order: RefundableOrder) =>
-  getRefundState(order) !== "none"
+type ShopTab = "shop" | ShopOrderTab | "unacknowledged"
 
-const isActiveOrder = (order: RefundableOrder) =>
-  getRefundState(order) === "none"
-
-type ShopTab = "shop" | "orders" | "refunded" | "unacknowledged"
+const SHOP_ORDER_TAB_ICONS: Readonly<Record<ShopOrderTab, typeof Package>> = {
+  pending: Clock,
+  active: Package,
+  fulfilled: CheckCircle,
+  rejected: AlertTriangle,
+  refunded: TrendingDown,
+}
 
 const getProductStep = (product: Pick<Product, "allowDecimalQuantity" | "quantityStep">) =>
   sanitizeQuantityStep(Boolean(product.allowDecimalQuantity), product.quantityStep ?? 1)
@@ -411,12 +422,18 @@ export default function OrderPortalPage() {
   )
 
   const ordersUrl = "/api/v1/orders"
-  const isViewingOrders = activeTab === "orders" || activeTab === "refunded"
+  const isViewingOrders = isShopOrderTab(activeTab)
   const { data: ordersData, mutate: mutateOrders } = useSWR<any>(ordersUrl, fetcher, {
     refreshInterval: isViewingOrders || showOrderDetail ? ORDER_STATUS_REFRESH_INTERVAL_MS : 0,
     revalidateOnFocus: true,
     revalidateOnReconnect: true,
   })
+  const orderTabCounts = useMemo(() => countShopOrdersByTab(ordersData?.items), [ordersData])
+  const ordersOnActiveTab = useMemo(
+    () => (Array.isArray(ordersData?.items) ? ordersData.items : [])
+      .filter((order: Order) => shopOrderTabOf(order) === activeTab),
+    [ordersData, activeTab],
+  )
 
   // Delivered orders awaiting acknowledgement. Read from the approved orders
   // alone, so a long history cannot push one past the list's page limit. The
@@ -448,7 +465,7 @@ export default function OrderPortalPage() {
       return
     }
 
-    if (tab === "orders" || tab === "refunded") {
+    if (isShopOrderTab(tab)) {
       const freshOrders = await fetcher(`${ordersUrl}?refresh=${Date.now()}`)
       await mutateOrders(freshOrders, { revalidate: false })
       void mutateBudget()
@@ -1514,7 +1531,7 @@ export default function OrderPortalPage() {
 
       <div className="max-w-7xl mx-auto p-4 md:p-6">
         {/* Tabs */}
-        <div className="mb-6 flex gap-2 rounded-2xl bg-white/80 p-1 shadow-sm ring-1 ring-black/5 backdrop-blur-md dark:bg-slate-900/80">
+        <div className="mb-6 flex flex-wrap gap-2 rounded-2xl bg-white/80 p-1 shadow-sm ring-1 ring-black/5 backdrop-blur-md dark:bg-slate-900/80">
           <Button
             onClick={() => { void handleTabChange("shop") }}
             variant={activeTab === "shop" ? "default" : "outline"}
@@ -1523,22 +1540,20 @@ export default function OrderPortalPage() {
             <Grid className="h-4 w-4" />
             Shop
           </Button>
-          <Button
-            onClick={() => { void handleTabChange("orders") }}
-            variant={activeTab === "orders" ? "default" : "outline"}
-            className="gap-2"
-          >
-            <Package className="h-4 w-4" />
-            Active Orders ({ordersData?.items?.filter(isActiveOrder).length || 0})
-          </Button>
-          <Button
-            onClick={() => { void handleTabChange("refunded") }}
-            variant={activeTab === "refunded" ? "default" : "outline"}
-            className="gap-2"
-          >
-            <TrendingDown className="h-4 w-4" />
-            Refunded ({ordersData?.items?.filter(isRefundRelatedOrder).length || 0})
-          </Button>
+          {SHOP_ORDER_TABS.map((tab) => {
+            const TabIcon = SHOP_ORDER_TAB_ICONS[tab]
+            return (
+              <Button
+                key={tab}
+                onClick={() => { void handleTabChange(tab) }}
+                variant={activeTab === tab ? "default" : "outline"}
+                className="gap-2"
+              >
+                <TabIcon className="h-4 w-4" />
+                {SHOP_ORDER_TAB_LABELS[tab]} ({orderTabCounts[tab]})
+              </Button>
+            )
+          })}
           <Button
             onClick={() => { void handleTabChange("unacknowledged") }}
             variant={activeTab === "unacknowledged" ? "default" : "outline"}
@@ -1591,7 +1606,7 @@ export default function OrderPortalPage() {
               />
             )
           }
-          if (activeTab === "orders" || activeTab === "refunded") {
+          if (isShopOrderTab(activeTab)) {
             return (
           // Orders View
           <div className="space-y-4">
@@ -1624,12 +1639,7 @@ export default function OrderPortalPage() {
               }
               return (
               <div className="space-y-3">
-                {ordersData.items
-                  .filter((order: any) => {
-                    return activeTab === "refunded"
-                      ? isRefundRelatedOrder(order)
-                      : isActiveOrder(order)
-                  })
+                {ordersOnActiveTab
                   .map((order: any) => {
                     const statusColors: Record<string, { bg: string; text: string; icon: any }> = {
                       pending: { bg: "bg-yellow-50 dark:bg-yellow-950", text: "text-yellow-700 dark:text-yellow-300", icon: Clock },
@@ -1796,22 +1806,17 @@ export default function OrderPortalPage() {
                     )
                   })}
                 {/* Empty State for Specific Filter */}
-                {ordersData.items.filter((order: any) => {
-                  return activeTab === "refunded"
-                    ? isRefundRelatedOrder(order)
-                    : isActiveOrder(order)
-                }).length === 0 && (
+                {ordersOnActiveTab.length === 0 && (() => {
+                  const EmptyIcon = SHOP_ORDER_TAB_ICONS[activeTab]
+                  return (
                     <div className="text-center py-16">
-                      {activeTab === "refunded" ? (
-                        <TrendingDown className="h-12 w-12 text-muted-foreground mx-auto mb-4 opacity-50" />
-                      ) : (
-                        <Package className="h-12 w-12 text-muted-foreground mx-auto mb-4 opacity-50" />
-                      )}
+                      <EmptyIcon className="h-12 w-12 text-muted-foreground mx-auto mb-4 opacity-50" />
                       <p className="text-lg font-medium text-muted-foreground">
-                        {activeTab === "refunded" ? "No refunded orders" : "No active orders"}
+                        {SHOP_ORDER_TAB_EMPTY_LABELS[activeTab]}
                       </p>
                     </div>
-                  )}
+                  )
+                })()}
               </div>
             )
             })()}

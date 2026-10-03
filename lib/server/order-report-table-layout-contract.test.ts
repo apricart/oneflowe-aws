@@ -10,7 +10,9 @@ describe("order-report table layout contract", () => {
       "utf8",
     )
 
-    expect(page).toContain("[&_[data-slot=table-container]]:overflow-x-auto")
+    // The horizontal scroll lives on the shared report scroll box (overflow:
+    // auto in `.report-table-scroll`), which keeps its scrollbar in view.
+    expect(page).toContain('<ReportTableScroll className="flex-1">')
     expect(page).toContain('Table className="min-w-[2100px] table-fixed"')
     expect(page).toContain('<col className="w-[185px]" />')
     expect(page).not.toContain("[&_[data-slot=table-container]]:overflow-hidden")

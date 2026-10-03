@@ -14,7 +14,12 @@ import type { ProductRequestList, ProductRequestListItem } from "@/lib/product-r
  * things. This file proves the screen does not offer them in the first place.
  */
 
+// 3 Oct 2026, 10:00 in Karachi. Only `Date` is faked, so SWR's timers still run.
+const NOW = new Date("2026-10-03T05:00:00.000Z")
+
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] })
+  vi.setSystemTime(NOW)
   Element.prototype.scrollIntoView = vi.fn()
   Element.prototype.hasPointerCapture = vi.fn(() => false)
   Element.prototype.releasePointerCapture = vi.fn()
@@ -23,6 +28,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  vi.useRealTimers()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -45,9 +51,12 @@ function item(overrides: Partial<ProductRequestListItem> = {}): ProductRequestLi
     referenceUrl: "https://example.com/sanitiser",
     notes: "Every branch asks for it",
     imageUrl: null,
+    reviewStartedAt: null,
+    reviewStartedBy: null,
     reviewNote: null,
     reviewedAt: null,
     reviewedBy: null,
+    estimatedAvailableOn: null,
     createdAt: "2026-09-30T09:00:00.000Z",
     organization: { id: 10, name: "K-Electric" },
     requestedBy: { id: "u-ho", fullName: "Sara Head Office", email: "sara@example.test", role: "HEAD_OFFICE" },
@@ -61,7 +70,12 @@ function list(items: ProductRequestListItem[], overrides: Partial<ProductRequest
     total: items.length,
     page: 1,
     pageSize: 20,
-    counts: { PENDING: items.filter((entry) => entry.status === "PENDING").length, APPROVED: 0, REJECTED: 0 },
+    counts: {
+      PENDING: items.filter((entry) => entry.status === "PENDING").length,
+      UNDER_REVIEW: items.filter((entry) => entry.status === "UNDER_REVIEW").length,
+      APPROVED: 0,
+      REJECTED: 0,
+    },
     organizations: [],
     ...overrides,
   }
@@ -136,6 +150,57 @@ describe("ProductRequestsView for Head Office", () => {
     expect(within(dialog).getByText("Rejected by")).toBeTruthy()
   })
 
+  it("shows a request Super Admin is working on as under review, with who and since when", async () => {
+    stubFetch({
+      status: 200,
+      body: list([item({
+        status: "UNDER_REVIEW",
+        reviewStartedAt: "2026-10-01T06:00:00.000Z",
+        reviewStartedBy: { id: "u-sa", fullName: "Apricart Admin" },
+      })]),
+    })
+    renderView("HEAD_OFFICE")
+
+    const row = await screen.findByRole("row", { name: "Open request for Hand sanitiser" })
+    expect(within(row).getByText("Under review")).toBeTruthy()
+    fireEvent.click(row)
+    const dialog = await screen.findByRole("dialog")
+    expect(within(dialog).getByText("Apricart Admin is reviewing this request. The decision will appear here.")).toBeTruthy()
+    expect(within(dialog).queryByRole("button", { name: /Approve|Reject|Mark under review/ })).toBeNull()
+  })
+
+  it("shows when an approved product is expected in the catalogue, in the list and the request", async () => {
+    stubFetch({
+      status: 200,
+      body: list([item({
+        status: "APPROVED",
+        reviewedAt: "2026-10-02T12:00:00.000Z",
+        reviewedBy: { id: "u-sa", fullName: "Apricart Admin" },
+        estimatedAvailableOn: "2026-10-15",
+      })]),
+    })
+    renderView("HEAD_OFFICE")
+
+    const row = await screen.findByRole("row", { name: "Open request for Hand sanitiser" })
+    expect(within(row).getByText("Expected by 15 Oct 2026")).toBeTruthy()
+    fireEvent.click(row)
+    const dialog = await screen.findByRole("dialog")
+    expect(within(dialog).getByText(/Expected in the catalogue by/).textContent).toBe("Expected in the catalogue by 15 Oct 2026")
+  })
+
+  it("says so when an approval made before dates existed has none", async () => {
+    stubFetch({
+      status: 200,
+      body: list([item({ status: "APPROVED", reviewedAt: "2026-09-30T12:00:00.000Z", reviewedBy: { id: "u-sa", fullName: "A" } })]),
+    })
+    renderView("HEAD_OFFICE")
+
+    const row = await screen.findByRole("row", { name: "Open request for Hand sanitiser" })
+    expect(within(row).queryByText(/Expected by/)).toBeNull()
+    fireEvent.click(row)
+    expect(within(await screen.findByRole("dialog")).getByText("No availability date was given.")).toBeTruthy()
+  })
+
   it("opens every tab on all statuses", async () => {
     const calls = stubFetch({ status: 200, body: list([]) })
     renderView("HEAD_OFFICE")
@@ -161,21 +226,95 @@ describe("ProductRequestsView for Super Admin", () => {
     expect(new URL(`http://x${calls[0].url}`).searchParams.get("status")).toBe("PENDING")
   })
 
-  it("approves a pending request with its note and refreshes the list", async () => {
+  it("approves a pending request with its note and date and refreshes the list", async () => {
     const calls = stubFetch({ status: 200, body: list([item()]) }, { status: 200, body: { id: 11, status: "APPROVED" } })
     renderView("SUPER_ADMIN")
 
     fireEvent.click(await screen.findByRole("row", { name: "Open request for Hand sanitiser" }))
     const dialog = await screen.findByRole("dialog")
     fireEvent.change(within(dialog).getByLabelText("Note to Head Office (optional)"), { target: { value: "Added as KE-9001" } })
+    fireEvent.change(within(dialog).getByLabelText("Expected in catalogue by"), { target: { value: "2026-10-15" } })
     fireEvent.click(within(dialog).getByRole("button", { name: /Approve/ }))
 
     await waitFor(() => expect(calls.some((call) => call.method === "PATCH")).toBe(true))
     const patch = calls.find((call) => call.method === "PATCH")!
     expect(patch.url).toBe("/api/v1/product-requests/11")
-    expect(patch.body).toEqual({ status: "APPROVED", reviewNote: "Added as KE-9001" })
+    expect(patch.body).toEqual({ status: "APPROVED", reviewNote: "Added as KE-9001", estimatedAvailableOn: "2026-10-15" })
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
     expect(calls.filter((call) => call.method === "GET" && call.url.startsWith("/api/v1/product-requests")).length).toBeGreaterThan(1)
+  })
+
+  it("does not send an approval without a date, and says why beside the field", async () => {
+    const calls = stubFetch({ status: 200, body: list([item()]) })
+    renderView("SUPER_ADMIN")
+
+    fireEvent.click(await screen.findByRole("row", { name: "Open request for Hand sanitiser" }))
+    const dialog = await screen.findByRole("dialog")
+    fireEvent.click(within(dialog).getByRole("button", { name: /Approve/ }))
+
+    const field = within(dialog).getByLabelText("Expected in catalogue by")
+    expect(field.getAttribute("aria-invalid")).toBe("true")
+    expect(within(dialog).getByText("Choose the date the product is expected in the catalogue").id)
+      .toBe(field.getAttribute("aria-describedby"))
+    expect(calls.some((call) => call.method === "PATCH")).toBe(false)
+  })
+
+  it("does not send a date that has already passed", async () => {
+    const calls = stubFetch({ status: 200, body: list([item()]) })
+    renderView("SUPER_ADMIN")
+
+    fireEvent.click(await screen.findByRole("row", { name: "Open request for Hand sanitiser" }))
+    const dialog = await screen.findByRole("dialog")
+    fireEvent.change(within(dialog).getByLabelText("Expected in catalogue by"), { target: { value: "2026-10-02" } })
+    fireEvent.click(within(dialog).getByRole("button", { name: /Approve/ }))
+
+    expect(within(dialog).getByText("Expected availability date cannot be in the past")).toBeTruthy()
+    expect(calls.some((call) => call.method === "PATCH")).toBe(false)
+  })
+
+  it("fills the date from a quick pick counted from today, and bounds the picker", async () => {
+    const calls = stubFetch({ status: 200, body: list([item()]) }, { status: 200, body: { id: 11, status: "APPROVED" } })
+    renderView("SUPER_ADMIN")
+
+    fireEvent.click(await screen.findByRole("row", { name: "Open request for Hand sanitiser" }))
+    const dialog = await screen.findByRole("dialog")
+    const field = within(dialog).getByLabelText("Expected in catalogue by") as HTMLInputElement
+    expect(field.min).toBe("2026-10-03")
+    expect(field.max).toBe("2027-10-03")
+    fireEvent.click(within(dialog).getByRole("button", { name: "In 2 weeks" }))
+    expect(field.value).toBe("2026-10-17")
+    fireEvent.click(within(dialog).getByRole("button", { name: /Approve/ }))
+
+    await waitFor(() => expect(calls.some((call) => call.method === "PATCH")).toBe(true))
+    expect(calls.find((call) => call.method === "PATCH")?.body).toMatchObject({ estimatedAvailableOn: "2026-10-17" })
+  })
+
+  it("marks a pending request under review with nothing but the status", async () => {
+    const calls = stubFetch({ status: 200, body: list([item()]) }, { status: 200, body: { id: 11, status: "UNDER_REVIEW" } })
+    renderView("SUPER_ADMIN")
+
+    fireEvent.click(await screen.findByRole("row", { name: "Open request for Hand sanitiser" }))
+    const dialog = await screen.findByRole("dialog")
+    fireEvent.change(within(dialog).getByLabelText("Note to Head Office (optional)"), { target: { value: "ignored" } })
+    fireEvent.click(within(dialog).getByRole("button", { name: /Mark under review/ }))
+
+    await waitFor(() => expect(calls.some((call) => call.method === "PATCH")).toBe(true))
+    expect(calls.find((call) => call.method === "PATCH")?.body).toEqual({ status: "UNDER_REVIEW" })
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+  })
+
+  it("still lets a request under review be approved or rejected, but not put under review again", async () => {
+    stubFetch({
+      status: 200,
+      body: list([item({ status: "UNDER_REVIEW", reviewStartedAt: "2026-10-01T06:00:00.000Z", reviewStartedBy: { id: "u-sa", fullName: "A" } })]),
+    })
+    renderView("SUPER_ADMIN")
+
+    fireEvent.click(await screen.findByRole("row", { name: "Open request for Hand sanitiser" }))
+    const dialog = await screen.findByRole("dialog")
+    expect(within(dialog).getByRole("button", { name: /Approve/ })).toBeTruthy()
+    expect(within(dialog).getByRole("button", { name: /Reject/ })).toBeTruthy()
+    expect(within(dialog).queryByRole("button", { name: /Mark under review/ })).toBeNull()
   })
 
   it("shows the server's answer when the request was already decided elsewhere", async () => {
@@ -250,10 +389,32 @@ describe("ProductRequestDetailDialog layout", () => {
       .toMatch(/^Not provided: Barcode \/ manufacturer code, Image$/)
   })
 
-  it("marks where the request stands", async () => {
+  const currentStep = (dialog: HTMLElement) =>
+    within(dialog).getByRole("list", { name: "Request progress" }).querySelector("[aria-current='step']")?.textContent
+
+  it("marks a pending request as submitted and waiting", async () => {
     const dialog = await open()
-    const current = within(dialog).getByRole("list", { name: "Request progress" }).querySelector("[aria-current='step']")
-    expect(current?.textContent).toContain("Under review")
+    expect(currentStep(dialog)).toContain("Submitted")
+    expect(within(dialog).getByText("Waiting for Super Admin")).toBeTruthy()
+  })
+
+  it("marks a request under review at that step, with when it started", async () => {
+    const dialog = await open({
+      status: "UNDER_REVIEW",
+      reviewStartedAt: "2026-10-01T06:00:00.000Z",
+      reviewStartedBy: { id: "u-sa", fullName: "A" },
+    })
+    expect(currentStep(dialog)).toMatch(/^Under reviewSince /)
+  })
+
+  it("marks a request decided without a review start as decided directly", async () => {
+    const dialog = await open({
+      status: "REJECTED",
+      reviewedAt: "2026-10-02T06:00:00.000Z",
+      reviewedBy: { id: "u-sa", fullName: "A" },
+    })
+    expect(currentStep(dialog)).toContain("Rejected")
+    expect(within(dialog).getByText("Decided directly")).toBeTruthy()
   })
 
   it("fills the note from a template, still editable, and sends it with the decision", async () => {

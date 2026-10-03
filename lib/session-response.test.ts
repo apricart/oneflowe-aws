@@ -36,6 +36,41 @@ describe("passive session response", () => {
     expect(result.headers.get("set-cookie")).toContain("fresh")
   })
 
+  it("rewrites a rejected session's null body to an empty object", async () => {
+    const source = new Response("null", {
+      status: 200,
+      headers: {
+        "Cache-Control": "private, no-store",
+        "Content-Type": "application/json",
+        "Content-Length": "4",
+        "Set-Cookie": "next-auth.session-token=stale; Path=/",
+      },
+    })
+
+    const result = await hardenSessionEndpointResponse(source, {
+      allowCookieWrite: false,
+    })
+
+    expect(result.status).toBe(200)
+    expect(result.headers.get("set-cookie")).toBeNull()
+    expect(result.headers.get("cache-control")).toBe("private, no-store")
+    expect(result.headers.get("content-length")).toBeNull()
+    await expect(result.json()).resolves.toEqual({})
+  })
+
+  it("keeps cookie writes on an activity update whose session was rejected", async () => {
+    const source = new Response("null", {
+      headers: { "Set-Cookie": "next-auth.session-token=fresh; Path=/" },
+    })
+
+    const result = await hardenSessionEndpointResponse(source, {
+      allowCookieWrite: true,
+    })
+
+    expect(result.headers.get("set-cookie")).toContain("fresh")
+    await expect(result.json()).resolves.toEqual({})
+  })
+
   it("returns no-store 503 without cookie mutation when validation is unavailable", async () => {
     const source = new Response(
       JSON.stringify({ sessionValidationUnavailable: true }),

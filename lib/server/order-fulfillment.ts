@@ -5,7 +5,7 @@ import { and, eq, gte, sql } from "drizzle-orm"
 import { budgets, orders } from "@/db/schema"
 import { db } from "@/lib/db"
 import { isTokenHandoffEligible, tokenHandoffSettlesNow } from "@/lib/order-token-handoff"
-import { orderSelectColumns, updateOrderFulfillmentStatusColumn } from "@/lib/order-select"
+import { orderSelectColumns } from "@/lib/order-select"
 import { budgetPeriodOf } from "@/lib/budget-consumption"
 import { recordAuditEvent } from "@/lib/server/activity-audit"
 import { moveHeldQuantityBudgetToUsedForOrder } from "@/lib/server/product-quantity-budget-ledger"
@@ -27,11 +27,13 @@ import {
  * is unchanged: the same single-winner claim, the same money and quantity
  * ledger moves.
  *
- * The one thing a caller chooses is what the transition means for delivery.
- * The Super Admin fulfilment route redeems a token in person and records the
- * delivery as part of settling the order ("record-delivery"). A token hand-off
- * settles an order the delivery status already calls DELIVERED, and must leave
- * that recorded delivery moment exactly as it stands ("require-delivered").
+ * **No order is fulfilled before it is delivered, whoever asks.** The claim
+ * only matches an order whose delivery status is already DELIVERED, and the
+ * recorded delivery moment is left exactly as it stands. The Super Admin
+ * fulfilment route used to record the delivery itself as it settled; that mode
+ * is gone, so delivery is recorded only through the delivery-progress route
+ * and every caller here — that route and both hand-off paths — is bound by
+ * the same rule. An undelivered order simply is not claimed ("conflict").
  *
  * Authorization is **not** performed here. Every caller has already decided
  * that this actor may act on this order, and passes the tenant and branch it
@@ -57,29 +59,12 @@ export type OrderFulfillmentTarget = {
    * which is the same value the unattended sweep writes.
    */
   fulfilledByUserId: string | null
-  /**
-   * Whether this transition records the delivery itself, or requires the order
-   * to be delivered already. Defaults to recording it, which is what the
-   * Super Admin fulfilment route has always done.
-   */
-  delivery?: OrderDeliveryHandling
 }
-
-/**
- * How a fulfilment relates to physical delivery.
- *
- * - `record-delivery`: the transition marks the order delivered as it settles.
- * - `require-delivered`: the order must already be delivered, and its recorded
- *   delivery moment is left untouched. A not-yet-delivered order simply is not
- *   claimed, so this can never settle goods that have not arrived.
- */
-export type OrderDeliveryHandling = "record-delivery" | "require-delivered"
 
 export type OrderFulfillmentOutcome =
   | "fulfilled"
   | "conflict"
   | "ledger-conflict"
-  | "migration-missing"
 
 /** Ledger invariants that mean the transition rolled back rather than applied. */
 const LEDGER_INVARIANTS = ["BUDGET_LEDGER_INVARIANT", "QUANTITY_BUDGET_LEDGER_INVARIANT"]
@@ -94,7 +79,6 @@ const DELIVERED_ORDER_CONDITION = sql`UPPER(TRIM(COALESCE(to_jsonb("orders") ->>
 function fulfillmentFailureOutcome(transitionError: any): OrderFulfillmentOutcome | null {
   if (transitionError?.message === "ORDER_TRANSITION_CONFLICT") return "conflict"
   if (LEDGER_INVARIANTS.includes(transitionError?.message)) return "ledger-conflict"
-  if (transitionError?.message === "FULFILLMENT_MIGRATION_MISSING") return "migration-missing"
   return null
 }
 
@@ -135,18 +119,14 @@ export async function fulfillApprovedOrder({
   organizationId,
   branchId,
   fulfilledByUserId,
-  delivery = "record-delivery",
 }: OrderFulfillmentTarget): Promise<OrderFulfillmentOutcome> {
-  const requiresDelivery = delivery === "require-delivered"
   try {
     await db.transaction(async (tx) => {
       // Claim the transition so only one simultaneous fulfilment can move ledgers.
       const fulfilledAt = new Date()
       const [fulfilledOrder] = await tx.update(orders).set({
         status: "FULFILLED",
-        // A delivered order keeps the moment it was actually delivered; only a
-        // transition that records the delivery itself writes this.
-        ...(requiresDelivery ? {} : { deliveredAt: fulfilledAt }),
+        // The order keeps the moment it was actually delivered.
         fulfilledAt,
         fulfilledByUserId,
         updatedAt: fulfilledAt,
@@ -156,15 +136,11 @@ export async function fulfillApprovedOrder({
         eq(orders.branchId, branchId),
         sql`UPPER(${orders.status}) = 'APPROVED'`,
         // Part of the same single-winner claim, so an order that is not
-        // delivered yet is never settled by a caller that requires delivery.
-        requiresDelivery ? DELIVERED_ORDER_CONDITION : undefined,
+        // delivered yet is never settled, by any caller.
+        DELIVERED_ORDER_CONDITION,
       )).returning(orderSelectColumns)
 
       if (!fulfilledOrder) throw new Error("ORDER_TRANSITION_CONFLICT")
-      if (!requiresDelivery) {
-        const migrationReady = await updateOrderFulfillmentStatusColumn(tx, orderId, "DELIVERED")
-        if (!migrationReady) throw new Error("FULFILLMENT_MIGRATION_MISSING")
-      }
 
       // Only an order that took a hold at creation has one to settle; an order
       // placed while its tenant had budgets off moves no ledger here, whatever
@@ -198,7 +174,6 @@ export async function fulfillApprovedOrder({
           tid: fulfilledOrder.tid,
           totalCents: fulfilledOrder.totalCents,
           period: budgetPeriodOf(fulfilledOrder.createdAt),
-          delivery,
         },
       })
     })
@@ -262,7 +237,6 @@ async function settleOneTokenHandoff(
     organizationId: candidate.organizationId,
     branchId: candidate.branchId,
     fulfilledByUserId: candidate.handedOffByUserId,
-    delivery: "require-delivered",
   })
   if (outcome === "fulfilled") settlement.fulfilledOrderIds.add(candidate.orderId)
   else console.warn(`[TokenHandoff] Order ${candidate.orderId} not fulfilled: ${outcome}`)
@@ -337,7 +311,6 @@ export async function settleDeliveredOrderAfterTokenHandoff(
   const outcome = await fulfillApprovedOrder({
     ...target,
     fulfilledByUserId: handoff.handedOffByUserId,
-    delivery: "require-delivered",
   })
 
   if (outcome === "fulfilled") return "fulfilled"

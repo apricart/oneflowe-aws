@@ -5,7 +5,7 @@ import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { budgets,orders,orderItems,organizationInventory,branchInventory,branches,globalProducts,productQuantityBudgets,refunds,systemLogs,groupAuditLogs,organizations,refundItems } from "@/db/schema"
 import { headers } from "next/headers"
-import { and,desc,eq,gte,ilike,lte,or,sql,inArray,isNotNull,isNull } from "drizzle-orm"
+import { and,desc,eq,gte,ilike,lte,or,sql,inArray,isNotNull,isNull,type AnyColumn,type SQL } from "drizzle-orm"
 import { logOrderActivity } from "@/lib/global-logger"
 import { generateReceiptData } from "@/lib/receipt-generator"
 import {
@@ -48,8 +48,92 @@ import { parseOrderCreatorRoleFilter } from "@/lib/order-creator-filter"
 import { orderCreatedByRoleMatches } from "@/lib/server/order-creator-role-sql"
 import { viewerStatusBucketCondition,viewerStatusBucketCount } from "@/lib/server/order-delivery-status-sql"
 import { parseOrderDeliveryFilter,type OrderDeliveryFilter } from "@/lib/unacknowledged-orders"
+import { parseFulfillmentStatusFilter,type FulfillmentStatus } from "@/lib/fulfillment-status"
 import { loadApprovedDeliveryAddress } from "@/lib/server/delivery-addresses"
 import { DELIVERY_ADDRESS_UNAVAILABLE } from "@/lib/delivery-address"
+import { ORDER_LIST_PRICE_SORT_KEYS,ORDER_LIST_SORT_KEYS,sortKeysForCaller,type OrderListSortKey } from "@/lib/list-sort-keys"
+import { parseSortParams } from "@/lib/table-sort"
+import { orderBySortSql } from "@/lib/server/sort-sql"
+
+/**
+ * The column each allowlisted Orders-table sort key orders by. Text compares
+ * case-insensitively; the refund badge sorts none → partial → full without
+ * reading the amount.
+ */
+const ORDER_LIST_SORT_SQL: Record<OrderListSortKey, SQL | AnyColumn> = {
+  id: orders.id,
+  tid: orders.tid,
+  branch: sql`LOWER(${branches.name})`,
+  costCenter: sql`LOWER(${branches.costCenterId})`,
+  orderStatus: sql`UPPER(${orders.status})`,
+  progress: orderSelectColumns.fulfillmentStatus,
+  paymentStatus: orderSelectColumns.paymentStatus,
+  refundStatus: sql`CASE
+    WHEN UPPER(${orders.status}) = 'REFUNDED' THEN 2
+    WHEN COALESCE(${orders.refundAmountCents}, 0) > 0 THEN 1
+    ELSE 0
+  END`,
+  orderDate: orders.createdAt,
+  approvalDate: orders.approvedAt,
+  deliveryDate: orders.deliveredAt,
+  amount: orders.totalCents,
+}
+
+/**
+ * The ORDER BY for the list. Without a requested sort it keeps its
+ * newest-first order; with one, the id tie-breaker keeps pages stable when many
+ * rows share the sorted value. A price key is refused when prices are hidden.
+ */
+function resolveOrderListOrder(
+  searchParams: URLSearchParams,
+  pricesHidden: boolean,
+): { ok: true; orderBy: SQL[] } | { ok: false; error: string } {
+  const requested = parseSortParams(
+    searchParams,
+    sortKeysForCaller(ORDER_LIST_SORT_KEYS, ORDER_LIST_PRICE_SORT_KEYS, pricesHidden),
+  )
+  if (!requested.ok) return requested
+  if (!requested.sort) return { ok: true, orderBy: [desc(orders.createdAt)] }
+  return {
+    ok: true,
+    orderBy: [orderBySortSql(ORDER_LIST_SORT_SQL[requested.sort.key], requested.sort.direction), desc(orders.id)],
+  }
+}
+
+/**
+ * The list query parameters that are parsed rather than passed through: the
+ * creator-role, delivery and fulfilment filters, and the sort. Parsed before
+ * anything is built so a malformed value is refused rather than quietly
+ * dropped, which would return more rows than the caller asked for.
+ */
+function parseOrderListQuery(
+  params: ReturnType<typeof getOrderListParams>,
+  pricesHidden: boolean,
+):
+  | {
+    ok: true
+    creatorRole: OrderCreatorRole | null
+    deliveryFilter: OrderDeliveryFilter | null
+    fulfillmentStatusFilter: FulfillmentStatus | null
+    orderBy: SQL[]
+  }
+  | { ok: false; error: string } {
+  const creatorFilter = parseOrderCreatorRoleFilter(params.createdByRole)
+  if (!creatorFilter.ok) return { ok: false, error: creatorFilter.message }
+  const deliveryFilter = parseOrderDeliveryFilter(params.delivery)
+  if (!deliveryFilter.ok) return { ok: false, error: deliveryFilter.message }
+  const fulfillmentStatusFilter = parseFulfillmentStatusFilter(params.fulfillmentStatus)
+  if (!fulfillmentStatusFilter.ok) return { ok: false, error: fulfillmentStatusFilter.message }
+  const listOrder = resolveOrderListOrder(params.searchParams, pricesHidden)
+  if (!listOrder.ok) return listOrder
+  return {
+    ok: true,
+    creatorRole: creatorFilter.role,
+    deliveryFilter: deliveryFilter.filter,
+    fulfillmentStatusFilter: fulfillmentStatusFilter.filter,
+    orderBy: listOrder.orderBy,
+  }
+}
 
 function generateTid(): string {
   // Simple ULID-like: timestamp base36 + cryptographically secure random hex
@@ -85,6 +169,7 @@ function getOrderListParams(req: NextRequest) {
     groupId: searchParams.get("groupId") || undefined,
     createdByRole: searchParams.get("createdByRole"),
     delivery: searchParams.get("delivery"),
+    fulfillmentStatus: searchParams.get("fulfillmentStatus"),
     groupIds: parseNumberList(searchParams.get("groupIds") || undefined),
     months: parseNumberList(searchParams.get("months") || undefined, 1, 12),
     years: parseNumberList(searchParams.get("years") || undefined, 2000, 2100),
@@ -295,6 +380,7 @@ function addOrderStatusConditions(
   conditions: any[],
   statusFilter: ReturnType<typeof getOrderStatusFilter>,
   deliveryFilter: OrderDeliveryFilter | null,
+  fulfillmentStatus: FulfillmentStatus | null,
 ) {
   const requestedStatuses = getOrderStatusesForFilter(statusFilter)
   if (requestedStatuses.length > 0) {
@@ -305,6 +391,9 @@ function addOrderStatusConditions(
   if (deliveryFilter === "unacknowledged") {
     conditions.push(viewerStatusBucketCondition("DELIVERED_UNACKNOWLEDGED"))
   }
+  if (fulfillmentStatus) {
+    conditions.push(sql`UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED')) = ${fulfillmentStatus}`)
+  }
 }
 
 function getOrderListSummaryTotal(statusFilter: string, summaryRow: any, deliveryFilter: OrderDeliveryFilter | null = null) {
@@ -312,6 +401,30 @@ function getOrderListSummaryTotal(statusFilter: string, summaryRow: any, deliver
   // page total whether the caller also sent `status=approved` or not.
   if (deliveryFilter === "unacknowledged") return Number(summaryRow?.deliveredUnacknowledged || 0)
   return Number(statusFilter === "all" ? summaryRow?.all || 0 : summaryRow?.[statusFilter] || 0)
+}
+
+async function getOrderListPaginationTotal(input: {
+  statusFilter: string
+  summaryRow: any
+  deliveryFilter: OrderDeliveryFilter | null
+  fulfillmentStatus: FulfillmentStatus | null
+  conditions: any[]
+}) {
+  const summaryTotal = Number(getOrderListSummaryTotal(
+    input.statusFilter,
+    input.summaryRow,
+    input.deliveryFilter,
+  ))
+  if (!input.fulfillmentStatus) return summaryTotal
+
+  const { conditions } = input
+  const listCondition = conditions.length ? and(...conditions) : undefined
+  const [filteredTotal] = await db
+    .select({ count: metricExpressions.totalOrderCount })
+    .from(orders)
+    .leftJoin(branches, eq(orders.branchId, branches.id))
+    .where(listCondition)
+  return Number(filteredTotal?.count || 0)
 }
 
 function parseScopedNumericId(value: unknown) {
@@ -955,23 +1068,22 @@ export async function GET(req: NextRequest) {
       scopedBranchIds,
     })
 
-    // Narrowing by the role that raised the order. Parsed before anything is
-    // built so a malformed value is refused rather than quietly dropped, which
-    // would return more rows than the caller asked for.
-    const creatorFilter = parseOrderCreatorRoleFilter(params.createdByRole)
-    if (!creatorFilter.ok) return NextResponse.json({ error: creatorFilter.message }, { status: 400 })
-    const deliveryFilter = parseOrderDeliveryFilter(params.delivery)
-    if (!deliveryFilter.ok) return NextResponse.json({ error: deliveryFilter.message }, { status: 400 })
-
     const pricesHidden = await shouldHidePricesForRole(role, orgIdNum)
+    const listQuery = parseOrderListQuery(params, pricesHidden)
+    if (!listQuery.ok) return NextResponse.json({ error: listQuery.error }, { status: 400 })
     addOrderDimensionConditions(conditions, params)
-    addOrderCreatorRoleCondition(conditions, creatorFilter.role)
+    addOrderCreatorRoleCondition(conditions, listQuery.creatorRole)
     addOrderDateConditions(conditions, params)
 
     // Status changes which rows are returned, but not the KPI scope. Keeping a
     // separate snapshot prevents a selected tab from zeroing the other cards.
     const summaryConditions = [...conditions]
-    addOrderStatusConditions(conditions, statusFilter, deliveryFilter.filter)
+    addOrderStatusConditions(
+      conditions,
+      statusFilter,
+      listQuery.deliveryFilter,
+      listQuery.fulfillmentStatusFilter,
+    )
 
     // --- Audit Logging for Group Access ---
     auditOrderGroupAccess(params, { organizationId: orgIdNum, userId: currentUserId, role })
@@ -1037,8 +1149,8 @@ export async function GET(req: NextRequest) {
 
     const { page, limit, offset } = params
     const items = await (conditions.length
-      ? selectBase.where(and(...conditions)).orderBy(desc(orders.createdAt)).limit(limit).offset(offset)
-      : selectBase.orderBy(desc(orders.createdAt)).limit(limit).offset(offset))
+      ? selectBase.where(and(...conditions)).orderBy(...listQuery.orderBy).limit(limit).offset(offset)
+      : selectBase.orderBy(...listQuery.orderBy).limit(limit).offset(offset))
 
     // The list is intentionally paginated, but the summary cards must describe
     // the complete filtered scope rather than only the current page of rows.
@@ -1072,7 +1184,13 @@ export async function GET(req: NextRequest) {
     })
     if (singleOrderResponse) return singleOrderResponse
 
-    const paginationTotal = Number(getOrderListSummaryTotal(statusFilter, summaryRow, deliveryFilter.filter))
+    const paginationTotal = await getOrderListPaginationTotal({
+      statusFilter,
+      summaryRow,
+      deliveryFilter: listQuery.deliveryFilter,
+      fulfillmentStatus: listQuery.fulfillmentStatusFilter,
+      conditions,
+    })
 
     return NextResponse.json({
       items: filtered,

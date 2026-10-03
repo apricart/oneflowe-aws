@@ -6,11 +6,15 @@ import { MultiBranchFilter } from "@/components/dashboard/multi-branch-filter"
 import { BranchFilter } from "@/components/reports/branch-filter"
 import { GroupFilter } from "@/components/reports/group-filter"
 import { KPICard } from "@/components/reports/kpi-card"
+import { ReportTableScroll } from "@/components/reports/report-table-scroll"
+import { SortableHeader, ariaSortFor, useTableSort } from "@/components/reports/sortable-header"
+import { sortRows, type SortValue } from "@/lib/table-sort"
 import { MultiSelectFilter } from "@/components/reports/multi-select-filter"
 import { OrganizationFilter as OrgFilter } from "@/components/reports/organization-filter"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card,CardContent,CardHeader,CardTitle } from "@/components/ui/card"
+import { usesPurchaseWording } from "@/lib/purchase-wording"
 import {
 DropdownMenu,
 DropdownMenuContent,
@@ -46,7 +50,7 @@ Upload
 } from "lucide-react"
 import { useSession } from "next-auth/react"
 import { useSearchParams } from "next/navigation"
-import { useCallback,useEffect,useMemo,useRef,useState } from "react"
+import { useCallback,useEffect,useMemo,useRef,useState,type ReactNode } from "react"
 import { Bar,CartesianGrid,ComposedChart,Legend,ResponsiveContainer,Tooltip,XAxis,YAxis } from "recharts"
 import useSWR from "swr"
 import * as XLSX from "xlsx"
@@ -54,6 +58,20 @@ import * as XLSX from "xlsx"
 type DateRange = { startDate: Date; endDate: Date }
 
 const ALL_MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+
+type BranchSortKey = "branch" | "status" | "group" | "revenue" | "refunds" | "orders" | "fulfillment"
+/** What each sortable column of the branch table orders by. */
+const BRANCH_SORT_ACCESSORS: Record<BranchSortKey, (row: any) => SortValue> = {
+    branch: (row) => row.name,
+    status: (row) => row.status,
+    group: (row) => row.groupName,
+    revenue: (row) => row.revenue,
+    refunds: (row) => row.refunds,
+    orders: (row) => row.totalOrders,
+    fulfillment: (row) => row.fulfilledOrders,
+}
+/** Numbers and dates show the largest or newest first on the first click. */
+const BRANCH_DESC_FIRST_SORT_KEYS = new Set<BranchSortKey>(["revenue", "refunds", "orders", "fulfillment"])
 
 export default function BranchReportsPage() {
     const searchParams = useSearchParams()
@@ -70,7 +88,7 @@ export default function BranchReportsPage() {
     const role = (session?.user as any)?.role as Role
     const userOrgId = (session?.user as any)?.organizationId
     const userBranchId = sessionUserBranchId || (session?.user as any)?.branchId
-    const isBuyer = role === "HEAD_OFFICE" || role === "BRANCH_ADMIN"
+    const isBuyer = usesPurchaseWording(role)
 
     // Role-based terminology
     const revenueLabel = isBuyer ? "Purchase" : "Revenue"
@@ -297,6 +315,22 @@ export default function BranchReportsPage() {
         
         return list
     }, [reportData?.items, reportSearch, role, userBranchId])
+
+    // The rank badge is the branch's place in the ranking the report returns,
+    // whichever column the table is currently sorted by.
+    const branchRank = useMemo(() => new Map<unknown, number>(filteredBranches.map((b: any, position: number) => [b.id, position] as const)), [filteredBranches])
+    // Column sort, applied after the search filter (plans/OF-TABLE-column-sorting.md).
+    const { sort: branchSort, toggleSort: toggleBranchSort } = useTableSort<BranchSortKey>()
+    const sortedBranchRows = useMemo(() => sortRows(filteredBranches, branchSort, BRANCH_SORT_ACCESSORS), [filteredBranches, branchSort])
+    const sortBranchHead = (key: BranchSortKey, label: ReactNode) => (
+        <SortableHeader
+            label={label}
+            sortKey={key}
+            sort={branchSort}
+            onSort={toggleBranchSort}
+            firstDirection={BRANCH_DESC_FIRST_SORT_KEYS.has(key) ? "desc" : "asc"}
+        />
+    )
 
     const normalizedTrend = useMemo(() => {
         const trend = chartData?.trend || []
@@ -687,17 +721,17 @@ export default function BranchReportsPage() {
                                     </Badge>
                                 </div>
                             </CardHeader>
-                            <CardContent className="p-0">
+                            <ReportTableScroll>
                                 <Table>
                                     <TableHeader>
                                         <TableRow className="bg-slate-50/50 dark:bg-slate-900/50 border-b border-slate-100 dark:border-slate-800">
-                                            <TableHead className="pl-8 h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400">Rank & Branch</TableHead>
-                                            <TableHead className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-center">Status</TableHead>
-                                            {role !== "BRANCH_ADMIN" && <TableHead className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400">Cluster / Group</TableHead>}
-                                            {!pricesHidden && <TableHead className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-right">{revenueHeader} (PKR)</TableHead>}
-                                            {!pricesHidden && <TableHead className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-right text-rose-500">Refunds</TableHead>}
-                                            <TableHead className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-right">Orders</TableHead>
-                                            <TableHead className="px-8 h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-center">Fulfillment</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(branchSort, "branch")} className="pl-8 h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400">{sortBranchHead("branch", "Rank & Branch")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(branchSort, "status")} className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-center">{sortBranchHead("status", "Status")}</TableHead>
+                                            {role !== "BRANCH_ADMIN" && <TableHead aria-sort={ariaSortFor(branchSort, "group")} className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400">{sortBranchHead("group", "Cluster / Group")}</TableHead>}
+                                            {!pricesHidden && <TableHead aria-sort={ariaSortFor(branchSort, "revenue")} className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-right">{sortBranchHead("revenue", <>{revenueHeader} (PKR)</>)}</TableHead>}
+                                            {!pricesHidden && <TableHead aria-sort={ariaSortFor(branchSort, "refunds")} className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-right text-rose-500">{sortBranchHead("refunds", "Refunds")}</TableHead>}
+                                            <TableHead aria-sort={ariaSortFor(branchSort, "orders")} className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-right">{sortBranchHead("orders", "Orders")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(branchSort, "fulfillment")} className="px-8 h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-center">{sortBranchHead("fulfillment", "Fulfillment")}</TableHead>
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
@@ -715,20 +749,20 @@ export default function BranchReportsPage() {
                                         )
                                           }
                                           return (
-                                            filteredBranches.map((branch: any, idx: number) => (
+                                            sortedBranchRows.map((branch: any) => (
                                                 <TableRow key={branch.id} className="group hover:bg-slate-50/80 dark:hover:bg-slate-900/40 border-b border-slate-50 dark:border-slate-900 transition-all h-20">
                                                     <TableCell className="pl-8">
                                                         <div className="flex items-center gap-4">
                                                             <div className={cn("h-8 w-8 rounded-full flex items-center justify-center text-[10px] font-bold border", (() => {
-                                                              if (idx === 0) {
+                                                              if (branchRank.get(branch.id) === 0) {
                                                                 return "bg-amber-100 border-amber-200 text-amber-700 shadow-sm"
                                                               }
-                                                              if (idx === 1) {
+                                                              if (branchRank.get(branch.id) === 1) {
                                                                 return "bg-slate-100 border-slate-200 text-slate-700"
                                                               }
                                                               return "bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-400"
                                                             })())}>
-                                                                {idx === 0 ? <Crown className="h-3.5 w-3.5" /> : idx + 1}
+                                                                {branchRank.get(branch.id) === 0 ? <Crown className="h-3.5 w-3.5" /> : (branchRank.get(branch.id) ?? 0) + 1}
                                                             </div>
                                                             <div className="flex flex-col">
                                                                 <span className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-tight group-hover:text-emerald-600 transition-colors uppercase">{branch.name}</span>
@@ -788,7 +822,7 @@ export default function BranchReportsPage() {
                                         })()}
                                     </TableBody>
                                 </Table>
-                            </CardContent>
+                            </ReportTableScroll>
                             <div className="px-8 py-5 border-t border-slate-100 dark:border-slate-900 bg-slate-50/50 dark:bg-slate-900/40 flex items-center justify-between">
                                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{filteredBranches.length} units listed</p>
                                 <p className="text-[10px] font-bold text-slate-300 dark:text-slate-700 font-mono italic" suppressHydrationWarning>GEN_TS: {generatedDate}</p>

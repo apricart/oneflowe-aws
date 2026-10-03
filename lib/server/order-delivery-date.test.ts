@@ -34,8 +34,11 @@ describe("order delivery date contracts", () => {
 
     expect(directFulfilment).toContain('requireApiRole(["SUPER_ADMIN"])')
     expect(directFulfilment).toContain("verifyResourceAccess(ord.organizationId, ord.branchId)")
-    expect(fulfilmentService).toContain("deliveredAt: fulfilledAt")
-    expect(fulfilmentService).toContain('updateOrderFulfillmentStatusColumn(tx, orderId, "DELIVERED")')
+    // Fulfilment no longer records a delivery: it requires one. The recorded
+    // delivery moment is never overwritten by the fulfilment that follows it.
+    expect(fulfilmentService).not.toContain("deliveredAt: fulfilledAt")
+    expect(fulfilmentService).not.toContain("updateOrderFulfillmentStatusColumn")
+    expect(directFulfilment).toContain("if (!isOrderDelivered(ord.fulfillmentStatus)) {")
   })
 
   it("uses deliveredAt for the waiting window without changing order-list scoping", () => {
@@ -53,9 +56,15 @@ describe("order delivery date contracts", () => {
   it("shows an explicit empty value for orders that have not been delivered", () => {
     const directory = source("components/orders/orders-directory.tsx")
 
-    expect(directory).toContain(">Order Date</th>")
-    expect(directory).toContain(">Delivery Date</th>")
+    // Headers are sortable labels (plans/OF-TABLE-column-sorting.md).
+    expect(directory).toContain('{sortLabel("orderDate", "Order Date")}</th>')
+    expect(directory).toContain('{sortLabel("deliveryDate", "Delivery Date")}</th>')
     expect(directory).toContain('order.deliveredAt ? format(new Date(order.deliveredAt), "dd MMM yyyy") : "—"')
-    expect(directory).toContain("overflow-x-auto")
+    // The table is wider than its card, so its horizontal scrollbar is always
+    // shown (overflow-x: scroll) rather than appearing only on overflow/hover.
+    // Rows scroll inside the bounded box (overflow-y: auto) so that scrollbar
+    // sits in the viewport instead of below the last row.
+    expect(directory).toContain("orders-table-scrollbar")
+    expect(source("app/globals.css")).toMatch(/\.orders-table-scrollbar \{\s*overflow-x: scroll;\s*overflow-y: auto;/)
   })
 })

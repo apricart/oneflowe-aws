@@ -241,6 +241,9 @@ const navigationByRole = (role: string, budgetAllocationEnabled: boolean) => {
           { href: "/reports/order-report", label: "Order Report" },
           { href: "/reports/group-orders", label: "Group Order Report" },
           { href: "/reports/refund-report", label: "Refund Report" },
+          // Goes with the allocation grant: an approver that may allocate to its
+          // branches may read their budget report, and no other approver.
+          ...(budgetAllocationEnabled ? [{ href: "/reports/budget-summary", label: "Budget Report" }] : []),
           { href: "/reports/product-performance", label: "Product Report" },
           { href: "/reports/user-report", label: "User Report" },
           { href: "/reports/branch-reports", label: "Branch Report" },

@@ -48,6 +48,14 @@ describe("KpiRow", () => {
     expect(screen.queryByText(/organizations with budget allocation off/)).toBeNull()
   })
 
+  it("shows Consumed as one figure, never split into spent and committed", () => {
+    render(<KpiRow kpis={kpis({ budgetTracking: "all", totalBudgetCents: 100_000, spentCents: 25_000, heldCents: 15_000, consumedCents: 40_000, remainingCents: 60_000, utilizationPct: 40 })} loading={false} />)
+
+    expect(screen.queryByText(/spent/i)).toBeNull()
+    expect(screen.queryByText(/committed/i)).toBeNull()
+    expect(screen.getByText(/including orders awaiting approval/)).toBeTruthy()
+  })
+
   it("keeps an older response without the field on the budget figures", () => {
     render(<KpiRow kpis={kpis()} loading={false} />)
 

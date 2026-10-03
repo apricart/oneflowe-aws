@@ -71,24 +71,26 @@ describe("Budget vs Consumed", () => {
     expect(within(screen.getByRole("table")).getByText("no budget")).toBeTruthy()
   })
 
-  it("surfaces the exact figures in the table view, Consumed beside its two halves", () => {
+  it("surfaces Consumed and Remaining in the table view, never split into spent and committed", () => {
     render(<BudgetVsActualChart rows={[branch()]} loading={false} error={null} />)
     showTable("Budget vs Consumed by Branch")
     const table = within(screen.getByRole("table"))
     expect(table.getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
-      "Branch", "Total Budget", "Consumed", "Spent", "Committed", "Remaining", "Utilization",
+      "Branch", "Total Budget", "Consumed", "Remaining", "Utilization",
     ])
     expect(table.getByText("Airport Branch")).toBeTruthy()
     expect(table.getByText("6.1%")).toBeTruthy()
+    // The fixture's spent (Rs 830) and committed (Rs 6,450) halves are not printed.
+    expect(table.queryByText(/830/)).toBeNull()
+    expect(table.queryByText(/6,450/)).toBeNull()
   })
 
   it("draws exactly two series — Total budget and Consumed — never a stacked split", () => {
-    // The client's ask, in the words of the legend: two bars per branch. The
-    // halves of Consumed are in the tooltip and the table, not on the axis.
+    // The client's ask, in the words of the legend: two bars per branch.
     render(<BudgetVsActualChart rows={[branch()]} loading={false} error={null} />)
     const legend = screen.getByRole("list")
     expect(within(legend).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
-      "Total budget", "Consumed (spent + committed)",
+      "Total budget", "Consumed",
     ])
   })
 

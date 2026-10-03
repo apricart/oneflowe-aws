@@ -34,6 +34,24 @@ export function isSessionValidationUnavailablePayload(
 }
 
 /**
+ * A rejected session makes the `session` callback return `null`, which NextAuth
+ * serialises as a JSON `null` body. The NextAuth v4 client runs
+ * `Object.keys(data)` on that body and logs CLIENT_FETCH_ERROR on every poll,
+ * so it is rewritten to `{}`, NextAuth's own "no session" body.
+ */
+function withEmptySessionBody(response: Response): Response {
+  const headers = new Headers(response.headers)
+  headers.delete("content-length")
+  headers.set("content-type", "application/json; charset=utf-8")
+
+  return new Response("{}", {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
+}
+
+/**
  * Passive reads never write cookies. A transient server-side validation-store
  * failure is surfaced as 503 for both reads and activity updates, and its
  * response can never overwrite or clear the caller's still-signed cookie.
@@ -43,11 +61,17 @@ export async function hardenSessionEndpointResponse(
   options: { allowCookieWrite: boolean },
 ): Promise<Response> {
   let validationUnavailable = false
+  let emptySession = false
   try {
     const payload = await response.clone().json()
     validationUnavailable = isSessionValidationUnavailablePayload(payload)
+    emptySession = payload === null
   } catch {
     // Non-JSON responses are handled by the caller/NextAuth unchanged.
+  }
+
+  if (emptySession) {
+    response = withEmptySessionBody(response)
   }
 
   if (validationUnavailable) {

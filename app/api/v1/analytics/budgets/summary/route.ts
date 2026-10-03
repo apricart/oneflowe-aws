@@ -8,6 +8,9 @@ import { redactAnalyticsPrices,shouldHidePricesForRole } from "@/lib/price-visib
 import { buildAppMonthPeriods,getAppMonthPeriod,parseEndDateParam,parseStartDateParam } from "@/lib/date-range-params"
 import { consumedHeldCentsSql,consumedSpentCentsSql,orderBudgetMonthSql,orderBudgetPeriodSql,orderBudgetYearSql } from "@/lib/server/budget-consumption-sql"
 import { budgetEnabledBranchSql,budgetTrackedOrderSql,isOrganizationBudgetEnabled } from "@/lib/server/organization-budget-policy"
+import { fenceToAssignedBranches } from "@/lib/money-budget-access"
+import { resolveScopedBranchIds,usesMultiBranchScope } from "@/lib/server/multi-branch-scope"
+import { isGroupUserBudgetAllocationEnabled } from "@/lib/server/group-user-budget-allocation"
 
 const emptyBudgetSummary = {
     summary: { totalAllocated: 0, totalSpent: 0, totalHeld: 0, totalCredited: 0, totalRemaining: 0 },
@@ -72,6 +75,14 @@ async function resolveBudgetStartDate(context: any) {
     const start = new Date()
     start.setDate(1)
     return start
+}
+
+async function resolveBudgetDateRange(context: any) {
+    const startDate = await resolveBudgetStartDate(context)
+    const endDate = parseEndDateParam(context.endDateParam) || new Date()
+    if (!context.startDateParam) startDate.setHours(0, 0, 0, 0)
+    if (!context.endDateParam) endDate.setHours(23, 59, 59, 999)
+    return { startDate, endDate }
 }
 
 function buildRecordLookup<T extends { branchId: number; period: string }>(records: T[]) {
@@ -227,6 +238,38 @@ async function loadOrderScopedSpending(context: any) {
 }
 
 /**
+ * The assignment fence for the group roles, read from the database by user id
+ * and never from the request. `null` means the caller is not fenced by
+ * assignment: its tenant predicate is applied in `loadActiveBudgetBranches`.
+ */
+async function loadAssignedReportBranchIds(userRole: string, userId: unknown): Promise<number[] | null> {
+    if (!usesMultiBranchScope(userRole)) return null
+    if (typeof userId !== "string" || userId.length === 0) return []
+    return resolveScopedBranchIds(db, userId)
+}
+
+/**
+ * The approver reads budgets only with the same account grant that lets it
+ * allocate them, re-read from the database rather than the JWT claim.
+ */
+async function mayReadBudgetReport(userRole: string, userId: unknown, userOrgId: unknown): Promise<boolean> {
+    return userRole !== "GROUP_USER" || isGroupUserBudgetAllocationEnabled(userId, userOrgId)
+}
+
+/**
+ * The branch set the request resolves to, fenced to the caller's assignments.
+ * The group roles see their assigned branches and no others, whatever the
+ * query string names; the fence is applied to the fully resolved set so a
+ * group filter cannot reach past it either. `isNarrowed` marks a set that may
+ * legitimately come out empty, which is answered with an empty report.
+ */
+async function resolveReportBranchIds(context: any): Promise<{ branchIds: number[]; isNarrowed: boolean }> {
+    const assignedBranchIds = await loadAssignedReportBranchIds(context.userRole, context.userId)
+    const branchIds = fenceToAssignedBranches(await resolveBudgetBranchIds(context), assignedBranchIds)
+    return { branchIds, isNarrowed: context.groupIds.length > 0 || assignedBranchIds !== null }
+}
+
+/**
  * Whether the report is for one tenant that has budget allocation off. The
  * page reads the flag this answers to say so, rather than show a report of
  * zeroes as though they were a budget.
@@ -243,6 +286,11 @@ export async function GET(req: NextRequest) {
         const userRole = ((session.user as any).role || "").toUpperCase().replace(/\s+/g, '_')
         const userOrgId = (session.user as any).organizationId
         const userBranchId = (session.user as any).branchId
+        const userId = (session.user as any).id
+
+        if (!await mayReadBudgetReport(userRole, userId, userOrgId)) {
+            return NextResponse.json({ error: "Budget allocation is not enabled for this user" }, { status: 403 })
+        }
 
         const url = new URL(req.url)
         const startDateParam = url.searchParams.get("startDate")
@@ -265,22 +313,18 @@ export async function GET(req: NextRequest) {
 
         if (await isBudgetDisabledTenant(allowedOrgId)) return respond({ ...emptyBudgetSummary, budgetsEnabled: false })
 
-        const branchIds = await resolveBudgetBranchIds({
-            branchIdsParam, branchIdParam, userRole, userBranchId, allowedOrgId, groupIds,
+        const { branchIds, isNarrowed } = await resolveReportBranchIds({
+            branchIdsParam, branchIdParam, userRole, userId, userBranchId, allowedOrgId, groupIds,
         })
 
-        if (groupIds.length > 0 && branchIds.length === 0) return respond(emptyBudgetSummary)
+        if (isNarrowed && branchIds.length === 0) return respond(emptyBudgetSummary)
 
         if (branchIds.length === 0) {
             return NextResponse.json({ error: "No branches selected" }, { status: 400 })
         }
 
         // 2. Date/Period parsing
-        const startDate = await resolveBudgetStartDate({ startDateParam, preset, branchIds, allowedOrgId })
-        const endDate = parseEndDateParam(endDateParam) || new Date()
-
-        if (!startDateParam) startDate.setHours(0, 0, 0, 0)
-        if (!endDateParam) endDate.setHours(23, 59, 59, 999)
+        const { startDate, endDate } = await resolveBudgetDateRange({ startDateParam, endDateParam, preset, branchIds, allowedOrgId })
 
         // Get unique YYYY-MM periods from the date range to query budgets table
         let periodList = buildAppMonthPeriods(startDate, endDate, months, years)

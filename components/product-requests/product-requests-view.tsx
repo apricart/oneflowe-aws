@@ -20,6 +20,7 @@ import {
   PRODUCT_REQUEST_PAGE_SIZE_DEFAULT,
   PRODUCT_REQUEST_STATUSES,
   PRODUCT_REQUEST_STATUS_LABELS,
+  formatProductRequestDay,
   isProductRequestImagePath,
   productRequestTitle,
   type ProductRequestList,
@@ -269,12 +270,22 @@ function ProductRequestsTable({
             </TableCell>
             {showOrganization ? <TableCell className="text-sm">{item.organization.name}</TableCell> : null}
             <TableCell className="text-sm">{dateLabel(item.createdAt)}</TableCell>
-            <TableCell><ProductRequestStatusBadge status={item.status} /></TableCell>
+            <TableCell>
+              <ProductRequestStatusBadge status={item.status} />
+              <AvailabilityHint item={item} />
+            </TableCell>
           </TableRow>
         ))}
       </TableBody>
     </Table>
   )
+}
+
+/** Under an approved request's status: when the product is expected in the catalogue. */
+function AvailabilityHint({ item }: Readonly<{ item: ProductRequestListItem }>) {
+  const availableOn = item.status === "APPROVED" ? formatProductRequestDay(item.estimatedAvailableOn) : null
+  if (!availableOn) return null
+  return <p className="mt-1 whitespace-nowrap text-xs text-muted-foreground">Expected by {availableOn}</p>
 }
 
 function ViewHeader({
@@ -334,7 +345,7 @@ function StatusTabs({
   const total = counts ? PRODUCT_REQUEST_STATUSES.reduce((sum, key) => sum + counts[key], 0) : undefined
   return (
     <Tabs value={status} onValueChange={onChange}>
-      <TabsList>
+      <TabsList className="h-auto flex-wrap">
         <TabsTrigger value="all">All{suffix(total)}</TabsTrigger>
         {PRODUCT_REQUEST_STATUSES.map((key) => (
           <TabsTrigger key={key} value={key}>

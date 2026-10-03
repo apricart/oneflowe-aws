@@ -7,6 +7,7 @@ import { verifyApprovalToken } from "@/lib/approval-token"
 import { logFulfillmentAttempt } from "@/lib/global-logger"
 import { orderSelectColumns } from "@/lib/order-select"
 import { fulfillApprovedOrder, type OrderFulfillmentOutcome } from "@/lib/server/order-fulfillment"
+import { isOrderDelivered } from "@/lib/fulfillment-status"
 import { fulfillmentSchema, validationMessage } from "@/lib/server/mutation-validation"
 
 function fulfillmentOutcomeResponse(outcome: OrderFulfillmentOutcome) {
@@ -15,9 +16,6 @@ function fulfillmentOutcomeResponse(outcome: OrderFulfillmentOutcome) {
   }
   if (outcome === "ledger-conflict") {
     return error("Order budget hold is inconsistent; fulfilment was not applied", 409)
-  }
-  if (outcome === "migration-missing") {
-    return error("Fulfillment progress migration has not been applied", 503)
   }
   return null
 }
@@ -52,6 +50,13 @@ export async function POST(
 
   if (ord.status.toUpperCase() !== "APPROVED") {
     return error(`Cannot fulfill order in ${ord.status} state`, 400)
+  }
+
+  // Goods that have not arrived are never fulfilled, by any role. Delivery is
+  // recorded through the delivery-progress route; the claim in
+  // `fulfillApprovedOrder` enforces the same rule against a race.
+  if (!isOrderDelivered(ord.fulfillmentStatus)) {
+    return error("Order cannot be fulfilled until it has been delivered", 409)
   }
 
   if (!ord.approvalTokenHash) {

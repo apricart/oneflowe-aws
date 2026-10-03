@@ -67,7 +67,15 @@ export type ComparisonRow = {
   cumulativeShare: number
 }
 
-export type EntitySeries = { key: string; label: string; points: Array<{ period: string; value: number }> }
+/**
+ * One line per entity. `quantity` and `spendCents` ride along with the drawn
+ * `value` so a point can be read as both; absent from an older response.
+ */
+export type EntitySeries = {
+  key: string
+  label: string
+  points: Array<{ period: string; value: number; quantity?: number; spendCents?: number }>
+}
 
 /**
  * What a reader clicked: the entity, and — on a trend — the bucket as well.
@@ -214,6 +222,7 @@ function EntityTooltip({ row, format, metricLabel, concentrationEligible, showCh
   // below is for the budget metrics, where the figure *is* the position.
   if (budgetBeside) {
     rows.push(
+      { label: "Quantity", value: countShort(row.quantity) } as any,
       { label: "Total budget", value: money(row.totalBudgetCents ?? 0), color: BUDGET_BESIDE_COLOR } as any,
       { label: "% of budget", value: budgetShareLabel(row.value, row.totalBudgetCents), muted: true } as any,
       { label: "Orders", value: countShort(row.orderCount), muted: true } as any,
@@ -225,8 +234,10 @@ function EntityTooltip({ row, format, metricLabel, concentrationEligible, showCh
       { label: "Remaining", value: money(row.remainingCents ?? 0), muted: true } as any,
     )
   } else {
+    // Both figures, whichever one the bar is drawn from.
+    if (format !== "quantity") rows.push({ label: "Quantity", value: countShort(row.quantity) } as any)
     rows.push(
-      { label: metricLabel === "Consumed" ? "Consumed" : "Procurement value", value: money(row.spendCents), muted: true } as any,
+      { label: metricLabel === "Consumed" ? "Consumed" : "Procurement value", value: money(row.spendCents), muted: format !== "quantity" } as any,
       { label: "Orders", value: countShort(row.orderCount), muted: true } as any,
     )
   }
@@ -376,6 +387,32 @@ const LABEL_MEASURED = { fontSize: 11, fill: "var(--viz-ink)", fontWeight: 700 }
 const LABEL_COMPANION = { fontSize: 10, fill: "var(--viz-axis)", fontWeight: 600 } as const
 /** A reference figure is never the subject, so it never takes the leading ink. */
 const LABEL_REFERENCE = { fontSize: 11, fill: "var(--viz-axis)", fontWeight: 600 } as const
+/** Both figures as one upright string: one size, each half in its own ink. */
+const LABEL_COMBINED = { fontSize: 10, fill: "var(--viz-ink)", fontWeight: 600 } as const
+
+/**
+ * Quantity and value as one upright string, "12 · 142.8K", for a column too
+ * narrow to stand two lines beside it. The measure the column is drawn from
+ * keeps the leading ink; the other half takes the companion's.
+ */
+export function CombinedFigure({ x, y, quantity, money: value, format }: Readonly<{
+  x: number
+  y: number
+  quantity: string
+  money: string
+  format: string
+}>) {
+  const quantityIsMeasured = format !== "currency"
+  const ink = (measured: boolean) => (measured
+    ? { fill: LABEL_MEASURED.fill, fontWeight: LABEL_MEASURED.fontWeight }
+    : { fill: LABEL_COMPANION.fill, fontWeight: LABEL_COMPANION.fontWeight })
+  return (
+    <ColumnFigure x={x} y={y} rotated style={LABEL_COMBINED}>
+      <tspan style={ink(quantityIsMeasured)}>{quantity}</tspan>
+      <tspan style={ink(!quantityIsMeasured)}>{` · ${value}`}</tspan>
+    </ColumnFigure>
+  )
+}
 
 /**
  * Past this many columns a figure drawn across the column is wider than the
@@ -455,8 +492,12 @@ const DUAL_LABEL_BOTTOM_LINE = 5
 const DUAL_LABEL_GAP = 14
 /** Two stacked lines need more headroom above the tallest column than one does. */
 const DUAL_LABEL_TOP_MARGIN = 36
+/** …and a budget figure lifted clear over the pair needs one line more. */
+const DUAL_BUDGET_LABEL_TOP_MARGIN = 50
 /** An upright figure stands on its length: six or seven characters of it. */
 const ROTATED_LABEL_TOP_MARGIN = 56
+/** Both figures as one upright string, "1.2K · 142.8K", stand on twice that. */
+const ROTATED_COMBINED_LABEL_TOP_MARGIN = 88
 
 /**
  * The `LabelList` content that draws them.
@@ -470,7 +511,12 @@ const ROTATED_LABEL_TOP_MARGIN = 56
  * where "12 · 142.8K" read bottom-to-top keeps the quantity first, which is
  * the order the reader was promised.
  */
-export function dualColumnLabel(rows: ReadonlyArray<ComparisonRow>, format: string, rotated: boolean) {
+export function dualColumnLabel(
+  rows: ReadonlyArray<Pick<ComparisonRow, "quantity" | "spendCents"> | null | undefined>,
+  format: string,
+  rotated: boolean,
+  options?: Readonly<{ combined?: boolean; nudge?: number }>,
+) {
   const quantityIsMeasured = format !== "currency"
   const quantityStyle = quantityIsMeasured ? LABEL_MEASURED : LABEL_COMPANION
   const moneyStyle = quantityIsMeasured ? LABEL_COMPANION : LABEL_MEASURED
@@ -483,7 +529,12 @@ export function dualColumnLabel(rows: ReadonlyArray<ComparisonRow>, format: stri
     if (!row || !Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width)) return <g />
 
     const lines = dualColumnLabelLines(row)
-    const centre = x + width / 2
+    const centre = x + width / 2 + (options?.nudge ?? 0)
+    // Beside a budget column there is room for one upright line, not two:
+    // the pair is printed as one string, quantity first.
+    if (rotated && options?.combined) {
+      return <CombinedFigure x={centre} y={y - COLUMN_LABEL_OFFSET} quantity={lines.quantity} money={lines.money} format={format} />
+    }
     // Turned upright the pair becomes two parallel lines rather than two
     // stacked ones: the same design rotated, so the quantity that led above
     // the column leads to the left of it.
@@ -541,9 +592,11 @@ export function columnTopMargin(options: Readonly<{
   dual: boolean
   budgetBeside?: boolean
   rotated: boolean
+  /** Upright figures printed as one "quantity · value" string. */
+  combined?: boolean
 }>): number {
-  if (options.rotated) return ROTATED_LABEL_TOP_MARGIN
-  if (options.dual) return DUAL_LABEL_TOP_MARGIN
+  if (options.rotated) return options.combined ? ROTATED_COMBINED_LABEL_TOP_MARGIN : ROTATED_LABEL_TOP_MARGIN
+  if (options.dual) return options.budgetBeside ? DUAL_BUDGET_LABEL_TOP_MARGIN : DUAL_LABEL_TOP_MARGIN
   return options.budgetBeside ? BUDGET_LABEL_TOP_MARGIN : 20
 }
 
@@ -579,12 +632,17 @@ const BUDGET_LABEL_TOP_MARGIN = 32
  * surface. When the two would land within a line of each other, the budget is
  * lifted clear: it is the reference, so it is the one that moves, and it moves
  * the same way whether the branch is just under its budget or just over it.
+ *
+ * `valueLines` is how many lines the value column's label stands on — two when
+ * it carries both quantity and value — so the budget clears the whole block,
+ * landing a line above its top line.
  */
-export function budgetLabelY(budgetTop: number, valueTop: number): number {
+export function budgetLabelY(budgetTop: number, valueTop: number, valueLines = 1): number {
   const natural = budgetTop - COLUMN_LABEL_OFFSET
-  const valueLabel = valueTop - COLUMN_LABEL_OFFSET
-  if (Math.abs(natural - valueLabel) >= COLUMN_LABEL_LINE) return natural
-  return valueLabel - COLUMN_LABEL_LINE
+  const valueLowest = valueTop - COLUMN_LABEL_OFFSET
+  const valueHighest = valueLowest - (Math.max(1, valueLines) - 1) * (DUAL_LABEL_TOP_LINE - DUAL_LABEL_BOTTOM_LINE)
+  if (natural >= valueLowest + COLUMN_LABEL_LINE || natural <= valueHighest - COLUMN_LABEL_LINE) return natural
+  return valueHighest - COLUMN_LABEL_LINE
 }
 
 /**
@@ -600,6 +658,7 @@ export function budgetColumnLabelContent(
   rows: ReadonlyArray<ComparisonRow>,
   rotated: boolean,
   nudge = 0,
+  valueLines = 1,
 ) {
   return function BudgetColumnLabel(props: any) {
     const row = rows[Number(props?.index)]
@@ -619,13 +678,42 @@ export function budgetColumnLabelContent(
     return (
       <ColumnFigure
         x={x + width / 2 - nudge}
-        y={liftable ? budgetLabelY(y, valueTop) : y - COLUMN_LABEL_OFFSET}
+        y={liftable ? budgetLabelY(y, valueTop, valueLines) : y - COLUMN_LABEL_OFFSET}
         rotated={rotated}
         style={LABEL_REFERENCE}
       >
         {text}
       </ColumnFigure>
     )
+  }
+}
+
+/**
+ * How the figures over a column chart are laid out.
+ *
+ * Beside a budget, the quantity-and-value pair labels the value column alone
+ * and the budget column keeps its one figure. Upright, there is room over a
+ * budget pair for one line per column, so the value's two figures become one
+ * string; across, the budget figure clears both of the pair's lines.
+ */
+function columnLabelLayout(
+  rows: ReadonlyArray<ComparisonRow>,
+  format: string,
+  options: Readonly<Pick<ChartProps, "dualValueLabels" | "budgetBeside" | "fullWidth">>,
+) {
+  const dual = Boolean(options.dualValueLabels)
+  const rotated = columnLabelsRotated(rows.length, options.fullWidth)
+  const combined = dual && Boolean(options.budgetBeside) && rotated
+  const nudge = columnLabelNudge(rotated, options.budgetBeside)
+  return {
+    dual,
+    rotated,
+    nudge,
+    topMargin: columnTopMargin({ dual, budgetBeside: options.budgetBeside, rotated, combined }),
+    valueLabel: dual
+      ? dualColumnLabel(rows, format, rotated, { combined, nudge: combined ? nudge : 0 })
+      : columnValueLabel(rows, format, rotated, nudge),
+    budgetValueLines: dual ? 2 : 1,
   }
 }
 
@@ -647,12 +735,9 @@ function ColumnChart({
 }: Readonly<ChartProps>) {
   const angled = columnTicksAngled(rows)
   const drill = drillHandler(dimension, onDrillDown)
-  // A budget beside already gives the column a companion of its own; stacking
-  // a second pair of figures over the pair of columns would read as four.
-  const dual = Boolean(dualValueLabels) && !budgetBeside
-  const rotated = columnLabelsRotated(rows.length, fullWidth)
-  const nudge = columnLabelNudge(rotated, budgetBeside)
-  const topMargin = columnTopMargin({ dual, budgetBeside, rotated })
+  const { dual, rotated, nudge, topMargin, valueLabel, budgetValueLines } = columnLabelLayout(rows, format, {
+    dualValueLabels, budgetBeside, fullWidth,
+  })
   return (
     <>
       {/* The card grows for the labels rather than the plot shrinking for them. */}
@@ -704,7 +789,11 @@ function ColumnChart({
                 because a value is text and the column under it is what says
                 which quantity it belongs to.
               */}
-              <LabelList dataKey="totalBudgetCents" position="top" content={budgetColumnLabelContent(rows, rotated, nudge)} />
+              <LabelList
+                dataKey="totalBudgetCents"
+                position="top"
+                content={budgetColumnLabelContent(rows, rotated, nudge, budgetValueLines)}
+              />
             </Bar>
           ) : null}
           <Bar
@@ -722,9 +811,7 @@ function ColumnChart({
             <LabelList
               dataKey="value"
               position="top"
-              content={dual
-                ? dualColumnLabel(rows, format, rotated)
-                : columnValueLabel(rows, format, rotated, nudge)}
+              content={valueLabel}
             />
           </Bar>
         </BarChart>
@@ -738,12 +825,7 @@ function ColumnChart({
         ]}
       />
       <DrillHint enabled={Boolean(drill)} noun={dimensionLabel.toLowerCase()} />
-      {dual ? (
-        <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
-          Each column is labelled with its quantity {rotated ? "before" : "above"} its value in ₨, whichever measure the
-          columns are drawn from. Values are abbreviated; the exact figures are in the tooltip and the table.
-        </p>
-      ) : null}
+      {dual ? <DualLabelNote metricLabel={metricLabel} rotated={rotated} budgetBeside={budgetBeside} /> : null}
       {budgetBeside ? (
         <BudgetBesideNote metricLabel={metricLabel} />
       ) : null}
@@ -751,10 +833,27 @@ function ColumnChart({
   )
 }
 
+/** How to read the two figures over a column, and — beside a budget — which column carries which. */
+function DualLabelNote({ metricLabel, rotated, budgetBeside }: Readonly<{
+  metricLabel: string
+  rotated: boolean
+  budgetBeside?: boolean
+}>) {
+  const order = rotated ? "before" : "above"
+  const copy = budgetBeside
+    ? `Each ${metricLabel.toLowerCase()} column is labelled with its quantity ${order} its value in ₨; the Total budget column beside it carries the budget.`
+    : `Each column is labelled with its quantity ${order} its value in ₨, whichever measure the columns are drawn from.`
+  return (
+    <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+      {copy} Values are abbreviated; the exact figures are in the tooltip and the table.
+    </p>
+  )
+}
+
 function BudgetBesideNote({ metricLabel }: Readonly<{ metricLabel: string }>) {
   const copy = metricLabel === "Consumed"
-    ? "Total budget is allocated + add-ons for every month in the period. Consumed includes pending orders as committed and excludes cancelled, rejected, and refunded orders."
-    : `Total budget is allocated + add-ons for every month in the period. ${metricLabel} excludes pending orders, so its share of budget reads lower than the Overview's Utilization, which counts them as committed.`
+    ? "Total budget is allocated + add-ons for every month in the period. Consumed includes orders awaiting approval and excludes cancelled, rejected, and refunded orders."
+    : `Total budget is allocated + add-ons for every month in the period. ${metricLabel} excludes pending orders, so its share of budget reads lower than the Overview's Utilization, which counts them.`
   return <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">{copy}</p>
 }
 
@@ -902,6 +1001,22 @@ function DrillDot({ cx, cy, color, payload, onDrill }: Readonly<{
   )
 }
 
+/**
+ * One line's figure in the trend tooltip: quantity and amount together when
+ * the point carries both, whichever one the line is drawn from — otherwise the
+ * drawn value alone, for a response that predates them or a metric that is
+ * neither.
+ */
+export function trendPointLabel(
+  point: EntitySeries["points"][number] | undefined,
+  drawn: number,
+  format: string,
+): string {
+  const carriesBoth = typeof point?.quantity === "number" && typeof point?.spendCents === "number"
+  if (!carriesBoth || (format !== "currency" && format !== "quantity")) return formatByKind(drawn, format)
+  return `Qty ${countShort(point?.quantity ?? 0)} · ${money(point?.spendCents ?? 0)}`
+}
+
 function TrendChart({
   series, periods, format, metricLabel, dimension, onDrillDown, dimensionLabel,
 }: Readonly<ChartProps>) {
@@ -951,7 +1066,11 @@ function TrendChart({
                   title={String(label)}
                   rows={series.map((entity, index) => ({
                     label: entity.label,
-                    value: formatByKind(Number(payload.find((p: any) => p.dataKey === entity.key)?.value ?? 0), format),
+                    value: trendPointLabel(
+                      entity.points.find((point) => point.period === label),
+                      Number(payload.find((p: any) => p.dataKey === entity.key)?.value ?? 0),
+                      format,
+                    ),
                     color: SERIES[index % SERIES.length],
                   }))}
                 />

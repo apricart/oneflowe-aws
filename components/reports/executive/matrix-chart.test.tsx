@@ -7,6 +7,8 @@ import {
   cellDrillTarget,
   columnData,
   indexCells,
+  matrixCellFigure,
+  matrixColumnsLabelled,
   type MatrixResponse,
 } from "./matrix-chart"
 
@@ -173,5 +175,30 @@ describe("the table's swatches", () => {
     // Ahmed, Sana, Total: the two people carry the swatches; the margin does not.
     expect(swatchesIn(table.getAllByRole("rowheader"))).toEqual([true, true, false])
     expect(swatchesIn(table.getAllByRole("columnheader"))).toEqual([false, false, false, false, false])
+  })
+})
+
+describe("both figures for a pair", () => {
+  const cell = { row: AHMED, column: "186", value: 7000, spendCents: 7000, quantity: 14, orderCount: 2 }
+
+  it("reads a cell as quantity and amount, whichever the grid is measured by", () => {
+    expect(matrixCellFigure(cell, "currency").replace(/\s/g, " ")).toBe("Qty 14 · Rs 70")
+    expect(matrixCellFigure({ ...cell, value: 14 }, "quantity").replace(/\s/g, " ")).toBe("Qty 14 · Rs 70")
+  })
+
+  it("keeps the drawn figure alone for a metric that is neither", () => {
+    expect(matrixCellFigure({ ...cell, value: 2 }, "count")).toBe("2")
+  })
+
+  it("labels the columns only while each still has the width for its figure", () => {
+    expect(matrixColumnsLabelled(24)).toBe(true)
+    expect(matrixColumnsLabelled(25)).toBe(false)
+    expect(matrixColumnsLabelled(60, true)).toBe(true)
+    expect(matrixColumnsLabelled(61, true)).toBe(false)
+  })
+
+  it("says how to read the figures on a labelled grid", () => {
+    render(<MatrixChart response={response()} />)
+    expect(screen.getByText(/labelled with its quantity above its value/)).toBeTruthy()
   })
 })

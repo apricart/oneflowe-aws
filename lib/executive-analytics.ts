@@ -108,7 +108,7 @@ export const EXECUTIVE_METRICS: Record<ExecutiveMetricId, MetricDefinition> = {
     format: "currency",
     grain: "order",
     unitSensitive: false,
-    formula: "SUM(order.totalCents - order.refundAmountCents) over revenue-eligible orders",
+    formula: "SUM(order.totalCents - order.refundAmountCents) over approved and fulfilled orders",
     decision: "Where the money actually went in the selected period.",
   },
   orders: {
@@ -117,7 +117,7 @@ export const EXECUTIVE_METRICS: Record<ExecutiveMetricId, MetricDefinition> = {
     format: "count",
     grain: "order",
     unitSensitive: false,
-    formula: "COUNT(order) over revenue-eligible orders",
+    formula: "COUNT(order) over approved and fulfilled orders",
     decision: "Purchasing activity independent of order size.",
   },
   avgOrderValue: {
@@ -135,7 +135,7 @@ export const EXECUTIVE_METRICS: Record<ExecutiveMetricId, MetricDefinition> = {
     format: "quantity",
     grain: "line",
     unitSensitive: false,
-    formula: "SUM(orderItem.quantity) over lines of revenue-eligible orders; each ordered item counts as one quantity regardless of its unit label",
+    formula: "SUM(orderItem.quantity) over lines of approved and fulfilled orders; each ordered item counts as one quantity regardless of its unit label",
     decision: "Ordered item counts, when money hides a price change.",
   },
   avgUnitPrice: {
@@ -819,7 +819,7 @@ export const EXECUTIVE_CHARTS: ExecutiveChartDefinition[] = [
     title: "Budget vs Consumed by Branch",
     businessQuestion: "Is each branch living within the budget it was given?",
     decision: "Move budget toward branches that need it, away from branches that cannot use it.",
-    metric: "Total Budget, Consumed (spent + committed), Remaining",
+    metric: "Total Budget, Consumed, Remaining",
     chart: "grouped-bar",
     priority: "P0",
   },
@@ -1070,10 +1070,10 @@ export type SideBySidePanel = {
    * Each column is labelled with both of its figures — quantity above value
    * — rather than with the one measure the columns are drawn from.
    *
-   * For the panel people flip the Amount ⇄ Quantity toggle on: "twelve reams
-   * for 142,800" is one reading, and made of two columns' worth of flipping
-   * otherwise. Only the printing changes; the height is still the selected
-   * measure, and the tooltip and table are untouched.
+   * "Twelve reams for 142,800" is one reading, and made of two columns' worth
+   * of flipping the Amount ⇄ Quantity toggle otherwise, so every column panel
+   * carries it. Only the printing changes; the height is still the selected
+   * measure. Beside a budget column it labels the value column alone.
    */
   dualValueLabels?: boolean
 }
@@ -1125,6 +1125,7 @@ export const SIDE_BY_SIDE_PANELS: SideBySidePanel[] = [
     question: "Which product categories were ordered the most? Each bar adds up every product in that category.",
     colorful: true,
     hiddenForSingleProduct: true,
+    dualValueLabels: true,
   },
   {
     id: "by-requester",
@@ -1133,6 +1134,7 @@ export const SIDE_BY_SIDE_PANELS: SideBySidePanel[] = [
     title: "By requester",
     question: "Which people ordered the most? Each bar is one person's total.",
     colorful: true,
+    dualValueLabels: true,
   },
   /**
    * The two panels whose entities hold a budget — a branch directly, a month
@@ -1147,6 +1149,7 @@ export const SIDE_BY_SIDE_PANELS: SideBySidePanel[] = [
     question: "How much each branch ordered, shown next to the budget that branch was given.",
     colorful: true,
     budgetBeside: true,
+    dualValueLabels: true,
   },
   {
     id: "by-month",
@@ -1156,6 +1159,7 @@ export const SIDE_BY_SIDE_PANELS: SideBySidePanel[] = [
     question: "How much was ordered in each month, shown next to that month's budget.",
     colorful: false,
     budgetBeside: true,
+    dualValueLabels: true,
   },
   {
     id: "requesters-over-months",

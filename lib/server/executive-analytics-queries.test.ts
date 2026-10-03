@@ -288,3 +288,44 @@ describe("the requester × product grid", () => {
     expect(grid).toContain("row: orderDimensionColumns[rows as OrderGrainDimension].key")
   })
 })
+
+/**
+ * Order-grain rows report no quantity of their own, so the quantity printed
+ * over a requester, branch or month column is read from the lines. The read is
+ * the one place that pins a ranked key list back into a line query, so its
+ * fence and its bound are pinned here; the figures are checked against the
+ * Quantity measure in the integration suite.
+ */
+describe("the quantity behind an order-grain column", () => {
+  const read = builderBody("loadLineQuantities")
+  const compareRoute = source("app/api/v1/analytics/executive/compare/route.ts")
+
+  it("is fenced through the shared line conditions, never a hand-written where", () => {
+    expect(read).toContain("lineConditions(scope, filters)")
+    expect(read).not.toContain("inArray(orders.branchId")
+    expect(read).not.toContain("inArray(orders.organizationId")
+    expect(read).not.toContain("sql.raw")
+  })
+
+  it("is bounded by the keys the ranking returned, bound as parameters", () => {
+    expect(read).toContain("inArray(column.key, keys)")
+    expect(read).toContain("if (keys.length === 0) return new Map()")
+    expect(read).not.toContain(".limit(")
+  })
+
+  it("nets refunds exactly as a line-grain row of the same dimension does", () => {
+    expect(read).toContain("quantity: lineNetQuantity")
+  })
+
+  it("is asked for only for the window that is drawn, not for the prior one", () => {
+    expect(compareRoute.match(/\{ withQuantity: true \}/g)).toHaveLength(1)
+    expect(compareRoute).toContain("loadComparison(scope, filters, parsed.dimension, parsed.metric, parsed.limit, { withQuantity: true })")
+    // The grid ranks its axes for their order and totals alone.
+    expect(builderBody("loadMatrix")).not.toContain("withQuantity")
+  })
+
+  it("fills every point of an order-grain trend, per entity and month", () => {
+    const series = builderBody("loadEntitySeries")
+    expect(series).toContain("loadLineQuantities(scope, filters, dimension as OrderGrainDimension, Array.from(wanted.keys()), { byMonth: true })")
+  })
+})

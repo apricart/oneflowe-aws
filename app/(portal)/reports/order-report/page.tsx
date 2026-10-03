@@ -4,6 +4,7 @@ import { useAppContext } from "@/components/context/app-context"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
+import { usesPurchaseWording } from "@/lib/purchase-wording"
 import {
 DropdownMenu,
 DropdownMenuContent,
@@ -46,7 +47,7 @@ TrendingUp,
 Upload
 } from "lucide-react"
 import { useSession } from "next-auth/react"
-import { useCallback,useEffect,useMemo,useRef,useState } from "react"
+import { useCallback,useEffect,useMemo,useRef,useState,type ReactNode } from "react"
 import {
 Bar,
 CartesianGrid,
@@ -69,6 +70,10 @@ import { BranchFilter } from "@/components/reports/branch-filter"
 import { ColumnSelector,useColumnSelector,type ColumnDef } from "@/components/reports/column-selector"
 import { GroupFilter } from "@/components/reports/group-filter"
 import { KPICard } from "@/components/reports/kpi-card"
+import { ReportTableScroll } from "@/components/reports/report-table-scroll"
+import { SortableHeader, ariaSortFor, useTableSort } from "@/components/reports/sortable-header"
+import type { OrderReportSortKey } from "@/lib/list-sort-keys"
+import { appendSortParams, type SortDirection } from "@/lib/table-sort"
 import { MultiSelectFilter } from "@/components/reports/multi-select-filter"
 import { OrganizationFilter } from "@/components/reports/organization-filter"
 import { useDebounce } from "@/hooks/use-debounce"
@@ -76,6 +81,10 @@ import { useToast } from "@/hooks/use-toast"
 import type { DateRange } from "@/lib/hooks/use-sales-performance"
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
 const ORDER_REPORT_PAGE_SIZE = 25
+/** Dates, quantities and money show the newest or largest first on the first click. */
+const ORDER_REPORT_DESC_FIRST_SORT_KEYS = new Set<OrderReportSortKey>([
+    "orderDate", "quantityOrdered", "quantityDelivered", "quantityRefunded", "subtotalValue", "refundValue", "netTotalValue",
+])
 
 const ALL_COLUMNS: ColumnDef[] = [
     { key: "orderDate", label: "Date", defaultVisible: true },
@@ -123,7 +132,7 @@ export default function OrderReportPage() {
     const role = (session?.user as any)?.role as Role
     const userOrgId = (session?.user as any)?.organizationId
     const organizationId = userOrgId || contextOrgId
-    const isBuyer = role === "HEAD_OFFICE" || role === "BRANCH_ADMIN"
+    const isBuyer = usesPurchaseWording(role)
 
     // Role-based terminology
     const kpiRevenueLabel = isBuyer ? "Net Amount" : "Net Revenue"
@@ -146,6 +155,22 @@ export default function OrderReportPage() {
     const debouncedGroupOrderFilter = useDebounce(groupOrderFilter.trim(), 300)
     const [statusFilter, setStatusFilter] = useState<StatusFilter>("all")
     const [currentPage, setCurrentPage] = useState(1)
+    // Sorted on the server so it covers every page, starting from the order the
+    // report already used (newest first). A new sort starts again from page 1.
+    const { sort: reportSort, toggleSort: toggleReportSort } = useTableSort<OrderReportSortKey>({ key: "orderDate", direction: "desc" })
+    const handleReportSort = useCallback((key: OrderReportSortKey, firstDirection?: SortDirection) => {
+        toggleReportSort(key, firstDirection)
+        setCurrentPage(1)
+    }, [toggleReportSort])
+    const sortHead = (key: OrderReportSortKey, label: ReactNode) => (
+        <SortableHeader
+            label={label}
+            sortKey={key}
+            sort={reportSort}
+            onSort={handleReportSort}
+            firstDirection={ORDER_REPORT_DESC_FIRST_SORT_KEYS.has(key) ? "desc" : "asc"}
+        />
+    )
     const [isExporting, setIsExporting] = useState(false)
     const [generatedDate, setGeneratedDate] = useState("")
 
@@ -297,6 +322,7 @@ export default function OrderReportPage() {
     }
     reportParams.set("page", currentPage.toString())
     reportParams.set("limit", ORDER_REPORT_PAGE_SIZE.toString())
+    appendSortParams(reportParams, reportSort)
     reportParams.set("ordersOnly", "true")
     const { data: reportData, isLoading: isReportLoading, isValidating: isReportValidating, mutate: mutateReport } = useSWR(
         isInitialized ? `/api/v1/analytics/summary?${reportParams.toString()}` : null, fetcher,
@@ -971,7 +997,7 @@ export default function OrderReportPage() {
 
                         {/* Report Table */}
                         <Card className="min-w-0 rounded-[2.5rem] border-slate-200 dark:border-slate-800 shadow-2xl bg-white dark:bg-slate-900/40 overflow-hidden min-h-[600px] flex flex-col">
-                            <div className="min-w-0 flex-1 overflow-hidden [&_[data-slot=table-container]]:overflow-x-auto [&_[data-slot=table-container]]:overscroll-x-contain">
+                            <ReportTableScroll className="flex-1">
                                 <Table className="min-w-[2100px] table-fixed">
                                     <colgroup>
                                         {isVisible("tid") && <col className="w-[185px]" />}
@@ -995,29 +1021,31 @@ export default function OrderReportPage() {
                                     <TableHeader>
                                         <TableRow className="bg-slate-50/50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800 hover:bg-transparent">
                                             {isVisible("tid") && (
-                                                <TableHead className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500 bg-slate-50/100 dark:bg-slate-900/100 border-r border-slate-200/60 dark:border-slate-800/60">
-                                                    <div className="flex min-w-0 items-center gap-1.5">
-                                                        <Hash className="h-3.5 w-3.5 shrink-0 text-indigo-500" />
-                                                        <span>Transaction ID</span>
-                                                    </div>
+                                                <TableHead aria-sort={ariaSortFor(reportSort, "tid")} className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500 bg-slate-50/100 dark:bg-slate-900/100 border-r border-slate-200/60 dark:border-slate-800/60">
+                                                    {sortHead("tid", (
+                                                        <span className="flex min-w-0 items-center gap-1.5">
+                                                            <Hash className="h-3.5 w-3.5 shrink-0 text-indigo-500" />
+                                                            <span>Transaction ID</span>
+                                                        </span>
+                                                    ))}
                                                 </TableHead>
                                             )}
-                                            {isVisible("orderDate") && <TableHead className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500"><div className="flex items-center gap-1.5"><Calendar className="h-3 w-3 shrink-0" /> Date</div></TableHead>}
-                                            {isVisible("userName") && <TableHead className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">User</TableHead>}
-                                            {isVisible("employeeId") && <TableHead className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">Employee #</TableHead>}
-                                            {isVisible("organizationName") && role === "SUPER_ADMIN" && <TableHead className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">Org</TableHead>}
-                                            {isVisible("group") && role !== "BRANCH_ADMIN" && <TableHead className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">Group</TableHead>}
-                                            {isVisible("groupOrderReference") && showsGroupOrders && <TableHead className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500"><div className="flex items-center gap-1.5"><Layers className="h-3 w-3 shrink-0" /> Group Order</div></TableHead>}
-                                            {isVisible("branchName") && role !== "BRANCH_ADMIN" && <TableHead className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500"><div className="flex items-center gap-1.5"><Store className="h-3 w-3 shrink-0" /> Branch</div></TableHead>}
-                                            {isVisible("status") && <TableHead className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500 text-center">Status</TableHead>}
-                                            {isVisible("deliveryStatus") && <TableHead className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500 text-center">Delivery</TableHead>}
-                                            {isVisible("paymentStatus") && <TableHead className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500 text-center">Payment</TableHead>}
-                                            {isVisible("quantityOrdered") && <TableHead className="h-14 px-2 text-center text-[9px] font-black uppercase leading-tight tracking-wide text-slate-500 whitespace-normal">Qty Ordered</TableHead>}
-                                            {isVisible("quantityDelivered") && <TableHead className="h-14 px-2 text-center text-[9px] font-black uppercase leading-tight tracking-wide text-emerald-600 whitespace-normal">Qty Delivered</TableHead>}
-                                            {isVisible("quantityRefunded") && <TableHead className="h-14 px-2 text-center text-[9px] font-black uppercase leading-tight tracking-wide text-rose-500 whitespace-normal">Qty Refunded</TableHead>}
-                                            {!pricesHidden && isVisible("subtotalValue") && <TableHead className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-wide text-slate-500 text-right">Subtotal</TableHead>}
-                                            {!pricesHidden && isVisible("refundValue") && <TableHead className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-wide text-right text-rose-500">Refund</TableHead>}
-                                            {!pricesHidden && isVisible("netTotalValue") && <TableHead className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-wide text-slate-500 text-right whitespace-normal">{isBuyer ? "Net Purchased" : "Net Revenue"}</TableHead>}
+                                            {isVisible("orderDate") && <TableHead aria-sort={ariaSortFor(reportSort, "orderDate")} className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">{sortHead("orderDate", <span className="flex items-center gap-1.5"><Calendar className="h-3 w-3 shrink-0" /> Date</span>)}</TableHead>}
+                                            {isVisible("userName") && <TableHead aria-sort={ariaSortFor(reportSort, "userName")} className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">{sortHead("userName", "User")}</TableHead>}
+                                            {isVisible("employeeId") && <TableHead aria-sort={ariaSortFor(reportSort, "employeeId")} className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">{sortHead("employeeId", "Employee #")}</TableHead>}
+                                            {isVisible("organizationName") && role === "SUPER_ADMIN" && <TableHead aria-sort={ariaSortFor(reportSort, "organizationName")} className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">{sortHead("organizationName", "Org")}</TableHead>}
+                                            {isVisible("group") && role !== "BRANCH_ADMIN" && <TableHead aria-sort={ariaSortFor(reportSort, "group")} className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">{sortHead("group", "Group")}</TableHead>}
+                                            {isVisible("groupOrderReference") && showsGroupOrders && <TableHead aria-sort={ariaSortFor(reportSort, "groupOrderReference")} className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">{sortHead("groupOrderReference", <span className="flex items-center gap-1.5"><Layers className="h-3 w-3 shrink-0" /> Group Order</span>)}</TableHead>}
+                                            {isVisible("branchName") && role !== "BRANCH_ADMIN" && <TableHead aria-sort={ariaSortFor(reportSort, "branchName")} className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">{sortHead("branchName", <span className="flex items-center gap-1.5"><Store className="h-3 w-3 shrink-0" /> Branch</span>)}</TableHead>}
+                                            {isVisible("status") && <TableHead aria-sort={ariaSortFor(reportSort, "status")} className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500 text-center">{sortHead("status", "Status")}</TableHead>}
+                                            {isVisible("deliveryStatus") && <TableHead aria-sort={ariaSortFor(reportSort, "deliveryStatus")} className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500 text-center">{sortHead("deliveryStatus", "Delivery")}</TableHead>}
+                                            {isVisible("paymentStatus") && <TableHead aria-sort={ariaSortFor(reportSort, "paymentStatus")} className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500 text-center">{sortHead("paymentStatus", "Payment")}</TableHead>}
+                                            {isVisible("quantityOrdered") && <TableHead aria-sort={ariaSortFor(reportSort, "quantityOrdered")} className="h-14 px-2 text-center text-[9px] font-black uppercase leading-tight tracking-wide text-slate-500 whitespace-normal">{sortHead("quantityOrdered", "Qty Ordered")}</TableHead>}
+                                            {isVisible("quantityDelivered") && <TableHead aria-sort={ariaSortFor(reportSort, "quantityDelivered")} className="h-14 px-2 text-center text-[9px] font-black uppercase leading-tight tracking-wide text-emerald-600 whitespace-normal">{sortHead("quantityDelivered", "Qty Delivered")}</TableHead>}
+                                            {isVisible("quantityRefunded") && <TableHead aria-sort={ariaSortFor(reportSort, "quantityRefunded")} className="h-14 px-2 text-center text-[9px] font-black uppercase leading-tight tracking-wide text-rose-500 whitespace-normal">{sortHead("quantityRefunded", "Qty Refunded")}</TableHead>}
+                                            {!pricesHidden && isVisible("subtotalValue") && <TableHead aria-sort={ariaSortFor(reportSort, "subtotalValue")} className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-wide text-slate-500 text-right">{sortHead("subtotalValue", "Subtotal")}</TableHead>}
+                                            {!pricesHidden && isVisible("refundValue") && <TableHead aria-sort={ariaSortFor(reportSort, "refundValue")} className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-wide text-right text-rose-500">{sortHead("refundValue", "Refund")}</TableHead>}
+                                            {!pricesHidden && isVisible("netTotalValue") && <TableHead aria-sort={ariaSortFor(reportSort, "netTotalValue")} className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-wide text-slate-500 text-right whitespace-normal">{sortHead("netTotalValue", isBuyer ? "Net Purchased" : "Net Revenue")}</TableHead>}
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
@@ -1139,7 +1167,7 @@ export default function OrderReportPage() {
                                         })()}
                                     </TableBody>
                                 </Table>
-                            </div>
+                            </ReportTableScroll>
                             <div className="flex flex-col gap-4 border-t border-slate-100 bg-slate-50/50 px-6 py-5 dark:border-slate-900 dark:bg-slate-900/40 sm:flex-row sm:items-center sm:justify-between sm:px-8">
                                 <div className="space-y-1">
                                     <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest italic">System Generated Audit • {generatedDate}</p>

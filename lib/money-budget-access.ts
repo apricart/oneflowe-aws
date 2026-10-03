@@ -89,6 +89,22 @@ export function resolveManagedBranchScope({
 }
 
 /**
+ * The branches a budget report may show, given the branch set the request
+ * resolved to and the caller's assignments. `null` assignments mean the caller
+ * is not fenced by assignment — its tenant predicate is applied downstream —
+ * and the set passes through. Otherwise only assigned branches survive; an
+ * empty result stays empty and is never widened back to the tenant.
+ */
+export function fenceToAssignedBranches(
+  branchIds: number[],
+  assignedBranchIds: unknown[] | null,
+): number[] {
+  if (assignedBranchIds === null) return branchIds
+  const assigned = new Set(normalizePositiveIds(assignedBranchIds))
+  return branchIds.filter((branchId) => assigned.has(branchId))
+}
+
+/**
  * Whether one allocation may be written to one branch. The tenant check is
  * the handler's, applied to every role before this; this is the assignment
  * check on top of it, and only the approver has one.

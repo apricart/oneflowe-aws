@@ -1,13 +1,14 @@
 import "server-only"
 
-import { and, asc, count, desc, eq, isNotNull, isNull, sql, type SQL } from "drizzle-orm"
+import { and, asc, count, desc, eq, inArray, isNotNull, isNull, sql, type SQL } from "drizzle-orm"
 import { alias } from "drizzle-orm/pg-core"
 
 import { categories, organizations, productRequests, roles, users } from "@/db/schema"
 import { db } from "@/lib/db"
 import {
   PRODUCT_REQUEST_STATUSES,
-  canReviewProductRequestInStatus,
+  productRequestAvailabilityRefusal,
+  productRequestTransitionRefusal,
   type ProductRequestInput,
   type ProductRequestList,
   type ProductRequestListQuery,
@@ -187,6 +188,7 @@ export async function listProductRequests(
 
   const requester = alias(users, "product_request_requester")
   const reviewer = alias(users, "product_request_reviewer")
+  const reviewStarter = alias(users, "product_request_review_starter")
   const category = alias(categories, "product_request_category")
   const subcategory = alias(categories, "product_request_subcategory")
 
@@ -211,10 +213,14 @@ export async function listProductRequests(
         referenceUrl: productRequests.referenceUrl,
         notes: productRequests.notes,
         imageUrl: productRequests.imageUrl,
+        reviewStartedAt: productRequests.reviewStartedAt,
+        reviewStartedById: reviewStarter.id,
+        reviewStartedByName: reviewStarter.fullName,
         reviewNote: productRequests.reviewNote,
         reviewedAt: productRequests.reviewedAt,
         reviewedById: reviewer.id,
         reviewedByName: reviewer.fullName,
+        estimatedAvailableOn: productRequests.estimatedAvailableOn,
         createdAt: productRequests.createdAt,
         organizationId: organizations.id,
         organizationName: organizations.name,
@@ -228,6 +234,7 @@ export async function listProductRequests(
       .innerJoin(requester, eq(productRequests.requestedByUserId, requester.id))
       .leftJoin(roles, eq(requester.roleId, roles.id))
       .leftJoin(reviewer, eq(productRequests.reviewedByUserId, reviewer.id))
+      .leftJoin(reviewStarter, eq(productRequests.reviewStartedByUserId, reviewStarter.id))
       .leftJoin(category, eq(productRequests.categoryId, category.id))
       .leftJoin(subcategory, eq(productRequests.subcategoryId, subcategory.id))
       .where(filtered)
@@ -273,9 +280,12 @@ export async function listProductRequests(
       referenceUrl: row.referenceUrl,
       notes: row.notes,
       imageUrl: row.imageUrl,
+      reviewStartedAt: toIso(row.reviewStartedAt),
+      reviewStartedBy: row.reviewStartedById === null ? null : { id: row.reviewStartedById, fullName: row.reviewStartedByName },
       reviewNote: row.reviewNote,
       reviewedAt: toIso(row.reviewedAt),
       reviewedBy: row.reviewedById === null ? null : { id: row.reviewedById, fullName: row.reviewedByName },
+      estimatedAvailableOn: row.estimatedAvailableOn,
       createdAt: toIso(row.createdAt) ?? "",
       organization: { id: row.organizationId, name: row.organizationName },
       requestedBy: {
@@ -294,18 +304,27 @@ export async function listProductRequests(
 }
 
 /**
- * Record Super Admin's decision.
+ * Move a request on: put it under review, or record Super Admin's decision.
  *
- * The row is locked and its status re-read inside the transaction, so two
- * reviewers — or one double click — cannot both decide it: the second sees a
- * request that is no longer pending and gets a 409.
+ * The row is locked and its status re-read inside the transaction, and the
+ * update is conditional on the status it was read in, so two reviewers — or
+ * one double click — cannot both move it: the second sees a request that has
+ * already moved and gets a 409. An approval's date is checked against today
+ * here, not in the schema, so the schema never reads the clock.
  */
 export async function reviewProductRequest(input: {
   reviewer: AuditActor & { id: string }
   requestId: number
   review: ProductRequestReview
+  now?: Date
 }): Promise<Result<{ id: number; status: ProductRequestStatus }>> {
   const { reviewer, requestId, review } = input
+  const now = input.now ?? new Date()
+
+  if (review.status === "APPROVED") {
+    const dateRefusal = productRequestAvailabilityRefusal(review.estimatedAvailableOn, now)
+    if (dateRefusal) return fail(400, dateRefusal)
+  }
 
   return db.transaction(async (tx) => {
     const [current] = await tx
@@ -320,11 +339,29 @@ export async function reviewProductRequest(input: {
       .for("update")
 
     if (!current) return fail(404, "Product request not found")
-    if (!canReviewProductRequestInStatus(current.status)) {
-      return fail(409, `This request has already been ${current.status.toLowerCase()}`)
+    const refusal = productRequestTransitionRefusal(current.status, review.status)
+    if (refusal) return fail(409, refusal)
+
+    if (review.status === "UNDER_REVIEW") {
+      await tx
+        .update(productRequests)
+        .set({ status: "UNDER_REVIEW", reviewStartedByUserId: reviewer.id, reviewStartedAt: now, updatedAt: now })
+        .where(and(eq(productRequests.id, requestId), eq(productRequests.status, "PENDING")))
+
+      await recordAuditEvent(tx, {
+        action: "START_PRODUCT_REQUEST_REVIEW",
+        entity: "product_request",
+        entityId: requestId,
+        actor: reviewer,
+        organizationId: current.organizationId,
+        before: { status: current.status },
+        after: { status: "UNDER_REVIEW" },
+      })
+
+      return { ok: true as const, id: requestId, status: review.status }
     }
 
-    const now = new Date()
+    const estimatedAvailableOn = review.status === "APPROVED" ? review.estimatedAvailableOn : null
     await tx
       .update(productRequests)
       .set({
@@ -332,9 +369,10 @@ export async function reviewProductRequest(input: {
         reviewNote: review.reviewNote,
         reviewedByUserId: reviewer.id,
         reviewedAt: now,
+        estimatedAvailableOn,
         updatedAt: now,
       })
-      .where(and(eq(productRequests.id, requestId), eq(productRequests.status, "PENDING")))
+      .where(and(eq(productRequests.id, requestId), inArray(productRequests.status, ["PENDING", "UNDER_REVIEW"])))
 
     await recordAuditEvent(tx, {
       action: "REVIEW_PRODUCT_REQUEST",
@@ -343,7 +381,7 @@ export async function reviewProductRequest(input: {
       actor: reviewer,
       organizationId: current.organizationId,
       before: { status: current.status },
-      after: { status: review.status, reviewNote: review.reviewNote },
+      after: { status: review.status, reviewNote: review.reviewNote, estimatedAvailableOn },
     })
 
     return { ok: true as const, id: requestId, status: review.status }

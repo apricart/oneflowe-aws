@@ -547,6 +547,13 @@
       "when": 1791010800000,
       "tag": "20261001120000_add_organization_budgets_enabled",
       "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1791014400000,
+      "tag": "20261003120000_add_product_request_review_stage",
+      "breakpoints": true
     }
   ]
 }

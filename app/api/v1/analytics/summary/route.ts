@@ -4,7 +4,7 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { orders, users, roles, branches, organizations, groups, groupOrders, orderItems, refunds, refundItems } from "@/db/schema"
-import { and, desc, eq, gte, ilike, lte, or, sql, sum, count, inArray } from "drizzle-orm"
+import { and, desc, eq, gte, ilike, lte, or, sql, sum, count, inArray, type AnyColumn, type SQL } from "drizzle-orm"
 import { alias } from "drizzle-orm/pg-core"
 import { metricExpressions } from "@/lib/metric-utils"
 import { escapeLikePattern } from "@/lib/utils"
@@ -17,11 +17,54 @@ import {
 } from "@/lib/server/analytics-scope"
 import { loadAnalyticsAssignedBranchIds } from "@/lib/server/analytics-branch-scope"
 import { orderSelectColumns } from "@/lib/order-select"
+import { ORDER_REPORT_PRICE_SORT_KEYS, ORDER_REPORT_SORT_KEYS, sortKeysForCaller, type OrderReportSortKey } from "@/lib/list-sort-keys"
+import { parseSortParams } from "@/lib/table-sort"
+import { orderBySortSql } from "@/lib/server/sort-sql"
 
 // Separate aliases for the two people an order can pass through after its
 // raiser, so one query can name all three without colliding on `users`.
 const approverUsers = alias(users, "approver_users")
 const fulfillerUsers = alias(users, "fulfiller_users")
+
+// Read by the report row and by its sort, so the column and its order agree.
+const quantityOrderedSql = sql<number>`(
+    SELECT COALESCE(SUM(${orderItems.quantity}), 0)
+    FROM ${orderItems}
+    WHERE ${orderItems.orderId} = ${orders.id}
+)`
+const quantityRefundedSql = sql<number>`(
+    SELECT COALESCE(SUM(${refundItems.quantity}), 0)
+    FROM ${refundItems}
+    INNER JOIN ${refunds} ON ${refundItems.refundId} = ${refunds.id}
+    WHERE ${refunds.orderId} = ${orders.id}
+    AND UPPER(${refunds.status}) IN ('APPROVED', 'COMPLETED')
+)`
+const groupOrderReferenceSql = sql<string | null>`(
+    SELECT ${groupOrders.reference}
+    FROM ${groupOrders}
+    WHERE ${groupOrders.id} = ${orders.groupOrderId}
+)`
+
+/** The expression each allowlisted Order Report column sorts by. */
+const ORDER_REPORT_SORT_SQL: Record<OrderReportSortKey, SQL | AnyColumn> = {
+    tid: orders.tid,
+    orderDate: orders.createdAt,
+    userName: sql`LOWER(${users.fullName})`,
+    employeeId: sql`LOWER(${users.employeeId})`,
+    organizationName: sql`LOWER(${organizations.name})`,
+    group: sql`LOWER(${groups.name})`,
+    groupOrderReference: groupOrderReferenceSql,
+    branchName: sql`LOWER(${branches.name})`,
+    status: sql`UPPER(${orders.status})`,
+    deliveryStatus: orderSelectColumns.fulfillmentStatus,
+    paymentStatus: orderSelectColumns.paymentStatus,
+    quantityOrdered: quantityOrderedSql,
+    quantityDelivered: sql`(${quantityOrderedSql} - ${quantityRefundedSql})`,
+    quantityRefunded: quantityRefundedSql,
+    subtotalValue: orders.subtotalCents,
+    refundValue: sql`COALESCE(${orders.refundAmountCents}, 0)`,
+    netTotalValue: sql`(${orders.totalCents} - COALESCE(${orders.refundAmountCents}, 0))`,
+}
 
 function parseNumberList(value: string | null, isValid = (number: number) => number > 0) {
     return value ? value.split(",").map(Number).filter((number) => !Number.isNaN(number) && isValid(number)) : []
@@ -284,6 +327,11 @@ export async function GET(req: NextRequest) {
     })
     const pricesHidden = await shouldHidePricesForRole(normalizedRole, currentUserOrgId)
     const respond = (payload: any) => buildSummaryResponse(pricesHidden, payload)
+    const requestedSort = parseSortParams(
+        url.searchParams,
+        sortKeysForCaller(ORDER_REPORT_SORT_KEYS, ORDER_REPORT_PRICE_SORT_KEYS, pricesHidden),
+    )
+    if (!requestedSort.ok) return NextResponse.json({ error: requestedSort.error }, { status: 400 })
     console.log(`[Summary API] User: ${userId}, Role: ${normalizedRole}, Params: Branch=${branchId}, Org=${organizationId}, Group=${groupId}`)
 
     const assignedBranchIds = await loadAnalyticsAssignedBranchIds(normalizedRole, userId)
@@ -327,11 +375,7 @@ export async function GET(req: NextRequest) {
         branchId: orders.branchId,
         branchName: branches.name,
         groupName: groups.name,
-        groupOrderReference: sql<string | null>`(
-            SELECT ${groupOrders.reference}
-            FROM ${groupOrders}
-            WHERE ${groupOrders.id} = ${orders.groupOrderId}
-        )`,
+        groupOrderReference: groupOrderReferenceSql,
         organizationName: organizations.name,
         createdAt: orders.createdAt,
         approvedAt: orders.approvedAt,
@@ -347,18 +391,8 @@ export async function GET(req: NextRequest) {
         // The invoice number lives in the receipt snapshot taken when the order
         // was raised, exactly as the branch export reads it.
         invoiceNumber: sql<string | null>`${orders.receiptData} ->> 'invoiceNumber'`,
-        quantityOrdered: sql<number>`(
-            SELECT COALESCE(SUM(${orderItems.quantity}), 0)
-            FROM ${orderItems}
-            WHERE ${orderItems.orderId} = ${orders.id}
-        )`.mapWith(Number),
-        quantityRefunded: sql<number>`(
-            SELECT COALESCE(SUM(${refundItems.quantity}), 0)
-            FROM ${refundItems}
-            INNER JOIN ${refunds} ON ${refundItems.refundId} = ${refunds.id}
-            WHERE ${refunds.orderId} = ${orders.id}
-            AND UPPER(${refunds.status}) IN ('APPROVED', 'COMPLETED')
-        )`.mapWith(Number)
+        quantityOrdered: quantityOrderedSql.mapWith(Number),
+        quantityRefunded: quantityRefundedSql.mapWith(Number)
     })
         .from(orders)
         .leftJoin(branches, eq(orders.branchId, branches.id))
@@ -368,7 +402,10 @@ export async function GET(req: NextRequest) {
         .leftJoin(approverUsers, eq(orders.approvedByUserId, approverUsers.id))
         .leftJoin(fulfillerUsers, eq(orders.fulfilledByUserId, fulfillerUsers.id))
         .where(whereClause)
-        .orderBy(desc(orders.createdAt), desc(orders.id))
+        // Newest first unless a column was chosen; the id keeps pages stable.
+        .orderBy(...(requestedSort.sort
+            ? [orderBySortSql(ORDER_REPORT_SORT_SQL[requestedSort.sort.key], requestedSort.sort.direction), desc(orders.id)]
+            : [desc(orders.createdAt), desc(orders.id)]))
         .limit(limit)
         .offset(offset)
 

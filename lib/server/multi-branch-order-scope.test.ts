@@ -124,13 +124,16 @@ describe("order list creator-role filter", () => {
   })
 
   it("refuses a malformed value rather than ignoring it", () => {
-    expect(orders).toContain("if (!creatorFilter.ok) return NextResponse.json({ error: creatorFilter.message }, { status: 400 })")
+    // Parsed with the other list filters and the sort in `parseOrderListQuery`,
+    // whose first refusal the handler answers with 400.
+    expect(orders).toContain("if (!creatorFilter.ok) return { ok: false, error: creatorFilter.message }")
+    expect(orders).toContain("if (!listQuery.ok) return NextResponse.json({ error: listQuery.error }, { status: 400 })")
   })
 
   it("applies the filter before the summary snapshot is taken", () => {
     // Otherwise the status counts would describe the whole branch scope while
     // the rows beneath them described only one role's orders.
-    const creatorAt = orders.indexOf("addOrderCreatorRoleCondition(conditions, creatorFilter.role)")
+    const creatorAt = orders.indexOf("addOrderCreatorRoleCondition(conditions, listQuery.creatorRole)")
     const summaryAt = orders.indexOf("const summaryConditions = [...conditions]")
     expect(creatorAt).toBeGreaterThan(-1)
     expect(summaryAt).toBeGreaterThan(creatorAt)

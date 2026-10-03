@@ -48,7 +48,10 @@ describe("order-report pagination contract", () => {
     // table happens to be showing.
     expect(page).toContain("const rows = buildOrderReportExportRows(exportOrders, exportLayoutOptions)")
     expect(page).not.toContain("const rows = filteredOrders.map")
-    expect(route).toContain(".orderBy(desc(orders.createdAt), desc(orders.id))")
+    // Pages walk a stable order: newest first by default, and an id tie-breaker
+    // behind any column sort (plans/OF-TABLE-column-sorting.md).
+    expect(route).toContain(": [desc(orders.createdAt), desc(orders.id)]")
+    expect(route).toContain("requestedSort.sort.direction), desc(orders.id)]")
     expect(route).toContain('url.searchParams.get("ordersOnly") === "true"')
   })
 })

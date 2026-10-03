@@ -4,6 +4,7 @@ import { useAppContext } from "@/components/context/app-context"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card,CardContent,CardHeader,CardTitle } from "@/components/ui/card"
+import { usesPurchaseWording } from "@/lib/purchase-wording"
 import {
 DropdownMenu,
 DropdownMenuContent,
@@ -38,7 +39,7 @@ X
 } from "lucide-react"
 import { useSession } from "next-auth/react"
 import { usePathname,useRouter,useSearchParams } from "next/navigation"
-import { useCallback,useEffect,useMemo,useRef,useState } from "react"
+import { useCallback,useEffect,useMemo,useRef,useState,type ReactNode } from "react"
 import {
 Bar,
 CartesianGrid,
@@ -62,6 +63,9 @@ import { useOrganizations } from "@/lib/hooks/use-api"
 
 import type { ColumnDef } from "@/components/reports/column-selector"
 import { KPICard } from "@/components/reports/kpi-card"
+import { ReportTableScroll } from "@/components/reports/report-table-scroll"
+import { SortableHeader, ariaSortFor, useTableSort } from "@/components/reports/sortable-header"
+import { sortRows, type SortValue } from "@/lib/table-sort"
 import { MonthlyConsumptionChart } from "@/components/reports/monthly-consumption-chart"
 import { OrganizationFilter } from "@/components/reports/organization-filter"
 import { ProductFilter } from "@/components/reports/product-filter"
@@ -122,6 +126,43 @@ const LEDGER_COLUMNS: ColumnDef[] = [
     { key: "status", label: "Status", defaultVisible: true },
 ]
 
+type ProductSortKey = "code" | "name" | "category" | "subCategory" | "status" | "qtyOrdered" | "qtyFulfilled" | "qtyRefunded" | "price" | "revenue"
+/** What each sortable column of the product table orders by. */
+const PRODUCT_SORT_ACCESSORS: Record<ProductSortKey, (row: any) => SortValue> = {
+    code: (row) => row.productCode,
+    name: (row) => row.productName,
+    category: (row) => row.category,
+    subCategory: (row) => row.subCategory,
+    status: (row) => row.status || "active",
+    qtyOrdered: (row) => row.qtyOrdered,
+    qtyFulfilled: (row) => row.qtyFulfilled,
+    qtyRefunded: (row) => row.qtyRefunded,
+    price: (row) => row.unitPriceCents || row.basePriceCents,
+    revenue: (row) => row.revenueGeneratedCents,
+}
+/** Numbers and dates show the largest or newest first on the first click. */
+const PRODUCT_DESC_FIRST_SORT_KEYS = new Set<ProductSortKey>(["qtyOrdered", "qtyFulfilled", "qtyRefunded", "price", "revenue"])
+
+type LedgerSortKey = "organization" | "branch" | "orderId" | "tid" | "orderDate" | "group" | "user" | "item" | "qtyOrdered" | "refunded" | "netItems" | "unitPrice" | "netTotal"
+/** What each sortable column of the itemized order table orders by. */
+const LEDGER_SORT_ACCESSORS: Record<LedgerSortKey, (row: any) => SortValue> = {
+    organization: (row) => row.organizationName,
+    branch: (row) => row.branchName,
+    orderId: (row) => row.orderId || row.tid,
+    tid: (row) => row.tid,
+    orderDate: (row) => (row.orderCreatedAt ? new Date(row.orderCreatedAt) : null),
+    group: (row) => row.group,
+    user: (row) => row.userName,
+    item: (row) => row.itemDetails,
+    qtyOrdered: (row) => row.qtyOrdered,
+    refunded: (row) => row.qtyOrdered - row.qtyDelivered,
+    netItems: (row) => row.qtyDelivered,
+    unitPrice: (row) => row.priceCents,
+    netTotal: (row) => row.netTotalCents,
+}
+/** Numbers and dates show the largest or newest first on the first click. */
+const LEDGER_DESC_FIRST_SORT_KEYS = new Set<LedgerSortKey>(["orderDate", "qtyOrdered", "refunded", "netItems", "unitPrice", "netTotal"])
+
 export default function ProductPerformancePage() {
     const router = useRouter()
     const pathname = usePathname()
@@ -146,7 +187,7 @@ export default function ProductPerformancePage() {
 
     const { data: session, status: sessionStatus } = useSession()
     const role = (session?.user as any)?.role as Role
-    const isBuyer = role === "HEAD_OFFICE" || role === "BRANCH_ADMIN"
+    const isBuyer = usesPurchaseWording(role)
     const [hasMounted, setHasMounted] = useState(false)
 
     // Role-based terminology
@@ -543,10 +584,36 @@ export default function ProductPerformancePage() {
         )
     }, [ledgerItems, reportSearchTerm])
 
+    // Column sort, applied after the search filter (plans/OF-TABLE-column-sorting.md).
+    const { sort: ledgerSort, toggleSort: toggleLedgerSort } = useTableSort<LedgerSortKey>()
+    const sortedLedgerRows = useMemo(() => sortRows(filteredLedger, ledgerSort, LEDGER_SORT_ACCESSORS), [filteredLedger, ledgerSort])
+    const sortLedgerHead = (key: LedgerSortKey, label: ReactNode) => (
+        <SortableHeader
+            label={label}
+            sortKey={key}
+            sort={ledgerSort}
+            onSort={toggleLedgerSort}
+            firstDirection={LEDGER_DESC_FIRST_SORT_KEYS.has(key) ? "desc" : "asc"}
+        />
+    )
+
     const filteredProducts = products.filter((p: any) =>
         (p.productName || p.productCode || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
         (p.category || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
         (p.subCategory || "").toLowerCase().includes(searchTerm.toLowerCase())
+    )
+
+    // Column sort, applied after the search filter (plans/OF-TABLE-column-sorting.md).
+    const { sort: productSort, toggleSort: toggleProductSort } = useTableSort<ProductSortKey>()
+    const sortedProductRows = useMemo(() => sortRows(filteredProducts, productSort, PRODUCT_SORT_ACCESSORS), [filteredProducts, productSort])
+    const sortProductHead = (key: ProductSortKey, label: ReactNode) => (
+        <SortableHeader
+            label={label}
+            sortKey={key}
+            sort={productSort}
+            onSort={toggleProductSort}
+            firstDirection={PRODUCT_DESC_FIRST_SORT_KEYS.has(key) ? "desc" : "asc"}
+        />
     )
 
     const totalRevenue = products.reduce((sum: number, p: any) => sum + (p.revenueGeneratedCents || 0), 0)
@@ -1112,20 +1179,20 @@ export default function ProductPerformancePage() {
                                     </DropdownMenu>
                                 </div>
                             </div>
-                            <div className="overflow-x-auto">
+                            <ReportTableScroll>
                                 <Table>
                                     <TableHeader>
                                         <TableRow className="bg-slate-50/50 dark:bg-slate-800/30 border-b border-slate-200 dark:border-slate-800">
-                                            <TableHead className="pl-6 h-10 text-[10px] font-bold uppercase tracking-wider text-slate-500">Code</TableHead>
-                                            <TableHead className="h-10 text-[10px] font-bold uppercase tracking-wider text-slate-500">Product Name</TableHead>
-                                            <TableHead className="h-10 text-[10px] font-bold uppercase tracking-wider text-slate-500">Category</TableHead>
-                                            <TableHead className="h-10 text-[10px] font-bold uppercase tracking-wider text-slate-500">Sub-category</TableHead>
-                                            <TableHead className="h-10 text-[10px] font-bold uppercase tracking-wider text-slate-500 text-center">Status</TableHead>
-                                            <TableHead className="h-10 text-[10px] font-bold uppercase tracking-wider text-slate-500 text-center">{compare ? "Qty Ord (A/B)" : "Qty Ordered"}</TableHead>
-                                            <TableHead className="h-10 text-[10px] font-bold uppercase tracking-wider text-slate-500 text-center text-emerald-600">{compare ? "Fulfilled (A/B)" : "Fulfilled"}</TableHead>
-                                            <TableHead className="h-10 text-[10px] font-bold uppercase tracking-wider text-slate-500 text-center text-rose-500">{compare ? "Refunded (A/B)" : "Refunded"}</TableHead>
-                                            {!pricesHidden && <TableHead className="h-10 text-[10px] font-bold uppercase tracking-wider text-slate-500 text-center">{priceLabel}</TableHead>}
-                                            {!pricesHidden && <TableHead className="text-right pr-6 h-10 text-[10px] font-bold uppercase tracking-wider text-slate-500 font-mono">{compare ? `${tableRevenueHeader} (A/B)` : tableRevenueHeader}</TableHead>}
+                                            <TableHead aria-sort={ariaSortFor(productSort, "code")} className="pl-6 h-10 text-[10px] font-bold uppercase tracking-wider text-slate-500">{sortProductHead("code", "Code")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(productSort, "name")} className="h-10 text-[10px] font-bold uppercase tracking-wider text-slate-500">{sortProductHead("name", "Product Name")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(productSort, "category")} className="h-10 text-[10px] font-bold uppercase tracking-wider text-slate-500">{sortProductHead("category", "Category")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(productSort, "subCategory")} className="h-10 text-[10px] font-bold uppercase tracking-wider text-slate-500">{sortProductHead("subCategory", "Sub-category")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(productSort, "status")} className="h-10 text-[10px] font-bold uppercase tracking-wider text-slate-500 text-center">{sortProductHead("status", "Status")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(productSort, "qtyOrdered")} className="h-10 text-[10px] font-bold uppercase tracking-wider text-slate-500 text-center">{sortProductHead("qtyOrdered", compare ? "Qty Ord (A/B)" : "Qty Ordered")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(productSort, "qtyFulfilled")} className="h-10 text-[10px] font-bold uppercase tracking-wider text-slate-500 text-center text-emerald-600">{sortProductHead("qtyFulfilled", compare ? "Fulfilled (A/B)" : "Fulfilled")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(productSort, "qtyRefunded")} className="h-10 text-[10px] font-bold uppercase tracking-wider text-slate-500 text-center text-rose-500">{sortProductHead("qtyRefunded", compare ? "Refunded (A/B)" : "Refunded")}</TableHead>
+                                            {!pricesHidden && <TableHead aria-sort={ariaSortFor(productSort, "price")} className="h-10 text-[10px] font-bold uppercase tracking-wider text-slate-500 text-center">{sortProductHead("price", priceLabel)}</TableHead>}
+                                            {!pricesHidden && <TableHead aria-sort={ariaSortFor(productSort, "revenue")} className="text-right pr-6 h-10 text-[10px] font-bold uppercase tracking-wider text-slate-500 font-mono">{sortProductHead("revenue", compare ? `${tableRevenueHeader} (A/B)` : tableRevenueHeader)}</TableHead>}
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
@@ -1141,7 +1208,7 @@ export default function ProductPerformancePage() {
                                         )
                                           }
                                           return (
-                                            filteredProducts.map((p: any) => (
+                                            sortedProductRows.map((p: any) => (
                                                 <TableRow key={p.productId} className="hover:bg-amber-50/40 dark:hover:bg-amber-900/10 border-b border-slate-100 dark:border-slate-800/50">
                                                     <TableCell className="font-mono text-[11px] pl-6 text-slate-500 font-semibold">{p.productCode}</TableCell>
                                                     <TableCell className="font-medium text-xs text-slate-900 dark:text-slate-200">
@@ -1201,7 +1268,7 @@ export default function ProductPerformancePage() {
                                         })()}
                                     </TableBody>
                                 </Table>
-                            </div>
+                            </ReportTableScroll>
                         </Card>
                     </TabsContent>
                     <TabsContent value="reports" className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
@@ -1399,26 +1466,26 @@ export default function ProductPerformancePage() {
                                 error={topProductsData?.error || null}
                                 onRankByChange={setTopProductsRankBy}
                             />
-                            <div className="overflow-x-auto">
+                            <ReportTableScroll>
                                 <Table>
                                     <TableHeader>
                                         <TableRow className="bg-slate-50/20 dark:bg-slate-800/10">
                                             {role === "SUPER_ADMIN" && (
-                                                <TableHead className="pl-6 h-10 text-[9px] font-black uppercase tracking-widest text-slate-400 whitespace-nowrap">Organization</TableHead>
+                                                <TableHead aria-sort={ariaSortFor(ledgerSort, "organization")} className="pl-6 h-10 text-[9px] font-black uppercase tracking-widest text-slate-400 whitespace-nowrap">{sortLedgerHead("organization", "Organization")}</TableHead>
                                             )}
-                                            {role !== "BRANCH_ADMIN" && <TableHead className={cn("h-10 text-[9px] font-black uppercase tracking-widest text-slate-400 whitespace-nowrap", role !== "SUPER_ADMIN" && "pl-6")}>Branch</TableHead>}
-                                            <TableHead className="h-10 text-[9px] font-black uppercase tracking-widest text-slate-400 whitespace-nowrap">Order ID</TableHead>
-                                            <TableHead className="h-10 text-[9px] font-black uppercase tracking-widest text-slate-400 whitespace-nowrap">Trans ID</TableHead>
-                                            <TableHead className="h-10 text-[9px] font-black uppercase tracking-widest text-slate-400 whitespace-nowrap">Order Date</TableHead>
-                                            {role !== "BRANCH_ADMIN" && <TableHead className="h-10 text-[9px] font-black uppercase tracking-widest text-slate-400 whitespace-nowrap">Group</TableHead>}
+                                            {role !== "BRANCH_ADMIN" && <TableHead aria-sort={ariaSortFor(ledgerSort, "branch")} className={cn("h-10 text-[9px] font-black uppercase tracking-widest text-slate-400 whitespace-nowrap", role !== "SUPER_ADMIN" && "pl-6")}>{sortLedgerHead("branch", "Branch")}</TableHead>}
+                                            <TableHead aria-sort={ariaSortFor(ledgerSort, "orderId")} className="h-10 text-[9px] font-black uppercase tracking-widest text-slate-400 whitespace-nowrap">{sortLedgerHead("orderId", "Order ID")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(ledgerSort, "tid")} className="h-10 text-[9px] font-black uppercase tracking-widest text-slate-400 whitespace-nowrap">{sortLedgerHead("tid", "Trans ID")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(ledgerSort, "orderDate")} className="h-10 text-[9px] font-black uppercase tracking-widest text-slate-400 whitespace-nowrap">{sortLedgerHead("orderDate", "Order Date")}</TableHead>
+                                            {role !== "BRANCH_ADMIN" && <TableHead aria-sort={ariaSortFor(ledgerSort, "group")} className="h-10 text-[9px] font-black uppercase tracking-widest text-slate-400 whitespace-nowrap">{sortLedgerHead("group", "Group")}</TableHead>}
                                             {!pricesHidden && <TableHead className="h-10 text-[9px] font-black uppercase tracking-widest text-slate-400 whitespace-nowrap text-center">Discount</TableHead>}
-                                            <TableHead className="h-10 text-[9px] font-black uppercase tracking-widest text-slate-400 whitespace-nowrap">User Details</TableHead>
-                                            <TableHead className="h-10 text-[9px] font-black uppercase tracking-widest text-slate-400 min-w-[150px]">Item Details</TableHead>
-                                            <TableHead className="h-10 text-[9px] font-black uppercase tracking-widest text-slate-400 whitespace-nowrap text-center">Qty Ordered</TableHead>
-                                            <TableHead className="h-10 text-[9px] font-black uppercase tracking-widest text-slate-400 whitespace-nowrap text-center text-rose-500">Refunded</TableHead>
-                                            <TableHead className="h-10 text-[9px] font-black uppercase tracking-widest text-slate-400 whitespace-nowrap text-center text-emerald-600">Net Items</TableHead>
-                                            {!pricesHidden && <TableHead className="h-10 text-[9px] font-black uppercase tracking-widest text-slate-400 whitespace-nowrap text-center">Unit Price</TableHead>}
-                                            {!pricesHidden && <TableHead className="h-10 text-[9px] font-black uppercase tracking-widest text-slate-400 whitespace-nowrap text-right pr-6">{exportRevenueHeader}</TableHead>}
+                                            <TableHead aria-sort={ariaSortFor(ledgerSort, "user")} className="h-10 text-[9px] font-black uppercase tracking-widest text-slate-400 whitespace-nowrap">{sortLedgerHead("user", "User Details")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(ledgerSort, "item")} className="h-10 text-[9px] font-black uppercase tracking-widest text-slate-400 min-w-[150px]">{sortLedgerHead("item", "Item Details")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(ledgerSort, "qtyOrdered")} className="h-10 text-[9px] font-black uppercase tracking-widest text-slate-400 whitespace-nowrap text-center">{sortLedgerHead("qtyOrdered", "Qty Ordered")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(ledgerSort, "refunded")} className="h-10 text-[9px] font-black uppercase tracking-widest text-slate-400 whitespace-nowrap text-center text-rose-500">{sortLedgerHead("refunded", "Refunded")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(ledgerSort, "netItems")} className="h-10 text-[9px] font-black uppercase tracking-widest text-slate-400 whitespace-nowrap text-center text-emerald-600">{sortLedgerHead("netItems", "Net Items")}</TableHead>
+                                            {!pricesHidden && <TableHead aria-sort={ariaSortFor(ledgerSort, "unitPrice")} className="h-10 text-[9px] font-black uppercase tracking-widest text-slate-400 whitespace-nowrap text-center">{sortLedgerHead("unitPrice", "Unit Price")}</TableHead>}
+                                            {!pricesHidden && <TableHead aria-sort={ariaSortFor(ledgerSort, "netTotal")} className="h-10 text-[9px] font-black uppercase tracking-widest text-slate-400 whitespace-nowrap text-right pr-6">{sortLedgerHead("netTotal", exportRevenueHeader)}</TableHead>}
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
@@ -1450,7 +1517,7 @@ export default function ProductPerformancePage() {
                                         )
                                           }
                                           return (
-                                            filteredLedger.map((item: any) => {
+                                            sortedLedgerRows.map((item: any) => {
                                                 return (
                                                     <TableRow key={`${item.id}-${item.tid}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
                                                         {role === "SUPER_ADMIN" && (
@@ -1525,7 +1592,7 @@ export default function ProductPerformancePage() {
                                         })()}
                                     </TableBody>
                                 </Table>
-                            </div>
+                            </ReportTableScroll>
                         </Card>
                     </TabsContent>
                 </Tabs>

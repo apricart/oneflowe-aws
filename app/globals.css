@@ -183,6 +183,93 @@
     display: none;
   }
 
+  /* The Orders table is wider than its card. Reserve a permanent horizontal
+     scrollbar so mouse users never have to discover the overflow by accident. */
+  .orders-table-scrollbar {
+    overflow-x: scroll;
+    overflow-y: auto;
+    scrollbar-color: #94a3b8 #e2e8f0;
+    scrollbar-gutter: stable;
+    scrollbar-width: auto;
+  }
+  /* Report tables (components/reports/report-table-scroll.tsx) share the
+     Orders scrollbar, but only show it when the table actually overflows: many
+     reports fit their card, and an empty track there reads as broken. */
+  .report-table-scroll {
+    overflow: auto;
+    scrollbar-color: #94a3b8 #e2e8f0;
+    scrollbar-width: auto;
+  }
+  .report-table-scroll::-webkit-scrollbar,
+  .orders-table-scrollbar::-webkit-scrollbar {
+    display: block;
+    height: 12px;
+    width: 12px;
+  }
+  .report-table-scroll::-webkit-scrollbar-track,
+  .orders-table-scrollbar::-webkit-scrollbar-track {
+    background: #e2e8f0;
+    border-radius: 9999px;
+  }
+  .report-table-scroll::-webkit-scrollbar-thumb,
+  .orders-table-scrollbar::-webkit-scrollbar-thumb {
+    background: #94a3b8;
+    border: 3px solid #e2e8f0;
+    border-radius: 9999px;
+  }
+  .dark .report-table-scroll,
+  .dark .orders-table-scrollbar {
+    scrollbar-color: #64748b #1e293b;
+  }
+  .dark .report-table-scroll::-webkit-scrollbar-track,
+  .dark .orders-table-scrollbar::-webkit-scrollbar-track {
+    background: #1e293b;
+  }
+  .dark .report-table-scroll::-webkit-scrollbar-thumb,
+  .dark .orders-table-scrollbar::-webkit-scrollbar-thumb {
+    background: #64748b;
+    border-color: #1e293b;
+  }
+
+  /* The box is the one scroll container: the Table primitive's own
+     overflow-x wrapper would otherwise trap the horizontal scrollbar below the
+     last row and give the sticky header the wrong scrolling ancestor. */
+  .report-table-scroll > [data-slot="table-container"] {
+    overflow: visible;
+  }
+  /* Sticky, opaque header row. The inset shadow stands in for the row's bottom
+     border, which scrolls away under border-collapse. */
+  .report-table-scroll > [data-slot="table-container"] > table > thead > tr > th {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    height: calc(var(--spacing) * 11);
+    padding-block: calc(var(--spacing) * 2.5);
+    padding-inline: calc(var(--spacing) * 3);
+    background-color: var(--color-slate-50);
+    box-shadow: inset 0 -1px 0 var(--color-slate-200);
+  }
+  .dark .report-table-scroll > [data-slot="table-container"] > table > thead > tr > th {
+    background-color: var(--color-slate-900);
+    box-shadow: inset 0 -1px 0 var(--color-slate-800);
+  }
+  /* Compact spacing, as on the Orders table: 12px above and below each cell,
+     12px between columns, 20px at the table's outer edges. Spanning cells
+     (loading, empty and expanded rows) keep their own padding. */
+  .report-table-scroll > [data-slot="table-container"] > table > tbody > tr {
+    height: auto;
+  }
+  .report-table-scroll > [data-slot="table-container"] > table > tbody > tr > td:not([colspan]) {
+    padding-block: calc(var(--spacing) * 3);
+    padding-inline: calc(var(--spacing) * 3);
+  }
+  .report-table-scroll > [data-slot="table-container"] > table > :is(thead, tbody) > tr > :is(th, td:not([colspan])):first-child {
+    padding-left: calc(var(--spacing) * 5);
+  }
+  .report-table-scroll > [data-slot="table-container"] > table > :is(thead, tbody) > tr > :is(th, td:not([colspan])):last-child {
+    padding-right: calc(var(--spacing) * 5);
+  }
+
   .glass {
     @apply bg-white/70 backdrop-blur-xl border border-white/20 shadow-xl;
   }
