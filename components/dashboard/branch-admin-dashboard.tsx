@@ -4,7 +4,7 @@ import { useMemo, useState, useCallback, useEffect } from "react"
 import { motion } from "framer-motion"
 import useSWR from "swr"
 import { fetcher } from "@/lib/fetcher"
-import { useSalesPerformance, type DateRange } from "@/lib/hooks/use-sales-performance"
+import { useSalesPerformance, type DateRange, type SalesPerformanceResponse } from "@/lib/hooks/use-sales-performance"
 import { Card, CardContent } from "@/components/ui/card"
 import { NotificationRail } from "@/components/notifications/notification-center"
 import { formatPKR, cn } from "@/lib/utils"
@@ -43,6 +43,116 @@ export type BranchDashboardScope = {
   isReady: boolean
   /** Heading shown above the filter row. */
   heading: string
+}
+
+type ChartQuickFilter = "today" | "7d" | null
+type ChartGranularity = "daily" | "monthly" | "yearly"
+type ChartSeriesPoint = { label: string; sales: number; orders: number; itemQuantity: number }
+
+const ALL_MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+type ChartPeriodSelection = {
+  chartQuickFilter: ChartQuickFilter
+  chartMonths: number[]
+  chartYears: number[]
+  months: number[]
+  years: number[]
+}
+
+/** The chart's local filters that follow from a change of the global preset. */
+function chartFiltersForPreset(
+  preset: FilterPreset,
+  months: number[],
+  years: number[],
+  availableYears: number[],
+): Pick<ChartPeriodSelection, "chartQuickFilter" | "chartMonths" | "chartYears"> {
+  if (preset === "today" || preset === "7d") {
+    return { chartQuickFilter: preset, chartMonths: [], chartYears: [] }
+  }
+  if (preset === "all") {
+    return { chartQuickFilter: null, chartMonths: ALL_MONTHS, chartYears: availableYears }
+  }
+  return { chartQuickFilter: null, chartMonths: months, chartYears: years }
+}
+
+function resolveChartGranularity(
+  { chartQuickFilter, chartMonths, chartYears, months, years }: ChartPeriodSelection,
+  activePreset: FilterPreset,
+): ChartGranularity {
+  const hasChartFilters = chartMonths.length > 0 || chartYears.length > 0
+  if (chartQuickFilter === "today" || (activePreset === "today" && !hasChartFilters)) {
+    return "daily"
+  }
+  const followsGlobalFilters = !chartQuickFilter && chartMonths.length === 0
+  if (chartYears.length > 1 || (chartYears.length === 0 && years.length > 1 && followsGlobalFilters)) {
+    return "yearly"
+  }
+  const isBroadRange = !chartQuickFilter && ["all", "yearly", "monthly", "custom"].includes(activePreset)
+  const globalPicksMonths = !chartQuickFilter && (months.length > 0 || years.length === 1)
+  if (chartMonths.length > 0 || chartYears.length === 1 || globalPicksMonths || isBroadRange) {
+    return "monthly"
+  }
+  return "daily"
+}
+
+function findSeriesPoint(raw: any[], matches: (label: string | undefined) => boolean | undefined, label: string): ChartSeriesPoint {
+  const match = raw.find((r: any) => matches(r.label))
+  return {
+    label,
+    sales: match?.sales ?? 0,
+    orders: match?.orders ?? 0,
+    itemQuantity: match?.itemQuantity ?? 0,
+  }
+}
+
+/**
+ * Lays the series out one bar per selected year, or one per selected month,
+ * filling the gaps with zeros. Without month/year filters the chart scaffolds
+ * its intervals from the date range and matches by label, so the raw series is
+ * returned as-is to keep those labels aligned.
+ */
+function normalizeChartSeries(raw: any[], { chartMonths, chartYears, months, years }: Omit<ChartPeriodSelection, "chartQuickFilter">): any[] {
+  if (chartMonths.length === 0 && chartYears.length === 0) {
+    return raw
+  }
+
+  const activeYears = chartYears.length > 0 ? chartYears : years
+  const activeMonths = chartMonths.length > 0 ? chartMonths : months
+
+  if (activeYears.length > 1) {
+    return activeYears.toSorted((a, b) => a - b).map(y =>
+      findSeriesPoint(raw, label => label === String(y) || label?.startsWith(String(y)), String(y)),
+    )
+  }
+
+  const monthsToShow = activeMonths.length > 0 && activeMonths.length < 12
+    ? activeMonths.toSorted((a, b) => a - b)
+    : ALL_MONTHS
+
+  return monthsToShow.map(m => {
+    const monthPrefix = MONTH_NAMES[m - 1]
+    return findSeriesPoint(raw, label => label?.startsWith(monthPrefix), monthPrefix)
+  })
+}
+
+function buildTrend(
+  compare: boolean,
+  current: number,
+  prev: number | undefined,
+  formatFn?: (v: number) => string,
+): { type: TrendDirection; value: string; label: string } | undefined {
+  if (!compare || prev === undefined || prev === null) return undefined
+  const diff = current - prev
+  let percentage = current > 0 ? 100 : 0
+  if (prev > 0) percentage = (diff / prev) * 100
+  const fmt = formatFn || ((v: number) => v.toLocaleString())
+  const type: TrendDirection = diff >= 0 ? "up" : "down"
+  return {
+    type,
+    value: `${Math.abs(percentage).toFixed(1)}%`,
+    label: `${fmt(current)} vs ${fmt(prev)}`
+  }
 }
 
 export function BranchAdminDashboard({ scope }: Readonly<{ scope?: BranchDashboardScope }> = {}) {
@@ -106,8 +216,6 @@ export function BranchAdminDashboard({ scope }: Readonly<{ scope?: BranchDashboa
   }, [allTimePerf]);
 
   // ── Local Chart State ──
-  type ChartQuickFilter = "today" | "7d" | null
-  
   const [chartQuickFilter, setChartQuickFilter] = useState<ChartQuickFilter>("today")
   const [chartMonths, setChartMonths] = useState<number[]>([])
   const [chartYears, setChartYears] = useState<number[]>([])
@@ -128,23 +236,10 @@ export function BranchAdminDashboard({ scope }: Readonly<{ scope?: BranchDashboa
 
   // Sync Global Filters to Local Chart Filters
   useEffect(() => {
-    if (activePreset === "today") {
-      setChartQuickFilter("today")
-      setChartMonths([])
-      setChartYears([])
-    } else if (activePreset === "7d") {
-      setChartQuickFilter("7d")
-      setChartMonths([])
-      setChartYears([])
-    } else if (activePreset === "all") {
-      setChartQuickFilter(null)
-      setChartMonths([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
-      setChartYears(chartYearsAvailable)
-    } else {
-      setChartQuickFilter(null)
-      setChartMonths(months)
-      setChartYears(years)
-    }
+    const next = chartFiltersForPreset(activePreset, months, years, chartYearsAvailable)
+    setChartQuickFilter(next.chartQuickFilter)
+    setChartMonths(next.chartMonths)
+    setChartYears(next.chartYears)
   }, [activePreset, months, years, chartYearsAvailable])
 
   const handleKPIOpen = (type: DrillDownType) => {
@@ -190,20 +285,10 @@ export function BranchAdminDashboard({ scope }: Readonly<{ scope?: BranchDashboa
     return (hasChartFilters ? null : chartDateRange)
   })()
 
-  const isBroadRange = !chartQuickFilter && ["all", "yearly", "monthly", "custom"].includes(activePreset)
-
-  const chartGranularity = (() => {
-    if ((chartQuickFilter === "today" || (activePreset === "today" && !hasChartFilters))) {
-      return "daily" as const
-    }
-    if ((chartYears.length > 1 || (chartYears.length === 0 && years.length > 1 && !chartQuickFilter && chartMonths.length === 0))) {
-      return "yearly" as const
-    }
-    if ((chartMonths.length > 0 || chartYears.length === 1 || (!chartQuickFilter && (months.length > 0 || years.length === 1)) || isBroadRange)) {
-      return "monthly" as const
-    }
-    return "daily" as const
-  })()
+  const chartGranularity = resolveChartGranularity(
+    { chartQuickFilter, chartMonths, chartYears, months, years },
+    activePreset,
+  )
 
   const { data: chartPerfData, isLoading: isLoadingChart } = useSalesPerformance({
     organizationId,
@@ -224,46 +309,10 @@ export function BranchAdminDashboard({ scope }: Readonly<{ scope?: BranchDashboa
   const priceVisibilityKnown = [perfData, chartPerfData, allTimePerf].some((data: any) => typeof data?.pricesHidden === "boolean")
   const isPriceVisibilityPending = userRole === "BRANCH_ADMIN" && !priceVisibilityKnown
 
-  const normalizedChartData = useMemo(() => {
-    const raw = chartPerfData?.seriesData ?? []
-
-    // When no month/year arrays are active, the chart's safeData will scaffold
-    // intervals from the dateRange and match by label — return raw so labels align.
-    if (!hasChartFilters) {
-      return raw
-    }
-
-    const activeYears = chartYears.length > 0 ? chartYears : years
-    const activeMonths = chartMonths.length > 0 ? chartMonths : months
-
-    if (activeYears.length > 1) {
-      return [...activeYears].sort((a, b) => a - b).map(y => {
-        const match = raw.find((r: any) => r.label === String(y) || r.label?.startsWith(String(y)))
-        return {
-          label: String(y),
-          sales: match?.sales ?? 0,
-          orders: match?.orders ?? 0,
-          itemQuantity: match?.itemQuantity ?? 0,
-        }
-      })
-    }
-
-    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-    const monthsToShow = activeMonths.length > 0 && activeMonths.length < 12
-      ? [...activeMonths].sort((a, b) => a - b)
-      : [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
-
-    return monthsToShow.map(m => {
-      const monthPrefix = monthNames[m - 1]
-      const match = raw.find((r: any) => r.label?.startsWith(monthPrefix))
-      return {
-        label: monthPrefix,
-        sales: match?.sales ?? 0,
-        orders: match?.orders ?? 0,
-        itemQuantity: match?.itemQuantity ?? 0,
-      }
-    })
-  }, [chartPerfData, chartMonths, chartYears, months, years, hasChartFilters])
+  const normalizedChartData = useMemo(
+    () => normalizeChartSeries(chartPerfData?.seriesData ?? [], { chartMonths, chartYears, months, years }),
+    [chartPerfData, chartMonths, chartYears, months, years],
+  )
 
 
   const handleDateChange = useCallback(({ range, preset, compare: compareMode, compareRange: compRange, months: m, years: y, compareMonths: cm, compareYears: cy }: GlobalDateFilterChange) => {
@@ -281,46 +330,10 @@ export function BranchAdminDashboard({ scope }: Readonly<{ scope?: BranchDashboa
     handleDateChange({ range: getPresetRange("all"), preset: "all", compare: false, compareRange: null, months: [], years: [], compareMonths: [], compareYears: [] })
   }, [handleDateChange])
 
-  const buildTrend = useCallback((current: number, prev: number | undefined, formatFn?: (v: number) => string) => {
-    if (!compare || prev === undefined || prev === null) return undefined
-    const diff = current - prev
-    const percentage = (() => {
-      if (prev > 0) {
-        return (diff / prev) * 100
-      }
-      return (current > 0 ? 100 : 0)
-    })()
-    const fmt = formatFn || ((v: number) => v.toLocaleString())
-    const type: TrendDirection = diff >= 0 ? "up" : "down"
-    return {
-      type,
-      value: `${Math.abs(percentage).toFixed(1)}%`,
-      label: `${fmt(current)} vs ${fmt(prev)}`
-    }
-  }, [compare])
-
-  const totalRevenue = perfData?.totalNetSales ?? perfData?.totalSales ?? 0
-  const totalOrders = perfData?.totalOrders ?? 0
-  const totalItemsSold = perfData?.totalItemsSold ?? 0
-  const pendingCount = perfData?.statusCounts?.pendingCount ?? 0
-  const fulfilledCount = perfData?.statusCounts?.fulfilledCount ?? 0
-
-  const refundedCount = perfData?.statusCounts?.refundedCount ?? 0
-  const rejectedCount = perfData?.statusCounts?.rejectedCount ?? 0
-  const approvedCount = perfData?.statusCounts?.approvedCount ?? 0
-  const deliveredCount = perfData?.statusCounts?.deliveredCount ?? 0
-  const notDeliveredCount = perfData?.statusCounts?.notDeliveredCount ?? 0
-  const totalUsers = perfData?.totalUsers ?? 0
-  const totalBranches = perfData?.totalBranches ?? 0
-  const pendingAmount = (perfData?.statusCounts?.pendingAmountCents ?? 0) / 100
-  const approvedAmount = (perfData?.statusCounts?.approvedAmountCents ?? 0) / 100
-  const fulfilledAmount = (perfData?.statusCounts?.valueFulfilledCents ?? 0) / 100
-  const refundedAmount = (perfData?.statusCounts?.valueRefundedCents ?? 0) / 100
-  const rejectedAmount = (perfData?.statusCounts?.valueRejectedCents ?? 0) / 100
-  const exceptionCount = refundedCount + rejectedCount
-  const previousExceptionCount = perfData?.comparison
-    ? (perfData.comparison.refundedCount ?? 0) + (perfData.comparison.rejectedCount ?? 0)
-    : undefined
+  const trendFor = useCallback(
+    (current: number, prev: number | undefined) => buildTrend(compare, current, prev),
+    [compare],
+  )
 
   return (
     <motion.main 
@@ -364,144 +377,14 @@ export function BranchAdminDashboard({ scope }: Readonly<{ scope?: BranchDashboa
       </div>
 
       {/* ━━━ KPI Cards ━━━ */}
-      <div className="relative z-10 grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        {(() => {
-          if (isPriceVisibilityPending) {
-            return (
-          <BankingKPICard
-            icon={TrendingUp} title="Loading"
-            value="..."
-            subtitle="Checking access"
-            gradient="from-slate-400 to-slate-600" iconBg="text-slate-600 bg-slate-600" delay={0}
-            isLoading={!perfData}
-          />
-        )
-          }
-          if (pricesHidden) {
-            return (
-          <BankingKPICard
-            icon={TrendingUp} title="Items"
-            value={totalItemsSold.toLocaleString()}
-            subtitle={getPresetLabel(activePreset, dateRange)}
-            gradient="from-emerald-500 to-teal-600" iconBg="text-emerald-600 bg-emerald-600" delay={0}
-            trend={buildTrend(totalItemsSold, perfData?.comparison?.totalItemsSold)?.type}
-            trendValue={buildTrend(totalItemsSold, perfData?.comparison?.totalItemsSold)?.value}
-            comparisonValue={buildTrend(totalItemsSold, perfData?.comparison?.totalItemsSold)?.label}
-            comparisonLabel="VS LAST"
-            isLoading={!perfData}
-          />
-        )
-          }
-          return (
-          <BankingKPICard
-            icon={TrendingUp} title="Purchased"
-            value={formatPKR(totalRevenue, { maximumFractionDigits: 0 })}
-            subtitle={getPresetLabel(activePreset, dateRange)}
-            gradient="from-emerald-500 to-teal-600" iconBg="text-emerald-600 bg-emerald-600" delay={0}
-            onClick={() => handleKPIOpen("REVENUE")}
-            trend={buildTrend(totalRevenue, perfData?.comparison?.totalNetSales ?? perfData?.comparison?.totalSales)?.type}
-            trendValue={buildTrend(totalRevenue, perfData?.comparison?.totalNetSales ?? perfData?.comparison?.totalSales)?.value}
-            comparisonValue={buildTrend(totalRevenue, perfData?.comparison?.totalNetSales ?? perfData?.comparison?.totalSales)?.label}
-            comparisonLabel="VS LAST"
-            isLoading={!perfData}
-          />
-        )
-        })()}
-        <BankingKPICard
-          icon={Package} title="Orders"
-          value={totalOrders.toLocaleString()}
-          subtitle={getPresetLabel(activePreset, dateRange)}
-          gradient="from-blue-500 to-indigo-600" iconBg="text-blue-600 bg-blue-600" delay={50}
-          onClick={() => handleKPIOpen("ORDERS")}
-          trend={buildTrend(totalOrders, perfData?.comparison?.totalOrders)?.type}
-          trendValue={buildTrend(totalOrders, perfData?.comparison?.totalOrders)?.value}
-          comparisonValue={buildTrend(totalOrders, perfData?.comparison?.totalOrders)?.label}
-          comparisonLabel="VS LAST"
-          isLoading={!perfData}
-        />
-        <BankingKPICard
-          icon={Activity} title="Pending Approval"
-          value={pendingCount.toLocaleString()}
-          amount={pricesHidden ? undefined : formatPKR(pendingAmount, { maximumFractionDigits: 0 })}
-          subtitle={getPresetLabel(activePreset, dateRange)}
-          gradient="from-amber-400 to-orange-500" iconBg="text-amber-600 bg-amber-600" delay={75}
-          onClick={() => handleKPIOpen("PENDING" as any)}
-          trend={buildTrend(pendingCount, perfData?.comparison?.pendingCount)?.type}
-          trendValue={buildTrend(pendingCount, perfData?.comparison?.pendingCount)?.value}
-          comparisonValue={buildTrend(pendingCount, perfData?.comparison?.pendingCount)?.label}
-          comparisonLabel="VS LAST"
-          isLoading={!perfData}
-        />
-        <BankingKPICard
-          icon={CheckCircle2} title="Active"
-          value={approvedCount.toLocaleString()}
-          amount={pricesHidden ? undefined : formatPKR(approvedAmount, { maximumFractionDigits: 0 })}
-          subtitle={getPresetLabel(activePreset, dateRange)}
-          gradient="from-blue-400 to-indigo-500" iconBg="text-blue-600 bg-blue-600" delay={100}
-          onClick={() => handleKPIOpen("APPROVED")}
-          trend={buildTrend(approvedCount, perfData?.comparison?.approvedCount)?.type}
-          trendValue={buildTrend(approvedCount, perfData?.comparison?.approvedCount)?.value}
-          comparisonValue={buildTrend(approvedCount, perfData?.comparison?.approvedCount)?.label}
-          comparisonLabel="VS LAST"
-          details={[
-            { label: "Delivered/Unacknowledged", value: deliveredCount.toLocaleString(), align: "left" },
-            { label: "Not Delivered", value: notDeliveredCount.toLocaleString(), align: "right" },
-          ]}
-          isLoading={!perfData}
-        />
-        <BankingKPICard
-          icon={CheckCircle2} title="Fulfilled"
-          value={fulfilledCount.toLocaleString()}
-          amount={pricesHidden ? undefined : formatPKR(fulfilledAmount, { maximumFractionDigits: 0 })}
-          subtitle={getPresetLabel(activePreset, dateRange)}
-          gradient="from-teal-500 to-cyan-600" iconBg="text-teal-600 bg-teal-600" delay={125}
-          onClick={() => handleKPIOpen("FULFILLED")}
-          trend={buildTrend(fulfilledCount, perfData?.comparison?.fulfilledCount)?.type}
-          trendValue={buildTrend(fulfilledCount, perfData?.comparison?.fulfilledCount)?.value}
-          comparisonValue={buildTrend(fulfilledCount, perfData?.comparison?.fulfilledCount)?.label}
-          comparisonLabel="VS LAST"
-          isLoading={!perfData}
-        />
-        <BankingKPICard
-          icon={RotateCcw} title="Refunded / Rejected"
-          value={exceptionCount.toLocaleString()}
-          subtitle={getPresetLabel(activePreset, dateRange)}
-          gradient="from-red-500 to-slate-700" iconBg="text-red-600 bg-red-600" delay={150}
-          trend={buildTrend(exceptionCount, previousExceptionCount)?.type}
-          trendValue={buildTrend(exceptionCount, previousExceptionCount)?.value}
-          comparisonValue={buildTrend(exceptionCount, previousExceptionCount)?.label}
-          comparisonLabel="VS LAST"
-          details={[
-            {
-              label: "Refunded",
-              value: refundedCount.toLocaleString(),
-              amount: pricesHidden ? undefined : formatPKR(refundedAmount, { maximumFractionDigits: 0 }),
-              onClick: pricesHidden ? undefined : () => handleKPIOpen("REFUNDED"),
-            },
-            {
-              label: "Rejected",
-              value: rejectedCount.toLocaleString(),
-              amount: pricesHidden ? undefined : formatPKR(rejectedAmount, { maximumFractionDigits: 0 }),
-              onClick: pricesHidden ? undefined : () => handleKPIOpen("REJECTED"),
-            },
-          ]}
-          isLoading={!perfData}
-        />
-        <BankingKPICard
-          icon={Users} title="Total Users"
-          value={totalUsers.toLocaleString()}
-          subtitle="Current scope"
-          gradient="from-violet-500 to-purple-600" iconBg="text-violet-600 bg-violet-600" delay={175}
-          isLoading={!perfData}
-        />
-        <BankingKPICard
-          icon={Building2} title="Total Branches"
-          value={totalBranches.toLocaleString()}
-          subtitle="Current scope"
-          gradient="from-cyan-500 to-sky-600" iconBg="text-cyan-600 bg-cyan-600" delay={200}
-          isLoading={!perfData}
-        />
-      </div>
+      <BranchKpiCards
+        perfData={perfData}
+        pricesHidden={pricesHidden}
+        isPriceVisibilityPending={isPriceVisibilityPending}
+        subtitle={getPresetLabel(activePreset, dateRange)}
+        trendFor={trendFor}
+        onOpen={handleKPIOpen}
+      />
 
       {/* ━━━ Sales Performance Chart ━━━ */}
       <div className="space-y-6">
@@ -513,35 +396,16 @@ export function BranchAdminDashboard({ scope }: Readonly<{ scope?: BranchDashboa
                 <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Filters</span>
               </div>
 
-              <div className="flex items-center gap-1">
-                <Button
-                  variant={chartQuickFilter === "today" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => handleQuickFilter("today")}
-                  className={cn("h-8 px-3 rounded-lg text-[10px] font-semibold uppercase tracking-wider", chartQuickFilter === "today" ? "bg-indigo-600 text-white shadow-sm" : "text-slate-500")}
-                >
-                  <Clock className="h-3 w-3 mr-1" /> Today
-                </Button>
-                <Button
-                  variant={chartQuickFilter === "7d" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => handleQuickFilter("7d")}
-                  className={cn("h-8 px-3 rounded-lg text-[10px] font-semibold uppercase tracking-wider", chartQuickFilter === "7d" ? "bg-indigo-600 text-white shadow-sm" : "text-slate-500")}
-                >
-                  7D
-                </Button>
-              </div>
-
-              <div className="h-6 w-[1px] bg-slate-200 dark:bg-slate-700 mx-0.5" />
-              
-              <MonthFilter selected={chartMonths} onChange={handleChartMonths} />
-              <YearFilter selected={chartYears} onChange={handleChartYears} availableYears={chartYearsAvailable} />
-
-              {isLoadingChart && (
-                <div className="ml-auto flex items-center gap-1.5 text-xs text-slate-400 font-medium">
-                  <RefreshCw className="h-3 w-3 animate-spin text-emerald-500" /> Syncing Data
-                </div>
-              )}
+              <ChartPeriodFilters
+                quickFilter={chartQuickFilter}
+                onQuickFilter={handleQuickFilter}
+                months={chartMonths}
+                onMonths={handleChartMonths}
+                years={chartYears}
+                onYears={handleChartYears}
+                availableYears={chartYearsAvailable}
+                isLoading={isLoadingChart}
+              />
             </div>
 
             {(() => {
@@ -599,6 +463,242 @@ export function BranchAdminDashboard({ scope }: Readonly<{ scope?: BranchDashboa
         compareYears={compareYears}
       />}
     </motion.main>
+  )
+}
+
+type TrendFor = (current: number, prev: number | undefined) => ReturnType<typeof buildTrend>
+
+function BranchKpiCards({
+  perfData,
+  pricesHidden,
+  isPriceVisibilityPending,
+  subtitle,
+  trendFor,
+  onOpen,
+}: Readonly<{
+  perfData: SalesPerformanceResponse | undefined
+  pricesHidden: boolean
+  isPriceVisibilityPending: boolean
+  subtitle: string
+  trendFor: TrendFor
+  onOpen: (type: DrillDownType) => void
+}>) {
+  const totalRevenue = perfData?.totalNetSales ?? perfData?.totalSales ?? 0
+  const totalOrders = perfData?.totalOrders ?? 0
+  const totalItemsSold = perfData?.totalItemsSold ?? 0
+  const pendingCount = perfData?.statusCounts?.pendingCount ?? 0
+  const fulfilledCount = perfData?.statusCounts?.fulfilledCount ?? 0
+
+  const refundedCount = perfData?.statusCounts?.refundedCount ?? 0
+  const rejectedCount = perfData?.statusCounts?.rejectedCount ?? 0
+  const approvedCount = perfData?.statusCounts?.approvedCount ?? 0
+  const deliveredCount = perfData?.statusCounts?.deliveredCount ?? 0
+  const notDeliveredCount = perfData?.statusCounts?.notDeliveredCount ?? 0
+  const totalUsers = perfData?.totalUsers ?? 0
+  const totalBranches = perfData?.totalBranches ?? 0
+  const pendingAmount = (perfData?.statusCounts?.pendingAmountCents ?? 0) / 100
+  const approvedAmount = (perfData?.statusCounts?.approvedAmountCents ?? 0) / 100
+  const fulfilledAmount = (perfData?.statusCounts?.valueFulfilledCents ?? 0) / 100
+  const refundedAmount = (perfData?.statusCounts?.valueRefundedCents ?? 0) / 100
+  const rejectedAmount = (perfData?.statusCounts?.valueRejectedCents ?? 0) / 100
+  const exceptionCount = refundedCount + rejectedCount
+  const previousExceptionCount = perfData?.comparison
+    ? (perfData.comparison.refundedCount ?? 0) + (perfData.comparison.rejectedCount ?? 0)
+    : undefined
+
+  return (
+    <div className="relative z-10 grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+      {(() => {
+        if (isPriceVisibilityPending) {
+          return (
+        <BankingKPICard
+          icon={TrendingUp} title="Loading"
+          value="..."
+          subtitle="Checking access"
+          gradient="from-slate-400 to-slate-600" iconBg="text-slate-600 bg-slate-600" delay={0}
+          isLoading={!perfData}
+        />
+      )
+        }
+        if (pricesHidden) {
+          return (
+        <BankingKPICard
+          icon={TrendingUp} title="Items"
+          value={totalItemsSold.toLocaleString()}
+          subtitle={subtitle}
+          gradient="from-emerald-500 to-teal-600" iconBg="text-emerald-600 bg-emerald-600" delay={0}
+          trend={trendFor(totalItemsSold, perfData?.comparison?.totalItemsSold)?.type}
+          trendValue={trendFor(totalItemsSold, perfData?.comparison?.totalItemsSold)?.value}
+          comparisonValue={trendFor(totalItemsSold, perfData?.comparison?.totalItemsSold)?.label}
+          comparisonLabel="VS LAST"
+          isLoading={!perfData}
+        />
+      )
+        }
+        return (
+        <BankingKPICard
+          icon={TrendingUp} title="Purchased"
+          value={formatPKR(totalRevenue, { maximumFractionDigits: 0 })}
+          subtitle={subtitle}
+          gradient="from-emerald-500 to-teal-600" iconBg="text-emerald-600 bg-emerald-600" delay={0}
+          onClick={() => onOpen("REVENUE")}
+          trend={trendFor(totalRevenue, perfData?.comparison?.totalNetSales ?? perfData?.comparison?.totalSales)?.type}
+          trendValue={trendFor(totalRevenue, perfData?.comparison?.totalNetSales ?? perfData?.comparison?.totalSales)?.value}
+          comparisonValue={trendFor(totalRevenue, perfData?.comparison?.totalNetSales ?? perfData?.comparison?.totalSales)?.label}
+          comparisonLabel="VS LAST"
+          isLoading={!perfData}
+        />
+      )
+      })()}
+      <BankingKPICard
+        icon={Package} title="Orders"
+        value={totalOrders.toLocaleString()}
+        subtitle={subtitle}
+        gradient="from-blue-500 to-indigo-600" iconBg="text-blue-600 bg-blue-600" delay={50}
+        onClick={() => onOpen("ORDERS")}
+        trend={trendFor(totalOrders, perfData?.comparison?.totalOrders)?.type}
+        trendValue={trendFor(totalOrders, perfData?.comparison?.totalOrders)?.value}
+        comparisonValue={trendFor(totalOrders, perfData?.comparison?.totalOrders)?.label}
+        comparisonLabel="VS LAST"
+        isLoading={!perfData}
+      />
+      <BankingKPICard
+        icon={Activity} title="Pending Approval"
+        value={pendingCount.toLocaleString()}
+        amount={pricesHidden ? undefined : formatPKR(pendingAmount, { maximumFractionDigits: 0 })}
+        subtitle={subtitle}
+        gradient="from-amber-400 to-orange-500" iconBg="text-amber-600 bg-amber-600" delay={75}
+        onClick={() => onOpen("PENDING" as any)}
+        trend={trendFor(pendingCount, perfData?.comparison?.pendingCount)?.type}
+        trendValue={trendFor(pendingCount, perfData?.comparison?.pendingCount)?.value}
+        comparisonValue={trendFor(pendingCount, perfData?.comparison?.pendingCount)?.label}
+        comparisonLabel="VS LAST"
+        isLoading={!perfData}
+      />
+      <BankingKPICard
+        icon={CheckCircle2} title="Active"
+        value={approvedCount.toLocaleString()}
+        amount={pricesHidden ? undefined : formatPKR(approvedAmount, { maximumFractionDigits: 0 })}
+        subtitle={subtitle}
+        gradient="from-blue-400 to-indigo-500" iconBg="text-blue-600 bg-blue-600" delay={100}
+        onClick={() => onOpen("APPROVED")}
+        trend={trendFor(approvedCount, perfData?.comparison?.approvedCount)?.type}
+        trendValue={trendFor(approvedCount, perfData?.comparison?.approvedCount)?.value}
+        comparisonValue={trendFor(approvedCount, perfData?.comparison?.approvedCount)?.label}
+        comparisonLabel="VS LAST"
+        details={[
+          { label: "Delivered/Unacknowledged", value: deliveredCount.toLocaleString(), align: "left" },
+          { label: "Not Delivered", value: notDeliveredCount.toLocaleString(), align: "right" },
+        ]}
+        isLoading={!perfData}
+      />
+      <BankingKPICard
+        icon={CheckCircle2} title="Fulfilled"
+        value={fulfilledCount.toLocaleString()}
+        amount={pricesHidden ? undefined : formatPKR(fulfilledAmount, { maximumFractionDigits: 0 })}
+        subtitle={subtitle}
+        gradient="from-teal-500 to-cyan-600" iconBg="text-teal-600 bg-teal-600" delay={125}
+        onClick={() => onOpen("FULFILLED")}
+        trend={trendFor(fulfilledCount, perfData?.comparison?.fulfilledCount)?.type}
+        trendValue={trendFor(fulfilledCount, perfData?.comparison?.fulfilledCount)?.value}
+        comparisonValue={trendFor(fulfilledCount, perfData?.comparison?.fulfilledCount)?.label}
+        comparisonLabel="VS LAST"
+        isLoading={!perfData}
+      />
+      <BankingKPICard
+        icon={RotateCcw} title="Refunded / Rejected"
+        value={exceptionCount.toLocaleString()}
+        subtitle={subtitle}
+        gradient="from-red-500 to-slate-700" iconBg="text-red-600 bg-red-600" delay={150}
+        trend={trendFor(exceptionCount, previousExceptionCount)?.type}
+        trendValue={trendFor(exceptionCount, previousExceptionCount)?.value}
+        comparisonValue={trendFor(exceptionCount, previousExceptionCount)?.label}
+        comparisonLabel="VS LAST"
+        details={[
+          {
+            label: "Refunded",
+            value: refundedCount.toLocaleString(),
+            amount: pricesHidden ? undefined : formatPKR(refundedAmount, { maximumFractionDigits: 0 }),
+            onClick: pricesHidden ? undefined : () => onOpen("REFUNDED"),
+          },
+          {
+            label: "Rejected",
+            value: rejectedCount.toLocaleString(),
+            amount: pricesHidden ? undefined : formatPKR(rejectedAmount, { maximumFractionDigits: 0 }),
+            onClick: pricesHidden ? undefined : () => onOpen("REJECTED"),
+          },
+        ]}
+        isLoading={!perfData}
+      />
+      <BankingKPICard
+        icon={Users} title="Total Users"
+        value={totalUsers.toLocaleString()}
+        subtitle="Current scope"
+        gradient="from-violet-500 to-purple-600" iconBg="text-violet-600 bg-violet-600" delay={175}
+        isLoading={!perfData}
+      />
+      <BankingKPICard
+        icon={Building2} title="Total Branches"
+        value={totalBranches.toLocaleString()}
+        subtitle="Current scope"
+        gradient="from-cyan-500 to-sky-600" iconBg="text-cyan-600 bg-cyan-600" delay={200}
+        isLoading={!perfData}
+      />
+    </div>
+  )
+}
+
+function ChartPeriodFilters({
+  quickFilter,
+  onQuickFilter,
+  months,
+  onMonths,
+  years,
+  onYears,
+  availableYears,
+  isLoading,
+}: Readonly<{
+  quickFilter: ChartQuickFilter
+  onQuickFilter: (f: ChartQuickFilter) => void
+  months: number[]
+  onMonths: (m: number[]) => void
+  years: number[]
+  onYears: (y: number[]) => void
+  availableYears: number[]
+  isLoading: boolean
+}>) {
+  return (
+    <>
+      <div className="flex items-center gap-1">
+        <Button
+          variant={quickFilter === "today" ? "default" : "outline"}
+          size="sm"
+          onClick={() => onQuickFilter("today")}
+          className={cn("h-8 px-3 rounded-lg text-[10px] font-semibold uppercase tracking-wider", quickFilter === "today" ? "bg-indigo-600 text-white shadow-sm" : "text-slate-500")}
+        >
+          <Clock className="h-3 w-3 mr-1" /> Today
+        </Button>
+        <Button
+          variant={quickFilter === "7d" ? "default" : "outline"}
+          size="sm"
+          onClick={() => onQuickFilter("7d")}
+          className={cn("h-8 px-3 rounded-lg text-[10px] font-semibold uppercase tracking-wider", quickFilter === "7d" ? "bg-indigo-600 text-white shadow-sm" : "text-slate-500")}
+        >
+          7D
+        </Button>
+      </div>
+
+      <div className="h-6 w-[1px] bg-slate-200 dark:bg-slate-700 mx-0.5" />
+
+      <MonthFilter selected={months} onChange={onMonths} />
+      <YearFilter selected={years} onChange={onYears} availableYears={availableYears} />
+
+      {isLoading && (
+        <div className="ml-auto flex items-center gap-1.5 text-xs text-slate-400 font-medium">
+          <RefreshCw className="h-3 w-3 animate-spin text-emerald-500" /> Syncing Data
+        </div>
+      )}
+    </>
   )
 }
 
