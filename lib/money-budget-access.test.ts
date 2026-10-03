@@ -4,6 +4,7 @@ import {
   canAllocateToBranch,
   canManageMoneyBudgets,
   canManageMoneyBudgetsForAccount,
+  fenceToAssignedBranches,
   managesAssignedBranchesOnly,
   resolveManagedBranchScope,
 } from "./money-budget-access"
@@ -103,5 +104,24 @@ describe("whether one allocation may be written to one branch", () => {
     expect(canAllocateToBranch({ role: "GROUP_USER", assignedBranchIds: [10], branchId: 0 })).toBe(false)
     expect(canAllocateToBranch({ role: "GROUP_ORDER_PORTAL", assignedBranchIds: [10], branchId: 10 })).toBe(false)
     expect(canAllocateToBranch({ role: "BRANCH_ADMIN", assignedBranchIds: [10], branchId: 10 })).toBe(false)
+  })
+})
+
+describe("fencing a budget report to assigned branches", () => {
+  it("passes the set through for a caller fenced only by tenant", () => {
+    expect(fenceToAssignedBranches([1, 2, 3], null)).toEqual([1, 2, 3])
+  })
+
+  it("keeps only the assigned branches, in the requested order", () => {
+    expect(fenceToAssignedBranches([3, 9, 1], [1, 3, 5])).toEqual([3, 1])
+  })
+
+  it("never widens an empty assignment to the tenant", () => {
+    expect(fenceToAssignedBranches([1, 2], [])).toEqual([])
+    expect(fenceToAssignedBranches([], [1, 2])).toEqual([])
+  })
+
+  it("ignores malformed assignment ids", () => {
+    expect(fenceToAssignedBranches([1, 2], ["1", null, -2, 0, "x"])).toEqual([1])
   })
 })

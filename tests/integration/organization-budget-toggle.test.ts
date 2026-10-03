@@ -242,8 +242,15 @@ describe.skipIf(!hasTestDatabase)("organization budget allocation switch through
     expect(outcome.kind).toBe("rejected")
   }
 
-  const fulfil = async (orderId: number, organizationId: number, branchId: number) =>
-    fulfillApprovedOrder({ orderId, organizationId, branchId, fulfilledByUserId: actors.superAdmin.id })
+  // An order is fulfilled only once its goods are delivered, so the delivery is
+  // recorded first, as the delivery-progress route would.
+  const fulfil = async (orderId: number, organizationId: number, branchId: number) => {
+    await db
+      .update(orders)
+      .set({ fulfillmentStatus: "DELIVERED", deliveredAt: new Date() })
+      .where(eq(orders.id, orderId))
+    return fulfillApprovedOrder({ orderId, organizationId, branchId, fulfilledByUserId: actors.superAdmin.id })
+  }
 
   beforeAll(async () => {
     const roleIds = {

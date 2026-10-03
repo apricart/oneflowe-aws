@@ -145,8 +145,10 @@ export async function GET(req: NextRequest) {
       })
     }
 
+    // Only the drawn window needs a quantity on every row; the prior window
+    // feeds `previousValue` alone.
     const [rankedRows, previousRows] = await Promise.all([
-      loadComparison(scope, filters, parsed.dimension, parsed.metric, parsed.limit),
+      loadComparison(scope, filters, parsed.dimension, parsed.metric, parsed.limit, { withQuantity: true }),
       parsed.dimension === "month"
         ? Promise.resolve([])
         : loadComparison(

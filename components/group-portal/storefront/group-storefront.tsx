@@ -34,6 +34,7 @@ import {
   applyQuantityToBranchPlans,
   branchPlansToEntries,
   entryTotalCents,
+  replaceBranchPlanLines,
   withoutBranchPlan,
 } from "../group-order-plan"
 import { ReviewStep } from "../review-step"
@@ -602,6 +603,7 @@ function StorefrontBody({
   if (reviewPlans) {
     return (
       <ReviewStep
+        groupId={groupId ?? null}
         groupName={groupName}
         branchPlans={reviewPlans}
         notes={notes}
@@ -620,6 +622,8 @@ function StorefrontBody({
           if (!source) return
           onCommitPlans(applyQuantityToBranchPlans(reviewPlans, inventoryId, source.quantity))
         }}
+        onReplaceBranchLines={(branchId, lines) =>
+          onCommitPlans(replaceBranchPlanLines(reviewPlans, branchId, lines))}
         onRemoveBranch={(branchId) => {
           onCommitPlans(withoutBranchPlan(reviewPlans, branchId))
         }}

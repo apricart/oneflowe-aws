@@ -10,7 +10,12 @@ import * as requestsRoute from "@/app/api/v1/product-requests/route"
 import * as uploadRoute from "@/app/api/v1/upload/image/route"
 import { auditLogs, productRequests } from "@/db/schema"
 import { closePool, db } from "@/lib/db"
-import { PRODUCT_REQUEST_PAGE_SIZE_MAX } from "@/lib/product-request"
+import {
+  PRODUCT_REQUEST_AVAILABILITY_MAX_DAYS,
+  PRODUCT_REQUEST_PAGE_SIZE_MAX,
+  addDaysToDay,
+  productRequestAvailabilityBounds,
+} from "@/lib/product-request"
 import { putImage } from "@/lib/server/image-storage"
 
 import {
@@ -114,6 +119,10 @@ async function auditFor(requestId: number, action: string) {
 
 const STORED_IMAGE = "/api/v1/images/products/0b6f3c52-8f6e-4d1a-9a57-3c2b1d4e5f60.png"
 
+// The route checks the date against today, so the fixtures name days relative to it.
+const TODAY = productRequestAvailabilityBounds(new Date()).min
+const IN_TWO_WEEKS = addDaysToDay(TODAY, 14)
+
 describe.skipIf(!hasTestDatabase)("Product requests — routes against a real database", () => {
   let f: ProductRequestFixtures
   let apricart: Actor
@@ -180,9 +189,10 @@ describe.skipIf(!hasTestDatabase)("Product requests — routes against a real da
       expect((await create({ productName: "Soap" })).status).toBe(403)
     })
 
-    it("does not let Head Office decide a request", async () => {
+    it("does not let Head Office decide a request, or put one under review", async () => {
       signIn(headOffice)
-      expect((await review(1, { status: "APPROVED" })).status).toBe(403)
+      expect((await review(1, { status: "APPROVED", estimatedAvailableOn: IN_TWO_WEEKS })).status).toBe(403)
+      expect((await review(1, { status: "UNDER_REVIEW" })).status).toBe(403)
     })
 
     it("refuses a Head Office user with no organization rather than widening it", async () => {
@@ -395,10 +405,78 @@ describe.skipIf(!hasTestDatabase)("Product requests — routes against a real da
     })
   })
 
-  describe("deciding a request", () => {
-    it("records Super Admin's approval, its note, who and when, with an audit row", async () => {
+  describe("putting a request under review", () => {
+    it("records who started the review and when, with an audit row, and decides nothing", async () => {
       signIn(apricart)
-      const response = await review(fullRequestId, { status: "APPROVED", reviewNote: " Added as KE-9001 " })
+      const response = await review(fullRequestId, { status: "UNDER_REVIEW" })
+      expect(response.status).toBe(200)
+      expect(response.body).toEqual({ id: fullRequestId, status: "UNDER_REVIEW" })
+
+      const row = await requestRow(fullRequestId)
+      expect(row).toMatchObject({
+        status: "UNDER_REVIEW",
+        reviewStartedByUserId: f.superAdminId,
+        reviewedByUserId: null,
+        reviewedAt: null,
+        estimatedAvailableOn: null,
+      })
+      expect(row.reviewStartedAt).toBeInstanceOf(Date)
+
+      const audit = await auditFor(fullRequestId, "START_PRODUCT_REQUEST_REVIEW")
+      expect(audit).toHaveLength(1)
+      expect(audit[0]).toMatchObject({ userId: f.superAdminId, organizationId: f.organizationId })
+    })
+
+    it("shows Head Office the request as under review, by whom, in its own tab", async () => {
+      signIn(headOffice)
+      const response = await list({ status: "UNDER_REVIEW" })
+      expect(response.status).toBe(200)
+      expect(response.body.items.map((item: any) => item.id)).toEqual([fullRequestId])
+      expect(response.body.items[0]).toMatchObject({
+        status: "UNDER_REVIEW",
+        reviewStartedBy: { id: f.superAdminId, fullName: `Apricart ${f.suffix}` },
+        reviewedBy: null,
+        estimatedAvailableOn: null,
+      })
+      expect(typeof response.body.items[0].reviewStartedAt).toBe("string")
+      expect(response.body.counts.UNDER_REVIEW).toBe(1)
+    })
+
+    it("refuses to start a review twice", async () => {
+      signIn(apricart)
+      const response = await review(fullRequestId, { status: "UNDER_REVIEW" })
+      expect(response.status).toBe(409)
+      expect(response.body.error).toBe("This request is already under review")
+      expect(await auditFor(fullRequestId, "START_PRODUCT_REQUEST_REVIEW")).toHaveLength(1)
+    })
+  })
+
+  describe("the expected availability date", () => {
+    it.each([
+      ["no date", { status: "APPROVED" }],
+      ["a date in the past", { status: "APPROVED", estimatedAvailableOn: addDaysToDay(TODAY, -1) }],
+      [
+        "a date past the horizon",
+        { status: "APPROVED", estimatedAvailableOn: addDaysToDay(TODAY, PRODUCT_REQUEST_AVAILABILITY_MAX_DAYS + 1) },
+      ],
+      ["a day the calendar lacks", { status: "APPROVED", estimatedAvailableOn: "2027-02-30" }],
+      ["a date on a rejection", { status: "REJECTED", estimatedAvailableOn: IN_TWO_WEEKS }],
+      ["a note on a review start", { status: "UNDER_REVIEW", reviewNote: "Looking into it" }],
+    ])("refuses %s, and leaves the request under review", async (_label, body) => {
+      signIn(apricart)
+      expect((await review(fullRequestId, body)).status).toBe(400)
+      expect((await requestRow(fullRequestId)).status).toBe("UNDER_REVIEW")
+    })
+  })
+
+  describe("deciding a request", () => {
+    it("approves a request under review with its date, note, who and when, with an audit row", async () => {
+      signIn(apricart)
+      const response = await review(fullRequestId, {
+        status: "APPROVED",
+        reviewNote: " Added as KE-9001 ",
+        estimatedAvailableOn: IN_TWO_WEEKS,
+      })
       expect(response.status).toBe(200)
       expect(response.body).toEqual({ id: fullRequestId, status: "APPROVED" })
 
@@ -407,13 +485,17 @@ describe.skipIf(!hasTestDatabase)("Product requests — routes against a real da
       expect(row.reviewNote).toBe("Added as KE-9001")
       expect(row.reviewedByUserId).toBe(f.superAdminId)
       expect(row.reviewedAt).toBeInstanceOf(Date)
+      expect(row.estimatedAvailableOn).toBe(IN_TWO_WEEKS)
+      // The review start is kept, so the timeline can still show it.
+      expect(row.reviewStartedByUserId).toBe(f.superAdminId)
 
       const audit = await auditFor(fullRequestId, "REVIEW_PRODUCT_REQUEST")
       expect(audit).toHaveLength(1)
       expect(audit[0]).toMatchObject({ userId: f.superAdminId, organizationId: f.organizationId })
+      expect(JSON.stringify(audit[0].metadata)).toContain(IN_TWO_WEEKS)
     })
 
-    it("shows Head Office the outcome and the note", async () => {
+    it("shows Head Office the outcome, the note and the expected date", async () => {
       signIn(headOffice)
       const response = await list({ status: "APPROVED" })
       const decided = response.body.items.find((item: any) => item.id === fullRequestId)
@@ -421,8 +503,17 @@ describe.skipIf(!hasTestDatabase)("Product requests — routes against a real da
         status: "APPROVED",
         reviewNote: "Added as KE-9001",
         reviewedBy: { id: f.superAdminId, fullName: `Apricart ${f.suffix}` },
+        estimatedAvailableOn: IN_TWO_WEEKS,
       })
       expect(response.body.counts.APPROVED).toBeGreaterThanOrEqual(1)
+      expect(response.body.counts.UNDER_REVIEW).toBe(0)
+    })
+
+    it("refuses to put a decided request back under review", async () => {
+      signIn(apricart)
+      const response = await review(fullRequestId, { status: "UNDER_REVIEW" })
+      expect(response.status).toBe(409)
+      expect(response.body.error).toBe("This request has already been approved")
     })
 
     it("refuses a second decision on the same request", async () => {
@@ -440,7 +531,7 @@ describe.skipIf(!hasTestDatabase)("Product requests — routes against a real da
 
       signIn(apricart)
       const outcomes = await Promise.all([
-        review(raised.body.id, { status: "APPROVED" }),
+        review(raised.body.id, { status: "APPROVED", estimatedAvailableOn: IN_TWO_WEEKS }),
         review(raised.body.id, { status: "REJECTED" }),
       ])
       expect(outcomes.map((outcome) => outcome.status).sort()).toEqual([200, 409])
@@ -451,13 +542,20 @@ describe.skipIf(!hasTestDatabase)("Product requests — routes against a real da
       signIn(apricart)
       const response = await review(neighbourRequestId, { status: "REJECTED", reviewNote: "Already stocked as Floor Clean" })
       expect(response.status).toBe(200)
-      expect(await requestRow(neighbourRequestId)).toMatchObject({ status: "REJECTED", reviewNote: "Already stocked as Floor Clean" })
+      // Decided straight from pending: no review start, and no date on a rejection.
+      expect(await requestRow(neighbourRequestId)).toMatchObject({
+        status: "REJECTED",
+        reviewNote: "Already stocked as Floor Clean",
+        reviewStartedAt: null,
+        reviewStartedByUserId: null,
+        estimatedAvailableOn: null,
+      })
     })
 
     it.each([
-      ["an unknown id", 2_000_000_000, { status: "APPROVED" }, 404],
-      ["a non-numeric id", "abc", { status: "APPROVED" }, 404],
-      ["a zero id", 0, { status: "APPROVED" }, 404],
+      ["an unknown id", 2_000_000_000, { status: "UNDER_REVIEW" }, 404],
+      ["a non-numeric id", "abc", { status: "UNDER_REVIEW" }, 404],
+      ["a zero id", 0, { status: "UNDER_REVIEW" }, 404],
       ["a move back to pending", 1, { status: "PENDING" }, 400],
       ["an unknown field", 1, { status: "APPROVED", reviewedByUserId: "x" }, 400],
       ["no body", 1, undefined, 400],
@@ -488,12 +586,60 @@ describe.skipIf(!hasTestDatabase)("Product requests — routes against a real da
       ).rejects.toThrow()
     })
 
-    it("refuses a status outside the three", async () => {
+    it("refuses a status outside the four", async () => {
       await expect(
         db.insert(productRequests).values({
           organizationId: f.organizationId,
           requestedByUserId: f.headOfficeId,
           status: "DONE",
+        }),
+      ).rejects.toThrow()
+    })
+
+    it("refuses a request under review with no one named as reviewing it", async () => {
+      await expect(
+        db.insert(productRequests).values({
+          organizationId: f.organizationId,
+          requestedByUserId: f.headOfficeId,
+          status: "UNDER_REVIEW",
+        }),
+      ).rejects.toThrow()
+    })
+
+    it("refuses a request under review that already carries a decision", async () => {
+      await expect(
+        db.insert(productRequests).values({
+          organizationId: f.organizationId,
+          requestedByUserId: f.headOfficeId,
+          status: "UNDER_REVIEW",
+          reviewStartedByUserId: f.superAdminId,
+          reviewStartedAt: new Date(),
+          reviewedByUserId: f.superAdminId,
+          reviewedAt: new Date(),
+        }),
+      ).rejects.toThrow()
+    })
+
+    it("refuses a pending request that names a review start", async () => {
+      await expect(
+        db.insert(productRequests).values({
+          organizationId: f.organizationId,
+          requestedByUserId: f.headOfficeId,
+          reviewStartedByUserId: f.superAdminId,
+          reviewStartedAt: new Date(),
+        }),
+      ).rejects.toThrow()
+    })
+
+    it("refuses an availability date on anything but an approval", async () => {
+      await expect(
+        db.insert(productRequests).values({
+          organizationId: f.organizationId,
+          requestedByUserId: f.headOfficeId,
+          status: "REJECTED",
+          reviewedByUserId: f.superAdminId,
+          reviewedAt: new Date(),
+          estimatedAvailableOn: IN_TWO_WEEKS,
         }),
       ).rejects.toThrow()
     })

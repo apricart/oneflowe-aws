@@ -6,6 +6,7 @@ FULFILLMENT_STATUS_LABELS,
 normalizeFulfillmentStatus,
 } from "@/lib/fulfillment-status"
 import { cn,formatPKR } from "@/lib/utils"
+import { usesPurchaseWording } from "@/lib/purchase-wording"
 import { format } from "date-fns"
 import { AnimatePresence,motion } from "framer-motion"
 import { useCallback,useEffect,useMemo,useState } from "react"
@@ -249,12 +250,6 @@ function buildDrillDownUrl(options: {
     return `/api/v1/analytics/drill-down?${params.toString()}`
 }
 
-// Wording only: these roles buy stock rather than sell it, so the drawer reads
-// "Purchased" instead of "Revenue" for them. It grants no access of its own.
-function isBuyerRole(role: string | null): boolean {
-    return ["HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER"].includes(role ?? "")
-}
-
 function drillDownConfig(type: DrillDownSheetProps["type"]) {
     return type ? TYPE_CONFIG[type] : null
 }
@@ -277,7 +272,7 @@ export function DrillDownSheet({
     compareYears: parentCompareYears
 }: Readonly<DrillDownSheetProps>): React.ReactElement | null {
     const { userRole } = useAppContext()
-    const isBuyer = isBuyerRole(userRole)
+    const isBuyer = usesPurchaseWording(userRole)
 
     const [localDateRange, setLocalDateRange] = useState<DateRange | null>(getPresetRange("all"))
     const [localCompareRange, setLocalCompareRange] = useState<DateRange | null>(null)
@@ -458,7 +453,7 @@ export function DrillDownSheet({
                                     <BIInsightCard
                                         title={isBuyer ? "Total Purchased" : "Total Revenue"}
                                         value={formatPKR(summary.netRevenue)}
-                                        subvalue={isBuyer ? "Net Purchased" : "Net Net Revenue"}
+                                        subvalue={isBuyer ? "Net Purchased" : "Net Revenue"}
                                         icon={TrendingUp}
                                     />
                                     <BIInsightCard

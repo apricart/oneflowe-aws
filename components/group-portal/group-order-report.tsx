@@ -25,6 +25,9 @@ import { useSession } from "next-auth/react"
 import { GlobalDateFilter, type FilterPreset, type GlobalDateFilterChange } from "@/components/dashboard/global-date-filter"
 import { GroupFilter } from "@/components/reports/group-filter"
 import { KPICard } from "@/components/reports/kpi-card"
+import { ReportTableScroll } from "@/components/reports/report-table-scroll"
+import { SortableHeader, ariaSortFor, useTableSort } from "@/components/reports/sortable-header"
+import { sortRows, type SortValue } from "@/lib/table-sort"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -132,6 +135,31 @@ type GroupBreakdownRow = {
   netCents: number
 }
 
+type GroupBreakdownSortKey = "group" | "groupOrders" | "branchOrders" | "branches" | "quantity" | "total" | "refunded" | "net"
+/** What each sortable column of the by-group table orders by. */
+const GROUP_BREAKDOWN_SORT_ACCESSORS: Record<GroupBreakdownSortKey, (row: GroupBreakdownRow) => SortValue> = {
+  group: (row) => row.groupName,
+  groupOrders: (row) => row.groupOrderCount,
+  branchOrders: (row) => row.branchOrderCount,
+  branches: (row) => row.branchCount,
+  quantity: (row) => row.quantityOrdered,
+  total: (row) => row.totalCents,
+  refunded: (row) => row.refundCents,
+  net: (row) => row.netCents,
+}
+
+type ReportChildSortKey = "branch" | "tid" | "status" | "items" | "quantity" | "total" | "refunded"
+/** What each sortable column of a group order's branch-order table orders by. */
+const REPORT_CHILD_SORT_ACCESSORS: Record<ReportChildSortKey, (child: ReportChild) => SortValue> = {
+  branch: (child) => child.branchName,
+  tid: (child) => child.tid,
+  status: (child) => String(child.status).toUpperCase(),
+  items: (child) => child.itemCount,
+  quantity: (child) => child.quantityOrdered,
+  total: (child) => child.totalCents,
+  refunded: (child) => child.refundCents,
+}
+
 type ReportResponse = {
   items: ReportRow[]
   pagination: { page: number; limit: number; total: number; totalPages: number; hasMore: boolean }
@@ -197,6 +225,9 @@ export function GroupOrderReport() {
   const pagination = reportData?.pagination
   const summary = reportData?.summary ?? groupData?.summary
   const byGroup = useMemo(() => groupData?.byGroup ?? [], [groupData])
+  // Column sort for the by-group table (plans/OF-TABLE-column-sorting.md).
+  const { sort: groupSort, toggleSort: toggleGroupSort } = useTableSort<GroupBreakdownSortKey>()
+  const sortedByGroup = useMemo(() => sortRows(byGroup, groupSort, GROUP_BREAKDOWN_SORT_ACCESSORS), [byGroup, groupSort])
 
   const resetToFirstPage = useCallback(() => setPage(1), [])
 
@@ -558,18 +589,34 @@ export function GroupOrderReport() {
                   <ListSkeleton />
                 </div>
               ) : (
-                <div className="overflow-x-auto">
+                <ReportTableScroll>
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead className="text-[10px] font-black uppercase tracking-widest text-slate-500">Group</TableHead>
-                        <TableHead className="text-right text-[10px] font-black uppercase tracking-widest text-slate-500">Group orders</TableHead>
-                        <TableHead className="text-right text-[10px] font-black uppercase tracking-widest text-slate-500">Branch orders</TableHead>
-                        <TableHead className="text-right text-[10px] font-black uppercase tracking-widest text-slate-500">Branches</TableHead>
-                        <TableHead className="text-right text-[10px] font-black uppercase tracking-widest text-slate-500">Qty ordered</TableHead>
-                        <TableHead className="text-right text-[10px] font-black uppercase tracking-widest text-slate-500">Total</TableHead>
-                        <TableHead className="text-right text-[10px] font-black uppercase tracking-widest text-slate-500">Refunded</TableHead>
-                        <TableHead className="text-right text-[10px] font-black uppercase tracking-widest text-slate-500">Net</TableHead>
+                        <TableHead aria-sort={ariaSortFor(groupSort, "group")} className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+                          <SortableHeader label="Group" sortKey="group" sort={groupSort} onSort={toggleGroupSort} />
+                        </TableHead>
+                        <TableHead aria-sort={ariaSortFor(groupSort, "groupOrders")} className="text-right text-[10px] font-black uppercase tracking-widest text-slate-500">
+                          <SortableHeader label="Group orders" sortKey="groupOrders" sort={groupSort} onSort={toggleGroupSort} firstDirection="desc" />
+                        </TableHead>
+                        <TableHead aria-sort={ariaSortFor(groupSort, "branchOrders")} className="text-right text-[10px] font-black uppercase tracking-widest text-slate-500">
+                          <SortableHeader label="Branch orders" sortKey="branchOrders" sort={groupSort} onSort={toggleGroupSort} firstDirection="desc" />
+                        </TableHead>
+                        <TableHead aria-sort={ariaSortFor(groupSort, "branches")} className="text-right text-[10px] font-black uppercase tracking-widest text-slate-500">
+                          <SortableHeader label="Branches" sortKey="branches" sort={groupSort} onSort={toggleGroupSort} firstDirection="desc" />
+                        </TableHead>
+                        <TableHead aria-sort={ariaSortFor(groupSort, "quantity")} className="text-right text-[10px] font-black uppercase tracking-widest text-slate-500">
+                          <SortableHeader label="Qty ordered" sortKey="quantity" sort={groupSort} onSort={toggleGroupSort} firstDirection="desc" />
+                        </TableHead>
+                        <TableHead aria-sort={ariaSortFor(groupSort, "total")} className="text-right text-[10px] font-black uppercase tracking-widest text-slate-500">
+                          <SortableHeader label="Total" sortKey="total" sort={groupSort} onSort={toggleGroupSort} firstDirection="desc" />
+                        </TableHead>
+                        <TableHead aria-sort={ariaSortFor(groupSort, "refunded")} className="text-right text-[10px] font-black uppercase tracking-widest text-slate-500">
+                          <SortableHeader label="Refunded" sortKey="refunded" sort={groupSort} onSort={toggleGroupSort} firstDirection="desc" />
+                        </TableHead>
+                        <TableHead aria-sort={ariaSortFor(groupSort, "net")} className="text-right text-[10px] font-black uppercase tracking-widest text-slate-500">
+                          <SortableHeader label="Net" sortKey="net" sort={groupSort} onSort={toggleGroupSort} firstDirection="desc" />
+                        </TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -580,7 +627,7 @@ export function GroupOrderReport() {
                           </TableCell>
                         </TableRow>
                       ) : (
-                        byGroup.map((row) => (
+                        sortedByGroup.map((row) => (
                           <TableRow key={row.groupId ?? "unassigned"}>
                             <TableCell className="text-xs font-bold text-slate-800 dark:text-slate-200">{row.groupName}</TableCell>
                             <TableCell className="text-right text-xs tabular-nums">{row.groupOrderCount}</TableCell>
@@ -595,7 +642,7 @@ export function GroupOrderReport() {
                       )}
                     </TableBody>
                   </Table>
-                </div>
+                </ReportTableScroll>
               )}
             </CardContent>
           </Card>
@@ -610,6 +657,8 @@ function GroupOrderRowCard({
   expanded,
   onToggle,
 }: Readonly<{ row: ReportRow; expanded: boolean; onToggle: () => void }>) {
+  const { sort: childSort, toggleSort: toggleChildSort } = useTableSort<ReportChildSortKey>()
+  const sortedChildren = useMemo(() => sortRows(row.orders, childSort, REPORT_CHILD_SORT_ACCESSORS), [row.orders, childSort])
   return (
     <Card className="overflow-hidden rounded-2xl border-slate-200 dark:border-slate-800">
       <CardContent className="p-0">
@@ -660,21 +709,35 @@ function GroupOrderRowCard({
         </button>
 
         {expanded && (
-          <div className="overflow-x-auto border-t border-slate-100 dark:border-slate-800">
+          <ReportTableScroll className="border-t border-slate-100 dark:border-slate-800">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="text-[10px] font-black uppercase tracking-widest text-slate-500">Branch</TableHead>
-                  <TableHead className="text-[10px] font-black uppercase tracking-widest text-slate-500">Transaction ID</TableHead>
-                  <TableHead className="text-[10px] font-black uppercase tracking-widest text-slate-500">Status</TableHead>
-                  <TableHead className="text-right text-[10px] font-black uppercase tracking-widest text-slate-500">Items</TableHead>
-                  <TableHead className="text-right text-[10px] font-black uppercase tracking-widest text-slate-500">Qty</TableHead>
-                  <TableHead className="text-right text-[10px] font-black uppercase tracking-widest text-slate-500">Total</TableHead>
-                  <TableHead className="text-right text-[10px] font-black uppercase tracking-widest text-slate-500">Refunded</TableHead>
+                  <TableHead aria-sort={ariaSortFor(childSort, "branch")} className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+                    <SortableHeader label="Branch" sortKey="branch" sort={childSort} onSort={toggleChildSort} />
+                  </TableHead>
+                  <TableHead aria-sort={ariaSortFor(childSort, "tid")} className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+                    <SortableHeader label="Transaction ID" sortKey="tid" sort={childSort} onSort={toggleChildSort} />
+                  </TableHead>
+                  <TableHead aria-sort={ariaSortFor(childSort, "status")} className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+                    <SortableHeader label="Status" sortKey="status" sort={childSort} onSort={toggleChildSort} />
+                  </TableHead>
+                  <TableHead aria-sort={ariaSortFor(childSort, "items")} className="text-right text-[10px] font-black uppercase tracking-widest text-slate-500">
+                    <SortableHeader label="Items" sortKey="items" sort={childSort} onSort={toggleChildSort} firstDirection="desc" />
+                  </TableHead>
+                  <TableHead aria-sort={ariaSortFor(childSort, "quantity")} className="text-right text-[10px] font-black uppercase tracking-widest text-slate-500">
+                    <SortableHeader label="Qty" sortKey="quantity" sort={childSort} onSort={toggleChildSort} firstDirection="desc" />
+                  </TableHead>
+                  <TableHead aria-sort={ariaSortFor(childSort, "total")} className="text-right text-[10px] font-black uppercase tracking-widest text-slate-500">
+                    <SortableHeader label="Total" sortKey="total" sort={childSort} onSort={toggleChildSort} firstDirection="desc" />
+                  </TableHead>
+                  <TableHead aria-sort={ariaSortFor(childSort, "refunded")} className="text-right text-[10px] font-black uppercase tracking-widest text-slate-500">
+                    <SortableHeader label="Refunded" sortKey="refunded" sort={childSort} onSort={toggleChildSort} firstDirection="desc" />
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {row.orders.map((child) => (
+                {sortedChildren.map((child) => (
                   <TableRow key={child.id}>
                     <TableCell className="text-xs font-semibold text-slate-800 dark:text-slate-200">
                       {child.branchName}
@@ -703,7 +766,7 @@ function GroupOrderRowCard({
                 ))}
               </TableBody>
             </Table>
-          </div>
+          </ReportTableScroll>
         )}
 
         {expanded && row.notes && (

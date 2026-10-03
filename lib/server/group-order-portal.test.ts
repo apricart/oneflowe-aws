@@ -27,6 +27,7 @@ import {
   applyQuantityToBranchPlans,
   branchPlansToEntries,
   mergeEntriesIntoBranchPlans,
+  replaceBranchPlanLines,
   toRequestEntries,
   withoutBranchPlan,
 } from "@/components/group-portal/group-order-plan"
@@ -204,6 +205,45 @@ describe("group order review edits", () => {
 
     expect(remaining.map((plan) => plan.branch.id)).toEqual([1, 3])
     expect(received(remaining)[0]).toEqual({ branchId: 1, items: [[10, 4], [11, 2]] })
+  })
+
+  it("adds a product to one location only", () => {
+    const [, second] = basePlans()
+    const edited = replaceBranchPlanLines(basePlans(), 2, [...second.lines, line(12, 3, 1000)])
+
+    expect(received(edited)).toEqual([
+      { branchId: 1, items: [[10, 4], [11, 2]] },
+      { branchId: 2, items: [[10, 4], [11, 2], [12, 3]] },
+      { branchId: 3, items: [[10, 4], [11, 2]] },
+    ])
+    expect(edited[1].totalCents).toBe(4 * 250 + 2 * 500 + 3 * 1000)
+    // Lines stay in the same name order the merge produces.
+    expect(edited[1].lines.map((entry) => entry.name)).toEqual(["Product 10", "Product 11", "Product 12"])
+  })
+
+  it("drops zero lines, keeps the last of a duplicate, and drops an emptied location", () => {
+    const edited = replaceBranchPlanLines(basePlans(), 2, [line(10, 0), line(11, 2), line(11, 5)])
+    expect(received(edited)[1]).toEqual({ branchId: 2, items: [[11, 5]] })
+
+    const emptied = replaceBranchPlanLines(basePlans(), 2, [line(10, 0)])
+    expect(emptied.map((plan) => plan.branch.id)).toEqual([1, 3])
+  })
+
+  it("never adds a location that is not already in the order", () => {
+    const plans = withoutBranchPlan(basePlans(), 3)
+    const edited = replaceBranchPlanLines(plans, 3, [line(12, 1)])
+
+    expect(received(edited)).toEqual(received(plans))
+  })
+
+  it("submits a location's added product to that location alone", () => {
+    const [first] = basePlans()
+    const edited = replaceBranchPlanLines(basePlans(), 1, [...first.lines, line(12, 1)])
+    const rebuilt = branchPlansToEntries(edited, nextKey)
+
+    expect(received(mergeEntriesIntoBranchPlans(rebuilt, branchesById))).toEqual(received(edited))
+    expect(groupOrderCreateSchema.safeParse({ groupId: 7, entries: toRequestEntries(rebuilt) }).success)
+      .toBe(true)
   })
 
   it("still produces a payload the submission endpoint accepts", () => {

@@ -269,6 +269,20 @@ test("an order can be created, approved, and fulfilled only by the correct roles
       403,
     )
 
+    // Not even Super Admin fulfils goods that have not been delivered.
+    await expectJsonStatus(
+      await mutation(fulfiller.page, `/api/v1/orders/${orderId}/fulfill`, {
+        approvalToken: approvalBody.approvalToken,
+      }),
+      409,
+    )
+
+    for (const fulfillmentStatus of ["IN_PROCESS", "OUT_FOR_DELIVERY", "DELIVERED"]) {
+      await expectJsonStatus(
+        await mutation(fulfiller.page, `/api/v1/orders/${orderId}/fulfillment-status`, { fulfillmentStatus }),
+      )
+    }
+
     await expectJsonStatus(
       await mutation(fulfiller.page, `/api/v1/orders/${orderId}/fulfill`, {
         approvalToken: approvalBody.approvalToken,

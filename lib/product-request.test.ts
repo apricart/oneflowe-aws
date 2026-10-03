@@ -3,19 +3,27 @@ import { describe, expect, it } from "vitest"
 import { MAX_BUSINESS_QUANTITY } from "@/lib/business-rules"
 import { MAX_PRICE_CENTS } from "@/lib/price-ladder"
 import {
+  PRODUCT_REQUEST_AVAILABILITY_MAX_DAYS,
   PRODUCT_REQUEST_LIMITS,
   PRODUCT_REQUEST_PAGE_MAX,
   PRODUCT_REQUEST_PAGE_SIZE_DEFAULT,
   PRODUCT_REQUEST_PAGE_SIZE_MAX,
+  addDaysToDay,
   canReviewProductRequestInStatus,
+  canStartProductRequestReview,
+  formatProductRequestDay,
   hasAnyProductRequestContent,
+  isCalendarDay,
   isProductRequestImagePath,
   isProductRequestStatus,
   normalizeReferenceUrl,
   parseProductRequestListQuery,
   productRequestCreateSchema,
+  productRequestAvailabilityBounds,
+  productRequestAvailabilityRefusal,
   productRequestReviewSchema,
   productRequestTitle,
+  productRequestTransitionRefusal,
   estimatedMonthlyValueCents,
 } from "@/lib/product-request"
 
@@ -217,37 +225,134 @@ describe("hasAnyProductRequestContent", () => {
 })
 
 describe("a review", () => {
-  it.each(["APPROVED", "REJECTED"])("accepts %s", (status) => {
-    expect(productRequestReviewSchema.safeParse({ status }).success).toBe(true)
+  it.each([
+    ["marking it under review", { status: "UNDER_REVIEW" }],
+    ["an approval with its date", { status: "APPROVED", estimatedAvailableOn: "2026-10-15" }],
+    ["a rejection", { status: "REJECTED" }],
+  ])("accepts %s", (_label, body) => {
+    expect(productRequestReviewSchema.safeParse(body).success).toBe(true)
   })
 
   it("keeps a trimmed note and turns a blank one into null", () => {
-    expect(productRequestReviewSchema.parse({ status: "REJECTED", reviewNote: " Not stocked " }).reviewNote).toBe("Not stocked")
-    expect(productRequestReviewSchema.parse({ status: "APPROVED", reviewNote: "  " }).reviewNote).toBeNull()
+    expect(productRequestReviewSchema.parse({ status: "REJECTED", reviewNote: " Not stocked " })).toEqual({
+      status: "REJECTED",
+      reviewNote: "Not stocked",
+    })
+    expect(
+      productRequestReviewSchema.parse({ status: "APPROVED", reviewNote: "  ", estimatedAvailableOn: " 2026-10-15 " }),
+    ).toEqual({ status: "APPROVED", reviewNote: null, estimatedAvailableOn: "2026-10-15" })
   })
 
   it.each([
     ["back to pending", { status: "PENDING" }],
     ["an unknown status", { status: "DONE" }],
     ["no status", {}],
-    ["an over-long note", { status: "APPROVED", reviewNote: "a".repeat(PRODUCT_REQUEST_LIMITS.reviewNote + 1) }],
-    ["an unknown field", { status: "APPROVED", organizationId: 1 }],
+    ["an approval with no date", { status: "APPROVED" }],
+    ["an approval with a blank date", { status: "APPROVED", estimatedAvailableOn: "" }],
+    ["an approval with a day the calendar lacks", { status: "APPROVED", estimatedAvailableOn: "2026-02-30" }],
+    ["an approval with a timestamp for a date", { status: "APPROVED", estimatedAvailableOn: "2026-10-15T00:00:00Z" }],
+    ["a date on a rejection", { status: "REJECTED", estimatedAvailableOn: "2026-10-15" }],
+    ["a note on a review start", { status: "UNDER_REVIEW", reviewNote: "Looking" }],
+    ["a date on a review start", { status: "UNDER_REVIEW", estimatedAvailableOn: "2026-10-15" }],
+    [
+      "an over-long note",
+      { status: "APPROVED", estimatedAvailableOn: "2026-10-15", reviewNote: "a".repeat(PRODUCT_REQUEST_LIMITS.reviewNote + 1) },
+    ],
+    ["an unknown field", { status: "REJECTED", organizationId: 1 }],
   ])("refuses %s", (_label, body) => {
     expect(productRequestReviewSchema.safeParse(body).success).toBe(false)
   })
 })
 
-describe("which statuses can be decided", () => {
-  it("is pending only — a decision is final", () => {
+describe("how a request moves", () => {
+  it("can be decided while pending or under review, and never again after", () => {
     expect(canReviewProductRequestInStatus("PENDING")).toBe(true)
+    expect(canReviewProductRequestInStatus("UNDER_REVIEW")).toBe(true)
     expect(canReviewProductRequestInStatus("APPROVED")).toBe(false)
     expect(canReviewProductRequestInStatus("REJECTED")).toBe(false)
+    expect(canReviewProductRequestInStatus("DONE")).toBe(false)
   })
 
-  it("recognises exactly the three statuses", () => {
+  it("can be put under review only while pending", () => {
+    expect(canStartProductRequestReview("PENDING")).toBe(true)
+    expect(canStartProductRequestReview("UNDER_REVIEW")).toBe(false)
+    expect(canStartProductRequestReview("APPROVED")).toBe(false)
+    expect(canStartProductRequestReview("REJECTED")).toBe(false)
+  })
+
+  it.each([
+    ["PENDING", "UNDER_REVIEW"],
+    ["PENDING", "APPROVED"],
+    ["PENDING", "REJECTED"],
+    ["UNDER_REVIEW", "APPROVED"],
+    ["UNDER_REVIEW", "REJECTED"],
+  ] as const)("allows %s → %s", (from, to) => {
+    expect(productRequestTransitionRefusal(from, to)).toBeNull()
+  })
+
+  it.each([
+    ["UNDER_REVIEW", "UNDER_REVIEW", "This request is already under review"],
+    ["APPROVED", "UNDER_REVIEW", "This request has already been approved"],
+    ["APPROVED", "REJECTED", "This request has already been approved"],
+    ["REJECTED", "APPROVED", "This request has already been rejected"],
+    ["DONE", "APPROVED", "This request is in an unknown state"],
+  ] as const)("refuses %s → %s, saying why", (from, to, message) => {
+    expect(productRequestTransitionRefusal(from, to)).toBe(message)
+  })
+
+  it("recognises exactly the four statuses", () => {
     expect(isProductRequestStatus("PENDING")).toBe(true)
+    expect(isProductRequestStatus("UNDER_REVIEW")).toBe(true)
     expect(isProductRequestStatus("pending")).toBe(false)
     expect(isProductRequestStatus(null)).toBe(false)
+  })
+})
+
+describe("the expected availability date", () => {
+  // 3 Oct 2026, 10:00 in Karachi.
+  const now = new Date("2026-10-03T05:00:00.000Z")
+
+  it("runs from today in Karachi to a year ahead", () => {
+    expect(productRequestAvailabilityBounds(now)).toEqual({ min: "2026-10-03", max: "2027-10-03" })
+    expect(productRequestAvailabilityRefusal("2026-10-03", now)).toBeNull()
+    expect(productRequestAvailabilityRefusal(addDaysToDay("2026-10-03", PRODUCT_REQUEST_AVAILABILITY_MAX_DAYS), now)).toBeNull()
+  })
+
+  it("refuses yesterday and a day past the horizon", () => {
+    expect(productRequestAvailabilityRefusal("2026-10-02", now)).toBe("Expected availability date cannot be in the past")
+    expect(productRequestAvailabilityRefusal("2027-10-04", now)).toBe(
+      `Expected availability date must be within ${PRODUCT_REQUEST_AVAILABILITY_MAX_DAYS} days`,
+    )
+  })
+
+  it("counts today in Karachi, not in UTC", () => {
+    // 20:00 UTC on 2 Oct is already 01:00 on 3 Oct in Karachi.
+    const lateUtc = new Date("2026-10-02T20:00:00.000Z")
+    expect(productRequestAvailabilityBounds(lateUtc).min).toBe("2026-10-03")
+    expect(productRequestAvailabilityRefusal("2026-10-02", lateUtc)).toBe("Expected availability date cannot be in the past")
+  })
+
+  it("refuses a value that is not a calendar day", () => {
+    expect(productRequestAvailabilityRefusal("2026-02-29", now)).toMatch(/real date/)
+    expect(productRequestAvailabilityRefusal("15/10/2026", now)).toMatch(/real date/)
+  })
+
+  it("knows which days the calendar has", () => {
+    expect(isCalendarDay("2028-02-29")).toBe(true)
+    expect(isCalendarDay("2026-02-29")).toBe(false)
+    expect(isCalendarDay("2026-13-01")).toBe(false)
+    expect(isCalendarDay("2026-1-01")).toBe(false)
+  })
+
+  it("moves a day across month and year ends", () => {
+    expect(addDaysToDay("2026-10-31", 1)).toBe("2026-11-01")
+    expect(addDaysToDay("2026-12-25", 14)).toBe("2027-01-08")
+  })
+
+  it("is shown as the day it names, whatever the reader's time zone", () => {
+    expect(formatProductRequestDay("2026-10-15")).toBe("15 Oct 2026")
+    expect(formatProductRequestDay(null)).toBeNull()
+    expect(formatProductRequestDay("not a day")).toBeNull()
   })
 })
 

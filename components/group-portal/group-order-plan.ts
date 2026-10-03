@@ -102,6 +102,40 @@ export function applyQuantityToBranchPlans(
   })
 }
 
+/**
+ * Replace what one branch receives with an edited set of lines.
+ *
+ * This is how a product is added to a single location on the review screen:
+ * the location's lines are edited as a whole and swapped in, and every other
+ * branch keeps exactly what it had. Lines at zero are dropped, a product named
+ * twice keeps its last quantity, and a branch left with nothing drops out — the
+ * same rules as a quantity edit. A branch not already in the order is left out
+ * rather than added, because which locations are ordered for is chosen in the
+ * sidebar, not here.
+ */
+export function replaceBranchPlanLines(
+  plans: BranchPlan[],
+  branchId: number,
+  lines: SelectedLine[],
+): BranchPlan[] {
+  const byInventoryId = new Map<number, SelectedLine>()
+  for (const line of lines) {
+    const quantity = roundQuantity(line.quantity)
+    if (quantity > 0) byInventoryId.set(line.organizationInventoryId, { ...line, quantity })
+  }
+  const nextLines = [...byInventoryId.values()].sort((left, right) => left.name.localeCompare(right.name))
+
+  return plans.flatMap((plan): BranchPlan[] => {
+    if (plan.branch.id !== branchId) return [plan]
+    if (nextLines.length === 0) return []
+    return [{
+      ...plan,
+      lines: nextLines,
+      totalCents: entryTotalCents(nextLines),
+    }]
+  })
+}
+
 /** Every branch except the one named, which leaves the group order. */
 export function withoutBranchPlan(plans: BranchPlan[], branchId: number): BranchPlan[] {
   return plans.filter((plan) => plan.branch.id !== branchId)

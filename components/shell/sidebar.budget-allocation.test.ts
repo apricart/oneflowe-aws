@@ -11,6 +11,17 @@ describe("budget allocation navigation", () => {
     expect(hasBudgets("GROUP_USER", true)).toBe(true)
   })
 
+  it("offers the Group User the budget report only with the same grant", () => {
+    const hasBudgetReport = (enabled?: boolean) =>
+      getNavigationByRole("GROUP_USER", enabled)
+        .flatMap((item: any) => item.subItems ?? [])
+        .some((sub: { href: string }) => sub.href === "/reports/budget-summary")
+
+    expect(hasBudgetReport()).toBe(false)
+    expect(hasBudgetReport(false)).toBe(false)
+    expect(hasBudgetReport(true)).toBe(true)
+  })
+
   it("keeps administrator navigation unchanged", () => {
     expect(hasBudgets("SUPER_ADMIN")).toBe(true)
     expect(hasBudgets("HEAD_OFFICE")).toBe(true)

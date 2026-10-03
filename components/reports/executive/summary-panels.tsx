@@ -109,7 +109,7 @@ function buildKpis(kpis: ExecutiveKpis): KpiSpec[] {
       key: "consumed",
       label: "Consumed",
       value: money(kpis.consumedCents),
-      hint: `${money(kpis.spentCents)} spent + ${money(kpis.heldCents)} committed`,
+      hint: "Charged against the budget, including orders awaiting approval",
       change: kpis.consumedGrowthPct,
       icon: Receipt,
     },

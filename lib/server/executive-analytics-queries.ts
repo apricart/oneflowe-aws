@@ -568,6 +568,55 @@ export async function loadLineGrainSeries(
   })
 }
 
+/** The map key `loadLineQuantities` files a quantity under: the entity, and its month when asked. */
+export function lineQuantityKey(key: string, period?: string): string {
+  return period === undefined ? key : `${key}|${period}`
+}
+
+/**
+ * Line-grain quantity for entities an order-grain read has already ranked.
+ *
+ * An order-grain row is a whole order's money and knows nothing of the lines
+ * inside it, so it carries no quantity of its own. Product Performance prints
+ * both figures over every column, so the quantity is read here — at line grain,
+ * under the same fence and status population (`lineConditions`), and pinned to
+ * the keys the ranking returned, so the read is bounded by them and can never
+ * add an entity the ranking did not name. Quantity is the count entered on each
+ * line, net of approved refunds, whatever its unit label: the same figure a
+ * line-grain row of the same dimension reports.
+ */
+export async function loadLineQuantities(
+  scope: ExecutiveScope,
+  filters: ExecutiveFilters,
+  dimension: OrderGrainDimension,
+  keys: string[],
+  options?: { byMonth?: boolean },
+): Promise<Map<string, number>> {
+  if (keys.length === 0) return new Map()
+  const column = lineDimensionColumns[dimension]
+  const monthKey = sql<string>`TO_CHAR(${APP_LOCAL_CREATED_AT}, 'YYYY-MM')`
+  const byMonth = options?.byMonth === true
+  const rows = await db
+    .select({
+      key: column.key,
+      period: byMonth ? monthKey : sql<string>`NULL`,
+      quantity: lineNetQuantity,
+    })
+    .from(orderItems)
+    .innerJoin(orders, eq(orderItems.orderId, orders.id))
+    .leftJoin(branches, eq(orders.branchId, branches.id))
+    .leftJoin(groups, eq(branches.groupId, groups.id))
+    .leftJoin(organizations, eq(orders.organizationId, organizations.id))
+    .leftJoin(users, eq(orders.createdByUserId, users.id))
+    .where(and(...lineConditions(scope, filters), inArray(column.key, keys)))
+    .groupBy(...column.group, ...(byMonth ? [monthKey] : []))
+
+  return new Map(rows.map((row) => [
+    lineQuantityKey(String(row.key), byMonth ? String(row.period) : undefined),
+    Number(row.quantity) || 0,
+  ]))
+}
+
 /** Which units are in scope for metrics, such as average unit price, that require one denominator. */
 export async function loadUnitsInScope(
   scope: ExecutiveScope,
@@ -1127,7 +1176,11 @@ export async function loadEntityOptions(
 
 // ── Time series ────────────────────────────────────────────────────────────
 
-export type SeriesPoint = { period: string; value: number }
+/**
+ * One bucket of one line. `quantity` and `spendCents` ride along with the drawn
+ * `value` whichever measure is selected, so a point can be read as both.
+ */
+export type SeriesPoint = { period: string; value: number; quantity: number; spendCents: number }
 export type EntitySeries = { key: string; label: string; points: SeriesPoint[] }
 
 /**
@@ -1150,7 +1203,11 @@ export async function loadEntitySeries(
   const grain = resolveGrain(dimension, metric, { lineScoped: isLineScoped(filters) })
   const monthKey = sql<string>`TO_CHAR(${APP_LOCAL_CREATED_AT}, 'YYYY-MM')`
 
-  const ranked = await loadComparison(scope, filters, dimension, metric, limit)
+  // A time-axis series is drawn straight from the ranked rows, so only that
+  // form needs them to carry their quantity.
+  const ranked = await loadComparison(scope, filters, dimension, metric, limit, {
+    withQuantity: isTimeAxisDimension(dimension),
+  })
   if (ranked.length === 0) return { periods: [], series: [] }
 
   /**
@@ -1168,7 +1225,12 @@ export async function loadEntitySeries(
       series: [{
         key: dimension,
         label: metricDefinitionForStatusSet(metric, filters.statusSet).label,
-        points: chronological.map((row) => ({ period: row.key, value: row.value })),
+        points: chronological.map((row) => ({
+          period: row.key,
+          value: row.value,
+          quantity: row.quantity,
+          spendCents: row.spendCents,
+        })),
       }],
     }
   }
@@ -1233,12 +1295,26 @@ export async function loadEntitySeries(
   const periods = Array.from(new Set(rows.map((row) => String(row.period))))
     .sort((left, right) => left.localeCompare(right))
 
-  const byEntity = new Map<string, Map<string, number>>()
+  // Order-grain rows carry no quantity; read it from the lines, per entity and
+  // month, for exactly the entities being drawn.
+  const orderQuantities = grain === "line"
+    ? null
+    : await loadLineQuantities(scope, filters, dimension as OrderGrainDimension, Array.from(wanted.keys()), { byMonth: true })
+
+  const byEntity = new Map<string, Map<string, SeriesPoint>>()
   for (const row of rows) {
     const key = String(row.key)
     if (!wanted.has(key)) continue
-    const points = byEntity.get(key) ?? new Map<string, number>()
-    points.set(String(row.period), valueOf(row))
+    const period = String(row.period)
+    const points = byEntity.get(key) ?? new Map<string, SeriesPoint>()
+    points.set(period, {
+      period,
+      value: valueOf(row),
+      quantity: orderQuantities
+        ? orderQuantities.get(lineQuantityKey(key, period)) ?? 0
+        : Number(row.quantity) || 0,
+      spendCents: Number(row.valueCents) || 0,
+    })
     byEntity.set(key, points)
   }
 
@@ -1247,10 +1323,9 @@ export async function loadEntitySeries(
     series: ranked.map((entity) => ({
       key: entity.key,
       label: entity.label,
-      points: periods.map((period) => ({
-        period,
-        value: byEntity.get(entity.key)?.get(period) ?? 0,
-      })),
+      points: periods.map((period) => (
+        byEntity.get(entity.key)?.get(period) ?? { period, value: 0, quantity: 0, spendCents: 0 }
+      )),
     })),
   }
 }
@@ -1281,6 +1356,13 @@ export async function loadComparison(
   dimension: ExecutiveDimensionId,
   metric: ExecutiveMetricId,
   limit: number,
+  /**
+   * `withQuantity` fills `quantity` on order-grain rows, which otherwise report
+   * none, at the cost of one more bounded read. Asked for only where the rows
+   * are drawn — not for a prior window or a grid's axis ranking, which read
+   * `value` alone.
+   */
+  options?: { withQuantity?: boolean },
 ): Promise<ComparisonRow[]> {
   const grain = resolveGrain(dimension, metric, { lineScoped: isLineScoped(filters) })
 
@@ -1313,6 +1395,9 @@ export async function loadComparison(
 
   if (grain === "order") {
     const rows = await loadOrderGrainSeries(scope, filters, dimension as OrderGrainDimension, limit)
+    const quantities = options?.withQuantity
+      ? await loadLineQuantities(scope, filters, dimension as OrderGrainDimension, rows.map((row) => row.key))
+      : null
     return rows.map((row) => ({
       key: row.key,
       label: row.label,
@@ -1320,7 +1405,7 @@ export async function loadComparison(
         ? row.orderCount
         : metric === "avgOrderValue" ? row.avgOrderValueCents : row.spendCents,
       spendCents: row.spendCents,
-      quantity: 0,
+      quantity: quantities?.get(lineQuantityKey(row.key)) ?? 0,
       orderCount: row.orderCount,
       avgUnitPriceCents: 0,
     }))

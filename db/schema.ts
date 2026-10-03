@@ -13,6 +13,7 @@ import {
   bigint,
   numeric,
   check,
+  date,
 } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
@@ -2367,9 +2368,16 @@ export const productRequests = pgTable(
     // A stored image path from `POST /api/v1/upload/image`, never a `data:`
     // URL or an external address.
     imageUrl: text("image_url"),
+    // Set when Super Admin marks the request under review, and kept once it is
+    // decided so the timeline can show when review began.
+    reviewStartedByUserId: uuid("review_started_by_user_id").references(() => users.id),
+    reviewStartedAt: timestamp("review_started_at", { withTimezone: true }),
     reviewNote: text("review_note"),
     reviewedByUserId: uuid("reviewed_by_user_id").references(() => users.id),
     reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    // The day Super Admin expects the product in the catalogue. Required by the
+    // API on every approval; null on approvals made before it existed.
+    estimatedAvailableOn: date("estimated_available_on", { mode: "string" }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -2377,7 +2385,7 @@ export const productRequests = pgTable(
     index("product_requests_org_created_idx").on(t.organizationId, t.createdAt),
     index("product_requests_status_created_idx").on(t.status, t.createdAt),
     index("product_requests_requester_idx").on(t.requestedByUserId),
-    check("product_requests_status_ck", sql`${t.status} IN ('PENDING', 'APPROVED', 'REJECTED')`),
+    check("product_requests_status_ck", sql`${t.status} IN ('PENDING', 'UNDER_REVIEW', 'APPROVED', 'REJECTED')`),
     check(
       "product_requests_values_valid_ck",
       sql`COALESCE(${t.expectedPriceCents}, 0) >= 0 AND COALESCE(${t.estimatedMonthlyQuantity}, 0) >= 0`,
@@ -2386,13 +2394,28 @@ export const productRequests = pgTable(
       "product_requests_image_path_ck",
       sql`${t.imageUrl} IS NULL OR ${t.imageUrl} LIKE '/api/v1/images/products/%'`,
     ),
-    // A pending request carries no decision; a decided one names who and when.
+    // An undecided request carries no decision; a decided one names who and when.
     check(
       "product_requests_review_ck",
-      sql`CASE WHEN ${t.status} = 'PENDING'
+      sql`CASE WHEN ${t.status} IN ('PENDING', 'UNDER_REVIEW')
             THEN ${t.reviewedAt} IS NULL AND ${t.reviewedByUserId} IS NULL AND ${t.reviewNote} IS NULL
             ELSE ${t.reviewedAt} IS NOT NULL AND ${t.reviewedByUserId} IS NOT NULL
           END`,
+    ),
+    // Under review names who started it and when; pending has neither; a
+    // decided request keeps both or never had them.
+    check(
+      "product_requests_review_start_ck",
+      sql`CASE ${t.status}
+            WHEN 'PENDING' THEN ${t.reviewStartedAt} IS NULL AND ${t.reviewStartedByUserId} IS NULL
+            WHEN 'UNDER_REVIEW' THEN ${t.reviewStartedAt} IS NOT NULL AND ${t.reviewStartedByUserId} IS NOT NULL
+            ELSE (${t.reviewStartedAt} IS NULL) = (${t.reviewStartedByUserId} IS NULL)
+          END`,
+    ),
+    // Only an approval promises a date.
+    check(
+      "product_requests_availability_ck",
+      sql`${t.estimatedAvailableOn} IS NULL OR ${t.status} = 'APPROVED'`,
     ),
   ],
 )

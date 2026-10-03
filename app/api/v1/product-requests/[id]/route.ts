@@ -13,9 +13,11 @@ import { validationMessage } from "@/lib/server/mutation-validation"
 import { reviewProductRequest } from "@/lib/server/product-requests"
 
 /**
- * Super Admin's decision on a new-product request: approved or rejected, with
- * an optional note Head Office will read. A decision is final — a second one
- * gets 409 — and it creates no product and sets no price.
+ * Super Admin moves a new-product request on: marks it under review, or
+ * decides it — approved with the date the product is expected in the
+ * catalogue, or rejected — with an optional note Head Office will read. A
+ * decision can be made from pending or under review; it is final — a second
+ * one gets 409 — and it creates no product and sets no price.
  */
 
 function parseRequestId(raw: string): number | null {

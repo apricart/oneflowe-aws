@@ -1,17 +1,20 @@
 "use client"
 
 import * as React from "react"
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
+import { Bar, BarChart, CartesianGrid, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 
 import { cn } from "@/lib/utils"
 import type { MatrixDimensionId } from "@/lib/executive-analytics"
-import { AXIS_STYLE, GRID_STYLE, Legend, VizTooltip, formatByKind, formatShortByKind } from "./chart-kit"
+import { AXIS_STYLE, GRID_STYLE, Legend, VizTooltip, countShort, formatByKind, formatShortByKind, money } from "./chart-kit"
 import {
   DrillHint,
   columnAxisProps,
   columnBottomMargin,
   columnChartHeight,
+  columnLabelsRotated,
   columnTicksAngled,
+  columnTopMargin,
+  dualColumnLabel,
   entityColor,
   type DrillTarget,
 } from "./comparison-charts"
@@ -103,6 +106,8 @@ const cellKey = (row: string, column: string) => `${row}|${column}`
 type Props = {
   response: MatrixResponse
   onDrillDown?: (target: DrillTarget) => void
+  /** The panel spans the whole row, so more columns have room for their figures. */
+  fullWidth?: boolean
 }
 
 export type ColumnDatum = {
@@ -128,6 +133,35 @@ export function columnData(response: Pick<MatrixResponse, "rows" | "columns" | "
 
 // ── Columns ────────────────────────────────────────────────────────────────
 
+/**
+ * Past this many columns in all, an upright figure is wider than the pitch of
+ * the columns it stands over — about twelve pixels each across half a 1280px
+ * window at the labelled cluster gap, and eleven across the whole row at the
+ * larger cap — and neighbouring figures overwrite each other. The figures are
+ * then left to the tooltip and the table rather than drawn illegibly.
+ */
+const MATRIX_LABEL_MAX_COLUMNS = 24
+const MATRIX_LABEL_MAX_COLUMNS_FULL_WIDTH = 60
+
+/**
+ * The gap between clusters. A labelled grid gives a little of it to its
+ * columns, which is what buys each upright figure its width; an unlabelled one
+ * keeps the wider, easier-to-read separation.
+ */
+const CLUSTER_GAP = "22%"
+const CLUSTER_GAP_LABELLED = "12%"
+
+/** Whether every column in the grid carries its quantity and value over it. */
+export function matrixColumnsLabelled(columnCount: number, fullWidth?: boolean): boolean {
+  return columnCount <= (fullWidth ? MATRIX_LABEL_MAX_COLUMNS_FULL_WIDTH : MATRIX_LABEL_MAX_COLUMNS)
+}
+
+/** One pair's figure in the tooltip: quantity and amount together when the grid measures either. */
+export function matrixCellFigure(cell: MatrixCell, format: string): string {
+  if (format !== "currency" && format !== "quantity") return formatByKind(cell.value, format)
+  return `Qty ${countShort(cell.quantity)} · ${money(cell.spendCents)}`
+}
+
 /** What one cluster holds, one line per row entity, the column's total last. */
 function ColumnTooltip({ datum, response, byPair }: Readonly<{
   datum: ColumnDatum
@@ -139,11 +173,14 @@ function ColumnTooltip({ datum, response, byPair }: Readonly<{
     <VizTooltip
       title={datum.label}
       rows={[
-        ...rows.map((row, index) => ({
-          label: row.label,
-          value: byPair.has(cellKey(row.key, datum.key)) ? formatByKind(datum.values[row.key], format) : "—",
-          color: entityColor(index, true),
-        })),
+        ...rows.map((row, index) => {
+          const cell = byPair.get(cellKey(row.key, datum.key))
+          return {
+            label: row.label,
+            value: cell ? matrixCellFigure(cell, format) : "—",
+            color: entityColor(index, true),
+          }
+        }),
         { label: `All ${response.rowLabel.toLowerCase()}s`, value: formatByKind(datum.total, format), muted: true },
       ]}
     />
@@ -183,7 +220,7 @@ function ColumnFootnote({ response }: Readonly<{ response: MatrixResponse }>) {
 }
 
 /** The grid as grouped columns: one cluster per column entity, one column per row entity inside it. */
-export function MatrixChart({ response, onDrillDown }: Readonly<Props>) {
+export function MatrixChart({ response, onDrillDown, fullWidth }: Readonly<Props>) {
   const { rows, columns, format } = response
   const byPair = React.useMemo(() => indexCells(response.cells), [response.cells])
   const data = React.useMemo(() => columnData(response), [response])
@@ -191,13 +228,22 @@ export function MatrixChart({ response, onDrillDown }: Readonly<Props>) {
   const angled = columnTicksAngled(columns)
   const drill = cellDrillHandler(response, byPair, onDrillDown)
 
+  // Every column carries its quantity and value, as on the ranked panels —
+  // upright as one string once the columns are narrower than two lines are
+  // wide, and not at all past the point where even that would collide.
+  const columnCount = rows.length * columns.length
+  const labelled = matrixColumnsLabelled(columnCount, fullWidth)
+  const rotated = columnLabelsRotated(columnCount, fullWidth)
+  const topMargin = labelled ? columnTopMargin({ dual: true, rotated, combined: rotated }) : 12
+
   return (
     <>
-      <ResponsiveContainer width="100%" height={columnChartHeight(angled, 320)}>
+      {/* The card grows for the labels rather than the plot shrinking for them. */}
+      <ResponsiveContainer width="100%" height={columnChartHeight(angled, 320) + topMargin - 12}>
         <BarChart
           data={data}
-          margin={{ top: 12, right: 12, bottom: columnBottomMargin(angled), left: 4 }}
-          barCategoryGap="22%"
+          margin={{ top: topMargin, right: 12, bottom: columnBottomMargin(angled), left: 4 }}
+          barCategoryGap={labelled ? CLUSTER_GAP_LABELLED : CLUSTER_GAP}
           barGap={2}
         >
           <CartesianGrid {...GRID_STYLE} vertical={false} />
@@ -228,13 +274,30 @@ export function MatrixChart({ response, onDrillDown }: Readonly<Props>) {
               isAnimationActive={false}
               onClick={drill?.(row)}
               className={drill ? "cursor-pointer" : undefined}
-            />
+            >
+              {labelled ? (
+                <LabelList
+                  position="top"
+                  content={dualColumnLabel(
+                    data.map((datum) => byPair.get(cellKey(row.key, datum.key)) ?? null),
+                    format,
+                    rotated,
+                    { combined: true },
+                  )}
+                />
+              ) : null}
+            </Bar>
           ))}
         </BarChart>
       </ResponsiveContainer>
       <Legend items={rows.map((row, index) => ({ key: row.key, label: row.label, color: entityColor(index, true) }))} />
       <DrillHint enabled={Boolean(onDrillDown)} noun="column" />
       <ColumnFootnote response={response} />
+      <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+        {labelled
+          ? `Each column is labelled with its quantity ${rotated ? "before" : "above"} its value in ₨. Values are abbreviated; the exact figures are in the tooltip and the table.`
+          : "Too many columns to print figures over each one — hover a column for its quantity and value, or widen the panel."}
+      </p>
     </>
   )
 }

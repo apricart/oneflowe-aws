@@ -38,8 +38,23 @@ describe("order-list summary contract", () => {
     expect(route).toContain('deliveredUnacknowledged: viewerStatusBucketCount("DELIVERED_UNACKNOWLEDGED")')
     expect(route).toContain('conditions.push(viewerStatusBucketCondition("DELIVERED_UNACKNOWLEDGED"))')
     // The row filter goes after the summary snapshot, so the count is the whole scope.
-    expect(route.indexOf("const summaryConditions = [...conditions]"))
-      .toBeLessThan(route.indexOf("addOrderStatusConditions(conditions, statusFilter, deliveryFilter.filter)"))
+    const summarySnapshot = route.indexOf("const summaryConditions = [...conditions]")
+    expect(summarySnapshot)
+      .toBeLessThan(route.indexOf("addOrderStatusConditions(", summarySnapshot))
+  })
+
+  it("filters the complete server-side list by delivery status", () => {
+    const page = source("app/(portal)/orders/page.tsx")
+    const route = source("app/api/v1/orders/route.ts")
+
+    expect(page).toContain('params.set("fulfillmentStatus", fulfillmentStatusFilter)')
+    expect(page).toContain('aria-label="Filter by delivery status"')
+    expect(route).toContain("const fulfillmentStatusFilter = parseFulfillmentStatusFilter(params.fulfillmentStatus)")
+    // Refused through `parseOrderListQuery`, whose first refusal is a 400.
+    expect(route).toContain("if (!fulfillmentStatusFilter.ok) return { ok: false, error: fulfillmentStatusFilter.message }")
+    expect(route).toContain("if (!listQuery.ok) return NextResponse.json({ error: listQuery.error }, { status: 400 })")
+    expect(route).toContain("UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED'))")
+    expect(route).toContain("const [filteredTotal] = await db")
   })
 
   it("keeps summary conditions independent from the selected list status", () => {

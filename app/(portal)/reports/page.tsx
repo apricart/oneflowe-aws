@@ -18,6 +18,7 @@ import {
 import { useState,useEffect } from "react"
 
 import { useSession } from "next-auth/react"
+import { usesPurchaseWording } from "@/lib/purchase-wording"
 
 const reportCards = [
   {
@@ -126,7 +127,7 @@ const groupUserOnlyReportCards = [
 export default function ReportsPage() {
   const { data: session } = useSession()
   const role = (session?.user as any)?.role
-  const isBuyer = role === "HEAD_OFFICE" || role === "BRANCH_ADMIN"
+  const isBuyer = usesPurchaseWording(role)
   const [hasMounted, setHasMounted] = useState(false)
 
   useEffect(() => {

@@ -261,8 +261,12 @@ function isSharedPortalArea(pathname: string): boolean {
   return isInvoiceArea(pathname) || isSupportArea(pathname) || isDeliveryAddressArea(pathname)
 }
 
+/** Group User areas that open only with the account's budget allocation grant. */
+const GROUP_USER_BUDGET_AREAS = ["/budgets", "/reports/budget-summary"]
+
 function groupUserRedirect(pathname: string, budgetAllocationEnabled: boolean): string | null {
-  if (pathMatchesPrefix(pathname, "/budgets") && !budgetAllocationEnabled) return GROUP_USER_HOME
+  const isBudgetArea = GROUP_USER_BUDGET_AREAS.some((prefix) => pathMatchesPrefix(pathname, prefix))
+  if (isBudgetArea && !budgetAllocationEnabled) return GROUP_USER_HOME
   const allowed = isSharedPortalArea(pathname)
     || GROUP_USER_AREAS.some((prefix) => pathMatchesPrefix(pathname, prefix))
   return allowed ? null : GROUP_USER_HOME

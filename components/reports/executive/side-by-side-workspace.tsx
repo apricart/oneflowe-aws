@@ -128,7 +128,7 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
   }, [])
 
   const metric: ExecutiveMetricId = MEASURE_METRIC[measure]
-  // Amount is the budget-facing Consumed metric (spent + held). Quantity keeps
+  // Amount is the budget-facing Consumed metric. Quantity keeps
   // its established fulfilled/approved order population and vocabulary.
   const statusSet = productPerformanceStatusSet(metric)
   const metricDefinition = metricDefinitionForStatusSet(metric, statusSet)
@@ -655,7 +655,7 @@ function MatrixPanel({ panel, rows, filters, metric, expanded, onToggleExpanded,
       toolbar={<FullWidthToggle id={`expand-${panel.id}`} title={panel.title} checked={expanded} onChange={onToggleExpanded} />}
       table={data ? <MatrixTable response={data} onDrillDown={onDrillDown} /> : null}
     >
-      {data ? <MatrixChart response={data} onDrillDown={onDrillDown} /> : null}
+      {data ? <MatrixChart response={data} onDrillDown={onDrillDown} fullWidth={expanded} /> : null}
       {data?.quantityUnit.selected ? (
         <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
           Measured in <strong>{data.quantityUnit.selected}</strong> only. Other units in this period are excluded rather

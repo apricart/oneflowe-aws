@@ -21,6 +21,7 @@ import {
 } from "lucide-react"
 import { motion } from "framer-motion"
 import { cn } from "@/lib/utils"
+import { usesPurchaseWording } from "@/lib/purchase-wording"
 import type { SalesSeriesPoint,BranchSalesPoint,DateRange } from "@/lib/hooks/use-sales-performance"
 import {
   format,
@@ -868,7 +869,7 @@ function SalesPerfSummary({ model }: Readonly<{ model: ReturnType<typeof salesPe
 const SalesPerfTooltip = ({ active, payload, label: tooltipLabel, activeMetric, hasComparison }: any) => {
   const { userRole } = useAppContext()
   if (!active || !payload?.length) return null
-  const isBuyer = ["HEAD_OFFICE", "BRANCH_ADMIN"].includes(userRole ?? "")
+  const isBuyer = usesPurchaseWording(userRole)
   const model = salesPerfTooltipModel(payload[0].payload, activeMetric, isBuyer, hasComparison)
   return (
     <div className="glass shadow-[0_20px_60px_rgba(0,0,0,0.2)] dark:shadow-[0_20px_60px_rgba(0,0,0,0.4)] p-5 rounded-[1.5rem] border border-white/20 dark:border-slate-700/30 min-w-[280px]">
@@ -1182,7 +1183,7 @@ export function SalesPerformanceBarChart({
   const { theme } = useTheme()
   const isDark = theme === 'dark'
   const { userRole } = useAppContext()
-  const isBuyer = userRole === "HEAD_OFFICE" || userRole === "BRANCH_ADMIN"
+  const isBuyer = usesPurchaseWording(userRole)
 
   const [activeMetric, setActiveMetric] = useState<'revenue' | 'orders' | 'sales'>('revenue')
 

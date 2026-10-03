@@ -438,6 +438,34 @@ describe.skipIf(!hasTestDatabase)("ledger and order-derived consumption agree", 
       })
     })
 
+    it("refuses to fulfil the order while its goods have not been delivered", async () => {
+      const outcome = await fulfillApprovedOrder({
+        orderId: carriedOrderId,
+        organizationId: fixtures.organizationId,
+        branchId: carriedBranchId,
+        fulfilledByUserId: fixtures.headOfficeId,
+      })
+      expect(outcome).toBe("conflict")
+
+      const [order] = await db
+        .select({ status: orders.status, fulfilledAt: orders.fulfilledAt })
+        .from(orders)
+        .where(eq(orders.id, carriedOrderId))
+      expect(order.status).toBe("APPROVED")
+      expect(order.fulfilledAt).toBeNull()
+
+      // Nothing moved: the hold is still a hold.
+      const carried = await ledgerRow(carriedBranchId, previousPeriod)
+      expect(carried.held).toBe(40_000)
+      expect(carried.spent).toBe(0)
+
+      // Delivery is recorded separately; only then may the order be fulfilled.
+      await db
+        .update(orders)
+        .set({ fulfillmentStatus: "DELIVERED", deliveredAt: new Date() })
+        .where(eq(orders.id, carriedOrderId))
+    })
+
     it("fulfilment moves held to spent on the month the order was raised in", async () => {
       const outcome = await fulfillApprovedOrder({
         orderId: carriedOrderId,
@@ -573,6 +601,109 @@ describe.skipIf(!hasTestDatabase)("ledger and order-derived consumption agree", 
       expect(status).toBe(200)
       expect(branchRow(body, carriedBranchId)).toBeUndefined()
       expect(branchRow(body, parityBranchId)).toBeDefined()
+    })
+
+    describe("a Group User", () => {
+      const signInApprover = (id: string) => signIn({
+        id,
+        email: "approver@example.test",
+        role: "GROUP_USER",
+        organizationId: fixtures.organizationId,
+      })
+
+      it("with the allocation grant reads its assigned branch, to the same figure", async () => {
+        signInApprover(fixtures.approverId)
+        const { status, body } = await readSummary(ledgerParams(parityBranchId, fixtures.organizationId))
+
+        expect(status).toBe(200)
+        expect(branchRow(body, parityBranchId)).toBeDefined()
+        expect(body.summary.totalSpent).toBe(EXPECTED_CONSUMED)
+      })
+
+      it("sees only its assigned branches when it names none", async () => {
+        signInApprover(fixtures.approverId)
+        const { status, body } = await readSummary({
+          preset: "all",
+          startDate: periodStart,
+          endDate: periodEnd,
+          granularity: "monthly",
+        })
+
+        expect(status).toBe(200)
+        expect(branchRow(body, parityBranchId)).toBeDefined()
+        expect(branchRow(body, fixtures.alphaNorthId)).toBeDefined()
+        expect(branchRow(body, fixtures.betaBranchId)).toBeUndefined()
+      })
+
+      it("cannot name an unassigned branch in its own tenant", async () => {
+        signInApprover(fixtures.approverId)
+        const { status, body } = await readSummary(ledgerParams(fixtures.betaBranchId, fixtures.organizationId))
+
+        expect(status).toBe(200)
+        expect(branchRow(body, fixtures.betaBranchId)).toBeUndefined()
+        expect(body.summary.totalAllocated).toBe(0)
+      })
+
+      it("cannot reach an unassigned branch through a group filter", async () => {
+        signInApprover(fixtures.approverId)
+        const { status, body } = await readSummary({
+          groupIds: String(fixtures.betaGroupId),
+          preset: "all",
+          startDate: periodStart,
+          endDate: periodEnd,
+          granularity: "monthly",
+        })
+
+        expect(status).toBe(200)
+        expect(body.branchBreakdown).toEqual([])
+      })
+
+      it("cannot reach another tenant's branch", async () => {
+        signInApprover(fixtures.approverId)
+        const { body } = await readSummary({
+          organizationId: String(fixtures.foreignOrganizationId),
+          branchIds: String(fixtures.foreignBranchId),
+          preset: "all",
+          startDate: periodStart,
+          endDate: periodEnd,
+          granularity: "monthly",
+        })
+
+        expect(branchRow(body, fixtures.foreignBranchId)).toBeUndefined()
+      })
+
+      it("with no assignments reads nothing rather than the tenant", async () => {
+        signInApprover(fixtures.emptyApproverId)
+        const { status, body } = await readSummary({
+          preset: "all",
+          startDate: periodStart,
+          endDate: periodEnd,
+          granularity: "monthly",
+        })
+
+        expect(status).toBe(200)
+        expect(body.branchBreakdown).toEqual([])
+        expect(body.summary.totalAllocated).toBe(0)
+      })
+
+      it("without the allocation grant is refused, whatever its session claims", async () => {
+        await db.update(users).set({ budgetAllocationEnabled: false }).where(eq(users.id, fixtures.approverId))
+        try {
+          signIn({
+            id: fixtures.approverId,
+            email: "approver@example.test",
+            role: "GROUP_USER",
+            organizationId: fixtures.organizationId,
+            budgetAllocationEnabled: true,
+          })
+          const { status, body } = await readSummary(ledgerParams(parityBranchId, fixtures.organizationId))
+
+          expect(status).toBe(403)
+          expect(body.branchBreakdown).toBeUndefined()
+        } finally {
+          await db.update(users).set({ budgetAllocationEnabled: true }).where(eq(users.id, fixtures.approverId))
+        }
+      })
     })
 
     it("lets a super admin read across tenants when it names the organization", async () => {

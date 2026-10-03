@@ -29,16 +29,28 @@ describe("Group User budget page gate", () => {
     mocks.getToken.mockReset()
   })
 
-  it.each([undefined, false, "true"])("redirects a Group User with claim %s", async (claim) => {
-    mocks.getToken.mockResolvedValue(token(claim))
-    const response = await proxy(new NextRequest("https://app.test/budgets"))
-    expect(response.status).toBe(307)
-    expect(response.headers.get("location")).toBe("https://app.test/dashboard")
+  const BUDGET_PAGES = ["/budgets", "/reports/budget-summary"]
+  const CLAIMS = [undefined, false, "true"]
+
+  it.each(BUDGET_PAGES.flatMap((page) => CLAIMS.map((claim) => [page, claim] as const)))(
+    "redirects a Group User from %s with claim %s",
+    async (page, claim) => {
+      mocks.getToken.mockResolvedValue(token(claim))
+      const response = await proxy(new NextRequest(`https://app.test${page}`))
+      expect(response.status).toBe(307)
+      expect(response.headers.get("location")).toBe("https://app.test/dashboard")
+    },
+  )
+
+  it.each(BUDGET_PAGES)("allows an explicitly enabled Group User through to %s", async (page) => {
+    mocks.getToken.mockResolvedValue(token(true))
+    const response = await proxy(new NextRequest(`https://app.test${page}`))
+    expect(response.status).toBe(200)
   })
 
-  it("allows an explicitly enabled Group User through to the server page gate", async () => {
-    mocks.getToken.mockResolvedValue(token(true))
-    const response = await proxy(new NextRequest("https://app.test/budgets"))
+  it("leaves the Group User's other reports open without the grant", async () => {
+    mocks.getToken.mockResolvedValue(token(false))
+    const response = await proxy(new NextRequest("https://app.test/reports/order-report"))
     expect(response.status).toBe(200)
   })
 })

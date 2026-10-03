@@ -27,10 +27,11 @@ async function readRequests(): Promise<Array<{
   brand: string | null
   expected_price_cents: number | null
   review_note: string | null
+  estimated_available_on: unknown
 }>> {
   return queryTestDb(
     testDatabaseUrl(),
-    `SELECT status, brand, expected_price_cents, review_note FROM product_requests
+    `SELECT status, brand, expected_price_cents, review_note, estimated_available_on FROM product_requests
       WHERE organization_id = $1 ORDER BY id`,
     [tenant.organizationId],
   )
@@ -90,11 +91,13 @@ test.describe.serial("product requests", () => {
     const detail = page.getByRole("dialog", { name: PRODUCT_NAME })
     await expect(detail).toBeVisible()
     await detail.getByLabel("Note to Head Office (optional)").fill(REVIEW_NOTE)
+    // Approving needs the date the product is expected in the catalogue.
+    await detail.getByRole("button", { name: "In 2 weeks" }).click()
     await detail.getByRole("button", { name: "Approve" }).click()
     await expect(page.getByText("Request approved").first()).toBeVisible({ timeout: 150_000 })
 
     await expect.poll(readRequests, { timeout: 150_000 }).toEqual([
-      expect.objectContaining({ status: "APPROVED", review_note: REVIEW_NOTE }),
+      expect.objectContaining({ status: "APPROVED", review_note: REVIEW_NOTE, estimated_available_on: expect.anything() }),
     ])
     const products = await queryTestDb(testDatabaseUrl(), "SELECT id FROM global_products WHERE name = $1", [PRODUCT_NAME])
     expect(products).toHaveLength(0)
@@ -106,9 +109,11 @@ test.describe.serial("product requests", () => {
     await page.goto("/inventory/product-requests")
     const row = page.getByRole("row", { name: `Open request for ${PRODUCT_NAME}` })
     await expect(row).toContainText("Approved", { timeout: 150_000 })
+    await expect(row).toContainText("Expected by")
     await row.click()
     const detail = page.getByRole("dialog", { name: PRODUCT_NAME })
     await expect(detail.getByText(REVIEW_NOTE)).toBeVisible()
+    await expect(detail.getByText(/Expected in the catalogue by/)).toBeVisible()
     // Head Office can read the decision but is never offered one.
     await expect(detail.getByRole("button", { name: "Approve" })).toHaveCount(0)
   })

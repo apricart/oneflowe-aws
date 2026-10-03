@@ -19,17 +19,30 @@ import { roundQuantity } from "@/lib/quantity"
  * against what actually exists.
  */
 
-export const PRODUCT_REQUEST_STATUSES = ["PENDING", "APPROVED", "REJECTED"] as const
+export const PRODUCT_REQUEST_STATUSES = ["PENDING", "UNDER_REVIEW", "APPROVED", "REJECTED"] as const
 export type ProductRequestStatus = (typeof PRODUCT_REQUEST_STATUSES)[number]
 
-/** The outcomes a reviewer may record. `PENDING` is where every request starts. */
-export const PRODUCT_REQUEST_DECISIONS = ["APPROVED", "REJECTED"] as const
-export type ProductRequestDecision = (typeof PRODUCT_REQUEST_DECISIONS)[number]
+/** Every status a reviewer may move a request to. `PENDING` is where every request starts. */
+export type ProductRequestReviewStatus = Exclude<ProductRequestStatus, "PENDING">
 
 export const PRODUCT_REQUEST_STATUS_LABELS: Record<ProductRequestStatus, string> = {
   PENDING: "Pending",
+  UNDER_REVIEW: "Under review",
   APPROVED: "Approved",
   REJECTED: "Rejected",
+}
+
+/**
+ * Where Super Admin may move a request from each status. Marking a request
+ * under review tells Head Office someone is working on it, but it is never a
+ * required step: a pending request can be decided directly. A decision is
+ * final.
+ */
+export const PRODUCT_REQUEST_TRANSITIONS: Record<ProductRequestStatus, readonly ProductRequestReviewStatus[]> = {
+  PENDING: ["UNDER_REVIEW", "APPROVED", "REJECTED"],
+  UNDER_REVIEW: ["APPROVED", "REJECTED"],
+  APPROVED: [],
+  REJECTED: [],
 }
 
 export function isProductRequestStatus(value: unknown): value is ProductRequestStatus {
@@ -193,18 +206,118 @@ export function hasAnyProductRequestContent(value: Readonly<Record<string, unkno
   return Object.values(value).some((field) => field !== null && field !== undefined && field !== "")
 }
 
-export const productRequestReviewSchema = z
-  .object({
-    status: z.enum(PRODUCT_REQUEST_DECISIONS, { error: "Status must be APPROVED or REJECTED" }),
-    reviewNote: optionalText(PRODUCT_REQUEST_LIMITS.reviewNote, "Review note"),
-  })
-  .strict()
+/** How far ahead Super Admin may promise a product. Further than a year is not an estimate. */
+export const PRODUCT_REQUEST_AVAILABILITY_MAX_DAYS = 365
+
+const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+
+/** Whether `YYYY-MM-DD` names a day the calendar has — the Date parser would roll "2026-02-31" into March. */
+export function isCalendarDay(value: string): boolean {
+  if (!DAY_PATTERN.test(value)) return false
+  const [year, month, day] = value.split("-").map(Number)
+  const probe = new Date(Date.UTC(year, month - 1, day))
+  return probe.getUTCFullYear() === year && probe.getUTCMonth() === month - 1 && probe.getUTCDate() === day
+}
+
+/**
+ * The date Super Admin expects the product to be in the catalogue. Shape only:
+ * whether the day is in range depends on today, which the server checks with
+ * `productRequestAvailabilityRefusal` so this schema never reads the clock.
+ */
+const availabilityDateField = z
+  .string({ error: "Expected availability date is required to approve a request" })
+  .trim()
+  .refine(isCalendarDay, "Expected availability date must be a real date in YYYY-MM-DD format")
+
+const reviewNoteField = optionalText(PRODUCT_REQUEST_LIMITS.reviewNote, "Review note")
+
+/**
+ * What Super Admin may send. Each status is its own strict shape, so a date on
+ * a rejection, a note on a review start, or any unknown key is refused rather
+ * than silently dropped.
+ */
+export const productRequestReviewSchema = z.discriminatedUnion(
+  "status",
+  [
+    z.object({ status: z.literal("UNDER_REVIEW") }).strict(),
+    z
+      .object({
+        status: z.literal("APPROVED"),
+        reviewNote: reviewNoteField,
+        estimatedAvailableOn: availabilityDateField,
+      })
+      .strict(),
+    z.object({ status: z.literal("REJECTED"), reviewNote: reviewNoteField }).strict(),
+  ],
+  { error: "Status must be UNDER_REVIEW, APPROVED or REJECTED" },
+)
 
 export type ProductRequestReview = z.output<typeof productRequestReviewSchema>
 
-/** Only a pending request can be decided; a decision is final. */
+/** A request is open to a decision until it has one: pending or under review. */
 export function canReviewProductRequestInStatus(status: string): boolean {
-  return status === "PENDING"
+  return isProductRequestStatus(status) && PRODUCT_REQUEST_TRANSITIONS[status].length > 0
+}
+
+/** Only a pending request can be put under review. */
+export function canStartProductRequestReview(status: string): boolean {
+  return isProductRequestStatus(status) && PRODUCT_REQUEST_TRANSITIONS[status].includes("UNDER_REVIEW")
+}
+
+/** Why a request in `from` cannot move to `to`, or null when it can. The wording is shown to Super Admin. */
+export function productRequestTransitionRefusal(from: string, to: ProductRequestReviewStatus): string | null {
+  if (!isProductRequestStatus(from)) return "This request is in an unknown state"
+  if (PRODUCT_REQUEST_TRANSITIONS[from].includes(to)) return null
+  if (from === "UNDER_REVIEW") return "This request is already under review"
+  return `This request has already been ${PRODUCT_REQUEST_STATUS_LABELS[from].toLowerCase()}`
+}
+
+const appDayFormatter = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Karachi",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+})
+
+/** `day` (`YYYY-MM-DD`) moved by `days`, on the calendar — no time zone involved. */
+export function addDaysToDay(day: string, days: number): string {
+  const [year, month, date] = day.split("-").map(Number)
+  return new Date(Date.UTC(year, month - 1, date + days)).toISOString().slice(0, 10)
+}
+
+/**
+ * The days an availability date may name at `now`: today in Asia/Karachi up to
+ * `PRODUCT_REQUEST_AVAILABILITY_MAX_DAYS` later. The date picker uses the same
+ * bounds the server enforces.
+ */
+export function productRequestAvailabilityBounds(now: Date): { min: string; max: string } {
+  const min = appDayFormatter.format(now)
+  return { min, max: addDaysToDay(min, PRODUCT_REQUEST_AVAILABILITY_MAX_DAYS) }
+}
+
+/** Why `day` cannot be promised at `now`, or null when it can. */
+export function productRequestAvailabilityRefusal(day: string, now: Date): string | null {
+  if (!isCalendarDay(day)) return "Expected availability date must be a real date in YYYY-MM-DD format"
+  const { min, max } = productRequestAvailabilityBounds(now)
+  // `YYYY-MM-DD` strings order the same way as the days they name.
+  if (day < min) return "Expected availability date cannot be in the past"
+  if (day > max) {
+    return `Expected availability date must be within ${PRODUCT_REQUEST_AVAILABILITY_MAX_DAYS} days`
+  }
+  return null
+}
+
+const dayLabelFormatter = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "UTC",
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+})
+
+/** "15 Oct 2026" for a `YYYY-MM-DD` day. A date has no time, so it is formatted in UTC and never shifts. */
+export function formatProductRequestDay(day: string | null | undefined): string | null {
+  if (!day || !isCalendarDay(day)) return null
+  return dayLabelFormatter.format(new Date(`${day}T00:00:00.000Z`))
 }
 
 export type ProductRequestListQuery = {
@@ -277,9 +390,14 @@ export type ProductRequestListItem = {
   referenceUrl: string | null
   notes: string | null
   imageUrl: string | null
+  /** When Super Admin marked the request under review; null if it never was. */
+  reviewStartedAt: string | null
+  reviewStartedBy: { id: string; fullName: string | null } | null
   reviewNote: string | null
   reviewedAt: string | null
   reviewedBy: { id: string; fullName: string | null } | null
+  /** `YYYY-MM-DD` the product is expected in the catalogue; approved requests only. */
+  estimatedAvailableOn: string | null
   createdAt: string
   organization: { id: number; name: string }
   requestedBy: { id: string; fullName: string | null; email: string; role: string | null }
