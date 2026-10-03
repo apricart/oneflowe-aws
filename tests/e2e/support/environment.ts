@@ -89,6 +89,11 @@ export function serverEnv(testDatabaseUrl: string): Record<string, string> {
     ...(process.env as Record<string, string>),
     NODE_ENV: "development",
     NEXT_DIST_DIR: E2E_DIST_DIR,
+    // Read by `next.config.mjs`. A memory-threshold restart mid-run drops the
+    // request in flight and recompiles every route cold, which fails whichever
+    // test it lands in. If the heap genuinely runs out, the server now dies with
+    // a heap error instead — a loud failure rather than a misleading one.
+    E2E_DISABLE_DEV_MEMORY_RESTART: "1",
     // Keep browser tests self-contained. Cache/rate-limit fallbacks stay in
     // process and no test run depends on an external Redis service.
     ONEFLOWE_OFFLINE_MODE: "true",

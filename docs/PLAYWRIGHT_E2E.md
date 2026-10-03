@@ -135,7 +135,7 @@ run `npm run e2e:smoke` against their fresh migrated Postgres service. A smoke
 failure stops the job before image build/deployment, and the Playwright report,
 trace, screenshot, and video are uploaded as a workflow artifact.
 
-## Two things worth knowing
+## Three things worth knowing
 
 **It runs beside `npm run dev`.** Next keeps its dev-server lock at
 `<distDir>/dev/lock` and refuses to start a second server against the same one.
@@ -150,6 +150,17 @@ server through `webServer.env`, and `@next/env` never overwrites a variable that
 is already in the process environment. The seed builds its own pool from the
 validated connection string rather than importing `@/lib/db`, so it cannot reach
 whatever `DATABASE_URL` happened to resolve to.
+
+**The dev server does not restart on memory pressure.** `next dev` normally
+exits and restarts once its heap passes 80% of the limit (half the machine's
+RAM by default). One server compiling most of the app crosses that on a CI
+runner, and the restart drops the request in flight and recompiles every route
+cold — a readiness check fails closed, the next test runs out of time, and
+neither failure is about the code it names. The suite sets
+`E2E_DISABLE_DEV_MEMORY_RESTART=1`, which `next.config.mjs` turns into
+`experimental.devMemoryThresholdRestart: false`. If you see
+"Server is approaching the used memory threshold, restarting..." in a run, that
+flag is not reaching the server.
 
 `next start` is not used: it forces production mode, where the server env
 validator requires HTTPS for `NEXTAUTH_URL` and for the Redis URL.
