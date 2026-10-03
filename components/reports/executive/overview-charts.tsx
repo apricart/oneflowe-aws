@@ -94,9 +94,8 @@ export function budgetChartMinWidth(count: number): number {
 /**
  * Two upright columns per branch — Total Budget beside Consumed — and nothing
  * stacked, because that is the comparison the reader is making: how much was
- * given against how much was used. Spent and committed, the two halves of
- * Consumed, stay in the tooltip and the table where they can be read as
- * figures rather than guessed from a boundary inside a bar.
+ * given against how much was used. Consumed is shown as one figure everywhere
+ * — bar, tooltip and table — never split into spent and committed halves.
  */
 export function BudgetVsActualChart({ rows, loading, error, onSelectBranch, selectedBranchId }: Readonly<{
   rows: BranchRow[]
@@ -115,19 +114,17 @@ export function BudgetVsActualChart({ rows, loading, error, onSelectBranch, sele
     <ChartCard
       title="Budget vs Consumed by Branch"
       question="Is each branch living within the budget it was given?"
-      formula="Total Budget = allocated + add-ons. Consumed = spent + committed. Remaining = Total Budget − Consumed."
+      formula="Total Budget = allocated + add-ons. Consumed = every order charged against the budget, including orders awaiting approval, net of refunds. Remaining = Total Budget − Consumed."
       loading={loading}
       error={error}
       empty={data.length === 0 ? "No branch in the selected period has a budget or any procurement activity." : null}
       table={
         <DataTable
-          columns={["Branch", "Total Budget", "Consumed", "Spent", "Committed", "Remaining", "Utilization"]}
+          columns={["Branch", "Total Budget", "Consumed", "Remaining", "Utilization"]}
           rows={data.map((row) => [
             row.branchName,
             money(row.totalBudgetCents),
             money(row.consumedCents),
-            money(row.spentCents),
-            money(row.heldCents),
             money(row.remainingCents),
             row.totalBudgetCents > 0 ? percent(row.utilizationPct) : "no budget",
           ])}
@@ -161,8 +158,6 @@ export function BudgetVsActualChart({ rows, loading, error, onSelectBranch, sele
                       rows={[
                         { label: "Total budget", value: money(row.totalBudgetCents), color: BUDGET_BESIDE_COLOR },
                         { label: "Consumed", value: money(row.consumedCents), color: SERIES[0] },
-                        { label: "Spent", value: money(row.spentCents), muted: true },
-                        { label: "Committed", value: money(row.heldCents), muted: true },
                         { label: "Remaining", value: money(row.remainingCents) },
                         {
                           label: "Utilization",
@@ -206,7 +201,7 @@ export function BudgetVsActualChart({ rows, loading, error, onSelectBranch, sele
       <Legend
         items={[
           { label: "Total budget", color: BUDGET_BESIDE_COLOR },
-          { label: "Consumed (spent + committed)", color: SERIES[0] },
+          { label: "Consumed", color: SERIES[0] },
         ]}
       />
     </ChartCard>
@@ -230,7 +225,7 @@ export function UtilizationRankingChart({ rows, warningPct, loading, error }: Re
     <ChartCard
       title="Budget Utilization Ranking"
       question="Which branch is closest to exhausting its budget?"
-      formula="Utilization % = (spent + committed) ÷ (allocated + add-ons) × 100. Branches with no budget are listed separately rather than shown at 0%."
+      formula="Utilization % = Consumed ÷ Total Budget × 100, where Total Budget is allocated + add-ons. Branches with no budget are listed separately rather than shown at 0%."
       loading={loading}
       error={error}
       empty={data.length === 0 ? "No branch in scope has an allocated budget for this period, so utilization cannot be ranked." : null}
@@ -330,7 +325,7 @@ export function ProcurementTrendChart({ current, previous, loading, error }: Rea
     <ChartCard
       title="Procurement Trend"
       question="Are we spending faster than we were?"
-      formula="Procurement Value per month = Σ(order total − refunds) over revenue-eligible orders. The comparison series is the equal-length window immediately before this one, aligned by position."
+      formula="Procurement Value per month = Σ(order total − refunds) over approved and fulfilled orders. The comparison series is the equal-length window immediately before this one, aligned by position."
       loading={loading}
       error={error}
       empty={data.length === 0 ? "No procurement activity in the selected period." : null}

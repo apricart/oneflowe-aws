@@ -104,21 +104,26 @@ describe("the shared fulfilment transition", () => {
     // Both ledgers still move exactly as the Super Admin route moved them.
     expect(service).toContain('throw new Error("BUDGET_LEDGER_INVARIANT")')
     expect(service).toContain("moveHeldQuantityBudgetToUsedForOrder(tx, fulfilledOrder)")
-    expect(service).toContain('updateOrderFulfillmentStatusColumn(tx, orderId, "DELIVERED")')
   })
 
-  it("only settles an undelivered order for the caller that records the delivery", () => {
+  it("never settles an undelivered order, for any caller", () => {
     const service = source("lib/server/order-fulfillment.ts")
+    const fulfilRoute = source("app/api/v1/orders/[id]/fulfill/route.ts")
 
-    // The delivery requirement is part of the same single-winner claim, so a
-    // caller that requires delivery cannot settle goods that have not arrived.
-    expect(service).toContain("requiresDelivery ? DELIVERED_ORDER_CONDITION : undefined")
+    // The delivery requirement is unconditional and part of the same
+    // single-winner claim, so no caller can settle goods that have not arrived.
+    expect(service).toMatch(/^\s+DELIVERED_ORDER_CONDITION,\r?$/m)
     expect(service).toContain("= 'DELIVERED'")
-    // An order that was delivered earlier keeps the moment it was delivered.
-    expect(service).toContain("...(requiresDelivery ? {} : { deliveredAt: fulfilledAt })")
-    expect(service).toContain("if (!requiresDelivery) {")
-    // The Super Admin fulfilment route keeps recording the delivery itself.
-    expect(service).toContain('delivery = "record-delivery"')
+    // There is no longer a mode that records the delivery while fulfilling.
+    expect(service).not.toContain("record-delivery")
+    expect(service).not.toContain("requiresDelivery")
+    expect(service).not.toContain("deliveredAt: fulfilledAt")
+    // The Super Admin route refuses an undelivered order before the token.
+    const deliveredAt = fulfilRoute.indexOf("if (!isOrderDelivered(ord.fulfillmentStatus)) {")
+    const tokenAt = fulfilRoute.indexOf("verifyApprovalToken(input.approvalToken")
+    expect(deliveredAt).toBeGreaterThan(-1)
+    expect(tokenAt).toBeGreaterThan(deliveredAt)
+    expect(fulfilRoute).toContain('error("Order cannot be fulfilled until it has been delivered", 409)')
   })
 
   it("decides nothing about who may act — that stays with each caller", () => {
@@ -148,7 +153,6 @@ describe("the shared fulfilment transition", () => {
     expect(service).toContain('if (record.outcome !== "recorded")')
     expect(service).toContain("if (!tokenHandoffSettlesNow(candidate.status, record.fulfillmentStatus))")
     expect(service).toContain("settlement.awaitingDeliveryOrderIds.add(candidate.orderId)")
-    expect(service).toContain('delivery: "require-delivered"')
   })
 
   it("settles a delivered order for whoever handed its token over, inside the caller's scope", () => {

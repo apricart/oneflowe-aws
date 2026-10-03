@@ -29,6 +29,12 @@ import {
   settleDueAddonsOnBudget,
   settleDueBudgetAddons,
 } from "@/lib/server/budget-addon-expiry"
+import {
+  budgetEnabledBranchSql,
+  budgetTrackedOrderSql,
+  isOrganizationBudgetEnabled,
+} from "@/lib/server/organization-budget-policy"
+import { BUDGETS_DISABLED_CODE, BUDGETS_DISABLED_MESSAGE } from "@/lib/organization-budget-policy"
 
 type MoneyBudgetUpdate = ReturnType<typeof moneyBudgetUpdateSchema.parse>
 
@@ -248,6 +254,9 @@ function buildBudgetBranchScope(role: string, organizationId: number | null, gro
     organizationCondition,
     groupIds.length > 0 ? inArray(branches.groupId, groupIds) : undefined,
     branchIds.length > 0 ? inArray(branches.id, branchIds) : undefined,
+    // A tenant with budget allocation off has no live budget: its kept rows are
+    // neither listed nor topped up from the baseline by this read.
+    budgetEnabledBranchSql(),
   )
 }
 
@@ -379,6 +388,8 @@ async function loadAggregatedMoneyBudgets(context: any) {
   )
   const spendingConditions = [
     inArray(orders.branchId, branchIds),
+    // Only orders that took a hold, so this agrees with the ledger it replaces.
+    budgetTrackedOrderSql(),
     context.startDate || context.endDate ? gte(orders.createdAt, range.start) : undefined,
     context.startDate || context.endDate ? lte(orders.createdAt, range.end) : undefined,
     context.months.length > 0 ? sql`EXTRACT(MONTH FROM ${orders.createdAt}) IN (${sql.join(context.months, sql.raw(", "))})` : undefined,
@@ -455,6 +466,9 @@ async function handleAllMoneyBudgets(context: any) {
     if (context.role !== "SUPER_ADMIN" && !context.organizationId) {
       return NextResponse.json({ error: `Organization context required for ${context.role} users` }, { status: 400 })
     }
+    if (context.organizationId && !await isOrganizationBudgetEnabled(Number(context.organizationId))) {
+      return NextResponse.json({ budgets: [], budgetsEnabled: false })
+    }
     const branchScope = buildBudgetBranchScope(context.role, context.organizationId, context.groupIds, context.branchIds)
     let rows
     if (context.period) {
@@ -465,7 +479,7 @@ async function handleAllMoneyBudgets(context: any) {
     } else {
       rows = await loadAggregatedMoneyBudgets({ ...context, branchScope })
     }
-    return NextResponse.json({ budgets: await withBudgetAllocationModes(rows) })
+    return NextResponse.json({ budgets: await withBudgetAllocationModes(rows), budgetsEnabled: true })
   } catch (caughtError) {
     logError(caughtError, "BUDGETS_GET_ALL")
     return NextResponse.json({ error: "Failed to fetch budgets" }, { status: 500 })
@@ -494,6 +508,16 @@ async function handleSingleMoneyBudget({
   const fence = branchFromQuery ? await queriedBranchAccessError(role, branchId, organizationId) : null
   if (fence) return fence
 
+  // A tenant with budget allocation off has no budget to show and none to
+  // open: answer before the load below, which writes a period row when one is
+  // missing. The shop reads this flag to stop gating the cart on a budget.
+  const [branchTenant] = await db.select({ organizationId: branches.organizationId })
+    .from(branches).where(eq(branches.id, branchId)).limit(1)
+  if (!branchTenant) return NextResponse.json({ error: "Branch not found" }, { status: 404 })
+  if (!await isOrganizationBudgetEnabled(branchTenant.organizationId)) {
+    return NextResponse.json({ branchId, budgetsEnabled: false })
+  }
+
   const currentMonth = new Date().toISOString().slice(0, 7)
   const budget = await loadSingleBranchBudget(branchId, currentMonth)
   if (!budget) return NextResponse.json({ error: "Branch not found" }, { status: 404 })
@@ -504,6 +528,7 @@ async function handleSingleMoneyBudget({
   const credited = budget.amountCreditedCents ?? 0
   const budgetPayload = {
     branchId,
+    budgetsEnabled: true,
     amountAllocatedCents: allocated,
     amountSpentCents: spent,
     amountHeldCents: held,
@@ -732,6 +757,24 @@ async function parseMoneyBudgetUpdate(req: NextRequest): Promise<MoneyBudgetUpda
 }
 
 /**
+ * Why this tenant takes no money allocation, or null when it does.
+ *
+ * Budgets off comes first: allocating money a tenant's orders are never
+ * checked against would only mislead whoever reads the figure later.
+ */
+async function moneyAllocationRefusal(organizationId: number): Promise<NextResponse | null> {
+  if (!await isOrganizationBudgetEnabled(organizationId)) {
+    return NextResponse.json({ error: BUDGETS_DISABLED_MESSAGE, code: BUDGETS_DISABLED_CODE }, { status: 409 })
+  }
+  if (await getBudgetAllocationModeForOrganization(organizationId) === "quantity") {
+    return NextResponse.json({
+      error: "This organization uses quantity-based budgeting. Allocate budgets from Budget by Quantity."
+    }, { status: 403 })
+  }
+  return null
+}
+
+/**
  * PUT /api/v1/budgets - Update or create budget allocation
  */
 export async function PUT(req: NextRequest) {
@@ -785,12 +828,8 @@ export async function PUT(req: NextRequest) {
     const accessError = await allocationAccessError({ role, userId, orgId, branch })
     if (accessError) return accessError
 
-    const budgetAllocationMode = await getBudgetAllocationModeForOrganization(branch.organizationId)
-    if (budgetAllocationMode === "quantity") {
-      return NextResponse.json({
-        error: "This organization uses quantity-based budgeting. Allocate budgets from Budget by Quantity."
-      }, { status: 403 })
-    }
+    const refusal = await moneyAllocationRefusal(branch.organizationId)
+    if (refusal) return refusal
 
     try {
       const allocation = await writeMoneyBudgetAllocation({

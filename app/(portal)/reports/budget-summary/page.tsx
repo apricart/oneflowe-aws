@@ -47,14 +47,18 @@ X
 } from "lucide-react"
 import { useSession } from "next-auth/react"
 import { usePathname,useRouter,useSearchParams } from "next/navigation"
-import { useCallback,useEffect,useMemo,useRef,useState } from "react"
+import { useCallback,useEffect,useMemo,useRef,useState,type ReactNode } from "react"
 import useSWR from "swr"
+import { BudgetsDisabledNotice } from "@/components/budgets/budgets-disabled-notice"
 import * as XLSX from "xlsx"
 
 import { GlobalDateFilter,type FilterPreset,type GlobalDateFilterChange } from "@/components/dashboard/global-date-filter"
 import { GroupFilter } from "@/components/reports/group-filter"
 
 import { KPICard } from "@/components/reports/kpi-card"
+import { ReportTableScroll } from "@/components/reports/report-table-scroll"
+import { SortableHeader, ariaSortFor, useTableSort } from "@/components/reports/sortable-header"
+import { sortRows, type SortValue } from "@/lib/table-sort"
 import { Tabs,TabsContent,TabsList,TabsTrigger } from "@/components/ui/tabs"
 
 import {
@@ -72,6 +76,8 @@ YAxis
 
 interface BudgetSummaryResponse {
     pricesHidden?: boolean;
+    /** False for an organization with budget allocation switched off. */
+    budgetsEnabled?: boolean;
     summary: {
         totalAllocated: number;
         totalSpent: number;
@@ -265,6 +271,23 @@ function BudgetChartTooltip({ active, payload, label, branches }: Readonly<Budge
         </div>
     )
 }
+
+type BudgetSortKey = "branch" | "base" | "addon" | "total" | "consumption" | "remaining" | "utilization"
+/** What each sortable column of the budget table orders by. */
+const BUDGET_SORT_ACCESSORS: Record<BudgetSortKey, (row: any) => SortValue> = {
+    branch: (row) => row.branchName,
+    base: (row) => row.baselineAmount || 0,
+    addon: (row) => row.credited || 0,
+    total: (row) => (row.baselineAmount || 0) + (row.credited || 0),
+    consumption: (row) => row.spent || 0,
+    remaining: (row) => (row.baselineAmount || 0) + (row.credited || 0) - (row.spent || 0),
+    utilization: (row) => {
+        const total = (row.baselineAmount || 0) + (row.credited || 0)
+        return total > 0 ? (row.spent || 0) / total : 0
+    },
+}
+/** Numbers and dates show the largest or newest first on the first click. */
+const BUDGET_DESC_FIRST_SORT_KEYS = new Set<BudgetSortKey>(["base", "addon", "total", "consumption", "remaining", "utilization"])
 
 export default function BudgetSummaryPage() {
     const router = useRouter()
@@ -602,6 +625,19 @@ export default function BudgetSummaryPage() {
         )
     }, [budgetReportData?.branchBreakdown, searchTerm])
 
+    // Column sort, applied after the search filter (plans/OF-TABLE-column-sorting.md).
+    const { sort: budgetSort, toggleSort: toggleBudgetSort } = useTableSort<BudgetSortKey>()
+    const sortedBudgetRows = useMemo(() => sortRows(filteredReportBranches, budgetSort, BUDGET_SORT_ACCESSORS), [filteredReportBranches, budgetSort])
+    const sortBudgetHead = (key: BudgetSortKey, label: ReactNode) => (
+        <SortableHeader
+            label={label}
+            sortKey={key}
+            sort={budgetSort}
+            onSort={toggleBudgetSort}
+            firstDirection={BUDGET_DESC_FIRST_SORT_KEYS.has(key) ? "desc" : "asc"}
+        />
+    )
+
     // Smart defaults: if no year is selected, pick the CURRENT year if available, else latest
     useEffect(() => {
         if (!hasInitializedChartDefaults.current && availableChartYears.length > 0) {
@@ -867,6 +903,14 @@ export default function BudgetSummaryPage() {
                         Financial budget reports are hidden by organization settings.
                     </CardContent>
                 </Card>
+            </div>
+        )
+    }
+
+    if (pageData?.budgetsEnabled === false || budgetReportData?.budgetsEnabled === false) {
+        return (
+            <div className="min-h-screen bg-[#f8fafc] dark:bg-[#020617] p-6">
+                <BudgetsDisabledNotice className="mt-10" />
             </div>
         )
     }
@@ -1741,17 +1785,17 @@ export default function BudgetSummaryPage() {
                                             </div>
                                         </div>
                                         <div className="p-2 sm:p-6">
-                                            <div className="overflow-x-auto rounded-[2rem] border border-slate-100/60 dark:border-slate-800/60 shadow-[inset_0_2px_12px_rgba(0,0,0,0.02)]">
+                                            <ReportTableScroll className="rounded-[2rem] border border-slate-100/60 dark:border-slate-800/60 shadow-[inset_0_2px_12px_rgba(0,0,0,0.02)]">
                                                 <Table className="border-collapse">
                                                     <TableHeader className="bg-slate-50/30 dark:bg-slate-950/30">
                                                         <TableRow className="hover:bg-transparent border-b border-slate-100 dark:border-slate-800">
-                                                            <TableHead className="pl-6 h-12 text-[10px] font-black uppercase tracking-[0.25em] text-slate-400">Branch Identity</TableHead>
-                                                            <TableHead className="h-12 text-[10px] font-black uppercase tracking-[0.25em] text-emerald-600/70 text-right">Standard BASE</TableHead>
-                                                            <TableHead className="h-12 text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600/70 text-right">Add-On (Adj)</TableHead>
-                                                            <TableHead className="h-12 text-[10px] font-black uppercase tracking-[0.25em] text-slate-900 dark:text-white text-right">TOTAL BUDGET</TableHead>
-                                                            <TableHead className="h-12 text-[10px] font-black uppercase tracking-[0.25em] text-rose-500/70 text-right">TOTAL CONSUMPTION</TableHead>
-                                                            <TableHead className="h-12 text-[10px] font-black uppercase tracking-[0.25em] text-slate-900 dark:text-white text-right">LIQUID REMAINING</TableHead>
-                                                            <TableHead className="h-12 text-[10px] font-black uppercase tracking-[0.25em] text-slate-400 text-center pr-6">Utilization</TableHead>
+                                                            <TableHead aria-sort={ariaSortFor(budgetSort, "branch")} className="pl-6 h-12 text-[10px] font-black uppercase tracking-[0.25em] text-slate-400">{sortBudgetHead("branch", "Branch Identity")}</TableHead>
+                                                            <TableHead aria-sort={ariaSortFor(budgetSort, "base")} className="h-12 text-[10px] font-black uppercase tracking-[0.25em] text-emerald-600/70 text-right">{sortBudgetHead("base", "Standard BASE")}</TableHead>
+                                                            <TableHead aria-sort={ariaSortFor(budgetSort, "addon")} className="h-12 text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600/70 text-right">{sortBudgetHead("addon", "Add-On (Adj)")}</TableHead>
+                                                            <TableHead aria-sort={ariaSortFor(budgetSort, "total")} className="h-12 text-[10px] font-black uppercase tracking-[0.25em] text-slate-900 dark:text-white text-right">{sortBudgetHead("total", "TOTAL BUDGET")}</TableHead>
+                                                            <TableHead aria-sort={ariaSortFor(budgetSort, "consumption")} className="h-12 text-[10px] font-black uppercase tracking-[0.25em] text-rose-500/70 text-right">{sortBudgetHead("consumption", "TOTAL CONSUMPTION")}</TableHead>
+                                                            <TableHead aria-sort={ariaSortFor(budgetSort, "remaining")} className="h-12 text-[10px] font-black uppercase tracking-[0.25em] text-slate-900 dark:text-white text-right">{sortBudgetHead("remaining", "LIQUID REMAINING")}</TableHead>
+                                                            <TableHead aria-sort={ariaSortFor(budgetSort, "utilization")} className="h-12 text-[10px] font-black uppercase tracking-[0.25em] text-slate-400 text-center pr-6">{sortBudgetHead("utilization", "Utilization")}</TableHead>
                                                         </TableRow>
                                                     </TableHeader>
                                                     <TableBody className="bg-transparent">
@@ -1763,7 +1807,7 @@ export default function BudgetSummaryPage() {
                                                             </TableRow>
                                                         )}
                                                         <AnimatePresence mode="popLayout">
-                                                            {filteredReportBranches.map((b: any, index: number) => {
+                                                            {sortedBudgetRows.map((b: any, index: number) => {
                                                                 const baseline = b.baselineAmount || 0;
                                                                 const addon = b.credited || 0;
                                                                 const totalLimit = baseline + addon;
@@ -1848,7 +1892,7 @@ export default function BudgetSummaryPage() {
                                                         </AnimatePresence>
                                                     </TableBody>
                                                 </Table>
-                                            </div>
+                                            </ReportTableScroll>
                                         </div>
                                     </Card>
                                 </motion.div>

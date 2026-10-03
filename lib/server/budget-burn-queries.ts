@@ -8,6 +8,7 @@ import { db } from "@/lib/db"
 import { REVENUE_ELIGIBLE_FILTER } from "@/lib/metric-utils"
 import { orderConditions, type ExecutiveFilters } from "@/lib/server/executive-analytics-queries"
 import type { ExecutiveScope } from "@/lib/server/executive-analytics-scope"
+import { aggregatedRequesterRoleSql } from "@/lib/server/order-creator-role-sql"
 
 /**
  * The aggregate behind the budget-burn watchlist: one row per creator per
@@ -67,7 +68,16 @@ export async function loadCreatorMonth(
     .select({
       userId: orders.createdByUserId,
       branchId: orders.branchId,
-      role: roles.name,
+      // One role per creator per branch, aggregated — never the per-row value.
+      //
+      // `isOrderCreatorRole` decides from this which rows are *listed*. Keyed on
+      // the live role, a promoted requester would drop off the panel taking
+      // their consumption history with them while the branch denominators kept
+      // counting it. Keyed on the per-row recorded role, a person whose role
+      // changed mid-window would split into two rows and `creatorKey`
+      // (`userId:branchId`) would then either list them twice with their spend
+      // divided or drop one row outright in `unionCreators`.
+      role: aggregatedRequesterRoleSql,
       // Falls back through the identifiers a person may actually have, so a
       // row is never labelled with a bare UUID — and never with an email.
       requesterName: sql<string>`COALESCE(NULLIF(TRIM(${users.fullName}), ''), ${users.employeeId}, ${users.username}, 'Unknown requester')`,
@@ -87,7 +97,8 @@ export async function loadCreatorMonth(
     .groupBy(
       orders.createdByUserId,
       orders.branchId,
-      roles.name,
+      // Deliberately no role here: `aggregatedRequesterRoleSql` is an aggregate
+      // over the group precisely so this stays one row per creator per branch.
       users.fullName,
       users.employeeId,
       users.username,

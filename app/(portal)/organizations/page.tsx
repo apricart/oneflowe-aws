@@ -2,6 +2,11 @@
 import { useAppContext } from "@/components/context/app-context"
 import { BranchExcelExportButton } from "@/components/organizations/branch-excel-export-button"
 import { BranchListExcelExportButton } from "@/components/organizations/branch-list-excel-export-button"
+import {
+EmailDomainField,
+emailDomainDraftError,
+toEmailDomainPayload,
+} from "@/components/organizations/email-domain-field"
 import { OrganizationExcelExportButton } from "@/components/organizations/organization-excel-export-button"
 import { OrganizationListExcelExportButton } from "@/components/organizations/organization-list-excel-export-button"
 import {
@@ -29,7 +34,10 @@ BUDGET_ALLOCATION_MODE_SETTING_KEY,
 parseBudgetAllocationMode,
 type BudgetAllocationMode,
 } from "@/lib/budget-allocation-mode"
+import { DEFAULT_ORGANIZATION_BUDGETS_ENABLED } from "@/lib/organization-budget-policy"
 import { formatCountLabel } from "@/lib/count-label"
+import { PAYMENT_CONTROL_POLICY } from "@/lib/payment-control-policy"
+import { UNACKNOWLEDGED_DELIVERY_BLOCK_THRESHOLD } from "@/lib/unacknowledged-delivery-block"
 import { useBranches,useOrganizations } from "@/lib/hooks/use-api"
 import {
 DEFAULT_ORDER_APPROVER_ROLE,
@@ -46,10 +54,130 @@ type Organization = {
   name: string
   code: string
   ntnNumber?: string | null
+  emailDomain?: string | null
   status?: "active" | "inactive"
   budgetAllocationMode?: BudgetAllocationMode
   orderApproverRole?: OrderApproverRole
+  orderApprovalRequired?: boolean
+  blockOrderingOnUnpaidInvoices?: boolean
+  blockOrderingOnUnacknowledgedDeliveries?: boolean
+  budgetsEnabled?: boolean
 }
+
+const UNPAID_INVOICE_BLOCK_HINT =
+  `A branch with ${PAYMENT_CONTROL_POLICY.overdueBlockThreshold} or more unpaid invoices (delivered and not marked paid) cannot place new orders until they are paid.`
+
+const UNACKNOWLEDGED_DELIVERY_BLOCK_HINT =
+  `A branch with ${UNACKNOWLEDGED_DELIVERY_BLOCK_THRESHOLD} or more orders that are delivered but not yet acknowledged (still approved) cannot place new orders until they are acknowledged.`
+
+/**
+ * Super Admin only. Switching one on can stop a branch ordering at once, so
+ * each hint says exactly what is counted.
+ */
+function OrderingBlockSwitch({
+  id,
+  label,
+  hint,
+  checked,
+  onCheckedChange,
+  disabled,
+}: Readonly<{
+  id: string
+  label: string
+  hint: string
+  checked: boolean
+  onCheckedChange: (checked: boolean) => void
+  disabled: boolean
+}>) {
+  return (
+    <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
+      <div className="pr-4">
+        <Label htmlFor={id}>{label}</Label>
+        <p className="text-xs text-muted-foreground">{hint}</p>
+      </div>
+      <Switch id={id} checked={checked} onCheckedChange={onCheckedChange} disabled={disabled} />
+    </div>
+  )
+}
+
+const BUDGET_ALLOCATION_HINT =
+  "When off, orders are placed without a budget: nothing is checked, held or reported against one. When on, a branch needs an allocated budget before it can order."
+
+const EDIT_BUDGET_ALLOCATION_ON_NOTE =
+  "New orders follow the selected model immediately. Existing orders and reports remain unchanged."
+const EDIT_BUDGET_ALLOCATION_OFF_NOTE =
+  "New orders take no budget. Orders already holding budget keep it until they are decided, and allocations are kept for if budgets are switched back on."
+
+/**
+ * The budget allocation switch and, while it is on, the model it runs on.
+ * Super Admin only; the server refuses the field from anyone else. The model
+ * is hidden rather than disabled while off, because it has no effect then.
+ */
+function BudgetAllocationFields({
+  idPrefix,
+  enabled,
+  onEnabledChange,
+  mode,
+  onModeChange,
+  disabled,
+  note,
+}: Readonly<{
+  idPrefix: string
+  enabled: boolean
+  onEnabledChange: (enabled: boolean) => void
+  mode: BudgetAllocationMode
+  onModeChange: (mode: BudgetAllocationMode) => void
+  disabled: boolean
+  note?: string
+}>) {
+  const modeOption = (value: BudgetAllocationMode, label: string, description: string) => (
+    <button
+      type="button"
+      onClick={() => onModeChange(value)}
+      disabled={disabled}
+      aria-pressed={mode === value}
+      className={cn(
+        "rounded-md border bg-background p-3 text-left transition-colors",
+        mode === value ? "border-indigo-500 ring-2 ring-indigo-100 dark:ring-indigo-900/40" : "hover:bg-muted/50"
+      )}
+    >
+      <span className="text-sm font-semibold">{label}</span>
+      <span className="mt-1 block text-xs text-muted-foreground">{description}</span>
+    </button>
+  )
+
+  return (
+    <div className="space-y-3 rounded-md border bg-background px-3 py-2">
+      <div className="flex items-center justify-between">
+        <div className="pr-4">
+          <Label htmlFor={`${idPrefix}-budgets-enabled`}>Budget allocation</Label>
+          <p className="text-xs text-muted-foreground">{BUDGET_ALLOCATION_HINT}</p>
+        </div>
+        <Switch
+          id={`${idPrefix}-budgets-enabled`}
+          checked={enabled}
+          onCheckedChange={onEnabledChange}
+          disabled={disabled}
+        />
+      </div>
+      {enabled && (
+        <div className="space-y-2">
+          <Label>Budget allocation model</Label>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {modeOption("money", "Money value", "Allocate budgets directly in PKR.")}
+            {modeOption("quantity", "Quantity", "Allocate product quantities that calculate budget value.")}
+          </div>
+        </div>
+      )}
+      {note && <p className="text-xs text-muted-foreground">{note}</p>}
+    </div>
+  )
+}
+
+const CREATE_EMAIL_DOMAIN_HINT =
+  "People joining through the join page must use an address at this domain. Leave blank and nobody can join this way."
+const EDIT_EMAIL_DOMAIN_HINT =
+  "People joining through the join page must use an address at this domain. Clear it to stop anyone joining this way."
 type Branch = {
   id: number
   name: string
@@ -392,8 +520,8 @@ export default function OrganizationsPage() {
     return result
   }, [visibleBranches, branchStatusFilter, branchSearch])
 
-  const orgCount = orgs?.items.length ?? 0
-  const branchCount = branches?.items.length ?? 0
+  const orgCount = orgs?.items?.length ?? 0
+  const branchCount = branches?.items?.length ?? 0
 
   return (
     <>
@@ -509,6 +637,7 @@ export default function OrganizationsPage() {
                         subtitle={`${org.code} • ${formatCountLabel(branchesByOrgId.get(org.id)?.length || 0, "branch", "branches")}`}
                         status={isActiveStatus(org.status)}
                         budgetAllocationMode={org.budgetAllocationMode}
+                        budgetsEnabled={org.budgetsEnabled !== false}
                       >
                         <EditOrgDialog
                           org={org}
@@ -815,6 +944,7 @@ function OrganizationListItem({
   status,
   badgeLabel,
   budgetAllocationMode,
+  budgetsEnabled = true,
 }: Readonly<{
   title: string
   subtitle: string
@@ -824,6 +954,7 @@ function OrganizationListItem({
   status?: boolean
   badgeLabel?: string
   budgetAllocationMode?: BudgetAllocationMode
+  budgetsEnabled?: boolean
 }>) {
   const initials = title
     .split(" ")
@@ -890,12 +1021,13 @@ function OrganizationListItem({
                 variant="outline"
                 className={cn(
                   "text-[9px] uppercase font-semibold tracking-widest px-2 py-0.5 rounded-md whitespace-nowrap",
-                  normalizedBudgetAllocationMode === "quantity"
+                  !budgetsEnabled && "border-slate-200 bg-slate-50 text-slate-500 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-400",
+                  budgetsEnabled && normalizedBudgetAllocationMode === "quantity"
                     ? "border-indigo-200/70 bg-indigo-50/70 text-indigo-700 dark:border-indigo-500/20 dark:bg-indigo-500/10 dark:text-indigo-300"
                     : "border-sky-200/70 bg-sky-50/70 text-sky-700 dark:border-sky-500/20 dark:bg-sky-500/10 dark:text-sky-300"
                 )}
               >
-                {BUDGET_ALLOCATION_MODE_LABELS[normalizedBudgetAllocationMode]}
+                {budgetsEnabled ? BUDGET_ALLOCATION_MODE_LABELS[normalizedBudgetAllocationMode] : "Budget off"}
               </Badge>
             )}
             {(() => {
@@ -1029,9 +1161,16 @@ function CreateOrgDialog({
   const [name, setName] = useState("")
   const [code, setCode] = useState("")
   const [ntnNumber, setNtnNumber] = useState("")
+  const [emailDomain, setEmailDomain] = useState("")
   const [status, setStatus] = useState<boolean>(true)
   const [budgetAllocationMode, setBudgetAllocationMode] = useState<BudgetAllocationMode>("money")
+  // Off by default: a new company orders without budgets until a Super Admin
+  // switches allocation on (DEFAULT_ORGANIZATION_BUDGETS_ENABLED).
+  const [budgetsEnabled, setBudgetsEnabled] = useState(DEFAULT_ORGANIZATION_BUDGETS_ENABLED)
   const [orderApproverRole, setOrderApproverRole] = useState<OrderApproverRole>(DEFAULT_ORDER_APPROVER_ROLE)
+  const [orderApprovalRequired, setOrderApprovalRequired] = useState(true)
+  const [blockOrderingOnUnpaidInvoices, setBlockOrderingOnUnpaidInvoices] = useState(false)
+  const [blockOrderingOnUnacknowledgedDeliveries, setBlockOrderingOnUnacknowledgedDeliveries] = useState(false)
   const [hideBranchAdminPrices, setHideBranchAdminPrices] = useState(false)
   const [hideOrderPortalPrices, setHideOrderPortalPrices] = useState(false)
   const [privateNetworkEnabled, setPrivateNetworkEnabled] = useState(false)
@@ -1040,9 +1179,11 @@ function CreateOrgDialog({
   const [saving, setSaving] = useState(false)
 
   const networkError = privateNetworkDraftError(privateNetworkEnabled, networkEntries)
+  const emailDomainError = emailDomainDraftError(emailDomain)
 
   async function createCompany() {
     setSaving(true)
+    const emailDomainPayload = toEmailDomainPayload(emailDomain)
     try {
       const res = await fetch("/api/v1/organizations", {
         method: "POST",
@@ -1051,9 +1192,14 @@ function CreateOrgDialog({
           code,
           // Optional: only sent when filled in, so a blank field stays absent.
           ...(ntnNumber.trim() ? { ntnNumber: ntnNumber.trim() } : {}),
+          ...(emailDomainPayload ? { emailDomain: emailDomainPayload } : {}),
           status: status ? "active" : "inactive",
+          budgetsEnabled,
           budgetAllocationMode,
           orderApproverRole,
+          orderApprovalRequired,
+          blockOrderingOnUnpaidInvoices,
+          blockOrderingOnUnacknowledgedDeliveries,
           priceVisibility: {
             hideBranchAdminPrices,
             hideOrderPortalPrices,
@@ -1072,9 +1218,14 @@ function CreateOrgDialog({
       setName("")
       setCode("")
       setNtnNumber("")
+      setEmailDomain("")
       setStatus(true)
       setBudgetAllocationMode("money")
+      setBudgetsEnabled(DEFAULT_ORGANIZATION_BUDGETS_ENABLED)
       setOrderApproverRole(DEFAULT_ORDER_APPROVER_ROLE)
+      setOrderApprovalRequired(true)
+      setBlockOrderingOnUnpaidInvoices(false)
+      setBlockOrderingOnUnacknowledgedDeliveries(false)
       setHideBranchAdminPrices(false)
       setHideOrderPortalPrices(false)
       setPrivateNetworkEnabled(false)
@@ -1089,7 +1240,7 @@ function CreateOrgDialog({
   }
 
   function submit() {
-    if (!name || !code || saving || networkError) return
+    if (!name || !code || saving || networkError || emailDomainError) return
     setConfirmModeOpen(true)
   }
 
@@ -1145,45 +1296,47 @@ function CreateOrgDialog({
                 />
                 <p className="text-xs text-muted-foreground">Tax registration number. Leave blank if not applicable.</p>
               </div>
-              <div className="space-y-2">
-                <Label>Budget allocation model</Label>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <button
-                    type="button"
-                    onClick={() => setBudgetAllocationMode("money")}
-                    disabled={saving}
-                    className={cn(
-                      "rounded-md border bg-background p-3 text-left transition-colors",
-                      budgetAllocationMode === "money" ? "border-indigo-500 ring-2 ring-indigo-100 dark:ring-indigo-900/40" : "hover:bg-muted/50"
-                    )}
-                  >
-                    <span className="text-sm font-semibold">Money value</span>
-                    <span className="mt-1 block text-xs text-muted-foreground">Allocate budgets directly in PKR.</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setBudgetAllocationMode("quantity")}
-                    disabled={saving}
-                    className={cn(
-                      "rounded-md border bg-background p-3 text-left transition-colors",
-                      budgetAllocationMode === "quantity" ? "border-indigo-500 ring-2 ring-indigo-100 dark:ring-indigo-900/40" : "hover:bg-muted/50"
-                    )}
-                  >
-                    <span className="text-sm font-semibold">Quantity</span>
-                    <span className="mt-1 block text-xs text-muted-foreground">Allocate product quantities that calculate budget value.</span>
-                  </button>
+              <EmailDomainField
+                id="email-domain"
+                value={emailDomain}
+                onChange={setEmailDomain}
+                disabled={saving}
+                hint={CREATE_EMAIL_DOMAIN_HINT}
+              />
+              <BudgetAllocationFields
+                idPrefix="create"
+                enabled={budgetsEnabled}
+                onEnabledChange={setBudgetsEnabled}
+                mode={budgetAllocationMode}
+                onModeChange={setBudgetAllocationMode}
+                disabled={saving}
+              />
+              <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
+                <div className="pr-4">
+                  <Label htmlFor="create-order-approval-required">Require order approval</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Turn this off to approve new Order Portal and Group Order Portal orders immediately.
+                  </p>
                 </div>
+                <Switch
+                  id="create-order-approval-required"
+                  checked={orderApprovalRequired}
+                  onCheckedChange={setOrderApprovalRequired}
+                  disabled={saving}
+                />
               </div>
-              <div className="space-y-2">
+              <div className={cn("space-y-2", !orderApprovalRequired && "opacity-60")}>
                 <Label>Order approver</Label>
                 <p className="text-xs text-muted-foreground">
-                  Exactly one role can approve or reject pending orders for this company.
+                  {orderApprovalRequired
+                    ? "Exactly one role can approve or reject pending orders for this company."
+                    : "Saved for use if approval is required again later."}
                 </p>
                 <div className="grid gap-2 sm:grid-cols-2">
                   <button
                     type="button"
                     onClick={() => setOrderApproverRole("BRANCH_ADMIN")}
-                    disabled={saving}
+                    disabled={saving || !orderApprovalRequired}
                     className={cn(
                       "rounded-md border bg-background p-3 text-left transition-colors",
                       orderApproverRole === "BRANCH_ADMIN" ? "border-indigo-500 ring-2 ring-indigo-100 dark:ring-indigo-900/40" : "hover:bg-muted/50",
@@ -1195,7 +1348,7 @@ function CreateOrgDialog({
                   <button
                     type="button"
                     onClick={() => setOrderApproverRole("HEAD_OFFICE")}
-                    disabled={saving}
+                    disabled={saving || !orderApprovalRequired}
                     className={cn(
                       "rounded-md border bg-background p-3 text-left transition-colors",
                       orderApproverRole === "HEAD_OFFICE" ? "border-indigo-500 ring-2 ring-indigo-100 dark:ring-indigo-900/40" : "hover:bg-muted/50",
@@ -1206,6 +1359,22 @@ function CreateOrgDialog({
                   </button>
                 </div>
               </div>
+              <OrderingBlockSwitch
+                id="create-block-ordering-on-unpaid-invoices"
+                label="Block ordering on unpaid invoices"
+                hint={UNPAID_INVOICE_BLOCK_HINT}
+                checked={blockOrderingOnUnpaidInvoices}
+                onCheckedChange={setBlockOrderingOnUnpaidInvoices}
+                disabled={saving}
+              />
+              <OrderingBlockSwitch
+                id="create-block-ordering-on-unacknowledged-deliveries"
+                label="Block ordering on unacknowledged deliveries"
+                hint={UNACKNOWLEDGED_DELIVERY_BLOCK_HINT}
+                checked={blockOrderingOnUnacknowledgedDeliveries}
+                onCheckedChange={setBlockOrderingOnUnacknowledgedDeliveries}
+                disabled={saving}
+              />
               <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
                 <div>
                   <Label htmlFor="org-status">Status</Label>
@@ -1265,7 +1434,7 @@ function CreateOrgDialog({
             <Button
               onClick={submit}
               className="gap-2 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100 disabled:shadow-none"
-              disabled={!name || !code || saving || Boolean(networkError)}
+              disabled={!name || !code || saving || Boolean(networkError) || Boolean(emailDomainError)}
             >
               <Save className="h-4 w-4" />
               Save Company
@@ -1279,7 +1448,7 @@ function CreateOrgDialog({
         onOpenChange={setConfirmModeOpen}
         onConfirm={createCompany}
         title="Confirm Budget Model"
-        description={`This company will use ${budgetAllocationMode === "quantity" ? "quantity-based" : "money-value"} budget allocation. ${ORDER_APPROVER_ROLE_LABELS[orderApproverRole]} will be the only role allowed to approve or reject orders. Super Admins can change this later from Edit Company.`}
+        description={`${budgetsEnabled ? `This company will use ${budgetAllocationMode === "quantity" ? "quantity-based" : "money-value"} budget allocation.` : "This company will order without budget allocation."} ${orderApprovalRequired ? `${ORDER_APPROVER_ROLE_LABELS[orderApproverRole]} will approve or reject new orders.` : "New orders will be approved immediately when they are created."} Super Admins can change this later from Edit Company.`}
         confirmText="Create Company"
         cancelText="Review"
         type="warning"
@@ -1505,6 +1674,7 @@ function EditOrgDialog({
   const [name, setName] = useState(org.name)
   const [code, setCode] = useState(org.code)
   const [ntnNumber, setNtnNumber] = useState(org.ntnNumber ?? "")
+  const [emailDomain, setEmailDomain] = useState(org.emailDomain ?? "")
   const [status, setStatus] = useState<boolean>(isActiveStatus(org.status))
   const [budgetAllocationMode, setBudgetAllocationMode] = useState<BudgetAllocationMode>(
     parseBudgetAllocationMode(org.budgetAllocationMode)
@@ -1512,6 +1682,18 @@ function EditOrgDialog({
   const [orderApproverRole, setOrderApproverRole] = useState<OrderApproverRole>(
     parseOrderApproverRole(org.orderApproverRole)
   )
+  const [orderApprovalRequired, setOrderApprovalRequired] = useState(
+    org.orderApprovalRequired !== false,
+  )
+  const [blockOrderingOnUnpaidInvoices, setBlockOrderingOnUnpaidInvoices] = useState(
+    org.blockOrderingOnUnpaidInvoices === true,
+  )
+  const [blockOrderingOnUnacknowledgedDeliveries, setBlockOrderingOnUnacknowledgedDeliveries] = useState(
+    org.blockOrderingOnUnacknowledgedDeliveries === true,
+  )
+  // Anything but an explicit false reads as on, matching the server's
+  // fail-safe: a tenant is never shown as unbudgeted when it is not.
+  const [budgetsEnabled, setBudgetsEnabled] = useState(org.budgetsEnabled !== false)
   const [hideBranchAdminPrices, setHideBranchAdminPrices] = useState(false)
   const [hideOrderPortalPrices, setHideOrderPortalPrices] = useState(false)
   const [privateNetworkEnabled, setPrivateNetworkEnabled] = useState(false)
@@ -1524,15 +1706,33 @@ function EditOrgDialog({
   const networkError = networkLoadFailed
     ? null
     : privateNetworkDraftError(privateNetworkEnabled, networkEntries)
+  const emailDomainError = emailDomainDraftError(emailDomain)
 
   useEffect(() => {
     setName(org.name)
     setCode(org.code)
     setNtnNumber(org.ntnNumber ?? "")
+    setEmailDomain(org.emailDomain ?? "")
     setStatus(isActiveStatus(org.status))
     setBudgetAllocationMode(parseBudgetAllocationMode(org.budgetAllocationMode))
     setOrderApproverRole(parseOrderApproverRole(org.orderApproverRole))
-  }, [org.name, org.code, org.ntnNumber, org.status, org.budgetAllocationMode, org.orderApproverRole])
+    setOrderApprovalRequired(org.orderApprovalRequired !== false)
+    setBlockOrderingOnUnpaidInvoices(org.blockOrderingOnUnpaidInvoices === true)
+    setBlockOrderingOnUnacknowledgedDeliveries(org.blockOrderingOnUnacknowledgedDeliveries === true)
+    setBudgetsEnabled(org.budgetsEnabled !== false)
+  }, [
+    org.name,
+    org.code,
+    org.ntnNumber,
+    org.emailDomain,
+    org.status,
+    org.budgetAllocationMode,
+    org.orderApproverRole,
+    org.orderApprovalRequired,
+    org.blockOrderingOnUnpaidInvoices,
+    org.blockOrderingOnUnacknowledgedDeliveries,
+    org.budgetsEnabled,
+  ])
 
   useEffect(() => {
     if (!open || !isSuperAdmin) return
@@ -1650,6 +1850,13 @@ function EditOrgDialog({
               />
               <p className="text-xs text-muted-foreground">Tax registration number. Clear the field to remove it.</p>
             </div>
+            <EmailDomainField
+              id="eemail-domain"
+              value={emailDomain}
+              onChange={setEmailDomain}
+              disabled={saving}
+              hint={EDIT_EMAIL_DOMAIN_HINT}
+            />
             <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
               <div>
                 <Label htmlFor="org-status-edit">Status</Label>
@@ -1667,16 +1874,35 @@ function EditOrgDialog({
             </div>
             {isSuperAdmin && (
               <div className="space-y-3">
-                <div className="space-y-2 rounded-md border bg-background px-3 py-2">
+                <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
+                  <div className="pr-4">
+                    <Label htmlFor={`edit-order-approval-required-${org.id}`}>Require order approval</Label>
+                    <p className="text-xs text-muted-foreground">
+                      When off, newly created orders are approved immediately. Existing orders are unchanged.
+                    </p>
+                  </div>
+                  <Switch
+                    id={`edit-order-approval-required-${org.id}`}
+                    checked={orderApprovalRequired}
+                    onCheckedChange={setOrderApprovalRequired}
+                    disabled={loadingSettings || saving}
+                  />
+                </div>
+                <div className={cn(
+                  "space-y-2 rounded-md border bg-background px-3 py-2",
+                  !orderApprovalRequired && "opacity-60",
+                )}>
                   <Label>Order approver</Label>
                   <p className="text-xs text-muted-foreground">
-                    This role alone can approve or reject pending orders.
+                    {orderApprovalRequired
+                      ? "This role alone can approve or reject pending orders."
+                      : "Saved for use if approval is required again later."}
                   </p>
                   <div className="grid gap-2 sm:grid-cols-2">
                     <button
                       type="button"
                       onClick={() => setOrderApproverRole("BRANCH_ADMIN")}
-                      disabled={loadingSettings || saving}
+                      disabled={loadingSettings || saving || !orderApprovalRequired}
                       className={cn(
                         "rounded-md border bg-background p-3 text-left transition-colors",
                         orderApproverRole === "BRANCH_ADMIN" ? "border-indigo-500 ring-2 ring-indigo-100 dark:ring-indigo-900/40" : "hover:bg-muted/50",
@@ -1688,7 +1914,7 @@ function EditOrgDialog({
                     <button
                       type="button"
                       onClick={() => setOrderApproverRole("HEAD_OFFICE")}
-                      disabled={loadingSettings || saving}
+                      disabled={loadingSettings || saving || !orderApprovalRequired}
                       className={cn(
                         "rounded-md border bg-background p-3 text-left transition-colors",
                         orderApproverRole === "HEAD_OFFICE" ? "border-indigo-500 ring-2 ring-indigo-100 dark:ring-indigo-900/40" : "hover:bg-muted/50",
@@ -1699,38 +1925,31 @@ function EditOrgDialog({
                     </button>
                   </div>
                 </div>
-                <div className="space-y-2 rounded-md border bg-background px-3 py-2">
-                  <Label>Budget allocation model</Label>
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    <button
-                      type="button"
-                      onClick={() => setBudgetAllocationMode("money")}
-                      disabled={loadingSettings || saving}
-                      className={cn(
-                        "rounded-md border bg-background p-3 text-left transition-colors",
-                        budgetAllocationMode === "money" ? "border-indigo-500 ring-2 ring-indigo-100 dark:ring-indigo-900/40" : "hover:bg-muted/50"
-                      )}
-                    >
-                      <span className="text-sm font-semibold">Money value</span>
-                      <span className="mt-1 block text-xs text-muted-foreground">Allocate budgets directly in PKR.</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setBudgetAllocationMode("quantity")}
-                      disabled={loadingSettings || saving}
-                      className={cn(
-                        "rounded-md border bg-background p-3 text-left transition-colors",
-                        budgetAllocationMode === "quantity" ? "border-indigo-500 ring-2 ring-indigo-100 dark:ring-indigo-900/40" : "hover:bg-muted/50"
-                      )}
-                    >
-                      <span className="text-sm font-semibold">Quantity</span>
-                      <span className="mt-1 block text-xs text-muted-foreground">Allocate product quantities that calculate budget value.</span>
-                    </button>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    New orders follow the selected model immediately. Existing orders and reports remain unchanged.
-                  </p>
-                </div>
+                <OrderingBlockSwitch
+                  id={`edit-block-ordering-on-unpaid-invoices-${org.id}`}
+                  label="Block ordering on unpaid invoices"
+                  hint={UNPAID_INVOICE_BLOCK_HINT}
+                  checked={blockOrderingOnUnpaidInvoices}
+                  onCheckedChange={setBlockOrderingOnUnpaidInvoices}
+                  disabled={loadingSettings || saving}
+                />
+                <OrderingBlockSwitch
+                  id={`edit-block-ordering-on-unacknowledged-deliveries-${org.id}`}
+                  label="Block ordering on unacknowledged deliveries"
+                  hint={UNACKNOWLEDGED_DELIVERY_BLOCK_HINT}
+                  checked={blockOrderingOnUnacknowledgedDeliveries}
+                  onCheckedChange={setBlockOrderingOnUnacknowledgedDeliveries}
+                  disabled={loadingSettings || saving}
+                />
+                <BudgetAllocationFields
+                  idPrefix={`edit-${org.id}`}
+                  enabled={budgetsEnabled}
+                  onEnabledChange={setBudgetsEnabled}
+                  mode={budgetAllocationMode}
+                  onModeChange={setBudgetAllocationMode}
+                  disabled={loadingSettings || saving}
+                  note={budgetsEnabled ? EDIT_BUDGET_ALLOCATION_ON_NOTE : EDIT_BUDGET_ALLOCATION_OFF_NOTE}
+                />
                 <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
                   <div>
                     <Label htmlFor="hide-branch-admin-price-visibility">Hide Branch Admin prices</Label>
@@ -1789,7 +2008,8 @@ function EditOrgDialog({
               loadingNetwork ||
               !name.trim() ||
               !code.trim() ||
-              Boolean(networkError)
+              Boolean(networkError) ||
+              Boolean(emailDomainError)
             }
             onClick={async () => {
               setSaving(true)
@@ -1800,8 +2020,18 @@ function EditOrgDialog({
                     code,
                     // Optional: an emptied field clears the stored value.
                     ntnNumber: ntnNumber.trim() || null,
+                    emailDomain: toEmailDomainPayload(emailDomain),
                     status: status ? "active" : "inactive",
-                    ...(isSuperAdmin ? { budgetAllocationMode, orderApproverRole } : {}),
+                    ...(isSuperAdmin
+                      ? {
+                        budgetsEnabled,
+                        budgetAllocationMode,
+                        orderApproverRole,
+                        orderApprovalRequired,
+                        blockOrderingOnUnpaidInvoices,
+                        blockOrderingOnUnacknowledgedDeliveries,
+                      }
+                      : {}),
                   },
                   isSuperAdmin
                     ? {

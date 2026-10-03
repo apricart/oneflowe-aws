@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useSession } from "next-auth/react"
 import useSWR from "swr"
 import jsPDF from "jspdf"
@@ -33,6 +33,10 @@ import { ColumnSelector, type ColumnDef, useColumnSelector } from "@/components/
 import { RefundDetailsDrawer } from "@/components/reports/refund-details-drawer"
 import { GroupFilter } from "@/components/reports/group-filter"
 import { KPICard } from "@/components/reports/kpi-card"
+import { ReportTableScroll } from "@/components/reports/report-table-scroll"
+import { SortableHeader, ariaSortFor, useTableSort } from "@/components/reports/sortable-header"
+import type { RefundReportSortKey } from "@/lib/list-sort-keys"
+import { appendSortParams, type SortDirection } from "@/lib/table-sort"
 import { MultiSelectFilter } from "@/components/reports/multi-select-filter"
 import { OrganizationFilter } from "@/components/reports/organization-filter"
 import { Badge } from "@/components/ui/badge"
@@ -55,6 +59,8 @@ import { sanitizeSpreadsheetRow } from "@/lib/spreadsheet"
 import { cn, formatPKR } from "@/lib/utils"
 
 const PAGE_SIZE = 25
+/** Dates, quantities and money show the newest or largest first on the first click. */
+const REFUND_REPORT_DESC_FIRST_SORT_KEYS = new Set<RefundReportSortKey>(["refundDate", "quantity", "amount"])
 
 const ALL_COLUMNS: ColumnDef[] = [
     { key: "refundNumber", label: "Refund #", defaultVisible: true },
@@ -228,6 +234,22 @@ export default function RefundReportPage() {
     const [groupIds, setGroupIds] = useState<string[]>([])
     const [branchIds, setBranchIds] = useState<string[]>([])
     const [currentPage, setCurrentPage] = useState(1)
+    // Sorted on the server so it covers every page, starting from the order the
+    // report already used (newest first). A new sort starts again from page 1.
+    const { sort: refundSort, toggleSort: toggleRefundSort } = useTableSort<RefundReportSortKey>({ key: "refundDate", direction: "desc" })
+    const handleRefundSort = useCallback((key: RefundReportSortKey, firstDirection?: SortDirection) => {
+        toggleRefundSort(key, firstDirection)
+        setCurrentPage(1)
+    }, [toggleRefundSort])
+    const sortHead = (key: RefundReportSortKey, label: ReactNode) => (
+        <SortableHeader
+            label={label}
+            sortKey={key}
+            sort={refundSort}
+            onSort={handleRefundSort}
+            firstDirection={REFUND_REPORT_DESC_FIRST_SORT_KEYS.has(key) ? "desc" : "asc"}
+        />
+    )
     const [selectedRefund, setSelectedRefund] = useState<RefundRecord | null>(null)
     const [drawerOpen, setDrawerOpen] = useState(false)
     const [isExporting, setIsExporting] = useState(false)
@@ -276,8 +298,9 @@ export default function RefundReportPage() {
         const params = new URLSearchParams(queryParams)
         params.set("page", String(currentPage))
         params.set("limit", String(PAGE_SIZE))
+        appendSortParams(params, refundSort)
         return params
-    }, [currentPage, queryParams])
+    }, [currentPage, queryParams, refundSort])
 
     const { data, error, isLoading, isValidating, mutate } = useSWR(
         isInitialized && sessionStatus === "authenticated"
@@ -580,23 +603,23 @@ export default function RefundReportPage() {
                     </div>
 
                     <Card className="flex min-h-[600px] min-w-0 flex-col overflow-hidden rounded-[2.5rem] border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-900/40">
-                        <div className="min-w-0 flex-1 overflow-hidden [&_[data-slot=table-container]]:overflow-x-auto">
+                        <ReportTableScroll className="flex-1">
                             <Table className="min-w-[1950px] table-fixed">
                                 <TableHeader>
                                     <TableRow className="border-b border-slate-200 bg-slate-50/80 hover:bg-slate-50/80 dark:border-slate-800 dark:bg-slate-900/80">
-                                        {isVisible("refundNumber") && <TableHead className="h-14 w-[170px] px-4 text-[10px] font-black uppercase tracking-widest text-slate-500"><span className="flex items-center gap-2"><Hash className="h-3.5 w-3.5 text-rose-500" /> Refund #</span></TableHead>}
-                                        {isVisible("refundDate") && <TableHead className="h-14 w-[135px] px-4 text-[10px] font-black uppercase tracking-widest text-slate-500"><span className="flex items-center gap-2"><Calendar className="h-3.5 w-3.5" /> Date</span></TableHead>}
-                                        {isVisible("tid") && <TableHead className="h-14 w-[180px] px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">Order ID</TableHead>}
-                                        {isVisible("reason") && <TableHead className="h-14 w-[300px] px-4 text-[10px] font-black uppercase tracking-widest text-rose-600 dark:text-rose-400">Refund Reason</TableHead>}
-                                        {isVisible("requestedBy") && <TableHead className="h-14 w-[170px] px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">Requested By</TableHead>}
-                                        {isVisible("organization") && role === "SUPER_ADMIN" && <TableHead className="h-14 w-[150px] px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">Organization</TableHead>}
-                                        {isVisible("group") && role !== "BRANCH_ADMIN" && role !== "BRANCH_MANAGER" && <TableHead className="h-14 w-[140px] px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">Group</TableHead>}
-                                        {isVisible("branch") && role !== "BRANCH_ADMIN" && role !== "BRANCH_MANAGER" && <TableHead className="h-14 w-[150px] px-4 text-[10px] font-black uppercase tracking-widest text-slate-500"><span className="flex items-center gap-2"><Store className="h-3.5 w-3.5" /> Branch</span></TableHead>}
-                                        {isVisible("status") && <TableHead className="h-14 w-[120px] px-3 text-center text-[10px] font-black uppercase tracking-widest text-slate-500">Status</TableHead>}
-                                        {isVisible("refundType") && <TableHead className="h-14 w-[115px] px-3 text-center text-[10px] font-black uppercase tracking-widest text-slate-500">Type</TableHead>}
-                                        {isVisible("quantity") && <TableHead className="h-14 w-[100px] px-3 text-center text-[10px] font-black uppercase tracking-widest text-slate-500">Qty</TableHead>}
-                                        {!pricesHidden && isVisible("amount") && <TableHead className="h-14 w-[145px] px-4 text-right text-[10px] font-black uppercase tracking-widest text-rose-500">Refund Amount</TableHead>}
-                                        {isVisible("processedBy") && <TableHead className="h-14 w-[160px] px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">Processed By</TableHead>}
+                                        {isVisible("refundNumber") && <TableHead aria-sort={ariaSortFor(refundSort, "refundNumber")} className="h-14 w-[170px] px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">{sortHead("refundNumber", <span className="flex items-center gap-2"><Hash className="h-3.5 w-3.5 text-rose-500" /> Refund #</span>)}</TableHead>}
+                                        {isVisible("refundDate") && <TableHead aria-sort={ariaSortFor(refundSort, "refundDate")} className="h-14 w-[135px] px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">{sortHead("refundDate", <span className="flex items-center gap-2"><Calendar className="h-3.5 w-3.5" /> Date</span>)}</TableHead>}
+                                        {isVisible("tid") && <TableHead aria-sort={ariaSortFor(refundSort, "tid")} className="h-14 w-[180px] px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">{sortHead("tid", "Order ID")}</TableHead>}
+                                        {isVisible("reason") && <TableHead aria-sort={ariaSortFor(refundSort, "reason")} className="h-14 w-[300px] px-4 text-[10px] font-black uppercase tracking-widest text-rose-600 dark:text-rose-400">{sortHead("reason", "Refund Reason")}</TableHead>}
+                                        {isVisible("requestedBy") && <TableHead aria-sort={ariaSortFor(refundSort, "requestedBy")} className="h-14 w-[170px] px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">{sortHead("requestedBy", "Requested By")}</TableHead>}
+                                        {isVisible("organization") && role === "SUPER_ADMIN" && <TableHead aria-sort={ariaSortFor(refundSort, "organization")} className="h-14 w-[150px] px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">{sortHead("organization", "Organization")}</TableHead>}
+                                        {isVisible("group") && role !== "BRANCH_ADMIN" && role !== "BRANCH_MANAGER" && <TableHead aria-sort={ariaSortFor(refundSort, "group")} className="h-14 w-[140px] px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">{sortHead("group", "Group")}</TableHead>}
+                                        {isVisible("branch") && role !== "BRANCH_ADMIN" && role !== "BRANCH_MANAGER" && <TableHead aria-sort={ariaSortFor(refundSort, "branch")} className="h-14 w-[150px] px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">{sortHead("branch", <span className="flex items-center gap-2"><Store className="h-3.5 w-3.5" /> Branch</span>)}</TableHead>}
+                                        {isVisible("status") && <TableHead aria-sort={ariaSortFor(refundSort, "status")} className="h-14 w-[120px] px-3 text-center text-[10px] font-black uppercase tracking-widest text-slate-500">{sortHead("status", "Status")}</TableHead>}
+                                        {isVisible("refundType") && <TableHead aria-sort={ariaSortFor(refundSort, "refundType")} className="h-14 w-[115px] px-3 text-center text-[10px] font-black uppercase tracking-widest text-slate-500">{sortHead("refundType", "Type")}</TableHead>}
+                                        {isVisible("quantity") && <TableHead aria-sort={ariaSortFor(refundSort, "quantity")} className="h-14 w-[100px] px-3 text-center text-[10px] font-black uppercase tracking-widest text-slate-500">{sortHead("quantity", "Qty")}</TableHead>}
+                                        {!pricesHidden && isVisible("amount") && <TableHead aria-sort={ariaSortFor(refundSort, "amount")} className="h-14 w-[145px] px-4 text-right text-[10px] font-black uppercase tracking-widest text-rose-500">{sortHead("amount", "Refund Amount")}</TableHead>}
+                                        {isVisible("processedBy") && <TableHead aria-sort={ariaSortFor(refundSort, "processedBy")} className="h-14 w-[160px] px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">{sortHead("processedBy", "Processed By")}</TableHead>}
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
@@ -657,7 +680,7 @@ export default function RefundReportPage() {
                                     })()}
                                 </TableBody>
                             </Table>
-                        </div>
+                        </ReportTableScroll>
 
                         <div className="flex flex-col gap-4 border-t border-slate-100 bg-slate-50/50 px-6 py-5 dark:border-slate-900 dark:bg-slate-900/40 sm:flex-row sm:items-center sm:justify-between sm:px-8">
                             <div>

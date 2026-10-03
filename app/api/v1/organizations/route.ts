@@ -221,8 +221,16 @@ export async function POST(req: Request) {
           name,
           code,
           ntnNumber,
+          // Already normalised by the schema; absent or blank is null.
+          emailDomain: body.emailDomain ?? null,
           status,
           orderApproverRole: body.orderApproverRole,
+          orderApprovalRequired: body.orderApprovalRequired,
+          blockOrderingOnUnpaidInvoices: body.blockOrderingOnUnpaidInvoices,
+          blockOrderingOnUnacknowledgedDeliveries: body.blockOrderingOnUnacknowledgedDeliveries,
+          // Written explicitly: the column default keeps directly inserted
+          // rows budgeted, the product default for a new tenant is off.
+          budgetsEnabled: body.budgetsEnabled,
           privateNetworkLoginEnabled: privateNetworkLogin.enabled,
         })
         .returning()
@@ -259,7 +267,12 @@ export async function POST(req: Request) {
         entityId: String(createdOrganization.id),
         metadata: {
           orderApproverRole: body.orderApproverRole,
+          orderApprovalRequired: body.orderApprovalRequired,
+          blockOrderingOnUnpaidInvoices: body.blockOrderingOnUnpaidInvoices,
+          blockOrderingOnUnacknowledgedDeliveries: body.blockOrderingOnUnacknowledgedDeliveries,
+          budgetsEnabled: body.budgetsEnabled,
           budgetAllocationMode,
+          emailDomain: createdOrganization.emailDomain,
           privateNetworkLoginEnabled: privateNetworkLogin.enabled,
           allowedNetworks: resolvedNetworkRows.rows.map(formatAllowlistEntry),
         },

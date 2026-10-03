@@ -5,11 +5,15 @@ import { GlobalDateFilter,type FilterPreset,type GlobalDateFilterChange } from "
 import { BranchFilter } from "@/components/reports/branch-filter"
 import { GroupFilter } from "@/components/reports/group-filter"
 import { KPICard } from "@/components/reports/kpi-card"
+import { ReportTableScroll } from "@/components/reports/report-table-scroll"
+import { SortableHeader, ariaSortFor, useTableSort } from "@/components/reports/sortable-header"
+import { sortRows, type SortValue } from "@/lib/table-sort"
 import { MultiSelectFilter } from "@/components/reports/multi-select-filter"
 import { OrganizationFilter as OrgFilter } from "@/components/reports/organization-filter"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card,CardContent,CardHeader,CardTitle } from "@/components/ui/card"
+import { usesPurchaseWording } from "@/lib/purchase-wording"
 import {
 DropdownMenu,
 DropdownMenuContent,
@@ -43,7 +47,7 @@ Upload
 } from "lucide-react"
 import { useSession } from "next-auth/react"
 import { useRouter,useSearchParams } from "next/navigation"
-import { Fragment,useCallback,useEffect,useMemo,useRef,useState } from "react"
+import { Fragment,useCallback,useEffect,useMemo,useRef,useState,type ReactNode } from "react"
 import { Bar,CartesianGrid,ComposedChart,Legend,ResponsiveContainer,Tooltip,XAxis,YAxis } from "recharts"
 import useSWR from "swr"
 import * as XLSX from "xlsx"
@@ -77,6 +81,19 @@ function buildGroupsQueryParams(context: any) {
     return params
 }
 
+type GroupSortKey = "name" | "budget" | "units" | "revenue" | "refunds" | "orders"
+/** What each sortable column of the group table orders by. */
+const GROUP_SORT_ACCESSORS: Record<GroupSortKey, (row: any) => SortValue> = {
+    name: (row) => row.name,
+    budget: (row) => row.totalBudget,
+    units: (row) => row.branchCount,
+    revenue: (row) => row.totalAmountCents,
+    refunds: (row) => row.totalRefundCents,
+    orders: (row) => row.totalOrders,
+}
+/** Numbers and dates show the largest or newest first on the first click. */
+const GROUP_DESC_FIRST_SORT_KEYS = new Set<GroupSortKey>(["budget", "units", "revenue", "refunds", "orders"])
+
 export default function GroupsReportPage() {
     const router = useRouter()
     const searchParams = useSearchParams()
@@ -88,7 +105,7 @@ export default function GroupsReportPage() {
 
     const { data: session } = useSession()
     const role = (session?.user as any)?.role as Role
-    const isBuyer = role === "HEAD_OFFICE" || role === "BRANCH_ADMIN"
+    const isBuyer = usesPurchaseWording(role)
     const userOrgId = (session?.user as any)?.organizationId
     const [hasMounted, setHasMounted] = useState(false)
 
@@ -283,6 +300,19 @@ export default function GroupsReportPage() {
         return groups.filter((g: any) => g.name?.toLowerCase().includes(reportSearch.toLowerCase()) || g.organizationName?.toLowerCase().includes(reportSearch.toLowerCase()))
     }, [reportData?.groups, reportSearch])
 
+    // Column sort, applied after the search filter (plans/OF-TABLE-column-sorting.md).
+    const { sort: groupSort, toggleSort: toggleGroupSort } = useTableSort<GroupSortKey>()
+    const sortedGroupRows = useMemo(() => sortRows(filteredGroups, groupSort, GROUP_SORT_ACCESSORS), [filteredGroups, groupSort])
+    const sortGroupHead = (key: GroupSortKey, label: ReactNode) => (
+        <SortableHeader
+            label={label}
+            sortKey={key}
+            sort={groupSort}
+            onSort={toggleGroupSort}
+            firstDirection={GROUP_DESC_FIRST_SORT_KEYS.has(key) ? "desc" : "asc"}
+        />
+    )
+
     const normalizedTrend = useMemo(() => {
         const trend = chartData?.trend || []
         const currentYear = new Date().getFullYear()
@@ -346,7 +376,7 @@ export default function GroupsReportPage() {
             const groupRow = [
                 `GROUP: ${group.name || "-"}`,
                 ...(role === "SUPER_ADMIN" ? [group.organizationName || "-"] : []),
-                money(group.totalBudget),
+                group.budgetsEnabled === false ? "Off" : money(group.totalBudget),
                 group.branchCount || 0,
                 money(group.totalAmountCents),
                 money(group.totalRefundCents),
@@ -367,7 +397,7 @@ export default function GroupsReportPage() {
             const branchRows = branches.map((branch: any) => [
                 `  - ${branch.name || "-"}`,
                 ...(role === "SUPER_ADMIN" ? [group.organizationName || "-"] : []),
-                money(branch.totalBudget),
+                group.budgetsEnabled === false ? "Off" : money(branch.totalBudget),
                 branch.status || "Unknown",
                 money(branch.revenue),
                 money(branch.refunds),
@@ -718,17 +748,17 @@ export default function GroupsReportPage() {
                                     </Badge>
                                 </div>
                             </CardHeader>
-                            <CardContent className="p-0">
+                            <ReportTableScroll>
                                 <Table>
                                     <TableHeader>
                                         <TableRow className="bg-slate-50/50 dark:bg-slate-900/50 border-b border-slate-100 dark:border-slate-800">
                                             <TableHead className="w-10 pl-6"></TableHead>
-                                            <TableHead className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400">Group Name</TableHead>
-                                            <TableHead className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-center">Budget</TableHead>
-                                            <TableHead className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-center">Managed Units</TableHead>
-                                            <TableHead className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-right">{isBuyer ? "Purchased (PKR)" : "Revenue (PKR)"}</TableHead>
-                                            <TableHead className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-right text-rose-500">Refunds</TableHead>
-                                            <TableHead className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-center">Orders</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(groupSort, "name")} className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400">{sortGroupHead("name", "Group Name")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(groupSort, "budget")} className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-center">{sortGroupHead("budget", "Budget")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(groupSort, "units")} className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-center">{sortGroupHead("units", "Managed Units")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(groupSort, "revenue")} className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-right">{sortGroupHead("revenue", isBuyer ? "Purchased (PKR)" : "Revenue (PKR)")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(groupSort, "refunds")} className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-right text-rose-500">{sortGroupHead("refunds", "Refunds")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(groupSort, "orders")} className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-center">{sortGroupHead("orders", "Orders")}</TableHead>
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
@@ -746,7 +776,7 @@ export default function GroupsReportPage() {
                                         )
                                           }
                                           return (
-                                            filteredGroups.map((group: any) => {
+                                            sortedGroupRows.map((group: any) => {
                                                 const isExpanded = expandedGroups.has(group.id)
                                                 const hasBranches = group.branches && group.branches.length > 0
                                                 return (
@@ -762,7 +792,7 @@ export default function GroupsReportPage() {
                                                                 </div>
                                                             </TableCell>
                                                             <TableCell className="text-center font-black">
-                                                                <span className="text-sm font-black text-slate-900 dark:text-white tracking-tight">{formatPKR(group.totalBudget / 100)}</span>
+                                                                <span className="text-sm font-black text-slate-900 dark:text-white tracking-tight">{group.budgetsEnabled === false ? "Off" : formatPKR(group.totalBudget / 100)}</span>
                                                             </TableCell>
                                                             <TableCell className="text-center font-black">
                                                                 <div className="inline-flex items-center gap-2 px-3 py-1 bg-indigo-50 dark:bg-indigo-500/10 rounded-full text-[10px]">
@@ -790,7 +820,7 @@ export default function GroupsReportPage() {
                                                                     </div>
                                                                 </TableCell>
                                                                 <TableCell className="text-center font-black">
-                                                                    <span className="text-xs font-bold text-slate-400 tracking-tight">{formatPKR(branch.totalBudget / 100)}</span>
+                                                                    <span className="text-xs font-bold text-slate-400 tracking-tight">{group.budgetsEnabled === false ? "Off" : formatPKR(branch.totalBudget / 100)}</span>
                                                                 </TableCell>
                                                                 <TableCell className="text-center font-black">
                                                                     <Badge variant="outline" className={cn("text-[9px] font-black uppercase tracking-widest scale-90", (() => {
@@ -817,7 +847,7 @@ export default function GroupsReportPage() {
                                         })()}
                                     </TableBody>
                                 </Table>
-                            </CardContent>
+                            </ReportTableScroll>
                             <div className="px-8 py-5 border-t border-slate-100 dark:border-slate-900 bg-slate-50/50 dark:bg-slate-900/40 flex items-center justify-between">
                                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{filteredGroups.length} groups analyzed</p>
                                 <p className="text-[10px] font-bold text-slate-300 dark:text-slate-700 font-mono italic" suppressHydrationWarning>GEN_TS: {generatedDate}</p>

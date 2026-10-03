@@ -1,11 +1,15 @@
-export type Role = "SUPER_ADMIN" | "HEAD_OFFICE" | "GROUP_USER" | "BRANCH_ADMIN" | "GROUP_ORDER_PORTAL" | "ORDER_PORTAL"
+export type Role = "SUPER_ADMIN" | "HEAD_OFFICE" | "GROUP_USER" | "BRANCH_ADMIN" | "GROUP_ORDER_PORTAL" | "ORDER_PORTAL" | "VIEWER"
 
 /**
  * Validate if a string is a valid role
+ *
+ * Note this list is duplicated in `lib/auth.ts`, whose `getSafeUserRole` falls
+ * back to BRANCH_ADMIN for anything it does not recognise. A role added here
+ * and not there is silently promoted to a branch administrator.
  */
 export function isValidRole(role: unknown): role is Role {
   if (typeof role !== 'string') return false
-  const validRoles: Role[] = ['SUPER_ADMIN', 'HEAD_OFFICE', 'GROUP_USER', 'BRANCH_ADMIN', 'GROUP_ORDER_PORTAL', 'ORDER_PORTAL']
+  const validRoles: Role[] = ['SUPER_ADMIN', 'HEAD_OFFICE', 'GROUP_USER', 'BRANCH_ADMIN', 'GROUP_ORDER_PORTAL', 'ORDER_PORTAL', 'VIEWER']
   return validRoles.includes(role as Role)
 }
 
@@ -68,13 +72,18 @@ export function hasRole(current: Role | undefined | null, allowed: Role[]): bool
 // group-based roles into the scale renumbers it without changing any existing
 // pairwise relationship. GROUP_USER sits above BRANCH_ADMIN because it decides
 // orders across many branches rather than one.
+//
+// VIEWER takes the floor: it reads a dashboard and can act on nothing at all,
+// so every acting role outranks it. Renumbering the rest by one preserves each
+// existing pair, and `lib/server/user-access-policy.test.ts` holds that.
 const ROLE_HIERARCHY: Record<Role, number> = {
-  'ORDER_PORTAL': 1,
-  'GROUP_ORDER_PORTAL': 2,
-  'BRANCH_ADMIN': 3,
-  'GROUP_USER': 4,
-  'HEAD_OFFICE': 5,
-  'SUPER_ADMIN': 6
+  'VIEWER': 1,
+  'ORDER_PORTAL': 2,
+  'GROUP_ORDER_PORTAL': 3,
+  'BRANCH_ADMIN': 4,
+  'GROUP_USER': 5,
+  'HEAD_OFFICE': 6,
+  'SUPER_ADMIN': 7
 }
 
 /**

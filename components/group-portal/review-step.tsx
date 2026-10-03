@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo } from "react"
+import { useMemo, useState } from "react"
 import { ArrowLeft, Building2, Info, Loader2, Pencil, Send, Trash2 } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
@@ -13,6 +13,7 @@ import { calculateLineCents, sanitizeQuantityStep } from "@/lib/quantity"
 import { formatPKR } from "@/lib/utils"
 
 import { QuantityStepper } from "./quantity-stepper"
+import { ReviewLocationEditor } from "./review-location-editor"
 import type { BranchPlan, SelectedLine } from "./types"
 
 /**
@@ -26,37 +27,52 @@ import type { BranchPlan, SelectedLine } from "./types"
  * Quantities are editable in place because this is the first screen that shows
  * a branch its own final numbers. A change applies to that branch alone unless
  * the user asks for it everywhere, since the whole point of reviewing per branch
- * is to be able to treat one branch differently from the rest.
+ * is to be able to treat one branch differently from the rest. For the same
+ * reason each location can be opened on its own to add products only it needs.
  */
 export function ReviewStep({
+  groupId,
   groupName,
   branchPlans,
   notes,
   poNumber,
   submitting,
+  checkingInvoices,
   onNotesChange,
   onPoNumberChange,
   onQuantityChange,
   onApplyQuantityToAll,
+  onReplaceBranchLines,
   onRemoveBranch,
   onBack,
   onSubmit,
 }: Readonly<{
+  /** The group the catalogue is narrowed by when adding to one location. */
+  groupId: number | null
   groupName: string
   branchPlans: BranchPlan[]
   notes: string
   poNumber: string
   submitting: boolean
+  checkingInvoices: boolean
   onNotesChange: (notes: string) => void
   onPoNumberChange: (poNumber: string) => void
   onQuantityChange: (organizationInventoryId: number, quantity: number, branchId: number) => void
   onApplyQuantityToAll: (organizationInventoryId: number, sourceBranchId: number) => void
+  /** Swap in one location's edited lines; false when the edit was refused. */
+  onReplaceBranchLines: (branchId: number, lines: SelectedLine[]) => boolean
   onRemoveBranch: (branchId: number) => void
   onBack: () => void
   onSubmit: () => void
 }>) {
   const grandTotalCents = branchPlans.reduce((sum, plan) => sum + plan.totalCents, 0)
   const totalLines = branchPlans.reduce((sum, plan) => sum + plan.lines.length, 0)
+  const busy = submitting || checkingInvoices
+  const [editingBranchId, setEditingBranchId] = useState<number | null>(null)
+  // Looked up live, so a location that leaves the order closes its editor.
+  const editingPlan = editingBranchId === null
+    ? null
+    : branchPlans.find((plan) => plan.branch.id === editingBranchId) ?? null
 
   /** How many branches receive each product, so "apply to all" can say how many. */
   const branchesPerProduct = useMemo(() => {
@@ -100,7 +116,7 @@ export function ReviewStep({
           </h2>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{groupName}</p>
         </div>
-        <Button type="button" variant="outline" size="sm" className="w-fit gap-2" onClick={onBack} disabled={submitting}>
+        <Button type="button" variant="outline" size="sm" className="w-fit gap-2" onClick={onBack} disabled={busy}>
           <ArrowLeft className="h-4 w-4" />
           Keep adding
         </Button>
@@ -127,7 +143,9 @@ export function ReviewStep({
           <span>
             Quantities can still be changed here. An edit applies to that location only — use{" "}
             <span className="font-medium">Apply to all</span> to give every location the same
-            quantity. Setting a quantity to zero removes that line.
+            quantity. Setting a quantity to zero removes that line. Use{" "}
+            <span className="font-medium">Edit items</span> on a location to add products for that
+            location alone.
           </span>
         </CardContent>
       </Card>
@@ -158,12 +176,24 @@ export function ReviewStep({
                   <span className="font-mono text-sm">{formatPKR(plan.totalCents / 100)}</span>
                   <Button
                     type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 gap-1.5 px-2 text-xs"
+                    aria-label={`Edit items for ${plan.branch.name}`}
+                    disabled={busy}
+                    onClick={() => setEditingBranchId(plan.branch.id)}
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                    Edit items
+                  </Button>
+                  <Button
+                    type="button"
                     variant="ghost"
                     size="icon"
                     className="h-7 w-7 text-slate-400 hover:text-rose-600"
                     aria-label={`Remove ${plan.branch.name} from this group order`}
                     title="Remove this location from the group order"
-                    disabled={submitting}
+                    disabled={busy}
                     onClick={() => onRemoveBranch(plan.branch.id)}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
@@ -192,7 +222,7 @@ export function ReviewStep({
                         line={line}
                         branchName={plan.branch.name}
                         sharedBranchCount={branchesPerProduct.get(line.organizationInventoryId) ?? 1}
-                        disabled={submitting}
+                        disabled={busy}
                         onQuantityChange={(quantity) =>
                           onQuantityChange(line.organizationInventoryId, quantity, plan.branch.id)}
                         onApplyToAll={() =>
@@ -207,6 +237,13 @@ export function ReviewStep({
         ))}
       </div>
 
+      <ReviewLocationEditor
+        plan={editingPlan}
+        groupId={groupId}
+        onClose={() => setEditingBranchId(null)}
+        onApply={(lines) => editingPlan !== null && onReplaceBranchLines(editingPlan.branch.id, lines)}
+      />
+
       <div className="space-y-2">
         <label htmlFor="group-order-po-number" className="text-sm font-medium text-slate-700 dark:text-slate-200">
           Purchase order number (optional)
@@ -218,7 +255,7 @@ export function ReviewStep({
           maxLength={MAX_PO_NUMBER_LENGTH}
           placeholder="e.g. PO-2026-0148"
           autoComplete="off"
-          disabled={submitting}
+          disabled={busy}
         />
         <p className="text-xs text-slate-500 dark:text-slate-400">
           Your own reference. Printed as P.O.# on the invoice for every location in this group order.
@@ -237,17 +274,19 @@ export function ReviewStep({
           maxLength={2000}
           rows={3}
           placeholder="Anything the approver should know. Added to every branch order in this group."
-          disabled={submitting}
+          disabled={busy}
         />
       </div>
 
       <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-        <Button type="button" variant="outline" onClick={onBack} disabled={submitting}>
+        <Button type="button" variant="outline" onClick={onBack} disabled={busy}>
           Back
         </Button>
-        <Button type="button" className="gap-2" onClick={onSubmit} disabled={submitting || branchPlans.length === 0}>
-          {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-          {submitting ? "Submitting…" : `Submit group order (${branchPlans.length})`}
+        <Button type="button" className="gap-2" onClick={onSubmit} disabled={busy || branchPlans.length === 0}>
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+          {checkingInvoices
+            ? "Checking invoices…"
+            : (submitting ? "Submitting…" : `Submit group order (${branchPlans.length})`)}
         </Button>
       </div>
     </div>

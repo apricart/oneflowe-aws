@@ -4,9 +4,12 @@ import {
   type OrderSplitFilter,
   type OrderStatusFilter,
 } from "@/lib/order-status"
+import { isUnacknowledgedDelivery } from "@/lib/unacknowledged-delivery-block"
+import type { OrderDeliveryFilter } from "@/lib/unacknowledged-orders"
 
 export type OrderListViewSource = {
   status?: string | null
+  fulfillmentStatus?: string | null
   refundAmountCents?: number | null
   createdAt: string | Date
 }
@@ -14,6 +17,8 @@ export type OrderListViewSource = {
 export type OrderListViewOptions = {
   statusFilter: OrderStatusFilter
   splitFilter: OrderSplitFilter
+  /** The "Delivered · Unfulfilled" tab: approved orders whose goods have arrived. */
+  deliveryFilter?: OrderDeliveryFilter | null
 }
 
 /**
@@ -28,9 +33,13 @@ export type OrderListViewOptions = {
  */
 export function selectOrdersForListView<T extends OrderListViewSource>(
   orders: readonly T[],
-  { statusFilter, splitFilter }: OrderListViewOptions,
+  { statusFilter, splitFilter, deliveryFilter = null }: OrderListViewOptions,
 ): T[] {
   let filtered = [...orders]
+
+  if (deliveryFilter === "unacknowledged") {
+    filtered = filtered.filter((order) => isUnacknowledgedDelivery(order))
+  }
 
   if (statusFilter !== "all") {
     if (statusFilter === "refunded") {

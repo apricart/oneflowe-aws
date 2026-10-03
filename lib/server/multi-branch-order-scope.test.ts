@@ -109,19 +109,31 @@ describe("order list creator-role filter", () => {
 
   it("takes the role from an allowlist and binds it as a parameter", () => {
     expect(orders).toContain("parseOrderCreatorRoleFilter(params.createdByRole)")
-    expect(orders).toContain("eq(roles.name, creatorRole)")
+    // The predicate itself moved to `lib/server/order-creator-role-sql.ts` when
+    // the filter began reading the role recorded on the order rather than the
+    // creator's role today. The guarantee is unchanged and is asserted where
+    // the expression now lives: the value is bound through drizzle's `eq`,
+    // never interpolated.
+    expect(orders).toContain("orderCreatedByRoleMatches(creatorRole)")
+    const creatorRoleSql = source("lib/server/order-creator-role-sql.ts")
+    expect(creatorRoleSql).toContain("eq(orders.createdByRole, creatorRole)")
+    expect(creatorRoleSql).toContain("eq(roles.name, creatorRole)")
     // Nothing the caller sends is ever concatenated into the fragment.
     expect(orders).not.toContain("sql.raw(params.createdByRole")
+    expect(creatorRoleSql).not.toContain("sql.raw(")
   })
 
   it("refuses a malformed value rather than ignoring it", () => {
-    expect(orders).toContain("if (!creatorFilter.ok) return NextResponse.json({ error: creatorFilter.message }, { status: 400 })")
+    // Parsed with the other list filters and the sort in `parseOrderListQuery`,
+    // whose first refusal the handler answers with 400.
+    expect(orders).toContain("if (!creatorFilter.ok) return { ok: false, error: creatorFilter.message }")
+    expect(orders).toContain("if (!listQuery.ok) return NextResponse.json({ error: listQuery.error }, { status: 400 })")
   })
 
   it("applies the filter before the summary snapshot is taken", () => {
     // Otherwise the status counts would describe the whole branch scope while
     // the rows beneath them described only one role's orders.
-    const creatorAt = orders.indexOf("addOrderCreatorRoleCondition(conditions, creatorFilter.role)")
+    const creatorAt = orders.indexOf("addOrderCreatorRoleCondition(conditions, listQuery.creatorRole)")
     const summaryAt = orders.indexOf("const summaryConditions = [...conditions]")
     expect(creatorAt).toBeGreaterThan(-1)
     expect(summaryAt).toBeGreaterThan(creatorAt)

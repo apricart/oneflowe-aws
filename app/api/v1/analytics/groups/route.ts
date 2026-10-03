@@ -7,6 +7,7 @@ import { and, eq, sql, isNull, gte, lte, desc, inArray } from "drizzle-orm"
 import { metricExpressions, REVENUE_ELIGIBLE_FILTER } from "@/lib/metric-utils"
 import { redactAnalyticsPrices, shouldHidePricesForRole } from "@/lib/price-visibility"
 import { buildAppMonthPeriods, getAppMonthPeriod, parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
+import { budgetEnabledBranchSql } from "@/lib/server/organization-budget-policy"
 
 const nonDeletedGroupCondition = sql`${groups.status} != 'deleted'`
 
@@ -178,7 +179,13 @@ async function loadGroupSupportingData(context: any) {
             period: budgets.period,
             amountAllocatedCents: budgets.amountAllocatedCents,
             amountCreditedCents: budgets.amountCreditedCents,
-        }).from(branches).leftJoin(budgets, and(eq(budgets.branchId, branches.id), inArray(budgets.period, context.periods)))
+        // A tenant with budget allocation off contributes no budget: its kept
+        // ledger rows are not joined, while its branches still list below.
+        }).from(branches).leftJoin(budgets, and(
+            eq(budgets.branchId, branches.id),
+            inArray(budgets.period, context.periods),
+            budgetEnabledBranchSql(),
+        ))
             .where(inArray(branches.groupId, context.groupIds)),
         db.select({
             id: branches.id,
@@ -329,6 +336,9 @@ export async function GET(req: NextRequest) {
                 status: groups.status,
                 organizationId: groups.organizationId,
                 organizationName: organizations.name,
+                // The page shows "Off" rather than PKR 0 for a tenant whose
+                // budget allocation is switched off.
+                budgetsEnabled: sql<boolean>`bool_and(${organizations.budgetsEnabled})`,
                 totalOrders: sql<number>`count(${orders.id})::int`,
                 totalAmountCents: metricExpressions.revenue,
                 totalRefundCents: sql<number>`coalesce(sum(${orders.refundAmountCents}), 0)::int`,

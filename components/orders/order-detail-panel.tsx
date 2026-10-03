@@ -153,10 +153,13 @@ export function OrderDetailPanel({
                       <Package className="h-7 w-7 stroke-[1.5]" />
                     </div>
                     <div>
-                      <p className="text-[10px] font-bold text-indigo-400/80 dark:text-indigo-500 uppercase tracking-widest mb-0.5">Order ID</p>
+                      <p className="text-[10px] font-bold text-indigo-400/80 dark:text-indigo-500 uppercase tracking-widest mb-0.5">Transaction ID</p>
                       <h2 className="font-mono text-lg font-black text-slate-800 dark:text-slate-100 tracking-wider">
                         {order.tid}
                       </h2>
+                      <p className="mt-1 text-[10px] font-medium text-slate-500 dark:text-slate-400">
+                        Order ID <span className="font-mono">#{order.id}</span>
+                      </p>
                     </div>
                   </div>
                   {(() => {

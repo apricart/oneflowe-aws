@@ -23,7 +23,6 @@ import {
   panelSegmentation,
   panelsForFocus,
   resolveDrillDownSort,
-  resolveGrain,
   resolveSortDirection,
 } from "./executive-analytics"
 import {
@@ -188,29 +187,23 @@ describe("the side-by-side panel registry", () => {
     expect(panelSegmentation(byProduct, 25)).toBe("user")
   })
 
-  it("labels the product columns with both figures, and only a column panel with both to print", () => {
-    // "Twelve reams for 142,800" is one reading of the product panel; without
-    // it the reader flips Amount ⇄ Quantity and holds the first figure in
-    // their head. Only the printing changes — the column height is still
-    // whichever measure the toggle is on.
-    const dual = SIDE_BY_SIDE_PANELS.filter((panel) => panel.dualValueLabels)
-    expect(dual.map((panel) => panel.id)).toEqual(["by-product"])
-    for (const panel of dual) {
-      expect(panel.chart, panel.id).toBe("column")
-      // A budget beside already gives the column a companion; a second pair of
-      // figures over the pair would read as four.
-      expect(panel.budgetBeside ?? false, panel.id).toBe(false)
-      // Load-bearing: both figures are read off the row, and an order-grain row
-      // carries `quantity: 0`. Under either measure, and focused or not, this
-      // panel has to resolve to line grain or the quantity line prints a zero.
-      for (const measure of ["amount", "quantity"] as const) {
-        for (const lineScoped of [false, true]) {
-          expect(
-            resolveGrain(panel.dimension, MEASURE_METRIC[measure], { lineScoped }),
-            `${panel.id} under ${measure}${lineScoped ? ", focused" : ""}`,
-          ).toBe("line")
-        }
-      }
+  it("labels every column panel with both figures, the budget panels included", () => {
+    // "Twelve reams for 142,800" is one reading of a column; without it the
+    // reader flips Amount ⇄ Quantity and holds the first figure in their head.
+    // Only the printing changes — the column height is still whichever
+    // measure the toggle is on. Beside a budget the pair labels the value
+    // column alone. This once applied to the product panel only, because an
+    // order-grain row carried `quantity: 0`; the compare route now fills an
+    // order-grain row's quantity from its lines (`loadLineQuantities`, pinned
+    // in the queries contract test and checked against the Quantity measure in
+    // the integration suite), so the requester, branch and month panels print
+    // a real figure under Amount too.
+    const columns = SIDE_BY_SIDE_PANELS.filter((panel) => panel.chart === "column")
+    expect(columns.map((panel) => panel.id)).toEqual(["by-product", "by-category", "by-requester", "by-branch", "by-month"])
+    for (const panel of columns) expect(panel.dualValueLabels, panel.id).toBe(true)
+    // A trend has no column to print over.
+    for (const panel of SIDE_BY_SIDE_PANELS.filter((entry) => entry.chart !== "column")) {
+      expect(panel.dualValueLabels ?? false, panel.id).toBe(false)
     }
   })
 

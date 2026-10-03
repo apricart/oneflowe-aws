@@ -238,6 +238,13 @@ function drawPartyGrid(doc: any, receiptData: any, itemQuantity: number, x: numb
     if (receiptData.organizationName) {
         deliverTo.push({ value: receiptData.organizationName })
     }
+    // `buyerAddress` already *is* the chosen delivery address when the order
+    // named one — it is snapshotted that way at creation. The label is printed
+    // beside it so a reader can tell which of a branch's addresses the goods
+    // were sent to, rather than having to recognise the street.
+    if (receiptData.deliveryAddressLabel) {
+        deliverTo.push({ label: "Deliver to:", value: toDisplayNameCase(String(receiptData.deliveryAddressLabel)) })
+    }
     deliverTo.push({ label: "Address:", value: toDisplayNameCase(receiptData.buyerAddress || "-") })
     deliverTo.push({ label: "Phone:", value: String(receiptData.placedByPhone || receiptData.buyerPhone || "N/A") })
     deliverTo.push({ label: "Initiator:", value: toDisplayNameCase(receiptData.placedByName || "N/A") })

@@ -442,6 +442,49 @@ describe.skipIf(!hasTestDatabase)("Product Performance — executive analytics r
     })
   })
 
+  describe("quantity beside the amount on every column", () => {
+    // Under Amount a requester, branch or month row is an order-grain total
+    // and once carried a quantity of 0. Every column now prints both figures,
+    // so each row must carry the very figure the Quantity measure reports for
+    // the same entity — under both status populations.
+    for (const statuses of ["revenue", "consumed"] as const) {
+      it(`carries the Quantity measure's own figure on every requester, branch and month row (${statuses})`, async () => {
+        for (const dimension of ["user", "branch", "month"] as const) {
+          const [amount, quantity] = await Promise.all([
+            compare({ dimension, metric: "spend", chart: "column", statuses }),
+            compare({ dimension, metric: "quantity", chart: "column", statuses }),
+          ])
+          const units = new Map(quantity.body.rows.map((row: any) => [row.key, row.value]))
+          expect(amount.body.rows.length, dimension).toBeGreaterThan(0)
+          for (const row of amount.body.rows) {
+            expect(row.quantity, `${dimension} ${row.label}`).toBe(units.get(row.key))
+          }
+        }
+      })
+    }
+
+    it("reports the worked branch quantities beside the branch amounts", async () => {
+      const { body } = await compare({ dimension: "branch", metric: "spend", chart: "column" })
+      expect(body.rows.map((row: any) => [row.label, row.value, row.quantity])).toEqual([
+        [f.names.south, 16500, 60], [f.names.north, 15000, 36],
+      ])
+    })
+
+    it("carries quantity and amount on every point of an order-grain trend", async () => {
+      const [trend, totals] = await Promise.all([
+        compare({ dimension: "user", metric: "spend", chart: "line", limit: 6 }),
+        compare({ dimension: "user", metric: "quantity", chart: "column" }),
+      ])
+      const units = new Map(totals.body.rows.map((row: any) => [row.key, row.value]))
+      for (const series of trend.body.series) {
+        // Under Amount the drawn value is the amount itself.
+        for (const point of series.points) expect(point.spendCents).toBe(point.value)
+        const quantity = series.points.reduce((sum: number, point: any) => sum + point.quantity, 0)
+        expect(quantity, series.label).toBe(units.get(series.key))
+      }
+    })
+  })
+
   describe("Product Performance Amount as Consumed", () => {
     const consumedCompare = (query: Query) => compare({ ...query, statuses: "consumed" })
 

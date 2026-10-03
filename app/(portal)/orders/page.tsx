@@ -20,16 +20,28 @@ import {
   CheckCircle,
   Clock,
   TrendingDown,RefreshCw,XCircle,ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  PackageCheck,
+  Truck,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAppContext } from "@/components/context/app-context"
 import { OrderExport } from "@/components/orders/order-export"
 import { OrdersDirectory } from "@/components/orders/orders-directory"
+import { useTableSort } from "@/components/reports/sortable-header"
+import type { OrderListSortKey } from "@/lib/list-sort-keys"
+import { appendSortParams,type SortDirection } from "@/lib/table-sort"
 import { GlobalDateFilter,type FilterPreset,type GlobalDateFilterChange } from "@/components/dashboard/global-date-filter"
 import { startOfDay,endOfDay } from "date-fns"
 import { BranchFilter } from "@/components/reports/branch-filter"
 import { GroupFilter } from "@/components/reports/group-filter"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import {
   getOrderFulfillmentVariant,
   getOrderStatusFilter,
@@ -37,6 +49,18 @@ import {
   type OrderStatusFilter,
 } from "@/lib/order-status"
 import { selectOrdersForListView } from "@/lib/order-list-view"
+import {
+  DELIVERED_UNFULFILLED_LABEL,
+  ORDER_DELIVERY_FILTER_UNACKNOWLEDGED,
+  parseOrderDeliveryFilter,
+  type OrderDeliveryFilter,
+} from "@/lib/unacknowledged-orders"
+import {
+  FULFILLMENT_STATUS_LABELS,
+  FULFILLMENT_STATUSES,
+  parseFulfillmentStatusFilter,
+  type FulfillmentStatus,
+} from "@/lib/fulfillment-status"
 
 type DateRange = {
   startDate: Date
@@ -98,9 +122,33 @@ export default function OrdersManagementPage() {
   )
 }
 
+/**
+ * The tab a link asks for. `?delivery=unacknowledged` opens the
+ * "Delivered · Unfulfilled" tab, which rides on the approved status filter;
+ * any other delivery value is ignored here and refused by the API.
+ */
+function requestedListTab(searchParams: Pick<URLSearchParams, "get">): {
+  statusFilter: OrderStatusFilter
+  deliveryFilter: OrderDeliveryFilter | null
+  fulfillmentStatusFilter: FulfillmentStatus | null
+} {
+  const delivery = parseOrderDeliveryFilter(searchParams.get("delivery"))
+  const deliveryFilter = delivery.ok ? delivery.filter : null
+  const fulfillmentStatus = parseFulfillmentStatusFilter(searchParams.get("fulfillmentStatus"))
+  return {
+    statusFilter: deliveryFilter ? "approved" : getOrderStatusFilter(searchParams.get("status")),
+    deliveryFilter,
+    fulfillmentStatusFilter: fulfillmentStatus.ok ? fulfillmentStatus.filter : null,
+  }
+}
+
 function OrdersManagementContent() {
   const searchParams = useSearchParams()
-  const requestedStatusFilter = getOrderStatusFilter(searchParams.get("status"))
+  const {
+    statusFilter: requestedStatusFilter,
+    deliveryFilter: requestedDeliveryFilter,
+    fulfillmentStatusFilter: requestedFulfillmentStatusFilter,
+  } = requestedListTab(searchParams)
   const { data: session } = useSession()
   const {
     organizationId,
@@ -119,12 +167,25 @@ function OrdersManagementContent() {
   const [searchQuery, setSearchQuery] = useState("")
   const debouncedSearchQuery = useDebounce(searchQuery.trim(), 300)
   const [currentPage, setCurrentPage] = useState(1)
+  // Sorted on the server, so it covers every page; it starts at the order the
+  // list already used (newest first). A new sort starts again from page 1.
+  const { sort: orderSort, toggleSort: toggleOrderSort } = useTableSort<OrderListSortKey>({ key: "orderDate", direction: "desc" })
+  const handleOrderSort = useCallback((key: OrderListSortKey, firstDirection?: SortDirection) => {
+    toggleOrderSort(key, firstDirection)
+    setCurrentPage(1)
+  }, [toggleOrderSort])
   const [dateRange, setDateRange] = useState<DateRange | null>(null)
   const [activePreset, setActivePreset] = useState<FilterPreset>("all")
   const [selectedMonths, setSelectedMonths] = useState<number[]>([])
   const [selectedYears, setSelectedYears] = useState<number[]>([])
   const [statusFilter, setStatusFilter] = useState<OrderStatusFilter>(requestedStatusFilter)
   const [splitFilter, setSplitFilter] = useState<OrderSplitFilter>("all")
+  // Delivered orders still waiting to be fulfilled are a slice of Active, shown
+  // as their own tab. It rides on the approved status filter.
+  const [deliveryFilter, setDeliveryFilter] = useState<OrderDeliveryFilter | null>(requestedDeliveryFilter)
+  const [fulfillmentStatusFilter, setFulfillmentStatusFilter] = useState<FulfillmentStatus | null>(
+    requestedFulfillmentStatusFilter,
+  )
   // Local Hierarchical Filter State
   const [reportBranchIds, setReportBranchIds] = useState<string[]>([])
   const [reportGroupIds, setReportGroupIds] = useState<string[]>([])
@@ -132,7 +193,9 @@ function OrdersManagementContent() {
   useEffect(() => {
     setCurrentPage(1)
     setStatusFilter(requestedStatusFilter)
-  }, [requestedStatusFilter])
+    setDeliveryFilter(requestedDeliveryFilter)
+    setFulfillmentStatusFilter(requestedFulfillmentStatusFilter)
+  }, [requestedStatusFilter, requestedDeliveryFilter, requestedFulfillmentStatusFilter])
 
 
   const handleDateChange = useCallback(({ range, preset, months = [], years = [] }: GlobalDateFilterChange) => {
@@ -152,6 +215,8 @@ function OrdersManagementContent() {
     selectedMonths.length > 0 ||
     selectedYears.length > 0 ||
     statusFilter !== "all" ||
+    deliveryFilter !== null ||
+    fulfillmentStatusFilter !== null ||
     splitFilter !== "all"
 
   const resetOrderFilters = useCallback(() => {
@@ -164,6 +229,8 @@ function OrdersManagementContent() {
     setSelectedMonths([])
     setSelectedYears([])
     setStatusFilter("all")
+    setDeliveryFilter(null)
+    setFulfillmentStatusFilter(null)
     setSplitFilter("all")
   }, [])
 
@@ -230,20 +297,29 @@ function OrdersManagementContent() {
       params.set("status", statusFilter)
     }
 
+    if (deliveryFilter) {
+      params.set("delivery", deliveryFilter)
+    }
+
+    if (fulfillmentStatusFilter) {
+      params.set("fulfillmentStatus", fulfillmentStatusFilter)
+    }
+
     if (debouncedSearchQuery) {
       params.set("q", debouncedSearchQuery)
     }
 
     return params.toString()
-  }, [organizationId, branchId, branchIds, reportBranchIds, reportGroupIds, dateRange, selectedMonths, selectedYears, statusFilter, isInitialized, debouncedSearchQuery])
+  }, [organizationId, branchId, branchIds, reportBranchIds, reportGroupIds, dateRange, selectedMonths, selectedYears, statusFilter, isInitialized, debouncedSearchQuery, deliveryFilter, fulfillmentStatusFilter])
 
   const ordersEndpoint = useMemo(() => {
     if (ordersQuery === null) return null
     const params = new URLSearchParams(ordersQuery)
     params.set("page", currentPage.toString())
     params.set("limit", ORDERS_PAGE_SIZE.toString())
+    appendSortParams(params, orderSort)
     return `/api/v1/orders?${params.toString()}`
-  }, [ordersQuery, currentPage])
+  }, [ordersQuery, currentPage, orderSort])
 
   // Fetch orders scoped by context
   const { data: ordersData, mutate: mutateOrders, isValidating } = useSWR<any>(
@@ -267,8 +343,8 @@ function OrdersManagementContent() {
 
   // Filter and search orders
   const filteredOrders = useMemo(
-    () => selectOrdersForListView<OrderItem>(orders, { statusFilter, splitFilter }),
-    [orders, splitFilter, statusFilter],
+    () => selectOrdersForListView<OrderItem>(orders, { statusFilter, splitFilter, deliveryFilter }),
+    [orders, splitFilter, statusFilter, deliveryFilter],
   )
 
   // Export covers the whole filtered scope, not the page on screen. The list is
@@ -301,8 +377,8 @@ function OrdersManagementContent() {
       pages.forEach((data) => collected.push(...(data?.items || [])))
     }
 
-    return selectOrdersForListView<OrderItem>(collected, { statusFilter, splitFilter })
-  }, [ordersQuery, splitFilter, statusFilter])
+    return selectOrdersForListView<OrderItem>(collected, { statusFilter, splitFilter, deliveryFilter })
+  }, [ordersQuery, splitFilter, statusFilter, deliveryFilter])
 
   // Approve order
 
@@ -471,29 +547,56 @@ function OrdersManagementContent() {
                     ["fulfilled", "Fulfilled"],
                     ["rejected", "Rejected"],
                     ["refunded", "Refunded"],
-                  ] as [OrderStatusFilter, string][]).map(([status, label]) => (
+                  ] as [OrderStatusFilter, string][]).map(([status, label]) => {
+                    const isSelected = statusFilter === status && deliveryFilter === null
+                    return (
                     <Button
                       key={status}
                       onClick={() => {
                         setCurrentPage(1)
                         setStatusFilter(status)
+                        setDeliveryFilter(null)
                       }}
-                      variant={statusFilter === status ? "secondary" : "ghost"}
+                      variant={isSelected ? "secondary" : "ghost"}
                       size="sm"
-                      className={`px-3 h-8 text-xs font-bold rounded-lg transition-all duration-200 shrink-0 ${statusFilter === status
+                      className={`px-3 h-8 text-xs font-bold rounded-lg transition-all duration-200 shrink-0 ${isSelected
                         ? "bg-white dark:bg-slate-700 shadow-sm text-slate-900 dark:text-white"
                         : "text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200"
                         }`}
                     >
                       {label}
                     </Button>
-                  ))}
+                    )
+                  })}
+                  <Button
+                    onClick={() => {
+                      setCurrentPage(1)
+                      setStatusFilter("approved")
+                      setDeliveryFilter(ORDER_DELIVERY_FILTER_UNACKNOWLEDGED)
+                      setFulfillmentStatusFilter(null)
+                    }}
+                    variant={deliveryFilter ? "secondary" : "ghost"}
+                    size="sm"
+                    title="Active orders whose goods have been delivered but which are not yet fulfilled"
+                    className={cn(
+                      "h-8 shrink-0 gap-1.5 rounded-lg px-3 text-xs font-bold transition-all duration-200",
+                      deliveryFilter
+                        ? "bg-white text-amber-700 shadow-sm dark:bg-slate-700 dark:text-amber-300"
+                        : "text-amber-700 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-300",
+                    )}
+                  >
+                    <PackageCheck className="h-3.5 w-3.5" aria-hidden="true" />
+                    {DELIVERED_UNFULFILLED_LABEL}
+                    <span className="rounded-full bg-amber-100 px-1.5 text-[10px] text-amber-800 dark:bg-amber-900/50 dark:text-amber-200">
+                      {Number(statusCounts.deliveredUnacknowledged || 0)}
+                    </span>
+                  </Button>
                 </div>
 
                 <div className="group relative w-full min-w-0 sm:w-[280px] sm:shrink-0">
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400 transition-colors group-focus-within:text-indigo-500" />
                   <Input
-                    placeholder="Search by TID, ID, or cost center..."
+                    placeholder="Search by transaction ID, order ID, or cost center..."
                     className="pl-9 h-8 text-[11px] font-bold bg-white dark:bg-slate-900/50 border-slate-200 dark:border-slate-800 rounded-xl focus:ring-1 focus:ring-indigo-500/30 transition-all shadow-sm"
                     value={searchQuery}
                     onChange={(e) => {
@@ -506,6 +609,31 @@ function OrdersManagementContent() {
 
               {/* Right Side: Environment Filters & Actions */}
               <div className="flex w-full flex-wrap items-center justify-end gap-2 rounded-2xl 2xl:w-auto 2xl:shrink-0 2xl:flex-nowrap">
+                <Select
+                  value={fulfillmentStatusFilter ?? "all"}
+                  onValueChange={(value) => {
+                    setCurrentPage(1)
+                    setDeliveryFilter(null)
+                    setFulfillmentStatusFilter(value === "all" ? null : (value as FulfillmentStatus))
+                  }}
+                >
+                  <SelectTrigger
+                    aria-label="Filter by delivery status"
+                    className="h-10 w-[190px] rounded-xl border-slate-200 bg-white text-xs font-medium shadow-sm dark:border-slate-800 dark:bg-slate-900/50"
+                  >
+                    <Truck className="mr-2 h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
+                    <SelectValue placeholder="All delivery statuses" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All delivery statuses</SelectItem>
+                    {FULFILLMENT_STATUSES.map((status) => (
+                      <SelectItem key={status} value={status}>
+                        {FULFILLMENT_STATUS_LABELS[status]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+
                 <GlobalDateFilter
                   value={dateRange}
                   onChange={handleDateChange}
@@ -607,6 +735,8 @@ function OrdersManagementContent() {
               canDecideOrders={canDecideOrders}
               showCostCenterId={showCostCenterId}
               pricesHidden={Boolean(ordersData?.pricesHidden)}
+              sort={orderSort}
+              onSort={handleOrderSort}
               onUpdate={() => mutateOrders()}
             />
             {totalOrders > 0 && (

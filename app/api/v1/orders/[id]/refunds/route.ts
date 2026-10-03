@@ -6,6 +6,7 @@ import { refunds, orders, budgets, auditLogs, users, orderItems, refundItems, gl
 import { eq, sql, desc, inArray, and, isNull } from "drizzle-orm"
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
 import { releaseRefundedQuantityBudget } from "@/lib/server/product-quantity-budget-ledger"
+import { orderTakesBudget } from "@/lib/organization-budget-policy"
 import { orderSelectColumns } from "@/lib/order-select"
 import { calculateLineCents, formatQuantity, validateProductQuantity } from "@/lib/quantity"
 import { sendRefundRequestEmail } from "@/lib/email"
@@ -279,19 +280,24 @@ async function createApprovedRefund(tx: any, context: any) {
     processedByUserId: context.userId,
   }).returning({ id: refunds.id })
   await tx.update(refunds).set({ refundNumber: `Refund-${String(inserted.id).padStart(6, "0")}` }).where(eq(refunds.id, inserted.id))
-  // The order's own period, not today's: this money was held or spent on that
-  // row, and withdrawing it from any other would leave both months wrong.
-  const [budget] = await tx.select().from(budgets).where(and(
-    eq(budgets.branchId, context.order.branchId),
-    eq(budgets.period, budgetPeriodOf(context.lockedOrder.createdAt ?? context.order.createdAt)),
-  )).limit(1)
   const status = String(context.lockedOrder.status || "").toUpperCase()
-  if (budget) await tx.update(budgets).set(status === "FULFILLED" ? {
-    amountSpentCents: sql`GREATEST(0, ${budgets.amountSpentCents} - ${context.total})`, updatedAt: new Date(),
-  } : {
-    amountHeldCents: sql`GREATEST(0, ${budgets.amountHeldCents} - ${context.total})`, updatedAt: new Date(),
-  }).where(eq(budgets.id, budget.id))
-  await releaseRefundedQuantityBudget(tx, context.lockedOrder, context.details.map((item: any) => ({ orderItemId: item.orderItemId, quantity: item.quantity })))
+  // Only an order that took a hold when it was placed has budget to give back;
+  // one placed while its tenant had budgets off is refunded without touching
+  // any budget row, whatever the tenant's setting is now.
+  if (orderTakesBudget(context.lockedOrder)) {
+    // The order's own period, not today's: this money was held or spent on that
+    // row, and withdrawing it from any other would leave both months wrong.
+    const [budget] = await tx.select().from(budgets).where(and(
+      eq(budgets.branchId, context.order.branchId),
+      eq(budgets.period, budgetPeriodOf(context.lockedOrder.createdAt ?? context.order.createdAt)),
+    )).limit(1)
+    if (budget) await tx.update(budgets).set(status === "FULFILLED" ? {
+      amountSpentCents: sql`GREATEST(0, ${budgets.amountSpentCents} - ${context.total})`, updatedAt: new Date(),
+    } : {
+      amountHeldCents: sql`GREATEST(0, ${budgets.amountHeldCents} - ${context.total})`, updatedAt: new Date(),
+    }).where(eq(budgets.id, budget.id))
+    await releaseRefundedQuantityBudget(tx, context.lockedOrder, context.details.map((item: any) => ({ orderItemId: item.orderItemId, quantity: item.quantity })))
+  }
   const isFullRefund = context.approved + context.total >= Number(context.lockedOrder.totalCents)
   await tx.update(orders).set({
     refundAmountCents: sql`COALESCE(${orders.refundAmountCents}, 0) + ${context.total}`,

@@ -5,6 +5,8 @@ import { db } from "@/lib/db"
 import { orders, orderItems, organizations, branches, users, budgets, auditLogs, refunds, refundItems, globalProducts } from "@/db/schema"
 import { eq, or, ilike, sql, and, desc, ne } from "drizzle-orm"
 import { releaseRefundedQuantityBudget } from "@/lib/server/product-quantity-budget-ledger"
+import { orderTakesBudget } from "@/lib/organization-budget-policy"
+import { orderSelectColumns } from "@/lib/order-select"
 import { calculateLineCents, formatQuantity, validateProductQuantity } from "@/lib/quantity"
 import { resolveAdminRefundReason } from "@/lib/admin-refund-approval"
 import { adminRefundProcessSchema, validationMessage } from "@/lib/server/mutation-validation"
@@ -509,6 +511,7 @@ export async function POST(req: NextRequest) {
                     totalCents: orders.totalCents,
                     refundAmountCents: orders.refundAmountCents,
                     receiptData: orders.receiptData,
+                    budgetTracked: orderSelectColumns.budgetTracked,
                 })
                 .from(orders)
                 .where(eq(orders.id, orderId))
@@ -582,18 +585,24 @@ export async function POST(req: NextRequest) {
                 .where(eq(orders.id, orderId))
 
             // 2. Credit branch budget (add back the refunded amount)
-            // Must match the current month's budget period
+            // Must match the current month's budget period. An order that took
+            // no budget hold when it was placed is refunded without touching any
+            // budget: crediting it would hand the branch money it never spent
+            // from its budget.
+            const refundTouchesBudget = orderTakesBudget(lockedOrder)
             const currentMonth = new Date().toISOString().slice(0, 7) // YYYY-MM format
-            const [budget] = await tx
+            const [budget] = refundTouchesBudget ? await tx
                 .select()
                 .from(budgets)
                 .where(and(
                     eq(budgets.branchId, orderData.branchId),
                     eq(budgets.period, currentMonth)
                 ))
-                .limit(1)
+                .limit(1) : []
 
-            if (budget) {
+            if (!refundTouchesBudget) {
+                // Nothing to credit; the quantity budget is left alone below too.
+            } else if (budget) {
                 // Credit refund amount back to budget (increases available funds)
                 await tx
                     .update(budgets)
@@ -608,7 +617,7 @@ export async function POST(req: NextRequest) {
                 console.warn(`[Refunds] No budget found for branch ${orderData.branchId}, period ${currentMonth}. Refund credit skipped.`)
             }
 
-            await releaseRefundedQuantityBudget(
+            if (refundTouchesBudget) await releaseRefundedQuantityBudget(
                 tx,
                 { ...orderData, status: liveCurrentStatus },
                 refundDetails.map((item) => ({

@@ -470,6 +470,90 @@
       "when": 1790802000000,
       "tag": "20260926200000_compact_product_price_history",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1790974800000,
+      "tag": "20260928120000_add_order_created_by_role",
+      "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1790978400000,
+      "tag": "20260928130000_snapshot_baseline",
+      "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1790982000000,
+      "tag": "20260929120000_add_organization_join",
+      "breakpoints": true
+    },
+    {
+      "idx": 70,
+      "version": "7",
+      "when": 1790985600000,
+      "tag": "20260929130000_add_branch_delivery_addresses",
+      "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1790989200000,
+      "tag": "20260929184428_add_password_reset_challenges",
+      "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1790992800000,
+      "tag": "20260930120000_add_organization_email_domain",
+      "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1790996400000,
+      "tag": "20260930150000_add_order_approval_required",
+      "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1791000000000,
+      "tag": "20260930160000_add_block_ordering_on_unpaid_invoices",
+      "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1791003600000,
+      "tag": "20260930170000_add_block_ordering_on_unacknowledged_deliveries",
+      "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1791007200000,
+      "tag": "20260930180000_add_product_requests",
+      "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1791010800000,
+      "tag": "20261001120000_add_organization_budgets_enabled",
+      "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1791014400000,
+      "tag": "20261003120000_add_product_request_review_stage",
+      "breakpoints": true
     }
   ]
 }

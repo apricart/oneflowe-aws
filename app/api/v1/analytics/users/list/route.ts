@@ -6,6 +6,7 @@ import { users, branches, roles } from "@/db/schema"
 import { and, eq, inArray, isNull, or, sql } from "drizzle-orm"
 import { ORDER_CREATOR_ROLES } from "@/lib/group-order-visibility"
 import { resolveUsersScopedToBranches } from "@/lib/server/multi-branch-scope"
+import { hasRaisedOrderAsRequesterSql, raisedOrderAtBranchesSql } from "@/lib/server/order-creator-role-sql"
 
 function parsePositiveIds(value: string | null): number[] {
     return value?.split(",").map(Number).filter((id) => !Number.isNaN(id) && id > 0) ?? []
@@ -77,14 +78,28 @@ export async function GET(req: NextRequest) {
         }
 
         if (branchIds.length > 0) {
-            // A multi-branch requester has no `users.branch_id` of its own — it
-            // reaches branches through its assignments — so a filter written
-            // only against that column drops it from the list even when it
-            // placed the orders being reported on.
+            // Three ways a person belongs to a branch for this filter, and all
+            // three are needed:
+            //
+            //  1. `users.branch_id` — a single-branch role, pinned there now.
+            //  2. an assignment — a group-based requester has no branch of its
+            //     own and reaches branches through its groups, so a filter
+            //     written only against that column drops it from the list even
+            //     when it placed the orders being reported on.
+            //  3. an order it actually raised there — the historical answer.
+            //     Assignments are deleted when a user moves off a group role,
+            //     and `users.branch_id` moves when a user is reassigned, so
+            //     without this a person's own past orders stay in the branch's
+            //     totals while the person disappears from the filter meant to
+            //     select them. `orders.branch_id` and `orders.created_by_role`
+            //     do not move, so this arm survives any role change.
             const scopedUserIds = await resolveUsersScopedToBranches(db, branchIds)
-            conditions.push(scopedUserIds.length > 0
-                ? or(inArray(users.branchId, branchIds), inArray(users.id, scopedUserIds))!
-                : inArray(users.branchId, branchIds))
+            const branchArms = [
+                inArray(users.branchId, branchIds),
+                raisedOrderAtBranchesSql(branchIds),
+            ]
+            if (scopedUserIds.length > 0) branchArms.push(inArray(users.id, scopedUserIds))
+            conditions.push(or(...branchArms)!)
         }
 
         const items = await db
@@ -99,7 +114,19 @@ export async function GET(req: NextRequest) {
             .innerJoin(roles, eq(users.roleId, roles.id))
             // Both roles raise orders, so both belong in a filter over the
             // people whose orders this report can show.
-            .where(and(...conditions, inArray(roles.name, [...ORDER_CREATOR_ROLES])))
+            //
+            // This is a union, not a swap. Current role alone drops a requester
+            // who has since been promoted, taking their historical orders out of
+            // reach of the filter that is supposed to find them; recorded role
+            // alone drops a requester who has not placed an order yet, so they
+            // could never be selected. The list needs both.
+            .where(and(
+                ...conditions,
+                or(
+                    inArray(roles.name, [...ORDER_CREATOR_ROLES]),
+                    hasRaisedOrderAsRequesterSql,
+                )!,
+            ))
             .groupBy(users.id, users.fullName, users.firstName, users.lastName, users.email, users.employeeId, users.branchId, users.organizationId)
             .orderBy(users.fullName)
             .limit(1000)

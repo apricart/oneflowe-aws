@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { alias } from "drizzle-orm/pg-core"
-import { and, count, desc, eq, gte, ilike, inArray, lte, or, sql } from "drizzle-orm"
+import { and, count, desc, eq, gte, ilike, inArray, lte, or, sql, type AnyColumn, type SQL } from "drizzle-orm"
 
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
@@ -20,6 +20,9 @@ import { parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
 import { redactAnalyticsPrices, shouldHidePricesForRole } from "@/lib/price-visibility"
 import { resolveMultiBranchAnalyticsIds } from "@/lib/server/analytics-scope"
 import { loadAnalyticsAssignedBranchIds } from "@/lib/server/analytics-branch-scope"
+import { REFUND_REPORT_PRICE_SORT_KEYS, REFUND_REPORT_SORT_KEYS, sortKeysForCaller, type RefundReportSortKey } from "@/lib/list-sort-keys"
+import { parseSortParams } from "@/lib/table-sort"
+import { orderBySortSql } from "@/lib/server/sort-sql"
 import {
     parseRequestedOrganizationIds,
     resolveAnalyticsOrganizationIds,
@@ -27,6 +30,37 @@ import {
 
 const requestedByUsers = alias(users, "refund_requested_by_users")
 const processedByUsers = alias(users, "refund_processed_by_users")
+
+// Read by the report row and by its sort, so the column and its order agree.
+const refundReasonSql = sql<string | null>`COALESCE(
+    NULLIF(BTRIM(${refunds.reason}), ''),
+    NULLIF(BTRIM(${orders.refundReason}), '')
+)`
+const refundQuantitySql = sql<number>`(
+    SELECT COALESCE(SUM(${refundItems.quantity}), 0)
+    FROM ${refundItems}
+    WHERE ${refundItems.refundId} = ${refunds.id}
+)`
+
+/**
+ * The expression each allowlisted Refund Report column sorts by. "Type" orders
+ * by the FULL / PARTIAL label the row already shows, not by the amounts.
+ */
+const REFUND_REPORT_SORT_SQL: Record<RefundReportSortKey, SQL | AnyColumn> = {
+    refundNumber: refunds.refundNumber,
+    refundDate: refunds.createdAt,
+    tid: orders.tid,
+    reason: sql`LOWER(${refundReasonSql})`,
+    requestedBy: sql`LOWER(COALESCE(${requestedByUsers.fullName}, ${requestedByUsers.email}))`,
+    organization: sql`LOWER(${organizations.name})`,
+    group: sql`LOWER(${groups.name})`,
+    branch: sql`LOWER(${branches.name})`,
+    status: sql`UPPER(${refunds.status})`,
+    refundType: sql`CASE WHEN ${refunds.amountCents} >= ${orders.totalCents} THEN 'FULL' ELSE 'PARTIAL' END`,
+    quantity: refundQuantitySql,
+    amount: refunds.amountCents,
+    processedBy: sql`LOWER(COALESCE(${processedByUsers.fullName}, ${processedByUsers.email}))`,
+}
 
 const parsePositiveIds = (value: string | null) => value
     ? Array.from(new Set(value.split(",").map(Number).filter((id) => Number.isInteger(id) && id > 0)))
@@ -228,6 +262,11 @@ export async function GET(req: NextRequest) {
             role,
             currentUser?.organizationId ?? sessionUser.organizationId,
         )
+        const requestedSort = parseSortParams(
+            searchParams,
+            sortKeysForCaller(REFUND_REPORT_SORT_KEYS, REFUND_REPORT_PRICE_SORT_KEYS, pricesHidden),
+        )
+        if (!requestedSort.ok) return NextResponse.json({ error: requestedSort.error }, { status: 400 })
         const respond = (payload: Record<string, unknown>) => NextResponse.json(
             pricesHidden
                 ? redactAnalyticsPrices({ ...payload, pricesHidden: true })
@@ -265,10 +304,7 @@ export async function GET(req: NextRequest) {
                 refundNumber: refunds.refundNumber,
                 amountCents: refunds.amountCents,
                 taxRefundCents: refunds.taxRefundCents,
-                reason: sql<string | null>`COALESCE(
-                    NULLIF(BTRIM(${refunds.reason}), ''),
-                    NULLIF(BTRIM(${orders.refundReason}), '')
-                )`,
+                reason: refundReasonSql,
                 status: refunds.status,
                 createdAt: refunds.createdAt,
                 updatedAt: refunds.updatedAt,
@@ -290,11 +326,7 @@ export async function GET(req: NextRequest) {
                 requestedByEmployeeId: requestedByUsers.employeeId,
                 processedByName: processedByUsers.fullName,
                 processedByEmail: processedByUsers.email,
-                quantityRefunded: sql<number>`(
-                    SELECT COALESCE(SUM(${refundItems.quantity}), 0)
-                    FROM ${refundItems}
-                    WHERE ${refundItems.refundId} = ${refunds.id}
-                )`.mapWith(Number),
+                quantityRefunded: refundQuantitySql.mapWith(Number),
                 itemCount: sql<number>`(
                     SELECT COUNT(*)
                     FROM ${refundItems}
@@ -309,7 +341,10 @@ export async function GET(req: NextRequest) {
                 .leftJoin(requestedByUsers, eq(refunds.requestedByUserId, requestedByUsers.id))
                 .leftJoin(processedByUsers, eq(refunds.processedByUserId, processedByUsers.id))
                 .where(whereClause)
-                .orderBy(desc(refunds.createdAt), desc(refunds.id))
+                // Newest first unless a column was chosen; the id keeps pages stable.
+                .orderBy(...(requestedSort.sort
+                    ? [orderBySortSql(REFUND_REPORT_SORT_SQL[requestedSort.sort.key], requestedSort.sort.direction), desc(refunds.id)]
+                    : [desc(refunds.createdAt), desc(refunds.id)]))
                 .limit(limit)
                 .offset(offset),
         ])

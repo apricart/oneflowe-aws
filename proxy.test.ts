@@ -182,6 +182,43 @@ describe("session policy proxy enforcement", () => {
     ["GROUP_ORDER_PORTAL", "/invoices/42", null],
     // The rest of each area stays exactly as closed as before.
     ["GROUP_ORDER_PORTAL", "/orders", "/group-portal"],
+    // The join queue is Head Office's alone. Super Admin is bounced too, and
+    // deliberately so: issuing a tenant's join code and deciding who joins it
+    // belong to that tenant's own gatekeeper (lib/organization-join-access.ts).
+    ["HEAD_OFFICE", "/join-requests", null],
+    ["SUPER_ADMIN", "/join-requests", "/dashboard"],
+    ["BRANCH_ADMIN", "/join-requests", "/dashboard"],
+    ["GROUP_USER", "/join-requests", "/dashboard"],
+    ["GROUP_ORDER_PORTAL", "/join-requests", "/group-portal"],
+    ["ORDER_PORTAL", "/join-requests", "/shop"],
+    // The read-only account reaches its dashboard and nothing else — not the
+    // shared invoice page, not the support area, not another role's portal.
+    // The proxy is navigation only; every endpoint refuses it besides.
+    ["VIEWER", "/dashboard", null],
+    ["VIEWER", "/orders", "/dashboard"],
+    ["VIEWER", "/orders/42", "/dashboard"],
+    ["VIEWER", "/users", "/dashboard"],
+    ["VIEWER", "/budgets", "/dashboard"],
+    ["VIEWER", "/budget-by-quantity", "/dashboard"],
+    ["VIEWER", "/reports", "/dashboard"],
+    ["VIEWER", "/reports/graphical", "/dashboard"],
+    ["VIEWER", "/settings", "/dashboard"],
+    ["VIEWER", "/inventory", "/dashboard"],
+    ["VIEWER", "/branch-inventory", "/dashboard"],
+    ["VIEWER", "/groups", "/dashboard"],
+    ["VIEWER", "/refunds", "/dashboard"],
+    ["VIEWER", "/products", "/dashboard"],
+    ["VIEWER", "/employee-management", "/dashboard"],
+    ["VIEWER", "/approvals", "/dashboard"],
+    ["VIEWER", "/branches", "/dashboard"],
+    ["VIEWER", "/join-requests", "/dashboard"],
+    ["VIEWER", "/organizations", "/dashboard"],
+    ["VIEWER", "/shop", "/dashboard"],
+    ["VIEWER", "/group-portal", "/dashboard"],
+    ["VIEWER", "/group-portal/bulk-order", "/dashboard"],
+    ["VIEWER", "/invoices/42", "/dashboard"],
+    ["VIEWER", "/receipts/42", "/dashboard"],
+    ["VIEWER", "/support", "/dashboard"],
   ])(
     "preserves %s routing for %s",
     async (role, path, redirectedPath) => {
@@ -200,6 +237,28 @@ describe("session policy proxy enforcement", () => {
       }
     },
   )
+
+  it.each(["/join", "/login"])("lets an unauthenticated caller reach %s", async (path) => {
+    // The public join page must work with no session — it is how somebody with
+    // no account asks to be let into an organization. It can create nothing:
+    // the endpoint behind it records a pending request and Head Office decides
+    // it (plans/OF-JOIN-organization-self-service-join.md).
+    mocks.getToken.mockResolvedValue(null)
+
+    const response = await proxy(request(path))
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get("x-middleware-next")).toBe("1")
+  })
+
+  it("does not let /join open the Head Office queue at /join-requests", async () => {
+    mocks.getToken.mockResolvedValue(null)
+
+    const response = await proxy(request("/join-requests"))
+
+    expect(response.status).toBe(307)
+    expect(response.headers.get("location")).toBe("https://app.test/login")
+  })
 
   it("leaves API authorization to the handlers while still applying no-store", async () => {
     // No session at all: the proxy neither redirects nor refuses an API
@@ -300,6 +359,7 @@ describe("pages for a session that still owes a password change, per role", () =
     ["HEAD_OFFICE", "/dashboard"],
     ["GROUP_ORDER_PORTAL", "/group-portal"],
     ["GROUP_USER", "/dashboard"],
+    ["VIEWER", "/dashboard"],
   ]
 
   it.each(homes)("sends a flagged %s from %s to /change-password", async (role, home) => {

@@ -15,6 +15,7 @@ import {
   queueSuperAdminApprovalNotifications,
 } from "@/lib/server/order-notifications"
 import { releaseHeldQuantityBudgetForOrder } from "@/lib/server/product-quantity-budget-ledger"
+import { orderTakesBudget } from "@/lib/organization-budget-policy"
 
 /**
  * The approve and reject transitions, extracted so every caller reaches them
@@ -210,29 +211,35 @@ export async function rejectOrder({
 
       if (!rejectedOrder) throw new Error("ORDER_TRANSITION_CONFLICT")
 
-      // 2. Restore budget
-      const orderMonth = budgetPeriodOf(rejectedOrder.createdAt)
+      // 2. Restore budget — only the hold this order took. An order placed
+      // while its tenant had budgets off holds nothing, and releasing its total
+      // would take it out of another order's hold.
+      if (orderTakesBudget(rejectedOrder)) {
+        const orderMonth = budgetPeriodOf(rejectedOrder.createdAt)
 
-      const [budget] = await tx.select().from(budgets).where(
-        and(
-          eq(budgets.branchId, rejectedOrder.branchId),
-          eq(budgets.period, orderMonth),
-        ),
-      ).limit(1)
+        const [budget] = await tx.select().from(budgets).where(
+          and(
+            eq(budgets.branchId, rejectedOrder.branchId),
+            eq(budgets.period, orderMonth),
+          ),
+        ).limit(1)
 
-      if (budget) {
-        const [releasedBudget] = await tx.update(budgets).set({
-          amountHeldCents: sql`${budgets.amountHeldCents} - ${rejectedOrder.totalCents}`,
-          updatedAt: new Date(),
-        }).where(and(
-          eq(budgets.id, budget.id),
-          gte(budgets.amountHeldCents, rejectedOrder.totalCents),
-        )).returning({ id: budgets.id })
-        if (!releasedBudget) throw new Error("BUDGET_LEDGER_INVARIANT")
+        if (budget) {
+          const [releasedBudget] = await tx.update(budgets).set({
+            amountHeldCents: sql`${budgets.amountHeldCents} - ${rejectedOrder.totalCents}`,
+            updatedAt: new Date(),
+          }).where(and(
+            eq(budgets.id, budget.id),
+            gte(budgets.amountHeldCents, rejectedOrder.totalCents),
+          )).returning({ id: budgets.id })
+          if (!releasedBudget) throw new Error("BUDGET_LEDGER_INVARIANT")
+        }
+
+        // Release the quantity budget with it.
+        await releaseHeldQuantityBudgetForOrder(tx, rejectedOrder)
       }
 
-      // 3. Release quantity budget and restore stock
-      await releaseHeldQuantityBudgetForOrder(tx, rejectedOrder)
+      // 3. Restore stock
 
       const items = await tx.select().from(orderItems).where(eq(orderItems.orderId, orderId))
       for (const item of items) {

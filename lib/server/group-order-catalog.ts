@@ -11,6 +11,7 @@ import {
 } from "@/db/schema"
 import { db } from "@/lib/db"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
+import { isOrganizationBudgetEnabled } from "@/lib/server/organization-budget-policy"
 import {
   effectivePriceCentsSql,
   groupPriceJoinOn,
@@ -155,6 +156,8 @@ async function resolveQuantityBudgetBranches(
   branchIds: number[],
   period: string,
 ): Promise<number[]> {
+  // With budget allocation off, no branch runs on a quantity budget.
+  if (!await isOrganizationBudgetEnabled(organizationId)) return []
   const mode = await getBudgetAllocationModeForOrganization(organizationId)
   if (mode !== "quantity") return []
 

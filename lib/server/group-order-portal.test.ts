@@ -27,6 +27,7 @@ import {
   applyQuantityToBranchPlans,
   branchPlansToEntries,
   mergeEntriesIntoBranchPlans,
+  replaceBranchPlanLines,
   toRequestEntries,
   withoutBranchPlan,
 } from "@/components/group-portal/group-order-plan"
@@ -204,6 +205,45 @@ describe("group order review edits", () => {
 
     expect(remaining.map((plan) => plan.branch.id)).toEqual([1, 3])
     expect(received(remaining)[0]).toEqual({ branchId: 1, items: [[10, 4], [11, 2]] })
+  })
+
+  it("adds a product to one location only", () => {
+    const [, second] = basePlans()
+    const edited = replaceBranchPlanLines(basePlans(), 2, [...second.lines, line(12, 3, 1000)])
+
+    expect(received(edited)).toEqual([
+      { branchId: 1, items: [[10, 4], [11, 2]] },
+      { branchId: 2, items: [[10, 4], [11, 2], [12, 3]] },
+      { branchId: 3, items: [[10, 4], [11, 2]] },
+    ])
+    expect(edited[1].totalCents).toBe(4 * 250 + 2 * 500 + 3 * 1000)
+    // Lines stay in the same name order the merge produces.
+    expect(edited[1].lines.map((entry) => entry.name)).toEqual(["Product 10", "Product 11", "Product 12"])
+  })
+
+  it("drops zero lines, keeps the last of a duplicate, and drops an emptied location", () => {
+    const edited = replaceBranchPlanLines(basePlans(), 2, [line(10, 0), line(11, 2), line(11, 5)])
+    expect(received(edited)[1]).toEqual({ branchId: 2, items: [[11, 5]] })
+
+    const emptied = replaceBranchPlanLines(basePlans(), 2, [line(10, 0)])
+    expect(emptied.map((plan) => plan.branch.id)).toEqual([1, 3])
+  })
+
+  it("never adds a location that is not already in the order", () => {
+    const plans = withoutBranchPlan(basePlans(), 3)
+    const edited = replaceBranchPlanLines(plans, 3, [line(12, 1)])
+
+    expect(received(edited)).toEqual(received(plans))
+  })
+
+  it("submits a location's added product to that location alone", () => {
+    const [first] = basePlans()
+    const edited = replaceBranchPlanLines(basePlans(), 1, [...first.lines, line(12, 1)])
+    const rebuilt = branchPlansToEntries(edited, nextKey)
+
+    expect(received(mergeEntriesIntoBranchPlans(rebuilt, branchesById))).toEqual(received(edited))
+    expect(groupOrderCreateSchema.safeParse({ groupId: 7, entries: toRequestEntries(rebuilt) }).success)
+      .toBe(true)
   })
 
   it("still produces a payload the submission endpoint accepts", () => {
@@ -459,13 +499,23 @@ describe("group order portal access contracts", () => {
     // scoped per order by lib/invoice-access-policy rather than by area.
     expect(proxySource).toContain('const GROUP_ORDER_PORTAL_HOME = "/group-portal"')
     expect(proxySource).toContain('if (role === "GROUP_ORDER_PORTAL") {')
-    expect(proxySource).toContain("return pathname.startsWith(GROUP_ORDER_PORTAL_HOME) || isInvoiceArea(pathname)")
+    // Matched on the terms rather than on one line of source, because the
+    // allowlist has outgrown a single line: what matters is that the home is
+    // the only *area* the requester holds and every addition is a named shared
+    // surface, not how the expression happens to be wrapped.
+    expect(proxySource).toContain("return pathname.startsWith(GROUP_ORDER_PORTAL_HOME)")
     expect(proxySource).toContain(": GROUP_ORDER_PORTAL_HOME")
+    expect(proxySource).toContain("|| isInvoiceArea(pathname)")
     // The support area joined the invoice page as a second shared surface: a
     // requester raises a query about its own order from here, and which threads
     // it may read is decided by lib/support-access rather than by area.
     expect(proxySource).toContain("isSupportArea(pathname)")
     expect(proxySource).toContain('const SUPPORT_AREA = "/support"')
+    // And delivery addresses as a third: the requester asks for a destination
+    // for the branches it orders for, and which branches those are is
+    // re-resolved from its own assignments on every call rather than by area.
+    expect(proxySource).toContain("|| isDeliveryAddressArea(pathname)")
+    expect(proxySource).toContain('const DELIVERY_ADDRESS_AREA = "/delivery-addresses"')
     // The gate that used to sit on the retired wizard route now guards the area
     // itself, and still fails closed: only the requester renders the
     // storefront. Every other role — the approver included — is sent to the

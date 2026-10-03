@@ -60,6 +60,57 @@ describe("every live order asks the payment-control gate first", () => {
     const text = source("lib/server/group-order-creation.ts")
     expect(text).toContain("if (isPaymentControlBlockedError(caughtError)) return caughtError.message")
   })
+
+  it("the group route tags a refused branch with the code and count, so the storefront can raise the popup", () => {
+    const text = source("lib/server/group-order-creation.ts")
+    expect(text).toMatch(/isPaymentControlBlockedError\(branchError\)\s*\?\s*\{ code: branchError\.code, unpaidInvoiceCount: branchError\.details\.overdueCount \}/)
+  })
+})
+
+describe("the unpaid-invoices popup is raised on both ordering pages", () => {
+  it("the Order Portal checks before submitting and turns the server's 409 into the popup", () => {
+    const text = source("app/shop/page.tsx")
+    expect(text).toContain("await checkOrderingBlock(")
+    expect(text).toContain("parseOrderingBlockedResponse(res.status, json)")
+    expect(text).toContain("<UnpaidInvoicesDialog")
+  })
+
+  it("the Group Order Portal raises it for every location refused for unpaid invoices", () => {
+    const text = source("components/group-portal/storefront/group-storefront.tsx")
+    expect(text).toContain("setUnpaidInvoicesNotice(noticeForBlockedBranches(blockedBranchesOf(body.item?.results)))")
+    expect(text).toContain("<UnpaidInvoicesDialog")
+  })
+})
+
+describe("the unpaid-invoice toggle is Super Admin's alone", () => {
+  it.each([
+    ["app/api/v1/organizations/route.ts", "export async function POST"],
+    ["app/api/v1/organizations/[id]/route.ts", "export async function PATCH"],
+  ])("%s writes it only behind a Super Admin gate", (path, handler) => {
+    const text = source(path)
+    const handlerAt = text.indexOf(handler)
+    const gateAt = text.indexOf('requireApiRole(["SUPER_ADMIN"])', handlerAt)
+    const writeAt = text.indexOf("blockOrderingOnUnpaidInvoices", handlerAt)
+    expect(handlerAt).toBeGreaterThan(-1)
+    expect(gateAt).toBeGreaterThan(handlerAt)
+    expect(writeAt).toBeGreaterThan(gateAt)
+  })
+
+  it("no other route writes the column", () => {
+    const writers = [
+      "app/api/v1/organizations/[id]/network-policy/route.ts",
+      "app/api/v1/settings/route.ts",
+    ]
+    for (const path of writers) expect(source(path)).not.toContain("blockOrderingOnUnpaidInvoices")
+  })
+
+  it("a change is audited with what it replaced, in the same transaction", () => {
+    const text = source("app/api/v1/organizations/[id]/route.ts")
+    const txAt = text.indexOf("db.transaction(")
+    const auditAt = text.indexOf("action: UNPAID_INVOICE_ORDERING_BLOCK_AUDIT_ACTION")
+    expect(auditAt).toBeGreaterThan(txAt)
+    expect(text).toContain("previousBlockOrderingOnUnpaidInvoices: existingOrganization.blockOrderingOnUnpaidInvoices")
+  })
 })
 
 describe("the server module", () => {
@@ -100,12 +151,47 @@ describe("the server module", () => {
   })
 })
 
+// The seam used to return "not configured" unconditionally. It is now
+// connected, behind a Super Admin toggle per organization
+// (plans/OF-PAYMENT-CONTROL-unpaid-invoice-ordering-block.md); what it does
+// against Postgres is in tests/integration/unpaid-invoice-ordering-block.test.ts.
 describe("the seam", () => {
   const seam = source("lib/server/overdue-payment-source.ts")
+  const body = seam.slice(seam.indexOf("export const overduePaymentSource"))
 
-  it("is server-only and returns the not-configured answer until a source is agreed", () => {
+  it("is server-only", () => {
     expect(seam.startsWith('import "server-only"')).toBe(true)
-    expect(seam).toContain("export const overduePaymentSource: OverduePaymentSource = async () => NOT_CONFIGURED_OVERDUE_SUMMARY")
+  })
+
+  it("reads the organization's toggle first and answers not-configured while it is off", () => {
+    const toggleAt = body.indexOf("organizations.blockOrderingOnUnpaidInvoices")
+    const offAt = body.indexOf("if (organization?.enabled !== true) return NOT_CONFIGURED_OVERDUE_SUMMARY")
+    const ordersAt = body.indexOf(".from(orders)")
+    expect(toggleAt).toBeGreaterThan(-1)
+    expect(offAt).toBeGreaterThan(toggleAt)
+    expect(ordersAt).toBeGreaterThan(offAt)
+  })
+
+  it("counts only the gate's own tenant and branch, never a value from a request", () => {
+    expect(body).toContain("eq(orders.organizationId, scope.organizationId)")
+    expect(body).toContain("eq(orders.branchId, scope.branchId)")
+    expect(body).toContain("eq(organizations.id, scope.organizationId)")
+  })
+
+  it("counts exactly the invoices the Paid/Unpaid control can clear", () => {
+    expect(body).toContain("eq(orders.status, UNPAID_INVOICE_ORDER_STATUS)")
+    expect(body).toContain("eq(orders.fulfillmentStatus, UNPAID_INVOICE_FULFILLMENT_STATUS)")
+    expect(body).toContain("eq(orders.paymentStatus, UNPAID_INVOICE_PAYMENT_STATUS)")
+    expect(body).toContain("isNotNull(orders.receiptData)")
+  })
+
+  it("never selects an amount: the status route is readable where prices are hidden", () => {
+    expect(body).not.toMatch(/totalCents|subtotalCents|taxCents|refundAmountCents/)
+    expect(body).toContain("amountCents: null")
+  })
+
+  it("lists a bounded number of invoices", () => {
+    expect(body).toContain(".limit(UNPAID_INVOICE_ITEMS_LIMIT)")
   })
 })
 

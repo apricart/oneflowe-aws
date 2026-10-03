@@ -80,13 +80,18 @@ describe("group user dashboard and order directory", () => {
   it("resolves the sales endpoint's branch filter on the server and denies an empty set", () => {
     const route = source("app/api/v1/analytics/sales-performance/route.ts")
 
-    expect(route).toContain('const allowedRoles = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER"] as const')
+    // VIEWER was added to this allowlist deliberately: the read-only role's
+    // dashboard is served by this endpoint. The approver's own resolution below
+    // is what this test is really pinning, and it is untouched by that.
+    expect(route).toContain('const allowedRoles = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "VIEWER"] as const')
     expect(route).toContain("await loadAnalyticsAssignedBranchIds(role, scope?.userId)")
     expect(route).toContain("resolveMultiBranchAnalyticsIds({")
     // An approver with no assignments is refused rather than served the tenant.
     expect(route).toContain("if (scopedBranchIds !== null && scopedBranchIds.length === 0) {")
-    // The tenant filter is re-asserted from the session, not the query string.
-    expect(route).toContain("const organizationIds = scopedBranchIds === null ? parseNumberList(organizationIdsParam) : []")
+    // The tenant filter is re-asserted from the session, not the query string,
+    // for the approver and for the read-only role alike.
+    expect(route).toContain("const organizationIds = scopedBranchIds === null && !isViewerRole(role)")
+    expect(route).toContain("? parseNumberList(organizationIdsParam)")
     // The branch breakdown selects from `branches`, so it is narrowed too.
     expect(route).toContain("branchListConditions.push(inArray(branches.id, scopedBranchIds))")
     // The Branch Admin path is untouched.
@@ -96,7 +101,7 @@ describe("group user dashboard and order directory", () => {
   it("resolves the drill-down endpoint's branch filter the same way", () => {
     const route = source("app/api/v1/analytics/drill-down/route.ts")
 
-    expect(route).toContain('const allowedRoles = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER"] as const')
+    expect(route).toContain('const allowedRoles = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "VIEWER"] as const')
     expect(route).toContain("await loadAnalyticsAssignedBranchIds(role, scope?.userId)")
     // Returning an empty branch list here would leave the query filtered by
     // tenant alone, so the empty case is an explicit refusal.

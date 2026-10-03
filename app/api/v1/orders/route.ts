@@ -3,9 +3,9 @@ import { createHash,randomBytes } from "node:crypto"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
-import { budgets,orders,orderItems,organizationInventory,branchInventory,branches,globalProducts,productQuantityBudgets,refunds,roles,systemLogs,groupAuditLogs,organizations,refundItems,users } from "@/db/schema"
+import { budgets,orders,orderItems,organizationInventory,branchInventory,branches,globalProducts,productQuantityBudgets,refunds,systemLogs,groupAuditLogs,organizations,refundItems } from "@/db/schema"
 import { headers } from "next/headers"
-import { and,desc,eq,exists,gte,ilike,lte,or,sql,inArray,isNotNull,isNull } from "drizzle-orm"
+import { and,desc,eq,gte,ilike,lte,or,sql,inArray,isNotNull,isNull,type AnyColumn,type SQL } from "drizzle-orm"
 import { logOrderActivity } from "@/lib/global-logger"
 import { generateReceiptData } from "@/lib/receipt-generator"
 import {
@@ -16,18 +16,27 @@ import {
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
 import { parseEndDateParam,parseStartDateParam } from "@/lib/date-range-params"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
+import { isOrganizationBudgetEnabled, resolveOrderBudgetTracking } from "@/lib/server/organization-budget-policy"
+import { BUDGET_POLICY_CHANGED_MESSAGE } from "@/lib/organization-budget-policy"
 import { settleDueAddonsOnBudget,settleDueBudgetAddons } from "@/lib/server/budget-addon-expiry"
 import { assertBranchMayOrder } from "@/lib/server/payment-control"
 import { isPaymentControlBlockedError } from "@/lib/payment-control-policy"
+import { assertBranchDeliveriesAcknowledged } from "@/lib/server/unacknowledged-delivery-block"
+import { isDeliveryAcknowledgementBlockedError } from "@/lib/unacknowledged-delivery-block"
 import { orderSelectColumns } from "@/lib/order-select"
 import { calculateLineCents,formatQuantity,roundQuantity,validateProductQuantity } from "@/lib/quantity"
 import { resolveTaxRateBp,splitInclusiveCents } from "@/lib/tax"
 import { getOrganizationTaxRateBp } from "@/lib/server/tax-rate"
 import { orderCreateSchema,validationMessage } from "@/lib/server/mutation-validation"
 import { withRateLimit } from "@/lib/rate-limiter"
-import { attemptImmediateOrderEmailDelivery,queueOrderCreatedNotifications as enqueueCreatedOrderEvents } from "@/lib/server/order-notifications"
+import {
+  attemptImmediateOrderEmailDelivery,
+  queueOrderCreatedNotifications as enqueueCreatedOrderEvents,
+  queueSuperAdminAutoApprovalNotifications as enqueueAutoApprovedOrderEvents,
+} from "@/lib/server/order-notifications"
 import { canViewFulfillmentToken } from "@/lib/fulfillment-token-access"
 import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
+import { resolveInitialOrderApproval } from "@/lib/server/order-creation-approval"
 import { resolveScopedBranchIds,usesMultiBranchScope } from "@/lib/server/multi-branch-scope"
 import { loadGroupPriceOverrides,resolveBranchGroupId,resolveEffectivePriceCents } from "@/lib/server/effective-price"
 import { isValidRole } from "@/lib/rbac"
@@ -36,8 +45,95 @@ import { getOrderStatusesForFilter,getOrderStatusFilter } from "@/lib/order-stat
 import { budgetPeriodOf } from "@/lib/budget-consumption"
 import { isGroupPortalOrder,type OrderCreatorRole } from "@/lib/group-order-visibility"
 import { parseOrderCreatorRoleFilter } from "@/lib/order-creator-filter"
+import { orderCreatedByRoleMatches } from "@/lib/server/order-creator-role-sql"
+import { viewerStatusBucketCondition,viewerStatusBucketCount } from "@/lib/server/order-delivery-status-sql"
+import { parseOrderDeliveryFilter,type OrderDeliveryFilter } from "@/lib/unacknowledged-orders"
+import { parseFulfillmentStatusFilter,type FulfillmentStatus } from "@/lib/fulfillment-status"
+import { loadApprovedDeliveryAddress } from "@/lib/server/delivery-addresses"
+import { DELIVERY_ADDRESS_UNAVAILABLE } from "@/lib/delivery-address"
+import { ORDER_LIST_PRICE_SORT_KEYS,ORDER_LIST_SORT_KEYS,sortKeysForCaller,type OrderListSortKey } from "@/lib/list-sort-keys"
+import { parseSortParams } from "@/lib/table-sort"
+import { orderBySortSql } from "@/lib/server/sort-sql"
 
+/**
+ * The column each allowlisted Orders-table sort key orders by. Text compares
+ * case-insensitively; the refund badge sorts none → partial → full without
+ * reading the amount.
+ */
+const ORDER_LIST_SORT_SQL: Record<OrderListSortKey, SQL | AnyColumn> = {
+  id: orders.id,
+  tid: orders.tid,
+  branch: sql`LOWER(${branches.name})`,
+  costCenter: sql`LOWER(${branches.costCenterId})`,
+  orderStatus: sql`UPPER(${orders.status})`,
+  progress: orderSelectColumns.fulfillmentStatus,
+  paymentStatus: orderSelectColumns.paymentStatus,
+  refundStatus: sql`CASE
+    WHEN UPPER(${orders.status}) = 'REFUNDED' THEN 2
+    WHEN COALESCE(${orders.refundAmountCents}, 0) > 0 THEN 1
+    ELSE 0
+  END`,
+  orderDate: orders.createdAt,
+  approvalDate: orders.approvedAt,
+  deliveryDate: orders.deliveredAt,
+  amount: orders.totalCents,
+}
 
+/**
+ * The ORDER BY for the list. Without a requested sort it keeps its
+ * newest-first order; with one, the id tie-breaker keeps pages stable when many
+ * rows share the sorted value. A price key is refused when prices are hidden.
+ */
+function resolveOrderListOrder(
+  searchParams: URLSearchParams,
+  pricesHidden: boolean,
+): { ok: true; orderBy: SQL[] } | { ok: false; error: string } {
+  const requested = parseSortParams(
+    searchParams,
+    sortKeysForCaller(ORDER_LIST_SORT_KEYS, ORDER_LIST_PRICE_SORT_KEYS, pricesHidden),
+  )
+  if (!requested.ok) return requested
+  if (!requested.sort) return { ok: true, orderBy: [desc(orders.createdAt)] }
+  return {
+    ok: true,
+    orderBy: [orderBySortSql(ORDER_LIST_SORT_SQL[requested.sort.key], requested.sort.direction), desc(orders.id)],
+  }
+}
+
+/**
+ * The list query parameters that are parsed rather than passed through: the
+ * creator-role, delivery and fulfilment filters, and the sort. Parsed before
+ * anything is built so a malformed value is refused rather than quietly
+ * dropped, which would return more rows than the caller asked for.
+ */
+function parseOrderListQuery(
+  params: ReturnType<typeof getOrderListParams>,
+  pricesHidden: boolean,
+):
+  | {
+    ok: true
+    creatorRole: OrderCreatorRole | null
+    deliveryFilter: OrderDeliveryFilter | null
+    fulfillmentStatusFilter: FulfillmentStatus | null
+    orderBy: SQL[]
+  }
+  | { ok: false; error: string } {
+  const creatorFilter = parseOrderCreatorRoleFilter(params.createdByRole)
+  if (!creatorFilter.ok) return { ok: false, error: creatorFilter.message }
+  const deliveryFilter = parseOrderDeliveryFilter(params.delivery)
+  if (!deliveryFilter.ok) return { ok: false, error: deliveryFilter.message }
+  const fulfillmentStatusFilter = parseFulfillmentStatusFilter(params.fulfillmentStatus)
+  if (!fulfillmentStatusFilter.ok) return { ok: false, error: fulfillmentStatusFilter.message }
+  const listOrder = resolveOrderListOrder(params.searchParams, pricesHidden)
+  if (!listOrder.ok) return listOrder
+  return {
+    ok: true,
+    creatorRole: creatorFilter.role,
+    deliveryFilter: deliveryFilter.filter,
+    fulfillmentStatusFilter: fulfillmentStatusFilter.filter,
+    orderBy: listOrder.orderBy,
+  }
+}
 
 function generateTid(): string {
   // Simple ULID-like: timestamp base36 + cryptographically secure random hex
@@ -72,6 +168,8 @@ function getOrderListParams(req: NextRequest) {
     id,
     groupId: searchParams.get("groupId") || undefined,
     createdByRole: searchParams.get("createdByRole"),
+    delivery: searchParams.get("delivery"),
+    fulfillmentStatus: searchParams.get("fulfillmentStatus"),
     groupIds: parseNumberList(searchParams.get("groupIds") || undefined),
     months: parseNumberList(searchParams.get("months") || undefined, 1, 12),
     years: parseNumberList(searchParams.get("years") || undefined, 2000, 2100),
@@ -179,16 +277,11 @@ function addOrderDimensionConditions(conditions: any[], params: ReturnType<typeo
  */
 function addOrderCreatorRoleCondition(conditions: any[], creatorRole: OrderCreatorRole | null) {
   if (!creatorRole) return
-  conditions.push(exists(
-    db
-      .select({ one: sql`1` })
-      .from(users)
-      .innerJoin(roles, eq(users.roleId, roles.id))
-      .where(and(
-        eq(users.id, orders.createdByUserId),
-        eq(roles.name, creatorRole),
-      )),
-  ))
+  // The role recorded on the order, not the creator's role today. A requester
+  // who has since been promoted must not have their past orders vanish from
+  // this tab. `orderCreatedByRoleMatches` falls back to the live join only for
+  // rows written before the column existed.
+  conditions.push(orderCreatedByRoleMatches(creatorRole))
 }
 
 function addOrderDateConditions(conditions: any[], params: ReturnType<typeof getOrderListParams>) {
@@ -279,8 +372,59 @@ async function getSingleOrderListResponse(id: string | undefined, filtered: any[
   })
 }
 
-function getOrderListSummaryTotal(statusFilter: string, summaryRow: any) {
+/**
+ * Which rows a status tab returns. Applied after the summary snapshot, so a
+ * selected tab narrows the list without zeroing the other cards.
+ */
+function addOrderStatusConditions(
+  conditions: any[],
+  statusFilter: ReturnType<typeof getOrderStatusFilter>,
+  deliveryFilter: OrderDeliveryFilter | null,
+  fulfillmentStatus: FulfillmentStatus | null,
+) {
+  const requestedStatuses = getOrderStatusesForFilter(statusFilter)
+  if (requestedStatuses.length > 0) {
+    conditions.push(inArray(orders.status, requestedStatuses))
+  }
+  // Delivered but not yet acknowledged — the dashboard's own bucket, so this
+  // tab, its count and the "Delivered/Unacknowledged" card cannot disagree.
+  if (deliveryFilter === "unacknowledged") {
+    conditions.push(viewerStatusBucketCondition("DELIVERED_UNACKNOWLEDGED"))
+  }
+  if (fulfillmentStatus) {
+    conditions.push(sql`UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED')) = ${fulfillmentStatus}`)
+  }
+}
+
+function getOrderListSummaryTotal(statusFilter: string, summaryRow: any, deliveryFilter: OrderDeliveryFilter | null = null) {
+  // Delivered-but-unacknowledged orders are all APPROVED, so this count is the
+  // page total whether the caller also sent `status=approved` or not.
+  if (deliveryFilter === "unacknowledged") return Number(summaryRow?.deliveredUnacknowledged || 0)
   return Number(statusFilter === "all" ? summaryRow?.all || 0 : summaryRow?.[statusFilter] || 0)
+}
+
+async function getOrderListPaginationTotal(input: {
+  statusFilter: string
+  summaryRow: any
+  deliveryFilter: OrderDeliveryFilter | null
+  fulfillmentStatus: FulfillmentStatus | null
+  conditions: any[]
+}) {
+  const summaryTotal = Number(getOrderListSummaryTotal(
+    input.statusFilter,
+    input.summaryRow,
+    input.deliveryFilter,
+  ))
+  if (!input.fulfillmentStatus) return summaryTotal
+
+  const { conditions } = input
+  const listCondition = conditions.length ? and(...conditions) : undefined
+  const [filteredTotal] = await db
+    .select({ count: metricExpressions.totalOrderCount })
+    .from(orders)
+    .leftJoin(branches, eq(orders.branchId, branches.id))
+    .where(listCondition)
+  return Number(filteredTotal?.count || 0)
 }
 
 function parseScopedNumericId(value: unknown) {
@@ -436,7 +580,7 @@ async function saveOrderReceipt(tx: any, context: any) {
   const receiptData = await generateReceiptData({
     orderId: context.order.id,
     orderTid: context.tid,
-    status: "PENDING",
+    status: context.order.status,
     organizationId: context.organizationId,
     branchId: context.branchId,
     orderItemsData: context.items,
@@ -445,6 +589,10 @@ async function saveOrderReceipt(tx: any, context: any) {
     totalCents: context.total,
     discountCents: 0,
     deliveryChargesCents: 0,
+    // Already verified against the tenant, the branch and `approved` inside
+    // this transaction. Passed in rather than re-read, so the invoice cannot
+    // print an address the order guard did not allow.
+    deliveryAddress: context.deliveryAddress ?? null,
   })
   // Snapshot the buyer's own reference beside the invoice number so a reissued
   // invoice prints exactly what was agreed when the order was placed.
@@ -467,6 +615,8 @@ async function saveCreationLedgers(tx: any, context: any) {
       updatedAt: new Date(),
     }).where(eq(globalProducts.id, item.globalProductId))
   }
+  // An order of a tenant with budgets off takes no hold, money or quantity.
+  if (!context.budgetTracked) return
   await tx.update(budgets).set({ amountHeldCents: sql`${budgets.amountHeldCents} + ${context.total}` })
     .where(eq(budgets.id, context.budgetId))
   for (const item of context.items) {
@@ -499,7 +649,12 @@ async function logCreatedOrder(tx: any, context: any) {
     action: "ORDER_CREATE",
     resourceType: "order",
     resourceId: String(context.order.id),
-    details: { tid: context.tid, total: context.total, items: context.itemCount },
+    details: {
+      tid: context.tid,
+      total: context.total,
+      items: context.itemCount,
+      autoApproved: context.order.status === "APPROVED",
+    },
     ipAddress: forwardedFor ? forwardedFor.split(",")[0] : "unknown",
     userAgent: headersList.get("user-agent"),
     success: true,
@@ -507,19 +662,32 @@ async function logCreatedOrder(tx: any, context: any) {
 }
 
 async function persistCreatedOrder(tx: any, context: any) {
+  const initialApproval = await resolveInitialOrderApproval(tx, context.organizationId)
   const [order] = await tx.insert(orders).values({
     tid: context.tid,
     idempotencyKey: context.idempotencyKey,
     requestFingerprint: context.requestFingerprint,
     organizationId: context.organizationId,
     branchId: context.branchId,
-    status: "PENDING",
+    ...initialApproval.values,
     subtotalCents: context.subtotal,
     taxCents: context.tax,
     totalCents: context.total,
     notes: context.notes || null,
     poNumber: context.poNumber || null,
+    // Added only when an address was chosen, so an order placed against the
+    // branch's own address produces exactly the INSERT it produced before this
+    // column existed — which matters while the migration is being applied by
+    // hand ahead of, or behind, the deploy.
+    ...(context.deliveryAddress ? { deliveryAddressId: context.deliveryAddress.id } : {}),
     createdByUserId: context.userId,
+    // Pinned at creation: the creator's role can change afterwards, what they
+    // were when they raised this cannot. See `lib/server/order-creator-role-sql.ts`.
+    createdByRole: context.role ?? null,
+    // Fixed now, for the order's whole life: every later ledger move asks the
+    // order, not the tenant's current setting. Written only when false, so a
+    // budgeted order produces the INSERT it produced before the column existed.
+    ...(context.budgetTracked ? {} : { budgetTracked: false }),
   }).returning(orderSelectColumns)
   await tx.insert(orderItems).values(context.items.map((item: any) => ({
     ...item,
@@ -529,10 +697,46 @@ async function persistCreatedOrder(tx: any, context: any) {
   await saveCreationLedgers(tx, { ...context, order })
   await saveOrderReceipt(tx, { ...context, order })
   await logCreatedOrder(tx, { ...context, order })
-  const queuedNotifications = context.role === "ORDER_PORTAL"
-    ? await enqueueCreatedOrderEvents(tx, { order, requestedBy: context.requestedBy })
+  return {
+    order,
+    queuedNotifications: await queueCreationNotifications(tx, context, order, initialApproval.approvalRequired),
+    approvalRequired: initialApproval.approvalRequired,
+  }
+}
+
+/**
+ * A pending order asks its approvers to decide it. An order approved at
+ * creation has nobody to ask, so Super Admins are told it is ready for review
+ * instead — whoever raised it, since it is now as fulfilment-ready as any
+ * manually approved order.
+ */
+async function queueCreationNotifications(tx: any, context: any, order: any, approvalRequired: boolean) {
+  if (!approvalRequired) return enqueueAutoApprovedOrderEvents(tx, { order })
+  return context.role === "ORDER_PORTAL"
+    ? enqueueCreatedOrderEvents(tx, { order, requestedBy: context.requestedBy })
     : { eventKeys: [], recipientCount: 0 }
-  return { order, queuedNotifications }
+}
+
+/**
+ * The chosen delivery address, verified, or null when the order goes to the
+ * branch's own address.
+ *
+ * Read **inside** the creation transaction rather than beside the selector: an
+ * address that was approved when the page rendered and rejected before the
+ * order committed must not slip through. Every part of the tuple is asserted by
+ * `loadApprovedDeliveryAddress` — the id, the tenant, the branch this order is
+ * actually for, and `status = 'approved'` — so a pending, rejected,
+ * other-branch or other-tenant id is refused here and nowhere else.
+ */
+async function resolveCreationDeliveryAddress(tx: any, context: any) {
+  if (!context.deliveryAddressId) return null
+  const address = await loadApprovedDeliveryAddress(tx, {
+    organizationId: context.organizationId,
+    branchId: context.branchId,
+    addressId: context.deliveryAddressId,
+  })
+  if (!address) throw new Error(DELIVERY_ADDRESS_UNAVAILABLE)
+  return address
 }
 
 async function processOrderCreationTransaction(tx: any, context: any) {
@@ -540,21 +744,35 @@ async function processOrderCreationTransaction(tx: any, context: any) {
   // and nothing has been locked or written, so a blocked branch costs one
   // read and holds no row.
   await assertBranchMayOrder(tx, { organizationId: context.organizationId, branchId: context.branchId })
-  const money = await lockCreationMoneyBudget(tx, context)
-  const quantityBudgets = await lockCreationQuantityBudgets(tx, context)
+  // Then the delivered-but-unacknowledged gate, under the same rule: before
+  // any lock or write.
+  await assertBranchDeliveriesAcknowledged(tx, { organizationId: context.organizationId, branchId: context.branchId })
+  const deliveryAddress = await resolveCreationDeliveryAddress(tx, context)
+  // Read under a shared lock on the organization row, which the organization
+  // PATCH holds FOR UPDATE: the order commits wholly under one setting.
+  const budgetTracked = await resolveOrderBudgetTracking(tx, context.organizationId)
+  // The pre-flight saw budgets off and opened no budget row; the tenant has
+  // switched them on since. Refuse rather than hold against nothing.
+  if (budgetTracked && !context.budgetId) throw new Error(BUDGET_POLICY_CHANGED_MESSAGE)
+  const money = budgetTracked ? await lockCreationMoneyBudget(tx, context) : null
+  const quantityBudgets = budgetTracked ? await lockCreationQuantityBudgets(tx, context) : new Map()
   const lockedInventory = await lockCreationInventory(tx, context)
   const orgTaxRateBp = await getOrganizationTaxRateBp(context.organizationId)
   const calculated = calculateLockedOrderItems(context.normalizedItems, lockedInventory, orgTaxRateBp)
-  const budgetError = getBudgetError(calculated.total, money.available, context.pricesHidden)
-  if (budgetError) throw new Error(budgetError)
+  if (money) {
+    const budgetError = getBudgetError(calculated.total, money.available, context.pricesHidden)
+    if (budgetError) throw new Error(budgetError)
+  }
   validateCreationStock(calculated.items, lockedInventory.productById)
   return persistCreatedOrder(tx, {
     ...context,
+    budgetTracked,
     items: calculated.items,
     subtotal: calculated.subtotal,
     tax: calculated.tax,
     total: calculated.total,
     quantityBudgets,
+    deliveryAddress,
   })
 }
 
@@ -563,7 +781,11 @@ function getOrderReplayResponse(existingOrder: any, requestFingerprint: string, 
   if (existingOrder.requestFingerprint !== requestFingerprint) {
     return NextResponse.json({ error: "Idempotency key was already used for a different order" }, { status: 409 })
   }
-  const { requestFingerprint: _requestFingerprint, ...replayedOrder } = existingOrder
+  const {
+    requestFingerprint: _requestFingerprint,
+    approvalTokenHash: _approvalTokenHash,
+    ...replayedOrder
+  } = existingOrder
   return NextResponse.json({
     message: "Order already created",
     order: pricesHidden
@@ -599,9 +821,12 @@ async function validateCreationBranch(organizationId: number, branchId: number) 
 }
 
 function getCreatedOrderResponse(order: any, pricesHidden: boolean) {
+  const { approvalTokenHash: _approvalTokenHash, ...safeOrder } = order
   return NextResponse.json({
     message: "Order created",
-    order: pricesHidden ? { ...order, subtotalCents: null, taxCents: null, totalCents: null } : order,
+    order: pricesHidden
+      ? { ...safeOrder, subtotalCents: null, taxCents: null, totalCents: null }
+      : safeOrder,
   })
 }
 
@@ -610,7 +835,11 @@ function getTenantErrorStatus(message: string) {
 }
 
 function warnAboutMissingOrderApprover(role: string, result: any) {
-  if (role !== "ORDER_PORTAL" || result.queuedNotifications.recipientCount > 0) return
+  if (
+    role !== "ORDER_PORTAL"
+    || !result.approvalRequired
+    || result.queuedNotifications.recipientCount > 0
+  ) return
   console.warn("[OrderNotifications] No active configured order approver recipient was available", {
     orderId: result.order.id,
     organizationId: result.order.organizationId,
@@ -725,6 +954,36 @@ async function getOrCreateCurrentBudget(branchId: number, period: string) {
   )).limit(1))[0]
 }
 
+/**
+ * The budget pre-flight before the creation transaction: the period row this
+ * order will hold against, or the refusal to return. A tenant with budget
+ * allocation switched off orders with no budget at all — no row is read or
+ * opened here, and the transaction takes no hold (`budgetId: null`).
+ */
+async function preflightCreationBudget(context: {
+  organizationId: number
+  branchId: number
+  period: string
+  total: number
+  pricesHidden: boolean
+}): Promise<{ budgetId: number | null } | { response: NextResponse }> {
+  if (!await isOrganizationBudgetEnabled(context.organizationId)) return { budgetId: null }
+
+  const currentBudget = await getOrCreateCurrentBudget(context.branchId, context.period)
+  if (!currentBudget) {
+    return {
+      response: NextResponse.json({
+        error: `Budget not configured for current month (${context.period}). Please contact head office to allocate budget.`,
+      }, { status: 400 }),
+    }
+  }
+
+  const remaining = (currentBudget.amountAllocatedCents + currentBudget.amountCreditedCents) - (currentBudget.amountSpentCents + currentBudget.amountHeldCents)
+  const budgetError = getBudgetError(context.total, remaining, context.pricesHidden)
+  if (budgetError) return { response: NextResponse.json({ error: budgetError }, { status: 400 }) }
+  return { budgetId: currentBudget.id }
+}
+
 async function getOrderCreationErrorResponse(caughtError: any, replayContext: any) {
   if (caughtError?.code === "23505" && replayContext) {
     const [existingOrder] = await db.select({ ...orderSelectColumns, requestFingerprint: orders.requestFingerprint })
@@ -741,9 +1000,17 @@ async function getOrderCreationErrorResponse(caughtError: any, replayContext: an
       { status: 409 },
     )
   }
+  if (isDeliveryAcknowledgementBlockedError(caughtError)) {
+    return NextResponse.json(
+      { error: caughtError.message, code: caughtError.code, deliveryAcknowledgement: caughtError.details },
+      { status: 409 },
+    )
+  }
   const message = String(caughtError.message || "")
   const normalized = message.toLowerCase()
-  const isCustomerError = message.startsWith("Insufficient stock")
+  const isCustomerError = message === DELIVERY_ADDRESS_UNAVAILABLE
+    || message === BUDGET_POLICY_CHANGED_MESSAGE
+    || message.startsWith("Insufficient stock")
     || message.startsWith("Budget not configured")
     || message.includes("Insufficient budget")
     || normalized.includes("quantity budget")
@@ -801,24 +1068,22 @@ export async function GET(req: NextRequest) {
       scopedBranchIds,
     })
 
-    // Narrowing by the role that raised the order. Parsed before anything is
-    // built so a malformed value is refused rather than quietly dropped, which
-    // would return more rows than the caller asked for.
-    const creatorFilter = parseOrderCreatorRoleFilter(params.createdByRole)
-    if (!creatorFilter.ok) return NextResponse.json({ error: creatorFilter.message }, { status: 400 })
-
     const pricesHidden = await shouldHidePricesForRole(role, orgIdNum)
+    const listQuery = parseOrderListQuery(params, pricesHidden)
+    if (!listQuery.ok) return NextResponse.json({ error: listQuery.error }, { status: 400 })
     addOrderDimensionConditions(conditions, params)
-    addOrderCreatorRoleCondition(conditions, creatorFilter.role)
+    addOrderCreatorRoleCondition(conditions, listQuery.creatorRole)
     addOrderDateConditions(conditions, params)
 
     // Status changes which rows are returned, but not the KPI scope. Keeping a
     // separate snapshot prevents a selected tab from zeroing the other cards.
     const summaryConditions = [...conditions]
-    const requestedStatuses = getOrderStatusesForFilter(statusFilter)
-    if (requestedStatuses.length > 0) {
-      conditions.push(inArray(orders.status, requestedStatuses))
-    }
+    addOrderStatusConditions(
+      conditions,
+      statusFilter,
+      listQuery.deliveryFilter,
+      listQuery.fulfillmentStatusFilter,
+    )
 
     // --- Audit Logging for Group Access ---
     auditOrderGroupAccess(params, { organizationId: orgIdNum, userId: currentUserId, role })
@@ -884,8 +1149,8 @@ export async function GET(req: NextRequest) {
 
     const { page, limit, offset } = params
     const items = await (conditions.length
-      ? selectBase.where(and(...conditions)).orderBy(desc(orders.createdAt)).limit(limit).offset(offset)
-      : selectBase.orderBy(desc(orders.createdAt)).limit(limit).offset(offset))
+      ? selectBase.where(and(...conditions)).orderBy(...listQuery.orderBy).limit(limit).offset(offset)
+      : selectBase.orderBy(...listQuery.orderBy).limit(limit).offset(offset))
 
     // The list is intentionally paginated, but the summary cards must describe
     // the complete filtered scope rather than only the current page of rows.
@@ -900,6 +1165,7 @@ export async function GET(req: NextRequest) {
           fulfilled: metricExpressions.fulfilledCount,
           rejected: metricExpressions.rejectedCount,
           refunded: metricExpressions.refundedCount,
+          deliveredUnacknowledged: viewerStatusBucketCount("DELIVERED_UNACKNOWLEDGED"),
         })
         .from(orders)
         .leftJoin(branches, eq(orders.branchId, branches.id))
@@ -918,7 +1184,13 @@ export async function GET(req: NextRequest) {
     })
     if (singleOrderResponse) return singleOrderResponse
 
-    const paginationTotal = Number(getOrderListSummaryTotal(statusFilter, summaryRow))
+    const paginationTotal = await getOrderListPaginationTotal({
+      statusFilter,
+      summaryRow,
+      deliveryFilter: listQuery.deliveryFilter,
+      fulfillmentStatus: listQuery.fulfillmentStatusFilter,
+      conditions,
+    })
 
     return NextResponse.json({
       items: filtered,
@@ -929,6 +1201,7 @@ export async function GET(req: NextRequest) {
         fulfilled: Number(summaryRow?.fulfilled || 0),
         rejected: Number(summaryRow?.rejected || 0),
         refunded: Number(summaryRow?.refunded || 0),
+        deliveredUnacknowledged: Number(summaryRow?.deliveredUnacknowledged || 0),
       },
       pricesHidden,
       capabilities: decisionCapabilities,
@@ -974,7 +1247,14 @@ export async function POST(req: NextRequest) {
     if (!parsedBody.success) {
       return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
     }
-    const { items, branchId: branchIdInput, organizationId: orgIdInput, notes, poNumber } = parsedBody.data
+    const {
+      items,
+      branchId: branchIdInput,
+      organizationId: orgIdInput,
+      notes,
+      poNumber,
+      deliveryAddressId,
+    } = parsedBody.data
 
     const normalizedItems = items.map((item) => ({
       organizationInventoryId: item.organizationInventoryId,
@@ -1002,6 +1282,7 @@ export async function POST(req: NextRequest) {
       branchId,
       notes,
       poNumber,
+      deliveryAddressId,
       items: normalizedItems,
     })
     replayContext = { userId, idempotencyKey, requestFingerprint, pricesHidden }
@@ -1028,21 +1309,21 @@ export async function POST(req: NextRequest) {
 
     // budget check and hold - must be for current month period
     const currentMonth = budgetPeriodOf(new Date())
-    const currentBudget = await getOrCreateCurrentBudget(branchId, currentMonth)
-    if (!currentBudget) return NextResponse.json({
-      error: `Budget not configured for current month (${currentMonth}). Please contact head office to allocate budget.`,
-    }, { status: 400 })
-
-    const remaining = (currentBudget.amountAllocatedCents + currentBudget.amountCreditedCents) - (currentBudget.amountSpentCents + currentBudget.amountHeldCents)
-
-    const budgetError = getBudgetError(total, remaining, pricesHidden)
-    if (budgetError) return NextResponse.json({ error: budgetError }, { status: 400 })
+    const preflight = await preflightCreationBudget({
+      organizationId: Number(organizationId),
+      branchId,
+      period: currentMonth,
+      total,
+      pricesHidden,
+    })
+    if ("response" in preflight) return preflight.response
+    const currentBudgetId = preflight.budgetId
 
     const tid = generateTid()
     const invoiceSequenceReady = await hasInvoiceSequenceTable(db)
 
     const creationResult = await db.transaction((tx) => processOrderCreationTransaction(tx, {
-      budgetId: currentBudget.id,
+      budgetId: currentBudgetId,
       period: currentMonth,
       total,
       pricesHidden,
@@ -1057,6 +1338,7 @@ export async function POST(req: NextRequest) {
       requestFingerprint,
       notes,
       poNumber,
+      deliveryAddressId,
       userId,
       role,
       userEmail: session.user?.email,
@@ -1092,6 +1374,7 @@ function orderRequestFingerprint(input: {
   branchId: number
   notes?: string
   poNumber?: string
+  deliveryAddressId?: number
   items: Array<{ organizationInventoryId: number; quantity: number }>
 }) {
   const canonical = {
@@ -1099,6 +1382,12 @@ function orderRequestFingerprint(input: {
     branchId: input.branchId,
     notes: input.notes || null,
     poNumber: input.poNumber || null,
+    // Present only when an address was chosen, which keeps the canonical object
+    // byte-identical to what it was before delivery addresses existed for every
+    // order that uses the branch default. Writing `?? null` instead would
+    // change the hash of every such request, turning an idempotent retry that
+    // spanned the deploy into a 409 "key already used for a different order".
+    ...(input.deliveryAddressId ? { deliveryAddressId: input.deliveryAddressId } : {}),
     items: input.items.slice().sort((a, b) => a.organizationInventoryId - b.organizationInventoryId),
   }
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex")

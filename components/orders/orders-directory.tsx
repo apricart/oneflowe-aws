@@ -53,6 +53,9 @@ import {
 } from "@/components/orders/order-detail-panel"
 import { getFulfillmentProgressColor, getPaymentStatusColor } from "@/lib/order-status-colors"
 import { ColumnSelector,type ColumnDef,useColumnSelector } from "@/components/reports/column-selector"
+import { SortableHeader,ariaSortFor } from "@/components/reports/sortable-header"
+import type { OrderListSortKey } from "@/lib/list-sort-keys"
+import type { SortDirection,SortState } from "@/lib/table-sort"
 import { isInvoiceAvailableForOrder } from "@/lib/invoice-availability"
 import { getOrderDerivedStatus,hasPartialRefund,type DerivedOrderStatusKey,type OrderStatusContext } from "@/lib/order-status"
 import { calculateLineCents,formatQuantity } from "@/lib/quantity"
@@ -72,22 +75,44 @@ import {
   shouldShowOrderFulfillmentStatus,
   shouldShowOrderPaymentStatus,
 } from "@/lib/order-status-display"
+import { isUnacknowledgedDelivery } from "@/lib/unacknowledged-delivery-block"
+import {
+  DELIVERED_UNFULFILLED_LABEL,
+  orderRowFulfilmentAction,
+} from "@/lib/unacknowledged-orders"
 
 type OrderTableColumn = ColumnDef & { width: number }
 
 const ORDER_TABLE_COLUMNS: OrderTableColumn[] = [
-  { key: "tid", label: "TID", width: 240 },
-  { key: "branch", label: "Branch", width: 180 },
-  { key: "costCenter", label: "Cost Center", width: 110 },
-  { key: "orderStatus", label: "Order Status", width: 150 },
-  { key: "progress", label: "Progress", width: 130 },
-  { key: "paymentStatus", label: "Payment", width: 120 },
-  { key: "refundStatus", label: "Refund", width: 130 },
-  { key: "orderDate", label: "Order Date", width: 120 },
-  { key: "approvalDate", label: "Approval Date", width: 130 },
-  { key: "deliveryDate", label: "Delivery Date", width: 130 },
-  { key: "amount", label: "Amount", width: 130 },
+  { key: "id", label: "Order ID", width: 96 },
+  { key: "tid", label: "Transaction ID", width: 224 },
+  { key: "branch", label: "Branch", width: 160 },
+  { key: "costCenter", label: "Cost Center", width: 104 },
+  { key: "orderStatus", label: "Order Status", width: 152 },
+  { key: "progress", label: "Progress", width: 140 },
+  { key: "paymentStatus", label: "Payment", width: 108 },
+  { key: "refundStatus", label: "Refund", width: 128 },
+  { key: "orderDate", label: "Order Date", width: 112 },
+  { key: "approvalDate", label: "Approval Date", width: 120 },
+  { key: "deliveryDate", label: "Delivery Date", width: 120 },
+  { key: "amount", label: "Amount", width: 120 },
 ]
+
+/**
+ * Approvers can hand a fulfillment token to admin operations from these two
+ * pinned columns. Super Admin deliberately does not render either column.
+ */
+const TOKEN_COLUMN_WIDTH = 180
+const ACTION_COLUMN_WIDTH = 150
+/** Numbers and dates show the largest or newest first on the first click. */
+const DESC_FIRST_SORT_KEYS = new Set<OrderListSortKey>(["id", "orderDate", "approvalDate", "deliveryDate", "amount"])
+const PINNED_CELL_CLASS = "sticky z-10 bg-white group-hover:bg-slate-50 dark:bg-slate-900 dark:group-hover:bg-slate-800"
+/**
+ * The table scrolls inside a bounded box so its horizontal scrollbar stays in
+ * view; the header row sticks to the top of that box while the body scrolls.
+ */
+const HEAD_CELL_CLASS = "sticky top-0 z-20 bg-slate-50 shadow-[inset_0_-1px_0_var(--color-slate-200)] dark:bg-slate-800 dark:shadow-[inset_0_-1px_0_var(--color-slate-700)]"
+const PINNED_HEAD_CLASS = "sticky top-0 z-30 bg-slate-50 shadow-[inset_0_-1px_0_var(--color-slate-200)] dark:bg-slate-800 dark:shadow-[inset_0_-1px_0_var(--color-slate-700)]"
 
 type OrdersDirectoryProps = {
   orders: any[]
@@ -99,6 +124,12 @@ type OrdersDirectoryProps = {
   canDecideOrders?: boolean
   showCostCenterId?: boolean
   pricesHidden?: boolean
+  /**
+   * The server-side sort of the list (`GET /api/v1/orders?sort=&dir=`). Without
+   * `onSort` the headers are plain labels.
+   */
+  sort?: SortState<OrderListSortKey>
+  onSort?: (key: OrderListSortKey, firstDirection?: SortDirection) => void
   onUpdate: () => void
 }
 
@@ -116,6 +147,23 @@ function GroupOrderBadge() {
       className="mt-1 rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-indigo-600 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-400"
     >
       Group Order
+    </Badge>
+  )
+}
+
+/**
+ * Marks an active order whose goods have arrived but which has not been
+ * fulfilled yet — the same rule the ordering block and the dashboard's
+ * "Delivered/Unacknowledged" figure use.
+ */
+function DeliveredUnfulfilledBadge() {
+  return (
+    <Badge
+      variant="outline"
+      title="Delivered to the branch, not yet fulfilled"
+      className="mt-1 rounded-lg border border-amber-300 bg-amber-50 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-700 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
+    >
+      {DELIVERED_UNFULFILLED_LABEL}
     </Badge>
   )
 }
@@ -144,6 +192,8 @@ export function OrdersDirectory({
   canDecideOrders = false,
   showCostCenterId,
   pricesHidden = false,
+  sort = null,
+  onSort,
   onUpdate
 }: Readonly<OrdersDirectoryProps>) {
   const router = useRouter()
@@ -151,15 +201,15 @@ export function OrdersDirectory({
   const [viewingOrder, setViewingOrder] = useState<any>(null)
 
   // Modals for actions
-  const [actionType, setActionType] = useState<"approve" | "reject" | "fulfill" | null>(null)
+  const [actionType, setActionType] = useState<"approve" | "reject" | null>(null)
   const [generatedToken, setGeneratedToken] = useState<string | null>(null)
   const [showTokenDialog, setShowTokenDialog] = useState(false)
   const [rejectReason, setRejectReason] = useState("")
-  const [fulfillToken, setFulfillToken] = useState("")
   const [isProcessing, setIsProcessing] = useState(false)
   const [isUpdatingProgress, setIsUpdatingProgress] = useState(false)
   const [isUpdatingPayment, setIsUpdatingPayment] = useState(false)
-  const [isSendingTokenEmail, setIsSendingTokenEmail] = useState(false)
+  /** The order whose token is being emailed; one at a time, from the row or the drawer. */
+  const [sendingTokenOrderId, setSendingTokenOrderId] = useState<number | null>(null)
   const [isOrderDetailsExpanded, setIsOrderDetailsExpanded] = useState(false)
   const [orderDetails, setOrderDetails] = useState<OrderDetails | null>(null)
   const [isOrderDetailsLoading, setIsOrderDetailsLoading] = useState(false)
@@ -179,11 +229,18 @@ export function OrdersDirectory({
   const availableTableColumnKeys = new Set(availableTableColumns.map((column) => column.key))
   const selectedTableColumns = availableTableColumns.filter((column) => isVisible(column.key))
   const selectedTableColumnKeys = selectedTableColumns.map((column) => column.key)
+  const showFulfillmentColumns = !isSuperAdmin
+  const fulfillmentColumnsWidth = showFulfillmentColumns
+    ? TOKEN_COLUMN_WIDTH + ACTION_COLUMN_WIDTH
+    : 0
   const tableMinWidth = Math.max(
     720,
     selectedTableColumns.reduce((total, column) => total + column.width, 0),
-  )
+  ) + fulfillmentColumnsWidth
   const isTableColumnVisible = (key: string) => availableTableColumnKeys.has(key) && isVisible(key)
+  const sortLabel = (key: OrderListSortKey, label: string) => (onSort
+    ? <SortableHeader label={label} sortKey={key} sort={sort} onSort={onSort} firstDirection={DESC_FIRST_SORT_KEYS.has(key) ? "desc" : "asc"} />
+    : label)
   const setSelectedTableColumns = (nextKeys: string[]) => {
     const unavailableKeys = visibleKeys.filter((key) => !availableTableColumnKeys.has(key))
     setVisibleKeys([...unavailableKeys, ...nextKeys])
@@ -369,10 +426,6 @@ export function OrdersDirectory({
       } else if (actionType === "reject") {
         endpoint = `/api/v1/orders/${viewingOrder.id}/reject`
         payload = { reason: rejectReason }
-      } else if (actionType === "fulfill") {
-        if (!fulfillToken) throw new Error("Fulfillment token is required")
-        endpoint = `/api/v1/orders/${viewingOrder.id}/fulfill`
-        payload = { approvalToken: fulfillToken }
       }
 
       const res = await fetch(endpoint, {
@@ -406,7 +459,6 @@ export function OrdersDirectory({
       setActionType(null)
       setViewingOrder(null)
       setRejectReason("")
-      setFulfillToken("")
       onUpdate()
 
     } catch (err: any) {
@@ -420,12 +472,29 @@ export function OrdersDirectory({
     }
   }
 
-  const sendTokenToAdmin = async () => {
-    if (!viewingOrder) return
+  const closeActionDialog = () => {
+    setActionType(null)
+  }
 
-    setIsSendingTokenEmail(true)
+  const copyToken = async (token: string) => {
     try {
-      const res = await fetch(`/api/v1/orders/${viewingOrder.id}/send-token-email`, {
+      await navigator.clipboard.writeText(token)
+      toast({ title: "Copied", description: "Fulfillment token copied to clipboard." })
+    } catch {
+      toast({
+        title: "Copy failed",
+        description: "Could not copy the fulfillment token. Please select and copy it manually.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  const sendTokenToAdmin = async (order: any) => {
+    if (!order || sendingTokenOrderId !== null) return
+
+    setSendingTokenOrderId(order.id)
+    try {
+      const res = await fetch(`/api/v1/orders/${order.id}/send-token-email`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       })
@@ -452,7 +521,7 @@ export function OrdersDirectory({
       // open panel and the list behind it are refreshed when it actually did.
       if (data?.fulfilled) {
         setViewingOrder((current: any) => (
-          current ? { ...current, status: "FULFILLED" } : current
+          current?.id === order.id ? { ...current, status: "FULFILLED" } : current
         ))
         onUpdate()
       }
@@ -463,7 +532,7 @@ export function OrdersDirectory({
         variant: "destructive",
       })
     } finally {
-      setIsSendingTokenEmail(false)
+      setSendingTokenOrderId(null)
     }
   }
 
@@ -543,9 +612,13 @@ export function OrdersDirectory({
 
                   <div className="relative z-10 mb-4 flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0 flex-1 space-y-1">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">TID</p>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Transaction ID</p>
                       <p className="truncate font-mono text-sm font-bold text-slate-800 dark:text-slate-100">{order.tid}</p>
+                      <p className="text-[10px] font-medium text-slate-500 dark:text-slate-400">
+                        Order ID <span className="font-mono">#{order.id}</span>
+                      </p>
                       {order.placedByGroupPortal && <GroupOrderBadge />}
+                      {isUnacknowledgedDelivery(order) && <DeliveredUnfulfilledBadge />}
                     </div>
                     <Badge
                       variant="outline"
@@ -616,7 +689,8 @@ export function OrdersDirectory({
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
             transition={{ duration: 0.2 }}
-            className="w-full min-w-0 max-w-full overflow-x-auto rounded-3xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900"
+            data-testid="orders-table-scroll"
+            className="orders-table-scrollbar max-h-[max(24rem,calc(100dvh-12rem))] w-full min-w-0 max-w-full rounded-3xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900"
           >
             <table
               className="w-full table-fixed text-sm"
@@ -626,20 +700,43 @@ export function OrdersDirectory({
                 {selectedTableColumns.map((column) => (
                   <col key={column.key} style={{ width: `${column.width}px` }} />
                 ))}
+                {showFulfillmentColumns && (
+                  <>
+                    <col style={{ width: `${TOKEN_COLUMN_WIDTH}px` }} />
+                    <col style={{ width: `${ACTION_COLUMN_WIDTH}px` }} />
+                  </>
+                )}
               </colgroup>
               <thead>
-                <tr className="border-b border-slate-200 bg-slate-50/70 text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:border-slate-800 dark:bg-slate-800/50">
-                  {isTableColumnVisible("tid") && <th className="h-14 whitespace-nowrap py-3 pl-6 pr-4 text-left font-bold">TID</th>}
-                  {isTableColumnVisible("branch") && <th className="h-14 whitespace-nowrap px-4 py-3 text-left font-bold">Branch</th>}
-                  {isTableColumnVisible("costCenter") && <th className="h-14 whitespace-nowrap px-4 py-3 text-left font-bold">Cost Center</th>}
-                  {isTableColumnVisible("orderStatus") && <th className="h-14 whitespace-nowrap px-4 py-3 text-center font-bold">Order Status</th>}
-                  {isTableColumnVisible("progress") && <th className="h-14 whitespace-nowrap px-4 py-3 text-center font-bold">Progress</th>}
-                  {isTableColumnVisible("paymentStatus") && <th className="h-14 whitespace-nowrap px-4 py-3 text-center font-bold">Payment</th>}
-                  {isTableColumnVisible("refundStatus") && <th className="h-14 whitespace-nowrap px-4 py-3 text-center font-bold">Refund</th>}
-                  {isTableColumnVisible("orderDate") && <th className="h-14 whitespace-nowrap px-4 py-3 text-left font-bold">Order Date</th>}
-                  {isTableColumnVisible("approvalDate") && <th className="h-14 whitespace-nowrap px-4 py-3 text-left font-bold">Approval Date</th>}
-                  {isTableColumnVisible("deliveryDate") && <th className="h-14 whitespace-nowrap px-4 py-3 text-left font-bold">Delivery Date</th>}
-                  {isTableColumnVisible("amount") && <th className="h-14 whitespace-nowrap py-3 pl-4 pr-6 text-right font-bold">Amount</th>}
+                <tr className="border-b border-slate-200 text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:border-slate-800">
+                  {isTableColumnVisible("id") && <th aria-sort={ariaSortFor(sort, "id")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap py-2.5 pl-5 pr-3 text-left font-bold")}>{sortLabel("id", "Order ID")}</th>}
+                  {isTableColumnVisible("tid") && <th aria-sort={ariaSortFor(sort, "tid")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-left font-bold")}>{sortLabel("tid", "Transaction ID")}</th>}
+                  {isTableColumnVisible("branch") && <th aria-sort={ariaSortFor(sort, "branch")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-left font-bold")}>{sortLabel("branch", "Branch")}</th>}
+                  {isTableColumnVisible("costCenter") && <th aria-sort={ariaSortFor(sort, "costCenter")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-left font-bold")}>{sortLabel("costCenter", "Cost Center")}</th>}
+                  {isTableColumnVisible("orderStatus") && <th aria-sort={ariaSortFor(sort, "orderStatus")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-center font-bold")}>{sortLabel("orderStatus", "Order Status")}</th>}
+                  {isTableColumnVisible("progress") && <th aria-sort={ariaSortFor(sort, "progress")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-center font-bold")}>{sortLabel("progress", "Progress")}</th>}
+                  {isTableColumnVisible("paymentStatus") && <th aria-sort={ariaSortFor(sort, "paymentStatus")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-center font-bold")}>{sortLabel("paymentStatus", "Payment")}</th>}
+                  {isTableColumnVisible("refundStatus") && <th aria-sort={ariaSortFor(sort, "refundStatus")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-center font-bold")}>{sortLabel("refundStatus", "Refund")}</th>}
+                  {isTableColumnVisible("orderDate") && <th aria-sort={ariaSortFor(sort, "orderDate")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-left font-bold")}>{sortLabel("orderDate", "Order Date")}</th>}
+                  {isTableColumnVisible("approvalDate") && <th aria-sort={ariaSortFor(sort, "approvalDate")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-left font-bold")}>{sortLabel("approvalDate", "Approval Date")}</th>}
+                  {isTableColumnVisible("deliveryDate") && <th aria-sort={ariaSortFor(sort, "deliveryDate")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-left font-bold")}>{sortLabel("deliveryDate", "Delivery Date")}</th>}
+                  {isTableColumnVisible("amount") && <th aria-sort={ariaSortFor(sort, "amount")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap py-2.5 pl-3 pr-5 text-right font-bold")}>{sortLabel("amount", "Amount")}</th>}
+                  {showFulfillmentColumns && (
+                    <>
+                      <th
+                        className={cn(PINNED_HEAD_CLASS, "h-11 whitespace-nowrap border-l border-slate-200 px-3 py-2.5 text-left font-bold dark:border-slate-700")}
+                        style={{ right: ACTION_COLUMN_WIDTH }}
+                      >
+                        Fulfillment Token
+                      </th>
+                      <th
+                        className={cn(PINNED_HEAD_CLASS, "h-11 whitespace-nowrap py-2.5 pl-3 pr-5 text-right font-bold")}
+                        style={{ right: 0 }}
+                      >
+                        Action
+                      </th>
+                    </>
+                  )}
                 </tr>
               </thead>
               <tbody>
@@ -647,6 +744,15 @@ export function OrdersDirectory({
                   const statusDisplay = getOrderStatusDisplay(order, statusContext)
                   const derivedStatus = statusDisplay.orderStatus
                   const statusColors = getStatusColor(derivedStatus.key)
+                  const isActiveOrder = String(order.status || "").toUpperCase() === "APPROVED"
+                  const rowToken = isActiveOrder && typeof order.approvalToken === "string" && order.approvalToken
+                    ? order.approvalToken
+                    : null
+                  const rowAction = showFulfillmentColumns ? orderRowFulfilmentAction({
+                    canFulfilWithToken: false,
+                    status: order.status,
+                    approvalToken: order.approvalToken,
+                  }) : null
                   return (
                     <motion.tr
                       initial={{ opacity: 0, x: -10 }}
@@ -656,11 +762,19 @@ export function OrdersDirectory({
                       onClick={() => setViewingOrder(order)}
                       className="group border-b border-slate-50 dark:border-slate-800/50 hover:bg-slate-50/80 dark:hover:bg-slate-800/30 cursor-pointer transition-colors"
                     >
-                      {isTableColumnVisible("tid") && <td className="py-5 pl-6 pr-4">
+                      {isTableColumnVisible("id") && (
+                        <td className="py-3 pl-5 pr-3">
+                          <span className="font-mono text-xs font-bold text-slate-600 dark:text-slate-300">
+                            #{order.id}
+                          </span>
+                        </td>
+                      )}
+                      {isTableColumnVisible("tid") && <td className="px-3 py-3">
                         <span className="block truncate font-mono text-xs font-bold text-slate-700 dark:text-slate-300 group-hover:text-indigo-600 transition-colors uppercase tracking-wider" title={order.tid}>{order.tid}</span>
                         {order.placedByGroupPortal && <GroupOrderBadge />}
+                        {isUnacknowledgedDelivery(order) && <DeliveredUnfulfilledBadge />}
                       </td>}
-                      {isTableColumnVisible("branch") && <td className="px-4 py-5">
+                      {isTableColumnVisible("branch") && <td className="px-3 py-3">
                         <div className="flex items-center gap-2">
                           <Building2 className="h-3.5 w-3.5 shrink-0 text-indigo-500 opacity-60" />
                           <span className="min-w-0 truncate font-medium text-slate-600 dark:text-slate-400" title={order.branchName || `#${order.branchId}`}>
@@ -669,32 +783,32 @@ export function OrdersDirectory({
                         </div>
                       </td>}
                       {isTableColumnVisible("costCenter") && (
-                        <td className="px-4 py-5">
+                        <td className="px-3 py-3">
                           <span className="font-mono text-xs font-bold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-md">
                             {order.branchCostCenterId || "-"}
                           </span>
                         </td>
                       )}
-                      {isTableColumnVisible("orderStatus") && <td className="px-4 py-5 text-center">
+                      {isTableColumnVisible("orderStatus") && <td className="px-3 py-3 text-center">
                         <Badge variant="outline" className={cn("px-2 py-0.5 text-[10px] uppercase font-bold tracking-wider rounded-lg border", statusColors.bg, statusColors.text, statusColors.border)}>
                           {derivedStatus.label}
                         </Badge>
                       </td>}
-                      {isTableColumnVisible("progress") && <td className="px-4 py-5 text-center">
+                      {isTableColumnVisible("progress") && <td className="px-3 py-3 text-center">
                         {statusDisplay.fulfillmentStatus ? (
                           <Badge variant="outline" className={cn("px-2 py-0.5 text-[9px] uppercase font-bold tracking-wider rounded-lg border", getFulfillmentProgressColor(order.fulfillmentStatus))}>
                             {statusDisplay.fulfillmentStatus}
                           </Badge>
                         ) : <span className="text-slate-300 dark:text-slate-600">—</span>}
                       </td>}
-                      {isTableColumnVisible("paymentStatus") && <td className="px-4 py-5 text-center">
+                      {isTableColumnVisible("paymentStatus") && <td className="px-3 py-3 text-center">
                         {statusDisplay.paymentStatus ? (
                           <Badge variant="outline" className={cn("px-2 py-0.5 text-[9px] uppercase font-bold tracking-wider rounded-lg border", getPaymentStatusColor(order.paymentStatus))}>
                             {statusDisplay.paymentStatus}
                           </Badge>
                         ) : <span className="text-slate-300 dark:text-slate-600">—</span>}
                       </td>}
-                      {isTableColumnVisible("refundStatus") && <td className="px-4 py-5 text-center">
+                      {isTableColumnVisible("refundStatus") && <td className="px-3 py-3 text-center">
                         {(() => {
                           if (statusDisplay.refundStatus) {
                             return (
@@ -714,24 +828,79 @@ export function OrdersDirectory({
                           return <span className="text-slate-300 dark:text-slate-600">—</span>
                         })()}
                       </td>}
-                      {isTableColumnVisible("orderDate") && <td className="whitespace-nowrap px-4 py-5 text-xs font-medium text-slate-500">
+                      {isTableColumnVisible("orderDate") && <td className="whitespace-nowrap px-3 py-3 text-xs font-medium text-slate-500">
                         {format(new Date(order.createdAt), "dd MMM yyyy")}
                       </td>}
-                      {isTableColumnVisible("approvalDate") && <td className="whitespace-nowrap px-4 py-5 text-xs font-medium text-slate-500">
+                      {isTableColumnVisible("approvalDate") && <td className="whitespace-nowrap px-3 py-3 text-xs font-medium text-slate-500">
                         {order.approvedAt ? format(new Date(order.approvedAt), "dd MMM yyyy") : "—"}
                       </td>}
-                      {isTableColumnVisible("deliveryDate") && <td className="whitespace-nowrap px-4 py-5 text-xs font-medium text-slate-500">
+                      {isTableColumnVisible("deliveryDate") && <td className="whitespace-nowrap px-3 py-3 text-xs font-medium text-slate-500">
                         {order.deliveredAt ? format(new Date(order.deliveredAt), "dd MMM yyyy") : "—"}
                       </td>}
-                      {isTableColumnVisible("amount") && <td className="whitespace-nowrap py-5 pl-4 pr-6 text-right font-bold text-slate-800 dark:text-slate-200">
+                      {isTableColumnVisible("amount") && <td className="whitespace-nowrap py-3 pl-3 pr-5 text-right font-bold text-slate-800 dark:text-slate-200">
                         {order.totalCents !== null && order.totalCents !== undefined ? formatPKR(order.totalCents / 100) : "-"}
                       </td>}
+                      {showFulfillmentColumns && (
+                        <>
+                      <td
+                        className={cn(PINNED_CELL_CLASS, "border-l border-slate-100 px-3 py-3 dark:border-slate-800")}
+                        style={{ right: ACTION_COLUMN_WIDTH }}
+                      >
+                        {rowToken ? (
+                          <div className="flex min-w-0 items-center gap-1.5">
+                            <code
+                              className="min-w-0 truncate rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1 font-mono text-xs font-bold tracking-[0.12em] text-indigo-700 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-300"
+                              title={rowToken}
+                            >
+                              {rowToken}
+                            </code>
+                            <Button
+                              type="button"
+                              size="icon"
+                              variant="ghost"
+                              className="h-7 w-7 shrink-0"
+                              aria-label={`Copy fulfillment token for order ${order.tid}`}
+                              title="Copy fulfillment token"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                void copyToken(rowToken)
+                              }}
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        ) : <span className="text-slate-300 dark:text-slate-600">—</span>}
+                      </td>
+                      <td
+                        className={cn(PINNED_CELL_CLASS, "py-3 pl-3 pr-5 text-right")}
+                        style={{ right: 0 }}
+                      >
+                        {rowAction === "send-token" && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            disabled={sendingTokenOrderId !== null}
+                            className="h-8 gap-1.5 rounded-lg bg-indigo-600 px-3 text-xs font-bold text-white hover:bg-indigo-500"
+                            aria-label={`Fulfil order ${order.tid} by emailing its token`}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              void sendTokenToAdmin(order)
+                            }}
+                          >
+                            <Send className={cn("h-3.5 w-3.5", sendingTokenOrderId === order.id && "animate-pulse")} />
+                            {sendingTokenOrderId === order.id ? "Sending..." : "Send token"}
+                          </Button>
+                        )}
+                        {!rowAction && <span className="text-slate-300 dark:text-slate-600">—</span>}
+                      </td>
+                        </>
+                      )}
                     </motion.tr>
                   )
                 })}
                 {orders.length === 0 && (
                   <tr>
-                    <td colSpan={Math.max(selectedTableColumns.length, 1)}>
+                    <td colSpan={selectedTableColumns.length + (showFulfillmentColumns ? 2 : 0)}>
                       <EmptyOrdersState compact />
                     </td>
                   </tr>
@@ -759,15 +928,17 @@ export function OrdersDirectory({
               order={viewingOrder}
               statusContext={statusContext}
               isSuperAdmin={isSuperAdmin}
-              showFulfillmentToken={canDecideOrders}
+              showFulfillmentToken={!isSuperAdmin && canDecideOrders}
               details={orderDetails?.id === viewingOrder.id ? orderDetails : null}
               detailsExpanded={isOrderDetailsExpanded}
               detailsLoading={isOrderDetailsLoading}
               detailsError={orderDetailsError}
               onToggleDetails={() => setIsOrderDetailsExpanded((expanded) => !expanded)}
               onRetryDetails={() => setOrderDetailsRequestKey((key) => key + 1)}
-              onSendToken={sendTokenToAdmin}
-              isSendingToken={isSendingTokenEmail}
+              onSendToken={!isSuperAdmin && canDecideOrders
+                ? () => { void sendTokenToAdmin(viewingOrder) }
+                : undefined}
+              isSendingToken={sendingTokenOrderId !== null}
               actions={(() => {
                 const isRefundRelated =
                   viewingOrder.status?.toLowerCase() === "refunded" ||
@@ -844,14 +1015,6 @@ export function OrdersDirectory({
 
                   {viewingOrder.status.toLowerCase() === "approved" && isSuperAdmin && (
                     <div className="w-full space-y-3">
-                      {/* The token reached admin operations before the goods
-                          did, so recording delivery is what completes this
-                          order. Saying so here stops it looking unfinished. */}
-                      {viewingOrder.tokenHandoffAt && (
-                        <p className="rounded-xl border border-dashed border-emerald-200 bg-emerald-50/60 p-3 text-xs font-medium text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/20 dark:text-emerald-300">
-                          Fulfilment token already sent to the admin — this order is marked fulfilled as soon as it is delivered.
-                        </p>
-                      )}
                       {(() => {
                         const nextStatus = getNextFulfillmentStatus(viewingOrder.fulfillmentStatus)
                         return (() => {
@@ -871,10 +1034,6 @@ export function OrdersDirectory({
                           return null
                         })()
                       })()}
-                      <Button onClick={() => setActionType("fulfill")} className="w-full h-12 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold shadow-lg shadow-indigo-600/20">
-                        <CheckCircle className="mr-2 h-4 w-4" />
-                        Fulfill Order
-                      </Button>
                     </div>
                   )}
                 </div>
@@ -887,16 +1046,14 @@ export function OrdersDirectory({
       </Sheet>
 
       {/* Action Dialogs (Replacing the old ones) */}
-      <Dialog open={!!actionType} onOpenChange={(open) => !open && setActionType(null)}>
+      <Dialog open={!!actionType} onOpenChange={(open) => !open && closeActionDialog()}>
         <DialogContent className="max-w-md border-0 shadow-2xl bg-white/90 dark:bg-slate-900/95 backdrop-blur-xl rounded-[2rem]">
           <DialogHeader>
             <DialogTitle className="text-xl font-black tracking-tight flex items-center gap-2">
               {actionType === 'reject' && <XCircle className="text-rose-500 h-6 w-6" />}
               {actionType === 'approve' && <CheckCircle className="text-emerald-500 h-6 w-6" />}
-              {actionType === 'fulfill' && <Package className="text-indigo-500 h-6 w-6" />}
               {actionType === "reject" && "Reject Order"}
               {actionType === "approve" && "Approve Order"}
-              {actionType === "fulfill" && "Fulfill Order"}
             </DialogTitle>
           </DialogHeader>
 
@@ -916,29 +1073,13 @@ export function OrdersDirectory({
             {actionType === "approve" && (
               <p className="text-sm font-medium text-slate-500">Are you sure you want to approve TID {viewingOrder?.tid}? This will notify Super Admin.</p>
             )}
-            {actionType === "fulfill" && (
-              <div className="space-y-4">
-                <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-800">
-                  <p className="text-sm font-medium text-amber-800 dark:text-amber-400">
-                    Enter the approval token provided by the organization approver to verify this fulfillment.
-                  </p>
-                </div>
-                <Input
-                  value={fulfillToken}
-                  onChange={(e) => setFulfillToken(e.target.value)}
-                  placeholder="e.g. A1B2C3D4"
-                  className="h-14 font-mono text-center text-lg tracking-widest font-bold uppercase rounded-xl border-indigo-200 shadow-inner"
-                  autoFocus
-                />
-              </div>
-            )}
           </div>
 
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setActionType(null)} disabled={isProcessing} className="h-11 rounded-xl">Cancel</Button>
+            <Button variant="ghost" onClick={closeActionDialog} disabled={isProcessing} className="h-11 rounded-xl">Cancel</Button>
             <Button
               onClick={executeAction}
-              disabled={isProcessing || (actionType === 'reject' && !rejectReason) || (actionType === 'fulfill' && !fulfillToken)}
+              disabled={isProcessing || (actionType === 'reject' && !rejectReason)}
               className={cn("h-11 rounded-xl font-bold px-6 text-white shadow-lg",
                 (() => {
                   if (actionType === 'reject') {

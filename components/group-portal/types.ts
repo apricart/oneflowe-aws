@@ -38,6 +38,11 @@ export type BranchBudgetResponse = {
   items: BranchBudgetSummary[]
   /** The `YYYY-MM` period the figures belong to. */
   period: string
+  /**
+   * False when the tenant has budget allocation switched off; `items` is then
+   * empty and every location shows no budget figure.
+   */
+  budgetsEnabled?: boolean
 }
 
 export type CatalogItem = {
@@ -124,6 +129,14 @@ export type BranchResult =
     branchId: number
     branchName: string
     reason: string
+    /**
+     * "PAYMENT_CONTROL_BLOCKED" when the branch was refused for unpaid
+     * invoices, "UNACKNOWLEDGED_DELIVERIES_BLOCKED" when refused for delivered
+     * orders awaiting acknowledgement.
+     */
+    code?: string
+    unpaidInvoiceCount?: number
+    unacknowledgedDeliveryCount?: number
   }
 
 export type GroupOrderSubmission = {

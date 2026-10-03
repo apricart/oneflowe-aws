@@ -1,3 +1,5 @@
+import { PORTAL_CHROME_ROLES, usesPortalChrome, type PortalChromeRole } from "@/lib/portal-chrome"
+
 /**
  * Which shell the support area wears.
  *
@@ -10,25 +12,21 @@
  * back through a "Back to dashboard" link. So the shell is chosen per role:
  * whoever the sidebar builds a menu for keeps that menu here.
  *
- * The list below must agree with `getNavigationByRole` in
- * `components/shell/sidebar.tsx` — that function is where a role does or does
- * not get a `/support` entry, and an entry that leads somewhere menu-less is
- * the bug this module exists to prevent. `support-shell.test.ts` reads the
- * sidebar and fails if the two disagree.
+ * That rule is not particular to support — `/delivery-addresses` is shared for
+ * the same reason and answers it the same way — so the list itself now lives in
+ * `lib/portal-chrome.ts` and this module is the support-shaped name for it.
+ * The names below are kept because callers and `support-shell.test.ts` use
+ * them; that test reads the sidebar and fails if the two disagree about
+ * `/support`.
  *
  * Pure: no session, no request, no database. Presentation only — wearing the
  * sidebar grants nothing, `lib/support-access.ts` decides what may be read.
  */
 
 /** Roles that keep the portal chrome (sidebar and topbar) inside `/support`. */
-export const SUPPORT_PORTAL_SHELL_ROLES = [
-  "SUPER_ADMIN",
-  "HEAD_OFFICE",
-  "BRANCH_ADMIN",
-  "GROUP_USER",
-] as const
+export const SUPPORT_PORTAL_SHELL_ROLES = PORTAL_CHROME_ROLES
 
-export type SupportPortalShellRole = (typeof SUPPORT_PORTAL_SHELL_ROLES)[number]
+export type SupportPortalShellRole = PortalChromeRole
 
 /**
  * Does this role read `/support` inside the portal chrome?
@@ -38,8 +36,5 @@ export type SupportPortalShellRole = (typeof SUPPORT_PORTAL_SHELL_ROLES)[number]
  * role too — the safe answer is the shell that assumes nothing.
  */
 export function supportUsesPortalShell(role: string | null | undefined): boolean {
-  return (
-    typeof role === "string" &&
-    SUPPORT_PORTAL_SHELL_ROLES.includes(role as SupportPortalShellRole)
-  )
+  return usesPortalChrome(role)
 }

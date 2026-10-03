@@ -5,6 +5,9 @@ import { GlobalDateFilter,type FilterPreset,type GlobalDateFilterChange } from "
 import { BranchFilter } from "@/components/reports/branch-filter"
 import { GroupFilter } from "@/components/reports/group-filter"
 import { KPICard } from "@/components/reports/kpi-card"
+import { ReportTableScroll } from "@/components/reports/report-table-scroll"
+import { SortableHeader, ariaSortFor, useTableSort } from "@/components/reports/sortable-header"
+import { sortRows, type SortValue } from "@/lib/table-sort"
 import { MultiSelectFilter } from "@/components/reports/multi-select-filter"
 import { OrganizationFilter } from "@/components/reports/organization-filter"
 import { UserFilter } from "@/components/reports/user-filter"
@@ -12,6 +15,7 @@ import { UsersToReviewTab } from "@/components/reports/users-to-review-tab"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card,CardContent } from "@/components/ui/card"
+import { usesPurchaseWording } from "@/lib/purchase-wording"
 import {
 DropdownMenu,
 DropdownMenuContent,
@@ -47,7 +51,7 @@ Upload,
 UserSearch,Users
 } from "lucide-react"
 import { useSession } from "next-auth/react"
-import { useCallback,useEffect,useMemo,useRef,useState } from "react"
+import { useCallback,useEffect,useMemo,useRef,useState,type ReactNode } from "react"
 import {
 Bar,
 CartesianGrid,
@@ -68,6 +72,21 @@ const fetcher = (url: string) => fetch(url).then((r) => r.json())
 const ALL_MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 const CHART_MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
+type UserSortKey = "name" | "status" | "employeeId" | "branch" | "orders" | "fulfilled" | "refunded" | "revenue"
+/** What each sortable column of the user table orders by. */
+const USER_SORT_ACCESSORS: Record<UserSortKey, (row: any) => SortValue> = {
+    name: (row) => row.userName,
+    status: (row) => row.status,
+    employeeId: (row) => row.employeeId || row.userId,
+    branch: (row) => [row.organizationName, row.branchName].filter(Boolean).join(" "),
+    orders: (row) => row.totalOrders,
+    fulfilled: (row) => row.fulfilledOrders,
+    refunded: (row) => row.refundedOrders,
+    revenue: (row) => row.totalSpentCents,
+}
+/** Numbers and dates show the largest or newest first on the first click. */
+const USER_DESC_FIRST_SORT_KEYS = new Set<UserSortKey>(["orders", "fulfilled", "refunded", "revenue"])
+
 export default function UserReportPage() {
 
     const {
@@ -79,7 +98,7 @@ export default function UserReportPage() {
     const { data: session, status: sessionStatus } = useSession()
     const role = (session?.user as any)?.role as Role
     const showsUsersToReview = isBudgetBurnRole(role)
-    const isBuyer = role === "HEAD_OFFICE" || role === "BRANCH_ADMIN"
+    const isBuyer = usesPurchaseWording(role)
     const userOrgId = (session?.user as any)?.organizationId
 
     const [hasMounted, setHasMounted] = useState(false)
@@ -363,6 +382,19 @@ export default function UserReportPage() {
         (u.branchName || "").toLowerCase().includes(reportSearch.toLowerCase()) ||
         (u.employeeId || "").toLowerCase().includes(reportSearch.toLowerCase()) ||
         (u.organizationName || "").toLowerCase().includes(reportSearch.toLowerCase())
+    )
+
+    // Column sort, applied after the search filter (plans/OF-TABLE-column-sorting.md).
+    const { sort: userSort, toggleSort: toggleUserSort } = useTableSort<UserSortKey>()
+    const sortedUserRows = useMemo(() => sortRows(filteredUsers, userSort, USER_SORT_ACCESSORS), [filteredUsers, userSort])
+    const sortUserHead = (key: UserSortKey, label: ReactNode) => (
+        <SortableHeader
+            label={label}
+            sortKey={key}
+            sort={userSort}
+            onSort={toggleUserSort}
+            firstDirection={USER_DESC_FIRST_SORT_KEYS.has(key) ? "desc" : "asc"}
+        />
     )
 
     // KPI Metrics
@@ -890,7 +922,7 @@ export default function UserReportPage() {
                                 </div>
                             </div>
 
-                            <div className="overflow-x-auto relative min-h-[400px]">
+                            <ReportTableScroll className="relative min-h-[400px]">
                                 {isReportLoading && (
                                     <div className="absolute inset-0 bg-white/30 dark:bg-slate-900/30 backdrop-blur-[1px] z-10 flex items-center justify-center">
                                         <Loader2 className="h-10 w-10 animate-spin text-slate-300" />
@@ -899,14 +931,14 @@ export default function UserReportPage() {
                                 <Table>
                                     <TableHeader>
                                         <TableRow className="bg-slate-50/50 dark:bg-slate-800/30 border-b border-slate-100/50 dark:border-slate-800/50">
-                                            <TableHead className="pl-8 h-14 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Employee Profile</TableHead>
-                                            <TableHead className="h-14 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 text-center">Status</TableHead>
-                                            <TableHead className="h-14 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">ID Reference</TableHead>
-                                            {role !== "BRANCH_ADMIN" && <TableHead className="h-14 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">{role === "SUPER_ADMIN" ? "Domain / Branch" : "Branch"}</TableHead>}
-                                            <TableHead className="h-14 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 text-center">Orders {compare && "(A/B)"}</TableHead>
-                                            <TableHead className="h-14 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 text-center">Fulfilled</TableHead>
-                                            <TableHead className="h-14 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 text-center">Refunded</TableHead>
-                                            {!pricesHidden && <TableHead className="text-right pr-8 h-14 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">{isBuyer ? "Purchased" : "Revenue"} {compare && "(A/B)"}</TableHead>}
+                                            <TableHead aria-sort={ariaSortFor(userSort, "name")} className="pl-8 h-14 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">{sortUserHead("name", "Employee Profile")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(userSort, "status")} className="h-14 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 text-center">{sortUserHead("status", "Status")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(userSort, "employeeId")} className="h-14 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">{sortUserHead("employeeId", "ID Reference")}</TableHead>
+                                            {role !== "BRANCH_ADMIN" && <TableHead aria-sort={ariaSortFor(userSort, "branch")} className="h-14 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">{sortUserHead("branch", role === "SUPER_ADMIN" ? "Domain / Branch" : "Branch")}</TableHead>}
+                                            <TableHead aria-sort={ariaSortFor(userSort, "orders")} className="h-14 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 text-center">{sortUserHead("orders", <>Orders {compare && "(A/B)"}</>)}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(userSort, "fulfilled")} className="h-14 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 text-center">{sortUserHead("fulfilled", "Fulfilled")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(userSort, "refunded")} className="h-14 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 text-center">{sortUserHead("refunded", "Refunded")}</TableHead>
+                                            {!pricesHidden && <TableHead aria-sort={ariaSortFor(userSort, "revenue")} className="text-right pr-8 h-14 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">{sortUserHead("revenue", <>{isBuyer ? "Purchased" : "Revenue"} {compare && "(A/B)"}</>)}</TableHead>}
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
@@ -917,7 +949,7 @@ export default function UserReportPage() {
                                         )
                                           }
                                           return (
-                                            filteredUsers.map((u: any) => (
+                                            sortedUserRows.map((u: any) => (
                                                 <TableRow key={`${u.userId}-${u.userEmail}`} className="group hover:bg-slate-100/50 dark:hover:bg-slate-800/50 transition-all duration-300">
                                                     <TableCell className="pl-8 py-5">
                                                         <div className="flex flex-col gap-0.5">
@@ -988,7 +1020,7 @@ export default function UserReportPage() {
                                         })()}
                                     </TableBody>
                                 </Table>
-                            </div>
+                            </ReportTableScroll>
                             <div className="p-6 bg-slate-50/50 dark:bg-slate-900/40 text-center border-t border-slate-100/50 dark:border-slate-800 flex justify-between items-center group">
                                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em] italic">System Generated Audit • {generatedDate}</p>
                                 <div className="h-1 w-24 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden">

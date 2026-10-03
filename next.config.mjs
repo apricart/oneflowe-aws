@@ -20,6 +20,12 @@ const nextConfig = {
   // Performance optimizations
   experimental: {
     optimizePackageImports: ['lucide-react', '@radix-ui/react-icons'],
+    // `next dev` exits and restarts once the heap passes 80% of its limit. The
+    // Playwright suite compiles most of the app in one server, crosses that on a
+    // CI runner, and the restart drops in-flight requests and throws away every
+    // compiled route mid-test. The suite turns it off (`E2E_DISABLE_DEV_MEMORY_RESTART`);
+    // `npm run dev` keeps the default.
+    devMemoryThresholdRestart: process.env.E2E_DISABLE_DEV_MEMORY_RESTART !== '1',
   },
   turbopack: {
     rules: {

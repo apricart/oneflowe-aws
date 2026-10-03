@@ -5,10 +5,14 @@ import { type FilterPreset,GlobalDateFilter,type GlobalDateFilterChange } from "
 import { BranchFilter } from "@/components/reports/branch-filter"
 import { GroupFilter } from "@/components/reports/group-filter"
 import { KPICard } from "@/components/reports/kpi-card"
+import { ReportTableScroll } from "@/components/reports/report-table-scroll"
+import { SortableHeader, ariaSortFor, useTableSort } from "@/components/reports/sortable-header"
+import { sortRows, type SortValue } from "@/lib/table-sort"
 import { MultiSelectFilter } from "@/components/reports/multi-select-filter"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card,CardContent,CardHeader,CardTitle } from "@/components/ui/card"
+import { usesPurchaseWording } from "@/lib/purchase-wording"
 import {
 DropdownMenu,
 DropdownMenuContent,
@@ -57,7 +61,7 @@ Users
 } from "lucide-react"
 import { useSession } from "next-auth/react"
 import { usePathname,useRouter,useSearchParams } from "next/navigation"
-import { useCallback,useEffect,useMemo,useRef,useState } from "react"
+import { useCallback,useEffect,useMemo,useRef,useState,type ReactNode } from "react"
 import {
 Bar,
 CartesianGrid,
@@ -109,10 +113,24 @@ const formatTrendPeriodLabel = (period: string) => {
     return period
 }
 
+type OrganizationSortKey = "organization" | "status" | "branches" | "users" | "revenue" | "orders" | "fulfillment"
+/** What each sortable column of the organization table orders by. */
+const ORGANIZATION_SORT_ACCESSORS: Record<OrganizationSortKey, (row: any) => SortValue> = {
+    organization: (row) => row.organizationName,
+    status: (row) => row.organizationStatus,
+    branches: (row) => row.activeBranchCount,
+    users: (row) => row.totalUserCount,
+    revenue: (row) => row.revenue,
+    orders: (row) => row.orderCount,
+    fulfillment: (row) => row.fulfilledCount,
+}
+/** Numbers and dates show the largest or newest first on the first click. */
+const ORGANIZATION_DESC_FIRST_SORT_KEYS = new Set<OrganizationSortKey>(["branches", "users", "revenue", "orders", "fulfillment"])
+
 export default function OrganizationReportPage() {
     const { data: session } = useSession()
     const role = (session?.user as any)?.role
-    const isBuyer = role === "HEAD_OFFICE" || role === "BRANCH_ADMIN"
+    const isBuyer = usesPurchaseWording(role)
     const userOrgId = (session?.user as any)?.organizationId
     const router = useRouter()
     const searchParams = useSearchParams()
@@ -445,6 +463,19 @@ export default function OrganizationReportPage() {
             s.organizationId.toString().includes(reportSearch)
         )
     }, [stats, reportSearch])
+
+    // Column sort, applied after the search filter (plans/OF-TABLE-column-sorting.md).
+    const { sort: organizationSort, toggleSort: toggleOrganizationSort } = useTableSort<OrganizationSortKey>()
+    const sortedOrganizationRows = useMemo(() => sortRows(filteredStats, organizationSort, ORGANIZATION_SORT_ACCESSORS), [filteredStats, organizationSort])
+    const sortOrganizationHead = (key: OrganizationSortKey, label: ReactNode) => (
+        <SortableHeader
+            label={label}
+            sortKey={key}
+            sort={organizationSort}
+            onSort={toggleOrganizationSort}
+            firstDirection={ORGANIZATION_DESC_FIRST_SORT_KEYS.has(key) ? "desc" : "asc"}
+        />
+    )
 
     return (
         <div className="min-h-screen bg-[#f8fafc] dark:bg-[#020617] transition-colors duration-500 pb-20">
@@ -929,17 +960,17 @@ export default function OrganizationReportPage() {
                                     </div>
                                 </div>
                             </CardHeader>
-                            <CardContent className="p-0 flex-1 overflow-auto">
+                            <ReportTableScroll className="flex-1">
                                 <Table>
                                     <TableHeader>
                                         <TableRow className="bg-slate-50/50 dark:bg-slate-900/50 border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50/50 dark:hover:bg-slate-900/50">
-                                            <TableHead className="pl-8 h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400">Organization</TableHead>
-                                            <TableHead className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-center">Status</TableHead>
-                                            <TableHead className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-center">Branches (Act/Ina)</TableHead>
-                                            <TableHead className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-center">Managed Users</TableHead>
-                                            <TableHead className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-right">{isBuyer ? "Purchase (PKR)" : "Revenue (PKR)"}</TableHead>
-                                            <TableHead className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-right">Orders</TableHead>
-                                            <TableHead className="px-8 h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-center">Fulfillment</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(organizationSort, "organization")} className="pl-8 h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400">{sortOrganizationHead("organization", "Organization")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(organizationSort, "status")} className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-center">{sortOrganizationHead("status", "Status")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(organizationSort, "branches")} className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-center">{sortOrganizationHead("branches", "Branches (Act/Ina)")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(organizationSort, "users")} className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-center">{sortOrganizationHead("users", "Managed Users")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(organizationSort, "revenue")} className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-right">{sortOrganizationHead("revenue", isBuyer ? "Purchase (PKR)" : "Revenue (PKR)")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(organizationSort, "orders")} className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-right">{sortOrganizationHead("orders", "Orders")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(organizationSort, "fulfillment")} className="px-8 h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-center">{sortOrganizationHead("fulfillment", "Fulfillment")}</TableHead>
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
@@ -966,7 +997,7 @@ export default function OrganizationReportPage() {
                                         )
                                           }
                                           return (
-                                            filteredStats.map((org: any) => (
+                                            sortedOrganizationRows.map((org: any) => (
                                                 <TableRow key={org.organizationId} className="group hover:bg-slate-50/80 dark:hover:bg-slate-900/40 border-b border-slate-50 dark:border-slate-900 transition-all duration-200 h-20">
                                                     <TableCell className="pl-8">
                                                         <div className="flex flex-col">
@@ -1045,7 +1076,7 @@ export default function OrganizationReportPage() {
                                         })()}
                                     </TableBody>
                                 </Table>
-                            </CardContent>
+                            </ReportTableScroll>
                             <div className="px-8 py-5 border-t border-slate-100 dark:border-slate-900 bg-slate-50/50 dark:bg-slate-900/40 flex items-center justify-between">
                                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
                                     {filteredStats.length} {(() => {

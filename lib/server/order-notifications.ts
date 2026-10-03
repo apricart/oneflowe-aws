@@ -324,6 +324,54 @@ export async function queueSuperAdminApprovalNotifications(tx: any, input: {
   })
 }
 
+/**
+ * Tell Super Admins an order was approved at creation by its organization's
+ * policy (`organizations.orderApprovalRequired = false`).
+ *
+ * This is the auto-approved counterpart of the notification above: no person
+ * approved the order, so there is no approver to verify, but the order is
+ * exactly as ready for review and fulfilment as a manually approved one. It
+ * reuses the ORDER_APPROVED_ADMIN template — and therefore its event key,
+ * delivery path and in-app link — which cannot collide with a manual approval
+ * because an order created APPROVED is never PENDING.
+ */
+export async function queueSuperAdminAutoApprovalNotifications(tx: any, input: {
+  order: OrderEventInput
+}): Promise<QueuedOrderNotifications> {
+  const { order } = input
+  if (!order.organizationId) return { eventKeys: [], recipientCount: 0 }
+
+  const context = await getOrderContext(tx, order)
+  if (!context) throw new Error("ORDER_NOTIFICATION_SCOPE_INVALID")
+
+  const recipients = await tx
+    .select({ id: users.id, email: users.email })
+    .from(users)
+    .innerJoin(roles, eq(users.roleId, roles.id))
+    .where(and(
+      eq(roles.name, "SUPER_ADMIN"),
+      eq(users.isActive, true),
+      isNull(users.deletedAt),
+    ))
+
+  return insertRecipientEvents(tx, {
+    order: { ...order, organizationId: order.organizationId },
+    template: "ORDER_APPROVED_ADMIN",
+    targetRole: "SUPER_ADMIN",
+    message: `Order ${order.tid} was approved automatically by organization policy and is ready for review.`,
+    payload: {
+      orderId: order.id,
+      tid: order.tid,
+      organizationName: context.organizationName,
+      branchName: context.branchName,
+      approvedBy: null,
+      approvedByRole: null,
+      autoApproved: true,
+    },
+    recipients,
+  })
+}
+
 function isLifecycleTemplate(value: string): value is OrderLifecycleEmailTemplate {
   return value === "ORDER_CREATED" ||
     value === "ORDER_APPROVED" ||
@@ -351,6 +399,7 @@ function parsePayload(value: Record<string, unknown>): OrderLifecycleEmailPayloa
     approvedBy: typeof value.approvedBy === "string" ? value.approvedBy : null,
     approvedByRole: isOrderDecisionRole(value.approvedByRole) ? value.approvedByRole : null,
     rejectionReason: typeof value.rejectionReason === "string" ? value.rejectionReason : null,
+    autoApproved: value.autoApproved === true,
   }
 }
 

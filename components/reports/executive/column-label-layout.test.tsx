@@ -2,6 +2,7 @@ import { render } from "@testing-library/react"
 import { beforeAll, beforeEach, describe, expect, it } from "vitest"
 
 import { ComparisonChart, type ComparisonRow, type EntitySeries } from "./comparison-charts"
+import { MatrixChart, type MatrixResponse } from "./matrix-chart"
 
 /**
  * The column labels do not overwrite each other on a full panel.
@@ -164,6 +165,46 @@ describe("column labels on a half-row card", () => {
     expect(collisions(labelBoxes(container))).toEqual([])
   })
 
+  /** The branch rows with a quantity each, as the Amount panel now receives them. */
+  const branchRows = (valueOf: (budget: number, value: number) => number = (_, value) => value) =>
+    BRANCHES.map(([label, budget, value], index) => {
+      const drawn = valueOf(budget, value)
+      return row({
+        key: String(index), label, value: drawn, spendCents: drawn, totalBudgetCents: budget,
+        quantity: 1_240 - index * 110,
+      })
+    })
+
+  it("keeps quantity, value and budget clear of each other on every branch, upright", () => {
+    // Ten branches across half a row: every figure reads upward, and the
+    // value column's pair is one string so it fits beside its budget.
+    const { container } = render(
+      <ComparisonChart
+        {...base} chart="column" rows={branchRows()} dimensionLabel="Branch" dimension="branch" budgetBeside dualValueLabels
+      />,
+    )
+    const boxes = labelBoxes(container)
+    expect(boxes).toHaveLength(BRANCHES.length * 2)
+    expect(boxes.filter((box) => box.text.includes("·"))).toHaveLength(BRANCHES.length)
+    expect(collisions(boxes)).toEqual([])
+  })
+
+  it("keeps quantity, value and budget clear across a widened panel, where the budget is nearly spent", () => {
+    // Across, the pair is two lines over the value column, and a budget figure
+    // level with either line is lifted over both.
+    cardWidth = FULL_CARD_WIDTH
+    const { container } = render(
+      <ComparisonChart
+        {...base} chart="column" rows={branchRows((budget) => Math.round(budget * 0.99))}
+        dimensionLabel="Branch" dimension="branch" budgetBeside dualValueLabels fullWidth
+      />,
+    )
+    const boxes = labelBoxes(container)
+    // A budget figure, a quantity and a value per branch.
+    expect(boxes).toHaveLength(BRANCHES.length * 3)
+    expect(collisions(boxes)).toEqual([])
+  })
+
   it("keeps the two-line product labels clear at twelve columns", () => {
     const rows = Array.from({ length: 12 }, (_, index) => row({
       key: String(index),
@@ -177,6 +218,60 @@ describe("column labels on a half-row card", () => {
     )
     const boxes = labelBoxes(container)
     expect(boxes).toHaveLength(24)
+    expect(collisions(boxes)).toEqual([])
+  })
+})
+
+describe("the requester × product grid on a half-row card", () => {
+  const people = ["Ahmed", "Sana", "Bilal"].map((label, index) => ({
+    key: `0000000${index}-0000-4000-8000-000000000000`, label, total: 0,
+  }))
+  const products = Array.from({ length: 12 }, (_, index) => ({ key: String(100 + index), label: `Product number ${index + 1}`, total: 0 }))
+
+  const grid = (rowCount: number): MatrixResponse => ({
+    rowDimension: "user",
+    columnDimension: "product",
+    rowLabel: "Requester",
+    columnLabel: "Product",
+    metric: "spend",
+    grain: "line",
+    format: "currency",
+    label: "Consumed",
+    formula: "",
+    period: { startDate: "2026-06-01", endDate: "2026-08-31" },
+    quantityUnit: { selected: null, conflict: false, available: [] },
+    limits: { rows: 12, columns: 12 },
+    rows: people.slice(0, rowCount),
+    columns: products,
+    cells: people.slice(0, rowCount).flatMap((person, p) => products.map((product, index) => ({
+      row: person.key,
+      column: product.key,
+      value: 14_280_000 - index * 900_000 - p * 400_000,
+      spendCents: 14_280_000 - index * 900_000 - p * 400_000,
+      quantity: 1_240 - index * 80 - p * 30,
+      orderCount: 3,
+    }))),
+  })
+
+  it("labels every one of two people's columns with both figures, clear of each other", () => {
+    const { container } = render(<MatrixChart response={grid(2)} />)
+    const boxes = labelBoxes(container)
+    expect(boxes).toHaveLength(24)
+    expect(boxes.every((box) => box.text.includes("·"))).toBe(true)
+    expect(collisions(boxes)).toEqual([])
+  })
+
+  it("leaves the figures to the tooltip rather than overprint them once the columns are too narrow", () => {
+    const { container, getByText } = render(<MatrixChart response={grid(3)} />)
+    expect(labelBoxes(container)).toHaveLength(0)
+    expect(getByText(/hover a column for its quantity and value/)).toBeTruthy()
+  })
+
+  it("labels the same three people once the panel is widened", () => {
+    cardWidth = FULL_CARD_WIDTH
+    const { container } = render(<MatrixChart response={grid(3)} fullWidth />)
+    const boxes = labelBoxes(container)
+    expect(boxes).toHaveLength(36)
     expect(collisions(boxes)).toEqual([])
   })
 })

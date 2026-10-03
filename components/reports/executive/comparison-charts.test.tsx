@@ -17,6 +17,7 @@ import {
   dualColumnLabel,
   dualColumnLabelLines,
   entityColor,
+  trendPointLabel,
   type ComparisonRow,
   type EntitySeries,
 } from "./comparison-charts"
@@ -193,12 +194,51 @@ describe("both figures over a product column", () => {
     expect(screen.queryByText(/quantity above its value/)).toBeNull()
   })
 
-  it("keeps the single label when a budget stands beside the column", () => {
-    // Two columns already; a second pair of figures over them would read as
-    // four, so the pair is withheld rather than drawn ambiguously.
+  it("labels the value column with both figures beside a budget, and says the budget column carries the budget", () => {
+    // Reversed deliberately: every column on Product Performance now carries
+    // its quantity and its value, the branch and month panels included. The
+    // pair stands over the value column only; the budget column keeps its one
+    // figure, and the caption says which is which.
     render(<ComparisonChart {...base} chart="column" colorful dualValueLabels budgetBeside />)
-    expect(screen.queryByText(/quantity above its value/)).toBeNull()
+    expect(screen.getByText(/procurement value column is labelled with its quantity above its value/)).toBeTruthy()
+    expect(screen.getByText(/the Total budget column beside it carries the budget/)).toBeTruthy()
     expect(screen.getByText(/Total budget is allocated \+ add-ons/)).toBeTruthy()
+  })
+
+  it("prints the pair as one upright string when the columns are too narrow for two lines", () => {
+    // Beside a budget column there is room for one upright line per column.
+    // Quantity still leads, and the nudge steps it off the budget's figure.
+    const Label = dualColumnLabel([ream], "currency", true, { combined: true, nudge: 3 })
+    const { container } = render(
+      <svg><Label index={0} viewBox={{ x: 10, y: 100, width: 40, height: 80 }} /></svg>,
+    )
+    const texts = Array.from(container.querySelectorAll("text"))
+    expect(texts).toHaveLength(1)
+    expect(texts[0].textContent).toBe("12 · 142.8K")
+    expect(texts[0].getAttribute("x")).toBe("33")
+    expect(texts[0].getAttribute("transform")).toContain("rotate(-90")
+  })
+
+  it("draws nothing for a pair the grid has no cell for", () => {
+    // The requester × product grid hands one entry per column, null where the
+    // person bought none of that product.
+    const Label = dualColumnLabel([null], "currency", false)
+    const { container } = render(<svg><Label index={0} viewBox={{ x: 10, y: 100, width: 40, height: 80 }} /></svg>)
+    expect(container.querySelectorAll("text")).toHaveLength(0)
+  })
+})
+
+describe("both figures in a trend's tooltip", () => {
+  it("reads a point as quantity and amount, whichever the line is drawn from", () => {
+    const point = { period: "2026-07", value: 142_800, quantity: 12, spendCents: 14_280_000 }
+    expect(trendPointLabel(point, 142_800, "currency").replace(/\s/g, " ")).toBe("Qty 12 · Rs 142,800")
+    expect(trendPointLabel({ ...point, value: 12 }, 12, "quantity").replace(/\s/g, " ")).toBe("Qty 12 · Rs 142,800")
+  })
+
+  it("falls back to the drawn value for an older response or a metric that is neither", () => {
+    expect(trendPointLabel({ period: "2026-07", value: 150_000 }, 150_000, "currency").replace(/\s/g, " ")).toBe("Rs 1,500")
+    expect(trendPointLabel(undefined, 150_000, "currency").replace(/\s/g, " ")).toBe("Rs 1,500")
+    expect(trendPointLabel({ period: "2026-07", value: 4, quantity: 9, spendCents: 900 }, 4, "count")).toBe("4")
   })
 })
 
@@ -259,6 +299,17 @@ describe("a budget beside the columns", () => {
     expect(budgetLabelY(104, 100)).toBe(100 - 5 - 15)
   })
 
+  it("clears both lines when the value column carries quantity and value", () => {
+    // The pair stands on two baselines 14px apart; the budget lands a line
+    // above the top one, not merely above the lower one.
+    expect(budgetLabelY(100, 100, 2)).toBe(100 - 5 - 14 - 15)
+    // A budget figure level with the quantity line is just as much a collision.
+    expect(budgetLabelY(86, 100, 2)).toBe(100 - 5 - 14 - 15)
+    // Well clear above or below the pair, it keeps its own place.
+    expect(budgetLabelY(40, 200, 2)).toBe(35)
+    expect(budgetLabelY(200, 100, 2)).toBe(195)
+  })
+
   it("derives the value column's top from the budget column's own geometry", () => {
     // One axis from zero and a shared baseline, so the budget column's height
     // is the scale: 300K over 240px puts a 150K value column's top halfway up,
@@ -298,6 +349,12 @@ describe("a budget beside the columns", () => {
       .toBeGreaterThan(columnTopMargin({ dual: false, budgetBeside: true, rotated: false }))
     expect(columnTopMargin({ dual: false, rotated: true }))
       .toBeGreaterThan(columnTopMargin({ dual: true, rotated: false }))
+    // A budget lifted over a two-line pair needs a line more than the pair.
+    expect(columnTopMargin({ dual: true, budgetBeside: true, rotated: false }))
+      .toBeGreaterThan(columnTopMargin({ dual: true, rotated: false }))
+    // One upright "quantity · value" string stands on far more than one figure.
+    expect(columnTopMargin({ dual: true, budgetBeside: true, rotated: true, combined: true }))
+      .toBeGreaterThan(columnTopMargin({ dual: false, rotated: true }))
   })
 
   it("wears the reference role, which is neither a series slot nor a status", () => {
@@ -328,9 +385,9 @@ describe("a budget beside the columns", () => {
     expect(south.slice(1, 4)).toEqual(["Rs 1,000", "Rs 0", "no budget"])
   })
 
-  it("explains that Consumed includes pending commitments beside the budget", () => {
+  it("explains that Consumed includes orders awaiting approval beside the budget", () => {
     render(<ComparisonChart {...base} rows={budgeted} chart="column" budgetBeside metricLabel="Consumed" />)
-    expect(screen.getByText(/Consumed includes pending orders as committed/)).toBeTruthy()
+    expect(screen.getByText(/Consumed includes orders awaiting approval/)).toBeTruthy()
     expect(screen.getByText(/excludes cancelled, rejected, and refunded orders/)).toBeTruthy()
   })
 })

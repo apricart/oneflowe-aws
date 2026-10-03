@@ -1,0 +1,148 @@
+import { randomUUID } from "node:crypto"
+
+import {
+  expect,
+  type APIResponse,
+  type Browser,
+  type BrowserContext,
+  type Page,
+} from "@playwright/test"
+
+import { E2E_BASE_URL, E2E_PASSWORD } from "./environment"
+
+/**
+ * Signing in, and calling the API as the signed-in person.
+ *
+ * Two ways in, for two purposes. `signIn` drives the login form, which is what
+ * a journey that starts at the door should prove. `apiSession` authenticates
+ * through NextAuth directly, for the supporting actors in a multi-role journey —
+ * the approver, the Super Admin who marks a delivery — whose part is set-up, not
+ * the thing under test.
+ */
+
+export type JsonBody = Record<string, any>
+
+export function testDatabaseUrl(): string {
+  const url = process.env.TEST_DATABASE_URL?.trim() ?? ""
+  if (!url || !/test/i.test(new URL(url).pathname)) {
+    throw new Error("TEST_DATABASE_URL must name a disposable test database")
+  }
+  return url
+}
+
+export async function responseJson(response: APIResponse): Promise<JsonBody> {
+  const text = await response.text()
+  try {
+    return JSON.parse(text) as JsonBody
+  } catch {
+    return { unparsedResponse: text }
+  }
+}
+
+export async function expectStatus(response: APIResponse, status = 200): Promise<JsonBody> {
+  const body = await responseJson(response)
+  expect(response.status(), `${response.url()} ${JSON.stringify(body, null, 2)}`).toBe(status)
+  return body
+}
+
+export async function signIn(page: Page, username: string, landing?: RegExp): Promise<void> {
+  await page.goto("/login")
+  await page.getByLabel("Username or Email").fill(username)
+  await page.getByLabel("Password", { exact: true }).fill(E2E_PASSWORD)
+  await page.getByRole("button", { name: /sign in/i }).click()
+  // A cold development server may reload while compiling the first workspace,
+  // so poll the URL rather than attaching to one navigation.
+  if (landing) {
+    await expect(page).toHaveURL(landing, { timeout: 150_000 })
+  } else {
+    await expect(page).not.toHaveURL(/\/login/, { timeout: 150_000 })
+  }
+}
+
+export async function signOut(page: Page): Promise<void> {
+  const csrf = await responseJson(await page.request.get(`${E2E_BASE_URL}/api/auth/csrf`))
+  await page.request.post(`${E2E_BASE_URL}/api/auth/signout`, {
+    form: { csrfToken: csrf.csrfToken, callbackUrl: `${E2E_BASE_URL}/login` },
+    headers: { "X-Auth-Return-Redirect": "1" },
+  })
+  await page.context().clearCookies()
+}
+
+export async function sessionRole(page: Page): Promise<string> {
+  const session = await responseJson(await page.request.get(`${E2E_BASE_URL}/api/auth/session`))
+  return String(session.user?.role ?? "")
+}
+
+export interface ApiSession {
+  context: BrowserContext
+  page: Page
+  close: () => Promise<void>
+}
+
+export async function apiSession(
+  browser: Browser,
+  username: string,
+  password = E2E_PASSWORD,
+): Promise<ApiSession> {
+  const context = await browser.newContext({ baseURL: E2E_BASE_URL })
+  const csrf = await expectStatus(await context.request.get(`${E2E_BASE_URL}/api/auth/csrf`))
+  const callback = await context.request.post(`${E2E_BASE_URL}/api/auth/callback/credentials`, {
+    form: {
+      csrfToken: csrf.csrfToken,
+      username,
+      password,
+      callbackUrl: `${E2E_BASE_URL}/dashboard`,
+    },
+    headers: { "X-Auth-Return-Redirect": "1" },
+    maxRedirects: 0,
+  })
+  expect([200, 302], `${callback.status()} ${callback.url()}`).toContain(callback.status())
+  const session = await expectStatus(await context.request.get(`${E2E_BASE_URL}/api/auth/session`))
+  expect(session.user?.id, `${username} did not get a session`).toBeTruthy()
+  const page = await context.newPage()
+  return { context, page, close: () => context.close() }
+}
+
+function sameOrigin(extra: Record<string, string> = {}): Record<string, string> {
+  return { Origin: E2E_BASE_URL, "Sec-Fetch-Site": "same-origin", ...extra }
+}
+
+export function post(page: Page, path: string, data: unknown, headers: Record<string, string> = {}) {
+  return page.request.post(path, { data, headers: sameOrigin(headers) })
+}
+
+export function put(page: Page, path: string, data: unknown, headers: Record<string, string> = {}) {
+  return page.request.put(path, { data, headers: sameOrigin(headers) })
+}
+
+export function patch(page: Page, path: string, data: unknown, headers: Record<string, string> = {}) {
+  return page.request.patch(path, { data, headers: sameOrigin(headers) })
+}
+
+/** A new order through the real endpoint, as the requester would place it. */
+export async function placeOrder(
+  page: Page,
+  items: Array<{ organizationInventoryId: number; quantity: number }>,
+  extra: Record<string, unknown> = {},
+): Promise<JsonBody> {
+  const body = await expectStatus(
+    await post(page, "/api/v1/orders", { items, ...extra }, { "Idempotency-Key": `e2e-${randomUUID()}` }),
+  )
+  return body.order
+}
+
+export async function approveOrder(page: Page, orderId: number): Promise<string> {
+  const body = await expectStatus(await post(page, `/api/v1/orders/${orderId}/approve`, {}))
+  return String(body.approvalToken)
+}
+
+/** Walk an approved order's delivery progress to DELIVERED, one step at a time, as Super Admin. */
+export async function markDelivered(page: Page, orderId: number): Promise<void> {
+  for (const fulfillmentStatus of ["IN_PROCESS", "OUT_FOR_DELIVERY", "DELIVERED"]) {
+    await expectStatus(await post(page, `/api/v1/orders/${orderId}/fulfillment-status`, { fulfillmentStatus }))
+  }
+}
+
+export async function fulfilOrder(page: Page, orderId: number, approvalToken: string): Promise<void> {
+  await expectStatus(await post(page, `/api/v1/orders/${orderId}/fulfill`, { approvalToken }))
+}

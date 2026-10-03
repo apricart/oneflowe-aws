@@ -19,6 +19,8 @@ export type OrderLifecycleEmailPayload = {
   approvedBy?: string | null
   approvedByRole?: "BRANCH_ADMIN" | "HEAD_OFFICE" | "GROUP_USER" | null
   rejectionReason?: string | null
+  /** ORDER_APPROVED_ADMIN only: approved at creation by organization policy, not by a person. */
+  autoApproved?: boolean | null
 }
 
 const escapeHtml = (value: unknown) => stringifyPrimitive(value)
@@ -44,6 +46,7 @@ export function buildOrderLifecycleEmail(
   const link = orderUrl(template, payload.orderId)
   const isCreated = template === "ORDER_CREATED"
   const isAdminApproval = template === "ORDER_APPROVED_ADMIN"
+  const isAutoApproval = isAdminApproval && payload.autoApproved === true
   const isApproved = template === "ORDER_APPROVED"
   const approverRoleLabel = (() => {
     if (payload.approvedByRole === "HEAD_OFFICE") return "Head Office"
@@ -53,6 +56,9 @@ export function buildOrderLifecycleEmail(
   const heading = (() => {
     if (isCreated) {
       return "New order awaiting approval"
+    }
+    if (isAutoApproval) {
+      return "Order approved automatically"
     }
     if (isAdminApproval) {
       return `Order approved by ${approverRoleLabel}`
@@ -75,6 +81,9 @@ export function buildOrderLifecycleEmail(
     if (isCreated) {
       return "An Order Portal user submitted a new order that requires your approval."
     }
+    if (isAutoApproval) {
+      return "This order was approved automatically under its organization's order approval policy. It is ready for Super Admin review."
+    }
     if (isAdminApproval) {
       return `${approverRoleLabel} approved an order. It is ready for Super Admin review.`
     }
@@ -87,6 +96,9 @@ export function buildOrderLifecycleEmail(
   const subject = (() => {
     if (isCreated) {
       return `Order ${payload.tid} is awaiting approval`
+    }
+    if (isAutoApproval) {
+      return `Order ${payload.tid} was approved automatically`
     }
     if (isAdminApproval) {
       return `Order ${payload.tid} was approved by ${approverRoleLabel}`

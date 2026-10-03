@@ -28,7 +28,7 @@ describe("order-list pagination contract", () => {
   it("returns an exact total and total-page count for the filtered query", () => {
     const route = source("app/api/v1/orders/route.ts")
 
-    expect(route).toContain("const paginationTotal = Number(")
+    expect(route).toContain("const paginationTotal = await getOrderListPaginationTotal(")
     expect(route).toContain("totalPages: Math.ceil(paginationTotal / limit)")
     expect(route).toContain("hasMore: page * limit < paginationTotal")
     expect(route).toContain(".limit(limit).offset(offset)")

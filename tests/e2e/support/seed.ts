@@ -10,6 +10,7 @@ import {
   branches,
   groupAuditLogs,
   groups,
+  notifications,
   organizations,
   roles,
   systemLogs,
@@ -210,6 +211,10 @@ async function destroy(db: SeedDb): Promise<void> {
   await db.delete(groupAuditLogs).where(
     inArray(groupAuditLogs.performedByUserId, seeded.map((row) => row.id)),
   )
+  // Notifications also reference the user and are written by ordinary product
+  // behaviour during a run, so a suite that leaves any behind makes the *next*
+  // run's teardown fail on the foreign key before a single test starts.
+  await db.delete(notifications).where(inArray(notifications.userId, seeded.map((row) => row.id)))
 
   if (organizationIds.length > 0) {
     await db.delete(groups).where(inArray(groups.organizationId, organizationIds))

@@ -12,6 +12,7 @@ import {
   isPasswordChangePendingApiPathAllowed,
   PASSWORD_CHANGE_REQUIRED_CODE,
 } from "@/lib/password-change-pending"
+import { isViewerRole, VIEWER_AREAS, VIEWER_HOME } from "@/lib/viewer-access"
 
 const protectedPrefixes = [
   "/approvals",
@@ -21,11 +22,16 @@ const protectedPrefixes = [
   "/budget-by-quantity",
   "/change-password",
   "/dashboard",
+  // A shared area rather than a role-gated one: five roles reach it across
+  // three portals. Its layout refuses the rest through
+  // `canReadDeliveryAddresses`, and every handler behind it re-checks.
+  "/delivery-addresses",
   "/employee-management",
   "/group-portal",
   "/groups",
   "/inventory",
   "/invoices",
+  "/join-requests",
   "/orders",
   "/organizations",
   "/products",
@@ -236,12 +242,31 @@ function isSupportArea(pathname: string): boolean {
   return pathMatchesPrefix(pathname, SUPPORT_AREA)
 }
 
-function isSharedPortalArea(pathname: string): boolean {
-  return isInvoiceArea(pathname) || isSupportArea(pathname)
+/**
+ * Delivery addresses are shared for the same reason: the branch that needs an
+ * extra destination lives in `/shop` or `/group-portal`, and the Head Office
+ * that approves it lives in the admin shell, so no single role's area owns the
+ * page. Which addresses a caller may see and whether they may decide one is
+ * settled by `lib/delivery-address-access.ts` on the handlers behind it and by
+ * a branch set re-resolved from the session on every call — this allowlist only
+ * stops the shell bouncing the request home first.
+ */
+const DELIVERY_ADDRESS_AREA = "/delivery-addresses"
+
+function isDeliveryAddressArea(pathname: string): boolean {
+  return pathMatchesPrefix(pathname, DELIVERY_ADDRESS_AREA)
 }
 
+function isSharedPortalArea(pathname: string): boolean {
+  return isInvoiceArea(pathname) || isSupportArea(pathname) || isDeliveryAddressArea(pathname)
+}
+
+/** Group User areas that open only with the account's budget allocation grant. */
+const GROUP_USER_BUDGET_AREAS = ["/budgets", "/reports/budget-summary"]
+
 function groupUserRedirect(pathname: string, budgetAllocationEnabled: boolean): string | null {
-  if (pathMatchesPrefix(pathname, "/budgets") && !budgetAllocationEnabled) return GROUP_USER_HOME
+  const isBudgetArea = GROUP_USER_BUDGET_AREAS.some((prefix) => pathMatchesPrefix(pathname, prefix))
+  if (isBudgetArea && !budgetAllocationEnabled) return GROUP_USER_HOME
   const allowed = isSharedPortalArea(pathname)
     || GROUP_USER_AREAS.some((prefix) => pathMatchesPrefix(pathname, prefix))
   return allowed ? null : GROUP_USER_HOME
@@ -275,12 +300,25 @@ function rolePortalRedirect(role: string | undefined, pathname: string, budgetAl
   if (role === "GROUP_USER") {
     return groupUserRedirect(pathname, budgetAllocationEnabled)
   }
+  if (isViewerRole(role)) {
+    // Read-only account: one area, and no shared page at all — not the invoice
+    // page, not support. Its dashboard drills into orders through an analytics
+    // endpoint rather than the orders directory, so it needs nothing else.
+    return VIEWER_AREAS.some((prefix) => pathMatchesPrefix(pathname, prefix))
+      ? null
+      : VIEWER_HOME
+  }
   if (role === "GROUP_ORDER_PORTAL") {
     // The requester keeps its own workspace and never reaches the admin shell,
     // the approver's queue, or the single-branch /shop. Its order history links
     // to the invoice page, and the support area is shared by every role; both
     // are scoped per row on their own endpoints rather than by area.
-    return pathname.startsWith(GROUP_ORDER_PORTAL_HOME) || isInvoiceArea(pathname) || isSupportArea(pathname)
+    return pathname.startsWith(GROUP_ORDER_PORTAL_HOME)
+      || isInvoiceArea(pathname)
+      || isSupportArea(pathname)
+      // It requests delivery addresses for the branches it orders for, so it
+      // reaches the page those requests are raised on.
+      || isDeliveryAddressArea(pathname)
       ? null
       : GROUP_ORDER_PORTAL_HOME
   }
@@ -292,6 +330,40 @@ function rolePortalRedirect(role: string | undefined, pathname: string, budgetAl
   return null
 }
 
+/**
+ * Shell areas that belong to one role, checked after `rolePortalRedirect` has
+ * confined each role to its own portal.
+ *
+ * Navigation only. Every one of these areas re-checks server-side in its route
+ * handlers or its page layout, and this table never replaces that:
+ *   * `/organizations` — Super Admin's platform administration.
+ *   * `/activity` — the cross-tenant activity log; what it *returns* is decided
+ *     by `lib/activity-log-access.ts`.
+ *   * `/branches` — Head Office's own branch administration.
+ *   * `/join-requests` — the tenant's join code and join queue; who may decide
+ *     one is `lib/organization-join-access.ts`, on the handlers.
+ *
+ * `/users` is deliberately absent: it checks in a server layout instead, so an
+ * authenticated caller gets an explicit access-denied state rather than a
+ * redirect.
+ *
+ * Kept as a table rather than a chain of `if`s so the whole set is readable in
+ * one place, and so adding an area does not add a branch to `proxy`.
+ */
+const ROLE_GATED_AREAS: ReadonlyArray<{ prefix: string; role: string; home: string }> = [
+  { prefix: "/organizations", role: "SUPER_ADMIN", home: "/login" },
+  { prefix: "/activity", role: "SUPER_ADMIN", home: "/dashboard" },
+  { prefix: "/branches", role: "HEAD_OFFICE", home: "/dashboard" },
+  { prefix: "/join-requests", role: "HEAD_OFFICE", home: "/dashboard" },
+]
+
+/** Where to send a caller whose role does not hold the area, or null. */
+function roleGatedAreaRedirect(pathname: string, role: string | undefined): string | null {
+  const area = ROLE_GATED_AREAS.find((candidate) => pathname.startsWith(candidate.prefix))
+  if (!area || role === area.role) return null
+  return area.home
+}
+
 export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl
   const response = NextResponse.next()
@@ -300,7 +372,11 @@ export async function proxy(req: NextRequest) {
     return await handleApiRequest(req, pathname, response)
   }
 
-  const isPublicPath = ["/login"].includes(pathname)
+  // `/join` is public by design: it is how somebody with no account asks to be
+  // let into an organization. It is not in `protectedPrefixes` either, so this
+  // list is belt-and-braces rather than the thing that opens it. Note the exact
+  // match — `/join-requests` is the Head Office queue and stays protected.
+  const isPublicPath = ["/login", "/join"].includes(pathname)
   const needsAuth = protectedPrefixes.some((prefix) =>
     pathMatchesPrefix(pathname, prefix),
   ) && !isPublicPath
@@ -349,28 +425,10 @@ export async function proxy(req: NextRequest) {
     return withSecurityHeaders(redirectRes, pathname)
   }
 
-  // Enforce SUPER_ADMIN for admin sections
-  if (pathname.startsWith("/organizations") && role !== "SUPER_ADMIN") {
+  const gatedAreaRedirect = roleGatedAreaRedirect(pathname, role)
+  if (gatedAreaRedirect) {
     logger("middleware", { reason: "insufficient_role", path: pathname, role })
-    const url = new URL("/login", req.url || "http://localhost")
-    const redirectRes = NextResponse.redirect(url)
-    return withSecurityHeaders(redirectRes, pathname)
-  }
-  // The activity log spans every tenant. Navigation is gated here; the
-  // authorization that decides what is returned is in the route handler
-  // (`lib/activity-log-access.ts`), which this does not replace.
-  if (pathname.startsWith("/activity") && role !== "SUPER_ADMIN") {
-    logger("middleware", { reason: "insufficient_role", path: pathname, role })
-    const url = new URL("/dashboard", req.url || "http://localhost")
-    const redirectRes = NextResponse.redirect(url)
-    return withSecurityHeaders(redirectRes, pathname)
-  }
-  // /users performs its role check in a server layout so authenticated users
-  // receive an explicit access-denied state without mounting the management UI.
-  // Head Office only routes
-  if (pathname.startsWith("/branches") && role !== "HEAD_OFFICE") {
-    logger("middleware", { reason: "insufficient_role", path: pathname, role })
-    const url = new URL("/dashboard", req.url || "http://localhost")
+    const url = new URL(gatedAreaRedirect, req.url || "http://localhost")
     const redirectRes = NextResponse.redirect(url)
     return withSecurityHeaders(redirectRes, pathname)
   }
@@ -393,6 +451,10 @@ export const config = {
     "/dashboard/:path*",
     "/organizations/:path*",
     "/users/:path*",
+    "/join-requests",
+    "/join-requests/:path*",
+    "/delivery-addresses",
+    "/delivery-addresses/:path*",
     "/branches/:path*",
     "/orders/:path*",
     "/inventory/:path*",

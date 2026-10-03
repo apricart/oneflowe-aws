@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 vi.mock("next/navigation", () => ({
@@ -205,6 +205,8 @@ describe("OrdersDirectory", () => {
     const orderRow = tableQueries.getByText("ORD-0047").closest("tr")
     const cells = within(orderRow!).getAllByRole("cell")
 
+    expect(headers.slice(0, 2)).toEqual(["Order ID", "Transaction ID"])
+    expect(cells[headers.indexOf("Order ID")]?.textContent).toContain("#47")
     expect(cells[headers.indexOf("Order Status")]?.textContent).toContain("Fulfilled")
     expect(cells[headers.indexOf("Progress")]?.textContent).toContain("Delivered")
     expect(cells[headers.indexOf("Payment")]?.textContent).toContain("Paid")
@@ -217,5 +219,191 @@ describe("OrdersDirectory", () => {
     fireEvent.click(screen.getByText("Approval Date", { selector: "span" }))
 
     expect(tableQueries.queryByRole("columnheader", { name: "Approval Date" })).toBeNull()
+  })
+
+  it("keeps a visible horizontal scrollbar on the table", () => {
+    render(
+      <OrdersDirectory
+        orders={[]}
+        userRole="SUPER_ADMIN"
+        isSuperAdmin
+        isBranchAdmin={false}
+        onUpdate={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByTestId("orders-table-scroll").className).toContain("orders-table-scrollbar")
+  })
+
+  it("bounds the table height so its horizontal scrollbar stays in view, with a sticky header", () => {
+    render(
+      <OrdersDirectory
+        orders={[]}
+        userRole="SUPER_ADMIN"
+        isSuperAdmin
+        isBranchAdmin={false}
+        onUpdate={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByTestId("orders-table-scroll").className).toMatch(/max-h-\[/)
+    for (const header of screen.getAllByRole("columnheader")) {
+      expect(header.className).toContain("sticky")
+      expect(header.className).toContain("top-0")
+    }
+  })
+})
+
+describe("OrdersDirectory fulfilment columns", () => {
+  const activeDelivered = {
+    id: 50,
+    tid: "ORD-0050",
+    status: "APPROVED",
+    fulfillmentStatus: "DELIVERED",
+    branchId: 8,
+    branchName: "North Branch",
+    createdAt: "2026-07-28T10:00:00.000Z",
+    totalCents: 125000,
+    approvalToken: "TOKEN0050",
+  }
+  const fulfilled = {
+    ...activeDelivered,
+    id: 51,
+    tid: "ORD-0051",
+    status: "FULFILLED",
+    approvalToken: null,
+  }
+
+  afterEach(() => {
+    cleanup()
+    localStorage.clear()
+    vi.unstubAllGlobals()
+  })
+
+  function cellsFor(tid: string) {
+    const table = screen.getByRole("table")
+    const headers = within(table).getAllByRole("columnheader").map((header) => header.textContent)
+    const cells = within(within(table).getByText(tid).closest("tr")!).getAllByRole("cell")
+    return {
+      token: cells[headers.indexOf("Fulfillment Token")],
+      action: cells[headers.indexOf("Action")],
+    }
+  }
+
+  it("hides fulfillment-token and fulfillment-action controls from Super Admin", async () => {
+    render(
+      <OrdersDirectory orders={[activeDelivered]} userRole="SUPER_ADMIN" isSuperAdmin isBranchAdmin={false} onUpdate={vi.fn()} />,
+    )
+    const headers = within(screen.getByRole("table")).getAllByRole("columnheader").map((header) => header.textContent)
+    expect(headers).not.toContain("Fulfillment Token")
+    expect(headers).not.toContain("Action")
+    expect(screen.queryByText("TOKEN0050")).toBeNull()
+    expect(screen.queryByRole("button", { name: /Fulfil order/ })).toBeNull()
+
+    fireEvent.click(screen.getByText("ORD-0050"))
+    const drawer = await screen.findByRole("dialog", { name: "Order details" })
+    expect(within(drawer).queryByText("Fulfillment Token")).toBeNull()
+    expect(within(drawer).queryByRole("button", { name: "Fulfill Order" })).toBeNull()
+  })
+
+  it("shows approvers the token columns outside the column picker", () => {
+    render(
+      <OrdersDirectory orders={[activeDelivered, fulfilled]} userRole="BRANCH_ADMIN" isSuperAdmin={false} isBranchAdmin canDecideOrders onUpdate={vi.fn()} />,
+    )
+    const headers = within(screen.getByRole("table")).getAllByRole("columnheader").map((header) => header.textContent)
+    expect(headers.slice(-2)).toEqual(["Fulfillment Token", "Action"])
+    expect(cellsFor("ORD-0050").token?.textContent).toContain("TOKEN0050")
+    expect(screen.getAllByText("Delivered · Unfulfilled")).toHaveLength(1)
+
+    const done = cellsFor("ORD-0051")
+    expect(done.token?.textContent).toBe("—")
+    expect(done.action?.textContent).toBe("—")
+
+    fireEvent.click(screen.getByRole("button", { name: /Columns/ }))
+    expect(screen.queryByText("Fulfillment Token", { selector: "span" })).toBeNull()
+  })
+
+  it("lets an approver who holds the token fulfil by emailing it", async () => {
+    const onUpdate = vi.fn()
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ fulfilled: true, message: "Token sent" }),
+    }))
+    vi.stubGlobal("fetch", fetchMock)
+    render(
+      <OrdersDirectory orders={[activeDelivered]} userRole="BRANCH_ADMIN" isSuperAdmin={false} isBranchAdmin canDecideOrders onUpdate={onUpdate} />,
+    )
+    expect(screen.queryByRole("button", { name: "Fulfil order ORD-0050" })).toBeNull()
+
+    fireEvent.click(screen.getByRole("button", { name: "Fulfil order ORD-0050 by emailing its token" }))
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/v1/orders/50/send-token-email", expect.objectContaining({ method: "POST" }))
+    })
+    await waitFor(() => expect(onUpdate).toHaveBeenCalled())
+    expect(screen.queryByRole("dialog", { name: "Order details" })).toBeNull()
+  })
+
+  it("offers no action when the server withheld the token", () => {
+    render(
+      <OrdersDirectory
+        orders={[{ ...activeDelivered, approvalToken: null }]}
+        userRole="HEAD_OFFICE"
+        isSuperAdmin={false}
+        isBranchAdmin={false}
+        isHeadOffice
+        onUpdate={vi.fn()}
+      />,
+    )
+    const row = cellsFor("ORD-0050")
+    expect(row.token?.textContent).toBe("—")
+    expect(row.action?.textContent).toBe("—")
+  })
+})
+
+describe("OrdersDirectory column sorting", () => {
+  afterEach(() => {
+    cleanup()
+  })
+
+  const renderSorted = (onSort = vi.fn()) => {
+    render(
+      <OrdersDirectory
+        orders={[]}
+        userRole="SUPER_ADMIN"
+        isSuperAdmin
+        isBranchAdmin={false}
+        sort={{ key: "orderDate", direction: "desc" }}
+        onSort={onSort}
+        onUpdate={vi.fn()}
+      />,
+    )
+    return onSort
+  }
+
+  it("marks the sorted column for assistive technology and no other", () => {
+    renderSorted()
+
+    const sorted = screen.getAllByRole("columnheader").filter((header) => header.hasAttribute("aria-sort"))
+    expect(sorted).toHaveLength(1)
+    expect(sorted[0].textContent).toContain("Order Date")
+    expect(sorted[0].getAttribute("aria-sort")).toBe("descending")
+  })
+
+  it("asks for text columns A→Z and number or date columns largest-first on the first click", () => {
+    const onSort = renderSorted()
+
+    fireEvent.click(screen.getByRole("button", { name: /^branch$/i }))
+    fireEvent.click(screen.getByRole("button", { name: /^amount$/i }))
+
+    expect(onSort).toHaveBeenNthCalledWith(1, "branch", "asc")
+    expect(onSort).toHaveBeenNthCalledWith(2, "amount", "desc")
+  })
+
+  it("keeps plain labels when the page does not sort", () => {
+    render(
+      <OrdersDirectory orders={[]} userRole="SUPER_ADMIN" isSuperAdmin isBranchAdmin={false} onUpdate={vi.fn()} />,
+    )
+    expect(screen.queryByRole("button", { name: /^branch$/i })).toBeNull()
   })
 })

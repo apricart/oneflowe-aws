@@ -9,11 +9,13 @@ import { parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
 import { resolveDrillDownSortColumn } from "@/lib/server/drill-down-sort"
 import { isMultiBranchAnalyticsRole, resolveMultiBranchAnalyticsIds } from "@/lib/server/analytics-scope"
 import { loadAnalyticsAssignedBranchIds } from "@/lib/server/analytics-branch-scope"
+import { viewerStatusBucketCondition } from "@/lib/server/order-delivery-status-sql"
+import { isViewerRole, resolveViewerBranchIds, resolveViewerScope } from "@/lib/viewer-access"
 
 // GROUP_USER drills into the same dashboard cards as an administrator, over the
 // branch set assigned to it. Its scope is resolved from those assignments
 // below, never from the request, so the other roles' ladders are untouched.
-const allowedRoles = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER"] as const
+const allowedRoles = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "VIEWER"] as const
 
 function parseNumberList(value: string | null, isValid = (number: number) => number > 0) {
     return value ? value.split(",").map(Number).filter((number) => !Number.isNaN(number) && isValid(number)) : []
@@ -35,10 +37,18 @@ async function verifyHeadOfficeBranch(organizationId: number | null, requestedBr
     }
 }
 
-async function resolveDrillDownScope(role: string, scope: any, context: any) {
+/** An organization/branch pair, or the refusal to send back instead. */
+type ResolvedDrillDownScope = {
+    organizationId?: number | null
+    branchId?: number | null
+    error?: string
+}
+
+async function resolveDrillDownScope(role: string, scope: any, context: any): Promise<ResolvedDrillDownScope> {
     if (role === "BRANCH_ADMIN") {
         return { organizationId: scope?.organizationId ?? null, branchId: scope?.branchId ?? null }
     }
+    if (isViewerRole(role)) return resolveViewerDrillDownScope(scope, context)
     // The branch filter for a multi-branch role is its assigned set, applied by
     // the caller as an explicit branch list rather than a single branch here.
     if (isMultiBranchAnalyticsRole(role)) {
@@ -60,6 +70,26 @@ async function resolveDrillDownScope(role: string, scope: any, context: any) {
     return { organizationId, ...result }
 }
 
+/**
+ * The read-only account's scope. Its organization is the session's; its branch
+ * is the session's when the account is pinned, and otherwise the requested one
+ * once verified against the tenant — the same check Head Office gets.
+ */
+async function resolveViewerDrillDownScope(scope: any, context: any): Promise<ResolvedDrillDownScope> {
+    const viewerScope = resolveViewerScope({
+        organizationId: scope?.organizationId,
+        branchId: scope?.branchId,
+        requestedBranchId: context.branchId ? Number(context.branchId) : null,
+    })
+    if (viewerScope.error) return { error: viewerScope.error }
+    if (!viewerScope.branchId || scope?.branchId) return viewerScope
+
+    const verified = await verifyHeadOfficeBranch(viewerScope.organizationId, viewerScope.branchId)
+    return verified.error
+        ? { error: verified.error }
+        : { organizationId: viewerScope.organizationId, branchId: verified.branchId }
+}
+
 async function resolveDrillDownBranchIds(role: string, organizationId: number | null, value: string | null, scope: any) {
     const requested = parseNumberList(value)
     // A multi-branch role is confined to the branches assigned to it. A
@@ -76,6 +106,11 @@ async function resolveDrillDownBranchIds(role: string, organizationId: number | 
         return branchIds.length > 0
             ? { branchIds }
             : { error: "Access denied: no branches are assigned to your account", branchIds: [] }
+    }
+    // A pinned Viewer collapses to its own branch; an unpinned one is fenced by
+    // the tenant predicate the caller applies from `resolveDrillDownScope`.
+    if (isViewerRole(role)) {
+        return { branchIds: resolveViewerBranchIds({ branchId: scope?.branchId, requestedBranchIds: requested }) }
     }
     if (requested.length === 0 || role === "BRANCH_ADMIN") return { branchIds: [] }
     if (role === "SUPER_ADMIN") return { branchIds: requested }
@@ -136,8 +171,16 @@ function addDrillDownTypeCondition(conditions: any[], type: string, refundType?:
         inArray(sql`UPPER(${orders.status})`, ["PARTIAL", "PARTIALLY_FULFILLED"]),
     ))
     else if (exactStatusTypes.includes(type)) conditions.push(eq(sql`UPPER(${orders.status})`, type))
-    else if (type === "DELIVERED") conditions.push(eq(sql`UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED'))`, "DELIVERED"))
+    else if (type === "DELIVERED") conditions.push(viewerStatusBucketCondition("DELIVERED"))
     else if (type === "NOT_DELIVERED") conditions.push(sql`UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED')) <> 'DELIVERED'`)
+    // The two buckets the Viewer dashboard splits Active into. Their predicates
+    // come from the same module as the KPI cards above them, so a card and the
+    // list it opens cannot disagree — see `lib/order-delivery-status.ts`.
+    // NOT_DELIVERED above is deliberately left alone: it counts every status,
+    // which is not what the existing cards calling it report, and changing it
+    // would move three dashboards this work is not allowed to touch.
+    else if (type === "DELIVERED_UNACKNOWLEDGED") conditions.push(viewerStatusBucketCondition("DELIVERED_UNACKNOWLEDGED"))
+    else if (type === "UNFULFILLED") conditions.push(viewerStatusBucketCondition("UNFULFILLED"))
 }
 
 async function loadDrillDownItemMaps(orderIds: number[]) {
@@ -371,7 +414,7 @@ export async function GET(req: NextRequest) {
     const parsedCompYears = parseNumberList(compareYearsRaw, (number) => number > 2000)
     const refundType = searchParams.get("refundType")?.toLowerCase() // all, full, partial
     const sortColumn = resolveDrillDownSortColumn(searchParams.get("sortBy"))
-    if (!type || !["REVENUE", "REJECTED", "FULFILLED", "ORDERS", "REFUNDED", "PENDING", "APPROVED", "PARTIAL", "DELIVERED", "NOT_DELIVERED"].includes(type)) {
+    if (!type || !["REVENUE", "REJECTED", "FULFILLED", "ORDERS", "REFUNDED", "PENDING", "APPROVED", "PARTIAL", "DELIVERED", "NOT_DELIVERED", "DELIVERED_UNACKNOWLEDGED", "UNFULFILLED"].includes(type)) {
         return error("Invalid or missing drill-down type")
     }
 

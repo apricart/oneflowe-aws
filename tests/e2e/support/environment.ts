@@ -24,6 +24,15 @@ export const E2E_DIST_DIR = ".next-e2e"
 /** Test-only. Never a real account's password. */
 export const E2E_PASSWORD = "OneFloweE2E!2026"
 
+/**
+ * The secret the server under test signs with. Exported because a spec that
+ * stands in for the mailbox — the password reset journey — has to compute the
+ * same HMAC the server checks a code against.
+ */
+export function e2eNextAuthSecret(): string {
+  return process.env.NEXTAUTH_SECRET ?? "e2e-tests-nextauth-secret-value-not-a-secret"
+}
+
 function databaseIdentity(url: string): string {
   const parsed = new URL(url)
   return `${parsed.host}${parsed.pathname}`
@@ -80,6 +89,11 @@ export function serverEnv(testDatabaseUrl: string): Record<string, string> {
     ...(process.env as Record<string, string>),
     NODE_ENV: "development",
     NEXT_DIST_DIR: E2E_DIST_DIR,
+    // Read by `next.config.mjs`. A memory-threshold restart mid-run drops the
+    // request in flight and recompiles every route cold, which fails whichever
+    // test it lands in. If the heap genuinely runs out, the server now dies with
+    // a heap error instead — a loud failure rather than a misleading one.
+    E2E_DISABLE_DEV_MEMORY_RESTART: "1",
     // Keep browser tests self-contained. Cache/rate-limit fallbacks stay in
     // process and no test run depends on an external Redis service.
     ONEFLOWE_OFFLINE_MODE: "true",
@@ -89,7 +103,7 @@ export function serverEnv(testDatabaseUrl: string): Record<string, string> {
     DATABASE_URL: testDatabaseUrl,
     MIGRATION_DATABASE_URL: testDatabaseUrl,
     NEXTAUTH_URL: E2E_BASE_URL,
-    NEXTAUTH_SECRET: process.env.NEXTAUTH_SECRET ?? "e2e-tests-nextauth-secret-value-not-a-secret",
+    NEXTAUTH_SECRET: e2eNextAuthSecret(),
     UPSTASH_REDIS_REST_URL: process.env.UPSTASH_REDIS_REST_URL ?? "http://127.0.0.1:8079",
     // The server-env schema requires at least 32 characters for both. These are
     // obvious throwaways for a local run, not credentials.

@@ -6,6 +6,7 @@ FULFILLMENT_STATUS_LABELS,
 normalizeFulfillmentStatus,
 } from "@/lib/fulfillment-status"
 import { cn,formatPKR } from "@/lib/utils"
+import { usesPurchaseWording } from "@/lib/purchase-wording"
 import { format } from "date-fns"
 import { AnimatePresence,motion } from "framer-motion"
 import { useCallback,useEffect,useMemo,useState } from "react"
@@ -77,7 +78,7 @@ import { useAppContext } from "@/components/context/app-context"
 import { GlobalDateFilter,getPresetRange,type FilterPreset,type GlobalDateFilterChange } from "@/components/dashboard/global-date-filter"
 import type { DateRange } from "@/lib/hooks/use-sales-performance"
 
-export type DrillDownType = "REVENUE" | "REJECTED" | "FULFILLED" | "ORDERS" | "REFUNDED" | "PENDING" | "APPROVED" | "PARTIAL" | "DELIVERED" | "NOT_DELIVERED"
+export type DrillDownType = "REVENUE" | "REJECTED" | "FULFILLED" | "ORDERS" | "REFUNDED" | "PENDING" | "APPROVED" | "PARTIAL" | "DELIVERED" | "NOT_DELIVERED" | "DELIVERED_UNACKNOWLEDGED" | "UNFULFILLED"
 
 interface DrillDownSheetProps {
     isOpen: boolean
@@ -151,6 +152,16 @@ const TYPE_CONFIG = {
     },
     NOT_DELIVERED: {
         title: "Not Delivered Orders",
+        icon: Clock,
+        color: "text-sky-600 bg-sky-50 dark:bg-sky-900/20",
+    },
+    DELIVERED_UNACKNOWLEDGED: {
+        title: "Delivered, Pending Acknowledgment",
+        icon: Truck,
+        color: "text-amber-600 bg-amber-50 dark:bg-amber-900/20",
+    },
+    UNFULFILLED: {
+        title: "Unfulfilled Orders",
         icon: Clock,
         color: "text-sky-600 bg-sky-50 dark:bg-sky-900/20",
     },
@@ -239,12 +250,6 @@ function buildDrillDownUrl(options: {
     return `/api/v1/analytics/drill-down?${params.toString()}`
 }
 
-// Wording only: these roles buy stock rather than sell it, so the drawer reads
-// "Purchased" instead of "Revenue" for them. It grants no access of its own.
-function isBuyerRole(role: string | null): boolean {
-    return ["HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER"].includes(role ?? "")
-}
-
 function drillDownConfig(type: DrillDownSheetProps["type"]) {
     return type ? TYPE_CONFIG[type] : null
 }
@@ -267,7 +272,7 @@ export function DrillDownSheet({
     compareYears: parentCompareYears
 }: Readonly<DrillDownSheetProps>): React.ReactElement | null {
     const { userRole } = useAppContext()
-    const isBuyer = isBuyerRole(userRole)
+    const isBuyer = usesPurchaseWording(userRole)
 
     const [localDateRange, setLocalDateRange] = useState<DateRange | null>(getPresetRange("all"))
     const [localCompareRange, setLocalCompareRange] = useState<DateRange | null>(null)
@@ -448,7 +453,7 @@ export function DrillDownSheet({
                                     <BIInsightCard
                                         title={isBuyer ? "Total Purchased" : "Total Revenue"}
                                         value={formatPKR(summary.netRevenue)}
-                                        subvalue={isBuyer ? "Net Purchased" : "Net Net Revenue"}
+                                        subvalue={isBuyer ? "Net Purchased" : "Net Revenue"}
                                         icon={TrendingUp}
                                     />
                                     <BIInsightCard
