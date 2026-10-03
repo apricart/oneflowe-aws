@@ -31,6 +31,7 @@ import {
 Calculator,
 Calendar,
 ChevronLeft,ChevronRight,
+ChevronDown,
 Database,
 FileSpreadsheet,
 FileText,
@@ -47,7 +48,7 @@ TrendingUp,
 Upload
 } from "lucide-react"
 import { useSession } from "next-auth/react"
-import { useCallback,useEffect,useMemo,useRef,useState,type ReactNode } from "react"
+import { Fragment,useCallback,useEffect,useMemo,useRef,useState,type KeyboardEvent,type ReactNode } from "react"
 import {
 Bar,
 CartesianGrid,
@@ -75,6 +76,7 @@ import { SortableHeader, ariaSortFor, useTableSort } from "@/components/reports/
 import type { OrderReportSortKey } from "@/lib/list-sort-keys"
 import { appendSortParams, type SortDirection } from "@/lib/table-sort"
 import { MultiSelectFilter } from "@/components/reports/multi-select-filter"
+import { OrderReportRowDetails } from "@/components/reports/order-report-row-details"
 import { OrganizationFilter } from "@/components/reports/organization-filter"
 import { useDebounce } from "@/hooks/use-debounce"
 import { useToast } from "@/hooks/use-toast"
@@ -171,6 +173,28 @@ export default function OrderReportPage() {
             firstDirection={ORDER_REPORT_DESC_FIRST_SORT_KEYS.has(key) ? "desc" : "asc"}
         />
     )
+    // Rows opened to show their order details and line items. Several may be open
+    // at once; an id no longer on the current page simply renders nothing.
+    const [expandedOrderIds, setExpandedOrderIds] = useState<Set<number>>(() => new Set())
+    const toggleOrderExpansion = useCallback((orderId: number) => {
+        setExpandedOrderIds((current) => {
+            const next = new Set(current)
+            if (next.has(orderId)) next.delete(orderId)
+            else next.add(orderId)
+            return next
+        })
+    }, [])
+    const handleOrderRowClick = (orderId: number) => {
+        // Selecting a transaction id to copy it should not also toggle the row.
+        if (window.getSelection()?.toString()) return
+        toggleOrderExpansion(orderId)
+    }
+    const handleOrderRowKeyDown = (event: KeyboardEvent<HTMLTableRowElement>, orderId: number) => {
+        if (event.target !== event.currentTarget) return
+        if (event.key !== "Enter" && event.key !== " ") return
+        event.preventDefault()
+        toggleOrderExpansion(orderId)
+    }
     const [isExporting, setIsExporting] = useState(false)
     const [generatedDate, setGeneratedDate] = useState("")
 
@@ -615,6 +639,26 @@ export default function OrderReportPage() {
     const pricesHidden = Boolean((globalData as any)?.pricesHidden || (chartData as any)?.pricesHidden || (reportData as any)?.pricesHidden)
     const priceVisibilityKnown = [globalData, chartData, reportData].some((data: any) => typeof data?.pricesHidden === "boolean")
     const isPriceVisibilityPending = role === "BRANCH_ADMIN" && !priceVisibilityKnown
+    // Mirrors the <colgroup> below, so an expanded row spans exactly the shown columns.
+    const visibleReportColumnCount = [
+        isVisible("tid"),
+        isVisible("orderDate"),
+        isVisible("userName"),
+        isVisible("employeeId"),
+        isVisible("organizationName") && role === "SUPER_ADMIN",
+        isVisible("group") && role !== "BRANCH_ADMIN",
+        isVisible("groupOrderReference") && showsGroupOrders,
+        isVisible("branchName") && role !== "BRANCH_ADMIN",
+        isVisible("status"),
+        isVisible("deliveryStatus"),
+        isVisible("paymentStatus"),
+        isVisible("quantityOrdered"),
+        isVisible("quantityDelivered"),
+        isVisible("quantityRefunded"),
+        !pricesHidden && isVisible("subtotalValue"),
+        !pricesHidden && isVisible("refundValue"),
+        !pricesHidden && isVisible("netTotalValue"),
+    ].filter(Boolean).length
 
     if (!hasMounted || sessionStatus === "loading" || isPriceVisibilityPending) return <div className="flex h-[50vh] items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-indigo-400" /></div>
 
@@ -1061,13 +1105,27 @@ export default function OrderReportPage() {
                                         )
                                           }
                                           return (
-                                            filteredOrders.map((order: any) => (
-                                                <TableRow key={order.id} className="group border-b border-slate-100 dark:border-slate-800/50 hover:bg-slate-50/80 dark:hover:bg-indigo-500/5 transition-all duration-300">
+                                            filteredOrders.map((order: any) => {
+                                                const isExpanded = expandedOrderIds.has(order.id)
+                                                return (
+                                                <Fragment key={order.id}>
+                                                <TableRow
+                                                    tabIndex={0}
+                                                    aria-expanded={isExpanded}
+                                                    aria-controls={isExpanded ? `order-report-details-${order.id}` : undefined}
+                                                    aria-label={`Order ${order.tid}, ${isExpanded ? "collapse" : "show"} details`}
+                                                    onClick={() => handleOrderRowClick(order.id)}
+                                                    onKeyDown={(event) => handleOrderRowKeyDown(event, order.id)}
+                                                    className={cn(
+                                                        "group cursor-pointer border-b border-slate-100 dark:border-slate-800/50 hover:bg-slate-50/80 dark:hover:bg-indigo-500/5 transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500",
+                                                        isExpanded && "bg-indigo-50/40 dark:bg-indigo-950/10",
+                                                    )}
+                                                >
                                                     {isVisible("tid") && (
                                                         <TableCell className="px-3 2xl:px-4 py-5 bg-white/100 dark:bg-[#0c1222]/100 group-hover:bg-slate-50/100 dark:group-hover:bg-slate-900/100 border-r border-slate-200/60 dark:border-slate-800/60 transition-colors duration-300">
                                                             <div className="flex min-w-0 flex-col gap-1.5">
                                                                 <div className="flex min-w-0 items-center gap-1.5">
-                                                                    <Hash className="h-3 w-3 shrink-0 text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+                                                                    <ChevronDown aria-hidden="true" className={cn("h-3.5 w-3.5 shrink-0 transition-transform duration-300", isExpanded ? "rotate-0 text-indigo-500" : "-rotate-90 text-slate-300 group-hover:text-indigo-400")} />
                                                                     <span className="whitespace-normal break-all text-[11px] font-black text-slate-900 dark:text-white font-mono tracking-tight tabular-nums" title={order.tid}>{order.tid}</span>
                                                                 </div>
                                                                 <span className="flex min-w-0 items-center gap-1 text-[9px] font-bold text-slate-400 uppercase tracking-wide">
@@ -1162,7 +1220,17 @@ export default function OrderReportPage() {
                                                         </TableCell>
                                                     )}
                                                 </TableRow>
-                                            ))
+                                                {isExpanded && (
+                                                    <OrderReportRowDetails
+                                                        orderId={order.id}
+                                                        tid={order.tid}
+                                                        columnCount={visibleReportColumnCount}
+                                                        onCollapse={() => toggleOrderExpansion(order.id)}
+                                                    />
+                                                )}
+                                                </Fragment>
+                                                )
+                                            })
                                         )
                                         })()}
                                     </TableBody>
