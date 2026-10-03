@@ -1,6 +1,5 @@
-import { readFileSync } from "node:fs"
+import { readdirSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
-import { globSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 
 import {
@@ -121,8 +120,10 @@ describe("the areas the role may navigate to", () => {
  * to the list fails here.
  */
 describe("the routes that admit a Viewer", () => {
-  const routeFiles = globSync("app/api/v1/**/route.ts", { cwd: process.cwd() })
-    .map((path) => path.split("\\").join("/"))
+  // `fs.globSync` would read better but only exists from Node 22; CI runs 20.19.
+  const routeFiles = readdirSync(resolve(process.cwd(), "app/api/v1"), { recursive: true, encoding: "utf8" })
+    .map((path) => `app/api/v1/${path.split("\\").join("/")}`)
+    .filter((path) => path.endsWith("/route.ts"))
 
   it("finds the route files to check", () => {
     expect(routeFiles.length).toBeGreaterThan(50)
