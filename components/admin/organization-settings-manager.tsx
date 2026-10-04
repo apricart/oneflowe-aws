@@ -254,7 +254,7 @@ export function OrganizationSettingsManager() {
         description: "Setting saved successfully",
       })
       
-      mutateSettings()
+      void mutateSettings()
     } catch (error) {
       console.error("Failed to save organization setting:", error)
       toast({
@@ -278,7 +278,7 @@ export function OrganizationSettingsManager() {
         description: "Setting deleted successfully",
       })
       
-      mutateSettings()
+      void mutateSettings()
     } catch (error) {
       console.error("Failed to delete organization setting:", error)
       toast({

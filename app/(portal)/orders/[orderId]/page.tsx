@@ -573,11 +573,17 @@ export default function SuperAdminOrderDetailsPage() {
                                 size="sm"
                                 className="h-7 w-7 p-0 hover:bg-emerald-100 dark:hover:bg-emerald-900 text-emerald-600 dark:text-emerald-400"
                                 onClick={() => {
-                                  navigator.clipboard.writeText(step.approvalToken)
-                                  toast({
-                                    title: "Token Copied",
-                                    description: "Approval token copied to clipboard",
-                                  })
+                                  navigator.clipboard.writeText(step.approvalToken).then(
+                                    () => toast({
+                                      title: "Token Copied",
+                                      description: "Approval token copied to clipboard",
+                                    }),
+                                    () => toast({
+                                      title: "Copy failed",
+                                      description: "Could not copy the approval token. Please select and copy it manually.",
+                                      variant: "destructive",
+                                    }),
+                                  )
                                 }}
                               >
                                 <Copy className="h-3.5 w-3.5" />
@@ -650,8 +656,14 @@ export default function SuperAdminOrderDetailsPage() {
           <DialogFooter>
             <Button
               onClick={() => {
-                void navigator.clipboard.writeText(generatedToken || "")
-                toast({ title: "Copied", description: "Token copied to clipboard." })
+                navigator.clipboard.writeText(generatedToken || "").then(
+                  () => toast({ title: "Copied", description: "Token copied to clipboard." }),
+                  () => toast({
+                    title: "Copy failed",
+                    description: "Could not copy the token. Please select and copy it manually.",
+                    variant: "destructive",
+                  }),
+                )
               }}
             >
               <Copy className="mr-2 h-4 w-4" />

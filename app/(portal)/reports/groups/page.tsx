@@ -230,9 +230,9 @@ export default function GroupsReportPage() {
         setSelectedYears([])
         setCompareMonths([])
         setCompareYears([])
-        mutateGlobal()
-        mutateChart()
-        mutateReport()
+        void mutateGlobal()
+        void mutateChart()
+        void mutateReport()
     }, [mutateGlobal, mutateChart, mutateReport])
 
     const resetReportFilters = useCallback(() => {
@@ -258,7 +258,7 @@ export default function GroupsReportPage() {
         setActivePreset("all")
         setSelectedMonths([])
         setSelectedYears([])
-        mutateReport()
+        void mutateReport()
     }, [activePreset, allYears, contextOrgId, mutateReport, role, userOrgId])
 
     const resetChartFilters = useCallback(() => {
@@ -279,7 +279,7 @@ export default function GroupsReportPage() {
         setSelectedBranchIds([])
         setChartMonths(activePreset === "all" ? [...ALL_MONTHS] : [])
         setChartYears(activePreset === "all" ? [...allYears] : [])
-        mutateChart()
+        void mutateChart()
     }, [activePreset, allYears, contextOrgId, mutateChart, role, userOrgId])
 
     const summary = globalData?.summary || { totalGroups: 0, totalOrders: 0, totalRevenue: 0, totalRefunds: 0 }

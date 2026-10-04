@@ -1074,8 +1074,8 @@ export default function OrderPortalPage() {
           return
         }
         if (json.error?.toLowerCase().includes("stock") || json.error?.toLowerCase().includes("budget")) {
-          mutateBranchInventory()
-          mutateBudget()
+          void mutateBranchInventory()
+          void mutateBudget()
         }
         const description = pricesHidden && budgetVisible && json.error?.toLowerCase().includes("insufficient budget")
           ? `This order exceeds the available budget of PKR ${(budgetAvailableForCart / 100).toFixed(2)}. Please reduce quantities or contact head office.`
@@ -1105,9 +1105,9 @@ export default function OrderPortalPage() {
       setShowCheckout(false)
 
       // Revalidate all data so UI updates immediately without refresh
-      mutateOrders()
-      mutateBudget() // Update budget display (remaining, on hold amounts)
-      mutateBranchInventory() // Update stock quantities
+      void mutateOrders()
+      void mutateBudget() // Update budget display (remaining, on hold amounts)
+      void mutateBranchInventory() // Update stock quantities
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" })
     } finally {
@@ -2802,7 +2802,7 @@ export default function OrderPortalPage() {
                 initialOrderItems={orderDetailsData?.items?.[0]?.orderItems || selectedOrder.orderItems || []}
                 onRefundSuccess={() => {
                   // Refresh orders data
-                  mutateOrders?.()
+                  void mutateOrders?.()
                 }}
                 refundAmountCents={selectedOrder.refundAmountCents}
                 refundedAt={selectedOrder.refundedAt}

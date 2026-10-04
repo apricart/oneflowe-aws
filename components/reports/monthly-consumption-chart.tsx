@@ -246,7 +246,6 @@ export function MonthlyConsumptionChart({
   const axisTick = isDark ? "#94a3b8" : "#64748b"
   const surface = isDark ? "#0f172a" : "#ffffff"
 
-  const isSuperAdmin = role === "SUPER_ADMIN"
   const isBranchScoped = role === "BRANCH_ADMIN"
 
   const [view, setView] = useState<"chart" | "table">("chart")
@@ -348,7 +347,7 @@ export function MonthlyConsumptionChart({
     setProductIds([])
     setCategoryIds([])
     setSeriesCount(CONSUMPTION_TREND_DEFAULT_SERIES)
-    mutate()
+    void mutate()
   }
 
   return (

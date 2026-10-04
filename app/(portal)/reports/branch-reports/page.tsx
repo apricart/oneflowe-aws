@@ -237,9 +237,9 @@ export default function BranchReportsPage() {
         setSelectedYears([])
         setCompareMonths([])
         setCompareYears([])
-        mutateGlobal()
-        mutateChart()
-        mutateReport()
+        void mutateGlobal()
+        void mutateChart()
+        void mutateReport()
     }, [mutateGlobal, mutateChart, mutateReport])
 
     const resetReportFilters = useCallback(() => {
@@ -266,7 +266,7 @@ export default function BranchReportsPage() {
         setActivePreset("all")
         setSelectedMonths([])
         setSelectedYears([])
-        mutateReport()
+        void mutateReport()
     }, [activePreset, allYears, contextBranchIds, contextOrgId, mutateReport, role, userBranchId, userOrgId])
 
     const resetChartFilters = useCallback(() => {
@@ -288,7 +288,7 @@ export default function BranchReportsPage() {
         setSelectedBranchIds(defaultBranchIds)
         setChartMonths(activePreset === "all" ? [...ALL_MONTHS] : [])
         setChartYears(activePreset === "all" ? [...allYears] : [])
-        mutateChart()
+        void mutateChart()
     }, [activePreset, allYears, contextBranchIds, contextOrgId, mutateChart, role, userBranchId, userOrgId])
 
     const summary = globalData?.summary || { totalOrders: 0, totalRevenue: 0, totalRefunds: 0, activeBranches: 0 }

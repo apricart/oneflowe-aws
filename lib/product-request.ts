@@ -87,7 +87,7 @@ const optionalText = (max: number, label: string) =>
     .trim()
     .max(max, `${label} must not exceed ${max} characters`)
     .nullish()
-    .transform((value) => (value ? value : null))
+    .transform((value) => value || null)
 
 const optionalId = (label: string) =>
   z

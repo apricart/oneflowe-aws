@@ -11,7 +11,7 @@ import { formatDateTime } from "@/lib/utils"
  * joined by a vertical bar. A step with no date is shown undated — the data
  * behind it does not carry one, and none is invented.
  */
-export function PaymentControlTimeline({ steps }: { steps: PaymentControlTimelineStepView[] }) {
+export function PaymentControlTimeline({ steps }: Readonly<{ steps: PaymentControlTimelineStepView[] }>) {
   if (steps.length === 0) return null
 
   return (

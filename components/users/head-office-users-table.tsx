@@ -1791,7 +1791,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
                     className="gap-2 border-slate-200 dark:border-slate-800 text-indigo-600 dark:text-indigo-400 h-10 shadow-sm"
                     disabled={statusSubmittingUserId === viewingUser.id}
                     onClick={() => {
-                        if (viewingUser) toggleUserStatus(viewingUser)
+                        if (viewingUser) void toggleUserStatus(viewingUser)
                     }}
                   >
                     <StatusActionContent

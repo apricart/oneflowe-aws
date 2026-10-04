@@ -381,9 +381,9 @@ export default function OrderReportPage() {
         setSelectedYears([])
         setCompareMonths([])
         setCompareYears([])
-        mutateGlobal()
-        mutateChart()
-        mutateReport()
+        void mutateGlobal()
+        void mutateChart()
+        void mutateReport()
     }, [mutateGlobal, mutateChart, mutateReport])
 
 
@@ -401,7 +401,7 @@ export default function OrderReportPage() {
         setActivePreset("all")
         setSelectedMonths([])
         setSelectedYears([])
-        mutateReport()
+        void mutateReport()
     }, [contextBranchIds, mutateReport])
 
     const resetChartFilters = useCallback(() => {
@@ -410,7 +410,7 @@ export default function OrderReportPage() {
         setChartOrgIds([])
         setChartGroupIds([])
         setChartBranchIds(contextBranchIds.length > 0 ? [...contextBranchIds] : [])
-        mutateChart()
+        void mutateChart()
     }, [contextBranchIds, mutateChart])
 
     // ━━━ DATA PROCESSING ━━━

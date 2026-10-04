@@ -131,7 +131,7 @@ export default function BranchAdminInventory({
           title: "Success",
           description: `Product ${isVisible ? 'shown' : 'hidden'} successfully`,
         })
-        mutate()
+        void mutate()
       } else {
         const result = await response.json()
         toast({

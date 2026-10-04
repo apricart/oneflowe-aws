@@ -93,7 +93,10 @@ export function orderHeldCents(order: ConsumptionOrder): number {
  * deliberately not the Asia/Karachi month `buildAppMonthPeriods` uses to choose
  * *which* periods a report covers: that selects rows, this names one.
  */
-export function budgetPeriodOf(date: Date | string | number | null | undefined): string {
+/** Anything `budgetPeriodOf` accepts; nullish means "now". */
+type BudgetPeriodInput = Date | string | number | null | undefined
+
+export function budgetPeriodOf(date: BudgetPeriodInput): string {
   const resolved = date == null ? new Date() : new Date(date)
   const usable = Number.isNaN(resolved.getTime()) ? new Date() : resolved
   return usable.toISOString().slice(0, 7)

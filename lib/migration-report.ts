@@ -83,7 +83,7 @@ function causeChain(error: unknown): unknown[] {
 export function failingStatementOf(error: unknown): string | null {
   for (const link of causeChain(error)) {
     const message = readString((link as { message?: unknown }).message)
-    if (!message || !message.startsWith("Failed query:")) continue
+    if (!message?.startsWith("Failed query:")) continue
     const body = message.slice("Failed query:".length)
     const statement = body.split(/\nparams:/)[0]
     const trimmed = statement.trim()

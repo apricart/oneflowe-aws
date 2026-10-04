@@ -187,7 +187,7 @@ export default function BudgetsPage() {
     setSelectedGroupIds([])
     setContextBranchIds([])
     setSearchQuery("")
-    mutate()
+    void mutate()
   }, [handleDateChange, mutate, setContextBranchIds])
 
   const budgets = useMemo<BudgetAllocation[]>(() => budgetsData?.budgets || [], [budgetsData?.budgets])
@@ -360,10 +360,10 @@ export default function BudgetsPage() {
       })
       setShowDialog(false)
       setEditingBudget(null)
-      mutate()
+      void mutate()
       
       // Global revalidation for analytics
-      globalMutate(key => typeof key === 'string' && key.includes('/api/v1/analytics/budgets/summary'))
+      void globalMutate(key => typeof key === 'string' && key.includes('/api/v1/analytics/budgets/summary'))
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" })
     }
@@ -425,10 +425,10 @@ export default function BudgetsPage() {
       })
       setShowEmptyDialog(false)
       setEmptyingBudget(null)
-      mutate()
+      void mutate()
       
       // Global revalidation for analytics
-      globalMutate(key => typeof key === 'string' && key.includes('/api/v1/analytics/budgets/summary'))
+      void globalMutate(key => typeof key === 'string' && key.includes('/api/v1/analytics/budgets/summary'))
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" })
     }
@@ -456,10 +456,10 @@ export default function BudgetsPage() {
         description: `Reset ${successCount}/${scopedBudgets.length} branch budgets to ₨0.00`
       })
       setShowEmptyAllDialog(false)
-      mutate()
+      void mutate()
       
       // Global revalidation for analytics
-      globalMutate(key => typeof key === 'string' && key.includes('/api/v1/analytics/budgets/summary'))
+      void globalMutate(key => typeof key === 'string' && key.includes('/api/v1/analytics/budgets/summary'))
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" })
     }
@@ -501,10 +501,10 @@ export default function BudgetsPage() {
       })
       setShowBulkDialog(false)
       setBulkAmount("")
-      mutate()
+      void mutate()
 
       // Global revalidation for analytics
-      globalMutate(key => typeof key === 'string' && key.includes('/api/v1/analytics/budgets/summary'))
+      void globalMutate(key => typeof key === 'string' && key.includes('/api/v1/analytics/budgets/summary'))
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" })
     }

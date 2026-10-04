@@ -57,7 +57,7 @@ export function UsersTable() {
         variant: "default",
       })
 
-      mutate()
+      void mutate()
     } catch (error: any) {
       const { message } = handleError(error, "delete user")
 
@@ -168,7 +168,7 @@ export function UsersTable() {
         variant: "default",
       })
 
-      mutate()
+      void mutate()
       closeEditDialog()
     } catch (error: any) {
       const { message } = handleError(error, "update user")

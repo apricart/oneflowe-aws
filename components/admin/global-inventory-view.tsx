@@ -163,7 +163,7 @@ export default function GlobalInventoryView() {
             })
 
             if (res.ok) {
-                mutate()
+                void mutate()
                 setDialogMode(null)
                 setSelectedProduct(null)
                 toast({
@@ -506,7 +506,7 @@ export default function GlobalInventoryView() {
                                 onSuccess={() => {
                                     setDialogMode(null)
                                     setSelectedProduct(null)
-                                    mutate() // Refresh the product list
+                                    void mutate() // Refresh the product list
                                 }}
                             />
                         </div>

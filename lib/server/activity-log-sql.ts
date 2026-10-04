@@ -249,8 +249,7 @@ function branchFilters(shape: SourceShape, filters: ActivityFilters): SQL[] {
   const time = column(shape, shape.time)
   const upperAction = sql`upper(${column(shape, shape.action)})`
 
-  conditions.push(sql`${time} >= ${filters.from}`)
-  conditions.push(sql`${time} <= ${filters.to}`)
+  conditions.push(sql`${time} >= ${filters.from}`, sql`${time} <= ${filters.to}`)
 
   if (filters.cursor) {
     conditions.push(cursorPredicate(shape, filters.cursor))

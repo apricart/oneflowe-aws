@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitest/config'
 
-import { sharedAlias, sharedExclude } from './vitest.shared'
+import { sharedAlias, sharedCoverage, sharedExclude } from './vitest.shared'
 
 /**
  * Integration tests: real code against a real Postgres.
@@ -32,5 +32,6 @@ export default defineConfig({
         hookTimeout: 60000,
         fileParallelism: false,
         alias: sharedAlias,
+        coverage: sharedCoverage('coverage/integration'),
     },
 })

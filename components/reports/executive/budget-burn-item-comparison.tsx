@@ -73,7 +73,8 @@ export function BudgetBurnItemComparisonPanel({ selection, onClose }: Readonly<{
     ? data.windows.pattern.map((bucket) => bucket.month)
     : fallbackMonths(selection.month, BUDGET_BURN_PATTERN_MONTHS)
   const span = months.length
-  const range = months.length > 0 ? monthRangeLabel(months[0], months[months.length - 1]) : ""
+  const lastMonth = months.at(-1)
+  const range = lastMonth === undefined ? "" : monthRangeLabel(months[0], lastMonth)
 
   return (
     <Card className="overflow-hidden ring-1 ring-indigo-200 dark:ring-indigo-900">

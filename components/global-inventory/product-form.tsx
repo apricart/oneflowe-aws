@@ -737,7 +737,7 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Reado
                       accept="image/*"
                       className="hidden"
                       onChange={(event) => {
-                        handleImageFile(event.target.files?.[0] || null)
+                        void handleImageFile(event.target.files?.[0] || null)
                       }}
                       onClick={(event) => {
                         (event.target as HTMLInputElement).value = "" // Reset on click for same-file re-upload

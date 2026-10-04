@@ -327,10 +327,10 @@ export default function UserReportPage() {
         setSelectedYears([])
         setCompareMonths([])
         setCompareYears([])
-        mutateGlobal()
-        mutateChart()
-        mutateReport()
-        mutateUserProducts()
+        void mutateGlobal()
+        void mutateChart()
+        void mutateReport()
+        void mutateUserProducts()
     }, [mutateGlobal, mutateChart, mutateReport, mutateUserProducts])
 
     const resetReportFilters = useCallback(() => {
@@ -346,8 +346,8 @@ export default function UserReportPage() {
         setActivePreset("all")
         setSelectedMonths([])
         setSelectedYears([])
-        mutateReport()
-        mutateUserProducts()
+        void mutateReport()
+        void mutateUserProducts()
     }, [allYears, mutateReport, mutateUserProducts])
 
     const resetChartFilters = useCallback(() => {
@@ -357,7 +357,7 @@ export default function UserReportPage() {
         setChartOrganizationIds([])
         setChartGroupIds([])
         setChartUserIds([])
-        mutateChart()
+        void mutateChart()
     }, [allYears, contextBranchIds, mutateChart])
 
     const showNextUserProduct = useCallback((userId: string | number, totalProducts: number) => {

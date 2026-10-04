@@ -16,7 +16,7 @@ export default function SuppliersPage() {
     if (res.ok) {
       setOpen(false)
       setForm({ organizationId: "", branchId: "", name: "", address: "", contact: "", email: "", description: "" })
-      mutate()
+      void mutate()
     }
   }
 

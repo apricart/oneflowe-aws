@@ -84,7 +84,7 @@ export default function ProductStatusPage() {
                 p.id === product.id ? { ...p, isActive: newActive } : p
             ),
         }
-        mutate(optimisticData, false) // update local data, don't revalidate yet
+        void mutate(optimisticData, false) // update local data, don't revalidate yet
 
         try {
             await apiFetch("/api/v1/head-office/organization-inventory", {
@@ -102,7 +102,7 @@ export default function ProductStatusPage() {
                 variant: "success",
             })
             // Revalidate to get fresh server data
-            mutate()
+            void mutate()
         } catch (error: any) {
             toast({
                 title: "Error",

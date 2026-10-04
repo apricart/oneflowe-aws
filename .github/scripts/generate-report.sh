@@ -12,7 +12,7 @@ TRIVY_HIGH=0
 TRIVY_MEDIUM=0
 TRIVY_LOW=0
 
-if [ -f trivy-fs-report.json ]; then
+if [[ -f trivy-fs-report.json ]]; then
   TRIVY_CRITICAL=$(grep -o '"Severity":"CRITICAL"' trivy-fs-report.json 2>/dev/null | wc -l || echo 0)
   TRIVY_HIGH=$(grep -o '"Severity":"HIGH"' trivy-fs-report.json 2>/dev/null | wc -l || echo 0)
   TRIVY_MEDIUM=$(grep -o '"Severity":"MEDIUM"' trivy-fs-report.json 2>/dev/null | wc -l || echo 0)
@@ -25,7 +25,7 @@ SNYK_MEDIUM=0
 SNYK_LOW=0
 SNYK_TOTAL=0
 
-if [ -f snyk-report.json ]; then
+if [[ -f snyk-report.json ]]; then
   SNYK_HIGH=$(grep -o '"severity":"high"' snyk-report.json 2>/dev/null | wc -l || echo 0)
   SNYK_MEDIUM=$(grep -o '"severity":"medium"' snyk-report.json 2>/dev/null | wc -l || echo 0)
   SNYK_LOW=$(grep -o '"severity":"low"' snyk-report.json 2>/dev/null | wc -l || echo 0)
@@ -36,9 +36,9 @@ TRIVY_TOTAL=$((TRIVY_CRITICAL + TRIVY_HIGH + TRIVY_MEDIUM + TRIVY_LOW))
 GRAND_TOTAL=$((TRIVY_TOTAL + SNYK_TOTAL))
 
 # ---- Overall risk banner ----
-if [ "$TRIVY_CRITICAL" -gt 0 ] || [ "$SNYK_HIGH" -gt 0 ]; then
+if [[ "$TRIVY_CRITICAL" -gt 0 || "$SNYK_HIGH" -gt 0 ]]; then
   RISK_LEVEL="ATTENTION NEEDED"
-elif [ "$TRIVY_HIGH" -gt 0 ]; then
+elif [[ "$TRIVY_HIGH" -gt 0 ]]; then
   RISK_LEVEL="REVIEW RECOMMENDED"
 else
   RISK_LEVEL="LOW RISK"

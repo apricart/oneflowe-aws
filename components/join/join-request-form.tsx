@@ -201,7 +201,7 @@ export function JoinRequestForm({
     })
   }
 
-  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: React.SubmitEvent<HTMLFormElement>) => {
     event.preventDefault()
     setFailure(null)
 

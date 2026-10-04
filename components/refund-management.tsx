@@ -345,7 +345,7 @@ export function RefundManagement({
             setReason("")
             setReasonError("")
             setShowForm(false)
-            mutateRefunds()
+            void mutateRefunds()
             onRefundSuccess?.()
 
         } catch (err: any) {

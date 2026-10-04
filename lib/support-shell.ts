@@ -1,4 +1,4 @@
-import { PORTAL_CHROME_ROLES, usesPortalChrome, type PortalChromeRole } from "@/lib/portal-chrome"
+import { usesPortalChrome, type PortalChromeRole } from "@/lib/portal-chrome"
 
 /**
  * Which shell the support area wears.
@@ -24,7 +24,7 @@ import { PORTAL_CHROME_ROLES, usesPortalChrome, type PortalChromeRole } from "@/
  */
 
 /** Roles that keep the portal chrome (sidebar and topbar) inside `/support`. */
-export const SUPPORT_PORTAL_SHELL_ROLES = PORTAL_CHROME_ROLES
+export { PORTAL_CHROME_ROLES as SUPPORT_PORTAL_SHELL_ROLES } from "@/lib/portal-chrome"
 
 export type SupportPortalShellRole = PortalChromeRole
 
