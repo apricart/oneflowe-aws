@@ -377,5 +377,8 @@ describe.skipIf(!hasTestDatabase)("editing one location on the group order revie
 })
 
 describe.skipIf(hasTestDatabase)("review location edit integration suite", () => {
-  it(NO_DATABASE_REASON, () => {})
+  it("is skipped without a test database", () => {
+    console.warn(NO_DATABASE_REASON)
+    expect(hasTestDatabase).toBe(false)
+  })
 })

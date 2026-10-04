@@ -276,14 +276,12 @@ async function selectBackend(): Promise<BcryptBackend> {
  * than racing several.
  */
 function getBackend(): Promise<BcryptBackend> {
-  if (!backendPromise) {
-    backendPromise = selectBackend().catch((error) => {
-      console.error("[PasswordHasher] Backend selection failed; using bcryptjs.", {
-        type: error instanceof Error ? error.name : typeof error,
-      })
-      return bcryptjsBackend
+  backendPromise ??= selectBackend().catch((error) => {
+    console.error("[PasswordHasher] Backend selection failed; using bcryptjs.", {
+      type: error instanceof Error ? error.name : typeof error,
     })
-  }
+    return bcryptjsBackend
+  })
   return backendPromise
 }
 

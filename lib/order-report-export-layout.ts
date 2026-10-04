@@ -66,6 +66,9 @@ export const ORDER_REPORT_EXPORT_COLUMNS: readonly OrderReportExportColumn[] = [
   { key: "paymentStatus", label: "Payment Status" },
 ] as const
 
+/** A date as it arrives from JSON, or as a `Date` when built in-process. */
+type ReportDate = string | Date | null
+
 /**
  * One order as the report endpoint returns it. Every field is optional because
  * the row is assembled from a JSON response, and an order that never reached
@@ -80,11 +83,11 @@ export interface OrderReportExportRecord {
   userName?: string | null
   approverName?: string | null
   fulfillerName?: string | null
-  createdAt?: string | Date | null
-  approvedAt?: string | Date | null
-  deliveredAt?: string | Date | null
-  fulfilledAt?: string | Date | null
-  refundedAt?: string | Date | null
+  createdAt?: ReportDate
+  approvedAt?: ReportDate
+  deliveredAt?: ReportDate
+  fulfilledAt?: ReportDate
+  refundedAt?: ReportDate
   groupName?: string | null
   branchName?: string | null
   invoiceNumber?: string | null
@@ -134,7 +137,7 @@ function toText(value: unknown): string {
   return text.length > 0 ? text : EMPTY_TEXT
 }
 
-function toDate(value: string | Date | null | undefined): string {
+function toDate(value: ReportDate | undefined): string {
   if (!value) return EMPTY_DATE
   const date = value instanceof Date ? value : new Date(value)
   return Number.isNaN(date.getTime()) ? EMPTY_DATE : date.toLocaleDateString()

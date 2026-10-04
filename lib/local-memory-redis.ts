@@ -77,7 +77,7 @@ export class LocalMemoryRedis implements RedisLike {
       .map((character) => {
         if (character === "*") return ".*"
         if (character === "?") return "."
-        return character.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+        return character.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`)
       })
       .join("")
     const matcher = new RegExp(`^${source}$`)
@@ -92,7 +92,7 @@ export class LocalMemoryRedis implements RedisLike {
     const entry = this.current(key)
     const previous = entry?.value === undefined ? 0 : Number(entry.value)
     if (!Number.isFinite(previous)) {
-      throw new Error("Value is not an integer")
+      throw new TypeError("Value is not an integer")
     }
 
     const next = previous + 1

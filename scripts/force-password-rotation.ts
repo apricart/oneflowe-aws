@@ -39,6 +39,7 @@ import * as dotenv from "dotenv"
 import { z } from "zod"
 
 import { deleteCacheKeys } from "../lib/cache-cli"
+import { compareCodeUnits } from "../lib/code-unit-order"
 import {
   forcedPasswordRotationPlanLines,
   forcedPasswordRotationReversalLines,
@@ -224,7 +225,7 @@ function printPlan(context: ForwardContext, plan: ForcedPasswordRotationPlan): v
   console.log("")
   console.log("ROTATION")
   console.log(`  flag ............... ${counts.targets} account(s)`)
-  for (const [role, count] of Object.entries(counts.targetsByRole).sort()) {
+  for (const [role, count] of Object.entries(counts.targetsByRole).sort(([left], [right]) => compareCodeUnits(left, right))) {
     console.log(`    ${role.padEnd(18, ".")} ${count}`)
   }
   console.log(`  shared email ....... ${counts.targetsWithSharedEmail} of them on an address another person also uses`)
@@ -432,7 +433,7 @@ const commitReportSchema = z.object({
   organization: z.object({ id: z.number().int().positive(), code: z.string().min(1), name: z.string().min(1) }),
   plan: z.object({
     targets: z.array(z.object({
-      id: z.string().uuid(),
+      id: z.uuid(),
       username: z.string().nullable(),
       sessionVersion: z.number().int().nonnegative(),
     })),

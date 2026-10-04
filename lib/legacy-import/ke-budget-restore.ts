@@ -43,6 +43,7 @@
 
 import { z } from "zod"
 
+import { compareCodeUnits } from "../code-unit-order"
 import type { CurrentBudget } from "./ke-budgets"
 
 const PERIOD_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/
@@ -279,10 +280,10 @@ export function restorePlanLines(plan: RestorePlan): string[] {
     `PERIOD ${plan.period}`,
     ...plan.allocationRestores
       .map((entry) => `ALLOC ${entry.branchId} ${entry.period} ${entry.currentCents} -> ${entry.amountAllocatedCents}`)
-      .sort(),
+      .sort(compareCodeUnits),
     ...plan.baselineRestores
       .map((entry) => `BASELINE ${entry.branchId} 0 -> ${entry.baselineBudgetCents}`)
-      .sort(),
+      .sort(compareCodeUnits),
   ]
 }
 

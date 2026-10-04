@@ -355,5 +355,5 @@ function buildAttentionList({ rankedBranches, priceRows, agingRows }: {
   })
 
   const severityOrder = { critical: 0, serious: 1, warning: 2, good: 3 }
-  return items.sort((left, right) => severityOrder[left.severity] - severityOrder[right.severity]).slice(0, 12)
+  return items.toSorted((left, right) => severityOrder[left.severity] - severityOrder[right.severity]).slice(0, 12)
 }

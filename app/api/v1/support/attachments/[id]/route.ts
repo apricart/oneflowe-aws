@@ -93,7 +93,7 @@ export async function GET(
  * defence, because a header is one place where a stray quote or newline is a
  * response-splitting bug rather than a cosmetic one.
  */
-const HEADER_UNSAFE = new RegExp("[^A-Za-z0-9._-]", "g")
+const HEADER_UNSAFE = /[^A-Za-z0-9._-]/g
 
 function asciiFileName(name: string): string {
   const cleaned = name.replace(HEADER_UNSAFE, "_").slice(0, 120)

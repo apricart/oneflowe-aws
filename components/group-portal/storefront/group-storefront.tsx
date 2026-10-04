@@ -16,6 +16,7 @@ import { useToast } from "@/hooks/use-toast"
 import { fetcher } from "@/lib/fetcher"
 import { usePendingInvoiceGuard } from "@/lib/hooks/use-pending-invoice-guard"
 import { formatQuantity } from "@/lib/quantity"
+import { randomId } from "@/lib/random-id"
 import {
   blockedBranchesOf,
   noticeForBlockedBranches,
@@ -70,18 +71,12 @@ type StorefrontTab = "shop" | "orders" | "other" | "refunds"
 
 /** Stable id for a submitted entry. Client-only; never sent to the server. */
 function newEntryKey(): string {
-  return `entry-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  return `entry-${randomId()}`
 }
 
-/**
- * An idempotency key that survives a retry. `crypto.randomUUID` is unavailable
- * on insecure origins, so a random fallback keeps the header well-formed.
- */
+/** An idempotency key that survives a retry. */
 function newIdempotencyKey(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID()
-  }
-  return `grp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`
+  return randomId()
 }
 
 /**

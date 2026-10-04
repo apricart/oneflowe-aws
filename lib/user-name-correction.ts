@@ -101,6 +101,19 @@ export function text(value: unknown): string {
   return String(value ?? "").replace(/\s+/g, " ").trim()
 }
 
+/**
+ * Drops the lone trailing dash legacy names sometimes end in ("Imran Khan -"),
+ * with the whitespace around it. Anything else is returned untouched.
+ *
+ * Exactly `value.replace(/\s*-\s*$/, "")`, written without the regex: that
+ * pattern backtracks quadratically on a long run of whitespace. `trimEnd`
+ * removes the same characters `\s` matches.
+ */
+export function withoutTrailingDash(value: string): string {
+  const trimmed = value.trimEnd()
+  return trimmed.endsWith("-") ? trimmed.slice(0, -1).trimEnd() : value
+}
+
 export function emailKey(value: unknown): string {
   return text(value).toLowerCase()
 }

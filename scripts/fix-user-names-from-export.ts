@@ -227,7 +227,7 @@ async function auditWrite(
 
 async function commit(client: PoolClient, sheetPath: string, code: string): Promise<void> {
   const operator = arg("--operator")
-  assert(operator && /.+@.+/.test(operator), "--operator=<your email> is required so the audit trail names a person")
+  assert(operator && /.@./.test(operator), "--operator=<your email> is required so the audit trail names a person")
 
   const sheet = readSheet(sheetPath)
   const org = await organization(client, code, sheet.organization)
@@ -321,7 +321,7 @@ async function commit(client: PoolClient, sheetPath: string, code: string): Prom
 
 async function rollback(client: PoolClient, reportPath: string): Promise<void> {
   const operator = arg("--operator")
-  assert(operator && /.+@.+/.test(operator), "--operator=<your email> is required for a rollback")
+  assert(operator && /.@./.test(operator), "--operator=<your email> is required for a rollback")
 
   const report = JSON.parse(readFileSync(reportPath, "utf8")) as {
     plan: PlanRow[]

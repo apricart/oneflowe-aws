@@ -82,7 +82,7 @@ describe("cart persistence", () => {
   it("does nothing without a key, so nothing is written before the user is known", () => {
     writeStoredCartEntries(null, [{ id: 11, quantity: 2 }])
 
-    expect(localStorage.length).toBe(0)
+    expect(localStorage).toHaveLength(0)
     expect(readStoredCartEntries(null)).toEqual([])
   })
 })

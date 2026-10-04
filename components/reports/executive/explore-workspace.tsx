@@ -26,7 +26,9 @@ import {
   SERIES,
   countShort,
   formatShortByKind,
+  hoveredDatum,
   money,
+  type InjectedTooltipProps,
 } from "./chart-kit"
 import {
   ComparisonChart,
@@ -574,6 +576,22 @@ function Row({ term, value }: Readonly<{ term: string; value: string }>) {
   )
 }
 
+function BranchPriceTooltip(injected: InjectedTooltipProps<PriceResponse["rows"][number]>) {
+  const row = hoveredDatum(injected)
+  if (!row) return null
+  return (
+    <div className="min-w-[190px] rounded-lg border border-slate-200 bg-white p-3 shadow-lg dark:border-slate-700 dark:bg-slate-900">
+      <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">{String(injected.label)}</p>
+      <dl className="space-y-1 text-xs">
+        <Row term={`Avg price / ${row.unit}`} value={money(row.avgUnitPriceCents)} />
+        <Row term="Quantity" value={`${countShort(row.quantity)} ${row.unit}`} />
+        <Row term="Total value" value={money(row.valueCents)} />
+        <Row term="Orders" value={countShort(row.orderCount)} />
+      </dl>
+    </div>
+  )
+}
+
 /** The price drilldown: one product, one unit, branch against branch. */
 function PriceByBranchCard({ priceProduct, priceData, priceLoading, onClose }: Readonly<{
   priceProduct: { productId: number; unit: string; name?: string }
@@ -624,21 +642,7 @@ function PriceByBranchCard({ priceProduct, priceData, priceLoading, onClose }: R
           <YAxis type="category" dataKey="branchName" width={150} tick={AXIS_STYLE} axisLine={false} tickLine={false} />
           <Tooltip
             cursor={{ fill: "var(--viz-track)", fillOpacity: 0.35 }}
-            content={({ active, payload, label }: any) => {
-              if (!active || !payload?.length) return null
-              const row = payload[0].payload
-              return (
-                <div className="min-w-[190px] rounded-lg border border-slate-200 bg-white p-3 shadow-lg dark:border-slate-700 dark:bg-slate-900">
-                  <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">{String(label)}</p>
-                  <dl className="space-y-1 text-xs">
-                    <Row term={`Avg price / ${row.unit}`} value={money(row.avgUnitPriceCents)} />
-                    <Row term="Quantity" value={`${countShort(row.quantity)} ${row.unit}`} />
-                    <Row term="Total value" value={money(row.valueCents)} />
-                    <Row term="Orders" value={countShort(row.orderCount)} />
-                  </dl>
-                </div>
-              )
-            }}
+            content={<BranchPriceTooltip />}
           />
           <Bar dataKey="avgUnitPriceCents" fill={SERIES[0]} radius={[0, 4, 4, 0]} barSize={18}>
             <LabelList

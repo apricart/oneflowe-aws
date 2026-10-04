@@ -212,7 +212,7 @@ async function main(): Promise<void> {
       return
     }
     const operator = arg("--operator")
-    assert(operator && /.+@.+/.test(operator), "--operator=<your email> is required so the audit trail names a person")
+    assert(operator && /.@./.test(operator), "--operator=<your email> is required so the audit trail names a person")
     assert(arg("--confirm-plan-sha256") === digest,
       `--confirm-plan-sha256 does not match the current plan (${digest}). Re-run the preflight and pass the digest it prints.`)
     await commit(client, plan, digest, operator)

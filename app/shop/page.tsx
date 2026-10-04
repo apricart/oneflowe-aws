@@ -3,6 +3,7 @@ import React,{ useMemo,useState } from "react"
 import Link from "next/link"
 import Image from "next/image"
 import { formatPKR,cn } from "@/lib/utils"
+import { compareCodeUnits } from "@/lib/code-unit-order"
 import { calculateLineCents,formatQuantity,parseQuantity,roundQuantity,sanitizeQuantityStep } from "@/lib/quantity"
 import useSWR from "swr"
 import { useSession } from "next-auth/react"
@@ -761,7 +762,7 @@ export default function OrderPortalPage() {
     const dated = (Array.isArray(budget?.addons) ? budget.addons : [])
       .map((addon: { validUntil?: string | null }) => addon?.validUntil)
       .filter((value: unknown): value is string => typeof value === "string")
-      .sort()
+      .sort(compareCodeUnits)
     return dated[0] ? formatAddonValidUntil(dated[0]) : null
   })()
   const budgetExceeded = !pricesHidden && !budgetsOff && cartTotal > budgetAvailableForCart

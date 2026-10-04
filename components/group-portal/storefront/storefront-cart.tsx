@@ -115,8 +115,8 @@ export function StorefrontCart({
               </div>
               <div className="flex items-center justify-between text-base font-semibold">
                 <dt>
-                  Combined
-                  <span className="ml-1 text-xs font-normal text-muted-foreground">
+                  {/* No space before the count: the span's own margin is the gap. */}
+                  Combined<span className="ml-1 text-xs font-normal text-muted-foreground">
                     ({locationCount} {locationCount === 1 ? "location" : "locations"})
                   </span>
                 </dt>

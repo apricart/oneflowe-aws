@@ -433,10 +433,10 @@ export const CHART_TYPES: Record<ChartTypeId, ChartTypeDefinition> = {
  * An average or a percentage cannot: three branches at 90% utilization do not
  * make 270% of anything.
  */
-const ADDITIVE_METRICS: readonly ExecutiveMetricId[] = ["spend", "quantity", "orders", "budgetRemaining"]
+const ADDITIVE_METRICS: ReadonlySet<string> = new Set<ExecutiveMetricId>(["spend", "quantity", "orders", "budgetRemaining"])
 
 export function isAdditiveMetric(metric: unknown): boolean {
-  return typeof metric === "string" && ADDITIVE_METRICS.includes(metric as ExecutiveMetricId)
+  return typeof metric === "string" && ADDITIVE_METRICS.has(metric)
 }
 
 /** Past this many slices a donut is unreadable, so it stops being offered. */
@@ -458,51 +458,46 @@ export function chartTypesFor({ dimension, metric, entityCount }: {
   /** How many entities the comparison currently resolves to. */
   entityCount: number
 }): ChartTypeOption[] {
-  const isTimeAxis = isTimeAxisDimension(dimension)
   const isBudgetMetric = EXECUTIVE_METRICS[metric].grain === "budget"
-  const options: ChartTypeOption[] = []
+  const option = (id: ChartTypeId, disabledReason?: string): ChartTypeOption =>
+    ({ ...CHART_TYPES[id], disabledReason })
 
-  const push = (id: ChartTypeId, disabledReason?: string) =>
-    options.push({ ...CHART_TYPES[id], disabledReason })
-
-  if (isTimeAxis) {
+  if (isTimeAxisDimension(dimension)) {
     // Months already run along an axis; ranking them by size would destroy the
     // one thing that makes them meaningful.
-    push("line")
-    push("column")
-    push("table")
-    return options
+    return [option("line"), option("column"), option("table")]
   }
 
-  push("bar")
-  push("column")
+  return [
+    option("bar"),
+    option("column"),
+    option("grouped", isBudgetMetric
+      ? "A budget position is a snapshot of the selected period, so there is no prior-period figure to set beside it."
+      : undefined),
+    option("donut", donutWithheldReason(dimension, metric, entityCount)),
+    option("line", isBudgetMetric
+      ? "The budget ledger is monthly and per branch, so a budget position has no trend line of its own here."
+      : undefined),
+    option("scatter", isBudgetMetric
+      ? "Value against quantity needs order lines; a budget position has none."
+      : undefined),
+    option("table"),
+  ]
+}
 
-  push("grouped", isBudgetMetric
-    ? "A budget position is a snapshot of the selected period, so there is no prior-period figure to set beside it."
-    : undefined)
-
-  push("donut", (() => {
-    if (!isAdditiveMetric(metric)) {
-      return `${EXECUTIVE_METRICS[metric].label} is an average, not a part of a whole, so a share chart would be meaningless.`
-    }
-    if (entityCount > DONUT_MAX_SLICES) {
-      return `Too many ${EXECUTIVE_DIMENSIONS[dimension].entityNoun} to read as slices. Pick ${DONUT_MAX_SLICES} or fewer.`
-    }
-    if (entityCount === 0) return "Nothing to divide up yet."
-    return undefined
-  })())
-
-  push("line", isBudgetMetric
-    ? "The budget ledger is monthly and per branch, so a budget position has no trend line of its own here."
-    : undefined)
-
-  push("scatter", (() => {
-    if (isBudgetMetric) return "Value against quantity needs order lines; a budget position has none."
-    return undefined
-  })())
-
-  push("table")
-  return options
+function donutWithheldReason(
+  dimension: ExecutiveDimensionId,
+  metric: ExecutiveMetricId,
+  entityCount: number,
+): string | undefined {
+  if (!isAdditiveMetric(metric)) {
+    return `${EXECUTIVE_METRICS[metric].label} is an average, not a part of a whole, so a share chart would be meaningless.`
+  }
+  if (entityCount > DONUT_MAX_SLICES) {
+    return `Too many ${EXECUTIVE_DIMENSIONS[dimension].entityNoun} to read as slices. Pick ${DONUT_MAX_SLICES} or fewer.`
+  }
+  if (entityCount === 0) return "Nothing to divide up yet."
+  return undefined
 }
 
 export function isChartType(value: unknown): value is ChartTypeId {

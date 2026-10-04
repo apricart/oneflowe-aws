@@ -266,7 +266,7 @@ describe("group pricing access control", () => {
     expect(route).toContain('if (role === "HEAD_OFFICE" && group.organizationId !== (session.user as any).organizationId)')
     // One authorization helper serves GET and PUT, so the two cannot drift.
     expect(route).toContain("const { authorized, failure } = await authorizeGroupPricing(id)")
-    expect((route.match(/await authorizeGroupPricing\(id\)/g) || []).length).toBe(2)
+    expect(route.match(/await authorizeGroupPricing\(id\)/g) || []).toHaveLength(2)
   })
 
   it("verifies every priced product belongs to the group's own organization", () => {

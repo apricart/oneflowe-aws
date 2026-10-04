@@ -1036,7 +1036,7 @@ export async function loadEntityOptions(
   }
   const unfiltered: ExecutiveFilters = {
     ...filters,
-    ...(ownSelection[dimension] ?? {}),
+    ...ownSelection[dimension],
     // Listing what exists must not depend on which unit is being measured.
     unit: null,
   }
@@ -1468,7 +1468,7 @@ function matrixAxisIds(dimension: MatrixDimensionId, keys: string[]): { uuids: s
   // Only a key that is the canonical text of a positive integer, so the id
   // pinned in SQL is exactly the key the margin will be labelled with.
   const ids = keys
-    .map((key) => Number(key))
+    .map(Number)
     .filter((id, index) => Number.isInteger(id) && id > 0 && String(id) === keys[index])
   return { uuids: [], ids }
 }

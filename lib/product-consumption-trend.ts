@@ -12,6 +12,7 @@
  * which months the axis carries, and what each cell holds.
  */
 
+import { compareCodeUnits } from "@/lib/code-unit-order"
 import { buildAppMonthPeriods } from "@/lib/date-range-params"
 
 /** Lines drawn unless the caller asks for more. */
@@ -154,7 +155,7 @@ export function resolveTrendMonths({
   endDate?: Date | null
   observedMonths?: string[]
 }): string[] {
-  const observed = Array.from(new Set(observedMonths.filter(Boolean))).sort()
+  const observed = Array.from(new Set(observedMonths.filter(Boolean))).sort(compareCodeUnits)
 
   const selectedMonths = (months ?? []).filter((month) => month >= 1 && month <= 12)
   const selectedYears = (years ?? []).filter((year) => year > 2000)
@@ -181,7 +182,7 @@ export function resolveTrendMonths({
     return observed
   })()
 
-  const unique = Array.from(new Set(resolved)).sort()
+  const unique = Array.from(new Set(resolved)).sort(compareCodeUnits)
   // Trimmed from the old end: a trend is read from its right-hand side.
   return unique.slice(Math.max(0, unique.length - CONSUMPTION_TREND_MAX_MONTHS))
 }

@@ -43,6 +43,8 @@ import { mkdirSync, writeFileSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import * as dotenv from "dotenv"
 
+import { compareCodeUnits } from "../lib/code-unit-order"
+
 dotenv.config({ path: ".env.local", quiet: true })
 dotenv.config({ quiet: true })
 
@@ -227,7 +229,7 @@ async function main() {
       organizationId: KE.id,
       matchedProducts: plan.length,
       byStatus: Object.fromEntries(
-        [...new Set(plan.map((row) => row.status))].sort()
+        [...new Set(plan.map((row) => row.status))].sort(compareCodeUnits)
           .map((status) => [status, plan.filter((row) => row.status === status).length]),
       ),
       removedKeyCounts: Object.fromEntries(STALE_KEYS.map((key) => [

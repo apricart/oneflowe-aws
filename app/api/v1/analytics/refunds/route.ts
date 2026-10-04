@@ -18,15 +18,15 @@ import {
 } from "@/db/schema"
 import { parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
 import { redactAnalyticsPrices, shouldHidePricesForRole } from "@/lib/price-visibility"
-import { resolveMultiBranchAnalyticsIds } from "@/lib/server/analytics-scope"
+import {
+    parseRequestedOrganizationIds,
+    resolveAnalyticsOrganizationIds,
+    resolveMultiBranchAnalyticsIds,
+} from "@/lib/server/analytics-scope"
 import { loadAnalyticsAssignedBranchIds } from "@/lib/server/analytics-branch-scope"
 import { REFUND_REPORT_PRICE_SORT_KEYS, REFUND_REPORT_SORT_KEYS, sortKeysForCaller, type RefundReportSortKey } from "@/lib/list-sort-keys"
 import { parseSortParams } from "@/lib/table-sort"
 import { orderBySortSql } from "@/lib/server/sort-sql"
-import {
-    parseRequestedOrganizationIds,
-    resolveAnalyticsOrganizationIds,
-} from "@/lib/server/analytics-scope"
 
 const requestedByUsers = alias(users, "refund_requested_by_users")
 const processedByUsers = alias(users, "refund_processed_by_users")

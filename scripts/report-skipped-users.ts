@@ -15,6 +15,7 @@ import * as dotenv from "dotenv"
 import type { PoolClient } from "pg"
 import * as XLSX from "xlsx"
 
+import { compareCodeUnits } from "../lib/code-unit-order"
 import { sanitizeSpreadsheetRecords } from "../lib/spreadsheet"
 import { branchKey, emailKey, splitName, text } from "../lib/user-name-correction"
 
@@ -68,7 +69,7 @@ function readReport(path: string): JsonRow {
 function newestReport(prefix: string): string {
   const dir = resolve("deliverables")
   assert(existsSync(dir), "deliverables/ does not exist — run the corrections first")
-  const matches = readdirSync(dir).filter((name) => name.startsWith(prefix) && name.endsWith(".json")).sort()
+  const matches = readdirSync(dir).filter((name) => name.startsWith(prefix) && name.endsWith(".json")).sort(compareCodeUnits)
   assert(matches.length > 0, `No committed report found matching ${prefix}*`)
   return resolve(dir, matches[matches.length - 1]!)
 }

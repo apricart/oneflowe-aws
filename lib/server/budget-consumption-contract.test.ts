@@ -29,6 +29,7 @@ const LEDGER_PERIOD_WRITERS = [
   "lib/server/order-decision-service.ts",
   "lib/server/group-order-creation.ts",
   "lib/server/group-branch-budgets.ts",
+  "lib/server/budget-period-opening.ts",
 ]
 
 describe("order-derived consumption goes through the shared SQL", () => {

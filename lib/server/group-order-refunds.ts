@@ -47,7 +47,7 @@ import { resolveScopedBranchIds } from "@/lib/server/multi-branch-scope"
 
 /** Refund states that consume refundable capacity. */
 const LIVE_REFUND_STATUSES = ["PENDING", "APPROVED", "COMPLETED"]
-const SETTLED_REFUND_STATUSES = ["APPROVED", "COMPLETED"]
+const SETTLED_REFUND_STATUSES = new Set(["APPROVED", "COMPLETED"])
 const PENDING_STATUS = "PENDING"
 
 const CONFLICT_MESSAGE =
@@ -123,7 +123,7 @@ const emptyPressure = (): RefundPressure => ({ approved: 0, pending: 0 })
 function accumulatePressure(bucket: RefundPressure, status: string, amount: number): void {
   if (status === PENDING_STATUS) {
     bucket.pending += amount
-  } else if (SETTLED_REFUND_STATUSES.includes(status)) {
+  } else if (SETTLED_REFUND_STATUSES.has(status)) {
     bucket.approved += amount
   }
 }
@@ -736,7 +736,7 @@ export type GroupRefundOutcome =
 
 function firstSkipReason(skipped: GroupRefundOrderResult[]): string {
   const first = skipped[0]
-  return first && first.status === "skipped"
+  return first?.status === "skipped"
     ? first.reason
     : "None of the selected orders can be refunded right now."
 }

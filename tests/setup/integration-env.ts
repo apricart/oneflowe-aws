@@ -52,7 +52,9 @@ function warnAboutIgnoredLocalEnv(): void {
   } catch {
     return
   }
-  if (!/^\s*TEST_DATABASE_URL\s*=/m.test(contents)) return
+  // Leading whitespace is matched within the line only: `^` already tries every
+  // line start, and letting `\s*` run across blank lines backtracks for nothing.
+  if (!/^[^\S\n\r\u2028\u2029]*TEST_DATABASE_URL\s*=/m.test(contents)) return
 
   notify(
     '.env.local defines TEST_DATABASE_URL, and it was ignored on purpose. ' +

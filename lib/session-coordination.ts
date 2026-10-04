@@ -1,5 +1,7 @@
 "use client"
 
+import { randomId } from "@/lib/random-id"
+
 export const MANUAL_SIGN_OUT_EVENT = "oneflowe:manual-sign-out"
 
 const SIGN_OUT_CANCELLED_EVENT = "oneflowe:sign-out-cancelled"
@@ -68,16 +70,9 @@ function readSignOutIntent(raw: string | null): SignOutIntent | null {
     : null
 }
 
-function createAttemptId(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID()
-  }
-  return `${Date.now()}-${Math.random().toString(36).slice(2)}`
-}
-
 function beginSignOut(): string {
   const intent = JSON.stringify({
-    attemptId: createAttemptId(),
+    attemptId: randomId(),
     startedAt: Date.now(),
   } satisfies SignOutIntent)
   inProcessSignOutIntent = intent

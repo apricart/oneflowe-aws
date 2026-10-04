@@ -201,7 +201,7 @@ export function planStatusResync(
     })
   }
 
-  return { changes, holds, unchanged, missingFromLegacy: missingFromLegacy.sort((a, b) => a - b) }
+  return { changes, holds, unchanged, missingFromLegacy: missingFromLegacy.toSorted((a, b) => a - b) }
 }
 
 export interface StatusResyncCounts {

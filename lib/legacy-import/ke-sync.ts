@@ -300,8 +300,8 @@ export function planBranches(
   }
 
   return {
-    pins: pins.sort((a, b) => a.legacyLocationId - b.legacyLocationId),
-    creates: creates.sort((a, b) => a.legacyLocationId - b.legacyLocationId),
+    pins: pins.toSorted((a, b) => a.legacyLocationId - b.legacyLocationId),
+    creates: creates.toSorted((a, b) => a.legacyLocationId - b.legacyLocationId),
     unmatched: currentBranches.filter((branch) => !claimed.has(branch.id)),
     ambiguous,
   }

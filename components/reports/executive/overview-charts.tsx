@@ -28,10 +28,12 @@ import {
   STATUS_COLOR,
   VizTooltip,
   countShort,
+  hoveredDatum,
   money,
   moneyShort,
   percent,
   sequentialStep,
+  type InjectedTooltipProps,
 } from "./chart-kit"
 
 /**
@@ -97,6 +99,27 @@ export function budgetChartMinWidth(count: number): number {
  * given against how much was used. Consumed is shown as one figure everywhere
  * — bar, tooltip and table — never split into spent and committed halves.
  */
+function BudgetVsConsumedTooltip(injected: InjectedTooltipProps<BranchRow>) {
+  const row = hoveredDatum(injected)
+  if (!row) return null
+  return (
+    <VizTooltip
+      title={row.branchName}
+      rows={[
+        { label: "Total budget", value: money(row.totalBudgetCents), color: BUDGET_BESIDE_COLOR },
+        { label: "Consumed", value: money(row.consumedCents), color: SERIES[0] },
+        { label: "Remaining", value: money(row.remainingCents) },
+        {
+          label: "Utilization",
+          value: row.totalBudgetCents > 0 ? percent(row.utilizationPct) : "no budget set",
+          muted: true,
+        },
+        { label: "Orders", value: countShort(row.orderCount), muted: true },
+      ]}
+    />
+  )
+}
+
 export function BudgetVsActualChart({ rows, loading, error, onSelectBranch, selectedBranchId }: Readonly<{
   rows: BranchRow[]
   loading: boolean
@@ -149,26 +172,7 @@ export function BudgetVsActualChart({ rows, loading, error, onSelectBranch, sele
               <YAxis tickFormatter={moneyShort} tick={AXIS_STYLE} axisLine={false} tickLine={false} width={72} />
               <Tooltip
                 cursor={{ fill: "var(--viz-track)", fillOpacity: 0.35 }}
-                content={({ active, payload }: any) => {
-                  if (!active || !payload?.length) return null
-                  const row: BranchRow = payload[0].payload
-                  return (
-                    <VizTooltip
-                      title={row.branchName}
-                      rows={[
-                        { label: "Total budget", value: money(row.totalBudgetCents), color: BUDGET_BESIDE_COLOR },
-                        { label: "Consumed", value: money(row.consumedCents), color: SERIES[0] },
-                        { label: "Remaining", value: money(row.remainingCents) },
-                        {
-                          label: "Utilization",
-                          value: row.totalBudgetCents > 0 ? percent(row.utilizationPct) : "no budget set",
-                          muted: true,
-                        },
-                        { label: "Orders", value: countShort(row.orderCount), muted: true },
-                      ]}
-                    />
-                  )
-                }}
+                content={<BudgetVsConsumedTooltip />}
               />
               <Bar
                 dataKey="totalBudgetCents"
@@ -209,6 +213,23 @@ export function BudgetVsActualChart({ rows, loading, error, onSelectBranch, sele
 }
 
 // ── 2. Utilization ranking ─────────────────────────────────────────────────
+
+function UtilizationTooltip(injected: InjectedTooltipProps<BranchRow>) {
+  const row = hoveredDatum(injected)
+  if (!row) return null
+  return (
+    <VizTooltip
+      title={row.branchName}
+      rows={[
+        { label: "Utilization", value: percent(row.utilizationPct), color: HEALTH_META[row.health].color },
+        { label: "Status", value: HEALTH_META[row.health].label },
+        { label: "Consumed", value: money(row.consumedCents), muted: true },
+        { label: "Total budget", value: money(row.totalBudgetCents), muted: true },
+        { label: "Remaining", value: money(row.remainingCents), muted: true },
+      ]}
+    />
+  )
+}
 
 export function UtilizationRankingChart({ rows, warningPct, loading, error }: Readonly<{
   rows: BranchRow[]
@@ -258,22 +279,7 @@ export function UtilizationRankingChart({ rows, warningPct, loading, error }: Re
           <ReferenceLine x={100} stroke={STATUS_COLOR.critical} strokeDasharray="4 4" />
           <Tooltip
             cursor={{ fill: "var(--viz-track)", fillOpacity: 0.35 }}
-            content={({ active, payload }: any) => {
-              if (!active || !payload?.length) return null
-              const row: BranchRow = payload[0].payload
-              return (
-                <VizTooltip
-                  title={row.branchName}
-                  rows={[
-                    { label: "Utilization", value: percent(row.utilizationPct), color: HEALTH_META[row.health].color },
-                    { label: "Status", value: HEALTH_META[row.health].label },
-                    { label: "Consumed", value: money(row.consumedCents), muted: true },
-                    { label: "Total budget", value: money(row.totalBudgetCents), muted: true },
-                    { label: "Remaining", value: money(row.remainingCents), muted: true },
-                  ]}
-                />
-              )
-            }}
+            content={<UtilizationTooltip />}
           />
           <Bar dataKey="utilizationPct" radius={[0, 4, 4, 0]} barSize={18}>
             {data.map((row) => (
@@ -305,6 +311,34 @@ export function UtilizationRankingChart({ rows, warningPct, loading, error }: Re
 
 export type TrendPoint = { key: string; label: string; spendCents: number; orderCount: number }
 
+/** One month of this period beside the same position in the last. */
+type AlignedTrendPoint = {
+  label: string
+  currentCents: number
+  previousCents: number | null
+  previousLabel: string | null
+  orderCount: number
+}
+
+function ProcurementTrendTooltip(injected: InjectedTooltipProps<AlignedTrendPoint>) {
+  const point = hoveredDatum(injected)
+  if (!point) return null
+  return (
+    <VizTooltip
+      title={String(injected.label)}
+      rows={[
+        { label: "This period", value: money(point.currentCents), color: SERIES[0] },
+        {
+          label: point.previousLabel ? `Prior (${point.previousLabel})` : "Prior period",
+          value: point.previousCents === null ? "no data" : money(point.previousCents),
+          color: SERIES[1],
+        },
+        { label: "Orders", value: countShort(point.orderCount), muted: true },
+      ]}
+    />
+  )
+}
+
 export function ProcurementTrendChart({ current, previous, loading, error }: Readonly<{
   current: TrendPoint[]
   previous: TrendPoint[]
@@ -313,7 +347,7 @@ export function ProcurementTrendChart({ current, previous, loading, error }: Rea
 }>) {
   // The two windows are aligned by position, not by month name: "the third
   // month of this period" against "the third month of the last one".
-  const data = current.map((point, index) => ({
+  const data = current.map((point, index): AlignedTrendPoint => ({
     label: point.label,
     currentCents: point.spendCents,
     previousCents: previous[index]?.spendCents ?? null,
@@ -348,24 +382,7 @@ export function ProcurementTrendChart({ current, previous, loading, error }: Rea
           <YAxis tickFormatter={moneyShort} tick={AXIS_STYLE} axisLine={false} tickLine={false} width={64} />
           <Tooltip
             cursor={{ stroke: "var(--viz-axis)", strokeDasharray: "3 3" }}
-            content={({ active, payload, label }: any) => {
-              if (!active || !payload?.length) return null
-              const point = payload[0].payload
-              return (
-                <VizTooltip
-                  title={String(label)}
-                  rows={[
-                    { label: "This period", value: money(point.currentCents), color: SERIES[0] },
-                    {
-                      label: point.previousLabel ? `Prior (${point.previousLabel})` : "Prior period",
-                      value: point.previousCents === null ? "no data" : money(point.previousCents),
-                      color: SERIES[1],
-                    },
-                    { label: "Orders", value: countShort(point.orderCount), muted: true },
-                  ]}
-                />
-              )
-            }}
+            content={<ProcurementTrendTooltip />}
           />
           <Line
             type="monotone"
@@ -394,6 +411,22 @@ export type CategoryRow = {
   orderCount: number
   share: number
   cumulativeShare: number
+}
+
+function CategoryShareTooltip(injected: InjectedTooltipProps<CategoryRow>) {
+  const row = hoveredDatum(injected)
+  if (!row) return null
+  return (
+    <VizTooltip
+      title={String(injected.label)}
+      rows={[
+        { label: "Value", value: money(row.valueCents), color: SERIES[0] },
+        { label: "Share of spend", value: percent(row.share) },
+        { label: "Cumulative", value: percent(row.cumulativeShare), color: SERIES[1] },
+        { label: "Orders", value: countShort(row.orderCount), muted: true },
+      ]}
+    />
+  )
 }
 
 export function CategoryParetoChart({ rows, categoriesTo80, loading, error, onSelectCategory }: Readonly<{
@@ -453,21 +486,7 @@ export function CategoryParetoChart({ rows, categoriesTo80, loading, error, onSe
           <ReferenceLine y={80} stroke="var(--viz-axis)" strokeDasharray="4 4" />
           <Tooltip
             cursor={{ fill: "var(--viz-track)", fillOpacity: 0.35 }}
-            content={({ active, payload, label }: any) => {
-              if (!active || !payload?.length) return null
-              const row: CategoryRow = payload[0].payload
-              return (
-                <VizTooltip
-                  title={String(label)}
-                  rows={[
-                    { label: "Value", value: money(row.valueCents), color: SERIES[0] },
-                    { label: "Share of spend", value: percent(row.share) },
-                    { label: "Cumulative", value: percent(row.cumulativeShare), color: SERIES[1] },
-                    { label: "Orders", value: countShort(row.orderCount), muted: true },
-                  ]}
-                />
-              )
-            }}
+            content={<CategoryShareTooltip />}
           />
           <Bar
             dataKey="share"
@@ -605,6 +624,28 @@ const STATUS_LABEL: Record<string, string> = {
   OTHER: "Other",
 }
 
+function StatusCompositionTooltip({ present, ...injected }: InjectedTooltipProps<Record<string, number | string>> & Readonly<{
+  present: readonly string[]
+}>) {
+  const point = hoveredDatum(injected)
+  if (!point) return null
+  return (
+    <VizTooltip
+      title={String(injected.label)}
+      rows={[
+        { label: "Orders in period", value: countShort(Number(point.totalOrders)) },
+        ...present.map((status, index) => ({
+          label: STATUS_LABEL[status],
+          value: Number(point[status])
+            ? `${percent(Number(point[status]), 0)} · ${countShort(Number(point[`${status}_count`]) || 0)}`
+            : "—",
+          color: SERIES[index % SERIES.length],
+        })),
+      ]}
+    />
+  )
+}
+
 export function StatusCompositionChart({ branches, loading, error }: Readonly<{
   branches: StatusBranch[]
   loading: boolean
@@ -662,25 +703,7 @@ export function StatusCompositionChart({ branches, loading, error }: Readonly<{
           <YAxis type="category" dataKey="branchName" width={128} tick={AXIS_STYLE} axisLine={false} tickLine={false} />
           <Tooltip
             cursor={{ fill: "var(--viz-track)", fillOpacity: 0.35 }}
-            content={({ active, payload, label }: any) => {
-              if (!active || !payload?.length) return null
-              const point = payload[0].payload
-              return (
-                <VizTooltip
-                  title={String(label)}
-                  rows={[
-                    { label: "Orders in period", value: countShort(Number(point.totalOrders)) },
-                    ...present.map((status, index) => ({
-                      label: STATUS_LABEL[status],
-                      value: Number(point[status])
-                        ? `${percent(Number(point[status]), 0)} · ${countShort(Number(point[`${status}_count`]) || 0)}`
-                        : "—",
-                      color: SERIES[index % SERIES.length],
-                    })),
-                  ]}
-                />
-              )
-            }}
+            content={<StatusCompositionTooltip present={present} />}
           />
           {present.map((status, index) => (
             <Bar

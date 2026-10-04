@@ -650,5 +650,8 @@ describe.skipIf(!hasTestDatabase)("delivery addresses, end to end", () => {
 })
 
 describe.skipIf(hasTestDatabase)("delivery addresses", () => {
-  it.skip(`skipped: ${NO_DATABASE_REASON}`, () => {})
+  it("is skipped without a test database", () => {
+    console.warn(NO_DATABASE_REASON)
+    expect(hasTestDatabase).toBe(false)
+  })
 })

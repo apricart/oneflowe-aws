@@ -36,6 +36,7 @@ import { dirname } from "node:path"
 import * as dotenv from "dotenv"
 
 import { generateApprovalToken, hashApprovalToken } from "../lib/approval-token"
+import { compareCodeUnits } from "../lib/code-unit-order"
 import {
   KE_ORDERS_ORGANIZATION as ORGANIZATION,
   KE_ORDERS_SOURCE as SOURCE_SYSTEM,
@@ -268,6 +269,12 @@ interface ResolvedOrder {
   userId: string
   /** Historical identities are inactive by design; recorded so the report shows it. */
   userIsActive: boolean
+  /**
+   * Legacy named an orderer this branch has no account for, so the order went
+   * to the branch's own order-portal account. Recorded so the report shows how
+   * many orders carry a substitute owner rather than the person who placed them.
+   */
+  attributedToBranchFallback: boolean
   /** Historical products are inactive by design; recorded so the report shows it. */
   inactiveProducts: string[]
   subtotalCents: number
@@ -527,6 +534,7 @@ async function buildPlan(
       branchAddress: branch.address ?? null,
       userId: String(matched[0].id),
       userIsActive: matched[0].is_active === true,
+      attributedToBranchFallback,
       inactiveProducts: order.lines
         .filter((line) => productByName.get(line.normalizedName)?.inventory_active !== true)
         .map((line) => line.sourceName),
@@ -751,12 +759,14 @@ function summarize(plan: Plan) {
     byStatus.set(status, (byStatus.get(status) ?? 0) + 1)
     byPeriod.set(entry.order.period, (byPeriod.get(entry.order.period) ?? 0) + 1)
   }
+  const byKey = ([left]: [string, number], [right]: [string, number]) => compareCodeUnits(left, right)
   return {
-    byStatus: Object.fromEntries([...byStatus].sort()),
-    byPeriod: Object.fromEntries([...byPeriod].sort()),
+    byStatus: Object.fromEntries([...byStatus].sort(byKey)),
+    byPeriod: Object.fromEntries([...byPeriod].sort(byKey)),
     totalCents: plan.resolved.reduce((sum, entry) => sum + entry.totalCents, 0),
     taxCents: plan.resolved.reduce((sum, entry) => sum + entry.taxCents, 0),
     ordersAttributedToInactiveUser: plan.resolved.filter((entry) => !entry.userIsActive).length,
+    ordersAttributedToBranchFallback: plan.resolved.filter((entry) => entry.attributedToBranchFallback).length,
     ordersReferencingInactiveProduct: plan.resolved.filter((entry) => entry.inactiveProducts.length > 0).length,
   }
 }

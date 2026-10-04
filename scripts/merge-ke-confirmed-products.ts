@@ -20,6 +20,7 @@ import * as dotenv from "dotenv"
 import type { PoolClient } from "pg"
 
 import { invalidateCachePrefixes } from "../lib/cache-cli"
+import { compareCodeUnits } from "../lib/code-unit-order"
 
 dotenv.config({ path: ".env.local", quiet: true })
 dotenv.config({ quiet: true })
@@ -168,7 +169,7 @@ function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`
   if (value && typeof value === "object") {
     const record = value as JsonRow
-    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonical(record[key])}`).join(",")}}`
+    return `{${Object.keys(record).sort(compareCodeUnits).map((key) => `${JSON.stringify(key)}:${canonical(record[key])}`).join(",")}}`
   }
   return JSON.stringify(value ?? null)
 }

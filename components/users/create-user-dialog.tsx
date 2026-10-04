@@ -74,27 +74,27 @@ function getRoleLabel(role: string) {
 
 // Roles pinned to exactly one branch. The group roles are deliberately
 // excluded: their reach comes from the group/branch assignments instead.
-const SINGLE_BRANCH_ROLES = ["BRANCH_ADMIN", "ORDER_PORTAL"]
+const SINGLE_BRANCH_ROLES = new Set(["BRANCH_ADMIN", "ORDER_PORTAL"])
 
 // Roles whose reach is defined by group and branch assignments.
-const MULTI_BRANCH_ROLES = ["GROUP_ORDER_PORTAL", "GROUP_USER"]
+const MULTI_BRANCH_ROLES = new Set(["GROUP_ORDER_PORTAL", "GROUP_USER"])
 
 // Roles that may carry a branch but do not require one. A Viewer with a branch
 // reads that branch alone; without one it reads the whole organization. The
 // server applies the same rule in `lib/viewer-access.ts`, so leaving this blank
 // grants tenant-wide *reading*, never any ability to act.
-const OPTIONAL_BRANCH_ROLES = ["VIEWER"]
+const OPTIONAL_BRANCH_ROLES = new Set(["VIEWER"])
 
 function isSingleBranchRole(role: string) {
-  return SINGLE_BRANCH_ROLES.includes(role)
+  return SINGLE_BRANCH_ROLES.has(role)
 }
 
 function usesOptionalBranch(role: string) {
-  return OPTIONAL_BRANCH_ROLES.includes(role)
+  return OPTIONAL_BRANCH_ROLES.has(role)
 }
 
 function usesMultiBranchScope(role: string) {
-  return MULTI_BRANCH_ROLES.includes(role)
+  return MULTI_BRANCH_ROLES.has(role)
 }
 
 function toggleId(current: string[], id: string) {

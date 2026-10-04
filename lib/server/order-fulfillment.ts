@@ -67,7 +67,7 @@ export type OrderFulfillmentOutcome =
   | "ledger-conflict"
 
 /** Ledger invariants that mean the transition rolled back rather than applied. */
-const LEDGER_INVARIANTS = ["BUDGET_LEDGER_INVARIANT", "QUANTITY_BUDGET_LEDGER_INVARIANT"]
+const LEDGER_INVARIANTS = new Set(["BUDGET_LEDGER_INVARIANT", "QUANTITY_BUDGET_LEDGER_INVARIANT"])
 
 /**
  * "The goods have arrived", read the way every other delivery read in the
@@ -78,7 +78,7 @@ const DELIVERED_ORDER_CONDITION = sql`UPPER(TRIM(COALESCE(to_jsonb("orders") ->>
 
 function fulfillmentFailureOutcome(transitionError: any): OrderFulfillmentOutcome | null {
   if (transitionError?.message === "ORDER_TRANSITION_CONFLICT") return "conflict"
-  if (LEDGER_INVARIANTS.includes(transitionError?.message)) return "ledger-conflict"
+  if (LEDGER_INVARIANTS.has(transitionError?.message)) return "ledger-conflict"
   return null
 }
 
