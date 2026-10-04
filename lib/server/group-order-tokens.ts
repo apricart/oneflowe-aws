@@ -15,10 +15,9 @@ import { GROUP_ORDER_PORTAL_ROLE, resolveScopedBranchIds } from "@/lib/server/mu
  * The single-order hand-off emails one token at a time, which is right when
  * there is one order. A group order approves into one branch order per branch,
  * each with its own token, so doing the same thing here would mean dozens of
- * separate emails — and would exhaust the shared five-per-ten-minutes email
- * budget after the fifth branch. Collecting them into one message is both the
- * better hand-off for the administrator and the only version of this that
- * actually works at group scale.
+ * separate emails — and would quickly exhaust the shared email allowance.
+ * Collecting them into one message is both the better hand-off for the
+ * administrator and the version of this that works at group scale.
  *
  * It grants no reach the per-order route does not already grant. Every token
  * released here belongs to an approved order this same user created, inside

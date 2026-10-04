@@ -37,6 +37,7 @@ import {
 } from "@/lib/order-status"
 import { calculateLineCents, formatQuantity } from "@/lib/quantity"
 import { FULFILLMENT_STATUS_LABELS, normalizeFulfillmentStatus } from "@/lib/fulfillment-status"
+import { TOKEN_SENT_LABEL, isTokenAlreadySent } from "@/lib/order-token-handoff"
 import { PAYMENT_STATUS_LABELS, normalizePaymentStatus } from "@/lib/payment-status"
 import { getFulfillmentProgressColor, getPaymentStatusColor } from "@/lib/order-status-colors"
 import {
@@ -138,6 +139,7 @@ export function OrderDetailPanel({
   const isActiveOrder = normalizedOrderStatus === "APPROVED"
   const isFulfilledOrder = ["FULFILLED", "PARTIAL", "PARTIALLY_FULFILLED"].includes(normalizedOrderStatus)
   const isDeliveredOrder = normalizeFulfillmentStatus(order.fulfillmentStatus) === "DELIVERED"
+  const tokenAlreadySent = isTokenAlreadySent(order.tokenHandoffAt)
 
   return (
             <div className="flex flex-col h-full font-sans">
@@ -330,12 +332,15 @@ export function OrderDetailPanel({
                         <Button
                           type="button"
                           variant="outline"
-                          disabled={isSendingToken}
+                          disabled={isSendingToken || tokenAlreadySent}
                           onClick={onSendToken}
                           className="w-full h-11 rounded-xl bg-white dark:bg-slate-950 border-indigo-100 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 font-bold text-[11px] uppercase tracking-widest transition-all active:scale-[0.99]"
                         >
                           <Send className={cn("mr-2 h-4 w-4", isSendingToken && "animate-pulse")} />
-                          {isSendingToken ? "Sending Token..." : "Send Token to Admin"}
+                          {(() => {
+                            if (isSendingToken) return "Sending Token..."
+                            return tokenAlreadySent ? TOKEN_SENT_LABEL : "Send Token to Admin"
+                          })()}
                         </Button>
                       )}
                       <p className="text-[9px] font-bold text-slate-400 leading-tight">

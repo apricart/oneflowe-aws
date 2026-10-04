@@ -30,6 +30,8 @@ export type UnacknowledgedOrderSource = {
   deliveredAt?: string | null
   createdAt?: string | null
   approvalToken?: string | null
+  /** Set once the token has been emailed to admin operations; it is sent once. */
+  tokenHandoffAt?: string | null
 }
 
 const timeOf = (value?: string | null): number => {

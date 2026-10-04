@@ -4,7 +4,9 @@ import { beforeAll, describe, expect, it, vi } from "vitest"
 import { BUDGET_BESIDE_COLOR, SERIES, STATUS_COLOR } from "./chart-kit"
 import {
   ComparisonChart,
+  EntityTooltip,
   SeriesTable,
+  ShareTooltip,
   budgetShareLabel,
   columnTickLabel,
   budgetColumnLabel,
@@ -461,5 +463,42 @@ describe("the prior-period form", () => {
     render(<ComparisonChart {...base} chart="grouped" />)
     expect(screen.getByText("Procurement Value, this period")).toBeTruthy()
     expect(screen.getByText("Prior period")).toBeTruthy()
+  })
+})
+
+describe("bar and donut tooltips", () => {
+  const hovered = { active: true, payload: [{ payload: row({}) }] } as any
+  const labels = () => screen.getAllByText(/./).map((node) => node.textContent)
+
+  it("leaves out share of shown and the prior-period change", () => {
+    const { unmount } = render(<EntityTooltip {...hovered} format="currency" metricLabel="Consumed" />)
+    expect(screen.queryByText("Share of shown")).toBeNull()
+    expect(screen.queryByText("vs prior period")).toBeNull()
+    expect(screen.queryByText(/vs prior/)).toBeNull()
+    unmount()
+
+    render(<ShareTooltip {...hovered} format="currency" metricLabel="Consumed" />)
+    expect(screen.queryByText("Share of shown")).toBeNull()
+    expect(screen.queryByText(/vs prior/)).toBeNull()
+  })
+
+  it("names the money figure once when the bar is drawn from it", () => {
+    render(<EntityTooltip {...hovered} format="currency" metricLabel="Consumed" />)
+    expect(screen.getAllByText("Consumed")).toHaveLength(1)
+    expect(screen.getByText("Quantity")).toBeTruthy()
+    expect(screen.getByText("Orders")).toBeTruthy()
+  })
+
+  it("still shows the money figure beside a quantity bar", () => {
+    render(<EntityTooltip {...hovered} format="quantity" metricLabel="Quantity" />)
+    expect(screen.getAllByText("Quantity")).toHaveLength(1)
+    expect(screen.getByText("Procurement value")).toBeTruthy()
+    expect(labels()).not.toContain("Share of shown")
+  })
+
+  it("keeps a different money metric and the spend behind it apart", () => {
+    render(<EntityTooltip {...hovered} format="currency" metricLabel="Average Order Value" />)
+    expect(screen.getByText("Average Order Value")).toBeTruthy()
+    expect(screen.getByText("Procurement value")).toBeTruthy()
   })
 })

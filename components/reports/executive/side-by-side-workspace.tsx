@@ -10,6 +10,7 @@ import {
   budgetBesideWithheldReason,
   metricDefinitionForStatusSet,
   panelSegmentation,
+  panelSlotsForFocus,
   panelsForFocus,
   type ChartTypeId,
   type DrillDownStatusSet,
@@ -18,6 +19,7 @@ import {
   type MatrixDimensionId,
   type MeasureId,
   type SideBySidePanel,
+  type SideBySidePanelSlot,
 } from "@/lib/executive-analytics"
 import { retainAvailable } from "@/lib/executive-entity-selection"
 import { isPanelSnapshotReady, type SideBySidePanelSnapshot } from "@/lib/executive-side-by-side-export"
@@ -234,11 +236,14 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
    * A two-column grid cannot widen a panel in place: the half-row before it
    * would be left empty. Bringing the widened panel to the top is also what the
    * reader asked for by ticking it — the one question they want the room for.
+   *
+   * Everything else holds its place whatever the filters say: a panel withheld
+   * for the current focus keeps its slot as a note (`panelSlotsForFocus`).
    */
-  const orderedPanels = React.useMemo(() => {
-    const rank = (panel: SideBySidePanel) => (expanded.includes(panel.id) ? 0 : 1)
-    return [...panels].sort((left, right) => rank(left) - rank(right))
-  }, [panels, expanded])
+  const orderedSlots = React.useMemo(() => {
+    const rank = ({ panel, withheld }: SideBySidePanelSlot) => (!withheld && expanded.includes(panel.id) ? 0 : 1)
+    return [...panelSlotsForFocus(focusProducts.length)].sort((left, right) => rank(left) - rank(right))
+  }, [focusProducts.length, expanded])
 
   const focusLabels = focusProducts.map(
     (key) => productOptions.find((option) => option.key === key)?.label ?? "selected product",
@@ -331,7 +336,8 @@ export function SideBySideWorkspace({ filters }: Readonly<{ filters: ExecutiveFi
       </p>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        {orderedPanels.map((panel) => {
+        {orderedSlots.map(({ panel, withheld }) => {
+          if (withheld) return <WithheldPanel key={panel.id} panel={panel} />
           // A ranked panel split by the people picked to compare is served by
           // `/matrix` as a grid, one column per person inside each cluster.
           const gridRows = panelSegmentation(panel, compareUsers.length)
@@ -499,7 +505,8 @@ function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggle
       title={panel.title}
       question={panel.question}
       formula={data?.formula ?? panelMetric.formula}
-      loading={isLoading}
+      loading={isLoading && !data}
+      refreshing={isLoading && Boolean(data)}
       error={requestError}
       empty={data?.blocked?.message ?? (isEmpty ? "Nothing in the selected period under these filters." : null)}
       className={fullWidth ? "xl:col-span-2" : undefined}
@@ -560,6 +567,24 @@ function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggle
       {budgetWithheld && !isEmpty ? (
         <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">{budgetWithheld}</p>
       ) : null}
+    </ChartCard>
+  )
+}
+
+/**
+ * The slot of a panel withheld for the current focus.
+ *
+ * It asks for nothing and reports nothing to the download; it is here so the
+ * panels after it stay where the reader left them.
+ */
+function WithheldPanel({ panel }: Readonly<{ panel: SideBySidePanel }>) {
+  return (
+    <ChartCard
+      title={panel.title}
+      question={panel.question}
+      empty={panel.withheldNote ?? "Not shown for the current selection."}
+    >
+      {null}
     </ChartCard>
   )
 }
@@ -647,7 +672,8 @@ function MatrixPanel({ panel, rows, filters, metric, expanded, onToggleExpanded,
       title={panel.title}
       question={panel.question}
       formula={data?.formula ?? panelMetric.formula}
-      loading={isLoading}
+      loading={isLoading && !data}
+      refreshing={isLoading && Boolean(data)}
       error={requestError}
       empty={data?.blocked?.message ?? (isEmpty ? "Nothing in the selected period under these filters." : null)}
       className={expanded ? "xl:col-span-2" : undefined}

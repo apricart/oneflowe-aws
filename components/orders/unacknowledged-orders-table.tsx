@@ -1,6 +1,6 @@
 "use client"
 
-import { Copy, Eye, PackageCheck, Send } from "lucide-react"
+import { CheckCircle2, Copy, Eye, PackageCheck, Send } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -18,6 +18,7 @@ import {
   canSendTokenFromTab,
   type UnacknowledgedOrderSource,
 } from "@/lib/unacknowledged-orders"
+import { TOKEN_SENT_LABEL, isTokenAlreadySent } from "@/lib/order-token-handoff"
 import { cn } from "@/lib/utils"
 
 export type UnacknowledgedOrderRow = UnacknowledgedOrderSource & {
@@ -96,6 +97,7 @@ export function UnacknowledgedOrdersTable<T extends UnacknowledgedOrderRow>({
             {orders.map((order) => {
               const token = canSendTokenFromTab(order) ? String(order.approvalToken) : null
               const sending = sendingOrderId === order.id
+              const alreadySent = isTokenAlreadySent(order.tokenHandoffAt)
               return (
                 <TableRow key={order.id}>
                   <TableCell className="align-top">
@@ -144,7 +146,20 @@ export function UnacknowledgedOrdersTable<T extends UnacknowledgedOrderRow>({
                       >
                         <Eye className="h-4 w-4" />
                       </Button>
-                      {token && (
+                      {token && alreadySent && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          disabled
+                          aria-label={`Token for order ${order.tid} has already been emailed`}
+                          className="gap-2 whitespace-nowrap"
+                        >
+                          <CheckCircle2 className="h-4 w-4" />
+                          {TOKEN_SENT_LABEL}
+                        </Button>
+                      )}
+                      {token && !alreadySent && (
                         <Button
                           type="button"
                           size="sm"
