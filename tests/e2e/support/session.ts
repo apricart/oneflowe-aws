@@ -59,8 +59,29 @@ export async function signIn(page: Page, username: string, landing?: RegExp): Pr
   }
 }
 
+/**
+ * A GET through the page's request client, sent again once if the server reset
+ * a reused connection.
+ *
+ * The request client keeps sockets alive between calls, and the dev server
+ * closes an idle one after Node's default five-second `keepAliveTimeout` —
+ * `next dev`, unlike `next start`, has no flag to raise it. A call that picks up
+ * a pooled socket just as the server closes it fails with ECONNRESET before it
+ * reaches the application: `sessionRole`, then a slow redirect, then `signOut`
+ * is exactly that shape. Only idempotent GETs come through here, only a reset
+ * is retried, and only once; every other failure still fails the test.
+ */
+async function getReconnecting(page: Page, url: string): Promise<APIResponse> {
+  try {
+    return await page.request.get(url)
+  } catch (error) {
+    if (!(error instanceof Error && /ECONNRESET|socket hang up/i.test(error.message))) throw error
+    return page.request.get(url)
+  }
+}
+
 export async function signOut(page: Page): Promise<void> {
-  const csrf = await responseJson(await page.request.get(`${E2E_BASE_URL}/api/auth/csrf`))
+  const csrf = await responseJson(await getReconnecting(page, `${E2E_BASE_URL}/api/auth/csrf`))
   await page.request.post(`${E2E_BASE_URL}/api/auth/signout`, {
     form: { csrfToken: csrf.csrfToken, callbackUrl: `${E2E_BASE_URL}/login` },
     headers: { "X-Auth-Return-Redirect": "1" },
@@ -69,7 +90,7 @@ export async function signOut(page: Page): Promise<void> {
 }
 
 export async function sessionRole(page: Page): Promise<string> {
-  const session = await responseJson(await page.request.get(`${E2E_BASE_URL}/api/auth/session`))
+  const session = await responseJson(await getReconnecting(page, `${E2E_BASE_URL}/api/auth/session`))
   return String(session.user?.role ?? "")
 }
 

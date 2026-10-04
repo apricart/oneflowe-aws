@@ -1,6 +1,5 @@
-import { expect, test, type APIResponse, type Page } from "@playwright/test"
+import { expect, test, type Page } from "@playwright/test"
 
-import { E2E_BASE_URL, E2E_PASSWORD } from "./support/environment"
 import {
   SMOKE_BRANCH_NAME,
   SMOKE_GROUP_NAME,
@@ -14,6 +13,9 @@ import {
   fulfilOrder,
   markDelivered,
   placeOrder,
+  sessionRole,
+  signIn,
+  signOut,
 } from "./support/session"
 
 /**
@@ -38,42 +40,6 @@ import {
  * from the same state. Both facts are load-bearing — a spec added after this one
  * alphabetically must not assume the seeded roles.
  */
-
-type JsonBody = Record<string, any>
-
-async function responseJson(response: APIResponse): Promise<JsonBody> {
-  const text = await response.text()
-  try {
-    return JSON.parse(text) as JsonBody
-  } catch {
-    return { unparsedResponse: text }
-  }
-}
-
-async function signIn(page: Page, username: string, landingPath: RegExp): Promise<void> {
-  await page.goto("/login")
-  await page.getByLabel("Username or Email").fill(username)
-  await page.getByLabel("Password", { exact: true }).fill(E2E_PASSWORD)
-  await page.getByRole("button", { name: /sign in/i }).click()
-  // A cold development server may reload while compiling the first workspace,
-  // so poll the URL rather than attaching to one navigation.
-  await expect(page).toHaveURL(landingPath, { timeout: 150_000 })
-}
-
-async function signOut(page: Page): Promise<void> {
-  const csrf = await responseJson(await page.request.get(`${E2E_BASE_URL}/api/auth/csrf`))
-  await page.request.post(`${E2E_BASE_URL}/api/auth/signout`, {
-    form: { csrfToken: csrf.csrfToken, callbackUrl: `${E2E_BASE_URL}/login` },
-    headers: { "X-Auth-Return-Redirect": "1" },
-  })
-  await page.context().clearCookies()
-}
-
-/** The role a signed-in session reports for itself. */
-async function sessionRole(page: Page): Promise<string> {
-  const session = await responseJson(await page.request.get(`${E2E_BASE_URL}/api/auth/session`))
-  return String(session.user?.role ?? "")
-}
 
 function editDialog(page: Page) {
   return page.getByRole("dialog").filter({ hasText: "Edit User" })
