@@ -2,7 +2,7 @@ import { stringifyPrimitive } from "./stringify-primitive"
 
 function hasDangerousSpreadsheetPrefix(value: string): boolean {
   let index = 0
-  while (index < value.length && value.charCodeAt(index) <= 0x20) index += 1
+  while (index < value.length && (value.codePointAt(index) ?? 0) <= 0x20) index += 1
   return index < value.length && "=+-@".includes(value[index])
 }
 

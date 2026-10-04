@@ -483,7 +483,7 @@ export default function ProductPerformancePage() {
         setChartGroupIds([])
         setChartOrgIds([])
         setChartProductIds([])
-        mutateChart()
+        void mutateChart()
     }, [contextBranchIds, getDefaultChartYears, mutateChart])
 
     // ━━━ REPORT DATA (Local Filtered) ━━━
@@ -544,8 +544,8 @@ export default function ProductPerformancePage() {
         setReportSearchTerm("")
         setTopProductsRankBy("netValue")
         handleDateChange({ range: null, preset: "all" })
-        mutateLedger()
-        mutateTopProducts()
+        void mutateLedger()
+        void mutateTopProducts()
     }, [getDefaultReportYears, handleDateChange, mutateLedger, mutateTopProducts])
 
     useEffect(() => {
@@ -839,7 +839,7 @@ export default function ProductPerformancePage() {
                                 <MultiBranchFilter organizationId={organizationId} selectedBranchIds={contextBranchIds} onChange={setContextBranchIds} />
                             </>
                         )}
-                        <Button variant="ghost" size="icon" className="rounded-xl text-slate-400 hover:text-indigo-500 transition-colors" onClick={() => { handleDateChange({ range: null, preset: "all", compare: false, compareRange: null, months: [], years: [], compareMonths: [], compareYears: [] }); mutateGlobalPerf(); mutateLedger(); mutateChart(); mutateTopProducts(); }}>
+                        <Button variant="ghost" size="icon" className="rounded-xl text-slate-400 hover:text-indigo-500 transition-colors" onClick={() => { handleDateChange({ range: null, preset: "all", compare: false, compareRange: null, months: [], years: [], compareMonths: [], compareYears: [] }); void mutateGlobalPerf(); void mutateLedger(); void mutateChart(); void mutateTopProducts(); }}>
                             <RefreshCw className={cn("h-4 w-4", (isGlobalPerfLoading || isLedgerLoading || isChartPerfLoading || isTopProductsLoading || isTopProductsValidating) && "animate-spin")} />
                         </Button>
                     </div>

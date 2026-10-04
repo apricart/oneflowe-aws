@@ -27,9 +27,14 @@ export function ExpandableRowDrawer({ open, onClose, title, subtitle, fields }: 
 
     const handleCopy = (label: string, value: string | number | React.ReactNode) => {
         if (typeof value === "string" || typeof value === "number") {
-            navigator.clipboard.writeText(String(value))
-            setCopiedField(label)
-            setTimeout(() => setCopiedField(null), 2000)
+            // Only show the "copied" mark when the copy actually happened.
+            navigator.clipboard.writeText(String(value)).then(
+                () => {
+                    setCopiedField(label)
+                    setTimeout(() => setCopiedField(null), 2000)
+                },
+                () => setCopiedField(null),
+            )
         }
     }
 

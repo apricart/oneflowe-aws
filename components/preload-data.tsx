@@ -43,7 +43,7 @@ export function PreloadData() {
       }
     }
 
-    preloadCritical()
+    void preloadCritical()
   }, [session])
 
   return null // This component doesn't render anything
@@ -72,7 +72,7 @@ export function PreloadDashboardData() {
       }
     }
 
-    preload()
+    void preload()
   }, [session])
 
   return null

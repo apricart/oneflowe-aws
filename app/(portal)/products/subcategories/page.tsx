@@ -116,7 +116,7 @@ export default function SubcategoriesPage() {
 
             if (res.ok) {
                 toast({ title: "Success", description: "Subcategory created successfully" })
-                mutate()
+                void mutate()
                 closeDialog()
             } else {
                 toast({ title: "Error", description: data.error || "Failed to create subcategory", variant: "destructive" })
@@ -150,7 +150,7 @@ export default function SubcategoriesPage() {
 
             if (res.ok) {
                 toast({ title: "Success", description: "Subcategory updated successfully" })
-                mutate()
+                void mutate()
                 closeDialog()
             } else {
                 toast({ title: "Error", description: data.error || "Failed to update subcategory", variant: "destructive" })
@@ -175,7 +175,7 @@ export default function SubcategoriesPage() {
 
             if (res.ok) {
                 toast({ title: "Success", description: "Subcategory deleted successfully" })
-                mutate()
+                void mutate()
                 closeDialog()
             } else {
                 toast({ title: "Cannot Delete", description: data.error, variant: "destructive" })
@@ -393,8 +393,8 @@ export default function SubcategoriesPage() {
                                 placeholder="Enter subcategory name"
                                 onKeyDown={(e) => {
                                     if (e.key === "Enter" && !isSubmitting) {
-                                        if (dialogMode === "create") handleCreate()
-                                        else handleEdit()
+                                        if (dialogMode === "create") void handleCreate()
+                                        else void handleEdit()
                                     }
                                 }}
                             />

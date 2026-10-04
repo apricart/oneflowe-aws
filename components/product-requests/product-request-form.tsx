@@ -1,6 +1,6 @@
 "use client"
 
-import { useId, useState, type ChangeEvent, type ComponentType, type DragEvent, type FormEvent, type ReactNode } from "react"
+import { useId, useState, type ChangeEvent, type ComponentType, type DragEvent, type ReactNode, type SubmitEvent } from "react"
 import useSWR from "swr"
 import {
   ImagePlus,
@@ -121,7 +121,7 @@ export function ProductRequestForm({
     }
   }
 
-  const submit = async (event: FormEvent) => {
+  const submit = async (event: SubmitEvent) => {
     event.preventDefault()
     if (submitting || uploading) return
 

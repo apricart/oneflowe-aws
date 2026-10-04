@@ -145,7 +145,7 @@ export default function AssignToBranchPage() {
             }
         }
 
-        fetchAssignments()
+        void fetchAssignments()
 
         return () => controller.abort()
     }, [selectedGroup, selectedOrgId, toast])
@@ -218,7 +218,7 @@ export default function AssignToBranchPage() {
                 return updated
             })
             setSelectedProducts([])
-            mutate()
+            void mutate()
         } catch (error: any) {
             console.error("Assignment error:", error)
             toast({ title: "Error", description: error.message || "Failed to assign products", variant: "destructive" })

@@ -72,7 +72,7 @@ export function ScheduleReportModal({ reportName, storageKey = "schedule-report"
                 }),
             })
             if (res.ok) {
-                mutate("/api/v1/reports/schedule")
+                void mutate("/api/v1/reports/schedule")
                 setSaved(true)
                 toast({
                     title: "Schedule Saved",

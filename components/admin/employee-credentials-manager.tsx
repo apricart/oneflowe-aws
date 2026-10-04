@@ -85,7 +85,7 @@ export function EmployeeCredentialsManager() {
 
       toast({ title: isCreate ? "Created" : "Updated" })
       setShowDialog(false)
-      mutate()
+      void mutate()
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" })
     } finally {
@@ -107,15 +107,21 @@ export function EmployeeCredentialsManager() {
       }
 
       toast({ title: "Deactivated" })
-      mutate()
+      void mutate()
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" })
     }
   }
 
   const copyPassword = (text: string) => {
-    navigator.clipboard.writeText(text)
-    toast({ title: "Password copied" })
+    navigator.clipboard.writeText(text).then(
+      () => toast({ title: "Password copied" }),
+      () => toast({
+        title: "Copy failed",
+        description: "Could not copy the password. Please select and copy it manually.",
+        variant: "destructive",
+      }),
+    )
   }
 
   return (

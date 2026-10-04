@@ -231,7 +231,7 @@ describe("only one code path turns a request into a user", () => {
   it("is the approval inside lib/server/organization-join.ts", () => {
     const server = repositoryFile("lib/server/organization-join.ts")
     // One insert into `users`, in the approval transaction.
-    expect((server.match(/\.insert\(usersTable\)/g) || []).length).toBe(1)
+    expect(server.match(/\.insert\(usersTable\)/g) || []).toHaveLength(1)
     expect(server).toContain("db.transaction")
   })
 
@@ -250,7 +250,7 @@ describe("only one code path turns a request into a user", () => {
     const server = repositoryFile("lib/server/organization-join.ts")
     // Once at submission and once at approval — the branch could have moved
     // tenant, been de-activated or been deleted while the request waited.
-    expect((server.match(/await scopeTenantError\(/g) || []).length).toBe(2)
+    expect(server.match(/await scopeTenantError\(/g) || []).toHaveLength(2)
   })
 
   it("never takes isActive, mfaEnabled or the allocation right from the applicant", () => {

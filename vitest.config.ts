@@ -1,7 +1,7 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 
-import { sharedAlias, sharedExclude } from './vitest.shared'
+import { sharedAlias, sharedCoverage, sharedExclude } from './vitest.shared'
 
 /**
  * Unit and contract tests: everything that runs with no external service.
@@ -30,5 +30,6 @@ export default defineConfig({
             'tests/integration/**',
         ],
         alias: sharedAlias,
+        coverage: sharedCoverage('coverage/unit'),
     },
 })

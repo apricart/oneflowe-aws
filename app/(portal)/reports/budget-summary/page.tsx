@@ -683,7 +683,7 @@ export default function BudgetSummaryPage() {
         setReportGroupIds([])
         setSearchTerm("")
         handleDateChange({ range: null, preset: "all" })
-        mutateReport()
+        void mutateReport()
     }, [contextBranchIds, getDefaultReportYears, handleDateChange, mutateReport])
 
     const CHART_MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]

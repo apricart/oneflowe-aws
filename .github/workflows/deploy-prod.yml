@@ -125,7 +125,7 @@ jobs:
       # database; the integration suite runs against the service container
       # above, migrated fresh on every run.
       - name: Run unit tests
-        run: npm test
+        run: npm run test:coverage
 
       - name: Migrate the throwaway test database
         env:
@@ -141,7 +141,7 @@ jobs:
           TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/oneflowe_test
         run: |
           set -Eeuo pipefail
-          npm run test:integration 2>&1 | tee integration-run.log
+          npm run test:integration:coverage 2>&1 | tee integration-run.log
           if ! grep -q "running against oneflowe_test" integration-run.log; then
             echo "Integration suites did not run against the test database." >&2
             exit 1
@@ -152,7 +152,7 @@ jobs:
           fi
 
       - name: Install Chromium for role smoke tests
-        run: npx playwright install --with-deps chromium
+        run: ./node_modules/.bin/playwright install --with-deps chromium
 
       - name: Run role deployment smoke tests
         env:

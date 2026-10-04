@@ -154,7 +154,7 @@ export function GroupManagement({ role }: Readonly<{ role: string }>) {
             setName("")
             setDescription("")
             setOrganizationId("")
-            mutate(groupsUrl)
+            void mutate(groupsUrl)
         } catch (e: any) {
             toast({ title: "Error", description: e.message, variant: "destructive" })
         } finally {
@@ -181,7 +181,7 @@ export function GroupManagement({ role }: Readonly<{ role: string }>) {
                 variant: "success"
             })
             setIsEditOpen(false)
-            mutate(groupsUrl)
+            void mutate(groupsUrl)
         } catch (e: any) {
             toast({ title: "Error", description: e.message, variant: "destructive" })
         } finally {
@@ -203,7 +203,7 @@ export function GroupManagement({ role }: Readonly<{ role: string }>) {
                 description: "Group has been removed successfully",
                 variant: "default"
             })
-            mutate(groupsUrl)
+            void mutate(groupsUrl)
         } catch (e: any) {
             toast({ title: "Error", description: e.message, variant: "destructive" })
         } finally {
@@ -243,8 +243,8 @@ export function GroupManagement({ role }: Readonly<{ role: string }>) {
                 : ""
             toast({ title: "Success", description: `Branches assigned successfully.${autoMsg}`, variant: "success" })
             setIsBranchOpen(false)
-            mutate(groupsUrl)
-            mutateBranches()
+            void mutate(groupsUrl)
+            void mutateBranches()
         } catch (e: any) {
             toast({ title: "Error", description: e.message, variant: "destructive" })
         } finally {
@@ -302,8 +302,8 @@ export function GroupManagement({ role }: Readonly<{ role: string }>) {
                 description: "Branch is now independent",
                 variant: "success"
             })
-            mutate(groupsUrl)
-            mutateBranches()
+            void mutate(groupsUrl)
+            void mutateBranches()
         } catch (e: any) {
             toast({ title: "Error", description: e.message, variant: "destructive" })
         } finally {
@@ -341,7 +341,7 @@ export function GroupManagement({ role }: Readonly<{ role: string }>) {
 
             // Update SWR cache with fresh data
             if (freshBranches) {
-                mutateBranches(freshBranches, false)
+                void mutateBranches(freshBranches, false)
             }
 
             // Compute assigned IDs from FRESH data

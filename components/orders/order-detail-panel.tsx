@@ -313,8 +313,14 @@ export function OrderDetailPanel({
                           className="h-11 w-11 rounded-xl bg-white dark:bg-slate-950 border border-indigo-100 dark:border-indigo-800 text-indigo-500 hover:bg-indigo-50 transition-all active:scale-90"
                           onClick={() => {
                             const tokenToCopy = order.fulfillmentToken || order.approvalToken || ""
-                            navigator.clipboard.writeText(tokenToCopy)
-                            toast({ title: "Copied", description: "Token copied to clipboard" })
+                            navigator.clipboard.writeText(tokenToCopy).then(
+                              () => toast({ title: "Copied", description: "Token copied to clipboard" }),
+                              () => toast({
+                                title: "Copy failed",
+                                description: "Could not copy the token. Please select and copy it manually.",
+                                variant: "destructive",
+                              }),
+                            )
                           }}
                         >
                           <Copy className="h-4 w-4" />

@@ -81,7 +81,7 @@ async function upsertUser(
     username: input.username,
     fullName: input.fullName,
     firstName: nameParts.slice(0, -1).join(" ") || nameParts[0],
-    lastName: nameParts.length > 1 ? nameParts[nameParts.length - 1] : "Smoke",
+    lastName: nameParts.length > 1 ? nameParts.at(-1) ?? "Smoke" : "Smoke",
     passwordHash: input.passwordHash,
     roleId: input.roleId,
     organizationId: input.organizationId,

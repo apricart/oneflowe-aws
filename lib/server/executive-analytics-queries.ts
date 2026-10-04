@@ -11,7 +11,6 @@ import { consumedHeldCentsSql, consumedSpentCentsSql, netOrderCentsSql } from "@
 import { budgetEnabledBranchSql, budgetTrackedOrderSql } from "@/lib/server/organization-budget-policy"
 import type { ExecutiveScope } from "@/lib/server/executive-analytics-scope"
 import {
-  EXECUTIVE_METRICS,
   MAX_TIME_AXIS_POINTS,
   isBudgetRollupDimension,
   isTimeAxisDimension,
@@ -312,7 +311,6 @@ export async function loadBranchBudgets(
     .where(branchFence.length > 0 ? and(...branchFence) : undefined)
 
   if (branchRows.length === 0) return []
-  const branchIds = branchRows.map((row) => row.id)
   const trackedBranchIds = branchRows.filter((row) => row.budgetTracked === true).map((row) => row.id)
 
   // Neither the ledger nor the orders are read for a branch whose tenant has

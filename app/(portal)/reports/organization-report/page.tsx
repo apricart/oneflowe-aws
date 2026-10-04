@@ -284,9 +284,9 @@ export default function OrganizationReportPage() {
         setSelectedYears([])
         setCompareMonths([])
         setCompareYears([])
-        mutateGlobal()
-        mutateChart()
-        mutateReport()
+        void mutateGlobal()
+        void mutateChart()
+        void mutateReport()
     }, [mutateGlobal, mutateChart, mutateReport])
 
     const handleExport = (format: 'csv' | 'excel' | 'pdf') => {
@@ -343,7 +343,7 @@ export default function OrganizationReportPage() {
         setChartYears([])
         setChartOrgIds([])
         setChartBranchIds(contextBranchIds.length > 0 ? [...contextBranchIds] : [])
-        mutateChart()
+        void mutateChart()
     }, [contextBranchIds, mutateChart])
 
     const resetReportFilters = useCallback(() => {
@@ -360,7 +360,7 @@ export default function OrganizationReportPage() {
         setActivePreset("all")
         setSelectedMonths([])
         setSelectedYears([])
-        mutateReport()
+        void mutateReport()
     }, [activePreset, allYears, contextBranchIds, mutateReport])
 
     useEffect(() => {

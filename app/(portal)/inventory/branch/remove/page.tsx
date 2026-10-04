@@ -213,7 +213,7 @@ export default function RemoveFromBranchPage() {
 
             setRemoveDialogOpen(false)
             setSelectedProducts([])
-            mutate()
+            void mutate()
         } catch (error: any) {
             toast({ title: "Error", description: error.message, variant: "destructive" })
         } finally {

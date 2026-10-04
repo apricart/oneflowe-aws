@@ -290,7 +290,7 @@ export function OrdersDirectory({
       }
     }
 
-    loadOrderDetails()
+    void loadOrderDetails()
 
     return () => {
       isCurrentRequest = false
@@ -1114,8 +1114,14 @@ export function OrdersDirectory({
               <Button 
                 className="h-14 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold shadow-xl shadow-indigo-600/20 gap-2"
                 onClick={() => {
-                  navigator.clipboard.writeText(generatedToken || "")
-                  toast({ title: "Copied", description: "Token copied to clipboard" })
+                  navigator.clipboard.writeText(generatedToken || "").then(
+                    () => toast({ title: "Copied", description: "Token copied to clipboard" }),
+                    () => toast({
+                      title: "Copy failed",
+                      description: "Could not copy the token. Please select and copy it manually.",
+                      variant: "destructive",
+                    }),
+                  )
                 }}
               >
                 Copy Token

@@ -24,7 +24,7 @@ const plural = (count: number, noun: string) => `${count} overdue ${noun}${count
  * the branch is clear, or no payment source is connected.
  */
 export function paymentControlNotice(view: PaymentControlView | null | undefined): PaymentControlNotice | null {
-  if (!view || !view.configured) return null
+  if (!view?.configured) return null
   if (view.state === "CLEAR") return null
 
   if (view.state === "WARNING") {
@@ -84,7 +84,7 @@ const TONE_STYLES: Record<PaymentControlNotice["tone"], { wrapper: string; title
  * The notice an ordering user sees above the store. Nothing is rendered for
  * a clear branch or while no payment source is connected.
  */
-export function PaymentControlBanner({ view, className = "" }: { view: PaymentControlView | null | undefined; className?: string }) {
+export function PaymentControlBanner({ view, className = "" }: Readonly<{ view: PaymentControlView | null | undefined; className?: string }>) {
   const [expanded, setExpanded] = useState(false)
   const notice = paymentControlNotice(view)
   if (!notice || !view) return null

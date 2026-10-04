@@ -112,7 +112,7 @@ export default function ForgotPasswordPage() {
     return () => window.clearInterval(timer)
   }, [resendAfter])
 
-  async function sendCode(event?: React.FormEvent<HTMLFormElement>) {
+  async function sendCode(event?: React.SubmitEvent<HTMLFormElement>) {
     event?.preventDefault()
     if (busy || !identifier.trim()) return
     setBusy(true)
@@ -141,7 +141,7 @@ export default function ForgotPasswordPage() {
     }
   }
 
-  async function verifyCode(event: React.FormEvent<HTMLFormElement>) {
+  async function verifyCode(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault()
     if (busy || code.length !== 6) return
     setBusy(true)
@@ -161,7 +161,7 @@ export default function ForgotPasswordPage() {
     }
   }
 
-  async function setNewPassword(event: React.FormEvent<HTMLFormElement>) {
+  async function setNewPassword(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault()
     setError(null)
     if (password !== confirmPassword) {
