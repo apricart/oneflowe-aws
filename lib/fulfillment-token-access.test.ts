@@ -1,56 +1,40 @@
 import { describe, expect, it } from "vitest"
 import { canViewFulfillmentToken } from "@/lib/fulfillment-token-access"
 
-const approvedOrder = {
-  orderStatus: "APPROVED",
-  orderCreatedByUserId: "creator-id",
-  orderApprovedByUserId: "approver-id",
-}
+const FULFILLMENT_ROLES = [
+  "HEAD_OFFICE",
+  "GROUP_USER",
+  "BRANCH_ADMIN",
+  "GROUP_ORDER_PORTAL",
+  "ORDER_PORTAL",
+] as const
 
 describe("fulfillment token access", () => {
-  it("allows the Order Portal creator to view an approved order token", () => {
+  it.each(FULFILLMENT_ROLES)("allows %s to fulfill an approved order after its scope check", (role) => {
     expect(canViewFulfillmentToken({
-      ...approvedOrder,
-      role: "ORDER_PORTAL",
-      userId: "creator-id",
+      role,
+      orderStatus: " approved ",
+      userId: "viewer-id",
+      orderCreatedByUserId: "different-user-id",
+      orderApprovedByUserId: "another-user-id",
+      configuredApproverRole: role === "HEAD_OFFICE" ? "BRANCH_ADMIN" : "HEAD_OFFICE",
     })).toBe(true)
   })
 
-  it("denies another Order Portal user in the same scope", () => {
-    expect(canViewFulfillmentToken({
-      ...approvedOrder,
-      role: "ORDER_PORTAL",
-      userId: "different-user-id",
-    })).toBe(false)
+  it.each(FULFILLMENT_ROLES)("does not expose a token to %s before approval", (role) => {
+    expect(canViewFulfillmentToken({ role, orderStatus: "PENDING" })).toBe(false)
+    expect(canViewFulfillmentToken({ role, orderStatus: "REJECTED" })).toBe(false)
+    expect(canViewFulfillmentToken({ role })).toBe(false)
   })
 
-  it("does not expose a token to the Order Portal creator before approval", () => {
-    expect(canViewFulfillmentToken({
-      ...approvedOrder,
-      role: "ORDER_PORTAL",
-      userId: "creator-id",
-      orderStatus: "PENDING",
-    })).toBe(false)
+  it("does not grant fulfillment-token access to an unknown or read-only role", () => {
+    expect(canViewFulfillmentToken({ role: "VIEWER", orderStatus: "APPROVED" })).toBe(false)
+    expect(canViewFulfillmentToken({ role: "UNKNOWN_ROLE", orderStatus: "APPROVED" })).toBe(false)
+    expect(canViewFulfillmentToken({ orderStatus: "APPROVED" })).toBe(false)
   })
 
-  it("preserves access for super admins, branch admins, and the approver", () => {
-    expect(canViewFulfillmentToken({ ...approvedOrder, role: "SUPER_ADMIN", userId: "admin-id" })).toBe(true)
-    expect(canViewFulfillmentToken({ ...approvedOrder, role: "BRANCH_ADMIN", userId: "branch-admin-id" })).toBe(true)
-    expect(canViewFulfillmentToken({ ...approvedOrder, role: "HEAD_OFFICE", userId: "approver-id" })).toBe(true)
-  })
-
-  it("exposes the token only to the currently configured approver role", () => {
-    expect(canViewFulfillmentToken({
-      ...approvedOrder,
-      role: "BRANCH_ADMIN",
-      userId: "branch-admin-id",
-      configuredApproverRole: "HEAD_OFFICE",
-    })).toBe(false)
-    expect(canViewFulfillmentToken({
-      ...approvedOrder,
-      role: "HEAD_OFFICE",
-      userId: "head-office-id",
-      configuredApproverRole: "HEAD_OFFICE",
-    })).toBe(true)
+  it("preserves Super Admin token access for its existing verification flow", () => {
+    expect(canViewFulfillmentToken({ role: "SUPER_ADMIN", orderStatus: "APPROVED" })).toBe(true)
+    expect(canViewFulfillmentToken({ role: "SUPER_ADMIN", orderStatus: "FULFILLED" })).toBe(true)
   })
 })

@@ -137,8 +137,8 @@ const navigationByRole = (role: string, budgetAllocationEnabled: boolean) => {
         ]
       },
       { href: "/support", label: "Support", icon: LifeBuoy },
-      // Super Admin only. The trail spans every tenant, so no other role's menu
-      // carries it — see `lib/activity-log-access.ts`.
+      // Every tenant's trail. Head Office has the same entry for its own
+      // organization only — see `lib/activity-log-access.ts`.
       { href: "/activity", label: "Activity Log", icon: ScrollText },
       { href: "/settings", label: "Settings", icon: Settings },
     ]
@@ -190,6 +190,9 @@ const navigationByRole = (role: string, budgetAllocationEnabled: boolean) => {
         ]
       },
       { href: "/support", label: "Support", icon: LifeBuoy },
+      // Its own organization's trail only; the endpoint fences every row to the
+      // tenant and anonymises anyone outside it. `lib/activity-log-access.ts`.
+      { href: "/activity", label: "Activity Log", icon: ScrollText },
       { href: "/settings", label: "Settings", icon: Settings },
     ]
   }

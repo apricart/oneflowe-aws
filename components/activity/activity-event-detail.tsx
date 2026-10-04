@@ -132,7 +132,9 @@ function DetailBody({ event }: Readonly<{ event: ActivityEvent }>) {
           {event.ipAddress ? (
             <code className="font-mono text-xs">{event.ipAddress}</code>
           ) : (
-            <span className="text-muted-foreground">Not recorded</span>
+            <span className="text-muted-foreground">
+              {event.actor.redacted ? "Withheld" : "Not recorded"}
+            </span>
           )}
         </Row>
         {event.userAgent ? (

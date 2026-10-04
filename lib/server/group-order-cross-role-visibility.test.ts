@@ -151,14 +151,14 @@ describe("the branch owns its orders", () => {
     }
   })
 
-  it("keeps the fulfilment token with the raiser", () => {
-    // A credential handed to an administrator, not an action on the order, so
-    // this one did not widen with the rest.
+  it("lets an Order Portal user fulfill a visible group order without widening its read scope", () => {
     const token = source("lib/fulfillment-token-access.ts")
-    expect(token).toContain("orderCreatedByUserId === userId")
+    expect(token).toContain('"ORDER_PORTAL"')
     expect(token).not.toContain("groupOrderId")
-    expect(source("app/api/v1/orders/[id]/send-token-email/route.ts"))
-      .not.toContain("groupOrderId")
+    const route = source("app/api/v1/orders/[id]/send-token-email/route.ts")
+    expect(route).toContain("groupOrderId: orders.groupOrderId")
+    expect(route).toContain("canOrderPortalReadOrder({ viewerUserId: userId, order })")
+    expect(route).toContain("if (!hasOrderVisibilityForTokenEmail(user.role, user.id, order)) {")
   })
 
   it("offers no control the server would refuse", () => {

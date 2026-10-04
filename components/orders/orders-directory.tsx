@@ -92,8 +92,9 @@ const ORDER_TABLE_COLUMNS: OrderTableColumn[] = [
 ]
 
 /**
- * Approvers can hand a fulfillment token to admin operations from these two
- * pinned columns. Super Admin deliberately does not render either column.
+ * Operational roles can hand a fulfillment token to admin operations from
+ * these two pinned columns once the scoped API returns that token. Super Admin
+ * deliberately does not render either column; it keeps its verification flow.
  */
 const TOKEN_COLUMN_WIDTH = 180
 const ACTION_COLUMN_WIDTH = 150
@@ -209,6 +210,10 @@ export function OrdersDirectory({
   const [orderDetailsError, setOrderDetailsError] = useState<string | null>(null)
   const [orderDetailsRequestKey, setOrderDetailsRequestKey] = useState(0)
   const viewingOrderId = viewingOrder?.id
+  const viewingOrderCanHandoffToken = !isSuperAdmin
+    && String(viewingOrder?.status ?? "").trim().toUpperCase() === "APPROVED"
+    && typeof viewingOrder?.approvalToken === "string"
+    && viewingOrder.approvalToken.trim().length > 0
   const shouldShowCostCenterId = showCostCenterId ?? orders.some((order) => Boolean(order.branchCostCenterId))
   const { visibleKeys, isVisible, setVisibleKeys } = useColumnSelector(
     ORDER_TABLE_COLUMNS,
@@ -947,14 +952,14 @@ export function OrdersDirectory({
               order={viewingOrder}
               statusContext={statusContext}
               isSuperAdmin={isSuperAdmin}
-              showFulfillmentToken={!isSuperAdmin && canDecideOrders}
+              showFulfillmentToken={viewingOrderCanHandoffToken}
               details={orderDetails?.id === viewingOrder.id ? orderDetails : null}
               detailsExpanded={isOrderDetailsExpanded}
               detailsLoading={isOrderDetailsLoading}
               detailsError={orderDetailsError}
               onToggleDetails={() => setIsOrderDetailsExpanded((expanded) => !expanded)}
               onRetryDetails={() => setOrderDetailsRequestKey((key) => key + 1)}
-              onSendToken={!isSuperAdmin && canDecideOrders
+              onSendToken={viewingOrderCanHandoffToken
                 ? () => { void sendTokenToAdmin(viewingOrder) }
                 : undefined}
               isSendingToken={sendingTokenOrderId !== null}

@@ -160,6 +160,12 @@ narrowed to an organization — it is refused to every other role outright,
 including Head Office. `proxy.ts` gates `/activity` for navigation only; the
 route re-checks.
 
+> **Superseded for Head Office** by
+> `plans/OF-AUDIT-head-office-activity-log.md`: Head Office now reads its own
+> organization's trail, fenced in every branch of the union and with anyone
+> outside the tenant anonymised. Super Admin's reach is unchanged and every
+> other role is still refused.
+
 ## The writer
 
 `lib/server/activity-audit.ts` — `recordAuditEvent(executor, event)`.

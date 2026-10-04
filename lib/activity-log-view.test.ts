@@ -41,7 +41,7 @@ function event(overrides: Partial<ActivityEvent> = {}): ActivityEvent {
     entity: "category",
     entityLabel: "Category",
     entityId: "42",
-    actor: { id: "u-1", email: "ali@example.test", name: "Ali Raza", role: "SUPER_ADMIN" },
+    actor: { id: "u-1", email: "ali@example.test", name: "Ali Raza", role: "SUPER_ADMIN", redacted: false },
     organizationId: 3,
     organizationName: "Apricart",
     branchId: 9,
@@ -106,12 +106,12 @@ describe("tones and labels", () => {
 describe("actorLabel", () => {
   it("prefers the most identifying thing present", () => {
     expect(actorLabel(event())).toBe("Ali Raza")
-    expect(actorLabel(event({ actor: { id: "u", email: "a@b.test", name: null, role: null } }))).toBe("a@b.test")
-    expect(actorLabel(event({ actor: { id: "emp_9", email: null, name: null, role: null } }))).toBe("emp_9")
+    expect(actorLabel(event({ actor: { id: "u", email: "a@b.test", name: null, role: null, redacted: false } }))).toBe("a@b.test")
+    expect(actorLabel(event({ actor: { id: "emp_9", email: null, name: null, role: null, redacted: false } }))).toBe("emp_9")
   })
 
   it("names an actorless row System rather than leaving it blank", () => {
-    expect(actorLabel(event({ actor: { id: null, email: null, name: null, role: null } }))).toBe("System")
+    expect(actorLabel(event({ actor: { id: null, email: null, name: null, role: null, redacted: false } }))).toBe("System")
   })
 })
 

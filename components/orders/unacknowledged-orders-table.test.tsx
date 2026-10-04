@@ -64,7 +64,7 @@ describe("UnacknowledgedOrdersTable", () => {
     renderTable({ orders: [row(2, { approvalToken: null, placedByGroupPortal: true })] })
     expect(screen.queryByRole("button", { name: /Fulfil order TID-2/ })).toBeNull()
     expect(screen.queryByRole("button", { name: /Copy fulfillment token/ })).toBeNull()
-    expect(screen.getByText("Only the person who raised this order can see and send its token.")).toBeTruthy()
+    expect(screen.getByText("The fulfillment token is not available for this order.")).toBeTruthy()
     expect(screen.getByText("Group Order")).toBeTruthy()
   })
 

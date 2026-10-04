@@ -14,7 +14,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import {
-  TOKEN_HELD_BY_RAISER_NOTE,
+  TOKEN_UNAVAILABLE_NOTE,
   canSendTokenFromTab,
   type UnacknowledgedOrderSource,
 } from "@/lib/unacknowledged-orders"
@@ -131,7 +131,7 @@ export function UnacknowledgedOrdersTable<T extends UnacknowledgedOrderRow>({
                       </div>
                     ) : (
                       <span className="block max-w-[14rem] whitespace-normal text-xs text-muted-foreground">
-                        {TOKEN_HELD_BY_RAISER_NOTE}
+                        {TOKEN_UNAVAILABLE_NOTE}
                       </span>
                     )}
                   </TableCell>

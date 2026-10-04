@@ -8,6 +8,7 @@ import { sendOrderTokenEmail } from "@/lib/email"
 import { ADMIN_OPERATIONS_EMAIL } from "@/lib/email/recipients"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { canViewFulfillmentToken } from "@/lib/fulfillment-token-access"
+import { canOrderPortalReadOrder } from "@/lib/group-order-visibility"
 import {
   TOKEN_ALREADY_SENT_CODE,
   TOKEN_ALREADY_SENT_MESSAGE,
@@ -19,7 +20,6 @@ import {
   tokenHandoffMessage,
   tokenOrderNotApprovedMessage,
 } from "@/lib/order-token-handoff"
-import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
 import { settleOrdersAfterTokenHandoff } from "@/lib/server/order-fulfillment"
 import { sendTokenEmailOncePerOrder } from "@/lib/server/order-token-handoff-store"
 import { canUseScopedBranch, usesMultiBranchScope } from "@/lib/server/multi-branch-scope"
@@ -34,8 +34,9 @@ const TOKEN_EMAIL_RECIPIENT = ADMIN_OPERATIONS_EMAIL
  * ORDER_PORTAL and is left untouched for them. The group-based roles have no
  * single branch — their reach is a resolved set of assignments — so they are
  * checked against that set instead, with the tenant re-asserted explicitly
- * first. GROUP_ORDER_PORTAL additionally has to be the order's creator, which
- * `canViewFulfillmentToken` enforces below.
+ * first. Order Portal has an additional ownership/group-order read check below
+ * because sharing one branch must not make an arbitrary colleague's token
+ * reachable by guessing an order id.
  */
 async function hasBranchAccessForTokenEmail(
   role: string,
@@ -48,6 +49,20 @@ async function hasBranchAccessForTokenEmail(
   }
   if (!actorOrganizationId || actorOrganizationId !== order.organizationId) return false
   return canUseScopedBranch(userId, order.branchId)
+}
+
+/**
+ * Order Portal can read its own orders and group orders raised for its branch,
+ * but not arbitrary colleagues' orders at that same branch. Other roles have
+ * already completed their entire read-scope check above.
+ */
+function hasOrderVisibilityForTokenEmail(
+  role: string,
+  userId: string,
+  order: { createdByUserId: string; groupOrderId: number | null },
+): boolean {
+  return role !== "ORDER_PORTAL"
+    || canOrderPortalReadOrder({ viewerUserId: userId, order })
 }
 
 /**
@@ -110,6 +125,7 @@ export async function POST(
       branchId: orders.branchId,
       status: orders.status,
       createdByUserId: orders.createdByUserId,
+      groupOrderId: orders.groupOrderId,
       approvedByUserId: orders.approvedByUserId,
       approvalToken: orders.approvalToken,
       createdAt: orders.createdAt,
@@ -142,7 +158,10 @@ export async function POST(
   )
   if (!hasAccess) return error("Forbidden: You do not have access to this order", 403)
 
-  const capabilities = await getOrderDecisionCapabilities(scope)
+  if (!hasOrderVisibilityForTokenEmail(user.role, user.id, order)) {
+    return error("Forbidden: You do not have access to this order", 403)
+  }
+
   // Asked as though the order were still approved. The requester roles hold a
   // token only while it is, so asking with the live status would answer a
   // since-fulfilled order with "no access" — and the person who could have
@@ -154,7 +173,6 @@ export async function POST(
     orderStatus: TOKEN_HANDOFF_STATUS,
     orderCreatedByUserId: order.createdByUserId,
     orderApprovedByUserId: order.approvedByUserId,
-    configuredApproverRole: capabilities.orderApproverRole,
   })
   if (!canShareToken) return error("Forbidden: You do not have access to this fulfillment token", 403)
 

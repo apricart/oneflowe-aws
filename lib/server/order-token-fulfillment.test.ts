@@ -415,11 +415,17 @@ describe("fulfilment on token hand-off, per role", () => {
     expect(autoFulfil).not.toContain("token_handoff")
   })
 
-  it("does not widen who may see a token in the first place", () => {
+  it("allows every operational role only after an order is approved", () => {
     const policy = source("lib/fulfillment-token-access.ts")
 
-    expect(policy).toContain('const REQUESTER_ROLES = new Set(["ORDER_PORTAL", "GROUP_ORDER_PORTAL"])')
-    expect(policy).toContain("orderCreatedByUserId === userId")
-    expect(policy).toContain('String(orderStatus || "").toUpperCase() === "APPROVED"')
+    for (const role of ["HEAD_OFFICE", "GROUP_USER", "BRANCH_ADMIN", "GROUP_ORDER_PORTAL", "ORDER_PORTAL"]) {
+      expect(policy).toContain(`"${role}"`)
+    }
+    expect(policy).toContain('String(orderStatus || "").trim().toUpperCase() === "APPROVED"')
+    // Order Portal still has an ownership/group-order read fence before the
+    // route releases a token for a guessed id.
+    const tokenEmail = source("app/api/v1/orders/[id]/send-token-email/route.ts")
+    expect(tokenEmail).toContain("canOrderPortalReadOrder({ viewerUserId: userId, order })")
+    expect(tokenEmail).toContain("if (!hasOrderVisibilityForTokenEmail(user.role, user.id, order)) {")
   })
 })

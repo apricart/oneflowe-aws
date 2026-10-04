@@ -60,8 +60,8 @@ export function canSendTokenFromTab(order: UnacknowledgedOrderSource): boolean {
   return typeof order.approvalToken === "string" && order.approvalToken.trim().length > 0
 }
 
-/** Said in place of the token when the viewer is not the one who can hand it over. */
-export const TOKEN_HELD_BY_RAISER_NOTE = "Only the person who raised this order can see and send its token."
+/** Said in place of a token the scoped orders response could not supply. */
+export const TOKEN_UNAVAILABLE_NOTE = "The fulfillment token is not available for this order."
 
 /** How the admin orders screen names the same set of orders. */
 export const DELIVERED_UNFULFILLED_LABEL = "Delivered · Unfulfilled"

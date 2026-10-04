@@ -3,10 +3,11 @@ import { redirect } from "next/navigation"
 
 import { ActivityLogScreen } from "@/components/activity/activity-log-screen"
 import { authOptions } from "@/lib/auth-options"
-import { canViewActivityLog } from "@/lib/activity-log-access"
+import { canViewActivityLog, readsWholePlatform } from "@/lib/activity-log-access"
 
 /**
- * `/activity` — the admin activity log.
+ * `/activity` — the activity log. Super Admin reads every tenant; Head Office
+ * reads its own organization (`lib/activity-log-access.ts`).
  *
  * The redirect here and the entry in the sidebar are both presentation. The
  * authorization that matters is in `GET /api/v1/activity-logs`, which re-checks
@@ -19,13 +20,15 @@ export default async function ActivityPage() {
     redirect("/login")
   }
 
-  if (!canViewActivityLog((session.user as { role?: string }).role)) {
+  const role = (session.user as { role?: string }).role
+  if (!canViewActivityLog(role)) {
     redirect("/dashboard")
   }
 
   return (
     <div className="container mx-auto max-w-[1600px] px-4 py-8">
-      <ActivityLogScreen />
+      {/* Copy only. Which rows arrive is decided by the endpoint. */}
+      <ActivityLogScreen platformWide={readsWholePlatform(role)} />
     </div>
   )
 }

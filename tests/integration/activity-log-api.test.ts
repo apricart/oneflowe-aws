@@ -10,9 +10,11 @@ import {
   auditLogs,
   categories,
   emailOutbox,
+  roles,
   supportMessages,
   supportThreadReads,
   supportThreads,
+  users,
 } from "@/db/schema"
 import {
   ACTIVITY_MAX_WINDOW_DAYS,
@@ -20,6 +22,7 @@ import {
   type ActivityEvent,
   type ActivityLogPage,
 } from "@/lib/activity-log"
+import { PLATFORM_ACTOR_LABEL, WITHHELD } from "@/lib/activity-log-reach"
 import { closePool, db } from "@/lib/db"
 import { MAX_AUDIT_ENTITY_ID_LENGTH, recordAuditEvent } from "@/lib/server/activity-audit"
 
@@ -119,8 +122,9 @@ describe.skipIf(!hasTestDatabase)("GET /api/v1/activity-logs", () => {
       expect(body.items).toBeUndefined()
     })
 
+    // Head Office is admitted to its own organization — see "Head Office reads
+    // its own organization" below.
     it.each([
-      ["HEAD_OFFICE", "headOfficeId"],
       ["BRANCH_ADMIN", "branchAdminId"],
       ["GROUP_USER", "groupUserId"],
       ["GROUP_ORDER_PORTAL", "groupOrderPortalId"],
@@ -147,10 +151,10 @@ describe.skipIf(!hasTestDatabase)("GET /api/v1/activity-logs", () => {
 
     it("does not let a refused role learn anything from the error body", async () => {
       signIn({
-        id: fixtures.headOfficeId,
-        role: "HEAD_OFFICE",
+        id: fixtures.branchAdminId,
+        role: "BRANCH_ADMIN",
         organizationId: fixtures.organizationId,
-        branchId: null,
+        branchId: fixtures.northBranchId,
       })
       const { body } = await read()
       expect(JSON.stringify(body)).not.toContain(fixtures.suffix)
@@ -411,6 +415,194 @@ describe.skipIf(!hasTestDatabase)("GET /api/v1/activity-logs", () => {
         ),
       )
       expect(response.status).toBe(400)
+    })
+  })
+
+  /**
+   * `plans/OF-AUDIT-head-office-activity-log.md`. Organization A holds E1–E9;
+   * E10 and E11 are the neighbour's, E12 belongs to no tenant. E2, E5 and E8
+   * were done inside A by the Super Admin, so a Head Office reader sees the
+   * change but not the person.
+   */
+  describe("Head Office reads its own organization", () => {
+    const OWN_ORDER: readonly EventKey[] = EXPECTED_ORDER.filter(
+      (key) => !["E10", "E11", "E12"].includes(key),
+    )
+
+    function headOffice(organizationId: number | null = fixtures.organizationId): Actor {
+      return { id: fixtures.headOfficeId, role: "HEAD_OFFICE", organizationId, branchId: null }
+    }
+
+    beforeAll(() => signIn(headOffice()))
+
+    it("returns exactly its organization's rows, from all three sources, in order", async () => {
+      const { status, body, response } = await read({ limit: ACTIVITY_PAGE_SIZE_MAX })
+      expect(status).toBe(200)
+      expect(keysOf(fixtures, body.items)).toEqual([...OWN_ORDER])
+      expect(new Set(body.items.map((item) => item.source))).toEqual(new Set(["audit", "system", "group"]))
+      expect(body.items.every((item) => item.organizationId === fixtures.organizationId)).toBe(true)
+      expect(response.headers.get("cache-control")).toContain("no-store")
+    })
+
+    it("never returns another tenant's rows or a platform row", async () => {
+      const { body } = await read({ limit: ACTIVITY_PAGE_SIZE_MAX })
+      const keys = keysOf(fixtures, body.items)
+      expect(keys).not.toContain("E10")
+      expect(keys).not.toContain("E11")
+      expect(keys).not.toContain("E12")
+      expect(JSON.stringify(body)).not.toContain(`Neighbour ${fixtures.suffix}`)
+      expect(JSON.stringify(body)).not.toContain(`Foreign ${fixtures.suffix}`)
+    })
+
+    it("pages through the fenced list without leaking or losing a row", async () => {
+      const seen: EventKey[] = []
+      let cursor: string | undefined
+      for (let guard = 0; guard < 20; guard += 1) {
+        const { status, body } = await read({ limit: 2, cursor })
+        expect(status).toBe(200)
+        seen.push(...keysOf(fixtures, body.items))
+        if (!body.nextCursor) break
+        cursor = body.nextCursor
+      }
+      expect(seen).toEqual([...OWN_ORDER])
+    })
+
+    it("takes the organization from the account, not from the session it was handed", async () => {
+      // `getRequestScope` re-reads the users row; a session claiming the
+      // neighbour must still read organization A.
+      signIn(headOffice(fixtures.neighbourOrganizationId))
+      try {
+        const { status, body } = await read({ limit: ACTIVITY_PAGE_SIZE_MAX })
+        expect(status).toBe(200)
+        expect(keysOf(fixtures, body.items)).toEqual([...OWN_ORDER])
+      } finally {
+        signIn(headOffice())
+      }
+    })
+
+    it("refuses a request naming another organization, and accepts its own", async () => {
+      const foreign = await read({ organizationId: fixtures.neighbourOrganizationId })
+      expect(foreign.status).toBe(403)
+      expect(foreign.body.items).toBeUndefined()
+
+      const own = await read({ organizationId: fixtures.organizationId, limit: ACTIVITY_PAGE_SIZE_MAX })
+      expect(own.status).toBe(200)
+      expect(keysOf(fixtures, own.body.items)).toEqual([...OWN_ORDER])
+    })
+
+    it("returns nothing for another tenant's branch", async () => {
+      const { status, body } = await read({ branchId: fixtures.foreignBranchId })
+      expect(status).toBe(200)
+      expect(keysOf(fixtures, body.items)).toEqual([])
+    })
+
+    it("still narrows by its own branch", async () => {
+      const { body } = await read({ branchId: fixtures.northBranchId, limit: ACTIVITY_PAGE_SIZE_MAX })
+      expect(keysOf(fixtures, body.items)).toEqual(["E1", "E4", "E7"])
+    })
+
+    it("shows its own people in full, with their address", async () => {
+      const { body } = await read({ limit: ACTIVITY_PAGE_SIZE_MAX })
+      const signInRow = eventFor(fixtures, body.items, "E4")
+      expect(signInRow.actor.redacted).toBe(false)
+      expect(signInRow.actor.id).toBe(fixtures.branchAdminId)
+      expect(signInRow.actor.email).toContain("branchadmin")
+      expect(signInRow.ipAddress).toBe("198.51.100.7")
+
+      const employee = eventFor(fixtures, body.items, "E7")
+      expect(employee.actor.redacted).toBe(false)
+      expect(employee.actor.email).toContain("employee")
+
+      const groupRow = eventFor(fixtures, body.items, "E3")
+      expect(groupRow.actor.id).toBe(fixtures.headOfficeId)
+      expect(groupRow.ipAddress).toBe("203.0.113.9")
+    })
+
+    it("shows a Super Admin's change in its organization without the person behind it", async () => {
+      const { body } = await read({ limit: ACTIVITY_PAGE_SIZE_MAX })
+      for (const key of ["E2", "E5", "E8"] as const) {
+        const row = eventFor(fixtures, body.items, key)
+        expect(row.actor).toEqual({
+          id: null,
+          email: null,
+          name: PLATFORM_ACTOR_LABEL,
+          role: "SUPER_ADMIN",
+          redacted: true,
+        })
+        expect(row.ipAddress).toBeNull()
+        expect(row.userAgent).toBeNull()
+      }
+
+      const deleted = eventFor(fixtures, body.items, "E2")
+      expect(deleted.action).toBe("DELETE_CATEGORY")
+      expect(deleted.entityId).toBe("4242")
+      expect(deleted.metadata).toMatchObject({ ip: WITHHELD, before: { name: "Retired" } })
+      // The secret stays masked as well.
+      expect(JSON.stringify(deleted.metadata)).not.toContain("must-not-appear")
+
+      const serialized = JSON.stringify(body)
+      expect(serialized).not.toContain(fixtures.superAdminId)
+      expect(serialized).not.toContain(`superadmin-${fixtures.suffix}`)
+      expect(serialized).not.toContain("198.51.100.10")
+    })
+
+    it("finds its own people by name or email", async () => {
+      const { body } = await read({ search: `branchadmin-${fixtures.suffix}`, limit: ACTIVITY_PAGE_SIZE_MAX })
+      expect(keysOf(fixtures, body.items)).toEqual(["E1", "E4"])
+    })
+
+    it("cannot find the Super Admin by searching for them", async () => {
+      // The same term finds the Super Admin's rows for the platform reader, so
+      // an empty page here is the fence, not a typo.
+      const term = `superadmin-${fixtures.suffix}`
+      const { body } = await read({ search: term, limit: ACTIVITY_PAGE_SIZE_MAX })
+      expect(keysOf(fixtures, body.items)).toEqual([])
+
+      signIn(superAdmin(fixtures))
+      try {
+        const platform = await read({ search: term, limit: ACTIVITY_PAGE_SIZE_MAX })
+        expect(keysOf(fixtures, platform.body.items)).toEqual(["E2", "E5", "E8", "E10", "E12"])
+      } finally {
+        signIn(headOffice())
+      }
+    })
+
+    it("cannot find the neighbour's people by searching for them", async () => {
+      const { body } = await read({ search: `foreign-${fixtures.suffix}`, limit: ACTIVITY_PAGE_SIZE_MAX })
+      expect(keysOf(fixtures, body.items)).toEqual([])
+    })
+
+    it("cannot filter by the Super Admin's id, and can filter by its own people", async () => {
+      const outside = await read({ actorId: fixtures.superAdminId, limit: ACTIVITY_PAGE_SIZE_MAX })
+      expect(outside.status).toBe(200)
+      expect(keysOf(fixtures, outside.body.items)).toEqual([])
+
+      const own = await read({ actorId: fixtures.headOfficeId, limit: ACTIVITY_PAGE_SIZE_MAX })
+      expect(keysOf(fixtures, own.body.items)).toEqual(["E3", "E6"])
+    })
+
+    it("refuses a Head Office account with no organization rather than widening it", async () => {
+      const [role] = await db.select({ id: roles.id }).from(roles).where(eq(roles.name, "HEAD_OFFICE")).limit(1)
+      const [orphan] = await db
+        .insert(users)
+        .values({
+          email: `integration-activity-orphan-${fixtures.suffix}@example.test`,
+          passwordHash: "not-a-real-hash",
+          roleId: role.id,
+          organizationId: null,
+          fullName: `Activity orphan ${fixtures.suffix}`,
+        })
+        .returning({ id: users.id })
+      try {
+        // The session even claims organization A; the account says none.
+        signIn({ id: orphan.id, role: "HEAD_OFFICE", organizationId: fixtures.organizationId, branchId: null })
+        const { status, body } = await read()
+        expect(status).toBe(403)
+        expect(body.items).toBeUndefined()
+      } finally {
+        await db.delete(users).where(eq(users.id, orphan.id))
+        signIn(headOffice())
+      }
     })
   })
 

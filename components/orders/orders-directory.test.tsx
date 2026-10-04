@@ -306,7 +306,7 @@ describe("OrdersDirectory fulfilment columns", () => {
     expect(within(drawer).queryByRole("button", { name: "Fulfill Order" })).toBeNull()
   })
 
-  it("shows approvers the token columns outside the column picker", () => {
+  it("shows operational roles the token columns outside the column picker", () => {
     render(
       <OrdersDirectory orders={[activeDelivered, fulfilled]} userRole="BRANCH_ADMIN" isSuperAdmin={false} isBranchAdmin canDecideOrders onUpdate={vi.fn()} />,
     )
@@ -342,6 +342,29 @@ describe("OrdersDirectory fulfilment columns", () => {
     })
     await waitFor(() => expect(onUpdate).toHaveBeenCalled())
     expect(screen.queryByRole("dialog", { name: "Order details" })).toBeNull()
+  })
+
+  it("lets Head Office hand off a scoped token without order-decision authority", async () => {
+    render(
+      <OrdersDirectory
+        orders={[activeDelivered]}
+        userRole="HEAD_OFFICE"
+        isSuperAdmin={false}
+        isBranchAdmin={false}
+        isHeadOffice
+        canDecideOrders={false}
+        onUpdate={vi.fn()}
+      />,
+    )
+
+    expect(cellsFor("ORD-0050").token?.textContent).toContain("TOKEN0050")
+    expect(screen.getByRole("button", { name: "Fulfil order ORD-0050 by emailing its token" })).toBeTruthy()
+
+    fireEvent.click(screen.getByText("ORD-0050"))
+    const drawer = await screen.findByRole("dialog", { name: "Order details" })
+    expect(within(drawer).getByText("Fulfillment Token")).toBeTruthy()
+    expect(within(drawer).getByRole("button", { name: /Send Token to Admin/i })).toBeTruthy()
+    expect(within(drawer).queryByRole("button", { name: /Approve|Reject/i })).toBeNull()
   })
 
   it("offers no action when the server withheld the token", () => {
