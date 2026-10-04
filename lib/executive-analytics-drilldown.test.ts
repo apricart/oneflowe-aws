@@ -21,6 +21,7 @@ import {
   isTimeAxisDimension,
   measureOfMetric,
   panelSegmentation,
+  panelSlotsForFocus,
   panelsForFocus,
   resolveDrillDownSort,
   resolveSortDirection,
@@ -173,6 +174,29 @@ describe("the side-by-side panel registry", () => {
     expect(idsFor(2)).toEqual(expect.arrayContaining(hiddenForOne))
     expect(idsFor(25)).toEqual(expect.arrayContaining(hiddenForOne))
     for (const id of hiddenForOne) expect(idsFor(1)).not.toContain(id)
+  })
+
+  it("keeps every panel in its place when the focus changes, withholding into a note rather than a gap", () => {
+    // Focusing one product withholds category and product-over-time. Dropping
+    // them from the grid would pull every later panel up a slot, so a reader
+    // who changed a filter would find their charts rearranged.
+    const slots = (count: number) => panelSlotsForFocus(count).map(({ panel, withheld }) => `${panel.id}${withheld ? " (withheld)" : ""}`)
+    const unfocused = panelsForFocus(0).map((panel) => panel.id)
+
+    expect(slots(0)).toEqual(unfocused)
+    expect(slots(2)).toEqual(unfocused)
+    expect(slots(1)).toEqual([
+      "by-product", "by-category (withheld)", "by-requester", "by-branch", "by-month",
+      "requesters-over-months", "products-over-months (withheld)", "day-by-day",
+    ])
+    // The panels drawn are exactly the ones `panelsForFocus` names, in order.
+    for (const count of [0, 1, 2, 25]) {
+      expect(panelSlotsForFocus(count).filter((slot) => !slot.withheld).map((slot) => slot.panel)).toEqual(panelsForFocus(count))
+    }
+    // Every withheld slot tells the reader why it is empty.
+    for (const panel of SIDE_BY_SIDE_PANELS.filter((entry) => entry.hiddenForSingleProduct)) {
+      expect(panel.withheldNote, panel.id).toBeTruthy()
+    }
   })
 
   it("splits the product panel by requester only once there are two or more people to compare", () => {

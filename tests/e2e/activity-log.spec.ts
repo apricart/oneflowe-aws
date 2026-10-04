@@ -13,8 +13,9 @@ import {
  *
  * Only what a browser can prove and the other suites cannot: that a Super Admin
  * signs in and reaches the screen, that the rows render and the filters and the
- * detail panel work against the live endpoint, and that another role is turned
- * away. The merge, the cursor, the filters as SQL and every bound are covered in
+ * detail panel work against the live endpoint, and that Head Office reaches the
+ * same screen for its own organization with Apricart's people anonymised
+ * (`plans/OF-AUDIT-head-office-activity-log.md`). The merge, the cursor, the filters as SQL and every bound are covered in
  * `tests/integration/activity-log-api.test.ts`; nothing here duplicates them.
  */
 
@@ -145,25 +146,51 @@ test.describe("the activity log", () => {
     await expect(page.getByText("Warning").first()).toBeVisible()
   })
 
-  test("Head Office is turned away and never offered the entry", async ({ page }) => {
+  test("Head Office reaches it from the menu and reads its own organization", async ({ page }) => {
     await signIn(page, HEAD_OFFICE_USERNAME)
 
-    // Not in the menu.
-    await expect(page.getByRole("link", { name: "Activity Log" })).toHaveCount(0)
+    await page.getByRole("link", { name: "Activity Log" }).click()
+    await expect(page).toHaveURL(/\/activity$/, { timeout: 150_000 })
+    await expect(page.getByRole("heading", { name: "Activity log" })).toBeVisible({ timeout: 150_000 })
+    await expect(page.getByText(/in your organization/)).toBeVisible()
 
-    // And not reachable by typing the address either.
-    await page.goto("/activity")
-    await expect(page).toHaveURL(/\/dashboard/)
-    await expect(page.getByRole("heading", { name: "Activity log" })).toHaveCount(0)
+    // Deterministic: the id belongs to one row seeded into this Head Office's
+    // own organization, done there by the Super Admin.
+    await page.getByLabel("Search").fill(SEEDED_ENTITY_ID)
+    await expect(page.getByText(`Search: ${SEEDED_ENTITY_ID}`)).toBeVisible()
+    await expect(page.getByText("Delete category").first()).toBeVisible({ timeout: 150_000 })
   })
 
-  test("the endpoint itself refuses Head Office, not just the page", async ({ page }) => {
+  test("Head Office sees what Apricart changed, but not who or from where", async ({ page }) => {
+    await signIn(page, HEAD_OFFICE_USERNAME)
+    await page.goto("/activity")
+    await expect(page.getByRole("heading", { name: "Activity log" })).toBeVisible({ timeout: 150_000 })
+    await page.getByLabel("Search").fill(SEEDED_ENTITY_ID)
+
+    await page.getByRole("button", { name: /Delete category, Deleted, Critical/ }).first().click()
+    const panel = page.getByRole("dialog")
+    await expect(panel).toBeVisible()
+    await expect(panel.getByText("Apricart administrator", { exact: true })).toBeVisible()
+    await expect(panel.getByText("Withheld")).toBeVisible()
+    await expect(panel.getByText("E2E Retired Category")).toBeVisible()
+    await expect(panel.getByText("E2E Super Admin")).toHaveCount(0)
+    await expect(panel.getByText("198.51.100.11")).toHaveCount(0)
+  })
+
+  test("the endpoint fences Head Office to its own organization, not just the page", async ({ page }) => {
     await signIn(page, HEAD_OFFICE_USERNAME)
 
-    // The redirect above is navigation only. This is the control.
-    const response = await page.request.get("/api/v1/activity-logs")
-    expect(response.status()).toBe(403)
-    const body = await response.json()
-    expect(body.items).toBeUndefined()
+    const response = await page.request.get("/api/v1/activity-logs?limit=200")
+    expect(response.status()).toBe(200)
+    const body = (await response.json()) as { items: Array<{ organizationId: number | null }> }
+    const organizations = new Set(body.items.map((item) => item.organizationId))
+    // One tenant, and never a platform row.
+    expect(organizations.size).toBeLessThanOrEqual(1)
+    expect(organizations.has(null)).toBe(false)
+
+    // Asking for another organization is refused outright.
+    const foreign = await page.request.get("/api/v1/activity-logs?organizationId=2147483000")
+    expect(foreign.status()).toBe(403)
+    expect((await foreign.json()).items).toBeUndefined()
   })
 })

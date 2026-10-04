@@ -68,6 +68,7 @@ import {
   shouldShowOrderPaymentStatus,
 } from "@/lib/order-status-display"
 import { isUnacknowledgedDelivery } from "@/lib/unacknowledged-delivery-block"
+import { TOKEN_SENT_LABEL, isTokenAlreadySent, readTokenSendRefusal } from "@/lib/order-token-handoff"
 import {
   DELIVERED_UNFULFILLED_LABEL,
   orderRowFulfilmentAction,
@@ -91,8 +92,9 @@ const ORDER_TABLE_COLUMNS: OrderTableColumn[] = [
 ]
 
 /**
- * Approvers can hand a fulfillment token to admin operations from these two
- * pinned columns. Super Admin deliberately does not render either column.
+ * Operational roles can hand a fulfillment token to admin operations from
+ * these two pinned columns once the scoped API returns that token. Super Admin
+ * deliberately does not render either column; it keeps its verification flow.
  */
 const TOKEN_COLUMN_WIDTH = 180
 const ACTION_COLUMN_WIDTH = 150
@@ -208,6 +210,10 @@ export function OrdersDirectory({
   const [orderDetailsError, setOrderDetailsError] = useState<string | null>(null)
   const [orderDetailsRequestKey, setOrderDetailsRequestKey] = useState(0)
   const viewingOrderId = viewingOrder?.id
+  const viewingOrderCanHandoffToken = !isSuperAdmin
+    && String(viewingOrder?.status ?? "").trim().toUpperCase() === "APPROVED"
+    && typeof viewingOrder?.approvalToken === "string"
+    && viewingOrder.approvalToken.trim().length > 0
   const shouldShowCostCenterId = showCostCenterId ?? orders.some((order) => Boolean(order.branchCostCenterId))
   const { visibleKeys, isVisible, setVisibleKeys } = useColumnSelector(
     ORDER_TABLE_COLUMNS,
@@ -482,7 +488,7 @@ export function OrdersDirectory({
   }
 
   const sendTokenToAdmin = async (order: any) => {
-    if (!order || sendingTokenOrderId !== null) return
+    if (!order || isTokenAlreadySent(order.tokenHandoffAt) || sendingTokenOrderId !== null) return
 
     setSendingTokenOrderId(order.id)
     try {
@@ -502,21 +508,42 @@ export function OrdersDirectory({
           })()
         : {}
 
-      if (!res.ok) throw new Error(data.error || "Failed to send token email")
+      // A refusal that only means this screen is out of date — the token has
+      // already gone, or the order is no longer approved — corrects the panel
+      // and refreshes the list rather than reporting a failure.
+      const refusal = readTokenSendRefusal(res.status, data)
+      if (refusal?.kind === "not-approved") {
+        setViewingOrder((current: any) => (
+          current?.id === order.id && refusal.status ? { ...current, status: refusal.status } : current
+        ))
+        toast({ title: "Order already updated", description: refusal.message })
+        onUpdate()
+        return
+      }
+      const alreadySent = refusal?.kind === "already-sent"
+      if (!res.ok && !alreadySent) throw new Error(data.error || "Failed to send token email")
 
-      toast({
-        title: data?.fulfilled ? "Token sent — order fulfilled" : "Token sent",
-        description: data?.message || "Fulfillment token emailed to the admin.",
-      })
+      toast(alreadySent
+        ? { title: TOKEN_SENT_LABEL, description: refusal.message }
+        : {
+            title: data?.fulfilled ? "Token sent — order fulfilled" : "Token sent",
+            description: data?.message || "Fulfillment token emailed to the admin.",
+          })
 
       // The hand-off settles the order only once it has been delivered, so the
-      // open panel and the list behind it are refreshed when it actually did.
-      if (data?.fulfilled) {
-        setViewingOrder((current: any) => (
-          current?.id === order.id ? { ...current, status: "FULFILLED" } : current
-        ))
-        onUpdate()
-      }
+      // open panel shows FULFILLED only when it actually did. The list is
+      // refreshed either way, so the order now shows its token as sent.
+      const sentAt = new Date().toISOString()
+      setViewingOrder((current: any) => (
+        current?.id === order.id
+          ? {
+              ...current,
+              tokenHandoffAt: current.tokenHandoffAt ?? sentAt,
+              ...(data?.fulfilled ? { status: "FULFILLED" } : {}),
+            }
+          : current
+      ))
+      onUpdate()
     } catch (err: any) {
       toast({
         title: "Email Failed",
@@ -867,7 +894,12 @@ export function OrdersDirectory({
                         className={cn(PINNED_CELL_CLASS, "py-3 pl-3 pr-5 text-right")}
                         style={{ right: 0 }}
                       >
-                        {rowAction === "send-token" && (
+                        {rowAction === "send-token" && isTokenAlreadySent(order.tokenHandoffAt) && (
+                          <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+                            {TOKEN_SENT_LABEL}
+                          </span>
+                        )}
+                        {rowAction === "send-token" && !isTokenAlreadySent(order.tokenHandoffAt) && (
                           <Button
                             type="button"
                             size="sm"
@@ -920,14 +952,14 @@ export function OrdersDirectory({
               order={viewingOrder}
               statusContext={statusContext}
               isSuperAdmin={isSuperAdmin}
-              showFulfillmentToken={!isSuperAdmin && canDecideOrders}
+              showFulfillmentToken={viewingOrderCanHandoffToken}
               details={orderDetails?.id === viewingOrder.id ? orderDetails : null}
               detailsExpanded={isOrderDetailsExpanded}
               detailsLoading={isOrderDetailsLoading}
               detailsError={orderDetailsError}
               onToggleDetails={() => setIsOrderDetailsExpanded((expanded) => !expanded)}
               onRetryDetails={() => setOrderDetailsRequestKey((key) => key + 1)}
-              onSendToken={!isSuperAdmin && canDecideOrders
+              onSendToken={viewingOrderCanHandoffToken
                 ? () => { void sendTokenToAdmin(viewingOrder) }
                 : undefined}
               isSendingToken={sendingTokenOrderId !== null}

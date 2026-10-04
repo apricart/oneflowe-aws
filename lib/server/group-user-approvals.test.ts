@@ -88,19 +88,20 @@ describe("group user fulfilment token access", () => {
     expect(canViewFulfillmentToken({ role: "GROUP_USER" })).toBe(false)
   })
 
-  it("does not change any other role's token visibility", () => {
+  it("allows every operational role after its own scope check", () => {
     expect(canViewFulfillmentToken({ role: "SUPER_ADMIN" })).toBe(true)
     expect(canViewFulfillmentToken({
       role: "BRANCH_ADMIN",
+      orderStatus: "APPROVED",
       configuredApproverRole: "HEAD_OFFICE",
-    })).toBe(false)
+    })).toBe(true)
     expect(canViewFulfillmentToken({
       role: "ORDER_PORTAL",
       orderStatus: "APPROVED",
       userId: "u1",
       orderCreatedByUserId: "u2",
-    })).toBe(false)
-    expect(canViewFulfillmentToken({ role: "GROUP_ORDER_PORTAL", orderStatus: "APPROVED" })).toBe(false)
+    })).toBe(true)
+    expect(canViewFulfillmentToken({ role: "GROUP_ORDER_PORTAL", orderStatus: "APPROVED" })).toBe(true)
   })
 })
 

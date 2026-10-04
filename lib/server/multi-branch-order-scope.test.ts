@@ -223,11 +223,9 @@ describe("group order portal requester writes only inside its branches", () => {
       .toContain("resolveRefundBranchIds")
   })
 
-  it("leaves the fulfilment token and the invoice with the person who raised the order", () => {
-    // A credential and a document, not actions on the order, so neither
-    // widened with the writes above.
+  it("allows token handoff across assigned branches while keeping invoice ownership separate", () => {
     expect(source("lib/fulfillment-token-access.ts"))
-      .toContain("orderCreatedByUserId === userId")
+      .toContain('"GROUP_ORDER_PORTAL"')
     expect(source("lib/invoice-access-policy.ts"))
       .toContain("GROUP_ORDER_PORTAL: { tenant: \"own-organization\", branches: \"own-organization\", ownOrdersOnly: true }")
   })
@@ -237,14 +235,11 @@ describe("group order portal requester writes only inside its branches", () => {
     expect(detail()).toContain("orderCreatedByUserId: item.createdByUserId")
   })
 
-  it("offers no control in the tab that the server would refuse", () => {
+  it("offers fulfillment from the assigned-branch tab without adding decision controls", () => {
     const tab = source("components/group-portal/other-branch-orders.tsx")
 
-    // A read-only surface: nothing here may POST, PUT, PATCH or DELETE.
-    expect(tab).not.toContain("method: \"POST\"")
-    expect(tab).not.toContain("method: \"PUT\"")
-    expect(tab).not.toContain("method: \"PATCH\"")
-    expect(tab).not.toContain("method: \"DELETE\"")
+    expect(tab).toContain("<TokenHandoff")
+    expect(tab).not.toContain("onDecide")
     // And it asks the server only for the orders it is meant to show.
     expect(tab).toContain('createdByRole: "ORDER_PORTAL"')
   })

@@ -19,6 +19,8 @@ let selectedUnit: string | null = null
 let emptyRows = false
 /** When set, every comparison is still in flight and has no answer yet. */
 let panelsLoading = false
+/** When set, every comparison is in flight for new filters, the previous answer still held. */
+let panelsRefreshing = false
 /** When set, the requester option list is still in flight and has no answer yet. */
 let optionsPending = false
 
@@ -58,8 +60,8 @@ vi.mock("@/lib/hooks/use-api", () => ({
       }
     }
     if (panelsLoading) return { data: undefined, isLoading: true }
-    if (url.includes("/matrix?")) return { data: matrixResponse(url), isLoading: false }
-    return { data: comparisonResponse(url), isLoading: false }
+    if (url.includes("/matrix?")) return { data: matrixResponse(url), isLoading: panelsRefreshing }
+    return { data: comparisonResponse(url), isLoading: panelsRefreshing }
   },
 }))
 
@@ -248,6 +250,7 @@ beforeEach(() => {
   selectedUnit = null
   emptyRows = false
   panelsLoading = false
+  panelsRefreshing = false
   optionsPending = false
   writeFile.mockClear()
   scrollIntoView.mockClear()
@@ -415,11 +418,16 @@ describe("what the screen asks for", () => {
     const list = openPicker(/All products/)
     const panels = after(() => fireEvent.click(within(list).getByText("A4 Paper")))
 
-    // The selected product's total remains visible; only the redundant
-    // category and product-over-time panels are withheld.
+    // The selected product's total remains visible; the redundant category
+    // and product-over-time panels are withheld but keep their slots, so no
+    // other chart moves.
     expect(panelTitles()).toEqual([
-      "By product", "By requester", "By branch", "By month", "Requesters over months", "Day-by-day consumption",
+      "By product", "By category", "By requester", "By branch", "By month",
+      "Requesters over months", "Products over months", "Day-by-day consumption",
     ])
+    expect(screen.getByText(/A single product belongs to one category/)).toBeTruthy()
+    expect(screen.getByText(/its day-by-day consumption is shown below instead/)).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Show By category as a table" })).toBeNull()
     expect(requested.filter((url) => url.includes("/matrix?"))).toHaveLength(0)
     expect(screen.getByText("A4 Paper", { selector: "strong" })).toBeTruthy()
     expect(screen.getByText(/compared across products, requesters, branches and months at once/)).toBeTruthy()
@@ -428,9 +436,12 @@ describe("what the screen asks for", () => {
     for (const params of panels.values()) expect(params.get("productIds")).toBe("186")
 
     fireEvent.click(within(list).getByText("Toner"))
-    expect(panelTitles()).toContain("By product")
-    expect(panelTitles()).toContain("By category")
-    expect(panelTitles()).not.toContain("Day-by-day consumption")
+    expect(panelTitles()).toEqual([
+      "By product", "By category", "By requester", "By branch", "By month",
+      "Requesters over months", "Products over months",
+    ])
+    expect(screen.queryByText(/A single product belongs to one category/)).toBeNull()
+    expect(screen.getByRole("button", { name: "Show By category as a table" })).toBeTruthy()
     expect(screen.getByText("A4 Paper and Toner", { selector: "strong" })).toBeTruthy()
     expect(screen.getByText(/Choose a single product to see day-by-day consumption/)).toBeTruthy()
 
@@ -697,6 +708,25 @@ describe("drill-down from the grid", () => {
     const drill = new URL(`http://x${requested.filter((u) => u.includes("/drill-down?")).at(-1)}`).searchParams
     expect(drill.get("key")).toBe("u1")
     expect(drill.get("productIds")).toBe("187")
+  })
+})
+
+describe("changing a filter", () => {
+  it("keeps each chart drawn, dimmed, while the new answer loads, instead of collapsing it", () => {
+    panelsRefreshing = true
+    const { container } = render(<SideBySideWorkspace filters={filters()} />)
+    // Every panel still draws its previous answer, so no card changes height.
+    expect(screen.getAllByRole("button", { name: /^bar / }).length).toBeGreaterThan(0)
+    expect(screen.getByRole("button", { name: "bar branch" })).toBeTruthy()
+    const busy = container.querySelectorAll("[aria-busy=true]")
+    expect(busy.length).toBe(7)
+    for (const body of busy) expect(body.className).toContain("pointer-events-none")
+  })
+
+  it("shows the placeholder only before a panel has ever answered", () => {
+    panelsLoading = true
+    render(<SideBySideWorkspace filters={filters()} />)
+    expect(screen.queryByRole("button", { name: /^bar / })).toBeNull()
   })
 })
 

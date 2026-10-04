@@ -59,6 +59,7 @@ import {
   UNACKNOWLEDGED_ORDERS_TAB_LABEL,
   selectUnacknowledgedOrders,
 } from "@/lib/unacknowledged-orders"
+import { TOKEN_SENT_LABEL, isTokenAlreadySent, readTokenSendRefusal } from "@/lib/order-token-handoff"
 import { isUnacknowledgedDelivery } from "@/lib/unacknowledged-delivery-block"
 import {
   parseUnacknowledgedDeliveriesResponse,
@@ -172,6 +173,8 @@ interface Order {
   deliveryAddressId?: number | null
   statusAtRefund?: string | null
   approvalToken?: string | null
+  /** Set once the fulfilment token has been emailed to the admin; it is sent once. */
+  tokenHandoffAt?: string | null
   /**
    * True when this order reached the branch through a Group Order Portal
    * submission rather than being raised here. Such an order is listed because
@@ -491,8 +494,20 @@ export default function OrderPortalPage() {
     }
   }
 
-  const sendFulfillmentToken = async (order: Pick<Order, "id" | "approvalToken"> | null) => {
-    if (!order?.approvalToken || sendingTokenOrderId !== null) return
+  /** Show an order's token as sent in the open detail, and refresh the lists behind it. */
+  const markTokenSent = (orderId: number, status?: string) => {
+    const sentAt = new Date().toISOString()
+    setSelectedOrder((current) => (
+      current?.id === orderId
+        ? { ...current, tokenHandoffAt: current.tokenHandoffAt ?? sentAt, ...(status ? { status } : {}) }
+        : current
+    ))
+    void mutateOrders()
+    void mutateUnacknowledgedSource()
+  }
+
+  const sendFulfillmentToken = async (order: Pick<Order, "id" | "approvalToken" | "tokenHandoffAt"> | null) => {
+    if (!order?.approvalToken || isTokenAlreadySent(order.tokenHandoffAt) || sendingTokenOrderId !== null) return
 
     setSendingTokenOrderId(order.id)
     try {
@@ -511,6 +526,25 @@ export default function OrderPortalPage() {
           })()
         : {}
 
+      // A refusal that only means this screen is out of date — the token has
+      // already gone, or the order is no longer approved — corrects the open
+      // detail and refreshes the lists rather than reporting a failure.
+      const refusal = readTokenSendRefusal(response.status, data)
+      if (refusal?.kind === "already-sent") {
+        markTokenSent(order.id)
+        toast({ title: TOKEN_SENT_LABEL, description: refusal.message })
+        return
+      }
+      if (refusal?.kind === "not-approved") {
+        setSelectedOrder((current) => (
+          current?.id === order.id && refusal.status ? { ...current, status: refusal.status } : current
+        ))
+        void mutateOrders()
+        void mutateUnacknowledgedSource()
+        toast({ title: "Order already updated", description: refusal.message })
+        return
+      }
+
       if (!response.ok) throw new Error(data.error || "Failed to send token email")
 
       toast({
@@ -519,16 +553,11 @@ export default function OrderPortalPage() {
       })
 
       // Sending the token settles the order only once it has been delivered,
-      // so the open detail and the lists behind it are refreshed when it did —
-      // which is also what lifts the ordering block once enough are settled.
-      if (data?.fulfilled) {
-        setSelectedOrder((current) => (
-          current?.id === order.id ? { ...current, status: "FULFILLED" } : current
-        ))
-        void mutateOrders()
-        void mutateUnacknowledgedSource()
-        void mutateBudget()
-      }
+      // so the open detail reflects it when it did — which is also what lifts
+      // the ordering block once enough are settled. The lists are refreshed
+      // either way, so the order now shows its token as sent.
+      markTokenSent(order.id, data?.fulfilled ? "FULFILLED" : undefined)
+      if (data?.fulfilled) void mutateBudget()
     } catch (error) {
       toast({
         title: "Email failed",
@@ -2835,12 +2864,15 @@ export default function OrderPortalPage() {
                     <Button
                       type="button"
                       variant="outline"
-                      disabled={sendingTokenOrderId !== null}
+                      disabled={sendingTokenOrderId !== null || isTokenAlreadySent(selectedOrder.tokenHandoffAt)}
                       onClick={() => { void sendFulfillmentToken(selectedOrder) }}
                       className="h-11 w-full rounded-xl border-indigo-200 bg-white font-semibold text-indigo-700 hover:bg-indigo-100 dark:border-indigo-800 dark:bg-slate-950 dark:text-indigo-300 dark:hover:bg-indigo-950/50"
                     >
                       <Send className={cn("mr-2 h-4 w-4", sendingTokenOrderId === selectedOrder.id && "animate-pulse")} />
-                      {sendingTokenOrderId === selectedOrder.id ? "Sending Token..." : "Send Token to Admin"}
+                      {(() => {
+                        if (sendingTokenOrderId === selectedOrder.id) return "Sending Token..."
+                        return isTokenAlreadySent(selectedOrder.tokenHandoffAt) ? TOKEN_SENT_LABEL : "Send Token to Admin"
+                      })()}
                     </Button>
                     <p className="text-xs leading-relaxed text-muted-foreground">
                       Sending this token to the admin marks your order fulfilled. Copy it if you need to hand it over another way.

@@ -226,6 +226,12 @@ type ChartCardProps = {
   /** How the figure is calculated, shown on the info affordance. */
   formula?: string
   loading?: boolean
+  /**
+   * A new answer is on its way while the previous one is still drawn. The card
+   * keeps its chart — and so its height — dimmed and inert, instead of
+   * collapsing to a skeleton and pushing every card below it around.
+   */
+  refreshing?: boolean
   error?: string | null
   /** Rendered instead of the chart when there is nothing to draw. */
   empty?: string | null
@@ -265,7 +271,7 @@ function ChartBody({ loading, error, empty, table, view, children }: Readonly<{
 }
 
 export function ChartCard({
-  title, question, formula, loading, error, empty, table, toolbar, className, children,
+  title, question, formula, loading, refreshing, error, empty, table, toolbar, className, children,
 }: Readonly<ChartCardProps>) {
   const [view, setView] = React.useState<"chart" | "table">("chart")
   const [showFormula, setShowFormula] = React.useState(false)
@@ -309,7 +315,10 @@ export function ChartCard({
           </p>
         ) : null}
       </CardHeader>
-      <CardContent>
+      <CardContent
+        aria-busy={loading || refreshing ? true : undefined}
+        className={refreshing ? "pointer-events-none opacity-50 transition-opacity" : undefined}
+      >
         <ChartBody loading={loading} error={error} empty={empty} table={table} view={view}>
           {children}
         </ChartBody>

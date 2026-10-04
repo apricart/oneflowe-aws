@@ -43,7 +43,7 @@ function event(overrides: Partial<ActivityEvent> = {}): ActivityEvent {
     entity: "category",
     entityLabel: "Category",
     entityId: "42",
-    actor: { id: "u-1", email: "ali@example.test", name: "Ali Raza", role: "SUPER_ADMIN" },
+    actor: { id: "u-1", email: "ali@example.test", name: "Ali Raza", role: "SUPER_ADMIN", redacted: false },
     organizationId: 3,
     organizationName: "Apricart",
     branchId: 9,
@@ -315,5 +315,21 @@ describe("export", () => {
     expect(click).toHaveBeenCalledOnce()
     // No second endpoint means no second unbounded read path.
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("what the screen says it covers", () => {
+  it("tells an organization reader it is their organization, and that Apricart is anonymised", () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})))
+    render(<ActivityLogScreen />)
+    expect(screen.getByText(/in your organization/i)).toBeTruthy()
+    expect(screen.getByText(/without their personal details/i)).toBeTruthy()
+    expect(screen.queryByText(/across every organization/i)).toBeNull()
+  })
+
+  it("tells the whole-platform reader it spans every organization", () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})))
+    render(<ActivityLogScreen platformWide />)
+    expect(screen.getByText(/across every organization/i)).toBeTruthy()
   })
 })

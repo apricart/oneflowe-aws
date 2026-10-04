@@ -31,6 +31,10 @@ export enum Permission {
   ORG_MANAGE_SETTINGS = "org:manage_settings",
   ORG_MANAGE_BRANCHES = "org:manage_branches",
   ORG_VIEW_METRICS = "org:view_metrics",
+  // The activity log narrowed to one tenant. Distinct from
+  // SYSTEM_VIEW_AUDIT_LOGS, which is the whole platform's trail and stays
+  // Super Admin's alone. Enforced through `lib/activity-log-access.ts`.
+  ORG_VIEW_AUDIT_LOGS = "org:view_audit_logs",
 
   // User Management
   USER_CREATE = "user:create",
@@ -189,6 +193,13 @@ export const PERMISSION_DEFINITIONS: PermissionInfo[] = [
     key: Permission.ORG_VIEW_METRICS,
     label: "View Organization Metrics",
     description: "Access organization performance metrics",
+    category: PermissionCategory.ORGANIZATION,
+  },
+  {
+    key: Permission.ORG_VIEW_AUDIT_LOGS,
+    label: "View Organization Activity Log",
+    description:
+      "Read the activity log of the caller's own organization. Actions by people outside it are anonymised",
     category: PermissionCategory.ORGANIZATION,
   },
 
@@ -526,6 +537,9 @@ export const ROLE_TEMPLATES = {
       Permission.ORG_MANAGE_SETTINGS,
       Permission.ORG_MANAGE_BRANCHES,
       Permission.ORG_VIEW_METRICS,
+      // Its own organization's trail only — never SYSTEM_VIEW_AUDIT_LOGS. See
+      // lib/activity-log-access.ts.
+      Permission.ORG_VIEW_AUDIT_LOGS,
       Permission.USER_VIEW,
       Permission.USER_CREATE,
       Permission.USER_EDIT,

@@ -5,6 +5,7 @@ import useSWR from "swr"
 import { Building2, ChevronRight, Pencil } from "lucide-react"
 
 import { BranchOrderEditSheet } from "@/components/group-portal/branch-order-edit-sheet"
+import { TokenHandoff } from "@/components/group-portal/token-handoff"
 import { OrderDetailPanel, type OrderDetails } from "@/components/orders/order-detail-panel"
 import { RefundManagement } from "@/components/refund-management"
 import { Button } from "@/components/ui/button"
@@ -45,6 +46,8 @@ type BranchOrder = {
   createdAt: string
   approvedAt?: string | null
   rejectionReason?: string | null
+  approvalToken?: string | null
+  tokenHandoffAt?: string | null
 }
 
 type BranchOrdersResponse = {
@@ -95,12 +98,11 @@ function formatDate(value: string | null | undefined): string {
  * people at those branches raise", which is the context a requester needs
  * before spending more of the same branch budget.
  *
- * It is **read-only, by design and not merely by omission**. Editing, refunding,
- * the fulfilment token, the token email and the invoice all stay with the person
- * who raised the order — four separate server-side controls enforce that, and
- * a receipt or an invoice for someone else's order is refused by
- * `authorizeInvoiceRequest`. Rather than render those controls and let the
- * server turn them down, the surface simply does not offer them.
+ * The requester may act only inside its live branch assignments. Approved rows
+ * include the fulfillment-token handoff because every operational role may
+ * complete an order it is already allowed to read; the endpoint independently
+ * re-checks the tenant and assignment before sending. Other controls keep their
+ * own policies, including invoice access.
  *
  * The rows come from the standard `/api/v1/orders` endpoint, which resolves this
  * user's branch assignments server-side; the `createdByRole` filter narrows that
@@ -254,18 +256,18 @@ function OrderRow({
 }
 
 /**
- * The order as raised, read-only.
+ * The order as raised inside this requester's assigned branch scope.
  *
  * It renders the shared `OrderDetailPanel` — the same body the Branch Admin,
  * the Order Portal and this portal's own approvals drawer show — so an order
  * looks the same to a requester here as it does to the people it is raised
- * with. The panel owns no decision logic; the `actions` footer stays empty
- * because editing, refunding, the fulfilment token and the invoice all remain
- * with the person who placed the order.
+ * with. The panel owns no decision logic; the `actions` footer supplies only
+ * actions independently authorized for this requester and order.
  *
  * Fetched fresh rather than shown from the list row, so the line items and the
  * status are the current ones; the row paints the panel immediately while that
- * request is in flight.
+ * request is in flight. An approved order whose scoped response carries a token
+ * can be handed to admin operations from this drawer.
  */
 function OrderDetailSheet({
   order,
@@ -298,6 +300,10 @@ function OrderDetailSheet({
   }
   // The list row paints immediately; the fetched record only adds detail.
   const detailedOrder = { ...order, ...matched }
+  const token = typeof detailedOrder.approvalToken === "string"
+    && detailedOrder.approvalToken.trim().length > 0
+    ? detailedOrder.approvalToken
+    : null
 
   const closeSheet = () => {
     setExpanded(false)
@@ -311,7 +317,7 @@ function OrderDetailSheet({
           <SheetTitle>Order details</SheetTitle>
           <SheetDescription>
             {order
-              ? `Order ${order.tid}, raised at ${order.branchName || `branch ${order.branchId}`}. You are viewing this order; it stays with the person who placed it.`
+              ? `Order ${order.tid}, raised at ${order.branchName || `branch ${order.branchId}`}. Actions remain limited to your assigned branch scope.`
               : "Review the order status, branch information, and line items."}
           </SheetDescription>
         </SheetHeader>
@@ -327,6 +333,18 @@ function OrderDetailSheet({
             onRetryDetails={() => setReloadKey((key) => key + 1)}
             actions={
               <div className="mt-auto shrink-0 space-y-4 border-t border-slate-100 bg-white/80 px-6 py-4 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-900/80">
+                {String(detailedOrder.status).toUpperCase() === "APPROVED" && token && (
+                  <TokenHandoff
+                    orderId={order.id}
+                    tid={order.tid}
+                    token={token}
+                    branchName={order.branchName ?? undefined}
+                    onFulfilled={() => {
+                      onChanged()
+                      closeSheet()
+                    }}
+                  />
+                )}
                 {/* The branch owns its orders, so a group requester may amend a
                     still-pending one. The server re-checks the same rule and
                     tells the person who raised it. */}

@@ -64,7 +64,7 @@ describe("UnacknowledgedOrdersTable", () => {
     renderTable({ orders: [row(2, { approvalToken: null, placedByGroupPortal: true })] })
     expect(screen.queryByRole("button", { name: /Fulfil order TID-2/ })).toBeNull()
     expect(screen.queryByRole("button", { name: /Copy fulfillment token/ })).toBeNull()
-    expect(screen.getByText("Only the person who raised this order can see and send its token.")).toBeTruthy()
+    expect(screen.getByText("The fulfillment token is not available for this order.")).toBeTruthy()
     expect(screen.getByText("Group Order")).toBeTruthy()
   })
 
@@ -75,6 +75,21 @@ describe("UnacknowledgedOrdersTable", () => {
     expect(first.disabled).toBe(true)
     expect(first.textContent).toContain("Sending...")
     expect(second.disabled).toBe(true)
+  })
+
+  it("shows a token that has already been emailed as sent, and offers no second send", () => {
+    const { onSendToken } = renderTable({
+      orders: [row(3, { tokenHandoffAt: "2026-09-21T10:00:00.000Z" }), row(4)],
+    })
+    expect(screen.queryByRole("button", { name: "Fulfil order TID-3 by emailing its token" })).toBeNull()
+    const sent = screen.getByRole("button", { name: "Token for order TID-3 has already been emailed" }) as HTMLButtonElement
+    expect(sent.disabled).toBe(true)
+    expect(sent.textContent).toContain("Token sent")
+    fireEvent.click(sent)
+    expect(onSendToken).not.toHaveBeenCalled()
+    // The token itself is still there to copy, and the other row is unaffected.
+    expect(screen.getByText("TOKEN3ABCDEF")).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Fulfil order TID-4 by emailing its token" })).toBeTruthy()
   })
 
   it("says so when nothing is awaiting acknowledgement", () => {

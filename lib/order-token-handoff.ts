@@ -20,7 +20,7 @@ import { normalizeFulfillmentStatus } from "@/lib/fulfillment-status"
  */
 
 /** The only order status that carries a shareable token, and the only one that can settle. */
-const TOKEN_HANDOFF_STATUS = "APPROVED"
+export const TOKEN_HANDOFF_STATUS = "APPROVED"
 
 /** The delivery status that means the goods have physically arrived. */
 const DELIVERED_STATUS = "DELIVERED"
@@ -45,6 +45,80 @@ export type TokenHandoffResult = {
  */
 export function isTokenHandoffEligible(orderStatus?: string | null): boolean {
   return String(orderStatus ?? "").trim().toUpperCase() === TOKEN_HANDOFF_STATUS
+}
+
+/**
+ * Whether the order's token has already been emailed to admin operations.
+ *
+ * A token is emailed once per order: `token_handoff_at` is written when it
+ * leaves, and both send routes refuse an order that carries it. The UI reads
+ * the same field to stop offering a send the server would refuse.
+ */
+export function isTokenAlreadySent(tokenHandoffAt?: string | Date | null): boolean {
+  if (tokenHandoffAt instanceof Date) return !Number.isNaN(tokenHandoffAt.getTime())
+  return typeof tokenHandoffAt === "string" && tokenHandoffAt.trim().length > 0
+}
+
+/** Machine-readable refusal codes for a token email that was not sent. */
+export const TOKEN_ALREADY_SENT_CODE = "TOKEN_ALREADY_SENT"
+export const TOKEN_SEND_IN_PROGRESS_CODE = "TOKEN_SEND_IN_PROGRESS"
+
+export const TOKEN_ALREADY_SENT_MESSAGE =
+  "This order's fulfilment token has already been emailed to the admin. Each order's token is sent once."
+export const GROUP_TOKENS_ALREADY_SENT_MESSAGE =
+  "Every fulfilment token in this group order has already been emailed to the admin."
+export const TOKEN_SEND_IN_PROGRESS_MESSAGE =
+  "This fulfilment token is already being emailed. Refresh in a moment to see the result."
+
+/** Shown in place of the send action once the token has gone. */
+export const TOKEN_SENT_LABEL = "Token sent"
+
+/**
+ * The order is no longer approved, so it has no token to send. A screen that
+ * still offers the send is showing the order as it was when it loaded — most
+ * often it has since been fulfilled by a hand-off from another screen or by
+ * the auto-fulfil sweep — so the refusal carries the status it is in now.
+ */
+export const TOKEN_ORDER_NOT_APPROVED_CODE = "ORDER_NOT_APPROVED"
+
+const FULFILLED_STATUSES = new Set(["FULFILLED", "PARTIAL", "PARTIALLY_FULFILLED"])
+
+/** Why a token cannot be sent for an order in this status, in the user's words. */
+export function tokenOrderNotApprovedMessage(orderStatus?: string | null): string {
+  const status = String(orderStatus ?? "").trim().toUpperCase()
+  if (FULFILLED_STATUSES.has(status)) {
+    return "This order has already been fulfilled, so its token no longer needs to be sent."
+  }
+  if (status === "PENDING") return "This order has not been approved yet, so it has no token to send."
+  if (status) {
+    return `This order is ${status.toLowerCase().replace(/_/g, " ")}, so it has no token to send.`
+  }
+  return "A token can only be sent for an active order."
+}
+
+export type TokenSendRefusal =
+  | { kind: "already-sent"; message: string }
+  | { kind: "not-approved"; message: string; status: string | null }
+
+/**
+ * Read a refused send as one of the two refusals that mean "this screen is out
+ * of date" rather than "something failed", so every send surface refreshes
+ * instead of showing an error. Anything else is a real failure: null.
+ */
+export function readTokenSendRefusal(
+  httpStatus: number,
+  body: { code?: unknown; error?: unknown; status?: unknown } | null | undefined,
+): TokenSendRefusal | null {
+  if (httpStatus !== 409 || !body) return null
+  const message = typeof body.error === "string" ? body.error : ""
+  if (body.code === TOKEN_ALREADY_SENT_CODE) {
+    return { kind: "already-sent", message: message || TOKEN_ALREADY_SENT_MESSAGE }
+  }
+  if (body.code === TOKEN_ORDER_NOT_APPROVED_CODE) {
+    const status = typeof body.status === "string" && body.status.trim() ? body.status.trim().toUpperCase() : null
+    return { kind: "not-approved", message: message || tokenOrderNotApprovedMessage(status), status }
+  }
+  return null
 }
 
 /**

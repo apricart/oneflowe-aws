@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 vi.mock("@/hooks/use-toast", () => ({
@@ -22,9 +22,24 @@ const listResponse = {
       approvedAt: null,
       rejectionReason: null,
     },
+    {
+      id: 1920,
+      tid: "approved-branch-order-token",
+      branchId: 7,
+      branchName: "Demo North Branch",
+      status: "APPROVED",
+      fulfillmentStatus: "DELIVERED",
+      totalCents: 125_000,
+      itemCount: 2,
+      createdAt: "2026-09-11T06:00:19.000Z",
+      approvedAt: "2026-09-11T07:00:19.000Z",
+      rejectionReason: null,
+      approvalToken: "BRANCHTOKEN1234",
+      tokenHandoffAt: null,
+    },
   ],
   pricesHidden: false,
-  pagination: { page: 1, limit: 25, total: 1, totalPages: 1, hasMore: false },
+  pagination: { page: 1, limit: 25, total: 2, totalPages: 1, hasMore: false },
 }
 
 // Only the orders list is served. Every other request the drawer makes — the
@@ -93,5 +108,17 @@ describe("OtherBranchOrders", () => {
 
     expect(screen.getByTestId("edit-sheet").textContent)
       .toContain("mtv4btk0531073d73267a18a")
+  })
+
+  it("lets the group requester hand off a visible approved branch order", () => {
+    render(<OtherBranchOrders />)
+    fireEvent.click(screen.getByRole("button", { name: /approved-branch-order-token/ }))
+
+    const dialog = screen.getByRole("dialog")
+    expect(within(dialog).getByText("BRANCHTOKEN1234")).toBeTruthy()
+    expect(within(dialog).getByRole("button", {
+      name: /Email fulfilment token for approved-branch-order-token.*to admin operations/i,
+    })).toBeTruthy()
+    expect(within(dialog).queryByRole("button", { name: /^(approve|reject)$/i })).toBeNull()
   })
 })

@@ -266,23 +266,22 @@ describe("fulfilment token for the group requester", () => {
     orderCreatedByUserId: "requester-id",
   }
 
-  it("shows the requester a token for an approved order it raised", () => {
+  it("shows the requester a token for an approved order in its scoped response", () => {
     expect(canViewFulfillmentToken(approvedOwnOrder)).toBe(true)
   })
 
-  it("hides it before approval and from a requester that did not raise the order", () => {
+  it("hides it before approval but leaves identity scoping to the caller", () => {
     expect(canViewFulfillmentToken({ ...approvedOwnOrder, orderStatus: "PENDING" })).toBe(false)
-    expect(canViewFulfillmentToken({ ...approvedOwnOrder, userId: "someone-else" })).toBe(false)
+    expect(canViewFulfillmentToken({ ...approvedOwnOrder, userId: "someone-else" })).toBe(true)
   })
 
   it("ignores the tenant's configured approver role for the requester tier", () => {
-    // The requester's claim is creation, not approval, so the configured
-    // approver role must neither grant nor withdraw its own token.
+    // Fulfillment authority is independent from approval authority.
     expect(canViewFulfillmentToken({ ...approvedOwnOrder, configuredApproverRole: "HEAD_OFFICE" })).toBe(true)
     expect(canViewFulfillmentToken({ ...approvedOwnOrder, configuredApproverRole: "BRANCH_ADMIN" })).toBe(true)
   })
 
-  it("leaves every other role's answer exactly as it was", () => {
+  it("allows every operational role and still rejects an unknown role", () => {
     const order = {
       orderStatus: "APPROVED",
       orderCreatedByUserId: "creator-id",
@@ -292,7 +291,9 @@ describe("fulfilment token for the group requester", () => {
     expect(canViewFulfillmentToken({ ...order, role: "BRANCH_ADMIN", userId: "b" })).toBe(true)
     expect(canViewFulfillmentToken({ ...order, role: "GROUP_USER", userId: "c" })).toBe(true)
     expect(canViewFulfillmentToken({ ...order, role: "ORDER_PORTAL", userId: "creator-id" })).toBe(true)
-    expect(canViewFulfillmentToken({ ...order, role: "ORDER_PORTAL", userId: "other" })).toBe(false)
+    expect(canViewFulfillmentToken({ ...order, role: "HEAD_OFFICE", userId: "head" })).toBe(true)
+    expect(canViewFulfillmentToken({ ...order, role: "GROUP_ORDER_PORTAL", userId: "group" })).toBe(true)
+    expect(canViewFulfillmentToken({ ...order, role: "ORDER_PORTAL", userId: "other" })).toBe(true)
     expect(canViewFulfillmentToken({ ...order, role: "UNKNOWN_ROLE", userId: "creator-id" })).toBe(false)
   })
 

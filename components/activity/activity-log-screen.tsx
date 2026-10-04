@@ -92,7 +92,16 @@ export function activityQueryFor(filters: ActivityFilterState, now: Date): strin
   return buildQuery(filters, null, now)
 }
 
-export function ActivityLogScreen() {
+type ScreenProps = Readonly<{
+  /**
+   * Whether the reader sees every tenant (Super Admin) or one (Head Office).
+   * Copy only — the endpoint decides which rows arrive. Defaults to the
+   * narrower claim so a missing prop never tells a tenant it sees the platform.
+   */
+  platformWide?: boolean
+}>
+
+export function ActivityLogScreen({ platformWide = false }: ScreenProps = {}) {
   const [filters, setFilters] = useState<ActivityFilterState>(EMPTY_FILTERS)
   const [debouncedSearch, setDebouncedSearch] = useState("")
   const [events, setEvents] = useState<ActivityEvent[]>([])
@@ -175,8 +184,9 @@ export function ActivityLogScreen() {
             Activity log
           </h1>
           <p className="max-w-2xl text-sm text-muted-foreground">
-            Sign-ins, business changes and group operations across every organization, newest
-            first. Select a row to see who did it, from what address, and exactly what changed.
+            {platformWide
+              ? "Sign-ins, business changes and group operations across every organization, newest first. Select a row to see who did it, from what address, and exactly what changed."
+              : "Sign-ins, business changes and group operations in your organization, newest first. Select a row to see who did it and exactly what changed. Changes made by Apricart administrators are shown without their personal details."}
           </p>
         </div>
         <div className="flex gap-2">

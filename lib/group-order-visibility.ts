@@ -33,9 +33,9 @@ export function isGroupPortalOrder(
  * May an Order Portal user read this order?
  *
  * Either it is one they raised themselves — the rule that has always applied —
- * or it is a group order raised for their branch. It is deliberately *reading*
- * only: editing, cancelling, refunding, and the fulfilment token all stay with
- * the person who created the order.
+ * or it is a group order raised for their branch. Callers may layer separately
+ * authorized branch actions on this read scope; the tenant and branch checks
+ * must still pass before any token or write is released.
  */
 export function canOrderPortalReadOrder(input: {
   viewerUserId: string | null | undefined
