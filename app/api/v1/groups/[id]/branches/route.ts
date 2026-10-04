@@ -18,7 +18,7 @@ import { groupBranchesUpdateSchema,validationMessage } from "@/lib/server/mutati
  * Returning the group is what lets the callers pin their own queries to the
  * tenant that owns it, rather than trusting the id from the URL.
  */
-const GROUP_BRANCH_ROLES = ["SUPER_ADMIN", "HEAD_OFFICE"]
+const GROUP_BRANCH_ROLES = new Set(["SUPER_ADMIN", "HEAD_OFFICE"])
 
 type AuthorizedGroup = {
     group: { id: number; organizationId: number }
@@ -35,7 +35,7 @@ async function authorizeGroupBranchAccess(
     }
 
     const role = (session.user as any).role
-    if (!GROUP_BRANCH_ROLES.includes(role)) {
+    if (!GROUP_BRANCH_ROLES.has(role)) {
         return { failure: NextResponse.json({ error: "Forbidden" }, { status: 403 }) }
     }
 

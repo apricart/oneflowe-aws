@@ -172,7 +172,7 @@ export function AppContextProvider({ children }: Readonly<{ children: ReactNode 
       setOrganizationIdState(null)
       setBranchIdState(null)
       setBranchIdsState([])
-    } else if (userRole === "HEAD_OFFICE" && userOrgId) {
+    } else if ((userRole === "HEAD_OFFICE" || userRole === "GROUP_USER") && userOrgId) {
       setOrganizationIdState(String(userOrgId))
       setBranchIdState(null)
       setBranchIdsState([])
@@ -180,10 +180,6 @@ export function AppContextProvider({ children }: Readonly<{ children: ReactNode 
       setOrganizationIdState(String(userOrgId))
       setBranchIdState(String(userBranchId))
       setBranchIdsState([String(userBranchId)])
-    } else if (userRole === "GROUP_USER" && userOrgId) {
-      setOrganizationIdState(String(userOrgId))
-      setBranchIdState(null)
-      setBranchIdsState([])
     } else if (userRole === "VIEWER" && userOrgId) {
       // Resetting a pinned Viewer returns it to its own branch, not to the
       // whole tenant.

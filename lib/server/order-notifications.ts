@@ -17,9 +17,7 @@ import { isValidEmailAddress } from "@/lib/validation/email"
 import {
   isOrderApproverRole,
   isOrderDecisionRole,
-  ORDER_APPROVER_ROLE_LABELS,
   ORDER_DECISION_ROLE_LABELS,
-  type OrderApproverRole,
   type OrderDecisionRole,
 } from "@/lib/order-approver-role"
 import { ORDER_CREATOR_ROLES } from "@/lib/group-order-visibility"

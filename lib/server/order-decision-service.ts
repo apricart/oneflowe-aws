@@ -58,14 +58,14 @@ export type OrderDecisionOutcome =
   | { kind: "ledger-conflict"; decision: "approve" | "reject" }
 
 /** Ledger invariants that mean the transition rolled back rather than applied. */
-const LEDGER_INVARIANTS = ["BUDGET_LEDGER_INVARIANT", "QUANTITY_BUDGET_LEDGER_INVARIANT"]
+const LEDGER_INVARIANTS = new Set(["BUDGET_LEDGER_INVARIANT", "QUANTITY_BUDGET_LEDGER_INVARIANT"])
 
 function decisionFailureOutcome(
   transitionError: any,
   decision: "approve" | "reject",
 ): OrderDecisionOutcome | null {
   if (transitionError?.message === "ORDER_TRANSITION_CONFLICT") return { kind: "conflict" }
-  if (LEDGER_INVARIANTS.includes(transitionError?.message)) {
+  if (LEDGER_INVARIANTS.has(transitionError?.message)) {
     return { kind: "ledger-conflict", decision }
   }
   return null

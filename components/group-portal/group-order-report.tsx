@@ -331,11 +331,11 @@ export function GroupOrderReport() {
       const book = XLSX.utils.book_new()
       XLSX.utils.book_append_sheet(book, sheet, "Group orders")
       XLSX.writeFile(book, `${fileStem}.${format === "excel" ? "xlsx" : "csv"}`)
-    } catch (caught) {
-      console.error("Group order report export failed", caught)
+    } catch (error) {
+      console.error("Group order report export failed", error)
       toast({
         title: "Export failed",
-        description: caught instanceof Error ? caught.message : "Unable to export the filtered group orders.",
+        description: error instanceof Error ? error.message : "Unable to export the filtered group orders.",
         variant: "destructive",
       })
     } finally {

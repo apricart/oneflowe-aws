@@ -383,7 +383,7 @@ async function applyRow(client: PoolClient, organizationId: number, userId: stri
 
 async function commit(client: PoolClient, plan: Plan, output: string): Promise<void> {
   const operator = arg("--operator")
-  assert(operator && /.+@.+/.test(operator), "--operator=<your email> is required so the audit trail names a person")
+  assert(operator && /.@./.test(operator), "--operator=<your email> is required so the audit trail names a person")
   const digest = planDigest(plan)
   assert(arg("--confirm-plan-sha256") === digest,
     `--confirm-plan-sha256 does not match the current plan (${digest}). Re-run the preflight and pass the digest it prints.`)
@@ -434,7 +434,7 @@ async function commit(client: PoolClient, plan: Plan, output: string): Promise<v
 
 async function rollback(client: PoolClient, path: string): Promise<void> {
   const operator = arg("--operator")
-  assert(operator && /.+@.+/.test(operator), "--operator=<your email> is required for a rollback")
+  assert(operator && /.@./.test(operator), "--operator=<your email> is required for a rollback")
   const committed = JSON.parse(readFileSync(resolve(path), "utf8")) as { organization: Plan["organization"]; rows: PlanRow[]; committedAt?: string }
   assert(committed.committedAt, "Only a committed report can be rolled back")
   const organization = await readOrganization(client)

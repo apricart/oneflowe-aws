@@ -27,6 +27,7 @@
  * Pure: reads no database and performs no I/O.
  */
 
+import { compareCodeUnits } from "../code-unit-order"
 import type { CurrentBranchAssignment } from "./ke-branch-catalogue"
 import {
   resolveListProducts,
@@ -140,7 +141,7 @@ export function catalogueRestrictionPlanLines(plan: CatalogueRestrictionPlan): s
     ...plan.deactivations.map((entry) => `DEACTIVATE ${entry.organizationInventoryId}`),
     ...plan.deactivations.flatMap((entry) =>
       entry.branchRows.map((row) => `HIDE ${row.branchId} ${entry.organizationInventoryId} ${rowCode(row)}`)),
-  ].sort()
+  ].sort(compareCodeUnits)
 }
 
 export interface CatalogueRestrictionCounts {
@@ -262,5 +263,5 @@ export function catalogueRestrictionReversalLines(reversal: CatalogueRestriction
     ...reversal.reactivations.flatMap((entry) =>
       entry.branchRows.map((row) => `UNHIDE ${row.branchId} ${entry.organizationInventoryId} -> ${rowCode(row)}`)),
     ...reversal.deactivations.map((entry) => `DEACTIVATE ${entry.organizationInventoryId}`),
-  ].sort()
+  ].sort(compareCodeUnits)
 }

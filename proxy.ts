@@ -181,7 +181,7 @@ async function handleApiRequest(req: NextRequest, pathname: string, response: Ne
   return withSecurityHeaders(response, pathname)
 }
 
-const ADMIN_PORTAL_ROLES = ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"]
+const ADMIN_PORTAL_ROLES = new Set(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"])
 
 /**
  * The approver works inside the admin shell so it gets the same sidebar and
@@ -322,7 +322,7 @@ function rolePortalRedirect(role: string | undefined, pathname: string, budgetAl
       ? null
       : GROUP_ORDER_PORTAL_HOME
   }
-  if (role && ADMIN_PORTAL_ROLES.includes(role)) {
+  if (role && ADMIN_PORTAL_ROLES.has(role)) {
     // Strict separation: administrators belong in the dashboard shell only, and
     // the approval queue is not theirs.
     return adminPortalRedirect(pathname)

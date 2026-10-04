@@ -23,6 +23,7 @@ import * as dotenv from "dotenv"
 import type { PoolClient } from "pg"
 import * as XLSX from "xlsx"
 
+import { compareCodeUnits } from "../lib/code-unit-order"
 import { normalizeProductName } from "../lib/legacy-import/ke-electric"
 import { planBranchBudgets, type CurrentBudget } from "../lib/legacy-import/ke-budgets"
 import {
@@ -120,6 +121,17 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   throw new Error(`${url}: ${lastError instanceof Error ? lastError.message : String(lastError)}`)
 }
 
+/**
+ * A list endpoint's body is checked to be an array rather than cast to one, so
+ * a misbehaving legacy server cannot hand back an object whose `length` is
+ * text that ends up in the run log.
+ */
+async function fetchJsonArray<T>(path: string, init?: RequestInit): Promise<T[]> {
+  const body = await fetchJson<unknown>(path, init)
+  if (!Array.isArray(body)) throw new Error(`${path} did not return an array`)
+  return body as T[]
+}
+
 async function mapConcurrent<T, R>(
   values: readonly T[], concurrency: number, fn: (value: T) => Promise<R>,
 ): Promise<R[]> {
@@ -153,7 +165,7 @@ async function fetchOrderList(): Promise<LegacyOrderListRow[]> {
 }
 
 async function fetchPriceHistory(): Promise<LegacyPriceHistoryRow[]> {
-  return fetchJson<LegacyPriceHistoryRow[]>("/api/ProductSummary/GetSummaryItemHistory", {
+  return fetchJsonArray<LegacyPriceHistoryRow>("/api/ProductSummary/GetSummaryItemHistory", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -210,11 +222,11 @@ async function main(): Promise<void> {
   console.log("Fetching legacy reference data ...")
   const [legacyLocations, legacyGroups, legacySubUsers, legacyItems, legacyCategories, legacyPriceHistory] =
     await Promise.all([
-      fetchJson<LegacyLocation[]>(`/api/Location/GetLocation/${LEGACY_ACCOUNT_ID}`),
-      fetchJson<LegacyLocationGroup[]>(`/api/LocationGroup/GetLocationGroups/${LEGACY_ACCOUNT_ID}`),
-      fetchJson<LegacySubUser[]>(`/api/SubUser/0/${LEGACY_ACCOUNT_ID}`),
-      fetchJson<LegacyItem[]>(`/api/Item/0/null/${LEGACY_ACCOUNT_ID}`),
-      fetchJson<LegacyCategory[]>(`/api/Category/0/${LEGACY_ACCOUNT_ID}`),
+      fetchJsonArray<LegacyLocation>(`/api/Location/GetLocation/${LEGACY_ACCOUNT_ID}`),
+      fetchJsonArray<LegacyLocationGroup>(`/api/LocationGroup/GetLocationGroups/${LEGACY_ACCOUNT_ID}`),
+      fetchJsonArray<LegacySubUser>(`/api/SubUser/0/${LEGACY_ACCOUNT_ID}`),
+      fetchJsonArray<LegacyItem>(`/api/Item/0/null/${LEGACY_ACCOUNT_ID}`),
+      fetchJsonArray<LegacyCategory>(`/api/Category/0/${LEGACY_ACCOUNT_ID}`),
       fetchPriceHistory(),
     ])
   console.log(`  locations ${legacyLocations.length}, groups ${legacyGroups.length}, users ${legacySubUsers.length}, `
@@ -491,7 +503,6 @@ async function main(): Promise<void> {
       if (!dbGroup) issues.push("MISSING IN DB")
       const legacyMemberBranchIds = new Set(
         legacyMembers.map((id) => pinByLegacyId.get(id)?.branchId).filter((id): id is number => id != null))
-      const dbMemberIds = new Set(dbMembers.map((row) => Number(row.id)))
       let missingMembers = 0
       let extraMembers = 0
       for (const legacyId of legacyMembers) {
@@ -782,7 +793,7 @@ async function main(): Promise<void> {
     const existingByName = new Map(productPlan.existing.map((existing) => [existing.normalizedName, existing]))
     const driftByName = new Map(productPlan.priceDrift.map((drift) => [drift.normalizedName, drift]))
     const skippedProductByName = new Map(productPlan.skipped.map((skip) => [skip.normalizedName, skip]))
-    for (const name of [...allLegacyProductNames].sort()) {
+    for (const name of [...allLegacyProductNames].sort(compareCodeUnits)) {
       const stats = legacyProductStats.get(name)
       const create = createByName.get(name)
       const existing = existingByName.get(name)

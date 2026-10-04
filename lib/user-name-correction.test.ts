@@ -7,9 +7,35 @@ import {
   matchKey,
   phoneDigits,
   splitName,
+  withoutTrailingDash,
   type SheetRow,
   type UserRow,
 } from "./user-name-correction"
+
+describe("withoutTrailingDash", () => {
+  it("drops a lone trailing dash and the whitespace around it", () => {
+    expect(withoutTrailingDash("Imran Khan -")).toBe("Imran Khan")
+    expect(withoutTrailingDash("Imran Khan\t-  \n")).toBe("Imran Khan")
+    expect(withoutTrailingDash("Imran Khan-")).toBe("Imran Khan")
+  })
+
+  it("leaves a name without a trailing dash untouched, trailing space included", () => {
+    expect(withoutTrailingDash("Imran Khan ")).toBe("Imran Khan ")
+    expect(withoutTrailingDash("Imran-Khan")).toBe("Imran-Khan")
+    expect(withoutTrailingDash("")).toBe("")
+  })
+
+  it("removes only the last of several dashes", () => {
+    expect(withoutTrailingDash("Khan --")).toBe("Khan -")
+  })
+
+  it("agrees with the regex it replaces", () => {
+    const samples = ["", "-", " - ", "a - b -", "a\u00A0-\u2028", "--", "a -\r\n", " ".repeat(5) + "x", "a-\t"]
+    for (const sample of samples) {
+      expect(withoutTrailingDash(sample)).toBe(sample.replace(/\s*-\s*$/, ""))
+    }
+  })
+})
 
 function sheetRow(overrides: Partial<SheetRow> & Pick<SheetRow, "index">): SheetRow {
   return {

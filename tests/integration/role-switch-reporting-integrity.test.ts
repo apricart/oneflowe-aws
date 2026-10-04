@@ -400,5 +400,8 @@ describe.skipIf(!hasTestDatabase)("money integrity across a role change", () => 
 })
 
 describe.skipIf(hasTestDatabase)("role-switch reporting integrity suite", () => {
-  it(NO_DATABASE_REASON, () => {})
+  it("is skipped without a test database", () => {
+    console.warn(NO_DATABASE_REASON)
+    expect(hasTestDatabase).toBe(false)
+  })
 })

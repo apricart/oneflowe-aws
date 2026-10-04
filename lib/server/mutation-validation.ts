@@ -802,7 +802,7 @@ export const supportThreadCreateSchema = z.object({
   // caller reaching the endpoint directly never sees the dialog.
   if (isProductRequiredForCategory(value.category) && (value.productId ?? null) === null) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ["productId"],
       message: "A query under this category must name the product it is about",
     })
@@ -822,7 +822,7 @@ export const supportThreadUpdateSchema = z.object({
   status: z.enum(SUPPORT_STATUSES).optional(),
   priority: z.enum(SUPPORT_PRIORITIES).optional(),
   // `null` unassigns; omitted leaves the assignment alone.
-  assignedToUserId: z.string().uuid().nullish(),
+  assignedToUserId: z.uuid().nullish(),
 }).strict().refine(
   (value) => value.status !== undefined
     || value.priority !== undefined

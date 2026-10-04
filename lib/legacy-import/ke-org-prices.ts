@@ -100,7 +100,7 @@ export function legacyPriceByInventoryId(plan: ProductPlan): {
   for (const [id, values] of seen) {
     const distinct = [...new Set(values)]
     if (distinct.length === 1) prices.set(id, distinct[0])
-    else ambiguous.set(id, distinct.sort((a, b) => a - b))
+    else ambiguous.set(id, distinct.toSorted((a, b) => a - b))
   }
   return { prices, ambiguous }
 }

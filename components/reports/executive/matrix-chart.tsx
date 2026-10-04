@@ -5,7 +5,18 @@ import { Bar, BarChart, CartesianGrid, LabelList, ResponsiveContainer, Tooltip, 
 
 import { cn } from "@/lib/utils"
 import type { MatrixDimensionId } from "@/lib/executive-analytics"
-import { AXIS_STYLE, GRID_STYLE, Legend, VizTooltip, countShort, formatByKind, formatShortByKind, money } from "./chart-kit"
+import {
+  AXIS_STYLE,
+  GRID_STYLE,
+  Legend,
+  VizTooltip,
+  countShort,
+  formatByKind,
+  formatShortByKind,
+  hoveredDatum,
+  money,
+  type InjectedTooltipProps,
+} from "./chart-kit"
 import {
   DrillHint,
   columnAxisProps,
@@ -163,11 +174,12 @@ export function matrixCellFigure(cell: MatrixCell, format: string): string {
 }
 
 /** What one cluster holds, one line per row entity, the column's total last. */
-function ColumnTooltip({ datum, response, byPair }: Readonly<{
-  datum: ColumnDatum
+function ColumnTooltip({ response, byPair, ...injected }: InjectedTooltipProps<ColumnDatum> & Readonly<{
   response: MatrixResponse
   byPair: Map<string, MatrixCell>
 }>) {
+  const datum = hoveredDatum(injected)
+  if (!datum) return null
   const { rows, format } = response
   return (
     <VizTooltip
@@ -257,9 +269,7 @@ export function MatrixChart({ response, onDrillDown, fullWidth }: Readonly<Props
           />
           <Tooltip
             cursor={{ fill: "var(--viz-track)", fillOpacity: 0.35 }}
-            content={({ active, payload }: any) => (active && payload?.length
-              ? <ColumnTooltip datum={payload[0].payload} response={response} byPair={byPair} />
-              : null)}
+            content={<ColumnTooltip response={response} byPair={byPair} />}
           />
           {rows.map((row, index) => (
             <Bar

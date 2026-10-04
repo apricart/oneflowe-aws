@@ -47,6 +47,8 @@ const BUDGET_ENABLED_READERS = [
   "lib/server/executive-analytics-queries.ts",
   "app/api/v1/budgets/route.ts",
   "app/api/v1/analytics/groups/route.ts",
+  // Opens rows across tenants for a Super Admin's list; never for a tenant with budgets off.
+  "lib/server/budget-period-opening.ts",
 ]
 
 describe("storage", () => {

@@ -34,6 +34,7 @@ import {
   type LegacyOrderDetail,
   type LegacyOrderListRow,
 } from "../lib/legacy-import/ke-post-cutoff"
+import { withoutTrailingDash } from "../lib/user-name-correction"
 import { resolveWorkspacePath } from "./lib/resolve-workspace-path"
 
 dotenv.config({ path: ".env.local", quiet: true })
@@ -286,7 +287,7 @@ async function main() {
         }
       }
 
-      const userName = String(row.UserDetails ?? "").replace(/\s*-\s*$/, "").trim()
+      const userName = withoutTrailingDash(String(row.UserDetails ?? "")).trim()
       const candidates = usersByKey.get(`${branch.id}|${normalizeLegacyText(userName)}`) ?? []
       if (candidates.length === 0) {
         return {

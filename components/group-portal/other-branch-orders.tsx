@@ -297,7 +297,7 @@ function OrderDetailSheet({
     pricesHidden?: boolean
   }
   // The list row paints immediately; the fetched record only adds detail.
-  const detailedOrder = { ...order, ...(matched ?? {}) }
+  const detailedOrder = { ...order, ...matched }
 
   const closeSheet = () => {
     setExpanded(false)

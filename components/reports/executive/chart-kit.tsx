@@ -434,6 +434,26 @@ export function VizTooltip({ title, rows }: Readonly<{
   )
 }
 
+/** What Recharts injects into the element passed as a `<Tooltip content>`. */
+export type InjectedTooltipProps<T> = Readonly<{
+  active?: boolean
+  payload?: ReadonlyArray<{ payload: T; dataKey?: unknown; value?: unknown }>
+  label?: string | number
+}>
+
+/**
+ * The datum under the cursor, or null when nothing is hovered.
+ *
+ * A chart passes its tooltip to Recharts as an element — `content={<X … />}`,
+ * which Recharts clones with the props above — and never as an inline
+ * function: Recharts 2 renders a function with `createElement`, so an arrow
+ * defined inside the chart is a new component type on every render and the
+ * whole tooltip unmounts and remounts each time the chart does.
+ */
+export function hoveredDatum<T>({ active, payload }: InjectedTooltipProps<T>): T | null {
+  return active && payload?.length ? payload[0].payload : null
+}
+
 /** A legend is always present for two or more series; identity is never colour alone. */
 /**
  * Legend entries take an optional `key` — the entity's id — because two entities

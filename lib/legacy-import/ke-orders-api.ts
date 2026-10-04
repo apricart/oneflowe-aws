@@ -20,7 +20,7 @@
  * derives net and tax from it, so importing never restates what was charged.
  */
 
-import { DEFAULT_TAX_RATE_BP, resolveTaxRateBp, splitInclusiveCents } from "../tax"
+import { resolveTaxRateBp, splitInclusiveCents } from "../tax"
 import {
   canonicalJson,
   legacyStatusText,
@@ -142,14 +142,17 @@ export interface PreparedApiLine {
  * it was. Here the same line keeps `RefundPrice`, and the original value is
  * `Price + RefundPrice`.
  */
+/** Legacy sends some figures as numbers and some as numeric strings. */
+type LegacyNumeric = number | string | null
+
 export interface LegacyRefundLine {
   ID?: number | null
   Name?: string | null
-  Quantity?: number | string | null
-  RefundQuantity?: number | string | null
-  UnitPrice?: number | string | null
-  Price?: number | string | null
-  RefundPrice?: number | string | null
+  Quantity?: LegacyNumeric
+  RefundQuantity?: LegacyNumeric
+  UnitPrice?: LegacyNumeric
+  Price?: LegacyNumeric
+  RefundPrice?: LegacyNumeric
 }
 
 export interface LegacyRefund {
@@ -353,10 +356,12 @@ function restoreRefundedLines(
   }
 }
 
+const NOTHING_IMPORTED: AlreadyImported = { legacyOrderIds: new Set(), identityKeys: new Set() }
+
 export function prepareApiOrders(
   listRows: readonly LegacyOrderListRow[],
   detailsById: ReadonlyMap<number, LegacyOrderDetail>,
-  alreadyImported: AlreadyImported = { legacyOrderIds: new Set(), identityKeys: new Set() },
+  alreadyImported: AlreadyImported = NOTHING_IMPORTED,
   refundsByOrderId: ReadonlyMap<number, LegacyRefund> = new Map(),
 ): PreparationResult {
   const prepared: PreparedApiOrder[] = []
@@ -628,7 +633,7 @@ export function computeOrderTax(
   return { subtotalCents: totalCents - taxCents, taxCents, totalCents, lines: results }
 }
 
-export { DEFAULT_TAX_RATE_BP }
+export { DEFAULT_TAX_RATE_BP } from "../tax"
 
 export interface SheetRow {
   Location?: unknown
@@ -693,8 +698,8 @@ export function reconcileAgainstSheet(
     sheetRowCount: sheetRows.length,
     apiRowCount: listRows.length,
     matched,
-    onlyInSheet: onlyInSheet.sort((a, b) => a.localeCompare(b)),
-    onlyInApi: onlyInApi.sort((a, b) => a.localeCompare(b)),
+    onlyInSheet: onlyInSheet.toSorted((a, b) => a.localeCompare(b)),
+    onlyInApi: onlyInApi.toSorted((a, b) => a.localeCompare(b)),
   }
 }
 

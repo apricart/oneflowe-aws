@@ -20,6 +20,7 @@
  * afterwards, and what the affected branch/month budget rows must read.
  */
 
+import { compareCodeUnits } from "../code-unit-order"
 import { normalizeLegacyText } from "./ke-post-cutoff"
 
 // ---------------------------------------------------------------------------
@@ -242,7 +243,7 @@ function reattribute(
     return pool.slice().sort((a, b) => a.username.localeCompare(b.username))[0]
   }
 
-  if (creator && creator.externalSource === source && creator.externalId) {
+  if (creator?.externalSource === source && creator.externalId) {
     const identity = creator.externalId.toLowerCase()
     const atTarget = (accountsByIdentity.get(identity) ?? []).filter((account) => account.branchId === target.id)
     if (atTarget.length > 0) return { to: preferActive(atTarget).userId, rule: "SAME_PERSON_AT_BRANCH" }
@@ -352,7 +353,7 @@ function planBudgetChanges(
 
   const budgetByKey = new Map(input.budgets.map((row) => [`${row.branchId}:${row.period}`, row]))
   const changes: BudgetLedgerChange[] = []
-  for (const key of [...touched].sort()) {
+  for (const key of [...touched].sort(compareCodeUnits)) {
     const [branchId, period] = key.split(":")
     const budget = budgetByKey.get(key)
     const { spent, held } = consumption.get(key)!

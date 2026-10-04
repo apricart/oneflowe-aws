@@ -860,5 +860,8 @@ describe.skipIf(!hasTestDatabase)("switching a user between the four branch and 
 })
 
 describe.skipIf(hasTestDatabase)("requester role switch suite", () => {
-  it(NO_DATABASE_REASON, () => {})
+  it("is skipped without a test database", () => {
+    console.warn(NO_DATABASE_REASON)
+    expect(hasTestDatabase).toBe(false)
+  })
 })
