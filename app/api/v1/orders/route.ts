@@ -384,7 +384,10 @@ function addOrderStatusConditions(
 ) {
   const requestedStatuses = getOrderStatusesForFilter(statusFilter)
   if (requestedStatuses.length > 0) {
-    conditions.push(inArray(orders.status, requestedStatuses))
+    // Case-insensitive, like the summary cards (`metricExpressions`): the column
+    // has no check constraint, so an exact match drops a row stored as
+    // "Pending" that the card above it still counts.
+    conditions.push(inArray(sql`UPPER(${orders.status})`, requestedStatuses))
   }
   // Delivered but not yet acknowledged — the dashboard's own bucket, so this
   // tab, its count and the "Delivered/Unacknowledged" card cannot disagree.
