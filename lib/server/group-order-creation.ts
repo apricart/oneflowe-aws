@@ -911,7 +911,7 @@ export async function createGroupOrder(
     // A concurrent request with the same key won the unique index; replay it
     // instead of creating a second set of branch orders.
     const raced = await findSubmissionByIdempotencyKey(input.actor.userId, input.idempotencyKey)
-    if (raced && raced.requestFingerprint === fingerprint) {
+    if (raced?.requestFingerprint === fingerprint) {
       return { ok: true, submission: await describeSubmission(raced, true) }
     }
     if (raced) {

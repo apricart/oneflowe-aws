@@ -1019,7 +1019,7 @@ describe.skipIf(!hasTestDatabase)("Support threads — routes against a real dat
       const notified = (await notificationsFor(threadId, f.superAdminId)).length
       expect((await patchThread(threadId, { status: "RESOLVED" })).status).toBe(200)
       expect((await threadRow(threadId)).resolvedAt).toEqual(resolved.resolvedAt)
-      expect((await notificationsFor(threadId, f.superAdminId)).length).toBe(notified)
+      expect(await notificationsFor(threadId, f.superAdminId)).toHaveLength(notified)
 
       const reopen = await patchThread(threadId, { status: "OPEN" })
       expect(reopen.status).toBe(200)

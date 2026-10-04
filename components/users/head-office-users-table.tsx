@@ -15,6 +15,7 @@ import { Popover,PopoverContent,PopoverTrigger } from "@/components/ui/popover"
 import { Command,CommandInput,CommandList,CommandEmpty,CommandGroup,CommandItem } from "@/components/ui/command"
 import { Edit,Trash2,Search,User,Mail,Phone,ShieldCheck,Building2,MapPin,AlertCircle,CheckCircle,ChevronLeft,ChevronRight,RefreshCw,Eye,EyeOff,Upload,FileText,Table as TableIcon,FileJson,MoreHorizontal,KeyRound,Calendar,LayoutGrid,List,Check,ChevronsUpDown } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { compareCodeUnits } from "@/lib/code-unit-order"
 import { motion,AnimatePresence } from "framer-motion"
 import { Switch } from "@/components/ui/switch"
 import { DropdownMenu,DropdownMenuContent,DropdownMenuItem,DropdownMenuLabel,DropdownMenuSeparator,DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -135,11 +136,11 @@ const validateEditForm = (
   // The role's row shape. The server enforces all of this independently and is
   // the actual control; checking here only saves a round trip and lets the
   // message sit against the field the administrator has to fix.
-  if (MULTI_BRANCH_ROLES.includes(form.role)) {
+  if (MULTI_BRANCH_ROLES.has(form.role)) {
     if (form.groupIds.length === 0 && form.branchIds.length === 0) {
       errors.groupScope = "Assign at least one group or one branch to this user"
     }
-  } else if (SINGLE_BRANCH_ROLES.includes(form.role) && !form.branchId) {
+  } else if (SINGLE_BRANCH_ROLES.has(form.role) && !form.branchId) {
     errors.branchId = "A branch is required for this role"
   }
 
@@ -186,10 +187,10 @@ const resolveScopeListsForUpdate = (
   user: UserRow,
   loadedScope: { groupIds: string[]; branchIds: string[] } | null,
 ) => {
-  if (!MULTI_BRANCH_ROLES.includes(form.role)) return null
+  if (!MULTI_BRANCH_ROLES.has(form.role)) return null
   const roleChanged = form.role !== (user.role || "")
   const sameList = (a: string[], b: string[]) =>
-    a.length === b.length && [...a].sort().join(",") === [...b].sort().join(",")
+    a.length === b.length && [...a].sort(compareCodeUnits).join(",") === [...b].sort(compareCodeUnits).join(",")
   const scopeEdited = loadedScope === null
     || !sameList(form.groupIds, loadedScope.groupIds)
     || !sameList(form.branchIds, loadedScope.branchIds)
@@ -216,7 +217,7 @@ const buildUserUpdate = (
   addChangedValue(body, "organizationId", form.organizationId ? Number.parseInt(form.organizationId) : null, user.organizationId ?? null)
   // A group-based role is never pinned to one branch; the server refuses the
   // change if a branch survives the switch, so it is explicitly cleared.
-  const nextBranchId = MULTI_BRANCH_ROLES.includes(form.role)
+  const nextBranchId = MULTI_BRANCH_ROLES.has(form.role)
     ? null
     : (form.branchId ? Number.parseInt(form.branchId) : null)
   addChangedValue(body, "branchId", nextBranchId, user.branchId ?? null)
@@ -411,7 +412,7 @@ type RoleAssignmentFieldsProps = {
 }
 
 // Roles whose reach is defined by group and branch assignments.
-const MULTI_BRANCH_ROLES = ["GROUP_ORDER_PORTAL", "GROUP_USER"]
+const MULTI_BRANCH_ROLES = new Set(["GROUP_ORDER_PORTAL", "GROUP_USER"])
 
 /**
  * The role changes this dialog can make.
@@ -435,7 +436,7 @@ const SWITCHABLE_ROLES = [
 ] as const
 
 /** The roles pinned to exactly one branch. */
-const SINGLE_BRANCH_ROLES = ["BRANCH_ADMIN", "ORDER_PORTAL"]
+const SINGLE_BRANCH_ROLES = new Set(["BRANCH_ADMIN", "ORDER_PORTAL"])
 
 /** Add or remove one id from a selection, preserving order. */
 function toggleAssignedId(current: string[], id: string): string[] {
@@ -589,8 +590,8 @@ function RoleSwitchNotice({
   if (roleChanged) {
     const suffixWarning = usernameSuffixWarning(username, nextRole)
     const leavingApprover = currentRole === "GROUP_USER" && nextRole !== "GROUP_USER"
-    const leavingGroupScope = MULTI_BRANCH_ROLES.includes(currentRole)
-      && !MULTI_BRANCH_ROLES.includes(nextRole)
+    const leavingGroupScope = MULTI_BRANCH_ROLES.has(currentRole)
+      && !MULTI_BRANCH_ROLES.has(nextRole)
     return (
       <div className="space-y-1">
         <p className="text-xs text-amber-700 dark:text-amber-500">
@@ -762,7 +763,7 @@ function RoleAssignmentFields({
   const roleSwitchOffered = canOfferRoleSwitch(currentRole)
   const readiness = useRoleChangeReadiness(userId, roleSwitchOffered)
   const needsBranch = form.role === "BRANCH_ADMIN" || form.role === "ORDER_PORTAL"
-  const needsGroupScope = MULTI_BRANCH_ROLES.includes(form.role)
+  const needsGroupScope = MULTI_BRANCH_ROLES.has(form.role)
   const organizationId = form.organizationId ? Number.parseInt(form.organizationId) : null
   const selectedBranchId = Number.parseInt(form.branchId)
   const selectedBranchName = branches.find((branch) => branch.id === selectedBranchId)?.name
@@ -788,9 +789,9 @@ function RoleAssignmentFields({
             // A group-based role carries no branch, and a single-branch role
             // carries no assignments. Clearing the other shape's fields here is
             // what stops a stale value being submitted and refused.
-            branchId: MULTI_BRANCH_ROLES.includes(role) ? "" : form.branchId,
-            groupIds: MULTI_BRANCH_ROLES.includes(role) ? form.groupIds : [],
-            branchIds: MULTI_BRANCH_ROLES.includes(role) ? form.branchIds : [],
+            branchId: MULTI_BRANCH_ROLES.has(role) ? "" : form.branchId,
+            groupIds: MULTI_BRANCH_ROLES.has(role) ? form.groupIds : [],
+            branchIds: MULTI_BRANCH_ROLES.has(role) ? form.branchIds : [],
             budgetAllocationEnabled: role === "GROUP_USER" && form.budgetAllocationEnabled,
           })}
         >

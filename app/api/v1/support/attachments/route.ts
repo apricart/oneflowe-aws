@@ -167,7 +167,7 @@ async function resolveUploadTenant(
   rawThreadId: FormDataEntryValue | null,
 ): Promise<UploadTenant> {
   if (rawThreadId !== null) {
-    const threadId = typeof rawThreadId === "string" ? Number(rawThreadId) : NaN
+    const threadId = typeof rawThreadId === "string" ? Number(rawThreadId) : Number.NaN
     if (!Number.isInteger(threadId) || threadId <= 0) {
       return { ok: false, error: "Support request not found", status: 404 }
     }
@@ -195,9 +195,9 @@ async function resolveUploadTenant(
  */
 // Control characters, quotes, angle brackets, and the Windows-reserved set.
 // Built from a string rather than a literal so the control range stays readable
-// and does not put raw bytes in the source.
-// eslint-disable-next-line no-control-regex -- removing control characters is the point
-const UNSAFE_FILENAME_CHARACTERS = new RegExp("[\\u0000-\\u001f\\u007f\"'<>|:*?\\\\/]", "g")
+// and does not put raw bytes in the source. Matching control characters is the
+// point, which is why this is not a literal `no-control-regex` would refuse.
+const UNSAFE_FILENAME_CHARACTERS = new RegExp(String.raw`[\u0000-\u001f\u007f"'<>|:*?\\/]`, "g")
 
 function safeFileName(name: unknown, extension: string): string {
   const base = typeof name === "string" ? name : ""

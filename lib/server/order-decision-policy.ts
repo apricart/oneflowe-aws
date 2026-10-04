@@ -18,10 +18,10 @@ import {
 } from "@/lib/server/multi-branch-scope"
 
 /** Roles permitted to reach an order decision at all. */
-const ORDER_DECISION_ROLES = ["BRANCH_ADMIN", "HEAD_OFFICE", GROUP_USER_ROLE]
+const ORDER_DECISION_ROLES = new Set<string>(["BRANCH_ADMIN", "HEAD_OFFICE", GROUP_USER_ROLE])
 
 function canAttemptOrderDecision(role: unknown): boolean {
-  return typeof role === "string" && ORDER_DECISION_ROLES.includes(role)
+  return typeof role === "string" && ORDER_DECISION_ROLES.has(role)
 }
 
 export type OrderDecisionCapabilities = {

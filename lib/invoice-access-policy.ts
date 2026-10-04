@@ -101,7 +101,7 @@ const INVOICE_ROLE_RULES: Record<Role, InvoiceRoleRule> = {
 }
 
 /** Roles whose branch reach comes from group and branch assignments. */
-export function invoiceScopeNeedsAssignedBranches(role: Role | string | null | undefined): boolean {
+export function invoiceScopeNeedsAssignedBranches(role: string | null | undefined): boolean {
   return typeof role === "string"
     && isValidRole(role)
     && INVOICE_ROLE_RULES[role].branches === "assigned"
@@ -153,7 +153,8 @@ function isWithinBranchScope(
  * order's existence or state.
  */
 export function resolveInvoiceAccess(input: {
-  role: Role | string | null | undefined
+  /** Any string: an unknown role is refused inside, rather than by the type. */
+  role: string | null | undefined
   scope: InvoiceRequesterScope | null | undefined
   order: InvoiceOrderSubject | null | undefined
 }): InvoiceAccessDenial | null {

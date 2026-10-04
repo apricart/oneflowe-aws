@@ -40,6 +40,7 @@
 
 import { z } from "zod"
 
+import { compareCodeUnits } from "../code-unit-order"
 import { normalizeProductName } from "./ke-electric"
 import type { CurrentBranchAssignment } from "./ke-branch-catalogue"
 
@@ -156,6 +157,8 @@ export interface GroupCatalogueOptions {
   hideOthers: boolean
 }
 
+const KEEP_OTHERS: Readonly<GroupCatalogueOptions> = { hideOthers: false }
+
 export interface GroupCataloguePlan {
   products: ResolvedProduct[]
   groups: GroupSummary[]
@@ -185,10 +188,12 @@ function isLive(row: CurrentBranchAssignment | undefined): boolean {
  * Resolve every list line to a product, or a reason it cannot be. Shared with
  * the catalogue restriction, so both read one list the same way.
  */
+const ACTIVE_ENTRIES_ONLY: Readonly<{ includeInactiveEntries: boolean }> = { includeInactiveEntries: false }
+
 export function resolveListProducts(
   wanted: readonly WantedProduct[],
   mapped: readonly MappedProduct[],
-  options: { includeInactiveEntries: boolean } = { includeInactiveEntries: false },
+  options: { includeInactiveEntries: boolean } = ACTIVE_ENTRIES_ONLY,
 ): { products: ResolvedProduct[]; skipped: SkippedProduct[]; warnings: ProductWarning[] } {
   const mappingsByName = new Map<string, MappedProduct[]>()
   for (const mapping of mapped) {
@@ -273,7 +278,7 @@ export function planGroupCatalogue(
   mapped: readonly MappedProduct[],
   branches: readonly GroupBranch[],
   assignments: readonly CurrentBranchAssignment[],
-  options: GroupCatalogueOptions = { hideOthers: false },
+  options: GroupCatalogueOptions = KEEP_OTHERS,
 ): GroupCataloguePlan {
   const { products, skipped, warnings } = resolveListProducts(wanted, mapped, { includeInactiveEntries: true })
   const activations: GroupActivation[] = products
@@ -372,7 +377,7 @@ export function groupCataloguePlanLines(plan: GroupCataloguePlan): string[] {
       ? `CREATE ${entry.branchId} ${entry.organizationInventoryId}`
       : `RESTORE ${entry.branchId} ${entry.organizationInventoryId} ${stateCode(entry.before as BranchRowState)}`),
     ...plan.hides.map((entry) => `HIDE ${entry.branchId} ${entry.organizationInventoryId}`),
-  ].sort()
+  ].sort(compareCodeUnits)
 }
 
 export interface GroupCatalogueCounts {
@@ -616,5 +621,5 @@ export function groupCatalogueReversalLines(reversal: GroupCatalogueReversal): s
     ...reversal.restores.map((entry) => `RESTORE ${entry.branchId} ${entry.organizationInventoryId} -> ${stateCode(entry.to)}`),
     ...reversal.unhides.map((entry) => `UNHIDE ${entry.branchId} ${entry.organizationInventoryId}`),
     ...reversal.deactivations.map((entry) => `DEACTIVATE ${entry.organizationInventoryId}`),
-  ].sort()
+  ].sort(compareCodeUnits)
 }

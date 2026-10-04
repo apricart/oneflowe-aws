@@ -823,5 +823,8 @@ describe.skipIf(!hasTestDatabase)("group-based roles through their real API and 
 })
 
 describe.skipIf(hasTestDatabase)("group-based role integration suite", () => {
-  it(NO_DATABASE_REASON, () => {})
+  it("is skipped without a test database", () => {
+    console.warn(NO_DATABASE_REASON)
+    expect(hasTestDatabase).toBe(false)
+  })
 })

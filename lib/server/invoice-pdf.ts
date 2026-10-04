@@ -245,11 +245,13 @@ function drawPartyGrid(doc: any, receiptData: any, itemQuantity: number, x: numb
     if (receiptData.deliveryAddressLabel) {
         deliverTo.push({ label: "Deliver to:", value: toDisplayNameCase(String(receiptData.deliveryAddressLabel)) })
     }
-    deliverTo.push({ label: "Address:", value: toDisplayNameCase(receiptData.buyerAddress || "-") })
-    deliverTo.push({ label: "Phone:", value: String(receiptData.placedByPhone || receiptData.buyerPhone || "N/A") })
-    deliverTo.push({ label: "Initiator:", value: toDisplayNameCase(receiptData.placedByName || "N/A") })
-    deliverTo.push({ label: "Approver:", value: toDisplayNameCase(receiptData.approvedByName || "N/A") })
-    deliverTo.push({ label: "Fulfiller:", value: toDisplayNameCase(receiptData.fulfilledByName || "N/A") })
+    deliverTo.push(
+        { label: "Address:", value: toDisplayNameCase(receiptData.buyerAddress || "-") },
+        { label: "Phone:", value: String(receiptData.placedByPhone || receiptData.buyerPhone || "N/A") },
+        { label: "Initiator:", value: toDisplayNameCase(receiptData.placedByName || "N/A") },
+        { label: "Approver:", value: toDisplayNameCase(receiptData.approvedByName || "N/A") },
+        { label: "Fulfiller:", value: toDisplayNameCase(receiptData.fulfilledByName || "N/A") },
+    )
 
     const cellWidth = half - pad * 2
     const bodyHeight = pad * 2 + Math.max(

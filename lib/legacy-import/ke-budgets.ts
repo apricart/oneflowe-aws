@@ -55,6 +55,8 @@
  * undoes is not a zero.
  */
 
+import { compareCodeUnits } from "../code-unit-order"
+
 /** The budget-bearing fields of a legacy location row. */
 export interface LegacyLocationBudget {
   ID: number
@@ -179,11 +181,13 @@ export function budgetToCents(value: unknown): number | null {
  * `branchByLegacyId` comes from the branch pins, which is the only trustworthy
  * link between the two systems — never the branch name.
  */
+const DEFAULT_BUDGET_PLAN_OPTIONS: Readonly<BudgetPlanOptions> = { allowLower: false }
+
 export function planBranchBudgets(
   locations: readonly LegacyLocationBudget[],
   branchByLegacyId: ReadonlyMap<number, { branchId: number; name: string }>,
   currentBudgets: readonly CurrentBudget[],
-  options: BudgetPlanOptions = { allowLower: false },
+  options: BudgetPlanOptions = DEFAULT_BUDGET_PLAN_OPTIONS,
 ): BudgetPlan {
   const existing = new Map(currentBudgets.map((row) => [`${row.branchId}:${row.period}`, row]))
 
@@ -363,6 +367,6 @@ export function summarizeBudgets(plan: BudgetPlan): BudgetCounts {
     totalAllocatedCents: plan.creates.reduce((sum, entry) => sum + entry.amountAllocatedCents, 0)
       + plan.raises.reduce((sum, entry) => sum + entry.amountAllocatedCents - entry.currentCents, 0)
       + plan.lowers.reduce((sum, entry) => sum + entry.amountAllocatedCents - entry.currentCents, 0),
-    periods: [...new Set(touched.map((entry) => entry.period))].sort(),
+    periods: [...new Set(touched.map((entry) => entry.period))].sort(compareCodeUnits),
   }
 }

@@ -35,9 +35,11 @@ import {
   formatByKind,
   formatMarkLabelByKind,
   formatShortByKind,
+  hoveredDatum,
   money,
   moneyShortBare,
   percent,
+  type InjectedTooltipProps,
 } from "./chart-kit"
 
 /**
@@ -203,14 +205,17 @@ export function DrillHint({ enabled, noun }: Readonly<{ enabled: boolean; noun: 
   )
 }
 
-function EntityTooltip({ row, format, metricLabel, concentrationEligible, showChange, budgetBeside }: Readonly<{
-  row: ComparisonRow
+function EntityTooltip({
+  format, metricLabel, concentrationEligible, showChange, budgetBeside, ...injected
+}: InjectedTooltipProps<ComparisonRow> & Readonly<{
   format: string
   metricLabel: string
   concentrationEligible: boolean
   showChange: boolean
   budgetBeside?: boolean
 }>) {
+  const row = hoveredDatum(injected)
+  if (!row) return null
   const rows = [
     { label: metricLabel, value: formatByKind(row.value, format), color: SERIES[0] },
     ...(concentrationEligible ? [{ label: "Share of shown", value: percent(row.share) }] : []),
@@ -278,9 +283,7 @@ function RankedBars({
           <YAxis type="category" dataKey="label" width={168} tick={AXIS_STYLE} axisLine={false} tickLine={false} />
           <Tooltip
             cursor={{ fill: "var(--viz-track)", fillOpacity: 0.35 }}
-            content={({ active, payload }: any) => (active && payload?.length
-              ? <EntityTooltip row={payload[0].payload} format={format} metricLabel={metricLabel} concentrationEligible showChange />
-              : null)}
+            content={<EntityTooltip format={format} metricLabel={metricLabel} concentrationEligible showChange />}
           />
           <Bar
             dataKey="value"
@@ -759,18 +762,15 @@ function ColumnChart({
           />
           <Tooltip
             cursor={{ fill: "var(--viz-track)", fillOpacity: 0.35 }}
-            content={({ active, payload }: any) => (active && payload?.length
-              ? (
-                <EntityTooltip
-                  row={payload[0].payload}
-                  format={format}
-                  metricLabel={metricLabel}
-                  concentrationEligible
-                  showChange
-                  budgetBeside={budgetBeside}
-                />
-              )
-              : null)}
+            content={(
+              <EntityTooltip
+                format={format}
+                metricLabel={metricLabel}
+                concentrationEligible
+                showChange
+                budgetBeside={budgetBeside}
+              />
+            )}
           />
           {budgetBeside ? (
             <Bar
@@ -859,6 +859,21 @@ function BudgetBesideNote({ metricLabel }: Readonly<{ metricLabel: string }>) {
 
 // ── This period vs prior ───────────────────────────────────────────────────
 
+function PeriodPairTooltip({ format, ...injected }: InjectedTooltipProps<ComparisonRow> & Readonly<{ format: string }>) {
+  const row = hoveredDatum(injected)
+  if (!row) return null
+  return (
+    <VizTooltip
+      title={row.label}
+      rows={[
+        { label: "This period", value: formatByKind(row.value, format), color: SERIES[0] },
+        { label: "Prior period", value: formatByKind(row.previousValue, format), color: SERIES[1] },
+        { label: "Change", value: changeLabel(row.changePct).text },
+      ]}
+    />
+  )
+}
+
 function GroupedChart({ rows, format, metricLabel }: Readonly<ChartProps>) {
   return (
     <>
@@ -875,20 +890,7 @@ function GroupedChart({ rows, format, metricLabel }: Readonly<ChartProps>) {
           <YAxis type="category" dataKey="label" width={168} tick={AXIS_STYLE} axisLine={false} tickLine={false} />
           <Tooltip
             cursor={{ fill: "var(--viz-track)", fillOpacity: 0.35 }}
-            content={({ active, payload }: any) => {
-              if (!active || !payload?.length) return null
-              const row: ComparisonRow = payload[0].payload
-              return (
-                <VizTooltip
-                  title={row.label}
-                  rows={[
-                    { label: "This period", value: formatByKind(row.value, format), color: SERIES[0] },
-                    { label: "Prior period", value: formatByKind(row.previousValue, format), color: SERIES[1] },
-                    { label: "Change", value: changeLabel(row.changePct).text },
-                  ]}
-                />
-              )
-            }}
+            content={<PeriodPairTooltip format={format} />}
           />
           <Bar dataKey="previousValue" fill={SERIES[1]} radius={[0, 4, 4, 0]} barSize={9} />
           <Bar dataKey="value" fill={SERIES[0]} radius={[0, 4, 4, 0]} barSize={9}>
@@ -911,6 +913,24 @@ function GroupedChart({ rows, format, metricLabel }: Readonly<ChartProps>) {
 
 // ── Share of total ─────────────────────────────────────────────────────────
 
+function ShareTooltip({ format, metricLabel, ...injected }: InjectedTooltipProps<ComparisonRow> & Readonly<{
+  format: string
+  metricLabel: string
+}>) {
+  const row = hoveredDatum(injected)
+  if (!row) return null
+  return (
+    <VizTooltip
+      title={row.label}
+      rows={[
+        { label: metricLabel, value: formatByKind(row.value, format) },
+        { label: "Share of shown", value: percent(row.share) },
+        { label: "vs prior period", value: changeLabel(row.changePct).text, muted: true },
+      ]}
+    />
+  )
+}
+
 function DonutChart({ rows, format, metricLabel, dimensionLabel, dimension, onDrillDown }: Readonly<ChartProps>) {
   const total = rows.reduce((sum, row) => sum + Math.max(0, row.value), 0)
   const drill = drillHandler(dimension, onDrillDown)
@@ -919,20 +939,7 @@ function DonutChart({ rows, format, metricLabel, dimensionLabel, dimension, onDr
       <ResponsiveContainer width="100%" height={300}>
         <PieChart>
           <Tooltip
-            content={({ active, payload }: any) => {
-              if (!active || !payload?.length) return null
-              const row: ComparisonRow = payload[0].payload
-              return (
-                <VizTooltip
-                  title={row.label}
-                  rows={[
-                    { label: metricLabel, value: formatByKind(row.value, format) },
-                    { label: "Share of shown", value: percent(row.share) },
-                    { label: "vs prior period", value: changeLabel(row.changePct).text, muted: true },
-                  ]}
-                />
-              )
-            }}
+            content={<ShareTooltip format={format} metricLabel={metricLabel} />}
           />
           <Pie
             data={rows}
@@ -1017,6 +1024,28 @@ export function trendPointLabel(
   return `Qty ${countShort(point?.quantity ?? 0)} · ${money(point?.spendCents ?? 0)}`
 }
 
+function TrendTooltip({ series, format, ...injected }: InjectedTooltipProps<unknown> & Readonly<{
+  series: EntitySeries[]
+  format: string
+}>) {
+  const { active, payload, label } = injected
+  if (!active || !payload?.length) return null
+  return (
+    <VizTooltip
+      title={String(label)}
+      rows={series.map((entity, index) => ({
+        label: entity.label,
+        value: trendPointLabel(
+          entity.points.find((point) => point.period === label),
+          Number(payload.find((entry) => entry.dataKey === entity.key)?.value ?? 0),
+          format,
+        ),
+        color: SERIES[index % SERIES.length],
+      }))}
+    />
+  )
+}
+
 function TrendChart({
   series, periods, format, metricLabel, dimension, onDrillDown, dimensionLabel,
 }: Readonly<ChartProps>) {
@@ -1059,23 +1088,7 @@ function TrendChart({
           />
           <Tooltip
             cursor={{ stroke: "var(--viz-axis)", strokeDasharray: "3 3" }}
-            content={({ active, payload, label }: any) => {
-              if (!active || !payload?.length) return null
-              return (
-                <VizTooltip
-                  title={String(label)}
-                  rows={series.map((entity, index) => ({
-                    label: entity.label,
-                    value: trendPointLabel(
-                      entity.points.find((point) => point.period === label),
-                      Number(payload.find((p: any) => p.dataKey === entity.key)?.value ?? 0),
-                      format,
-                    ),
-                    color: SERIES[index % SERIES.length],
-                  }))}
-                />
-              )
-            }}
+            content={<TrendTooltip series={series} format={format} />}
           />
           {series.map((entity, index) => (
             <Line
@@ -1108,6 +1121,27 @@ function TrendChart({
 }
 
 // ── Value against quantity ─────────────────────────────────────────────────
+
+function ScatterTooltip({ format, metricLabel, unit, ...injected }: InjectedTooltipProps<ComparisonRow> & Readonly<{
+  format: string
+  metricLabel: string
+  unit: string | null
+}>) {
+  const row = hoveredDatum(injected)
+  if (!row) return null
+  return (
+    <VizTooltip
+      title={row.label}
+      rows={[
+        { label: "Value", value: money(row.spendCents), color: SERIES[0] },
+        { label: `Quantity${unit ? ` (${unit})` : ""}`, value: countShort(row.quantity) },
+        { label: "Avg unit price", value: money(row.avgUnitPriceCents) },
+        { label: "Orders", value: countShort(row.orderCount), muted: true },
+        { label: metricLabel, value: formatByKind(row.value, format), muted: true },
+      ]}
+    />
+  )
+}
 
 function ScatterCompare({ rows, format, metricLabel, unit, dimension, onDrillDown }: Readonly<ChartProps>) {
   const usable = rows.filter((row) => row.quantity > 0)
@@ -1149,22 +1183,7 @@ function ScatterCompare({ rows, format, metricLabel, unit, dimension, onDrillDow
           <ZAxis type="number" dataKey="orderCount" range={[60, 320]} name="Orders" />
           <Tooltip
             cursor={{ strokeDasharray: "3 3" }}
-            content={({ active, payload }: any) => {
-              if (!active || !payload?.length) return null
-              const row: ComparisonRow = payload[0].payload
-              return (
-                <VizTooltip
-                  title={row.label}
-                  rows={[
-                    { label: "Value", value: money(row.spendCents), color: SERIES[0] },
-                    { label: `Quantity${unit ? ` (${unit})` : ""}`, value: countShort(row.quantity) },
-                    { label: "Avg unit price", value: money(row.avgUnitPriceCents) },
-                    { label: "Orders", value: countShort(row.orderCount), muted: true },
-                    { label: metricLabel, value: formatByKind(row.value, format), muted: true },
-                  ]}
-                />
-              )
-            }}
+            content={<ScatterTooltip format={format} metricLabel={metricLabel} unit={unit} />}
           />
           <Scatter
             data={usable}

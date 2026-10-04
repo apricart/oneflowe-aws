@@ -46,6 +46,7 @@ import {
 } from "../lib/legacy-import/ke-org-prices"
 import { canMutatePrices } from "../lib/pricing-access"
 import { invalidateCachePrefixes } from "../lib/cache-cli"
+import { compareCodeUnits } from "../lib/code-unit-order"
 
 dotenv.config({ path: ".env.local", quiet: true })
 dotenv.config({ quiet: true })
@@ -84,7 +85,7 @@ const sha256 = (value: string) => createHash("sha256").update(value).digest("hex
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`
   if (value && typeof value === "object") {
-    return `{${Object.keys(value as JsonRow).sort()
+    return `{${Object.keys(value as JsonRow).sort(compareCodeUnits)
       .map((k) => `${JSON.stringify(k)}:${canonical((value as JsonRow)[k])}`).join(",")}}`
   }
   return JSON.stringify(value ?? null)

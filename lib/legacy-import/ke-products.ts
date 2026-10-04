@@ -381,7 +381,8 @@ export function planProducts(
       continue
     }
     entries.sort((a, b) => a.date.localeCompare(b.date))
-    const latest = entries[entries.length - 1]
+    const latest = entries.at(-1)
+    if (!latest) continue
     const sourceName = String(
       priceHistory.find((row) => normalizeProductName(row.ItemName) === normalizedName)?.ItemName ?? normalizedName,
     ).trim()

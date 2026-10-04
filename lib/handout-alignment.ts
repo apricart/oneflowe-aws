@@ -149,7 +149,7 @@ export function codeKey(value: unknown): string {
 
 /** The portal role a hand-out username addresses, from its `-ba` / `-op` tail. */
 export function roleOfUsername(username: unknown): string | null {
-  const suffix = text(username).toLowerCase().match(/-([a-z]+)$/)?.[1]
+  const suffix = /-([a-z]+)$/.exec(text(username).toLowerCase())?.[1]
   if (!suffix) return null
   for (const role of ["BRANCH_ADMIN", "ORDER_PORTAL"]) {
     if (roleSuffix(role) === suffix) return role

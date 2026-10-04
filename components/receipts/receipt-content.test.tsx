@@ -173,7 +173,7 @@ describe("invoice header", () => {
         renderInvoice()
 
         expect(screen.getByText("Bill To")).toBeTruthy()
-        expect(screen.getAllByText("United Bank Limited").length).toBe(2)
+        expect(screen.getAllByText("United Bank Limited")).toHaveLength(2)
         expect(screen.getByText("NTN: 0801164-8")).toBeTruthy()
 
         expect(screen.getByText("Delivery To")).toBeTruthy()
@@ -253,7 +253,7 @@ describe("invoice header", () => {
         const { container } = renderInvoice()
 
         const billTo = container.querySelector(".invoice-parties")
-        expect(within(billTo as HTMLElement).getAllByText("ASU-CPU Central Processing Unit").length).toBe(2)
+        expect(within(billTo as HTMLElement).getAllByText("ASU-CPU Central Processing Unit")).toHaveLength(2)
         expect(container.textContent).not.toContain("NTN: 0801164-8")
     })
 })

@@ -29,7 +29,7 @@ import * as XLSX from "xlsx"
 
 import { codeKey, roleOfUsername } from "../lib/handout-alignment"
 import { sanitizeSpreadsheetRecords } from "../lib/spreadsheet"
-import { emailKey, matchKey, splitName, text } from "../lib/user-name-correction"
+import { emailKey, matchKey, splitName, text, withoutTrailingDash } from "../lib/user-name-correction"
 import { buildUsername } from "../lib/username-generation"
 
 dotenv.config({ path: ".env.local", quiet: true })
@@ -62,7 +62,7 @@ function readSheet(path: string, sheetName?: string): JsonRow[] {
 
 /** Legacy names sometimes end in a lone dash; it is not part of the name. */
 function cleanName(value: unknown): string {
-  return text(value).replace(/\s*-\s*$/, "")
+  return withoutTrailingDash(text(value))
 }
 
 async function main(): Promise<void> {

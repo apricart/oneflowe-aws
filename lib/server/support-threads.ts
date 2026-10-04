@@ -22,7 +22,6 @@ import {
   type SupportViewer,
 } from "@/lib/support-access"
 import {
-  SUPPORT_MAX_ATTACHMENTS_PER_MESSAGE,
   nextSupportStatusAfterMessage,
   supportOrderSearchId,
   supportSideForRole,
@@ -1069,7 +1068,7 @@ async function resolveAssignee(tx: any, userId: string | null): Promise<string |
   return candidate?.id ?? null
 }
 
-export const MAX_ATTACHMENTS_PER_MESSAGE = SUPPORT_MAX_ATTACHMENTS_PER_MESSAGE
+export { SUPPORT_MAX_ATTACHMENTS_PER_MESSAGE as MAX_ATTACHMENTS_PER_MESSAGE } from "@/lib/support-thread"
 
 /**
  * Resolves an attachment for reading, applying its thread's visibility rule.

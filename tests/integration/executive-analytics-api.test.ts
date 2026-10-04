@@ -1306,6 +1306,9 @@ describe.skipIf(!hasTestDatabase)("Product Performance — executive analytics r
   })
 })
 
-if (!hasTestDatabase) {
-  it.skip(NO_DATABASE_REASON, () => {})
-}
+describe.skipIf(hasTestDatabase)("executive analytics endpoint integration suite", () => {
+  it("is skipped without a test database", () => {
+    console.warn(NO_DATABASE_REASON)
+    expect(hasTestDatabase).toBe(false)
+  })
+})

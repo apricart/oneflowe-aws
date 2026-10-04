@@ -29,7 +29,10 @@ dotenv.config({ quiet: true })
 
 const ADVISORY_LOCK = 700016
 const AUDIT_ACTION = "USER_EMAIL_CORRECTION"
-const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+// local@domain, the domain holding a dot that is neither its first nor last
+// character. The first dot after the domain's first character is pinned so the
+// pattern cannot backtrack across every dot in a long input.
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@][^\s@.]*\.[^\s@]+$/
 
 type JsonRow = Record<string, unknown>
 
@@ -138,7 +141,7 @@ async function main(): Promise<void> {
     }
     const operator = arg("--operator")
     const reason = arg("--reason")
-    assert(operator && /.+@.+/.test(operator), "--operator=<your email> is required so the audit trail names a person")
+    assert(operator && /.@./.test(operator), "--operator=<your email> is required so the audit trail names a person")
     assert(reason, "--reason=<why> is required so the audit trail says why the address changed")
     assert(arg("--confirm-plan-sha256") === digest,
       `--confirm-plan-sha256 does not match the current plan (${digest}). Re-run the preflight and pass the digest it prints.`)

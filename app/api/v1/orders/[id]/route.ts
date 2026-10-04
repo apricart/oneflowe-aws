@@ -6,7 +6,6 @@ import {
   branchInventory,
   budgets,
   globalProducts,
-  notifications,
   orderItems,
   orders,
   organizationInventory,

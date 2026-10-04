@@ -158,7 +158,7 @@ export async function recordAuthAuditEvent(event: AuthAuditEvent): Promise<void>
       details: {
         ...(event.provider ? { provider: event.provider } : {}),
         ...(event.reason ? { reason: event.reason } : {}),
-        ...(event.details ?? {}),
+        ...event.details,
       },
       ipAddress: truncate(clientIp, 64),
       userAgent,

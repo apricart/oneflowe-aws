@@ -53,6 +53,8 @@ import { mkdirSync, writeFileSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import * as dotenv from "dotenv"
 
+import { compareCodeUnits } from "../lib/code-unit-order"
+
 dotenv.config({ path: ".env.local", quiet: true })
 dotenv.config({ quiet: true })
 
@@ -508,9 +510,9 @@ async function main() {
     const digest = planDigest(targets)
     const newLeaves = [...new Set(planned.map(([, , sub]) => sub))]
       .filter((name) => SUBCATEGORIES[name].existingId === null)
-      .sort()
+      .sort(compareCodeUnits)
 
-    const bySubcategory = [...new Set(planned.map(([, , sub]) => sub))].sort().map((sub) => ({
+    const bySubcategory = [...new Set(planned.map(([, , sub]) => sub))].sort(compareCodeUnits).map((sub) => ({
       parent: PARENTS[SUBCATEGORIES[sub].parentId],
       subcategory: sub,
       isNew: SUBCATEGORIES[sub].existingId === null,

@@ -153,7 +153,7 @@ async function main(): Promise<void> {
     }
 
     const operator = arg("--operator")
-    assert(operator && /.+@.+/.test(operator), "--operator=<your email> is required so the audit trail names a person")
+    assert(operator && /.@./.test(operator), "--operator=<your email> is required so the audit trail names a person")
     const actorUserId = arg("--actor-user-id")
     assert(actorUserId, "--actor-user-id=<uuid> is required")
 

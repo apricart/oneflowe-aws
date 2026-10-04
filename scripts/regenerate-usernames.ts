@@ -283,7 +283,7 @@ async function applyRenames(
 
 async function commit(client: PoolClient, code: string): Promise<void> {
   const operator = arg("--operator")
-  assert(operator && /.+@.+/.test(operator), "--operator=<your email> is required so the audit trail names a person")
+  assert(operator && /.@./.test(operator), "--operator=<your email> is required so the audit trail names a person")
 
   const { org, built, codeSourceById } = await loadPlan(client, code)
   const digest = planDigest(built.plan)
@@ -350,7 +350,7 @@ async function commit(client: PoolClient, code: string): Promise<void> {
 
 async function rollback(client: PoolClient, reportPath: string): Promise<void> {
   const operator = arg("--operator")
-  assert(operator && /.+@.+/.test(operator), "--operator=<your email> is required for a rollback")
+  assert(operator && /.@./.test(operator), "--operator=<your email> is required for a rollback")
 
   const report = JSON.parse(readFileSync(reportPath, "utf8")) as {
     plan: UsernamePlanRow[]

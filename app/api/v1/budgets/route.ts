@@ -29,6 +29,7 @@ import {
   settleDueAddonsOnBudget,
   settleDueBudgetAddons,
 } from "@/lib/server/budget-addon-expiry"
+import { openCurrentBudgetPeriodRows } from "@/lib/server/budget-period-opening"
 import {
   budgetEnabledBranchSql,
   budgetTrackedOrderSql,
@@ -374,6 +375,15 @@ async function loadAggregatedMoneyBudgets(context: any) {
   const branchIds = activeBranches.map((branch) => branch.branchId)
   const range = await resolveMoneyBudgetRange({ ...context, branchIds })
   if (range.periods.length === 0) return []
+  // A branch nobody has ordered for yet this month has no row, which would
+  // read as 0. Open it at its baseline first — the row its next order would
+  // open — so the list shows the budget that order will be checked against.
+  // Only the figure shown depends on it, so a failure is logged, not fatal.
+  try {
+    await openCurrentBudgetPeriodRows(db, { branchIds, requestedPeriods: range.periods })
+  } catch (caughtError) {
+    logError(caughtError, "BUDGETS_OPEN_CURRENT_PERIOD")
+  }
   await settleDueBudgetAddons(db, { branchIds, periods: range.periods })
   const records = await db.select({
     branchId: budgets.branchId,

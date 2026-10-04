@@ -298,7 +298,6 @@ async function main(): Promise<void> {
        where oi.organization_id = $1 and oi.deleted_at is null
        order by gp.name
     `, [ORGANIZATION_ID])
-    const skippedIds = new Set<number>()
     try {
       // The price script names its report by run date, so pick the newest
       // rather than pinning a filename — a stale report makes this workbook
@@ -311,7 +310,6 @@ async function main(): Promise<void> {
         .sort((a, b) => b.mtime - a.mtime)
       if (candidates.length === 0) throw new Error("no organization-price report found")
       const report = JSON.parse(fs.readFileSync(resolve(reportDir, candidates[0].name), "utf8"))
-      for (const s of report.skipped ?? []) skippedIds.add(Number(s.organizationInventoryId))
       add("7-prices skipped", (report.skipped ?? []).map((s: JsonRow) => {
         const row = orgInventory.find((r) => Number(r.id) === Number(s.organizationInventoryId))
         return {
