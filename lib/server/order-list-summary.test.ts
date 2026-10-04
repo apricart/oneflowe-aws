@@ -61,7 +61,8 @@ describe("order-list summary contract", () => {
     const route = source("app/api/v1/orders/route.ts")
 
     expect(route).toContain("const summaryConditions = [...conditions]")
-    expect(route).toContain("conditions.push(inArray(orders.status, requestedStatuses))")
+    // Matched like the cards (`UPPER(status)`), so a tab never lists fewer rows than its card counts.
+    expect(route).toContain("conditions.push(inArray(sql`UPPER(${orders.status})`, requestedStatuses))")
     expect(route).toContain("const summaryCondition = summaryConditions.length ? and(...summaryConditions) : undefined")
     expect(route).toContain(".where(summaryCondition)")
   })
