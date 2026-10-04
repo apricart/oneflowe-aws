@@ -350,7 +350,9 @@ describe("the way in is reachable and the way out is not mislabelled", () => {
     const proxy = repositoryFile("proxy.ts")
     expect(proxy).toContain('const isPublicPath = ["/login", "/join"].includes(pathname)')
     expect(proxy).toContain('"/join-requests",')
-    expect(proxy).toContain('{ prefix: "/join-requests", role: "HEAD_OFFICE"')
+    // Head Office alone: the area table takes a role list since the activity
+    // log admitted two roles, and this entry must still list exactly one.
+    expect(proxy).toContain('{ prefix: "/join-requests", roles: ["HEAD_OFFICE"]')
   })
 
   it("gates the Head Office page in a server layout as well", () => {

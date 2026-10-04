@@ -205,21 +205,20 @@ export function DrillHint({ enabled, noun }: Readonly<{ enabled: boolean; noun: 
   )
 }
 
-function EntityTooltip({
-  format, metricLabel, concentrationEligible, showChange, budgetBeside, ...injected
+export function EntityTooltip({
+  format, metricLabel, budgetBeside, ...injected
 }: InjectedTooltipProps<ComparisonRow> & Readonly<{
   format: string
   metricLabel: string
-  concentrationEligible: boolean
-  showChange: boolean
   budgetBeside?: boolean
 }>) {
   const row = hoveredDatum(injected)
   if (!row) return null
+  // The hovered figure and the facts behind it — nothing derived from the
+  // other bars (share of shown, change on the prior period), which the table
+  // view carries for a reader who wants them.
   const rows = [
     { label: metricLabel, value: formatByKind(row.value, format), color: SERIES[0] },
-    ...(concentrationEligible ? [{ label: "Share of shown", value: percent(row.share) }] : []),
-    ...(showChange ? [{ label: "vs prior period", value: changeLabel(row.changePct).text }] : []),
   ]
 
   // A companion budget first: the row's figure is the selected money metric,
@@ -239,12 +238,14 @@ function EntityTooltip({
       { label: "Remaining", value: money(row.remainingCents ?? 0), muted: true } as any,
     )
   } else {
-    // Both figures, whichever one the bar is drawn from.
+    // Both figures, whichever one the bar is drawn from — but each only once:
+    // when the bar is the money figure itself, the headline row already says it.
+    const moneyLabel = metricLabel === "Consumed" ? "Consumed" : "Procurement value"
     if (format !== "quantity") rows.push({ label: "Quantity", value: countShort(row.quantity) } as any)
-    rows.push(
-      { label: metricLabel === "Consumed" ? "Consumed" : "Procurement value", value: money(row.spendCents), muted: format !== "quantity" } as any,
-      { label: "Orders", value: countShort(row.orderCount), muted: true } as any,
-    )
+    if (moneyLabel.toLowerCase() !== metricLabel.toLowerCase()) {
+      rows.push({ label: moneyLabel, value: money(row.spendCents), muted: format !== "quantity" } as any)
+    }
+    rows.push({ label: "Orders", value: countShort(row.orderCount), muted: true } as any)
   }
 
   return <VizTooltip title={row.label} rows={rows as any} />
@@ -283,7 +284,7 @@ function RankedBars({
           <YAxis type="category" dataKey="label" width={168} tick={AXIS_STYLE} axisLine={false} tickLine={false} />
           <Tooltip
             cursor={{ fill: "var(--viz-track)", fillOpacity: 0.35 }}
-            content={<EntityTooltip format={format} metricLabel={metricLabel} concentrationEligible showChange />}
+            content={<EntityTooltip format={format} metricLabel={metricLabel} />}
           />
           <Bar
             dataKey="value"
@@ -766,8 +767,6 @@ function ColumnChart({
               <EntityTooltip
                 format={format}
                 metricLabel={metricLabel}
-                concentrationEligible
-                showChange
                 budgetBeside={budgetBeside}
               />
             )}
@@ -913,7 +912,7 @@ function GroupedChart({ rows, format, metricLabel }: Readonly<ChartProps>) {
 
 // ── Share of total ─────────────────────────────────────────────────────────
 
-function ShareTooltip({ format, metricLabel, ...injected }: InjectedTooltipProps<ComparisonRow> & Readonly<{
+export function ShareTooltip({ format, metricLabel, ...injected }: InjectedTooltipProps<ComparisonRow> & Readonly<{
   format: string
   metricLabel: string
 }>) {
@@ -924,8 +923,6 @@ function ShareTooltip({ format, metricLabel, ...injected }: InjectedTooltipProps
       title={row.label}
       rows={[
         { label: metricLabel, value: formatByKind(row.value, format) },
-        { label: "Share of shown", value: percent(row.share) },
-        { label: "vs prior period", value: changeLabel(row.changePct).text, muted: true },
       ]}
     />
   )

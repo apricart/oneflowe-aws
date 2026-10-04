@@ -538,6 +538,13 @@ export type ActivityActor = {
   email: string | null
   name: string | null
   role: string | null
+  /**
+   * True when the reader may not know who this was — an organization-scoped
+   * reader looking at an action taken by someone outside their organization.
+   * `id`, `email` and `name` are then withheld, not merely unknown. See
+   * `lib/activity-log-reach.ts`.
+   */
+  redacted: boolean
 }
 
 export type ActivityEvent = {
@@ -658,7 +665,29 @@ export function maskAuditMetadata(value: unknown, depth = 0, seen = new WeakSet<
 // Filters
 // ---------------------------------------------------------------------------
 
+/**
+ * How much of the trail a reader may see, decided by the server from the
+ * caller's own account — never from the request.
+ *
+ * * `platform` — every tenant and the platform rows that belong to none.
+ *   Super Admin.
+ * * `organization` — the rows of one tenant, with anyone outside it
+ *   anonymised. Head Office, for its own organization.
+ *
+ * Deliberately a separate thing from the `organizationId` *filter*: the filter
+ * is what a caller asked for and is optional; the reach is what the server
+ * permits and is required, so loosening one can never loosen the other.
+ */
+export type ActivityReach =
+  | { kind: "platform" }
+  | { kind: "organization"; organizationId: number }
+
+/** The filters a request asked for, before the server has fenced them. */
+export type ActivityRequestFilters = Omit<ActivityFilters, "reach" | "searchActorIds">
+
 export type ActivityFilters = {
+  /** Required: no query is built without saying whose trail it reads. */
+  reach: ActivityReach
   from: Date
   to: Date
   limit: number

@@ -13,6 +13,7 @@ import {
   PASSWORD_CHANGE_REQUIRED_CODE,
 } from "@/lib/password-change-pending"
 import { isViewerRole, VIEWER_AREAS, VIEWER_HOME } from "@/lib/viewer-access"
+import { ACTIVITY_LOG_ROLES } from "@/lib/activity-log-access"
 
 const protectedPrefixes = [
   "/approvals",
@@ -337,8 +338,9 @@ function rolePortalRedirect(role: string | undefined, pathname: string, budgetAl
  * Navigation only. Every one of these areas re-checks server-side in its route
  * handlers or its page layout, and this table never replaces that:
  *   * `/organizations` — Super Admin's platform administration.
- *   * `/activity` — the cross-tenant activity log; what it *returns* is decided
- *     by `lib/activity-log-access.ts`.
+ *   * `/activity` — the activity log, for Super Admin (every tenant) and Head
+ *     Office (its own); what it *returns* is decided by
+ *     `lib/activity-log-access.ts`.
  *   * `/branches` — Head Office's own branch administration.
  *   * `/join-requests` — the tenant's join code and join queue; who may decide
  *     one is `lib/organization-join-access.ts`, on the handlers.
@@ -350,17 +352,17 @@ function rolePortalRedirect(role: string | undefined, pathname: string, budgetAl
  * Kept as a table rather than a chain of `if`s so the whole set is readable in
  * one place, and so adding an area does not add a branch to `proxy`.
  */
-const ROLE_GATED_AREAS: ReadonlyArray<{ prefix: string; role: string; home: string }> = [
-  { prefix: "/organizations", role: "SUPER_ADMIN", home: "/login" },
-  { prefix: "/activity", role: "SUPER_ADMIN", home: "/dashboard" },
-  { prefix: "/branches", role: "HEAD_OFFICE", home: "/dashboard" },
-  { prefix: "/join-requests", role: "HEAD_OFFICE", home: "/dashboard" },
+const ROLE_GATED_AREAS: ReadonlyArray<{ prefix: string; roles: readonly string[]; home: string }> = [
+  { prefix: "/organizations", roles: ["SUPER_ADMIN"], home: "/login" },
+  { prefix: "/activity", roles: ACTIVITY_LOG_ROLES, home: "/dashboard" },
+  { prefix: "/branches", roles: ["HEAD_OFFICE"], home: "/dashboard" },
+  { prefix: "/join-requests", roles: ["HEAD_OFFICE"], home: "/dashboard" },
 ]
 
 /** Where to send a caller whose role does not hold the area, or null. */
 function roleGatedAreaRedirect(pathname: string, role: string | undefined): string | null {
   const area = ROLE_GATED_AREAS.find((candidate) => pathname.startsWith(candidate.prefix))
-  if (!area || role === area.role) return null
+  if (!area || (role !== undefined && area.roles.includes(role))) return null
   return area.home
 }
 

@@ -3,9 +3,14 @@ import { resolve } from "node:path"
 import { describe, expect, it } from "vitest"
 
 import {
+  TOKEN_ALREADY_SENT_CODE,
+  TOKEN_ORDER_NOT_APPROVED_CODE,
+  isTokenAlreadySent,
   isTokenHandoffEligible,
+  readTokenSendRefusal,
   tokenHandoffMessage,
   tokenHandoffSettlesNow,
+  tokenOrderNotApprovedMessage,
 } from "@/lib/order-token-handoff"
 
 const source = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8")
@@ -166,6 +171,106 @@ describe("the shared fulfilment transition", () => {
   })
 })
 
+describe("a token is emailed once per order", () => {
+  it("reads a recorded hand-off as already sent", () => {
+    expect(isTokenAlreadySent("2026-10-05T09:00:00.000Z")).toBe(true)
+    expect(isTokenAlreadySent(new Date("2026-10-05T09:00:00.000Z"))).toBe(true)
+  })
+
+  it("reads a missing, blank or invalid hand-off as not sent", () => {
+    expect(isTokenAlreadySent(null)).toBe(false)
+    expect(isTokenAlreadySent(undefined)).toBe(false)
+    expect(isTokenAlreadySent("")).toBe(false)
+    expect(isTokenAlreadySent("   ")).toBe(false)
+    expect(isTokenAlreadySent(new Date("not a date"))).toBe(false)
+  })
+
+  it("sends through the once-per-order guard on both hand-off routes", () => {
+    for (const path of [
+      "app/api/v1/orders/[id]/send-token-email/route.ts",
+      "app/api/v1/group-portal/orders/[groupOrderId]/tokens/route.ts",
+    ]) {
+      const route = source(path)
+      expect(route).toContain("await sendTokenEmailOncePerOrder(")
+      expect(route).toContain('sendOutcome.outcome === "already-sent"')
+      expect(route).toContain('sendOutcome.outcome === "in-progress"')
+      expect(route).toContain("code: TOKEN_ALREADY_SENT_CODE")
+      expect(route).toContain("{ status: 409 }")
+      // The email leaves only from inside the guard, before the settlement.
+      expect(route.indexOf("await sendTokenEmailOncePerOrder(")).toBeLessThan(
+        route.indexOf("await settleOrdersAfterTokenHandoff("),
+      )
+    }
+  })
+
+  it("emails a group order's tokens only for the orders not yet sent", () => {
+    const groupTokens = source("app/api/v1/group-portal/orders/[groupOrderId]/tokens/route.ts")
+
+    expect(groupTokens).toContain(".filter((entry) => unsentOrderIds.has(entry.orderId))")
+    expect(groupTokens).toContain("entries: shareable.entries.filter((entry) => sendOutcome.orderIds.has(entry.orderId)),")
+  })
+
+  it("holds each order under a namespaced advisory lock from the check to the record", () => {
+    const store = source("lib/server/order-token-handoff-store.ts")
+
+    expect(store).toContain("pg_try_advisory_xact_lock(")
+    expect(store).toContain('const TOKEN_EMAIL_LOCK_NAMESPACE = "oneflowe:order-token-email"')
+    expect(store).toContain("if (row && !row.handedOffAt) unsent.push(target)")
+    // A failed email records nothing, so the order stays free to retry.
+    expect(store).toContain('if (!delivery.delivered) return { outcome: "failed", reason: delivery.reason } as const')
+    expect(store.indexOf("const delivery = await send(unsentOrderIds)")).toBeLessThan(
+      store.indexOf("await writeTokenHandoff(savepoint, { ...target, handedOffByUserId })"),
+    )
+  })
+
+  it("allows each user twenty token emails per ten minutes", () => {
+    expect(source("lib/rate-limiter.ts")).toContain("email: { requests: 20, windowSeconds: 60 * 10 },")
+  })
+})
+
+describe("a send for an order that has moved on", () => {
+  it("names a fulfilled order as already fulfilled, whatever case the status arrives in", () => {
+    for (const status of ["FULFILLED", "fulfilled", " Partial ", "PARTIALLY_FULFILLED"]) {
+      expect(tokenOrderNotApprovedMessage(status)).toBe(
+        "This order has already been fulfilled, so its token no longer needs to be sent.",
+      )
+    }
+  })
+
+  it("names every other status in plain words, and copes with none", () => {
+    expect(tokenOrderNotApprovedMessage("PENDING")).toBe("This order has not been approved yet, so it has no token to send.")
+    expect(tokenOrderNotApprovedMessage("REFUNDED")).toBe("This order is refunded, so it has no token to send.")
+    expect(tokenOrderNotApprovedMessage(null)).toBe("A token can only be sent for an active order.")
+  })
+
+  it("reads the two out-of-date refusals and nothing else", () => {
+    expect(readTokenSendRefusal(409, { code: TOKEN_ALREADY_SENT_CODE, error: "gone" }))
+      .toEqual({ kind: "already-sent", message: "gone" })
+    expect(readTokenSendRefusal(409, { code: TOKEN_ORDER_NOT_APPROVED_CODE, error: "moved", status: "fulfilled" }))
+      .toEqual({ kind: "not-approved", message: "moved", status: "FULFILLED" })
+    // A missing message falls back to the shared wording.
+    expect(readTokenSendRefusal(409, { code: TOKEN_ORDER_NOT_APPROVED_CODE, status: "FULFILLED" }))
+      .toMatchObject({ message: "This order has already been fulfilled, so its token no longer needs to be sent." })
+    // Real failures stay failures.
+    expect(readTokenSendRefusal(400, { code: TOKEN_ORDER_NOT_APPROVED_CODE })).toBeNull()
+    expect(readTokenSendRefusal(409, { code: "TOKEN_SEND_IN_PROGRESS" })).toBeNull()
+    expect(readTokenSendRefusal(409, null)).toBeNull()
+  })
+
+  it("tells only someone who could have sent the token what the order is now", () => {
+    const tokenEmail = source("app/api/v1/orders/[id]/send-token-email/route.ts")
+
+    // The token policy is asked as though the order were approved, so the
+    // requester roles reach the status gate; anyone it refuses still gets 403.
+    expect(tokenEmail).toContain("orderStatus: TOKEN_HANDOFF_STATUS,")
+    expect(tokenEmail.indexOf("if (!canShareToken) return error(")).toBeLessThan(
+      tokenEmail.indexOf("if (!isTokenHandoffEligible(order.status)) {"),
+    )
+    expect(tokenEmail).toContain("code: TOKEN_ORDER_NOT_APPROVED_CODE,")
+    expect(tokenEmail).toContain("status: currentStatus,")
+  })
+})
+
 describe("where a hand-off is remembered", () => {
   it("writes the hand-off only on an approved order in the authorized scope", () => {
     const store = source("lib/server/order-token-handoff-store.ts")
@@ -310,11 +415,17 @@ describe("fulfilment on token hand-off, per role", () => {
     expect(autoFulfil).not.toContain("token_handoff")
   })
 
-  it("does not widen who may see a token in the first place", () => {
+  it("allows every operational role only after an order is approved", () => {
     const policy = source("lib/fulfillment-token-access.ts")
 
-    expect(policy).toContain('const REQUESTER_ROLES = new Set(["ORDER_PORTAL", "GROUP_ORDER_PORTAL"])')
-    expect(policy).toContain("orderCreatedByUserId === userId")
-    expect(policy).toContain('String(orderStatus || "").toUpperCase() === "APPROVED"')
+    for (const role of ["HEAD_OFFICE", "GROUP_USER", "BRANCH_ADMIN", "GROUP_ORDER_PORTAL", "ORDER_PORTAL"]) {
+      expect(policy).toContain(`"${role}"`)
+    }
+    expect(policy).toContain('String(orderStatus || "").trim().toUpperCase() === "APPROVED"')
+    // Order Portal still has an ownership/group-order read fence before the
+    // route releases a token for a guessed id.
+    const tokenEmail = source("app/api/v1/orders/[id]/send-token-email/route.ts")
+    expect(tokenEmail).toContain("canOrderPortalReadOrder({ viewerUserId: userId, order })")
+    expect(tokenEmail).toContain("if (!hasOrderVisibilityForTokenEmail(user.role, user.id, order)) {")
   })
 })

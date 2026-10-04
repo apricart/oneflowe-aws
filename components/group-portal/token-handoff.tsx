@@ -5,6 +5,7 @@ import { Copy, Mail, ShieldCheck } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { useToast } from "@/hooks/use-toast"
+import { TOKEN_SENT_LABEL, readTokenSendRefusal } from "@/lib/order-token-handoff"
 
 /**
  * The fulfilment token and its hand-off to admin operations.
@@ -44,7 +45,7 @@ export function TokenHandoff({
   tid: string
   token: string
   branchName?: string
-  /** Called once the hand-off has settled the order, so the surface can refresh. */
+  /** Called once the order has moved on — settled by this hand-off, or found already settled — so the surface can refresh. */
   onFulfilled?: () => void
 }>) {
   const { toast } = useToast()
@@ -74,6 +75,20 @@ export function TokenHandoff({
         headers: { "Content-Type": "application/json" },
       })
       const payload = await res.json().catch(() => ({}))
+
+      // A token is emailed once per order, and only while the order is
+      // approved. Either refusal means this panel is out of date, so it stops
+      // offering the send and lets the surface refresh instead of failing.
+      const refusal = readTokenSendRefusal(res.status, payload)
+      if (refusal) {
+        setSent(true)
+        toast({
+          title: refusal.kind === "already-sent" ? TOKEN_SENT_LABEL : "Order already updated",
+          description: `${label} — ${refusal.message}`,
+        })
+        if (refusal.kind === "not-approved") onFulfilled?.()
+        return
+      }
 
       if (!res.ok) {
         toast({
@@ -132,7 +147,7 @@ export function TokenHandoff({
           variant="outline"
           className="h-8 gap-1 rounded-lg"
           onClick={sendToken}
-          disabled={sending}
+          disabled={sending || sent}
           aria-label={`Email fulfilment token for ${label} to admin operations`}
         >
           <Mail className="h-3.5 w-3.5" />

@@ -11,12 +11,17 @@ import {
   clampPageSize,
   decodeActivityCursor,
   resolveWindow,
-  type ActivityFilters,
+  type ActivityRequestFilters,
   type ActivitySource,
 } from "@/lib/activity-log"
 
 /**
- * The activity log's query string, validated into `ActivityFilters`.
+ * The activity log's query string, validated into `ActivityRequestFilters`.
+ *
+ * What this returns is what the caller *asked for*. It carries no reach: whose
+ * trail may be read is decided from the caller's account in
+ * `lib/activity-log-access.ts`, and only that turns these into the
+ * `ActivityFilters` a query can be built from.
  *
  * Kept out of the route handler and free of any database import so the whole
  * parse — every bound, every allowlist, every refusal — is unit-testable
@@ -76,7 +81,7 @@ export const activityLogQuerySchema = z
 export type ActivityLogQuery = z.infer<typeof activityLogQuerySchema>
 
 export type ActivityRequestResult =
-  | { ok: true; filters: ActivityFilters }
+  | { ok: true; filters: ActivityRequestFilters }
   | { ok: false; error: string; field?: string }
 
 /** The first issue, named by its field, so a 400 says which parameter was wrong. */

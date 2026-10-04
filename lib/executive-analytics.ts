@@ -1071,6 +1071,12 @@ export type SideBySidePanel = {
    * measure. Beside a budget column it labels the value column alone.
    */
   dualValueLabels?: boolean
+  /**
+   * What the panel's slot says while a single product is focused, for a panel
+   * that is `hiddenForSingleProduct`. The slot stays on screen as a note rather
+   * than collapsing, so the panels after it keep their places in the grid.
+   */
+  withheldNote?: string
 }
 
 /** Fewer compared entities than this and a split would show nothing to compare. */
@@ -1120,6 +1126,7 @@ export const SIDE_BY_SIDE_PANELS: SideBySidePanel[] = [
     question: "Which product categories were ordered the most? Each bar adds up every product in that category.",
     colorful: true,
     hiddenForSingleProduct: true,
+    withheldNote: "A single product belongs to one category, so there is nothing to compare here. Choose more products, or clear the selection, to see it.",
     dualValueLabels: true,
   },
   {
@@ -1172,6 +1179,7 @@ export const SIDE_BY_SIDE_PANELS: SideBySidePanel[] = [
     question: "How each product's orders went up or down from month to month. Each line is one product.",
     colorful: true,
     hiddenForSingleProduct: true,
+    withheldNote: "With one product chosen, its day-by-day consumption is shown below instead. Choose more products, or clear the selection, to see this.",
   },
   {
     id: "day-by-day",
@@ -1192,4 +1200,25 @@ export function panelsForFocus(focusedProductCount: number): SideBySidePanel[] {
     if (panel.hiddenForSingleProduct && single) return false
     return true
   })
+}
+
+/** One place in the Product Performance grid: a panel, or the note standing in for it. */
+export type SideBySidePanelSlot = { panel: SideBySidePanel; withheld: boolean }
+
+/**
+ * The grid's places for the current focus, in registry order.
+ *
+ * Every panel `panelsForFocus` renders, plus a withheld slot where a
+ * `hiddenForSingleProduct` panel would stand. Focusing one product therefore
+ * never moves the panels after it into a different place — a reader who
+ * changes a filter finds each chart where they left it. A withheld slot fetches
+ * nothing and is not part of the download; `panelsForFocus` stays the answer to
+ * "what is drawn". The single-product day panel is last in the registry, so it
+ * joins and leaves at the end without displacing anything.
+ */
+export function panelSlotsForFocus(focusedProductCount: number): SideBySidePanelSlot[] {
+  const shown = new Set(panelsForFocus(focusedProductCount).map((panel) => panel.id))
+  return SIDE_BY_SIDE_PANELS
+    .filter((panel) => shown.has(panel.id) || panel.hiddenForSingleProduct)
+    .map((panel) => ({ panel, withheld: !shown.has(panel.id) }))
 }

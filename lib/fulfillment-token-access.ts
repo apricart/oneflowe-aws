@@ -1,60 +1,39 @@
 type FulfillmentTokenAccessInput = {
   role?: string | null
-  userId?: string | null
   orderStatus?: string | null
+  /**
+   * Retained for call-site compatibility. Identity and branch authorization
+   * belong to the server query/route that loaded the order; this pure policy
+   * only decides whether a role may use a token after that scope check passed.
+   */
+  userId?: string | null
   orderCreatedByUserId?: string | null
   orderApprovedByUserId?: string | null
   configuredApproverRole?: string | null
 }
 
 /**
- * The two roles that raise orders rather than decide them. Both see a token
- * only for their own approved order, which is strictly narrower than any
- * administrator branch above.
+ * Roles that may complete the ordering side of an approved order by handing
+ * its fulfillment token to admin operations.
+ *
+ * This is deliberately a role/status decision, not a scope decision. Every
+ * caller must first restrict the order to the actor's tenant and branch reach:
+ * Head Office to its tenant, single-branch roles to their branch, group roles
+ * to their live assignments, and Order Portal to an order it may read. Keeping
+ * that boundary server-side lets all five operational roles fulfill orders
+ * without turning a token into a cross-tenant or cross-branch credential.
  */
-const REQUESTER_ROLES = new Set(["ORDER_PORTAL", "GROUP_ORDER_PORTAL"])
+const TOKEN_HANDOFF_ROLES = new Set([
+  "HEAD_OFFICE",
+  "GROUP_USER",
+  "BRANCH_ADMIN",
+  "GROUP_ORDER_PORTAL",
+  "ORDER_PORTAL",
+])
 
-export function canViewFulfillmentToken({
-  role,
-  userId,
-  orderStatus,
-  orderCreatedByUserId,
-  orderApprovedByUserId,
-  configuredApproverRole,
-}: FulfillmentTokenAccessInput): boolean {
+export function canViewFulfillmentToken(input: FulfillmentTokenAccessInput): boolean {
+  const { role, orderStatus } = input
   if (role === "SUPER_ADMIN") return true
-
-  if (role === "BRANCH_ADMIN") {
-    return configuredApproverRole === undefined
-      ? true
-      : configuredApproverRole === "BRANCH_ADMIN"
-  }
-
-  if (role === "HEAD_OFFICE") {
-    return configuredApproverRole === "HEAD_OFFICE"
-      || (configuredApproverRole === undefined && Boolean(userId && orderApprovedByUserId === userId))
-  }
-
-  // A GROUP_USER's authority comes from its branch assignments rather than the
-  // tenant's configured approver role, so the configured role is not consulted
-  // here. The branch scope itself is enforced by the caller — every surface
-  // that reaches this point has already restricted the order to the approver's
-  // branches. The token only exists once an order is approved, so this stays
-  // narrower than the BRANCH_ADMIN branch above rather than wider.
-  if (role === "GROUP_USER") {
-    return String(orderStatus || "").toUpperCase() === "APPROVED"
-  }
-
-  // The requester roles reach a token only through an order they raised
-  // themselves, and only once it is approved. GROUP_ORDER_PORTAL raises orders
-  // across a set of assigned branches rather than one pinned branch, so — as
-  // with GROUP_USER above — the branch scope is enforced by the caller; the
-  // creator comparison here is what keeps one requester out of another's token.
-  return Boolean(
-    REQUESTER_ROLES.has(String(role ?? "")) &&
-    String(orderStatus || "").toUpperCase() === "APPROVED" &&
-    userId &&
-    orderCreatedByUserId === userId
-  )
+  return TOKEN_HANDOFF_ROLES.has(String(role ?? ""))
+    && String(orderStatus || "").trim().toUpperCase() === "APPROVED"
 }
-

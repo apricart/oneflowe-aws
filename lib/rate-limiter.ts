@@ -35,7 +35,7 @@ const RATE_LIMITS = {
     report: { requests: 10, windowSeconds: 60 * 10 },    // 10 per 10 minutes
     order: { requests: 20, windowSeconds: 60 },           // 20 per minute
     refund: { requests: 10, windowSeconds: 60 * 10 },    // 10 per 10 minutes
-    email: { requests: 5, windowSeconds: 60 * 10 },      // 5 per 10 minutes
+    email: { requests: 20, windowSeconds: 60 * 10 },     // 20 per 10 minutes
 } as const
 
 export type RateLimitType = keyof typeof RATE_LIMITS

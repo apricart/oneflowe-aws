@@ -11,6 +11,7 @@ import {
   type ActionRule,
   type ActivityCursor,
   type ActivityFilters,
+  type ActivityReach,
   type ActivitySource,
 } from "@/lib/activity-log"
 
@@ -35,6 +36,10 @@ import {
  * are necessarily within the newest *n* of each table, so the per-branch limit
  * loses nothing — and nothing here needs `OFFSET`, which on a table that grows
  * without bound costs a scan of everything it skips.
+ *
+ * **The tenant fence is in every branch.** `filters.reach` is required, and an
+ * organization reach adds `organization_id = $org` to all three branches
+ * before any caller-supplied filter — see `plans/OF-AUDIT-head-office-activity-log.md`.
  *
  * Every value reaching the database is a bound parameter. The only text
  * assembled in code is structural — table names, column names and the rule
@@ -249,6 +254,14 @@ function branchFilters(shape: SourceShape, filters: ActivityFilters): SQL[] {
   const time = column(shape, shape.time)
   const upperAction = sql`upper(${column(shape, shape.action)})`
 
+  // The tenant fence comes first and does not depend on any filter the caller
+  // sent. An organization reader's rows are exactly those tagged with that
+  // organization, in every source; a row tagged with none (a platform action)
+  // fails the equality and is never theirs.
+  if (filters.reach.kind === "organization") {
+    conditions.push(sql`${column(shape, shape.organizationId)} = ${filters.reach.organizationId}`)
+  }
+
   conditions.push(sql`${time} >= ${filters.from}`, sql`${time} <= ${filters.to}`)
 
   if (filters.cursor) {
@@ -287,7 +300,9 @@ function branchFilters(shape: SourceShape, filters: ActivityFilters): SQL[] {
   }
 
   if (filters.search !== null) {
-    conditions.push(searchPredicate(shape, filters.search, filters.searchActorIds ?? []))
+    conditions.push(
+      searchPredicate(shape, filters.search, filters.searchActorIds ?? [], filters.reach),
+    )
   }
 
   return conditions
@@ -305,14 +320,24 @@ function searchPredicate(
   shape: SourceShape,
   search: string,
   searchActorIds: readonly string[],
+  reach: ActivityReach,
 ): SQL {
   const needle = search.trim().toUpperCase()
   const targets: SQL[] = [sql`upper(${column(shape, shape.action)})`]
 
   if (shape.entity) targets.push(sql`upper(coalesce(${column(shape, shape.entity)}, ''))`)
   if (shape.entityId) targets.push(sql`upper(coalesce(${column(shape, shape.entityId)}::text, ''))`)
-  if (shape.actorEmail) targets.push(sql`upper(coalesce(${column(shape, shape.actorEmail)}, ''))`)
-  targets.push(sql`upper(coalesce(${column(shape, shape.actorId)}::text, ''))`)
+
+  // The trail's own actor columns are searched for the whole-platform reader
+  // only. An organization reader sees some actors anonymised, and a search
+  // that still matched their email or id would answer "does the hidden
+  // person's address contain this?" one guess at a time. That reader finds
+  // people through `searchActorIds` alone, which `loadActivityPage` resolves
+  // within their own organization.
+  if (reach.kind === "platform") {
+    if (shape.actorEmail) targets.push(sql`upper(coalesce(${column(shape, shape.actorEmail)}, ''))`)
+    targets.push(sql`upper(coalesce(${column(shape, shape.actorId)}::text, ''))`)
+  }
 
   const tests = targets.map((target) => sql`position(${needle} in ${target}) > 0`)
 

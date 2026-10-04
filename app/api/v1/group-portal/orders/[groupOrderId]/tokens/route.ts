@@ -1,11 +1,20 @@
+import { NextResponse } from "next/server"
+
 import { error, ok } from "@/lib/api"
 import { getCurrentUser } from "@/lib/auth"
 import { sendGroupOrderTokensEmail } from "@/lib/email"
 import { ADMIN_OPERATIONS_EMAIL } from "@/lib/email/recipients"
-import { tokenHandoffMessage } from "@/lib/order-token-handoff"
+import {
+  GROUP_TOKENS_ALREADY_SENT_MESSAGE,
+  TOKEN_ALREADY_SENT_CODE,
+  TOKEN_SEND_IN_PROGRESS_CODE,
+  TOKEN_SEND_IN_PROGRESS_MESSAGE,
+  tokenHandoffMessage,
+} from "@/lib/order-token-handoff"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { requireGroupOrderPortal } from "@/lib/server/group-order-access"
 import { settleOrdersAfterTokenHandoff } from "@/lib/server/order-fulfillment"
+import { sendTokenEmailOncePerOrder } from "@/lib/server/order-token-handoff-store"
 import {
   loadShareableGroupTokens,
   recordGroupTokenHandoff,
@@ -21,8 +30,10 @@ export const dynamic = "force-dynamic"
  * reach: each token released here belongs to an approved order this same user
  * created, in their own tenant, at a branch still in their live assignments,
  * decided by the same `canViewFulfillmentToken` policy — this route simply
- * collects them rather than making the user send twenty separate emails and
- * exhaust the shared email budget after the fifth.
+ * collects them rather than making the user send twenty separate emails.
+ *
+ * Each token is emailed once. A repeat send carries only the branch orders
+ * whose token has not gone yet, and is refused when every one already has.
  *
  * The recipient is the configured admin operations mailbox and is never taken
  * from the request, so this cannot be used to send tokens anywhere else.
@@ -47,37 +58,68 @@ export async function POST(
     return error("No admin operations mailbox is configured for token hand-off", 400)
   }
 
-  const bundle = await loadShareableGroupTokens({
+  const shareable = await loadShareableGroupTokens({
     userId: actor.scope.userId,
     organizationId: actor.organizationId,
     groupOrderId: parsedId,
   })
-  if (!bundle) return error("Group order not found", 404)
+  if (!shareable) return error("Group order not found", 404)
 
-  if (bundle.entries.length === 0) {
+  if (shareable.entries.length === 0) {
     return error("No approved order in this group order has a fulfilment token to share", 400)
   }
 
   const user = await getCurrentUser()
 
-  try {
-    await sendGroupOrderTokensEmail({
-      to: ADMIN_OPERATIONS_EMAIL,
-      reference: bundle.reference,
-      groupName: bundle.groupName,
-      sharedBy: String(user?.email || "A group order portal user"),
-      entries: bundle.entries.map((entry) => ({
-        tid: entry.tid,
-        branchName: entry.branchName,
-        token: entry.token,
-        items: entry.items,
-      })),
-    })
-  } catch (emailError) {
-    const message = emailError instanceof Error
-      ? `${emailError.name}: ${emailError.message}`
-      : String(emailError)
-    return error(`Failed to send token email through AWS SES: ${message}`, 400)
+  // Each token is emailed once: the message carries only the orders whose token
+  // has not reached the administrator yet, and the bundle below is narrowed to
+  // the same set so the settlement and the trail describe exactly what went.
+  const sendOutcome = await sendTokenEmailOncePerOrder(
+    shareable.entries.map((entry) => ({
+      orderId: entry.orderId,
+      organizationId: shareable.organizationId,
+      branchId: entry.branchId,
+    })),
+    actor.scope.userId,
+    async (unsentOrderIds) => {
+      try {
+        await sendGroupOrderTokensEmail({
+          to: ADMIN_OPERATIONS_EMAIL,
+          reference: shareable.reference,
+          groupName: shareable.groupName,
+          sharedBy: String(user?.email || "A group order portal user"),
+          entries: shareable.entries
+            .filter((entry) => unsentOrderIds.has(entry.orderId))
+            .map((entry) => ({
+              tid: entry.tid,
+              branchName: entry.branchName,
+              token: entry.token,
+              items: entry.items,
+            })),
+        })
+        return { delivered: true }
+      } catch (emailError) {
+        const reason = emailError instanceof Error
+          ? `${emailError.name}: ${emailError.message}`
+          : String(emailError)
+        return { delivered: false, reason }
+      }
+    },
+  )
+
+  if (sendOutcome.outcome === "already-sent") {
+    return NextResponse.json({ error: GROUP_TOKENS_ALREADY_SENT_MESSAGE, code: TOKEN_ALREADY_SENT_CODE }, { status: 409 })
+  }
+  if (sendOutcome.outcome === "in-progress") {
+    return NextResponse.json({ error: TOKEN_SEND_IN_PROGRESS_MESSAGE, code: TOKEN_SEND_IN_PROGRESS_CODE }, { status: 409 })
+  }
+  if (sendOutcome.outcome === "failed") {
+    return error(`Failed to send token email through AWS SES: ${sendOutcome.reason}`, 400)
+  }
+
+  const bundle = {
+    ...shareable,
+    entries: shareable.entries.filter((entry) => sendOutcome.orderIds.has(entry.orderId)),
   }
 
   // Every token in this message has now reached the administrator, so each

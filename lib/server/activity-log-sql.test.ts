@@ -45,6 +45,7 @@ function render(fragment: ReturnType<typeof sql>) {
 
 function baseFilters(overrides: Partial<ActivityFilters> = {}): ActivityFilters {
   return {
+    reach: { kind: "platform" },
     from: new Date("2026-09-01T00:00:00.000Z"),
     to: new Date("2026-09-08T00:00:00.000Z"),
     limit: ACTIVITY_PAGE_SIZE_DEFAULT,
@@ -292,5 +293,66 @@ describe("activityPageQuery", () => {
     for (const identifier of rawIdentifiers) {
       expect(allowed.has(identifier.replaceAll('"', ""))).toBe(true)
     }
+  })
+})
+
+describe("the organization fence", () => {
+  const OWN = { kind: "organization", organizationId: 4242 } as const
+
+  /** The `where` clause of each branch, in union order. */
+  function whereClauses(text: string): string[] {
+    return text.split(/ union all /i).map((branch) => branch.slice(branch.indexOf("where")))
+  }
+
+  it("puts the tenant into every branch of the union, as a parameter", () => {
+    const rendered = render(activityPageQuery(baseFilters({ reach: OWN })))
+    const clauses = whereClauses(rendered.sql)
+    expect(clauses).toHaveLength(ACTIVITY_SOURCES.length)
+    for (const [index, alias] of ["al", "sl", "gal"].entries()) {
+      expect(clauses[index]).toContain(`${alias}."organization_id" = $`)
+    }
+    expect(rendered.params).toContain(4242)
+    expect(rendered.sql).not.toContain("4242")
+  })
+
+  it("adds nothing for the whole-platform reader", () => {
+    const rendered = render(activityPageQuery(baseFilters()))
+    expect(rendered.sql).not.toMatch(/"organization_id" = /)
+  })
+
+  it("keeps the fence when the caller also filters by organization", () => {
+    // The filter is what was asked for; the fence is what is allowed. Both stay.
+    const rendered = render(activityPageQuery(baseFilters({ reach: OWN, organizationId: 4242 })))
+    const fences = rendered.sql.match(/"organization_id" = \$\d+/g) ?? []
+    expect(fences).toHaveLength(ACTIVITY_SOURCES.length * 2)
+  })
+
+  it("keeps the fence in a branch filtered to one source and one branch", () => {
+    const rendered = render(
+      activityPageQuery(baseFilters({ reach: OWN, sources: ["audit"], branchId: 9 })),
+    )
+    expect(rendered.sql).toMatch(/al\."organization_id" = \$\d+/)
+    expect(rendered.params).toContain(4242)
+  })
+
+  it("does not search the trail's own actor columns for an organization reader", () => {
+    // Otherwise a term could confirm, one guess at a time, what an anonymised
+    // actor's email contains.
+    const rendered = render(activityPageQuery(baseFilters({ reach: OWN, search: "apricart" })))
+    expect(rendered.sql).not.toMatch(/upper\(coalesce\(sl\."user_email"/)
+    expect(rendered.sql).not.toMatch(/upper\(coalesce\(\w+\."(user_id|performed_by_user_id)"::text/)
+  })
+
+  it("still searches them for the whole-platform reader", () => {
+    const rendered = render(activityPageQuery(baseFilters({ search: "apricart" })))
+    expect(rendered.sql).toMatch(/upper\(coalesce\(sl\."user_email"/)
+  })
+
+  it("still lets an organization reader find people through the resolved ids", () => {
+    const ids = ["11111111-1111-4111-8111-111111111111"]
+    const rendered = render(
+      activityPageQuery(baseFilters({ reach: OWN, search: "ali", searchActorIds: ids })),
+    )
+    expect(rendered.params).toContain(ids[0])
   })
 })
