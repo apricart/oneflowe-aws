@@ -476,7 +476,7 @@ describe.skipIf(!hasTestDatabase)("blocking new orders on unpaid invoices", () =
       await patchOrganization(f.organizationId, { blockOrderingOnUnpaidInvoices: true })
       const before = (await toggleAudits(f.organizationId)).length
       await patchOrganization(f.organizationId, { blockOrderingOnUnpaidInvoices: true })
-      expect((await toggleAudits(f.organizationId)).length).toBe(before)
+      expect(await toggleAudits(f.organizationId)).toHaveLength(before)
     })
 
     it.each([

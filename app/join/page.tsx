@@ -136,7 +136,7 @@ function CodeStep({ onResolved }: Readonly<{ onResolved: (code: string, options:
   const [failure, setFailure] = useState<string | null>(null)
   const [domainMissingFor, setDomainMissingFor] = useState<string | null>(null)
 
-  const submit = async (event: React.FormEvent<HTMLFormElement>) => {
+  const submit = async (event: React.SubmitEvent<HTMLFormElement>) => {
     event.preventDefault()
     const normalized = normalizeJoinCode(code)
     const localError = joinCodeError(normalized)

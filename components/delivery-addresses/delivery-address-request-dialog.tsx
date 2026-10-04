@@ -88,7 +88,7 @@ export function DeliveryAddressRequestDialog({
     (event: { target: { value: string } }) =>
       setForm((current) => ({ ...current, [field]: event.target.value }))
 
-  const submit = async (event: React.FormEvent) => {
+  const submit = async (event: React.SubmitEvent) => {
     event.preventDefault()
     if (busy) return
 

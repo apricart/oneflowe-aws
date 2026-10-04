@@ -90,7 +90,7 @@ export default function CategoriesPage() {
 
             if (res.ok) {
                 toast({ title: "Success", description: "Category created successfully" })
-                mutate()
+                void mutate()
                 closeDialog()
             } else {
                 toast({ title: "Error", description: data.error || "Failed to create category", variant: "destructive" })
@@ -120,7 +120,7 @@ export default function CategoriesPage() {
 
             if (res.ok) {
                 toast({ title: "Success", description: "Category updated successfully" })
-                mutate()
+                void mutate()
                 closeDialog()
             } else {
                 toast({ title: "Error", description: data.error || "Failed to update category", variant: "destructive" })
@@ -145,7 +145,7 @@ export default function CategoriesPage() {
 
             if (res.ok) {
                 toast({ title: "Success", description: "Category deleted successfully" })
-                mutate()
+                void mutate()
                 closeDialog()
             } else {
                 toast({ title: "Cannot Delete", description: data.error, variant: "destructive" })
@@ -339,8 +339,8 @@ export default function CategoriesPage() {
                                 placeholder="Enter category name"
                                 onKeyDown={(e) => {
                                     if (e.key === "Enter" && !isSubmitting) {
-                                        if (dialogMode === "create") handleCreateCategory()
-                                        else handleEditCategory()
+                                        if (dialogMode === "create") void handleCreateCategory()
+                                        else void handleEditCategory()
                                     }
                                 }}
                             />

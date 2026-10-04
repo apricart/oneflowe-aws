@@ -70,9 +70,13 @@ function Button({
 
     if (result instanceof Promise) {
       setInternalPending(true)
-      result.finally(() => {
-        setInternalPending(false)
-      })
+      result
+        .finally(() => {
+          setInternalPending(false)
+        })
+        // A handler that rejects is still reported the way an uncaught error
+        // would be, rather than as a stray unhandled rejection from here.
+        .catch((error: unknown) => reportError(error))
     }
   }
 

@@ -147,14 +147,14 @@ export default function RefundsPage() {
             }
         }
 
-        fetchPendingRefunds()
+        void fetchPendingRefunds()
     }, [pendingRefundsVersion])
 
     // Auto-search on mount if tid param exists
     useEffect(() => {
         const tid = searchParams.get("tid")
         if (tid) {
-            performSearch(tid)
+            void performSearch(tid)
         }
     }, [searchParams])
 
@@ -287,7 +287,7 @@ export default function RefundsPage() {
 
             setRefundDialogOpen(false)
             setSelectedItems(new Map())
-            searchOrder()
+            void searchOrder()
             setPendingRefundsVersion(v => v + 1)
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : "Failed to process refund"
@@ -330,7 +330,7 @@ export default function RefundsPage() {
             setPendingRefundsVersion(v => v + 1)
             // If the cancelled order is currently shown in search, refresh it
             if (order?.tid === cancelTarget.tid) {
-                searchOrder()
+                void searchOrder()
             }
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : "Failed to cancel refund request"
@@ -551,7 +551,7 @@ export default function RefundsPage() {
                                                     size="sm"
                                                     onClick={() => {
                                                         setSearchQuery(refund.tid)
-                                                        performSearch(refund.tid, refund)
+                                                        void performSearch(refund.tid, refund)
                                                     }}
                                                 >
                                                     Review

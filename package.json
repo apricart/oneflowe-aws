@@ -76,6 +76,8 @@
     "test:unit": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:coverage": "vitest run --coverage",
+    "test:integration:coverage": "vitest run --config vitest.integration.config.ts --coverage",
     "test:all": "npm run test:unit && npm run test:integration",
     "typecheck": "tsc --noEmit"
   },
@@ -163,6 +165,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^5.1.4",
+    "@vitest/coverage-v8": "4.1.10",
     "dotenv": "^17.2.3",
     "drizzle-kit": "0.31.10",
     "eslint": "10.8.0",

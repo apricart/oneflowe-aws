@@ -8,7 +8,6 @@ import {
   actionLabel,
   activityEventId,
   categoryOf,
-  decodeActivityCursor,
   encodeActivityCursor,
   entityLabel,
   isActivitySource,
@@ -245,4 +244,4 @@ export async function loadActivityPage(
   }
 }
 
-export { decodeActivityCursor }
+export { decodeActivityCursor } from "@/lib/activity-log"

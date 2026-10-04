@@ -175,7 +175,7 @@ export default function AssignProductPage() {
             toast({ title: "Success", description: "Product assigned successfully" })
             setPriceDialogOpen(false)
             setSelectedProduct(null)
-            mutateAssignments()
+            void mutateAssignments()
         } catch (error: any) {
             toast({ title: "Error", description: error.message, variant: "destructive" })
         } finally {
@@ -230,7 +230,7 @@ export default function AssignProductPage() {
             setPropagationOpen(false)
             setEditDialogOpen(false)
             setSelectedAssignment(null)
-            mutateAssignments()
+            void mutateAssignments()
         } catch (error: any) {
             toast({ title: "Error", description: error.message, variant: "destructive" })
         } finally {

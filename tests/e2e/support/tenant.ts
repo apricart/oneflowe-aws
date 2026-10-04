@@ -192,7 +192,7 @@ function personRow(
     branchId,
     fullName,
     firstName: parts.slice(0, -1).join(" ") || parts[0],
-    lastName: parts.length > 1 ? parts[parts.length - 1] : "User",
+    lastName: parts.length > 1 ? parts.at(-1) ?? "User" : "User",
     isActive: true,
     budgetAllocationEnabled: extra.budgetAllocationEnabled ?? false,
     mfaEnabled: false,

@@ -360,8 +360,7 @@ function UnderReviewNotice({ request }: Readonly<{ request: ProductRequestListIt
       <ScanSearch aria-hidden className="mt-0.5 h-5 w-5 shrink-0 text-sky-600" />
       <div className="min-w-0 space-y-1">
         <p className="text-sm font-semibold text-sky-900 dark:text-sky-200">
-          Under review
-          <span className="font-normal text-muted-foreground"> · since {dateTime(request.reviewStartedAt)}</span>
+          Under review<span className="font-normal text-muted-foreground"> · since {dateTime(request.reviewStartedAt)}</span>
         </p>
         <p className="text-sm text-slate-700 dark:text-slate-300">
           {request.reviewStartedBy?.fullName || "Super Admin"} is reviewing this request. The decision will appear here.

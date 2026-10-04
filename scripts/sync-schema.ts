@@ -202,4 +202,4 @@ async function syncSchema() {
   }
 }
 
-syncSchema()
+void syncSchema()

@@ -46,10 +46,10 @@ export const JOINABLE_ROLE_LABELS: Record<JoinableRole, string> = {
 }
 
 /** Roles pinned to exactly one branch, mirroring `lib/server/multi-branch-scope.ts`. */
-const SINGLE_BRANCH_JOINABLE_ROLES: readonly JoinableRole[] = ["BRANCH_ADMIN", "ORDER_PORTAL"]
+const SINGLE_BRANCH_JOINABLE_ROLES: ReadonlySet<JoinableRole> = new Set<JoinableRole>(["BRANCH_ADMIN", "ORDER_PORTAL"])
 
 export function isSingleBranchJoinableRole(role: JoinableRole): boolean {
-  return SINGLE_BRANCH_JOINABLE_ROLES.includes(role)
+  return SINGLE_BRANCH_JOINABLE_ROLES.has(role)
 }
 
 export const JOIN_REQUEST_STATUSES = ["pending", "approved", "rejected"] as const

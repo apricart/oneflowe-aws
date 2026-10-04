@@ -60,3 +60,6 @@ next-env.d.ts
 *.xls
 *.xlsx
 *.xlsm
+
+# Test coverage output (npm run test:coverage / test:integration:coverage)
+/coverage/

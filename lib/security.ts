@@ -5,7 +5,7 @@ export const MAX_STORED_IMAGE_URL_LENGTH = 6_000_000
 
 export function containsControlCharacters(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index)
+    const code = value.codePointAt(index) ?? 0
     if (code <= 0x1f || code === 0x7f) return true
   }
   return false

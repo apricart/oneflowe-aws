@@ -30,7 +30,7 @@ function resolveAllowedBudgetOrganization(userRole: string, userOrgId: number | 
 }
 
 /** Roles whose budget view is their own branch and nothing else. */
-const SINGLE_BRANCH_BUDGET_ROLES = ["BRANCH_ADMIN", "BRANCH_MANAGER", "ORDER_PORTAL"]
+const SINGLE_BRANCH_BUDGET_ROLES = new Set(["BRANCH_ADMIN", "BRANCH_MANAGER", "ORDER_PORTAL"])
 
 async function resolveBudgetBranchIds(context: any) {
     let branchIds: number[] = []
@@ -42,7 +42,7 @@ async function resolveBudgetBranchIds(context: any) {
     // A single-branch role is pinned to its own branch even when the query
     // string names another: the request states a preference, the session
     // states the right.
-    if (SINGLE_BRANCH_BUDGET_ROLES.includes(context.userRole)) {
+    if (SINGLE_BRANCH_BUDGET_ROLES.has(context.userRole)) {
         return context.userBranchId ? [Number(context.userBranchId)] : []
     }
     if (branchIds.length === 0 && context.allowedOrgId) {

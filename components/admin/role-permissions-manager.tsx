@@ -121,7 +121,7 @@ export function RolePermissionsManager({ roleId, roleName }: Readonly<RolePermis
       })
       
       setHasChanges(false)
-      mutate(`/api/v1/roles/permissions?roleId=${selectedRole}`)
+      void mutate(`/api/v1/roles/permissions?roleId=${selectedRole}`)
     } catch (error) {
       console.error("Failed to save role permissions:", error)
       toast({

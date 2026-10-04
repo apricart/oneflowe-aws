@@ -89,10 +89,10 @@ function useExceptionDialog({
   return { close, dialog, reason, setDialog, setReason, submit, submitting }
 }
 
-function PaymentControlHeader({ view, openDialog }: {
+function PaymentControlHeader({ view, openDialog }: Readonly<{
   view: PaymentControlView
   openDialog: (dialog: "grant" | "revoke") => void
-}) {
+}>) {
   const state = STATE_LABELS[view.state]
   const canGrant = view.canManageExceptions && !view.exceptionActive
   const canRevoke = view.canManageExceptions && view.exceptionActive && view.exception !== null
@@ -128,7 +128,7 @@ function PaymentControlHeader({ view, openDialog }: {
   )
 }
 
-function PaymentControlException({ exception }: { exception: NonNullable<PaymentControlView["exception"]> }) {
+function PaymentControlException({ exception }: Readonly<{ exception: NonNullable<PaymentControlView["exception"]> }>) {
   const statusLabel = exception.active
     ? "Head Office exception in force"
     : exception.revokedAt ? "Exception revoked" : "Exception expired"
@@ -160,7 +160,7 @@ function PaymentControlException({ exception }: { exception: NonNullable<Payment
  * grant and revoke actions, each behind a confirmation that spells out what
  * it does and for how long. The buttons are convenience; the server enforces.
  */
-export function PaymentControlPanel({ branchId, onChanged }: { branchId: number; onChanged?: () => void }) {
+export function PaymentControlPanel({ branchId, onChanged }: Readonly<{ branchId: number; onChanged?: () => void }>) {
   const { data: view, error, isLoading, mutate } = usePaymentControl(branchId)
   const { close, dialog, reason, setDialog, setReason, submit, submitting } = useExceptionDialog({
     branchId,

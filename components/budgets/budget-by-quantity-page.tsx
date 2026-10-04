@@ -330,8 +330,8 @@ export default function BudgetByQuantityPage() {
     setSelectedGroupIds([])
     setContextBranchIds([])
     setSearchQuery("")
-    mutate()
-    mutateQuantityBudgets()
+    void mutate()
+    void mutateQuantityBudgets()
   }, [handleDateChange, mutate, mutateQuantityBudgets, setContextBranchIds])
 
   const handleEditBudget = (budget: BudgetAllocation) => {
@@ -434,9 +434,9 @@ export default function BudgetByQuantityPage() {
       })
       setShowEmptyAllDialog(false)
       setExpandedBranchIds([])
-      mutate()
-      mutateQuantityBudgets()
-      globalMutate((key) =>
+      void mutate()
+      void mutateQuantityBudgets()
+      void globalMutate((key) =>
         typeof key === "string" &&
         (key.includes("/api/v1/analytics/budgets/summary") ||
           key.includes("/api/v1/budgets") ||
@@ -484,9 +484,9 @@ export default function BudgetByQuantityPage() {
       setShowDialog(false)
       setEditingBudget(null)
       setAllocationLines([createAllocationLine()])
-      mutate()
-      mutateQuantityBudgets()
-      globalMutate((key) => typeof key === "string" && key.includes("/api/v1/analytics/budgets/summary"))
+      void mutate()
+      void mutateQuantityBudgets()
+      void globalMutate((key) => typeof key === "string" && key.includes("/api/v1/analytics/budgets/summary"))
     } catch (error: any) {
       toast({ title: "Error", description: error.message, variant: "destructive" })
     } finally {

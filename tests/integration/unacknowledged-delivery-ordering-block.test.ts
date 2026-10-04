@@ -680,7 +680,7 @@ describe.skipIf(!hasTestDatabase)("blocking new orders on unacknowledged deliver
       await patchOrganization(f.organizationId, { blockOrderingOnUnacknowledgedDeliveries: true })
       const before = (await toggleAudits(f.organizationId)).length
       await patchOrganization(f.organizationId, { blockOrderingOnUnacknowledgedDeliveries: true })
-      expect((await toggleAudits(f.organizationId)).length).toBe(before)
+      expect(await toggleAudits(f.organizationId)).toHaveLength(before)
 
       const [row] = await db.select({ unpaid: organizations.blockOrderingOnUnpaidInvoices }).from(organizations).where(eq(organizations.id, f.organizationId))
       expect(row.unpaid).toBe(false)

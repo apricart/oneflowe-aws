@@ -48,37 +48,37 @@ export function useRoles() {
 export const prefetchData = {
   async users() {
     const { fetcher } = await import('@/lib/fetcher')
-    preload('/api/v1/users', fetcher)
+    return preload('/api/v1/users', fetcher)
   },
 
   async organizations() {
     const { fetcher } = await import('@/lib/fetcher')
-    preload('/api/v1/organizations', fetcher)
+    return preload('/api/v1/organizations', fetcher)
   },
 
   async roles() {
     const { fetcher } = await import('@/lib/fetcher')
-    preload('/api/v1/roles', fetcher)
+    return preload('/api/v1/roles', fetcher)
   },
 
   async branches() {
     const { fetcher } = await import('@/lib/fetcher')
-    preload('/api/v1/branches', fetcher)
+    return preload('/api/v1/branches', fetcher)
   },
 
   async orders() {
     const { fetcher } = await import('@/lib/fetcher')
-    preload('/api/v1/orders', fetcher)
+    return preload('/api/v1/orders', fetcher)
   },
 
   async suppliers() {
     const { fetcher } = await import('@/lib/fetcher')
-    preload('/api/v1/suppliers', fetcher)
+    return preload('/api/v1/suppliers', fetcher)
   },
 
   async inventoryTx() {
     const { fetcher } = await import('@/lib/fetcher')
-    preload('/api/v1/inventory/transactions', fetcher)
+    return preload('/api/v1/inventory/transactions', fetcher)
   },
 }
 

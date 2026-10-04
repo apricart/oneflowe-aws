@@ -54,7 +54,7 @@ export function activeEntryHref(
     const path = at === -1 ? href : href.slice(0, at)
     if (path !== pathname) continue
     if (at === -1) {
-      if (plain === null) plain = href
+      plain ??= href
       continue
     }
     const wanted = new URLSearchParams(href.slice(at + 1))

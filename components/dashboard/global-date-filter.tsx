@@ -141,7 +141,7 @@ export function GlobalDateFilter({
                 console.error("Failed to fetch earliest record:", e)
             }
         }
-        fetchEarliest()
+        void fetchEarliest()
     }, [])
 
     const [monthsOpen, setMonthsOpen] = useState(false)

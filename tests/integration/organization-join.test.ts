@@ -523,7 +523,7 @@ describe.skipIf(!hasTestDatabase)("joining an organization, end to end", () => {
         .select({ id: organizationJoinRequests.id })
         .from(organizationJoinRequests)
         .where(eq(organizationJoinRequests.organizationId, fixtures.organizationId))
-      expect(after.length).toBe(before.length)
+      expect(after).toHaveLength(before.length)
     })
 
     it("answers a duplicate pending request without naming the field", async () => {
