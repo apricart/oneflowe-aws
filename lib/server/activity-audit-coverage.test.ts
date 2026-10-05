@@ -143,6 +143,11 @@ const VIA_LIB: readonly { file: string; module: string }[] = [
   { file: "app/api/v1/orders/[id]/approve/route.ts", module: "lib/server/order-decision-service.ts" },
   { file: "app/api/v1/orders/[id]/reject/route.ts", module: "lib/server/order-decision-service.ts" },
   { file: "app/api/v1/group-portal/approvals/decide/route.ts", module: "lib/server/order-decision-service.ts" },
+  // Return for correction and resubmission: both record inside the
+  // transaction that moves the order (ORDER_RETURNED_FOR_CORRECTION,
+  // ORDER_RESUBMITTED).
+  { file: "app/api/v1/orders/[id]/return-for-correction/route.ts", module: "lib/server/order-correction.ts" },
+  { file: "app/api/v1/orders/[id]/resubmit/route.ts", module: "lib/server/order-correction.ts" },
   { file: "app/api/v1/group-portal/orders/route.ts", module: "lib/server/group-order-creation.ts" },
   { file: "app/api/v1/group-portal/refunds/route.ts", module: "lib/server/group-order-refunds.ts" },
   { file: "app/api/v1/group-portal/orders/[groupOrderId]/tokens/route.ts", module: "lib/server/group-order-tokens.ts" },

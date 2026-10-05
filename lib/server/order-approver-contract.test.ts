@@ -30,6 +30,11 @@ describe("order approver implementation contracts", () => {
     expect(policy).toContain("branch.organizationId")
     expect(approve).toContain('requireApiRole(["BRANCH_ADMIN", "HEAD_OFFICE", "GROUP_USER"])')
     expect(reject).toContain('requireApiRole(["BRANCH_ADMIN", "HEAD_OFFICE", "GROUP_USER"])')
+    // Returning for correction is the third decision and is held to the same
+    // roles and the same in-transaction policy.
+    const returnRoute = source("app/api/v1/orders/[id]/return-for-correction/route.ts")
+    expect(returnRoute).toContain('requireApiRole(["BRANCH_ADMIN", "HEAD_OFFICE", "GROUP_USER"])')
+    expect(source("lib/server/order-correction.ts")).toContain("authorizeOrderDecision(tx,")
     // A GROUP_USER's reach is read inside the deciding transaction, never from
     // the request, so a stale or forged scope cannot authorize a decision.
     expect(policy).toContain("resolveScopedBranchIds(tx, input.scope.userId)")

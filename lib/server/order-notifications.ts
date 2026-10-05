@@ -166,19 +166,19 @@ async function creatorReachesOrderBranch(
 }
 
 /** The tenant's configured approvers for one branch's orders. */
-async function loadConfiguredApprovers(tx: any, input: {
-  approverRole: "BRANCH_ADMIN" | "HEAD_OFFICE"
-  organizationId: number
-  branchId: number
-}): Promise<NotificationRecipient[]> {
+async function loadConfiguredApprovers(
+  tx: any,
+  approverRole: "BRANCH_ADMIN" | "HEAD_OFFICE",
+  order: { organizationId: number; branchId: number },
+): Promise<NotificationRecipient[]> {
   return tx
     .select({ id: users.id, email: users.email })
     .from(users)
     .innerJoin(roles, eq(users.roleId, roles.id))
     .where(and(
-      eq(roles.name, input.approverRole),
-      eq(users.organizationId, input.organizationId),
-      input.approverRole === "BRANCH_ADMIN" ? eq(users.branchId, input.branchId) : undefined,
+      eq(roles.name, approverRole),
+      eq(users.organizationId, order.organizationId),
+      approverRole === "BRANCH_ADMIN" ? eq(users.branchId, order.branchId) : undefined,
       eq(users.isActive, true),
       isNull(users.deletedAt),
     ))
@@ -223,8 +223,7 @@ export async function queueOrderCreatedNotifications(tx: any, input: {
     throw new Error("ORDER_NOTIFICATION_SCOPE_INVALID")
   }
   const approverRole = context.orderApproverRole
-  const recipients = await loadConfiguredApprovers(tx, {
-    approverRole,
+  const recipients = await loadConfiguredApprovers(tx, approverRole, {
     organizationId: order.organizationId,
     branchId: order.branchId,
   })
@@ -490,8 +489,7 @@ export async function queueOrderResubmittedNotifications(tx: any, input: {
     throw new Error("ORDER_NOTIFICATION_SCOPE_INVALID")
   }
 
-  const approvers = await loadConfiguredApprovers(tx, {
-    approverRole: context.orderApproverRole,
+  const approvers = await loadConfiguredApprovers(tx, context.orderApproverRole, {
     organizationId: order.organizationId,
     branchId: order.branchId,
   })

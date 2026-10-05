@@ -68,6 +68,8 @@ import {
   shouldShowOrderPaymentStatus,
 } from "@/lib/order-status-display"
 import { isUnacknowledgedDelivery } from "@/lib/unacknowledged-delivery-block"
+import { isAwaitingCorrection } from "@/lib/order-correction"
+import { OrderCorrectionNotice, ReturnForCorrectionDialog } from "@/components/orders/order-correction"
 import { TOKEN_SENT_LABEL, isTokenAlreadySent, readTokenSendRefusal } from "@/lib/order-token-handoff"
 import {
   DELIVERED_UNFULFILLED_LABEL,
@@ -199,6 +201,7 @@ export function OrdersDirectory({
   const [generatedToken, setGeneratedToken] = useState<string | null>(null)
   const [showTokenDialog, setShowTokenDialog] = useState(false)
   const [rejectReason, setRejectReason] = useState("")
+  const [returningOrder, setReturningOrder] = useState<{ id: number; tid: string } | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
   const [isUpdatingProgress, setIsUpdatingProgress] = useState(false)
   const [isUpdatingPayment, setIsUpdatingPayment] = useState(false)
@@ -1025,13 +1028,37 @@ export function OrdersDirectory({
                   </div>
                 )}
 
+                {isAwaitingCorrection(viewingOrder) && (
+                  <OrderCorrectionNotice
+                    comment={viewingOrder.correctionRequestNote}
+                    returnedAt={viewingOrder.returnedForCorrectionAt}
+                    audience="approver"
+                  />
+                )}
+
+                {viewingOrder.status.toLowerCase() === "pending" && canDecideOrders && !isAwaitingCorrection(viewingOrder) && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setReturningOrder({ id: viewingOrder.id, tid: viewingOrder.tid })}
+                    className="w-full h-12 rounded-xl text-amber-700 border-amber-200 hover:bg-amber-50 dark:hover:bg-amber-900/20 dark:border-amber-800"
+                  >
+                    Return for correction
+                  </Button>
+                )}
+
                 <div className="flex gap-3">
                   {viewingOrder.status.toLowerCase() === "pending" && canDecideOrders && (
                     <>
                       <Button onClick={() => setActionType("reject")} variant="outline" className="flex-1 h-12 rounded-xl text-rose-600 border-rose-200 hover:bg-rose-50 dark:hover:bg-rose-900/20 dark:border-rose-800">
                         Reject
                       </Button>
-                      <Button onClick={() => setActionType("approve")} className="flex-1 h-12 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold shadow-lg shadow-emerald-600/20">
+                      <Button
+                        onClick={() => setActionType("approve")}
+                        disabled={isAwaitingCorrection(viewingOrder)}
+                        title={isAwaitingCorrection(viewingOrder) ? "Waiting for the requester to resubmit" : undefined}
+                        className="flex-1 h-12 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold shadow-lg shadow-emerald-600/20"
+                      >
                         Approve
                       </Button>
                     </>
@@ -1170,7 +1197,14 @@ export function OrdersDirectory({
         </DialogContent>
       </Dialog>
 
-
+      <ReturnForCorrectionDialog
+        order={returningOrder}
+        onClose={() => setReturningOrder(null)}
+        onReturned={() => {
+          setViewingOrder(null)
+          onUpdate()
+        }}
+      />
     </div>
   )
 }

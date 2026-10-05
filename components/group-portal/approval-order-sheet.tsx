@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import useSWR from "swr"
-import { Check, X } from "lucide-react"
+import { Check, CornerUpLeft, X } from "lucide-react"
 
 import { OrderDetailPanel, type OrderDetails } from "@/components/orders/order-detail-panel"
 import { Button } from "@/components/ui/button"
@@ -15,12 +15,16 @@ import {
 } from "@/components/ui/sheet"
 import { fetcher } from "@/lib/fetcher"
 
-import { type ApprovalOrder, isPending } from "./approval-types"
+import { OrderCorrectionNotice, ReturnForCorrectionDialog } from "@/components/orders/order-correction"
+
+import { type ApprovalOrder, isPending, isReturnedForCorrection } from "./approval-types"
 
 type Props = Readonly<{
   order: ApprovalOrder | null
   onClose: () => void
   onDecide: (orderIds: number[], decision: "approve" | "reject") => void
+  /** Refresh the queue after a return, which does not go through `onDecide`. */
+  onChanged?: () => void
   busy: boolean
 }>
 
@@ -37,7 +41,8 @@ type Props = Readonly<{
  * The fulfilment token is deliberately not repeated here: the queue row already
  * offers the copy and hand-off controls once an order is approved.
  */
-export function ApprovalOrderSheet({ order, onClose, onDecide, busy }: Props) {
+export function ApprovalOrderSheet({ order, onClose, onDecide, onChanged, busy }: Props) {
+  const [returning, setReturning] = useState<{ id: number; tid: string } | null>(null)
   const [expanded, setExpanded] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
 
@@ -50,6 +55,7 @@ export function ApprovalOrderSheet({ order, onClose, onDecide, busy }: Props) {
   // The queue row paints immediately; the fetched record only adds detail.
   const detailedOrder = { ...order, ...(fetched?.id === order?.id ? fetched : {}) }
   const decidable = order ? isPending(order) : false
+  const returned = order ? isReturnedForCorrection(order) : false
 
   const closeSheet = () => {
     setExpanded(false)
@@ -85,6 +91,24 @@ export function ApprovalOrderSheet({ order, onClose, onDecide, busy }: Props) {
             onRetryDetails={() => setReloadKey((key) => key + 1)}
             actions={decidable ? (
               <div className="mt-auto shrink-0 space-y-3 rounded-t-[2.5rem] border-t border-slate-100 bg-white/80 p-6 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-900/80">
+                {returned ? (
+                  <OrderCorrectionNotice
+                    comment={order.correctionRequestNote}
+                    returnedAt={order.returnedForCorrectionAt}
+                    audience="approver"
+                  />
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() => setReturning({ id: order.id, tid: order.tid })}
+                    className="h-12 w-full gap-2 rounded-xl border-amber-200 text-amber-700 hover:bg-amber-50 dark:border-amber-800 dark:hover:bg-amber-900/20"
+                  >
+                    <CornerUpLeft className="h-4 w-4" />
+                    Return for correction
+                  </Button>
+                )}
                 <div className="flex gap-3">
                   <Button
                     type="button"
@@ -98,7 +122,8 @@ export function ApprovalOrderSheet({ order, onClose, onDecide, busy }: Props) {
                   </Button>
                   <Button
                     type="button"
-                    disabled={busy}
+                    disabled={busy || returned}
+                    title={returned ? "Waiting for the requester to resubmit" : undefined}
                     onClick={() => decide("approve")}
                     className="h-12 flex-1 gap-2 rounded-xl bg-emerald-600 font-bold text-white shadow-lg shadow-emerald-600/20 hover:bg-emerald-500"
                   >
@@ -111,6 +136,14 @@ export function ApprovalOrderSheet({ order, onClose, onDecide, busy }: Props) {
           />
         )}
       </SheetContent>
+      <ReturnForCorrectionDialog
+        order={returning}
+        onClose={() => setReturning(null)}
+        onReturned={() => {
+          closeSheet()
+          onChanged?.()
+        }}
+      />
     </Sheet>
   )
 }

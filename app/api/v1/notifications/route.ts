@@ -87,13 +87,27 @@ function notificationSeverity(type: string): "info" | "warning" | "critical" {
   }
 }
 
+type NotificationCta = { label: string; href: string } | undefined
+
+/** "Review order" for someone who may still decide it. */
+function reviewOrderCta(orderId: number | null, allowed: boolean): NotificationCta {
+  return orderId && allowed ? { label: "Review order", href: `/orders/${orderId}` } : undefined
+}
+
+/** The requester's own order list, in whichever portal it uses. */
+function requesterOrdersCta(role: string | undefined): NotificationCta {
+  if (role === "ORDER_PORTAL") return { label: "View my orders", href: "/shop" }
+  if (role === "GROUP_ORDER_PORTAL") return { label: "Open my orders", href: "/group-portal" }
+  return undefined
+}
+
 function notificationCta(
   type: string,
   orderId: number | null,
   role: string | undefined,
   canDecideOrders: boolean,
   supportThreadId: number | null,
-) {
+): NotificationCta {
   // The support area is shared by every role, and the endpoints behind it
   // decide what each caller may read, so the link needs no role gate here.
   if (type.startsWith("SUPPORT_")) {
@@ -104,25 +118,16 @@ function notificationCta(
 
   switch (type) {
     case "ORDER_CREATED":
-      return orderId && canDecideOrders
-        ? { label: "Review order", href: `/orders/${orderId}` }
-        : undefined
+    case "ORDER_RESUBMITTED":
+      return reviewOrderCta(orderId, canDecideOrders)
     case "ORDER_APPROVED":
     case "ORDER_REJECTED":
-      return role === "ORDER_PORTAL" ? { label: "View my orders", href: "/shop" } : undefined
+      return role === "ORDER_PORTAL" ? requesterOrdersCta(role) : undefined
     case "ORDER_RETURNED":
     case "ORDER_RESUBMITTED_BY_COLLEAGUE":
-      if (role === "ORDER_PORTAL") return { label: "View my orders", href: "/shop" }
-      if (role === "GROUP_ORDER_PORTAL") return { label: "Open my orders", href: "/group-portal" }
-      return undefined
-    case "ORDER_RESUBMITTED":
-      return orderId && canDecideOrders
-        ? { label: "Review order", href: `/orders/${orderId}` }
-        : undefined
+      return requesterOrdersCta(role)
     case "ORDER_APPROVED_ADMIN":
-      return orderId && role === "SUPER_ADMIN"
-        ? { label: "Review order", href: `/orders/${orderId}` }
-        : undefined
+      return reviewOrderCta(orderId, role === "SUPER_ADMIN")
     case "REFUND_REQUESTED":
       return { label: "Review refund", href: "/refunds" }
     default:

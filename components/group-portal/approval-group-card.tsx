@@ -12,7 +12,7 @@ import {
   type ApprovalGroupOrder,
   STATUS_STYLES,
   formatDateTime,
-  isPending,
+  isAwaitingApprovalDecision,
 } from "./approval-types"
 
 type Props = Readonly<{
@@ -47,7 +47,9 @@ export function ApprovalGroupCard({
   busy,
   onRefresh,
 }: Props) {
-  const pendingOrders = item.orders.filter(isPending)
+  // Bulk actions reach only the orders waiting on the approver; one returned
+  // for correction is with its requester and cannot be approved yet.
+  const pendingOrders = item.orders.filter(isAwaitingApprovalDecision)
   const pendingIds = pendingOrders.map((order) => order.id)
   const selectedPendingIds = pendingIds.filter((id) => selectedIds.has(id))
   const allPendingSelected = pendingIds.length > 0 && selectedPendingIds.length === pendingIds.length
