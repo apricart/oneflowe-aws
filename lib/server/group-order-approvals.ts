@@ -54,6 +54,9 @@ export type ApprovalOrder = {
   createdAt: Date | null
   approvedAt: Date | null
   rejectionReason: string | null
+  /** Set while an approver has sent this pending order back for correction. */
+  returnedForCorrectionAt: Date | null
+  correctionRequestNote: string | null
   /** Present only for orders this approver may still see a token for. */
   approvalToken: string | null
 }
@@ -275,6 +278,8 @@ export async function listApprovalQueue({
       createdAt: orders.createdAt,
       approvedAt: orders.approvedAt,
       rejectionReason: orders.rejectionReason,
+      returnedForCorrectionAt: orders.returnedForCorrectionAt,
+      correctionRequestNote: orders.correctionRequestNote,
       approvalToken: orders.approvalToken,
       itemCount: sql<number>`(
         SELECT COALESCE(SUM(${orderItems.quantity}), 0)
@@ -310,6 +315,8 @@ export async function listApprovalQueue({
       createdAt: row.createdAt,
       approvedAt: row.approvedAt,
       rejectionReason: row.rejectionReason,
+      returnedForCorrectionAt: row.returnedForCorrectionAt,
+      correctionRequestNote: row.correctionRequestNote,
       // The token is the credential a Super Admin needs to mark the order
       // delivered. The branch scope is already enforced by the query above;
       // whether the token may be shown at all is deferred to the one shared

@@ -1,7 +1,7 @@
 import "server-only"
 
 import { and, asc, eq, isNotNull, isNull, sql } from "drizzle-orm"
-import { alias } from "drizzle-orm/pg-core"
+import { alias, type AnyPgColumn } from "drizzle-orm/pg-core"
 
 import { branches, orderCorrectionRequests, orders, roles, users } from "@/db/schema"
 import type { RequestScope } from "@/lib/auth"
@@ -387,7 +387,7 @@ export async function loadOrderCorrectionHistory(input: {
 }): Promise<OrderCorrectionHistoryEntry[]> {
   const requester = alias(users, "correction_requester")
   const resolver = alias(users, "correction_resolver")
-  const nameOf = (person: typeof requester) => sql<string | null>`COALESCE(
+  const nameOf = (person: { fullName: AnyPgColumn; firstName: AnyPgColumn; lastName: AnyPgColumn }) => sql<string | null>`COALESCE(
     NULLIF(TRIM(${person.fullName}), ''),
     NULLIF(TRIM(CONCAT_WS(' ', ${person.firstName}, ${person.lastName})), '')
   )`

@@ -24,6 +24,8 @@ export type ApprovalOrder = {
   createdAt: string | null
   approvedAt: string | null
   rejectionReason: string | null
+  returnedForCorrectionAt?: string | null
+  correctionRequestNote?: string | null
   approvalToken: string | null
 }
 

@@ -32,7 +32,7 @@ export type OrderWriteNotice = {
 
 type TxClient = {
   insert: (table: typeof notifications) => {
-    values: (rows: unknown) => { onConflictDoNothing: () => Promise<unknown> }
+    values: (rows: typeof notifications.$inferInsert) => { onConflictDoNothing: () => Promise<unknown> }
   }
 }
 

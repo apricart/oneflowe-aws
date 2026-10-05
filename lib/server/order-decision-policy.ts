@@ -27,6 +27,8 @@ function canAttemptOrderDecision(role: unknown): boolean {
 export type OrderDecisionCapabilities = {
   canApproveOrders: boolean
   canRejectOrders: boolean
+  /** Sending a pending order back for correction is the third decision, held to the same rule. */
+  canReturnOrders: boolean
   orderApproverRole: OrderApproverRole | null
 }
 
@@ -143,6 +145,7 @@ export async function getOrderDecisionCapabilities(
   const denied: OrderDecisionCapabilities = {
     canApproveOrders: false,
     canRejectOrders: false,
+    canReturnOrders: false,
     orderApproverRole: null,
   }
 
@@ -190,6 +193,7 @@ export async function getOrderDecisionCapabilities(
     return {
       canApproveOrders: allowedForGroupUser,
       canRejectOrders: allowedForGroupUser,
+      canReturnOrders: allowedForGroupUser,
       orderApproverRole: organization.orderApproverRole,
     }
   }
@@ -213,6 +217,7 @@ export async function getOrderDecisionCapabilities(
   return {
     canApproveOrders: allowed,
     canRejectOrders: allowed,
+    canReturnOrders: allowed,
     orderApproverRole: organization.orderApproverRole,
   }
 }
