@@ -174,3 +174,29 @@ discriminator; the resubmission notice is keyed per round.
 5. UI: shared notice, approver detail page, orders directory, Group approver
    sheet, Order Portal shop, Group Order Portal history and branch orders.
 6. Unit, contract and integration tests; typecheck, lint, test, build.
+
+## Implementation status
+
+Implemented as planned, with these additions found while building it:
+
+* **Notifications API admits `GROUP_USER` and `GROUP_ORDER_PORTAL`.** Both are
+  read strictly as their own rows inside their own organization (they have no
+  pinned branch). A Group User who returned an order is told when it comes back;
+  `ORDER_RESUBMITTED`, like `ORDER_CREATED`, is hidden from anyone who can no
+  longer decide orders.
+* **Bulk approval in the Group User queue skips returned orders**
+  (`isAwaitingApprovalDecision`); a returned row can still be rejected.
+* **Group Order Portal history** gained Edit (the existing branch-order edit
+  sheet) and Resubmit on a returned order, since a group requester previously
+  had no way to edit its own group orders there.
+* **`buildStatusTimeline`'s error fallback** now sets `approvalToken: null` like
+  every other path; its absence was failing the TypeScript step of the build.
+
+Verification: `npm run typecheck`, `npm run lint` (0 errors), `npm test`,
+`npm run test:integration` against a migrated disposable Postgres
+(`tests/integration/order-correction-api.test.ts`: 24 tests, run, not skipped),
+and `npm run build`. Two unit tests and one integration test fail on the Order
+Desk branch this was built on, before and after this change
+(`new-desk-order.test.tsx`, `order-desk-contract.test.ts`,
+`order-desk-api.test.ts` › "is fulfilled by the desk only after Super Admin
+records delivery"); they are not touched here.

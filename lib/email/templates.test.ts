@@ -202,6 +202,43 @@ describe("order lifecycle mail", () => {
       .toBe("Order TID 41 was approved by Branch Admin")
   })
 
+  it("tells the raiser what to correct, escaped, linking to the portal they order from", () => {
+    const toShop = buildOrderLifecycleEmail(
+      "ORDER_RETURNED",
+      { ...payload, correctionComment: `Fewer reams ${HOSTILE}` },
+      "ORDER_PORTAL",
+    )
+    expect(toShop.subject).toBe("Order TID 41 was returned for correction")
+    expect(toShop.text).toContain(`What to correct: Fewer reams ${HOSTILE}`)
+    expect(toShop.text).toContain("View my orders: https://portal.example.test/shop")
+    expect(toShop.html).not.toContain(HOSTILE)
+
+    const toGroupPortal = buildOrderLifecycleEmail(
+      "ORDER_RETURNED",
+      { ...payload, correctionComment: "Fewer reams" },
+      "GROUP_ORDER_PORTAL",
+    )
+    expect(toGroupPortal.text).toContain("View my orders: https://portal.example.test/group-portal")
+  })
+
+  it("asks the approver to review a resubmission, with the requester's note escaped", () => {
+    const email = buildOrderLifecycleEmail(
+      "ORDER_RESUBMITTED",
+      { ...payload, requestedBy: "Requester", resubmissionNote: `Done ${HOSTILE}` },
+      "BRANCH_ADMIN",
+    )
+    expect(email.subject).toBe("Order TID 41 was resubmitted for approval")
+    expect(email.text).toContain("Requested by: Requester")
+    expect(email.text).toContain(`Requester's note: Done ${HOSTILE}`)
+    expect(email.text).toContain("Review order: https://portal.example.test/orders/41")
+    expect(email.html).not.toContain(HOSTILE)
+  })
+
+  it("leaves out an empty correction or resubmission note", () => {
+    expect(buildOrderLifecycleEmail("ORDER_RESUBMITTED", payload).text).not.toContain("Requester's note")
+    expect(buildOrderLifecycleEmail("ORDER_RETURNED", payload).text).not.toContain("What to correct")
+  })
+
   it("sends with a sanitised tid tag", async () => {
     expect(await sendOrderLifecycleEmail({ to: "a@x.test", template: "ORDER_APPROVED", payload })).toBe("msg-1")
     expect(lastMail().tags).toEqual([
