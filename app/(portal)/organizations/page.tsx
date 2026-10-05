@@ -62,10 +62,14 @@ type Organization = {
   blockOrderingOnUnpaidInvoices?: boolean
   blockOrderingOnUnacknowledgedDeliveries?: boolean
   budgetsEnabled?: boolean
+  managedOrdering?: boolean
 }
 
 const UNPAID_INVOICE_BLOCK_HINT =
   `A branch with ${PAYMENT_CONTROL_POLICY.overdueBlockThreshold} or more unpaid invoices (delivered and not marked paid) cannot place new orders until they are paid.`
+
+const MANAGED_ORDERING_HINT =
+  "Apricart's Order Desk may enter this company's orders (received by email or WhatsApp) for the desk users granted it in Order Desk Team. Desk orders are Active immediately."
 
 const UNACKNOWLEDGED_DELIVERY_BLOCK_HINT =
   `A branch with ${UNACKNOWLEDGED_DELIVERY_BLOCK_THRESHOLD} or more orders that are delivered but not yet acknowledged (still approved) cannot place new orders until they are acknowledged.`
@@ -1171,6 +1175,8 @@ function CreateOrgDialog({
   const [orderApprovalRequired, setOrderApprovalRequired] = useState(true)
   const [blockOrderingOnUnpaidInvoices, setBlockOrderingOnUnpaidInvoices] = useState(false)
   const [blockOrderingOnUnacknowledgedDeliveries, setBlockOrderingOnUnacknowledgedDeliveries] = useState(false)
+  // Off by default: no company is reachable by the Order Desk until asked.
+  const [managedOrdering, setManagedOrdering] = useState(false)
   const [hideBranchAdminPrices, setHideBranchAdminPrices] = useState(false)
   const [hideOrderPortalPrices, setHideOrderPortalPrices] = useState(false)
   const [privateNetworkEnabled, setPrivateNetworkEnabled] = useState(false)
@@ -1200,6 +1206,7 @@ function CreateOrgDialog({
           orderApprovalRequired,
           blockOrderingOnUnpaidInvoices,
           blockOrderingOnUnacknowledgedDeliveries,
+          managedOrdering,
           priceVisibility: {
             hideBranchAdminPrices,
             hideOrderPortalPrices,
@@ -1373,6 +1380,14 @@ function CreateOrgDialog({
                 hint={UNACKNOWLEDGED_DELIVERY_BLOCK_HINT}
                 checked={blockOrderingOnUnacknowledgedDeliveries}
                 onCheckedChange={setBlockOrderingOnUnacknowledgedDeliveries}
+                disabled={saving}
+              />
+              <OrderingBlockSwitch
+                id="create-managed-ordering"
+                label="Managed by Apricart Order Desk"
+                hint={MANAGED_ORDERING_HINT}
+                checked={managedOrdering}
+                onCheckedChange={setManagedOrdering}
                 disabled={saving}
               />
               <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
@@ -1691,6 +1706,7 @@ function EditOrgDialog({
   const [blockOrderingOnUnacknowledgedDeliveries, setBlockOrderingOnUnacknowledgedDeliveries] = useState(
     org.blockOrderingOnUnacknowledgedDeliveries === true,
   )
+  const [managedOrdering, setManagedOrdering] = useState(org.managedOrdering === true)
   // Anything but an explicit false reads as on, matching the server's
   // fail-safe: a tenant is never shown as unbudgeted when it is not.
   const [budgetsEnabled, setBudgetsEnabled] = useState(org.budgetsEnabled !== false)
@@ -1719,6 +1735,7 @@ function EditOrgDialog({
     setOrderApprovalRequired(org.orderApprovalRequired !== false)
     setBlockOrderingOnUnpaidInvoices(org.blockOrderingOnUnpaidInvoices === true)
     setBlockOrderingOnUnacknowledgedDeliveries(org.blockOrderingOnUnacknowledgedDeliveries === true)
+    setManagedOrdering(org.managedOrdering === true)
     setBudgetsEnabled(org.budgetsEnabled !== false)
   }, [
     org.name,
@@ -1732,6 +1749,7 @@ function EditOrgDialog({
     org.blockOrderingOnUnpaidInvoices,
     org.blockOrderingOnUnacknowledgedDeliveries,
     org.budgetsEnabled,
+    org.managedOrdering,
   ])
 
   useEffect(() => {
@@ -1941,6 +1959,14 @@ function EditOrgDialog({
                   onCheckedChange={setBlockOrderingOnUnacknowledgedDeliveries}
                   disabled={loadingSettings || saving}
                 />
+                <OrderingBlockSwitch
+                  id={`edit-managed-ordering-${org.id}`}
+                  label="Managed by Apricart Order Desk"
+                  hint={MANAGED_ORDERING_HINT}
+                  checked={managedOrdering}
+                  onCheckedChange={setManagedOrdering}
+                  disabled={loadingSettings || saving}
+                />
                 <BudgetAllocationFields
                   idPrefix={`edit-${org.id}`}
                   enabled={budgetsEnabled}
@@ -2030,6 +2056,7 @@ function EditOrgDialog({
                         orderApprovalRequired,
                         blockOrderingOnUnpaidInvoices,
                         blockOrderingOnUnacknowledgedDeliveries,
+                        managedOrdering,
                       }
                       : {}),
                   },

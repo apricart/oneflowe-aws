@@ -137,8 +137,10 @@ export function buildStatusTimeline(
 
     const normalized = status.toLowerCase().trim()
 
-    // Handle cancelled orders
-    if (normalized === "cancelled") {
+    // A rejected or cancelled order left the flow at review. Without its own
+    // case a rejected order fell through to "unknown status" and showed
+    // "Pending review" as the current step, as if it still awaited a decision.
+    if (normalized === "cancelled" || normalized === "rejected") {
       return [
         {
           key: "pending",
@@ -147,13 +149,21 @@ export function buildStatusTimeline(
           state: "complete",
           approvalToken: null
         },
-        {
-          key: "cancelled",
-          label: "Cancelled",
-          description: "Order was cancelled by head office.",
-          state: "current",
-          approvalToken: null
-        },
+        normalized === "rejected"
+          ? {
+            key: "rejected",
+            label: "Rejected",
+            description: "The approver rejected this order.",
+            state: "current",
+            approvalToken: null
+          }
+          : {
+            key: "cancelled",
+            label: "Cancelled",
+            description: "Order was cancelled.",
+            state: "current",
+            approvalToken: null
+          },
       ]
     }
 

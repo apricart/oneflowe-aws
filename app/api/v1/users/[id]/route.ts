@@ -50,6 +50,16 @@ async function writeUserUpdateAudit(userId: string, input: unknown, sessionsInva
   }
 }
 
+/**
+ * `verifyResourceAccess` skips its tenant comparison when the id it is given is
+ * null, so on its own it let a Head Office reach any user row without an
+ * organization. Such a user belongs to no tenant, and only Super Admin may
+ * manage it.
+ */
+function isOutsideActorTenant(actorRole: string, targetOrganizationId: number | null): boolean {
+  return actorRole !== "SUPER_ADMIN" && targetOrganizationId === null
+}
+
 function getUniqueUserUpdateMessage(detail: string) {
   if (detail.includes('username')) return "Username already in use by another user"
   if (detail.includes('employee_id')) return "Internal ID (Employee ID) already exists."
@@ -298,7 +308,8 @@ export async function PATCH(
       return error("You cannot manage a user at this privilege level", 403)
     }
 
-    const hasAccess = await verifyResourceAccess(targetUser.organizationId)
+    const hasAccess = !isOutsideActorTenant(scope.role, targetUser.organizationId)
+      && await verifyResourceAccess(targetUser.organizationId)
     if (!hasAccess) return error("Unauthorized to assign user to this resource", 403)
 
     const currentUsername = String(targetUser.username || "").trim().toLowerCase()
@@ -344,7 +355,8 @@ export async function DELETE(
       return error("You cannot delete a user at this privilege level", 403)
     }
 
-    const hasAccess = await verifyResourceAccess(targetUser.organizationId)
+    const hasAccess = !isOutsideActorTenant(scope.role, targetUser.organizationId)
+      && await verifyResourceAccess(targetUser.organizationId)
     if (!hasAccess) return error("Forbidden: You do not have access to this user", 403)
 
     const dependencies = await getUserDeletionDependencies(id)

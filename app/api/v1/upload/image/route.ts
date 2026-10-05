@@ -6,8 +6,10 @@ import { sanitizeRasterUpload } from "@/lib/server/upload-security"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { db } from "@/lib/db"
 import { auditActorFromSession, recordAuditEvent } from "@/lib/server/activity-audit"
+import { isOrderDeskRole } from "@/lib/order-desk-access"
 import {
   buildImageKey,
+  buildOrderIntakeAttachmentKey,
   extensionForMime,
   imagePathForKey,
   isImageStorageConfigured,
@@ -27,8 +29,11 @@ export async function POST(req: NextRequest) {
     // (see `plans/OF-PRODUCT-REQUEST-head-office-new-product-requests.md`).
     // That grants Head Office no new reach: it already sets its catalogue's
     // `custom_image_url` through `PUT /api/v1/head-office/organization-inventory`.
+    // The Order Desk uploads the screenshot of a customer's WhatsApp message or
+    // email, here for the same WAF reason. Its upload is stored privately and
+    // handled apart from catalogue images below.
     const userRole = (session.user as any).role
-    if (userRole !== "SUPER_ADMIN" && !canRaiseProductRequest(userRole)) {
+    if (userRole !== "SUPER_ADMIN" && !canRaiseProductRequest(userRole) && !isOrderDeskRole(userRole)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
 
@@ -59,6 +64,10 @@ export async function POST(req: NextRequest) {
     const extension = extensionForMime(validation.image.mime)
     if (!extension) {
       return NextResponse.json({ error: "Unsupported image type" }, { status: 400 })
+    }
+
+    if (isOrderDeskRole(userRole)) {
+      return storeOrderIntakeAttachment(session, validation, extension)
     }
 
     if (!isImageStorageConfigured()) {
@@ -132,4 +141,41 @@ export async function POST(req: NextRequest) {
       details: "Upload failed"
     }, { status: 500 })
   }
+}
+
+/**
+ * A desk screenshot carries a customer's personal details, so it is never a
+ * catalogue image: it is stored under the private `order-intake/` prefix (which
+ * the public image route cannot serve), never as a `data:` URL even in local
+ * development, and answered with its key rather than a readable path. The key
+ * is bound to its uploader by this audit row; order creation checks it.
+ */
+async function storeOrderIntakeAttachment(
+  session: unknown,
+  validation: { buffer: Buffer; image: { mime: string; width: number; height: number } },
+  extension: NonNullable<ReturnType<typeof extensionForMime>>,
+) {
+  if (!isImageStorageConfigured()) {
+    return NextResponse.json({ error: "Image storage is not configured" }, { status: 503 })
+  }
+  const key = buildOrderIntakeAttachmentKey(extension)
+  await putImage({ key, body: validation.buffer, contentType: validation.image.mime })
+  // Written after the object lands, for the reason given on the catalogue path.
+  await recordAuditEvent(db, {
+    action: "UPLOAD_ORDER_INTAKE_ATTACHMENT",
+    entity: "image",
+    entityId: key,
+    actor: auditActorFromSession(session),
+    after: {
+      type: validation.image.mime,
+      sizeBytes: validation.buffer.length,
+      width: validation.image.width,
+      height: validation.image.height,
+    },
+  })
+  return NextResponse.json({
+    attachmentKey: key,
+    size: validation.buffer.length,
+    type: validation.image.mime,
+  })
 }

@@ -8,6 +8,7 @@ import {
 } from "@aws-sdk/client-s3"
 
 import { parseImageStorageEnv } from "@/lib/server/env-validation"
+import { ORDER_INTAKE_ATTACHMENT_PREFIX } from "@/lib/order-desk-access"
 
 /**
  * Product images live in S3, not in the database.
@@ -135,6 +136,18 @@ export function buildSupportAttachmentKey(extension: StoredImageExtension): stri
 
 export function isValidSupportAttachmentKey(key: string): boolean {
   return SUPPORT_KEY_PATTERN.test(key)
+}
+
+/**
+ * Keys for an Order Desk order's screenshot — the customer's WhatsApp message
+ * or email, which carries their personal details. Like support attachments it
+ * has a prefix of its own, so `GET /api/v1/images/[...key]` (pinned to
+ * `products/`) can never serve one; it comes back only through
+ * `GET /api/v1/order-desk/orders/[id]/attachment`, behind the desk's reach.
+ * The shape rule is `isOrderIntakeAttachmentKey` in `lib/order-desk-access.ts`.
+ */
+export function buildOrderIntakeAttachmentKey(extension: StoredImageExtension): string {
+  return `${ORDER_INTAKE_ATTACHMENT_PREFIX}/${randomUUID()}.${extension}`
 }
 
 export function imagePathForKey(key: string): string {

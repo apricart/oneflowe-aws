@@ -84,6 +84,8 @@ type InvoiceRoleRule = {
  *                          never reaches the invoice page, which is not in its
  *                          areas at all; this entry is the server-side half of
  *                          that and fails closed on its own.
+ *  - ORDER_DESK          — nothing, for now: it has no organization, so it is
+ *                          refused by the tenant check like an unknown scope.
  */
 const INVOICE_ROLE_RULES: Record<Role, InvoiceRoleRule> = {
   SUPER_ADMIN: { tenant: "platform", branches: "all", ownOrdersOnly: false },
@@ -98,6 +100,9 @@ const INVOICE_ROLE_RULES: Record<Role, InvoiceRoleRule> = {
   GROUP_ORDER_PORTAL: { tenant: "own-organization", branches: "own-organization", ownOrdersOnly: true },
   GROUP_USER: { tenant: "own-organization", branches: "assigned", ownOrdersOnly: false },
   VIEWER: { tenant: "own-organization", branches: "none", ownOrdersOnly: true },
+  // Reads no invoice yet. A desk account has no organization, so the tenant
+  // check refuses it before the branch rule is reached; "none" refuses it again.
+  ORDER_DESK: { tenant: "own-organization", branches: "none", ownOrdersOnly: true },
 }
 
 /** Roles whose branch reach comes from group and branch assignments. */

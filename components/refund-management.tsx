@@ -21,6 +21,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { isOrderPortalRefundEligible } from "@/lib/business-rules"
+import { isSameBudgetPeriod } from "@/lib/budget-consumption"
 import { isOrderWriteRole } from "@/lib/order-write-access"
 
 interface RefundManagementProps {
@@ -113,13 +114,14 @@ export function RefundManagement({
     const [processing, setProcessing] = useState(false)
     const [showForm, setShowForm] = useState(false)
 
-    // Validate refund window (must be same month/year)
-    // "it can only make request wihtnig that mo th"
+    // The refund window is the order's budget period — the UTC month the
+    // server enforces. Comparing the browser's local months disagreed with the
+    // server for five hours either side of a month boundary in Pakistan.
     const isWithinRefundWindow = useMemo(() => {
         if (!createdAt) return false
         const orderDate = new Date(createdAt)
-        const now = new Date()
-        return orderDate.getMonth() === now.getMonth() && orderDate.getFullYear() === now.getFullYear()
+        if (Number.isNaN(orderDate.getTime())) return false
+        return isSameBudgetPeriod(orderDate, new Date())
     }, [createdAt])
 
     // Track selected items and their quantities: { itemId: quantity }

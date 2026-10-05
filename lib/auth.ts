@@ -201,7 +201,7 @@ export function isValidRole(role: string | undefined | null): role is Role {
   // Kept in step with `lib/rbac.ts` by hand — `getSafeUserRole` below falls
   // back to BRANCH_ADMIN, so a role missing from this list is not rejected but
   // quietly granted branch-administrator authority.
-  const validRoles: Role[] = ['SUPER_ADMIN', 'HEAD_OFFICE', 'GROUP_USER', 'BRANCH_ADMIN', 'GROUP_ORDER_PORTAL', 'ORDER_PORTAL', 'VIEWER']
+  const validRoles: Role[] = ['SUPER_ADMIN', 'HEAD_OFFICE', 'GROUP_USER', 'BRANCH_ADMIN', 'GROUP_ORDER_PORTAL', 'ORDER_PORTAL', 'VIEWER', 'ORDER_DESK']
   return validRoles.includes(role as Role)
 }
 

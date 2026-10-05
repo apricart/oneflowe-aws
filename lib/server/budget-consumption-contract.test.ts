@@ -30,6 +30,8 @@ const LEDGER_PERIOD_WRITERS = [
   "lib/server/group-order-creation.ts",
   "lib/server/group-branch-budgets.ts",
   "lib/server/budget-period-opening.ts",
+  "lib/server/order-desk-orders.ts",
+  "lib/server/order-desk-edit.ts",
 ]
 
 describe("order-derived consumption goes through the shared SQL", () => {
@@ -78,6 +80,20 @@ describe("refunds are withdrawn from the period they were taken from", () => {
     const text = source(refundRoute)
     expect(text).toMatch(/eq\(budgets\.period, budgetPeriodOf\(/)
     expect(text).not.toMatch(/eq\(budgets\.period, new Date\(\)/)
+  })
+
+  // Every place that decides "is this order still in its refund window" —
+  // the requester route, the Super Admin route, the group requester rules, and
+  // the browser that decides whether to show the form at all. A local-month
+  // comparison in any of them disagrees with the others near a month boundary.
+  it.each([
+    "app/api/v1/admin/refunds/route.ts",
+    "lib/server/group-refund-rules.ts",
+    "components/refund-management.tsx",
+  ])("%s judges the refund window with isSameBudgetPeriod, not local months", (path) => {
+    const text = source(path)
+    expect(text).toMatch(/isSameBudgetPeriod\(/)
+    expect(text).not.toMatch(/\.getMonth\(\)\s*[!=]==/)
   })
 
   it("judges the refund window on the same period, not on local calendar months", () => {

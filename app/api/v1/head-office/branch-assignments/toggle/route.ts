@@ -153,6 +153,13 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ error: "Missing organizationInventoryId or organizationId" }, { status: 400 })
         }
 
+        // The same tenant rule as the PUT above. Without it a Head Office could
+        // name any organization in the query string and read its branch and
+        // group names and per-branch status.
+        if (userRole === "HEAD_OFFICE" && Number(organizationId) !== Number((session.user as any).organizationId)) {
+            return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+        }
+
         // Get all branchInventory records for this product
         const assignments = await db.select({
             branchId: branchInventory.branchId,

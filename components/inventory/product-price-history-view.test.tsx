@@ -192,6 +192,18 @@ describe("Product Price History", () => {
     expect(swr.use).toHaveBeenLastCalledWith("/api/v1/admin/product-price-history?range=1y&productId=8")
   })
 
+  it("offers an export of the price change records beside the table", () => {
+    swr.response = fixture
+    render(<ProductPriceHistoryView role="SUPER_ADMIN" />)
+    expect(screen.getByRole("button", { name: "Export" })).toHaveProperty("disabled", false)
+  })
+
+  it("disables the export when the selected product has no records in range", () => {
+    swr.response = { ...fixture, points: [] }
+    render(<ProductPriceHistoryView role="SUPER_ADMIN" />)
+    expect(screen.getByRole("button", { name: "Export" })).toHaveProperty("disabled", true)
+  })
+
   it("explains a blank result without displaying a zero price", () => {
     swr.response = { ...fixture, products: [], selectedProduct: null, points: [] }
     render(<ProductPriceHistoryView role="SUPER_ADMIN" />)

@@ -17,6 +17,7 @@ describe("expired add-ons are settled before any hold is taken", () => {
     "app/api/v1/orders/route.ts",
     "app/api/v1/orders/[id]/route.ts",
     "lib/server/group-order-creation.ts",
+    "lib/server/order-desk-edit.ts",
   ]
 
   it.each(HOLD_PATHS)("%s settles under the row lock before checking the budget", (path) => {

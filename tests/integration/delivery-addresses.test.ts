@@ -254,12 +254,15 @@ describe.skipIf(!hasTestDatabase)("delivery addresses, end to end", () => {
       const created = await raise("orderPortal", validAddress("Gate 2", fixtures.northBranchId))
       await decideAs("head", created.body.address.id, { decision: "approve" })
 
+      // Pinned to this address: audit rows are append-only, so earlier tests'
+      // approvals are still in the table and an unordered `find` could pick one.
       const trail = await db
         .select()
         .from(auditLogs)
         .where(and(
           eq(auditLogs.organizationId, fixtures.organizationId),
           eq(auditLogs.entity, "branch_delivery_address"),
+          eq(auditLogs.entityId, String(created.body.address.id)),
         ))
 
       const actions = trail.map((row) => row.action)

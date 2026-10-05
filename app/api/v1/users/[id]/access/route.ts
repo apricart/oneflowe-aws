@@ -19,6 +19,7 @@ import {
   isSelfAccessChange,
 } from "@/lib/server/user-access-policy"
 import { USER_MANAGEMENT_ROLES } from "@/lib/user-management-access"
+import { isOrderDeskRole, orderDeskAccessChangeError } from "@/lib/order-desk-access"
 import { roleChangeRequiresSettledOrders } from "@/lib/role-change-preconditions"
 import { loadRoleChangeReadiness } from "@/lib/server/role-change-readiness"
 import {
@@ -85,6 +86,33 @@ async function getAssignmentError({
     ))
     .limit(1)
   return branch ? null : "Branch does not belong to the selected organization"
+}
+
+/**
+ * Why the requested shape is refused, or null. An Order Desk account accepts
+ * activation and MFA changes only — its role is fixed and its reach lives in its
+ * own assignments, never in organization/branch — so it skips the organization
+ * rule every other role is held to.
+ */
+async function getAccessShapeError({
+  scope,
+  targetRole,
+  input,
+  nextRole,
+  nextOrganizationId,
+  nextBranchId,
+}: {
+  scope: NonNullable<Awaited<ReturnType<typeof getRequestScope>>>
+  targetRole: string
+  input: Parameters<typeof orderDeskAccessChangeError>[1]
+  nextRole: string
+  nextOrganizationId: number | null
+  nextBranchId: number | null
+}): Promise<string | null> {
+  const orderDeskError = orderDeskAccessChangeError(targetRole, input)
+  if (orderDeskError) return orderDeskError
+  if (isOrderDeskRole(nextRole)) return null
+  return getAssignmentError({ scope, nextRole, nextOrganizationId, nextBranchId })
 }
 
 async function resolveRoleId(inputRole: string | undefined, nextRole: string) {
@@ -378,7 +406,7 @@ export async function PATCH(
   if ("message" in accessValues && accessValues.message) return error(accessValues.message, accessValues.status)
   const { nextRole, nextBudgetAllocationEnabled, nextOrganizationId, nextBranchId } = accessValues
 
-  const assignmentError = await getAssignmentError({ scope, nextRole, nextOrganizationId, nextBranchId })
+  const assignmentError = await getAccessShapeError({ scope, targetRole, input, nextRole, nextOrganizationId, nextBranchId })
   if (assignmentError) return error(assignmentError, 400)
 
   // Decided inside the write transaction below, not here — see

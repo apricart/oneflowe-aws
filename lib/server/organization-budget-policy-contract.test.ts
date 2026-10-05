@@ -25,6 +25,8 @@ const LEDGER_MOVERS = [
   "app/api/v1/orders/[id]/refunds/route.ts", // refund, direct or requested
   "app/api/v1/admin/refunds/route.ts", // Super Admin refund
   "app/api/v1/admin/delete-order/route.ts", // admin delete
+  "lib/server/order-desk-orders.ts", // Order Desk cancel
+  "lib/server/order-desk-edit.ts", // Order Desk edit
 ]
 
 /** The two paths that create an order. */

@@ -9,6 +9,8 @@ export type OrderLifecycleEmailTemplate =
   | "ORDER_APPROVED"
   | "ORDER_REJECTED"
   | "ORDER_APPROVED_ADMIN"
+  | "ORDER_RETURNED"
+  | "ORDER_RESUBMITTED"
 
 export type OrderLifecycleEmailPayload = {
   orderId: number
@@ -21,6 +23,10 @@ export type OrderLifecycleEmailPayload = {
   rejectionReason?: string | null
   /** ORDER_APPROVED_ADMIN only: approved at creation by organization policy, not by a person. */
   autoApproved?: boolean | null
+  /** ORDER_RETURNED only: what the approver asked to be corrected. */
+  correctionComment?: string | null
+  /** ORDER_RESUBMITTED only: the requester's optional reply. */
+  resubmissionNote?: string | null
 }
 
 const escapeHtml = (value: unknown) => stringifyPrimitive(value)
@@ -32,19 +38,29 @@ const escapeHtml = (value: unknown) => stringifyPrimitive(value)
 
 const safeTagValue = (value: string) => value.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 256) || "unknown"
 
-function orderUrl(template: OrderLifecycleEmailTemplate, orderId: number) {
-  const path = template === "ORDER_CREATED" || template === "ORDER_APPROVED_ADMIN"
-    ? `/orders/${orderId}`
-    : "/shop"
+/**
+ * Where the button goes. Approver-facing mail opens the order; requester-facing
+ * mail opens the requester's own portal, which for a Group Order Portal raiser
+ * is the group workspace rather than the shop.
+ */
+function orderUrl(template: OrderLifecycleEmailTemplate, orderId: number, recipientRole?: string | null) {
+  const opensOrder = template === "ORDER_CREATED"
+    || template === "ORDER_APPROVED_ADMIN"
+    || template === "ORDER_RESUBMITTED"
+  const requesterPortal = recipientRole === "GROUP_ORDER_PORTAL" ? "/group-portal" : "/shop"
+  const path = opensOrder ? `/orders/${orderId}` : requesterPortal
   return new URL(path, env.NEXTAUTH_URL).toString()
 }
 
 export function buildOrderLifecycleEmail(
   template: OrderLifecycleEmailTemplate,
   payload: OrderLifecycleEmailPayload,
+  recipientRole?: string | null,
 ) {
-  const link = orderUrl(template, payload.orderId)
+  const link = orderUrl(template, payload.orderId, recipientRole)
   const isCreated = template === "ORDER_CREATED"
+  const isReturned = template === "ORDER_RETURNED"
+  const isResubmitted = template === "ORDER_RESUBMITTED"
   const isAdminApproval = template === "ORDER_APPROVED_ADMIN"
   const isAutoApproval = isAdminApproval && payload.autoApproved === true
   const isApproved = template === "ORDER_APPROVED"
@@ -56,6 +72,12 @@ export function buildOrderLifecycleEmail(
   const heading = (() => {
     if (isCreated) {
       return "New order awaiting approval"
+    }
+    if (isReturned) {
+      return "Your order needs correction"
+    }
+    if (isResubmitted) {
+      return "Corrected order awaiting approval"
     }
     if (isAutoApproval) {
       return "Order approved automatically"
@@ -69,7 +91,7 @@ export function buildOrderLifecycleEmail(
     return "Your order was rejected"
   })()
   const accent = (() => {
-    if (isCreated) {
+    if (isCreated || isReturned || isResubmitted) {
       return "#d97706"
     }
     if (isApproved || isAdminApproval) {
@@ -80,6 +102,12 @@ export function buildOrderLifecycleEmail(
   const intro = (() => {
     if (isCreated) {
       return "An Order Portal user submitted a new order that requires your approval."
+    }
+    if (isReturned) {
+      return "An authorized administrator returned your order for correction. Update it as requested and resubmit it for approval. The order stays reserved while you do."
+    }
+    if (isResubmitted) {
+      return "An order that was returned for correction has been updated and resubmitted. It requires your approval."
     }
     if (isAutoApproval) {
       return "This order was approved automatically under its organization's order approval policy. It is ready for Super Admin review."
@@ -92,10 +120,16 @@ export function buildOrderLifecycleEmail(
     }
     return "An authorized administrator rejected your order."
   })()
-  const actionLabel = isCreated || isAdminApproval ? "Review order" : "View my orders"
+  const actionLabel = isCreated || isAdminApproval || isResubmitted ? "Review order" : "View my orders"
   const subject = (() => {
     if (isCreated) {
       return `Order ${payload.tid} is awaiting approval`
+    }
+    if (isReturned) {
+      return `Order ${payload.tid} was returned for correction`
+    }
+    if (isResubmitted) {
+      return `Order ${payload.tid} was resubmitted for approval`
     }
     if (isAutoApproval) {
       return `Order ${payload.tid} was approved automatically`
@@ -109,7 +143,13 @@ export function buildOrderLifecycleEmail(
   const rejectionBlock = template === "ORDER_REJECTED" && payload.rejectionReason
     ? `<div style="margin-top:20px;padding:14px;border-radius:10px;background:#fef2f2;color:#991b1b;font-size:14px;line-height:1.5;"><strong>Reason:</strong> ${escapeHtml(payload.rejectionReason)}</div>`
     : ""
-  const requesterRow = isCreated && payload.requestedBy
+  const correctionBlock = isReturned && payload.correctionComment
+    ? `<div style="margin-top:20px;padding:14px;border-radius:10px;background:#fffbeb;color:#92400e;font-size:14px;line-height:1.5;white-space:pre-line;"><strong>What to correct:</strong> ${escapeHtml(payload.correctionComment)}</div>`
+    : ""
+  const resubmissionBlock = isResubmitted && payload.resubmissionNote
+    ? `<div style="margin-top:20px;padding:14px;border-radius:10px;background:#f1f5f9;color:#334155;font-size:14px;line-height:1.5;white-space:pre-line;"><strong>Requester's note:</strong> ${escapeHtml(payload.resubmissionNote)}</div>`
+    : ""
+  const requesterRow = (isCreated || isResubmitted) && payload.requestedBy
     ? `<tr><td style="padding-top:8px;color:#64748b;font-size:13px;font-weight:700;">Requested by</td><td style="padding-top:8px;text-align:right;color:#1e293b;font-size:13px;font-weight:800;">${escapeHtml(payload.requestedBy)}</td></tr>`
     : ""
   const approverRow = isAdminApproval && payload.approvedBy
@@ -134,6 +174,8 @@ export function buildOrderLifecycleEmail(
             ${approverRow}
           </table>
           ${rejectionBlock}
+          ${correctionBlock}
+          ${resubmissionBlock}
           <div style="margin-top:26px;"><a href="${escapeHtml(link)}" style="display:inline-block;padding:12px 18px;border-radius:9px;background:${accent};color:#ffffff;text-decoration:none;font-size:14px;font-weight:800;">${escapeHtml(actionLabel)}</a></div>
           <p style="margin:24px 0 0;color:#94a3b8;font-size:12px;line-height:1.5;">Sign in to OneFlowe to view current order details. This email never contains an approval or fulfillment token.</p>
         </td></tr>
@@ -149,9 +191,11 @@ export function buildOrderLifecycleEmail(
     `Order TID: ${payload.tid}`,
     `Organization: ${payload.organizationName}`,
     `Branch: ${payload.branchName}`,
-    isCreated && payload.requestedBy ? `Requested by: ${payload.requestedBy}` : "",
+    (isCreated || isResubmitted) && payload.requestedBy ? `Requested by: ${payload.requestedBy}` : "",
     isAdminApproval && payload.approvedBy ? `Approved by: ${payload.approvedBy}` : "",
     template === "ORDER_REJECTED" && payload.rejectionReason ? `Reason: ${payload.rejectionReason}` : "",
+    isReturned && payload.correctionComment ? `What to correct: ${payload.correctionComment}` : "",
+    isResubmitted && payload.resubmissionNote ? `Requester's note: ${payload.resubmissionNote}` : "",
     `${actionLabel}: ${link}`,
   ].filter(Boolean).join("\n")
 
@@ -162,8 +206,9 @@ export async function sendOrderLifecycleEmail(input: {
   to: string
   template: OrderLifecycleEmailTemplate
   payload: OrderLifecycleEmailPayload
+  recipientRole?: string | null
 }) {
-  const content = buildOrderLifecycleEmail(input.template, input.payload)
+  const content = buildOrderLifecycleEmail(input.template, input.payload, input.recipientRole)
   const result = await sendAppEmail({
     to: input.to,
     fromName: "OneFlowe Orders",

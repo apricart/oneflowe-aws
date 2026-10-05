@@ -16,9 +16,9 @@ import {
 
 const source = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8")
 
-// The calendar-month window is evaluated in local time, matching the rule the
-// single-order refund endpoint already applies, so these dates are built from
-// local components rather than UTC strings to stay timezone-independent.
+// The window is the order's budget period (the UTC month), the rule the
+// single-order refund endpoint applies. These mid-month dates fall in the same
+// month in every timezone; the month-boundary cases below use UTC instants.
 const NOW = new Date(2026, 7, 21, 10, 0, 0)
 const THIS_MONTH = new Date(2026, 7, 3, 9, 0, 0)
 const LAST_MONTH = new Date(2026, 6, 15, 9, 0, 0)
@@ -90,6 +90,16 @@ describe("requester refund eligibility", () => {
     expect(isWithinRefundMonth(LAST_MONTH.toISOString(), NOW)).toBe(false)
     // Same month a year earlier is still outside the window.
     expect(isWithinRefundMonth(new Date(2025, 7, 3), NOW)).toBe(false)
+  })
+
+  it("follows the UTC month at a boundary, whatever the local zone says", () => {
+    // 1 Oct 02:00 in Karachi is still 30 Sep in UTC: a September order is
+    // still refundable, exactly as the single-order endpoint decides.
+    const earlyFirstInKarachi = new Date("2026-09-30T21:00:00.000Z")
+    expect(isWithinRefundMonth(new Date("2026-09-10T08:00:00.000Z"), earlyFirstInKarachi)).toBe(true)
+    // An order placed then belongs to September, so October's window excludes it.
+    expect(isWithinRefundMonth(earlyFirstInKarachi, new Date("2026-10-01T06:00:00.000Z"))).toBe(false)
+    expect(isWithinRefundMonth(new Date("2026-09-30T23:59:59.999Z"), new Date("2026-10-01T00:00:00.000Z"))).toBe(false)
   })
 })
 

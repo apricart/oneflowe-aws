@@ -426,3 +426,150 @@ describe("pages for a session that still owes a password change, per role", () =
     expect(response.headers.get("location")).not.toBe("https://app.test/change-password")
   })
 })
+
+describe("Apricart's Order Desk session", () => {
+  beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW)
+    mocks.getToken.mockReset()
+    mocks.logger.mockReset()
+  })
+
+  afterEach(() => vi.restoreAllMocks())
+
+  // A desk account has no organization of its own.
+  const deskToken = () => ({ ...validToken("ORDER_DESK"), organizationId: null })
+
+  function apiRequest(path: string, method: string) {
+    return new NextRequest(`https://app.test${path}`, {
+      method,
+      headers: { origin: "https://app.test", "sec-fetch-site": "same-origin" },
+    })
+  }
+
+  it.each([
+    ["POST", "/api/v1/orders"],
+    ["GET", "/api/v1/order-desk/targets"],
+    ["GET", "/api/v1/order-desk/catalogue"],
+    ["GET", "/api/v1/order-desk/orders"],
+    ["GET", "/api/v1/order-desk/orders/"],
+    ["PUT", "/api/v1/order-desk/orders/42"],
+    ["POST", "/api/v1/order-desk/orders/42/fulfil"],
+    ["POST", "/api/v1/order-desk/orders/42/cancel"],
+    ["GET", "/api/v1/order-desk/orders/42/attachment"],
+    ["POST", "/api/v1/upload/image"],
+    ["GET", "/api/v1/orders/42/refunds"],
+    ["POST", "/api/v1/orders/42/refunds"],
+    ["POST", "/api/v1/users/me/change-password"],
+  ])("lets %s %s through to its handler", async (method, path) => {
+    mocks.getToken.mockResolvedValue(deskToken())
+
+    const response = await proxy(apiRequest(path, method))
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get("x-middleware-next")).toBe("1")
+  })
+
+  it.each([
+    // Reads that would otherwise run with no tenant on the session.
+    ["GET", "/api/v1/orders"],
+    ["GET", "/api/v1/orders/42"],
+    ["GET", "/api/v1/users"],
+    ["GET", "/api/v1/organizations"],
+    ["GET", "/api/v1/branches"],
+    ["GET", "/api/v1/budgets"],
+    ["GET", "/api/v1/branch/inventory"],
+    ["GET", "/api/v1/analytics/sales-performance"],
+    ["GET", "/api/v1/activity-logs"],
+    // Writes it must never reach: prices, users, tenants, approvals, the
+    // Super Admin fulfilment route, and its own team administration.
+    ["PATCH", "/api/v1/organizations/7"],
+    ["POST", "/api/v1/users"],
+    ["PATCH", "/api/v1/users/u-1/access"],
+    ["PUT", "/api/v1/groups/3/prices"],
+    ["POST", "/api/v1/orders/42/approve"],
+    ["POST", "/api/v1/orders/42/fulfill"],
+    ["POST", "/api/v1/orders/42/fulfillment-status"],
+    // Delivery is Super Admin's to record; the desk's old step is gone.
+    ["POST", "/api/v1/order-desk/orders/42/delivery"],
+    ["GET", "/api/v1/images/products/0b9b1c2e-3f4a-4b5c-8d6e-7f8091a2b3c4.png"],
+    ["PATCH", "/api/v1/admin/refunds/9"],
+    ["GET", "/api/v1/order-desk/team"],
+    ["PUT", "/api/v1/order-desk/team/u-1/assignments"],
+    // Right path, wrong method or a lookalike path.
+    ["GET", "/api/v1/order-desk/orders/42/fulfil"],
+    ["DELETE", "/api/v1/orders"],
+    ["POST", "/api/v1/order-desk/orders/abc/fulfil"],
+    ["POST", "/api/v1/order-desk/orders/42/fulfil/extra"],
+    ["POST", "/api/v1/orders-export"],
+  ])("refuses %s %s before any handler runs", async (method, path) => {
+    mocks.getToken.mockResolvedValue(deskToken())
+
+    const response = await proxy(apiRequest(path, method))
+
+    expect(response.status).toBe(403)
+    expect(response.headers.get("x-middleware-next")).toBeNull()
+    expect(response.headers.get("cache-control")).toContain("no-store")
+  })
+
+  it("leaves every other role's API traffic to its handlers", async () => {
+    mocks.getToken.mockResolvedValue(validToken("SUPER_ADMIN"))
+
+    const response = await proxy(apiRequest("/api/v1/order-desk/team", "GET"))
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get("x-middleware-next")).toBe("1")
+  })
+
+  it("still holds a desk session that owes a password change to the change endpoints", async () => {
+    mocks.getToken.mockResolvedValue({ ...deskToken(), mustChangePassword: true })
+
+    const response = await proxy(apiRequest("/api/v1/order-desk/targets", "GET"))
+
+    expect(response.status).toBe(403)
+    await expect(response.json()).resolves.toMatchObject({ code: "PASSWORD_CHANGE_REQUIRED" })
+  })
+
+  it.each([
+    ["/order-desk", null],
+    ["/order-desk/anything", null],
+    ["/dashboard", "/order-desk"],
+    ["/orders", "/order-desk"],
+    ["/users", "/order-desk"],
+    ["/organizations", "/order-desk"],
+    ["/desk-team", "/order-desk"],
+    ["/shop", "/order-desk"],
+    ["/group-portal", "/order-desk"],
+    ["/invoices/42", "/order-desk"],
+    ["/support", "/order-desk"],
+  ])("confines the desk's pages: %s", async (path, redirectedPath) => {
+    mocks.getToken.mockResolvedValue(deskToken())
+
+    const response = await proxy(request(path))
+
+    if (redirectedPath) {
+      expect(response.status).toBe(307)
+      expect(new URL(response.headers.get("location")!).pathname).toBe(redirectedPath)
+    } else {
+      expect(response.status).toBe(200)
+    }
+  })
+
+  it.each([
+    ["SUPER_ADMIN", "/desk-team", null],
+    ["HEAD_OFFICE", "/desk-team", "/dashboard"],
+    ["BRANCH_ADMIN", "/desk-team", "/dashboard"],
+    ["SUPER_ADMIN", "/order-desk", "/dashboard"],
+    ["HEAD_OFFICE", "/order-desk", "/dashboard"],
+  ])("keeps %s to its own side of %s", async (role, path, redirectedPath) => {
+    mocks.getToken.mockResolvedValue(validToken(role))
+
+    const response = await proxy(request(path))
+
+    if (redirectedPath) {
+      expect(response.status).toBe(307)
+      expect(new URL(response.headers.get("location")!).pathname).toBe(redirectedPath)
+    } else {
+      expect(response.status).toBe(200)
+    }
+  })
+})

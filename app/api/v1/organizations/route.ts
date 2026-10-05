@@ -231,6 +231,7 @@ export async function POST(req: Request) {
           // Written explicitly: the column default keeps directly inserted
           // rows budgeted, the product default for a new tenant is off.
           budgetsEnabled: body.budgetsEnabled,
+          managedOrdering: body.managedOrdering,
           privateNetworkLoginEnabled: privateNetworkLogin.enabled,
         })
         .returning()
@@ -271,6 +272,7 @@ export async function POST(req: Request) {
           blockOrderingOnUnpaidInvoices: body.blockOrderingOnUnpaidInvoices,
           blockOrderingOnUnacknowledgedDeliveries: body.blockOrderingOnUnacknowledgedDeliveries,
           budgetsEnabled: body.budgetsEnabled,
+          managedOrdering: body.managedOrdering,
           budgetAllocationMode,
           emailDomain: createdOrganization.emailDomain,
           privateNetworkLoginEnabled: privateNetworkLogin.enabled,
