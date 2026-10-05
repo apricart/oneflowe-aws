@@ -35,6 +35,7 @@ import { getRequestScope } from "@/lib/auth"
 import { UNPAID_INVOICE_ORDERING_BLOCK_AUDIT_ACTION } from "@/lib/unpaid-invoice-block"
 import { UNACKNOWLEDGED_DELIVERY_ORDERING_BLOCK_AUDIT_ACTION } from "@/lib/unacknowledged-delivery-block"
 import { ORGANIZATION_BUDGETS_AUDIT_ACTION } from "@/lib/organization-budget-policy"
+import { ORGANIZATION_MANAGED_ORDERING_AUDIT_ACTION } from "@/lib/order-desk-access"
 
 type OrganizationUpdateInput = ReturnType<typeof organizationUpdateSchema.parse>
 
@@ -46,6 +47,7 @@ const VERBATIM_ORGANIZATION_FIELDS = [
   "blockOrderingOnUnpaidInvoices",
   "blockOrderingOnUnacknowledgedDeliveries",
   "budgetsEnabled",
+  "managedOrdering",
 ] as const satisfies ReadonlyArray<keyof OrganizationUpdateInput>
 
 // Already fully validated by the schema (the email domain normalised, null and
@@ -157,6 +159,7 @@ export async function PATCH(
           orderApprovalRequired: organizations.orderApprovalRequired,
           blockOrderingOnUnpaidInvoices: organizations.blockOrderingOnUnpaidInvoices,
           blockOrderingOnUnacknowledgedDeliveries: organizations.blockOrderingOnUnacknowledgedDeliveries,
+          managedOrdering: organizations.managedOrdering,
           budgetsEnabled: organizations.budgetsEnabled,
         })
         .from(organizations)
@@ -282,6 +285,8 @@ export async function PATCH(
         })
       }
 
+      await auditManagedOrderingToggle(tx, { userId: scope.userId, orgId, body, existingOrganization })
+
       return { kind: "updated", item: updatedOrganization } as const
     })
     if (!transactionResult) return error("Organization not found", 404)
@@ -360,6 +365,34 @@ async function auditOrderingBlockToggles(
       },
     })
   }
+}
+
+/**
+ * Opening a tenant to Apricart's Order Desk, or closing it, changes who may
+ * raise its orders, so both directions are on the trail. The PATCH's FOR UPDATE
+ * on the organization row is what a desk order's FOR SHARE on it waits on.
+ */
+async function auditManagedOrderingToggle(
+  tx: OrganizationTx,
+  { userId, orgId, body, existingOrganization }: {
+    userId: string
+    orgId: number
+    body: OrganizationUpdateInput
+    existingOrganization: { managedOrdering: boolean }
+  },
+): Promise<void> {
+  if (body.managedOrdering === undefined || body.managedOrdering === existingOrganization.managedOrdering) return
+  await tx.insert(auditLogs).values({
+    userId,
+    organizationId: orgId,
+    action: ORGANIZATION_MANAGED_ORDERING_AUDIT_ACTION,
+    entity: "organization",
+    entityId: String(orgId),
+    metadata: {
+      previousManagedOrdering: existingOrganization.managedOrdering,
+      managedOrdering: body.managedOrdering,
+    },
+  })
 }
 
 export async function DELETE(

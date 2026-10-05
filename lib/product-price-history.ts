@@ -73,6 +73,23 @@ export type ProductPriceHistoryResponse = {
   }
 }
 
+export function productPriceHistoryScopeLabel(scope: ProductPriceHistoryScope): string {
+  return {
+    GLOBAL: "Global",
+    ORGANIZATION: "Organization",
+    GROUP: "Group",
+    BRANCH: "Historical branch",
+  }[scope]
+}
+
+export function productPriceHistorySourceLabel(source: ProductPriceHistorySource): string {
+  return {
+    CATALOG_CHANGE: "Recorded change",
+    ORDER_BACKFILL: "Historical backfill",
+    MIGRATION_BASELINE: "Migration baseline",
+  }[source]
+}
+
 export function isProductPriceHistoryRange(value: string | null): value is ProductPriceHistoryRangeKey {
   return PRODUCT_PRICE_HISTORY_RANGE_KEYS.includes(value as ProductPriceHistoryRangeKey)
 }

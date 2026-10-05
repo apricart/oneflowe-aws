@@ -817,6 +817,9 @@ function RoleAssignmentFields({
                     select. VIEWER is not in SWITCHABLE_ROLES, so the control is
                     read-only for it, exactly as it is for Head Office. */}
                 <SelectItem value="VIEWER">Viewer (read-only)</SelectItem>
+                {/* Likewise for an Order Desk account, whose role is fixed and
+                    whose reach is granted from Order Desk Team. */}
+                <SelectItem value="ORDER_DESK">Order Desk (Apricart)</SelectItem>
               </>
             )}
           </SelectContent>
@@ -1253,6 +1256,8 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
         return <Badge className="bg-cyan-100 text-cyan-800">Group User</Badge>
       case "VIEWER":
         return <Badge className="bg-slate-100 text-slate-800">Viewer</Badge>
+      case "ORDER_DESK":
+        return <Badge className="bg-indigo-100 text-indigo-800">Order Desk</Badge>
       default:
         return <Badge variant="outline">{role}</Badge>
     }
@@ -1363,6 +1368,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
             <SelectItem value="GROUP_ORDER_PORTAL">Group Order Portal User</SelectItem>
             <SelectItem value="GROUP_USER">Group User</SelectItem>
             <SelectItem value="VIEWER">Viewer (read-only)</SelectItem>
+            <SelectItem value="ORDER_DESK">Order Desk (Apricart)</SelectItem>
           </SelectContent>
         </Select>
 

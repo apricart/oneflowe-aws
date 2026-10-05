@@ -554,6 +554,27 @@
       "when": 1791014400000,
       "tag": "20261003120000_add_product_request_review_stage",
       "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "7",
+      "when": 1791018000000,
+      "tag": "20261005120000_add_order_desk",
+      "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1791021600000,
+      "tag": "20261005130000_add_order_desk_attachment_and_cancellation",
+      "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1791025200000,
+      "tag": "20261006120000_add_order_correction_requests",
+      "breakpoints": true
     }
   ]
 }

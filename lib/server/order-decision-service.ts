@@ -1,6 +1,6 @@
 import "server-only"
 
-import { and, eq, gte, sql } from "drizzle-orm"
+import { and, eq, gte, isNull, sql } from "drizzle-orm"
 
 import { auditLogs, budgets, globalProducts, orderItems, orders } from "@/db/schema"
 import type { RequestScope } from "@/lib/auth"
@@ -9,6 +9,8 @@ import { db } from "@/lib/db"
 import { logTokenGenerated } from "@/lib/global-logger"
 import { orderSelectColumns } from "@/lib/order-select"
 import { budgetPeriodOf } from "@/lib/budget-consumption"
+import { isAwaitingCorrection } from "@/lib/order-correction"
+import { closeOpenCorrectionRequest } from "@/lib/server/order-correction"
 import { authorizeOrderDecision } from "@/lib/server/order-decision-policy"
 import {
   queueOrderDecisionNotification,
@@ -54,6 +56,8 @@ export type OrderDecisionOutcome =
   | { kind: "not-found" }
   | { kind: "forbidden" }
   | { kind: "invalid-state"; status: string }
+  /** Pending, but sent back to the requesters; it cannot be approved until resubmitted. */
+  | { kind: "awaiting-correction" }
   | { kind: "conflict" }
   | { kind: "ledger-conflict"; decision: "approve" | "reject" }
 
@@ -80,6 +84,7 @@ function unsuccessfulOutcome(
   }
   if (result.kind === "not-found") return { kind: "not-found" }
   if (result.kind === "forbidden") return { kind: "forbidden" }
+  if (result.kind === "awaiting-correction") return { kind: "awaiting-correction" }
   return { kind: "conflict" }
 }
 
@@ -100,6 +105,9 @@ export async function approveOrder({
     if (ord.status.toUpperCase() !== "PENDING") {
       return { kind: "invalid-state", status: ord.status } as const
     }
+    // With the requesters for correction: the approver waits for the corrected
+    // order rather than approving the one it sent back.
+    if (isAwaitingCorrection(ord)) return { kind: "awaiting-correction" } as const
 
     const tokenHash = await hashApprovalToken(plainToken)
     const [approved] = await tx.update(orders).set({
@@ -113,6 +121,9 @@ export async function approveOrder({
     }).where(and(
       eq(orders.id, orderId),
       sql`UPPER(${orders.status}) = 'PENDING'`,
+      // Re-evaluated on the row a concurrent return just wrote, so a return
+      // and an approval racing each other cannot both succeed.
+      isNull(orders.returnedForCorrectionAt),
     )).returning({ id: orders.id })
 
     if (!approved) return { kind: "conflict" } as const
@@ -203,6 +214,11 @@ export async function rejectOrder({
         rejectedByUserId: user.id,
         rejectedAt: new Date(),
         rejectionReason: reason,
+        // A returned order may still be rejected outright. The open request
+        // goes with it — the row check allows the flag only on PENDING.
+        returnedForCorrectionAt: null,
+        returnedForCorrectionByUserId: null,
+        correctionRequestNote: null,
         updatedAt: new Date(),
       }).where(and(
         eq(orders.id, orderId),
@@ -210,6 +226,13 @@ export async function rejectOrder({
       )).returning(orderSelectColumns)
 
       if (!rejectedOrder) throw new Error("ORDER_TRANSITION_CONFLICT")
+
+      const closedCorrectionRequestId = await closeOpenCorrectionRequest(tx, {
+        orderId,
+        resolution: "REJECTED",
+        userId: user.id,
+        role: user.role,
+      })
 
       // 2. Restore budget — only the hold this order took. An order placed
       // while its tenant had budgets off holds nothing, and releasing its total
@@ -268,6 +291,7 @@ export async function rejectOrder({
           tid: rejectedOrder.tid,
           reason,
           actorRole: user.role,
+          closedCorrectionRequestId,
           decisionRole: authorization.decisionRole,
           configuredApproverRole: authorization.configuredApproverRole,
         },
@@ -314,6 +338,11 @@ export function orderDecisionErrorResponse(
       return { message: "Forbidden", status: 403 }
     case "invalid-state":
       return { message: `Cannot ${decision} order in ${outcome.status} state`, status: 400 }
+    case "awaiting-correction":
+      return {
+        message: "This order was returned for correction and cannot be approved until it is resubmitted",
+        status: 409,
+      }
     case "conflict":
       return { message: "Order was already approved, rejected, or otherwise changed", status: 409 }
     case "ledger-conflict":

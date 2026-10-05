@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { ORDER_APPROVER_ROLES } from "@/lib/order-approver-role"
 import { MAX_BUSINESS_QUANTITY, isUniquePositiveIdList } from "@/lib/business-rules"
+import { ORDER_CORRECTION_TEXT_MAX_LENGTH } from "@/lib/order-correction"
 import {
   DELIVERY_ADDRESS_DECISIONS,
   MAX_DELIVERY_ADDRESS_CITY,
@@ -30,6 +31,7 @@ import {
   normalizeJoinCode,
 } from "@/lib/organization-join"
 import { MAX_PRICE_CENTS } from "@/lib/price-ladder"
+import { CANCELLATION_REASON_MAX_LENGTH, INTAKE_CHANNELS, INTAKE_REFERENCE_MAX_LENGTH } from "@/lib/order-desk-access"
 import { MAX_ALLOWLIST_ENTRIES } from "@/lib/security/ip-allowlist"
 import {
   MAX_PO_NUMBER_LENGTH,
@@ -61,6 +63,9 @@ export const systemRoleSchema = z.enum([
   // admitted only to the analytics reads its dashboard needs
   // (`lib/viewer-access.ts`).
   "VIEWER",
+  // Apricart's internal order entry. No organization of its own; its reach is
+  // the managed organizations Super Admin assigns it (`lib/order-desk-access.ts`).
+  "ORDER_DESK",
 ])
 
 export type SystemRole = z.infer<typeof systemRoleSchema>
@@ -124,6 +129,15 @@ export const userCreateSchema = z.object({
 export const userScopeUpdateSchema = z.object({
   groupIds: assignedIdList.optional().default([]),
   branchIds: assignedIdList.optional().default([]),
+}).strict()
+
+/**
+ * Replaces an Order Desk user's whole reach: organizations granted whole, and
+ * single branches. Both bounded; sending both empty withdraws all reach.
+ */
+export const orderDeskAssignmentsUpdateSchema = z.object({
+  organizationIds: assignedIdList,
+  branchIds: assignedIdList,
 }).strict()
 
 export const userProfileUpdateSchema = z.object({
@@ -251,6 +265,9 @@ export const organizationCreateSchema = z.object({
   // Off unless asked for: an organization created in the application starts
   // without budget allocation (DEFAULT_ORGANIZATION_BUDGETS_ENABLED).
   budgetsEnabled: z.boolean().optional().default(false),
+  // Whether Apricart's Order Desk keys in this customer's orders. Off unless
+  // asked for (lib/order-desk-access.ts).
+  managedOrdering: z.boolean().optional().default(false),
   budgetAllocationMode: z.enum(["money", "quantity"]).optional(),
   priceVisibility: z.object({
     hideBranchAdminPrices: z.boolean().optional(),
@@ -272,6 +289,7 @@ export const organizationUpdateSchema = z.object({
   blockOrderingOnUnpaidInvoices: z.boolean().optional(),
   blockOrderingOnUnacknowledgedDeliveries: z.boolean().optional(),
   budgetsEnabled: z.boolean().optional(),
+  managedOrdering: z.boolean().optional(),
   budgetAllocationMode: z.enum(["money", "quantity"]).optional(),
 }).strict().refine((input) => Object.keys(input).length > 0, {
   message: "At least one organization field is required",
@@ -335,6 +353,27 @@ export const orderCreateSchema = z.object({
    * `status = 'approved'`.
    */
   deliveryAddressId: positiveId.optional(),
+  /**
+   * Where an Order Desk order came from. Both are required on a desk order and
+   * refused on any other (`orderIntakeError` in `lib/order-desk-access.ts`), so
+   * the shape here only bounds them.
+   */
+  intakeChannel: z.enum(INTAKE_CHANNELS).optional(),
+  intakeReference: z.string().trim().min(1).max(INTAKE_REFERENCE_MAX_LENGTH).optional(),
+  /** The key the upload route returned for the customer's screenshot. Optional. */
+  intakeAttachmentKey: z.string().max(128).optional(),
+}).strict()
+
+/** An Order Desk edit of an Active order before delivery: its lines, notes and PO number. */
+export const orderDeskEditSchema = z.object({
+  items: orderMutationItemsSchema,
+  notes: z.string().trim().max(2_000).optional(),
+  poNumber: clearablePurchaseOrderNumber.optional(),
+}).strict()
+
+/** Why an Order Desk order is being withdrawn. Required, so the trail says. */
+export const orderDeskCancelSchema = z.object({
+  reason: z.string().trim().min(1, "A reason is required").max(CANCELLATION_REASON_MAX_LENGTH),
 }).strict()
 
 export const orderUpdateSchema = z.object({
@@ -352,6 +391,21 @@ export const orderUpdateSchema = z.object({
 
 export const rejectionSchema = z.object({
   reason: z.string().trim().min(1).max(2_000),
+}).strict()
+
+/** An approver sending a pending order back to its requesters. */
+export const orderCorrectionRequestSchema = z.object({
+  comment: z.string().trim().min(1, "A comment saying what to correct is required")
+    .max(ORDER_CORRECTION_TEXT_MAX_LENGTH),
+}).strict()
+
+/**
+ * A requester sending a corrected order back for approval. The note is
+ * optional — the correction may be the edit itself — and an all-blank note is
+ * recorded as no note.
+ */
+export const orderResubmissionSchema = z.object({
+  note: z.string().trim().max(ORDER_CORRECTION_TEXT_MAX_LENGTH).optional(),
 }).strict()
 
 export const fulfillmentSchema = z.object({

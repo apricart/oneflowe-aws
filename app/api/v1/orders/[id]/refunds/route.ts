@@ -27,6 +27,8 @@ import {
   usesMultiBranchScope,
 } from "@/lib/server/multi-branch-scope"
 import { notifyRaiserOfOrderWrite } from "@/lib/server/order-write-audit"
+import { isOrderDeskRole } from "@/lib/order-desk-access"
+import { loadDeskOrder } from "@/lib/server/order-desk-orders"
 
 const refundRequestRoles = new Set([
   "SUPER_ADMIN",
@@ -35,6 +37,9 @@ const refundRequestRoles = new Set([
   // Both requester roles, because the branch owns its orders: a group order and
   // a branch order arrive at the same place and spend the same budget.
   ...ORDER_WRITE_ROLES,
+  // Apricart's Order Desk, on the orders it entered and still reaches. Its
+  // request is PENDING like any requester's; Super Admin approves it.
+  "ORDER_DESK",
 ])
 
 /**
@@ -82,6 +87,7 @@ function canAccessOrderForRefund(
   userOrgId: unknown,
   allowedBranchIds: readonly number[],
   userId: string,
+  deskOrderInReach = false,
 ) {
   if (!refundRequestRoles.has(userRole)) {
     return false
@@ -89,6 +95,12 @@ function canAccessOrderForRefund(
 
   if (userRole === "SUPER_ADMIN") {
     return true
+  }
+
+  // No organization of its own: the desk reaches an order only through its
+  // live assignments, resolved by the caller (`loadDeskOrder`).
+  if (isOrderDeskRole(userRole)) {
+    return deskOrderInReach
   }
 
   if (userRole === "HEAD_OFFICE") {
@@ -129,7 +141,7 @@ function getRefundEligibilityError(orderData: any, role: string) {
   if (!isSameBudgetPeriod(orderData.createdAt, new Date())) {
     return "Refund period ended. Refunds are only allowed within the calendar month of the order."
   }
-  if (isOrderWriteRole(role) && !isOrderPortalRefundEligible(status, orderData.fulfillmentStatus)) {
+  if ((isOrderWriteRole(role) || isOrderDeskRole(role)) && !isOrderPortalRefundEligible(status, orderData.fulfillmentStatus)) {
     return "A requester can request a refund only after the order is fulfilled and delivered."
   }
   return null
@@ -459,8 +471,9 @@ export async function GET(
     const userId = (session.user as any).id as string
     const pricesHidden = await shouldHidePricesForRole(userRole, order.organizationId)
     const allowedBranchIds = await resolveRefundBranchIds(userRole, userId, userBranchId)
+    const deskOrderInReach = isOrderDeskRole(userRole) && Boolean(await loadDeskOrder(db, userId, orderId))
 
-    if (!canAccessOrderForRefund(userRole, order, userOrgId, allowedBranchIds, userId)) {
+    if (!canAccessOrderForRefund(userRole, order, userOrgId, allowedBranchIds, userId, deskOrderInReach)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
 
@@ -599,9 +612,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const userBranchId = (session.user as any).branchId
     const pricesHidden = await shouldHidePricesForRole(userRole, orderData.organizationId)
     const allowedBranchIds = await resolveRefundBranchIds(userRole, userId, userBranchId)
+    const deskOrderInReach = isOrderDeskRole(userRole) && Boolean(await loadDeskOrder(db, userId, orderId))
     const eligibilityError = getRefundEligibilityError(orderData, userRole)
     if (eligibilityError) return NextResponse.json({ error: eligibilityError }, { status: 400 })
-    if (!canAccessOrderForRefund(userRole, orderData, userOrgId, allowedBranchIds, userId)) {
+    if (!canAccessOrderForRefund(userRole, orderData, userOrgId, allowedBranchIds, userId, deskOrderInReach)) {
       return NextResponse.json({ error: "Forbidden: Cannot request a refund for this order" }, { status: 403 })
     }
     // Named in the audit row and notified below when a colleague, rather than

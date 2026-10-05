@@ -56,6 +56,13 @@ export const organizations = pgTable(
     budgetsEnabled: boolean("budgets_enabled")
       .notNull()
       .default(true),
+    // Whether Apricart's Order Desk keys in this customer's orders (taken by
+    // email or WhatsApp). Off by default, so no existing tenant becomes
+    // reachable by the desk. Super Admin only; a desk user additionally needs
+    // an `order_desk_assignments` row. See lib/order-desk-access.ts.
+    managedOrdering: boolean("managed_ordering")
+      .notNull()
+      .default(false),
     // When enabled, members of this tenant may only authenticate from an
     // address in organizationAllowedIps. Defaults to false so every existing
     // organization keeps unrestricted login until a Super Admin opts in.
@@ -755,6 +762,20 @@ export const orders = pgTable(
     // budgets on or off can never release or spend a hold the order did not
     // take. See `orderTakesBudget` in lib/organization-budget-policy.ts.
     budgetTracked: boolean("budget_tracked").notNull().default(true),
+    // Where an Order Desk order came from — the customer's email, WhatsApp
+    // message or call — so it can be traced back to its source. Required for a
+    // desk order and null on every portal order (lib/order-desk-access.ts).
+    intakeChannel: varchar("intake_channel", { length: 16 }),
+    intakeReference: varchar("intake_reference", { length: 255 }),
+    // The storage key of the screenshot of that message, if one was uploaded.
+    // Private: served only through the desk's own route, never the public
+    // product-image route. One order per screenshot.
+    intakeAttachmentKey: varchar("intake_attachment_key", { length: 128 }),
+    // An Order Desk order withdrawn before delivery: who, when and why. The
+    // hold and stock it took were released in the same transaction.
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+    cancelledByUserId: uuid("cancelled_by_user_id").references(() => users.id),
+    cancellationReason: text("cancellation_reason"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
     fulfilledAt: timestamp("fulfilled_at", { withTimezone: true }),
@@ -765,6 +786,15 @@ export const orders = pgTable(
     rejectedByUserId: uuid("rejected_by_user_id").references(() => users.id),
     rejectedAt: timestamp("rejected_at", { withTimezone: true }),
     rejectionReason: text("rejection_reason"),
+    // The approver's open request for a correction, while one is open: who
+    // sent the order back, when, and what to fix. The order stays PENDING —
+    // its hold, quantity hold and stock reservation are untouched — and cannot
+    // be approved until a requester resubmits it, which clears all three.
+    // Every round, open or closed, is kept in `order_correction_requests`.
+    // See plans/OF-ORDER-RETURN-for-correction.md.
+    returnedForCorrectionAt: timestamp("returned_for_correction_at", { withTimezone: true }),
+    returnedForCorrectionByUserId: uuid("returned_for_correction_by_user_id").references(() => users.id),
+    correctionRequestNote: text("correction_request_note"),
     // Secure approval token for fulfillment verification
     approvalToken: varchar("approval_token", { length: 16 }), // Plaintext - shown only to approver
     approvalTokenHash: varchar("approval_token_hash", { length: 255 }), // Hash for verification
@@ -851,6 +881,76 @@ export const orders = pgTable(
     uniqueIndex("orders_creator_idempotency_uq").on(t.createdByUserId, t.idempotencyKey),
     check("orders_amounts_nonnegative_ck", sql`${t.subtotalCents} >= 0 AND ${t.taxCents} >= 0 AND ${t.totalCents} >= 0 AND COALESCE(${t.refundAmountCents}, 0) >= 0 AND COALESCE(${t.refundAmountCents}, 0) <= ${t.totalCents}`),
     check("orders_idempotency_pair_ck", sql`(${t.idempotencyKey} IS NULL AND ${t.requestFingerprint} IS NULL) OR (${t.idempotencyKey} IS NOT NULL AND ${t.requestFingerprint} IS NOT NULL)`),
+    check("orders_intake_channel_ck", sql`${t.intakeChannel} IS NULL OR ${t.intakeChannel} IN ('EMAIL', 'WHATSAPP', 'PHONE', 'OTHER')`),
+    check(
+      "orders_intake_attachment_key_ck",
+      sql`${t.intakeAttachmentKey} IS NULL OR ${t.intakeAttachmentKey} ~ '^order-intake/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[.](jpg|png|gif|webp)$'`,
+    ),
+    uniqueIndex("orders_intake_attachment_key_uq")
+      .on(t.intakeAttachmentKey)
+      .where(sql`${t.intakeAttachmentKey} IS NOT NULL`),
+    // An open correction request is all three columns or none, and only ever on
+    // a PENDING order — so no path that moves the status can leave the flag
+    // behind on an approved, rejected or cancelled order.
+    check(
+      "orders_correction_state_ck",
+      sql`(${t.returnedForCorrectionAt} IS NULL AND ${t.returnedForCorrectionByUserId} IS NULL AND ${t.correctionRequestNote} IS NULL) OR (${t.returnedForCorrectionAt} IS NOT NULL AND ${t.returnedForCorrectionByUserId} IS NOT NULL AND ${t.correctionRequestNote} IS NOT NULL AND UPPER(${t.status}) = 'PENDING')`,
+    ),
+  ],
+)
+
+/**
+ * Every round of "returned for correction" an order has been through.
+ *
+ * The open round is mirrored on the order row (`returned_for_correction_*`),
+ * which is what every guard and list reads; this table is the history the
+ * order detail renders. A round is opened by an approver and closed either by a
+ * requester resubmitting the order or by the order being rejected. One open
+ * round per order, enforced by the partial unique index.
+ */
+export const orderCorrectionRequests = pgTable(
+  "order_correction_requests",
+  {
+    id: serial("id").primaryKey(),
+    // Cascade, so the administrative order deletion removes the trail with it.
+    orderId: integer("order_id")
+      .references(() => orders.id, { onDelete: "cascade" })
+      .notNull(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id)
+      .notNull(),
+    branchId: integer("branch_id")
+      .references(() => branches.id)
+      .notNull(),
+    requestedByUserId: uuid("requested_by_user_id")
+      .references(() => users.id)
+      .notNull(),
+    requestedByRole: varchar("requested_by_role", { length: 32 }).notNull(),
+    comment: text("comment").notNull(),
+    requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
+    resolution: varchar("resolution", { length: 16 }),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    resolvedByUserId: uuid("resolved_by_user_id").references(() => users.id),
+    resolvedByRole: varchar("resolved_by_role", { length: 32 }),
+    responseNote: text("response_note"),
+  },
+  (t) => [
+    index("order_correction_requests_order_idx").on(t.orderId, t.requestedAt),
+    uniqueIndex("order_correction_requests_open_uq")
+      .on(t.orderId)
+      .where(sql`${t.resolution} IS NULL`),
+    check(
+      "order_correction_requests_resolution_ck",
+      sql`${t.resolution} IS NULL OR ${t.resolution} IN ('RESUBMITTED', 'REJECTED')`,
+    ),
+    check(
+      "order_correction_requests_shape_ck",
+      sql`(${t.resolution} IS NULL AND ${t.resolvedAt} IS NULL AND ${t.resolvedByUserId} IS NULL AND ${t.resolvedByRole} IS NULL AND ${t.responseNote} IS NULL) OR (${t.resolution} IS NOT NULL AND ${t.resolvedAt} IS NOT NULL AND ${t.resolvedByUserId} IS NOT NULL AND ${t.resolvedByRole} IS NOT NULL)`,
+    ),
+    check(
+      "order_correction_requests_text_ck",
+      sql`char_length(btrim(${t.comment})) BETWEEN 1 AND 1000 AND (${t.responseNote} IS NULL OR char_length(${t.responseNote}) <= 1000)`,
+    ),
   ],
 )
 
@@ -1907,6 +2007,43 @@ export const userBranchAssignments = pgTable(
     index("user_branch_assignments_user_idx").on(t.userId),
     index("user_branch_assignments_branch_idx").on(t.branchId),
     index("user_branch_assignments_org_idx").on(t.organizationId),
+  ],
+)
+
+/**
+ * What an Order Desk user may reach. A row with `branch_id` null grants every
+ * branch of the organization; a row with a branch grants that branch alone.
+ *
+ * Deliberately a table of its own rather than rows in
+ * `user_branch_assignments`: those feed the group roles' scope and reporting
+ * (`resolveUsersScopedToBranches` reads every row regardless of role), and a
+ * desk user must never appear there. Super Admin writes these rows; the reach
+ * they grant is read through `lib/server/order-desk-scope.ts`, which also
+ * requires the organization to be `managed_ordering`.
+ */
+export const orderDeskAssignments = pgTable(
+  "order_desk_assignments",
+  {
+    id: serial("id").primaryKey(),
+    userId: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id, { onDelete: "cascade" })
+      .notNull(),
+    branchId: integer("branch_id").references(() => branches.id, { onDelete: "cascade" }),
+    createdByUserId: uuid("created_by_user_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("order_desk_assignments_user_org_uq")
+      .on(t.userId, t.organizationId)
+      .where(sql`${t.branchId} IS NULL`),
+    uniqueIndex("order_desk_assignments_user_branch_uq")
+      .on(t.userId, t.branchId)
+      .where(sql`${t.branchId} IS NOT NULL`),
+    index("order_desk_assignments_user_idx").on(t.userId),
+    index("order_desk_assignments_org_idx").on(t.organizationId),
   ],
 )
 

@@ -1,3 +1,4 @@
+import { isSameBudgetPeriod } from "@/lib/budget-consumption"
 import { isOrderPortalRefundEligible, isRefundEligibleOrderStatus, normalizeOrderStatus } from "@/lib/business-rules"
 import { roundQuantity } from "@/lib/quantity"
 
@@ -33,10 +34,11 @@ export type RefundEligibilityInput = {
 }
 
 /**
- * True while `orderCreatedAt` falls in the same calendar month as `now`.
+ * True while `orderCreatedAt` falls in the same budget period as `now`.
  *
- * This mirrors the window the single-order refund endpoint enforces, kept as
- * its own function so both the eligibility reason and the tests can use it.
+ * This is the window the single-order refund endpoint enforces, through the
+ * same `isSameBudgetPeriod` (the UTC month). It used to compare local calendar
+ * months, which agreed only while the server's zone happened to be UTC.
  */
 export function isWithinRefundMonth(
   orderCreatedAt: Date | string | null,
@@ -45,8 +47,7 @@ export function isWithinRefundMonth(
   if (!orderCreatedAt) return false
   const orderDate = orderCreatedAt instanceof Date ? orderCreatedAt : new Date(orderCreatedAt)
   if (Number.isNaN(orderDate.getTime())) return false
-  return orderDate.getMonth() === now.getMonth()
-    && orderDate.getFullYear() === now.getFullYear()
+  return isSameBudgetPeriod(orderDate, now)
 }
 
 /**

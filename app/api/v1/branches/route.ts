@@ -160,11 +160,11 @@ export async function GET(req: Request) {
       ? scope.branchId
       : undefined
 
-    // HEAD_OFFICE, BRANCH_ADMIN and VIEWER must have organization context
-    if (
-      (scope.role === "HEAD_OFFICE" || scope.role === "BRANCH_ADMIN" || isViewerRole(scope.role))
-      && (!scopedOrgIds || scopedOrgIds.length === 0)
-    ) {
+    // Every role but Super Admin lists inside its own organization. With no
+    // organization there is no tenant predicate at all, so a caller without one
+    // is refused rather than shown every tenant's branches — ORDER_PORTAL was
+    // once missing from this check.
+    if (scope.role !== "SUPER_ADMIN" && (!scopedOrgIds || scopedOrgIds.length === 0)) {
       return error("Organization context required", 403)
     }
 

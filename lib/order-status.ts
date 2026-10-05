@@ -1,6 +1,10 @@
+import { isAwaitingCorrection } from "@/lib/order-correction"
+
 type OrderStatusSource = {
   status?: string | null
   refundAmountCents?: number | null
+  /** Set while an approver has sent a pending order back for correction. */
+  returnedForCorrectionAt?: Date | string | null
 }
 
 export type OrderStatusContext = "default" | "fulfilled" | "refunded"
@@ -27,6 +31,7 @@ export function getPendingOrderReviewHref(
 
 export type DerivedOrderStatusKey =
   | "pending"
+  | "returned_for_correction"
   | "approved"
   | "fulfilled"
   | "partially_fulfilled"
@@ -133,6 +138,12 @@ export function getOrderDerivedStatus(
   if (refundVariant === "full") return { key: "refunded", label: "Refunded" }
 
   const key = getBaseStatusKey(order)
+
+  // Still PENDING underneath — every filter and money reader treats it as
+  // such — but it is with the requesters, not the approver, and says so.
+  if (key === "pending" && isAwaitingCorrection(order)) {
+    return { key: "returned_for_correction", label: "Returned for Correction" }
+  }
 
   switch (key) {
     case "pending":

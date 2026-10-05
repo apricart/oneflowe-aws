@@ -47,45 +47,42 @@ function maskSensitiveData(data: any, seen = new WeakSet()): any {
         return data
     }
 
-    // Handle circular references
-    if (typeof data === 'object') {
-        if (seen.has(data)) {
-            return '[Circular Reference]'
-        }
-        seen.add(data)
-    }
-
-    // Primitive types - check for sensitive patterns
-    if (typeof data === 'string') {
-        // Don't mask everything, just check if it's a known sensitive field value
-        return data
-    }
-
     if (typeof data !== 'object') {
         return data
     }
 
-    // Array handling
-    if (Array.isArray(data)) {
-        return data.map(item => maskSensitiveData(item, seen))
+    // `seen` holds the objects on the current path only, so a cycle is caught
+    // but the same object reached twice through siblings is still logged.
+    if (seen.has(data)) {
+        return '[Circular Reference]'
     }
+    seen.add(data)
 
-    // Object handling
-    const masked: any = {}
-    const sensitiveKeys = ['password', 'token', 'secret', 'apiKey', 'otp', 'pin', 'authorization']
-
-    for (const key of Object.keys(data)) {
-        const lowerKey = key.toLowerCase()
-        if (sensitiveKeys.some(sensitive => lowerKey.includes(sensitive))) {
-            masked[key] = '***MASKED***'
-        } else if (typeof data[key] === 'object' && data[key] !== null) {
-            masked[key] = maskSensitiveData(data[key], seen)
-        } else {
-            masked[key] = data[key]
+    try {
+        if (Array.isArray(data)) {
+            return data.map(item => maskSensitiveData(item, seen))
         }
-    }
 
-    return masked
+        const masked: any = {}
+        // Lower case, because the key is lowered before comparing: an `apiKey`
+        // entry here never matched anything, so API keys reached the logs.
+        const sensitiveKeys = ['password', 'token', 'secret', 'apikey', 'api_key', 'otp', 'pin', 'authorization']
+
+        for (const key of Object.keys(data)) {
+            const lowerKey = key.toLowerCase()
+            if (sensitiveKeys.some(sensitive => lowerKey.includes(sensitive))) {
+                masked[key] = '***MASKED***'
+            } else if (typeof data[key] === 'object' && data[key] !== null) {
+                masked[key] = maskSensitiveData(data[key], seen)
+            } else {
+                masked[key] = data[key]
+            }
+        }
+
+        return masked
+    } finally {
+        seen.delete(data)
+    }
 }
 
 /**

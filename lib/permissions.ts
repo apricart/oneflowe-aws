@@ -665,5 +665,18 @@ export const ROLE_TEMPLATES = {
       Permission.SUPPORT_REPLY,
     ],
   },
+  ORDER_DESK: {
+    name: "Order Desk (Apricart)",
+    description: "Apricart staff who key in and fulfil orders for the managed organizations assigned to them",
+    permissions: [
+      // Descriptive only, like every template here: what confines this role is
+      // `lib/order-desk-access.ts` (its reach and its API allowlist) and each
+      // handler's own check. Deliberately no PRICING_MANAGE, ORDER_APPROVE,
+      // USER_* or ORG_* key — it enters orders and settles its own, nothing more.
+      Permission.INVENTORY_VIEW,
+      Permission.ORDER_CREATE,
+      Permission.ORDER_VIEW,
+    ],
+  },
 }
 

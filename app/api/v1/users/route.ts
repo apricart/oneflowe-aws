@@ -11,6 +11,7 @@ import { sendWelcomeEmail } from "@/lib/email"
 import { userCreateSchema,validationMessage } from "@/lib/server/mutation-validation"
 import { canAssignRole } from "@/lib/server/user-access-policy"
 import { isViewerRole } from "@/lib/viewer-access"
+import { isOrderDeskRole, orderDeskUserShapeError } from "@/lib/order-desk-access"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { USER_MANAGEMENT_ROLES } from "@/lib/user-management-access"
 import { usernameExists } from "@/lib/user-username-uniqueness"
@@ -51,6 +52,12 @@ function getRoleShapeError(
   // every endpoint the role is admitted to.
   if (isViewerRole(role) && !organizationId) {
     return { message: "organizationId required for VIEWER", status: 400 }
+  }
+  // Apricart's own cross-tenant staff: no organization, no branch. Its reach is
+  // the assignments Super Admin grants from Desk team, never this row.
+  if (isOrderDeskRole(role)) {
+    const shapeError = orderDeskUserShapeError(organizationId, branchId)
+    return shapeError ? { message: shapeError, status: 400 } : null
   }
   if (["BRANCH_ADMIN", "ORDER_PORTAL"].includes(role) && (!organizationId || !branchId)) {
     return { message: "organizationId and branchId required for BRANCH_ADMIN and ORDER_PORTAL", status: 400 }

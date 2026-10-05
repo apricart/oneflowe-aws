@@ -11,6 +11,7 @@ import { calculateLineCents, formatQuantity, validateProductQuantity } from "@/l
 import { resolveAdminRefundReason } from "@/lib/admin-refund-approval"
 import { adminRefundProcessSchema, validationMessage } from "@/lib/server/mutation-validation"
 import { isRefundEligibleOrderStatus } from "@/lib/business-rules"
+import { isSameBudgetPeriod } from "@/lib/budget-consumption"
 import { withRateLimit } from "@/lib/rate-limiter"
 
 const parseRefundRequestId = (value: string | null) => {
@@ -120,9 +121,10 @@ function getRefundEligibilityError(order: any) {
         return `Order in ${currentStatus || "unknown"} state is not eligible for a refund.`
     }
     const orderDate = new Date(order.createdAt || new Date())
-    const now = new Date()
-    if (orderDate.getMonth() === now.getMonth() && orderDate.getFullYear() === now.getFullYear()) return null
-    const orderMonthName = orderDate.toLocaleString('default', { month: 'long', year: 'numeric' })
+    // The same window the requester route enforces: the order's UTC budget
+    // period, not the server's local calendar month.
+    if (isSameBudgetPeriod(orderDate, new Date())) return null
+    const orderMonthName = orderDate.toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' })
     return `Refunds are only allowed for orders in the current month. This order is from ${orderMonthName}.`
 }
 

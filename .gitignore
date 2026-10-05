@@ -63,3 +63,6 @@ next-env.d.ts
 
 # Test coverage output (npm run test:coverage / test:integration:coverage)
 /coverage/
+
+# Personal Claude Code overrides
+.claude/settings.local.json

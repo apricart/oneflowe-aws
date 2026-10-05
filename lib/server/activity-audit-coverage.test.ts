@@ -102,7 +102,7 @@ const DIRECT: readonly DirectRoute[] = [
     // S3 is not transactional; see the comment at the call site.
     file: "app/api/v1/upload/image/route.ts",
     handlers: ["POST"],
-    actions: ["UPLOAD_IMAGE"],
+    actions: ["UPLOAD_IMAGE", "UPLOAD_ORDER_INTAKE_ATTACHMENT"],
     nonTransactional: true,
   },
   {
@@ -170,6 +170,15 @@ const VIA_LIB: readonly { file: string; module: string }[] = [
   // halves of the story cannot be spelled differently.
   { file: "app/api/v1/delivery-addresses/route.ts", module: "lib/server/delivery-address-audit.ts" },
   { file: "app/api/v1/delivery-addresses/[id]/route.ts", module: "lib/server/delivery-address-audit.ts" },
+
+  // Apricart's Order Desk. Its fulfil step reaches `fulfillApprovedOrder`,
+  // which records the APPROVED → FULFILLED move with the ledger; cancel and
+  // edit record inside their own transactions. A Super Admin granting a desk
+  // user's reach records inside the replacement.
+  { file: "app/api/v1/order-desk/orders/[id]/fulfil/route.ts", module: "lib/server/order-desk-orders.ts" },
+  { file: "app/api/v1/order-desk/orders/[id]/cancel/route.ts", module: "lib/server/order-desk-orders.ts" },
+  { file: "app/api/v1/order-desk/orders/[id]/route.ts", module: "lib/server/order-desk-edit.ts" },
+  { file: "app/api/v1/order-desk/team/[userId]/assignments/route.ts", module: "lib/server/order-desk-team.ts" },
 ]
 
 /**

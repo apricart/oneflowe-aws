@@ -54,6 +54,17 @@ import { DELIVERY_ADDRESS_UNAVAILABLE } from "@/lib/delivery-address"
 import { ORDER_LIST_PRICE_SORT_KEYS,ORDER_LIST_SORT_KEYS,sortKeysForCaller,type OrderListSortKey } from "@/lib/list-sort-keys"
 import { parseSortParams } from "@/lib/table-sort"
 import { orderBySortSql } from "@/lib/server/sort-sql"
+import { mayCreateOrder } from "@/lib/order-creation-access"
+import { isOrderDeskRole, orderIntakeError } from "@/lib/order-desk-access"
+import { isOrderDeskTarget } from "@/lib/server/order-desk-scope"
+import { deskAttachmentRefusal } from "@/lib/server/order-desk-attachments"
+
+/**
+ * Thrown inside the creation transaction when an Order Desk user's grant to the
+ * target branch — or the organization's managed flag — was withdrawn after the
+ * pre-check. Answered with the same 403 as the pre-check.
+ */
+const ORDER_DESK_TARGET_UNAVAILABLE = "You are not assigned to order for this branch"
 
 /**
  * The column each allowlisted Orders-table sort key orders by. Text compares
@@ -657,6 +668,9 @@ async function logCreatedOrder(tx: any, context: any) {
       total: context.total,
       items: context.itemCount,
       autoApproved: context.order.status === "APPROVED",
+      // Why an order skipped approval when the creator, not the tenant's
+      // policy, made it Active (an Order Desk entry).
+      ...(context.approvalBasis ? { approvalBasis: context.approvalBasis } : {}),
     },
     ipAddress: forwardedFor ? forwardedFor.split(",")[0] : "unknown",
     userAgent: headersList.get("user-agent"),
@@ -665,7 +679,10 @@ async function logCreatedOrder(tx: any, context: any) {
 }
 
 async function persistCreatedOrder(tx: any, context: any) {
-  const initialApproval = await resolveInitialOrderApproval(tx, context.organizationId)
+  const initialApproval = await resolveInitialOrderApproval(tx, context.organizationId, new Date(), {
+    role: context.role,
+    userId: context.userId,
+  })
   const [order] = await tx.insert(orders).values({
     tid: context.tid,
     idempotencyKey: context.idempotencyKey,
@@ -691,6 +708,11 @@ async function persistCreatedOrder(tx: any, context: any) {
     // order, not the tenant's current setting. Written only when false, so a
     // budgeted order produces the INSERT it produced before the column existed.
     ...(context.budgetTracked ? {} : { budgetTracked: false }),
+    // Order Desk only (`orderIntakeError` refused them on any other order), and
+    // written only when present so every other INSERT is unchanged.
+    ...(context.intakeChannel ? { intakeChannel: context.intakeChannel } : {}),
+    ...(context.intakeReference ? { intakeReference: context.intakeReference } : {}),
+    ...(context.intakeAttachmentKey ? { intakeAttachmentKey: context.intakeAttachmentKey } : {}),
   }).returning(orderSelectColumns)
   await tx.insert(orderItems).values(context.items.map((item: any) => ({
     ...item,
@@ -699,7 +721,7 @@ async function persistCreatedOrder(tx: any, context: any) {
   })))
   await saveCreationLedgers(tx, { ...context, order })
   await saveOrderReceipt(tx, { ...context, order })
-  await logCreatedOrder(tx, { ...context, order })
+  await logCreatedOrder(tx, { ...context, order, approvalBasis: initialApproval.approvalBasis })
   return {
     order,
     queuedNotifications: await queueCreationNotifications(tx, context, order, initialApproval.approvalRequired),
@@ -714,6 +736,10 @@ async function persistCreatedOrder(tx: any, context: any) {
  * manually approved order.
  */
 async function queueCreationNotifications(tx: any, context: any, order: any, approvalRequired: boolean) {
+  // An Order Desk entry was keyed in by Apricart's own staff, so telling Super
+  // Admins it exists would only echo it back; the customer has no account to
+  // notify yet.
+  if (isOrderDeskRole(context.role)) return { eventKeys: [], recipientCount: 0 }
   if (!approvalRequired) return enqueueAutoApprovedOrderEvents(tx, { order })
   return context.role === "ORDER_PORTAL"
     ? enqueueCreatedOrderEvents(tx, { order, requestedBy: context.requestedBy })
@@ -743,6 +769,17 @@ async function resolveCreationDeliveryAddress(tx: any, context: any) {
 }
 
 async function processOrderCreationTransaction(tx: any, context: any) {
+  // An Order Desk user's grant is re-read under FOR SHARE on the assignment
+  // and organization rows, so withdrawing it (or the managed flag) waits for
+  // this order rather than racing past the pre-check.
+  if (isOrderDeskRole(context.role) && !await isOrderDeskTarget(tx, {
+    userId: context.userId,
+    organizationId: context.organizationId,
+    branchId: context.branchId,
+    lock: true,
+  })) {
+    throw new Error(ORDER_DESK_TARGET_UNAVAILABLE)
+  }
   // The payment-control gate runs first: the branch is authoritative by now
   // and nothing has been locked or written, so a blocked branch costs one
   // read and holds no row.
@@ -805,14 +842,52 @@ function resolveOrderTenant(role: string, sessionOrganizationId: unknown, reques
   if (role === "SUPER_ADMIN" && requestedOrganizationId && Number.isFinite(requestedOrganizationId)) {
     return { organizationId: requestedOrganizationId }
   }
+  // An Order Desk account has no organization of its own: it always names the
+  // target, and the route then checks that target against its assignments
+  // (`isOrderDeskTarget`) before anything is read or written.
+  if (isOrderDeskRole(role)) {
+    return requestedOrganizationId && Number.isFinite(requestedOrganizationId)
+      ? { organizationId: requestedOrganizationId }
+      : { error: "Organization ID is required" }
+  }
   if (role === "HEAD_OFFICE" && requestedOrganizationId !== undefined && requestedOrganizationId !== organizationId) {
     return { error: "Tenant reassignment is not permitted" }
   }
   return Number.isFinite(organizationId) ? { organizationId } : { error: "Organization ID not found" }
 }
 
+/**
+ * The Order Desk's two creation rules, or null when neither refuses:
+ *
+ *   * a desk order must say where it came from, and nobody else may claim to
+ *     be one (400);
+ *   * a desk user reaches only the managed organizations it is assigned to,
+ *     re-read from the database now and again under lock inside the
+ *     transaction (403).
+ */
+async function orderDeskCreationRefusal(role: unknown, input: {
+  userId: string
+  organizationId: number
+  branchId: number
+  intakeChannel?: string
+  intakeReference?: string
+  intakeAttachmentKey?: string
+}) {
+  const intakeError = orderIntakeError(role, input)
+  if (intakeError) return NextResponse.json({ error: intakeError }, { status: 400 })
+  if (!isOrderDeskRole(role)) return null
+  if (!await isOrderDeskTarget(db, { userId: input.userId, organizationId: input.organizationId, branchId: input.branchId })) {
+    return NextResponse.json({ error: ORDER_DESK_TARGET_UNAVAILABLE }, { status: 403 })
+  }
+  // The screenshot must be one this desk user uploaded, not yet on any order.
+  const attachmentError = input.intakeAttachmentKey
+    ? await deskAttachmentRefusal({ userId: input.userId, key: input.intakeAttachmentKey })
+    : null
+  return attachmentError ? NextResponse.json({ error: attachmentError }, { status: 400 }) : null
+}
+
 function getCreationBranchId(role: string, requestedBranchId: number | undefined, sessionBranchId: unknown) {
-  return Number.parseInt(String(["HEAD_OFFICE", "SUPER_ADMIN"].includes(role) ? requestedBranchId : sessionBranchId))
+  return Number.parseInt(String(["HEAD_OFFICE", "SUPER_ADMIN", "ORDER_DESK"].includes(role) ? requestedBranchId : sessionBranchId))
 }
 
 async function validateCreationBranch(organizationId: number, branchId: number) {
@@ -988,6 +1063,10 @@ async function preflightCreationBudget(context: {
 }
 
 async function getOrderCreationErrorResponse(caughtError: any, replayContext: any) {
+  // Two desk orders raced to claim one screenshot; the loser is told plainly.
+  if (caughtError?.code === "23505" && String(caughtError?.constraint ?? caughtError?.cause?.constraint ?? "") === "orders_intake_attachment_key_uq") {
+    return NextResponse.json({ error: "That screenshot is already attached to another order" }, { status: 409 })
+  }
   if (caughtError?.code === "23505" && replayContext) {
     const [existingOrder] = await db.select({ ...orderSelectColumns, requestFingerprint: orders.requestFingerprint })
       .from(orders).where(and(
@@ -1010,6 +1089,7 @@ async function getOrderCreationErrorResponse(caughtError: any, replayContext: an
     )
   }
   const message = String(caughtError.message || "")
+  if (message === ORDER_DESK_TARGET_UNAVAILABLE) return NextResponse.json({ error: message }, { status: 403 })
   const normalized = message.toLowerCase()
   const isCustomerError = message === DELIVERY_ADDRESS_UNAVAILABLE
     || message === BUDGET_POLICY_CHANGED_MESSAGE
@@ -1236,6 +1316,9 @@ export async function POST(req: NextRequest) {
     if ((session.user as any).mustChangePassword === true) return NextResponse.json({ error: "Forbidden", message: "Password change required" }, { status: 403 })
     const role = (session.user as any).role
     const userId = (session.user as any).id
+    // Every role that places an order here today, and nobody else — see
+    // `lib/order-creation-access.ts`. Refused before anything is read.
+    if (!mayCreateOrder(role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     const rateLimit = await withRateLimit("order", userId)
     if (rateLimit) return rateLimit
     const idempotencyKey = req.headers.get("idempotency-key")?.trim() || ""
@@ -1257,6 +1340,9 @@ export async function POST(req: NextRequest) {
       notes,
       poNumber,
       deliveryAddressId,
+      intakeChannel,
+      intakeReference,
+      intakeAttachmentKey,
     } = parsedBody.data
 
     const normalizedItems = items.map((item) => ({
@@ -1278,6 +1364,15 @@ export async function POST(req: NextRequest) {
     if (!await validateCreationBranch(organizationId, branchId)) {
       return NextResponse.json({ error: "Branch does not belong to the selected organization" }, { status: 400 })
     }
+    const orderDeskRefusal = await orderDeskCreationRefusal(role, {
+      userId,
+      organizationId,
+      branchId,
+      intakeChannel,
+      intakeReference,
+      intakeAttachmentKey,
+    })
+    if (orderDeskRefusal) return orderDeskRefusal
     const pricesHidden = await shouldHidePricesForRole(role, organizationId)
     const budgetAllocationMode = await getBudgetAllocationModeForOrganization(Number(organizationId))
     const requestFingerprint = orderRequestFingerprint({
@@ -1286,6 +1381,9 @@ export async function POST(req: NextRequest) {
       notes,
       poNumber,
       deliveryAddressId,
+      intakeChannel,
+      intakeReference,
+      intakeAttachmentKey,
       items: normalizedItems,
     })
     replayContext = { userId, idempotencyKey, requestFingerprint, pricesHidden }
@@ -1342,6 +1440,9 @@ export async function POST(req: NextRequest) {
       notes,
       poNumber,
       deliveryAddressId,
+      intakeChannel,
+      intakeReference,
+      intakeAttachmentKey,
       userId,
       role,
       userEmail: session.user?.email,
@@ -1378,6 +1479,9 @@ function orderRequestFingerprint(input: {
   notes?: string
   poNumber?: string
   deliveryAddressId?: number
+  intakeChannel?: string
+  intakeReference?: string
+  intakeAttachmentKey?: string
   items: Array<{ organizationInventoryId: number; quantity: number }>
 }) {
   const canonical = {
@@ -1391,6 +1495,11 @@ function orderRequestFingerprint(input: {
     // change the hash of every such request, turning an idempotent retry that
     // spanned the deploy into a 409 "key already used for a different order".
     ...(input.deliveryAddressId ? { deliveryAddressId: input.deliveryAddressId } : {}),
+    // Present only on an Order Desk order, for the same reason: every other
+    // order hashes exactly as it did before these fields existed.
+    ...(input.intakeChannel ? { intakeChannel: input.intakeChannel } : {}),
+    ...(input.intakeReference ? { intakeReference: input.intakeReference } : {}),
+    ...(input.intakeAttachmentKey ? { intakeAttachmentKey: input.intakeAttachmentKey } : {}),
     items: input.items.slice().sort((a, b) => a.organizationInventoryId - b.organizationInventoryId),
   }
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex")
