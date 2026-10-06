@@ -1167,7 +1167,7 @@ export default function OrderReportPage() {
                                                                     }}
                                                                     className="max-w-full whitespace-normal text-[9px] font-black uppercase tracking-wide px-2 py-1 rounded-xl border shadow-sm transition-transform group-hover:scale-105 duration-300"
                                                                 >
-                                                                    {getOrderDerivedStatus({ status: order.status }).label}
+                                                                    {getOrderDerivedStatus(order).label}
                                                                 </Badge>
                                                                 {['FULFILLED', 'PARTIAL', 'PARTIALLY_FULFILLED'].includes(order.status?.toUpperCase()) && Number(order.refundAmountCents || 0) > 0 && (
                                                                     <Badge variant="outline" className="px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400">

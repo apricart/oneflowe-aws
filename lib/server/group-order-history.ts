@@ -39,6 +39,9 @@ export type GroupOrderChild = {
   createdAt: Date | null
   approvedAt: Date | null
   rejectionReason: string | null
+  /** Set while an approver has sent this pending order back for correction. */
+  returnedForCorrectionAt: Date | null
+  correctionRequestNote: string | null
   /**
    * The credential a Super Admin needs to mark this order delivered. Present
    * only while `canViewFulfillmentToken` allows it for the requester who raised
@@ -144,6 +147,8 @@ export async function listGroupOrders({
       createdAt: orders.createdAt,
       approvedAt: orders.approvedAt,
       rejectionReason: orders.rejectionReason,
+      returnedForCorrectionAt: orders.returnedForCorrectionAt,
+      correctionRequestNote: orders.correctionRequestNote,
       approvalToken: orders.approvalToken,
       createdByUserId: orders.createdByUserId,
       itemCount: sql<number>`(
@@ -178,6 +183,8 @@ export async function listGroupOrders({
       createdAt: row.createdAt,
       approvedAt: row.approvedAt,
       rejectionReason: row.rejectionReason,
+      returnedForCorrectionAt: row.returnedForCorrectionAt,
+      correctionRequestNote: row.correctionRequestNote,
       // The query above already pins every row to this user and tenant; the
       // shared policy is still consulted so the token cannot leak from an order
       // that is not approved, and so this surface keeps moving in step with

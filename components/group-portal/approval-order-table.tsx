@@ -17,6 +17,7 @@ import {
   STATUS_STYLES,
   formatDateTime,
   isPending,
+  isReturnedForCorrection,
   normalizeStatus,
 } from "./approval-types"
 
@@ -101,6 +102,7 @@ export function ApprovalOrderTable({
       order={viewingOrder}
       onClose={() => setViewingOrder(null)}
       onDecide={onDecide}
+      onChanged={onRefresh}
       busy={busy}
     />
     </>
@@ -126,6 +128,7 @@ function OrderRow({
 }>) {
   const status = normalizeStatus(order.status)
   const pending = isPending(order)
+  const returned = isReturnedForCorrection(order)
 
   return (
     <>
@@ -136,7 +139,7 @@ function OrderRow({
         {/* The controls inside the row act on the order directly, so they must
             not also open the drawer behind them. */}
         <td className="px-3 py-3" onClick={(event) => event.stopPropagation()}>
-          {pending ? (
+          {pending && !returned ? (
             <Checkbox
               checked={selected}
               onCheckedChange={() => onToggleSelection(order.id)}
@@ -175,7 +178,7 @@ function OrderRow({
             variant="secondary"
             className={cn("rounded-full text-[10px] font-bold", STATUS_STYLES[status] ?? STATUS_STYLES.REFUNDED)}
           >
-            {status}
+            {returned ? "RETURNED" : status}
           </Badge>
         </td>
         <td className="px-3 py-3" onClick={(event) => event.stopPropagation()}>
@@ -195,7 +198,8 @@ function OrderRow({
               <Button
                 type="button"
                 size="sm"
-                disabled={busy}
+                disabled={busy || returned}
+                title={returned ? "Waiting for the requester to resubmit" : undefined}
                 onClick={() => onDecide([order.id], "approve")}
                 className="h-8 gap-1 rounded-lg bg-emerald-600 text-white hover:bg-emerald-500"
               >
@@ -221,6 +225,15 @@ function OrderRow({
           )}
         </td>
       </tr>
+
+      {returned && order.correctionRequestNote && (
+        <tr className="border-b border-slate-100 dark:border-slate-800/70">
+          <td />
+          <td colSpan={6} className="px-3 pb-3 text-xs text-amber-700 dark:text-amber-300">
+            Returned for correction: {order.correctionRequestNote}
+          </td>
+        </tr>
+      )}
 
       {order.rejectionReason && (
         <tr className="border-b border-slate-100 dark:border-slate-800/70">

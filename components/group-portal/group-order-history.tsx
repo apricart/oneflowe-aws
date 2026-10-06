@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import useSWR from "swr"
-import { AlertTriangle, ChevronDown, ChevronRight, Layers, Mail, RotateCcw } from "lucide-react"
+import { AlertTriangle, ChevronDown, ChevronRight, Layers, Mail, Pencil, RotateCcw, Send } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -12,6 +12,10 @@ import { ListSkeleton } from "@/components/ui/skeleton"
 import { useToast } from "@/hooks/use-toast"
 import { fetcher } from "@/lib/fetcher"
 import { cn, formatPKR } from "@/lib/utils"
+
+import { BranchOrderEditSheet } from "@/components/group-portal/branch-order-edit-sheet"
+import { ResubmitOrderDialog } from "@/components/orders/order-correction"
+import { isAwaitingCorrection } from "@/lib/order-correction"
 
 import { GroupRefundDialog } from "./group-refund-dialog"
 import { TokenHandoff } from "./token-handoff"
@@ -60,6 +64,10 @@ export function GroupOrderHistory() {
   const [page, setPage] = useState(1)
   const [expanded, setExpanded] = useState<number | null>(null)
   const [refundTarget, setRefundTarget] = useState<{ id: number; reference: string } | null>(null)
+  // A branch order an approver returned for correction is corrected here — the
+  // same branch-scoped edit and resubmission the server re-checks.
+  const [editTarget, setEditTarget] = useState<CorrectableOrder | null>(null)
+  const [resubmitTarget, setResubmitTarget] = useState<CorrectableOrder | null>(null)
 
   const { data, error, isLoading, mutate } = useSWR<HistoryResponse>(
     `/api/v1/group-portal/orders?page=${page}`,
@@ -202,6 +210,37 @@ export function GroupOrderHistory() {
                                 {order.rejectionReason}
                               </span>
                             )}
+                            {isAwaitingCorrection(order) && (
+                              <span className="mt-1 block space-y-1 text-left">
+                                <span className="block text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300">
+                                  Returned for correction
+                                </span>
+                                <span className="block whitespace-pre-line text-[11px] text-amber-800 dark:text-amber-200">
+                                  {order.correctionRequestNote}
+                                </span>
+                                <span className="flex justify-end gap-1.5">
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 gap-1 rounded-lg px-2 text-[11px]"
+                                    onClick={() => setEditTarget(order)}
+                                  >
+                                    <Pencil className="h-3 w-3" />
+                                    Edit
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    className="h-7 gap-1 rounded-lg px-2 text-[11px]"
+                                    onClick={() => setResubmitTarget(order)}
+                                  >
+                                    <Send className="h-3 w-3" />
+                                    Resubmit
+                                  </Button>
+                                </span>
+                              </span>
+                            )}
                           </td>
                           {/* Renders only once the order is approved; the
                               invoice endpoints re-check the same rule. */}
@@ -301,8 +340,27 @@ export function GroupOrderHistory() {
         onClose={() => setRefundTarget(null)}
         onSubmitted={() => { void mutate() }}
       />
+
+      <BranchOrderEditSheet
+        order={editTarget}
+        onClose={() => setEditTarget(null)}
+        onSaved={() => { void mutate() }}
+      />
+      <ResubmitOrderDialog
+        order={resubmitTarget}
+        onClose={() => setResubmitTarget(null)}
+        onResubmitted={() => { void mutate() }}
+      />
     </div>
   )
+}
+
+type CorrectableOrder = {
+  id: number
+  tid: string
+  branchId: number
+  branchName: string
+  correctionRequestNote?: string | null
 }
 
 /**

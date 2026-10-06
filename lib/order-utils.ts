@@ -195,7 +195,8 @@ export function buildStatusTimeline(
     // Return safe default
     return STATUS_FLOW.map((step, index) => ({
       ...step,
-      state: index === 0 ? "current" : "upcoming"
+      state: index === 0 ? "current" : "upcoming",
+      approvalToken: null
     }))
   }
 }

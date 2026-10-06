@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
-import { and, desc, eq, isNull, ne, or, type SQL } from "drizzle-orm"
+import { and, desc, eq, isNull, notInArray, or, type SQL } from "drizzle-orm"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { notifications } from "@/db/schema"
@@ -15,7 +15,10 @@ function getSessionUserId(session: any) {
 
 function scopedNotificationConditions(session: any, userId: string): SQL[] | null {
   const role = (session?.user as any)?.role
-  if (!["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL"].includes(role)) return null
+  // The two group roles have no branch of their own; their notices are their
+  // own rows inside their own organization, which the user and tenant filters
+  // below already say.
+  if (!["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL", "GROUP_USER", "GROUP_ORDER_PORTAL"].includes(role)) return null
 
   const conditions: SQL[] = [
     eq(notifications.userId, userId),
@@ -47,6 +50,12 @@ function notificationTitle(type: string) {
       return "Order approved and ready for review"
     case "ORDER_REJECTED":
       return "Order rejected"
+    case "ORDER_RETURNED":
+      return "Order returned for correction"
+    case "ORDER_RESUBMITTED":
+      return "Corrected order awaiting approval"
+    case "ORDER_RESUBMITTED_BY_COLLEAGUE":
+      return "Order resubmitted by a colleague"
     case "REFUND_REQUESTED":
       return "Refund request submitted"
     case "SUPPORT_THREAD_OPENED":
@@ -67,6 +76,8 @@ function notificationSeverity(type: string): "info" | "warning" | "critical" {
     case "ORDER_CREATED":
     case "ORDER_APPROVED_ADMIN":
     case "ORDER_REJECTED":
+    case "ORDER_RETURNED":
+    case "ORDER_RESUBMITTED":
     case "REFUND_REQUESTED":
     case "SUPPORT_THREAD_OPENED":
     case "SUPPORT_MESSAGE_RECEIVED":
@@ -76,13 +87,27 @@ function notificationSeverity(type: string): "info" | "warning" | "critical" {
   }
 }
 
+type NotificationCta = { label: string; href: string } | undefined
+
+/** "Review order" for someone who may still decide it. */
+function reviewOrderCta(orderId: number | null, allowed: boolean): NotificationCta {
+  return orderId && allowed ? { label: "Review order", href: `/orders/${orderId}` } : undefined
+}
+
+/** The requester's own order list, in whichever portal it uses. */
+function requesterOrdersCta(role: string | undefined): NotificationCta {
+  if (role === "ORDER_PORTAL") return { label: "View my orders", href: "/shop" }
+  if (role === "GROUP_ORDER_PORTAL") return { label: "Open my orders", href: "/group-portal" }
+  return undefined
+}
+
 function notificationCta(
   type: string,
   orderId: number | null,
   role: string | undefined,
   canDecideOrders: boolean,
   supportThreadId: number | null,
-) {
+): NotificationCta {
   // The support area is shared by every role, and the endpoints behind it
   // decide what each caller may read, so the link needs no role gate here.
   if (type.startsWith("SUPPORT_")) {
@@ -93,16 +118,16 @@ function notificationCta(
 
   switch (type) {
     case "ORDER_CREATED":
-      return orderId && canDecideOrders
-        ? { label: "Review order", href: `/orders/${orderId}` }
-        : undefined
+    case "ORDER_RESUBMITTED":
+      return reviewOrderCta(orderId, canDecideOrders)
     case "ORDER_APPROVED":
     case "ORDER_REJECTED":
-      return role === "ORDER_PORTAL" ? { label: "View my orders", href: "/shop" } : undefined
+      return role === "ORDER_PORTAL" ? requesterOrdersCta(role) : undefined
+    case "ORDER_RETURNED":
+    case "ORDER_RESUBMITTED_BY_COLLEAGUE":
+      return requesterOrdersCta(role)
     case "ORDER_APPROVED_ADMIN":
-      return orderId && role === "SUPER_ADMIN"
-        ? { label: "Review order", href: `/orders/${orderId}` }
-        : undefined
+      return reviewOrderCta(orderId, role === "SUPER_ADMIN")
     case "REFUND_REQUESTED":
       return { label: "Review refund", href: "/refunds" }
     default:
@@ -133,7 +158,8 @@ export async function GET() {
       branchId: Number.isInteger(branchId) && branchId > 0 ? branchId : null,
     })
     if (!capabilities.canApproveOrders) {
-      scopeConditions.push(ne(notifications.type, "ORDER_CREATED"))
+      // "Awaiting your approval" is only true for someone who may still decide.
+      scopeConditions.push(notInArray(notifications.type, ["ORDER_CREATED", "ORDER_RESUBMITTED"]))
     }
 
     const rows = await db

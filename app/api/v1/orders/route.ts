@@ -1193,6 +1193,8 @@ export async function GET(req: NextRequest) {
         refundAmountCents: orders.refundAmountCents,
         refundReason: orders.refundReason,
         rejectionReason: orders.rejectionReason,
+        returnedForCorrectionAt: orders.returnedForCorrectionAt,
+        correctionRequestNote: orders.correctionRequestNote,
         subtotalCents: orders.subtotalCents,
         taxCents: orders.taxCents,
         totalCents: orders.totalCents,

@@ -112,6 +112,7 @@ import { orderUpdateSchema, validationMessage } from "@/lib/server/mutation-vali
 import { DELIVERY_ADDRESS_UNAVAILABLE } from "@/lib/delivery-address"
 import { loadApprovedDeliveryAddress } from "@/lib/server/delivery-addresses"
 import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
+import { loadOrderCorrectionHistory } from "@/lib/server/order-correction"
 import {
   canUseScopedBranch,
   resolveScopedBranchIds,
@@ -742,6 +743,13 @@ export async function GET(
     .leftJoin(globalProducts, eq(orderItems.globalProductId, globalProducts.id))
     .where(eq(orderItems.orderId, orderId))
 
+  // Read only after the order itself was authorized above; the loader
+  // re-asserts the tenant on its own query besides.
+  const correctionHistory = await loadOrderCorrectionHistory({
+    orderId,
+    organizationId: item.organizationId,
+  })
+
   return ok({
     item: {
       ...(pricesHidden
@@ -758,6 +766,7 @@ export async function GET(
         : itemsData,
       approvalToken: canSeeToken ? approvalToken : null,
       pricesHidden,
+      correctionHistory,
     },
     capabilities,
   })

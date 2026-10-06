@@ -2,12 +2,14 @@
 
 import { useEffect, useMemo, useState } from "react"
 import useSWR from "swr"
-import { Building2, ChevronRight, Pencil } from "lucide-react"
+import { Building2, ChevronRight, Pencil, Send } from "lucide-react"
 
 import { BranchOrderEditSheet } from "@/components/group-portal/branch-order-edit-sheet"
 import { TokenHandoff } from "@/components/group-portal/token-handoff"
 import { OrderDetailPanel, type OrderDetails } from "@/components/orders/order-detail-panel"
 import { RefundManagement } from "@/components/refund-management"
+import { OrderCorrectionNotice, ResubmitOrderDialog } from "@/components/orders/order-correction"
+import { isAwaitingCorrection } from "@/lib/order-correction"
 import { Button } from "@/components/ui/button"
 import {
   OrderListBody,
@@ -46,6 +48,8 @@ type BranchOrder = {
   createdAt: string
   approvedAt?: string | null
   rejectionReason?: string | null
+  returnedForCorrectionAt?: string | null
+  correctionRequestNote?: string | null
   approvalToken?: string | null
   tokenHandoffAt?: string | null
 }
@@ -139,6 +143,7 @@ export function OtherBranchOrders() {
   )
 
   const [editOrder, setEditOrder] = useState<BranchOrder | null>(null)
+  const [resubmitOrder, setResubmitOrder] = useState<BranchOrder | null>(null)
 
   const orders = data?.items ?? []
   const total = Number(data?.pagination?.total ?? 0)
@@ -188,7 +193,14 @@ export function OtherBranchOrders() {
         order={openOrder}
         onClose={() => setOpenOrder(null)}
         onEdit={(target) => { setOpenOrder(null); setEditOrder(target) }}
+        onResubmit={(target) => { setOpenOrder(null); setResubmitOrder(target) }}
         onChanged={() => { void mutate() }}
+      />
+
+      <ResubmitOrderDialog
+        order={resubmitOrder}
+        onClose={() => setResubmitOrder(null)}
+        onResubmitted={() => { void mutate() }}
       />
 
       <BranchOrderEditSheet
@@ -222,7 +234,7 @@ function OrderRow({
                 {order.tid}
               </span>
               <Badge className={cn("rounded-lg px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider", statusStyle(order.status))}>
-                {order.status}
+                {isAwaitingCorrection(order) ? "Returned" : order.status}
               </Badge>
               {order.status.toUpperCase() === "APPROVED" && (
                 <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
@@ -273,11 +285,13 @@ function OrderDetailSheet({
   order,
   onClose,
   onEdit,
+  onResubmit,
   onChanged,
 }: Readonly<{
   order: BranchOrder | null
   onClose: () => void
   onEdit: (order: BranchOrder) => void
+  onResubmit: (order: BranchOrder) => void
   onChanged: () => void
 }>) {
   const [expanded, setExpanded] = useState(false)
@@ -348,6 +362,13 @@ function OrderDetailSheet({
                 {/* The branch owns its orders, so a group requester may amend a
                     still-pending one. The server re-checks the same rule and
                     tells the person who raised it. */}
+                {isAwaitingCorrection(detailedOrder) && (
+                  <OrderCorrectionNotice
+                    comment={detailedOrder.correctionRequestNote}
+                    returnedAt={detailedOrder.returnedForCorrectionAt}
+                    audience="requester"
+                  />
+                )}
                 {String(detailedOrder.status).toUpperCase() === "PENDING" && (
                   <Button
                     type="button"
@@ -357,6 +378,16 @@ function OrderDetailSheet({
                   >
                     <Pencil className="h-4 w-4" />
                     Edit order
+                  </Button>
+                )}
+                {isAwaitingCorrection(detailedOrder) && (
+                  <Button
+                    type="button"
+                    className="w-full gap-2"
+                    onClick={() => onResubmit({ ...order, correctionRequestNote: detailedOrder.correctionRequestNote ?? null })}
+                  >
+                    <Send className="h-4 w-4" />
+                    Resubmit for approval
                   </Button>
                 )}
                 <RefundManagement
