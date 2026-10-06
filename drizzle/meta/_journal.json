@@ -582,6 +582,13 @@
       "when": 1791028800000,
       "tag": "20261007120000_add_branch_region_and_apricart_executive",
       "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
+      "when": 1791032400000,
+      "tag": "20261008120000_add_order_delivery_challans",
+      "breakpoints": true
     }
   ]
 }

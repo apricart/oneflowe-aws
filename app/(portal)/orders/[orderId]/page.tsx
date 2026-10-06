@@ -5,6 +5,8 @@ import Image from "next/image"
 import useSWR from "swr"
 import { useSession } from "next-auth/react"
 import { useState } from "react"
+import { DeliveryChallanPanel } from "@/components/orders/delivery-challan"
+import { normalizeFulfillmentStatus } from "@/lib/fulfillment-status"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -315,6 +317,9 @@ export default function SuperAdminOrderDetailsPage() {
       </div>
 
       {order && <OrderCorrectionState order={order} />}
+      {order && normalizeFulfillmentStatus(order.fulfillmentStatus) === "DELIVERED" && (
+        <DeliveryChallanPanel orderId={order.id} orderTid={order.tid} canReplace={isSuperAdmin} />
+      )}
 
       {order && (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">

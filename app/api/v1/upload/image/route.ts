@@ -7,6 +7,8 @@ import { withRateLimit } from "@/lib/rate-limiter"
 import { db } from "@/lib/db"
 import { auditActorFromSession, recordAuditEvent } from "@/lib/server/activity-audit"
 import { isOrderDeskRole } from "@/lib/order-desk-access"
+import { DELIVERY_CHALLAN_UPLOAD_PURPOSE } from "@/lib/delivery-challan"
+import { storeDeliveryChallanUpload } from "@/lib/server/delivery-challan"
 import {
   buildImageKey,
   buildOrderIntakeAttachmentKey,
@@ -45,6 +47,13 @@ export async function POST(req: NextRequest) {
 
     if (!file || !(file instanceof File)) {
       return NextResponse.json({ error: "No image file provided" }, { status: 400 })
+    }
+
+    // A delivery challan (an image or a PDF) for an order Super Admin is
+    // marking delivered. Through this path for the same WAF reason as the
+    // others; handled entirely apart from catalogue images.
+    if (formData.get("purpose") === DELIVERY_CHALLAN_UPLOAD_PURPOSE) {
+      return storeDeliveryChallan(session, userRole, formData.get("orderId"), file)
     }
 
     const bytes = await file.arrayBuffer()
@@ -141,6 +150,33 @@ export async function POST(req: NextRequest) {
       details: "Upload failed"
     }, { status: 500 })
   }
+}
+
+/**
+ * A delivery challan is Super Admin's alone to upload, whoever else this route
+ * admits. It is checked by content (re-encoded if an image, inspected if a
+ * PDF), stored under the private `delivery-challan/` prefix, and answered with
+ * a row id bound to this order and this uploader — never a path.
+ */
+async function storeDeliveryChallan(
+  session: unknown,
+  userRole: unknown,
+  rawOrderId: FormDataEntryValue | null,
+  file: File,
+) {
+  if (userRole !== "SUPER_ADMIN") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+  }
+  const orderId = typeof rawOrderId === "string" && /^\d+$/.test(rawOrderId) ? Number(rawOrderId) : NaN
+  if (!Number.isSafeInteger(orderId) || orderId <= 0) {
+    return NextResponse.json({ error: "A valid orderId is required" }, { status: 400 })
+  }
+  const actor = auditActorFromSession(session)
+  if (!actor.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+
+  const outcome = await storeDeliveryChallanUpload({ actor: { ...actor, id: actor.id }, orderId, file })
+  if (!outcome.ok) return NextResponse.json({ error: outcome.error }, { status: outcome.status })
+  return NextResponse.json({ deliveryChallan: outcome.challan }, { status: 201 })
 }
 
 /**

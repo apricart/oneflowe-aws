@@ -70,6 +70,7 @@ import {
 import { isUnacknowledgedDelivery } from "@/lib/unacknowledged-delivery-block"
 import { isAwaitingCorrection } from "@/lib/order-correction"
 import { OrderCorrectionNotice, ReturnForCorrectionDialog } from "@/components/orders/order-correction"
+import { DeliveryChallanUploadDialog } from "@/components/orders/delivery-challan"
 import { TOKEN_SENT_LABEL, isTokenAlreadySent, readTokenSendRefusal } from "@/lib/order-token-handoff"
 import {
   DELIVERED_UNFULFILLED_LABEL,
@@ -202,6 +203,8 @@ export function OrdersDirectory({
   const [showTokenDialog, setShowTokenDialog] = useState(false)
   const [rejectReason, setRejectReason] = useState("")
   const [returningOrder, setReturningOrder] = useState<{ id: number; tid: string } | null>(null)
+  // The order whose delivery is waiting on its challan upload.
+  const [challanOrder, setChallanOrder] = useState<{ id: number; tid: string } | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
   const [isUpdatingProgress, setIsUpdatingProgress] = useState(false)
   const [isUpdatingPayment, setIsUpdatingPayment] = useState(false)
@@ -362,46 +365,68 @@ export function OrdersDirectory({
     }
   }
 
+  /**
+   * Record one step of delivery progress. Delivered needs the uploaded
+   * challan's id; the server refuses it without one. Throws on refusal so the
+   * caller decides how to show it.
+   */
+  const postFulfillmentProgress = async (order: any, nextStatus: FulfillmentStatus, deliveryChallanId?: number) => {
+    const res = await fetch(`/api/v1/orders/${order.id}/fulfillment-status`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        fulfillmentStatus: nextStatus,
+        ...(deliveryChallanId === undefined ? {} : { deliveryChallanId }),
+      }),
+    })
+
+    const responseText = await res.text()
+    const data = responseText
+      ? (() => {
+          try {
+            return JSON.parse(responseText)
+          } catch {
+            return { error: responseText }
+          }
+        })()
+      : {}
+
+    if (!res.ok) throw new Error(data.error || "Failed to update fulfillment progress")
+
+    const updatedOrder = {
+      ...order,
+      fulfillmentStatus: data.item?.fulfillmentStatus || nextStatus,
+      // Recording delivery settles an order whose fulfilment token has
+      // already reached the admin, so the order status is taken from the
+      // server rather than assumed to be unchanged.
+      status: data.item?.status || order.status,
+    }
+    setViewingOrder(updatedOrder)
+    toast({
+      title: data?.fulfilled ? "Delivered — order fulfilled" : "Progress updated",
+      description: data?.fulfilled
+        ? `Order marked ${FULFILLMENT_STATUS_LABELS[nextStatus]}. Its fulfilment token was already sent to the admin, so the order is now fulfilled.`
+        : `Order marked ${FULFILLMENT_STATUS_LABELS[nextStatus]}.`,
+    })
+    onUpdate()
+  }
+
+  /** Delivered goes through the challan dialog; every earlier step posts directly. */
+  const requestFulfillmentProgress = (nextStatus: FulfillmentStatus) => {
+    if (!viewingOrder) return
+    if (nextStatus === "DELIVERED") {
+      setChallanOrder({ id: viewingOrder.id, tid: viewingOrder.tid })
+      return
+    }
+    void updateFulfillmentProgress(nextStatus)
+  }
+
   const updateFulfillmentProgress = async (nextStatus: FulfillmentStatus) => {
     if (!viewingOrder) return
 
     setIsUpdatingProgress(true)
     try {
-      const res = await fetch(`/api/v1/orders/${viewingOrder.id}/fulfillment-status`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fulfillmentStatus: nextStatus }),
-      })
-
-      const responseText = await res.text()
-      const data = responseText
-        ? (() => {
-            try {
-              return JSON.parse(responseText)
-            } catch {
-              return { error: responseText }
-            }
-          })()
-        : {}
-
-      if (!res.ok) throw new Error(data.error || "Failed to update fulfillment progress")
-
-      const updatedOrder = {
-        ...viewingOrder,
-        fulfillmentStatus: data.item?.fulfillmentStatus || nextStatus,
-        // Recording delivery settles an order whose fulfilment token has
-        // already reached the admin, so the order status is taken from the
-        // server rather than assumed to be unchanged.
-        status: data.item?.status || viewingOrder.status,
-      }
-      setViewingOrder(updatedOrder)
-      toast({
-        title: data?.fulfilled ? "Delivered — order fulfilled" : "Progress updated",
-        description: data?.fulfilled
-          ? `Order marked ${FULFILLMENT_STATUS_LABELS[nextStatus]}. Its fulfilment token was already sent to the admin, so the order is now fulfilled.`
-          : `Order marked ${FULFILLMENT_STATUS_LABELS[nextStatus]}.`,
-      })
-      onUpdate()
+      await postFulfillmentProgress(viewingOrder, nextStatus)
     } catch (err: any) {
       toast({
         title: "Progress Update Failed",
@@ -1074,7 +1099,7 @@ export function OrdersDirectory({
                           <Button
                             type="button"
                             disabled={isUpdatingProgress}
-                            onClick={() => updateFulfillmentProgress(nextStatus)}
+                            onClick={() => requestFulfillmentProgress(nextStatus)}
                             className="w-full h-12 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold shadow-lg shadow-sky-600/20"
                           >
                             <Truck className={cn("mr-2 h-4 w-4", isUpdatingProgress && "animate-pulse")} />
@@ -1196,6 +1221,16 @@ export function OrdersDirectory({
           </div>
         </DialogContent>
       </Dialog>
+
+      <DeliveryChallanUploadDialog
+        order={challanOrder}
+        mode="deliver"
+        onClose={() => setChallanOrder(null)}
+        onUploaded={async (challanId) => {
+          if (!viewingOrder) throw new Error("The order is no longer open")
+          await postFulfillmentProgress(viewingOrder, "DELIVERED", challanId)
+        }}
+      />
 
       <ReturnForCorrectionDialog
         order={returningOrder}

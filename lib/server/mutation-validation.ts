@@ -426,6 +426,29 @@ export const paymentStatusSchema = z.object({
 
 export const fulfillmentStatusSchema = z.object({
   fulfillmentStatus: z.enum(["IN_PROCESS", "OUT_FOR_DELIVERY", "DELIVERED"]),
+  // The uploaded delivery challan: required to mark an order delivered, and
+  // refused for any other stage (plans/OF-DELIVERY-CHALLAN-proof-of-delivery.md).
+  deliveryChallanId: positiveId.optional(),
+}).strict().superRefine((input, context) => {
+  if (input.fulfillmentStatus === "DELIVERED" && input.deliveryChallanId === undefined) {
+    context.addIssue({
+      code: "custom",
+      path: ["deliveryChallanId"],
+      message: "Upload the delivery challan to mark this order delivered",
+    })
+  }
+  if (input.fulfillmentStatus !== "DELIVERED" && input.deliveryChallanId !== undefined) {
+    context.addIssue({
+      code: "custom",
+      path: ["deliveryChallanId"],
+      message: "A delivery challan is attached only when the order is marked delivered",
+    })
+  }
+})
+
+/** Replacing a delivered order's challan with another uploaded one. */
+export const deliveryChallanReplaceSchema = z.object({
+  deliveryChallanId: positiveId,
 }).strict()
 
 export const refundRequestSchema = z.object({

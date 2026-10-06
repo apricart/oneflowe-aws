@@ -7,6 +7,24 @@ import { orderSelectColumns, transitionOrderFulfillmentStatusColumn } from "@/li
 import { eq } from "drizzle-orm"
 import { fulfillmentStatusSchema, validationMessage } from "@/lib/server/mutation-validation"
 import { settleDeliveredOrderAfterTokenHandoff } from "@/lib/server/order-fulfillment"
+import { attachDeliveryChallan } from "@/lib/server/delivery-challan"
+
+const DELIVERY_CHALLAN_NOT_ATTACHABLE = "DELIVERY_CHALLAN_NOT_ATTACHABLE"
+
+/**
+ * The status change, run so that a challan that cannot be attached reads as a
+ * refusal rather than a server error. Any other failure still propagates.
+ */
+async function runProgressTransition<T>(work: () => Promise<T>): Promise<T | "challan-refused"> {
+  try {
+    return await work()
+  } catch (transitionError) {
+    if (transitionError instanceof Error && transitionError.message === DELIVERY_CHALLAN_NOT_ATTACHABLE) {
+      return "challan-refused"
+    }
+    throw transitionError
+  }
+}
 
 const PROGRESS_STATUSES = FULFILLMENT_STATUSES.filter(
   (status) => status !== "NOT_STARTED"
@@ -106,9 +124,23 @@ export async function POST(
     return error(`Cannot move fulfillment progress from ${currentStatus} to ${nextStatus}`, 400)
   }
 
-  const updated = await db.transaction(async (tx) => {
+  const deliveryChallanId = parsedBody.data.deliveryChallanId ?? null
+  const updated = await runProgressTransition(() => db.transaction(async (tx) => {
     const transition = await transitionOrderFulfillmentStatusColumn(tx, orderId, currentStatus, nextStatus)
     if (transition !== "updated") return transition
+
+    // No delivery without its challan: attached here, in the same transaction,
+    // and only an upload for this order by this Super Admin that is not yet
+    // attached matches. Otherwise the whole transition rolls back.
+    if (nextStatus === "DELIVERED") {
+      const attached = deliveryChallanId !== null && await attachDeliveryChallan(tx, {
+        challanId: deliveryChallanId,
+        orderId,
+        actorUserId: user.id,
+        at: new Date(),
+      })
+      if (!attached) throw new Error(DELIVERY_CHALLAN_NOT_ATTACHABLE)
+    }
 
     await tx.insert(auditLogs).values({
       userId: user.id,
@@ -121,6 +153,7 @@ export async function POST(
         tid: order.tid,
         from: currentStatus,
         to: nextStatus,
+        ...(deliveryChallanId !== null ? { deliveryChallanId } : {}),
       },
     })
 
@@ -131,8 +164,11 @@ export async function POST(
       .limit(1)
 
     return updatedOrder || { ...order, fulfillmentStatus: nextStatus }
-  })
+  }))
 
+  if (updated === "challan-refused") {
+    return error("The delivery challan was not uploaded for this order, or has already been used. Upload it again.", 400)
+  }
   if (updated === "missing-column") {
     return error("Fulfillment progress migration has not been applied. Run the order fulfillment status migration first.", 503)
   }

@@ -148,6 +148,9 @@ const VIA_LIB: readonly { file: string; module: string }[] = [
   // ORDER_RESUBMITTED).
   { file: "app/api/v1/orders/[id]/return-for-correction/route.ts", module: "lib/server/order-correction.ts" },
   { file: "app/api/v1/orders/[id]/resubmit/route.ts", module: "lib/server/order-correction.ts" },
+  // Replacing a delivered order's challan records REPLACE_DELIVERY_CHALLAN
+  // in the same transaction as the swap.
+  { file: "app/api/v1/orders/[id]/delivery-challan/route.ts", module: "lib/server/delivery-challan.ts" },
   { file: "app/api/v1/group-portal/orders/route.ts", module: "lib/server/group-order-creation.ts" },
   { file: "app/api/v1/group-portal/refunds/route.ts", module: "lib/server/group-order-refunds.ts" },
   { file: "app/api/v1/group-portal/orders/[groupOrderId]/tokens/route.ts", module: "lib/server/group-order-tokens.ts" },

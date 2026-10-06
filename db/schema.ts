@@ -905,6 +905,59 @@ export const orders = pgTable(
 )
 
 /**
+ * The delivery challan behind each order's "Delivered" — Super Admin's proof
+ * of delivery. See plans/OF-DELIVERY-CHALLAN-proof-of-delivery.md.
+ *
+ * A row is created *unattached* when the file is uploaded, bound to its order
+ * and its uploader, and is attached by the delivery itself (or by a
+ * replacement), in the same transaction. One current challan per order; a
+ * replaced one is kept. The object lives under the private `delivery-challan/`
+ * prefix, which the public image route cannot serve.
+ */
+export const orderDeliveryChallans = pgTable(
+  "order_delivery_challans",
+  {
+    id: serial("id").primaryKey(),
+    orderId: integer("order_id")
+      .references(() => orders.id, { onDelete: "cascade" })
+      .notNull(),
+    organizationId: integer("organization_id").references(() => organizations.id).notNull(),
+    branchId: integer("branch_id").references(() => branches.id).notNull(),
+    storageKey: varchar("storage_key", { length: 128 }).notNull(),
+    // What the uploader's file was called, sanitised, for display only. It
+    // never builds a key or a path.
+    fileName: varchar("file_name", { length: 160 }).notNull(),
+    contentType: varchar("content_type", { length: 32 }).notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    uploadedByUserId: uuid("uploaded_by_user_id").references(() => users.id).notNull(),
+    uploadedAt: timestamp("uploaded_at", { withTimezone: true }).defaultNow().notNull(),
+    attachedAt: timestamp("attached_at", { withTimezone: true }),
+    replacedAt: timestamp("replaced_at", { withTimezone: true }),
+    replacedByUserId: uuid("replaced_by_user_id").references(() => users.id),
+  },
+  (t) => [
+    uniqueIndex("order_delivery_challans_storage_key_uq").on(t.storageKey),
+    index("order_delivery_challans_order_idx").on(t.orderId, t.uploadedAt),
+    uniqueIndex("order_delivery_challans_current_uq")
+      .on(t.orderId)
+      .where(sql`${t.attachedAt} IS NOT NULL AND ${t.replacedAt} IS NULL`),
+    check(
+      "order_delivery_challans_key_ck",
+      sql`${t.storageKey} ~ '^delivery-challan/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[.](jpg|png|webp|pdf)$'`,
+    ),
+    check(
+      "order_delivery_challans_type_ck",
+      sql`${t.contentType} IN ('image/jpeg', 'image/png', 'image/webp', 'application/pdf')`,
+    ),
+    check("order_delivery_challans_size_ck", sql`${t.sizeBytes} > 0 AND ${t.sizeBytes} <= 4194304`),
+    check(
+      "order_delivery_challans_replace_ck",
+      sql`(${t.replacedAt} IS NULL AND ${t.replacedByUserId} IS NULL) OR (${t.replacedAt} IS NOT NULL AND ${t.replacedByUserId} IS NOT NULL AND ${t.attachedAt} IS NOT NULL)`,
+    ),
+  ],
+)
+
+/**
  * Every round of "returned for correction" an order has been through.
  *
  * The open round is mirrored on the order row (`returned_for_correction_*`),

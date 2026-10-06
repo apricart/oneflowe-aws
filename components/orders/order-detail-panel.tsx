@@ -27,6 +27,7 @@ import {
 import { format } from "date-fns"
 
 import { toast } from "@/hooks/use-toast"
+import { DeliveryChallanPanel } from "@/components/orders/delivery-challan"
 import { cn, formatPKR } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -365,6 +366,12 @@ export function OrderDetailPanel({
                   onToggle={onToggleDetails}
                   onRetry={onRetryDetails}
                 />
+
+                {/* Proof of delivery, for whoever can read this order; the
+                    endpoints behind it apply the order detail's own rule. */}
+                {isDeliveredOrder && typeof order.id === "number" && (
+                  <DeliveryChallanPanel orderId={order.id} orderTid={String(order.tid ?? order.id)} canReplace={isSuperAdmin} />
+                )}
 
               </div>
 

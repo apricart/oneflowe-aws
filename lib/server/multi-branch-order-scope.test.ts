@@ -78,7 +78,11 @@ describe("group user decision surface", () => {
   })
 
   it("checks that read against the group roles' assignments, not a single branch", () => {
-    const detail = source("app/api/v1/orders/[id]/route.ts")
+    // The rule moved out of the detail route into a module of its own so the
+    // delivery challan reads apply the very same one; the route imports it.
+    expect(source("app/api/v1/orders/[id]/route.ts"))
+      .toContain('import { hasBranchAccessForOrderRead } from "@/lib/server/order-read-access"')
+    const detail = source("lib/server/order-read-access.ts")
 
     // Every single-branch role keeps the original check untouched. The
     // predicate names the mechanism rather than one role, so the approver and

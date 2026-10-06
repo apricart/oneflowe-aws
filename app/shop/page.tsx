@@ -9,6 +9,7 @@ import useSWR from "swr"
 import { useSession } from "next-auth/react"
 import { useToast } from "@/hooks/use-toast"
 import { useOrganizations,useBranches } from "@/lib/hooks/use-api"
+import { DeliveryChallanPanel } from "@/components/orders/delivery-challan"
 import { useAppContext } from "@/components/context/app-context"
 import { ContextSelector } from "@/components/shell/context-selector"
 import { Card } from "@/components/ui/card"
@@ -2743,6 +2744,10 @@ export default function OrderPortalPage() {
                   returnedAt={selectedOrder.returnedForCorrectionAt}
                   audience="requester"
                 />
+              )}
+
+              {String(selectedOrder.fulfillmentStatus ?? "").toUpperCase() === "DELIVERED" && (
+                <DeliveryChallanPanel orderId={selectedOrder.id} orderTid={selectedOrder.tid} />
               )}
 
               {(selectedOrder.status.toLowerCase() === 'rejected' || selectedOrder.status === 'REJECTED') && selectedOrder.rejectionReason && (
