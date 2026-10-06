@@ -4,6 +4,8 @@ import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { globalProducts, organizationInventory, branchInventory, branches } from "@/db/schema"
 import { and, eq, inArray, isNull } from "drizzle-orm"
+import { resolveAnalyticsOrganizationIds } from "@/lib/server/analytics-scope"
+import { fenceBranchIdsToOrganization } from "@/lib/server/user-analytics-branch-scope"
 
 export async function GET(req: NextRequest) {
     try {
@@ -15,7 +17,14 @@ export async function GET(req: NextRequest) {
         const groupIdsParam = url.searchParams.get("groupIds")
         const branchIdsParam = url.searchParams.get("branchIds")
 
-        const organizationIds = organizationIdsParam ? organizationIdsParam.split(",").map(Number).filter(n => !Number.isNaN(n)) : []
+        const role = String((session.user as any).role || "")
+        const userOrganizationId = (session.user as any).organizationId
+        // Which products a tenant has assigned is the tenant's own business:
+        // anyone but Super Admin filters by its own organization only.
+        const requestedOrganizationIds = organizationIdsParam ? organizationIdsParam.split(",").map(Number).filter(n => !Number.isNaN(n)) : []
+        const organizationIds = role === "SUPER_ADMIN" || requestedOrganizationIds.length === 0
+            ? requestedOrganizationIds
+            : resolveAnalyticsOrganizationIds({ role, userOrganizationId, requestedOrganizationIds })
         const groupIds = groupIdsParam ? groupIdsParam.split(",").map(Number).filter(n => !Number.isNaN(n)) : []
         let branchIds = branchIdsParam ? branchIdsParam.split(",").map(Number).filter(n => !Number.isNaN(n)) : []
 
@@ -26,6 +35,10 @@ export async function GET(req: NextRequest) {
                 .where(inArray(branches.groupId, groupIds))
             branchIds = groupBranches.map(b => b.id)
         }
+
+        const requestedAnyBranch = branchIds.length > 0
+        branchIds = await fenceBranchIdsToOrganization({ role, userOrganizationId, branchIds })
+        if (requestedAnyBranch && branchIds.length === 0) return NextResponse.json({ items: [] })
 
         const conditions: any[] = [isNull(globalProducts.deletedAt)]
 

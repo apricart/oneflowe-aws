@@ -3,6 +3,8 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { orders, orderItems, branches, globalProducts, categories, organizationInventory, branchInventory } from "@/db/schema"
+import { resolveAnalyticsOrganizationIds } from "@/lib/server/analytics-scope"
+import { fenceBranchIdsToOrganization } from "@/lib/server/user-analytics-branch-scope"
 import { and, eq, gte, lte, inArray, desc, isNull, sql, exists, or, isNotNull } from "drizzle-orm"
 import { getCached, scopedCacheKey, CACHE_TTL } from "@/lib/cache-utils"
 import { redactAnalyticsPrices, shouldHidePricesForRole } from "@/lib/price-visibility"
@@ -95,7 +97,13 @@ export async function GET(req: NextRequest) {
         const parsedMonths = positiveIds(monthsRaw).filter((month) => month <= 12)
         const parsedYears = positiveIds(yearsRaw, 2000)
         const parsedGroupIds = positiveIds(groupIdsRaw)
-        const parsedOrganizationIds = positiveIds(organizationIdsRaw)
+        // A caller other than Super Admin reads its own organization, whatever
+        // the query names: the organization price and the sales are tenant data.
+        const parsedOrganizationIds = resolveAnalyticsOrganizationIds({
+            role: userRole,
+            userOrganizationId: userOrgId,
+            requestedOrganizationIds: positiveIds(organizationIdsRaw),
+        })
         const parsedProductIds = positiveIds(productIdsRaw)
 
         // RBAC Context Parsing
@@ -119,6 +127,14 @@ export async function GET(req: NextRequest) {
             } else {
                 branchIds = groupBranchIds;
             }
+        }
+
+        // Branch and group ids came from the request; keep only this tenant's.
+        // Naming only ids outside it is refused rather than read as "no filter".
+        const requestedAnyBranch = branchIds.length > 0 || parsedGroupIds.length > 0
+        branchIds = await fenceBranchIdsToOrganization({ role: userRole, userOrganizationId: userOrgId, branchIds })
+        if (requestedAnyBranch && branchIds.length === 0 && !isBranchScopedRole) {
+            return NextResponse.json({ error: "No permitted branches resolved" }, { status: 403 })
         }
 
         const startDate = parseStartDateParam(startDateParam)

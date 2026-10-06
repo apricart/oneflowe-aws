@@ -88,21 +88,38 @@ async function getBlockedBranchRemovals(groupId: number, nextBranchIds: number[]
     return { currentBranches, blocked: rows.filter((branch) => branch.productCount > 0) }
 }
 
+/**
+ * A refusal the caller can act on, carried out of the transaction with its
+ * status. Everything else still answers a generic 500.
+ */
+class GroupBranchRefusal extends Error {
+    /** Written by this module only, never by a driver, so it is safe to return. */
+    readonly userMessage: string
+
+    constructor(userMessage: string, readonly status: 403 | 409) {
+        super(userMessage)
+        this.userMessage = userMessage
+    }
+}
+
 async function validateGroupBranches(tx: any, branchIds: number[], groupId: number, organizationId: number) {
     if (branchIds.length === 0) return
-    const conflicts = await tx.select().from(branches).where(and(
+    // Tenant first: the conflict message below names branches, so it may only
+    // ever be built from this organization's own.
+    const invalid = await tx.select({ id: branches.id }).from(branches).where(and(
         inArray(branches.id, branchIds),
+        sql`${branches.organizationId} != ${organizationId}`,
+    ))
+    if (invalid.length > 0) throw new GroupBranchRefusal("Some branches do not belong to this organization.", 403)
+    const conflicts = await tx.select({ name: branches.name }).from(branches).where(and(
+        inArray(branches.id, branchIds),
+        eq(branches.organizationId, organizationId),
         sql`${branches.groupId} IS NOT NULL`,
         sql`${branches.groupId} != ${groupId}`,
     ))
     if (conflicts.length > 0) {
-        throw new Error(`These branches are already assigned to another group: ${conflicts.map((branch: any) => branch.name).join(", ")}. Please release them first.`)
+        throw new GroupBranchRefusal(`These branches are already assigned to another group: ${conflicts.map((branch: any) => branch.name).join(", ")}. Please release them first.`, 409)
     }
-    const invalid = await tx.select().from(branches).where(and(
-        inArray(branches.id, branchIds),
-        sql`${branches.organizationId} != ${organizationId}`,
-    ))
-    if (invalid.length > 0) throw new Error("Unauthorized: Some branches do not belong to this organization.")
 }
 
 async function assignBranches(tx: any, branchIds: number[], groupId: number, organizationId: number) {
@@ -267,6 +284,11 @@ export async function PUT(req: Request, props: { params: Promise<{ id: string }>
             newlyAddedBranchIds,
         })
     } catch (error) {
+        // Used to answer every refusal here with a 500, so "release the branch
+        // from its other group first" reached Head Office as a server error.
+        if (error instanceof GroupBranchRefusal) {
+            return NextResponse.json({ error: error.userMessage }, { status: error.status })
+        }
         console.error("Failed to update group branch assignments:", error)
         return NextResponse.json({ error: "Internal Server Error" }, { status: 500 })
     }

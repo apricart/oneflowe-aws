@@ -1,0 +1,182 @@
+{
+  "groups": {
+    "summary": {
+      "totalGroups": 1,
+      "totalOrders": 6,
+      "totalRevenue": 31500,
+      "totalRefunds": 1000,
+      "avgRevenuePerGroup": 15000
+    },
+    "comparison": null,
+    "groups": [
+      {
+        "id": 228,
+        "name": "Distribution",
+        "status": "active",
+        "organizationId": 321,
+        "organizationName": "IT Exec Org S",
+        "budgetsEnabled": true,
+        "totalOrders": 3,
+        "totalAmountCents": 15000,
+        "totalRefundCents": 1000,
+        "rejectedOrders": 0,
+        "branchCount": 1,
+        "branches": [
+          {
+            "id": 638,
+            "name": "North S",
+            "status": "active",
+            "groupId": 228,
+            "orders": 3,
+            "revenue": 15000,
+            "refunds": 1000,
+            "rejected": 0,
+            "totalBudget": 0
+          }
+        ],
+        "totalBudget": 0
+      }
+    ],
+    "ungroupedBranches": [
+      {
+        "id": 639,
+        "name": "South S",
+        "organizationId": 321,
+        "organizationName": "IT Exec Org S",
+        "totalOrders": 3,
+        "totalAmountCents": 16500
+      }
+    ]
+  },
+  "groupsAllTime": {
+    "years": [
+      2026
+    ]
+  },
+  "groupsSummary": {
+    "summary": {
+      "totalGroups": 1,
+      "totalOrders": 6,
+      "totalRevenue": 31500,
+      "totalRefunds": 1000,
+      "avgRevenuePerGroup": 15000
+    },
+    "comparison": null
+  },
+  "groupsTrend": {
+    "trend": [
+      {
+        "date": "2026-06",
+        "revenue": 11000,
+        "orders": 1
+      },
+      {
+        "date": "2026-07",
+        "revenue": 2000,
+        "orders": 1
+      },
+      {
+        "date": "2026-08",
+        "revenue": 2000,
+        "orders": 1
+      }
+    ],
+    "compareTrend": []
+  },
+  "orgStats": {
+    "items": [
+      {
+        "organizationId": 321,
+        "organizationName": "IT Exec Org S",
+        "organizationStatus": "active",
+        "branchCount": 2,
+        "activeBranchCount": 2,
+        "inactiveBranchCount": 0,
+        "totalUserCount": 7,
+        "activeUserCount": 7,
+        "revenue": 315,
+        "orderCount": 9,
+        "fulfilledCount": 3,
+        "refundedCount": 1,
+        "refundedRevenue": 400,
+        "comparison": null
+      }
+    ],
+    "trend": [
+      {
+        "period": "2026-06",
+        "revenue": 180,
+        "orders": 2
+      },
+      {
+        "period": "2026-07",
+        "revenue": 100,
+        "orders": 2
+      },
+      {
+        "period": "2026-08",
+        "revenue": 35,
+        "orders": 5
+      }
+    ],
+    "comparisonTrend": []
+  },
+  "orgStatsAllTime": {
+    "items": [
+      {
+        "organizationId": 321,
+        "organizationName": "IT Exec Org S",
+        "organizationStatus": "active",
+        "branchCount": 2,
+        "activeBranchCount": 2,
+        "inactiveBranchCount": 0,
+        "totalUserCount": 7,
+        "activeUserCount": 7,
+        "revenue": 315,
+        "orderCount": 9,
+        "fulfilledCount": 3,
+        "refundedCount": 1,
+        "refundedRevenue": 400,
+        "comparison": null
+      }
+    ],
+    "trend": [
+      {
+        "period": "2026-06",
+        "revenue": 180,
+        "orders": 2
+      },
+      {
+        "period": "2026-07",
+        "revenue": 100,
+        "orders": 2
+      },
+      {
+        "period": "2026-08",
+        "revenue": 35,
+        "orders": 5
+      }
+    ],
+    "comparisonTrend": []
+  },
+  "refunds": {
+    "items": [],
+    "count": 0,
+    "summary": {
+      "totalRefunds": 0,
+      "approvedRefunds": 0,
+      "pendingRefunds": 0,
+      "cancelledRefunds": 0,
+      "approvedAmountCents": 0,
+      "pendingAmountCents": 0
+    },
+    "pagination": {
+      "page": 1,
+      "limit": 25,
+      "total": 0,
+      "totalPages": 0,
+      "hasMore": false
+    },
+    "pricesHidden": false
+  }
+}

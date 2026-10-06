@@ -353,10 +353,16 @@ export default function BudgetsPage() {
         return toast({ title: "Failed", description: json.error, variant: "destructive" })
       }
 
-      const newRemaining = (editingBudget.remainingCents / 100) + Number.parseFloat(newAmount)
+      // A monthly allocation replaces the allocation (the server sets it); only
+      // an add-on adds to what is there, so the two report different figures.
+      const newRemainingCents = allocationType === "monthly"
+        ? editingBudget.remainingCents - (editingBudget.amountAllocatedCents || 0) + amountCents
+        : editingBudget.remainingCents + amountCents
       toast({
         title: "Budget Updated",
-        description: `Added ${formatPKR(Number.parseFloat(newAmount))} to ${editingBudget.branchName}. New remaining: ${formatPKR(newRemaining)}`,
+        description: allocationType === "monthly"
+          ? `Set the monthly budget of ${editingBudget.branchName} to ${formatPKR(amountCents / 100)}. New remaining: ${formatPKR(newRemainingCents / 100)}`
+          : `Added ${formatPKR(amountCents / 100)} to ${editingBudget.branchName}. New remaining: ${formatPKR(newRemainingCents / 100)}`,
       })
       setShowDialog(false)
       setEditingBudget(null)
