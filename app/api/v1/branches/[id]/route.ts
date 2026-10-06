@@ -44,12 +44,10 @@ function getTextFieldUpdate(value: unknown, minimumLength: number, maximumLength
   return { value: normalized || null }
 }
 
-/** The group and region a patch sets, already validated by `branchUpdateSchema`. */
-function referencePatch(body: any) {
-  const patch: any = {}
+/** Sets the group and region a patch names, each already validated by `branchUpdateSchema`. */
+function applyReferencePatch(patch: any, body: any) {
   if (body.groupId !== undefined) patch.groupId = body.groupId === null ? null : Number(body.groupId)
   if (body.region !== undefined) patch.region = body.region
-  return patch
 }
 
 /**
@@ -99,7 +97,7 @@ function buildBranchPatch(body: any) {
     }
     patch.status = normalized
   }
-  Object.assign(patch, referencePatch(body))
+  applyReferencePatch(patch, body)
   patch.updatedAt = new Date()
   return { patch }
 }

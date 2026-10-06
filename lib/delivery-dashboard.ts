@@ -292,10 +292,13 @@ export function buildDeliveryDashboard(input: {
 
   // Offered before the city filter narrows the rows, so choosing one city never
   // hides the others from the picker.
-  const cityOptions = [...new Map(assessedAll.map((row) => {
+  // The first spelling seen names the city, as it does in the tables.
+  const cityLabels = new Map<string, string>()
+  for (const row of assessedAll) {
     const place = placeKey(row.city)
-    return [place.key, place.label] as const
-  })).values()].sort((a, b) => a.localeCompare(b))
+    if (!cityLabels.has(place.key)) cityLabels.set(place.key, place.label)
+  }
+  const cityOptions = [...cityLabels.values()].sort((a, b) => a.localeCompare(b))
 
   const assessed = assessedAll.filter((row) => matchesCity(row, filters.city))
   const assessments = assessed.map((row) => row.assessment)
