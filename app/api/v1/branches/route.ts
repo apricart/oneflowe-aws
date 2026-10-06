@@ -206,6 +206,7 @@ export async function GET(req: Request) {
           name: branchesTable.name,
           province: branchesTable.province,
           city: branchesTable.city,
+          region: branchesTable.region,
           address: branchesTable.address,
           costCenterId: branchesTable.costCenterId,
           code: branchesTable.code,
@@ -266,6 +267,12 @@ export async function POST(req: Request) {
     const access = resolveBranchCreationAccess(scope, requestedOrganizationId)
     if (!access.allowed) return error(access.message, access.status)
     const organizationId = access.organizationId
+
+    // The delivery region feeds Apricart's management dashboard across every
+    // tenant, so it is Apricart's to set, not a tenant's.
+    if (body.region !== undefined && body.region !== null && scope.role !== "SUPER_ADMIN") {
+      return error("Only Super Admin can set a branch's region", 403)
+    }
 
     const validated = validateBranchFields(body)
     if (validated.response) return validated.response
@@ -332,6 +339,7 @@ export async function POST(req: Request) {
           costCenterId: costCenterId || null,
           code: finalCode,
           status,
+          region: body.region ?? null,
         })
         .returning()
 

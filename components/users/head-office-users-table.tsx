@@ -820,6 +820,9 @@ function RoleAssignmentFields({
                 {/* Likewise for an Order Desk account, whose role is fixed and
                     whose reach is granted from Order Desk Team. */}
                 <SelectItem value="ORDER_DESK">Order Desk (Apricart)</SelectItem>
+                {/* And for an Apricart Executive, whose role is fixed and who
+                    has no organization or branch to change. */}
+                <SelectItem value="APRICART_EXECUTIVE">Apricart Executive</SelectItem>
               </>
             )}
           </SelectContent>
@@ -1258,6 +1261,8 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
         return <Badge className="bg-slate-100 text-slate-800">Viewer</Badge>
       case "ORDER_DESK":
         return <Badge className="bg-indigo-100 text-indigo-800">Order Desk</Badge>
+      case "APRICART_EXECUTIVE":
+        return <Badge className="bg-amber-100 text-amber-800">Apricart Executive</Badge>
       default:
         return <Badge variant="outline">{role}</Badge>
     }
@@ -1369,6 +1374,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
             <SelectItem value="GROUP_USER">Group User</SelectItem>
             <SelectItem value="VIEWER">Viewer (read-only)</SelectItem>
             <SelectItem value="ORDER_DESK">Order Desk (Apricart)</SelectItem>
+            <SelectItem value="APRICART_EXECUTIVE">Apricart Executive</SelectItem>
           </SelectContent>
         </Select>
 

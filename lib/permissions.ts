@@ -678,5 +678,16 @@ export const ROLE_TEMPLATES = {
       Permission.ORDER_VIEW,
     ],
   },
+  APRICART_EXECUTIVE: {
+    name: "Apricart Executive",
+    description: "Apricart management: read-only delivery monitoring across every organization",
+    permissions: [
+      // Descriptive only, like every template here. What confines this role is
+      // `lib/apricart-executive-access.ts` — one page area and a two-route read
+      // allowlist enforced in `proxy.ts` — and each handler's own role check.
+      // Every key is a read; no *_CREATE, *_EDIT, *_APPROVE or *_MANAGE.
+      Permission.ORDER_VIEW,
+    ],
+  },
 }
 

@@ -575,6 +575,13 @@
       "when": 1791025200000,
       "tag": "20261006120000_add_order_correction_requests",
       "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1791028800000,
+      "tag": "20261007120000_add_branch_region_and_apricart_executive",
+      "breakpoints": true
     }
   ]
 }

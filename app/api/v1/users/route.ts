@@ -12,6 +12,7 @@ import { userCreateSchema,validationMessage } from "@/lib/server/mutation-valida
 import { canAssignRole } from "@/lib/server/user-access-policy"
 import { isViewerRole } from "@/lib/viewer-access"
 import { isOrderDeskRole, orderDeskUserShapeError } from "@/lib/order-desk-access"
+import { apricartExecutiveUserShapeError, isApricartExecutiveRole } from "@/lib/apricart-executive-access"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { USER_MANAGEMENT_ROLES } from "@/lib/user-management-access"
 import { usernameExists } from "@/lib/user-username-uniqueness"
@@ -37,6 +38,23 @@ function getLoginUrl(requestUrl: string): string {
   return new URL("/login", requestUrl).toString()
 }
 
+/**
+ * Apricart's own staff roles carry no organization and no branch: the Order
+ * Desk's reach is the assignments Super Admin grants from Desk team, and
+ * management reads every organization. Undefined for any other role.
+ */
+function apricartStaffShapeError(
+  role: SystemRole,
+  organizationId: number | null,
+  branchId: number | null,
+): { message: string; status: number } | null | undefined {
+  let shapeError: string | null
+  if (isOrderDeskRole(role)) shapeError = orderDeskUserShapeError(organizationId, branchId)
+  else if (isApricartExecutiveRole(role)) shapeError = apricartExecutiveUserShapeError(organizationId, branchId)
+  else return undefined
+  return shapeError ? { message: shapeError, status: 400 } : null
+}
+
 /** Which organization/branch fields the requested role requires or forbids. */
 function getRoleShapeError(
   role: SystemRole,
@@ -53,12 +71,9 @@ function getRoleShapeError(
   if (isViewerRole(role) && !organizationId) {
     return { message: "organizationId required for VIEWER", status: 400 }
   }
-  // Apricart's own cross-tenant staff: no organization, no branch. Its reach is
-  // the assignments Super Admin grants from Desk team, never this row.
-  if (isOrderDeskRole(role)) {
-    const shapeError = orderDeskUserShapeError(organizationId, branchId)
-    return shapeError ? { message: shapeError, status: 400 } : null
-  }
+  // Apricart's own cross-tenant staff: no organization, no branch.
+  const staffShape = apricartStaffShapeError(role, organizationId, branchId)
+  if (staffShape !== undefined) return staffShape
   if (["BRANCH_ADMIN", "ORDER_PORTAL"].includes(role) && (!organizationId || !branchId)) {
     return { message: "organizationId and branchId required for BRANCH_ADMIN and ORDER_PORTAL", status: 400 }
   }

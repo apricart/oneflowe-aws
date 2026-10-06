@@ -2,7 +2,7 @@
 import Link from "next/link"
 import { usePathname, useSearchParams } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { Home,Building2,Users,Package,Boxes,Wallet,BarChart3,Settings,FolderTree,ChevronDown,ClipboardCheck,DoorOpen,Headset,LifeBuoy,MapPinned,PanelLeftClose,PanelLeftOpen,ScrollText } from "lucide-react"
+import { Home,Building2,Users,Package,Boxes,Wallet,BarChart3,Settings,FolderTree,ChevronDown,ClipboardCheck,DoorOpen,Headset,LifeBuoy,MapPinned,PanelLeftClose,PanelLeftOpen,ScrollText,Gauge } from "lucide-react"
 import Image from "next/image"
 import { useCallback,useEffect,useState,type ReactNode } from "react"
 import { Tooltip,TooltipContent,TooltipTrigger } from "@/components/ui/tooltip"
@@ -104,6 +104,9 @@ const navigationByRole = (role: string, budgetAllocationEnabled: boolean) => {
       // may order for — Super Admin's alone (lib/order-desk-access.ts).
       { href: "/desk-team", label: "Order Desk Team", icon: Headset },
       { href: "/orders", label: "Orders", icon: Package },
+      // Every client's approved orders against the delivery target; the same
+      // dashboard Apricart Executive accounts read (lib/apricart-executive-access.ts).
+      { href: "/delivery-dashboard", label: "Delivery Dashboard", icon: Gauge },
       { href: "/refunds", label: "Refunds", icon: Wallet },
       {
         href: "/inventory",

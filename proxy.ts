@@ -22,6 +22,13 @@ import {
   ORDER_DESK_MANAGER_ROLES,
 } from "@/lib/order-desk-access"
 import { ACTIVITY_LOG_ROLES } from "@/lib/activity-log-access"
+import {
+  APRICART_EXECUTIVE_AREAS,
+  APRICART_EXECUTIVE_HOME,
+  DELIVERY_DASHBOARD_AREA,
+  isApricartExecutiveApiRequestAllowed,
+  isApricartExecutiveRole,
+} from "@/lib/apricart-executive-access"
 
 const protectedPrefixes = [
   "/approvals",
@@ -35,8 +42,10 @@ const protectedPrefixes = [
   // three portals. Its layout refuses the rest through
   // `canReadDeliveryAddresses`, and every handler behind it re-checks.
   "/delivery-addresses",
+  "/delivery-dashboard",
   "/desk-team",
   "/employee-management",
+  "/executive",
   "/group-portal",
   "/groups",
   "/inventory",
@@ -203,6 +212,18 @@ async function handleApiRequest(req: NextRequest, pathname: string, response: Ne
       pathname,
     )
   }
+  // The same confinement for Apricart's management account, which also has no
+  // organization of its own: the delivery dashboard reads and nothing else.
+  if (
+    isApricartExecutiveRole((token as any)?.role)
+    && !isApricartExecutiveApiRequestAllowed(req.method, pathname)
+  ) {
+    logger("middleware", { reason: "apricart_executive_api_not_allowed", path: pathname })
+    return withSecurityHeaders(
+      NextResponse.json({ error: "Forbidden" }, { status: 403 }),
+      pathname,
+    )
+  }
   return withSecurityHeaders(response, pathname)
 }
 
@@ -312,10 +333,13 @@ function adminPortalRedirect(pathname: string): string | null {
  *     orders directory, so it needs nothing else.
  *   * ORDER_DESK — Apricart's order entry: its workspace, and not the invoice
  *     or support pages, which are scoped to a tenant it does not belong to.
+ *   * APRICART_EXECUTIVE — Apricart's management: the delivery dashboard and
+ *     nothing else, for the same reason.
  */
 const SINGLE_AREA_ROLES: ReadonlyArray<{ matches: (role: unknown) => boolean; areas: readonly string[]; home: string }> = [
   { matches: isViewerRole, areas: VIEWER_AREAS, home: VIEWER_HOME },
   { matches: isOrderDeskRole, areas: ORDER_DESK_AREAS, home: ORDER_DESK_HOME },
+  { matches: isApricartExecutiveRole, areas: APRICART_EXECUTIVE_AREAS, home: APRICART_EXECUTIVE_HOME },
 ]
 
 /**
@@ -397,6 +421,10 @@ const ROLE_GATED_AREAS: ReadonlyArray<{ prefix: string; roles: readonly string[]
   { prefix: DESK_TEAM_AREA, roles: ORDER_DESK_MANAGER_ROLES, home: "/dashboard" },
   // The desk's own workspace; no other role has a reason to render it.
   { prefix: ORDER_DESK_HOME, roles: ["ORDER_DESK"], home: "/dashboard" },
+  // The executive's own workspace, and the same dashboard in the admin shell
+  // for Super Admin. Both endpoints behind them re-check the role.
+  { prefix: APRICART_EXECUTIVE_HOME, roles: ["APRICART_EXECUTIVE"], home: "/dashboard" },
+  { prefix: DELIVERY_DASHBOARD_AREA, roles: ["SUPER_ADMIN"], home: "/dashboard" },
 ]
 
 /** Where to send a caller whose role does not hold the area, or null. */

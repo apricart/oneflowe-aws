@@ -86,6 +86,8 @@ type InvoiceRoleRule = {
  *                          that and fails closed on its own.
  *  - ORDER_DESK          — nothing, for now: it has no organization, so it is
  *                          refused by the tenant check like an unknown scope.
+ *  - APRICART_EXECUTIVE  — nothing, for the same reason; its dashboard shows no
+ *                          money at all.
  */
 const INVOICE_ROLE_RULES: Record<Role, InvoiceRoleRule> = {
   SUPER_ADMIN: { tenant: "platform", branches: "all", ownOrdersOnly: false },
@@ -103,6 +105,9 @@ const INVOICE_ROLE_RULES: Record<Role, InvoiceRoleRule> = {
   // Reads no invoice yet. A desk account has no organization, so the tenant
   // check refuses it before the branch rule is reached; "none" refuses it again.
   ORDER_DESK: { tenant: "own-organization", branches: "none", ownOrdersOnly: true },
+  // Reads no invoice: the delivery dashboard carries no money. No organization,
+  // so the tenant check refuses it, and "none" refuses it again.
+  APRICART_EXECUTIVE: { tenant: "own-organization", branches: "none", ownOrdersOnly: true },
 }
 
 /** Roles whose branch reach comes from group and branch assignments. */

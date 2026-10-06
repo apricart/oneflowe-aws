@@ -18,6 +18,7 @@ import {
   MAX_ORDERS_PER_GROUP_REFUND,
 } from "@/lib/server/group-refund-rules"
 import { PROPAGATION_MODES } from "@/lib/group-price-propagation"
+import { BRANCH_REGIONS } from "@/lib/branch-region"
 import {
   EMAIL_DOMAIN_MAX_LENGTH,
   emailDomainError,
@@ -66,6 +67,9 @@ export const systemRoleSchema = z.enum([
   // Apricart's internal order entry. No organization of its own; its reach is
   // the managed organizations Super Admin assigns it (`lib/order-desk-access.ts`).
   "ORDER_DESK",
+  // Apricart's management: reads the delivery dashboard across every
+  // organization and nothing else (`lib/apricart-executive-access.ts`).
+  "APRICART_EXECUTIVE",
 ])
 
 export type SystemRole = z.infer<typeof systemRoleSchema>
@@ -179,6 +183,8 @@ export const branchCreateSchema = z.object({
   address: z.string().trim().min(5).max(500),
   costCenterId: nullableText(128).optional(),
   status: z.enum(["active", "inactive"]).optional().default("active"),
+  // Delivery region; Super Admin only, enforced by the route.
+  region: z.union([z.enum(BRANCH_REGIONS), z.null()]).optional(),
 }).strict()
 
 export const branchUpdateSchema = z.object({
@@ -189,6 +195,8 @@ export const branchUpdateSchema = z.object({
   costCenterId: nullableText(128).optional(),
   status: z.enum(["active", "inactive", "suspended"]).optional(),
   groupId: nullablePositiveId.optional(),
+  // Delivery region, or null for Unknown; Super Admin only, enforced by the route.
+  region: z.union([z.enum(BRANCH_REGIONS), z.null()]).optional(),
 }).strict().refine((input) => Object.keys(input).length > 0, {
   message: "At least one branch field is required",
 })

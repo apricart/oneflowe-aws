@@ -104,6 +104,10 @@ export const branches = pgTable(
     name: varchar("name", { length: 255 }).notNull(),
     province: varchar("province", { length: 100 }),
     city: varchar("city", { length: 100 }),
+    // Delivery region, for the management delivery dashboard. One of
+    // BRANCH_REGIONS (lib/branch-region.ts) or NULL ("Unknown"); set by Super
+    // Admin in the branch form. See plans/OF-DELIVERY-management-delivery-dashboard.md.
+    region: varchar("region", { length: 16 }),
     address: text("address"),
     costCenterId: varchar("cost_center_id", { length: 128 }),
     // Avoid circular type init between users <-> branches; store admin user id without FK
@@ -131,6 +135,7 @@ export const branches = pgTable(
       .where(sql`${t.externalSource} IS NOT NULL AND ${t.externalId} IS NOT NULL`),
     index("branches_status_idx").on(t.status),
     index("branches_group_idx").on(t.groupId),
+    check("branches_region_ck", sql`${t.region} IS NULL OR ${t.region} IN ('NORTH', 'CENTRAL', 'SOUTH')`),
     check(
       "branches_external_identity_pair_ck",
       sql`(${t.externalSource} IS NULL) = (${t.externalId} IS NULL)

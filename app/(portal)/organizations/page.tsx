@@ -1,4 +1,6 @@
 "use client"
+import { BranchRegionSelect } from "@/components/branches/branch-region-select"
+import type { BranchRegion } from "@/lib/branch-region"
 import { useAppContext } from "@/components/context/app-context"
 import { BranchExcelExportButton } from "@/components/organizations/branch-excel-export-button"
 import { BranchListExcelExportButton } from "@/components/organizations/branch-list-excel-export-button"
@@ -189,6 +191,7 @@ type Branch = {
   organizationId: number
   province?: string | null
   city?: string | null
+  region?: BranchRegion | null
   address?: string | null
   costCenterId?: string | null
   status?: "active" | "inactive"
@@ -1494,6 +1497,7 @@ function CreateBranchDialog({
   const [name, setName] = useState("")
   const [province, setProvince] = useState("")
   const [city, setCity] = useState("")
+  const [region, setRegion] = useState<BranchRegion | null>(null)
   const [address, setAddress] = useState("")
   const [costCenterId, setCostCenterId] = useState("")
   const [status, setStatus] = useState<boolean>(true)
@@ -1512,6 +1516,7 @@ function CreateBranchDialog({
       name: name.trim(),
       province: province.trim(),
       city: city.trim(),
+      region,
       address: address.trim(),
       costCenterId: costCenterId.trim() || null,
       status: status ? "active" : "inactive",
@@ -1619,6 +1624,7 @@ function CreateBranchDialog({
                     />
                   </div>
                 </div>
+                <BranchRegionSelect id="branch-region" value={region} onChange={setRegion} disabled={saving} />
                 <div className="space-y-2">
                   <Label htmlFor="branch-address">Address</Label>
                   <Textarea
@@ -2091,6 +2097,7 @@ function EditBranchDialog({ branch, onSave }: Readonly<{ branch: Branch; onSave:
   const [code, setCode] = useState(branch.code ?? "")
   const [province, setProvince] = useState(branch.province ?? "")
   const [city, setCity] = useState(branch.city ?? "")
+  const [region, setRegion] = useState<BranchRegion | null>(branch.region ?? null)
   const [address, setAddress] = useState(branch.address ?? "")
   const [costCenterId, setCostCenterId] = useState(branch.costCenterId ?? "")
   const [status, setStatus] = useState<boolean>(isActiveStatus(branch.status))
@@ -2100,10 +2107,11 @@ function EditBranchDialog({ branch, onSave }: Readonly<{ branch: Branch; onSave:
     setCode(branch.code ?? "")
     setProvince(branch.province ?? "")
     setCity(branch.city ?? "")
+    setRegion(branch.region ?? null)
     setAddress(branch.address ?? "")
     setCostCenterId(branch.costCenterId ?? "")
     setStatus(isActiveStatus(branch.status))
-  }, [branch.name, branch.code, branch.province, branch.city, branch.address, branch.costCenterId, branch.status])
+  }, [branch.name, branch.code, branch.province, branch.city, branch.region, branch.address, branch.costCenterId, branch.status])
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
@@ -2149,6 +2157,7 @@ function EditBranchDialog({ branch, onSave }: Readonly<{ branch: Branch; onSave:
                 />
               </div>
             </div>
+            <BranchRegionSelect id="branch-region-edit" value={region} onChange={setRegion} />
             <div className="space-y-2">
               <Label htmlFor="branch-address-edit">Address</Label>
               <Textarea
@@ -2193,6 +2202,7 @@ function EditBranchDialog({ branch, onSave }: Readonly<{ branch: Branch; onSave:
                 name: name.trim(),
                 province: province.trim() || null,
                 city: city.trim() || null,
+                region,
                 address: address.trim() || null,
                 costCenterId: costCenterId.trim() || null,
                 status: status ? "active" : "inactive",

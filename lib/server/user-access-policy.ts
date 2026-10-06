@@ -15,6 +15,9 @@ const ROLE_LEVEL: Record<SystemRole, number> = {
   GROUP_USER: 5,
   HEAD_OFFICE: 6,
   ORDER_DESK: 7,
+  // Same reasoning as ORDER_DESK: Apricart's own cross-tenant staff, so only
+  // Super Admin may create or manage one (`lib/apricart-executive-access.ts`).
+  APRICART_EXECUTIVE: 7,
   SUPER_ADMIN: 8,
 }
 
