@@ -37,6 +37,7 @@ import {
   hasTestDatabase,
   type GroupRoleFixtures,
 } from "./helpers/group-role-fixtures"
+import { stageDeliveryChallan } from "./helpers/delivery-challan-fixtures"
 
 /**
  * The unacknowledged-delivery ordering block against Postgres
@@ -394,8 +395,9 @@ describe.skipIf(!hasTestDatabase)("blocking new orders on unacknowledged deliver
       expect((await status(f.alphaNorthId)).orderingAllowed).toBe(true)
 
       signIn(superAdmin())
+      const deliveryChallanId = await stageDeliveryChallan(pendingId, f.superAdminId)
       const delivered = await fulfillmentStatusRoute.POST(
-        request("POST", `http://localhost/api/v1/orders/${pendingId}/fulfillment-status`, { fulfillmentStatus: "DELIVERED" }),
+        request("POST", `http://localhost/api/v1/orders/${pendingId}/fulfillment-status`, { fulfillmentStatus: "DELIVERED", deliveryChallanId }),
         { params: Promise.resolve({ id: String(pendingId) }) },
       )
       expect(delivered.status).toBe(200)

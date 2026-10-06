@@ -45,6 +45,7 @@ import {
   ORDER_DESK_FIXTURE_PRICE_CENTS,
   type OrderDeskFixtures,
 } from "./helpers/order-desk-fixtures"
+import { stageDeliveryChallan } from "./helpers/delivery-challan-fixtures"
 
 /**
  * Apricart's Order Desk end to end: the real routes against Postgres, with
@@ -198,8 +199,11 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
   const superDeliver = async (orderId: number) => {
     signIn(actor("super"))
     for (const fulfillmentStatus of ["IN_PROCESS", "OUT_FOR_DELIVERY", "DELIVERED"]) {
+      const deliveryChallanId = fulfillmentStatus === "DELIVERED"
+        ? await stageDeliveryChallan(orderId, actor("super").id)
+        : undefined
       const result = await read(await progressRoute.POST(
-        jsonRequest(`http://localhost/api/v1/orders/${orderId}/fulfillment-status`, "POST", { fulfillmentStatus }),
+        jsonRequest(`http://localhost/api/v1/orders/${orderId}/fulfillment-status`, "POST", { fulfillmentStatus, deliveryChallanId }),
         params(orderId),
       ))
       expect(result.status, fulfillmentStatus).toBe(200)
