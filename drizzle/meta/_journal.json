@@ -554,6 +554,76 @@
       "when": 1791014400000,
       "tag": "20261003120000_add_product_request_review_stage",
       "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "7",
+      "when": 1791018000000,
+      "tag": "20261005120000_add_order_desk",
+      "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1791021600000,
+      "tag": "20261005130000_add_order_desk_attachment_and_cancellation",
+      "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1791025200000,
+      "tag": "20261006120000_add_order_correction_requests",
+      "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1791028800000,
+      "tag": "20261007120000_add_branch_region_and_apricart_executive",
+      "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
+      "when": 1791032400000,
+      "tag": "20261008120000_add_order_delivery_challans",
+      "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1791036000000,
+      "tag": "20261009120000_add_ordering_block_thresholds",
+      "breakpoints": true
+    },
+    {
+      "idx": 85,
+      "version": "7",
+      "when": 1791039600000,
+      "tag": "20261010120000_add_apricart_executive_order_approval",
+      "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "7",
+      "when": 1791043200000,
+      "tag": "20261011120000_add_warehouse_role",
+      "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1791046800000,
+      "tag": "20261012120000_add_tenant_composite_foreign_keys",
+      "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1791050400000,
+      "tag": "20261013120000_add_warehouse_city_assignments",
+      "breakpoints": true
     }
   ]
 }

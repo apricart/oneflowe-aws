@@ -224,11 +224,15 @@ export async function createExecutiveAnalyticsFixtures(): Promise<ExecutiveAnaly
   const foreignUserId = await person("foreign", role.orderPortal, neighbour.id, foreign.id, `Foreign User ${suffix}`)
 
   // The approver reaches South and nothing else. The second row is a stale or
-  // inconsistent assignment naming the neighbour's branch under tenant A's id;
+  // inconsistent assignment giving tenant A's approver the neighbour's branch;
   // every read must re-assert the tenant and drop it rather than reach Foreign.
+  // It carries the neighbour's id because the database refuses a branch filed
+  // under another organization's id (user_branch_assignments_branch_org_fk,
+  // plans/OF-DB-tenant-composite-foreign-keys.md); nothing ties the row's
+  // organization to its user's, so this shape can still exist.
   await db.insert(userBranchAssignments).values([
     { userId: southApproverId, branchId: south.id, organizationId: organization.id, createdByUserId: headOfficeId },
-    { userId: southApproverId, branchId: foreign.id, organizationId: organization.id, createdByUserId: headOfficeId },
+    { userId: southApproverId, branchId: foreign.id, organizationId: neighbour.id, createdByUserId: headOfficeId },
   ])
 
   const [stationery] = await db

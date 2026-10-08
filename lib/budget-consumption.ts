@@ -110,6 +110,44 @@ export function isSameBudgetPeriod(
   return budgetPeriodOf(left) === budgetPeriodOf(right)
 }
 
+/** How an approved refund moves its order's period row on the money ledger. */
+export type RefundLedgerMove = {
+  /** Withdrawn from `amount_spent_cents`. */
+  spentDebitCents: number
+  /** Added to `amount_credited_cents`. */
+  creditCents: number
+}
+
+/**
+ * The single rule both refund routes apply to the budget row of the order's
+ * own period (`plans/OF-BUDGET-refund-ledger-debit.md`).
+ *
+ * A refund of an order whose money is already spent is withdrawn from
+ * `spent`, because every order-side reader nets refunds out of consumption
+ * (`orderConsumptionCents`); crediting it instead left the ledger saying the
+ * branch consumed the refunded money, and a reader combining the two counted
+ * the refund twice. The debit never exceeds what the row has spent — a
+ * repaired or imported row can hold less — and whatever it cannot take is
+ * credited, so the branch always gets exactly the refund back.
+ *
+ * A refund of an order still holding its budget is credited and the hold left
+ * whole: fulfilment, rejection and cancellation each move the order's full
+ * total out of `held`, and a smaller hold would make them fail or eat another
+ * order's hold.
+ */
+export function planRefundLedgerMove(input: {
+  orderStatus?: string | null
+  refundCents: number
+  rowSpentCents: number
+}): RefundLedgerMove {
+  const refund = Math.max(0, Math.trunc(toCents(input.refundCents)))
+  if (classifyOrderConsumption({ status: input.orderStatus }) !== "spent") {
+    return { spentDebitCents: 0, creditCents: refund }
+  }
+  const spentDebitCents = Math.min(refund, Math.max(0, Math.trunc(toCents(input.rowSpentCents))))
+  return { spentDebitCents, creditCents: refund - spentDebitCents }
+}
+
 /**
  * Sum a set of orders the way the SQL does — the oracle a parity test checks
  * the database against.

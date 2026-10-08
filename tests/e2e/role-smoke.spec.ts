@@ -15,6 +15,7 @@ import {
   SMOKE_PRODUCT_CODE,
   SMOKE_USERNAMES,
 } from "./support/role-smoke-seed"
+import { markDelivered } from "./support/session"
 
 type JsonBody = Record<string, any>
 
@@ -277,11 +278,8 @@ test("an order can be created, approved, and fulfilled only by the correct roles
       409,
     )
 
-    for (const fulfillmentStatus of ["IN_PROCESS", "OUT_FOR_DELIVERY", "DELIVERED"]) {
-      await expectJsonStatus(
-        await mutation(fulfiller.page, `/api/v1/orders/${orderId}/fulfillment-status`, { fulfillmentStatus }),
-      )
-    }
+    // Super Admin may not mark it delivered without a delivery challan.
+    await markDelivered(fulfiller.page, orderId)
 
     await expectJsonStatus(
       await mutation(fulfiller.page, `/api/v1/orders/${orderId}/fulfill`, {

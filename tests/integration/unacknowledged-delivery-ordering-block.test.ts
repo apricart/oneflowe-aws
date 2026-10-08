@@ -37,6 +37,7 @@ import {
   hasTestDatabase,
   type GroupRoleFixtures,
 } from "./helpers/group-role-fixtures"
+import { stageDeliveryChallan } from "./helpers/delivery-challan-fixtures"
 
 /**
  * The unacknowledged-delivery ordering block against Postgres
@@ -394,8 +395,9 @@ describe.skipIf(!hasTestDatabase)("blocking new orders on unacknowledged deliver
       expect((await status(f.alphaNorthId)).orderingAllowed).toBe(true)
 
       signIn(superAdmin())
+      const deliveryChallanId = await stageDeliveryChallan(pendingId, f.superAdminId)
       const delivered = await fulfillmentStatusRoute.POST(
-        request("POST", `http://localhost/api/v1/orders/${pendingId}/fulfillment-status`, { fulfillmentStatus: "DELIVERED" }),
+        request("POST", `http://localhost/api/v1/orders/${pendingId}/fulfillment-status`, { fulfillmentStatus: "DELIVERED", deliveryChallanId }),
         { params: Promise.resolve({ id: String(pendingId) }) },
       )
       expect(delivered.status).toBe(200)
@@ -648,12 +650,13 @@ describe.skipIf(!hasTestDatabase)("blocking new orders on unacknowledged deliver
       expect(await status(f.alphaNorthId)).toMatchObject({ enabled: true, unacknowledgedCount: 0 })
     })
 
-    it("the count is fenced by the organization as well as the branch", async () => {
+    it("a row naming this tenant's branch under another tenant cannot exist, so it never counts", async () => {
       await setToggle(f.organizationId, true)
-      // A row naming this tenant's branch under another tenant must not count
-      // toward it: the count carries both predicates.
-      await delivery({ organizationId: f.foreignOrganizationId, branchId: f.alphaNorthId })
-      await delivery({ organizationId: f.foreignOrganizationId, branchId: f.alphaNorthId })
+      // The count carries both predicates; the database now refuses such a
+      // row outright (`orders_branch_org_fk`,
+      // `plans/OF-DB-tenant-composite-foreign-keys.md`).
+      await expect(delivery({ organizationId: f.foreignOrganizationId, branchId: f.alphaNorthId }))
+        .rejects.toMatchObject({ cause: expect.objectContaining({ code: "23503", constraint: "orders_branch_org_fk" }) })
 
       expect(await status(f.alphaNorthId)).toMatchObject({ orderingAllowed: true, unacknowledgedCount: 0 })
     })

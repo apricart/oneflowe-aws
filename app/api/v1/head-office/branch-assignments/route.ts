@@ -182,7 +182,14 @@ async function resolveAssignmentBranches(organizationId: number, groupIdValue: a
     if (!Array.isArray(directBranchIds) || directBranchIds.length === 0) return { error: "Either groupId or branchIds is required", status: 400 }
     const ids = directBranchIds.map(Number)
     if (ids.some((id) => !Number.isInteger(id) || id <= 0)) return { error: "Invalid branch IDs", status: 400 }
-    return { branchIds: [...new Set<number>(ids)], groupName: null }
+    const branchIds = [...new Set<number>(ids)]
+    // Direct ids come from the request, so each must be one of this tenant's
+    // branches. Unchecked, another tenant's branch id was written into a row
+    // carrying this tenant's organization.
+    const owned = await db.select({ id: branches.id }).from(branches)
+      .where(and(eq(branches.organizationId, organizationId), inArray(branches.id, branchIds)))
+    if (owned.length !== branchIds.length) return { error: "Branch does not belong to this organization", status: 403 }
+    return { branchIds, groupName: null }
   }
   const groupId = Number(groupIdValue)
   if (!Number.isInteger(groupId) || groupId <= 0) return { error: "Invalid group ID", status: 400 }
@@ -273,7 +280,10 @@ function validateAssignmentOrganizationId(value: any) {
 
 async function resolveDeleteAssignmentOrganizationId(context: any) {
   if (context.sessionOrganizationId) return Number(context.sessionOrganizationId)
-  if (context.role === "SUPER_ADMIN" && context.queryOrganizationId) return Number(context.queryOrganizationId)
+  // Only Super Admin may take the tenant from the request or from the row
+  // itself; anyone else without an organization of their own reaches nothing.
+  if (context.role !== "SUPER_ADMIN") return null
+  if (context.queryOrganizationId) return Number(context.queryOrganizationId)
   if (!context.assignmentId) return null
   const [assignment] = await db.select({ organizationId: branchInventory.organizationId }).from(branchInventory)
     .where(eq(branchInventory.id, Number.parseInt(context.assignmentId))).limit(1)
@@ -424,7 +434,7 @@ export async function GET(req: NextRequest) {
         .limit(limit)
         .offset(offset),
 
-      db.select({ count: sql<number>`count(*)` })
+      db.select({ count: sql<number>`count(*)::int` })
         .from(branchInventory)
         .leftJoin(organizationInventory, eq(branchInventory.organizationInventoryId, organizationInventory.id))
         .leftJoin(globalProducts, eq(organizationInventory.globalProductId, globalProducts.id))
@@ -439,7 +449,8 @@ export async function GET(req: NextRequest) {
         ),
     ])
 
-    const total = totalResult[0].count
+    // Cast in SQL and here: a bare count(*) is a bigint, which arrives as a string.
+    const total = Number(totalResult[0].count)
 
     return NextResponse.json({ items, total, page, limit })
   } catch (error) {

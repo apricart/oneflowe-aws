@@ -129,6 +129,63 @@ describe("state with a source", () => {
     expect(status.threshold).toBe(3)
   })
 
+  const dated = (count: number) => overdue(Array.from({ length: count }, (_, index) => ({
+    reference: `INV-${index + 1}`,
+    overdueSince: new Date(Date.UTC(2026, 7, index + 1)),
+  })))
+
+  // An organization's own limit (plans/OF-ORDERING-BLOCK-configurable-thresholds.md).
+  it.each([
+    [1, 0, "CLEAR", true],
+    [1, 1, "BLOCKED", false],
+    [5, 4, "WARNING", true],
+    [5, 5, "BLOCKED", false],
+    [5, 6, "BLOCKED", false],
+    [100, 99, "WARNING", true],
+    [100, 100, "BLOCKED", false],
+  ])("with a limit of %i, %i overdue → %s, orderingAllowed %s", (threshold, count, state, allowed) => {
+    const status = resolvePaymentControl({ overdue: dated(count), exception: null, now: NOW, threshold })
+    expect(status).toMatchObject({ state, orderingAllowed: allowed, threshold, limitReached: !allowed, overdueCount: count })
+  })
+
+  it("with a custom limit, the date the limit was reached is the limit-th oldest", () => {
+    const status = resolvePaymentControl({ overdue: dated(7), exception: null, now: NOW, threshold: 5 })
+    expect(status.blockedSince).toEqual(new Date(Date.UTC(2026, 7, 5)))
+  })
+
+  it("with a custom limit, the timeline and the refusal print that limit", () => {
+    const warning = resolvePaymentControl({ overdue: dated(3), exception: null, now: NOW, threshold: 5 })
+    expect(warning.timeline.find((step) => step.key === "warning")?.description).toBe("3 of 5 overdue payments. Ordering is still available.")
+    const blocked = resolvePaymentControl({ overdue: dated(5), exception: null, now: NOW, threshold: 5 })
+    expect(new PaymentControlBlockedError(blocked).details).toMatchObject({ overdueCount: 5, threshold: 5 })
+    expect(new PaymentControlBlockedError(blocked).message).toBe("You have 5 unpaid invoices. Please pay your dues before placing a new order.")
+  })
+
+  it("a Head Office exception still lets a branch past a custom limit", () => {
+    const status = resolvePaymentControl({ overdue: dated(1), exception: exception(), now: NOW, threshold: 1 })
+    expect(status).toMatchObject({ state: "BLOCKED", exceptionActive: true, orderingAllowed: true })
+  })
+
+  it.each([0, -1, 101, 1.5, Number.NaN])(
+    "an out-of-bounds limit (%s) falls back to the default, never to 'never block' or 'always block'",
+    (threshold) => {
+      const clear = resolvePaymentControl({ overdue: overdue([]), exception: null, now: NOW, threshold })
+      expect(clear).toMatchObject({ state: "CLEAR", orderingAllowed: true, threshold: THRESHOLD })
+      const blocked = resolvePaymentControl({ overdue: twoOverdue(), exception: null, now: NOW, threshold })
+      expect(blocked).toMatchObject({ state: "BLOCKED", orderingAllowed: false, threshold: THRESHOLD })
+    },
+  )
+
+  it("not configured ignores any limit", () => {
+    const status = resolvePaymentControl({
+      overdue: { configured: false, overdueCount: 5, items: [] },
+      exception: null,
+      now: NOW,
+      threshold: 1,
+    })
+    expect(status).toMatchObject({ state: "NOT_CONFIGURED", orderingAllowed: true })
+  })
+
   it("a negative or fractional count from a faulty source is clamped, never trusted", () => {
     const status = resolvePaymentControl({
       overdue: { configured: true, overdueCount: -3, items: [] },

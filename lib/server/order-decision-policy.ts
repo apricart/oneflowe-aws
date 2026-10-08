@@ -5,12 +5,15 @@ import { and, eq, isNull } from "drizzle-orm"
 import { branches, orders, organizations, roles, users } from "@/db/schema"
 import { db } from "@/lib/db"
 import type { RequestScope } from "@/lib/auth"
+import { APRICART_EXECUTIVE_ROLE, isApricartExecutiveRole } from "@/lib/apricart-executive-access"
+import { canExecutiveDecideOrder, isDeskEnteredOrder } from "@/lib/order-desk-approval"
 import {
   canMakeOrderDecision,
   isOrderApproverRole,
   type OrderApproverRole,
   type OrderDecisionRole,
 } from "@/lib/order-approver-role"
+import { loadExecutiveApprovalReach } from "@/lib/server/apricart-executive-scope"
 import {
   GROUP_USER_ROLE,
   isGroupApproverRole,
@@ -27,6 +30,8 @@ function canAttemptOrderDecision(role: unknown): boolean {
 export type OrderDecisionCapabilities = {
   canApproveOrders: boolean
   canRejectOrders: boolean
+  /** Sending a pending order back for correction is the third decision, held to the same rule. */
+  canReturnOrders: boolean
   orderApproverRole: OrderApproverRole | null
 }
 
@@ -35,7 +40,7 @@ export type OrderDecisionAuthorization =
     ok: true
     order: typeof orders.$inferSelect
     configuredApproverRole: OrderApproverRole
-    /** The role that actually decided — GROUP_USER, or the configured role. */
+    /** The role that actually decided — GROUP_USER, APRICART_EXECUTIVE, or the configured role. */
     decisionRole: OrderDecisionRole
   }
   | {
@@ -47,11 +52,19 @@ export type OrderDecisionAuthorization =
  * Authorize an order decision inside the same transaction as the status
  * transition. The organization row share lock serializes decisions with a
  * Super Admin changing the configured approver role.
+ *
+ * Who decides is fixed by where the order came from
+ * (`lib/order-desk-approval.ts`): an order the Order Desk entered is decided
+ * by an Apricart Executive assigned to its organization, and by no one in the
+ * tenant; every other order by the tenant's approvers, exactly as before.
  */
 export async function authorizeOrderDecision(
   tx: any,
   input: { orderId: number; scope: RequestScope },
 ): Promise<OrderDecisionAuthorization> {
+  if (isApricartExecutiveRole(input.scope.role)) {
+    return authorizeExecutiveOrderDecision(tx, input)
+  }
   if (!canAttemptOrderDecision(input.scope.role)) {
     return { ok: false, reason: "forbidden" }
   }
@@ -87,6 +100,8 @@ export async function authorizeOrderDecision(
 
   if (!order) return { ok: false, reason: "not-found" }
   if (!order.organizationId) return { ok: false, reason: "forbidden" }
+  // An order Apricart's Order Desk entered is Apricart's to decide.
+  if (isDeskEnteredOrder(order)) return { ok: false, reason: "forbidden" }
 
   const [organization] = await tx
     .select({
@@ -137,12 +152,74 @@ export async function authorizeOrderDecision(
   }
 }
 
+/**
+ * An Apricart Executive deciding an Order Desk order. Everything is re-read on
+ * this transaction: the account (inside `loadExecutiveApprovalReach`), the
+ * assignment for the order's organization under FOR SHARE — so a Super Admin
+ * removing it waits for this decision — and the organization under the same
+ * share lock the tenant path takes. Anything outside the reach reads as "not
+ * found", so the response cannot be used to discover another tenant's orders.
+ */
+async function authorizeExecutiveOrderDecision(
+  tx: any,
+  input: { orderId: number; scope: RequestScope },
+): Promise<OrderDecisionAuthorization> {
+  const [order] = await tx
+    .select()
+    .from(orders)
+    .where(eq(orders.id, input.orderId))
+    .limit(1)
+  if (!order?.organizationId || !isDeskEnteredOrder(order)) return { ok: false, reason: "not-found" }
+
+  const reachOrganizationIds = await loadExecutiveApprovalReach(tx, input.scope.userId, {
+    organizationId: order.organizationId,
+    lock: true,
+  })
+  if (reachOrganizationIds.length === 0) return { ok: false, reason: "not-found" }
+
+  const [organization] = await tx
+    .select({ orderApproverRole: organizations.orderApproverRole })
+    .from(organizations)
+    .where(eq(organizations.id, order.organizationId))
+    .for("share")
+    .limit(1)
+  const [branch] = await tx
+    .select({ organizationId: branches.organizationId })
+    .from(branches)
+    .where(eq(branches.id, order.branchId))
+    .limit(1)
+
+  if (
+    !organization
+    || !isOrderApproverRole(organization.orderApproverRole)
+    || !canExecutiveDecideOrder({
+      reachOrganizationIds,
+      order: {
+        createdByRole: order.createdByRole,
+        organizationId: order.organizationId,
+        branchOrganizationId: branch?.organizationId,
+      },
+    })
+  ) {
+    return { ok: false, reason: "not-found" }
+  }
+
+  return {
+    ok: true,
+    order,
+    // Recorded for the trail only; it does not decide anything here.
+    configuredApproverRole: organization.orderApproverRole,
+    decisionRole: APRICART_EXECUTIVE_ROLE,
+  }
+}
+
 export async function getOrderDecisionCapabilities(
   scope: RequestScope | null,
 ): Promise<OrderDecisionCapabilities> {
   const denied: OrderDecisionCapabilities = {
     canApproveOrders: false,
     canRejectOrders: false,
+    canReturnOrders: false,
     orderApproverRole: null,
   }
 
@@ -190,6 +267,7 @@ export async function getOrderDecisionCapabilities(
     return {
       canApproveOrders: allowedForGroupUser,
       canRejectOrders: allowedForGroupUser,
+      canReturnOrders: allowedForGroupUser,
       orderApproverRole: organization.orderApproverRole,
     }
   }
@@ -213,6 +291,7 @@ export async function getOrderDecisionCapabilities(
   return {
     canApproveOrders: allowed,
     canRejectOrders: allowed,
+    canReturnOrders: allowed,
     orderApproverRole: organization.orderApproverRole,
   }
 }

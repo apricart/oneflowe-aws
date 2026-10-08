@@ -108,8 +108,10 @@ describe("the areas the role may navigate to", () => {
 
   it("is confined explicitly in the proxy, which fails open for an unknown role", () => {
     const proxySource = source("proxy.ts")
-    expect(proxySource).toContain("isViewerRole(role)")
-    expect(proxySource).toContain("VIEWER_AREAS")
+    // The Viewer shares the single-area table with the Order Desk; its entry is
+    // the explicit confinement this test exists to keep.
+    expect(proxySource).toContain("{ matches: isViewerRole, areas: VIEWER_AREAS, home: VIEWER_HOME }")
+    expect(proxySource).toContain("const confined = SINGLE_AREA_ROLES.find((entry) => entry.matches(role))")
   })
 })
 

@@ -229,12 +229,16 @@ export async function createGroupRoleFixtures(): Promise<GroupRoleFixtures> {
       organizationId: organization.id,
       createdByUserId: headOfficeId,
     },
-    // Simulate an inconsistent/stale row. Every read must still re-assert the
-    // user's tenant instead of leaking this branch's name or values.
+    // Simulate a stale row pointing this tenant's requester at another
+    // tenant's branch. Every read must still re-assert the user's tenant
+    // instead of leaking this branch's name or values. The row carries the
+    // branch's own organization because `user_branch_assignments_branch_org_fk`
+    // refuses a branch/organization pair that does not exist
+    // (`plans/OF-DB-tenant-composite-foreign-keys.md`).
     {
       userId: requesterId,
       branchId: foreignBranch.id,
-      organizationId: organization.id,
+      organizationId: foreignOrganization.id,
       createdByUserId: headOfficeId,
     },
   ])

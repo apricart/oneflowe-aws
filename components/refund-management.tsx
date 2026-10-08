@@ -21,14 +21,20 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { isOrderPortalRefundEligible } from "@/lib/business-rules"
-import { isOrderWriteRole } from "@/lib/order-write-access"
+import {
+    REQUESTER_REFUND_WINDOW_DAYS,
+    isRefundWindowExemptRole,
+    isWithinRequesterRefundWindow,
+    requesterRefundDeadline,
+} from "@/lib/refund-window"
 
 interface RefundManagementProps {
     orderId: number
     orderTotalCents: number | null
     orderStatus: string
     orderFulfillmentStatus?: string | null
-    createdAt: string // Order creation date for refund window validation
+    /** When the order was fulfilled; a requester may ask for seven days from here. */
+    fulfilledAt?: string | null
     requesterRole?: string
     allowRefundRequest?: boolean
     pricesHidden?: boolean
@@ -71,10 +77,11 @@ const getFullyRefundedState = (input: RefundAvailabilityInput) => (
 
 const getRefundAvailability = (input: RefundAvailabilityInput) => {
     const isOrderApproved = ["APPROVED", "FULFILLED", "REFUNDED"].includes(input.orderStatus.toUpperCase())
-    // Both requester roles wait for delivery before claiming; the server
-    // applies the same gate, so offering it earlier would only be refused.
-    const isOrderPortal = isOrderWriteRole(input.requesterRole)
-    const meetsOrderPortalDeliveryRequirement = !isOrderPortal
+    // Every requester waits for fulfilment and delivery before claiming; the
+    // server applies the same gate, so offering it earlier would only be
+    // refused. Super Admin, who decides refunds, is held to no such gate.
+    const isRequester = !isRefundWindowExemptRole(input.requesterRole)
+    const meetsRequesterDeliveryRequirement = !isRequester
         || isOrderPortalRefundEligible(input.orderStatus, input.orderFulfillmentStatus)
     const hasRefundCapacity = getHasRefundCapacity(input)
     return {
@@ -82,11 +89,11 @@ const getRefundAvailability = (input: RefundAvailabilityInput) => {
         hasRefundCapacity,
         isFullyRefunded: getFullyRefundedState(input),
         isOrderApproved,
-        isOrderPortal,
-        meetsOrderPortalDeliveryRequirement,
+        isRequester,
+        meetsRequesterDeliveryRequirement,
         canRefund: input.allowRefundRequest
             && isOrderApproved
-            && meetsOrderPortalDeliveryRequirement
+            && meetsRequesterDeliveryRequirement
             && hasRefundCapacity
             && input.isWithinRefundWindow,
     }
@@ -97,7 +104,7 @@ export function RefundManagement({
     orderTotalCents,
     orderStatus,
     orderFulfillmentStatus,
-    createdAt,
+    fulfilledAt,
     requesterRole,
     allowRefundRequest = false,
     pricesHidden = false,
@@ -113,14 +120,13 @@ export function RefundManagement({
     const [processing, setProcessing] = useState(false)
     const [showForm, setShowForm] = useState(false)
 
-    // Validate refund window (must be same month/year)
-    // "it can only make request wihtnig that mo th"
-    const isWithinRefundWindow = useMemo(() => {
-        if (!createdAt) return false
-        const orderDate = new Date(createdAt)
-        const now = new Date()
-        return orderDate.getMonth() === now.getMonth() && orderDate.getFullYear() === now.getFullYear()
-    }, [createdAt])
+    // The rule the server enforces (`lib/refund-window.ts`): seven days from
+    // fulfilment for a requester, no limit for Super Admin.
+    const refundDeadline = useMemo(() => requesterRefundDeadline(fulfilledAt), [fulfilledAt])
+    const isWithinRefundWindow = useMemo(
+        () => isRefundWindowExemptRole(requesterRole) || isWithinRequesterRefundWindow(fulfilledAt, new Date()),
+        [fulfilledAt, requesterRole],
+    )
 
     // Track selected items and their quantities: { itemId: quantity }
     const [selectedItems, setSelectedItems] = useState<Record<number, number>>({})
@@ -220,8 +226,8 @@ export function RefundManagement({
         hasRefundCapacity,
         isFullyRefunded,
         isOrderApproved,
-        isOrderPortal,
-        meetsOrderPortalDeliveryRequirement,
+        isRequester,
+        meetsRequesterDeliveryRequirement,
         canRefund,
     } = getRefundAvailability({
         pricesHidden,
@@ -389,24 +395,29 @@ export function RefundManagement({
                     {isFullyRefunded && (
                         <Badge variant="outline" className="border-green-600 text-green-600 bg-green-50">Fully Refunded</Badge>
                     )}
+                    {canRefund && !showForm && isRequester && refundDeadline && (
+                        <span className="text-xs text-muted-foreground">
+                            Refund can be requested until {refundDeadline.toLocaleString()}
+                        </span>
+                    )}
                     {canRefund && !showForm && (
                         <Button variant="outline" size="sm" onClick={() => setShowForm(true)}>
                             Request Refund
                         </Button>
                     )}
-                    {allowRefundRequest && isOrderPortal && !meetsOrderPortalDeliveryRequirement && hasRefundCapacity && !showForm && (
+                    {allowRefundRequest && isRequester && !meetsRequesterDeliveryRequirement && hasRefundCapacity && !showForm && (
                         <div className="text-xs text-slate-600 bg-slate-50 px-3 py-2 rounded-md border border-slate-200 flex items-center gap-2">
                             <Clock className="h-3 w-3" />
                             Refund available after fulfillment and delivery
                         </div>
                     )}
-                    {allowRefundRequest && !isOrderPortal && !isOrderApproved && hasRefundCapacity && !showForm && (
+                    {allowRefundRequest && !isRequester && !isOrderApproved && hasRefundCapacity && !showForm && (
                         <div className="text-xs text-slate-600 bg-slate-50 px-3 py-2 rounded-md border border-slate-200 flex items-center gap-2">
                             <Clock className="h-3 w-3" />
                             Refund available after approval
                         </div>
                     )}
-                    {allowRefundRequest && isOrderApproved && meetsOrderPortalDeliveryRequirement && !isWithinRefundWindow && hasRefundCapacity && !showForm && (
+                    {allowRefundRequest && isOrderApproved && meetsRequesterDeliveryRequirement && !isWithinRefundWindow && hasRefundCapacity && !showForm && (
                         <div className="text-xs text-amber-700 bg-amber-50 px-3 py-2 rounded-md border border-amber-200 flex items-center gap-2">
                             <Clock className="h-3 w-3" />
                             Refund period ended
@@ -416,9 +427,9 @@ export function RefundManagement({
             </div>
 
             {/* Refund window explanation */}
-            {allowRefundRequest && isOrderApproved && meetsOrderPortalDeliveryRequirement && !isWithinRefundWindow && hasRefundCapacity && !showForm && (
+            {allowRefundRequest && isOrderApproved && meetsRequesterDeliveryRequirement && !isWithinRefundWindow && hasRefundCapacity && !showForm && (
                 <p className="text-xs text-muted-foreground text-right mt-1">
-                    Requests are limited to the calendar month of the order.
+                    Refunds can be requested within {REQUESTER_REFUND_WINDOW_DAYS} days of the order being fulfilled.
                 </p>
             )}
 

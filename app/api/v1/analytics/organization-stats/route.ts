@@ -7,6 +7,7 @@ import { and, eq, gte, lte, sql, count, inArray, isNull } from "drizzle-orm"
 import { metricExpressions } from "@/lib/metric-utils"
 import { parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
 import { shouldIncludeHeadOfficeUsers } from "@/lib/organization-report-scope"
+import { lacksAnalyticsTenant } from "@/lib/server/analytics-scope"
 
 function parseNumberList(value: string | null, requirePositive = false) {
     return value
@@ -131,6 +132,9 @@ function getTrendGrouping(
 export async function GET(req: NextRequest) {
     const session = await getServerSession(authOptions)
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    if (lacksAnalyticsTenant((session.user as any).role, (session.user as any).organizationId)) {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    }
 
     const url = new URL(req.url)
     const startDateParam = url.searchParams.get("startDate")

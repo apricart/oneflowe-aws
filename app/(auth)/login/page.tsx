@@ -14,6 +14,9 @@ import Link from "next/link"
 import { Building2,CircleCheck,Eye,EyeOff } from "lucide-react"
 import { safeInternalRedirectPath } from "@/lib/security"
 import { isViewerRole, VIEWER_HOME } from "@/lib/viewer-access"
+import { isOrderDeskRole, ORDER_DESK_HOME } from "@/lib/order-desk-access"
+import { APRICART_EXECUTIVE_HOME, isApricartExecutiveRole } from "@/lib/apricart-executive-access"
+import { WAREHOUSE_HOME, isWarehouseRole } from "@/lib/warehouse-access"
 
 /**
  * Clear stale NextAuth session cookies to prevent "Invalid URL" errors.
@@ -122,6 +125,12 @@ function roleLandingPath(role: unknown): string | null {
   // The read-only account has exactly one page, so it is named here rather than
   // left to honour a `callbackUrl` the proxy would only bounce.
   if (isViewerRole(role)) return VIEWER_HOME
+  // Apricart's order entry has one workspace of its own.
+  if (isOrderDeskRole(role)) return ORDER_DESK_HOME
+  // Apricart's management has one workspace: the delivery dashboard.
+  if (isApricartExecutiveRole(role)) return APRICART_EXECUTIVE_HOME
+  // Apricart's warehouse has one workspace: its delivery queue.
+  if (isWarehouseRole(role)) return WAREHOUSE_HOME
   return null
 }
 

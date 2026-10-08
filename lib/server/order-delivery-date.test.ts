@@ -28,7 +28,15 @@ describe("order delivery date contracts", () => {
 
     expect(progressRoute).toContain('requireApiRole(["SUPER_ADMIN"])')
     expect(progressRoute).toContain("verifyResourceAccess(order.organizationId, order.branchId)")
-    expect(progressRoute).toContain("transitionOrderFulfillmentStatusColumn")
+    // The transition moved into the progress module the warehouse shares; both
+    // routes reach delivery only through it, each authorizing its own caller.
+    const progressModule = source("lib/server/order-fulfillment-progress.ts")
+    const warehouseRoute = source("app/api/v1/warehouse/orders/[id]/progress/route.ts")
+    expect(progressRoute).toContain("progressOrderFulfillment({")
+    expect(warehouseRoute).toContain("progressOrderFulfillment({")
+    expect(warehouseRoute).toContain('requireApiRole(["WAREHOUSE"])')
+    expect(warehouseRoute).toContain("isOrderBranchInWarehouseReach(user.id, order, { client: tx, lock: true })")
+    expect(progressModule).toContain("transitionOrderFulfillmentStatusColumn")
     expect(orderSelect).toContain("WHEN ${nextStatus} = 'DELIVERED'")
     expect(orderSelect).toContain('COALESCE("delivered_at", NOW())')
 

@@ -228,9 +228,12 @@ export async function POST(req: Request) {
           orderApprovalRequired: body.orderApprovalRequired,
           blockOrderingOnUnpaidInvoices: body.blockOrderingOnUnpaidInvoices,
           blockOrderingOnUnacknowledgedDeliveries: body.blockOrderingOnUnacknowledgedDeliveries,
+          unpaidInvoiceBlockThreshold: body.unpaidInvoiceBlockThreshold,
+          unacknowledgedDeliveryBlockThreshold: body.unacknowledgedDeliveryBlockThreshold,
           // Written explicitly: the column default keeps directly inserted
           // rows budgeted, the product default for a new tenant is off.
           budgetsEnabled: body.budgetsEnabled,
+          managedOrdering: body.managedOrdering,
           privateNetworkLoginEnabled: privateNetworkLogin.enabled,
         })
         .returning()
@@ -270,7 +273,10 @@ export async function POST(req: Request) {
           orderApprovalRequired: body.orderApprovalRequired,
           blockOrderingOnUnpaidInvoices: body.blockOrderingOnUnpaidInvoices,
           blockOrderingOnUnacknowledgedDeliveries: body.blockOrderingOnUnacknowledgedDeliveries,
+          unpaidInvoiceBlockThreshold: body.unpaidInvoiceBlockThreshold,
+          unacknowledgedDeliveryBlockThreshold: body.unacknowledgedDeliveryBlockThreshold,
           budgetsEnabled: body.budgetsEnabled,
+          managedOrdering: body.managedOrdering,
           budgetAllocationMode,
           emailDomain: createdOrganization.emailDomain,
           privateNetworkLoginEnabled: privateNetworkLogin.enabled,

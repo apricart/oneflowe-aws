@@ -22,6 +22,8 @@ export type DeliveryAcknowledgementScope = { organizationId: number; branchId: n
  *
  * The organization opts in with `block_ordering_on_unacknowledged_deliveries`;
  * with it off nothing is counted and nothing is blocked. With it on, the
+ * branch stops at the organization's own
+ * `unacknowledged_delivery_block_threshold`, read from the same row. The
  * count uses the dashboard's own DELIVERED_UNACKNOWLEDGED predicate, fenced by
  * both the organization and the branch the caller was given — never by the
  * request. Every order at the branch counts, whoever raised it, group orders
@@ -32,7 +34,10 @@ export async function resolveBranchDeliveryAcknowledgement(
   scope: DeliveryAcknowledgementScope,
 ): Promise<DeliveryAcknowledgementStatus> {
   const [organization] = await client
-    .select({ enabled: organizations.blockOrderingOnUnacknowledgedDeliveries })
+    .select({
+      enabled: organizations.blockOrderingOnUnacknowledgedDeliveries,
+      threshold: organizations.unacknowledgedDeliveryBlockThreshold,
+    })
     .from(organizations)
     .where(eq(organizations.id, scope.organizationId))
     .limit(1)
@@ -49,7 +54,11 @@ export async function resolveBranchDeliveryAcknowledgement(
       viewerStatusBucketCondition("DELIVERED_UNACKNOWLEDGED"),
     ))
 
-  return resolveDeliveryAcknowledgement({ enabled: true, unacknowledgedCount: Number(total) })
+  return resolveDeliveryAcknowledgement({
+    enabled: true,
+    unacknowledgedCount: Number(total),
+    threshold: organization.threshold,
+  })
 }
 
 /**

@@ -11,6 +11,7 @@ import { budgetEnabledBranchSql,budgetTrackedOrderSql,isOrganizationBudgetEnable
 import { fenceToAssignedBranches } from "@/lib/money-budget-access"
 import { resolveScopedBranchIds,usesMultiBranchScope } from "@/lib/server/multi-branch-scope"
 import { isGroupUserBudgetAllocationEnabled } from "@/lib/server/group-user-budget-allocation"
+import { lacksAnalyticsTenant } from "@/lib/server/analytics-scope"
 
 const emptyBudgetSummary = {
     summary: { totalAllocated: 0, totalSpent: 0, totalHeld: 0, totalCredited: 0, totalRemaining: 0 },
@@ -287,6 +288,9 @@ export async function GET(req: NextRequest) {
         const userOrgId = (session.user as any).organizationId
         const userBranchId = (session.user as any).branchId
         const userId = (session.user as any).id
+        if (lacksAnalyticsTenant(userRole, userOrgId)) {
+            return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+        }
 
         if (!await mayReadBudgetReport(userRole, userId, userOrgId)) {
             return NextResponse.json({ error: "Budget allocation is not enabled for this user" }, { status: 403 })

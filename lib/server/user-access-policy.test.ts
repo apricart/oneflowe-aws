@@ -11,6 +11,7 @@ const EVERY_ROLE: SystemRole[] = [
   "GROUP_ORDER_PORTAL",
   "ORDER_PORTAL",
   "VIEWER",
+  "ORDER_DESK",
 ]
 
 describe("who may create a Viewer", () => {
@@ -74,5 +75,34 @@ describe("the authority ladder", () => {
     for (const actor of EVERY_ROLE) {
       expect(canManageUser(actor, "SUPER_ADMIN")).toBe(false)
     }
+  })
+})
+
+describe("who may create or manage an Order Desk account", () => {
+  it("is Super Admin alone", () => {
+    expect(canAssignRole("SUPER_ADMIN", "ORDER_DESK")).toBe(true)
+    expect(canManageUser("SUPER_ADMIN", "ORDER_DESK")).toBe(true)
+  })
+
+  it("is never a tenant's administrator, whose reach is one organization", () => {
+    for (const actor of EVERY_ROLE.filter((role) => role !== "SUPER_ADMIN")) {
+      expect(canAssignRole(actor, "ORDER_DESK")).toBe(false)
+      expect(canManageUser(actor, "ORDER_DESK")).toBe(false)
+    }
+  })
+
+  it("does not let a desk account manage or create anyone with a tenant above the floor", () => {
+    // ORDER_DESK sits above HEAD_OFFICE on the ladder only to keep Head Office
+    // out; it never reaches user management (USER_MANAGEMENT_ROLES), and the
+    // proxy refuses it every user route before a handler runs.
+    expect(USER_MANAGEMENT_ROLES).not.toContain("ORDER_DESK")
+  })
+
+  it("leaves every pre-existing pair where it was", () => {
+    expect(canAssignRole("HEAD_OFFICE", "GROUP_USER")).toBe(true)
+    expect(canAssignRole("HEAD_OFFICE", "VIEWER")).toBe(true)
+    expect(canAssignRole("SUPER_ADMIN", "HEAD_OFFICE")).toBe(true)
+    expect(canManageUser("HEAD_OFFICE", "HEAD_OFFICE")).toBe(false)
+    expect(canManageUser("SUPER_ADMIN", "HEAD_OFFICE")).toBe(true)
   })
 })

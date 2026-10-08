@@ -15,9 +15,15 @@
  * a delivered order to FULFILLED.
  */
 import { matchesViewerStatusBucket, type OrderDeliverySource } from "@/lib/order-delivery-status"
+import { DEFAULT_ORDERING_BLOCK_THRESHOLD, orderingBlockThresholdOrDefault } from "@/lib/ordering-block-threshold"
 
-/** Delivered-but-unacknowledged orders at which new ordering stops. */
-export const UNACKNOWLEDGED_DELIVERY_BLOCK_THRESHOLD = 2
+/**
+ * Delivered-but-unacknowledged orders at which new ordering stops, when
+ * nothing else is said. Each organization sets its own
+ * (`organizations.unacknowledged_delivery_block_threshold`,
+ * plans/OF-ORDERING-BLOCK-configurable-thresholds.md); this is its default.
+ */
+export const UNACKNOWLEDGED_DELIVERY_BLOCK_THRESHOLD = DEFAULT_ORDERING_BLOCK_THRESHOLD
 
 export const UNACKNOWLEDGED_DELIVERIES_BLOCKED_CODE = "UNACKNOWLEDGED_DELIVERIES_BLOCKED" as const
 
@@ -50,11 +56,14 @@ const isCount = (value: unknown): value is number =>
 export function resolveDeliveryAcknowledgement({
   enabled,
   unacknowledgedCount,
+  threshold: configuredThreshold,
 }: {
   enabled: boolean
   unacknowledgedCount: number
+  /** The organization's own limit; absent → the default, out of bounds → the default too. */
+  threshold?: number
 }): DeliveryAcknowledgementStatus {
-  const threshold = UNACKNOWLEDGED_DELIVERY_BLOCK_THRESHOLD
+  const threshold = orderingBlockThresholdOrDefault(configuredThreshold ?? UNACKNOWLEDGED_DELIVERY_BLOCK_THRESHOLD)
   if (!enabled) return { enabled: false, orderingAllowed: true, unacknowledgedCount: 0, threshold }
   const count = isCount(unacknowledgedCount) ? unacknowledgedCount : 0
   return { enabled: true, orderingAllowed: count < threshold, unacknowledgedCount: count, threshold }

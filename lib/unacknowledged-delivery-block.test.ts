@@ -77,6 +77,48 @@ describe("the decision", () => {
     })
   })
 
+  // An organization's own limit (plans/OF-ORDERING-BLOCK-configurable-thresholds.md).
+  it.each([
+    [1, 0, true],
+    [1, 1, false],
+    [4, 3, true],
+    [4, 4, false],
+    [4, 5, false],
+    [100, 99, true],
+    [100, 100, false],
+  ])("with a limit of %i, %i unacknowledged → orderingAllowed %s", (threshold, count, allowed) => {
+    expect(resolveDeliveryAcknowledgement({ enabled: true, unacknowledgedCount: count, threshold })).toEqual({
+      enabled: true,
+      orderingAllowed: allowed,
+      unacknowledgedCount: count,
+      threshold,
+    })
+  })
+
+  it.each([0, -1, 101, 2.5, Number.NaN])(
+    "an out-of-bounds limit (%s) falls back to the default, never to 'never block' or 'always block'",
+    (threshold) => {
+      expect(resolveDeliveryAcknowledgement({ enabled: true, unacknowledgedCount: 1, threshold })).toMatchObject({ orderingAllowed: true, threshold: 2 })
+      expect(resolveDeliveryAcknowledgement({ enabled: true, unacknowledgedCount: 2, threshold })).toMatchObject({ orderingAllowed: false, threshold: 2 })
+    },
+  )
+
+  it("with the toggle off, a limit of one still blocks nothing", () => {
+    expect(resolveDeliveryAcknowledgement({ enabled: false, unacknowledgedCount: 5, threshold: 1 })).toMatchObject({
+      enabled: false,
+      orderingAllowed: true,
+    })
+  })
+
+  it("the refusal carries the limit that was applied", () => {
+    const status = resolveDeliveryAcknowledgement({ enabled: true, unacknowledgedCount: 7, threshold: 7 })
+    expect(new DeliveryAcknowledgementBlockedError(status).details).toEqual({
+      code: UNACKNOWLEDGED_DELIVERIES_BLOCKED_CODE,
+      unacknowledgedCount: 7,
+      threshold: 7,
+    })
+  })
+
   it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])("a nonsensical count (%s) is read as zero, never as a block", (count) => {
     expect(resolveDeliveryAcknowledgement({ enabled: true, unacknowledgedCount: count })).toMatchObject({
       orderingAllowed: true,

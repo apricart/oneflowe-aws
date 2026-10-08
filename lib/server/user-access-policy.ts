@@ -3,6 +3,10 @@ import type { SystemRole } from "@/lib/server/mutation-validation"
 // Mirrors ROLE_HIERARCHY in `lib/rbac.ts`. VIEWER sits at the floor: it can act
 // on nothing, so every acting role outranks it and both administrators who may
 // manage users (`USER_MANAGEMENT_ROLES`) may assign it.
+//
+// ORDER_DESK sits above HEAD_OFFICE so that only Super Admin may create or
+// manage one: it is Apricart staff working across tenants, never a tenant's
+// own user. See `lib/order-desk-access.ts`.
 const ROLE_LEVEL: Record<SystemRole, number> = {
   VIEWER: 1,
   ORDER_PORTAL: 2,
@@ -10,7 +14,13 @@ const ROLE_LEVEL: Record<SystemRole, number> = {
   BRANCH_ADMIN: 4,
   GROUP_USER: 5,
   HEAD_OFFICE: 6,
-  SUPER_ADMIN: 7,
+  ORDER_DESK: 7,
+  // Same reasoning as ORDER_DESK: Apricart's own cross-tenant staff, so only
+  // Super Admin may create or manage one (`lib/apricart-executive-access.ts`).
+  APRICART_EXECUTIVE: 7,
+  // And again: Apricart's warehouse staff (`lib/warehouse-access.ts`).
+  WAREHOUSE: 7,
+  SUPER_ADMIN: 8,
 }
 
 /**

@@ -740,7 +740,9 @@ export default function RefundsPage() {
                                 <div className="flex items-center justify-between mb-3">
                                     <h4 className="font-medium">Select Items to Refund</h4>
                                     <Button variant="outline" size="sm" onClick={handleSelectAll}>
-                                        {selectedItems.size === order.items.length ? "Deselect All" : "Select All"}
+                                        {/* Same rule as handleSelectAll: fully refunded lines cannot be selected,
+                                         so "all" means every line with something left. */}
+                                        {selectedItems.size > 0 && selectedItems.size === order.items.filter((item) => item.quantity > (item.refundedQuantity || 0)).length ? "Deselect All" : "Select All"}
                                     </Button>
                                 </div>
                                 <Table>

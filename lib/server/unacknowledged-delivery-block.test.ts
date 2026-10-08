@@ -104,6 +104,15 @@ describe("the server module", () => {
     expect(moduleSource).toContain("resolveDeliveryAcknowledgement(")
     expect(moduleSource).not.toMatch(/unacknowledgedCount\s*>=|total\s*>=/)
   })
+
+  // plans/OF-ORDERING-BLOCK-configurable-thresholds.md
+  it("applies the organization's own limit, read from the same row as the toggle", () => {
+    const thresholdAt = moduleSource.indexOf("threshold: organizations.unacknowledgedDeliveryBlockThreshold")
+    const fromAt = moduleSource.indexOf(".from(organizations)")
+    expect(thresholdAt).toBeGreaterThan(-1)
+    expect(fromAt).toBeGreaterThan(thresholdAt)
+    expect(moduleSource).toContain("threshold: organization.threshold,")
+  })
 })
 
 describe("the pre-check route", () => {

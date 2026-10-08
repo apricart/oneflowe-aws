@@ -35,6 +35,8 @@
     "import:ke-refunds": "tsx scripts/import-ke-legacy-refunded-orders.ts",
     "repair:ke-branch-identities": "tsx scripts/repair-ke-case-sensitive-branches.ts",
     "repair:ke-order-branches": "tsx scripts/repair-ke-order-branches.ts",
+    "repair:ke-order-creators": "tsx scripts/repair-ke-order-creators.ts",
+    "repair:ke-price-history": "tsx scripts/dedupe-ke-price-history.ts",
     "restore:ke-budget-carryforward": "tsx scripts/restore-ke-branch-budget-carryforward.ts",
     "restore:ke-zeroed-budgets": "tsx scripts/restore-ke-zeroed-budgets.ts",
     "assign:ke-group-catalogue": "tsx scripts/assign-ke-group-catalogue.ts",

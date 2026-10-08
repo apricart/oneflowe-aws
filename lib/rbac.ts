@@ -1,4 +1,4 @@
-export type Role = "SUPER_ADMIN" | "HEAD_OFFICE" | "GROUP_USER" | "BRANCH_ADMIN" | "GROUP_ORDER_PORTAL" | "ORDER_PORTAL" | "VIEWER"
+export type Role = "SUPER_ADMIN" | "HEAD_OFFICE" | "GROUP_USER" | "BRANCH_ADMIN" | "GROUP_ORDER_PORTAL" | "ORDER_PORTAL" | "VIEWER" | "ORDER_DESK" | "APRICART_EXECUTIVE" | "WAREHOUSE"
 
 /**
  * Validate if a string is a valid role
@@ -9,7 +9,7 @@ export type Role = "SUPER_ADMIN" | "HEAD_OFFICE" | "GROUP_USER" | "BRANCH_ADMIN"
  */
 export function isValidRole(role: unknown): role is Role {
   if (typeof role !== 'string') return false
-  const validRoles: Role[] = ['SUPER_ADMIN', 'HEAD_OFFICE', 'GROUP_USER', 'BRANCH_ADMIN', 'GROUP_ORDER_PORTAL', 'ORDER_PORTAL', 'VIEWER']
+  const validRoles: Role[] = ['SUPER_ADMIN', 'HEAD_OFFICE', 'GROUP_USER', 'BRANCH_ADMIN', 'GROUP_ORDER_PORTAL', 'ORDER_PORTAL', 'VIEWER', 'ORDER_DESK', 'APRICART_EXECUTIVE', 'WAREHOUSE']
   return validRoles.includes(role as Role)
 }
 
@@ -76,6 +76,19 @@ export function hasRole(current: Role | undefined | null, allowed: Role[]): bool
 // VIEWER takes the floor: it reads a dashboard and can act on nothing at all,
 // so every acting role outranks it. Renumbering the rest by one preserves each
 // existing pair, and `lib/server/user-access-policy.test.ts` holds that.
+//
+// ORDER_DESK sits between HEAD_OFFICE and SUPER_ADMIN for one reason: it is
+// Apricart's own cross-tenant staff, so a tenant's Head Office must be unable
+// to create or manage it. It is not "more powerful" than Head Office — its
+// reach is confined by `lib/order-desk-access.ts`, and the level is compared
+// only in user management (`lib/server/user-access-policy.ts`).
+//
+// APRICART_EXECUTIVE shares ORDER_DESK's level for the same reason: Apricart's
+// own cross-tenant staff, which no tenant administrator may create. It reads a
+// dashboard and acts on nothing (`lib/apricart-executive-access.ts`).
+//
+// WAREHOUSE shares it too: Apricart's warehouse staff, confined to the
+// branches Super Admin assigns (`lib/warehouse-access.ts`).
 const ROLE_HIERARCHY: Record<Role, number> = {
   'VIEWER': 1,
   'ORDER_PORTAL': 2,
@@ -83,7 +96,10 @@ const ROLE_HIERARCHY: Record<Role, number> = {
   'BRANCH_ADMIN': 4,
   'GROUP_USER': 5,
   'HEAD_OFFICE': 6,
-  'SUPER_ADMIN': 7
+  'ORDER_DESK': 7,
+  'APRICART_EXECUTIVE': 7,
+  'WAREHOUSE': 7,
+  'SUPER_ADMIN': 8
 }
 
 /**

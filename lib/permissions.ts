@@ -665,5 +665,42 @@ export const ROLE_TEMPLATES = {
       Permission.SUPPORT_REPLY,
     ],
   },
+  ORDER_DESK: {
+    name: "Order Desk (Apricart)",
+    description: "Apricart staff who key in and fulfil orders for the managed organizations assigned to them",
+    permissions: [
+      // Descriptive only, like every template here: what confines this role is
+      // `lib/order-desk-access.ts` (its reach and its API allowlist) and each
+      // handler's own check. Deliberately no PRICING_MANAGE, ORDER_APPROVE,
+      // USER_* or ORG_* key — it enters orders and settles its own, nothing more.
+      Permission.INVENTORY_VIEW,
+      Permission.ORDER_CREATE,
+      Permission.ORDER_VIEW,
+    ],
+  },
+  APRICART_EXECUTIVE: {
+    name: "Apricart Executive",
+    description: "Apricart management: read-only delivery monitoring across every organization",
+    permissions: [
+      // Descriptive only, like every template here. What confines this role is
+      // `lib/apricart-executive-access.ts` — one page area and a two-route read
+      // allowlist enforced in `proxy.ts` — and each handler's own role check.
+      // Every key is a read; no *_CREATE, *_EDIT, *_APPROVE or *_MANAGE.
+      Permission.ORDER_VIEW,
+    ],
+  },
+  WAREHOUSE: {
+    name: "Warehouse (Apricart)",
+    description: "Apricart warehouse: picks, dispatches and delivers approved orders for the branches assigned to it",
+    permissions: [
+      // Descriptive only, like every template here. What confines this role is
+      // `lib/warehouse-access.ts` — one page area and an API allowlist enforced
+      // in `proxy.ts` — and each handler's own role and branch-reach check.
+      // Deliberately no ORDER_APPROVE, ORDER_CREATE, PRICING_MANAGE, USER_* or
+      // ORG_* key: it moves a delivery forward and reads, nothing more.
+      Permission.INVENTORY_VIEW,
+      Permission.ORDER_VIEW,
+    ],
+  },
 }
 

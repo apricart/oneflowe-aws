@@ -7,6 +7,7 @@ import {
   groups,
   userBranchAssignments,
   userGroupAssignments,
+  users,
 } from "@/db/schema"
 import { db } from "@/lib/db"
 import type { SystemRole } from "@/lib/server/mutation-validation"
@@ -273,6 +274,12 @@ export async function resolveScopedBranchIds(
   const rows = await client
     .selectDistinct({ id: branches.id })
     .from(branches)
+    // Only branches of the user's own organization. The composite keys
+    // (`plans/OF-DB-tenant-composite-foreign-keys.md`) force an assignment's
+    // organization to equal its branch's, so the per-join checks below can no
+    // longer catch a row pointing this user at another tenant's branch; this
+    // fence does. A user with no organization resolves to nothing.
+    .innerJoin(users, and(eq(users.id, userId), eq(users.organizationId, branches.organizationId)))
     // Each join re-asserts the tenant the assignment was written under, so a
     // row that somehow referenced another tenant's branch contributes nothing.
     .leftJoin(

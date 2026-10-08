@@ -112,45 +112,17 @@ import { orderUpdateSchema, validationMessage } from "@/lib/server/mutation-vali
 import { DELIVERY_ADDRESS_UNAVAILABLE } from "@/lib/delivery-address"
 import { loadApprovedDeliveryAddress } from "@/lib/server/delivery-addresses"
 import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
+import { decisionCapabilitiesForOrder, isDeskEnteredOrder } from "@/lib/order-desk-approval"
+import { loadOrderCorrectionHistory } from "@/lib/server/order-correction"
 import {
-  canUseScopedBranch,
   resolveScopedBranchIds,
   usesMultiBranchScope,
 } from "@/lib/server/multi-branch-scope"
 import { canOrderPortalReadOrder, isGroupPortalOrder } from "@/lib/group-order-visibility"
+// The read rule, shared with what is attached to an order (its delivery challan).
+import { hasBranchAccessForOrderRead } from "@/lib/server/order-read-access"
 import { loadGroupPriceOverrides, resolveBranchGroupId, resolveEffectivePriceCents } from "@/lib/server/effective-price"
 
-/**
- * Branch authorization for reading one order.
- *
- * `verifyResourceAccess` compares the order's branch against the single branch
- * pinned on the user row, which is exactly right for SUPER_ADMIN, HEAD_OFFICE,
- * BRANCH_ADMIN and ORDER_PORTAL and is left untouched for them. Neither group
- * role has a single branch — each reaches the set of branches an administrator
- * assigned it — so both are checked against that resolved set instead, with the
- * tenant re-asserted explicitly first. An empty assignment set denies access
- * rather than widening to the organization.
- *
- * The approver was the first role to need this; the requester needs the same
- * check for the same reason, and keying it on `usesMultiBranchScope` says that
- * once rather than naming one role and quietly meaning both.
- */
-async function hasBranchAccessForOrderRead(
-  role: unknown,
-  userId: unknown,
-  scope: RequestScope | null,
-  order: { organizationId: number; branchId: number },
-): Promise<boolean> {
-  const { verifyResourceAccess } = await import("@/lib/auth")
-  if (!usesMultiBranchScope(role)) {
-    return verifyResourceAccess(order.organizationId, order.branchId)
-  }
-  if (typeof userId !== "string" || !scope || scope.userId !== userId || scope.role !== role) {
-    return false
-  }
-  if (!scope.organizationId || scope.organizationId !== order.organizationId) return false
-  return canUseScopedBranch(userId, order.branchId)
-}
 
 /**
  * Lock the order and decide whether this actor may edit it.
@@ -215,8 +187,12 @@ async function lockOrderEditAccess(tx: any, context: any) {
   }
 
   // Out of scope reads as "not found", matching the read path, so the response
-  // cannot be used to discover that an order exists at another branch.
-  if (!canRequesterActOnOrder(writeActor, subject)) return { kind: "not-found" } as const
+  // cannot be used to discover that an order exists at another branch. An
+  // order Apricart's Order Desk entered is the desk's to correct, never the
+  // branch's (plans/OF-EXEC-APPROVAL-executive-approves-desk-orders.md).
+  if (!canRequesterActOnOrder(writeActor, subject) || isDeskEnteredOrder(existingOrder)) {
+    return { kind: "not-found" } as const
+  }
   if (!canRequesterEditOrder(writeActor, subject)) {
     return { kind: "invalid-state", status: existingOrder.status } as const
   }
@@ -640,6 +616,7 @@ export async function GET(
       // Selected so the ownership rule below and the requester's history agree
       // on which orders came from a Group Order Portal submission.
       groupOrderId: orders.groupOrderId,
+      createdByRole: orders.createdByRole,
       branchName: branches.name,
       branchOrganizationId: branches.organizationId,
       creatorName: sql<string | null>`COALESCE(
@@ -686,7 +663,10 @@ export async function GET(
   ) {
     return error("Not found", 404)
   }
-  const capabilities = await getOrderDecisionCapabilities(requestScope)
+  const decidedByApricart = isDeskEnteredOrder(item)
+  // An order the Order Desk entered is an Apricart Executive's to decide
+  // (plans/OF-EXEC-APPROVAL-executive-approves-desk-orders.md).
+  const capabilities = decisionCapabilitiesForOrder(await getOrderDecisionCapabilities(requestScope), item)
   const pricesHidden = await shouldHidePricesForRole(currentRole, item.organizationId)
   const {
     approvalToken,
@@ -694,6 +674,7 @@ export async function GET(
     approvalTokenCreatedAt: _approvalTokenCreatedAt,
     branchOrganizationId: _branchOrganizationId,
     groupOrderId: _groupOrderId,
+    createdByRole: _createdByRole,
     ...detailItem
   } = item
   // Same derived, read-only flag the list returns; the envelope id stays here.
@@ -701,7 +682,7 @@ export async function GET(
   // order it did not raise, so reaching many branches does not turn this into a
   // staff directory. Every other role's response is unchanged.
   const safeItem = applyOrderCreatorContactVisibility(
-    { ...detailItem, placedByGroupPortal: isGroupPortalOrder(item) },
+    { ...detailItem, placedByGroupPortal: isGroupPortalOrder(item), decidedByApricart },
     {
       role: currentRole,
       viewerUserId: currentUserId,
@@ -742,6 +723,13 @@ export async function GET(
     .leftJoin(globalProducts, eq(orderItems.globalProductId, globalProducts.id))
     .where(eq(orderItems.orderId, orderId))
 
+  // Read only after the order itself was authorized above; the loader
+  // re-asserts the tenant on its own query besides.
+  const correctionHistory = await loadOrderCorrectionHistory({
+    orderId,
+    organizationId: item.organizationId,
+  })
+
   return ok({
     item: {
       ...(pricesHidden
@@ -758,6 +746,7 @@ export async function GET(
         : itemsData,
       approvalToken: canSeeToken ? approvalToken : null,
       pricesHidden,
+      correctionHistory,
     },
     capabilities,
   })

@@ -6,8 +6,14 @@ import { sanitizeRasterUpload } from "@/lib/server/upload-security"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { db } from "@/lib/db"
 import { auditActorFromSession, recordAuditEvent } from "@/lib/server/activity-audit"
+import { isOrderDeskRole } from "@/lib/order-desk-access"
+import { DELIVERY_CHALLAN_UPLOAD_PURPOSE } from "@/lib/delivery-challan"
+import { storeDeliveryChallanUpload } from "@/lib/server/delivery-challan"
+import { warehouseChallanUploadRefusal } from "@/lib/server/warehouse-orders"
+import { isWarehouseRole } from "@/lib/warehouse-access"
 import {
   buildImageKey,
+  buildOrderIntakeAttachmentKey,
   extensionForMime,
   imagePathForKey,
   isImageStorageConfigured,
@@ -27,8 +33,17 @@ export async function POST(req: NextRequest) {
     // (see `plans/OF-PRODUCT-REQUEST-head-office-new-product-requests.md`).
     // That grants Head Office no new reach: it already sets its catalogue's
     // `custom_image_url` through `PUT /api/v1/head-office/organization-inventory`.
+    // The Order Desk uploads the screenshot of a customer's WhatsApp message or
+    // email, here for the same WAF reason. Its upload is stored privately and
+    // handled apart from catalogue images below. The warehouse uploads a
+    // delivery challan and nothing else (plans/OF-WAREHOUSE-warehouse-fulfilment-role.md).
     const userRole = (session.user as any).role
-    if (userRole !== "SUPER_ADMIN" && !canRaiseProductRequest(userRole)) {
+    if (
+      userRole !== "SUPER_ADMIN"
+      && !canRaiseProductRequest(userRole)
+      && !isOrderDeskRole(userRole)
+      && !isWarehouseRole(userRole)
+    ) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
 
@@ -40,6 +55,17 @@ export async function POST(req: NextRequest) {
 
     if (!file || !(file instanceof File)) {
       return NextResponse.json({ error: "No image file provided" }, { status: 400 })
+    }
+
+    // A delivery challan (an image or a PDF) for an order Super Admin is
+    // marking delivered. Through this path for the same WAF reason as the
+    // others; handled entirely apart from catalogue images.
+    if (formData.get("purpose") === DELIVERY_CHALLAN_UPLOAD_PURPOSE) {
+      return storeDeliveryChallan(session, userRole, formData.get("orderId"), file)
+    }
+    // The warehouse uploads challans only — never a catalogue image.
+    if (isWarehouseRole(userRole)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
 
     const bytes = await file.arrayBuffer()
@@ -59,6 +85,10 @@ export async function POST(req: NextRequest) {
     const extension = extensionForMime(validation.image.mime)
     if (!extension) {
       return NextResponse.json({ error: "Unsupported image type" }, { status: 400 })
+    }
+
+    if (isOrderDeskRole(userRole)) {
+      return storeOrderIntakeAttachment(session, validation, extension)
     }
 
     if (!isImageStorageConfigured()) {
@@ -132,4 +162,73 @@ export async function POST(req: NextRequest) {
       details: "Upload failed"
     }, { status: 500 })
   }
+}
+
+/**
+ * A delivery challan is uploaded by Super Admin, or by the warehouse for an
+ * order at a branch it serves that is out for delivery or delivered — never by
+ * anyone else this route admits. It is checked by content (re-encoded if an image, inspected if a
+ * PDF), stored under the private `delivery-challan/` prefix, and answered with
+ * a row id bound to this order and this uploader — never a path.
+ */
+async function storeDeliveryChallan(
+  session: unknown,
+  userRole: unknown,
+  rawOrderId: FormDataEntryValue | null,
+  file: File,
+) {
+  if (userRole !== "SUPER_ADMIN" && !isWarehouseRole(userRole)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+  }
+  const orderId = typeof rawOrderId === "string" && /^\d+$/.test(rawOrderId) ? Number(rawOrderId) : NaN
+  if (!Number.isSafeInteger(orderId) || orderId <= 0) {
+    return NextResponse.json({ error: "A valid orderId is required" }, { status: 400 })
+  }
+  const actor = auditActorFromSession(session)
+  if (!actor.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  if (isWarehouseRole(userRole)) {
+    const refusal = await warehouseChallanUploadRefusal(actor.id, orderId)
+    if (refusal) return NextResponse.json({ error: refusal.error }, { status: refusal.status })
+  }
+
+  const outcome = await storeDeliveryChallanUpload({ actor: { ...actor, id: actor.id }, orderId, file })
+  if (!outcome.ok) return NextResponse.json({ error: outcome.error }, { status: outcome.status })
+  return NextResponse.json({ deliveryChallan: outcome.challan }, { status: 201 })
+}
+
+/**
+ * A desk screenshot carries a customer's personal details, so it is never a
+ * catalogue image: it is stored under the private `order-intake/` prefix (which
+ * the public image route cannot serve), never as a `data:` URL even in local
+ * development, and answered with its key rather than a readable path. The key
+ * is bound to its uploader by this audit row; order creation checks it.
+ */
+async function storeOrderIntakeAttachment(
+  session: unknown,
+  validation: { buffer: Buffer; image: { mime: string; width: number; height: number } },
+  extension: NonNullable<ReturnType<typeof extensionForMime>>,
+) {
+  if (!isImageStorageConfigured()) {
+    return NextResponse.json({ error: "Image storage is not configured" }, { status: 503 })
+  }
+  const key = buildOrderIntakeAttachmentKey(extension)
+  await putImage({ key, body: validation.buffer, contentType: validation.image.mime })
+  // Written after the object lands, for the reason given on the catalogue path.
+  await recordAuditEvent(db, {
+    action: "UPLOAD_ORDER_INTAKE_ATTACHMENT",
+    entity: "image",
+    entityId: key,
+    actor: auditActorFromSession(session),
+    after: {
+      type: validation.image.mime,
+      sizeBytes: validation.buffer.length,
+      width: validation.image.width,
+      height: validation.image.height,
+    },
+  })
+  return NextResponse.json({
+    attachmentKey: key,
+    size: validation.buffer.length,
+    type: validation.image.mime,
+  })
 }
