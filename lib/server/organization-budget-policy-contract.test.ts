@@ -27,6 +27,7 @@ const LEDGER_MOVERS = [
   "app/api/v1/admin/delete-order/route.ts", // admin delete
   "lib/server/order-desk-orders.ts", // Order Desk cancel
   "lib/server/order-desk-edit.ts", // Order Desk edit
+  "lib/server/group-order-cancel.ts", // group requester cancel
 ]
 
 /** The two paths that create an order. */

@@ -43,7 +43,20 @@ import { FULFILLED_ORDER_STATUSES } from "@/lib/order-delivery-status"
  * apply; what is fenced instead is *which orders and which fields*: only the
  * dashboard's population (approved since the cutoff, never a legacy import),
  * and never an amount or a person.
+ *
+ * The warehouse reads the same dashboard fenced to its branches: every read
+ * here takes an optional `reach` (branch ids). Null — the management
+ * readers — is unfenced; an array, even an empty one, is a fence
+ * (plans/OF-WAREHOUSE-warehouse-fulfilment-role.md).
  */
+
+/** Branch ids the read is fenced to, or null for management's unfenced read. */
+export type DeliveryReach = readonly number[] | null
+
+function reachCondition(reach: DeliveryReach): SQL | undefined {
+  if (reach === null) return undefined
+  return reach.length === 0 ? sql`FALSE` : inArray(orders.branchId, [...reach])
+}
 
 const orderStatus = sql`UPPER(${orders.status})`
 const stage = sql`UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED'))`
@@ -75,8 +88,10 @@ function openOrDeliveredInRange(filters: DeliveryDashboardFilters): SQL {
   )`
 }
 
-function filterConditions(filters: DeliveryDashboardFilters): SQL[] {
+function filterConditions(filters: DeliveryDashboardFilters, reach: DeliveryReach): SQL[] {
   const conditions: SQL[] = [populationCondition(), openOrDeliveredInRange(filters)]
+  const fence = reachCondition(reach)
+  if (fence) conditions.push(fence)
   if (filters.organizationId !== null) conditions.push(eq(orders.organizationId, filters.organizationId))
   // `parseDeliveryDashboardQuery` only admits a branch together with an
   // organization; both predicates apply, so a branch of another tenant reads empty.
@@ -103,7 +118,10 @@ const rowColumns = {
   deliveredAt: orders.deliveredAt,
 }
 
-async function loadDeliveryRows(filters: DeliveryDashboardFilters): Promise<{ rows: DeliveryOrderRow[]; truncated: boolean }> {
+async function loadDeliveryRows(
+  filters: DeliveryDashboardFilters,
+  reach: DeliveryReach,
+): Promise<{ rows: DeliveryOrderRow[]; truncated: boolean }> {
   const rows = await db
     .select(rowColumns)
     .from(orders)
@@ -114,7 +132,7 @@ async function loadDeliveryRows(filters: DeliveryDashboardFilters): Promise<{ ro
       eq(branchDeliveryAddresses.id, orders.deliveryAddressId),
       eq(branchDeliveryAddresses.branchId, orders.branchId),
     ))
-    .where(and(...filterConditions(filters)))
+    .where(and(...filterConditions(filters, reach)))
     .orderBy(asc(orders.approvedAt), asc(orders.id))
     .limit(DELIVERY_DASHBOARD_MAX_ROWS + 1)
 
@@ -122,27 +140,37 @@ async function loadDeliveryRows(filters: DeliveryDashboardFilters): Promise<{ ro
   return { rows: (truncated ? rows.slice(0, DELIVERY_DASHBOARD_MAX_ROWS) : rows) as DeliveryOrderRow[], truncated }
 }
 
-async function loadFilterOptions(organizationId: number | null) {
-  const organizationRows = await db
-    .select({ id: organizations.id, name: organizations.name })
-    .from(organizations)
-    .orderBy(asc(organizations.name))
-    .limit(500)
+async function loadFilterOptions(organizationId: number | null, reach: DeliveryReach) {
+  // A fenced reader is offered only the organizations and branches it reaches.
+  const branchFence = reach === null ? undefined : reach.length === 0 ? sql`FALSE` : inArray(branches.id, [...reach])
+  const organizationRows = reach === null
+    ? await db
+      .select({ id: organizations.id, name: organizations.name })
+      .from(organizations)
+      .orderBy(asc(organizations.name))
+      .limit(500)
+    : await db
+      .selectDistinct({ id: organizations.id, name: organizations.name })
+      .from(organizations)
+      .innerJoin(branches, eq(branches.organizationId, organizations.id))
+      .where(branchFence)
+      .orderBy(asc(organizations.name))
+      .limit(500)
   const branchRows = organizationId === null
     ? []
     : await db
       .select({ id: branches.id, name: branches.name })
       .from(branches)
-      .where(eq(branches.organizationId, organizationId))
+      .where(and(eq(branches.organizationId, organizationId), branchFence))
       .orderBy(asc(branches.name))
       .limit(2000)
   return { organizations: organizationRows, branches: branchRows }
 }
 
-export async function loadDeliveryDashboard(filters: DeliveryDashboardFilters, now: Date) {
+export async function loadDeliveryDashboard(filters: DeliveryDashboardFilters, now: Date, reach: DeliveryReach = null) {
   const [{ rows, truncated }, options] = await Promise.all([
-    loadDeliveryRows(filters),
-    loadFilterOptions(filters.organizationId),
+    loadDeliveryRows(filters, reach),
+    loadFilterOptions(filters.organizationId, reach),
   ])
   return buildDeliveryDashboard({ rows, filters, now, truncated, ...options })
 }
@@ -175,6 +203,7 @@ const ROLE_LABELS: Record<string, string> = {
   ORDER_PORTAL: "Order Portal",
   GROUP_ORDER_PORTAL: "Group Order Portal",
   ORDER_DESK: "Order Desk",
+  WAREHOUSE: "Warehouse",
 }
 
 function roleLabel(role: string | null | undefined): string | null {
@@ -198,7 +227,7 @@ export type DeliveryTimelineEvent = {
  * the population — before the cutoff, imported, pending, rejected — reads as
  * not found, so this cannot be pointed at an arbitrary order.
  */
-export async function loadDeliveryTimeline(orderId: number, now: Date) {
+export async function loadDeliveryTimeline(orderId: number, now: Date, reach: DeliveryReach = null) {
   const [order] = await db
     .select({
       ...rowColumns,
@@ -213,7 +242,7 @@ export async function loadDeliveryTimeline(orderId: number, now: Date) {
       eq(branchDeliveryAddresses.id, orders.deliveryAddressId),
       eq(branchDeliveryAddresses.branchId, orders.branchId),
     ))
-    .where(and(eq(orders.id, orderId), populationCondition()))
+    .where(and(eq(orders.id, orderId), populationCondition(), reachCondition(reach)))
     .limit(1)
   if (!order) return null
 

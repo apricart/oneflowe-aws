@@ -77,7 +77,10 @@ describe("group orders reach the branch's own roles", () => {
   it("exposes the origin as a derived flag, never the envelope id", () => {
     const list = ordersList()
     expect(list).toContain("placedByGroupPortal: isGroupPortalOrder(item)")
-    expect(list).toContain("groupOrderId: _groupOrderId, ...publicItem } = item")
+    expect(list).toMatch(/groupOrderId: _groupOrderId,\s*\.\.\.publicItem\s*\} = item/)
+    // The Order Desk origin goes the same way: a derived flag, never the role.
+    expect(list).toContain("decidedByApricart: isDeskEnteredOrder(item)")
+    expect(list).toContain("createdByRole: _createdByRole,")
     const detail = source("app/api/v1/orders/[id]/route.ts")
     expect(detail).toContain("placedByGroupPortal: isGroupPortalOrder(item)")
     expect(detail).toContain("groupOrderId: _groupOrderId,")

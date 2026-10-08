@@ -131,6 +131,23 @@ type OrdersDirectoryProps = {
 }
 
 /**
+ * Marks an order Apricart's Order Desk entered. An Apricart Executive approves
+ * it; the tenant's approvers see it but cannot decide it, and the decision
+ * routes refuse them (plans/OF-EXEC-APPROVAL-executive-approves-desk-orders.md).
+ */
+function ApricartOrderBadge({ pending }: Readonly<{ pending: boolean }>) {
+  return (
+    <Badge
+      variant="outline"
+      title={pending ? "Entered by Apricart's Order Desk; an Apricart Executive approves it" : "Entered by Apricart's Order Desk"}
+      className="mt-1 rounded-lg border border-sky-200 bg-sky-50 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300"
+    >
+      {pending ? "Awaiting Apricart approval" : "Apricart Order Desk"}
+    </Badge>
+  )
+}
+
+/**
  * Marks an order that reached this branch through a Group Order Portal
  * submission. It is an ordinary branch order in every other respect — the badge
  * exists so an administrator can tell at a glance why an order they did not
@@ -196,6 +213,8 @@ export function OrdersDirectory({
   const router = useRouter()
   const [viewMode, setViewMode] = useState<"grid" | "table">("table")
   const [viewingOrder, setViewingOrder] = useState<any>(null)
+  // An Order Desk entry is an Apricart Executive's to decide, never the tenant's.
+  const canDecideViewingOrder = canDecideOrders && !viewingOrder?.decidedByApricart
 
   // Modals for actions
   const [actionType, setActionType] = useState<"approve" | "reject" | null>(null)
@@ -665,6 +684,7 @@ export function OrdersDirectory({
                         Order ID <span className="font-mono">#{order.id}</span>
                       </p>
                       {order.placedByGroupPortal && <GroupOrderBadge />}
+                      {order.decidedByApricart && <ApricartOrderBadge pending={order.status?.toLowerCase() === "pending"} />}
                       {isUnacknowledgedDelivery(order) && <DeliveredUnfulfilledBadge />}
                     </div>
                     <Badge
@@ -819,6 +839,7 @@ export function OrdersDirectory({
                       {isTableColumnVisible("tid") && <td className="px-3 py-3">
                         <span className="block truncate font-mono text-xs font-bold text-slate-700 dark:text-slate-300 group-hover:text-indigo-600 transition-colors uppercase tracking-wider" title={order.tid}>{order.tid}</span>
                         {order.placedByGroupPortal && <GroupOrderBadge />}
+                        {order.decidedByApricart && <ApricartOrderBadge pending={order.status?.toLowerCase() === "pending"} />}
                         {isUnacknowledgedDelivery(order) && <DeliveredUnfulfilledBadge />}
                       </td>}
                       {isTableColumnVisible("branch") && <td className="px-3 py-3">
@@ -1061,7 +1082,7 @@ export function OrdersDirectory({
                   />
                 )}
 
-                {viewingOrder.status.toLowerCase() === "pending" && canDecideOrders && !isAwaitingCorrection(viewingOrder) && (
+                {viewingOrder.status.toLowerCase() === "pending" && canDecideViewingOrder && !isAwaitingCorrection(viewingOrder) && (
                   <Button
                     type="button"
                     variant="outline"
@@ -1073,7 +1094,7 @@ export function OrdersDirectory({
                 )}
 
                 <div className="flex gap-3">
-                  {viewingOrder.status.toLowerCase() === "pending" && canDecideOrders && (
+                  {viewingOrder.status.toLowerCase() === "pending" && canDecideViewingOrder && (
                     <>
                       <Button onClick={() => setActionType("reject")} variant="outline" className="flex-1 h-12 rounded-xl text-rose-600 border-rose-200 hover:bg-rose-50 dark:hover:bg-rose-900/20 dark:border-rose-800">
                         Reject

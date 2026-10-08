@@ -58,13 +58,17 @@ describe("the desk's own order actions", () => {
     expect(service).toContain('loadOrderDeskReach(client, userId, "manage")')
     // The list builds its filter from the reach first, then only narrows it.
     expect(service).toContain("const conditions: SQL[] = [orderDeskOrderCondition(reach)]")
+    expect(service).toContain("const scopeWhere = and(...conditions)")
+    expect(service).toContain("const where = tab ? and(scopeWhere, tab) : scopeWhere")
     // Every read of `orders` is filtered by that list's `where`, or by the reach directly.
     for (const text of [service, edit]) {
       const reads = text.split(".from(orders)").slice(1)
       expect(reads.length).toBeGreaterThan(0)
       for (const after of reads) {
         const nextWhere = after.slice(0, after.indexOf(".where(") + 140)
-        expect(nextWhere).toMatch(/\.where\(where\)|\.where\(and\(eq\(orders\.id, (input\.)?orderId\), orderDeskOrderCondition\(reach\)\)\)/)
+        // `scopeWhere` is the list's reach-and-filters condition without the tab,
+        // which the per-tab counts read; `where` is the same plus the tab.
+        expect(nextWhere).toMatch(/\.where\((scopeW|w)here\)|\.where\(and\(eq\(orders\.id, (input\.)?orderId\), orderDeskOrderCondition\(reach\)\)\)/)
       }
     }
   })
@@ -82,11 +86,16 @@ describe("the desk's own order actions", () => {
     expect(service).toContain("fulfillApprovedOrder({")
     expect(service).not.toMatch(/status:\s*"FULFILLED"/)
     expect(edit).not.toMatch(/status:\s*"/)
-    // The cancel and the edit claim only an Active, undelivered order.
-    for (const text of [service, edit]) {
-      expect(text).toContain("sql`UPPER(${orders.status}) = 'APPROVED'`")
-      expect(text).toContain("sql`COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED') <> 'DELIVERED'`")
-    }
+    // The cancel claims a pending or an Active, undelivered order, in the
+    // status it read under lock. The edit claims a pending order only: since
+    // every desk order waits for an Apricart Executive, an edit after approval
+    // would change what was approved
+    // (plans/OF-EXEC-APPROVAL-executive-approves-desk-orders.md).
+    expect(service).toContain('const CANCELLABLE_STATUSES = ["PENDING", "APPROVED"]')
+    expect(service).toContain("sql`UPPER(${orders.status}) = ${previousStatus}`")
+    expect(service).toContain("sql`COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED') <> 'DELIVERED'`")
+    expect(edit).toContain("sql`UPPER(${orders.status}) = 'PENDING'`")
+    expect(edit).not.toContain("'APPROVED'")
   })
 
   it("releases and moves ledgers by the order's own period, and only for an order that took a hold", () => {
@@ -116,19 +125,44 @@ describe("the customer's screenshot", () => {
     expect(upload.indexOf("return storeOrderIntakeAttachment(")).toBeLessThan(upload.indexOf("// Never silently fall back"))
   })
 
-  it("is read back only through the desk's own route, by order id, behind its reach", () => {
-    const route = source("app/api/v1/order-desk/orders/[id]/attachment/route.ts")
-    expect(route).toContain('requireApiRole(["ORDER_DESK"])')
-    expect(route).toContain("loadDeskOrder(db, user.id, orderId)")
-    expect(route).toContain('"Cache-Control": "private, no-store, max-age=0"')
+  it("is read back only by order id, behind the reader's reach, never cached", () => {
+    // The desk through its own reach; an Apricart Executive through its
+    // approval reach (plans/OF-EXEC-APPROVAL-executive-approves-desk-orders.md).
+    // Both stream it through the one helper that sets the headers.
+    const desk = source("app/api/v1/order-desk/orders/[id]/attachment/route.ts")
+    expect(desk).toContain('requireApiRole(["ORDER_DESK"])')
+    expect(desk).toContain("loadDeskOrder(db, user.id, orderId)")
+    const executive = source("app/api/v1/executive/approvals/[id]/attachment/route.ts")
+    expect(executive).toContain('requireApiRole(["APRICART_EXECUTIVE"])')
+    expect(executive).toContain("loadExecutiveApprovalOrder(user.id, orderId)")
+    for (const route of [desk, executive]) {
+      expect(route).toContain("intakeAttachmentResponse(order.intakeAttachmentKey)")
+      expect(route).not.toContain("getImage(")
+    }
+    const helper = source("lib/server/order-desk-attachments.ts")
+    expect(helper).toContain('"Cache-Control": "private, no-store, max-age=0"')
+    expect(helper).toContain("if (!isOrderIntakeAttachmentKey(key)) return NextResponse.json")
   })
 
   it("is bound to its uploader and to one order when the order is created", () => {
     const route = source("app/api/v1/orders/route.ts")
-    expect(route).toContain("deskAttachmentRefusal({ userId: input.userId, key: input.intakeAttachmentKey })")
+    expect(route).toMatch(/deskAttachmentRefusal\(\{\s*userId: input\.userId,\s*key: input\.intakeAttachmentKey,\s*idempotencyKey: input\.idempotencyKey,\s*\}\)/)
     const binding = source("lib/server/order-desk-attachments.ts")
     expect(binding).toContain("eq(auditLogs.userId, input.userId)")
     expect(binding).toContain("eq(orders.intakeAttachmentKey, input.key)")
+    // The only order allowed to hold the key already is this same submission's
+    // own (a retry), which the route then answers through its replay check.
+    expect(binding).toContain("existing.createdByUserId === input.userId && existing.idempotencyKey === input.idempotencyKey")
+  })
+
+  it("lets a duplicate submission find its twin before reporting a screenshot conflict", () => {
+    const route = source("app/api/v1/orders/route.ts")
+    const handler = route.slice(route.indexOf("async function getOrderCreationErrorResponse"))
+    // Drizzle puts the driver's error on `cause`; the code is read from both.
+    expect(handler).toContain('String(caughtError?.code ?? caughtError?.cause?.code ?? "") === "23505"')
+    expect(handler.indexOf("getOrderReplayResponse(existingOrder")).toBeGreaterThan(0)
+    expect(handler.indexOf("getOrderReplayResponse(existingOrder"))
+      .toBeLessThan(handler.indexOf('"orders_intake_attachment_key_uq"'))
   })
 })
 

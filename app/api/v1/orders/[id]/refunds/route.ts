@@ -14,8 +14,9 @@ import { withRateLimit } from "@/lib/rate-limiter"
 import { ADMIN_OPERATIONS_EMAIL } from "@/lib/email/recipients"
 import { buildRefundSuccessPayload, redactRefundHistoryForPriceHidden } from "@/lib/refund-visibility"
 import { refundRequestSchema, validationMessage } from "@/lib/server/mutation-validation"
-import { isOrderPortalRefundEligible, isRefundEligibleOrderStatus } from "@/lib/business-rules"
-import { budgetPeriodOf, isSameBudgetPeriod } from "@/lib/budget-consumption"
+import { isRefundEligibleOrderStatus } from "@/lib/business-rules"
+import { budgetPeriodOf, planRefundLedgerMove } from "@/lib/budget-consumption"
+import { refundTimingReasonForRole } from "@/lib/refund-window"
 import {
   canRequesterActOnOrder,
   describeOrderWrite,
@@ -133,18 +134,12 @@ function canAccessOrderForRefund(
   return false
 }
 
-function getRefundEligibilityError(orderData: any, role: string) {
+function getRefundEligibilityError(orderData: any, role: string, now: Date) {
   const status = String(orderData.status || "").toUpperCase()
   if (!isRefundEligibleOrderStatus(status)) return `Order in ${status || "unknown"} state is not eligible for a refund`
-  // The same UTC period the order's money sits in, so a refund can only ever
-  // be admitted against the budget row it will actually be debited from.
-  if (!isSameBudgetPeriod(orderData.createdAt, new Date())) {
-    return "Refund period ended. Refunds are only allowed within the calendar month of the order."
-  }
-  if ((isOrderWriteRole(role) || isOrderDeskRole(role)) && !isOrderPortalRefundEligible(status, orderData.fulfillmentStatus)) {
-    return "A requester can request a refund only after the order is fulfilled and delivered."
-  }
-  return null
+  // Super Admin decides refunds and has no time limit; every other role may
+  // ask only between fulfilment and seven days after it.
+  return refundTimingReasonForRole(role, orderData, now)
 }
 
 function indexPreviousRefunds(rows: any[]) {
@@ -254,7 +249,7 @@ function getRefundProcessingErrorResponse(caughtError: any) {
 async function lockAndValidateRefund(tx: any, context: any) {
   const [lockedOrder] = await tx.select(orderSelectColumns).from(orders).where(eq(orders.id, context.orderId)).for('update')
   if (!lockedOrder || !isRefundEligibleOrderStatus(lockedOrder.status)
-    || (isOrderWriteRole(context.userRole) && !isOrderPortalRefundEligible(lockedOrder.status, lockedOrder.fulfillmentStatus))) {
+    || refundTimingReasonForRole(context.userRole, lockedOrder, context.now)) {
     throw new Error("REFUND_ELIGIBILITY_CONFLICT")
   }
   const liveLines = await tx.select({
@@ -298,16 +293,24 @@ async function createApprovedRefund(tx: any, context: any) {
   // any budget row, whatever the tenant's setting is now.
   if (orderTakesBudget(context.lockedOrder)) {
     // The order's own period, not today's: this money was held or spent on that
-    // row, and withdrawing it from any other would leave both months wrong.
+    // row, and giving it back on any other would leave both months wrong. How
+    // it goes back is `planRefundLedgerMove`, shared with the admin route.
     const [budget] = await tx.select().from(budgets).where(and(
       eq(budgets.branchId, context.order.branchId),
       eq(budgets.period, budgetPeriodOf(context.lockedOrder.createdAt ?? context.order.createdAt)),
-    )).limit(1)
-    if (budget) await tx.update(budgets).set(status === "FULFILLED" ? {
-      amountSpentCents: sql`GREATEST(0, ${budgets.amountSpentCents} - ${context.total})`, updatedAt: new Date(),
-    } : {
-      amountHeldCents: sql`GREATEST(0, ${budgets.amountHeldCents} - ${context.total})`, updatedAt: new Date(),
-    }).where(eq(budgets.id, budget.id))
+    )).limit(1).for("update")
+    if (budget) {
+      const move = planRefundLedgerMove({
+        orderStatus: status,
+        refundCents: context.total,
+        rowSpentCents: Number(budget.amountSpentCents),
+      })
+      await tx.update(budgets).set({
+        amountSpentCents: sql`${budgets.amountSpentCents} - ${move.spentDebitCents}`,
+        amountCreditedCents: sql`${budgets.amountCreditedCents} + ${move.creditCents}`,
+        updatedAt: new Date(),
+      }).where(eq(budgets.id, budget.id))
+    }
     await releaseRefundedQuantityBudget(tx, context.lockedOrder, context.details.map((item: any) => ({ orderItemId: item.orderItemId, quantity: item.quantity })))
   }
   const isFullRefund = context.approved + context.total >= Number(context.lockedOrder.totalCents)
@@ -613,11 +616,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const pricesHidden = await shouldHidePricesForRole(userRole, orderData.organizationId)
     const allowedBranchIds = await resolveRefundBranchIds(userRole, userId, userBranchId)
     const deskOrderInReach = isOrderDeskRole(userRole) && Boolean(await loadDeskOrder(db, userId, orderId))
-    const eligibilityError = getRefundEligibilityError(orderData, userRole)
-    if (eligibilityError) return NextResponse.json({ error: eligibilityError }, { status: 400 })
+    // Reach first, so a caller outside the order's scope learns nothing about
+    // its state from an eligibility message.
     if (!canAccessOrderForRefund(userRole, orderData, userOrgId, allowedBranchIds, userId, deskOrderInReach)) {
       return NextResponse.json({ error: "Forbidden: Cannot request a refund for this order" }, { status: 403 })
     }
+    const now = new Date()
+    const eligibilityError = getRefundEligibilityError(orderData, userRole, now)
+    if (eligibilityError) return NextResponse.json({ error: eligibilityError }, { status: 400 })
     // Named in the audit row and notified below when a colleague, rather than
     // the person who raised the order, is claiming on it.
     const refundWrite = describeOrderWrite(
@@ -659,6 +665,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       order: orderData,
       userRole,
       userId,
+      now,
       total: totalRefundAmount,
       reason,
       details: refundDetails,

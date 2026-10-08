@@ -27,6 +27,8 @@ vi.mock("@/lib/hooks/use-api", () => ({
           budgetAllocationMode: "money",
           blockOrderingOnUnpaidInvoices: true,
           blockOrderingOnUnacknowledgedDeliveries: true,
+          unpaidInvoiceBlockThreshold: 5,
+          unacknowledgedDeliveryBlockThreshold: 3,
           budgetsEnabled: false,
         },
       ],
@@ -603,5 +605,202 @@ describe("OrganizationsPage budget allocation switch", () => {
     })
     const patch = calls.find((call) => call.url === "/api/v1/organizations/1" && call.method === "PATCH")!
     expect(patch.body).not.toHaveProperty("budgetsEnabled")
+  })
+})
+
+// plans/OF-ORDERING-BLOCK-configurable-thresholds.md
+describe("OrganizationsPage ordering-block limits", () => {
+  const UNPAID_TOGGLE = "Block ordering on unpaid invoices"
+  const UNACKNOWLEDGED_TOGGLE = "Block ordering on unacknowledged deliveries"
+  const UNPAID_LIMIT = "Unpaid invoices that stop ordering"
+  const UNACKNOWLEDGED_LIMIT = "Unacknowledged deliveries that stop ordering"
+  const RANGE = "Enter a whole number from 1 to 100."
+
+  async function createCompany() {
+    fireEvent.click(screen.getByRole("button", { name: "Save Company" }))
+    const confirm = await screen.findByRole("alertdialog")
+    await act(async () => {
+      fireEvent.click(within(confirm).getByRole("button", { name: "Create Company" }))
+    })
+  }
+
+  function openCreate() {
+    fireEvent.click(screen.getByRole("button", { name: "Create Company" }))
+    fireEvent.change(screen.getByLabelText("Company name"), { target: { value: "Acme Inc." } })
+    fireEvent.change(screen.getByLabelText("Code"), { target: { value: "ACME" } })
+  }
+
+  async function openEdit(index: number) {
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[index])
+    const dialog = await screen.findByRole("dialog", { name: "Edit Company" })
+    const save = within(dialog).getByRole("button", { name: "Save Changes" }) as HTMLButtonElement
+    await waitFor(() => expect(save.disabled).toBe(false))
+    return { dialog, save }
+  }
+
+  async function patchSentFor(calls: ReturnType<typeof stubOrganizationApi>, id: number) {
+    await waitFor(() => {
+      expect(calls.some((call) => call.url === `/api/v1/organizations/${id}` && call.method === "PATCH")).toBe(true)
+    })
+    return calls.find((call) => call.url === `/api/v1/organizations/${id}` && call.method === "PATCH")!.body
+  }
+
+  it("Create Company shows a limit only while its block is on, starting at 2", () => {
+    stubOrganizationApi()
+    render(<OrganizationsPage />)
+    openCreate()
+
+    expect(screen.queryByLabelText(UNPAID_LIMIT)).toBeNull()
+    expect(screen.queryByLabelText(UNACKNOWLEDGED_LIMIT)).toBeNull()
+
+    fireEvent.click(screen.getByRole("switch", { name: UNPAID_TOGGLE }))
+    const limit = screen.getByLabelText(UNPAID_LIMIT) as HTMLInputElement
+    expect(limit.value).toBe("2")
+    expect(limit.getAttribute("min")).toBe("1")
+    expect(limit.getAttribute("max")).toBe("100")
+    expect(screen.queryByLabelText(UNACKNOWLEDGED_LIMIT)).toBeNull()
+
+    fireEvent.click(screen.getByRole("switch", { name: UNPAID_TOGGLE }))
+    expect(screen.queryByLabelText(UNPAID_LIMIT)).toBeNull()
+  })
+
+  it("Create Company sends the chosen limits, and the hint prints the number being typed", async () => {
+    const calls = stubOrganizationApi()
+    render(<OrganizationsPage />)
+    openCreate()
+
+    fireEvent.click(screen.getByRole("switch", { name: UNPAID_TOGGLE }))
+    fireEvent.change(screen.getByLabelText(UNPAID_LIMIT), { target: { value: "5" } })
+    expect(screen.getByText(/A branch with 5 or more unpaid invoices/)).toBeTruthy()
+
+    fireEvent.click(screen.getByRole("switch", { name: UNACKNOWLEDGED_TOGGLE }))
+    fireEvent.change(screen.getByLabelText(UNACKNOWLEDGED_LIMIT), { target: { value: "1" } })
+    expect(screen.getByText(/A branch with 1 or more orders that are delivered/)).toBeTruthy()
+
+    await createCompany()
+    await waitFor(() => expect(calls.some((call) => call.method === "POST")).toBe(true))
+    const created = calls.find((call) => call.url === "/api/v1/organizations")!.body
+    expect(created).toMatchObject({
+      blockOrderingOnUnpaidInvoices: true,
+      unpaidInvoiceBlockThreshold: 5,
+      blockOrderingOnUnacknowledgedDeliveries: true,
+      unacknowledgedDeliveryBlockThreshold: 1,
+    })
+  })
+
+  it("Create Company with both blocks off still sends the default limits", async () => {
+    const calls = stubOrganizationApi()
+    render(<OrganizationsPage />)
+    openCreate()
+    await createCompany()
+
+    await waitFor(() => expect(calls.some((call) => call.method === "POST")).toBe(true))
+    const created = calls.find((call) => call.url === "/api/v1/organizations")!.body
+    expect(created.unpaidInvoiceBlockThreshold).toBe(2)
+    expect(created.unacknowledgedDeliveryBlockThreshold).toBe(2)
+  })
+
+  it.each(["0", "101", "1.5", ""])("Create Company refuses %j while the block is on, and says why", (value) => {
+    stubOrganizationApi()
+    render(<OrganizationsPage />)
+    openCreate()
+    const save = screen.getByRole("button", { name: "Save Company" }) as HTMLButtonElement
+    expect(save.disabled).toBe(false)
+
+    fireEvent.click(screen.getByRole("switch", { name: UNPAID_TOGGLE }))
+    const limit = screen.getByLabelText(UNPAID_LIMIT)
+    fireEvent.change(limit, { target: { value } })
+
+    expect(screen.getByRole("alert").textContent).toBe(RANGE)
+    expect(limit.getAttribute("aria-invalid")).toBe("true")
+    expect(limit.getAttribute("aria-describedby")).toBe(screen.getByRole("alert").id)
+    expect(screen.getByText(/reaches the limit below in unpaid invoices/)).toBeTruthy()
+    expect(save.disabled).toBe(true)
+
+    fireEvent.change(limit, { target: { value: "3" } })
+    expect(screen.queryByRole("alert")).toBeNull()
+    expect(save.disabled).toBe(false)
+  })
+
+  it("an invalid limit on a block that is switched off neither blocks Save nor is sent", async () => {
+    const calls = stubOrganizationApi()
+    render(<OrganizationsPage />)
+    openCreate()
+
+    fireEvent.click(screen.getByRole("switch", { name: UNPAID_TOGGLE }))
+    fireEvent.change(screen.getByLabelText(UNPAID_LIMIT), { target: { value: "0" } })
+    fireEvent.click(screen.getByRole("switch", { name: UNPAID_TOGGLE }))
+
+    const save = screen.getByRole("button", { name: "Save Company" }) as HTMLButtonElement
+    expect(save.disabled).toBe(false)
+    await createCompany()
+    await waitFor(() => expect(calls.some((call) => call.method === "POST")).toBe(true))
+    const created = calls.find((call) => call.url === "/api/v1/organizations")!.body
+    expect(created.blockOrderingOnUnpaidInvoices).toBe(false)
+    expect(created).not.toHaveProperty("unpaidInvoiceBlockThreshold")
+    expect(created.unacknowledgedDeliveryBlockThreshold).toBe(2)
+  })
+
+  it("Edit Company prefills the stored limits and sends a change", async () => {
+    const calls = stubOrganizationApi()
+    render(<OrganizationsPage />)
+
+    // Panacloud (second) blocks on both, at 5 and 3.
+    const { dialog, save } = await openEdit(1)
+    const unpaid = within(dialog).getByLabelText(UNPAID_LIMIT) as HTMLInputElement
+    const unacknowledged = within(dialog).getByLabelText(UNACKNOWLEDGED_LIMIT) as HTMLInputElement
+    expect(unpaid.value).toBe("5")
+    expect(unacknowledged.value).toBe("3")
+    expect(within(dialog).getByText(/A branch with 5 or more unpaid invoices/)).toBeTruthy()
+    expect(within(dialog).getByText(/A branch with 3 or more orders that are delivered/)).toBeTruthy()
+
+    fireEvent.change(unpaid, { target: { value: "10" } })
+    await act(async () => {
+      fireEvent.click(save)
+    })
+    const patch = await patchSentFor(calls, 2)
+    expect(patch).toMatchObject({ unpaidInvoiceBlockThreshold: 10, unacknowledgedDeliveryBlockThreshold: 3 })
+  })
+
+  it("Edit Company refuses an invalid limit while the block is on", async () => {
+    stubOrganizationApi()
+    render(<OrganizationsPage />)
+
+    const { dialog, save } = await openEdit(1)
+    fireEvent.change(within(dialog).getByLabelText(UNACKNOWLEDGED_LIMIT), { target: { value: "0" } })
+    expect(within(dialog).getByRole("alert").textContent).toBe(RANGE)
+    expect(save.disabled).toBe(true)
+  })
+
+  it("Edit Company reads an organization with no stored limit as the default 2", async () => {
+    const calls = stubOrganizationApi()
+    render(<OrganizationsPage />)
+
+    // Zomato (first) carries no limit fields and blocks on neither.
+    const { dialog, save } = await openEdit(0)
+    fireEvent.click(within(dialog).getByRole("switch", { name: UNPAID_TOGGLE }))
+    expect((within(dialog).getByLabelText(UNPAID_LIMIT) as HTMLInputElement).value).toBe("2")
+
+    await act(async () => {
+      fireEvent.click(save)
+    })
+    const patch = await patchSentFor(calls, 1)
+    expect(patch).toMatchObject({ blockOrderingOnUnpaidInvoices: true, unpaidInvoiceBlockThreshold: 2, unacknowledgedDeliveryBlockThreshold: 2 })
+  })
+
+  it("a Head Office user neither sees nor sends either limit", async () => {
+    mocks.role = "HEAD_OFFICE"
+    const calls = stubOrganizationApi()
+    render(<OrganizationsPage />)
+
+    const { dialog, save } = await openEdit(1)
+    expect(within(dialog).queryByLabelText(UNPAID_LIMIT)).toBeNull()
+    expect(within(dialog).queryByLabelText(UNACKNOWLEDGED_LIMIT)).toBeNull()
+    await act(async () => {
+      fireEvent.click(save)
+    })
+    const patch = await patchSentFor(calls, 2)
+    expect(patch).not.toHaveProperty("unpaidInvoiceBlockThreshold")
+    expect(patch).not.toHaveProperty("unacknowledgedDeliveryBlockThreshold")
   })
 })

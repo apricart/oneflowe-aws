@@ -21,7 +21,13 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useDebounce } from "@/hooks/use-debounce"
 import { toast } from "@/hooks/use-toast"
-import { CancelDeskOrderDialog, EditDeskOrderDialog, RefundDeskOrderDialog, type DeskOrder } from "@/components/order-desk/desk-order-dialogs"
+import {
+  CancelDeskOrderDialog,
+  EditDeskOrderDialog,
+  RefundDeskOrderDialog,
+  ResubmitDeskOrderDialog,
+  type DeskOrder,
+} from "@/components/order-desk/desk-order-dialogs"
 import { CHANNEL_META, STAGE_META, StagePill, TAB_LABELS } from "@/components/order-desk/desk-theme"
 import { fetcher } from "@/lib/fetcher"
 import { FULFILLMENT_STATUSES, FULFILLMENT_STATUS_LABELS, normalizeFulfillmentStatus } from "@/lib/fulfillment-status"
@@ -47,9 +53,11 @@ type Target = { id: number; name: string; branches: { id: number; name: string }
 const ALL = "all"
 
 const EMPTY_MESSAGES: Record<DeskOrderStatusFilter, string> = {
+  awaiting_approval: "No orders are waiting for approval.",
   awaiting_delivery: "No orders are waiting for delivery.",
   ready_to_fulfil: "Nothing to fulfil right now. Delivered orders appear here.",
   fulfilled: "No fulfilled orders yet.",
+  rejected: "No rejected orders.",
   cancelled: "No cancelled orders.",
   all: "No orders yet. Create one from the New order tab.",
 }
@@ -62,6 +70,7 @@ type OpenDialog =
   | { kind: "fulfil"; order: DeskOrder }
   | { kind: "edit"; order: DeskOrder }
   | { kind: "cancel"; order: DeskOrder }
+  | { kind: "resubmit"; order: DeskOrder }
   | { kind: "refund"; order: DeskOrder }
   | null
 
@@ -109,6 +118,14 @@ function OrderCard({
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="font-semibold">{order.tid}</h3>
               <StagePill stage={stage} />
+              {order.status.toUpperCase() === "REFUNDED" && (
+                <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">Fully refunded</span>
+              )}
+              {order.returnedForCorrectionAt && (
+                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900 dark:bg-amber-950 dark:text-amber-100">
+                  Returned for correction
+                </span>
+              )}
             </div>
             <p className="text-xs text-muted-foreground">
               Entered {displayDate(order.createdAt)} by {order.enteredBy ?? "—"}
@@ -147,6 +164,16 @@ function OrderCard({
         </div>
 
         {(stage === "awaiting_delivery" || stage === "ready_to_fulfil" || stage === "fulfilled") && <DeliveryTracker order={order} />}
+        {order.returnedForCorrectionAt && order.correctionRequestNote && (
+          <p className="whitespace-pre-line rounded-md bg-amber-50 p-2 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+            <span className="font-medium">The executive asks: </span>{order.correctionRequestNote}
+          </p>
+        )}
+        {stage === "rejected" && order.rejectionReason && (
+          <p className="rounded-md bg-muted/50 p-2 text-sm text-muted-foreground">
+            Rejected — {order.rejectionReason}
+          </p>
+        )}
         {stage === "cancelled" && order.cancellationReason && (
           <p className="rounded-md bg-muted/50 p-2 text-sm text-muted-foreground">
             Cancelled {displayDate(order.cancelledAt)} — {order.cancellationReason}
@@ -177,6 +204,9 @@ function OrderCard({
           )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {stage === "awaiting_approval" && !order.returnedForCorrectionAt && (
+            <span className="text-xs text-muted-foreground">Waiting for an Apricart Executive to approve</span>
+          )}
           {stage === "awaiting_delivery" && (
             <span className="text-xs text-muted-foreground">Waiting for Super Admin to record delivery</span>
           )}
@@ -192,6 +222,9 @@ function OrderCard({
           )}
           {order.canEdit && (
             <Button size="sm" variant="outline" onClick={() => onAction({ kind: "edit", order })}>Edit</Button>
+          )}
+          {order.canResubmit && (
+            <Button size="sm" onClick={() => onAction({ kind: "resubmit", order })}>Resubmit for approval</Button>
           )}
           {order.canRequestRefund && (
             <Button size="sm" variant="outline" onClick={() => onAction({ kind: "refund", order })}>Request refund</Button>
@@ -230,11 +263,12 @@ function OrderCard({
 }
 
 /**
- * The desk's own orders, by where they stand: waiting for Super Admin to
- * record delivery, ready for the desk to fulfil, fulfilled, or cancelled. Each
- * card offers only the actions its stage allows; the server enforces them again.
+ * The desk's own orders, by where they stand: waiting for an Apricart
+ * Executive to approve, waiting for Super Admin to record delivery, ready for
+ * the desk to fulfil, fulfilled, rejected, or cancelled. Each card offers only
+ * the actions its stage allows; the server enforces them again.
  */
-export function DeskOrdersTable({ initialTab = "awaiting_delivery" }: Readonly<{ initialTab?: DeskOrderStatusFilter }>) {
+export function DeskOrdersTable({ initialTab = "awaiting_approval" }: Readonly<{ initialTab?: DeskOrderStatusFilter }>) {
   const [tab, setTab] = useState<DeskOrderStatusFilter>(initialTab)
   const [organizationId, setOrganizationId] = useState(ALL)
   const [branchId, setBranchId] = useState(ALL)
@@ -441,6 +475,9 @@ export function DeskOrdersTable({ initialTab = "awaiting_delivery" }: Readonly<{
       )}
       {dialog?.kind === "cancel" && (
         <CancelDeskOrderDialog key={dialog.order.id} order={dialog.order} onClose={() => setDialog(null)} onSaved={closeAndRefresh} />
+      )}
+      {dialog?.kind === "resubmit" && (
+        <ResubmitDeskOrderDialog key={dialog.order.id} order={dialog.order} onClose={() => setDialog(null)} onSaved={closeAndRefresh} />
       )}
       {dialog?.kind === "refund" && (
         <RefundDeskOrderDialog key={dialog.order.id} order={dialog.order} onClose={() => setDialog(null)} onSaved={closeAndRefresh} />

@@ -116,7 +116,9 @@ export function installFetch(routes: FetchRoute[]): void {
     )
     if (!route) ui.unmatched.push(`${method} ${target}`)
     const handler = route?.[1]
-    const resolved = typeof handler === "function" ? await (handler as Function)(url, init) : handler ?? {}
+    const resolved = typeof handler === "function"
+      ? await (handler as (url: URL, init?: RequestInit) => Handled | Promise<Handled>)(url, init)
+      : handler ?? {}
     const { status, payload } = isResponseShape(resolved)
       ? { status: resolved.status, payload: resolved.body }
       : { status: 200, payload: resolved }

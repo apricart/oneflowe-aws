@@ -14,6 +14,24 @@ const MULTI_BRANCH_SCOPED_ROLES = new Set([
   "GROUP_USER",
 ])
 
+/**
+ * Whether this caller has no tenant to scope an analytics read to: anyone but
+ * Super Admin whose session carries no organization.
+ *
+ * Several analytics handlers take the tenant from the session and add the
+ * organization filter only when there is one, so a role without an
+ * organization — Apricart's Order Desk, Executive and Warehouse — would read
+ * every tenant. `proxy.ts` keeps those roles off these paths, but the proxy is
+ * not the boundary; each such handler refuses the caller itself. Every tenant
+ * role carries an organization, so this refuses none of them.
+ * See plans/OF-WAREHOUSE-warehouse-fulfilment-role.md.
+ */
+export function lacksAnalyticsTenant(role: unknown, organizationId: unknown): boolean {
+  if (role === "SUPER_ADMIN") return false
+  const id = Number(organizationId)
+  return organizationId === null || organizationId === undefined || !Number.isSafeInteger(id) || id <= 0
+}
+
 export function isBranchScopedAnalyticsRole(role: unknown) {
   return typeof role === "string" && BRANCH_SCOPED_ROLES.has(role)
 }

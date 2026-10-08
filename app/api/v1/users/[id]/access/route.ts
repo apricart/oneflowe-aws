@@ -21,6 +21,7 @@ import {
 import { USER_MANAGEMENT_ROLES } from "@/lib/user-management-access"
 import { isOrderDeskRole, orderDeskAccessChangeError } from "@/lib/order-desk-access"
 import { apricartExecutiveAccessChangeError, isApricartExecutiveRole } from "@/lib/apricart-executive-access"
+import { isWarehouseRole, warehouseAccessChangeError } from "@/lib/warehouse-access"
 import { roleChangeRequiresSettledOrders } from "@/lib/role-change-preconditions"
 import { loadRoleChangeReadiness } from "@/lib/server/role-change-readiness"
 import {
@@ -116,6 +117,9 @@ async function getAccessShapeError({
   const executiveError = apricartExecutiveAccessChangeError(targetRole, input)
   if (executiveError) return executiveError
   if (isApricartExecutiveRole(nextRole)) return null
+  const warehouseError = warehouseAccessChangeError(targetRole, input)
+  if (warehouseError) return warehouseError
+  if (isWarehouseRole(nextRole)) return null
   return getAssignmentError({ scope, nextRole, nextOrganizationId, nextBranchId })
 }
 

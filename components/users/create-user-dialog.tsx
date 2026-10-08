@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from "react"
 import useSWR from "swr"
 import { APRICART_EXECUTIVE_LABEL, APRICART_EXECUTIVE_ROLE } from "@/lib/apricart-executive-access"
+import { WAREHOUSE_LABEL, WAREHOUSE_ROLE } from "@/lib/warehouse-access"
 import { jsonFetcher } from "@/lib/fetcher"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogTrigger, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
@@ -71,8 +72,13 @@ function getRoleLabel(role: string) {
   if (role === "GROUP_USER") return "Group User"
   if (role === "VIEWER") return "Viewer (read-only)"
   if (role === APRICART_EXECUTIVE_ROLE) return APRICART_EXECUTIVE_LABEL
+  if (role === WAREHOUSE_ROLE) return WAREHOUSE_LABEL
   return "Order Portal User"
 }
+
+// Apricart's own cross-tenant staff created from this dialog: no organization,
+// no branch. Their reach is granted elsewhere (or is every tenant).
+const APRICART_STAFF_ROLES = new Set<string>([APRICART_EXECUTIVE_ROLE, WAREHOUSE_ROLE])
 
 // Roles pinned to exactly one branch. The group roles are deliberately
 // excluded: their reach comes from the group/branch assignments instead.
@@ -449,7 +455,7 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
           password: form.password,
           phone: form.phone.trim() || null,
           role: form.role,
-          organizationId: form.role !== APRICART_EXECUTIVE_ROLE && form.organizationId
+          organizationId: !APRICART_STAFF_ROLES.has(form.role) && form.organizationId
             ? Number.parseInt(form.organizationId)
             : null,
           branchId: (isSingleBranchRole(form.role) || usesOptionalBranch(form.role)) && form.branchId
@@ -849,7 +855,7 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
 
                 {/* Organization Selector - Only for Super Admin. Apricart's
                     management reads every organization, so it is given none. */}
-                {userRole === "SUPER_ADMIN" && form.role !== APRICART_EXECUTIVE_ROLE && (
+                {userRole === "SUPER_ADMIN" && !APRICART_STAFF_ROLES.has(form.role) && (
                   <div className="space-y-2">
                     <Label htmlFor="organization">Organization *</Label>
                     <Select
@@ -920,10 +926,21 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                           {APRICART_EXECUTIVE_LABEL} (all clients, read-only)
                         </SelectItem>
                       )}
+                      {userRole === "SUPER_ADMIN" && (
+                        <SelectItem value={WAREHOUSE_ROLE}>
+                          {WAREHOUSE_LABEL} (assigned branches)
+                        </SelectItem>
+                      )}
                     </SelectContent>
                   </Select>
                   {errors.role && (
                     <p className="text-xs text-red-600">{errors.role}</p>
+                  )}
+                  {form.role === WAREHOUSE_ROLE && (
+                    <p className="text-xs text-muted-foreground">
+                      Apricart&apos;s warehouse. Picks, dispatches and marks delivered the approved orders
+                      of the branches you assign to it from Warehouse Team. No organization or branch is set here.
+                    </p>
                   )}
                   {form.role === APRICART_EXECUTIVE_ROLE && (
                     <p className="text-xs text-muted-foreground">

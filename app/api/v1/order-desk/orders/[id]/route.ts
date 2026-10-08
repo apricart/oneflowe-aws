@@ -9,11 +9,21 @@ import { orderDeskEditSchema, validationMessage } from "@/lib/server/mutation-va
 import { editDeskOrder } from "@/lib/server/order-desk-edit"
 
 /**
- * Edit an Order Desk order that is Active and not yet delivered: its lines,
- * notes and PO number. Re-priced, stock and budget re-checked, all under lock
+ * Edit an Order Desk order that is still pending — awaiting an executive's
+ * approval or returned for correction: its lines, notes and PO number.
+ * Re-priced, stock and budget re-checked, all under lock
  * (`lib/server/order-desk-edit.ts`, which also writes the audit row). An order
- * outside the desk user's reach is 404; a delivered or settled one is 409.
+ * outside the desk user's reach is 404; an approved, rejected or cancelled one
+ * is 409.
  */
+function deskEditRefusalMessage(outcome: { status: string; delivered: boolean }): string {
+  if (outcome.delivered) return "A delivered order cannot be edited"
+  if (String(outcome.status).toUpperCase() === "APPROVED") {
+    return "An approved order cannot be edited; cancel it and enter a new order instead"
+  }
+  return `Cannot edit an order in ${outcome.status} state`
+}
+
 export async function PUT(req: Request, props: { params: Promise<{ id: string }> }) {
   try {
     const roleError = await requireApiRole(["ORDER_DESK"])
@@ -52,9 +62,7 @@ export async function PUT(req: Request, props: { params: Promise<{ id: string }>
         return NextResponse.json({ error: "You are not assigned to order for this branch" }, { status: 403 })
       case "not-editable":
         return NextResponse.json({
-          error: outcome.delivered
-            ? "A delivered order cannot be edited"
-            : `Cannot edit an order in ${outcome.status} state`,
+          error: deskEditRefusalMessage(outcome),
         }, { status: 409 })
       case "invalid":
         return NextResponse.json({ error: outcome.message }, { status: 400 })

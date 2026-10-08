@@ -321,11 +321,16 @@ describe("where a hand-off is remembered", () => {
 
 describe("delivery settles an order whose token already went out", () => {
   it("settles it from the delivery transition, after that transition commits", () => {
-    const progressRoute = source("app/api/v1/orders/[id]/fulfillment-status/route.ts")
+    const route = source("app/api/v1/orders/[id]/fulfillment-status/route.ts")
+    // The transition and the settlement live in the module both progress
+    // routes share (Super Admin's and the warehouse's), so either delivery
+    // settles a waiting hand-off the same way.
+    const progressRoute = source("lib/server/order-fulfillment-progress.ts")
 
-    // Still Super Admin only, and still scoped to the order it authorized.
-    expect(progressRoute).toContain('requireApiRole(["SUPER_ADMIN"])')
-    expect(progressRoute).toContain("verifyResourceAccess(order.organizationId, order.branchId)")
+    // The Super Admin route is still Super Admin only, and still scoped to the order it authorized.
+    expect(route).toContain('requireApiRole(["SUPER_ADMIN"])')
+    expect(route).toContain("verifyResourceAccess(order.organizationId, order.branchId)")
+    expect(route).toContain("progressOrderFulfillment({")
     expect(progressRoute).toContain("settleDeliveredOrderAfterTokenHandoff({")
     expect(progressRoute).toContain("organizationId: order.organizationId,")
     expect(progressRoute).toContain("branchId: order.branchId,")
@@ -338,7 +343,8 @@ describe("delivery settles an order whose token already went out", () => {
     )
     // What happened is recorded and reported rather than assumed.
     expect(progressRoute).toContain('action: "ORDER_FULFILLED_ON_DELIVERY"')
-    expect(progressRoute).toContain("fulfilled,")
+    expect(progressRoute).toContain('return { kind: "updated", order: settled ?? updated, fulfilled }')
+    expect(route).toContain("fulfilled: outcome.fulfilled,")
   })
 })
 

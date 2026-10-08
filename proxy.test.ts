@@ -460,6 +460,10 @@ describe("Apricart's Order Desk session", () => {
     ["GET", "/api/v1/orders/42/refunds"],
     ["POST", "/api/v1/orders/42/refunds"],
     ["POST", "/api/v1/users/me/change-password"],
+    // "Forgot password" in the desk's own profile menu, while still signed in.
+    ["POST", "/api/v1/auth/password-reset/request"],
+    ["POST", "/api/v1/auth/password-reset/verify"],
+    ["POST", "/api/v1/auth/password-reset/complete"],
   ])("lets %s %s through to its handler", async (method, path) => {
     mocks.getToken.mockResolvedValue(deskToken())
 
@@ -560,6 +564,14 @@ describe("Apricart's Order Desk session", () => {
     ["BRANCH_ADMIN", "/desk-team", "/dashboard"],
     ["SUPER_ADMIN", "/order-desk", "/dashboard"],
     ["HEAD_OFFICE", "/order-desk", "/dashboard"],
+    // The warehouse's branches are assigned on a page of their own, which the
+    // warehouse workspace's "/warehouse" prefix must not swallow.
+    ["SUPER_ADMIN", "/warehouse-team", null],
+    ["HEAD_OFFICE", "/warehouse-team", "/dashboard"],
+    ["ORDER_DESK", "/warehouse-team", "/order-desk"],
+    ["WAREHOUSE", "/warehouse-team", "/warehouse"],
+    ["WAREHOUSE", "/warehouse", null],
+    ["SUPER_ADMIN", "/warehouse", "/dashboard"],
   ])("keeps %s to its own side of %s", async (role, path, redirectedPath) => {
     mocks.getToken.mockResolvedValue(validToken(role))
 

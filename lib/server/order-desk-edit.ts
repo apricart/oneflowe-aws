@@ -28,11 +28,13 @@ import { getOrganizationTaxRateBp } from "@/lib/server/tax-rate"
 
 /**
  * An Order Desk edit: the lines, notes and PO number of a desk order that is
- * Active and not yet delivered.
+ * still `PENDING` — awaiting an Apricart Executive's approval, or returned by
+ * one for correction. Never after approval: an edit then would change what the
+ * executive approved (plans/OF-EXEC-APPROVAL-executive-approves-desk-orders.md).
  *
- * The requester edit (`PUT /api/v1/orders/[id]`) is for PENDING orders and is
- * left exactly as it is; a desk order is Active from creation, so it gets this
- * path instead. It follows the same ledger rules, all inside one transaction:
+ * The requester edit (`PUT /api/v1/orders/[id]`) refuses desk orders — the
+ * desk corrects its own entries, never the branch — so the desk has this path
+ * instead. It follows the same ledger rules, all inside one transaction:
  *
  *   * the order, its lines, the branch and organization catalogue rows and every
  *     product touched are locked before anything is read for a decision;
@@ -44,7 +46,7 @@ import { getOrganizationTaxRateBp } from "@/lib/server/tax-rate"
  *     that row are settled under its lock;
  *   * the invoice keeps its number and date.
  *
- * The approval and its fulfilment token are unchanged.
+ * A pending order has no approval or fulfilment token to keep.
  */
 
 export class DeskEditRefusal extends Error {}
@@ -87,7 +89,7 @@ async function editInTransaction(tx: any, input: EditInput): Promise<DeskEditOut
   if (!order) return { kind: "not-found" }
 
   const delivered = isOrderDelivered(order.fulfillmentStatus)
-  if (String(order.status).toUpperCase() !== "APPROVED" || delivered) {
+  if (String(order.status).toUpperCase() !== "PENDING" || delivered) {
     return { kind: "not-editable", status: order.status, delivered }
   }
   // An edit adds demand, so the branch must still be one the desk may order for
@@ -138,8 +140,9 @@ async function editInTransaction(tx: any, input: EditInput): Promise<DeskEditOut
       eq(orders.id, order.id),
       eq(orders.organizationId, organizationId),
       eq(orders.branchId, branchId),
-      sql`UPPER(${orders.status}) = 'APPROVED'`,
-      sql`COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED') <> 'DELIVERED'`,
+      // An executive's approval racing this edit: whichever claims the row
+      // first wins, and an approval made first leaves nothing to edit.
+      sql`UPPER(${orders.status}) = 'PENDING'`,
     ))
     .returning({ id: orders.id })
   if (!updated) throw new Error("ORDER_EDIT_CONFLICT")

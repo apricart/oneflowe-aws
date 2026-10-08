@@ -57,7 +57,7 @@ describe("support list", () => {
 describe("support stats", () => {
   it("summarises the queue", async () => {
     installFetch([["/api/v1/support/stats", captured.statsApricart]])
-    renderWithApp(<SupportStats apricart onSelectStatus={vi.fn()} /> as any)
+    renderWithApp(<SupportStats side="APRICART" onSelectStatus={vi.fn()} />)
     expect(await screen.findByLabelText("Support summary")).toBeTruthy()
   })
 })

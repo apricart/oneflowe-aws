@@ -1,41 +1,57 @@
 import "server-only"
 
-import { and, count, desc, eq, gte, ilike, inArray, or, sql, sum, type SQL } from "drizzle-orm"
+import { and, count, desc, eq, gte, ilike, inArray, isNotNull, or, sql, sum, type SQL } from "drizzle-orm"
 
 import { branches, budgets, globalProducts, orderItems, orders, organizations, refunds, users } from "@/db/schema"
 import { db } from "@/lib/db"
 import { budgetPeriodOf } from "@/lib/budget-consumption"
 import { isOrderDelivered, normalizeFulfillmentStatus, type FulfillmentStatus } from "@/lib/fulfillment-status"
 import { deskOrderActions, type DeskOrderActions, type IntakeChannel } from "@/lib/order-desk-access"
+import {
+  ORDER_RESUBMITTED_ACTION,
+  normalizeCorrectionNote,
+  resubmissionRefusal,
+  type OrderCorrectionRefusal,
+} from "@/lib/order-correction"
 import { deskOrderStatusSelection, type DeskOrderCounts, type DeskOrderListQuery } from "@/lib/order-desk-query"
 import { escapeLikePattern } from "@/lib/utils"
 import { orderSelectColumns } from "@/lib/order-select"
 import { orderTakesBudget } from "@/lib/organization-budget-policy"
 import { recordAuditEvent, type AuditActor } from "@/lib/server/activity-audit"
+import { closeOpenCorrectionRequest } from "@/lib/server/order-correction"
 import { loadOrderDeskReach, orderDeskOrderCondition } from "@/lib/server/order-desk-scope"
 import { fulfillApprovedOrder, type OrderFulfillmentOutcome } from "@/lib/server/order-fulfillment"
 import { releaseHeldQuantityBudgetForOrder } from "@/lib/server/product-quantity-budget-ledger"
 
 /**
- * The Order Desk's own orders: listing, cancelling and fulfilling them.
+ * The Order Desk's own orders: listing, cancelling, resubmitting and
+ * fulfilling them.
  *
  * Every function here starts from the desk user's live reach
  * (`loadOrderDeskReach`, purpose `manage`) and reads the order **through**
  * `orderDeskOrderCondition`, so an order the desk did not enter — or one at a
  * branch it no longer reaches — is simply not found.
  *
- * Delivery is not the desk's to record: Super Admin moves it through the
- * existing progress route. The desk fulfils once that delivery is recorded,
- * through `fulfillApprovedOrder`, which refuses an undelivered order in its own
- * claim. Before delivery the desk may still cancel (here) or edit
- * (`lib/server/order-desk-edit.ts`); after fulfilment it may request a refund
- * through the shared refund route, which Super Admin approves.
+ * Approval is not the desk's: every desk order starts `PENDING` and an Apricart
+ * Executive assigned to its organization approves, rejects or returns it
+ * (`lib/order-desk-approval.ts`). While it is pending the desk may edit it
+ * (`lib/server/order-desk-edit.ts`) and, once returned, resubmit it (here).
+ * Delivery is not the desk's to record either: Super Admin moves it through
+ * the existing progress route. The desk fulfils once that delivery is
+ * recorded, through `fulfillApprovedOrder`, which refuses an undelivered order
+ * in its own claim. Until delivery the desk may cancel (here); after
+ * fulfilment it may request a refund through the shared refund route, which
+ * Super Admin approves.
  */
 
 export type DeskOrderSummary = DeskOrderActions & {
   id: number
   tid: string
   status: string
+  /** Set while an executive has it back with the desk for correction. */
+  returnedForCorrectionAt: Date | null
+  correctionRequestNote: string | null
+  rejectionReason: string | null
   fulfillmentStatus: FulfillmentStatus
   organizationId: number | null
   organizationName: string | null
@@ -104,9 +120,11 @@ export async function listDeskOrders(userId: string, query: DeskOrderListQuery):
     db.select({ total: count() }).from(orders).where(where),
     db
       .select({
+        awaiting_approval: tabCount("awaiting_approval"),
         awaiting_delivery: tabCount("awaiting_delivery"),
         ready_to_fulfil: tabCount("ready_to_fulfil"),
         fulfilled: tabCount("fulfilled"),
+        rejected: tabCount("rejected"),
         cancelled: tabCount("cancelled"),
         all: tabCount("all"),
       })
@@ -119,6 +137,9 @@ export async function listDeskOrders(userId: string, query: DeskOrderListQuery):
       id: orders.id,
       tid: orders.tid,
       status: orders.status,
+      returnedForCorrectionAt: orders.returnedForCorrectionAt,
+      correctionRequestNote: orders.correctionRequestNote,
+      rejectionReason: orders.rejectionReason,
       fulfillmentStatus: orders.fulfillmentStatus,
       organizationId: orders.organizationId,
       organizationName: organizations.name,
@@ -255,6 +276,12 @@ export async function fulfilDeskOrder(input: {
   return { kind: outcome }
 }
 
+/** A desk user acting on an order; the role is recorded on any correction round it closes. */
+type DeskActor = AuditActor & { id: string; role: string }
+
+/** What the desk may cancel: pending, or Active and not yet delivered. */
+const CANCELLABLE_STATUSES = ["PENDING", "APPROVED"]
+
 export type DeskCancelOutcome =
   | { kind: "cancelled" }
   | { kind: "not-found" }
@@ -263,9 +290,14 @@ export type DeskCancelOutcome =
   | { kind: "conflict" }
 
 /**
- * Withdraw a desk order before it is delivered: status `CANCELLED`, the budget
- * hold and the quantity hold it took released from the order's own period, and
- * its stock put back — all in one transaction, under a lock on the order.
+ * Withdraw a desk order before it is delivered — pending, or Active and not
+ * yet delivered: status `CANCELLED`, the budget hold and the quantity hold it
+ * took released from the order's own period, and its stock put back — all in
+ * one transaction, under a lock on the order. A pending order took the same
+ * holds and stock at creation as an Active one, so the release is the same.
+ * An order returned for correction has its open round closed `CANCELLED`, and
+ * the correction flag cleared with it (the row check allows it only on
+ * `PENDING`).
  *
  * The release follows the rejection path's rules exactly
  * (`lib/server/order-decision-service.ts`): only an order that took a hold
@@ -275,7 +307,7 @@ export type DeskCancelOutcome =
 export async function cancelDeskOrder(input: {
   orderId: number
   reason: string
-  actor: AuditActor & { id: string }
+  actor: DeskActor
 }): Promise<DeskCancelOutcome> {
   try {
     return await cancelInTransaction(input)
@@ -288,7 +320,7 @@ export async function cancelDeskOrder(input: {
 function cancelInTransaction(input: {
   orderId: number
   reason: string
-  actor: AuditActor & { id: string }
+  actor: DeskActor
 }): Promise<DeskCancelOutcome> {
   return db.transaction(async (tx): Promise<DeskCancelOutcome> => {
     const reach = await loadOrderDeskReach(tx, input.actor.id, "manage")
@@ -299,7 +331,8 @@ function cancelInTransaction(input: {
       .for("update")
       .limit(1)
     if (!current) return { kind: "not-found" }
-    if (String(current.status).toUpperCase() !== "APPROVED") return { kind: "not-active", status: current.status }
+    const previousStatus = String(current.status).toUpperCase()
+    if (!CANCELLABLE_STATUSES.includes(previousStatus)) return { kind: "not-active", status: current.status }
     if (isOrderDelivered(current.fulfillmentStatus)) return { kind: "delivered" }
 
     const now = new Date()
@@ -310,15 +343,25 @@ function cancelInTransaction(input: {
         cancelledAt: now,
         cancelledByUserId: input.actor.id,
         cancellationReason: input.reason,
+        returnedForCorrectionAt: null,
+        returnedForCorrectionByUserId: null,
+        correctionRequestNote: null,
         updatedAt: now,
       })
       .where(and(
         eq(orders.id, current.id),
-        sql`UPPER(${orders.status}) = 'APPROVED'`,
+        sql`UPPER(${orders.status}) = ${previousStatus}`,
         sql`COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED') <> 'DELIVERED'`,
       ))
       .returning(orderSelectColumns)
     if (!cancelled) throw new Error("ORDER_TRANSITION_CONFLICT")
+
+    const closedCorrectionRequestId = await closeOpenCorrectionRequest(tx, {
+      orderId: cancelled.id,
+      resolution: "CANCELLED",
+      userId: input.actor.id,
+      role: input.actor.role,
+    })
 
     if (orderTakesBudget(cancelled)) {
       const [budget] = await tx
@@ -355,10 +398,105 @@ function cancelInTransaction(input: {
       actor: input.actor,
       organizationId: cancelled.organizationId,
       branchId: cancelled.branchId,
-      before: { status: "APPROVED" },
+      before: { status: previousStatus },
       after: { status: "CANCELLED" },
-      context: { tid: cancelled.tid, reason: input.reason, totalCents: cancelled.totalCents, via: "ORDER_DESK" },
+      context: {
+        tid: cancelled.tid,
+        reason: input.reason,
+        totalCents: cancelled.totalCents,
+        via: "ORDER_DESK",
+        closedCorrectionRequestId,
+      },
     })
     return { kind: "cancelled" }
   })
+}
+
+export type DeskResubmitOutcome =
+  | { kind: "resubmitted" }
+  | { kind: "not-found" }
+  | { kind: "invalid-state"; refusal: OrderCorrectionRefusal; status: string }
+  | { kind: "conflict" }
+
+/**
+ * Send a returned desk order back to the executives for approval, optionally
+ * with a note. The desk's counterpart of `resubmitOrderForApproval`, which
+ * refuses desk orders: the order is read through the desk's reach and locked,
+ * the claim is conditional on it still being returned, and the round is closed
+ * `RESUBMITTED` on the same transaction.
+ *
+ * Unlike the requester path it queues no notification: that one tells the
+ * tenant's approvers, who do not decide a desk order.
+ */
+export async function resubmitDeskOrder(input: {
+  orderId: number
+  note?: string | null
+  actor: DeskActor
+}): Promise<DeskResubmitOutcome> {
+  try {
+    return await db.transaction(async (tx): Promise<DeskResubmitOutcome> => {
+      const reach = await loadOrderDeskReach(tx, input.actor.id, "manage")
+      const [order] = await tx
+        .select({
+          id: orders.id,
+          tid: orders.tid,
+          status: orders.status,
+          organizationId: orders.organizationId,
+          branchId: orders.branchId,
+          returnedForCorrectionAt: orders.returnedForCorrectionAt,
+        })
+        .from(orders)
+        .where(and(eq(orders.id, input.orderId), orderDeskOrderCondition(reach)))
+        .for("update")
+        .limit(1)
+      if (!order) return { kind: "not-found" }
+
+      const refusal = resubmissionRefusal(order)
+      if (refusal) return { kind: "invalid-state", refusal, status: order.status }
+
+      const [claimed] = await tx
+        .update(orders)
+        .set({
+          returnedForCorrectionAt: null,
+          returnedForCorrectionByUserId: null,
+          correctionRequestNote: null,
+          updatedAt: new Date(),
+        })
+        .where(and(
+          eq(orders.id, order.id),
+          sql`UPPER(${orders.status}) = 'PENDING'`,
+          isNotNull(orders.returnedForCorrectionAt),
+        ))
+        .returning({ id: orders.id })
+      if (!claimed) throw new Error("ORDER_TRANSITION_CONFLICT")
+
+      const note = normalizeCorrectionNote(input.note)
+      const correctionRequestId = await closeOpenCorrectionRequest(tx, {
+        orderId: order.id,
+        resolution: "RESUBMITTED",
+        userId: input.actor.id,
+        role: input.actor.role,
+        responseNote: note,
+      })
+      // The flag and the open round are written together; one without the
+      // other means the state is not what this transition assumes.
+      if (correctionRequestId === null) throw new Error("ORDER_TRANSITION_CONFLICT")
+
+      await recordAuditEvent(tx, {
+        action: ORDER_RESUBMITTED_ACTION,
+        entity: "order",
+        entityId: order.id,
+        actor: input.actor,
+        organizationId: order.organizationId,
+        branchId: order.branchId,
+        before: { status: "PENDING", awaiting: "CORRECTION" },
+        after: { status: "PENDING", awaiting: "APPROVAL" },
+        context: { tid: order.tid, note, correctionRequestId, via: "ORDER_DESK" },
+      })
+      return { kind: "resubmitted" }
+    })
+  } catch (error) {
+    if (error instanceof Error && error.message === "ORDER_TRANSITION_CONFLICT") return { kind: "conflict" }
+    throw error
+  }
 }

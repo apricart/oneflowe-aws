@@ -39,6 +39,9 @@ export type GroupOrderChild = {
   createdAt: Date | null
   approvedAt: Date | null
   rejectionReason: string | null
+  /** Set when the group requester withdrew it before approval. */
+  cancelledAt: Date | null
+  cancellationReason: string | null
   /** Set while an approver has sent this pending order back for correction. */
   returnedForCorrectionAt: Date | null
   correctionRequestNote: string | null
@@ -147,6 +150,8 @@ export async function listGroupOrders({
       createdAt: orders.createdAt,
       approvedAt: orders.approvedAt,
       rejectionReason: orders.rejectionReason,
+      cancelledAt: orders.cancelledAt,
+      cancellationReason: orders.cancellationReason,
       returnedForCorrectionAt: orders.returnedForCorrectionAt,
       correctionRequestNote: orders.correctionRequestNote,
       approvalToken: orders.approvalToken,
@@ -183,6 +188,8 @@ export async function listGroupOrders({
       createdAt: row.createdAt,
       approvedAt: row.approvedAt,
       rejectionReason: row.rejectionReason,
+      cancelledAt: row.cancelledAt,
+      cancellationReason: row.cancellationReason,
       returnedForCorrectionAt: row.returnedForCorrectionAt,
       correctionRequestNote: row.correctionRequestNote,
       // The query above already pins every row to this user and tenant; the

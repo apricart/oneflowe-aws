@@ -1,4 +1,4 @@
-export type Role = "SUPER_ADMIN" | "HEAD_OFFICE" | "GROUP_USER" | "BRANCH_ADMIN" | "GROUP_ORDER_PORTAL" | "ORDER_PORTAL" | "VIEWER" | "ORDER_DESK" | "APRICART_EXECUTIVE"
+export type Role = "SUPER_ADMIN" | "HEAD_OFFICE" | "GROUP_USER" | "BRANCH_ADMIN" | "GROUP_ORDER_PORTAL" | "ORDER_PORTAL" | "VIEWER" | "ORDER_DESK" | "APRICART_EXECUTIVE" | "WAREHOUSE"
 
 /**
  * Validate if a string is a valid role
@@ -9,7 +9,7 @@ export type Role = "SUPER_ADMIN" | "HEAD_OFFICE" | "GROUP_USER" | "BRANCH_ADMIN"
  */
 export function isValidRole(role: unknown): role is Role {
   if (typeof role !== 'string') return false
-  const validRoles: Role[] = ['SUPER_ADMIN', 'HEAD_OFFICE', 'GROUP_USER', 'BRANCH_ADMIN', 'GROUP_ORDER_PORTAL', 'ORDER_PORTAL', 'VIEWER', 'ORDER_DESK', 'APRICART_EXECUTIVE']
+  const validRoles: Role[] = ['SUPER_ADMIN', 'HEAD_OFFICE', 'GROUP_USER', 'BRANCH_ADMIN', 'GROUP_ORDER_PORTAL', 'ORDER_PORTAL', 'VIEWER', 'ORDER_DESK', 'APRICART_EXECUTIVE', 'WAREHOUSE']
   return validRoles.includes(role as Role)
 }
 
@@ -86,6 +86,9 @@ export function hasRole(current: Role | undefined | null, allowed: Role[]): bool
 // APRICART_EXECUTIVE shares ORDER_DESK's level for the same reason: Apricart's
 // own cross-tenant staff, which no tenant administrator may create. It reads a
 // dashboard and acts on nothing (`lib/apricart-executive-access.ts`).
+//
+// WAREHOUSE shares it too: Apricart's warehouse staff, confined to the
+// branches Super Admin assigns (`lib/warehouse-access.ts`).
 const ROLE_HIERARCHY: Record<Role, number> = {
   'VIEWER': 1,
   'ORDER_PORTAL': 2,
@@ -95,6 +98,7 @@ const ROLE_HIERARCHY: Record<Role, number> = {
   'HEAD_OFFICE': 6,
   'ORDER_DESK': 7,
   'APRICART_EXECUTIVE': 7,
+  'WAREHOUSE': 7,
   'SUPER_ADMIN': 8
 }
 

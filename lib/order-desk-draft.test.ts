@@ -9,6 +9,7 @@ import {
   estimateDraftTotalCents,
   SCREENSHOT_MAX_BYTES,
   screenshotFileError,
+  unavailableDraftLines,
   type DeskCatalogueItem,
   type DeskDraft,
 } from "./order-desk-draft"
@@ -129,5 +130,29 @@ describe("the screenshot file", () => {
     expect(screenshotFileError({ type: "image/png", size: SCREENSHOT_MAX_BYTES + 1 })).toMatch(/4 MB/)
     expect(screenshotFileError({ type: "image/svg+xml", size: 10 })).toMatch(/PNG/)
     expect(screenshotFileError({ type: "application/pdf", size: 10 })).toMatch(/PNG/)
+  })
+})
+
+describe("lines the branch no longer offers", () => {
+  it("names filled-in lines missing from the catalogue, and nothing else", () => {
+    expect(unavailableDraftLines({ 1: "2", 2: "", 9: "3", 8: " " }, catalogue)).toEqual([9])
+  })
+
+  it("is empty when every chosen product is still offered, or nothing is chosen", () => {
+    expect(unavailableDraftLines({ 1: "2", 2: "4" }, catalogue)).toEqual([])
+    expect(unavailableDraftLines({}, catalogue)).toEqual([])
+  })
+
+  it("names every chosen line when the catalogue is empty", () => {
+    expect(unavailableDraftLines({ 1: "2", 2: "4" }, [])).toEqual([1, 2])
+  })
+
+  it("is exactly the lines that would stop the request being built", () => {
+    const quantities = { 1: "1", 9: "1" }
+    expect(buildDeskEditRequest({ quantities, notes: "", poNumber: "" }, catalogue))
+      .toEqual({ ok: false, error: "A product in this order is no longer available for this branch" })
+    const kept = Object.fromEntries(Object.entries(quantities)
+      .filter(([id]) => !unavailableDraftLines(quantities, catalogue).includes(Number(id))))
+    expect(buildDeskEditRequest({ quantities: kept, notes: "", poNumber: "" }, catalogue).ok).toBe(true)
   })
 })

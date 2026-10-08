@@ -35,6 +35,7 @@ import {
   SCREENSHOT_TYPES,
   screenshotFileError,
   type DeskCatalogueItem,
+  unavailableDraftLines,
   type DeskDraft,
   type DeskDraftCheck,
 } from "@/lib/order-desk-draft"
@@ -96,8 +97,8 @@ function CreatedPanel({
           {created.totalCents !== null && <p className="text-sm font-medium">{formatPKR(created.totalCents / 100)}</p>}
         </div>
         <p className="rounded-md bg-muted/50 p-3 text-sm text-muted-foreground">
-          It is <span className="font-medium text-foreground">Active</span> now — no approval needed. Once Super Admin
-          records the delivery, it shows under <span className="font-medium text-foreground">Ready to fulfil</span>.
+          It is <span className="font-medium text-foreground">awaiting approval</span> by an Apricart Executive. Once
+          approved and delivered, it shows under <span className="font-medium text-foreground">Ready to fulfil</span>.
         </p>
         <div className="flex flex-col justify-center gap-2 sm:flex-row">
           <Button onClick={onNext}>Create another order</Button>
@@ -498,27 +499,50 @@ function Checklist({ checks }: Readonly<{ checks: DeskDraftCheck[] }>) {
   )
 }
 
+/**
+ * Products chosen earlier that the branch no longer offers (the catalogue was
+ * refreshed after a product was hidden or unassigned). They have no row above,
+ * so they are named here with a way out; otherwise the order can never be sent.
+ */
+function UnavailableLines({ count, disabled, onRemove }: Readonly<{ count: number; disabled: boolean; onRemove: () => void }>) {
+  if (count === 0) return null
+  return (
+    <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 p-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+      <span>
+        {count === 1 ? "1 product you chose is" : `${count} products you chose are`} no longer available for this branch.
+      </span>
+      <Button type="button" size="sm" variant="outline" disabled={disabled} onClick={onRemove}>
+        Remove {count === 1 ? "it" : "them"}
+      </Button>
+    </div>
+  )
+}
+
 function SummaryPanel({
   organization,
   branchName,
   lines,
+  unavailableCount,
   estimatedCents,
   checks,
   formError,
   busy,
   submitting,
   onRemove,
+  onRemoveUnavailable,
   onSubmit,
 }: Readonly<{
   organization: Target | null
   branchName: string | null
   lines: SummaryLine[]
+  unavailableCount: number
   estimatedCents: number
   checks: DeskDraftCheck[]
   formError: string | null
   busy: boolean
   submitting: boolean
   onRemove: (inventoryId: number) => void
+  onRemoveUnavailable: () => void
   onSubmit: () => void
 }>) {
   const ready = checks.every((check) => check.done)
@@ -538,6 +562,7 @@ function SummaryPanel({
           <div className="space-y-2">
             <p className="text-xs uppercase tracking-wide text-muted-foreground">Products ({lines.length})</p>
             <SummaryLines lines={lines} disabled={busy} onRemove={onRemove} />
+            <UnavailableLines count={unavailableCount} disabled={busy} onRemove={onRemoveUnavailable} />
           </div>
           <div className="flex items-baseline justify-between border-t pt-3">
             <span className="text-sm font-medium">Estimated total</span>
@@ -555,7 +580,7 @@ function SummaryPanel({
           </Button>
           <p className="flex items-start gap-2 text-xs text-muted-foreground">
             <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-            The order is Active straight away — no approval needed. The final total is calculated when it is created.
+            An Apricart Executive approves the order before delivery. The final total is calculated when it is created.
           </p>
         </CardContent>
       </Card>
@@ -567,7 +592,7 @@ function SummaryPanel({
  * A new order in three steps — the customer, the products, where the order
  * came from — with a summary beside them that says what is still missing.
  * The order is created through the same endpoint every role uses and comes
- * back Active.
+ * back pending, for an Apricart Executive to approve.
  */
 export function NewDeskOrder({ onViewOrders }: Readonly<{ onViewOrders: () => void }>) {
   const [draft, setDraft] = useState<DeskDraft>(EMPTY_DRAFT)
@@ -602,6 +627,8 @@ export function NewDeskOrder({ onViewOrders }: Readonly<{ onViewOrders: () => vo
     const item = byId.get(line.organizationInventoryId)
     return item ? [{ ...line, item }] : []
   })
+  // Judged only once the catalogue has loaded, or every line would look unavailable.
+  const unavailable = catalogueData ? unavailableDraftLines(draft.quantities, catalogue) : []
 
   const update = (patch: Partial<DeskDraft>) => {
     setFormError(null)
@@ -741,12 +768,14 @@ export function NewDeskOrder({ onViewOrders }: Readonly<{ onViewOrders: () => vo
         organization={organization}
         branchName={branch?.name ?? null}
         lines={lines}
+        unavailableCount={unavailable.length}
         estimatedCents={estimateDraftTotalCents(draft, catalogue)}
         checks={deskDraftChecklist(draft)}
         formError={formError}
         busy={submitting || uploading}
         submitting={submitting}
         onRemove={(inventoryId) => setQuantity(inventoryId, 0)}
+        onRemoveUnavailable={() => { for (const inventoryId of unavailable) setQuantity(inventoryId, 0) }}
         onSubmit={() => { void submit() }}
       />
     </div>

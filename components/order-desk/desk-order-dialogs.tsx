@@ -19,12 +19,14 @@ import { Textarea } from "@/components/ui/textarea"
 import { toast } from "@/hooks/use-toast"
 import { fetcher } from "@/lib/fetcher"
 import type { FulfillmentStatus } from "@/lib/fulfillment-status"
+import { ORDER_CORRECTION_TEXT_MAX_LENGTH } from "@/lib/order-correction"
 import { CANCELLATION_REASON_MAX_LENGTH, type IntakeChannel } from "@/lib/order-desk-access"
 import {
   buildDeskEditRequest,
   buildDeskRefundRequest,
   estimateDraftTotalCents,
   NOTES_MAX_LENGTH,
+  unavailableDraftLines,
   type DeskCatalogueItem,
 } from "@/lib/order-desk-draft"
 import { MAX_PO_NUMBER_LENGTH } from "@/lib/purchase-order"
@@ -37,8 +39,13 @@ export type DeskOrder = {
   tid: string
   status: string
   fulfillmentStatus: FulfillmentStatus
+  /** Set while an Apricart Executive has it back with the desk for correction. */
+  returnedForCorrectionAt: string | null
+  correctionRequestNote: string | null
+  rejectionReason: string | null
   canEdit: boolean
   canCancel: boolean
+  canResubmit: boolean
   canFulfil: boolean
   canRequestRefund: boolean
   organizationId: number | null
@@ -103,6 +110,18 @@ export function EditDeskOrderDialog({ order, onClose, onSaved }: DialogProps) {
   )
   const catalogue = useMemo(() => data?.items ?? [], [data])
   const estimate = estimateDraftTotalCents({ quantities }, catalogue)
+  // Lines of this order the branch no longer offers. Judged only once the
+  // catalogue has loaded, or every line would look unavailable meanwhile.
+  const unavailable = data
+    ? unavailableDraftLines(quantities, catalogue).map((id) => ({
+      id,
+      name: order.items.find((item) => item.organizationInventoryId === id)?.productName ?? "A product",
+    }))
+    : []
+  const removeLine = (inventoryId: number) => {
+    setFormError(null)
+    setQuantities((current) => ({ ...current, [inventoryId]: "" }))
+  }
 
   const save = async () => {
     if (saving) return
@@ -174,6 +193,22 @@ export function EditDeskOrderDialog({ order, onClose, onSaved }: DialogProps) {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {unavailable.length > 0 && (
+          <div role="alert" className="space-y-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+            <p>No longer available for this branch. Remove these lines to save the order:</p>
+            <ul className="space-y-1">
+              {unavailable.map((line) => (
+                <li key={line.id} className="flex items-center justify-between gap-2">
+                  <span className="font-medium">{line.name}</span>
+                  <Button size="sm" variant="outline" disabled={saving} onClick={() => removeLine(line.id)}>
+                    Remove {line.name}
+                  </Button>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 
@@ -253,6 +288,69 @@ export function CancelDeskOrderDialog({ order, onClose, onSaved }: DialogProps) 
           <Button variant="destructive" onClick={() => { void cancel() }} disabled={saving}>
             {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Cancel order
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/**
+ * Send an order an Apricart Executive returned for correction back for
+ * approval. Edit it first if the correction is to the lines; the note is
+ * optional.
+ */
+export function ResubmitDeskOrderDialog({ order, onClose, onSaved }: DialogProps) {
+  const [note, setNote] = useState("")
+  const [saving, setSaving] = useState(false)
+  const [formError, setFormError] = useState<string | null>(null)
+
+  const resubmit = async () => {
+    if (saving) return
+    setSaving(true)
+    setFormError(null)
+    const trimmed = note.trim()
+    const result = await sendJson(`/api/v1/order-desk/orders/${order.id}/resubmit`, "POST", trimmed ? { note: trimmed } : {})
+    setSaving(false)
+    if (!result.ok) {
+      setFormError(result.message || "The order could not be resubmitted")
+      return
+    }
+    toast({ title: order.tid, description: "Sent back for approval" })
+    onSaved()
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open && !saving) onClose() }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Resubmit {order.tid} for approval?</DialogTitle>
+          <DialogDescription>
+            The executive asked for a correction. Edit the order first if the lines need to change.
+          </DialogDescription>
+        </DialogHeader>
+        {order.correctionRequestNote && (
+          <p className="whitespace-pre-line rounded-md bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+            {order.correctionRequestNote}
+          </p>
+        )}
+        <div className="space-y-1">
+          <Label htmlFor="desk-resubmit-note">Note for the executive (optional)</Label>
+          <Textarea
+            id="desk-resubmit-note"
+            maxLength={ORDER_CORRECTION_TEXT_MAX_LENGTH}
+            value={note}
+            disabled={saving}
+            onChange={(event) => { setFormError(null); setNote(event.target.value) }}
+            placeholder="e.g. Quantities corrected with the customer"
+          />
+        </div>
+        {formError && <p role="alert" className="text-sm text-destructive">{formError}</p>}
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={saving}>Not yet</Button>
+          <Button onClick={() => { void resubmit() }} disabled={saving}>
+            {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            Resubmit
           </Button>
         </DialogFooter>
       </DialogContent>

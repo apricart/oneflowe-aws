@@ -80,17 +80,27 @@ describe("the challan routes", () => {
   it("attach the challan inside the delivery's own transaction", () => {
     const progress = read("app/api/v1/orders/[id]/fulfillment-status/route.ts")
     expect(progress).toContain('requireApiRole(["SUPER_ADMIN"])')
-    expect(progress).toContain("await attachDeliveryChallan(tx, {")
-    expect(progress).toContain("if (!attached) throw new Error(DELIVERY_CHALLAN_NOT_ATTACHABLE)")
+    // Super Admin's delivery still needs its challan; the shared transition
+    // (also the warehouse's, where it is optional) attaches it.
+    expect(progress).toContain("challanRequired: true")
+    const transition = read("lib/server/order-fulfillment-progress.ts")
+    expect(transition).toContain("await attachDeliveryChallan(tx, {")
+    expect(transition).toContain("if (!attached) throw new Error(DELIVERY_CHALLAN_NOT_ATTACHABLE)")
+    expect(transition).toContain("nextStatus === \"DELIVERED\" && challanRequired && deliveryChallanId === null")
     const store = read("lib/server/delivery-challan.ts")
     expect(store).toContain("eq(orderDeliveryChallans.uploadedByUserId, input.actorUserId)")
     expect(store).toContain("isNull(orderDeliveryChallans.attachedAt)")
   })
 
-  it("let only Super Admin upload one, whoever else the upload route admits", () => {
+  it("let only Super Admin and the warehouse upload one, whoever else the upload route admits", () => {
     const upload = read("app/api/v1/upload/image/route.ts")
     expect(upload).toContain("if (formData.get(\"purpose\") === DELIVERY_CHALLAN_UPLOAD_PURPOSE)")
-    expect(upload).toMatch(/async function storeDeliveryChallan[\s\S]*?if \(userRole !== "SUPER_ADMIN"\)/)
+    expect(upload).toMatch(/async function storeDeliveryChallan[\s\S]*?if \(userRole !== "SUPER_ADMIN" && !isWarehouseRole\(userRole\)\)/)
+    // The warehouse only for an order at a branch it serves
+    // (plans/OF-WAREHOUSE-warehouse-fulfilment-role.md) ...
+    expect(upload).toMatch(/async function storeDeliveryChallan[\s\S]*?warehouseChallanUploadRefusal\(actor\.id, orderId\)/)
+    // ... and never anything but a challan.
+    expect(upload).toMatch(/DELIVERY_CHALLAN_UPLOAD_PURPOSE\)[\s\S]*?if \(isWarehouseRole\(userRole\)\) \{\s*return NextResponse\.json\(\{ error: "Forbidden" \}, \{ status: 403 \}\)/)
   })
 
   it("read with exactly the order detail's rule", () => {

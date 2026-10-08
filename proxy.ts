@@ -29,6 +29,14 @@ import {
   isApricartExecutiveApiRequestAllowed,
   isApricartExecutiveRole,
 } from "@/lib/apricart-executive-access"
+import {
+  WAREHOUSE_AREAS,
+  WAREHOUSE_HOME,
+  WAREHOUSE_MANAGER_ROLES,
+  WAREHOUSE_TEAM_AREA,
+  isWarehouseApiRequestAllowed,
+  isWarehouseRole,
+} from "@/lib/warehouse-access"
 
 const protectedPrefixes = [
   "/approvals",
@@ -61,6 +69,8 @@ const protectedPrefixes = [
   "/settings",
   "/shop",
   "/support",
+  "/warehouse",
+  "/warehouse-team",
   "/users",
 ]
 const SESSION_COOKIE_NAMES = [
@@ -224,6 +234,15 @@ async function handleApiRequest(req: NextRequest, pathname: string, response: Ne
       pathname,
     )
   }
+  // And for Apricart's warehouse, which also has no organization of its own:
+  // its queue, its progress write and the challan upload, nothing else.
+  if (isWarehouseRole((token as any)?.role) && !isWarehouseApiRequestAllowed(req.method, pathname)) {
+    logger("middleware", { reason: "warehouse_api_not_allowed", path: pathname })
+    return withSecurityHeaders(
+      NextResponse.json({ error: "Forbidden" }, { status: 403 }),
+      pathname,
+    )
+  }
   return withSecurityHeaders(response, pathname)
 }
 
@@ -335,11 +354,13 @@ function adminPortalRedirect(pathname: string): string | null {
  *     or support pages, which are scoped to a tenant it does not belong to.
  *   * APRICART_EXECUTIVE — Apricart's management: the delivery dashboard and
  *     nothing else, for the same reason.
+ *   * WAREHOUSE — Apricart's warehouse: its delivery queue, for the same reason.
  */
 const SINGLE_AREA_ROLES: ReadonlyArray<{ matches: (role: unknown) => boolean; areas: readonly string[]; home: string }> = [
   { matches: isViewerRole, areas: VIEWER_AREAS, home: VIEWER_HOME },
   { matches: isOrderDeskRole, areas: ORDER_DESK_AREAS, home: ORDER_DESK_HOME },
   { matches: isApricartExecutiveRole, areas: APRICART_EXECUTIVE_AREAS, home: APRICART_EXECUTIVE_HOME },
+  { matches: isWarehouseRole, areas: WAREHOUSE_AREAS, home: WAREHOUSE_HOME },
 ]
 
 /**
@@ -425,11 +446,18 @@ const ROLE_GATED_AREAS: ReadonlyArray<{ prefix: string; roles: readonly string[]
   // for Super Admin. Both endpoints behind them re-check the role.
   { prefix: APRICART_EXECUTIVE_HOME, roles: ["APRICART_EXECUTIVE"], home: "/dashboard" },
   { prefix: DELIVERY_DASHBOARD_AREA, roles: ["SUPER_ADMIN"], home: "/dashboard" },
+  // The warehouse's own workspace; every endpoint behind it re-checks the role
+  // and the branch reach.
+  { prefix: WAREHOUSE_HOME, roles: ["WAREHOUSE"], home: "/dashboard" },
+  // Assigning warehouse accounts their branches is Super Admin's alone.
+  { prefix: WAREHOUSE_TEAM_AREA, roles: WAREHOUSE_MANAGER_ROLES, home: "/dashboard" },
 ]
 
 /** Where to send a caller whose role does not hold the area, or null. */
 function roleGatedAreaRedirect(pathname: string, role: string | undefined): string | null {
-  const area = ROLE_GATED_AREAS.find((candidate) => pathname.startsWith(candidate.prefix))
+  // On a path boundary, like every other area check here: "/warehouse-team"
+  // is not inside "/warehouse".
+  const area = ROLE_GATED_AREAS.find((candidate) => pathMatchesPrefix(pathname, candidate.prefix))
   if (!area || (role !== undefined && area.roles.includes(role))) return null
   return area.home
 }

@@ -43,7 +43,8 @@ describe("a new desk order", () => {
   it("labels the channel 'Order channel' and marks the choice", () => {
     swr.targets = [{ id: 1, name: "Meezan", code: null, branches: [] }]
     render(<NewDeskOrder onViewOrders={vi.fn()} />)
-    expect(screen.getByText("Order channel")).toBeTruthy()
+    // The fieldset is named by its legend; the checklist beside it repeats the words.
+    expect(screen.getByRole("group", { name: "Order channel" })).toBeTruthy()
     expect(screen.queryByText("Received by")).toBeNull()
 
     const whatsapp = screen.getByRole("button", { name: "WhatsApp" })

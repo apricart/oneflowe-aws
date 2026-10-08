@@ -1,20 +1,32 @@
 "use client"
 
 import { useSession } from "next-auth/react"
+import useSWR from "swr"
 import { Gauge } from "lucide-react"
 
 import { OrderPortalProfileMenu } from "@/components/auth/order-portal-profile-menu"
 import { DeliveryDashboard } from "@/components/delivery-dashboard/delivery-dashboard"
+import { EXECUTIVE_APPROVALS_KEY_PREFIX, ExecutiveApprovals } from "@/components/executive-approvals/executive-approvals"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { APRICART_EXECUTIVE_LABEL } from "@/lib/apricart-executive-access"
+import type { ExecutiveApprovalCounts } from "@/lib/executive-approval-query"
+import { fetcher } from "@/lib/fetcher"
 
 /**
- * The Apricart Executive's workspace: the delivery dashboard under a header of
- * its own. Self-contained, like the Order Desk — every call made from here is
- * on the role's allowlist (`lib/apricart-executive-access.ts`).
+ * The Apricart Executive's workspace: the delivery dashboard, and the Order
+ * Desk orders waiting for their approval, under a header of its own.
+ * Self-contained, like the Order Desk — every call made from here is on the
+ * role's allowlist (`lib/apricart-executive-access.ts`).
  */
 export function ExecutiveWorkspace() {
   const { data: session } = useSession()
   const user = session?.user as { fullName?: string; name?: string; email?: string } | undefined
+  // One row is enough: only the tab counts are read.
+  const { data: approvals } = useSWR<{ counts: ExecutiveApprovalCounts }>(
+    `${EXECUTIVE_APPROVALS_KEY_PREFIX}?status=awaiting_approval&limit=1`,
+    fetcher,
+  )
+  const waiting = approvals?.counts.awaiting_approval ?? 0
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
@@ -26,7 +38,7 @@ export function ExecutiveWorkspace() {
             </span>
             <div className="min-w-0">
               <h1 className="truncate text-base font-semibold text-slate-900 dark:text-white">Apricart OneFlowe</h1>
-              <p className="truncate text-xs text-muted-foreground">Delivery performance across every client</p>
+              <p className="truncate text-xs text-muted-foreground">Delivery performance and Order Desk approvals</p>
             </div>
           </div>
           <OrderPortalProfileMenu
@@ -37,7 +49,25 @@ export function ExecutiveWorkspace() {
         </div>
       </header>
       <main className="mx-auto max-w-7xl px-4 py-6">
-        <DeliveryDashboard />
+        <Tabs defaultValue="delivery" className="space-y-6">
+          <TabsList>
+            <TabsTrigger value="delivery">Delivery</TabsTrigger>
+            <TabsTrigger value="approvals" className="gap-2">
+              Approvals
+              {waiting > 0 && (
+                <span className="rounded-full bg-indigo-600 px-1.5 text-xs font-semibold tabular-nums text-white">
+                  <span className="sr-only">, waiting: </span>{waiting}
+                </span>
+              )}
+            </TabsTrigger>
+          </TabsList>
+          <TabsContent value="delivery">
+            <DeliveryDashboard />
+          </TabsContent>
+          <TabsContent value="approvals">
+            <ExecutiveApprovals />
+          </TabsContent>
+        </Tabs>
       </main>
     </div>
   )

@@ -42,6 +42,7 @@ export function OrderExport({ fetchOrders, totalOrders, role, statusContext = "d
             "ID": order.id,
             "TID": order.tid,
             "Date": new Date(order.createdAt).toLocaleDateString(),
+            "Group": order.groupName || "-",
             "Branch": order.branchName || "-",
             "Status": statusDisplay.orderStatus.label,
             "Fulfillment Status": statusDisplay.fulfillmentStatus || "-",
@@ -57,6 +58,7 @@ export function OrderExport({ fetchOrders, totalOrders, role, statusContext = "d
                 "ID": data.ID,
                 "TID": data.TID,
                 "Organization": order.organizationName || "-",
+                "Group": data.Group,
                 "Branch": data.Branch,
                 "Status": data.Status,
                 "Fulfillment Status": data["Fulfillment Status"],
@@ -104,7 +106,7 @@ export function OrderExport({ fetchOrders, totalOrders, role, statusContext = "d
         if (role) doc.text(`Role: ${role}`, 14, 36)
 
         const isSuperAdmin = role === "SUPER_ADMIN"
-        const headers = ["ID", "TID", "Date", "Branch", "Status", "Fulfillment", "Payment", "Refund", "Amount", "Items", "Reason"]
+        const headers = ["ID", "TID", "Date", "Group", "Branch", "Status", "Fulfillment", "Payment", "Refund", "Amount", "Items", "Reason"]
         if (isSuperAdmin) headers.splice(2, 0, "Organization")
 
         const tableData = orders.map(order => {
@@ -114,6 +116,7 @@ export function OrderExport({ fetchOrders, totalOrders, role, statusContext = "d
                 order.id,
                 order.tid,
                 new Date(order.createdAt).toLocaleDateString(),
+                order.groupName || "-",
                 order.branchName || "-",
                 statusDisplay.orderStatus.label,
                 statusDisplay.fulfillmentStatus || "-",

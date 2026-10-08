@@ -176,7 +176,7 @@ describe("Refund desk", () => {
   })
 
   it("reports the server's refusal of a refund", async () => {
-    routes({ status: 400, body: { error: "Refunds are only allowed for orders in the current month." } })
+    routes({ status: 400, body: { error: "Order in REJECTED state is not eligible for a refund." } })
     renderWithApp(<RefundsPage />)
     await search("TID-0041")
     await screen.findByText("Paper")
@@ -185,7 +185,7 @@ describe("Refund desk", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Confirm Refund" }))
     await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({
       title: "Refund Failed",
-      description: "Refunds are only allowed for orders in the current month.",
+      description: "Order in REJECTED state is not eligible for a refund.",
     })))
   })
 

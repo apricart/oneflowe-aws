@@ -1,10 +1,12 @@
 import "server-only"
 
 import { and, eq } from "drizzle-orm"
+import { NextResponse } from "next/server"
 
 import { auditLogs, orders } from "@/db/schema"
 import { db } from "@/lib/db"
 import { isOrderIntakeAttachmentKey, ORDER_INTAKE_UPLOAD_AUDIT_ACTION } from "@/lib/order-desk-access"
+import { contentTypeForKey, getImage, isImageStorageConfigured } from "@/lib/server/image-storage"
 
 /**
  * The screenshot an Order Desk user attaches to an order.
@@ -15,8 +17,17 @@ import { isOrderIntakeAttachmentKey, ORDER_INTAKE_UPLOAD_AUDIT_ACTION } from "@/
  * desk user could attach — and so read — another's screenshot, or two orders
  * could share one customer message. `orders_intake_attachment_key_uq` backs the
  * "only once" half up in the database.
+ *
+ * The one order that may already hold the key is the one this same submission
+ * created: same desk user, same idempotency key. A retry whose response was lost
+ * must reach the route's replay check and get its order back, not be told the
+ * screenshot belongs to "another" order.
  */
-export async function deskAttachmentRefusal(input: { userId: string; key: string }): Promise<string | null> {
+export async function deskAttachmentRefusal(input: {
+  userId: string
+  key: string
+  idempotencyKey: string
+}): Promise<string | null> {
   if (!isOrderIntakeAttachmentKey(input.key)) {
     return "intakeAttachmentKey is not a screenshot uploaded through the Order Desk"
   }
@@ -32,9 +43,45 @@ export async function deskAttachmentRefusal(input: { userId: string; key: string
   if (!upload) return "That screenshot was not uploaded by you"
 
   const [existing] = await db
-    .select({ id: orders.id })
+    .select({ createdByUserId: orders.createdByUserId, idempotencyKey: orders.idempotencyKey })
     .from(orders)
     .where(eq(orders.intakeAttachmentKey, input.key))
     .limit(1)
-  return existing ? "That screenshot is already attached to another order" : null
+  if (!existing) return null
+  const sameSubmission = existing.createdByUserId === input.userId && existing.idempotencyKey === input.idempotencyKey
+  return sameSubmission ? null : "That screenshot is already attached to another order"
+}
+
+/**
+ * Stream one intake screenshot back, for a caller that has already decided
+ * the reader may see this order — the desk through its reach, an Apricart
+ * Executive through its approval reach. Anything unservable is a 404, the same
+ * as "no such order", so the response cannot be used to probe.
+ *
+ * It carries a customer's personal details: never in a shared cache, never
+ * sniffed, and sandboxed so it can run nothing even if it were not an image.
+ */
+export async function intakeAttachmentResponse(key: string | null | undefined): Promise<NextResponse> {
+  if (!isOrderIntakeAttachmentKey(key)) return NextResponse.json({ error: "Not found" }, { status: 404 })
+  if (!isImageStorageConfigured()) {
+    return NextResponse.json({ error: "Image storage is not configured" }, { status: 503 })
+  }
+  const object = await getImage(key)
+  if (!object?.body) return NextResponse.json({ error: "Not found" }, { status: 404 })
+
+  const headers = new Headers({
+    // From the key the server generated, never from what the browser sent.
+    "Content-Type": contentTypeForKey(key),
+    // One customer's material: never in a shared cache.
+    "Cache-Control": "private, no-store, max-age=0",
+    "X-Content-Type-Options": "nosniff",
+    // Shown in the browser so the message can be read. Safe to inline: every
+    // upload was re-encoded through sharp into a plain raster, and the sandbox
+    // policy keeps the response from running anything regardless.
+    "Content-Disposition": "inline",
+    "Content-Security-Policy": "default-src 'none'; img-src 'self'; sandbox",
+  })
+  if (object.contentLength !== undefined) headers.set("Content-Length", String(object.contentLength))
+
+  return new NextResponse(object.body.transformToWebStream(), { headers })
 }

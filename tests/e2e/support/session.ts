@@ -7,6 +7,7 @@ import {
   type BrowserContext,
   type Page,
 } from "@playwright/test"
+import { Pool } from "pg"
 
 import { E2E_BASE_URL, E2E_PASSWORD } from "./environment"
 
@@ -157,11 +158,43 @@ export async function approveOrder(page: Page, orderId: number): Promise<string>
   return String(body.approvalToken)
 }
 
-/** Walk an approved order's delivery progress to DELIVERED, one step at a time, as Super Admin. */
+/**
+ * An uploaded, not yet attached delivery challan for one order, as the upload
+ * route would leave it — the browser suite has no S3 to upload to. Mirrors
+ * `stageDeliveryChallan` in `tests/integration/helpers/delivery-challan-fixtures.ts`.
+ */
+export async function stageDeliveryChallan(orderId: number, uploadedByUserId: string): Promise<number> {
+  const pool = new Pool({ connectionString: testDatabaseUrl(), max: 1 })
+  try {
+    const { rows } = await pool.query<{ id: number }>(
+      `INSERT INTO order_delivery_challans
+         (order_id, organization_id, branch_id, storage_key, file_name, content_type, size_bytes, uploaded_by_user_id)
+       SELECT id, organization_id, branch_id, $2, 'delivery-challan.pdf', 'application/pdf', 512, $3
+         FROM orders WHERE id = $1
+       RETURNING id`,
+      [orderId, `delivery-challan/${randomUUID()}.pdf`, uploadedByUserId],
+    )
+    if (!rows[0]) throw new Error(`Order ${orderId} not found for a delivery challan`)
+    return rows[0].id
+  } finally {
+    await pool.end()
+  }
+}
+
+/**
+ * Walk an approved order's delivery progress to DELIVERED, one step at a time,
+ * as Super Admin — who may not mark it delivered without a challan.
+ */
 export async function markDelivered(page: Page, orderId: number): Promise<void> {
-  for (const fulfillmentStatus of ["IN_PROCESS", "OUT_FOR_DELIVERY", "DELIVERED"]) {
+  for (const fulfillmentStatus of ["IN_PROCESS", "OUT_FOR_DELIVERY"]) {
     await expectStatus(await post(page, `/api/v1/orders/${orderId}/fulfillment-status`, { fulfillmentStatus }))
   }
+  const session = await responseJson(await getReconnecting(page, `${E2E_BASE_URL}/api/auth/session`))
+  const deliveryChallanId = await stageDeliveryChallan(orderId, String(session.user?.id))
+  await expectStatus(await post(page, `/api/v1/orders/${orderId}/fulfillment-status`, {
+    fulfillmentStatus: "DELIVERED",
+    deliveryChallanId,
+  }))
 }
 
 export async function fulfilOrder(page: Page, orderId: number, approvalToken: string): Promise<void> {

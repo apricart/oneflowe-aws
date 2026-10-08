@@ -77,7 +77,7 @@ export type OrderCorrectionHistoryEntry = {
   requestedAt: string
   requestedByName: string | null
   requestedByRole: string
-  resolution: "RESUBMITTED" | "REJECTED" | null
+  resolution: "RESUBMITTED" | "REJECTED" | "CANCELLED" | null
   resolvedAt: string | null
   resolvedByName: string | null
   resolvedByRole: string | null
@@ -90,6 +90,8 @@ const ROLE_LABELS: Record<string, string> = {
   GROUP_USER: "Group User",
   ORDER_PORTAL: "Order Portal",
   GROUP_ORDER_PORTAL: "Group Order Portal",
+  APRICART_EXECUTIVE: "Apricart Executive",
+  ORDER_DESK: "Order Desk",
 }
 
 function who(name: string | null, role: string | null): string {
@@ -138,6 +140,11 @@ export function OrderCorrectionHistory({
             {entry.resolution === "REJECTED" && (
               <p className="mt-2 font-medium text-rose-700 dark:text-rose-300">
                 Closed — order rejected by {who(entry.resolvedByName, entry.resolvedByRole)}
+              </p>
+            )}
+            {entry.resolution === "CANCELLED" && (
+              <p className="mt-2 font-medium text-slate-600 dark:text-slate-300">
+                Closed — order cancelled by {who(entry.resolvedByName, entry.resolvedByRole)}
               </p>
             )}
           </li>

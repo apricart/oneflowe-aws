@@ -93,7 +93,7 @@ export async function resolveBranchPaymentControl(
 ): Promise<BranchPaymentControl> {
   const overdue = await overduePaymentSource(client, scope, now)
   const exception = await loadLatestException(client, scope.branchId)
-  const status = resolvePaymentControl({ overdue, exception, now })
+  const status = resolvePaymentControl({ overdue, exception, now, threshold: overdue.blockThreshold })
   return { ...status, exception }
 }
 

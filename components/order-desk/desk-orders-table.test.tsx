@@ -21,8 +21,12 @@ const order = (id: number, overrides: Partial<DeskOrder> = {}): DeskOrder => ({
   tid: `TID-${id}`,
   status: "APPROVED",
   fulfillmentStatus: "NOT_STARTED",
-  canEdit: true,
+  returnedForCorrectionAt: null,
+  correctionRequestNote: null,
+  rejectionReason: null,
+  canEdit: false,
   canCancel: true,
+  canResubmit: false,
   canFulfil: false,
   canRequestRefund: false,
   organizationId: 1,
@@ -50,7 +54,15 @@ const order = (id: number, overrides: Partial<DeskOrder> = {}): DeskOrder => ({
 function page(items: DeskOrder[], readyToFulfil = 0) {
   return {
     items,
-    counts: { awaiting_delivery: 4, ready_to_fulfil: readyToFulfil, fulfilled: 7, cancelled: 1, all: 12 + readyToFulfil },
+    counts: {
+      awaiting_approval: 5,
+      awaiting_delivery: 4,
+      ready_to_fulfil: readyToFulfil,
+      fulfilled: 7,
+      rejected: 2,
+      cancelled: 1,
+      all: 19 + readyToFulfil,
+    },
     pagination: { page: 1, limit: 20, total: items.length, totalPages: 1 },
   }
 }
@@ -61,19 +73,61 @@ beforeEach(() => {
 afterEach(() => cleanup())
 
 describe("the desk's orders", () => {
-  it("shows every tab with its count, starting on Awaiting delivery", () => {
+  it("shows every tab with its count, starting on Awaiting approval", () => {
     swr.page = page([order(1)], 2)
     render(<DeskOrdersTable />)
     const tabs = within(screen.getByRole("tablist", { name: "Order status" })).getAllByRole("tab")
     expect(tabs.map((tab) => tab.textContent)).toEqual([
+      "Awaiting approval5",
       "Awaiting delivery4",
       "Ready to fulfil2",
       "Fulfilled7",
+      "Rejected2",
       "Cancelled1",
-      "All orders14",
+      "All orders21",
     ])
     expect(tabs[0].getAttribute("aria-selected")).toBe("true")
-    expect(swr.keys.some((key) => key.includes("status=awaiting_delivery"))).toBe(true)
+    expect(swr.keys.some((key) => key.includes("status=awaiting_approval"))).toBe(true)
+  })
+
+  it("offers edit and cancel while an order awaits an executive's approval, and says who it is waiting on", () => {
+    swr.page = page([order(7, { status: "PENDING", canEdit: true, canCancel: true })])
+    render(<DeskOrdersTable />)
+    const card = screen.getByRole("article")
+    expect(within(card).getAllByText("Awaiting approval").length).toBeGreaterThan(0)
+    expect(within(card).getByText("Waiting for an Apricart Executive to approve")).toBeTruthy()
+    expect(within(card).getByRole("button", { name: "Edit" })).toBeTruthy()
+    expect(within(card).getByRole("button", { name: "Cancel order" })).toBeTruthy()
+    expect(within(card).queryByRole("button", { name: /Resubmit/ })).toBeNull()
+    expect(screen.queryByLabelText(/Delivery progress/)).toBeNull()
+  })
+
+  it("shows what the executive asked for on a returned order, and offers Resubmit", () => {
+    swr.page = page([order(8, {
+      status: "PENDING",
+      returnedForCorrectionAt: "2026-10-06T09:00:00.000Z",
+      correctionRequestNote: "Customer wanted 3 kg, not 2",
+      canEdit: true,
+      canCancel: true,
+      canResubmit: true,
+    })])
+    render(<DeskOrdersTable />)
+    const card = screen.getByRole("article")
+    expect(within(card).getByText("Returned for correction")).toBeTruthy()
+    expect(within(card).getByText(/Customer wanted 3 kg, not 2/)).toBeTruthy()
+    expect(within(card).queryByText("Waiting for an Apricart Executive to approve")).toBeNull()
+    expect(within(card).getByRole("button", { name: "Resubmit for approval" })).toBeTruthy()
+    expect(within(card).getByRole("button", { name: "Edit" })).toBeTruthy()
+  })
+
+  it("shows why an executive rejected an order, and no actions", () => {
+    swr.page = page([order(9, { status: "REJECTED", canCancel: false, rejectionReason: "Duplicate of TID-7" })])
+    render(<DeskOrdersTable initialTab="rejected" />)
+    const card = screen.getByRole("article")
+    expect(within(card).getAllByText("Rejected").length).toBeGreaterThan(0)
+    expect(within(card).getByText(/Duplicate of TID-7/)).toBeTruthy()
+    expect(within(card).queryAllByRole("button").map((button) => button.textContent)).toEqual(["Show 1 item"])
+    expect(swr.keys.some((key) => key.includes("status=rejected"))).toBe(true)
   })
 
   it("points the desk at orders ready to fulfil, and goes there in one click", () => {
@@ -84,13 +138,14 @@ describe("the desk's orders", () => {
     expect(swr.keys.some((key) => key.includes("status=ready_to_fulfil"))).toBe(true)
   })
 
-  it("offers edit and cancel while an order awaits delivery, and says who it is waiting on", () => {
+  it("offers only cancel once approved and awaiting delivery, and says who it is waiting on", () => {
     swr.page = page([order(1)])
-    render(<DeskOrdersTable />)
+    render(<DeskOrdersTable initialTab="awaiting_delivery" />)
     const card = screen.getByRole("article")
     expect(within(card).getAllByText("Awaiting delivery").length).toBeGreaterThan(0)
     expect(within(card).getByText("Waiting for Super Admin to record delivery")).toBeTruthy()
-    expect(within(card).getByRole("button", { name: "Edit" })).toBeTruthy()
+    // An approved order's lines are fixed: an edit would change what was approved.
+    expect(within(card).queryByRole("button", { name: "Edit" })).toBeNull()
     expect(within(card).getByRole("button", { name: "Cancel order" })).toBeTruthy()
     expect(within(card).queryByRole("button", { name: /Fulfil/ })).toBeNull()
   })
@@ -122,6 +177,23 @@ describe("the desk's orders", () => {
     expect(screen.getByLabelText("Delivery progress: Fulfilled")).toBeTruthy()
   })
 
+  it("keeps a fully refunded order on the Fulfilled stage, says so, and offers nothing more", () => {
+    swr.page = page([order(6, {
+      status: "REFUNDED",
+      fulfillmentStatus: "DELIVERED",
+      canEdit: false,
+      canCancel: false,
+      refundedCents: 150_000,
+    })])
+    render(<DeskOrdersTable initialTab="fulfilled" />)
+    const card = screen.getByRole("article")
+    expect(within(card).getByText("Fully refunded")).toBeTruthy()
+    expect(within(card).getAllByText("Fulfilled").length).toBeGreaterThan(0)
+    expect(within(card).getByText(/^Refunded/)).toBeTruthy()
+    expect(within(card).queryAllByRole("button").map((button) => button.textContent)).toEqual(["Show 1 item"])
+    expect(swr.keys.some((key) => key.includes("status=fulfilled"))).toBe(true)
+  })
+
   it("shows why a cancelled order was cancelled, and no actions", () => {
     swr.page = page([order(4, {
       status: "CANCELLED",
@@ -147,6 +219,6 @@ describe("the desk's orders", () => {
   it("says plainly when a tab is empty", () => {
     swr.page = page([])
     render(<DeskOrdersTable />)
-    expect(screen.getByText("No orders are waiting for delivery.")).toBeTruthy()
+    expect(screen.getByText("No orders are waiting for approval.")).toBeTruthy()
   })
 })

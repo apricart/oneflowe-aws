@@ -14,6 +14,9 @@ import {
   numeric,
   check,
   date,
+  foreignKey,
+  unique,
+  type PgTableExtraConfigValue,
 } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
@@ -48,6 +51,15 @@ export const organizations = pgTable(
     blockOrderingOnUnacknowledgedDeliveries: boolean("block_ordering_on_unacknowledged_deliveries")
       .notNull()
       .default(false),
+    // How many of each a branch may hold before it stops ordering, while the
+    // matching block is on. Super Admin only; 1..100 (lib/ordering-block-threshold.ts),
+    // default 2 — the fixed value before it was configurable.
+    unpaidInvoiceBlockThreshold: integer("unpaid_invoice_block_threshold")
+      .notNull()
+      .default(2),
+    unacknowledgedDeliveryBlockThreshold: integer("unacknowledged_delivery_block_threshold")
+      .notNull()
+      .default(2),
     // Whether this tenant's orders are checked against, and held from, a branch
     // budget (lib/server/organization-budget-policy.ts). The column default is
     // true so existing tenants and directly inserted rows keep their budget
@@ -91,6 +103,15 @@ export const organizations = pgTable(
       "organizations_email_domain_shape_ck",
       sql`${t.emailDomain} IS NULL OR (${t.emailDomain} = lower(${t.emailDomain}) AND ${t.emailDomain} ~ '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$')`,
     ),
+    // ORDERING_BLOCK_THRESHOLD_MIN..MAX in lib/ordering-block-threshold.ts.
+    check(
+      "organizations_unpaid_invoice_block_threshold_ck",
+      sql`${t.unpaidInvoiceBlockThreshold} BETWEEN 1 AND 100`,
+    ),
+    check(
+      "organizations_unacknowledged_delivery_block_threshold_ck",
+      sql`${t.unacknowledgedDeliveryBlockThreshold} BETWEEN 1 AND 100`,
+    ),
   ],
 )
 
@@ -126,7 +147,9 @@ export const branches = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => [
+  // Annotated: this table and the composite keys reference each other in a
+  // cycle (branches -> groups -> users -> branches) that inference cannot close.
+  (t): PgTableExtraConfigValue[] => [
     index("branches_org_idx").on(t.organizationId),
     index("branches_name_idx").on(t.name),
     index("branches_cost_center_idx").on(t.costCenterId),
@@ -135,12 +158,29 @@ export const branches = pgTable(
       .where(sql`${t.externalSource} IS NOT NULL AND ${t.externalId} IS NOT NULL`),
     index("branches_status_idx").on(t.status),
     index("branches_group_idx").on(t.groupId),
+    // The warehouse city key; the expression must stay identical to
+    // branchCityKeySql (lib/server/branch-city-key.ts) or the index is not used.
+    // See plans/OF-WAREHOUSE-city-assignments.md.
+    index("branches_city_key_idx").on(sql`lower(btrim(regexp_replace(${t.city}, '\\s+', ' ', 'g')))`),
     check("branches_region_ck", sql`${t.region} IS NULL OR ${t.region} IN ('NORTH', 'CENTRAL', 'SOUTH')`),
     check(
       "branches_external_identity_pair_ck",
       sql`(${t.externalSource} IS NULL) = (${t.externalId} IS NULL)
         AND (${t.externalSource} IS NULL OR (btrim(${t.externalSource}) <> '' AND btrim(${t.externalId}) <> ''))`,
     ),
+    // Composite target for the (branch_id, organization_id) foreign keys: every
+    // *_branch_org_fk / *_group_org_fk makes the database refuse a row whose
+    // branch or group belongs to another organization than the row says.
+    // See plans/OF-DB-tenant-composite-foreign-keys.md.
+    unique("branches_id_organization_uq").on(t.id, t.organizationId),
+    // The migration writes ON DELETE SET NULL (group_id) — the column list, which
+    // Drizzle cannot express, leaves organization_id alone. There was no key
+    // here before, so deleting the parent must keep succeeding.
+    foreignKey({
+      name: "branches_group_org_fk",
+      columns: [t.groupId, t.organizationId],
+      foreignColumns: [groups.id, groups.organizationId],
+    }).onDelete("set null"),
   ],
 )
 
@@ -222,7 +262,9 @@ export const users = pgTable(
     lastFailedLoginAt: timestamp("last_failed_login_at", { withTimezone: true }),
     lockoutUntil: timestamp("lockout_until", { withTimezone: true }),
   },
-  (t) => [
+  // Annotated: this table and the composite keys reference each other in a
+  // cycle (branches -> groups -> users -> branches) that inference cannot close.
+  (t): PgTableExtraConfigValue[] => [
     uniqueIndex("users_username_idx").on(t.username),
     index("users_email_idx").on(t.email),
     index("users_role_idx").on(t.roleId),
@@ -241,6 +283,14 @@ export const users = pgTable(
       sql`(${t.externalSource} IS NULL) = (${t.externalId} IS NULL)
         AND (${t.externalSource} IS NULL OR (btrim(${t.externalSource}) <> '' AND btrim(${t.externalId}) <> ''))`,
     ),
+    // The migration writes ON DELETE SET NULL (branch_id) — the column list, which
+    // Drizzle cannot express, leaves organization_id alone. There was no key
+    // here before, so deleting the parent must keep succeeding.
+    foreignKey({
+      name: "users_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }).onDelete("set null"),
   ],
 )
 
@@ -393,6 +443,11 @@ export const inventory = pgTable(
     index("inventory_branch_idx").on(t.branchId),
     index("inventory_org_idx").on(t.organizationId),
     index("inventory_org_branch_sku_idx").on(t.organizationId, t.branchId, t.skuId),
+    foreignKey({
+      name: "inventory_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 
@@ -432,6 +487,11 @@ export const suppliers = pgTable(
     index("suppliers_org_idx").on(t.organizationId),
     index("suppliers_branch_idx").on(t.branchId),
     index("suppliers_name_idx").on(t.name),
+    foreignKey({
+      name: "suppliers_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 
@@ -514,6 +574,11 @@ export const branchDeliveryAddresses = pgTable(
       "branch_delivery_addresses_text_ck",
       sql`length(btrim(${t.label})) > 0 AND length(btrim(${t.labelKey})) > 0 AND length(btrim(${t.address})) > 0`,
     ),
+    foreignKey({
+      name: "branch_delivery_addresses_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 
@@ -540,6 +605,11 @@ export const budgets = pgTable(
     index("budgets_org_idx").on(t.organizationId),
     index("budgets_branch_idx").on(t.branchId),
     check("budgets_values_valid_ck", sql`${t.amountAllocatedCents} >= 0 AND ${t.amountSpentCents} >= 0 AND ${t.amountHeldCents} >= 0 AND ${t.amountCreditedCents} >= 0 AND (${t.amountAllocatedCents} + ${t.amountCreditedCents}) >= (${t.amountSpentCents} + ${t.amountHeldCents})`),
+    foreignKey({
+      name: "budgets_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 
@@ -615,6 +685,11 @@ export const paymentControlExceptions = pgTable(
     index("payment_control_exceptions_org_idx").on(t.organizationId),
     index("payment_control_exceptions_live_branch_idx").on(t.branchId, t.expiresAt).where(sql`${t.revokedAt} IS NULL`),
     check("payment_control_exceptions_window_ck", sql`${t.expiresAt} > ${t.startAt}`),
+    foreignKey({
+      name: "payment_control_exceptions_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 
@@ -901,6 +976,17 @@ export const orders = pgTable(
       "orders_correction_state_ck",
       sql`(${t.returnedForCorrectionAt} IS NULL AND ${t.returnedForCorrectionByUserId} IS NULL AND ${t.correctionRequestNote} IS NULL) OR (${t.returnedForCorrectionAt} IS NOT NULL AND ${t.returnedForCorrectionByUserId} IS NOT NULL AND ${t.correctionRequestNote} IS NOT NULL AND UPPER(${t.status}) = 'PENDING')`,
     ),
+    // A group order's envelope is in the same organization as each of its orders.
+    foreignKey({
+      name: "orders_group_order_org_fk",
+      columns: [t.groupOrderId, t.organizationId],
+      foreignColumns: [groupOrders.id, groupOrders.organizationId],
+    }),
+    foreignKey({
+      name: "orders_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 
@@ -954,6 +1040,11 @@ export const orderDeliveryChallans = pgTable(
       "order_delivery_challans_replace_ck",
       sql`(${t.replacedAt} IS NULL AND ${t.replacedByUserId} IS NULL) OR (${t.replacedAt} IS NOT NULL AND ${t.replacedByUserId} IS NOT NULL AND ${t.attachedAt} IS NOT NULL)`,
     ),
+    foreignKey({
+      name: "order_delivery_challans_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 
@@ -999,7 +1090,9 @@ export const orderCorrectionRequests = pgTable(
       .where(sql`${t.resolution} IS NULL`),
     check(
       "order_correction_requests_resolution_ck",
-      sql`${t.resolution} IS NULL OR ${t.resolution} IN ('RESUBMITTED', 'REJECTED')`,
+      // CANCELLED: the Order Desk withdrew a returned desk order instead of
+      // resubmitting it (plans/OF-EXEC-APPROVAL-executive-approves-desk-orders.md).
+      sql`${t.resolution} IS NULL OR ${t.resolution} IN ('RESUBMITTED', 'REJECTED', 'CANCELLED')`,
     ),
     check(
       "order_correction_requests_shape_ck",
@@ -1009,6 +1102,11 @@ export const orderCorrectionRequests = pgTable(
       "order_correction_requests_text_ck",
       sql`char_length(btrim(${t.comment})) BETWEEN 1 AND 1000 AND (${t.responseNote} IS NULL OR char_length(${t.responseNote}) <= 1000)`,
     ),
+    foreignKey({
+      name: "order_correction_requests_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 
@@ -1368,6 +1466,11 @@ export const branchProducts = pgTable(
     index("branch_products_org_product_idx").on(t.organizationProductId),
     index("branch_products_visible_idx").on(t.isVisible),
     index("branch_products_available_idx").on(t.isAvailable),
+    foreignKey({
+      name: "branch_products_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 
@@ -1417,6 +1520,11 @@ export const restockRequests = pgTable(
     index("restock_requests_product_idx").on(t.globalProductId),
     index("restock_requests_status_idx").on(t.status),
     index("restock_requests_requested_by_idx").on(t.requestedByUserId),
+    foreignKey({
+      name: "restock_requests_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 
@@ -1567,6 +1675,11 @@ export const branchInventory = pgTable(
     index("branch_inventory_active_idx").on(t.isActive),
     index("branch_inventory_deleted_at_idx").on(t.deletedAt),
     index("branch_inventory_status_idx").on(t.branchId, t.isVisible, t.isActive),
+    foreignKey({
+      name: "branch_inventory_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 
@@ -1619,6 +1732,11 @@ export const groupInventoryPrices = pgTable(
     index("group_inventory_prices_org_idx").on(t.organizationId),
     index("group_inventory_prices_item_idx").on(t.organizationInventoryId),
     check("group_inventory_prices_price_valid_ck", sql`${t.customPriceCents} >= 0`),
+    foreignKey({
+      name: "group_inventory_prices_group_org_fk",
+      columns: [t.groupId, t.organizationId],
+      foreignColumns: [groups.id, groups.organizationId],
+    }),
   ],
 )
 
@@ -1720,6 +1838,11 @@ export const productQuantityBudgets = pgTable(
     index("product_quantity_budgets_product_idx").on(t.globalProductId),
     index("product_quantity_budgets_period_idx").on(t.period),
     check("product_quantity_budgets_values_valid_ck", sql`${t.allocatedQuantity} >= 0 AND ${t.heldQuantity} >= 0 AND ${t.usedQuantity} >= 0 AND ${t.creditedQuantity} >= 0 AND ${t.amountAllocatedCents} >= 0 AND ${t.amountCreditedCents} >= 0 AND (${t.allocatedQuantity} + ${t.creditedQuantity}) >= (${t.heldQuantity} + ${t.usedQuantity})`),
+    foreignKey({
+      name: "product_quantity_budgets_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 
@@ -1757,6 +1880,11 @@ export const productQuantityBudgetAllocations = pgTable(
     index("product_quantity_budget_allocations_branch_idx").on(t.branchId),
     index("product_quantity_budget_allocations_product_idx").on(t.globalProductId),
     index("product_quantity_budget_allocations_period_idx").on(t.period),
+    foreignKey({
+      name: "product_quantity_budget_allocations_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 
@@ -1791,6 +1919,11 @@ export const employeeCredentials = pgTable(
     index("employee_creds_org_idx").on(t.organizationId),
     index("employee_creds_active_idx").on(t.isActive),
     index("employee_creds_created_by_idx").on(t.createdByUserId),
+    foreignKey({
+      name: "employee_credentials_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 
@@ -1845,10 +1978,14 @@ export const groups = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => [
+  // Annotated: this table and the composite keys reference each other in a
+  // cycle (branches -> groups -> users -> branches) that inference cannot close.
+  (t): PgTableExtraConfigValue[] => [
     index("groups_org_idx").on(t.organizationId),
     index("groups_name_idx").on(t.name),
     index("groups_status_idx").on(t.status),
+    // Composite target for the (group_id, organization_id) foreign keys.
+    unique("groups_id_organization_uq").on(t.id, t.organizationId),
   ],
 )
 
@@ -1979,6 +2116,11 @@ export const legacyUserMappings = pgTable(
     ),
     index("legacy_user_mappings_user_idx").on(t.userId),
     index("legacy_user_mappings_batch_idx").on(t.createdByBatchId),
+    foreignKey({
+      name: "legacy_user_mappings_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 
@@ -2039,6 +2181,11 @@ export const userGroupAssignments = pgTable(
     index("user_group_assignments_user_idx").on(t.userId),
     index("user_group_assignments_group_idx").on(t.groupId),
     index("user_group_assignments_org_idx").on(t.organizationId),
+    foreignKey({
+      name: "user_group_assignments_group_org_fk",
+      columns: [t.groupId, t.organizationId],
+      foreignColumns: [groups.id, groups.organizationId],
+    }),
   ],
 )
 
@@ -2065,6 +2212,11 @@ export const userBranchAssignments = pgTable(
     index("user_branch_assignments_user_idx").on(t.userId),
     index("user_branch_assignments_branch_idx").on(t.branchId),
     index("user_branch_assignments_org_idx").on(t.organizationId),
+    foreignKey({
+      name: "user_branch_assignments_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 
@@ -2102,6 +2254,99 @@ export const orderDeskAssignments = pgTable(
       .where(sql`${t.branchId} IS NOT NULL`),
     index("order_desk_assignments_user_idx").on(t.userId),
     index("order_desk_assignments_org_idx").on(t.organizationId),
+    foreignKey({
+      name: "order_desk_assignments_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
+  ],
+)
+
+/**
+ * Which organizations an Apricart Executive approves Order Desk orders for.
+ * One row per executive per organization; there is no branch grain.
+ *
+ * Super Admin writes these rows (`lib/server/apricart-executive-team.ts`); the
+ * reach they grant is read through `lib/server/apricart-executive-scope.ts`
+ * and, for a decision, re-read `FOR SHARE` inside the deciding transaction.
+ * They govern approval only — the delivery dashboard reads every tenant.
+ * See plans/OF-EXEC-APPROVAL-executive-approves-desk-orders.md.
+ */
+export const apricartExecutiveAssignments = pgTable(
+  "apricart_executive_assignments",
+  {
+    id: serial("id").primaryKey(),
+    userId: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id, { onDelete: "cascade" })
+      .notNull(),
+    createdByUserId: uuid("created_by_user_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("apricart_executive_assignments_user_org_uq").on(t.userId, t.organizationId),
+    index("apricart_executive_assignments_org_idx").on(t.organizationId),
+  ],
+)
+
+/**
+ * Which branches a Warehouse user picks, dispatches and delivers for. One row
+ * per user per branch — there is deliberately no organization-wide row, and no
+ * organization column: the organization is always the branch's own, read
+ * through the join, so the two can never disagree.
+ *
+ * Super Admin writes these rows (`lib/server/warehouse-team.ts`); the reach
+ * they grant is read through `lib/server/warehouse-scope.ts` and, for a write,
+ * re-read `FOR SHARE` inside the writing transaction.
+ * See plans/OF-WAREHOUSE-warehouse-fulfilment-role.md.
+ */
+export const warehouseAssignments = pgTable(
+  "warehouse_assignments",
+  {
+    id: serial("id").primaryKey(),
+    userId: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    branchId: integer("branch_id")
+      .references(() => branches.id, { onDelete: "cascade" })
+      .notNull(),
+    createdByUserId: uuid("created_by_user_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("warehouse_assignments_user_branch_uq").on(t.userId, t.branchId),
+    index("warehouse_assignments_branch_idx").on(t.branchId),
+  ],
+)
+
+/**
+ * Whole cities a Warehouse user serves: every branch whose normalised city
+ * equals `city_key`, including branches opened in that city later. Stores the
+ * key, never branch ids, so no write is needed when a branch is added.
+ *
+ * The key is only ever computed in SQL, by `branchCityKeySql`
+ * (`lib/server/branch-city-key.ts`), on both sides of every comparison; the
+ * `branches_city_key_idx` expression index serves the join. The reach is read
+ * with the branch assignments above, through `lib/server/warehouse-scope.ts`.
+ * See plans/OF-WAREHOUSE-city-assignments.md.
+ */
+export const warehouseCityAssignments = pgTable(
+  "warehouse_city_assignments",
+  {
+    id: serial("id").primaryKey(),
+    userId: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    cityKey: varchar("city_key", { length: 100 }).notNull(),
+    createdByUserId: uuid("created_by_user_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("warehouse_city_assignments_user_city_uq").on(t.userId, t.cityKey),
+    index("warehouse_city_assignments_city_idx").on(t.cityKey),
+    check("warehouse_city_assignments_city_key_ck", sql`btrim(${t.cityKey}) <> ''`),
   ],
 )
 
@@ -2158,6 +2403,13 @@ export const groupOrders = pgTable(
     index("group_orders_org_idx").on(t.organizationId),
     index("group_orders_creator_created_idx").on(t.createdByUserId, t.createdAt),
     index("group_orders_group_idx").on(t.groupId),
+    // Composite target for orders (group_order_id, organization_id).
+    unique("group_orders_id_organization_uq").on(t.id, t.organizationId),
+    foreignKey({
+      name: "group_orders_group_org_fk",
+      columns: [t.groupId, t.organizationId],
+      foreignColumns: [groups.id, groups.organizationId],
+    }),
   ],
 )
 
@@ -2184,7 +2436,14 @@ export const groupOrderDrafts = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => [uniqueIndex("group_order_drafts_user_uq").on(t.userId)],
+  (t) => [
+    uniqueIndex("group_order_drafts_user_uq").on(t.userId),
+    foreignKey({
+      name: "group_order_drafts_group_org_fk",
+      columns: [t.groupId, t.organizationId],
+      foreignColumns: [groups.id, groups.organizationId],
+    }),
+  ],
 )
 
 /**
@@ -2270,6 +2529,11 @@ export const supportThreads = pgTable(
     ),
     check("support_threads_message_count_ck", sql`${t.messageCount} >= 0`),
     check("support_threads_subject_present_ck", sql`char_length(btrim(${t.subject})) > 0`),
+    foreignKey({
+      name: "support_threads_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 

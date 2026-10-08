@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import useSWR from "swr"
-import { AlertTriangle, ChevronDown, ChevronRight, Layers, Mail, Pencil, RotateCcw, Send } from "lucide-react"
+import { AlertTriangle, Ban, ChevronDown, ChevronRight, Layers, Mail, Pencil, RotateCcw, Send } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -13,7 +13,10 @@ import { useToast } from "@/hooks/use-toast"
 import { fetcher } from "@/lib/fetcher"
 import { cn, formatPKR } from "@/lib/utils"
 
+import { BranchOrderDetailSheet, type BranchOrder } from "@/components/group-portal/branch-order-detail-sheet"
 import { BranchOrderEditSheet } from "@/components/group-portal/branch-order-edit-sheet"
+import { CancelGroupOrderDialog, type GroupCancelTarget } from "@/components/group-portal/cancel-group-order-dialog"
+import { isCancellableGroupOrderStatus } from "@/lib/group-order-cancel"
 import { ResubmitOrderDialog } from "@/components/orders/order-correction"
 import { isAwaitingCorrection } from "@/lib/order-correction"
 
@@ -34,6 +37,11 @@ function hasDeliveredOrder(item: GroupOrderHistoryItem): boolean {
   )
 }
 
+/** Branch orders still waiting for approval — the only ones a requester may cancel. */
+function pendingOrderCount(item: GroupOrderHistoryItem): number {
+  return item.orders.filter((order) => isCancellableGroupOrderStatus(order.status)).length
+}
+
 type HistoryResponse = {
   items: GroupOrderHistoryItem[]
   pagination: { page: number; limit: number; total: number; totalPages: number; hasMore: boolean }
@@ -44,6 +52,7 @@ const STATUS_STYLES: Record<string, string> = {
   APPROVED: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300",
   FULFILLED: "bg-sky-100 text-sky-800 dark:bg-sky-950/50 dark:text-sky-300",
   REJECTED: "bg-rose-100 text-rose-800 dark:bg-rose-950/50 dark:text-rose-300",
+  CANCELLED: "bg-rose-100 text-rose-800 dark:bg-rose-950/50 dark:text-rose-300",
   REFUNDED: "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
 }
 
@@ -59,6 +68,9 @@ function formatDate(value: string | null): string {
  * The user's own group orders, newest first, each expandable to the branch
  * orders it produced. This is how a group reference is traced back to the
  * individual orders the rest of the application works with.
+ *
+ * A branch order opens in the same side sheet "Other orders" uses
+ * (`BranchOrderDetailSheet`), so an order reads and acts the same in both tabs.
  */
 export function GroupOrderHistory() {
   const [page, setPage] = useState(1)
@@ -68,6 +80,8 @@ export function GroupOrderHistory() {
   // same branch-scoped edit and resubmission the server re-checks.
   const [editTarget, setEditTarget] = useState<CorrectableOrder | null>(null)
   const [resubmitTarget, setResubmitTarget] = useState<CorrectableOrder | null>(null)
+  const [openOrder, setOpenOrder] = useState<BranchOrder | null>(null)
+  const [cancelTarget, setCancelTarget] = useState<GroupCancelTarget | null>(null)
 
   const { data, error, isLoading, mutate } = useSWR<HistoryResponse>(
     `/api/v1/group-portal/orders?page=${page}`,
@@ -109,6 +123,8 @@ export function GroupOrderHistory() {
     <div className="space-y-3">
       {items.map((item) => {
         const isOpen = expanded === item.id
+        const pendingCount = pendingOrderCount(item)
+        const refundable = hasDeliveredOrder(item)
         return (
           <Card key={item.id} className="overflow-hidden rounded-2xl">
             <button
@@ -153,18 +169,39 @@ export function GroupOrderHistory() {
                 : <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-slate-400" />}
             </button>
 
-            {hasDeliveredOrder(item) && (
-              <div className="flex justify-end border-t border-slate-100 px-4 py-2 dark:border-slate-800/70">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-8 gap-1.5 rounded-lg"
-                  onClick={() => setRefundTarget({ id: item.id, reference: item.reference })}
-                >
-                  <RotateCcw className="h-3.5 w-3.5" />
-                  Request refund
-                </Button>
+            {(refundable || pendingCount > 0) && (
+              <div className="flex flex-wrap justify-end gap-2 border-t border-slate-100 px-4 py-2 dark:border-slate-800/70">
+                {/* Only what is still waiting for approval can be withdrawn;
+                    the server cancels just those and keeps the rest. */}
+                {pendingCount > 0 && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 gap-1.5 rounded-lg border-rose-200 text-rose-700 hover:bg-rose-50 hover:text-rose-800 dark:border-rose-900 dark:text-rose-300 dark:hover:bg-rose-950/40"
+                    onClick={() => setCancelTarget({
+                      kind: "submission",
+                      groupOrderId: item.id,
+                      reference: item.reference,
+                      pendingCount,
+                    })}
+                  >
+                    <Ban className="h-3.5 w-3.5" />
+                    Cancel pending orders ({pendingCount})
+                  </Button>
+                )}
+                {refundable && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 gap-1.5 rounded-lg"
+                    onClick={() => setRefundTarget({ id: item.id, reference: item.reference })}
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    Request refund
+                  </Button>
+                )}
               </div>
             )}
 
@@ -189,9 +226,25 @@ export function GroupOrderHistory() {
                     </thead>
                     <tbody>
                       {item.orders.map((order) => (
-                        <tr key={order.id} className="border-b border-slate-100 last:border-0 dark:border-slate-800/60">
+                        <tr
+                          key={order.id}
+                          onClick={() => setOpenOrder({ ...order })}
+                          className="cursor-pointer border-b border-slate-100 transition last:border-0 hover:bg-slate-50 dark:border-slate-800/60 dark:hover:bg-slate-800/40"
+                        >
                           <td className="py-2 pr-3 text-slate-800 dark:text-slate-200">{order.branchName}</td>
-                          <td className="py-2 pr-3 font-mono text-xs text-slate-600 dark:text-slate-300">{order.tid}</td>
+                          <td className="py-2 pr-3">
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                setOpenOrder({ ...order })
+                              }}
+                              aria-label={`Open order ${order.tid}`}
+                              className="rounded font-mono text-xs text-indigo-700 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-indigo-300"
+                            >
+                              {order.tid}
+                            </button>
+                          </td>
                           <td className="py-2 text-right tabular-nums text-slate-600 dark:text-slate-300">{order.itemCount}</td>
                           <td className="py-2 text-right font-mono tabular-nums text-slate-800 dark:text-slate-200">
                             {formatPKR(order.totalCents / 100)}
@@ -210,6 +263,11 @@ export function GroupOrderHistory() {
                                 {order.rejectionReason}
                               </span>
                             )}
+                            {order.status.toUpperCase() === "CANCELLED" && order.cancellationReason && (
+                              <span className="mt-1 block text-[10px] text-rose-600 dark:text-rose-400">
+                                Cancelled: {order.cancellationReason}
+                              </span>
+                            )}
                             {isAwaitingCorrection(order) && (
                               <span className="mt-1 block space-y-1 text-left">
                                 <span className="block text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300">
@@ -224,7 +282,10 @@ export function GroupOrderHistory() {
                                     size="sm"
                                     variant="outline"
                                     className="h-7 gap-1 rounded-lg px-2 text-[11px]"
-                                    onClick={() => setEditTarget(order)}
+                                    onClick={(event) => {
+                                      event.stopPropagation()
+                                      setEditTarget(order)
+                                    }}
                                   >
                                     <Pencil className="h-3 w-3" />
                                     Edit
@@ -233,7 +294,10 @@ export function GroupOrderHistory() {
                                     type="button"
                                     size="sm"
                                     className="h-7 gap-1 rounded-lg px-2 text-[11px]"
-                                    onClick={() => setResubmitTarget(order)}
+                                    onClick={(event) => {
+                                      event.stopPropagation()
+                                      setResubmitTarget(order)
+                                    }}
                                   >
                                     <Send className="h-3 w-3" />
                                     Resubmit
@@ -244,7 +308,7 @@ export function GroupOrderHistory() {
                           </td>
                           {/* Renders only once the order is approved; the
                               invoice endpoints re-check the same rule. */}
-                          <td className="py-2 text-right">
+                          <td className="py-2 text-right" onClick={(event) => event.stopPropagation()}>
                             <ReceiptIconButton
                               orderId={order.id}
                               orderStatus={order.status}
@@ -341,6 +405,24 @@ export function GroupOrderHistory() {
         onSubmitted={() => { void mutate() }}
       />
 
+      <BranchOrderDetailSheet
+        order={openOrder}
+        onClose={() => setOpenOrder(null)}
+        onEdit={(target) => { setOpenOrder(null); setEditTarget(target) }}
+        onResubmit={(target) => { setOpenOrder(null); setResubmitTarget(target) }}
+        onChanged={() => { void mutate() }}
+        onCancel={(target) => {
+          setOpenOrder(null)
+          setCancelTarget({ kind: "order", orderId: target.id, tid: target.tid })
+        }}
+      />
+
+      <CancelGroupOrderDialog
+        target={cancelTarget}
+        onClose={() => setCancelTarget(null)}
+        onCancelled={() => { void mutate() }}
+      />
+
       <BranchOrderEditSheet
         order={editTarget}
         onClose={() => setEditTarget(null)}
@@ -359,7 +441,7 @@ type CorrectableOrder = {
   id: number
   tid: string
   branchId: number
-  branchName: string
+  branchName?: string | null
   correctionRequestNote?: string | null
 }
 

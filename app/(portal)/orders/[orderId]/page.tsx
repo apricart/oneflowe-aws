@@ -76,6 +76,7 @@ type OrderDetail = {
   taxCents: number | null
   totalCents: number | null
   createdAt: string
+  fulfilledAt?: string | null
   orderItems?: OrderItem[]
   approvalToken?: string | null // Only visible to the approver
   rejectionReason?: string | null
@@ -83,6 +84,8 @@ type OrderDetail = {
   correctionRequestNote?: string | null
   correctionHistory?: OrderCorrectionHistoryEntry[]
   pricesHidden?: boolean
+  /** Entered by Apricart's Order Desk: an Apricart Executive decides it. */
+  decidedByApricart?: boolean
 }
 
 function numericOrderId(orderId: string | string[] | undefined): number | null {
@@ -112,7 +115,15 @@ function OrderDecisionActions({
   onDecide: (decision: "approve" | "reject") => void
   onReturn: () => void
 }>) {
-  if (order.status.toUpperCase() !== "PENDING" || !canDecideOrders) return null
+  if (order.status.toUpperCase() !== "PENDING") return null
+  if (order.decidedByApricart) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Entered by Apricart&apos;s Order Desk — awaiting approval by an Apricart Executive.
+      </p>
+    )
+  }
+  if (!canDecideOrders) return null
   const awaitingCorrection = isAwaitingCorrection(order)
   return (
     <div className="flex flex-wrap gap-2">
@@ -550,7 +561,7 @@ export default function SuperAdminOrderDetailsPage() {
                     orderTotalCents={order.totalCents}
                     orderStatus={order.status}
                     orderFulfillmentStatus={order.fulfillmentStatus}
-                    createdAt={order.createdAt}
+                    fulfilledAt={order.fulfilledAt ?? null}
                     allowRefundRequest={canRequestRefundFromOrderReview}
                     requesterRole={userRole}
                     pricesHidden={pricesHidden}

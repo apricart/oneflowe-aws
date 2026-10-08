@@ -1,4 +1,4 @@
-import { CheckCircle2, Clock, Mail, MessageCircle, MoreHorizontal, PackageCheck, Phone, XCircle } from "lucide-react"
+import { Ban, CheckCircle2, Clock, Hourglass, Mail, MessageCircle, MoreHorizontal, PackageCheck, Phone, XCircle } from "lucide-react"
 
 import type { IntakeChannel } from "@/lib/order-desk-access"
 import type { DeskOrderStage, DeskOrderStatusFilter } from "@/lib/order-desk-query"
@@ -11,9 +11,11 @@ type LucideIcon = typeof Clock
  * the same way. Deliberately few: one accent (indigo) for "this is yours to
  * act on", and one colour per stage of an order —
  *
+ *   sky     waiting on an Apricart Executive's approval
  *   amber   waiting on Super Admin to record delivery
  *   indigo  delivered, ready for the desk to fulfil
  *   emerald done
+ *   rose    rejected by an executive
  *   slate   cancelled
  *
  * Colour is never the only signal: every stage also carries its words and an
@@ -30,9 +32,16 @@ export type StageMeta = {
 }
 
 export const STAGE_META: Record<DeskOrderStage, StageMeta> = {
+  awaiting_approval: {
+    label: "Awaiting approval",
+    hint: "An Apricart Executive approves each order. You can still edit or cancel it.",
+    icon: Hourglass,
+    dot: "bg-sky-500",
+    pill: "bg-sky-50 text-sky-800 ring-sky-200 dark:bg-sky-950/40 dark:text-sky-200 dark:ring-sky-900",
+  },
   awaiting_delivery: {
     label: "Awaiting delivery",
-    hint: "Super Admin records delivery. You can still edit or cancel.",
+    hint: "Approved. Super Admin records delivery. You can still cancel.",
     icon: Clock,
     dot: "bg-amber-500",
     pill: "bg-amber-50 text-amber-800 ring-amber-200 dark:bg-amber-950/40 dark:text-amber-200 dark:ring-amber-900",
@@ -51,6 +60,13 @@ export const STAGE_META: Record<DeskOrderStage, StageMeta> = {
     dot: "bg-emerald-500",
     pill: "bg-emerald-50 text-emerald-800 ring-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-200 dark:ring-emerald-900",
   },
+  rejected: {
+    label: "Rejected",
+    hint: "Rejected by an Apricart Executive. Stock and budget were released.",
+    icon: Ban,
+    dot: "bg-rose-500",
+    pill: "bg-rose-50 text-rose-800 ring-rose-200 dark:bg-rose-950/40 dark:text-rose-200 dark:ring-rose-900",
+  },
   cancelled: {
     label: "Cancelled",
     hint: "Withdrawn before delivery. Stock and budget were released.",
@@ -68,9 +84,11 @@ export const STAGE_META: Record<DeskOrderStage, StageMeta> = {
 }
 
 export const TAB_LABELS: Record<DeskOrderStatusFilter, string> = {
+  awaiting_approval: STAGE_META.awaiting_approval.label,
   awaiting_delivery: STAGE_META.awaiting_delivery.label,
   ready_to_fulfil: STAGE_META.ready_to_fulfil.label,
   fulfilled: STAGE_META.fulfilled.label,
+  rejected: STAGE_META.rejected.label,
   cancelled: STAGE_META.cancelled.label,
   all: "All orders",
 }

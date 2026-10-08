@@ -11,7 +11,7 @@ import {
   isOrderIntakeAttachmentKey,
   ORDER_DESK_API_RULES,
   orderDeskAccessChangeError,
-  orderDeskBypassesApproval,
+  orderDeskRequiresExecutiveApproval,
   orderDeskUserShapeError,
   orderIntakeError,
   resolveDeskReach,
@@ -124,6 +124,10 @@ describe("the desk's API allowlist", () => {
     ["GET", "/api/v1/orders/7/refunds"],
     ["POST", "/api/v1/orders/7/refunds"],
     ["POST", "/api/v1/users/me/change-password"],
+    // The profile menu's "Forgot password" link, used while signed in.
+    ["POST", "/api/v1/auth/password-reset/request"],
+    ["POST", "/api/v1/auth/password-reset/verify"],
+    ["POST", "/api/v1/auth/password-reset/complete"],
   ])("admits %s %s", (method, path) => {
     expect(isOrderDeskApiRequestAllowed(method, path)).toBe(true)
   })
@@ -148,6 +152,9 @@ describe("the desk's API allowlist", () => {
     ["POST", "/api/v1/admin/refunds"],
     ["GET", "/api/v1/images/products/abc.png"],
     ["GET", "/api/v1/upload/image"],
+    ["GET", "/api/v1/auth/password-reset/request"],
+    ["POST", "/api/v1/auth/password-reset/requestx"],
+    ["POST", "/api/v1/auth/password-reset"],
   ])("refuses %s %s", (method, path) => {
     expect(isOrderDeskApiRequestAllowed(method, path)).toBe(false)
   })
@@ -169,6 +176,9 @@ describe("the desk's API allowlist", () => {
         // Admitted for its own orders only, through its live reach.
         expect(source).toMatch(/if \(isOrderDeskRole\(userRole\)\) \{\s*return deskOrderInReach/)
         expect(source).toContain("isOrderDeskRole(userRole) && Boolean(await loadDeskOrder(db, userId, orderId))")
+      } else if (rule.route.startsWith("app/api/v1/auth/password-reset/")) {
+        // Public: they read no session at all, so admitting the desk grants nothing.
+        expect(source, rule.route).not.toMatch(/getServerSession|getCurrentUser|getRequestScope|requireApiRole/)
       } else {
         // The change-password endpoints every signed-in account may reach.
         expect(rule.route).toMatch(/^app\/api\/v1\/users\/me\//)
@@ -206,10 +216,12 @@ describe("the desk's API allowlist", () => {
 })
 
 describe("orders the desk enters", () => {
-  it("skips approval only for the desk", () => {
-    expect(orderDeskBypassesApproval("ORDER_DESK")).toBe(true)
-    for (const role of ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL", "EMPLOYEE", undefined]) {
-      expect(orderDeskBypassesApproval(role)).toBe(false)
+  it("waits for an Apricart Executive only for the desk's own entries", () => {
+    // Reversed 2026-10-07 (plans/OF-EXEC-APPROVAL-executive-approves-desk-orders.md):
+    // a desk order no longer skips approval; it always waits for an executive.
+    expect(orderDeskRequiresExecutiveApproval("ORDER_DESK")).toBe(true)
+    for (const role of ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL", "EMPLOYEE", "APRICART_EXECUTIVE", undefined]) {
+      expect(orderDeskRequiresExecutiveApproval(role)).toBe(false)
     }
   })
 
@@ -244,29 +256,56 @@ describe("orders the desk enters", () => {
     expect(orderIntakeError("SUPER_ADMIN", { intakeReference: "x" })).toMatch(/only to Order Desk/)
   })
 
-  const none = { canEdit: false, canCancel: false, canFulfil: false, canRequestRefund: false }
+  const none = { canEdit: false, canCancel: false, canResubmit: false, canFulfil: false, canRequestRefund: false }
+  const NOW = new Date("2026-10-06T12:00:00.000Z")
+  const DAY = 24 * 60 * 60 * 1000
+  const recently = new Date(NOW.getTime() - DAY)
 
-  it("lets an Active order be edited or cancelled until Super Admin records delivery", () => {
+  it("lets a pending order be edited or cancelled while it waits for an executive", () => {
+    expect(deskOrderActions({ status: "PENDING", fulfillmentStatus: null, fulfilledAt: null }, NOW))
+      .toEqual({ ...none, canEdit: true, canCancel: true })
+    expect(deskOrderActions({ status: "pending", fulfillmentStatus: "NOT_STARTED", fulfilledAt: null, returnedForCorrectionAt: null }, NOW))
+      .toEqual({ ...none, canEdit: true, canCancel: true })
+  })
+
+  it("adds Resubmit once an executive returns it for correction", () => {
+    expect(deskOrderActions({
+      status: "PENDING",
+      fulfillmentStatus: null,
+      fulfilledAt: null,
+      returnedForCorrectionAt: "2026-10-06T09:00:00.000Z",
+    }, NOW)).toEqual({ ...none, canEdit: true, canCancel: true, canResubmit: true })
+  })
+
+  it("lets an Active order be cancelled, never edited, until Super Admin records delivery", () => {
+    // An edit after approval would change what the executive approved.
     for (const fulfillmentStatus of [null, "NOT_STARTED", "IN_PROCESS", "OUT_FOR_DELIVERY"]) {
-      expect(deskOrderActions({ status: "APPROVED", fulfillmentStatus }))
-        .toEqual({ ...none, canEdit: true, canCancel: true })
+      expect(deskOrderActions({ status: "APPROVED", fulfillmentStatus, fulfilledAt: null }, NOW))
+        .toEqual({ ...none, canCancel: true })
     }
   })
 
   it("fulfils only once delivered, and then nothing but fulfilment", () => {
-    expect(deskOrderActions({ status: "approved", fulfillmentStatus: "DELIVERED" }))
+    expect(deskOrderActions({ status: "approved", fulfillmentStatus: "DELIVERED", fulfilledAt: null }, NOW))
       .toEqual({ ...none, canFulfil: true })
   })
 
   it("offers a refund request only on a fulfilled, delivered order", () => {
-    expect(deskOrderActions({ status: "FULFILLED", fulfillmentStatus: "DELIVERED" }))
+    expect(deskOrderActions({ status: "FULFILLED", fulfillmentStatus: "DELIVERED", fulfilledAt: recently }, NOW))
       .toEqual({ ...none, canRequestRefund: true })
-    expect(deskOrderActions({ status: "FULFILLED", fulfillmentStatus: "IN_PROCESS" })).toEqual(none)
+    expect(deskOrderActions({ status: "FULFILLED", fulfillmentStatus: "IN_PROCESS", fulfilledAt: recently }, NOW)).toEqual(none)
   })
 
-  it.each(["PENDING", "CANCELLED", "REJECTED", "REFUNDED"])("offers nothing on a %s order", (status) => {
-    expect(deskOrderActions({ status, fulfillmentStatus: "DELIVERED" })).toEqual(none)
-    expect(deskOrderActions({ status, fulfillmentStatus: null })).toEqual(none)
+  it("stops offering a refund request seven days after fulfilment", () => {
+    const fulfilled = { status: "FULFILLED", fulfillmentStatus: "DELIVERED" }
+    expect(deskOrderActions({ ...fulfilled, fulfilledAt: new Date(NOW.getTime() - 7 * DAY) }, NOW).canRequestRefund).toBe(true)
+    expect(deskOrderActions({ ...fulfilled, fulfilledAt: new Date(NOW.getTime() - 7 * DAY - 1) }, NOW).canRequestRefund).toBe(false)
+    expect(deskOrderActions({ ...fulfilled, fulfilledAt: null }, NOW).canRequestRefund).toBe(false)
+  })
+
+  it.each(["CANCELLED", "REJECTED", "REFUNDED"])("offers nothing on a %s order", (status) => {
+    expect(deskOrderActions({ status, fulfillmentStatus: "DELIVERED", fulfilledAt: recently }, NOW)).toEqual(none)
+    expect(deskOrderActions({ status, fulfillmentStatus: null, fulfilledAt: null }, NOW)).toEqual(none)
   })
 })
 

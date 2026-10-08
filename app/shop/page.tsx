@@ -163,6 +163,7 @@ interface Order {
   fulfillmentStatus?: string | null
   totalCents: number | null
   createdAt: string
+  fulfilledAt?: string | null
   refundAmountCents?: number | null
   refundedAt?: string | null
   refundReason?: string | null
@@ -2859,7 +2860,7 @@ export default function OrderPortalPage() {
                 orderTotalCents={selectedOrder.totalCents}
                 orderStatus={selectedOrder.status}
                 orderFulfillmentStatus={selectedOrder.fulfillmentStatus}
-                createdAt={selectedOrder.createdAt}
+                fulfilledAt={selectedOrder.fulfilledAt ?? null}
                 // The branch owns its orders, so a requester may claim on a
                 // group order raised for its branch as well as on its own.
                 allowRefundRequest={

@@ -1,15 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
-import { safeFilenamePart } from "@/lib/security"
-import { db } from "@/lib/db"
-import { branches, orderItems, organizations, refundItems, refunds } from "@/db/schema"
-import { and, eq, sql } from "drizzle-orm"
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
-import { aggregateReceiptRefundItems, getReceiptNetTotal } from "@/lib/receipt-display"
-import { getOrderDerivedStatus } from "@/lib/order-status"
-import { formatBranchAddress } from "@/lib/branch-address"
 import { authorizeInvoiceRequest } from "@/lib/server/invoice-access"
-import { loadInvoiceParticipants } from "@/lib/server/invoice-participants"
-import { renderInvoicePdf } from "@/lib/server/invoice-pdf"
+import { buildInvoiceDocument } from "@/lib/server/invoice-document"
 
 export async function GET(
     req: NextRequest,
@@ -35,94 +27,14 @@ export async function GET(
             return NextResponse.json({ error: "Invoice download is unavailable while prices are hidden" }, { status: 403 })
         }
 
-        const participants = await loadInvoiceParticipants(order)
+        // The document itself is shared with the warehouse's download, so the
+        // two can never print different invoices for one order.
+        const { pdf, fileName } = await buildInvoiceDocument(order)
 
-        let branchAddress = ""
-        if (order.branchId !== null && order.organizationId !== null) {
-            const [branchDetails] = await db
-                .select({
-                    address: branches.address,
-                    city: branches.city,
-                    province: branches.province,
-                })
-                .from(branches)
-                .where(and(
-                    eq(branches.id, order.branchId),
-                    eq(branches.organizationId, order.organizationId),
-                ))
-                .limit(1)
-            branchAddress = formatBranchAddress(branchDetails)
-        }
-
-        let organizationName = ""
-        let organizationNtn = ""
-        if (order.organizationId !== null) {
-            const [organizationDetails] = await db
-                .select({
-                    name: organizations.name,
-                    ntnNumber: organizations.ntnNumber,
-                })
-                .from(organizations)
-                .where(eq(organizations.id, order.organizationId))
-                .limit(1)
-            organizationName = organizationDetails?.name || ""
-            organizationNtn = organizationDetails?.ntnNumber || ""
-        }
-
-        const refundRows = await db
-            .select({
-                productName: orderItems.productName,
-                quantity: refundItems.quantity,
-                amount: refundItems.amountCents,
-            })
-            .from(refundItems)
-            .innerJoin(refunds, eq(refundItems.refundId, refunds.id))
-            .innerJoin(orderItems, eq(refundItems.orderItemId, orderItems.id))
-            .where(and(
-                eq(refunds.orderId, orderId),
-                sql`UPPER(${refunds.status}) IN ('APPROVED', 'COMPLETED')`,
-            ))
-
-        const totalApprovedRefundAmount = (order.refundAmountCents || 0) / 100
-        const refundedItems = aggregateReceiptRefundItems(refundRows.map((item) => ({
-            productName: item.productName || "Unknown",
-            quantity: item.quantity || 0,
-            amount: (item.amount || 0) / 100,
-        })))
-        const derivedStatus = getOrderDerivedStatus({
-            status: order.status,
-            refundAmountCents: order.refundAmountCents,
-        }, "fulfilled")
-
-        const receiptData = {
-            ...(order.receiptData as any),
-            buyerAddress: branchAddress,
-            organizationName: (order.receiptData as any)?.organizationName || organizationName || "",
-            organizationNtn: organizationNtn || (order.receiptData as any)?.organizationNtn || "",
-            // Recorded on the order rather than in the snapshot: the payment
-            // can be settled long after the invoice was issued, and the
-            // order reference identifies the order the invoice covers.
-            orderId: order.id,
-            orderTid: order.tid,
-            paymentStatus: order.paymentStatus,
-            placedByName: participants.placedByName,
-            placedByPhone: participants.placedByPhone,
-            approvedByName: participants.approvedByName,
-            fulfilledByName: participants.fulfilledByName,
-            status: derivedStatus.label,
-            statusKey: derivedStatus.key,
-            refund: totalApprovedRefundAmount,
-            refundedItems,
-            totalAmount: getReceiptNetTotal(order.receiptData as any, totalApprovedRefundAmount),
-        }
-
-        const pdfBuffer = renderInvoicePdf(receiptData)
-        const invoiceFilePart = safeFilenamePart(receiptData.invoiceNumber, String(orderId))
-
-        return new NextResponse(pdfBuffer, {
+        return new NextResponse(pdf, {
             headers: {
                 "Content-Type": "application/pdf",
-                "Content-Disposition": `attachment; filename="invoice-${invoiceFilePart}.pdf"`,
+                "Content-Disposition": `attachment; filename="${fileName}"`,
                 // An invoice is per-user tenant data, and a stale copy must
                 // never be replayed from a browser or proxy cache.
                 "Cache-Control": "no-store",

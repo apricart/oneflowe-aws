@@ -9,6 +9,8 @@ import { auditActorFromSession, recordAuditEvent } from "@/lib/server/activity-a
 import { isOrderDeskRole } from "@/lib/order-desk-access"
 import { DELIVERY_CHALLAN_UPLOAD_PURPOSE } from "@/lib/delivery-challan"
 import { storeDeliveryChallanUpload } from "@/lib/server/delivery-challan"
+import { warehouseChallanUploadRefusal } from "@/lib/server/warehouse-orders"
+import { isWarehouseRole } from "@/lib/warehouse-access"
 import {
   buildImageKey,
   buildOrderIntakeAttachmentKey,
@@ -33,9 +35,15 @@ export async function POST(req: NextRequest) {
     // `custom_image_url` through `PUT /api/v1/head-office/organization-inventory`.
     // The Order Desk uploads the screenshot of a customer's WhatsApp message or
     // email, here for the same WAF reason. Its upload is stored privately and
-    // handled apart from catalogue images below.
+    // handled apart from catalogue images below. The warehouse uploads a
+    // delivery challan and nothing else (plans/OF-WAREHOUSE-warehouse-fulfilment-role.md).
     const userRole = (session.user as any).role
-    if (userRole !== "SUPER_ADMIN" && !canRaiseProductRequest(userRole) && !isOrderDeskRole(userRole)) {
+    if (
+      userRole !== "SUPER_ADMIN"
+      && !canRaiseProductRequest(userRole)
+      && !isOrderDeskRole(userRole)
+      && !isWarehouseRole(userRole)
+    ) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
 
@@ -54,6 +62,10 @@ export async function POST(req: NextRequest) {
     // others; handled entirely apart from catalogue images.
     if (formData.get("purpose") === DELIVERY_CHALLAN_UPLOAD_PURPOSE) {
       return storeDeliveryChallan(session, userRole, formData.get("orderId"), file)
+    }
+    // The warehouse uploads challans only — never a catalogue image.
+    if (isWarehouseRole(userRole)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
 
     const bytes = await file.arrayBuffer()
@@ -153,8 +165,9 @@ export async function POST(req: NextRequest) {
 }
 
 /**
- * A delivery challan is Super Admin's alone to upload, whoever else this route
- * admits. It is checked by content (re-encoded if an image, inspected if a
+ * A delivery challan is uploaded by Super Admin, or by the warehouse for an
+ * order at a branch it serves that is out for delivery or delivered — never by
+ * anyone else this route admits. It is checked by content (re-encoded if an image, inspected if a
  * PDF), stored under the private `delivery-challan/` prefix, and answered with
  * a row id bound to this order and this uploader — never a path.
  */
@@ -164,7 +177,7 @@ async function storeDeliveryChallan(
   rawOrderId: FormDataEntryValue | null,
   file: File,
 ) {
-  if (userRole !== "SUPER_ADMIN") {
+  if (userRole !== "SUPER_ADMIN" && !isWarehouseRole(userRole)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 })
   }
   const orderId = typeof rawOrderId === "string" && /^\d+$/.test(rawOrderId) ? Number(rawOrderId) : NaN
@@ -173,6 +186,10 @@ async function storeDeliveryChallan(
   }
   const actor = auditActorFromSession(session)
   if (!actor.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  if (isWarehouseRole(userRole)) {
+    const refusal = await warehouseChallanUploadRefusal(actor.id, orderId)
+    if (refusal) return NextResponse.json({ error: refusal.error }, { status: refusal.status })
+  }
 
   const outcome = await storeDeliveryChallanUpload({ actor: { ...actor, id: actor.id }, orderId, file })
   if (!outcome.ok) return NextResponse.json({ error: outcome.error }, { status: outcome.status })

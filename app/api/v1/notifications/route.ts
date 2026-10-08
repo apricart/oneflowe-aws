@@ -56,6 +56,8 @@ function notificationTitle(type: string) {
       return "Corrected order awaiting approval"
     case "ORDER_RESUBMITTED_BY_COLLEAGUE":
       return "Order resubmitted by a colleague"
+    case "ORDER_CANCELLED_BY_COLLEAGUE":
+      return "Order cancelled by a colleague"
     case "REFUND_REQUESTED":
       return "Refund request submitted"
     case "SUPPORT_THREAD_OPENED":
@@ -125,6 +127,7 @@ function notificationCta(
       return role === "ORDER_PORTAL" ? requesterOrdersCta(role) : undefined
     case "ORDER_RETURNED":
     case "ORDER_RESUBMITTED_BY_COLLEAGUE":
+    case "ORDER_CANCELLED_BY_COLLEAGUE":
       return requesterOrdersCta(role)
     case "ORDER_APPROVED_ADMIN":
       return reviewOrderCta(orderId, role === "SUPER_ADMIN")

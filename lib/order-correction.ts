@@ -17,8 +17,11 @@
 /** The upper bound on the approver's comment and the requester's reply. */
 export const ORDER_CORRECTION_TEXT_MAX_LENGTH = 1000
 
-/** How a round closes. An open round has no resolution. */
-export const ORDER_CORRECTION_RESOLUTIONS = ["RESUBMITTED", "REJECTED"] as const
+/**
+ * How a round closes. An open round has no resolution. `CANCELLED` closes a
+ * returned Order Desk order the desk withdrew instead of resubmitting.
+ */
+export const ORDER_CORRECTION_RESOLUTIONS = ["RESUBMITTED", "REJECTED", "CANCELLED"] as const
 export type OrderCorrectionResolution = (typeof ORDER_CORRECTION_RESOLUTIONS)[number]
 
 /** Audit actions, named once so the trail and its tests cannot drift apart. */

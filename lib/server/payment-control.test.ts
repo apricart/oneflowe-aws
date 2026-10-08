@@ -123,8 +123,8 @@ describe("the server module", () => {
     expect(moduleSource).not.toMatch(/paymentStatus|payment_status/)
   })
 
-  it("decides through the pure policy and nowhere else", () => {
-    expect(moduleSource).toContain("resolvePaymentControl({ overdue, exception, now })")
+  it("decides through the pure policy and nowhere else, at the limit the seam read", () => {
+    expect(moduleSource).toContain("resolvePaymentControl({ overdue, exception, now, threshold: overdue.blockThreshold })")
     expect(moduleSource).not.toMatch(/overdueCount\s*>=/)
   })
 
@@ -190,8 +190,20 @@ describe("the seam", () => {
     expect(body).toContain("amountCents: null")
   })
 
-  it("lists a bounded number of invoices", () => {
-    expect(body).toContain(".limit(UNPAID_INVOICE_ITEMS_LIMIT)")
+  it("lists a bounded number of invoices — at least the organization's limit, so the date it was reached is known", () => {
+    expect(body).toContain("const itemsLimit = Math.max(UNPAID_INVOICE_ITEMS_LIMIT, blockThreshold)")
+    expect(body).toContain(".limit(itemsLimit)")
+  })
+
+  // plans/OF-ORDERING-BLOCK-configurable-thresholds.md
+  it("reads the organization's own limit from the same row as the toggle, never from a request", () => {
+    const selectAt = body.indexOf(".select({")
+    const thresholdAt = body.indexOf("threshold: organizations.unpaidInvoiceBlockThreshold")
+    const fromAt = body.indexOf(".from(organizations)")
+    expect(thresholdAt).toBeGreaterThan(selectAt)
+    expect(fromAt).toBeGreaterThan(thresholdAt)
+    expect(body).toContain("const blockThreshold = orderingBlockThresholdOrDefault(organization.threshold)")
+    expect(body).toContain("blockThreshold,")
   })
 })
 

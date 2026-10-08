@@ -34,6 +34,10 @@ import { organizationUpdateSchema, validationMessage } from "@/lib/server/mutati
 import { getRequestScope } from "@/lib/auth"
 import { UNPAID_INVOICE_ORDERING_BLOCK_AUDIT_ACTION } from "@/lib/unpaid-invoice-block"
 import { UNACKNOWLEDGED_DELIVERY_ORDERING_BLOCK_AUDIT_ACTION } from "@/lib/unacknowledged-delivery-block"
+import {
+  UNACKNOWLEDGED_DELIVERY_BLOCK_THRESHOLD_AUDIT_ACTION,
+  UNPAID_INVOICE_BLOCK_THRESHOLD_AUDIT_ACTION,
+} from "@/lib/ordering-block-threshold"
 import { ORGANIZATION_BUDGETS_AUDIT_ACTION } from "@/lib/organization-budget-policy"
 import { ORGANIZATION_MANAGED_ORDERING_AUDIT_ACTION } from "@/lib/order-desk-access"
 
@@ -46,6 +50,8 @@ const VERBATIM_ORGANIZATION_FIELDS = [
   "orderApprovalRequired",
   "blockOrderingOnUnpaidInvoices",
   "blockOrderingOnUnacknowledgedDeliveries",
+  "unpaidInvoiceBlockThreshold",
+  "unacknowledgedDeliveryBlockThreshold",
   "budgetsEnabled",
   "managedOrdering",
 ] as const satisfies ReadonlyArray<keyof OrganizationUpdateInput>
@@ -159,6 +165,8 @@ export async function PATCH(
           orderApprovalRequired: organizations.orderApprovalRequired,
           blockOrderingOnUnpaidInvoices: organizations.blockOrderingOnUnpaidInvoices,
           blockOrderingOnUnacknowledgedDeliveries: organizations.blockOrderingOnUnacknowledgedDeliveries,
+          unpaidInvoiceBlockThreshold: organizations.unpaidInvoiceBlockThreshold,
+          unacknowledgedDeliveryBlockThreshold: organizations.unacknowledgedDeliveryBlockThreshold,
           managedOrdering: organizations.managedOrdering,
           budgetsEnabled: organizations.budgetsEnabled,
         })
@@ -262,6 +270,7 @@ export async function PATCH(
       }
 
       await auditOrderingBlockToggles(tx, { userId: scope.userId, orgId, body, existingOrganization })
+      await auditOrderingBlockThresholds(tx, { userId: scope.userId, orgId, body, existingOrganization })
 
       // Switching budgets off removes a spending control from every branch of
       // the tenant, and switching them on can stop a branch without an
@@ -362,6 +371,52 @@ async function auditOrderingBlockToggles(
       metadata: {
         previousBlockOrderingOnUnacknowledgedDeliveries: existingOrganization.blockOrderingOnUnacknowledgedDeliveries,
         blockOrderingOnUnacknowledgedDeliveries: body.blockOrderingOnUnacknowledgedDeliveries,
+      },
+    })
+  }
+}
+
+/**
+ * Raising or lowering a limit can stop, or release, a branch at once, so each
+ * change is on the trail with what it replaced — independently of the toggle,
+ * since a limit may be set while its block is off. Same transaction as the
+ * change (plans/OF-ORDERING-BLOCK-configurable-thresholds.md).
+ */
+async function auditOrderingBlockThresholds(
+  tx: OrganizationTx,
+  { userId, orgId, body, existingOrganization }: {
+    userId: string
+    orgId: number
+    body: OrganizationUpdateInput
+    existingOrganization: { unpaidInvoiceBlockThreshold: number; unacknowledgedDeliveryBlockThreshold: number }
+  },
+): Promise<void> {
+  const base = { userId, organizationId: orgId, entity: "organization", entityId: String(orgId) }
+
+  if (
+    body.unpaidInvoiceBlockThreshold !== undefined
+    && body.unpaidInvoiceBlockThreshold !== existingOrganization.unpaidInvoiceBlockThreshold
+  ) {
+    await tx.insert(auditLogs).values({
+      ...base,
+      action: UNPAID_INVOICE_BLOCK_THRESHOLD_AUDIT_ACTION,
+      metadata: {
+        previousUnpaidInvoiceBlockThreshold: existingOrganization.unpaidInvoiceBlockThreshold,
+        unpaidInvoiceBlockThreshold: body.unpaidInvoiceBlockThreshold,
+      },
+    })
+  }
+
+  if (
+    body.unacknowledgedDeliveryBlockThreshold !== undefined
+    && body.unacknowledgedDeliveryBlockThreshold !== existingOrganization.unacknowledgedDeliveryBlockThreshold
+  ) {
+    await tx.insert(auditLogs).values({
+      ...base,
+      action: UNACKNOWLEDGED_DELIVERY_BLOCK_THRESHOLD_AUDIT_ACTION,
+      metadata: {
+        previousUnacknowledgedDeliveryBlockThreshold: existingOrganization.unacknowledgedDeliveryBlockThreshold,
+        unacknowledgedDeliveryBlockThreshold: body.unacknowledgedDeliveryBlockThreshold,
       },
     })
   }

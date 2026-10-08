@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { NextRequest } from "next/server"
 import * as mockedNextAuth from "next-auth"
 import sharp from "sharp"
-import { and, desc, eq } from "drizzle-orm"
+import { and, count, desc, eq, sql } from "drizzle-orm"
 
 import * as ordersRoute from "@/app/api/v1/orders/route"
 import * as targetsRoute from "@/app/api/v1/order-desk/targets/route"
@@ -21,6 +21,7 @@ import * as publicImageRoute from "@/app/api/v1/images/[...key]/route"
 import * as usersRoute from "@/app/api/v1/users/route"
 import * as userAccessRoute from "@/app/api/v1/users/[id]/access/route"
 import * as organizationRoute from "@/app/api/v1/organizations/[id]/route"
+import * as executiveApproveRoute from "@/app/api/v1/executive/approvals/[id]/approve/route"
 import {
   auditLogs,
   branches,
@@ -52,6 +53,12 @@ import { stageDeliveryChallan } from "./helpers/delivery-challan-fixtures"
  * only identity, request headers, the rate limiter, the cache, password
  * hashing, outbound email and the S3 calls faked. Every authorization, reach,
  * ledger and audit decision runs for real.
+ *
+ * Every desk order now starts PENDING and an Apricart Executive approves it
+ * (plans/OF-EXEC-APPROVAL-executive-approves-desk-orders.md); a test that
+ * needs an Active order gets one through `createActiveOrder`, which has the
+ * executive approve it through the real route. The executive's own behaviour
+ * is in executive-desk-approval-api.test.ts.
  * See plans/OF-ORDER-DESK-internal-order-entry.md.
  */
 const mocks = vi.hoisted(() => ({
@@ -90,7 +97,10 @@ const { getServerSession } = mockedNextAuth
 
 type Actor = { id: string; email: string; role: string; organizationId: number | null; branchId: number | null }
 
+let signedIn: Actor | null = null
+
 function signIn(actor: Actor | null) {
+  signedIn = actor
   vi.mocked(getServerSession).mockResolvedValue(
     actor === null ? null : ({ user: { ...actor, fullName: actor.email, mustChangePassword: false } } as any),
   )
@@ -128,7 +138,7 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
   let pngBytes: Buffer
   const createdUserIds: string[] = []
 
-  const actor = (kind: "super" | "head" | "desk" | "desk2" | "deskOff" | "viewer" | "portal"): Actor => {
+  const actor = (kind: "super" | "head" | "desk" | "desk2" | "deskOff" | "viewer" | "portal" | "executive"): Actor => {
     const table = {
       super: { id: f.superAdminId, role: "SUPER_ADMIN", organizationId: null, branchId: null },
       head: { id: f.headOfficeId, role: "HEAD_OFFICE", organizationId: f.organizationA, branchId: null },
@@ -137,6 +147,7 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
       deskOff: { id: f.deskOffId, role: "ORDER_DESK", organizationId: null, branchId: null },
       viewer: { id: f.viewerId, role: "VIEWER", organizationId: f.organizationA, branchId: f.branchA1 },
       portal: { id: f.portalId, role: "ORDER_PORTAL", organizationId: f.organizationA, branchId: f.branchA1 },
+      executive: { id: f.executiveId, role: "APRICART_EXECUTIVE", organizationId: null, branchId: null },
     } as const
     return { ...table[kind], email: `${kind}-${f.suffix}@example.test` }
   }
@@ -158,6 +169,29 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
 
   const createOrder = async (body: unknown, key = idempotencyKey()) =>
     read(await ordersRoute.POST(jsonRequest("http://localhost/api/v1/orders", "POST", body, { "Idempotency-Key": key })))
+
+  /** An executive assigned to the order's organization approves it, then the caller is signed back in. */
+  const approveAsExecutive = async (orderId: number) => {
+    const caller = signedIn
+    const [row] = await db.select({ updatedAt: orders.updatedAt }).from(orders).where(eq(orders.id, orderId))
+    signIn(actor("executive"))
+    const approved = await read(await executiveApproveRoute.POST(
+      jsonRequest(`http://localhost/api/v1/executive/approvals/${orderId}/approve`, "POST", {
+        expectedUpdatedAt: row.updatedAt ? row.updatedAt.toISOString() : null,
+      }),
+      params(orderId),
+    ))
+    expect(approved.status, "executive approval").toBe(200)
+    signIn(caller)
+  }
+
+  /** A desk order taken through its executive approval: Active, ready for delivery. */
+  const createActiveOrder = async (body: unknown, key = idempotencyKey()) => {
+    const created = await createOrder(body, key)
+    expect(created.status, "desk order created").toBe(200)
+    await approveAsExecutive(created.body.order.id)
+    return created
+  }
 
   const targets = async () => read(await targetsRoute.GET())
   const catalogue = async (organizationId: number, branchId: number) => read(await catalogueRoute.GET(
@@ -321,18 +355,20 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
   })
 
   describe("creating an order", () => {
-    it("creates it Active, answerable to the desk user, with where it came from", async () => {
+    it("creates it pending for an Apricart Executive, with where it came from", async () => {
       const stockBefore = await stock()
       signIn(actor("desk"))
       const { status, body } = await createOrder(deskOrderBody())
 
       expect(status).toBe(200)
-      expect(body.order.status).toBe("APPROVED")
+      expect(body.order.status).toBe("PENDING")
       expect(body.order.approvalTokenHash).toBeUndefined()
 
       const row = await storedOrder(body.order.id)
-      expect(row.approvedByUserId).toBe(f.deskId)
-      expect(row.approvedAt).toBeInstanceOf(Date)
+      // Nobody has approved it, and there is no fulfilment token yet.
+      expect(row.approvedByUserId).toBeNull()
+      expect(row.approvedAt).toBeNull()
+      expect(row.approvalTokenHash).toBeNull()
       expect(row.createdByRole).toBe("ORDER_DESK")
       expect(row.intakeChannel).toBe("WHATSAPP")
       expect(row.intakeReference).toBe("Ali, 05 Oct 10:14")
@@ -348,7 +384,7 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
         eq(systemLogs.action, "ORDER_CREATE"),
         eq(systemLogs.resourceId, String(body.order.id)),
       ))
-      expect(log.details).toMatchObject({ autoApproved: true, approvalBasis: "ORDER_DESK_ENTRY" })
+      expect(log.details).toMatchObject({ autoApproved: false, approvalBasis: "APRICART_EXECUTIVE_APPROVAL" })
     })
 
     it("answers a retried submission with the same order", async () => {
@@ -557,21 +593,28 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
       expect((await listDeskOrders("status=everything")).status).toBe(400)
     })
 
-    it("is fulfilled by the desk only after Super Admin records delivery", async () => {
+    it("is fulfilled by the desk only after an executive approves it and Super Admin records delivery", async () => {
       signIn(actor("desk"))
       const created = await createOrder(bOrderBody(1))
       const orderId = created.body.order.id
       const before = await budgetB1()
 
-      // Not delivered yet: the desk cannot fulfil, and offers edit and cancel.
+      // Pending: the desk may edit or cancel it, and cannot fulfil it.
+      let listed = (await listDeskOrders("status=awaiting_approval&limit=50")).body.items.find((item: any) => item.id === orderId)
+      expect(listed).toMatchObject({ status: "PENDING", canEdit: true, canCancel: true, canResubmit: false, canFulfil: false })
       expect((await fulfil(orderId)).status).toBe(409)
-      let listed = (await listDeskOrders("status=active&limit=50")).body.items.find((item: any) => item.id === orderId)
-      expect(listed).toMatchObject({ canEdit: true, canCancel: true, canFulfil: false, canRequestRefund: false })
+
+      await approveAsExecutive(orderId)
+
+      // Approved, not delivered yet: the desk cannot fulfil, and may only cancel.
+      expect((await fulfil(orderId)).status).toBe(409)
+      listed = (await listDeskOrders("status=awaiting_delivery&limit=50")).body.items.find((item: any) => item.id === orderId)
+      expect(listed).toMatchObject({ canEdit: false, canCancel: true, canFulfil: false, canRequestRefund: false })
 
       await superDeliver(orderId)
 
       signIn(actor("desk"))
-      listed = (await listDeskOrders("status=active&limit=50")).body.items.find((item: any) => item.id === orderId)
+      listed = (await listDeskOrders("status=ready_to_fulfil&limit=50")).body.items.find((item: any) => item.id === orderId)
       expect(listed).toMatchObject({ fulfillmentStatus: "DELIVERED", canEdit: false, canCancel: false, canFulfil: true })
 
       const done = await fulfil(orderId)
@@ -653,7 +696,7 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
 
     it("refuses to cancel an order Super Admin has marked delivered", async () => {
       signIn(actor("desk"))
-      const created = await createOrder(deskOrderBody())
+      const created = await createActiveOrder(deskOrderBody())
       await superDeliver(created.body.order.id)
       signIn(actor("desk"))
       expect((await cancel(created.body.order.id)).status).toBe(409)
@@ -679,7 +722,8 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
       expect(edited.body.totalCents).toBe(5 * ORDER_DESK_FIXTURE_PRICE_CENTS.base)
 
       const row = await storedOrder(orderId)
-      expect(row.status).toBe("APPROVED")
+      // Still waiting for the executive, who now sees the edited lines.
+      expect(row.status).toBe("PENDING")
       expect(Number(row.totalCents)).toBe(5 * ORDER_DESK_FIXTURE_PRICE_CENTS.base)
       expect(row.notes).toBe("Customer added three more")
       expect(row.poNumber).toBe("PO-2")
@@ -717,9 +761,17 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
       expect((await editOrder(orderId, { items: [{ organizationInventoryId: f.inventoryA, quantity: 1 }], status: "FULFILLED" })).status).toBe(400)
       expect(Number((await storedOrder(orderId)).totalCents)).toBe(totalBefore)
 
+      // Once an executive approves it, the lines are fixed: an edit would
+      // change what was approved.
+      await approveAsExecutive(orderId)
+      const approved = await editOrder(orderId, { items: [{ organizationInventoryId: f.inventoryA, quantity: 1 }] })
+      expect(approved.status).toBe(409)
+      expect(approved.body.error).toMatch(/approved order cannot be edited/)
+
       await superDeliver(orderId)
       signIn(actor("desk"))
       expect((await editOrder(orderId, { items: [{ organizationInventoryId: f.inventoryA, quantity: 1 }] })).status).toBe(409)
+      expect(Number((await storedOrder(orderId)).totalCents)).toBe(totalBefore)
     })
 
     it("refuses an edit once the branch is no longer one the desk may order for", async () => {
@@ -738,7 +790,7 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
   describe("refunds", () => {
     it("lets the desk request a refund on a fulfilled order for Super Admin to approve", async () => {
       signIn(actor("desk"))
-      const created = await createOrder(bOrderBody(2))
+      const created = await createActiveOrder(bOrderBody(2))
       const orderId = created.body.order.id
       const [line] = await db.select({ id: orderItems.id }).from(orderItems).where(eq(orderItems.orderId, orderId))
 
@@ -892,6 +944,312 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
       expect(row.managedOrdering).toBe(false)
       const [user] = await db.select({ organizationId: users.organizationId }).from(users).where(eq(users.id, f.deskId))
       expect(user.organizationId).toBeNull()
+    })
+  })
+
+  describe("retries and races", () => {
+    beforeAll(() => {
+      process.env.S3_UPLOADS_BUCKET = "it-order-desk"
+      process.env.S3_UPLOADS_REGION = "ap-south-1"
+    })
+
+    afterAll(() => {
+      delete process.env.S3_UPLOADS_BUCKET
+      delete process.env.S3_UPLOADS_REGION
+    })
+
+    it("answers a retried submission that carries a screenshot with the order it created", async () => {
+      signIn(actor("desk"))
+      const { body: { attachmentKey } } = await upload()
+      const key = idempotencyKey()
+      const body = deskOrderBody({ intakeAttachmentKey: attachmentKey })
+
+      const first = await createOrder(body, key)
+      expect(first.status).toBe(200)
+      // The response was lost and the desk user pressed Create again.
+      const retry = await createOrder(body, key)
+      expect(retry.status).toBe(200)
+      expect(retry.body.replayed).toBe(true)
+      expect(retry.body.order.id).toBe(first.body.order.id)
+
+      // The same key with a different draft is still a conflict, never a second order.
+      expect((await createOrder({ ...body, intakeReference: "a different message" }, key)).status).toBe(409)
+      // A genuinely new submission still may not reuse the screenshot.
+      const reused = await createOrder(body)
+      expect(reused.status).toBe(400)
+      expect(reused.body.error).toMatch(/already attached/)
+      expect(await db.select({ id: orders.id }).from(orders).where(eq(orders.intakeAttachmentKey, attachmentKey))).toHaveLength(1)
+    })
+
+    it("creates one order when the same draft is submitted twice at once", async () => {
+      signIn(actor("desk"))
+      const { body: { attachmentKey } } = await upload()
+      const key = idempotencyKey()
+      const body = deskOrderBody({ intakeAttachmentKey: attachmentKey })
+      const stockBefore = await stock()
+
+      const results = await Promise.all([createOrder(body, key), createOrder(body, key)])
+
+      expect(results.map((result) => result.status)).toEqual([200, 200])
+      expect(results[0].body.order.id).toBe(results[1].body.order.id)
+      expect(results.filter((result) => result.body.replayed === true)).toHaveLength(1)
+      expect(await stock()).toBe(stockBefore - 2)
+    })
+
+    it("answers a double submission with one order for every role, not a 500", async () => {
+      // The shared creation path: the same lost race happens in the shop.
+      signIn(actor("portal"))
+      const key = idempotencyKey()
+      const body = { items: [{ organizationInventoryId: f.inventoryA, quantity: 1 }] }
+      const results = await Promise.all([createOrder(body, key), createOrder(body, key)])
+      expect(results.map((result) => result.status)).toEqual([200, 200])
+      expect(results[0].body.order.id).toBe(results[1].body.order.id)
+      expect(await db.select({ id: orders.id }).from(orders).where(and(
+        eq(orders.createdByUserId, f.portalId),
+        eq(orders.idempotencyKey, key),
+      ))).toHaveLength(1)
+    })
+
+    it("cancels an approved order once when two cancels race, releasing stock and the hold once", async () => {
+      signIn(actor("desk"))
+      const stockBefore = await stock()
+      const heldBefore = (await budgetB1()).held
+      const orderId = (await createActiveOrder(bOrderBody(3))).body.order.id
+
+      const results = await Promise.all([cancel(orderId), cancel(orderId)])
+
+      expect(results.map((result) => result.status).sort((a, b) => a - b)).toEqual([200, 409])
+      expect(await stock()).toBe(stockBefore)
+      expect((await budgetB1()).held).toBe(heldBefore)
+      const trail = await db.select({ id: auditLogs.id }).from(auditLogs).where(and(
+        eq(auditLogs.action, "ORDER_CANCELLED"),
+        eq(auditLogs.entityId, String(orderId)),
+      ))
+      expect(trail).toHaveLength(1)
+    })
+
+    it("fulfils once when two fulfils race, moving the hold to spent once", async () => {
+      signIn(actor("desk"))
+      const orderId = (await createActiveOrder(bOrderBody(2))).body.order.id
+      await superDeliver(orderId)
+      signIn(actor("desk"))
+      const before = await budgetB1()
+
+      const results = await Promise.all([fulfil(orderId), fulfil(orderId)])
+
+      expect(results.map((result) => result.status).sort((a, b) => a - b)).toEqual([200, 409])
+      const after = await budgetB1()
+      expect(after.held).toBe(before.held - 2 * ORDER_DESK_FIXTURE_PRICE_CENTS.base)
+      expect(after.spent).toBe(before.spent + 2 * ORDER_DESK_FIXTURE_PRICE_CENTS.base)
+    })
+
+    it("leaves stock and the hold whole when an edit races a cancel", async () => {
+      signIn(actor("desk"))
+      const stockBefore = await stock()
+      const heldBefore = (await budgetB1()).held
+      const orderId = (await createOrder(bOrderBody(2))).body.order.id
+
+      const [edited, cancelled] = await Promise.all([
+        editOrder(orderId, { items: [{ organizationInventoryId: f.inventoryB, quantity: 5 }] }),
+        cancel(orderId),
+      ])
+
+      // Whichever takes the lock first, the cancel lands and releases what the order then holds.
+      expect(cancelled.status).toBe(200)
+      expect([200, 409]).toContain(edited.status)
+      expect((await storedOrder(orderId)).status).toBe("CANCELLED")
+      expect(await stock()).toBe(stockBefore)
+      expect((await budgetB1()).held).toBe(heldBefore)
+    })
+  })
+
+  describe("the edges of the desk's reach", () => {
+    it("can still withdraw an order at a branch deactivated after it was placed, but not order there", async () => {
+      signIn(actor("desk"))
+      const orderId = (await createOrder(deskOrderBody({ branchId: f.branchA2 }))).body.order.id
+      await db.update(branches).set({ status: "inactive" }).where(eq(branches.id, f.branchA2))
+      try {
+        expect((await createOrder(deskOrderBody({ branchId: f.branchA2 }))).status).toBe(403)
+        expect((await catalogue(f.organizationA, f.branchA2)).status).toBe(403)
+        const listed = await listDeskOrders(`status=awaiting_approval&branchId=${f.branchA2}&limit=50`)
+        expect(listed.body.items.map((item: any) => item.id)).toContain(orderId)
+        expect((await cancel(orderId)).status).toBe(200)
+      } finally {
+        await db.update(branches).set({ status: "active" }).where(eq(branches.id, f.branchA2))
+      }
+    })
+
+    it("gives a deactivated desk user nothing, not even the orders it entered", async () => {
+      signIn(actor("desk"))
+      const orderId = (await createOrder(deskOrderBody())).body.order.id
+      // The account is switched off while its token is still in flight.
+      await db.update(users).set({ isActive: false }).where(eq(users.id, f.deskId))
+      try {
+        expect((await listDeskOrders("status=all&limit=50")).body.items).toEqual([])
+        expect((await cancel(orderId)).status).toBe(404)
+        expect((await fulfil(orderId)).status).toBe(404)
+        expect((await editOrder(orderId, { items: [{ organizationInventoryId: f.inventoryA, quantity: 1 }] })).status).toBe(404)
+        expect((await attachment(orderId)).status).toBe(404)
+        expect((await refundHistory(orderId)).status).toBe(403)
+        expect((await createOrder(deskOrderBody())).status).toBe(403)
+        expect((await storedOrder(orderId)).status).toBe("PENDING")
+      } finally {
+        await db.update(users).set({ isActive: true }).where(eq(users.id, f.deskId))
+      }
+    })
+
+    it("refuses a session that still owes a password change", async () => {
+      vi.mocked(getServerSession).mockResolvedValue({
+        user: { ...actor("desk"), fullName: "desk", mustChangePassword: true },
+      } as any)
+      expect((await createOrder(deskOrderBody())).status).toBe(403)
+    })
+
+    it("shows desk orders to the customer's own Head Office as orders of its branch that Apricart decides", async () => {
+      signIn(actor("desk"))
+      const orderId = (await createOrder(deskOrderBody())).body.order.id
+      signIn(actor("head"))
+      const seen = await read(await ordersRoute.GET(get(`http://localhost/api/v1/orders?id=${orderId}`)))
+      expect(seen.status).toBe(200)
+      expect(seen.body.items.map((item: any) => item.id)).toEqual([orderId])
+      expect(seen.body.items[0].status).toBe("PENDING")
+      expect(seen.body.items[0].decidedByApricart).toBe(true)
+      // The creator's role itself is never in the response.
+      expect(seen.body.items[0].createdByRole).toBeUndefined()
+    })
+  })
+
+  describe("malformed input", () => {
+    it("is refused on every desk write, and changes nothing", async () => {
+      signIn(actor("desk"))
+      const orderId = (await createOrder(deskOrderBody())).body.order.id
+      const before = await storedOrder(orderId)
+      const stockBefore = await stock()
+
+      expect((await cancel(orderId, { reason: "x", status: "APPROVED" })).status).toBe(400)
+      expect((await cancel(orderId, { reason: "x".repeat(501) })).status).toBe(400)
+
+      const line = (organizationInventoryId: number, quantity: unknown) => ({ organizationInventoryId, quantity })
+      for (const items of [
+        [line(f.inventoryA, 1), line(f.inventoryA, 2)],
+        [line(f.inventoryA, 1.5)],
+        [line(f.inventoryA, 0)],
+        [line(f.inventoryA, -1)],
+        [line(f.inventoryA, "lots")],
+      ]) {
+        expect((await editOrder(orderId, { items })).status, JSON.stringify(items)).toBe(400)
+      }
+      const badId = await read(await deskOrderRoute.PUT(
+        jsonRequest("http://localhost/api/v1/order-desk/orders/abc", "PUT", { items: [line(f.inventoryA, 1)] }),
+        params("abc"),
+      ))
+      expect(badId.status).toBe(400)
+
+      const catalogueWith = async (query: string) => read(await catalogueRoute.GET(get(`http://localhost/api/v1/order-desk/catalogue?${query}`)))
+      expect((await catalogueWith(`organizationId=${f.organizationA}`)).status).toBe(400)
+      expect((await catalogueWith(`organizationId=${f.organizationA}&branchId=${f.branchA1}&extra=1`)).status).toBe(400)
+
+      expect((await createOrder(deskOrderBody({ intakeReference: "x".repeat(256) }))).status).toBe(400)
+      expect((await createOrder(deskOrderBody({ intakeChannel: "whatsapp" }))).status).toBe(400)
+      expect((await createOrder(deskOrderBody({ intakeAttachmentKey: "order-intake/../products/x.png" }))).status).toBe(400)
+
+      const after = await storedOrder(orderId)
+      expect(after.status).toBe(before.status)
+      expect(Number(after.totalCents)).toBe(Number(before.totalCents))
+      expect(await stock()).toBe(stockBefore)
+    })
+  })
+
+  describe("the ordering gates", () => {
+    it("holds the desk to the unacknowledged-delivery block, which the desk clears by fulfilling", async () => {
+      const unacknowledgedAtA2 = async () => {
+        const [row] = await db.select({ n: count() }).from(orders).where(and(
+          eq(orders.branchId, f.branchA2),
+          sql`UPPER(${orders.status}) = 'APPROVED'`,
+          sql`${orders.fulfillmentStatus} = 'DELIVERED'`,
+        ))
+        return Number(row.n)
+      }
+      const existing = await unacknowledgedAtA2()
+      await db.update(organizations)
+        .set({ blockOrderingOnUnacknowledgedDeliveries: true, unacknowledgedDeliveryBlockThreshold: existing + 1 })
+        .where(eq(organizations.id, f.organizationA))
+      try {
+        signIn(actor("desk"))
+        const orderId = (await createActiveOrder(deskOrderBody({ branchId: f.branchA2 }))).body.order.id
+        await superDeliver(orderId)
+
+        signIn(actor("desk"))
+        const blocked = await createOrder(deskOrderBody({ branchId: f.branchA2 }))
+        expect(blocked.status).toBe(409)
+        expect(blocked.body.code).toBe("UNACKNOWLEDGED_DELIVERIES_BLOCKED")
+
+        expect((await fulfil(orderId)).status).toBe(200)
+        expect((await createOrder(deskOrderBody({ branchId: f.branchA2 }))).status).toBe(200)
+      } finally {
+        await db.update(organizations)
+          .set({ blockOrderingOnUnacknowledgedDeliveries: false, unacknowledgedDeliveryBlockThreshold: 2 })
+          .where(eq(organizations.id, f.organizationA))
+      }
+    })
+  })
+
+  describe("the order list after refunds", () => {
+    it("keeps a fully refunded desk order on the Fulfilled tab", async () => {
+      signIn(actor("desk"))
+      const orderId = (await createActiveOrder(bOrderBody(1))).body.order.id
+      await superDeliver(orderId)
+      signIn(actor("desk"))
+      expect((await fulfil(orderId)).status).toBe(200)
+      const [line] = await db.select({ id: orderItems.id }).from(orderItems).where(eq(orderItems.orderId, orderId))
+
+      signIn(actor("super"))
+      expect((await requestRefund(orderId, { items: [{ id: line.id, quantity: 1 }], reason: "Returned in full" })).status).toBe(200)
+      expect((await storedOrder(orderId)).status).toBe("REFUNDED")
+
+      signIn(actor("desk"))
+      const row = (await listDeskOrders("status=fulfilled&limit=50")).body.items.find((item: any) => item.id === orderId)
+      expect(row).toMatchObject({
+        status: "REFUNDED",
+        refundedCents: ORDER_DESK_FIXTURE_PRICE_CENTS.base,
+        canEdit: false,
+        canCancel: false,
+        canFulfil: false,
+        canRequestRefund: false,
+      })
+    })
+
+    it("counts each tab exactly as the tab lists it, and every order on one tab", async () => {
+      signIn(actor("desk"))
+      const { body } = await listDeskOrders("status=all&limit=1")
+      const tabs = ["awaiting_approval", "awaiting_delivery", "ready_to_fulfil", "fulfilled", "rejected", "cancelled", "all"] as const
+      for (const tab of tabs) {
+        const listed = await listDeskOrders(`status=${tab}&limit=1`)
+        expect(listed.body.pagination.total, tab).toBe(body.counts[tab])
+      }
+      const { awaiting_approval, awaiting_delivery, ready_to_fulfil, fulfilled, rejected, cancelled, all } = body.counts
+      expect(awaiting_approval).toBeGreaterThan(0)
+      expect(awaiting_approval + awaiting_delivery + ready_to_fulfil + fulfilled + rejected + cancelled).toBe(all)
+    })
+
+    it("bounds the page size and treats search wildcards literally", async () => {
+      signIn(actor("desk"))
+      const big = await listDeskOrders("status=all&limit=5000&page=0")
+      expect(big.body.pagination).toMatchObject({ page: 1, limit: 50 })
+      expect(big.body.items.length).toBeLessThanOrEqual(50)
+      for (const wildcard of ["%", "_"]) {
+        const found = await listDeskOrders(`status=all&q=${encodeURIComponent(wildcard)}`)
+        expect(found.status).toBe(200)
+        expect(found.body.items, wildcard).toEqual([])
+      }
+      expect((await listDeskOrders(`status=all&q=${"x".repeat(101)}`)).status).toBe(400)
+
+      const reference = `Ref-${f.suffix}`
+      const orderId = (await createOrder(deskOrderBody({ intakeReference: reference }))).body.order.id
+      expect((await listDeskOrders(`status=all&q=${reference}`)).body.items.map((item: any) => item.id)).toEqual([orderId])
+      // desk2 does not reach A1, so the same search finds nothing.
+      signIn(actor("desk2"))
+      expect((await listDeskOrders(`status=all&q=${reference}`)).body.items).toEqual([])
     })
   })
 })

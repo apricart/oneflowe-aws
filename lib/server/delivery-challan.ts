@@ -24,9 +24,11 @@ import { sanitizeRasterUpload } from "@/lib/server/upload-security"
  * Delivery challans: storing, attaching, replacing and reading them.
  * See plans/OF-DELIVERY-CHALLAN-proof-of-delivery.md and `lib/delivery-challan.ts`.
  *
- * Who may *write* is Super Admin, checked by each route; who may *read* is
- * whoever may read the order (`canReadOrderDetail`), checked by the read
- * routes. Nothing here widens either.
+ * Who may *write* is Super Admin, and the warehouse for orders at the branches
+ * assigned to it (plans/OF-WAREHOUSE-warehouse-fulfilment-role.md), checked by
+ * each route; who may *read* is whoever may read the order
+ * (`canReadOrderDetail`), or the warehouse within its branches, checked by the
+ * read routes. Nothing here widens either.
  */
 
 const PDF_SIGNATURE = Buffer.from("%PDF-", "latin1")
@@ -223,6 +225,93 @@ export async function replaceDeliveryChallan(input: {
     })
   } catch (error) {
     if (error instanceof Error && error.message === "DELIVERY_CHALLAN_NOT_ATTACHABLE") return { kind: "invalid-challan" }
+    throw error
+  }
+}
+
+export type AddDeliveryChallanOutcome =
+  | { kind: "attached" }
+  | { kind: "not-found" }
+  | { kind: "not-delivered"; status: string }
+  | { kind: "already-has-challan" }
+  | { kind: "invalid-challan" }
+
+/**
+ * Attach a challan to a delivered order that has **none** — the warehouse,
+ * whose challan is optional at delivery, adding it afterwards
+ * (plans/OF-WAREHOUSE-warehouse-fulfilment-role.md). It never replaces one:
+ * replacing stays Super Admin's (`replaceDeliveryChallan`). Under the order's
+ * row lock, with the caller's scope re-checked inside the same transaction.
+ */
+export async function addDeliveryChallanToDeliveredOrder(input: {
+  orderId: number
+  challanId: number
+  actor: AuditActor & { id: string }
+  /** The caller's scope, re-checked under the lock; false reads as not found. */
+  guardInTransaction: (tx: any, order: { organizationId: number | null; branchId: number }) => Promise<boolean>
+}): Promise<AddDeliveryChallanOutcome> {
+  try {
+    return await db.transaction(async (tx) => {
+      const [order] = await tx
+        .select({
+          id: orders.id,
+          tid: orders.tid,
+          organizationId: orders.organizationId,
+          branchId: orders.branchId,
+          fulfillmentStatus: orders.fulfillmentStatus,
+        })
+        .from(orders)
+        .where(eq(orders.id, input.orderId))
+        .for("update")
+        .limit(1)
+      if (!order) return { kind: "not-found" } as const
+      if (!await input.guardInTransaction(tx, { organizationId: order.organizationId, branchId: order.branchId })) {
+        return { kind: "not-found" } as const
+      }
+      if (!isOrderDelivered(order.fulfillmentStatus)) {
+        return { kind: "not-delivered", status: String(order.fulfillmentStatus ?? "NOT_STARTED") } as const
+      }
+
+      const [current] = await tx
+        .select({ id: orderDeliveryChallans.id })
+        .from(orderDeliveryChallans)
+        .where(and(
+          eq(orderDeliveryChallans.orderId, order.id),
+          isNotNull(orderDeliveryChallans.attachedAt),
+          isNull(orderDeliveryChallans.replacedAt),
+        ))
+        .limit(1)
+      if (current) return { kind: "already-has-challan" } as const
+
+      const attached = await attachDeliveryChallan(tx, {
+        challanId: input.challanId,
+        orderId: order.id,
+        actorUserId: input.actor.id,
+        at: new Date(),
+      })
+      if (!attached) return { kind: "invalid-challan" } as const
+
+      await recordAuditEvent(tx, {
+        action: "ADD_DELIVERY_CHALLAN",
+        entity: "order",
+        entityId: order.id,
+        actor: input.actor,
+        organizationId: order.organizationId,
+        branchId: order.branchId,
+        before: { deliveryChallanId: null },
+        after: { deliveryChallanId: input.challanId },
+        context: { tid: order.tid },
+      })
+      return { kind: "attached" } as const
+    })
+  } catch (error) {
+    // Belt and braces behind the row lock: a second current challan trips the
+    // one-current-challan index rather than being stored.
+    const violated = (candidate: unknown) => (candidate as { constraint?: unknown } | null)?.constraint
+    if (violated(error) === "order_delivery_challans_current_uq"
+      || violated((error as { cause?: unknown } | null)?.cause) === "order_delivery_challans_current_uq") {
+      return { kind: "already-has-challan" }
+    }
     throw error
   }
 }

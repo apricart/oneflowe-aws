@@ -18,9 +18,16 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { ExecutiveApproversCard } from "@/components/order-desk/executive-approvers-card"
 import { toast } from "@/hooks/use-toast"
 import { fetcher } from "@/lib/fetcher"
-import { describeDeskReach, toggleReachBranch, toggleReachOrganization, type DeskReachDraft } from "@/lib/order-desk-team-view"
+import {
+  describeDeskReach,
+  reachDraftFor,
+  toggleReachBranch,
+  toggleReachOrganization,
+  type DeskReachDraft,
+} from "@/lib/order-desk-team-view"
 
 type Member = {
   id: string
@@ -241,10 +248,8 @@ function AccessDialog({
   onClose: () => void
   onSaved: () => void
 }>) {
-  const [reach, setReach] = useState<DeskReachDraft>({
-    organizationIds: new Set(member.organizationIds),
-    branchIds: new Set(member.branchIds),
-  })
+  // Only grants the editor can show, so a stale one cannot make every save fail.
+  const [reach, setReach] = useState<DeskReachDraft>(() => reachDraftFor(member, organizations))
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
 
@@ -332,7 +337,7 @@ export function DeskTeamManager() {
           <div>
             <h1 className="text-xl font-semibold">Order Desk Team</h1>
             <p className="text-sm text-muted-foreground">
-              Apricart staff who enter and fulfil orders for managed organizations. Their orders are Active immediately.
+              Apricart staff who enter and fulfil orders for managed organizations, and the executives who approve them.
             </p>
           </div>
         </div>
@@ -399,6 +404,8 @@ export function DeskTeamManager() {
           )}
         </CardContent>
       </Card>
+
+      <ExecutiveApproversCard />
 
       <AddDeskUserDialog open={adding} onOpenChange={setAdding} organizations={organizations} onSaved={() => { void mutate() }} />
       {editing && (

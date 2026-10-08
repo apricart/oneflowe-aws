@@ -67,6 +67,22 @@ export function filledLines(draft: Pick<DeskDraft, "quantities">): { organizatio
     .map(([id, raw]) => ({ organizationInventoryId: Number(id), raw: raw.trim() }))
 }
 
+/**
+ * Filled-in lines whose product the branch catalogue no longer offers — it was
+ * hidden, deactivated or unassigned after it was chosen, or after the order
+ * being edited was placed. The form has no row for them, so it must list them
+ * to be removed; otherwise the draft can never be sent and nothing says why.
+ */
+export function unavailableDraftLines(
+  quantities: Readonly<Record<number, string>>,
+  catalogue: readonly Pick<DeskCatalogueItem, "organizationInventoryId">[],
+): number[] {
+  const offered = new Set(catalogue.map((item) => item.organizationInventoryId))
+  return filledLines({ quantities })
+    .map((line) => line.organizationInventoryId)
+    .filter((id) => !offered.has(id))
+}
+
 /** The filled-in lines, validated against the branch catalogue, or why not. */
 export function buildDeskOrderLines(
   quantities: Readonly<Record<number, string>>,

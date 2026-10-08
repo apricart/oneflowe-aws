@@ -40,12 +40,12 @@ import { hasTestDatabase } from "./helpers/pricing-fixtures"
  *
  * ```text
  * envelope (requester's own)
- *   North   FULFILLED + DELIVERED, this month   -> refundable
+ *   North   FULFILLED + DELIVERED a day ago     -> refundable
  *             Rice  4 x 10.00 (whole units)
  *             Flour 3 x 20.00 (decimal, step 0.5)
  *   South   APPROVED, not delivered              -> "fulfilled and delivered"
  *   Outside FULFILLED + DELIVERED, branch not in the requester's group -> out of scope
- *   Old     FULFILLED + DELIVERED, last month    -> "refund period has ended"
+ *   Old     FULFILLED + DELIVERED 8 days ago    -> "refund period has ended"
  * other envelope (same tenant, another requester) -> 404
  * ```
  *
@@ -74,10 +74,8 @@ async function roleId(name: string): Promise<number> {
   return created.id
 }
 
-function lastMonth(): Date {
-  const now = new Date()
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 15, 12))
-}
+const DAY_MS = 24 * 60 * 60 * 1000
+const daysAgo = (days: number): Date => new Date(Date.now() - days * DAY_MS)
 
 async function createFixtures() {
   const suffix = randomUUID().slice(0, 8)
@@ -161,7 +159,7 @@ async function createFixtures() {
     fulfillmentStatus: string
     groupOrderId: number
     createdByUserId?: string
-    createdAt?: Date
+    fulfilledAt?: Date
     lines: Array<{ productId: number; name: string; quantity: number; priceCents: number }>
   }) => {
     const totalCents = input.lines.reduce((sum, line) => sum + Math.round(line.quantity * line.priceCents), 0)
@@ -176,7 +174,9 @@ async function createFixtures() {
       subtotalCents: totalCents,
       taxCents: 0,
       totalCents,
-      createdAt: input.createdAt ?? new Date(),
+      // A fulfilled order carries its fulfilment time; the seven-day refund
+      // window runs from it.
+      fulfilledAt: input.status === "FULFILLED" ? (input.fulfilledAt ?? daysAgo(1)) : null,
     }).returning({ id: orders.id })
 
     const items = await db.insert(orderItems).values(input.lines.map((line) => ({
@@ -217,7 +217,7 @@ async function createFixtures() {
     branchId: old.id,
     ...delivered,
     groupOrderId: envelopeId,
-    createdAt: lastMonth(),
+    fulfilledAt: daysAgo(8),
     lines: [{ productId: rice.id, name: `Rice ${suffix}`, quantity: 1, priceCents: 1_000 }],
   })
   const theirOrder = await order({
@@ -339,7 +339,7 @@ describe.skipIf(!hasTestDatabase)("group refund requests", () => {
   })
 
   describe("the workspace", () => {
-    it("offers only the delivered, in-scope, this-month order and says why each other one is not refundable", async () => {
+    it("offers only the delivered, in-scope, recently fulfilled order and says why each other one is not refundable", async () => {
       const { status, body } = await workspace(f.envelopeId)
       expect(status).toBe(200)
       const item = body.item

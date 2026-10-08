@@ -19,6 +19,8 @@
  */
 
 import { isOrderDelivered } from "@/lib/fulfillment-status"
+import { isAwaitingCorrection } from "@/lib/order-correction"
+import { requesterRefundTimingReason } from "@/lib/refund-window"
 
 export const ORDER_DESK_ROLE = "ORDER_DESK" as const
 export const ORDER_DESK_LABEL = "Order Desk (Apricart)"
@@ -84,6 +86,11 @@ export const ORDER_DESK_API_RULES: readonly OrderDeskApiRule[] = [
     pattern: /^\/api\/v1\/order-desk\/orders\/\d+\/cancel$/,
   },
   {
+    route: "app/api/v1/order-desk/orders/[id]/resubmit/route.ts",
+    methods: ["POST"],
+    pattern: /^\/api\/v1\/order-desk\/orders\/\d+\/resubmit$/,
+  },
+  {
     route: "app/api/v1/order-desk/orders/[id]/attachment/route.ts",
     methods: ["GET"],
     pattern: /^\/api\/v1\/order-desk\/orders\/\d+\/attachment$/,
@@ -110,6 +117,14 @@ export const ORDER_DESK_API_RULES: readonly OrderDeskApiRule[] = [
     methods: ["POST"],
     pattern: /^\/api\/v1\/users\/me\/email-verification\/verify$/,
   },
+  // Self-service password reset, linked from the workspace's profile menu.
+  // Public endpoints that read no session, so a signed-in desk user reaching
+  // them gains nothing a signed-out visitor does not already have.
+  ...(["request", "verify", "complete"] as const).map((step) => ({
+    route: `app/api/v1/auth/password-reset/${step}/route.ts`,
+    methods: ["POST"],
+    pattern: new RegExp(`^/api/v1/auth/password-reset/${step}$`),
+  })),
 ]
 
 /** Exact match after trailing-slash normalisation — never a prefix. */
@@ -216,15 +231,12 @@ export function resolveDeskReach(input: DeskReachInput, purpose: DeskReachPurpos
 // Orders
 // ---------------------------------------------------------------------------
 
-/** Recorded in the creation log so the trail says why the order skipped approval. */
-export const ORDER_DESK_APPROVAL_BASIS = "ORDER_DESK_ENTRY"
-
 /**
- * A desk order is created Active (`APPROVED`), whatever the organization's own
- * approval switch says: the customer's message is the request, and the named
- * desk user who keyed it in is the one answerable for it.
+ * A desk order is created `PENDING`, whatever the organization's own approval
+ * switch says, and waits for an Apricart Executive assigned to that
+ * organization. Who decides it is `lib/order-desk-approval.ts`.
  */
-export function orderDeskBypassesApproval(creatorRole: unknown): boolean {
+export function orderDeskRequiresExecutiveApproval(creatorRole: unknown): boolean {
   return isOrderDeskRole(creatorRole)
 }
 
@@ -279,30 +291,49 @@ export function orderIntakeError(
 }
 
 export type DeskOrderActions = {
-  /** Active and not yet delivered: the lines can still change. */
+  /**
+   * Pending — awaiting approval or returned for correction. Never after
+   * approval: an edit then would change what the executive approved.
+   */
   canEdit: boolean
-  /** Active and not yet delivered: it can still be withdrawn. */
+  /** Pending, or Active and not yet delivered: it can still be withdrawn. */
   canCancel: boolean
+  /** Returned for correction: corrected (or not) and sent back for approval. */
+  canResubmit: boolean
   /** Active and delivered (Super Admin records delivery): ready to settle. */
   canFulfil: boolean
-  /** Fulfilled and delivered: a refund can be requested for Super Admin to approve. */
+  /**
+   * Fulfilled, delivered, and within seven days of fulfilment: a refund can be
+   * requested for Super Admin to approve.
+   */
   canRequestRefund: boolean
 }
 
 /**
- * What the desk may do with one of its orders, by state. Delivery itself is not
- * the desk's to record — Super Admin moves it — and no order is fulfilled
- * before that delivery is recorded. The server enforces each of these again.
+ * What the desk may do with one of its orders, by state. Approval is an
+ * executive's (`lib/order-desk-approval.ts`), delivery is Super Admin's, and no
+ * order is fulfilled before that delivery is recorded. The server enforces each
+ * of these again.
  */
-export function deskOrderActions(order: { status: string | null; fulfillmentStatus: string | null }): DeskOrderActions {
+export function deskOrderActions(
+  order: {
+    status: string | null
+    fulfillmentStatus: string | null
+    fulfilledAt: Date | string | null
+    returnedForCorrectionAt?: Date | string | null
+  },
+  now: Date = new Date(),
+): DeskOrderActions {
   const status = String(order.status ?? "").toUpperCase()
   const delivered = isOrderDelivered(order.fulfillmentStatus)
+  const pending = status === "PENDING"
   const active = status === "APPROVED"
   return {
-    canEdit: active && !delivered,
-    canCancel: active && !delivered,
+    canEdit: pending,
+    canCancel: pending || (active && !delivered),
+    canResubmit: isAwaitingCorrection({ status, returnedForCorrectionAt: order.returnedForCorrectionAt }),
     canFulfil: active && delivered,
-    canRequestRefund: status === "FULFILLED" && delivered,
+    canRequestRefund: requesterRefundTimingReason({ ...order, status }, now) === null,
   }
 }
 

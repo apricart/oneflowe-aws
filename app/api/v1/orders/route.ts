@@ -3,7 +3,7 @@ import { createHash,randomBytes } from "node:crypto"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
-import { budgets,orders,orderItems,organizationInventory,branchInventory,branches,globalProducts,productQuantityBudgets,refunds,systemLogs,groupAuditLogs,organizations,refundItems } from "@/db/schema"
+import { budgets,orders,orderItems,organizationInventory,branchInventory,branches,globalProducts,productQuantityBudgets,refunds,systemLogs,groupAuditLogs,organizations,refundItems,groups } from "@/db/schema"
 import { headers } from "next/headers"
 import { and,desc,eq,gte,ilike,lte,or,sql,inArray,isNotNull,isNull,type AnyColumn,type SQL } from "drizzle-orm"
 import { logOrderActivity } from "@/lib/global-logger"
@@ -56,6 +56,7 @@ import { parseSortParams } from "@/lib/table-sort"
 import { orderBySortSql } from "@/lib/server/sort-sql"
 import { mayCreateOrder } from "@/lib/order-creation-access"
 import { isOrderDeskRole, orderIntakeError } from "@/lib/order-desk-access"
+import { isDeskEnteredOrder } from "@/lib/order-desk-approval"
 import { isOrderDeskTarget } from "@/lib/server/order-desk-scope"
 import { deskAttachmentRefusal } from "@/lib/server/order-desk-attachments"
 
@@ -331,9 +332,20 @@ function sanitizeOrderListItems(items: any[], context: any) {
       configuredApproverRole: context.capabilities.orderApproverRole,
     })
     // Derived, read-only, and the same for every role: which rows came from a
-    // Group Order Portal submission. The envelope id itself stays server-side.
-    const { createdByUserId: _createdByUserId, groupOrderId: _groupOrderId, ...publicItem } = item
-    const withOrigin = { ...publicItem, placedByGroupPortal: isGroupPortalOrder(item) }
+    // Group Order Portal submission, and which the Order Desk entered — those
+    // an Apricart Executive decides, never the tenant's approvers. The envelope
+    // id and the creator's role themselves stay server-side.
+    const {
+      createdByUserId: _createdByUserId,
+      createdByRole: _createdByRole,
+      groupOrderId: _groupOrderId,
+      ...publicItem
+    } = item
+    const withOrigin = {
+      ...publicItem,
+      placedByGroupPortal: isGroupPortalOrder(item),
+      decidedByApricart: isDeskEnteredOrder(item),
+    }
     const safeItem = context.pricesHidden ? {
       ...withOrigin,
       subtotalCents: null,
@@ -867,6 +879,7 @@ function resolveOrderTenant(role: string, sessionOrganizationId: unknown, reques
  */
 async function orderDeskCreationRefusal(role: unknown, input: {
   userId: string
+  idempotencyKey: string
   organizationId: number
   branchId: number
   intakeChannel?: string
@@ -879,9 +892,14 @@ async function orderDeskCreationRefusal(role: unknown, input: {
   if (!await isOrderDeskTarget(db, { userId: input.userId, organizationId: input.organizationId, branchId: input.branchId })) {
     return NextResponse.json({ error: ORDER_DESK_TARGET_UNAVAILABLE }, { status: 403 })
   }
-  // The screenshot must be one this desk user uploaded, not yet on any order.
+  // The screenshot must be one this desk user uploaded, not yet on any order
+  // other than the one this same submission already created (a retry).
   const attachmentError = input.intakeAttachmentKey
-    ? await deskAttachmentRefusal({ userId: input.userId, key: input.intakeAttachmentKey })
+    ? await deskAttachmentRefusal({
+      userId: input.userId,
+      key: input.intakeAttachmentKey,
+      idempotencyKey: input.idempotencyKey,
+    })
     : null
   return attachmentError ? NextResponse.json({ error: attachmentError }, { status: 400 }) : null
 }
@@ -1063,11 +1081,14 @@ async function preflightCreationBudget(context: {
 }
 
 async function getOrderCreationErrorResponse(caughtError: any, replayContext: any) {
-  // Two desk orders raced to claim one screenshot; the loser is told plainly.
-  if (caughtError?.code === "23505" && String(caughtError?.constraint ?? caughtError?.cause?.constraint ?? "") === "orders_intake_attachment_key_uq") {
-    return NextResponse.json({ error: "That screenshot is already attached to another order" }, { status: 409 })
-  }
-  if (caughtError?.code === "23505" && replayContext) {
+  // Drizzle wraps the driver's error, so the Postgres code and constraint are on
+  // `cause`; reading only the top level turned every lost race into a 500.
+  const uniqueViolation = String(caughtError?.code ?? caughtError?.cause?.code ?? "") === "23505"
+  // A duplicate submission of the same draft lost the race to its twin. Which
+  // unique index Postgres reports first is not defined — the idempotency key or,
+  // on a desk order, the screenshot both collide — so the twin is looked for
+  // before the screenshot conflict is reported.
+  if (uniqueViolation && replayContext) {
     const [existingOrder] = await db.select({ ...orderSelectColumns, requestFingerprint: orders.requestFingerprint })
       .from(orders).where(and(
         eq(orders.createdByUserId, replayContext.userId),
@@ -1075,6 +1096,10 @@ async function getOrderCreationErrorResponse(caughtError: any, replayContext: an
       )).limit(1)
     const replayResponse = getOrderReplayResponse(existingOrder, replayContext.requestFingerprint, replayContext.pricesHidden)
     if (replayResponse) return replayResponse
+  }
+  // Two different desk orders raced to claim one screenshot; the loser is told plainly.
+  if (uniqueViolation && String(caughtError?.constraint ?? caughtError?.cause?.constraint ?? "") === "orders_intake_attachment_key_uq") {
+    return NextResponse.json({ error: "That screenshot is already attached to another order" }, { status: 409 })
   }
   if (isPaymentControlBlockedError(caughtError)) {
     return NextResponse.json(
@@ -1207,6 +1232,9 @@ export async function GET(req: NextRequest) {
         branchCity: branches.city,
         branchProvince: branches.province,
         branchCostCenterId: branches.costCenterId,
+        // The order's branch's group, joined the same way as the Order Report
+        // so the two downloads name the same group for the same order.
+        groupName: groups.name,
         hasRefundRequests: sql<number>`(
           SELECT COUNT(*)::int
           FROM ${refunds}
@@ -1224,6 +1252,7 @@ export async function GET(req: NextRequest) {
           WHERE ${orderItems.orderId} = ${orders.id}
         )`,
         createdByUserId: orders.createdByUserId,
+        createdByRole: orders.createdByRole,
         groupOrderId: orders.groupOrderId,
         approvedByUserId: orders.approvedByUserId,
         approvalToken: orders.approvalToken, // Will be filtered before return
@@ -1231,6 +1260,7 @@ export async function GET(req: NextRequest) {
       .from(orders)
       .leftJoin(branches, eq(orders.branchId, branches.id))
       .leftJoin(organizations, eq(orders.organizationId, organizations.id))
+      .leftJoin(groups, eq(branches.groupId, groups.id))
 
     const { page, limit, offset } = params
     const items = await (conditions.length
@@ -1368,6 +1398,7 @@ export async function POST(req: NextRequest) {
     }
     const orderDeskRefusal = await orderDeskCreationRefusal(role, {
       userId,
+      idempotencyKey,
       organizationId,
       branchId,
       intakeChannel,

@@ -4,9 +4,8 @@ import { requireApiRole } from "@/lib/api"
 import { getCurrentUser } from "@/lib/auth"
 import { db } from "@/lib/db"
 import { handleError } from "@/lib/error-handler"
-import { isOrderIntakeAttachmentKey } from "@/lib/order-desk-access"
 import { withRateLimit } from "@/lib/rate-limiter"
-import { contentTypeForKey, getImage, isImageStorageConfigured } from "@/lib/server/image-storage"
+import { intakeAttachmentResponse } from "@/lib/server/order-desk-attachments"
 import { loadDeskOrder } from "@/lib/server/order-desk-orders"
 
 /**
@@ -33,31 +32,8 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
     }
 
     const order = await loadDeskOrder(db, user.id, orderId)
-    if (!order || !isOrderIntakeAttachmentKey(order.intakeAttachmentKey)) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 })
-    }
-
-    if (!isImageStorageConfigured()) {
-      return NextResponse.json({ error: "Image storage is not configured" }, { status: 503 })
-    }
-    const object = await getImage(order.intakeAttachmentKey)
-    if (!object?.body) return NextResponse.json({ error: "Not found" }, { status: 404 })
-
-    const headers = new Headers({
-      // From the key the server generated, never from what the browser sent.
-      "Content-Type": contentTypeForKey(order.intakeAttachmentKey),
-      // One customer's material: never in a shared cache.
-      "Cache-Control": "private, no-store, max-age=0",
-      "X-Content-Type-Options": "nosniff",
-      // Shown in the browser so the desk can read the message. Safe to inline:
-      // every upload was re-encoded through sharp into a plain raster, and the
-      // sandbox policy keeps the response from running anything regardless.
-      "Content-Disposition": "inline",
-      "Content-Security-Policy": "default-src 'none'; img-src 'self'; sandbox",
-    })
-    if (object.contentLength !== undefined) headers.set("Content-Length", String(object.contentLength))
-
-    return new NextResponse(object.body.transformToWebStream(), { headers })
+    if (!order) return NextResponse.json({ error: "Not found" }, { status: 404 })
+    return await intakeAttachmentResponse(order.intakeAttachmentKey)
   } catch (error) {
     const handled = handleError(error, "GET /api/v1/order-desk/orders/[id]/attachment")
     return NextResponse.json({ error: handled.message }, { status: handled.status })

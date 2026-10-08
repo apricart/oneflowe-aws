@@ -16,6 +16,7 @@ import {
   type OrderCorrectionRefusal,
   type OrderCorrectionResolution,
 } from "@/lib/order-correction"
+import { decisionQueuesNotifications, isDeskEnteredOrder } from "@/lib/order-desk-approval"
 import {
   canRequesterActOnOrder,
   describeOrderWrite,
@@ -145,12 +146,16 @@ export async function returnOrderForCorrection(input: {
       requestedAt: returnedAt,
     }).returning({ id: orderCorrectionRequests.id })
 
-    const notifications = await queueOrderReturnedNotification(tx, {
-      order: claimed,
-      correctionRequestId: request.id,
-      comment: input.comment,
-      returnedByRole: authorization.decisionRole,
-    })
+    // An executive returning an Order Desk order tells no one: the desk sees
+    // it on its own list, and the raiser is no tenant user to notify.
+    const notifications = decisionQueuesNotifications(authorization.decisionRole)
+      ? await queueOrderReturnedNotification(tx, {
+        order: claimed,
+        correctionRequestId: request.id,
+        comment: input.comment,
+        returnedByRole: authorization.decisionRole,
+      })
+      : { eventKeys: [] as string[], recipientCount: 0 }
 
     await recordAuditEvent(tx, {
       action: ORDER_RETURNED_FOR_CORRECTION_ACTION,
@@ -232,6 +237,7 @@ export async function resubmitOrderForApproval(input: {
         organizationId: orders.organizationId,
         branchId: orders.branchId,
         createdByUserId: orders.createdByUserId,
+        createdByRole: orders.createdByRole,
         returnedForCorrectionAt: orders.returnedForCorrectionAt,
         returnedForCorrectionByUserId: orders.returnedForCorrectionByUserId,
       }).from(orders).where(and(
@@ -257,6 +263,9 @@ export async function resubmitOrderForApproval(input: {
         branchOrganizationId: orderBranch?.organizationId,
       }
       if (!canRequesterActOnOrder(writeActor, subject)) return { kind: "not-found" } as const
+      // The Order Desk resubmits its own entries (`resubmitDeskOrder`); the
+      // branch's requesters never do.
+      if (isDeskEnteredOrder(order)) return { kind: "not-found" } as const
 
       const refusal = resubmissionRefusal(order)
       if (refusal) return { kind: "invalid-state", refusal, status: order.status } as const

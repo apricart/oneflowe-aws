@@ -12,6 +12,31 @@ export type DeskReachDraft = {
 }
 
 /**
+ * What the Access dialog opens with: the member's grants, narrowed to the
+ * managed organizations the editor can show.
+ *
+ * A grant to an organization that has since stopped being managed reaches
+ * nothing — the server ignores it — and has no checkbox, so it cannot be
+ * unticked. The server also refuses to store it again, so carrying it into the
+ * draft would make every save for this person fail. Saving drops it instead.
+ */
+export function reachDraftFor(
+  member: { organizationIds: readonly number[]; branchIds: readonly number[] },
+  organizations: readonly { id: number; branches: readonly { id: number }[] }[],
+): DeskReachDraft {
+  const shown = new Set(organizations.map((organization) => organization.id))
+  const organizationIds = new Set(member.organizationIds.filter((id) => shown.has(id)))
+  const branchIds = new Set<number>()
+  for (const organization of organizations) {
+    if (organizationIds.has(organization.id)) continue
+    for (const branch of organization.branches) {
+      if (member.branchIds.includes(branch.id)) branchIds.add(branch.id)
+    }
+  }
+  return { organizationIds, branchIds }
+}
+
+/**
  * Tick or untick a whole organization. Ticking it makes its single-branch
  * grants redundant, so they are dropped rather than sent twice.
  */

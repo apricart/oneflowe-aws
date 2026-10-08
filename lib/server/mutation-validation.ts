@@ -33,7 +33,15 @@ import {
 } from "@/lib/organization-join"
 import { MAX_PRICE_CENTS } from "@/lib/price-ladder"
 import { CANCELLATION_REASON_MAX_LENGTH, INTAKE_CHANNELS, INTAKE_REFERENCE_MAX_LENGTH } from "@/lib/order-desk-access"
+import { GROUP_ORDER_CANCEL_REASON_MAX_LENGTH } from "@/lib/group-order-cancel"
+import { APRICART_EXECUTIVE_ASSIGNMENT_MAX } from "@/lib/apricart-executive-access"
+import { WAREHOUSE_ASSIGNMENT_MAX_PER_ORGANIZATION, WAREHOUSE_CITY_MAX_LENGTH } from "@/lib/warehouse-access"
 import { MAX_ALLOWLIST_ENTRIES } from "@/lib/security/ip-allowlist"
+import {
+  DEFAULT_ORDERING_BLOCK_THRESHOLD,
+  ORDERING_BLOCK_THRESHOLD_MAX,
+  ORDERING_BLOCK_THRESHOLD_MIN,
+} from "@/lib/ordering-block-threshold"
 import {
   MAX_PO_NUMBER_LENGTH,
   PO_NUMBER_MESSAGE,
@@ -70,6 +78,9 @@ export const systemRoleSchema = z.enum([
   // Apricart's management: reads the delivery dashboard across every
   // organization and nothing else (`lib/apricart-executive-access.ts`).
   "APRICART_EXECUTIVE",
+  // Apricart's warehouse: picks, dispatches and delivers the approved orders
+  // of the branches assigned to it (`lib/warehouse-access.ts`).
+  "WAREHOUSE",
 ])
 
 export type SystemRole = z.infer<typeof systemRoleSchema>
@@ -142,6 +153,25 @@ export const userScopeUpdateSchema = z.object({
 export const orderDeskAssignmentsUpdateSchema = z.object({
   organizationIds: assignedIdList,
   branchIds: assignedIdList,
+}).strict()
+
+/**
+ * Replaces the organizations an Apricart Executive approves Order Desk orders
+ * for. Sending an empty list withdraws every approval reach.
+ */
+export const apricartExecutiveAssignmentsUpdateSchema = z.object({
+  organizationIds: z.array(positiveId)
+    .max(APRICART_EXECUTIVE_ASSIGNMENT_MAX)
+    .refine(isUniquePositiveIdList, { message: "Duplicate ids are not allowed" }),
+}).strict()
+
+/**
+ * An Apricart Executive approving an Order Desk order: the order's `updatedAt`
+ * as it was listed to them, so an edit since then makes the approval a
+ * conflict rather than approving lines they did not see.
+ */
+export const executiveOrderApprovalSchema = z.object({
+  expectedUpdatedAt: z.iso.datetime({ offset: true }).nullable(),
 }).strict()
 
 export const userProfileUpdateSchema = z.object({
@@ -260,6 +290,14 @@ const organizationEmailDomain = z
   })
   .transform((domain) => domain || null)
 
+// How many unpaid invoices / unacknowledged deliveries stop a branch ordering.
+// A JSON number only: "3" is refused, not coerced (lib/ordering-block-threshold.ts).
+const organizationOrderingBlockThreshold = z
+  .number()
+  .int()
+  .min(ORDERING_BLOCK_THRESHOLD_MIN)
+  .max(ORDERING_BLOCK_THRESHOLD_MAX)
+
 export const organizationCreateSchema = z.object({
   name: z.string().trim().min(2).max(100),
   code: z.string().trim().min(2).max(20).regex(/^\w+$/),
@@ -270,6 +308,8 @@ export const organizationCreateSchema = z.object({
   orderApprovalRequired: z.boolean().optional().default(true),
   blockOrderingOnUnpaidInvoices: z.boolean().optional().default(false),
   blockOrderingOnUnacknowledgedDeliveries: z.boolean().optional().default(false),
+  unpaidInvoiceBlockThreshold: organizationOrderingBlockThreshold.optional().default(DEFAULT_ORDERING_BLOCK_THRESHOLD),
+  unacknowledgedDeliveryBlockThreshold: organizationOrderingBlockThreshold.optional().default(DEFAULT_ORDERING_BLOCK_THRESHOLD),
   // Off unless asked for: an organization created in the application starts
   // without budget allocation (DEFAULT_ORGANIZATION_BUDGETS_ENABLED).
   budgetsEnabled: z.boolean().optional().default(false),
@@ -296,6 +336,8 @@ export const organizationUpdateSchema = z.object({
   orderApprovalRequired: z.boolean().optional(),
   blockOrderingOnUnpaidInvoices: z.boolean().optional(),
   blockOrderingOnUnacknowledgedDeliveries: z.boolean().optional(),
+  unpaidInvoiceBlockThreshold: organizationOrderingBlockThreshold.optional(),
+  unacknowledgedDeliveryBlockThreshold: organizationOrderingBlockThreshold.optional(),
   budgetsEnabled: z.boolean().optional(),
   managedOrdering: z.boolean().optional(),
   budgetAllocationMode: z.enum(["money", "quantity"]).optional(),
@@ -384,6 +426,11 @@ export const orderDeskCancelSchema = z.object({
   reason: z.string().trim().min(1, "A reason is required").max(CANCELLATION_REASON_MAX_LENGTH),
 }).strict()
 
+/** A group requester withdrawing a pending group order (`plans/OF-GROUP-cancel-pending-group-orders.md`). */
+export const groupOrderCancelSchema = z.object({
+  reason: z.string().trim().min(1, "A reason is required").max(GROUP_ORDER_CANCEL_REASON_MAX_LENGTH),
+}).strict()
+
 export const orderUpdateSchema = z.object({
   items: orderMutationItemsSchema,
   notes: z.string().trim().max(2_000).optional(),
@@ -445,6 +492,53 @@ export const fulfillmentStatusSchema = z.object({
     })
   }
 })
+
+/**
+ * The warehouse moving an order's delivery one stage forward. Unlike Super
+ * Admin's progress body, a delivery challan is **optional** when marking an
+ * order delivered (plans/OF-WAREHOUSE-warehouse-fulfilment-role.md), and still
+ * refused at any other stage.
+ */
+export const warehouseProgressSchema = z.object({
+  fulfillmentStatus: z.enum(["IN_PROCESS", "OUT_FOR_DELIVERY", "DELIVERED"]),
+  deliveryChallanId: positiveId.optional(),
+}).strict().superRefine((input, context) => {
+  if (input.fulfillmentStatus !== "DELIVERED" && input.deliveryChallanId !== undefined) {
+    context.addIssue({
+      code: "custom",
+      path: ["deliveryChallanId"],
+      message: "A delivery challan is attached only when the order is marked delivered",
+    })
+  }
+})
+
+/** The warehouse attaching a challan to a delivered order that has none. */
+export const warehouseChallanAttachSchema = z.object({
+  deliveryChallanId: positiveId,
+}).strict()
+
+/**
+ * Replaces the branches one warehouse user serves **in one organization**.
+ * Sending an empty list withdraws that organization's branches only; the
+ * user's branches in other organizations are untouched.
+ */
+export const warehouseBranchAssignmentsUpdateSchema = z.object({
+  organizationId: positiveId,
+  branchIds: z.array(positiveId)
+    .max(WAREHOUSE_ASSIGNMENT_MAX_PER_ORGANIZATION)
+    .refine(isUniquePositiveIdList, { message: "Duplicate ids are not allowed" }),
+}).strict()
+
+/**
+ * Assigns or withdraws one whole city for one warehouse user. The city is
+ * matched by its normalised key in SQL, so any spelling of it will do; one
+ * city per request keeps the body tiny however many branches it spans.
+ * See plans/OF-WAREHOUSE-city-assignments.md.
+ */
+export const warehouseCityAssignmentUpdateSchema = z.object({
+  city: z.string().trim().min(1).max(WAREHOUSE_CITY_MAX_LENGTH),
+  assigned: z.boolean(),
+}).strict()
 
 /** Replacing a delivered order's challan with another uploaded one. */
 export const deliveryChallanReplaceSchema = z.object({

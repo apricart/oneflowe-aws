@@ -6,7 +6,7 @@ import { orders, branches, organizations, groups } from "@/db/schema"
 import { and, eq, gte, lte, inArray, desc, sql } from "drizzle-orm"
 import { metricExpressions, REVENUE_ELIGIBLE_FILTER } from "@/lib/metric-utils"
 import { redactAnalyticsPrices, shouldHidePricesForRole } from "@/lib/price-visibility"
-import { resolveMultiBranchAnalyticsIds } from "@/lib/server/analytics-scope"
+import { lacksAnalyticsTenant, resolveMultiBranchAnalyticsIds } from "@/lib/server/analytics-scope"
 import { loadAnalyticsAssignedBranchIds } from "@/lib/server/analytics-branch-scope"
 import { parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
 
@@ -188,6 +188,9 @@ export async function GET(req: NextRequest) {
 
         const userRole = ((session.user as any).role || "").toUpperCase().replace(/\s+/g, '_')
         const userOrganizationId = (session.user as any).organizationId
+        if (lacksAnalyticsTenant(userRole, userOrganizationId)) {
+            return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+        }
         const pricesHidden = await shouldHidePricesForRole(userRole, userOrganizationId)
         const respond = (payload: any) => NextResponse.json(
             pricesHidden ? redactAnalyticsPrices({ ...payload, pricesHidden }) : { ...payload, pricesHidden },

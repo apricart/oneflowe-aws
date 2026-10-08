@@ -154,6 +154,10 @@ const VIA_LIB: readonly { file: string; module: string }[] = [
   { file: "app/api/v1/group-portal/orders/route.ts", module: "lib/server/group-order-creation.ts" },
   { file: "app/api/v1/group-portal/refunds/route.ts", module: "lib/server/group-order-refunds.ts" },
   { file: "app/api/v1/group-portal/orders/[groupOrderId]/tokens/route.ts", module: "lib/server/group-order-tokens.ts" },
+  // A group requester cancelling a pending group order records ORDER_CANCELLED
+  // per order inside the transaction that releases its holds and stock.
+  { file: "app/api/v1/group-portal/branch-orders/[orderId]/cancel/route.ts", module: "lib/server/group-order-cancel.ts" },
+  { file: "app/api/v1/group-portal/orders/[groupOrderId]/cancel/route.ts", module: "lib/server/group-order-cancel.ts" },
   { file: "app/api/v1/budgets/cron/expire-addons/route.ts", module: "lib/server/budget-addon-expiry.ts" },
   { file: "app/api/v1/payment-control/exceptions/route.ts", module: "lib/server/payment-control.ts" },
   { file: "app/api/v1/payment-control/exceptions/[id]/revoke/route.ts", module: "lib/server/payment-control.ts" },
@@ -187,6 +191,34 @@ const VIA_LIB: readonly { file: string; module: string }[] = [
   { file: "app/api/v1/order-desk/orders/[id]/cancel/route.ts", module: "lib/server/order-desk-orders.ts" },
   { file: "app/api/v1/order-desk/orders/[id]/route.ts", module: "lib/server/order-desk-edit.ts" },
   { file: "app/api/v1/order-desk/team/[userId]/assignments/route.ts", module: "lib/server/order-desk-team.ts" },
+  // The desk resubmitting an order an executive returned records
+  // ORDER_RESUBMITTED inside the transaction that clears the request.
+  { file: "app/api/v1/order-desk/orders/[id]/resubmit/route.ts", module: "lib/server/order-desk-orders.ts" },
+
+  // An Apricart Executive deciding an Order Desk order goes through the very
+  // service the tenant approvers use, so it records the same ORDER_APPROVED /
+  // ORDER_REJECTED / ORDER_RETURNED_FOR_CORRECTION rows, with
+  // decisionRole APRICART_EXECUTIVE. A Super Admin assigning an executive's
+  // organizations records inside the replacement.
+  { file: "app/api/v1/executive/approvals/[id]/approve/route.ts", module: "lib/server/order-decision-service.ts" },
+  { file: "app/api/v1/executive/approvals/[id]/reject/route.ts", module: "lib/server/order-decision-service.ts" },
+  { file: "app/api/v1/executive/approvals/[id]/return/route.ts", module: "lib/server/order-correction.ts" },
+  { file: "app/api/v1/apricart-executives/[userId]/organizations/route.ts", module: "lib/server/apricart-executive-team.ts" },
+
+  // Moving a delivery forward — Super Admin's route and the warehouse's — is
+  // one shared module that writes ORDER_FULFILLMENT_STATUS_UPDATE inside the
+  // transition (and ORDER_FULFILLED_ON_DELIVERY when a waiting hand-off
+  // settles). The warehouse adding a challan to a delivered order records
+  // ADD_DELIVERY_CHALLAN under the order's lock; a Super Admin assigning a
+  // warehouse user's branches records inside the replacement.
+  // See plans/OF-WAREHOUSE-warehouse-fulfilment-role.md.
+  { file: "app/api/v1/orders/[id]/fulfillment-status/route.ts", module: "lib/server/order-fulfillment-progress.ts" },
+  { file: "app/api/v1/warehouse/orders/[id]/progress/route.ts", module: "lib/server/order-fulfillment-progress.ts" },
+  { file: "app/api/v1/warehouse/orders/[id]/delivery-challan/route.ts", module: "lib/server/delivery-challan.ts" },
+  { file: "app/api/v1/warehouse-team/[userId]/branches/route.ts", module: "lib/server/warehouse-team.ts" },
+  // Assigning or withdrawing a whole city records inside the change.
+  // See plans/OF-WAREHOUSE-city-assignments.md.
+  { file: "app/api/v1/warehouse-team/[userId]/cities/route.ts", module: "lib/server/warehouse-team.ts" },
 ]
 
 /**
@@ -228,7 +260,6 @@ const LEGACY_DIRECT: readonly string[] = [
   "app/api/v1/inventory/global-products/[id]/route.ts",
   "app/api/v1/inventory/import/route.ts",
   "app/api/v1/inventory/organization-products/route.ts",
-  "app/api/v1/orders/[id]/fulfillment-status/route.ts",
   "app/api/v1/orders/[id]/payment-status/route.ts",
   "app/api/v1/orders/[id]/refunds/route.ts",
   "app/api/v1/orders/[id]/route.ts",
@@ -445,7 +476,9 @@ describe("routes that still audit by hand", () => {
   it("is shrinking, not growing", () => {
     // A number, so migrating one of these to `recordAuditEvent` is a visible,
     // deliberate edit to this file rather than something nobody notices.
-    expect(LEGACY_DIRECT).toHaveLength(38)
+    // 37: the fulfillment-status route moved to VIA_LIB when its transition
+    // became `lib/server/order-fulfillment-progress.ts`, shared with the warehouse.
+    expect(LEGACY_DIRECT).toHaveLength(37)
   })
 })
 

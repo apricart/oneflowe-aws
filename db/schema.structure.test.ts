@@ -16,9 +16,9 @@ import * as schema from "./schema"
  * does not have.
  */
 
-const tables = Object.entries(schema)
-  .filter((entry): entry is [string, PgTable] => entry[1] instanceof PgTable)
-  .map(([exportName, table]) => ({ exportName, config: getTableConfig(table) }))
+const tables = Object.entries(schema).flatMap(([exportName, table]) =>
+  table instanceof PgTable ? [{ exportName, config: getTableConfig(table) }] : [],
+)
 
 const tableNames = new Set(tables.map((table) => table.config.name))
 

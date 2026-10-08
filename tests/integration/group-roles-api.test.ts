@@ -269,6 +269,15 @@ describe.skipIf(!hasTestDatabase)("group-based roles through their real API and 
       })
       expect(byBranch.has(fixtures.foreignBranchId)).toBe(false)
     })
+
+    it("never resolves another tenant's branch into the scope, even from a stale assignment row", async () => {
+      // The fixture assigns the requester to the foreign branch under the
+      // foreign organization — a row the composite keys allow — so only the
+      // resolver's own-organization fence keeps it out.
+      const scoped = await resolveScopedBranchIds(db, fixtures.requesterId)
+      expect(scoped).not.toContain(fixtures.foreignBranchId)
+      expect(scoped).toEqual(expect.arrayContaining([fixtures.alphaNorthId, fixtures.alphaSouthId, fixtures.betaBranchId]))
+    })
   })
 
   describe("Group User approval and reporting values", () => {

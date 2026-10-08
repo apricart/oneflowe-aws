@@ -689,5 +689,18 @@ export const ROLE_TEMPLATES = {
       Permission.ORDER_VIEW,
     ],
   },
+  WAREHOUSE: {
+    name: "Warehouse (Apricart)",
+    description: "Apricart warehouse: picks, dispatches and delivers approved orders for the branches assigned to it",
+    permissions: [
+      // Descriptive only, like every template here. What confines this role is
+      // `lib/warehouse-access.ts` — one page area and an API allowlist enforced
+      // in `proxy.ts` — and each handler's own role and branch-reach check.
+      // Deliberately no ORDER_APPROVE, ORDER_CREATE, PRICING_MANAGE, USER_* or
+      // ORG_* key: it moves a delivery forward and reads, nothing more.
+      Permission.INVENTORY_VIEW,
+      Permission.ORDER_VIEW,
+    ],
+  },
 }
 

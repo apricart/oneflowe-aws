@@ -18,6 +18,8 @@ const ROLE_LEVEL: Record<SystemRole, number> = {
   // Same reasoning as ORDER_DESK: Apricart's own cross-tenant staff, so only
   // Super Admin may create or manage one (`lib/apricart-executive-access.ts`).
   APRICART_EXECUTIVE: 7,
+  // And again: Apricart's warehouse staff (`lib/warehouse-access.ts`).
+  WAREHOUSE: 7,
   SUPER_ADMIN: 8,
 }
 

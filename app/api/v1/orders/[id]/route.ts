@@ -112,6 +112,7 @@ import { orderUpdateSchema, validationMessage } from "@/lib/server/mutation-vali
 import { DELIVERY_ADDRESS_UNAVAILABLE } from "@/lib/delivery-address"
 import { loadApprovedDeliveryAddress } from "@/lib/server/delivery-addresses"
 import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
+import { decisionCapabilitiesForOrder, isDeskEnteredOrder } from "@/lib/order-desk-approval"
 import { loadOrderCorrectionHistory } from "@/lib/server/order-correction"
 import {
   resolveScopedBranchIds,
@@ -186,8 +187,12 @@ async function lockOrderEditAccess(tx: any, context: any) {
   }
 
   // Out of scope reads as "not found", matching the read path, so the response
-  // cannot be used to discover that an order exists at another branch.
-  if (!canRequesterActOnOrder(writeActor, subject)) return { kind: "not-found" } as const
+  // cannot be used to discover that an order exists at another branch. An
+  // order Apricart's Order Desk entered is the desk's to correct, never the
+  // branch's (plans/OF-EXEC-APPROVAL-executive-approves-desk-orders.md).
+  if (!canRequesterActOnOrder(writeActor, subject) || isDeskEnteredOrder(existingOrder)) {
+    return { kind: "not-found" } as const
+  }
   if (!canRequesterEditOrder(writeActor, subject)) {
     return { kind: "invalid-state", status: existingOrder.status } as const
   }
@@ -611,6 +616,7 @@ export async function GET(
       // Selected so the ownership rule below and the requester's history agree
       // on which orders came from a Group Order Portal submission.
       groupOrderId: orders.groupOrderId,
+      createdByRole: orders.createdByRole,
       branchName: branches.name,
       branchOrganizationId: branches.organizationId,
       creatorName: sql<string | null>`COALESCE(
@@ -657,7 +663,10 @@ export async function GET(
   ) {
     return error("Not found", 404)
   }
-  const capabilities = await getOrderDecisionCapabilities(requestScope)
+  const decidedByApricart = isDeskEnteredOrder(item)
+  // An order the Order Desk entered is an Apricart Executive's to decide
+  // (plans/OF-EXEC-APPROVAL-executive-approves-desk-orders.md).
+  const capabilities = decisionCapabilitiesForOrder(await getOrderDecisionCapabilities(requestScope), item)
   const pricesHidden = await shouldHidePricesForRole(currentRole, item.organizationId)
   const {
     approvalToken,
@@ -665,6 +674,7 @@ export async function GET(
     approvalTokenCreatedAt: _approvalTokenCreatedAt,
     branchOrganizationId: _branchOrganizationId,
     groupOrderId: _groupOrderId,
+    createdByRole: _createdByRole,
     ...detailItem
   } = item
   // Same derived, read-only flag the list returns; the envelope id stays here.
@@ -672,7 +682,7 @@ export async function GET(
   // order it did not raise, so reaching many branches does not turn this into a
   // staff directory. Every other role's response is unchanged.
   const safeItem = applyOrderCreatorContactVisibility(
-    { ...detailItem, placedByGroupPortal: isGroupPortalOrder(item) },
+    { ...detailItem, placedByGroupPortal: isGroupPortalOrder(item), decidedByApricart },
     {
       role: currentRole,
       viewerUserId: currentUserId,

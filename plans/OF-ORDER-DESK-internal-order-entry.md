@@ -126,6 +126,12 @@ only, and `/order-desk` is the desk's only page.
 
 ### D5 — Desk orders are Active whatever the tenant's switch says
 
+> **Superseded 2026-10-07** by `plans/OF-EXEC-APPROVAL-executive-approves-desk-orders.md`:
+> every desk order is now created `PENDING` and an Apricart Executive assigned
+> to its organization approves, rejects or returns it. The desk edits only
+> while an order is pending, resubmits returned ones, and may still cancel
+> until delivery. The text below records the original decision.
+
 `resolveInitialOrderApproval` takes the creator from the session. For
 `ORDER_DESK` it writes the same approved values as auto-approval, with two
 additions:
@@ -287,7 +293,12 @@ has no account to notify.
     modules added to the ledger-mover, period-writer and add-on-settlement
     lists;
   - desk cases in `proxy.test.ts`.
-- **Integration:** `tests/integration/order-desk-api.test.ts` (35 tests).
+- **End to end:** `tests/e2e/order-desk.spec.ts` — Super Admin creates and
+  grants a desk user; the desk is confined to its workspace through the real
+  proxy; creates, edits, cancels, fulfils and requests a refund in the browser;
+  Head Office sees the order; the managed switch withdraws the desk.
+- **Integration:** `tests/integration/order-desk-api.test.ts` (50 tests; see
+  the 2026-10-07 review below for the 15 added).
   - 401 without a session; 403 for other roles.
   - Reach: whole versus single branch; an unmanaged organization with a stale
     grant; an inactive branch; an inactive account; a branch named under the
@@ -313,6 +324,33 @@ has no account to notify.
   gate, turns six integration tests red. Dropping the uploader binding, the
   stock restore on cancel, or the hold move on edit each turns its own test
   red.
+
+### Review, 2026-10-07
+
+A second pass over the role and its screens found six faults. Each is fixed,
+and each has a test that fails when the fix is undone.
+
+| # | Fault | Fix | Guarded by |
+|---|---|---|---|
+| R1 | A retried desk order that carried a screenshot (the response was lost, Create pressed again) was refused with "already attached to another order" instead of being answered with the order it had created. | `deskAttachmentRefusal` admits the one order the same desk user created under the same idempotency key, so the route's replay check answers it. | integration "answers a retried submission that carries a screenshot…" |
+| R2 | Two identical submissions at once (a double click) returned **500** to the loser — for every role, not just the desk. Drizzle wraps the driver error, so `23505` sits on `error.cause.code`, and the handler read only `error.code`. | `getOrderCreationErrorResponse` reads the code from both, and looks for the twin before reporting a screenshot conflict. | integration "creates one order when the same draft is submitted twice at once", "…for every role, not a 500"; contract |
+| R3 | Order Desk Team: a grant to an organization that later stopped being managed had no checkbox, could not be unticked, and made every save of that person's access fail (400). | `reachDraftFor` opens the Access dialog with only the grants the editor can show; saving drops the stale ones. | `lib/order-desk-team-view.test.ts`, `components/order-desk/desk-team-manager.test.tsx` |
+| R4 | "Forgot password" in the desk's own profile menu was refused (403) by the proxy allowlist. | The three public `password-reset` endpoints are on `ORDER_DESK_API_RULES`; the contract test asserts they read no session. | `lib/order-desk-access.test.ts`, `proxy.test.ts`, e2e |
+| R5 | A fully refunded desk order (`REFUNDED`) vanished from every tab except All, where it had no stage. | It stays on Fulfilled, labelled "Fully refunded". | `lib/order-desk-query.test.ts`, integration tab-count oracle, component |
+| R6 | A product hidden at the branch after it was chosen stayed in the Edit dialog (or the new-order draft) with no row to clear it, so the edit could never be saved. | `unavailableDraftLines` names those lines with a Remove action. | `lib/order-desk-draft.test.ts`, `components/order-desk/desk-order-dialogs.test.tsx` |
+
+Coverage added in the same pass: races (double cancel, double fulfil, edit
+against cancel — ledger moved exactly once), the desk after its branch is
+deactivated and after its own account is, a session owing a password change,
+malformed input on every desk write, the unacknowledged-delivery gate (the desk
+clears it by fulfilling), the tab-count oracle, page-size bounds and literal
+search wildcards; component tests for the edit, cancel and refund dialogs and
+the team screen; and `tests/e2e/order-desk.spec.ts` for the journeys through a
+real browser and the real proxy.
+
+Not changed, noted: the desk edit moves quantity-budget holds on any existing
+row whatever the allocation mode, exactly as the requester edit does — a shared
+behaviour, not a desk one.
 
 ## 6. Security impact
 

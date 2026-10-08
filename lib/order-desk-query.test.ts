@@ -13,13 +13,13 @@ import {
 const parse = (query: string) => parseDeskOrderListQuery(new URLSearchParams(query))
 
 describe("the desk's order list query", () => {
-  it("opens on the orders waiting for delivery, first page", () => {
+  it("opens on the orders waiting for an executive's approval, first page", () => {
     expect(parse("")).toEqual({
       ok: true,
       value: {
         organizationId: null,
         branchId: null,
-        status: "awaiting_delivery",
+        status: "awaiting_approval",
         search: "",
         page: 1,
         limit: DESK_ORDER_PAGE_SIZE_DEFAULT,
@@ -56,9 +56,12 @@ describe("the desk's order list query", () => {
   })
 
   it("maps each tab to the statuses and delivery state it selects", () => {
+    // A returned order is still PENDING: it stays on Awaiting approval, flagged.
+    expect(deskOrderStatusSelection("awaiting_approval")).toEqual({ statuses: ["PENDING"], delivered: null })
     expect(deskOrderStatusSelection("awaiting_delivery")).toEqual({ statuses: ["APPROVED"], delivered: false })
     expect(deskOrderStatusSelection("ready_to_fulfil")).toEqual({ statuses: ["APPROVED"], delivered: true })
-    expect(deskOrderStatusSelection("fulfilled")).toEqual({ statuses: ["FULFILLED", "PARTIAL", "PARTIALLY_FULFILLED"], delivered: null })
+    expect(deskOrderStatusSelection("fulfilled")).toEqual({ statuses: ["FULFILLED", "PARTIAL", "PARTIALLY_FULFILLED", "REFUNDED"], delivered: null })
+    expect(deskOrderStatusSelection("rejected")).toEqual({ statuses: ["REJECTED"], delivered: null })
     expect(deskOrderStatusSelection("cancelled")).toEqual({ statuses: ["CANCELLED"], delivered: null })
     expect(deskOrderStatusSelection("all")).toEqual({ statuses: null, delivered: null })
   })
@@ -72,14 +75,20 @@ describe("where an order stands", () => {
     ["FULFILLED", "DELIVERED", "fulfilled"],
     ["PARTIALLY_FULFILLED", "DELIVERED", "fulfilled"],
     ["CANCELLED", null, "cancelled"],
-    ["PENDING", null, "other"],
-    ["REFUNDED", "DELIVERED", "other"],
+    // Every desk order starts PENDING, waiting for an Apricart Executive.
+    ["PENDING", null, "awaiting_approval"],
+    ["pending", "NOT_STARTED", "awaiting_approval"],
+    // Fully refunded after fulfilment: still on the Fulfilled tab, never lost to "All".
+    ["REFUNDED", "DELIVERED", "fulfilled"],
+    ["refunded", "DELIVERED", "fulfilled"],
+    ["REJECTED", null, "rejected"],
+    ["ON_HOLD", null, "other"],
   ])("%s / %s is %s", (status, fulfillmentStatus, stage) => {
     expect(deskOrderStage({ status, fulfillmentStatus })).toBe(stage)
   })
 
   it("puts every order on exactly the tab whose selection it matches", () => {
-    for (const [status, fulfillmentStatus] of [["APPROVED", null], ["APPROVED", "DELIVERED"], ["FULFILLED", "DELIVERED"], ["CANCELLED", null]] as const) {
+    for (const [status, fulfillmentStatus] of [["APPROVED", null], ["APPROVED", "DELIVERED"], ["FULFILLED", "DELIVERED"], ["REFUNDED", "DELIVERED"], ["CANCELLED", null]] as const) {
       const stage = deskOrderStage({ status, fulfillmentStatus })
       if (stage === "other") continue
       const selection = deskOrderStatusSelection(stage)

@@ -1,86 +1,17 @@
 import { error, ok, readJson, requireApiRole } from "@/lib/api"
 import { getCurrentUser, verifyResourceAccess } from "@/lib/auth"
-import { db } from "@/lib/db"
-import { auditLogs, orders } from "@/db/schema"
-import { FULFILLMENT_STATUSES, normalizeFulfillmentStatus, type FulfillmentStatus } from "@/lib/fulfillment-status"
-import { orderSelectColumns, transitionOrderFulfillmentStatusColumn } from "@/lib/order-select"
-import { eq } from "drizzle-orm"
+import { normalizeFulfillmentStatus } from "@/lib/fulfillment-status"
 import { fulfillmentStatusSchema, validationMessage } from "@/lib/server/mutation-validation"
-import { settleDeliveredOrderAfterTokenHandoff } from "@/lib/server/order-fulfillment"
-import { attachDeliveryChallan } from "@/lib/server/delivery-challan"
-
-const DELIVERY_CHALLAN_NOT_ATTACHABLE = "DELIVERY_CHALLAN_NOT_ATTACHABLE"
+import { PROGRESS_STATUSES, progressOrderFulfillment } from "@/lib/server/order-fulfillment-progress"
 
 /**
- * The status change, run so that a challan that cannot be attached reads as a
- * refusal rather than a server error. Any other failure still propagates.
+ * Super Admin moves an order's delivery forward one stage. The stage rule, the
+ * compare-and-set, the challan, the audit row and the settlement of a waiting
+ * token hand-off all live in `progressOrderFulfillment`, which the warehouse's
+ * route shares. Here a delivery still needs its challan
+ * (plans/OF-DELIVERY-CHALLAN-proof-of-delivery.md): the body schema demands
+ * one, and `challanRequired` makes the shared module refuse without one too.
  */
-async function runProgressTransition<T>(work: () => Promise<T>): Promise<T | "challan-refused"> {
-  try {
-    return await work()
-  } catch (transitionError) {
-    if (transitionError instanceof Error && transitionError.message === DELIVERY_CHALLAN_NOT_ATTACHABLE) {
-      return "challan-refused"
-    }
-    throw transitionError
-  }
-}
-
-const PROGRESS_STATUSES = FULFILLMENT_STATUSES.filter(
-  (status) => status !== "NOT_STARTED"
-) as FulfillmentStatus[]
-
-/** The order this route reads and, once delivered, may settle. */
-type ProgressOrder = {
-  id: number
-  tid: string
-  organizationId: number | null
-  branchId: number
-}
-
-/**
- * Settle an order whose fulfilment token already reached admin operations.
- *
- * A hand-off does not complete an order on its own — the goods have to arrive —
- * so a token handed over before delivery is remembered on the order. Recording
- * the delivery is the other half of that rule, and this is where it is applied.
- *
- * It runs after the progress transition has committed, never inside it: the
- * settlement opens its own transaction against the same row. It adds no reach —
- * this request has already been authorized against this order, and it settles
- * that order alone, re-asserting the same tenant and branch.
- *
- * An order with no hand-off recorded is left approved exactly as before, which
- * is every order whose token is redeemed by the administrator directly.
- */
-async function settleOnDeliveryIfTokenHandedOff(
-  order: ProgressOrder,
-  actorUserId: string,
-): Promise<boolean> {
-  const outcome = await settleDeliveredOrderAfterTokenHandoff({
-    orderId: order.id,
-    organizationId: order.organizationId,
-    branchId: order.branchId,
-  })
-
-  if (outcome !== "fulfilled") return false
-
-  await db.insert(auditLogs).values({
-    userId: actorUserId,
-    organizationId: order.organizationId,
-    branchId: order.branchId,
-    action: "ORDER_FULFILLED_ON_DELIVERY",
-    entity: "Order",
-    entityId: String(order.id),
-    metadata: {
-      tid: order.tid,
-      reason: "Fulfilment token was already handed to admin operations; delivery completed the order",
-    },
-  })
-
-  return true
-}
-
 export async function POST(
   req: Request,
   props: { params: Promise<{ id: string }> }
@@ -105,94 +36,37 @@ export async function POST(
     return error("Invalid fulfillment status", 400)
   }
 
-  const [order] = await db.select(orderSelectColumns).from(orders).where(eq(orders.id, orderId)).limit(1)
-  if (!order) return error("Order not found", 404)
-
-  const hasAccess = await verifyResourceAccess(order.organizationId, order.branchId)
-  if (!hasAccess) return error("Forbidden: You do not have access to this order", 403)
-
-  const orderStatus = String(order.status || "").toUpperCase()
-  if (orderStatus !== "APPROVED") {
-    return error(`Fulfillment progress can only be updated for approved orders. Current status: ${order.status}`, 400)
-  }
-
-  const currentStatus = normalizeFulfillmentStatus(order.fulfillmentStatus)
-  const currentIndex = FULFILLMENT_STATUSES.indexOf(currentStatus)
-  const nextIndex = FULFILLMENT_STATUSES.indexOf(nextStatus)
-
-  if (nextIndex !== currentIndex + 1) {
-    return error(`Cannot move fulfillment progress from ${currentStatus} to ${nextStatus}`, 400)
-  }
-
-  const deliveryChallanId = parsedBody.data.deliveryChallanId ?? null
-  const updated = await runProgressTransition(() => db.transaction(async (tx) => {
-    const transition = await transitionOrderFulfillmentStatusColumn(tx, orderId, currentStatus, nextStatus)
-    if (transition !== "updated") return transition
-
-    // No delivery without its challan: attached here, in the same transaction,
-    // and only an upload for this order by this Super Admin that is not yet
-    // attached matches. Otherwise the whole transition rolls back.
-    if (nextStatus === "DELIVERED") {
-      const attached = deliveryChallanId !== null && await attachDeliveryChallan(tx, {
-        challanId: deliveryChallanId,
-        orderId,
-        actorUserId: user.id,
-        at: new Date(),
-      })
-      if (!attached) throw new Error(DELIVERY_CHALLAN_NOT_ATTACHABLE)
-    }
-
-    await tx.insert(auditLogs).values({
-      userId: user.id,
-      organizationId: order.organizationId,
-      branchId: order.branchId,
-      action: "ORDER_FULFILLMENT_STATUS_UPDATE",
-      entity: "Order",
-      entityId: String(order.id),
-      metadata: {
-        tid: order.tid,
-        from: currentStatus,
-        to: nextStatus,
-        ...(deliveryChallanId !== null ? { deliveryChallanId } : {}),
-      },
-    })
-
-    const [updatedOrder] = await tx
-      .select(orderSelectColumns)
-      .from(orders)
-      .where(eq(orders.id, orderId))
-      .limit(1)
-
-    return updatedOrder || { ...order, fulfillmentStatus: nextStatus }
-  }))
-
-  if (updated === "challan-refused") {
-    return error("The delivery challan was not uploaded for this order, or has already been used. Upload it again.", 400)
-  }
-  if (updated === "missing-column") {
-    return error("Fulfillment progress migration has not been applied. Run the order fulfillment status migration first.", 503)
-  }
-  if (updated === "conflict") {
-    return error("Fulfillment progress was already changed by another request", 409)
-  }
-
-  const fulfilled = nextStatus === "DELIVERED"
-    && await settleOnDeliveryIfTokenHandedOff(
-      { id: order.id, tid: order.tid, organizationId: order.organizationId, branchId: order.branchId },
-      user.id,
-    )
-
-  // Settling the order changed the row this response reports, so it is read
-  // back rather than describing the state it had a moment earlier.
-  const [settledOrder] = fulfilled
-    ? await db.select(orderSelectColumns).from(orders).where(eq(orders.id, orderId)).limit(1)
-    : []
-
-  return ok({
-    message: fulfilled
-      ? "Fulfillment progress updated — the order is now marked fulfilled"
-      : "Fulfillment progress updated",
-    fulfilled,
-    item: settledOrder ?? updated,
+  const outcome = await progressOrderFulfillment({
+    orderId,
+    nextStatus,
+    deliveryChallanId: parsedBody.data.deliveryChallanId ?? null,
+    challanRequired: true,
+    actor: { id: user.id, role: user.role },
+    authorize: (order) => verifyResourceAccess(order.organizationId, order.branchId),
   })
+
+  switch (outcome.kind) {
+    case "not-found":
+      return error("Order not found", 404)
+    case "out-of-scope":
+      return error("Forbidden: You do not have access to this order", 403)
+    case "not-approved":
+      return error(`Fulfillment progress can only be updated for approved orders. Current status: ${outcome.status}`, 400)
+    case "invalid-step":
+      return error(`Cannot move fulfillment progress from ${outcome.from} to ${outcome.to}`, 400)
+    case "challan-refused":
+      return error("The delivery challan was not uploaded for this order, or has already been used. Upload it again.", 400)
+    case "missing-column":
+      return error("Fulfillment progress migration has not been applied. Run the order fulfillment status migration first.", 503)
+    case "conflict":
+      return error("Fulfillment progress was already changed by another request", 409)
+    case "updated":
+      return ok({
+        message: outcome.fulfilled
+          ? "Fulfillment progress updated — the order is now marked fulfilled"
+          : "Fulfillment progress updated",
+        fulfilled: outcome.fulfilled,
+        item: outcome.order,
+      })
+  }
 }

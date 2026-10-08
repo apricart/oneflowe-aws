@@ -10,6 +10,7 @@ import { logTokenGenerated } from "@/lib/global-logger"
 import { orderSelectColumns } from "@/lib/order-select"
 import { budgetPeriodOf } from "@/lib/budget-consumption"
 import { isAwaitingCorrection } from "@/lib/order-correction"
+import { decisionQueuesNotifications } from "@/lib/order-desk-approval"
 import { closeOpenCorrectionRequest } from "@/lib/server/order-correction"
 import { authorizeOrderDecision } from "@/lib/server/order-decision-policy"
 import {
@@ -47,6 +48,9 @@ export type OrderDecisionInput = {
   scope: RequestScope
   user: DecisionActor
 }
+
+/** No notice queued: an executive's decision on an Order Desk order. */
+const NO_NOTIFICATIONS = { eventKeys: [] as string[], recipientCount: 0 }
 
 type DecidedOrder = typeof orders.$inferSelect
 
@@ -88,11 +92,31 @@ function unsuccessfulOutcome(
   return { kind: "conflict" }
 }
 
+/**
+ * The approver's view of the row, compared at the millisecond grain a client
+ * sees: the column holds microseconds when Postgres wrote it.
+ */
+function updatedAtMatches(expected: Date | null) {
+  return expected === null
+    ? isNull(orders.updatedAt)
+    : sql`date_trunc('milliseconds', ${orders.updatedAt}) = ${expected.toISOString()}::timestamptz`
+}
+
 export async function approveOrder({
   orderId,
   scope,
   user,
-}: OrderDecisionInput): Promise<OrderDecisionOutcome> {
+  expectedUpdatedAt,
+}: OrderDecisionInput & {
+  /**
+   * The order's `updatedAt` as the approver saw it. When given, the claim
+   * matches only that version, so an edit landing between reading the order
+   * and approving it turns the approval into a conflict rather than approving
+   * lines nobody looked at. `null` means the row had none. Omitted, the claim
+   * is exactly what it always was.
+   */
+  expectedUpdatedAt?: Date | null
+}): Promise<OrderDecisionOutcome> {
   // Generated before the transaction so the plaintext is never read back out of
   // committed state; it is returned to the approver exactly once.
   const plainToken = generateApprovalToken(10)
@@ -124,19 +148,25 @@ export async function approveOrder({
       // Re-evaluated on the row a concurrent return just wrote, so a return
       // and an approval racing each other cannot both succeed.
       isNull(orders.returnedForCorrectionAt),
+      expectedUpdatedAt === undefined ? undefined : updatedAtMatches(expectedUpdatedAt),
     )).returning({ id: orders.id })
 
     if (!approved) return { kind: "conflict" } as const
 
-    const creatorNotifications = await queueOrderDecisionNotification(tx, {
-      order: ord,
-      decision: "APPROVED",
-    })
-    const superAdminNotifications = await queueSuperAdminApprovalNotifications(tx, {
-      order: ord,
-      approvedByUserId: user.id,
-      approvedByRole: authorization.decisionRole,
-    })
+    const notifies = decisionQueuesNotifications(authorization.decisionRole)
+    const creatorNotifications = notifies
+      ? await queueOrderDecisionNotification(tx, {
+        order: ord,
+        decision: "APPROVED",
+      })
+      : NO_NOTIFICATIONS
+    const superAdminNotifications = notifies
+      ? await queueSuperAdminApprovalNotifications(tx, {
+        order: ord,
+        approvedByUserId: user.id,
+        approvedByRole: authorization.decisionRole,
+      })
+      : NO_NOTIFICATIONS
 
     await tx.insert(auditLogs).values({
       userId: user.id,
@@ -156,6 +186,7 @@ export async function approveOrder({
     return {
       kind: "approved",
       order: ord,
+      notifies,
       creatorNotifications,
       superAdminNotifications,
     } as const
@@ -166,14 +197,14 @@ export async function approveOrder({
   const ord = decisionResult.order
   logTokenGenerated(orderId, ord.tid, user.id, user.email || "unknown")
 
-  if (decisionResult.creatorNotifications.recipientCount === 0) {
+  if (decisionResult.notifies && decisionResult.creatorNotifications.recipientCount === 0) {
     console.warn("[OrderNotifications] Approved order creator was not an active scoped Order Portal user", {
       orderId,
       organizationId: ord.organizationId,
       branchId: ord.branchId,
     })
   }
-  if (decisionResult.superAdminNotifications.recipientCount === 0) {
+  if (decisionResult.notifies && decisionResult.superAdminNotifications.recipientCount === 0) {
     console.warn("[OrderNotifications] No active Super Admin recipient was available", {
       orderId,
       organizationId: ord.organizationId,
@@ -274,11 +305,14 @@ export async function rejectOrder({
           .where(eq(globalProducts.id, item.globalProductId))
       }
 
-      const notifications = await queueOrderDecisionNotification(tx, {
-        order: rejectedOrder,
-        decision: "REJECTED",
-        rejectionReason: reason,
-      })
+      const notifies = decisionQueuesNotifications(authorization.decisionRole)
+      const notifications = notifies
+        ? await queueOrderDecisionNotification(tx, {
+          order: rejectedOrder,
+          decision: "REJECTED",
+          rejectionReason: reason,
+        })
+        : NO_NOTIFICATIONS
 
       await tx.insert(auditLogs).values({
         userId: user.id,
@@ -300,13 +334,14 @@ export async function rejectOrder({
       return {
         kind: "rejected",
         order: rejectedOrder,
+        notifies,
         notifications,
       } as const
     })
 
     if (decisionResult.kind !== "rejected") return unsuccessfulOutcome(decisionResult)
 
-    if (decisionResult.notifications.recipientCount === 0) {
+    if (decisionResult.notifies && decisionResult.notifications.recipientCount === 0) {
       console.warn("[OrderNotifications] Rejected order creator was not an active scoped Order Portal user", {
         orderId,
         organizationId: decisionResult.order.organizationId,

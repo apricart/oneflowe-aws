@@ -13,6 +13,7 @@ import { canAssignRole } from "@/lib/server/user-access-policy"
 import { isViewerRole } from "@/lib/viewer-access"
 import { isOrderDeskRole, orderDeskUserShapeError } from "@/lib/order-desk-access"
 import { apricartExecutiveUserShapeError, isApricartExecutiveRole } from "@/lib/apricart-executive-access"
+import { isWarehouseRole, warehouseUserShapeError } from "@/lib/warehouse-access"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { USER_MANAGEMENT_ROLES } from "@/lib/user-management-access"
 import { usernameExists } from "@/lib/user-username-uniqueness"
@@ -51,6 +52,7 @@ function apricartStaffShapeError(
   let shapeError: string | null
   if (isOrderDeskRole(role)) shapeError = orderDeskUserShapeError(organizationId, branchId)
   else if (isApricartExecutiveRole(role)) shapeError = apricartExecutiveUserShapeError(organizationId, branchId)
+  else if (isWarehouseRole(role)) shapeError = warehouseUserShapeError(organizationId, branchId)
   else return undefined
   return shapeError ? { message: shapeError, status: 400 } : null
 }

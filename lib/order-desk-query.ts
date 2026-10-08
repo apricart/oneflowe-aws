@@ -8,13 +8,16 @@
 
 /**
  * The tabs of the desk's order list, in the order the work happens: an order
- * waits for Super Admin to record delivery, is then ready for the desk to
- * fulfil, and ends fulfilled (or cancelled before delivery).
+ * waits for an Apricart Executive to approve it (or is returned to the desk to
+ * correct), then for Super Admin to record delivery, is then ready for the desk
+ * to fulfil, and ends fulfilled — or rejected, or cancelled before delivery.
  */
 export const DESK_ORDER_STATUS_FILTERS = [
+  "awaiting_approval",
   "awaiting_delivery",
   "ready_to_fulfil",
   "fulfilled",
+  "rejected",
   "cancelled",
   "all",
 ] as const
@@ -59,7 +62,7 @@ export function parseDeskOrderListQuery(params: URLSearchParams): DeskOrderListQ
   const branchId = optionalId(params.get("branchId"), "branchId")
   if (!branchId.ok) return branchId
 
-  const rawStatus = (params.get("status") ?? "awaiting_delivery").trim().toLowerCase()
+  const rawStatus = (params.get("status") ?? "awaiting_approval").trim().toLowerCase()
   if (!(DESK_ORDER_STATUS_FILTERS as readonly string[]).includes(rawStatus)) {
     return { ok: false, error: `status must be one of: ${DESK_ORDER_STATUS_FILTERS.join(", ")}` }
   }
@@ -83,16 +86,27 @@ export function parseDeskOrderListQuery(params: URLSearchParams): DeskOrderListQ
 }
 
 /**
+ * Settled after fulfilment. A fully refunded order (`REFUNDED`) was fulfilled
+ * first, so it stays on the Fulfilled tab rather than dropping off every tab
+ * but All.
+ */
+const SETTLED_STATUSES = ["FULFILLED", "PARTIAL", "PARTIALLY_FULFILLED", "REFUNDED"]
+
+/**
  * What each tab selects: the order statuses, and — for an Active order —
  * whether Super Admin has recorded delivery. `null` statuses means every order.
+ * A pending order returned for correction stays on Awaiting approval, flagged
+ * on its row: it is still waiting on approval, with the desk's correction first.
  */
 export function deskOrderStatusSelection(filter: DeskOrderStatusFilter): {
   statuses: string[] | null
   delivered: boolean | null
 } {
+  if (filter === "awaiting_approval") return { statuses: ["PENDING"], delivered: null }
   if (filter === "awaiting_delivery") return { statuses: ["APPROVED"], delivered: false }
   if (filter === "ready_to_fulfil") return { statuses: ["APPROVED"], delivered: true }
-  if (filter === "fulfilled") return { statuses: ["FULFILLED", "PARTIAL", "PARTIALLY_FULFILLED"], delivered: null }
+  if (filter === "fulfilled") return { statuses: SETTLED_STATUSES, delivered: null }
+  if (filter === "rejected") return { statuses: ["REJECTED"], delivered: null }
   if (filter === "cancelled") return { statuses: ["CANCELLED"], delivered: null }
   return { statuses: null, delivered: null }
 }
@@ -106,8 +120,10 @@ export type DeskOrderStage = Exclude<DeskOrderStatusFilter, "all"> | "other"
 export function deskOrderStage(order: { status: string | null; fulfillmentStatus: string | null }): DeskOrderStage {
   const status = String(order.status ?? "").toUpperCase()
   const delivered = String(order.fulfillmentStatus ?? "").toUpperCase() === "DELIVERED"
+  if (status === "PENDING") return "awaiting_approval"
   if (status === "APPROVED") return delivered ? "ready_to_fulfil" : "awaiting_delivery"
-  if (["FULFILLED", "PARTIAL", "PARTIALLY_FULFILLED"].includes(status)) return "fulfilled"
+  if (SETTLED_STATUSES.includes(status)) return "fulfilled"
+  if (status === "REJECTED") return "rejected"
   if (status === "CANCELLED") return "cancelled"
   return "other"
 }

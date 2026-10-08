@@ -241,9 +241,14 @@ describe("group order portal requester writes only inside its branches", () => {
 
   it("offers fulfillment from the assigned-branch tab without adding decision controls", () => {
     const tab = source("components/group-portal/other-branch-orders.tsx")
+    // The tab's side panel is shared with "My group orders"; the hand-off lives there.
+    const panel = source("components/group-portal/branch-order-detail-sheet.tsx")
 
-    expect(tab).toContain("<TokenHandoff")
-    expect(tab).not.toContain("onDecide")
+    expect(tab).toContain("<BranchOrderDetailSheet")
+    expect(panel).toContain("<TokenHandoff")
+    for (const text of [tab, panel]) expect(text).not.toContain("onDecide")
+    // The tab offers no cancel: that is for the requester's own group orders.
+    expect(tab).not.toContain("onCancel")
     // And it asks the server only for the orders it is meant to show.
     expect(tab).toContain('createdByRole: "ORDER_PORTAL"')
   })

@@ -2,6 +2,7 @@ import { stringifyPrimitive } from "../stringify-primitive"
 import "server-only"
 
 import { sendAppEmail } from "@/lib/email/ses"
+import type { OrderDecisionRole } from "@/lib/order-approver-role"
 import { env } from "@/lib/server/env"
 
 export type OrderLifecycleEmailTemplate =
@@ -19,7 +20,7 @@ export type OrderLifecycleEmailPayload = {
   branchName: string
   requestedBy?: string | null
   approvedBy?: string | null
-  approvedByRole?: "BRANCH_ADMIN" | "HEAD_OFFICE" | "GROUP_USER" | null
+  approvedByRole?: OrderDecisionRole | null
   rejectionReason?: string | null
   /** ORDER_APPROVED_ADMIN only: approved at creation by organization policy, not by a person. */
   autoApproved?: boolean | null
@@ -61,6 +62,7 @@ const RED = "#dc2626"
 function approverRoleLabelOf(payload: OrderLifecycleEmailPayload): string {
   if (payload.approvedByRole === "HEAD_OFFICE") return "Head Office"
   if (payload.approvedByRole === "GROUP_USER") return "Group User"
+  if (payload.approvedByRole === "APRICART_EXECUTIVE") return "Apricart Executive"
   return "Branch Admin"
 }
 

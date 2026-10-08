@@ -57,7 +57,10 @@ const HEALTH_STYLES: Record<string, string> = {
   DELIVERED_UNTIMED: "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
 }
 
-function buildQuery(filters: Filters, view: DeliveryListView): string {
+const DASHBOARD_ENDPOINT = "/api/v1/delivery-dashboard"
+const dashboardTimelineEndpoint = (orderId: number) => `/api/v1/delivery-dashboard/orders/${orderId}/timeline`
+
+function buildQuery(filters: Filters, view: DeliveryListView, base: string): string {
   const params = new URLSearchParams()
   if (filters.organizationId !== ALL) params.set("organizationId", filters.organizationId)
   if (filters.organizationId !== ALL && filters.branchId !== ALL) params.set("branchId", filters.branchId)
@@ -68,7 +71,7 @@ function buildQuery(filters: Filters, view: DeliveryListView): string {
   if (filters.deliveredTo) params.set("deliveredTo", filters.deliveredTo)
   if (view !== "ALL") params.set("view", view)
   const query = params.toString()
-  return `/api/v1/delivery-dashboard${query ? `?${query}` : ""}`
+  return `${base}${query ? `?${query}` : ""}`
 }
 
 function formatHours(hours: number | null | undefined): string {
@@ -92,11 +95,21 @@ function delayText(row: Pick<DeliveryListRow, "hoursOverdue" | "hoursRemaining" 
   return "Delivered"
 }
 
-export function DeliveryDashboard() {
+/**
+ * The endpoints default to management's; the warehouse passes its own, which
+ * answer the same query string with the same shape, fenced to its branches.
+ */
+export function DeliveryDashboard({
+  dashboardEndpoint = DASHBOARD_ENDPOINT,
+  timelineEndpoint = dashboardTimelineEndpoint,
+}: Readonly<{
+  dashboardEndpoint?: string
+  timelineEndpoint?: (orderId: number) => string
+}> = {}) {
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS)
   const [view, setView] = useState<DeliveryListView>("ALL")
   const [timelineOrder, setTimelineOrder] = useState<DeliveryListRow | null>(null)
-  const endpoint = useMemo(() => buildQuery(filters, view), [filters, view])
+  const endpoint = useMemo(() => buildQuery(filters, view, dashboardEndpoint), [filters, view, dashboardEndpoint])
 
   const { data, error, isLoading, isValidating, mutate } = useSWR<DeliveryDashboardResponse>(
     endpoint,
@@ -171,7 +184,7 @@ export function DeliveryDashboard() {
         </>
       )}
 
-      <TimelineSheet order={timelineOrder} onClose={() => setTimelineOrder(null)} />
+      <TimelineSheet order={timelineOrder} timelineEndpoint={timelineEndpoint} onClose={() => setTimelineOrder(null)} />
     </div>
   )
 }
@@ -605,9 +618,13 @@ type TimelineResponse = {
   events: Array<{ key: string; label: string; at: string; by: string | null }>
 }
 
-function TimelineSheet({ order, onClose }: Readonly<{ order: DeliveryListRow | null; onClose: () => void }>) {
+function TimelineSheet({
+  order,
+  timelineEndpoint,
+  onClose,
+}: Readonly<{ order: DeliveryListRow | null; timelineEndpoint: (orderId: number) => string; onClose: () => void }>) {
   const { data, error, isLoading } = useSWR<TimelineResponse>(
-    order ? `/api/v1/delivery-dashboard/orders/${order.id}/timeline` : null,
+    order ? timelineEndpoint(order.id) : null,
     fetcher,
   )
   return (

@@ -331,7 +331,7 @@ describe.skipIf(!hasTestDatabase)("catalogue and administration routes", () => {
         { userId: f.branchAdminId, organizationId: f.home, branchId: f.north, type: "ORDER_CREATED", targetRole: "BRANCH_ADMIN", message: `Theirs ${f.suffix}` },
       ])
       signIn(ho())
-      const listed = await json(await notificationsRoute.GET(req("/x")))
+      const listed = await json(await notificationsRoute.GET())
       expect(JSON.stringify(listed.body)).toContain(`Mine ${f.suffix}`)
       expect(JSON.stringify(listed.body)).not.toContain(`Theirs ${f.suffix}`)
 
@@ -339,7 +339,7 @@ describe.skipIf(!hasTestDatabase)("catalogue and administration routes", () => {
       expect(marked.status).toBeLessThan(500)
 
       signIn(null)
-      expect((await notificationsRoute.GET(req("/x"))).status).toBe(401)
+      expect((await notificationsRoute.GET()).status).toBe(401)
     })
   })
 

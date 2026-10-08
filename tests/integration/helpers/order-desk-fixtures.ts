@@ -3,8 +3,10 @@ import { randomUUID } from "node:crypto"
 import { eq, inArray, or } from "drizzle-orm"
 
 import {
+  apricartExecutiveAssignments,
   auditLogs,
   branchInventory,
+  orderCorrectionRequests,
   branches,
   budgets,
   emailOutbox,
@@ -32,7 +34,7 @@ export { NO_DATABASE_REASON, hasTestDatabase } from "./pricing-fixtures"
  * Three tenants for the Order Desk, each answering one question.
  *
  * ```text
- * Managed A  (managed, approval REQUIRED, budgets off)  A1 active · A2 active · A3 inactive
+ * Managed A  (managed, approval REQUIRED, Head Office approves, budgets off)  A1 active · A2 active · A3 inactive
  * Managed B  (managed, budgets ON, B1 funded)           B1 active
  * Tenant C   (NOT managed — a K-Electric shape)         C1 active
  *
@@ -40,6 +42,11 @@ export { NO_DATABASE_REASON, hasTestDatabase } from "./pricing-fixtures"
  * desk2    : A2 only
  * deskOff  : A whole, but the account is inactive
  * viewer   : VIEWER pinned to A1      portal : ORDER_PORTAL at A1      head : HEAD_OFFICE of A
+ *
+ * Apricart Executives, who approve the desk's orders:
+ * executive    : A · B
+ * executiveC   : C only (so none of the desk's orders)
+ * executiveOff : A, but the account is inactive
  * ```
  *
  * One product, base price 10.00, priced 15.00 by tenant A, stock 1000.
@@ -61,6 +68,9 @@ export type OrderDeskFixtures = {
   deskOffId: string
   viewerId: string
   portalId: string
+  executiveId: string
+  executiveCId: string
+  executiveOffId: string
   productId: number
   inventoryA: number
   inventoryB: number
@@ -88,12 +98,15 @@ export async function createOrderDeskFixtures(): Promise<OrderDeskFixtures> {
     desk: await resolveRoleId("ORDER_DESK"),
     viewer: await resolveRoleId("VIEWER"),
     portal: await resolveRoleId("ORDER_PORTAL"),
+    executive: await resolveRoleId("APRICART_EXECUTIVE"),
   }
 
   const [organizationA, organizationB, organizationC] = await db
     .insert(organizations)
     .values([
-      { name: `ITD Managed A ${suffix}`, code: `ITDA_${suffix}`, managedOrdering: true, orderApprovalRequired: true, budgetsEnabled: false },
+      // Head Office approves A's own orders, so a refusal to decide a desk
+      // order is a refusal of the configured approver, not a role mismatch.
+      { name: `ITD Managed A ${suffix}`, code: `ITDA_${suffix}`, managedOrdering: true, orderApprovalRequired: true, orderApproverRole: "HEAD_OFFICE", budgetsEnabled: false },
       { name: `ITD Managed B ${suffix}`, code: `ITDB_${suffix}`, managedOrdering: true, budgetsEnabled: true },
       { name: `ITD Tenant C ${suffix}`, code: `ITDC_${suffix}`, managedOrdering: false, budgetsEnabled: false },
     ])
@@ -140,6 +153,16 @@ export async function createOrderDeskFixtures(): Promise<OrderDeskFixtures> {
   const deskOffId = await person("desk-off", role.desk, { organizationId: null, branchId: null, isActive: false })
   const viewerId = await person("viewer", role.viewer, { organizationId: organizationA.id, branchId: branchA1.id })
   const portalId = await person("portal", role.portal, { organizationId: organizationA.id, branchId: branchA1.id })
+  const executiveId = await person("exec", role.executive, { organizationId: null, branchId: null })
+  const executiveCId = await person("exec-c", role.executive, { organizationId: null, branchId: null })
+  const executiveOffId = await person("exec-off", role.executive, { organizationId: null, branchId: null, isActive: false })
+
+  await db.insert(apricartExecutiveAssignments).values([
+    { userId: executiveId, organizationId: organizationA.id, createdByUserId: superAdminId },
+    { userId: executiveId, organizationId: organizationB.id, createdByUserId: superAdminId },
+    { userId: executiveCId, organizationId: organizationC.id, createdByUserId: superAdminId },
+    { userId: executiveOffId, organizationId: organizationA.id, createdByUserId: superAdminId },
+  ])
 
   await db.insert(orderDeskAssignments).values([
     { userId: deskId, organizationId: organizationA.id, branchId: null, createdByUserId: superAdminId },
@@ -206,6 +229,9 @@ export async function createOrderDeskFixtures(): Promise<OrderDeskFixtures> {
     deskOffId,
     viewerId,
     portalId,
+    executiveId,
+    executiveCId,
+    executiveOffId,
     productId: product.id,
     inventoryA: inventoryA.id,
     inventoryB: inventoryB.id,
@@ -216,7 +242,19 @@ export async function createOrderDeskFixtures(): Promise<OrderDeskFixtures> {
 
 export async function destroyOrderDeskFixtures(f: OrderDeskFixtures, extraUserIds: string[] = []): Promise<void> {
   const organizationIds = [f.organizationA, f.organizationB, f.organizationC]
-  const userIds = [f.superAdminId, f.headOfficeId, f.deskId, f.desk2Id, f.deskOffId, f.viewerId, f.portalId, ...extraUserIds]
+  const userIds = [
+    f.superAdminId,
+    f.headOfficeId,
+    f.deskId,
+    f.desk2Id,
+    f.deskOffId,
+    f.viewerId,
+    f.portalId,
+    f.executiveId,
+    f.executiveCId,
+    f.executiveOffId,
+    ...extraUserIds,
+  ]
 
   await db.delete(notifications).where(inArray(notifications.organizationId, organizationIds))
   await db.delete(emailOutbox).where(inArray(emailOutbox.organizationId, organizationIds))
@@ -227,11 +265,13 @@ export async function destroyOrderDeskFixtures(f: OrderDeskFixtures, extraUserId
     await db.delete(refundItems).where(inArray(refundItems.refundId, refundRows.map((row) => row.id)))
   }
   await db.delete(refunds).where(inArray(refunds.organizationId, organizationIds))
+  await db.delete(orderCorrectionRequests).where(inArray(orderCorrectionRequests.organizationId, organizationIds))
   await db.delete(orderItems).where(inArray(orderItems.organizationId, organizationIds))
   await db.delete(orders).where(inArray(orders.organizationId, organizationIds))
   await db.delete(budgets).where(inArray(budgets.organizationId, organizationIds))
   await db.delete(invoiceSequences).where(inArray(invoiceSequences.organizationId, organizationIds))
   await db.delete(orderDeskAssignments).where(inArray(orderDeskAssignments.userId, userIds))
+  await db.delete(apricartExecutiveAssignments).where(inArray(apricartExecutiveAssignments.userId, userIds))
   await db.delete(branchInventory).where(inArray(branchInventory.organizationId, organizationIds))
   await db.delete(organizationInventory).where(inArray(organizationInventory.organizationId, organizationIds))
   await db.delete(sessions).where(inArray(sessions.userId, userIds))

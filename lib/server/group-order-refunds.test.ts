@@ -9,24 +9,23 @@ import {
   MAX_ORDERS_PER_GROUP_REFUND,
   OUT_OF_SCOPE_REASON,
   getRequesterRefundBlockReason,
-  isWithinRefundMonth,
   remainingRefundableCents,
   remainingRefundableQuantity,
 } from "@/lib/server/group-refund-rules"
 
 const source = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8")
 
-// The window is the order's budget period (the UTC month), the rule the
-// single-order refund endpoint applies. These mid-month dates fall in the same
-// month in every timezone; the month-boundary cases below use UTC instants.
-const NOW = new Date(2026, 7, 21, 10, 0, 0)
-const THIS_MONTH = new Date(2026, 7, 3, 9, 0, 0)
-const LAST_MONTH = new Date(2026, 6, 15, 9, 0, 0)
+// The window runs seven days from fulfilment (`lib/refund-window.ts`), the
+// rule the single-order refund endpoint applies to every requester.
+const DAY = 24 * 60 * 60 * 1000
+const NOW = new Date("2026-08-21T10:00:00.000Z")
+const FULFILLED_RECENTLY = new Date(NOW.getTime() - 2 * DAY)
+const FULFILLED_TOO_LONG_AGO = new Date(NOW.getTime() - 7 * DAY - 1)
 
-const deliveredThisMonth = {
+const deliveredRecently = {
   status: "FULFILLED",
   fulfillmentStatus: "DELIVERED",
-  createdAt: THIS_MONTH,
+  fulfilledAt: FULFILLED_RECENTLY,
   remainingRefundableCents: 50_000,
   now: NOW,
 }
@@ -38,19 +37,19 @@ const deliveredThisMonth = {
  * fact that this role can only ever *ask* for a refund.
  */
 describe("requester refund eligibility", () => {
-  it("allows a delivered order inside its own calendar month", () => {
-    expect(getRequesterRefundBlockReason(deliveredThisMonth)).toBeNull()
+  it("allows a delivered order within seven days of fulfilment", () => {
+    expect(getRequesterRefundBlockReason(deliveredRecently)).toBeNull()
   })
 
   it("refuses an order that has not been delivered yet", () => {
     expect(getRequesterRefundBlockReason({
-      ...deliveredThisMonth,
+      ...deliveredRecently,
       status: "APPROVED",
       fulfillmentStatus: "OUT_FOR_DELIVERY",
     })).toContain("fulfilled and delivered")
 
     expect(getRequesterRefundBlockReason({
-      ...deliveredThisMonth,
+      ...deliveredRecently,
       status: "FULFILLED",
       fulfillmentStatus: "IN_PROCESS",
     })).toContain("fulfilled and delivered")
@@ -58,48 +57,49 @@ describe("requester refund eligibility", () => {
 
   it("refuses a pending order, matching the single-branch requester rule", () => {
     expect(getRequesterRefundBlockReason({
-      ...deliveredThisMonth,
+      ...deliveredRecently,
       status: "PENDING",
       fulfillmentStatus: "NOT_STARTED",
     })).toContain("fulfilled and delivered")
   })
 
   it("refuses a rejected order outright", () => {
-    expect(getRequesterRefundBlockReason({ ...deliveredThisMonth, status: "REJECTED" }))
+    expect(getRequesterRefundBlockReason({ ...deliveredRecently, status: "REJECTED" }))
       .toContain("rejected")
   })
 
   it("refuses an order that is already fully refunded, by status or by capacity", () => {
-    expect(getRequesterRefundBlockReason({ ...deliveredThisMonth, status: "REFUNDED" }))
+    expect(getRequesterRefundBlockReason({ ...deliveredRecently, status: "REFUNDED" }))
       .toContain("already been fully refunded")
-    expect(getRequesterRefundBlockReason({ ...deliveredThisMonth, remainingRefundableCents: 0 }))
+    expect(getRequesterRefundBlockReason({ ...deliveredRecently, remainingRefundableCents: 0 }))
       .toContain("already been fully refunded")
   })
 
-  it("closes the window once the order's calendar month has passed", () => {
+  it("closes the window seven days after fulfilment", () => {
     expect(getRequesterRefundBlockReason({
-      ...deliveredThisMonth,
-      createdAt: LAST_MONTH,
+      ...deliveredRecently,
+      fulfilledAt: FULFILLED_TOO_LONG_AGO,
     })).toContain("refund period has ended")
+    expect(getRequesterRefundBlockReason({
+      ...deliveredRecently,
+      fulfilledAt: new Date(NOW.getTime() - 7 * DAY),
+    })).toBeNull()
   })
 
-  it("treats a missing or unparseable order date as outside the window", () => {
-    expect(isWithinRefundMonth(null, NOW)).toBe(false)
-    expect(isWithinRefundMonth("not-a-date", NOW)).toBe(false)
-    expect(isWithinRefundMonth(THIS_MONTH.toISOString(), NOW)).toBe(true)
-    expect(isWithinRefundMonth(LAST_MONTH.toISOString(), NOW)).toBe(false)
-    // Same month a year earlier is still outside the window.
-    expect(isWithinRefundMonth(new Date(2025, 7, 3), NOW)).toBe(false)
+  it("treats a missing or unparseable fulfilment time as outside the window", () => {
+    expect(getRequesterRefundBlockReason({ ...deliveredRecently, fulfilledAt: null }))
+      .toContain("refund period has ended")
+    expect(getRequesterRefundBlockReason({ ...deliveredRecently, fulfilledAt: "not-a-date" }))
+      .toContain("refund period has ended")
   })
 
-  it("follows the UTC month at a boundary, whatever the local zone says", () => {
-    // 1 Oct 02:00 in Karachi is still 30 Sep in UTC: a September order is
-    // still refundable, exactly as the single-order endpoint decides.
-    const earlyFirstInKarachi = new Date("2026-09-30T21:00:00.000Z")
-    expect(isWithinRefundMonth(new Date("2026-09-10T08:00:00.000Z"), earlyFirstInKarachi)).toBe(true)
-    // An order placed then belongs to September, so October's window excludes it.
-    expect(isWithinRefundMonth(earlyFirstInKarachi, new Date("2026-10-01T06:00:00.000Z"))).toBe(false)
-    expect(isWithinRefundMonth(new Date("2026-09-30T23:59:59.999Z"), new Date("2026-10-01T00:00:00.000Z"))).toBe(false)
+  it("is not bound to the order's calendar month", () => {
+    // Fulfilled on 30 Sep, asked on 3 Oct: a different month, still in time.
+    expect(getRequesterRefundBlockReason({
+      ...deliveredRecently,
+      fulfilledAt: new Date("2026-09-30T20:00:00.000Z"),
+      now: new Date("2026-10-03T09:00:00.000Z"),
+    })).toBeNull()
   })
 })
 
