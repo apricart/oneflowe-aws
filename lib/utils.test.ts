@@ -32,6 +32,11 @@ describe('formatPKR', () => {
         expect(result).toMatch(/(PKR|Rs)\s?1,000/)
     })
 
+    it('always shows two decimals, whatever the runtime ICU defaults to for PKR', () => {
+        expect(formatPKR(800)).toMatch(/^(PKR|Rs)\s?800\.00$/)
+        expect(formatPKR(1234.5)).toMatch(/^(PKR|Rs)\s?1,234\.50$/)
+    })
+
     it('handles invalid input', () => {
         expect(formatPKR(NaN)).toBe('PKR 0.00')
         // @ts-expect-error intentional invalid input for runtime guard

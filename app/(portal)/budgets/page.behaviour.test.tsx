@@ -89,8 +89,8 @@ describe("Budgets page", () => {
     expect(request.url).toContain("organizationId=5")
     expect(request.url).toContain("all=true")
 
-    expect(within(rowFor("North")).getByText(/^Rs\s?800$/)).toBeTruthy()
-    expect(rowFor("South").lastElementChild?.previousElementSibling?.textContent).toMatch(/^Rs\s?500$/)
+    expect(within(rowFor("North")).getByText(/^Rs\s?800\.00$/)).toBeTruthy()
+    expect(rowFor("South").lastElementChild?.previousElementSibling?.textContent).toMatch(/^Rs\s?500\.00$/)
   })
 
   it("shows the disabled notice when the organization has budgets switched off", async () => {
@@ -151,7 +151,7 @@ describe("Budgets page", () => {
     })
     await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Budget Updated" })))
     const description = toast.mock.calls.find(([arg]) => arg.title === "Budget Updated")![0].description as string
-    expect(description).toMatch(/^Added Rs\s?150 to North\. New remaining: Rs\s?950$/)
+    expect(description).toMatch(/^Added Rs\s?150\.00 to North\. New remaining: Rs\s?950\.00$/)
   })
 
   it("reports a monthly base as set, not added, with the remaining it really leaves", async () => {
@@ -168,7 +168,7 @@ describe("Budgets page", () => {
     expect(callsTo("/api/v1/budgets", "PUT")[0].body).toEqual({ branchId: 11, amountAllocatedCents: 50_000, type: "monthly" })
     const description = toast.mock.calls.find(([arg]) => arg.title === "Budget Updated")![0].description as string
     // 800.00 remaining - 1,000.00 old allocation + 500.00 new allocation = 300.00
-    expect(description).toMatch(/^Set the monthly budget of North to Rs\s?500\. New remaining: Rs\s?300$/)
+    expect(description).toMatch(/^Set the monthly budget of North to Rs\s?500\.00\. New remaining: Rs\s?300\.00$/)
   })
 
   it("blocks a monthly base below what the branch has already committed", async () => {

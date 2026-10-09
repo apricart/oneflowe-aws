@@ -68,8 +68,8 @@ describe("Budget Summary report", () => {
 
     const text = document.body.textContent ?? ""
     await waitFor(() => expect(document.body.textContent).toMatch(/3,500/))
-    expect(text).toMatch(/Base: Rs\s?3,000 \| Addon: Rs\s?500/)
-    expect(document.body.textContent).toMatch(/\+Rs\s?2,000/)
+    expect(text).toMatch(/Base: Rs\s?3,000\.00 \| Addon: Rs\s?500\.00/)
+    expect(document.body.textContent).toMatch(/\+Rs\s?2,000\.00/)
   })
 
   it("lists every branch on the reports tab, marks the overspent one, and filters by name", async () => {
