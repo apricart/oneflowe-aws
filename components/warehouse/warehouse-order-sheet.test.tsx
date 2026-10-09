@@ -147,7 +147,8 @@ describe("the warehouse picking sheet", () => {
     const revokeObjectURL = vi.fn()
     vi.stubGlobal("URL", Object.assign(URL, { createObjectURL, revokeObjectURL }))
     const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {})
-    fetchMock.mockResolvedValueOnce(new Response(new Blob(["%PDF-1.7"]), {
+    // A string body, not a Blob: Node 20's fetch Response cannot stream jsdom's Blob.
+    fetchMock.mockResolvedValueOnce(new Response("%PDF-1.7", {
       status: 200,
       headers: { "Content-Type": "application/pdf", "Content-Disposition": 'attachment; filename="invoice-INV-0042.pdf"' },
     }))

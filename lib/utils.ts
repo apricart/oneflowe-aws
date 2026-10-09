@@ -31,9 +31,14 @@ export function logger(scope: string, data: unknown) {
   }
 }
 
+// Fraction digits are pinned: ICU's default for PKR changed (2 digits on Node 20
+// and older browsers, 0 on Node 24 and newer ones), so leaving them unset makes
+// the same amount render differently on the server and in each browser.
 const pkFormatter = new Intl.NumberFormat("en-PK", {
   style: "currency",
   currency: "PKR",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
 })
 
 /**
