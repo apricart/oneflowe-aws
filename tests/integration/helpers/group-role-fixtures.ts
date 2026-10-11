@@ -21,6 +21,7 @@ import {
 import { db } from "@/lib/db"
 import { currentBudgetPeriod } from "@/lib/server/group-branch-budgets"
 
+import { purgeInvoiceLedger } from "./invoice-ledger-cleanup"
 export { NO_DATABASE_REASON, hasTestDatabase } from "./pricing-fixtures"
 
 /**
@@ -452,6 +453,7 @@ export async function destroyGroupRoleFixtures(
   ]
 
   await db.delete(systemLogs).where(inArray(systemLogs.organizationId, organizationIds))
+  await purgeInvoiceLedger({ organizationIds })
   // A budget allocation writes an audit row naming the acting user; it must go
   // before the user does.
   await db.delete(auditLogs).where(inArray(auditLogs.organizationId, organizationIds))

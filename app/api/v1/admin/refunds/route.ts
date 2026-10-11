@@ -13,6 +13,7 @@ import { adminRefundProcessSchema, validationMessage } from "@/lib/server/mutati
 import { isRefundEligibleOrderStatus } from "@/lib/business-rules"
 import { budgetPeriodOf, planRefundLedgerMove } from "@/lib/budget-consumption"
 import { withRateLimit } from "@/lib/rate-limiter"
+import { CREDIT_NOTE_CONFLICT_ERRORS, issueCreditNoteForRefund } from "@/lib/server/credit-notes"
 
 const parseRefundRequestId = (value: string | null) => {
     if (!value) return { id: null }
@@ -555,22 +556,9 @@ export async function POST(req: NextRequest) {
             const liveNewApprovedTotal = liveApprovedTotal + totalRefundAmount
             const liveIsFullRefund = liveNewApprovedTotal >= Number(lockedOrder.totalCents)
 
-            // 1. Update order with refund info and update receipt data
-            let updatedReceiptData = lockedOrder.receiptData as any
-            if (updatedReceiptData) {
-                // Update receipt with new refund amount and itemized details
-                const { updateReceiptWithRefund } = await import('@/lib/receipt-generator')
-                updatedReceiptData = updateReceiptWithRefund(
-                    updatedReceiptData,
-                    totalRefundAmount,
-                    refundDetails.map(d => ({
-                        productName: d.productName,
-                        quantity: d.quantity,
-                        amount: d.totalCents / 100
-                    }))
-                )
-            }
-
+            // 1. Update order with refund info. The invoice snapshot is left
+            // alone: an issued invoice never changes, and a refund against it
+            // is a credit note (step 5b, plans/OF-INVOICE-invoice-ledger.md).
             await tx
                 .update(orders)
                 .set({
@@ -581,7 +569,6 @@ export async function POST(req: NextRequest) {
                     refundedByUserId: userId,
                     refundAmountCents: liveNewApprovedTotal,
                     refundReason: effectiveReason || orderData.refundReason,
-                    receiptData: updatedReceiptData || lockedOrder.receiptData,
                     updatedAt: new Date(),
                 })
                 .where(eq(orders.id, orderId))
@@ -711,6 +698,15 @@ export async function POST(req: NextRequest) {
                 )
             }
 
+            // 5b. Credit the refund against the order's tax invoice, exactly as
+            // the direct refund route does.
+            await issueCreditNoteForRefund(tx, {
+                refundId: approvedRefundId,
+                orderId,
+                actor: { id: userId, role: userRole },
+                reason: effectiveReason,
+            })
+
             // 6. Mark only other pending requests for this order as superseded.
             // This ensures that 'hasRefundRequests' in order list becomes 0 and the "REQUESTED" badge disappears.
             const supersedeConditions = [
@@ -744,7 +740,7 @@ export async function POST(req: NextRequest) {
         })
 
     } catch (error: any) {
-        if (["REFUND_AVAILABILITY_CONFLICT", "REFUND_ELIGIBILITY_CONFLICT", "QUANTITY_BUDGET_LEDGER_INVARIANT"].includes(error?.message)) {
+        if (["REFUND_AVAILABILITY_CONFLICT", "REFUND_ELIGIBILITY_CONFLICT", "QUANTITY_BUDGET_LEDGER_INVARIANT", ...CREDIT_NOTE_CONFLICT_ERRORS].includes(error?.message)) {
             return NextResponse.json({
                 error: "Refund eligibility changed while the request was being processed. Refresh and try again."
             }, { status: 409 })

@@ -8,6 +8,7 @@ import { FULFILLMENT_STATUSES, normalizeFulfillmentStatus, type FulfillmentStatu
 import { orderSelectColumns, transitionOrderFulfillmentStatusColumn } from "@/lib/order-select"
 import { attachDeliveryChallan } from "@/lib/server/delivery-challan"
 import { settleDeliveredOrderAfterTokenHandoff } from "@/lib/server/order-fulfillment"
+import { issueTaxInvoiceAtDelivery } from "@/lib/server/invoice-issuance"
 
 /**
  * Moving an order's delivery forward one stage — the single place it happens.
@@ -20,7 +21,9 @@ import { settleDeliveredOrderAfterTokenHandoff } from "@/lib/server/order-fulfil
  * a delivery recorded by either has exactly the same effects.
  *
  * Delivery is recorded nowhere else. Fulfilment requires it and never writes
- * it (`fulfillApprovedOrder`). See
+ * it (`fulfillApprovedOrder`). Recording it also issues the order's tax
+ * invoice, in the same transaction (`issueTaxInvoiceAtDelivery`,
+ * plans/OF-INVOICE-invoice-ledger.md). See
  * plans/OF-WAREHOUSE-warehouse-fulfilment-role.md and
  * plans/OF-DELIVERY-CHALLAN-proof-of-delivery.md.
  */
@@ -203,6 +206,13 @@ export async function progressOrderFulfillment(input: {
           ...(deliveryChallanId !== null ? { deliveryChallanId } : {}),
         },
       })
+
+      // The goods are supplied, so the tax invoice is issued now, numbered and
+      // dated in this transaction: if it cannot be, the delivery is not
+      // recorded either.
+      if (nextStatus === "DELIVERED") {
+        await issueTaxInvoiceAtDelivery(tx, { orderId, actor })
+      }
 
       return (await loadOrder(tx, orderId)) ?? { ...order, fulfillmentStatus: nextStatus }
     })

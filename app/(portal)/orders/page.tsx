@@ -23,6 +23,7 @@ import {
   ChevronRight,
   PackageCheck,
   Truck,
+  FileText,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAppContext } from "@/components/context/app-context"
@@ -61,6 +62,12 @@ import {
   parseFulfillmentStatusFilter,
   type FulfillmentStatus,
 } from "@/lib/fulfillment-status"
+import {
+  INVOICE_STATUS_LABELS,
+  INVOICE_STATUSES,
+  parseInvoiceStatusFilter,
+  type InvoiceStatus,
+} from "@/lib/invoice-status"
 
 type DateRange = {
   startDate: Date
@@ -132,14 +139,17 @@ function requestedListTab(searchParams: Pick<URLSearchParams, "get">): {
   statusFilter: OrderStatusFilter
   deliveryFilter: OrderDeliveryFilter | null
   fulfillmentStatusFilter: FulfillmentStatus | null
+  invoiceStatusFilter: InvoiceStatus | null
 } {
   const delivery = parseOrderDeliveryFilter(searchParams.get("delivery"))
   const deliveryFilter = delivery.ok ? delivery.filter : null
   const fulfillmentStatus = parseFulfillmentStatusFilter(searchParams.get("fulfillmentStatus"))
+  const invoiceStatus = parseInvoiceStatusFilter(searchParams.get("invoiceStatus"))
   return {
     statusFilter: deliveryFilter ? "approved" : getOrderStatusFilter(searchParams.get("status")),
     deliveryFilter,
     fulfillmentStatusFilter: fulfillmentStatus.ok ? fulfillmentStatus.filter : null,
+    invoiceStatusFilter: invoiceStatus.ok ? invoiceStatus.filter : null,
   }
 }
 
@@ -149,6 +159,7 @@ function OrdersManagementContent() {
     statusFilter: requestedStatusFilter,
     deliveryFilter: requestedDeliveryFilter,
     fulfillmentStatusFilter: requestedFulfillmentStatusFilter,
+    invoiceStatusFilter: requestedInvoiceStatusFilter,
   } = requestedListTab(searchParams)
   const { data: session } = useSession()
   const {
@@ -187,6 +198,9 @@ function OrdersManagementContent() {
   const [fulfillmentStatusFilter, setFulfillmentStatusFilter] = useState<FulfillmentStatus | null>(
     requestedFulfillmentStatusFilter,
   )
+  const [invoiceStatusFilter, setInvoiceStatusFilter] = useState<InvoiceStatus | null>(
+    requestedInvoiceStatusFilter,
+  )
   // Local Hierarchical Filter State
   const [reportBranchIds, setReportBranchIds] = useState<string[]>([])
   const [reportGroupIds, setReportGroupIds] = useState<string[]>([])
@@ -196,7 +210,8 @@ function OrdersManagementContent() {
     setStatusFilter(requestedStatusFilter)
     setDeliveryFilter(requestedDeliveryFilter)
     setFulfillmentStatusFilter(requestedFulfillmentStatusFilter)
-  }, [requestedStatusFilter, requestedDeliveryFilter, requestedFulfillmentStatusFilter])
+    setInvoiceStatusFilter(requestedInvoiceStatusFilter)
+  }, [requestedStatusFilter, requestedDeliveryFilter, requestedFulfillmentStatusFilter, requestedInvoiceStatusFilter])
 
 
   const handleDateChange = useCallback(({ range, preset, months = [], years = [] }: GlobalDateFilterChange) => {
@@ -218,6 +233,7 @@ function OrdersManagementContent() {
     statusFilter !== "all" ||
     deliveryFilter !== null ||
     fulfillmentStatusFilter !== null ||
+    invoiceStatusFilter !== null ||
     splitFilter !== "all"
 
   const resetOrderFilters = useCallback(() => {
@@ -232,6 +248,7 @@ function OrdersManagementContent() {
     setStatusFilter("all")
     setDeliveryFilter(null)
     setFulfillmentStatusFilter(null)
+    setInvoiceStatusFilter(null)
     setSplitFilter("all")
   }, [])
 
@@ -306,12 +323,16 @@ function OrdersManagementContent() {
       params.set("fulfillmentStatus", fulfillmentStatusFilter)
     }
 
+    if (invoiceStatusFilter) {
+      params.set("invoiceStatus", invoiceStatusFilter)
+    }
+
     if (debouncedSearchQuery) {
       params.set("q", debouncedSearchQuery)
     }
 
     return params.toString()
-  }, [organizationId, branchId, branchIds, reportBranchIds, reportGroupIds, dateRange, selectedMonths, selectedYears, statusFilter, isInitialized, debouncedSearchQuery, deliveryFilter, fulfillmentStatusFilter])
+  }, [organizationId, branchId, branchIds, reportBranchIds, reportGroupIds, dateRange, selectedMonths, selectedYears, statusFilter, isInitialized, debouncedSearchQuery, deliveryFilter, fulfillmentStatusFilter, invoiceStatusFilter])
 
   const ordersEndpoint = useMemo(() => {
     if (ordersQuery === null) return null
@@ -630,6 +651,30 @@ function OrdersManagementContent() {
                     {FULFILLMENT_STATUSES.map((status) => (
                       <SelectItem key={status} value={status}>
                         {FULFILLMENT_STATUS_LABELS[status]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+
+                <Select
+                  value={invoiceStatusFilter ?? "all"}
+                  onValueChange={(value) => {
+                    setCurrentPage(1)
+                    setInvoiceStatusFilter(value === "all" ? null : (value as InvoiceStatus))
+                  }}
+                >
+                  <SelectTrigger
+                    aria-label="Filter by invoice status"
+                    className="h-10 w-[190px] rounded-xl border-slate-200 bg-white text-xs font-medium shadow-sm dark:border-slate-800 dark:bg-slate-900/50"
+                  >
+                    <FileText className="mr-2 h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
+                    <SelectValue placeholder="All invoice statuses" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All invoice statuses</SelectItem>
+                    {INVOICE_STATUSES.map((status) => (
+                      <SelectItem key={status} value={status}>
+                        {INVOICE_STATUS_LABELS[status]}
                       </SelectItem>
                     ))}
                   </SelectContent>

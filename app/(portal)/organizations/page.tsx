@@ -62,6 +62,7 @@ type Organization = {
   name: string
   code: string
   ntnNumber?: string | null
+  strnNumber?: string | null
   emailDomain?: string | null
   status?: "active" | "inactive"
   budgetAllocationMode?: BudgetAllocationMode
@@ -1254,6 +1255,7 @@ function CreateOrgDialog({
   const [name, setName] = useState("")
   const [code, setCode] = useState("")
   const [ntnNumber, setNtnNumber] = useState("")
+  const [strnNumber, setStrnNumber] = useState("")
   const [emailDomain, setEmailDomain] = useState("")
   const [status, setStatus] = useState<boolean>(true)
   const [budgetAllocationMode, setBudgetAllocationMode] = useState<BudgetAllocationMode>("money")
@@ -1295,6 +1297,7 @@ function CreateOrgDialog({
           code,
           // Optional: only sent when filled in, so a blank field stays absent.
           ...(ntnNumber.trim() ? { ntnNumber: ntnNumber.trim() } : {}),
+          ...(strnNumber.trim() ? { strnNumber: strnNumber.trim() } : {}),
           ...(emailDomainPayload ? { emailDomain: emailDomainPayload } : {}),
           status: status ? "active" : "inactive",
           budgetsEnabled,
@@ -1323,6 +1326,7 @@ function CreateOrgDialog({
       setName("")
       setCode("")
       setNtnNumber("")
+      setStrnNumber("")
       setEmailDomain("")
       setStatus(true)
       setBudgetAllocationMode("money")
@@ -1402,6 +1406,17 @@ function CreateOrgDialog({
                   disabled={saving}
                 />
                 <p className="text-xs text-muted-foreground">Tax registration number. Leave blank if not applicable.</p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="strn-number">STRN number (optional)</Label>
+                <Input
+                  id="strn-number"
+                  value={strnNumber}
+                  onChange={(e) => setStrnNumber(e.target.value)}
+                  placeholder="3277876123456"
+                  disabled={saving}
+                />
+                <p className="text-xs text-muted-foreground">Sales tax registration number, printed on invoices beside the NTN.</p>
               </div>
               <EmailDomainField
                 id="email-domain"
@@ -1804,6 +1819,7 @@ function EditOrgDialog({
   const [name, setName] = useState(org.name)
   const [code, setCode] = useState(org.code)
   const [ntnNumber, setNtnNumber] = useState(org.ntnNumber ?? "")
+  const [strnNumber, setStrnNumber] = useState(org.strnNumber ?? "")
   const [emailDomain, setEmailDomain] = useState(org.emailDomain ?? "")
   const [status, setStatus] = useState<boolean>(isActiveStatus(org.status))
   const [budgetAllocationMode, setBudgetAllocationMode] = useState<BudgetAllocationMode>(
@@ -1855,6 +1871,7 @@ function EditOrgDialog({
     setName(org.name)
     setCode(org.code)
     setNtnNumber(org.ntnNumber ?? "")
+    setStrnNumber(org.strnNumber ?? "")
     setEmailDomain(org.emailDomain ?? "")
     setStatus(isActiveStatus(org.status))
     setBudgetAllocationMode(parseBudgetAllocationMode(org.budgetAllocationMode))
@@ -1870,6 +1887,7 @@ function EditOrgDialog({
     org.name,
     org.code,
     org.ntnNumber,
+    org.strnNumber,
     org.emailDomain,
     org.status,
     org.budgetAllocationMode,
@@ -1998,6 +2016,17 @@ function EditOrgDialog({
                 disabled={saving}
               />
               <p className="text-xs text-muted-foreground">Tax registration number. Clear the field to remove it.</p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="estrn">STRN number (optional)</Label>
+              <Input
+                id="estrn"
+                value={strnNumber}
+                onChange={(e) => setStrnNumber(e.target.value)}
+                placeholder="3277876123456"
+                disabled={saving}
+              />
+              <p className="text-xs text-muted-foreground">Sales tax registration number. Clear the field to remove it.</p>
             </div>
             <EmailDomainField
               id="eemail-domain"
@@ -2190,6 +2219,7 @@ function EditOrgDialog({
                     code,
                     // Optional: an emptied field clears the stored value.
                     ntnNumber: ntnNumber.trim() || null,
+                    strnNumber: strnNumber.trim() || null,
                     emailDomain: toEmailDomainPayload(emailDomain),
                     status: status ? "active" : "inactive",
                     ...(isSuperAdmin

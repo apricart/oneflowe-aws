@@ -402,3 +402,49 @@ describe("invoice line items", () => {
         expect(container.querySelector(".summary-table")).toBeNull()
     })
 })
+
+describe("invoice status, title and customer STRN", () => {
+    afterEach(() => {
+        cleanup()
+        swrResponse = { data: receiptResponse, error: undefined, isLoading: false }
+    })
+
+    const withReceipt = (extra: Record<string, unknown>) => {
+        swrResponse = {
+            data: { ...receiptResponse, receiptData: { ...receiptResponse.receiptData, ...extra } },
+            error: undefined,
+            isLoading: false,
+        }
+    }
+
+    it("titles an issued invoice INVOICE and shows its status", () => {
+        withReceipt({ invoiceStatus: "ISSUED" })
+        renderInvoice()
+
+        expect(screen.getByText("INVOICE")).toBeTruthy()
+        expect(screen.getByText("Invoice Status")).toBeTruthy()
+        expect(screen.getByText("Issued")).toBeTruthy()
+    })
+
+    it("titles an approved, undelivered order PROFORMA INVOICE", () => {
+        withReceipt({ invoiceStatus: "PROFORMA_AVAILABLE" })
+        renderInvoice()
+
+        expect(screen.getByText("PROFORMA INVOICE")).toBeTruthy()
+        expect(screen.queryByText("INVOICE")).toBeNull()
+        expect(screen.getByText("Proforma available")).toBeTruthy()
+    })
+
+    it("shows no status line when the server sent none", () => {
+        renderInvoice()
+
+        expect(screen.queryByText("Invoice Status")).toBeNull()
+    })
+
+    it("prints the customer's STRN under Bill To when present", () => {
+        withReceipt({ invoiceStatus: "PROFORMA_AVAILABLE", organizationStrn: "3277876123456" })
+        renderInvoice()
+
+        expect(screen.getByText("STRN: 3277876123456")).toBeTruthy()
+    })
+})

@@ -437,7 +437,8 @@ async function regenerateReceipt(
   })
   // The invoice keeps its number, its date and its purchase order reference.
   const previous = input.order.receiptData as any
-  receiptData.invoiceNumber = previous?.invoiceNumber || input.order.tid
+  // A number drawn at placement survives; otherwise it is issued at delivery.
+  if (previous?.invoiceNumber) receiptData.invoiceNumber = previous.invoiceNumber
   receiptData.date = previous?.date || receiptData.date
   // An edit never changes where the goods go, so an order sent to a chosen
   // delivery address keeps that address on its invoice.

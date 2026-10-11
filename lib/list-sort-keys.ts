@@ -21,6 +21,8 @@ export const ORDER_LIST_SORT_KEYS = [
   "orderDate",
   "approvalDate",
   "deliveryDate",
+  // Sorts by the document's stage (lib/invoice-status.ts), never an amount.
+  "invoiceStatus",
   "amount",
 ] as const
 export type OrderListSortKey = (typeof ORDER_LIST_SORT_KEYS)[number]

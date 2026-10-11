@@ -25,10 +25,15 @@ describe("invoice creation is part of the order transaction", () => {
     expect(orderEdit).toContain("const receiptData = await generateReceiptData({")
   })
 
-  it("locks the tenant even when invoice numbering falls back to the order TID", () => {
+  // Both creation paths number through one function, which numbers nothing
+  // while invoices are issued at delivery (plans/OF-INVOICE-invoice-ledger.md)
+  // and, when switched back, still locks the tenant on the TID fallback.
+  it("numbers (or not) through one shared function that locks the tenant on the TID fallback", () => {
     for (const path of ["app/api/v1/orders/route.ts", "lib/server/group-order-creation.ts"]) {
-      expect(source(path)).toContain("await lockInvoiceTenantForIssuance(tx, context.organizationId)")
+      expect(source(path)).toContain("await assignInvoiceNumberAtCreation(tx, receiptData, {")
+      expect(source(path)).not.toContain("generateNextInvoiceNumber(")
     }
+    expect(source("lib/invoice-number.ts")).toContain("await lockInvoiceTenantForIssuance(client, input.organizationId)")
   })
 })
 

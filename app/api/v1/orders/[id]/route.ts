@@ -431,7 +431,9 @@ async function regenerateEditedOrderReceipt(tx: any, context: any) {
     deliveryAddress: context.deliveryAddress ?? null,
   })
   const previousReceipt = context.existingOrder.receiptData as any
-  receiptData.invoiceNumber = previousReceipt?.invoiceNumber || context.existingOrder.tid
+  // A number drawn when the order was placed survives the edit; an order with
+  // none gets one at delivery (lib/invoice-policy.ts), never the TID.
+  if (previousReceipt?.invoiceNumber) receiptData.invoiceNumber = previousReceipt.invoiceNumber
   receiptData.date = previousReceipt?.date || receiptData.date
   // The invoice identity survives an edit, and so does the buyer's purchase
   // order reference: the edited value when one was sent, the recorded one

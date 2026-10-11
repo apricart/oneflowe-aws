@@ -5,7 +5,8 @@ import { orders } from "@/db/schema"
 import { getCurrentUser } from "@/lib/auth"
 import { db } from "@/lib/db"
 import { orderSelectColumns } from "@/lib/order-select"
-import { PENDING_INVOICE_ORDER_STATUSES } from "@/lib/pending-invoice"
+import { PENDING_INVOICE_STATUSES } from "@/lib/pending-invoice"
+import { invoiceStatusSql } from "@/lib/server/invoice-status-sql"
 
 const NO_STORE_HEADERS = { "Cache-Control": "private, no-store, max-age=0" }
 
@@ -40,10 +41,9 @@ export async function GET() {
       eq(orders.createdByUserId, user.id),
       eq(orderSelectColumns.paymentStatus, "UNPAID"),
       isNotNull(orders.receiptData),
-      inArray(
-        sql<string>`UPPER(TRIM(${orders.status}))`,
-        [...PENDING_INVOICE_ORDER_STATUSES],
-      ),
+      // A tax invoice, issued at delivery and not fully credited
+      // (lib/pending-invoice.ts). A proforma is not an invoice.
+      inArray(invoiceStatusSql, [...PENDING_INVOICE_STATUSES]),
     ))
     .orderBy(desc(orders.createdAt))
     .limit(1)

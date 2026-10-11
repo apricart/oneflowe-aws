@@ -64,11 +64,14 @@ function copyVerbatimFields(body: OrganizationUpdateInput, patch: Record<string,
   }
 }
 
-// Optional field: an empty (or explicitly null) value clears it, so a wrong
-// NTN can be removed without leaving an empty string behind.
-function normalizeNtnNumber(value: string | null) {
+// Optional fields: an empty (or explicitly null) value clears it, so a wrong
+// NTN or STRN can be removed without leaving an empty string behind.
+function normalizeTaxIdentifier(value: string | null) {
   return value === null ? null : value.trim() || null
 }
+
+/** `audit_logs.action` for a change to the NTN or STRN an invoice prints. */
+const ORGANIZATION_TAX_IDENTIFIERS_AUDIT_ACTION = "UPDATE_ORGANIZATION_TAX_IDENTIFIERS"
 
 async function buildOrganizationPatch(body: OrganizationUpdateInput, organizationId: number) {
   const patch: Record<string, unknown> = {}
@@ -91,7 +94,10 @@ async function buildOrganizationPatch(body: OrganizationUpdateInput, organizatio
     patch.code = code
   }
   if (body.ntnNumber !== undefined) {
-    patch.ntnNumber = normalizeNtnNumber(body.ntnNumber)
+    patch.ntnNumber = normalizeTaxIdentifier(body.ntnNumber)
+  }
+  if (body.strnNumber !== undefined) {
+    patch.strnNumber = normalizeTaxIdentifier(body.strnNumber)
   }
   copyVerbatimFields(body, patch)
   if (body.status !== undefined) {
@@ -160,6 +166,8 @@ export async function PATCH(
         .select({
           id: organizations.id,
           code: organizations.code,
+          ntnNumber: organizations.ntnNumber,
+          strnNumber: organizations.strnNumber,
           orderApproverRole: organizations.orderApproverRole,
           emailDomain: organizations.emailDomain,
           orderApprovalRequired: organizations.orderApprovalRequired,
@@ -295,6 +303,7 @@ export async function PATCH(
       }
 
       await auditManagedOrderingToggle(tx, { userId: scope.userId, orgId, body, existingOrganization })
+      await auditTaxIdentifiers(tx, { userId: scope.userId, orgId, patch, existingOrganization })
 
       return { kind: "updated", item: updatedOrganization } as const
     })
@@ -447,6 +456,40 @@ async function auditManagedOrderingToggle(
       previousManagedOrdering: existingOrganization.managedOrdering,
       managedOrdering: body.managedOrdering,
     },
+  })
+}
+
+/**
+ * The NTN and STRN are printed on every invoice issued to this organization,
+ * so a change to either is on the trail with what it replaced. Compared after
+ * normalisation, so re-saving the same value writes nothing.
+ */
+async function auditTaxIdentifiers(
+  tx: OrganizationTx,
+  { userId, orgId, patch, existingOrganization }: {
+    userId: string
+    orgId: number
+    patch: Record<string, unknown>
+    existingOrganization: { ntnNumber: string | null; strnNumber: string | null }
+  },
+): Promise<void> {
+  const changes: Record<string, string | null> = {}
+  for (const field of ["ntnNumber", "strnNumber"] as const) {
+    if (!(field in patch)) continue
+    const next = (patch[field] as string | null) ?? null
+    const previous = existingOrganization[field] ?? null
+    if (next === previous) continue
+    changes[`previous${field[0].toUpperCase()}${field.slice(1)}`] = previous
+    changes[field] = next
+  }
+  if (Object.keys(changes).length === 0) return
+  await tx.insert(auditLogs).values({
+    userId,
+    organizationId: orgId,
+    action: ORGANIZATION_TAX_IDENTIFIERS_AUDIT_ACTION,
+    entity: "organization",
+    entityId: String(orgId),
+    metadata: changes,
   })
 }
 

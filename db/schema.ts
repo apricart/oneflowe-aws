@@ -29,6 +29,10 @@ export const organizations = pgTable(
     // Optional tax identifier. Nullable so every existing organization stays
     // valid without one, and so an operator can clear a wrong value.
     ntnNumber: varchar("ntn_number", { length: 32 }),
+    // Optional sales tax registration number, printed under Bill To beside the
+    // NTN. Nullable for the same reasons; set on Create / Edit Organization.
+    // See plans/OF-INVOICE-invoice-ledger.md (D9).
+    strnNumber: varchar("strn_number", { length: 32 }),
     status: varchar("status", { length: 32 }).default("active"),
     orderApproverRole: varchar("order_approver_role", { length: 32 })
       .notNull()
@@ -897,7 +901,8 @@ export const orders = pgTable(
     refundReason: text("refund_reason"),
     // Receipt data - complete snapshot for historical accuracy
     receiptData: jsonb("receipt_data").$type<{
-      invoiceNumber: string
+      /** Absent until the tax invoice is issued at delivery (lib/invoice-policy.ts). */
+      invoiceNumber?: string
       /** Buyer's purchase order reference as supplied when the order was placed. */
       poNumber?: string
       date: string
@@ -987,6 +992,9 @@ export const orders = pgTable(
       columns: [t.branchId, t.organizationId],
       foreignColumns: [branches.id, branches.organizationId],
     }),
+    // Composite target for the invoice ledger's (order_id, organization_id)
+    // keys, as branches and groups have (plans/OF-INVOICE-invoice-ledger.md).
+    unique("orders_id_organization_uq").on(t.id, t.organizationId),
   ],
 )
 
@@ -1196,6 +1204,212 @@ export const refundItems = pgTable(
     index("refund_items_refund_idx").on(t.refundId),
     index("refund_items_order_item_idx").on(t.orderItemId),
     check("refund_items_values_valid_ck", sql`${t.quantity} > 0 AND ${t.quantity} <= 1000000 AND ${t.amountCents} >= 0`),
+  ],
+)
+
+/**
+ * The invoice ledger (plans/OF-INVOICE-invoice-ledger.md).
+ *
+ * A tax invoice is issued when an order's delivery is recorded, numbered from
+ * the organization's existing `invoice_sequences` series and dated that day in
+ * Karachi; a refund approved against it issues a numbered credit note. Neither
+ * document changes once written: database triggers refuse any update to an
+ * invoice other than its credited totals and status, and any update or delete
+ * of its lines, its credit notes or their lines.
+ *
+ * Invoices supplied before the ledger existed are copied in by
+ * `npm run backfill:invoice-ledger` with their original number and printed
+ * date (`origin` LEGACY_*); they keep printing from the order's own snapshot.
+ */
+export const invoices = pgTable(
+  "invoices",
+  {
+    id: serial("id").primaryKey(),
+    organizationId: integer("organization_id").references(() => organizations.id).notNull(),
+    branchId: integer("branch_id").notNull(),
+    orderId: integer("order_id").notNull(),
+    number: varchar("number", { length: 40 }).notNull(),
+    issueDate: date("issue_date", { mode: "string" }).notNull(),
+    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().defaultNow(),
+    origin: varchar("origin", { length: 24 }).notNull(),
+    status: varchar("status", { length: 24 }).notNull().default("ISSUED"),
+    seller: jsonb("seller").$type<Record<string, unknown>>().notNull(),
+    buyer: jsonb("buyer").$type<Record<string, unknown>>().notNull(),
+    participants: jsonb("participants").$type<Record<string, unknown>>().notNull().default({}),
+    netCents: bigint("net_cents", { mode: "number" }).notNull(),
+    taxCents: bigint("tax_cents", { mode: "number" }).notNull(),
+    discountCents: bigint("discount_cents", { mode: "number" }).notNull().default(0),
+    deliveryChargesCents: bigint("delivery_charges_cents", { mode: "number" }).notNull().default(0),
+    totalCents: bigint("total_cents", { mode: "number" }).notNull(),
+    creditedNetCents: bigint("credited_net_cents", { mode: "number" }).notNull().default(0),
+    creditedTaxCents: bigint("credited_tax_cents", { mode: "number" }).notNull().default(0),
+    creditedTotalCents: bigint("credited_total_cents", { mode: "number" }).notNull().default(0),
+    // The order's `receipt_data` verbatim, for legacy rows only.
+    legacySnapshot: jsonb("legacy_snapshot"),
+    issuedByUserId: uuid("issued_by_user_id").references(() => users.id),
+    // Set on rows the backfill wrote, so its rollback can find exactly them.
+    backfillBatch: varchar("backfill_batch", { length: 64 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("invoices_order_uq").on(t.orderId),
+    uniqueIndex("invoices_org_number_uq").on(t.organizationId, t.number),
+    uniqueIndex("invoices_prefixed_number_uq")
+      .on(t.number)
+      .where(sql`${t.number} ~ '^[A-Z0-9_]+-APR-[0-9]{6}$'`),
+    unique("invoices_id_organization_uq").on(t.id, t.organizationId),
+    index("invoices_org_issue_date_idx").on(t.organizationId, t.issueDate),
+    index("invoices_branch_idx").on(t.branchId),
+    check("invoices_origin_ck", sql`${t.origin} IN ('ISSUED_AT_SUPPLY', 'LEGACY_SNAPSHOT', 'LEGACY_IMPORT')`),
+    check("invoices_status_ck", sql`${t.status} IN ('ISSUED', 'PARTIALLY_CREDITED', 'CREDITED')`),
+    check(
+      "invoices_amounts_ck",
+      sql`${t.netCents} >= 0 AND ${t.taxCents} >= 0 AND ${t.discountCents} >= 0 AND ${t.deliveryChargesCents} >= 0 AND ${t.totalCents} >= 0`,
+    ),
+    // Issued invoices add up exactly; legacy rows keep the figures they were issued with.
+    check(
+      "invoices_arithmetic_ck",
+      sql`${t.origin} <> 'ISSUED_AT_SUPPLY' OR ${t.netCents} + ${t.taxCents} + ${t.deliveryChargesCents} - ${t.discountCents} = ${t.totalCents}`,
+    ),
+    check(
+      "invoices_credited_ck",
+      sql`${t.creditedNetCents} >= 0 AND ${t.creditedTaxCents} >= 0 AND ${t.creditedTotalCents} >= 0 AND ${t.creditedTotalCents} <= ${t.totalCents}`,
+    ),
+    check("invoices_legacy_snapshot_ck", sql`(${t.origin} = 'ISSUED_AT_SUPPLY') = (${t.legacySnapshot} IS NULL)`),
+    foreignKey({
+      name: "invoices_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
+    foreignKey({
+      name: "invoices_order_org_fk",
+      columns: [t.orderId, t.organizationId],
+      foreignColumns: [orders.id, orders.organizationId],
+    }),
+  ],
+)
+
+export const invoiceLines = pgTable(
+  "invoice_lines",
+  {
+    id: serial("id").primaryKey(),
+    invoiceId: integer("invoice_id").notNull(),
+    organizationId: integer("organization_id").notNull(),
+    lineNo: integer("line_no").notNull(),
+    orderItemId: integer("order_item_id").references(() => orderItems.id).notNull(),
+    productName: varchar("product_name", { length: 255 }).notNull(),
+    productCode: varchar("product_code", { length: 128 }),
+    unit: varchar("unit", { length: 64 }).notNull(),
+    category: varchar("category", { length: 255 }),
+    quantity: numeric("quantity", { precision: 12, scale: 3, mode: "number" }).notNull(),
+    // The tax-inclusive unit price the order was charged at.
+    unitPriceCents: bigint("unit_price_cents", { mode: "number" }).notNull(),
+    taxRateBp: integer("tax_rate_bp"),
+    netCents: bigint("net_cents", { mode: "number" }).notNull(),
+    taxCents: bigint("tax_cents", { mode: "number" }).notNull(),
+    grossCents: bigint("gross_cents", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("invoice_lines_line_uq").on(t.invoiceId, t.lineNo),
+    index("invoice_lines_order_item_idx").on(t.orderItemId),
+    check("invoice_lines_line_no_ck", sql`${t.lineNo} > 0`),
+    check(
+      "invoice_lines_values_ck",
+      sql`${t.quantity} > 0 AND ${t.unitPriceCents} >= 0 AND ${t.netCents} >= 0 AND ${t.taxCents} >= 0 AND ${t.netCents} + ${t.taxCents} = ${t.grossCents}`,
+    ),
+    check("invoice_lines_tax_rate_ck", sql`${t.taxRateBp} IS NULL OR (${t.taxRateBp} >= 0 AND ${t.taxRateBp} <= 10000)`),
+    foreignKey({
+      name: "invoice_lines_invoice_org_fk",
+      columns: [t.invoiceId, t.organizationId],
+      foreignColumns: [invoices.id, invoices.organizationId],
+    }),
+  ],
+)
+
+export const creditNoteSequences = pgTable(
+  "credit_note_sequences",
+  {
+    // ON DELETE CASCADE in the migration, as invoice_sequences.
+    organizationId: integer("organization_id")
+      .primaryKey()
+      .references(() => organizations.id, { onDelete: "cascade" })
+      .notNull(),
+    lastValue: integer("last_value").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    check("credit_note_sequences_range_ck", sql`${t.lastValue} >= 0 AND ${t.lastValue} <= 999999`),
+  ],
+)
+
+export const creditNotes = pgTable(
+  "credit_notes",
+  {
+    id: serial("id").primaryKey(),
+    organizationId: integer("organization_id").references(() => organizations.id).notNull(),
+    invoiceId: integer("invoice_id").notNull(),
+    refundId: integer("refund_id").references(() => refunds.id).notNull(),
+    number: varchar("number", { length: 40 }).notNull(),
+    issueDate: date("issue_date", { mode: "string" }).notNull(),
+    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().defaultNow(),
+    reason: text("reason"),
+    netCents: bigint("net_cents", { mode: "number" }).notNull(),
+    taxCents: bigint("tax_cents", { mode: "number" }).notNull(),
+    totalCents: bigint("total_cents", { mode: "number" }).notNull(),
+    issuedByUserId: uuid("issued_by_user_id").references(() => users.id).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    // One credit note per approved refund: a retried approval cannot issue two.
+    uniqueIndex("credit_notes_refund_uq").on(t.refundId),
+    uniqueIndex("credit_notes_number_uq").on(t.number),
+    unique("credit_notes_id_organization_uq").on(t.id, t.organizationId),
+    index("credit_notes_invoice_idx").on(t.invoiceId),
+    check("credit_notes_number_ck", sql`${t.number} ~ '^[A-Z0-9_]+-CN-[0-9]{6}$'`),
+    check(
+      "credit_notes_amounts_ck",
+      sql`${t.netCents} >= 0 AND ${t.taxCents} >= 0 AND ${t.totalCents} > 0 AND ${t.netCents} + ${t.taxCents} = ${t.totalCents}`,
+    ),
+    foreignKey({
+      name: "credit_notes_invoice_org_fk",
+      columns: [t.invoiceId, t.organizationId],
+      foreignColumns: [invoices.id, invoices.organizationId],
+    }),
+  ],
+)
+
+export const creditNoteLines = pgTable(
+  "credit_note_lines",
+  {
+    id: serial("id").primaryKey(),
+    creditNoteId: integer("credit_note_id").notNull(),
+    organizationId: integer("organization_id").notNull(),
+    lineNo: integer("line_no").notNull(),
+    // Null for an un-itemised adjustment, or a credit against a legacy invoice.
+    invoiceLineId: integer("invoice_line_id").references(() => invoiceLines.id),
+    orderItemId: integer("order_item_id").references(() => orderItems.id),
+    description: varchar("description", { length: 255 }).notNull(),
+    quantity: numeric("quantity", { precision: 12, scale: 3, mode: "number" }),
+    taxRateBp: integer("tax_rate_bp"),
+    netCents: bigint("net_cents", { mode: "number" }).notNull(),
+    taxCents: bigint("tax_cents", { mode: "number" }).notNull(),
+    grossCents: bigint("gross_cents", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("credit_note_lines_line_uq").on(t.creditNoteId, t.lineNo),
+    check("credit_note_lines_line_no_ck", sql`${t.lineNo} > 0`),
+    check(
+      "credit_note_lines_values_ck",
+      sql`(${t.quantity} IS NULL OR ${t.quantity} > 0) AND ${t.netCents} >= 0 AND ${t.taxCents} >= 0 AND ${t.netCents} + ${t.taxCents} = ${t.grossCents}`,
+    ),
+    foreignKey({
+      name: "credit_note_lines_credit_note_org_fk",
+      columns: [t.creditNoteId, t.organizationId],
+      foreignColumns: [creditNotes.id, creditNotes.organizationId],
+    }),
   ],
 )
 

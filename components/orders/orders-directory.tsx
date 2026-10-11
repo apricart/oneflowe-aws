@@ -71,6 +71,7 @@ import { isUnacknowledgedDelivery } from "@/lib/unacknowledged-delivery-block"
 import { isAwaitingCorrection } from "@/lib/order-correction"
 import { OrderCorrectionNotice, ReturnForCorrectionDialog } from "@/components/orders/order-correction"
 import { DeliveryChallanUploadDialog } from "@/components/orders/delivery-challan"
+import { InvoiceStatusBadge } from "@/components/orders/invoice-status-badge"
 import { TOKEN_SENT_LABEL, isTokenAlreadySent, readTokenSendRefusal } from "@/lib/order-token-handoff"
 import {
   DELIVERED_UNFULFILLED_LABEL,
@@ -93,6 +94,7 @@ const ORDER_TABLE_COLUMNS: OrderTableColumn[] = [
   { key: "orderDate", label: "Order Date", width: 112 },
   { key: "approvalDate", label: "Approval Date", width: 120 },
   { key: "deliveryDate", label: "Delivery Date", width: 120 },
+  { key: "invoiceStatus", label: "Invoice Status", width: 148 },
   { key: "amount", label: "Amount", width: 120 },
 ]
 
@@ -800,6 +802,7 @@ export function OrdersDirectory({
                   {isTableColumnVisible("orderDate") && <th aria-sort={ariaSortFor(sort, "orderDate")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-left font-bold")}>{sortLabel("orderDate", "Order Date")}</th>}
                   {isTableColumnVisible("approvalDate") && <th aria-sort={ariaSortFor(sort, "approvalDate")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-left font-bold")}>{sortLabel("approvalDate", "Approval Date")}</th>}
                   {isTableColumnVisible("deliveryDate") && <th aria-sort={ariaSortFor(sort, "deliveryDate")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-left font-bold")}>{sortLabel("deliveryDate", "Delivery Date")}</th>}
+                  {isTableColumnVisible("invoiceStatus") && <th aria-sort={ariaSortFor(sort, "invoiceStatus")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-center font-bold")}>{sortLabel("invoiceStatus", "Invoice Status")}</th>}
                   {isTableColumnVisible("amount") && <th aria-sort={ariaSortFor(sort, "amount")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap py-2.5 pl-3 pr-5 text-right font-bold")}>{sortLabel("amount", "Amount")}</th>}
                   {showFulfillmentColumns && (
                     <>
@@ -927,6 +930,9 @@ export function OrdersDirectory({
                       </td>}
                       {isTableColumnVisible("deliveryDate") && <td className="whitespace-nowrap px-3 py-3 text-xs font-medium text-slate-500">
                         {order.deliveredAt ? format(new Date(order.deliveredAt), "dd MMM yyyy") : "—"}
+                      </td>}
+                      {isTableColumnVisible("invoiceStatus") && <td className="px-3 py-3 text-center">
+                        <InvoiceStatusBadge status={order.invoiceStatus} />
                       </td>}
                       {isTableColumnVisible("amount") && <td className="whitespace-nowrap py-3 pl-3 pr-5 text-right font-bold text-slate-800 dark:text-slate-200">
                         {order.totalCents !== null && order.totalCents !== undefined ? formatPKR(order.totalCents / 100) : "-"}

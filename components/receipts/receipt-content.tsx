@@ -11,6 +11,14 @@ import { getReceiptItemQuantity, toDisplayNameCase } from "@/lib/receipt-display
 import { INVOICE_ISSUER } from "@/lib/invoice-issuer"
 import { normalizePaymentStatus } from "@/lib/payment-status"
 import { formatInvoiceDisplayDate, INVOICE_SYSTEM_GENERATED_NOTE } from "@/lib/invoice-format"
+import { invoiceDocumentTitle, toInvoiceStatus } from "@/lib/invoice-status"
+import {
+    CREDIT_NOTE_TITLE,
+    PROFORMA_NOTE,
+    displayedInvoiceNumber,
+    isProformaDocument,
+} from "@/lib/invoice-ledger-document"
+import { InvoiceStatusBadge } from "@/components/orders/invoice-status-badge"
 import { formatQuantity } from "@/lib/quantity"
 import {
     buildInvoiceLines,
@@ -83,6 +91,32 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
         }
     }
 
+    const handleCreditNoteDownload = async (creditNote: { id: number; number: string }) => {
+        setIsDownloading(true)
+        try {
+            const response = await fetch(`/api/v1/receipts/${orderId}/credit-notes/${creditNote.id}/download`)
+            if (!response.ok) throw new Error("Failed to download credit note")
+
+            const blob = await response.blob()
+            const url = window.URL.createObjectURL(blob)
+            const a = document.createElement("a")
+            a.href = url
+            a.download = `credit-note-${safeFilenamePart(creditNote.number, String(creditNote.id))}.pdf`
+            document.body.appendChild(a)
+            a.click()
+            window.URL.revokeObjectURL(url)
+            a.remove()
+        } catch (error: any) {
+            toast({
+                title: "Error",
+                description: error.message || "Failed to download credit note",
+                variant: "destructive",
+            })
+        } finally {
+            setIsDownloading(false)
+        }
+    }
+
     const handlePrint = () => {
         window.print()
     }
@@ -124,6 +158,14 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
     const statusKey = String(receiptData.statusKey || receiptData.status || "PENDING").toLowerCase()
     const isPaid = normalizePaymentStatus(receiptData.paymentStatus) === "PAID"
     const orderReference = receiptData.orderId || data?.orderId || orderId || "N/A"
+    const invoiceStatus = toInvoiceStatus(receiptData.invoiceStatus)
+    const documentTitle = invoiceStatus ? invoiceDocumentTitle(invoiceStatus) : "INVOICE"
+    // An invoice issued at delivery is printed from its own record: it shows
+    // its own status, and no fulfiller (fulfilment comes after issue).
+    const isFrozen = receiptData.frozen === true
+    const isProforma = isProformaDocument(receiptData)
+    const creditNotes: Array<{ id: number; number: string; date: string; total: number | null }> =
+        Array.isArray(receiptData.creditNotes) ? receiptData.creditNotes : []
 
     return (
         <div className={`receipt-container ${standalone ? 'py-8 px-4' : 'p-2'}`}>
@@ -398,7 +440,12 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
                         </div>
                     </div>
                     <div className="masthead-title">
-                        <div>INVOICE</div>
+                        <div>{documentTitle}</div>
+                        {isProforma && (
+                            <p className="mt-1 max-w-[260px] text-right text-[10px] font-semibold normal-case tracking-normal text-amber-700">
+                                {PROFORMA_NOTE}
+                            </p>
+                        )}
                         {isPaid && <div className="paid-stamp">PAID</div>}
                     </div>
                 </div>
@@ -409,7 +456,7 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
                         <div className="meta-line">
                             <span className="meta-key">Invoice#</span>
                             <span className="meta-key">:</span>
-                            <span className="meta-value">{receiptData.invoiceNumber || "N/A"}</span>
+                            <span className="meta-value">{displayedInvoiceNumber(receiptData)}</span>
                         </div>
                         <div className="meta-line">
                             <span className="meta-key">Invoice Date</span>
@@ -424,15 +471,26 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
                     </div>
 
                     <div className="party-cell party-right">
-                        <div className="meta-line">
-                            <span className="meta-key">Status</span>
-                            <span className="meta-key">:</span>
-                            <span>
-                                <span className={`inline-block rounded px-1.5 text-[10px] font-bold uppercase ${getStatusBadgeClass(statusKey)}`}>
-                                    {receiptData.status || "PENDING"}
+                        {!isFrozen && (
+                            <div className="meta-line">
+                                <span className="meta-key">Status</span>
+                                <span className="meta-key">:</span>
+                                <span>
+                                    <span className={`inline-block rounded px-1.5 text-[10px] font-bold uppercase ${getStatusBadgeClass(statusKey)}`}>
+                                        {receiptData.status || "PENDING"}
+                                    </span>
                                 </span>
-                            </span>
-                        </div>
+                            </div>
+                        )}
+                        {invoiceStatus && (
+                            <div className="meta-line">
+                                <span className="meta-key">Invoice Status</span>
+                                <span className="meta-key">:</span>
+                                <span>
+                                    <InvoiceStatusBadge status={invoiceStatus} className="rounded px-1.5 text-[10px]" />
+                                </span>
+                            </div>
+                        )}
                         <div className="meta-line">
                             <span className="meta-key">Total Items</span>
                             <span className="meta-key">:</span>
@@ -447,6 +505,9 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
                         <p className="party-name">{receiptData.organizationName || receiptData.buyerName || "N/A"}</p>
                         {receiptData.organizationNtn && (
                             <p className="party-line">NTN: {receiptData.organizationNtn}</p>
+                        )}
+                        {receiptData.organizationStrn && (
+                            <p className="party-line">STRN: {receiptData.organizationStrn}</p>
                         )}
                     </div>
 
@@ -481,10 +542,12 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
                             <span className="party-label">Approver:</span>{" "}
                             {toDisplayNameCase(receiptData.approvedByName || "N/A")}
                         </p>
-                        <p className="party-line">
-                            <span className="party-label">Fulfiller:</span>{" "}
-                            {toDisplayNameCase(receiptData.fulfilledByName || "N/A")}
-                        </p>
+                        {!isFrozen && (
+                            <p className="party-line">
+                                <span className="party-label">Fulfiller:</span>{" "}
+                                {toDisplayNameCase(receiptData.fulfilledByName || "N/A")}
+                            </p>
+                        )}
                     </div>
                 </div>
 
@@ -571,6 +634,38 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
                         </div>
                     </div>
                 </div>}
+
+                {creditNotes.length > 0 && (
+                    <section aria-label="Credit notes" className="mt-6 rounded-md border border-slate-200 p-4">
+                        <p className="mb-2 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                            {CREDIT_NOTE_TITLE}S issued against this invoice
+                        </p>
+                        <ul className="space-y-1.5">
+                            {creditNotes.map((note) => (
+                                <li key={note.id} className="flex items-center justify-between gap-3 text-[11px]">
+                                    <span className="font-semibold text-slate-700">
+                                        {note.number} · {formatInvoiceDisplayDate(note.date) || note.date}
+                                        {note.total !== null && note.total !== undefined && (
+                                            <span className="ml-2 font-bold text-red-500">-PKR {formatInvoiceMoney(note.total)}</span>
+                                        )}
+                                    </span>
+                                    {!pricesHidden && (
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            size="sm"
+                                            className="print-hidden h-7 gap-1 text-[11px]"
+                                            disabled={isDownloading}
+                                            onClick={() => handleCreditNoteDownload(note)}
+                                        >
+                                            <Download className="h-3.5 w-3.5" /> Download
+                                        </Button>
+                                    )}
+                                </li>
+                            ))}
+                        </ul>
+                    </section>
+                )}
 
                 {/* Footer */}
                 <div className="invoice-note mt-16 pt-8 border-t border-slate-100 text-center">
