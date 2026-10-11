@@ -2,7 +2,7 @@ import "server-only"
 
 import { sql, type SQL } from "drizzle-orm"
 
-import { orders } from "@/db/schema"
+import { invoices, orders } from "@/db/schema"
 import { SUPPLIED_ORDER_STATUSES, type InvoiceStatus } from "@/lib/invoice-status"
 
 const supplied = sql.join(SUPPLIED_ORDER_STATUSES.map((status) => sql`${status}`), sql`, `)
@@ -12,13 +12,20 @@ const fulfillmentStatus = sql`UPPER(BTRIM(COALESCE(${orders.fulfillmentStatus}, 
 const statusAtRefund = sql`UPPER(BTRIM(COALESCE(${orders.statusAtRefund}, '')))`
 
 /**
+ * The order's tax invoice status, or NULL before one is issued. One row at most
+ * (`invoices_order_uq`), and `invoices_status_ck` holds it to the three tax-invoice statuses.
+ */
+const ledgerStatus = sql`(SELECT ${invoices.status} FROM ${invoices} WHERE ${invoices.orderId} = ${orders.id} LIMIT 1)`
+
+/**
  * The SQL twin of `deriveInvoiceStatus` (lib/invoice-status.ts), branch for
- * branch, for filtering and sorting the order list in the database.
- * `tests/integration/invoice-status-sql.test.ts` runs every combination of
+ * branch, for filtering and sorting the order list in the database: the
+ * issued invoice's own status when there is one, otherwise derived from the
+ * order. `tests/integration/invoice-status.test.ts` runs every combination of
  * status, fulfilment status, status at refund and refund amount through both
  * and requires the same answer.
  */
-export const invoiceStatusSql: SQL<InvoiceStatus> = sql<InvoiceStatus>`CASE
+export const invoiceStatusSql: SQL<InvoiceStatus> = sql<InvoiceStatus>`COALESCE(${ledgerStatus}, CASE
   WHEN ${status} IN ('PENDING', 'REJECTED') THEN 'NOT_ISSUED'
   WHEN ${status} = 'CANCELLED' THEN 'CANCELLED'
   WHEN ${status} IN (${supplied})
@@ -32,7 +39,7 @@ export const invoiceStatusSql: SQL<InvoiceStatus> = sql<InvoiceStatus>`CASE
   WHEN ${status} = 'REFUNDED' THEN 'CANCELLED'
   WHEN ${status} = 'APPROVED' THEN 'PROFORMA_AVAILABLE'
   ELSE 'NOT_ISSUED'
-END`
+END)`
 
 /**
  * Sort rank following the document's life: not issued, proforma, issued,

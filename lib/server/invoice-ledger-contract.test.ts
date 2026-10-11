@@ -75,6 +75,23 @@ describe("the invoice ledger", () => {
     expect(migration).toContain("SELECT current_database() LIKE '%test%'")
   })
 
+  it("answers an organization with no company code plainly, at creation and at delivery", () => {
+    for (const path of ["app/api/v1/orders/[id]/fulfillment-status/route.ts", "app/api/v1/warehouse/orders/[id]/progress/route.ts"]) {
+      expect(source(path)).toContain('case "invoice-code-missing":')
+      expect(source(path)).toContain("return error(INVOICE_CODE_MISSING_MESSAGE, 409)")
+    }
+    expect(source("app/api/v1/orders/route.ts")).toContain("if (isInvoiceCodeMissingError(caughtError)) {")
+    expect(source("lib/server/group-order-creation.ts")).toContain("if (isInvoiceCodeMissingError(caughtError)) return caughtError.message")
+  })
+
+  it("prices every approved refund line through one rule, and re-checks it under the order lock", () => {
+    for (const path of ["app/api/v1/orders/[id]/refunds/route.ts", "app/api/v1/admin/refunds/route.ts"]) {
+      expect(source(path)).toContain("refundLineAmountCents({")
+      expect(source(path)).toContain("refundDetailsStillPriced(")
+      expect(source(path)).not.toContain("calculateLineCents(")
+    }
+  })
+
   it("sets the test-cleanup switch nowhere outside the integration helpers", () => {
     const offenders = ["app", "lib", "scripts", "components"].flatMap(filesUnder)
       .filter((path) => source(path).includes("invoice_ledger_test_cleanup"))

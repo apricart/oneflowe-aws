@@ -1,4 +1,5 @@
 import { error, ok, readJson, requireApiRole } from "@/lib/api"
+import { INVOICE_CODE_MISSING_MESSAGE } from "@/lib/invoice-number"
 import { getCurrentUser, verifyResourceAccess } from "@/lib/auth"
 import { normalizeFulfillmentStatus } from "@/lib/fulfillment-status"
 import { fulfillmentStatusSchema, validationMessage } from "@/lib/server/mutation-validation"
@@ -60,6 +61,8 @@ export async function POST(
       return error("Fulfillment progress migration has not been applied. Run the order fulfillment status migration first.", 503)
     case "conflict":
       return error("Fulfillment progress was already changed by another request", 409)
+    case "invoice-code-missing":
+      return error(INVOICE_CODE_MISSING_MESSAGE, 409)
     case "updated":
       return ok({
         message: outcome.fulfilled

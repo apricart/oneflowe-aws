@@ -8,7 +8,7 @@ import { shouldHidePricesForRole } from "@/lib/price-visibility"
 import { releaseRefundedQuantityBudget } from "@/lib/server/product-quantity-budget-ledger"
 import { orderTakesBudget } from "@/lib/organization-budget-policy"
 import { orderSelectColumns } from "@/lib/order-select"
-import { calculateLineCents, formatQuantity, validateProductQuantity } from "@/lib/quantity"
+import { formatQuantity, validateProductQuantity } from "@/lib/quantity"
 import { sendRefundRequestEmail } from "@/lib/email"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { ADMIN_OPERATIONS_EMAIL } from "@/lib/email/recipients"
@@ -31,6 +31,7 @@ import { notifyRaiserOfOrderWrite } from "@/lib/server/order-write-audit"
 import { isOrderDeskRole } from "@/lib/order-desk-access"
 import { loadDeskOrder } from "@/lib/server/order-desk-orders"
 import { CREDIT_NOTE_CONFLICT_ERRORS, issueCreditNoteForRefund } from "@/lib/server/credit-notes"
+import { refundDetailsStillPriced, refundHistoryByLine, refundLineAmountCents } from "@/lib/refund-amount"
 
 const refundRequestRoles = new Set([
   "SUPER_ADMIN",
@@ -143,6 +144,9 @@ function getRefundEligibilityError(orderData: any, role: string, now: Date) {
   return refundTimingReasonForRole(role, orderData, now)
 }
 
+/** Refunds that hold quantity and money on an order: approved, or asked for and not yet decided. */
+const LIVE_REFUND_STATUSES = ["PENDING", "APPROVED", "COMPLETED"]
+
 function indexPreviousRefunds(rows: any[]) {
   const approved = new Map<number, number>()
   const pending = new Map<number, number>()
@@ -180,7 +184,15 @@ function calculateRefundDetails(context: any) {
       orderItemId: item.id,
       name: original.productName,
       quantity: validation.quantity,
-      amount: calculateLineCents(original.priceCents, validation.quantity),
+      // The refund that takes a line's last units gives back exactly what is
+      // left of its charge (lib/refund-amount.ts), against the same approved
+      // and pending lines the quantity check above counts.
+      amount: refundLineAmountCents({
+        priceCents: original.priceCents,
+        lineQuantity: original.quantity,
+        already: context.history.get(item.id) ?? { quantity: 0, amountCents: 0 },
+        refundQuantity: validation.quantity,
+      }),
     })
   }
   const total = details.reduce((sum, detail) => sum + detail.amount, 0)
@@ -234,6 +246,7 @@ async function loadRefundRequestData(orderId: number, requestedItems: any[]) {
     items: requestedItems,
     orderItems: new Map(orderItemsList.map((item) => [item.id, item])),
     quantityRules: new Map(quantityRules.map((rule) => [rule.id, rule])),
+    history: refundHistoryByLine(previousRefunds.filter((row) => LIVE_REFUND_STATUSES.includes(row.status))),
     ...previous,
   })
   return { calculated, orderItemsMap: new Map(orderItemsList.map((item) => [item.id, item])), previousRefunds, existingRefunds }
@@ -256,10 +269,11 @@ async function lockAndValidateRefund(tx: any, context: any) {
   const liveLines = await tx.select({
     orderItemId: refundItems.orderItemId,
     quantity: refundItems.quantity,
+    amountCents: refundItems.amountCents,
     status: refunds.status,
   }).from(refundItems).innerJoin(refunds, eq(refundItems.refundId, refunds.id)).where(and(
     eq(refunds.orderId, context.orderId),
-    inArray(refunds.status, ["PENDING", "APPROVED", "COMPLETED"]),
+    inArray(refunds.status, LIVE_REFUND_STATUSES),
   ))
   const quantityByItem = new Map<number, number>()
   liveLines.forEach((line: any) => quantityByItem.set(line.orderItemId, (quantityByItem.get(line.orderItemId) || 0) + Number(line.quantity || 0)))
@@ -268,6 +282,14 @@ async function lockAndValidateRefund(tx: any, context: any) {
     const remaining = Number(original?.quantity || 0) - (quantityByItem.get(detail.orderItemId) || 0)
     if (!original || detail.quantity > remaining) throw new Error("REFUND_AVAILABILITY_CONFLICT")
   })
+  // Priced before the lock; a refund on the same line committed since can make
+  // this one the refund that takes the last units, at a different amount.
+  const stillPriced = refundDetailsStillPriced(
+    context.details.map((detail: any) => ({ orderItemId: detail.orderItemId, quantity: detail.quantity, amountCents: detail.amount })),
+    context.orderItems,
+    refundHistoryByLine(liveLines),
+  )
+  if (!stillPriced) throw new Error("REFUND_AVAILABILITY_CONFLICT")
   const liveRecords = await tx.select({ amountCents: refunds.amountCents, status: refunds.status }).from(refunds).where(eq(refunds.orderId, context.orderId))
   const approvedRecords = liveRecords.filter((record: any) => ["APPROVED", "COMPLETED"].includes(record.status))
     .reduce((sum: number, record: any) => sum + Number(record.amountCents || 0), 0)

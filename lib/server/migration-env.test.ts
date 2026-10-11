@@ -57,22 +57,28 @@ describe("readMigrationEnvFor", () => {
 
   it("each environment reads its own file", () => {
     write(".env.test.local", `TEST_DATABASE_URL=${TEST_DB}\n`)
-    write(".env.production.local", `MIGRATION_DATABASE_URL=${ELSEWHERE}\n`)
+    write(".env.prod.local", `MIGRATION_DATABASE_URL=${ELSEWHERE}\n`)
 
     expect(readMigrationEnvFor("test", dir).env.TEST_DATABASE_URL).toBe(TEST_DB)
     expect(readMigrationEnvFor("test", dir).env.MIGRATION_DATABASE_URL).toBeUndefined()
     expect(readMigrationEnvFor("production", dir).env.MIGRATION_DATABASE_URL).toBe(ELSEWHERE)
   })
 
-  it("lets the shell win over every file", () => {
+  it("production never reads .env.production.local, which Next loads into every production-mode tool", () => {
     write(".env.production.local", `MIGRATION_DATABASE_URL=${ELSEWHERE}\n`)
+
+    expect(readMigrationEnvFor("production", dir).env.MIGRATION_DATABASE_URL).toBeUndefined()
+  })
+
+  it("lets the shell win over every file", () => {
+    write(".env.prod.local", `MIGRATION_DATABASE_URL=${ELSEWHERE}\n`)
     vi.stubEnv("MIGRATION_DATABASE_URL", LOCAL)
 
     expect(readMigrationEnvFor("production", dir).env.MIGRATION_DATABASE_URL).toBe(LOCAL)
   })
 
   it("leaves process.env untouched", () => {
-    write(".env.production.local", `MIGRATION_DATABASE_URL=${ELSEWHERE}\n`)
+    write(".env.prod.local", `MIGRATION_DATABASE_URL=${ELSEWHERE}\n`)
 
     readMigrationEnvFor("production", dir)
 

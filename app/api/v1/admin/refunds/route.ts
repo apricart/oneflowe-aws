@@ -7,13 +7,14 @@ import { eq, or, ilike, sql, and, desc, ne } from "drizzle-orm"
 import { releaseRefundedQuantityBudget } from "@/lib/server/product-quantity-budget-ledger"
 import { orderTakesBudget } from "@/lib/organization-budget-policy"
 import { orderSelectColumns } from "@/lib/order-select"
-import { calculateLineCents, formatQuantity, validateProductQuantity } from "@/lib/quantity"
+import { formatQuantity, validateProductQuantity } from "@/lib/quantity"
 import { resolveAdminRefundReason } from "@/lib/admin-refund-approval"
 import { adminRefundProcessSchema, validationMessage } from "@/lib/server/mutation-validation"
 import { isRefundEligibleOrderStatus } from "@/lib/business-rules"
 import { budgetPeriodOf, planRefundLedgerMove } from "@/lib/budget-consumption"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { CREDIT_NOTE_CONFLICT_ERRORS, issueCreditNoteForRefund } from "@/lib/server/credit-notes"
+import { refundDetailsStillPriced, refundHistoryByLine, refundLineAmountCents, type LineRefundHistory } from "@/lib/refund-amount"
 
 const parseRefundRequestId = (value: string | null) => {
     if (!value) return { id: null }
@@ -151,9 +152,14 @@ async function loadRefundOrderItems(orderId: number) {
         .where(eq(orderItems.orderId, orderId))
 }
 
-async function loadApprovedQuantities(orderId: number) {
+/**
+ * What approved refunds already took from each line, quantity and money. A
+ * pending request is not counted: approving it replaces its lines, and every
+ * other pending request on the order is superseded.
+ */
+async function loadApprovedRefundHistory(orderId: number): Promise<Map<number, LineRefundHistory>> {
     const rows = await db
-        .select({ refundId: refundItems.refundId, orderItemId: refundItems.orderItemId, quantity: refundItems.quantity })
+        .select({ refundId: refundItems.refundId, orderItemId: refundItems.orderItemId, quantity: refundItems.quantity, amountCents: refundItems.amountCents })
         .from(refundItems)
         .innerJoin(refunds, eq(refunds.id, refundItems.refundId))
         .where(and(
@@ -162,15 +168,10 @@ async function loadApprovedQuantities(orderId: number) {
         ))
     const records = await db.select({ id: refunds.id, status: refunds.status }).from(refunds).where(eq(refunds.orderId, orderId))
     const statuses = new Map(records.map((record) => [record.id, record.status]))
-    const approved = new Map<number, number>()
-    for (const row of rows) {
-        if (!["APPROVED", "COMPLETED"].includes(statuses.get(row.refundId) || "")) continue
-        approved.set(row.orderItemId, (approved.get(row.orderItemId) || 0) + row.quantity)
-    }
-    return approved
+    return refundHistoryByLine(rows.filter((row) => ["APPROVED", "COMPLETED"].includes(statuses.get(row.refundId) || "")))
 }
 
-function calculateRefundDetails(items: any[], orderItemsById: Map<number, any>, approvedQuantities: Map<number, number>) {
+function calculateRefundDetails(items: any[], orderItemsById: Map<number, any>, approvedHistory: Map<number, LineRefundHistory>) {
     const details: any[] = []
     let total = 0
     for (const requestedItem of items) {
@@ -182,12 +183,20 @@ function calculateRefundDetails(items: any[], orderItemsById: Map<number, any>, 
             label: `Refund quantity for ${orderItem.productName}`,
         })
         if (!validation.ok) return { error: validation.error }
-        const approved = approvedQuantities.get(requestedItem.itemId) || 0
+        const history = approvedHistory.get(requestedItem.itemId) ?? { quantity: 0, amountCents: 0 }
+        const approved = history.quantity
         const remaining = orderItem.quantity - approved
         if (validation.quantity > remaining) {
             return { error: `Refund quantity (${formatQuantity(validation.quantity)}) exceeds remaining quantity (${formatQuantity(remaining)}) for item: ${orderItem.productName} (Approved: ${formatQuantity(approved)})` }
         }
-        const itemTotal = calculateLineCents(orderItem.priceCents, validation.quantity)
+        // The refund that takes a line's last units gives back exactly what is
+        // left of its charge (lib/refund-amount.ts).
+        const itemTotal = refundLineAmountCents({
+            priceCents: orderItem.priceCents,
+            lineQuantity: orderItem.quantity,
+            already: history,
+            refundQuantity: validation.quantity,
+        })
         total += itemTotal
         details.push({
             itemId: requestedItem.itemId,
@@ -219,8 +228,8 @@ async function prepareAdminRefund(input: any) {
         return { response: NextResponse.json({ error: "No items found for this order" }, { status: 404 }) }
     }
     const orderItemsById = new Map(orderItems.map((item) => [item.id, item]))
-    const approvedQuantities = await loadApprovedQuantities(input.orderId)
-    const calculation = calculateRefundDetails(input.items, orderItemsById, approvedQuantities)
+    const approvedHistory = await loadApprovedRefundHistory(input.orderId)
+    const calculation = calculateRefundDetails(input.items, orderItemsById, approvedHistory)
     if (calculation.error) {
         return { response: NextResponse.json({ error: calculation.error }, { status: 400 }) }
     }
@@ -528,6 +537,7 @@ export async function POST(req: NextRequest) {
                 .select({
                     orderItemId: refundItems.orderItemId,
                     quantity: refundItems.quantity,
+                    amountCents: refundItems.amountCents,
                 })
                 .from(refundItems)
                 .innerJoin(refunds, eq(refunds.id, refundItems.refundId))
@@ -536,6 +546,14 @@ export async function POST(req: NextRequest) {
                     or(eq(refunds.status, "APPROVED"), eq(refunds.status, "COMPLETED")),
                 ))
             assertRefundQuantitiesAvailable(refundDetails, orderItemsMap, liveApprovedLines)
+            // Priced before the lock; a refund approved since on the same line
+            // can make this one the refund that takes its last units.
+            const stillPriced = refundDetailsStillPriced(
+                refundDetails.map((detail: any) => ({ orderItemId: detail.itemId, quantity: detail.quantity, amountCents: detail.totalCents })),
+                orderItemsMap,
+                refundHistoryByLine(liveApprovedLines),
+            )
+            if (!stillPriced) throw new Error("REFUND_AVAILABILITY_CONFLICT")
 
             const liveApprovedRefunds = await tx
                 .select({ amountCents: refunds.amountCents })

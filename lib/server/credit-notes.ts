@@ -1,6 +1,6 @@
 import "server-only"
 
-import { and, eq, sql } from "drizzle-orm"
+import { and, eq, inArray, sql } from "drizzle-orm"
 
 import {
   auditLogs,
@@ -66,6 +66,7 @@ export async function issueCreditNoteForRefund(
     number: invoices.number,
     taxCents: invoices.taxCents,
     totalCents: invoices.totalCents,
+    creditedTaxCents: invoices.creditedTaxCents,
     creditedTotalCents: invoices.creditedTotalCents,
   }).from(invoices).where(eq(invoices.orderId, input.orderId)).for("update").limit(1)
 
@@ -76,6 +77,8 @@ export async function issueCreditNoteForRefund(
     description: orderItems.productName,
     taxRateBp: orderItems.taxRateBp,
     invoiceLineId: invoiceLines.id,
+    invoiceLineGrossCents: invoiceLines.grossCents,
+    invoiceLineTaxCents: invoiceLines.taxCents,
   })
     .from(refundItems)
     .innerJoin(orderItems, eq(orderItems.id, refundItems.orderItemId))
@@ -98,20 +101,45 @@ export async function issueCreditNoteForRefund(
     return { kind: "no-invoice", taxCents }
   }
 
+  // What earlier credit notes took from each invoice line. Stable while this
+  // runs: every credit note against this invoice holds its row FOR UPDATE.
+  const invoiceLineIds = [...new Set(lines.map((line) => line.invoiceLineId).filter((id): id is number => id !== null))]
+  const creditedRows = invoiceLineIds.length === 0 ? [] : await tx.select({
+    invoiceLineId: creditNoteLines.invoiceLineId,
+    grossCents: sql<string>`COALESCE(SUM(${creditNoteLines.grossCents}), 0)`,
+    taxCents: sql<string>`COALESCE(SUM(${creditNoteLines.taxCents}), 0)`,
+  }).from(creditNoteLines)
+    .where(and(
+      inArray(creditNoteLines.invoiceLineId, invoiceLineIds),
+      eq(creditNoteLines.organizationId, invoice.organizationId),
+    ))
+    .groupBy(creditNoteLines.invoiceLineId)
+  const creditedByLine = new Map(creditedRows.map((row) => [row.invoiceLineId, row]))
+
   const plan = planCreditNote({
     refundAmountCents,
-    lines: lines.map((line) => ({
-      orderItemId: line.orderItemId,
-      invoiceLineId: line.invoiceLineId,
-      description: line.description,
-      quantity: Number(line.quantity),
-      grossCents: Number(line.grossCents),
-      taxRateBp: line.taxRateBp,
-    })),
+    lines: lines.map((line) => {
+      const credited = line.invoiceLineId === null ? undefined : creditedByLine.get(line.invoiceLineId)
+      return {
+        orderItemId: line.orderItemId,
+        invoiceLineId: line.invoiceLineId,
+        description: line.description,
+        quantity: Number(line.quantity),
+        grossCents: Number(line.grossCents),
+        taxRateBp: line.taxRateBp,
+        invoiceLine: line.invoiceLineId === null ? null : {
+          grossCents: Number(line.invoiceLineGrossCents),
+          taxCents: Number(line.invoiceLineTaxCents),
+          creditedGrossCents: Number(credited?.grossCents ?? 0),
+          creditedTaxCents: Number(credited?.taxCents ?? 0),
+        },
+      }
+    }),
     invoice: {
       taxCents: Number(invoice.taxCents),
       totalCents: Number(invoice.totalCents),
       creditedTotalCents: Number(invoice.creditedTotalCents),
+      creditedTaxCents: Number(invoice.creditedTaxCents),
     },
   })
 

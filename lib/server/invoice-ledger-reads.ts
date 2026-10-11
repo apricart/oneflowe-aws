@@ -12,6 +12,12 @@ import {
   type LedgerInvoiceLineRecord,
   type LedgerInvoiceRecord,
 } from "@/lib/invoice-ledger-document"
+import {
+  INVOICE_STATUS_LABELS,
+  invoiceDocumentTitle,
+  isTaxInvoiceStatus,
+  toInvoiceStatus,
+} from "@/lib/invoice-status"
 
 /**
  * Reads of the invoice ledger for one order. They take the order id the caller
@@ -169,7 +175,15 @@ export async function invoiceDocumentForOrder<T extends Record<string, unknown> 
       creditNotes: ledger.creditNotes,
     })
   }
-  return legacyDocument === null
-    ? legacyDocument
-    : { ...legacyDocument, creditNotes: ledger.creditNotes.map(creditNoteReference) }
+  if (legacyDocument === null) return legacyDocument
+  // A legacy invoice prints from its snapshot, but its status is the ledger's,
+  // which is what the Orders list shows (invoiceStatusSql).
+  const status = toInvoiceStatus(ledger.invoice.status)
+  return {
+    ...legacyDocument,
+    ...(status && isTaxInvoiceStatus(status)
+      ? { invoiceStatus: status, invoiceStatusLabel: INVOICE_STATUS_LABELS[status], documentTitle: invoiceDocumentTitle(status) }
+      : {}),
+    creditNotes: ledger.creditNotes.map(creditNoteReference),
+  }
 }

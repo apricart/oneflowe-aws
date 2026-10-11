@@ -117,7 +117,10 @@ export async function issueTaxInvoiceAtDelivery(
     refundedByItem,
     unitemizedRefundCents: Math.max(0, refundedTotal - itemizedTotal),
   })
-  if (plan.lines.length === 0 || plan.totalCents <= 0) return { kind: "skipped", reason: "NOTHING_TO_INVOICE" }
+  // Skipped only when refunds took every unit, which leaves the order refunded
+  // and undeliverable. Goods delivered free of charge are still a supply, and
+  // are invoiced at zero.
+  if (plan.lines.length === 0) return { kind: "skipped", reason: "NOTHING_TO_INVOICE" }
 
   // The number: the reservation drawn at creation, or the next in the series.
   // Both paths hold the organization row FOR SHARE, as issuing always has.

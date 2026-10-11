@@ -10,6 +10,7 @@ import { logOrderActivity } from "@/lib/global-logger"
 import { generateReceiptData } from "@/lib/receipt-generator"
 import {
   assignInvoiceNumberAtCreation,
+  isInvoiceCodeMissingError,
   hasInvoiceSequenceTable,
 } from "@/lib/invoice-number"
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
@@ -1126,6 +1127,9 @@ async function getOrderCreationErrorResponse(caughtError: any, replayContext: an
       { error: caughtError.message, code: caughtError.code, deliveryAcknowledgement: caughtError.details },
       { status: 409 },
     )
+  }
+  if (isInvoiceCodeMissingError(caughtError)) {
+    return NextResponse.json({ error: caughtError.message, code: caughtError.code }, { status: 409 })
   }
   const message = String(caughtError.message || "")
   if (message === ORDER_DESK_TARGET_UNAVAILABLE) return NextResponse.json({ error: message }, { status: 403 })

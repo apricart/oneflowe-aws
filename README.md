@@ -99,7 +99,7 @@ and applies nothing.
 \`\`\`bash
 npm run db:migrate:dev    # localhost only — .env.development.local, then .env.local
 npm run db:migrate:test   # database name must contain "test" — .env.test.local
-npm run db:migrate:prod   # .env.production.local — dry run, prints a digest
+npm run db:migrate:prod   # .env.prod.local — dry run, prints a digest
 npm run db:migrate:prod -- --confirm=<digest>   # applies exactly that plan
 \`\`\`
 

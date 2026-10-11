@@ -493,11 +493,101 @@ allocation, customer statements, ageing) is follow-up F1. It will move
   invoice". This reverses part of `plans/OF-ORDERS-pending-invoice-notice.md`;
   its tests were changed deliberately.
 
+### Fixes after the edge-case review (2026-10-11)
+
+`lib/invoice-ledger-edge-cases.test.ts` and
+`tests/integration/invoice-ledger-edge-cases.test.ts` found the following, and
+every item below is fixed.
+
+**Changes D2 step 3 (pre-delivery refunds) and D7 (organization-code lock).**
+
+- **Credit-note tax now lands exactly on the invoiced tax.** Each note used to
+  split its own gross, but the invoice line was split once over the whole
+  line. At 18%, most prices refunded one unit at a time credited a paisa more
+  or less tax than was invoiced (PKR 100.01 × 3: 45.78 credited against 45.77).
+  `planCreditNote` now takes a line's credit tax from what is left on that
+  invoice line (`creditTaxFromLine`). The note that completes an invoice takes
+  exactly the tax left on it, and no note takes credited tax past the tax
+  charged. `issueCreditNoteForRefund` supplies each invoice line's earlier
+  credits, read under the invoice's `FOR UPDATE` lock.
+- **An issued invoice's own status is the status everywhere.** Before, a refund
+  approved before delivery was taken off the invoice (row: ISSUED, no credit
+  note), while the Orders list derived PARTIALLY_CREDITED from
+  "supplied + refund > 0". Now `invoiceStatusSql` reads `invoices.status` first
+  (one subquery on `invoices_order_uq`), and `deriveInvoiceStatus` takes it as
+  `ledgerStatus`. Legacy invoice documents print the ledger's status as well.
+- **The database holds the credited figures** (migration
+  `20261016120000_invoice_ledger_credit_integrity`):
+  - credited net + credited tax = credited total;
+  - credited tax ≤ tax;
+  - for invoices issued at supply, the status matches the credited total;
+  - the trigger also refuses lowering any credited total.
+- **Deleting a user who issued ledger documents keeps the trail.** The
+  user-delete route's history check now counts invoices, credit notes and
+  delivery challans, so such a user is deactivated, not deleted. The hard
+  delete's cleanup, which detaches the person from `audit_logs`, now runs in
+  the same transaction as the delete. Before, a warehouse account was
+  anonymised in the audit trail and then refused by the invoice's foreign key.
+- **Test harness:** the Playwright teardown (`tests/e2e/support/tenant.ts`)
+  switches on the ledger's test-cleanup exception, without which no spec that
+  delivers an order could tear down. `ordering-gates.spec.ts` now delivers the
+  order it expects a "pending invoice" for.
+
+- **Goods delivered free of charge are invoiced, at zero.** A line now leaves
+  the invoice only when refunds took all of its quantity. An all-free order
+  gets a zero-value invoice instead of none, so its status no longer says
+  "Issued" while no invoice exists. An invoice with nothing left to pay
+  (total less refunds ≤ 0) is not an unpaid invoice: the pending-invoice
+  notice and the unpaid-invoice ordering block both use `orderStillOwes` /
+  `orderStillOwesSql`.
+- **An un-itemised refund before delivery is taken off the lines, not
+  discounted.** It used to become `discount_cents` and leave every line's tax
+  in place, so the invoice could state more tax than it charged, and the
+  refund's tax was counted twice. It is now shared across the lines in
+  proportion to their gross (largest remainder, to the paisa), and each line it
+  touches is re-split on what it still charges. `discount_cents` is always 0 on
+  invoices issued at supply. Only legacy imports carry un-itemised refunds.
+- **A line refunded in pieces gives back exactly what it charged.** Each refund
+  was priced `round(price × quantity)`, so pieces could add up to a paisa more
+  or less than the line. Three refunds of 0.1 at 103 paisa left one paisa on no
+  invoice and in no refund. PKR 1.01 × 1.5 could never have its last half unit
+  refunded (0.51 asked, 0.50 left). `refundLineAmountCents`
+  (`lib/refund-amount.ts`) gives the refund that takes a line's last units what
+  is left of its charge, and caps every other refund at what is left. Both
+  approval routes price through it and re-check it under the order lock
+  (`refundDetailsStillPriced`); a mismatch is the existing 409 "refresh and
+  try again". Group refund *requests* only reserve capacity: their amounts are
+  re-priced when Super Admin approves them.
+- **An organization with no usable company code takes no order.** Numbering
+  moved to delivery, so a code-less tenant could place orders that could never
+  be delivered (a 500 at delivery, rolled back). Changes:
+  - `assignInvoiceNumberAtCreation` now refuses such an organization
+    (`InvoiceCodeMissingError`, a 409 in both creation paths);
+  - a delivery that meets one answers 409 `invoice-code-missing` on both
+    progress routes;
+  - **the organization-code lock follows numbers actually drawn**: the
+    sequence counter above 0, an invoice row, or an order holding a number.
+    It used to lock on "any order with a snapshot", which every order has, so
+    a code-less tenant with orders could never be given a code. A code can
+    always be set where there was none, because no number can be drawn without
+    one.
+
+Checked and not defects:
+- K-Electric imports carry `KE-LEGACY-<id>` as both TID and invoice number,
+  which `reservedInvoiceNumber` already ignores, so they are numbered from the
+  series at delivery. Older-format numbers drawn at creation stay honoured, as
+  D6 requires.
+- `import-ke-legacy-refunded-orders.ts` only creates new orders, never adds a
+  refund to an invoiced one.
+- The two unpaid-invoice definitions differ on purpose (D7): the ordering
+  block counts only fulfilled orders, so every block can be cleared by paying.
+
 ### Release order
 
-1. Apply `20261014120000_add_organization_strn_number` and
-   `20261015120000_add_invoice_ledger` (manually, as production migrations are
-   run).
+1. Apply `20261014120000_add_organization_strn_number`,
+   `20261015120000_add_invoice_ledger` and
+   `20261016120000_invoice_ledger_credit_integrity` (manually, as production
+   migrations are run).
 2. `npm run backfill:invoice-ledger` — dry run; check the summary; commit with
    the printed digest. Print `DATABASE_URL`'s host first.
 3. Deploy.
