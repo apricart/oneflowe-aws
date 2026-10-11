@@ -8,8 +8,7 @@
  * cannot drift apart.
  */
 import { jsPDF } from "jspdf"
-import path from "node:path"
-import fs from "node:fs"
+import { apricartLogoDataUrl } from "@/lib/server/pdf-logo"
 import { getReceiptItemQuantity, toDisplayNameCase } from "@/lib/receipt-display"
 import {
     buildInvoiceLines,
@@ -153,18 +152,10 @@ function drawMasthead(doc: any, margin: number, right: number, title: string) {
     const textX = margin + 44
     let y = 22
 
-    try {
-        const logoPath = path.join(process.cwd(), "public", "apricart-logo-blue.png")
-        if (fs.existsSync(logoPath)) {
-            const logoData = fs.readFileSync(logoPath).toString("base64")
-            doc.addImage(`data:image/png;base64,${logoData}`, "PNG", margin, 17, 38, 11, undefined, "FAST")
-        } else {
-            setText(doc, colors.primary)
-            doc.setFont("helvetica", "bold")
-            doc.setFontSize(15)
-            doc.text("APRICART", margin, 25)
-        }
-    } catch {
+    const logo = apricartLogoDataUrl()
+    if (logo) {
+        doc.addImage(logo, "PNG", margin, 17, 38, 11, undefined, "FAST")
+    } else {
         setText(doc, colors.primary)
         doc.setFont("helvetica", "bold")
         doc.setFontSize(15)

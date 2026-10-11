@@ -24,7 +24,9 @@ jobs:
   # ============================================================
   build-and-report:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Tests, scans, image build, push and the report share this budget; the
+    # staging run hit its own 35-minute limit inside the SonarCloud step.
+    timeout-minutes: 60
     permissions:
       contents: read
     outputs:
@@ -182,8 +184,12 @@ jobs:
         run: npm run lint
 
       # ---- SonarCloud scan (report only) ----
+      # Its own timeout keeps a slow TypeScript analysis from spending the
+      # job's budget: when it expires the step fails, continue-on-error carries
+      # on, and the image is still built and queued for approval.
       - name: SonarCloud Scan
         continue-on-error: true
+        timeout-minutes: 15
         uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6.0.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

@@ -14,7 +14,8 @@ import {
 import { isValidImageKey } from "@/lib/server/image-storage"
 import { fulfillmentStatusSchema } from "@/lib/server/mutation-validation"
 
-const read = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8")
+// A Windows checkout (core.autocrlf) has CRLF; the multi-line assertions are written with LF.
+const read = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8").replace(/\r\n/g, "\n")
 const KEY = "delivery-challan/0f8fad5b-d9cb-469f-a165-70867728950e.pdf"
 
 describe("delivery challan rules", () => {

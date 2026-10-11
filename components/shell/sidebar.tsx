@@ -137,6 +137,8 @@ const navigationByRole = (role: string, budgetAllocationEnabled: boolean) => {
           visualizeReports,
           { href: "/reports/organization-report", label: "Organization Report" },
           { href: "/reports/order-report", label: "Order Report" },
+          // Super Admin and Head Office only (lib/consolidated-invoice-access.ts).
+          { href: "/reports/consolidated-invoices", label: "Consolidated Invoice Report" },
           { href: "/reports/refund-report", label: "Refund Report" },
           { href: "/reports/budget-summary", label: "Budget Report" },
           { href: "/reports/product-performance", label: "Product Report" },
@@ -190,6 +192,8 @@ const navigationByRole = (role: string, budgetAllocationEnabled: boolean) => {
           visualizeReports,
           { href: "/reports/organization-report", label: "Organization Report" },
           { href: "/reports/order-report", label: "Order Report" },
+          // Super Admin and Head Office only (lib/consolidated-invoice-access.ts).
+          { href: "/reports/consolidated-invoices", label: "Consolidated Invoice Report" },
           { href: "/reports/refund-report", label: "Refund Report" },
           { href: "/reports/budget-summary", label: "Budget Report" },
           { href: "/reports/product-performance", label: "Product Report" },

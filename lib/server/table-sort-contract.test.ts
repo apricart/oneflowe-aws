@@ -26,6 +26,9 @@ const source = (path: string) => readFileSync(resolve(process.cwd(), path), "utf
  */
 const SORTABLE_TABLES: Array<[path: string, unsortableHeaders: number]> = [
   ["components/orders/orders-directory.tsx", 4],
+  // The two-band header's three band cells, and the S. No / Designation cells
+  // (one template in the column map): Designation is always blank.
+  ["components/reports/consolidated-invoice/consolidated-invoice-document.tsx", 4],
   ["app/(portal)/reports/organization-report/page.tsx", 0],
   ["app/(portal)/reports/order-report/page.tsx", 0],
   ["app/(portal)/reports/refund-report/page.tsx", 0],

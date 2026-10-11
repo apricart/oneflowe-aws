@@ -1,22 +1,24 @@
 # OF-INVOICE — Consolidated Invoice Report (preview and PDF download)
 
-Status: **decided; build after Phase 3 of `plans/OF-INVOICE-invoice-ledger.md`.**
+Status: **built 2026-10-11** on top of the invoice ledger.
 Rename with the Jira ID when one is assigned.
 
-> **Dependency (2026-10-11).** The invoice-ledger investigation found that app
-> refunds never record their tax part (`refunds.tax_refund_cents` is 0 for
-> them), so D5's `refundTax` would understate the tax deducted on refunded
-> orders. Built on the ledger, rows come from `invoices` (dated by
-> `issue_date`) less their credit notes, and that problem disappears. If this
-> report must ship first, derive the refunded tax from `refund_items` ×
-> `order_items.tax_rate_bp` via `splitInclusiveCents` instead of
-> `tax_refund_cents`.
+As built, two small departures from the text below: the sort runs in memory
+over the bounded row set rather than in SQL (the same order reaches the
+preview and the PDF either way), and Super Admin's organization comes from the
+shell's context selector, as on the other reports.
 
-## Requirement (revised 2026-10-10)
+Builds on `plans/OF-INVOICE-invoice-ledger.md`, now in production: tax invoices
+are records in `invoices` / `invoice_lines`, issued and dated at delivery;
+refunds against them are `credit_notes`; and every invoice supplied before the
+ledger was copied in on 2026-10-11 (batch `59e78541f853162b`, 1,184 rows).
+This revision replaces the 2026-10-10 version, which read `orders.receipt_data`
+and parsed a text date.
 
-The team decided the consolidated invoice is **for reporting only**. Nothing
-is issued, numbered, saved, paid or voided. This supersedes the earlier
-issue/payment design (kept in outline as follow-up F2).
+## Requirement
+
+The consolidated invoice is **for reporting only**. Nothing is issued, numbered,
+saved, paid or voided.
 
 A **Consolidated Invoice Report** for **Super Admin and Head Office**:
 
@@ -24,114 +26,86 @@ A **Consolidated Invoice Report** for **Super Admin and Head Office**:
    - organization (Super Admin);
    - period, **by month** or by **custom date range**;
    - branches and/or group;
-   - which orders: **delivered & fulfilled**, **approved (not yet
-     delivered)**, or both;
-   - whether to include fully refunded orders.
+   - which documents: **issued invoices** (delivered / fulfilled) or
+     **proformas** (approved, not yet delivered);
+   - whether to include fully credited invoices.
 2. **A preview** of the exact document those filters produce.
-3. **Download** of that document as a PDF in the supplied template
+3. **Download** as a PDF in the supplied template
    (`Group Invoice_Consolidation.pdf`).
 
-Carried over from earlier decisions with the requester:
+Carried over from the requester:
 
-- CRC = the branch's Cost Center ID (`branches.cost_center_id`, set when a
-  branch is created or edited).
+- CRC = the branch's Cost Center ID.
 - The Invoice Period printed is the selected period.
 - Multi-page PDFs carry page numbers.
-- Every invoice has a status (D2).
 
-## Investigation
+## What changed since the last version, and why it matters
 
-### The individual invoice (unchanged by this work)
+| Before (2026-10-10 plan) | Now (ledger in production) |
+|---|---|
+| Rows from `orders.receipt_data` | Rows from `invoices` |
+| Invoice date parsed from text (`to_date(receipt_data->>'date')`) with a `created_at` window | `invoices.issue_date`, a real `date` column, indexed `(organization_id, issue_date)` |
+| Refund tax recorded on no app refund, so the report would have understated the tax credited | `invoices.credited_net/tax/total_cents` record what was credited, tax included, for every invoice |
+| Invoice status derived per row | `invoices.status` (Issued, Partially credited, Credited) is stored by the ledger |
+| A row's figures could drift from its invoice (live branch, live NTN) | Issued invoices are frozen; the report reads the same frozen buyer, lines and totals the invoice prints |
+| Approved orders mixed in with delivered ones | Proformas are not tax invoices; they are a separate report mode, never mixed with invoices |
+| No migration | Still no migration: everything needed exists |
 
-- **No invoice table exists.** An invoice is the snapshot
-  `orders.receipt_data` (jsonb): number, printed date, lines, totals. It is
-  written at order **creation** by `saveOrderReceipt`
-  (`app/api/v1/orders/route.ts`), by `lib/server/group-order-creation.ts` and
-  by the KE importers. The only invoice table is `invoice_sequences` (one
-  counter row per organization).
-- **Availability:** `isInvoiceAvailableForOrder` (`lib/invoice-availability.ts`)
-  — from approval onwards, including refunded orders whose `status_at_refund`
-  was approved or fulfilled.
-- **Readers:** `GET /api/v1/receipts/[orderId]`, `.../download`
-  (`buildInvoiceDocument` → `renderInvoicePdf`, hand-drawn jsPDF, portrait),
-  and the warehouse invoice route.
-- **Access:** `resolveInvoiceAccess` (`lib/invoice-access-policy.ts`).
+## What exists (investigation, 2026-10-11)
 
-**A report needs no new table.** It reads what exists. This change has **no
-migration**.
+### The ledger
 
-### Invoice numbers on the report are unique
+| Column (`invoices`) | Use in the report |
+|---|---|
+| `organization_id`, `branch_id` | tenant and branch fence; composite FK to `branches (id, organization_id)` |
+| `order_id` | order status label, Order ID column, legacy fallbacks; `UNIQUE` |
+| `number` | Invoice No (unique per organization: `invoices_org_number_uq`) |
+| `issue_date` | Invoice Date and the period match |
+| `origin` | `ISSUED_AT_SUPPLY` (frozen rows and lines) or `LEGACY_SNAPSHOT` / `LEGACY_IMPORT` (backfilled) |
+| `status` | Issued / Partially credited / Credited |
+| `buyer` (jsonb) | `branchName`, `costCenterId`, `organizationName`, `ntn`, `strn` as at issue (as at backfill for legacy rows) |
+| `participants` (jsonb) | `approvedByName` as at issue; `{}` on legacy rows |
+| `net_cents`, `tax_cents`, `total_cents` | invoiced figures |
+| `credited_net_cents`, `credited_tax_cents`, `credited_total_cents` | everything credited since, in cents |
 
-| Source | Format | Uniqueness |
-|---|---|---|
-| Current | `<ORGCODE>-APR-000001` | `orders_tenant_prefixed_invoice_number_unique_idx` — global |
-| Before 2026-09-24 | `APR-000030` | `orders_org_invoice_number_unique_idx` `(organization_id, number)` — per organization |
-| KE imports | `KE-LEGACY-<id>` | per organization |
-| Fallback (sequence table missing) | order `tid` | `orders.tid` unique |
+- `invoice_lines` (issued at supply only): quantity and `tax_rate_bp` per line.
+- `credit_note_lines`: quantity credited per line, null for an un-itemised
+  adjustment.
+- Legacy rows have no lines. Their quantities and rates come from
+  `order_items`, and refunded quantities from approved `refund_items`.
 
-A report covers **exactly one organization** (the Bill To), so no number can
-appear twice on it. Gaps in the series are expected: numbers are drawn at
-creation, and rejected or cancelled orders never reach an invoice (the sample
-skips `APR-000036` and `APR-000040`).
+### Dates: two meanings in one column, by design
 
-### The printed invoice date is the one to filter on
+- **Issued at supply:** `issue_date` is the Karachi date of **delivery**.
+- **Legacy:** `issue_date` is the date the invoice was **printed** with, which
+  was the order's creation date.
 
-- `receipt_data.date` is `toLocaleDateString("en-US")` (`MM/DD/YYYY`) in the
-  time zone of the process that created the order: the production container
-  for app orders, a Karachi workstation for the KE imports.
-- For orders placed 00:00–05:00 Karachi time it differs by a day from the
-  Karachi date of `created_at`.
-- A report that selected on `created_at` could therefore list a row printed
-  **31 Aug** under **September**. That contradicts the invoice it summarises.
+The report shows each invoice under the date printed on it, which is what the
+customer holds. The legacy/new boundary is 2026-10-11; a report spanning it
+mixes both meanings and says so in a footnote (D7).
 
-The report selects on the **printed date** (D4).
+### Production volumes
 
-### Refunds, payment, money
+- 1,184 invoices across 4 organizations; K-Electric has 1,051, the largest.
+- A whole year for K-Electric is about 1,000 rows, so the 1,000-row cap (D5)
+  is checked against real numbers before release.
 
-- A **full refund** sets `status = 'REFUNDED'` (keeping `status_at_refund`).
-- A **partial refund** sets `refund_amount_cents > 0`
-  (`getOrderRefundVariant`, `lib/order-status.ts`).
-- `refunds.tax_refund_cents` is the tax part.
-- Order money is integer cents: `orders.subtotal_cents`, `tax_cents`,
-  `total_cents`.
-- `order_items.quantity` is numeric(12,3); `order_items.tax_rate_bp` holds the
-  rate.
+### Conventions reused
 
-### Existing report conventions this reuses
-
-- **Shell and context:**
-  - report pages are client components under `app/(portal)/reports/*`, inside
-    the portal shell;
-  - Super Admin's organization comes from the shell's context selector
-    (`useAppContext().organizationId`);
-  - the hub `app/(portal)/reports/page.tsx` lists role-specific cards in their
-    own arrays (`executiveOnlyReportCards`, `groupUserOnlyReportCards`), so no
-    role is offered a page it cannot open.
-- **Filters:**
-  - `BranchFilter` and `GroupFilter` (`components/reports/`) load from
-    `GET /api/v1/branches` and `GET /api/v1/groups`;
-  - both endpoints already pin Head Office to its own organization on the
-    server (`getRequestScope()` in branches; session organization in groups),
-    so they can be reused as they are.
-- **PDF tables:**
-  - `jspdf` 4.2.1 and `jspdf-autotable` 5.0.8 are already dependencies, used
-    by eight report pages;
-  - autotable handles page breaks, repeating headers, multi-row headers with
-    `colSpan`, and wrapped cells, which is exactly what the template's
-    two-band header and long Department/Approver names need;
-  - it runs in Node (only its `html:` option needs a DOM), so the PDF can be
-    built **on the server**.
-- **Sorting:**
-  - every Reports table sorts (`plans/OF-TABLE-column-sorting.md`);
-  - server-sorted routes admit only allowlisted keys from
-    `lib/list-sort-keys.ts`;
-  - `lib/server/table-sort-contract.test.ts` lists each one.
-- **Proxy:**
-  - `/reports/*` is open to Super Admin, Head Office, Branch Admin and Group
-    User;
-  - other reports (e.g. Organization Report) have **no** page-level role gate
-    and rely on their endpoints;
-  - this report adds a real gate (D1).
+- **Report shell and filters:**
+  - report pages under `app/(portal)/reports/*`;
+  - Super Admin's organization from the context selector;
+  - `BranchFilter` / `GroupFilter`, whose endpoints already pin Head Office to
+    its own organization;
+  - role-specific hub cards in their own array.
+- **PDF table:** `jspdf` + `jspdf-autotable` on the server, which gives page
+  breaks, a repeated header row, `colSpan` bands and wrapped cells.
+- **Sorting:** server sort through an allowlist in `lib/list-sort-keys.ts`,
+  checked by the table-sort contract.
+- **Masthead:** `INVOICE_ISSUER` and the logo, as the invoice PDF uses them.
+- **Access:** role allowlists in a `lib/*-access.ts` module rather than new
+  `Permission` keys (as `lib/product-request-access.ts` does), because a new
+  key needs `db:seed` on production.
 
 ## Decisions
 
@@ -139,441 +113,377 @@ The report selects on the **printed date** (D4).
 
 | | Super Admin | Head Office | Every other role |
 |---|---|---|---|
-| Open the page | ✔ | ✔ | redirected (`proxy.ts`) |
+| Open the page | ✔ | ✔ | redirected by `proxy.ts` |
 | Preview / PDF | the organization it selects (required) | **its own organization only** | 403 |
 
-- **Roles:** `CONSOLIDATED_INVOICE_REPORT_ROLES` in
-  `lib/consolidated-invoice-access.ts`, a role allowlist rather than a new
-  `Permission` key. A new key only takes effect after `db:seed` rewrites
-  `role_permissions` on production; `lib/product-request-access.ts` makes the
-  same choice. The sidebar, the hub card and the handlers all read
-  `canReadConsolidatedInvoiceReport(role)`.
-- **Head Office's organization** comes from `getRequestScope()` (the `users`
-  row), never from the request. An `organizationId` it sends is ignored, and a
-  Head Office account with no organization is 403.
-- **Super Admin's** `organizationId` is required (400 without) and must exist
-  (404).
-- **`branchIds` (≤ 200) and `groupId`** are verified to belong to that
-  organization in one query, or the request is **404 "Branch not found"** /
-  **"Group not found"**. A caller cannot confirm another tenant's ids.
-- **No price redaction applies:** price hiding covers only Branch Admin and
-  Order Portal (`shouldHidePricesForRole`).
-- **Navigation:**
-  - `proxy.ts` gets a `ROLE_GATED_AREAS` entry
-    `{ prefix: "/reports/consolidated-invoices", roles: ["SUPER_ADMIN", "HEAD_OFFICE"], home: "/reports" }`.
-    Without it, Branch Admin and Group User would reach the page through the
-    `/reports` prefix.
-  - Order Portal, Group Order Portal, Viewer, Desk, Executive and Warehouse
-    are already confined to their own areas, and their API allowlists refuse
-    the new routes.
-- **Exposure:** rows carry branch name, cost center, approver name, quantity
-  and money. No phone, email, delivery address or line items.
+- `CONSOLIDATED_INVOICE_REPORT_ROLES` and `canReadConsolidatedInvoiceReport(role)`
+  live in `lib/consolidated-invoice-access.ts`. The sidebar, the hub card and
+  both handlers read them.
+- **Head Office's organization** comes from `getRequestScope()`, never the
+  request. An `organizationId` it sends is ignored; a Head Office account
+  without an organization is 403.
+- **Super Admin's** `organizationId` is required (400 without it) and must
+  exist (404).
+- **`branchIds` (≤ 200) and `groupId`** are checked against that organization
+  in one query, otherwise **404** "Branch not found" / "Group not found".
+- **`proxy.ts`** gets `ROLE_GATED_AREAS` `{ prefix: "/reports/consolidated-invoices", roles: ["SUPER_ADMIN", "HEAD_OFFICE"], home: "/reports" }`.
+  Branch Admin and Group User reach `/reports/*` today, so this gate is needed.
+- **No price redaction:** Head Office is never price-restricted.
 
-### D2 — Invoice status: derived, defined once, never stored
+### D2 — Two report modes, never mixed
 
-`lib/invoice-status.ts` (pure), mapping the requester's table:
+| Mode | Rows | Title | Period matched on |
+|---|---|---|---|
+| **Invoices** (default) | `invoices` rows: Issued and Partially credited; Credited too when "include fully credited" is ticked | **CONSOLIDATED INVOICE** | `invoices.issue_date` |
+| **Proformas** | orders that are approved, not delivered (`deriveInvoiceStatus` = Proforma available), with no invoice row | **CONSOLIDATED PROFORMA** | Karachi date of `orders.approved_at` |
 
-```
-issued = status ∈ {FULFILLED, PARTIAL, PARTIALLY_FULFILLED}
-      or fulfillment_status = DELIVERED
-      or status_at_refund ∈ {FULFILLED, PARTIAL, PARTIALLY_FULFILLED}
+- **Why not both in one document:** a tax invoice and a proforma are different
+  documents. A total that adds proformas to invoices states an amount that was
+  never invoiced. The requester's "approved orders" filter is honoured as its
+  own mode.
+- **Proforma rows:**
+  - Invoice No shows the number reserved when the order was placed, marked
+    "(on delivery)", or "On delivery" if there is none;
+  - Invoice Date shows the approval date;
+  - figures are the order's own, less refunds approved before delivery.
+- **The PDF footer says what the document is:**
+  - Invoices: "Summary of the tax invoices listed; sales tax is charged on
+    each. Not a separate tax invoice."
+  - Proformas: "Proformas only; no tax invoice has been issued for these
+    orders."
 
-status PENDING or REJECTED            → NOT_ISSUED          "Not issued"
-status CANCELLED                      → CANCELLED           "Cancelled"
-issued and status REFUNDED            → CREDITED            "Credited"
-issued and refund_amount_cents > 0    → PARTIALLY_CREDITED  "Partially credited"
-issued                                → ISSUED              "Issued"
-not issued and status REFUNDED        → CANCELLED           "Cancelled"
-not issued and status APPROVED        → PROFORMA_AVAILABLE  "Proforma available"
-```
+### D3 — Period: month or custom range
 
-- **"Cancelled" is added to the requester's table** for an order cancelled,
-  or fully refunded, before delivery. A credit can only follow an issued
-  invoice; refunding goods never delivered cancels a proforma.
-- **Why derived:** about ten code paths move an order (approve, deliver,
-  fulfil, auto-fulfil, two refund routes, desk and group cancel, admin
-  delete). A stored status would have to be updated by all of them and would
-  drift. `lib/delivery-sla.ts` is read-time-only for the same reason.
-- **SQL twin:** `invoiceStatusSql` in `lib/server/invoice-status-sql.ts`, a
-  `CASE` expression for the report's filter. An integration test drives every
-  combination of status × fulfilment status × refund through both and
-  requires them to agree, the same discipline as `lib/budget-consumption.ts`
-  and its SQL twin.
-- **Scope of this change:** the status appears in this report (on-screen
-  preview column, and the filter). Showing it on the individual invoice and
-  in the Orders directory is follow-up F1, and reuses the same module.
+- **Month:** a year select plus a month select, sent as `month=YYYY-MM`.
+- **Range:** `from`/`to` as `YYYY-MM-DD`, inclusive, `from ≤ to`, at most 366
+  days, `to` no later than today in Karachi.
+- The browser sends **date strings**; the server compares them directly with
+  `issue_date` (`BETWEEN $from AND $to`), with no time-zone arithmetic. That
+  uses `invoices_org_issue_date_idx`.
+- Proformas compare `(approved_at AT TIME ZONE 'Asia/Karachi')::date`; the
+  number of approved, undelivered orders is small (66 in production today).
 
-### D3 — Which orders
+### D4 — Row figures: the invoice, less what has been credited
 
-**"Orders"** selector (single choice):
+`lib/consolidated-invoice.ts` (pure) builds every row and total; the preview
+and the PDF both render its output.
 
-| Option | Invoice statuses included |
-|---|---|
-| **Delivered & fulfilled** (default) | Issued, Partially credited |
-| **Approved — not yet delivered** | Proforma available |
-| **All approved onwards** | both of the above |
+| Column | Invoices mode | Proformas mode |
+|---|---|---|
+| Invoice No | `invoices.number` | reserved number "(on delivery)", or "On delivery" |
+| Invoice Date | `issue_date` | Karachi approval date |
+| Order ID | `order_id` | `orders.id` |
+| Order Status | `getOrderDerivedStatus(order, "fulfilled").label` | same |
+| Department | `buyer.branchName` (as at issue) | live `branches.name` |
+| Approver | `participants.approvedByName`; legacy rows: the live approver's display name | live approver's display name |
+| Designation | blank (no source; follow-up F4) | blank |
+| CRC | `buyer.costCenterId` (as at issue) | live `branches.cost_center_id` |
+| Items (Qty) | invoiced quantity less quantity credited (see below) | order quantity less refunded quantity |
+| Value Excl. Sales Tax | `net_cents − credited_net_cents` | order net less refunded net |
+| Sales Tax % | one distinct line rate → "18%"; several → "Mixed"; none → "—" | same, from `order_items` |
+| Sales Tax Amount | `tax_cents − credited_tax_cents` | order tax less refunded tax |
+| Total Amount | `total_cents − credited_total_cents` | order total less refunds |
 
-- **"Include fully refunded orders"** checkbox, default **off**. When on, it
-  adds *Credited* to a delivered selection. Their rows print 0.00 with status
-  "Refunded".
-- *Not issued* and *Cancelled* orders never appear: they have no invoice.
-- Every order must also have an invoice snapshot (`receipt_data IS NOT NULL`)
-  and belong to the selected organization (and branch/group filter).
+- **Quantity:**
+  - issued at supply: `Σ invoice_lines.quantity − Σ credit_note_lines.quantity`;
+  - legacy: `Σ order_items.quantity − Σ approved refund_items.quantity`;
+  - an un-itemised credit has no quantity and moves money only.
+- **Refunds before delivery (proformas)** use `refundTaxCents`
+  (`lib/invoice-ledger.ts`), the same rule the ledger uses, so the two modes
+  split tax identically.
+- **Credits are applied as at the moment the report is generated**, whatever
+  the credit note's own date. A report for August pulled in October shows each
+  August invoice net of everything credited since. That is the figure the
+  customer owes against each invoice now, and it matches the individual
+  invoice's status. Showing credit notes by their own dates is follow-up F3.
+- **Totals row and header cards** are column sums in **cents**, formatted only
+  at the edge.
+- Every row satisfies **Value + Tax = Total**. The ledger guarantees it for
+  issued invoices, and the backfill checked it for every legacy row (0
+  exceptions in production).
 
-### D4 — Period: month or custom range, on the printed invoice date
+### D5 — Query: one statement per mode, bounded
 
-- **Month:** a year select plus a month select, sent as `month=YYYY-MM`, from
-  the 1st to the last day.
-- **Custom range:** two date inputs, sent as `from=YYYY-MM-DD&to=YYYY-MM-DD`.
-  Inclusive, `from ≤ to`, at most 366 days, `to` no later than today in
-  Karachi.
-- The browser sends **date strings, never `Date` objects**, so a user's
-  browser time zone cannot shift a boundary. The server resolves them.
-- **Match:** `to_date(receipt_data->>'date', 'MM/DD/YYYY')` when the snapshot
-  matches `^\d{2}/\d{2}/\d{4}$`. Otherwise it falls back to the Karachi date
-  of `created_at`, so an unfamiliar legacy value still lands in a period.
-- **Index use, without a migration:** the query also bounds `created_at` to
-  the period widened by one day each side. That range scan runs on the
-  existing `orders_org_created_idx (organization_id, created_at)`; the exact
-  date test runs only on that small window.
-- The printed **Invoice Period** is the selected period, e.g.
-  `01 Aug 2026 – 31 Aug 2026`.
+`lib/server/consolidated-invoice-queries.ts`.
 
-### D5 — Row figures (integer cents, pure, one module)
-
-`lib/consolidated-invoice.ts` builds every row and total; the preview and the
-PDF both read its output, so they cannot disagree. The figures are those of
-the order's own invoice **after refunds**:
-
-| Column | Value |
-|---|---|
-| Invoice No | `receipt_data->>'invoiceNumber'` |
-| Invoice Date | `formatInvoiceDisplayDate(receipt_data->>'date')`, the text on the invoice |
-| Order ID | `orders.id` |
-| Order Status | `getOrderDerivedStatus(order, "fulfilled").label` (Fulfilled, Approved, Partially Refunded, Refunded…) |
-| Department | `branches.name` |
-| Approver | `getReceiptUserDisplayName(approver)`, the name the invoice prints |
-| Designation | blank: no source exists (follow-up F4) |
-| CRC | `branches.cost_center_id` |
-| Items (Qty) | `Σ order_items.quantity` |
-| Value Excl. Sales Tax | `max(0, subtotal_cents − (refund − refundTax))` |
-| Sales Tax % | one distinct `tax_rate_bp` → "18%"; several → "Mixed"; none → "—" |
-| Sales Tax Amount | `max(0, tax_cents − refundTax)` |
-| Total Amount | `max(0, total_cents − refund)`, which is the individual invoice's TOTAL |
-
-Where:
-
-- `refund = refund_amount_cents`;
-- `refundTax = min(refund, tax_cents, Σ tax_refund_cents of APPROVED/COMPLETED refunds)`.
-
-Totals row and header cards are column sums **in cents**, formatted only at
-the edge. Quantities print without trailing zeros (`169`, `12.5`).
-
-### D6 — Query: one statement, bounded
-
-`lib/server/consolidated-invoice-queries.ts`:
+Invoices mode, in outline:
 
 ```
-orders
-  JOIN branches  ON (branches.id, branches.organization_id) = (orders.branch_id, orders.organization_id)
-  LEFT JOIN users approver ON approver.id = orders.approved_by_user_id
-  + correlated aggregates: Σ order_items.quantity, distinct tax_rate_bp,
-    Σ approved refunds.tax_refund_cents
-WHERE organization_id = $org
-  AND created_at BETWEEN $from − 1 day AND $to + 1 day   -- index range
-  AND printed-date ∈ [$from, $to]
-  AND invoiceStatusSql ∈ $statuses
-  AND receipt_data IS NOT NULL
-  [AND branch_id = ANY($branchIds)] [AND branches.group_id = $groupId]
-ORDER BY <allowlisted sort>, orders.id
+invoices i
+  JOIN orders o           ON (o.id, o.organization_id) = (i.order_id, i.organization_id)
+  JOIN branches b         ON (b.id, b.organization_id) = (i.branch_id, i.organization_id)   -- group filter
+  LEFT JOIN users ap      ON ap.id = o.approved_by_user_id                                  -- legacy approver
+  + correlated aggregates: invoiced quantity and distinct rates (invoice_lines, or order_items for legacy),
+    credited quantity (credit_note_lines, or approved refund_items for legacy)
+WHERE i.organization_id = $org
+  AND i.issue_date BETWEEN $from AND $to
+  AND i.status = ANY($statuses)              -- ISSUED, PARTIALLY_CREDITED [, CREDITED]
+  [AND i.branch_id = ANY($branchIds)] [AND b.group_id = $groupId]
+ORDER BY <allowlisted sort>, i.issue_date, i.number, i.id
 LIMIT 1001
 ```
 
-- **Selected columns:** only `receipt_data->>'invoiceNumber'` and
-  `->>'date'`, never the whole jsonb.
-- **No N+1:** approver names are joined, not loaded per row.
-- **1 000-order cap:** above it the API answers **422** "This selection has
-  more than 1,000 invoices — narrow the period or branches", with the count.
-  Unbounded output is both a denial-of-service and an exfiltration path.
-- **Sorting (complies with the table-sort rule):**
-  - the preview's headers sort through `SortableHeader` / `useTableSort`;
-  - the request carries `sort=&dir=`, admitted only from
-    `CONSOLIDATED_INVOICE_SORT_KEYS` in `lib/list-sort-keys.ts` (400
-    otherwise), mapped through a `Record<Key, SQL>` and `orderBySortSql`;
-  - the **PDF uses the same sort**, so the download is the preview;
-  - default order is invoice date, then invoice number;
-  - S.No is renumbered in the chosen order;
-  - the page and the route go on `table-sort-contract.test.ts`.
+- **One statement, no N+1.** Only the columns the report prints are selected;
+  `legacy_snapshot` and `seller` are never read.
+- **Bound:** more than 1,000 rows answers **422** "This selection has more
+  than 1,000 invoices: narrow the period or branches", with the count.
+- **Sorting:**
+  - keys come from `CONSOLIDATED_INVOICE_SORT_KEYS` (400 for anything else),
+    mapped through a `Record<Key, SQL>`;
+  - the PDF uses the same sort as the preview;
+  - default order is invoice date, then number;
+  - S.No follows the chosen order.
+- **Proformas mode** reads `orders` with `invoiceStatusSql = 'PROFORMA_AVAILABLE'`
+  and the same fences, joins and bound.
 
-### D7 — Screen: Reports → Consolidated Invoice Report
+### D6 — Screen: Reports → Consolidated Invoice Report
 
-**Placement:**
+- **Placement:** the Reports submenu for Super Admin and Head Office in
+  `components/shell/sidebar.tsx`, and a card on the Reports hub in its own
+  `consolidatedInvoiceReportCards` array.
+- **Page:** `app/(portal)/reports/consolidated-invoices/page.tsx`, with
+  components in `components/reports/consolidated-invoice/`.
+  1. **Filters:**
+     - organization (Super Admin, from the context selector; without one, the
+       page asks to pick one);
+     - Period (Month or Custom range);
+     - Branches, Group;
+     - **Mode:** Invoices or Proformas;
+     - **Include fully credited** (Invoices mode).
 
-- Super Admin's and Head Office's **Reports** submenu in
-  `components/shell/sidebar.tsx`: "Consolidated Invoice Report".
-- A card on the Reports hub, held in its own `consolidatedInvoiceReportCards`
-  array, shown to those two roles only.
+     The filters live in the URL, so a report can be bookmarked.
+  2. **Preview:** an HTML rendering of the template.
+     - Masthead, and the four header cards: Bill To with NTN and STRN,
+       Invoice Period, Total Orders and Total Items, Grand Total (excl. +
+       tax).
+     - Two-band column header: gold "Apricart Details" over Invoice No and
+       Invoice Date; navy "<Organization> Details" over the rest.
+     - Zebra rows, a Total row, and sortable headers.
+     - On screen only: an invoice-status badge per row (`InvoiceStatusBadge`),
+       and each Invoice No links to `/invoices/[orderId]`, where the invoice
+       and its credit notes can be downloaded.
+  3. **Download PDF:** disabled while a request is in flight, and while the
+     preview is empty or loading.
+- **States:** loading; empty ("No invoices match these filters"); 422 (the
+  narrowing message); error (the API's safe message).
+- **Bill To** prints the organization's **current** name, NTN and STRN. A
+  report describes the account as it is now; each row keeps the branch and
+  cost centre recorded on its own invoice.
 
-**Page:** `app/(portal)/reports/consolidated-invoices/page.tsx`, built from
-`components/reports/consolidated-invoice/*`:
+### D7 — PDF: server-built, matching the template
 
-1. **Filter bar:**
-   - organization: Super Admin only, taken from the context selector; without
-     one, the page asks to pick one;
-   - **Period:** Month | Custom range;
-   - Branches (`BranchFilter`) / Group (`GroupFilter`);
-   - **Orders:** Delivered & fulfilled | Approved — not yet delivered | All;
-   - **Include fully refunded.**
-   - The selected filters live in the URL query string, so a report can be
-     bookmarked or shared with a colleague of the same organization.
-2. **Preview** (`ConsolidatedInvoiceDocument`): an HTML rendering of the
-   template.
-   - Masthead; the four header cards (Bill To + NTN, Invoice Period, Total
-     Orders + Total Items, Grand Total with excl. + tax).
-   - The two-band header: gold "Apricart Details" over Invoice No and Invoice
-     Date, navy "<Organization> Details" over the rest.
-   - Zebra rows, the Total row, and sortable column headers.
-   - On screen only, a small **invoice-status** badge per row (D2), and each
-     Invoice No links to the individual invoice (`/invoices/[orderId]`).
-3. **Download PDF:** disabled while in flight and while the preview is empty
-   or loading. It requests the same query string.
+`lib/server/consolidated-invoice-pdf.ts`, jsPDF + jspdf-autotable, A4
+landscape.
 
-**States:** loading skeleton; empty ("No invoices match these filters"); 422
-(the narrowing message); error (the safe message from the API, never a raw
-error).
+- **Masthead:** the logo (its loader extracted from `invoice-pdf.ts` into a
+  shared helper), `INVOICE_ISSUER`, and the title from D2.
+- **Header cards** as in the template; STRN under NTN when present.
+- **Table:**
+  - a two-row head (bands with `colSpan`, then the column titles);
+  - right-aligned figures; wrapped Department, Approver and CRC;
+  - the Total row as the foot;
+  - `showHead: "everyPage"`, `showFoot: "lastPage"`.
+- **Footer on every page:** "Page x of y", "Generated on <Karachi date-time>",
+  and the D2 statement.
+- **Footnote when relevant:** when the period includes dates before
+  2026-10-11, one line says "Invoices dated before 11 Oct 2026 carry their
+  order date; later invoices carry their delivery date."
+- **File name:** `consolidated-invoice-<ORGCODE>-<from>_<to>.pdf`, or
+  `consolidated-proforma-…`, through `safeFilenamePart`.
 
-### D8 — PDF: server-built, matching the template
-
-`lib/server/consolidated-invoice-pdf.ts`, jsPDF + jspdf-autotable on the
-server, **A4 landscape**:
-
-- **Masthead:**
-  - the logo (`public/apricart-logo-blue.png`, loader extracted from
-    `invoice-pdf.ts` into a shared helper so both invoices use one);
-  - `INVOICE_ISSUER` name, address on one line, NTN/STRN;
-  - "CONSOLIDATED INVOICE" at the right.
-- **Header cards** as in the template.
-- **Table:** an autotable with a two-row head (bands with `colSpan`, then the
-  column titles in navy), right-aligned figures, wrapped
-  Department/Approver/CRC cells, and the bold **Total** row as a foot.
-  - `showHead: "everyPage"`: the column header repeats on every page;
-  - `showFoot: "lastPage"`: the totals are printed once, at the end.
-- **Footer on every page** (the only additions to the template):
-  - **"Page x of y"**;
-  - "Generated on <Karachi date-time>";
-  - one line: *"Summary of the invoices listed. Sales tax is charged on each
-    listed invoice; this is not a separate tax invoice."*
-
-  The template's title is kept as requested. A document titled "invoice" with
-  no number of its own must say what it is, or it can be booked as a second
-  tax invoice and the tax counted twice.
-- **File name:** `consolidated-invoice-<ORGCODE>-<from>_<to>.pdf` through
-  `safeFilenamePart`.
-- Building it on the server means the authorization, the query and the
-  document come from one place. It does not depend on the browser, and the
-  download can be audited (D10).
-
-### D9 — API
+### D8 — API
 
 | Method | Path | Roles | Rate limit |
 |---|---|---|---|
 | GET | `/api/v1/reports/consolidated-invoice` | SA, HO | `search` |
-| GET | `/api/v1/reports/consolidated-invoice/pdf` | SA, HO | `report` (10 per 10 min, fail-closed) |
+| GET | `/api/v1/reports/consolidated-invoice/pdf` | SA, HO | `report` (fail-closed) |
 
-**Shared query parameters, Zod `.strict()`** (unknown keys → 400):
+**Query parameters, validated with Zod `.strict()`:**
 
 | Parameter | Values |
 |---|---|
-| `organizationId` | Super Admin only; ignored for Head Office |
-| `mode` | `month` \| `range` |
-| `month` / `from` + `to` | as in D4 |
-| `branchIds` | comma list, ≤ 200 |
-| `groupId` | optional |
-| `orders` | `delivered` \| `approved` \| `all` |
+| `organizationId` | Super Admin only |
+| `mode` | `invoices` \| `proformas` |
+| `period` | `month` \| `range` |
+| `month`, or `from` + `to` | as in D3 |
+| `branchIds` | ≤ 200 |
+| `groupId` | one group |
 | `includeCredited` | `true` \| `false` |
-| `sort`, `dir` | allowlisted |
+| `sort`, `dir` | allowlisted (D5) |
 
-**Handler order (rule 05):** rate limit → session (401) → role (403) → scope
-from the database → validate (400) → fence filters (404) → query → cap
-(422) → respond.
+- **Handler order:** rate limit → session (401) → role (403) → scope from the
+  database → validate (400) → fence filters (404) → query → cap (422) →
+  respond.
+- **JSON:** `{ mode, billTo: { name, ntn, strn, code }, period: { from, to, label }, rows[], totals, count }`,
+  with money in cents.
+- **Headers:** `Cache-Control: no-store` on both routes. No request body, so
+  the WAF's 8 KB limit does not apply.
 
-**JSON response:** `{ billTo: { name, ntn, code }, period: { from, to, label },
-rows[], totals, count }`. Money is in cents; the client formats it.
+### D9 — Audit
 
-Both responses carry `Cache-Control: no-store`. There is no request body, so
-the WAF's 8 KB limit is not a concern.
+Every PDF download writes one `audit_logs` row: `DOWNLOAD_CONSOLIDATED_INVOICE_REPORT`.
 
-### D10 — Audit
-
-Each **PDF download** writes one `audit_logs` row in the handler:
-
-- action `DOWNLOAD_CONSOLIDATED_INVOICE_REPORT`;
-- organization, actor, role, filters, order count, grand total in cents;
-- a SHA-256 digest of the ordered `(orderId, invoiceNumber, totalCents)`
-  list.
-
-A document handed to a client can then be traced to who produced it and
-verified later. No names or line items go in the audit row. Previews are
-reads and are not audited, as with every other report.
+- It records organization, actor, role, mode, period, filters, row count and
+  grand total in cents.
+- It records a SHA-256 of the ordered `(number, totalCents)` list, so a
+  document handed to a client can be verified later.
+- No names, no lines. Previews are not audited, like other reports.
 
 ## Modules
 
 | File | Layer | Contents |
 |---|---|---|
-| `lib/invoice-status.ts` (+ test) | pure | D2 |
-| `lib/server/invoice-status-sql.ts` | server | SQL twin of D2 |
-| `lib/consolidated-invoice-access.ts` (+ test) | pure | D1 roles |
-| `lib/consolidated-invoice.ts` (+ test) | pure | Zod schema, period resolution (D4), row and total arithmetic (D5), tax-rate label, digest, file name, limits |
+| `lib/consolidated-invoice-access.ts` (+ test) | pure | D1 role allowlist |
+| `lib/consolidated-invoice.ts` (+ test) | pure | Zod schema, period resolution (D3), row and total arithmetic (D4), tax-rate label, digest, file name, footnote rule, limits |
 | `lib/list-sort-keys.ts` *(edit)* | pure | `CONSOLIDATED_INVOICE_SORT_KEYS` |
 | `lib/server/consolidated-invoice-scope.ts` | server | caller → organization; branch/group fence |
-| `lib/server/consolidated-invoice-queries.ts` | server | D6 |
-| `lib/server/consolidated-invoice-pdf.ts` (+ test) | server | D8 |
+| `lib/server/consolidated-invoice-queries.ts` | server | D5, both modes |
+| `lib/server/consolidated-invoice-pdf.ts` (+ test) | server | D7 |
 | `lib/server/pdf-logo.ts` | server | logo loader shared with `invoice-pdf.ts` |
-| `app/api/v1/reports/consolidated-invoice/route.ts`, `.../pdf/route.ts` | routes | thin handlers (D9) |
+| `app/api/v1/reports/consolidated-invoice/route.ts`, `.../pdf/route.ts` | routes | D8, thin |
 | `app/(portal)/reports/consolidated-invoices/page.tsx` | UI | host page |
-| `components/reports/consolidated-invoice/{filters,period-picker,document}.tsx` | UI | D7 |
+| `components/reports/consolidated-invoice/{filters,period-picker,document}.tsx` | UI | D6 |
 | `components/shell/sidebar.tsx`, `app/(portal)/reports/page.tsx`, `proxy.ts` *(edits)* | UI / edge | placement and gate |
-| `CLAUDE.md` *(edit)* | docs | one paragraph under Important Patterns |
+| `CLAUDE.md` *(edit)* | docs | one paragraph |
+
+**Reused, not rebuilt:**
+
+- `lib/invoice-status.ts` (`deriveInvoiceStatus`, `INVOICE_STATUS_LABELS`);
+- `lib/server/invoice-status-sql.ts` (proforma selection);
+- `lib/invoice-ledger.ts` (`refundTaxCents`);
+- `components/orders/invoice-status-badge.tsx`;
+- `INVOICE_ISSUER`.
 
 **No schema change, no migration, no new dependency.**
 
 ### Build order
 
-1. `lib/invoice-status.ts`, its SQL twin, and their tests.
-2. The pure report module (`lib/consolidated-invoice.ts`), its access module
-   and unit tests.
-3. Scope, query, JSON route, and integration tests.
-4. The PDF renderer and its route, with the audit row.
-5. The page, filters and preview; sidebar, hub card, proxy gate; contract
-   lists; `CLAUDE.md`.
+1. Pure modules (`consolidated-invoice`, `-access`) with unit tests.
+2. Scope and queries (both modes), the JSON route, and integration tests.
+3. PDF renderer and route, with the audit row.
+4. Page, filters, preview; sidebar, hub card, proxy gate; contract lists;
+   `CLAUDE.md`.
 
 ## Tests
 
-**Unit:**
+### Unit
 
-- `deriveInvoiceStatus`: every row of D2, including partial refund on an
-  undelivered order, full refund before delivery, cancelled after approval,
-  and returned for correction.
-- **Periods:** a leap February, December → January, 0/366/367-day ranges,
-  `from > to`, a future `to`, a malformed month, unknown parameters.
-- **Rows:** no refund; partial refund; full refund; a tax refund larger than
-  the tax; mixed and absent tax rates; totals equal the column sums;
-  quantity formatting.
-- Digest stability; file-name sanitising; role allowlist.
-- **PDF:** renders one page and many pages; "Page x of y" is present; the
-  header repeats; totals appear once; the text includes every invoice number
-  (asserted on the extracted text, as `invoice-pdf.test.ts` does).
+- **Periods:** a leap February, December → January, ranges of 0, 366 and 367
+  days, `from > to`, a future `to`, a malformed month, unknown parameters.
+- **Rows:**
+  - an uncredited invoice;
+  - partly and fully credited invoices, where the figures equal invoiced minus
+    credited and Value + Tax = Total;
+  - a legacy row's quantity from order items less refunded items;
+  - mixed and absent tax rates;
+  - a proforma with a refund before delivery, whose tax matches
+    `refundTaxCents`.
+- **Totals and output:** totals equal the column sums; the footnote rule;
+  digest stability; file-name sanitising; the role allowlist.
+- **PDF:** one page and many pages; "Page x of y"; the header repeats; totals
+  appear once; both titles; both footer statements; every invoice number
+  appears in the extracted text.
 
-**Contract:**
+### Contract
 
-- Both routes on `lib/server/security-boundaries.test.ts`; each handler
-  checks the allowlist itself and reads the organization through
-  `getRequestScope`.
-- The page and route on `table-sort-contract.test.ts`.
-- The sidebar entry and hub card for Super Admin and Head Office only.
-- The proxy gate is present.
+- Both routes are on `lib/server/security-boundaries.test.ts`; each checks the
+  allowlist itself and takes the organization through `getRequestScope`.
+- The page and route are on `table-sort-contract.test.ts`.
+- The sidebar entry and hub card exist for Super Admin and Head Office only;
+  the proxy gate is present.
+- The queries read `invoices.issue_date` and never `receipt_data`.
 
-**Integration** (`tests/integration/consolidated-invoice-report-api.test.ts`,
-`tests/integration/invoice-status-sql.test.ts`):
+### Integration (`tests/integration/consolidated-invoice-report-api.test.ts`)
 
-- **Roles:** 401 unauthenticated; 403 for Branch Admin, Group User, Order
+Fixtures issue invoices through `progressOrderFulfillment` and credit them
+through the refund route, so the report reads real ledger rows. Cleanup goes
+through `purgeInvoiceLedger`.
+
+- **Roles:** 401 when unauthenticated; 403 for Branch Admin, Group User, Order
   Portal, Group Order Portal, Viewer, Order Desk, Apricart Executive and
-  Warehouse; 200 for Super Admin and Head Office, on both routes.
+  Warehouse; 200 for Super Admin and Head Office on both routes.
 - **Tenant isolation:**
   - Head Office of A sending `organizationId=B` still gets A;
-  - B's branch or group in a filter → 404;
+  - B's branch or group → 404;
   - Super Admin without `organizationId` → 400;
-  - no row from another organization ever appears (two-tenant fixture).
-- **Selection:**
-  - each `orders` option returns exactly the right statuses;
-  - `includeCredited` toggles fully refunded rows;
-  - pending, rejected and cancelled orders never appear.
-- **Date boundary:** an order created 2026-08-31 20:00 UTC with snapshot
-  `08/31/2026` is in August and not September; a legacy snapshot with an
-  unparseable date falls back to its Karachi creation date.
-- **Row parity:** each row's Items and Total equal what
-  `GET /api/v1/receipts/[id]` reports for that order.
-- **Refund netting** against real `refunds` rows.
-- **Bounds:** > 1 000 orders → 422.
+  - the two-tenant fixture never leaks a row.
+- **Modes:**
+  - Invoices mode never contains an undelivered order;
+  - Proformas mode never contains a delivered one;
+  - `includeCredited` toggles Credited rows.
+- **Periods:** an invoice delivered at 23:30 Karachi on 31 Aug is in August;
+  a legacy row is matched on its printed date.
+- **Row parity:** each row's total equals the individual invoice's TOTAL less
+  its credit notes, and its quantity equals the delivered quantity less what
+  was credited.
+- **Credits:** a credit note issued after the period still reduces the row.
+- **Bounds:** more than 1,000 rows → 422.
 - **Sorting:** an unknown sort key → 400; the PDF order equals the JSON
   order.
-- **Audit:** a PDF download writes the audit row with the right digest.
-- `invoiceStatusSql` ≡ `deriveInvoiceStatus` over every combination.
-- The warehouse isolation and write sweeps cover the new GET handlers
-  automatically and must stay green.
+- **Audit:** the row is written with the right digest.
+- The warehouse isolation and write sweeps stay green.
 
-**E2E:** Head Office opens Reports → Consolidated Invoice Report, picks a
-month, sees the preview, downloads the PDF. A Branch Admin typing the URL is
-sent back to `/reports`.
+### E2E
+
+Head Office opens Reports → Consolidated Invoice Report, picks a month,
+previews, downloads, then switches to Proformas. A Branch Admin typing the URL
+is sent back to `/reports`.
 
 ## Security impact
 
-- **Authentication:** session on both routes; the forced password-change gate
-  in `proxy.ts` applies unchanged.
-- **Authorization:** two-role allowlist in each handler, plus the proxy gate
-  for navigation only.
+- **Authentication:** session on both routes; the forced-password-change gate
+  applies.
+- **Authorization:** two-role allowlist in each handler; the proxy gate is for
+  navigation only.
 - **Tenant isolation:**
-  - Head Office's organization comes from the `users` row;
-  - Super Admin's is the only request-supplied tenant, and only for that
-    role;
-  - filters are fenced (404);
-  - the branch join uses the tenant composite key;
-  - the integration suite holds a two-tenant fixture.
-- **Input:** Zod strict, enum allowlists, date strings parsed and bound as
-  parameters, sort through an allowlist, no `sql.raw`.
-- **Abuse:** ≤ 1 000 rows, ≤ 366 days, ≤ 200 branch ids, rate limits,
+  - organization from the `users` row;
+  - filters fenced with 404;
+  - joins on composite tenant keys;
+  - the integration suite holds two tenants.
+- **Input:** Zod strict; enum allowlists; dates bound as parameters; sort via
+  an allowlist; no `sql.raw`.
+- **Abuse:** ≤ 1,000 rows, ≤ 366 days, ≤ 200 branch ids; rate limits;
   `no-store`.
-- **Exposure:** branch, cost center, approver name and figures only.
-- **Audit:** every download is recorded with a verifiable digest.
+- **Exposure:** invoice numbers, branch, cost centre, approver name and
+  figures only.
+- **Audit:** every download, with a verifiable digest.
 
 ## Database impact
 
-None. No migration, no index, no backfill. Reads use `orders_org_created_idx`.
+- **None:** no migration, index or backfill.
+- **Index:** reads use `invoices_org_issue_date_idx`.
+- **Before release:** `EXPLAIN ANALYZE` read-only (`begin read only`) for a
+  12-month K-Electric query.
 
-Before release, run `EXPLAIN ANALYZE` read-only (`begin read only`, never a
-session `SET` on the pooler) for a 12-month, whole-organization query on
-K-Electric, the largest tenant.
+## Operational notes
 
-## Rollout
-
-1. Read-only production checks:
-   - no duplicate invoice numbers per organization;
-   - the distribution of `receipt_data->>'date'` formats per organization (to
-     size the D4 fallback);
-   - every organization has an NTN where the Bill To should print one.
-2. Deploy. Read-only feature, no flag: the sidebar entry, hub card and page
-   are the only visible change.
-3. **Rollback:** revert the commit. Nothing is written except audit rows.
+- **The report reads only the ledger.** An order imported by `import:ke-orders`
+  appears only after `npm run backfill:invoice-ledger` has run (the ledger
+  plan already requires that after every import).
+- `npx tsx scripts/backfill-invoice-ledger.ts --validate` must show nothing in
+  `creditedTotalsOutOfStep` before a report is handed to a customer; a stale
+  credited total would show here as a wrong row.
 
 ## Risk
 
 | Risk | Mitigation |
 |---|---|
-| A row from another tenant | Organization from the database; fenced filters; two-tenant integration fixture |
-| A row disagreeing with its own invoice | Row-parity test; shared formatters (`formatInvoiceDisplayDate`, `getReceiptUserDisplayName`, `getOrderDerivedStatus`) |
-| A slow query on a large tenant | Index range on `(organization_id, created_at)`; 1 000-row cap; `EXPLAIN` before release |
-| The document mistaken for a second tax invoice | Footer statement (D8) |
+| A row from another tenant | Organization from the database; fenced filters; composite joins; two-tenant fixture |
+| A row disagreeing with its invoice or credit notes | Figures read straight from `invoices.*_cents` / `credited_*`; row-parity test |
+| Invoices and proformas added into one total | Separate modes, separate titles, never mixed (D2) |
+| Mixed date meanings across 11 Oct 2026 | Footnote on any period that spans it (D7) |
+| Slow query on K-Electric | Index on `(organization_id, issue_date)`; cap of 1,000 rows; `EXPLAIN` before release |
 
 ## Follow-ups (not in this change)
 
-- **F1 — Invoice status everywhere:** the same `lib/invoice-status.ts` on the
-  individual invoice (status field, "PROFORMA INVOICE" title while proforma)
-  and as a column and filter in the Orders directory.
-- **F2 — Numbered, saved consolidated invoices** (issue, credit lines, payment,
-  void), if the business later uses them for billing rather than reporting.
-  The 2026-10-09 design in outline:
-  - a `<ORGCODE>-CIN-000001` series with its own counter;
-  - issue, void and payment by Super Admin only;
-  - a `consolidated_invoice_lines` ledger with `UNIQUE (order_id)` on live
-    charges, so each order is billed once;
-  - credit lines for refunds after billing;
-  - immutable snapshots for reprints.
-
-  It would build on this report's query and row module unchanged.
-- **F3 — Tax invoice at the time of supply:** today the individual invoice
-  number and date are fixed at order creation, so rejected orders leave gaps
-  and the date can precede delivery. Confirm with the company's tax adviser.
-- **F4 — Designation:** an additive `users.designation` column, if the
-  customer wants that column filled.
-- **F5 — Excel export** of the same rows, if Finance asks for it. It reuses
-  the JSON route and `sanitizeSpreadsheetRow`.
+- **F1 — Excel export** of the same rows (reuses the JSON route and
+  `sanitizeSpreadsheetRow`).
+- **F2 — Numbered, saved consolidated invoices** (issue, payment, void), if
+  the business moves from reporting to billing. They would charge each
+  `invoices` row once and carry credit notes as credit lines (outline in the
+  ledger plan's F2).
+- **F3 — Credit notes by their own date:** an option to show credit notes
+  issued in the period as their own negative rows, instead of netting each
+  invoice as at today.
+- **F4 — Designation:** a `users.designation` column, if the customer wants
+  that column filled.
