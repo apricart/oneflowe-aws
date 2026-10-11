@@ -197,11 +197,27 @@ async function validate(client: PoolClient): Promise<void> {
        and (i.number is distinct from o.receipt_data ->> 'invoiceNumber' or i.total_cents <> o.total_cents)
      limit 50
   `)
+  // A refund approved by code that predates the ledger (between the backfill
+  // and the deploy) moves the order's refund total but not the invoice's
+  // credited total. Legacy rows are compared with their order; invoices issued
+  // at supply with the credit notes issued against them.
+  const { rows: creditMismatches } = await client.query(`
+    select i.id, i.order_id, i.number, i.origin, i.credited_total_cents,
+           case when i.origin = 'ISSUED_AT_SUPPLY'
+                then coalesce((select sum(c.total_cents) from credit_notes c where c.invoice_id = i.id), 0)
+                else least(coalesce(o.refund_amount_cents, 0), i.total_cents) end as expected_credited_cents
+      from invoices i join orders o on o.id = i.order_id
+     where i.credited_total_cents <> case when i.origin = 'ISSUED_AT_SUPPLY'
+                then coalesce((select sum(c.total_cents) from credit_notes c where c.invoice_id = i.id), 0)
+                else least(coalesce(o.refund_amount_cents, 0), i.total_cents) end
+     limit 50
+  `)
   console.log(JSON.stringify({
     mode: "VALIDATE",
     target: describeTarget(),
     counts,
     legacyRowsDisagreeingWithTheirOrder: mismatches,
+    creditedTotalsOutOfStep: creditMismatches,
   }, null, 2))
 }
 
