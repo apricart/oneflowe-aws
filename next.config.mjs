@@ -8,6 +8,17 @@ const nextConfig = {
   // not require stopping `npm run dev`. Unset everywhere else, which is `.next`.
   distDir: process.env.NEXT_DIST_DIR || '.next',
 
+  // `next dev` disposes a compiled route after 60s unused, keeping at most 5.
+  // The Playwright suite revisits routes minutes apart, so it pays the compile
+  // again; on a 2-vCPU CI runner that recompile, queued behind the routes the
+  // page prefetches, outlasts the browser fetcher's 30s timeout on every SWR
+  // retry and the page settles on its load-error state. The suite keeps every
+  // route it has compiled (`E2E_KEEP_COMPILED_ROUTES`); `npm run dev` keeps the
+  // defaults.
+  ...(process.env.E2E_KEEP_COMPILED_ROUTES === '1'
+    ? { onDemandEntries: { maxInactiveAge: 60 * 60 * 1000, pagesBufferLength: 1000 } }
+    : {}),
+
   // Security: Remove X-Powered-By header
   poweredByHeader: false,
   typescript: {

@@ -109,7 +109,7 @@ jobs:
       - name: Migrate the throwaway test database
         env:
           MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/oneflowe_test
-        run: npm run db:migrate
+        run: npm run db:migrate:test
 
       # Fails on a skipped run as well as a failed one — see deploy-prod.yml.
       - name: Run integration tests

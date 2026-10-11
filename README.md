@@ -91,11 +91,21 @@ See `docs/security/environment-security.md` for deployment requirements.
 
 ### Running Migrations
 
-After setting up your database, run the migrations:
+Each environment has its own command. Each reads only its own env file and
+refuses a connection string that does not look like that environment
+(`lib/migration-target.ts`). Plain `npm run db:migrate` names no environment
+and applies nothing.
 
 \`\`\`bash
-npm run db:migrate
+npm run db:migrate:dev    # localhost only — .env.development.local, then .env.local
+npm run db:migrate:test   # database name must contain "test" — .env.test.local
+npm run db:migrate:prod   # .env.production.local — dry run, prints a digest
+npm run db:migrate:prod -- --confirm=<digest>   # applies exactly that plan
 \`\`\`
+
+A variable set in the shell wins over the file. The production digest covers
+the target and the pending migrations, so it applies nothing if either changed
+since the dry run.
 
 ### Seeding and Administrator Bootstrap
 

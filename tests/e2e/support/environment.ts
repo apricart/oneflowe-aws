@@ -94,6 +94,10 @@ export function serverEnv(testDatabaseUrl: string): Record<string, string> {
     // test it lands in. If the heap genuinely runs out, the server now dies with
     // a heap error instead — a loud failure rather than a misleading one.
     E2E_DISABLE_DEV_MEMORY_RESTART: "1",
+    // Read by `next.config.mjs`. Keeps every compiled route for the whole run, so
+    // revisiting a page minutes later does not recompile it behind a 30s client
+    // fetch timeout.
+    E2E_KEEP_COMPILED_ROUTES: "1",
     // Keep browser tests self-contained. Cache/rate-limit fallbacks stay in
     // process and no test run depends on an external Redis service.
     ONEFLOWE_OFFLINE_MODE: "true",

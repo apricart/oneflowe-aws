@@ -86,11 +86,14 @@ Two guards back this up:
      project gives you one database named `postgres`, so a *separate project*
      is needed — the production one is refused by name.
 
-2. Migrate it. Drizzle reads `MIGRATION_DATABASE_URL`, never `DATABASE_URL`:
+2. Migrate it. `db:migrate:test` reads `TEST_DATABASE_URL` from
+   `.env.test.local` (or `MIGRATION_DATABASE_URL` from the shell), never
+   `DATABASE_URL` or `.env.local`, and refuses a database whose name does not
+   contain `test`:
 
    ```bash
-   MIGRATION_DATABASE_URL=postgres://postgres:postgres@localhost:5433/oneflowe_test \
-     npm run db:migrate
+   TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5433/oneflowe_test \
+     npm run db:migrate:test
    ```
 
 3. Run the suite:
