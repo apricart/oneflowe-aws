@@ -1,3 +1,5 @@
+import { isAwaitingApproval, isAwaitingCorrection } from "@/lib/order-correction"
+
 /**
  * Client-side shapes for the Group User approval queue.
  *
@@ -24,6 +26,8 @@ export type ApprovalOrder = {
   createdAt: string | null
   approvedAt: string | null
   rejectionReason: string | null
+  returnedForCorrectionAt?: string | null
+  correctionRequestNote?: string | null
   approvalToken: string | null
 }
 
@@ -88,6 +92,19 @@ export function normalizeStatus(status: string | null | undefined): string {
 
 export function isPending(order: ApprovalOrder): boolean {
   return normalizeStatus(order.status) === "PENDING"
+}
+
+/**
+ * Pending and with the approver — the only orders an approval can act on.
+ * A returned order is still pending (it may be rejected) but waits on its
+ * requester, so it is kept out of approvals and bulk selection.
+ */
+export function isAwaitingApprovalDecision(order: ApprovalOrder): boolean {
+  return isAwaitingApproval(order)
+}
+
+export function isReturnedForCorrection(order: ApprovalOrder): boolean {
+  return isAwaitingCorrection(order)
 }
 
 export function formatDateTime(value: string | null): string {

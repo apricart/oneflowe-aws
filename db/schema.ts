@@ -14,6 +14,9 @@ import {
   numeric,
   check,
   date,
+  foreignKey,
+  unique,
+  type PgTableExtraConfigValue,
 } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
@@ -26,6 +29,10 @@ export const organizations = pgTable(
     // Optional tax identifier. Nullable so every existing organization stays
     // valid without one, and so an operator can clear a wrong value.
     ntnNumber: varchar("ntn_number", { length: 32 }),
+    // Optional sales tax registration number, printed under Bill To beside the
+    // NTN. Nullable for the same reasons; set on Create / Edit Organization.
+    // See plans/OF-INVOICE-invoice-ledger.md (D9).
+    strnNumber: varchar("strn_number", { length: 32 }),
     status: varchar("status", { length: 32 }).default("active"),
     orderApproverRole: varchar("order_approver_role", { length: 32 })
       .notNull()
@@ -48,6 +55,15 @@ export const organizations = pgTable(
     blockOrderingOnUnacknowledgedDeliveries: boolean("block_ordering_on_unacknowledged_deliveries")
       .notNull()
       .default(false),
+    // How many of each a branch may hold before it stops ordering, while the
+    // matching block is on. Super Admin only; 1..100 (lib/ordering-block-threshold.ts),
+    // default 2 — the fixed value before it was configurable.
+    unpaidInvoiceBlockThreshold: integer("unpaid_invoice_block_threshold")
+      .notNull()
+      .default(2),
+    unacknowledgedDeliveryBlockThreshold: integer("unacknowledged_delivery_block_threshold")
+      .notNull()
+      .default(2),
     // Whether this tenant's orders are checked against, and held from, a branch
     // budget (lib/server/organization-budget-policy.ts). The column default is
     // true so existing tenants and directly inserted rows keep their budget
@@ -56,6 +72,13 @@ export const organizations = pgTable(
     budgetsEnabled: boolean("budgets_enabled")
       .notNull()
       .default(true),
+    // Whether Apricart's Order Desk keys in this customer's orders (taken by
+    // email or WhatsApp). Off by default, so no existing tenant becomes
+    // reachable by the desk. Super Admin only; a desk user additionally needs
+    // an `order_desk_assignments` row. See lib/order-desk-access.ts.
+    managedOrdering: boolean("managed_ordering")
+      .notNull()
+      .default(false),
     // When enabled, members of this tenant may only authenticate from an
     // address in organizationAllowedIps. Defaults to false so every existing
     // organization keeps unrestricted login until a Super Admin opts in.
@@ -84,6 +107,15 @@ export const organizations = pgTable(
       "organizations_email_domain_shape_ck",
       sql`${t.emailDomain} IS NULL OR (${t.emailDomain} = lower(${t.emailDomain}) AND ${t.emailDomain} ~ '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$')`,
     ),
+    // ORDERING_BLOCK_THRESHOLD_MIN..MAX in lib/ordering-block-threshold.ts.
+    check(
+      "organizations_unpaid_invoice_block_threshold_ck",
+      sql`${t.unpaidInvoiceBlockThreshold} BETWEEN 1 AND 100`,
+    ),
+    check(
+      "organizations_unacknowledged_delivery_block_threshold_ck",
+      sql`${t.unacknowledgedDeliveryBlockThreshold} BETWEEN 1 AND 100`,
+    ),
   ],
 )
 
@@ -97,6 +129,10 @@ export const branches = pgTable(
     name: varchar("name", { length: 255 }).notNull(),
     province: varchar("province", { length: 100 }),
     city: varchar("city", { length: 100 }),
+    // Delivery region, for the management delivery dashboard. One of
+    // BRANCH_REGIONS (lib/branch-region.ts) or NULL ("Unknown"); set by Super
+    // Admin in the branch form. See plans/OF-DELIVERY-management-delivery-dashboard.md.
+    region: varchar("region", { length: 16 }),
     address: text("address"),
     costCenterId: varchar("cost_center_id", { length: 128 }),
     // Avoid circular type init between users <-> branches; store admin user id without FK
@@ -115,7 +151,9 @@ export const branches = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => [
+  // Annotated: this table and the composite keys reference each other in a
+  // cycle (branches -> groups -> users -> branches) that inference cannot close.
+  (t): PgTableExtraConfigValue[] => [
     index("branches_org_idx").on(t.organizationId),
     index("branches_name_idx").on(t.name),
     index("branches_cost_center_idx").on(t.costCenterId),
@@ -124,11 +162,29 @@ export const branches = pgTable(
       .where(sql`${t.externalSource} IS NOT NULL AND ${t.externalId} IS NOT NULL`),
     index("branches_status_idx").on(t.status),
     index("branches_group_idx").on(t.groupId),
+    // The warehouse city key; the expression must stay identical to
+    // branchCityKeySql (lib/server/branch-city-key.ts) or the index is not used.
+    // See plans/OF-WAREHOUSE-city-assignments.md.
+    index("branches_city_key_idx").on(sql`lower(btrim(regexp_replace(${t.city}, '\\s+', ' ', 'g')))`),
+    check("branches_region_ck", sql`${t.region} IS NULL OR ${t.region} IN ('NORTH', 'CENTRAL', 'SOUTH')`),
     check(
       "branches_external_identity_pair_ck",
       sql`(${t.externalSource} IS NULL) = (${t.externalId} IS NULL)
         AND (${t.externalSource} IS NULL OR (btrim(${t.externalSource}) <> '' AND btrim(${t.externalId}) <> ''))`,
     ),
+    // Composite target for the (branch_id, organization_id) foreign keys: every
+    // *_branch_org_fk / *_group_org_fk makes the database refuse a row whose
+    // branch or group belongs to another organization than the row says.
+    // See plans/OF-DB-tenant-composite-foreign-keys.md.
+    unique("branches_id_organization_uq").on(t.id, t.organizationId),
+    // The migration writes ON DELETE SET NULL (group_id) — the column list, which
+    // Drizzle cannot express, leaves organization_id alone. There was no key
+    // here before, so deleting the parent must keep succeeding.
+    foreignKey({
+      name: "branches_group_org_fk",
+      columns: [t.groupId, t.organizationId],
+      foreignColumns: [groups.id, groups.organizationId],
+    }).onDelete("set null"),
   ],
 )
 
@@ -210,7 +266,9 @@ export const users = pgTable(
     lastFailedLoginAt: timestamp("last_failed_login_at", { withTimezone: true }),
     lockoutUntil: timestamp("lockout_until", { withTimezone: true }),
   },
-  (t) => [
+  // Annotated: this table and the composite keys reference each other in a
+  // cycle (branches -> groups -> users -> branches) that inference cannot close.
+  (t): PgTableExtraConfigValue[] => [
     uniqueIndex("users_username_idx").on(t.username),
     index("users_email_idx").on(t.email),
     index("users_role_idx").on(t.roleId),
@@ -229,6 +287,14 @@ export const users = pgTable(
       sql`(${t.externalSource} IS NULL) = (${t.externalId} IS NULL)
         AND (${t.externalSource} IS NULL OR (btrim(${t.externalSource}) <> '' AND btrim(${t.externalId}) <> ''))`,
     ),
+    // The migration writes ON DELETE SET NULL (branch_id) — the column list, which
+    // Drizzle cannot express, leaves organization_id alone. There was no key
+    // here before, so deleting the parent must keep succeeding.
+    foreignKey({
+      name: "users_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }).onDelete("set null"),
   ],
 )
 
@@ -381,6 +447,11 @@ export const inventory = pgTable(
     index("inventory_branch_idx").on(t.branchId),
     index("inventory_org_idx").on(t.organizationId),
     index("inventory_org_branch_sku_idx").on(t.organizationId, t.branchId, t.skuId),
+    foreignKey({
+      name: "inventory_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 
@@ -420,6 +491,11 @@ export const suppliers = pgTable(
     index("suppliers_org_idx").on(t.organizationId),
     index("suppliers_branch_idx").on(t.branchId),
     index("suppliers_name_idx").on(t.name),
+    foreignKey({
+      name: "suppliers_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 
@@ -502,6 +578,11 @@ export const branchDeliveryAddresses = pgTable(
       "branch_delivery_addresses_text_ck",
       sql`length(btrim(${t.label})) > 0 AND length(btrim(${t.labelKey})) > 0 AND length(btrim(${t.address})) > 0`,
     ),
+    foreignKey({
+      name: "branch_delivery_addresses_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 
@@ -528,6 +609,11 @@ export const budgets = pgTable(
     index("budgets_org_idx").on(t.organizationId),
     index("budgets_branch_idx").on(t.branchId),
     check("budgets_values_valid_ck", sql`${t.amountAllocatedCents} >= 0 AND ${t.amountSpentCents} >= 0 AND ${t.amountHeldCents} >= 0 AND ${t.amountCreditedCents} >= 0 AND (${t.amountAllocatedCents} + ${t.amountCreditedCents}) >= (${t.amountSpentCents} + ${t.amountHeldCents})`),
+    foreignKey({
+      name: "budgets_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 
@@ -603,6 +689,11 @@ export const paymentControlExceptions = pgTable(
     index("payment_control_exceptions_org_idx").on(t.organizationId),
     index("payment_control_exceptions_live_branch_idx").on(t.branchId, t.expiresAt).where(sql`${t.revokedAt} IS NULL`),
     check("payment_control_exceptions_window_ck", sql`${t.expiresAt} > ${t.startAt}`),
+    foreignKey({
+      name: "payment_control_exceptions_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 
@@ -755,6 +846,20 @@ export const orders = pgTable(
     // budgets on or off can never release or spend a hold the order did not
     // take. See `orderTakesBudget` in lib/organization-budget-policy.ts.
     budgetTracked: boolean("budget_tracked").notNull().default(true),
+    // Where an Order Desk order came from — the customer's email, WhatsApp
+    // message or call — so it can be traced back to its source. Required for a
+    // desk order and null on every portal order (lib/order-desk-access.ts).
+    intakeChannel: varchar("intake_channel", { length: 16 }),
+    intakeReference: varchar("intake_reference", { length: 255 }),
+    // The storage key of the screenshot of that message, if one was uploaded.
+    // Private: served only through the desk's own route, never the public
+    // product-image route. One order per screenshot.
+    intakeAttachmentKey: varchar("intake_attachment_key", { length: 128 }),
+    // An Order Desk order withdrawn before delivery: who, when and why. The
+    // hold and stock it took were released in the same transaction.
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+    cancelledByUserId: uuid("cancelled_by_user_id").references(() => users.id),
+    cancellationReason: text("cancellation_reason"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
     fulfilledAt: timestamp("fulfilled_at", { withTimezone: true }),
@@ -765,6 +870,15 @@ export const orders = pgTable(
     rejectedByUserId: uuid("rejected_by_user_id").references(() => users.id),
     rejectedAt: timestamp("rejected_at", { withTimezone: true }),
     rejectionReason: text("rejection_reason"),
+    // The approver's open request for a correction, while one is open: who
+    // sent the order back, when, and what to fix. The order stays PENDING —
+    // its hold, quantity hold and stock reservation are untouched — and cannot
+    // be approved until a requester resubmits it, which clears all three.
+    // Every round, open or closed, is kept in `order_correction_requests`.
+    // See plans/OF-ORDER-RETURN-for-correction.md.
+    returnedForCorrectionAt: timestamp("returned_for_correction_at", { withTimezone: true }),
+    returnedForCorrectionByUserId: uuid("returned_for_correction_by_user_id").references(() => users.id),
+    correctionRequestNote: text("correction_request_note"),
     // Secure approval token for fulfillment verification
     approvalToken: varchar("approval_token", { length: 16 }), // Plaintext - shown only to approver
     approvalTokenHash: varchar("approval_token_hash", { length: 255 }), // Hash for verification
@@ -787,7 +901,8 @@ export const orders = pgTable(
     refundReason: text("refund_reason"),
     // Receipt data - complete snapshot for historical accuracy
     receiptData: jsonb("receipt_data").$type<{
-      invoiceNumber: string
+      /** Absent until the tax invoice is issued at delivery (lib/invoice-policy.ts). */
+      invoiceNumber?: string
       /** Buyer's purchase order reference as supplied when the order was placed. */
       poNumber?: string
       date: string
@@ -851,6 +966,155 @@ export const orders = pgTable(
     uniqueIndex("orders_creator_idempotency_uq").on(t.createdByUserId, t.idempotencyKey),
     check("orders_amounts_nonnegative_ck", sql`${t.subtotalCents} >= 0 AND ${t.taxCents} >= 0 AND ${t.totalCents} >= 0 AND COALESCE(${t.refundAmountCents}, 0) >= 0 AND COALESCE(${t.refundAmountCents}, 0) <= ${t.totalCents}`),
     check("orders_idempotency_pair_ck", sql`(${t.idempotencyKey} IS NULL AND ${t.requestFingerprint} IS NULL) OR (${t.idempotencyKey} IS NOT NULL AND ${t.requestFingerprint} IS NOT NULL)`),
+    check("orders_intake_channel_ck", sql`${t.intakeChannel} IS NULL OR ${t.intakeChannel} IN ('EMAIL', 'WHATSAPP', 'PHONE', 'OTHER')`),
+    check(
+      "orders_intake_attachment_key_ck",
+      sql`${t.intakeAttachmentKey} IS NULL OR ${t.intakeAttachmentKey} ~ '^order-intake/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[.](jpg|png|gif|webp)$'`,
+    ),
+    uniqueIndex("orders_intake_attachment_key_uq")
+      .on(t.intakeAttachmentKey)
+      .where(sql`${t.intakeAttachmentKey} IS NOT NULL`),
+    // An open correction request is all three columns or none, and only ever on
+    // a PENDING order — so no path that moves the status can leave the flag
+    // behind on an approved, rejected or cancelled order.
+    check(
+      "orders_correction_state_ck",
+      sql`(${t.returnedForCorrectionAt} IS NULL AND ${t.returnedForCorrectionByUserId} IS NULL AND ${t.correctionRequestNote} IS NULL) OR (${t.returnedForCorrectionAt} IS NOT NULL AND ${t.returnedForCorrectionByUserId} IS NOT NULL AND ${t.correctionRequestNote} IS NOT NULL AND UPPER(${t.status}) = 'PENDING')`,
+    ),
+    // A group order's envelope is in the same organization as each of its orders.
+    foreignKey({
+      name: "orders_group_order_org_fk",
+      columns: [t.groupOrderId, t.organizationId],
+      foreignColumns: [groupOrders.id, groupOrders.organizationId],
+    }),
+    foreignKey({
+      name: "orders_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
+    // Composite target for the invoice ledger's (order_id, organization_id)
+    // keys, as branches and groups have (plans/OF-INVOICE-invoice-ledger.md).
+    unique("orders_id_organization_uq").on(t.id, t.organizationId),
+  ],
+)
+
+/**
+ * The delivery challan behind each order's "Delivered" — Super Admin's proof
+ * of delivery. See plans/OF-DELIVERY-CHALLAN-proof-of-delivery.md.
+ *
+ * A row is created *unattached* when the file is uploaded, bound to its order
+ * and its uploader, and is attached by the delivery itself (or by a
+ * replacement), in the same transaction. One current challan per order; a
+ * replaced one is kept. The object lives under the private `delivery-challan/`
+ * prefix, which the public image route cannot serve.
+ */
+export const orderDeliveryChallans = pgTable(
+  "order_delivery_challans",
+  {
+    id: serial("id").primaryKey(),
+    orderId: integer("order_id")
+      .references(() => orders.id, { onDelete: "cascade" })
+      .notNull(),
+    organizationId: integer("organization_id").references(() => organizations.id).notNull(),
+    branchId: integer("branch_id").references(() => branches.id).notNull(),
+    storageKey: varchar("storage_key", { length: 128 }).notNull(),
+    // What the uploader's file was called, sanitised, for display only. It
+    // never builds a key or a path.
+    fileName: varchar("file_name", { length: 160 }).notNull(),
+    contentType: varchar("content_type", { length: 32 }).notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    uploadedByUserId: uuid("uploaded_by_user_id").references(() => users.id).notNull(),
+    uploadedAt: timestamp("uploaded_at", { withTimezone: true }).defaultNow().notNull(),
+    attachedAt: timestamp("attached_at", { withTimezone: true }),
+    replacedAt: timestamp("replaced_at", { withTimezone: true }),
+    replacedByUserId: uuid("replaced_by_user_id").references(() => users.id),
+  },
+  (t) => [
+    uniqueIndex("order_delivery_challans_storage_key_uq").on(t.storageKey),
+    index("order_delivery_challans_order_idx").on(t.orderId, t.uploadedAt),
+    uniqueIndex("order_delivery_challans_current_uq")
+      .on(t.orderId)
+      .where(sql`${t.attachedAt} IS NOT NULL AND ${t.replacedAt} IS NULL`),
+    check(
+      "order_delivery_challans_key_ck",
+      sql`${t.storageKey} ~ '^delivery-challan/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[.](jpg|png|webp|pdf)$'`,
+    ),
+    check(
+      "order_delivery_challans_type_ck",
+      sql`${t.contentType} IN ('image/jpeg', 'image/png', 'image/webp', 'application/pdf')`,
+    ),
+    check("order_delivery_challans_size_ck", sql`${t.sizeBytes} > 0 AND ${t.sizeBytes} <= 4194304`),
+    check(
+      "order_delivery_challans_replace_ck",
+      sql`(${t.replacedAt} IS NULL AND ${t.replacedByUserId} IS NULL) OR (${t.replacedAt} IS NOT NULL AND ${t.replacedByUserId} IS NOT NULL AND ${t.attachedAt} IS NOT NULL)`,
+    ),
+    foreignKey({
+      name: "order_delivery_challans_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
+  ],
+)
+
+/**
+ * Every round of "returned for correction" an order has been through.
+ *
+ * The open round is mirrored on the order row (`returned_for_correction_*`),
+ * which is what every guard and list reads; this table is the history the
+ * order detail renders. A round is opened by an approver and closed either by a
+ * requester resubmitting the order or by the order being rejected. One open
+ * round per order, enforced by the partial unique index.
+ */
+export const orderCorrectionRequests = pgTable(
+  "order_correction_requests",
+  {
+    id: serial("id").primaryKey(),
+    // Cascade, so the administrative order deletion removes the trail with it.
+    orderId: integer("order_id")
+      .references(() => orders.id, { onDelete: "cascade" })
+      .notNull(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id)
+      .notNull(),
+    branchId: integer("branch_id")
+      .references(() => branches.id)
+      .notNull(),
+    requestedByUserId: uuid("requested_by_user_id")
+      .references(() => users.id)
+      .notNull(),
+    requestedByRole: varchar("requested_by_role", { length: 32 }).notNull(),
+    comment: text("comment").notNull(),
+    requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
+    resolution: varchar("resolution", { length: 16 }),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    resolvedByUserId: uuid("resolved_by_user_id").references(() => users.id),
+    resolvedByRole: varchar("resolved_by_role", { length: 32 }),
+    responseNote: text("response_note"),
+  },
+  (t) => [
+    index("order_correction_requests_order_idx").on(t.orderId, t.requestedAt),
+    uniqueIndex("order_correction_requests_open_uq")
+      .on(t.orderId)
+      .where(sql`${t.resolution} IS NULL`),
+    check(
+      "order_correction_requests_resolution_ck",
+      // CANCELLED: the Order Desk withdrew a returned desk order instead of
+      // resubmitting it (plans/OF-EXEC-APPROVAL-executive-approves-desk-orders.md).
+      sql`${t.resolution} IS NULL OR ${t.resolution} IN ('RESUBMITTED', 'REJECTED', 'CANCELLED')`,
+    ),
+    check(
+      "order_correction_requests_shape_ck",
+      sql`(${t.resolution} IS NULL AND ${t.resolvedAt} IS NULL AND ${t.resolvedByUserId} IS NULL AND ${t.resolvedByRole} IS NULL AND ${t.responseNote} IS NULL) OR (${t.resolution} IS NOT NULL AND ${t.resolvedAt} IS NOT NULL AND ${t.resolvedByUserId} IS NOT NULL AND ${t.resolvedByRole} IS NOT NULL)`,
+    ),
+    check(
+      "order_correction_requests_text_ck",
+      sql`char_length(btrim(${t.comment})) BETWEEN 1 AND 1000 AND (${t.responseNote} IS NULL OR char_length(${t.responseNote}) <= 1000)`,
+    ),
+    foreignKey({
+      name: "order_correction_requests_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 
@@ -940,6 +1204,212 @@ export const refundItems = pgTable(
     index("refund_items_refund_idx").on(t.refundId),
     index("refund_items_order_item_idx").on(t.orderItemId),
     check("refund_items_values_valid_ck", sql`${t.quantity} > 0 AND ${t.quantity} <= 1000000 AND ${t.amountCents} >= 0`),
+  ],
+)
+
+/**
+ * The invoice ledger (plans/OF-INVOICE-invoice-ledger.md).
+ *
+ * A tax invoice is issued when an order's delivery is recorded, numbered from
+ * the organization's existing `invoice_sequences` series and dated that day in
+ * Karachi; a refund approved against it issues a numbered credit note. Neither
+ * document changes once written: database triggers refuse any update to an
+ * invoice other than its credited totals and status, and any update or delete
+ * of its lines, its credit notes or their lines.
+ *
+ * Invoices supplied before the ledger existed are copied in by
+ * `npm run backfill:invoice-ledger` with their original number and printed
+ * date (`origin` LEGACY_*); they keep printing from the order's own snapshot.
+ */
+export const invoices = pgTable(
+  "invoices",
+  {
+    id: serial("id").primaryKey(),
+    organizationId: integer("organization_id").references(() => organizations.id).notNull(),
+    branchId: integer("branch_id").notNull(),
+    orderId: integer("order_id").notNull(),
+    number: varchar("number", { length: 40 }).notNull(),
+    issueDate: date("issue_date", { mode: "string" }).notNull(),
+    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().defaultNow(),
+    origin: varchar("origin", { length: 24 }).notNull(),
+    status: varchar("status", { length: 24 }).notNull().default("ISSUED"),
+    seller: jsonb("seller").$type<Record<string, unknown>>().notNull(),
+    buyer: jsonb("buyer").$type<Record<string, unknown>>().notNull(),
+    participants: jsonb("participants").$type<Record<string, unknown>>().notNull().default({}),
+    netCents: bigint("net_cents", { mode: "number" }).notNull(),
+    taxCents: bigint("tax_cents", { mode: "number" }).notNull(),
+    discountCents: bigint("discount_cents", { mode: "number" }).notNull().default(0),
+    deliveryChargesCents: bigint("delivery_charges_cents", { mode: "number" }).notNull().default(0),
+    totalCents: bigint("total_cents", { mode: "number" }).notNull(),
+    creditedNetCents: bigint("credited_net_cents", { mode: "number" }).notNull().default(0),
+    creditedTaxCents: bigint("credited_tax_cents", { mode: "number" }).notNull().default(0),
+    creditedTotalCents: bigint("credited_total_cents", { mode: "number" }).notNull().default(0),
+    // The order's `receipt_data` verbatim, for legacy rows only.
+    legacySnapshot: jsonb("legacy_snapshot"),
+    issuedByUserId: uuid("issued_by_user_id").references(() => users.id),
+    // Set on rows the backfill wrote, so its rollback can find exactly them.
+    backfillBatch: varchar("backfill_batch", { length: 64 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("invoices_order_uq").on(t.orderId),
+    uniqueIndex("invoices_org_number_uq").on(t.organizationId, t.number),
+    uniqueIndex("invoices_prefixed_number_uq")
+      .on(t.number)
+      .where(sql`${t.number} ~ '^[A-Z0-9_]+-APR-[0-9]{6}$'`),
+    unique("invoices_id_organization_uq").on(t.id, t.organizationId),
+    index("invoices_org_issue_date_idx").on(t.organizationId, t.issueDate),
+    index("invoices_branch_idx").on(t.branchId),
+    check("invoices_origin_ck", sql`${t.origin} IN ('ISSUED_AT_SUPPLY', 'LEGACY_SNAPSHOT', 'LEGACY_IMPORT')`),
+    check("invoices_status_ck", sql`${t.status} IN ('ISSUED', 'PARTIALLY_CREDITED', 'CREDITED')`),
+    check(
+      "invoices_amounts_ck",
+      sql`${t.netCents} >= 0 AND ${t.taxCents} >= 0 AND ${t.discountCents} >= 0 AND ${t.deliveryChargesCents} >= 0 AND ${t.totalCents} >= 0`,
+    ),
+    // Issued invoices add up exactly; legacy rows keep the figures they were issued with.
+    check(
+      "invoices_arithmetic_ck",
+      sql`${t.origin} <> 'ISSUED_AT_SUPPLY' OR ${t.netCents} + ${t.taxCents} + ${t.deliveryChargesCents} - ${t.discountCents} = ${t.totalCents}`,
+    ),
+    check(
+      "invoices_credited_ck",
+      sql`${t.creditedNetCents} >= 0 AND ${t.creditedTaxCents} >= 0 AND ${t.creditedTotalCents} >= 0 AND ${t.creditedTotalCents} <= ${t.totalCents}`,
+    ),
+    check("invoices_legacy_snapshot_ck", sql`(${t.origin} = 'ISSUED_AT_SUPPLY') = (${t.legacySnapshot} IS NULL)`),
+    foreignKey({
+      name: "invoices_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
+    foreignKey({
+      name: "invoices_order_org_fk",
+      columns: [t.orderId, t.organizationId],
+      foreignColumns: [orders.id, orders.organizationId],
+    }),
+  ],
+)
+
+export const invoiceLines = pgTable(
+  "invoice_lines",
+  {
+    id: serial("id").primaryKey(),
+    invoiceId: integer("invoice_id").notNull(),
+    organizationId: integer("organization_id").notNull(),
+    lineNo: integer("line_no").notNull(),
+    orderItemId: integer("order_item_id").references(() => orderItems.id).notNull(),
+    productName: varchar("product_name", { length: 255 }).notNull(),
+    productCode: varchar("product_code", { length: 128 }),
+    unit: varchar("unit", { length: 64 }).notNull(),
+    category: varchar("category", { length: 255 }),
+    quantity: numeric("quantity", { precision: 12, scale: 3, mode: "number" }).notNull(),
+    // The tax-inclusive unit price the order was charged at.
+    unitPriceCents: bigint("unit_price_cents", { mode: "number" }).notNull(),
+    taxRateBp: integer("tax_rate_bp"),
+    netCents: bigint("net_cents", { mode: "number" }).notNull(),
+    taxCents: bigint("tax_cents", { mode: "number" }).notNull(),
+    grossCents: bigint("gross_cents", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("invoice_lines_line_uq").on(t.invoiceId, t.lineNo),
+    index("invoice_lines_order_item_idx").on(t.orderItemId),
+    check("invoice_lines_line_no_ck", sql`${t.lineNo} > 0`),
+    check(
+      "invoice_lines_values_ck",
+      sql`${t.quantity} > 0 AND ${t.unitPriceCents} >= 0 AND ${t.netCents} >= 0 AND ${t.taxCents} >= 0 AND ${t.netCents} + ${t.taxCents} = ${t.grossCents}`,
+    ),
+    check("invoice_lines_tax_rate_ck", sql`${t.taxRateBp} IS NULL OR (${t.taxRateBp} >= 0 AND ${t.taxRateBp} <= 10000)`),
+    foreignKey({
+      name: "invoice_lines_invoice_org_fk",
+      columns: [t.invoiceId, t.organizationId],
+      foreignColumns: [invoices.id, invoices.organizationId],
+    }),
+  ],
+)
+
+export const creditNoteSequences = pgTable(
+  "credit_note_sequences",
+  {
+    // ON DELETE CASCADE in the migration, as invoice_sequences.
+    organizationId: integer("organization_id")
+      .primaryKey()
+      .references(() => organizations.id, { onDelete: "cascade" })
+      .notNull(),
+    lastValue: integer("last_value").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    check("credit_note_sequences_range_ck", sql`${t.lastValue} >= 0 AND ${t.lastValue} <= 999999`),
+  ],
+)
+
+export const creditNotes = pgTable(
+  "credit_notes",
+  {
+    id: serial("id").primaryKey(),
+    organizationId: integer("organization_id").references(() => organizations.id).notNull(),
+    invoiceId: integer("invoice_id").notNull(),
+    refundId: integer("refund_id").references(() => refunds.id).notNull(),
+    number: varchar("number", { length: 40 }).notNull(),
+    issueDate: date("issue_date", { mode: "string" }).notNull(),
+    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().defaultNow(),
+    reason: text("reason"),
+    netCents: bigint("net_cents", { mode: "number" }).notNull(),
+    taxCents: bigint("tax_cents", { mode: "number" }).notNull(),
+    totalCents: bigint("total_cents", { mode: "number" }).notNull(),
+    issuedByUserId: uuid("issued_by_user_id").references(() => users.id).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    // One credit note per approved refund: a retried approval cannot issue two.
+    uniqueIndex("credit_notes_refund_uq").on(t.refundId),
+    uniqueIndex("credit_notes_number_uq").on(t.number),
+    unique("credit_notes_id_organization_uq").on(t.id, t.organizationId),
+    index("credit_notes_invoice_idx").on(t.invoiceId),
+    check("credit_notes_number_ck", sql`${t.number} ~ '^[A-Z0-9_]+-CN-[0-9]{6}$'`),
+    check(
+      "credit_notes_amounts_ck",
+      sql`${t.netCents} >= 0 AND ${t.taxCents} >= 0 AND ${t.totalCents} > 0 AND ${t.netCents} + ${t.taxCents} = ${t.totalCents}`,
+    ),
+    foreignKey({
+      name: "credit_notes_invoice_org_fk",
+      columns: [t.invoiceId, t.organizationId],
+      foreignColumns: [invoices.id, invoices.organizationId],
+    }),
+  ],
+)
+
+export const creditNoteLines = pgTable(
+  "credit_note_lines",
+  {
+    id: serial("id").primaryKey(),
+    creditNoteId: integer("credit_note_id").notNull(),
+    organizationId: integer("organization_id").notNull(),
+    lineNo: integer("line_no").notNull(),
+    // Null for an un-itemised adjustment, or a credit against a legacy invoice.
+    invoiceLineId: integer("invoice_line_id").references(() => invoiceLines.id),
+    orderItemId: integer("order_item_id").references(() => orderItems.id),
+    description: varchar("description", { length: 255 }).notNull(),
+    quantity: numeric("quantity", { precision: 12, scale: 3, mode: "number" }),
+    taxRateBp: integer("tax_rate_bp"),
+    netCents: bigint("net_cents", { mode: "number" }).notNull(),
+    taxCents: bigint("tax_cents", { mode: "number" }).notNull(),
+    grossCents: bigint("gross_cents", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("credit_note_lines_line_uq").on(t.creditNoteId, t.lineNo),
+    check("credit_note_lines_line_no_ck", sql`${t.lineNo} > 0`),
+    check(
+      "credit_note_lines_values_ck",
+      sql`(${t.quantity} IS NULL OR ${t.quantity} > 0) AND ${t.netCents} >= 0 AND ${t.taxCents} >= 0 AND ${t.netCents} + ${t.taxCents} = ${t.grossCents}`,
+    ),
+    foreignKey({
+      name: "credit_note_lines_credit_note_org_fk",
+      columns: [t.creditNoteId, t.organizationId],
+      foreignColumns: [creditNotes.id, creditNotes.organizationId],
+    }),
   ],
 )
 
@@ -1210,6 +1680,11 @@ export const branchProducts = pgTable(
     index("branch_products_org_product_idx").on(t.organizationProductId),
     index("branch_products_visible_idx").on(t.isVisible),
     index("branch_products_available_idx").on(t.isAvailable),
+    foreignKey({
+      name: "branch_products_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 
@@ -1259,6 +1734,11 @@ export const restockRequests = pgTable(
     index("restock_requests_product_idx").on(t.globalProductId),
     index("restock_requests_status_idx").on(t.status),
     index("restock_requests_requested_by_idx").on(t.requestedByUserId),
+    foreignKey({
+      name: "restock_requests_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 
@@ -1409,6 +1889,11 @@ export const branchInventory = pgTable(
     index("branch_inventory_active_idx").on(t.isActive),
     index("branch_inventory_deleted_at_idx").on(t.deletedAt),
     index("branch_inventory_status_idx").on(t.branchId, t.isVisible, t.isActive),
+    foreignKey({
+      name: "branch_inventory_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 
@@ -1461,6 +1946,11 @@ export const groupInventoryPrices = pgTable(
     index("group_inventory_prices_org_idx").on(t.organizationId),
     index("group_inventory_prices_item_idx").on(t.organizationInventoryId),
     check("group_inventory_prices_price_valid_ck", sql`${t.customPriceCents} >= 0`),
+    foreignKey({
+      name: "group_inventory_prices_group_org_fk",
+      columns: [t.groupId, t.organizationId],
+      foreignColumns: [groups.id, groups.organizationId],
+    }),
   ],
 )
 
@@ -1562,6 +2052,11 @@ export const productQuantityBudgets = pgTable(
     index("product_quantity_budgets_product_idx").on(t.globalProductId),
     index("product_quantity_budgets_period_idx").on(t.period),
     check("product_quantity_budgets_values_valid_ck", sql`${t.allocatedQuantity} >= 0 AND ${t.heldQuantity} >= 0 AND ${t.usedQuantity} >= 0 AND ${t.creditedQuantity} >= 0 AND ${t.amountAllocatedCents} >= 0 AND ${t.amountCreditedCents} >= 0 AND (${t.allocatedQuantity} + ${t.creditedQuantity}) >= (${t.heldQuantity} + ${t.usedQuantity})`),
+    foreignKey({
+      name: "product_quantity_budgets_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 
@@ -1599,6 +2094,11 @@ export const productQuantityBudgetAllocations = pgTable(
     index("product_quantity_budget_allocations_branch_idx").on(t.branchId),
     index("product_quantity_budget_allocations_product_idx").on(t.globalProductId),
     index("product_quantity_budget_allocations_period_idx").on(t.period),
+    foreignKey({
+      name: "product_quantity_budget_allocations_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 
@@ -1633,6 +2133,11 @@ export const employeeCredentials = pgTable(
     index("employee_creds_org_idx").on(t.organizationId),
     index("employee_creds_active_idx").on(t.isActive),
     index("employee_creds_created_by_idx").on(t.createdByUserId),
+    foreignKey({
+      name: "employee_credentials_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 
@@ -1687,10 +2192,14 @@ export const groups = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => [
+  // Annotated: this table and the composite keys reference each other in a
+  // cycle (branches -> groups -> users -> branches) that inference cannot close.
+  (t): PgTableExtraConfigValue[] => [
     index("groups_org_idx").on(t.organizationId),
     index("groups_name_idx").on(t.name),
     index("groups_status_idx").on(t.status),
+    // Composite target for the (group_id, organization_id) foreign keys.
+    unique("groups_id_organization_uq").on(t.id, t.organizationId),
   ],
 )
 
@@ -1821,6 +2330,11 @@ export const legacyUserMappings = pgTable(
     ),
     index("legacy_user_mappings_user_idx").on(t.userId),
     index("legacy_user_mappings_batch_idx").on(t.createdByBatchId),
+    foreignKey({
+      name: "legacy_user_mappings_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 
@@ -1881,6 +2395,11 @@ export const userGroupAssignments = pgTable(
     index("user_group_assignments_user_idx").on(t.userId),
     index("user_group_assignments_group_idx").on(t.groupId),
     index("user_group_assignments_org_idx").on(t.organizationId),
+    foreignKey({
+      name: "user_group_assignments_group_org_fk",
+      columns: [t.groupId, t.organizationId],
+      foreignColumns: [groups.id, groups.organizationId],
+    }),
   ],
 )
 
@@ -1907,6 +2426,141 @@ export const userBranchAssignments = pgTable(
     index("user_branch_assignments_user_idx").on(t.userId),
     index("user_branch_assignments_branch_idx").on(t.branchId),
     index("user_branch_assignments_org_idx").on(t.organizationId),
+    foreignKey({
+      name: "user_branch_assignments_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
+  ],
+)
+
+/**
+ * What an Order Desk user may reach. A row with `branch_id` null grants every
+ * branch of the organization; a row with a branch grants that branch alone.
+ *
+ * Deliberately a table of its own rather than rows in
+ * `user_branch_assignments`: those feed the group roles' scope and reporting
+ * (`resolveUsersScopedToBranches` reads every row regardless of role), and a
+ * desk user must never appear there. Super Admin writes these rows; the reach
+ * they grant is read through `lib/server/order-desk-scope.ts`, which also
+ * requires the organization to be `managed_ordering`.
+ */
+export const orderDeskAssignments = pgTable(
+  "order_desk_assignments",
+  {
+    id: serial("id").primaryKey(),
+    userId: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id, { onDelete: "cascade" })
+      .notNull(),
+    branchId: integer("branch_id").references(() => branches.id, { onDelete: "cascade" }),
+    createdByUserId: uuid("created_by_user_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("order_desk_assignments_user_org_uq")
+      .on(t.userId, t.organizationId)
+      .where(sql`${t.branchId} IS NULL`),
+    uniqueIndex("order_desk_assignments_user_branch_uq")
+      .on(t.userId, t.branchId)
+      .where(sql`${t.branchId} IS NOT NULL`),
+    index("order_desk_assignments_user_idx").on(t.userId),
+    index("order_desk_assignments_org_idx").on(t.organizationId),
+    foreignKey({
+      name: "order_desk_assignments_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
+  ],
+)
+
+/**
+ * Which organizations an Apricart Executive approves Order Desk orders for.
+ * One row per executive per organization; there is no branch grain.
+ *
+ * Super Admin writes these rows (`lib/server/apricart-executive-team.ts`); the
+ * reach they grant is read through `lib/server/apricart-executive-scope.ts`
+ * and, for a decision, re-read `FOR SHARE` inside the deciding transaction.
+ * They govern approval only — the delivery dashboard reads every tenant.
+ * See plans/OF-EXEC-APPROVAL-executive-approves-desk-orders.md.
+ */
+export const apricartExecutiveAssignments = pgTable(
+  "apricart_executive_assignments",
+  {
+    id: serial("id").primaryKey(),
+    userId: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id, { onDelete: "cascade" })
+      .notNull(),
+    createdByUserId: uuid("created_by_user_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("apricart_executive_assignments_user_org_uq").on(t.userId, t.organizationId),
+    index("apricart_executive_assignments_org_idx").on(t.organizationId),
+  ],
+)
+
+/**
+ * Which branches a Warehouse user picks, dispatches and delivers for. One row
+ * per user per branch — there is deliberately no organization-wide row, and no
+ * organization column: the organization is always the branch's own, read
+ * through the join, so the two can never disagree.
+ *
+ * Super Admin writes these rows (`lib/server/warehouse-team.ts`); the reach
+ * they grant is read through `lib/server/warehouse-scope.ts` and, for a write,
+ * re-read `FOR SHARE` inside the writing transaction.
+ * See plans/OF-WAREHOUSE-warehouse-fulfilment-role.md.
+ */
+export const warehouseAssignments = pgTable(
+  "warehouse_assignments",
+  {
+    id: serial("id").primaryKey(),
+    userId: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    branchId: integer("branch_id")
+      .references(() => branches.id, { onDelete: "cascade" })
+      .notNull(),
+    createdByUserId: uuid("created_by_user_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("warehouse_assignments_user_branch_uq").on(t.userId, t.branchId),
+    index("warehouse_assignments_branch_idx").on(t.branchId),
+  ],
+)
+
+/**
+ * Whole cities a Warehouse user serves: every branch whose normalised city
+ * equals `city_key`, including branches opened in that city later. Stores the
+ * key, never branch ids, so no write is needed when a branch is added.
+ *
+ * The key is only ever computed in SQL, by `branchCityKeySql`
+ * (`lib/server/branch-city-key.ts`), on both sides of every comparison; the
+ * `branches_city_key_idx` expression index serves the join. The reach is read
+ * with the branch assignments above, through `lib/server/warehouse-scope.ts`.
+ * See plans/OF-WAREHOUSE-city-assignments.md.
+ */
+export const warehouseCityAssignments = pgTable(
+  "warehouse_city_assignments",
+  {
+    id: serial("id").primaryKey(),
+    userId: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    cityKey: varchar("city_key", { length: 100 }).notNull(),
+    createdByUserId: uuid("created_by_user_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("warehouse_city_assignments_user_city_uq").on(t.userId, t.cityKey),
+    index("warehouse_city_assignments_city_idx").on(t.cityKey),
+    check("warehouse_city_assignments_city_key_ck", sql`btrim(${t.cityKey}) <> ''`),
   ],
 )
 
@@ -1963,6 +2617,13 @@ export const groupOrders = pgTable(
     index("group_orders_org_idx").on(t.organizationId),
     index("group_orders_creator_created_idx").on(t.createdByUserId, t.createdAt),
     index("group_orders_group_idx").on(t.groupId),
+    // Composite target for orders (group_order_id, organization_id).
+    unique("group_orders_id_organization_uq").on(t.id, t.organizationId),
+    foreignKey({
+      name: "group_orders_group_org_fk",
+      columns: [t.groupId, t.organizationId],
+      foreignColumns: [groups.id, groups.organizationId],
+    }),
   ],
 )
 
@@ -1989,7 +2650,14 @@ export const groupOrderDrafts = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => [uniqueIndex("group_order_drafts_user_uq").on(t.userId)],
+  (t) => [
+    uniqueIndex("group_order_drafts_user_uq").on(t.userId),
+    foreignKey({
+      name: "group_order_drafts_group_org_fk",
+      columns: [t.groupId, t.organizationId],
+      foreignColumns: [groups.id, groups.organizationId],
+    }),
+  ],
 )
 
 /**
@@ -2075,6 +2743,11 @@ export const supportThreads = pgTable(
     ),
     check("support_threads_message_count_ck", sql`${t.messageCount} >= 0`),
     check("support_threads_subject_present_ck", sql`char_length(btrim(${t.subject})) > 0`),
+    foreignKey({
+      name: "support_threads_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 

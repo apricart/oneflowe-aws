@@ -178,6 +178,11 @@ export type GroupOrderHistoryItem = {
     createdAt: string | null
     approvedAt: string | null
     rejectionReason: string | null
+    /** Set when the group requester withdrew it before approval. */
+    cancelledAt?: string | null
+    cancellationReason?: string | null
+    returnedForCorrectionAt?: string | null
+    correctionRequestNote?: string | null
     /** Server-gated: only ever set for an approved order this user raised. */
     approvalToken: string | null
   }>

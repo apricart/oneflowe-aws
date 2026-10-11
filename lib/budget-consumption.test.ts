@@ -9,6 +9,7 @@ import {
   orderConsumptionCents,
   orderHeldCents,
   orderSpentCents,
+  planRefundLedgerMove,
   summarizeOrderConsumption,
 } from "@/lib/budget-consumption"
 import { getOrderStatusesForFilter } from "@/lib/order-status"
@@ -163,5 +164,78 @@ describe("summarizeOrderConsumption", () => {
 
   it("is zero for no orders", () => {
     expect(summarizeOrderConsumption([])).toEqual({ spentCents: 0, heldCents: 0, consumedCents: 0 })
+  })
+})
+
+describe("planRefundLedgerMove", () => {
+  /** What the branch has left after the move — the figure that must rise by exactly the refund. */
+  function remainingAfter(row: { allocated: number; credited: number; spent: number; held: number }, move: ReturnType<typeof planRefundLedgerMove>) {
+    return row.allocated + (row.credited + move.creditCents) - (row.spent - move.spentDebitCents) - row.held
+  }
+
+  it("withdraws a fulfilled order's refund from spent and credits nothing", () => {
+    expect(planRefundLedgerMove({ orderStatus: "FULFILLED", refundCents: 125_000, rowSpentCents: 560_000 }))
+      .toEqual({ spentDebitCents: 125_000, creditCents: 0 })
+  })
+
+  it("treats every fulfilled-family status as spent", () => {
+    for (const status of CONSUMED_SPENT_STATUSES) {
+      expect(planRefundLedgerMove({ orderStatus: status, refundCents: 1_000, rowSpentCents: 5_000 }), status)
+        .toEqual({ spentDebitCents: 1_000, creditCents: 0 })
+    }
+  })
+
+  it("never takes spent below zero: what the row cannot cover is credited", () => {
+    expect(planRefundLedgerMove({ orderStatus: "FULFILLED", refundCents: 10_000, rowSpentCents: 4_000 }))
+      .toEqual({ spentDebitCents: 4_000, creditCents: 6_000 })
+    expect(planRefundLedgerMove({ orderStatus: "FULFILLED", refundCents: 10_000, rowSpentCents: 0 }))
+      .toEqual({ spentDebitCents: 0, creditCents: 10_000 })
+  })
+
+  it("credits an unfulfilled order's refund and leaves its hold whole", () => {
+    for (const status of CONSUMED_HELD_STATUSES) {
+      expect(planRefundLedgerMove({ orderStatus: status, refundCents: 2_500, rowSpentCents: 99_000 }), status)
+        .toEqual({ spentDebitCents: 0, creditCents: 2_500 })
+    }
+  })
+
+  it("normalises the status as the consumption rules do", () => {
+    expect(planRefundLedgerMove({ orderStatus: " fulfilled ", refundCents: 700, rowSpentCents: 700 }))
+      .toEqual({ spentDebitCents: 700, creditCents: 0 })
+  })
+
+  it("credits when the status is missing or unknown rather than guessing at spent", () => {
+    expect(planRefundLedgerMove({ orderStatus: null, refundCents: 300, rowSpentCents: 900 }))
+      .toEqual({ spentDebitCents: 0, creditCents: 300 })
+  })
+
+  it("moves nothing for a zero or negative refund", () => {
+    expect(planRefundLedgerMove({ orderStatus: "FULFILLED", refundCents: 0, rowSpentCents: 900 }))
+      .toEqual({ spentDebitCents: 0, creditCents: 0 })
+    expect(planRefundLedgerMove({ orderStatus: "FULFILLED", refundCents: -50, rowSpentCents: 900 }))
+      .toEqual({ spentDebitCents: 0, creditCents: 0 })
+  })
+
+  it("always raises the branch's remaining by exactly the refund", () => {
+    const row = { allocated: 5_000_000, credited: 20_000, spent: 560_000, held: 125_000 }
+    for (const [status, refund, spent] of [
+      ["FULFILLED", 125_000, 560_000],
+      ["FULFILLED", 900_000, 560_000],
+      ["APPROVED", 40_000, 560_000],
+      ["PENDING", 1, 0],
+    ] as const) {
+      const before = row.allocated + row.credited - spent - row.held
+      const move = planRefundLedgerMove({ orderStatus: status, refundCents: refund, rowSpentCents: spent })
+      expect(remainingAfter({ ...row, spent }, move) - before, `${status} ${refund}`).toBe(refund)
+    }
+  })
+
+  it("leaves the ledger agreeing with the order-side netting for a fulfilled order", () => {
+    // One fulfilled order of 4,350 on the row; 1,250 of it refunded.
+    const move = planRefundLedgerMove({ orderStatus: "FULFILLED", refundCents: 125_000, rowSpentCents: 435_000 })
+    expect(435_000 - move.spentDebitCents).toBe(
+      orderSpentCents({ status: "FULFILLED", totalCents: 435_000, refundAmountCents: 125_000 }),
+    )
+    expect(move.creditCents).toBe(0)
   })
 })

@@ -78,7 +78,11 @@ describe("group user decision surface", () => {
   })
 
   it("checks that read against the group roles' assignments, not a single branch", () => {
-    const detail = source("app/api/v1/orders/[id]/route.ts")
+    // The rule moved out of the detail route into a module of its own so the
+    // delivery challan reads apply the very same one; the route imports it.
+    expect(source("app/api/v1/orders/[id]/route.ts"))
+      .toContain('import { hasBranchAccessForOrderRead } from "@/lib/server/order-read-access"')
+    const detail = source("lib/server/order-read-access.ts")
 
     // Every single-branch role keeps the original check untouched. The
     // predicate names the mechanism rather than one role, so the approver and
@@ -237,9 +241,14 @@ describe("group order portal requester writes only inside its branches", () => {
 
   it("offers fulfillment from the assigned-branch tab without adding decision controls", () => {
     const tab = source("components/group-portal/other-branch-orders.tsx")
+    // The tab's side panel is shared with "My group orders"; the hand-off lives there.
+    const panel = source("components/group-portal/branch-order-detail-sheet.tsx")
 
-    expect(tab).toContain("<TokenHandoff")
-    expect(tab).not.toContain("onDecide")
+    expect(tab).toContain("<BranchOrderDetailSheet")
+    expect(panel).toContain("<TokenHandoff")
+    for (const text of [tab, panel]) expect(text).not.toContain("onDecide")
+    // The tab offers no cancel: that is for the requester's own group orders.
+    expect(tab).not.toContain("onCancel")
     // And it asks the server only for the orders it is meant to show.
     expect(tab).toContain('createdByRole: "ORDER_PORTAL"')
   })

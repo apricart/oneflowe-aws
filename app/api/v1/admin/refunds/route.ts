@@ -11,7 +11,9 @@ import { calculateLineCents, formatQuantity, validateProductQuantity } from "@/l
 import { resolveAdminRefundReason } from "@/lib/admin-refund-approval"
 import { adminRefundProcessSchema, validationMessage } from "@/lib/server/mutation-validation"
 import { isRefundEligibleOrderStatus } from "@/lib/business-rules"
+import { budgetPeriodOf, planRefundLedgerMove } from "@/lib/budget-consumption"
 import { withRateLimit } from "@/lib/rate-limiter"
+import { CREDIT_NOTE_CONFLICT_ERRORS, issueCreditNoteForRefund } from "@/lib/server/credit-notes"
 
 const parseRefundRequestId = (value: string | null) => {
     if (!value) return { id: null }
@@ -114,16 +116,17 @@ async function loadPendingRefundRequest(refundRequestId: number | undefined, ord
     return pendingRequest
 }
 
+/**
+ * Super Admin decides refunds and has no time limit: only the order's state is
+ * checked here. The requester window (`lib/refund-window.ts`) governs asking,
+ * not deciding.
+ */
 function getRefundEligibilityError(order: any) {
     const currentStatus = String(order.status || "").toUpperCase()
     if (!isRefundEligibleOrderStatus(currentStatus)) {
         return `Order in ${currentStatus || "unknown"} state is not eligible for a refund.`
     }
-    const orderDate = new Date(order.createdAt || new Date())
-    const now = new Date()
-    if (orderDate.getMonth() === now.getMonth() && orderDate.getFullYear() === now.getFullYear()) return null
-    const orderMonthName = orderDate.toLocaleString('default', { month: 'long', year: 'numeric' })
-    return `Refunds are only allowed for orders in the current month. This order is from ${orderMonthName}.`
+    return null
 }
 
 async function loadRefundOrderItems(orderId: number) {
@@ -553,22 +556,9 @@ export async function POST(req: NextRequest) {
             const liveNewApprovedTotal = liveApprovedTotal + totalRefundAmount
             const liveIsFullRefund = liveNewApprovedTotal >= Number(lockedOrder.totalCents)
 
-            // 1. Update order with refund info and update receipt data
-            let updatedReceiptData = lockedOrder.receiptData as any
-            if (updatedReceiptData) {
-                // Update receipt with new refund amount and itemized details
-                const { updateReceiptWithRefund } = await import('@/lib/receipt-generator')
-                updatedReceiptData = updateReceiptWithRefund(
-                    updatedReceiptData,
-                    totalRefundAmount,
-                    refundDetails.map(d => ({
-                        productName: d.productName,
-                        quantity: d.quantity,
-                        amount: d.totalCents / 100
-                    }))
-                )
-            }
-
+            // 1. Update order with refund info. The invoice snapshot is left
+            // alone: an issued invoice never changes, and a refund against it
+            // is a credit note (step 5b, plans/OF-INVOICE-invoice-ledger.md).
             await tx
                 .update(orders)
                 .set({
@@ -579,42 +569,47 @@ export async function POST(req: NextRequest) {
                     refundedByUserId: userId,
                     refundAmountCents: liveNewApprovedTotal,
                     refundReason: effectiveReason || orderData.refundReason,
-                    receiptData: updatedReceiptData || lockedOrder.receiptData,
                     updatedAt: new Date(),
                 })
                 .where(eq(orders.id, orderId))
 
-            // 2. Credit branch budget (add back the refunded amount)
-            // Must match the current month's budget period. An order that took
-            // no budget hold when it was placed is refunded without touching any
-            // budget: crediting it would hand the branch money it never spent
-            // from its budget.
+            // 2. Give the refund back to the branch budget on the order's own
+            // period — the row its money was taken from — never today's: with
+            // no time limit on approval, the two can differ. A spent order's
+            // refund is withdrawn from spent, an unfulfilled one's is credited
+            // (`planRefundLedgerMove`, shared with the order refund route). An
+            // order that took no budget hold when it was placed is refunded
+            // without touching any budget: it never spent from one.
             const refundTouchesBudget = orderTakesBudget(lockedOrder)
-            const currentMonth = new Date().toISOString().slice(0, 7) // YYYY-MM format
+            const orderPeriod = budgetPeriodOf(orderData.createdAt ?? new Date())
             const [budget] = refundTouchesBudget ? await tx
                 .select()
                 .from(budgets)
                 .where(and(
                     eq(budgets.branchId, orderData.branchId),
-                    eq(budgets.period, currentMonth)
+                    eq(budgets.period, orderPeriod)
                 ))
-                .limit(1) : []
+                .limit(1)
+                .for("update") : []
 
             if (!refundTouchesBudget) {
-                // Nothing to credit; the quantity budget is left alone below too.
+                // Nothing to give back; the quantity budget is left alone below too.
             } else if (budget) {
-                // Credit refund amount back to budget (increases available funds)
+                const move = planRefundLedgerMove({
+                    orderStatus: liveCurrentStatus,
+                    refundCents: totalRefundAmount,
+                    rowSpentCents: Number(budget.amountSpentCents),
+                })
                 await tx
                     .update(budgets)
                     .set({
-                        amountCreditedCents: sql`${budgets.amountCreditedCents} + ${totalRefundAmount}`,
+                        amountSpentCents: sql`${budgets.amountSpentCents} - ${move.spentDebitCents}`,
+                        amountCreditedCents: sql`${budgets.amountCreditedCents} + ${move.creditCents}`,
                         updatedAt: new Date(),
                     })
                     .where(eq(budgets.id, budget.id))
-
-                console.log(`[Refunds] Budget credited: ${totalRefundAmount} cents added to amountCreditedCents, branch ${orderData.branchId}, period ${currentMonth}`)
             } else {
-                console.warn(`[Refunds] No budget found for branch ${orderData.branchId}, period ${currentMonth}. Refund credit skipped.`)
+                console.warn(`[Refunds] No budget found for branch ${orderData.branchId}, period ${orderPeriod}. Refund credit skipped.`)
             }
 
             if (refundTouchesBudget) await releaseRefundedQuantityBudget(
@@ -703,6 +698,15 @@ export async function POST(req: NextRequest) {
                 )
             }
 
+            // 5b. Credit the refund against the order's tax invoice, exactly as
+            // the direct refund route does.
+            await issueCreditNoteForRefund(tx, {
+                refundId: approvedRefundId,
+                orderId,
+                actor: { id: userId, role: userRole },
+                reason: effectiveReason,
+            })
+
             // 6. Mark only other pending requests for this order as superseded.
             // This ensures that 'hasRefundRequests' in order list becomes 0 and the "REQUESTED" badge disappears.
             const supersedeConditions = [
@@ -736,7 +740,7 @@ export async function POST(req: NextRequest) {
         })
 
     } catch (error: any) {
-        if (["REFUND_AVAILABILITY_CONFLICT", "REFUND_ELIGIBILITY_CONFLICT", "QUANTITY_BUDGET_LEDGER_INVARIANT"].includes(error?.message)) {
+        if (["REFUND_AVAILABILITY_CONFLICT", "REFUND_ELIGIBILITY_CONFLICT", "QUANTITY_BUDGET_LEDGER_INVARIANT", ...CREDIT_NOTE_CONFLICT_ERRORS].includes(error?.message)) {
             return NextResponse.json({
                 error: "Refund eligibility changed while the request was being processed. Refresh and try again."
             }, { status: 409 })

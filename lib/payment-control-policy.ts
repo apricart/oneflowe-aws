@@ -13,6 +13,7 @@
  * and an exception is in force exactly while `now < expiresAt`, so an expiry
  * takes effect at the instant without a job.
  */
+import { DEFAULT_ORDERING_BLOCK_THRESHOLD, orderingBlockThresholdOrDefault } from "@/lib/ordering-block-threshold"
 
 /**
  * The policy numbers, in one place. Both are the client's words as of
@@ -21,8 +22,12 @@
  * here and print them rather than repeating them.
  */
 export const PAYMENT_CONTROL_POLICY = {
-  /** Overdue payments at which new ordering stops. */
-  overdueBlockThreshold: 2,
+  /**
+   * Overdue payments at which new ordering stops, when nothing else is said.
+   * Each organization sets its own (`organizations.unpaid_invoice_block_threshold`,
+   * plans/OF-ORDERING-BLOCK-configurable-thresholds.md); this is its default.
+   */
+  overdueBlockThreshold: DEFAULT_ORDERING_BLOCK_THRESHOLD,
   /** How long a Head Office exception lasts: calendar months, Asia/Karachi. */
   exceptionDurationMonths: 1,
 } as const
@@ -68,6 +73,11 @@ export type OverduePaymentSummary = {
   configured: boolean
   overdueCount: number
   items: OverduePaymentItem[]
+  /**
+   * The organization's own limit, read with its toggle. Absent while not
+   * configured, and then the policy default applies.
+   */
+  blockThreshold?: number
 }
 
 export const NOT_CONFIGURED_OVERDUE_SUMMARY: OverduePaymentSummary = Object.freeze({
@@ -196,7 +206,8 @@ export function resolvePaymentControl(input: {
   now: Date
   threshold?: number
 }): PaymentControlStatus {
-  const threshold = input.threshold ?? PAYMENT_CONTROL_POLICY.overdueBlockThreshold
+  // Absent → the policy default; out of bounds → the default too, never "no limit".
+  const threshold = orderingBlockThresholdOrDefault(input.threshold ?? PAYMENT_CONTROL_POLICY.overdueBlockThreshold)
   const configured = input.overdue.configured === true
   const overdueCount = configured ? Math.max(0, Math.trunc(input.overdue.overdueCount)) : 0
   const overdueItems = configured ? input.overdue.items : []

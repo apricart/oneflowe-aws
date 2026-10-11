@@ -26,8 +26,11 @@ import {
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { ProductPriceHistoryExport } from "@/components/inventory/product-price-history-export"
 import { fetcher } from "@/lib/fetcher"
 import {
+  productPriceHistoryScopeLabel as scopeLabel,
+  productPriceHistorySourceLabel as sourceLabel,
   type ProductPriceHistoryPoint,
   type ProductPriceHistoryRangeKey,
   type ProductPriceHistoryResponse,
@@ -64,23 +67,6 @@ function dateTimeLabel(value: string, includeTime = true) {
 }
 
 type ChartPoint = ProductPriceHistoryPoint & { axisLabel: string }
-
-function scopeLabel(scope: ProductPriceHistoryPoint["scope"]) {
-  return {
-    GLOBAL: "Global",
-    ORGANIZATION: "Organization",
-    GROUP: "Group",
-    BRANCH: "Historical branch",
-  }[scope]
-}
-
-function sourceLabel(source: ProductPriceHistoryPoint["source"]) {
-  return {
-    CATALOG_CHANGE: "Recorded change",
-    ORDER_BACKFILL: "Historical backfill",
-    MIGRATION_BASELINE: "Migration baseline",
-  }[source]
-}
 
 function contextLabel(point: ProductPriceHistoryPoint) {
   if (point.scope === "GLOBAL") return "All organizations"
@@ -241,6 +227,8 @@ export default function ProductPriceHistoryView({ role }: Readonly<{ role: Produ
       axisLabel: dateTimeLabel(point.changedAt, false),
     })), [data?.points])
 
+  const tableRecords = useMemo(() => [...chartData].reverse(), [chartData])
+
   const activeProductId = selectedProductId ?? data?.selectedProduct?.id ?? null
   const effectiveOrganizationId = organizationId ?? data?.selection.organizationId ?? null
   const organizations = (data?.options.organizations ?? []).map((option) => ({ value: String(option.id), label: option.name }))
@@ -252,6 +240,13 @@ export default function ProductPriceHistoryView({ role }: Readonly<{ role: Produ
     value: String(option.id),
     label: organizationId === null && role === "SUPER_ADMIN" ? `${option.name} · ${option.organizationName}` : option.name,
   }))
+
+  const exportScopeDescription = [
+    data?.range.label,
+    organizations.find((option) => option.value === String(effectiveOrganizationId))?.label ?? "All organizations",
+    groups.find((option) => option.value === String(groupId))?.label ?? "All groups",
+    branches.find((option) => option.value === String(branchId))?.label ?? "All branches",
+  ].filter(Boolean).join(" · ")
 
   const resetProduct = () => setSelectedProductId(null)
   const changeOrganization = (value: string) => {
@@ -421,9 +416,18 @@ export default function ProductPriceHistoryView({ role }: Readonly<{ role: Produ
             </Card>
 
             <Card className="gap-4 overflow-hidden border-slate-200 py-0 shadow-sm dark:border-slate-800">
-              <CardHeader className="border-b border-slate-100 px-5 py-4 dark:border-slate-800">
-                <CardTitle className="text-base">Price change records</CardTitle>
-                <CardDescription className="text-xs">Catalogue ledger entries, newest first.</CardDescription>
+              <CardHeader className="flex-row items-start justify-between gap-4 border-b border-slate-100 px-5 py-4 dark:border-slate-800">
+                <div>
+                  <CardTitle className="text-base">Price change records</CardTitle>
+                  <CardDescription className="text-xs">Catalogue ledger entries, newest first.</CardDescription>
+                </div>
+                {data?.selectedProduct ? (
+                  <ProductPriceHistoryExport
+                    product={data.selectedProduct}
+                    points={tableRecords}
+                    scopeDescription={exportScopeDescription}
+                  />
+                ) : null}
               </CardHeader>
               <CardContent className="overflow-x-auto p-0">
                 {chartData.length === 0 ? (
@@ -442,7 +446,7 @@ export default function ProductPriceHistoryView({ role }: Readonly<{ role: Produ
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {[...chartData].reverse().map((point) => (
+                      {tableRecords.map((point) => (
                         <TableRow key={point.id}>
                           <TableCell className="whitespace-nowrap pl-5 font-medium">{dateTimeLabel(point.changedAt)}</TableCell>
                           <TableCell className="text-right font-semibold tabular-nums text-blue-700 dark:text-blue-300">{money(point.priceCents)}</TableCell>

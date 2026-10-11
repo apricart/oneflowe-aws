@@ -1,6 +1,6 @@
 import "server-only"
 
-import { and, eq, gte, sql } from "drizzle-orm"
+import { and, eq, gte, isNull, sql } from "drizzle-orm"
 
 import { auditLogs, budgets, globalProducts, orderItems, orders } from "@/db/schema"
 import type { RequestScope } from "@/lib/auth"
@@ -9,6 +9,9 @@ import { db } from "@/lib/db"
 import { logTokenGenerated } from "@/lib/global-logger"
 import { orderSelectColumns } from "@/lib/order-select"
 import { budgetPeriodOf } from "@/lib/budget-consumption"
+import { isAwaitingCorrection } from "@/lib/order-correction"
+import { decisionQueuesNotifications } from "@/lib/order-desk-approval"
+import { closeOpenCorrectionRequest } from "@/lib/server/order-correction"
 import { authorizeOrderDecision } from "@/lib/server/order-decision-policy"
 import {
   queueOrderDecisionNotification,
@@ -46,6 +49,9 @@ export type OrderDecisionInput = {
   user: DecisionActor
 }
 
+/** No notice queued: an executive's decision on an Order Desk order. */
+const NO_NOTIFICATIONS = { eventKeys: [] as string[], recipientCount: 0 }
+
 type DecidedOrder = typeof orders.$inferSelect
 
 export type OrderDecisionOutcome =
@@ -54,6 +60,8 @@ export type OrderDecisionOutcome =
   | { kind: "not-found" }
   | { kind: "forbidden" }
   | { kind: "invalid-state"; status: string }
+  /** Pending, but sent back to the requesters; it cannot be approved until resubmitted. */
+  | { kind: "awaiting-correction" }
   | { kind: "conflict" }
   | { kind: "ledger-conflict"; decision: "approve" | "reject" }
 
@@ -80,14 +88,35 @@ function unsuccessfulOutcome(
   }
   if (result.kind === "not-found") return { kind: "not-found" }
   if (result.kind === "forbidden") return { kind: "forbidden" }
+  if (result.kind === "awaiting-correction") return { kind: "awaiting-correction" }
   return { kind: "conflict" }
+}
+
+/**
+ * The approver's view of the row, compared at the millisecond grain a client
+ * sees: the column holds microseconds when Postgres wrote it.
+ */
+function updatedAtMatches(expected: Date | null) {
+  return expected === null
+    ? isNull(orders.updatedAt)
+    : sql`date_trunc('milliseconds', ${orders.updatedAt}) = ${expected.toISOString()}::timestamptz`
 }
 
 export async function approveOrder({
   orderId,
   scope,
   user,
-}: OrderDecisionInput): Promise<OrderDecisionOutcome> {
+  expectedUpdatedAt,
+}: OrderDecisionInput & {
+  /**
+   * The order's `updatedAt` as the approver saw it. When given, the claim
+   * matches only that version, so an edit landing between reading the order
+   * and approving it turns the approval into a conflict rather than approving
+   * lines nobody looked at. `null` means the row had none. Omitted, the claim
+   * is exactly what it always was.
+   */
+  expectedUpdatedAt?: Date | null
+}): Promise<OrderDecisionOutcome> {
   // Generated before the transaction so the plaintext is never read back out of
   // committed state; it is returned to the approver exactly once.
   const plainToken = generateApprovalToken(10)
@@ -100,6 +129,9 @@ export async function approveOrder({
     if (ord.status.toUpperCase() !== "PENDING") {
       return { kind: "invalid-state", status: ord.status } as const
     }
+    // With the requesters for correction: the approver waits for the corrected
+    // order rather than approving the one it sent back.
+    if (isAwaitingCorrection(ord)) return { kind: "awaiting-correction" } as const
 
     const tokenHash = await hashApprovalToken(plainToken)
     const [approved] = await tx.update(orders).set({
@@ -113,19 +145,28 @@ export async function approveOrder({
     }).where(and(
       eq(orders.id, orderId),
       sql`UPPER(${orders.status}) = 'PENDING'`,
+      // Re-evaluated on the row a concurrent return just wrote, so a return
+      // and an approval racing each other cannot both succeed.
+      isNull(orders.returnedForCorrectionAt),
+      expectedUpdatedAt === undefined ? undefined : updatedAtMatches(expectedUpdatedAt),
     )).returning({ id: orders.id })
 
     if (!approved) return { kind: "conflict" } as const
 
-    const creatorNotifications = await queueOrderDecisionNotification(tx, {
-      order: ord,
-      decision: "APPROVED",
-    })
-    const superAdminNotifications = await queueSuperAdminApprovalNotifications(tx, {
-      order: ord,
-      approvedByUserId: user.id,
-      approvedByRole: authorization.decisionRole,
-    })
+    const notifies = decisionQueuesNotifications(authorization.decisionRole)
+    const creatorNotifications = notifies
+      ? await queueOrderDecisionNotification(tx, {
+        order: ord,
+        decision: "APPROVED",
+      })
+      : NO_NOTIFICATIONS
+    const superAdminNotifications = notifies
+      ? await queueSuperAdminApprovalNotifications(tx, {
+        order: ord,
+        approvedByUserId: user.id,
+        approvedByRole: authorization.decisionRole,
+      })
+      : NO_NOTIFICATIONS
 
     await tx.insert(auditLogs).values({
       userId: user.id,
@@ -145,6 +186,7 @@ export async function approveOrder({
     return {
       kind: "approved",
       order: ord,
+      notifies,
       creatorNotifications,
       superAdminNotifications,
     } as const
@@ -155,14 +197,14 @@ export async function approveOrder({
   const ord = decisionResult.order
   logTokenGenerated(orderId, ord.tid, user.id, user.email || "unknown")
 
-  if (decisionResult.creatorNotifications.recipientCount === 0) {
+  if (decisionResult.notifies && decisionResult.creatorNotifications.recipientCount === 0) {
     console.warn("[OrderNotifications] Approved order creator was not an active scoped Order Portal user", {
       orderId,
       organizationId: ord.organizationId,
       branchId: ord.branchId,
     })
   }
-  if (decisionResult.superAdminNotifications.recipientCount === 0) {
+  if (decisionResult.notifies && decisionResult.superAdminNotifications.recipientCount === 0) {
     console.warn("[OrderNotifications] No active Super Admin recipient was available", {
       orderId,
       organizationId: ord.organizationId,
@@ -203,6 +245,11 @@ export async function rejectOrder({
         rejectedByUserId: user.id,
         rejectedAt: new Date(),
         rejectionReason: reason,
+        // A returned order may still be rejected outright. The open request
+        // goes with it — the row check allows the flag only on PENDING.
+        returnedForCorrectionAt: null,
+        returnedForCorrectionByUserId: null,
+        correctionRequestNote: null,
         updatedAt: new Date(),
       }).where(and(
         eq(orders.id, orderId),
@@ -210,6 +257,13 @@ export async function rejectOrder({
       )).returning(orderSelectColumns)
 
       if (!rejectedOrder) throw new Error("ORDER_TRANSITION_CONFLICT")
+
+      const closedCorrectionRequestId = await closeOpenCorrectionRequest(tx, {
+        orderId,
+        resolution: "REJECTED",
+        userId: user.id,
+        role: user.role,
+      })
 
       // 2. Restore budget — only the hold this order took. An order placed
       // while its tenant had budgets off holds nothing, and releasing its total
@@ -251,11 +305,14 @@ export async function rejectOrder({
           .where(eq(globalProducts.id, item.globalProductId))
       }
 
-      const notifications = await queueOrderDecisionNotification(tx, {
-        order: rejectedOrder,
-        decision: "REJECTED",
-        rejectionReason: reason,
-      })
+      const notifies = decisionQueuesNotifications(authorization.decisionRole)
+      const notifications = notifies
+        ? await queueOrderDecisionNotification(tx, {
+          order: rejectedOrder,
+          decision: "REJECTED",
+          rejectionReason: reason,
+        })
+        : NO_NOTIFICATIONS
 
       await tx.insert(auditLogs).values({
         userId: user.id,
@@ -268,6 +325,7 @@ export async function rejectOrder({
           tid: rejectedOrder.tid,
           reason,
           actorRole: user.role,
+          closedCorrectionRequestId,
           decisionRole: authorization.decisionRole,
           configuredApproverRole: authorization.configuredApproverRole,
         },
@@ -276,13 +334,14 @@ export async function rejectOrder({
       return {
         kind: "rejected",
         order: rejectedOrder,
+        notifies,
         notifications,
       } as const
     })
 
     if (decisionResult.kind !== "rejected") return unsuccessfulOutcome(decisionResult)
 
-    if (decisionResult.notifications.recipientCount === 0) {
+    if (decisionResult.notifies && decisionResult.notifications.recipientCount === 0) {
       console.warn("[OrderNotifications] Rejected order creator was not an active scoped Order Portal user", {
         orderId,
         organizationId: decisionResult.order.organizationId,
@@ -314,6 +373,11 @@ export function orderDecisionErrorResponse(
       return { message: "Forbidden", status: 403 }
     case "invalid-state":
       return { message: `Cannot ${decision} order in ${outcome.status} state`, status: 400 }
+    case "awaiting-correction":
+      return {
+        message: "This order was returned for correction and cannot be approved until it is resubmitted",
+        status: 409,
+      }
     case "conflict":
       return { message: "Order was already approved, rejected, or otherwise changed", status: 409 }
     case "ledger-conflict":

@@ -112,3 +112,40 @@ describe("organization unacknowledged-delivery ordering block validation", () =>
   })
 })
 
+
+// plans/OF-ORDERING-BLOCK-configurable-thresholds.md
+describe.each([
+  "unpaidInvoiceBlockThreshold",
+  "unacknowledgedDeliveryBlockThreshold",
+] as const)("organization ordering-block threshold validation: %s", (field) => {
+  it("defaults a new organization to 2, the fixed limit before it was configurable", () => {
+    expect(organizationCreateSchema.parse({ name: "Example Company", code: "EXAMPLE" })[field]).toBe(2)
+  })
+
+  it.each([1, 2, 7, 99, 100])("accepts %i on create and on update", (value) => {
+    expect(organizationCreateSchema.parse({ name: "Example Company", code: "EXAMPLE", [field]: value })[field]).toBe(value)
+    expect(organizationUpdateSchema.parse({ [field]: value })).toEqual({ [field]: value })
+  })
+
+  it.each([0, -1, 101, 1_000, 1.5, Number.NaN, Number.POSITIVE_INFINITY, "3", "", null, true, {}, [3]])(
+    "refuses %j on create and on update",
+    (value) => {
+      expect(organizationUpdateSchema.safeParse({ [field]: value }).success).toBe(false)
+      expect(organizationCreateSchema.safeParse({ name: "Example Company", code: "EXAMPLE", [field]: value }).success).toBe(false)
+    },
+  )
+
+  it("an update does not set it when it was not sent", () => {
+    expect(organizationUpdateSchema.parse({ name: "Renamed Company" })).not.toHaveProperty(field)
+  })
+
+  it("is independent of its toggle: it may be set while the block is off", () => {
+    expect(organizationUpdateSchema.parse({ [field]: 5, blockOrderingOnUnpaidInvoices: false, blockOrderingOnUnacknowledgedDeliveries: false }))
+      .toEqual({ [field]: 5, blockOrderingOnUnpaidInvoices: false, blockOrderingOnUnacknowledgedDeliveries: false })
+  })
+})
+
+it("a misspelt threshold field is refused rather than ignored", () => {
+  expect(organizationUpdateSchema.safeParse({ unpaidInvoicesBlockThreshold: 3 }).success).toBe(false)
+  expect(organizationUpdateSchema.safeParse({ unacknowledgedDeliveriesBlockThreshold: 3 }).success).toBe(false)
+})

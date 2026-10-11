@@ -40,7 +40,8 @@ describe("pending invoice notification wiring", () => {
     expect(route).toContain("eq(orders.createdByUserId, user.id)")
     expect(route).toContain('eq(orderSelectColumns.paymentStatus, "UNPAID")')
     expect(route).toContain("isNotNull(orders.receiptData)")
-    expect(route).toContain("PENDING_INVOICE_ORDER_STATUSES")
+    // A tax invoice only, by the shared invoice-status rule (plans/OF-INVOICE-invoice-ledger.md, D7).
+    expect(route).toContain("inArray(invoiceStatusSql, [...PENDING_INVOICE_STATUSES])")
     expect(route).not.toMatch(/searchParams|branchId|organizationId/)
   })
 })

@@ -1,16 +1,15 @@
-/**
- * Order states in which an invoice is available and can still represent money
- * awaiting payment. A fully refunded order is deliberately absent: its invoice
- * remains available as a historical document, but it is no longer payable.
- */
-export const PENDING_INVOICE_ORDER_STATUSES = [
-  "APPROVED",
-  "FULFILLED",
-  "PARTIAL",
-  "PARTIALLY_FULFILLED",
-] as const
+import { deriveInvoiceStatus, type InvoiceStatus } from "@/lib/invoice-status"
 
-const pendingInvoiceStatuses = new Set<string>(PENDING_INVOICE_ORDER_STATUSES)
+/**
+ * Invoice statuses that still represent money awaiting payment: a tax invoice
+ * issued at delivery, whole or partly credited. A proforma is not an invoice
+ * (nothing is owed until the goods are supplied), and a fully credited invoice
+ * is no longer payable. See plans/OF-INVOICE-invoice-ledger.md (D7), which
+ * narrowed this from "approved onwards".
+ */
+export const PENDING_INVOICE_STATUSES = ["ISSUED", "PARTIALLY_CREDITED"] as const satisfies readonly InvoiceStatus[]
+
+const pendingInvoiceStatuses = new Set<InvoiceStatus>(PENDING_INVOICE_STATUSES)
 
 export type PendingInvoiceSummary = {
   orderId: number
@@ -25,6 +24,9 @@ export type PendingInvoiceStatus = {
 
 type PendingInvoiceOrder = {
   status?: string | null
+  fulfillmentStatus?: string | null
+  statusAtRefund?: string | null
+  refundAmountCents?: number | string | null
   paymentStatus?: string | null
   receiptData?: unknown
 }
@@ -34,13 +36,13 @@ function normalize(value: unknown) {
 }
 
 /**
- * The shared definition used by tests and mirrored by the small indexed query
- * in the status endpoint. An invoice must actually have a receipt snapshot,
- * be past approval, not be fully refunded, and still be marked unpaid.
+ * The shared definition used by tests and mirrored by the status endpoint's
+ * query (through `invoiceStatusSql`). The order must have a snapshot, a tax
+ * invoice that is not fully credited, and still be marked unpaid.
  */
 export function isPendingInvoiceOrder(order: PendingInvoiceOrder): boolean {
   return Boolean(order.receiptData)
-    && pendingInvoiceStatuses.has(normalize(order.status))
+    && pendingInvoiceStatuses.has(deriveInvoiceStatus(order))
     && normalize(order.paymentStatus) === "UNPAID"
 }
 

@@ -194,7 +194,8 @@ export function useDashboardNotifications() {
 
   const computedNotifications = useMemo<DashboardNotification[]>(() => {
     if (!isInitialized || !isAdminRole) return []
-    const pendingOrders = pendingOrdersQuery.data?.items || []
+    // An Order Desk entry waits on an Apricart Executive, not on this reader.
+    const pendingOrders = (pendingOrdersQuery.data?.items || []).filter((order: any) => !order?.decidedByApricart)
     return compactNotifications([
       getPendingOrderNotification(
         pendingOrders,

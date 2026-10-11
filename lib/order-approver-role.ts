@@ -22,19 +22,21 @@ export function parseOrderApproverRole(value: unknown): OrderApproverRole {
 
 /**
  * The role that actually made a decision. This is the tenant's configured
- * approver role for the standard flow, or GROUP_USER when a multi-branch
- * approver acted. It is reported in audits, notifications, and emails so the
- * record always names the role that really decided.
+ * approver role for the standard flow, GROUP_USER when a multi-branch
+ * approver acted, or APRICART_EXECUTIVE for an order the Order Desk entered
+ * (`lib/order-desk-approval.ts`). It is reported in audits, notifications, and
+ * emails so the record always names the role that really decided.
  */
-export type OrderDecisionRole = OrderApproverRole | "GROUP_USER"
+export type OrderDecisionRole = OrderApproverRole | "GROUP_USER" | "APRICART_EXECUTIVE"
 
 export const ORDER_DECISION_ROLE_LABELS: Record<OrderDecisionRole, string> = {
   ...ORDER_APPROVER_ROLE_LABELS,
   GROUP_USER: "Group User",
+  APRICART_EXECUTIVE: "Apricart Executive",
 }
 
 export function isOrderDecisionRole(value: unknown): value is OrderDecisionRole {
-  return isOrderApproverRole(value) || value === "GROUP_USER"
+  return isOrderApproverRole(value) || value === "GROUP_USER" || value === "APRICART_EXECUTIVE"
 }
 
 export type OrderDecisionAccessInput = {

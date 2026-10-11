@@ -8,6 +8,8 @@ import { getOrderDerivedStatus } from "@/lib/order-status"
 import { formatBranchAddress } from "@/lib/branch-address"
 import { authorizeInvoiceRequest } from "@/lib/server/invoice-access"
 import { loadInvoiceParticipants } from "@/lib/server/invoice-participants"
+import { describeInvoiceStatus } from "@/lib/invoice-status"
+import { invoiceDocumentForOrder } from "@/lib/server/invoice-ledger-reads"
 
 function refundHistoryLine(item: any, pricesHidden: boolean) {
     return {
@@ -79,17 +81,20 @@ export async function GET(
 
         let organizationName = ""
         let organizationNtn = ""
+        let organizationStrn = ""
         if (order.organizationId !== null) {
             const [organizationDetails] = await db
                 .select({
                     name: organizations.name,
                     ntnNumber: organizations.ntnNumber,
+                    strnNumber: organizations.strnNumber,
                 })
                 .from(organizations)
                 .where(eq(organizations.id, order.organizationId))
                 .limit(1)
             organizationName = organizationDetails?.name || ""
             organizationNtn = organizationDetails?.ntnNumber || ""
+            organizationStrn = organizationDetails?.strnNumber || ""
         }
 
         // Fetch refund information
@@ -132,9 +137,10 @@ export async function GET(
             status: order.status,
             refundAmountCents: order.refundAmountCents,
         }, "fulfilled")
+        const invoice = describeInvoiceStatus(order, organizationStrn)
 
         // Dynamically override receipt data status with actual order status for accuracy
-        const finalReceiptData = order.receiptData ? {
+        const snapshotReceiptData = order.receiptData ? {
             ...(order.receiptData as any),
             buyerAddress: branchAddress,
             organizationName: (order.receiptData as any)?.organizationName || organizationName || "",
@@ -151,16 +157,21 @@ export async function GET(
             fulfilledByName: participants.fulfilledByName,
             status: derivedStatus.label,
             statusKey: derivedStatus.key,
+            ...invoice.fields,
             refund: totalApprovedRefundAmount,
             refundedItems,
             totalAmount: getReceiptNetTotal(order.receiptData as any, totalApprovedRefundAmount),
         } : null
+        // An invoice issued at delivery prints from its own ledger rows; a
+        // proforma or a legacy invoice keeps the snapshot above.
+        const finalReceiptData: any = await invoiceDocumentForOrder(order, snapshotReceiptData)
         const safeReceiptData = pricesHidden ? redactReceiptPrices(finalReceiptData) : finalReceiptData
 
         return NextResponse.json({
             orderId: order.id,
             orderTid: order.tid,
             status: order.status,
+            invoiceStatus: finalReceiptData?.invoiceStatus ?? invoice.fields.invoiceStatus,
             receiptData: safeReceiptData,
             refundHistory,
             totalRefundAmount: pricesHidden ? null : totalApprovedRefundAmount,

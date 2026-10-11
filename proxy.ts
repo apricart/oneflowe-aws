@@ -13,7 +13,31 @@ import {
   PASSWORD_CHANGE_REQUIRED_CODE,
 } from "@/lib/password-change-pending"
 import { isViewerRole, VIEWER_AREAS, VIEWER_HOME } from "@/lib/viewer-access"
+import {
+  DESK_TEAM_AREA,
+  isOrderDeskApiRequestAllowed,
+  isOrderDeskRole,
+  ORDER_DESK_AREAS,
+  ORDER_DESK_HOME,
+  ORDER_DESK_MANAGER_ROLES,
+} from "@/lib/order-desk-access"
 import { ACTIVITY_LOG_ROLES } from "@/lib/activity-log-access"
+import { CONSOLIDATED_INVOICE_REPORT_AREA, CONSOLIDATED_INVOICE_REPORT_ROLES } from "@/lib/consolidated-invoice-access"
+import {
+  APRICART_EXECUTIVE_AREAS,
+  APRICART_EXECUTIVE_HOME,
+  DELIVERY_DASHBOARD_AREA,
+  isApricartExecutiveApiRequestAllowed,
+  isApricartExecutiveRole,
+} from "@/lib/apricart-executive-access"
+import {
+  WAREHOUSE_AREAS,
+  WAREHOUSE_HOME,
+  WAREHOUSE_MANAGER_ROLES,
+  WAREHOUSE_TEAM_AREA,
+  isWarehouseApiRequestAllowed,
+  isWarehouseRole,
+} from "@/lib/warehouse-access"
 
 const protectedPrefixes = [
   "/approvals",
@@ -27,12 +51,16 @@ const protectedPrefixes = [
   // three portals. Its layout refuses the rest through
   // `canReadDeliveryAddresses`, and every handler behind it re-checks.
   "/delivery-addresses",
+  "/delivery-dashboard",
+  "/desk-team",
   "/employee-management",
+  "/executive",
   "/group-portal",
   "/groups",
   "/inventory",
   "/invoices",
   "/join-requests",
+  "/order-desk",
   "/orders",
   "/organizations",
   "/products",
@@ -42,6 +70,8 @@ const protectedPrefixes = [
   "/settings",
   "/shop",
   "/support",
+  "/warehouse",
+  "/warehouse-team",
   "/users",
 ]
 const SESSION_COOKIE_NAMES = [
@@ -179,6 +209,41 @@ async function handleApiRequest(req: NextRequest, pathname: string, response: Ne
       pathname,
     )
   }
+
+  // An Order Desk account has no organization of its own, and most handlers
+  // check roles inline, where a missing organization can read as "no tenant
+  // filter". So the desk reaches only the API calls its workspace makes, and
+  // everything else is refused here before any handler runs. Each admitted
+  // handler still checks the role and the desk's reach itself — this layer is
+  // in addition to that, never instead of it.
+  if (isOrderDeskRole((token as any)?.role) && !isOrderDeskApiRequestAllowed(req.method, pathname)) {
+    logger("middleware", { reason: "order_desk_api_not_allowed", path: pathname })
+    return withSecurityHeaders(
+      NextResponse.json({ error: "Forbidden" }, { status: 403 }),
+      pathname,
+    )
+  }
+  // The same confinement for Apricart's management account, which also has no
+  // organization of its own: the delivery dashboard reads and nothing else.
+  if (
+    isApricartExecutiveRole((token as any)?.role)
+    && !isApricartExecutiveApiRequestAllowed(req.method, pathname)
+  ) {
+    logger("middleware", { reason: "apricart_executive_api_not_allowed", path: pathname })
+    return withSecurityHeaders(
+      NextResponse.json({ error: "Forbidden" }, { status: 403 }),
+      pathname,
+    )
+  }
+  // And for Apricart's warehouse, which also has no organization of its own:
+  // its queue, its progress write and the challan upload, nothing else.
+  if (isWarehouseRole((token as any)?.role) && !isWarehouseApiRequestAllowed(req.method, pathname)) {
+    logger("middleware", { reason: "warehouse_api_not_allowed", path: pathname })
+    return withSecurityHeaders(
+      NextResponse.json({ error: "Forbidden" }, { status: 403 }),
+      pathname,
+    )
+  }
   return withSecurityHeaders(response, pathname)
 }
 
@@ -281,6 +346,25 @@ function adminPortalRedirect(pathname: string): string | null {
 }
 
 /**
+ * Roles confined to one area of their own and no shared page at all.
+ *
+ *   * VIEWER — read-only: its dashboard, and not the invoice page or support.
+ *     It drills into orders through an analytics endpoint rather than the
+ *     orders directory, so it needs nothing else.
+ *   * ORDER_DESK — Apricart's order entry: its workspace, and not the invoice
+ *     or support pages, which are scoped to a tenant it does not belong to.
+ *   * APRICART_EXECUTIVE — Apricart's management: the delivery dashboard and
+ *     nothing else, for the same reason.
+ *   * WAREHOUSE — Apricart's warehouse: its delivery queue, for the same reason.
+ */
+const SINGLE_AREA_ROLES: ReadonlyArray<{ matches: (role: unknown) => boolean; areas: readonly string[]; home: string }> = [
+  { matches: isViewerRole, areas: VIEWER_AREAS, home: VIEWER_HOME },
+  { matches: isOrderDeskRole, areas: ORDER_DESK_AREAS, home: ORDER_DESK_HOME },
+  { matches: isApricartExecutiveRole, areas: APRICART_EXECUTIVE_AREAS, home: APRICART_EXECUTIVE_HOME },
+  { matches: isWarehouseRole, areas: WAREHOUSE_AREAS, home: WAREHOUSE_HOME },
+]
+
+/**
  * The portal each role is confined to, or null when the path is already inside
  * it. Each restricted role owns exactly one area and is redirected home from
  * everywhere else; /change-password stays reachable so a forced password change
@@ -301,13 +385,11 @@ function rolePortalRedirect(role: string | undefined, pathname: string, budgetAl
   if (role === "GROUP_USER") {
     return groupUserRedirect(pathname, budgetAllocationEnabled)
   }
-  if (isViewerRole(role)) {
-    // Read-only account: one area, and no shared page at all — not the invoice
-    // page, not support. Its dashboard drills into orders through an analytics
-    // endpoint rather than the orders directory, so it needs nothing else.
-    return VIEWER_AREAS.some((prefix) => pathMatchesPrefix(pathname, prefix))
+  const confined = SINGLE_AREA_ROLES.find((entry) => entry.matches(role))
+  if (confined) {
+    return confined.areas.some((prefix) => pathMatchesPrefix(pathname, prefix))
       ? null
-      : VIEWER_HOME
+      : confined.home
   }
   if (role === "GROUP_ORDER_PORTAL") {
     // The requester keeps its own workspace and never reaches the admin shell,
@@ -357,11 +439,29 @@ const ROLE_GATED_AREAS: ReadonlyArray<{ prefix: string; roles: readonly string[]
   { prefix: "/activity", roles: ACTIVITY_LOG_ROLES, home: "/dashboard" },
   { prefix: "/branches", roles: ["HEAD_OFFICE"], home: "/dashboard" },
   { prefix: "/join-requests", roles: ["HEAD_OFFICE"], home: "/dashboard" },
+  // Creating desk users and granting their reach is Super Admin's alone.
+  { prefix: DESK_TEAM_AREA, roles: ORDER_DESK_MANAGER_ROLES, home: "/dashboard" },
+  // The desk's own workspace; no other role has a reason to render it.
+  { prefix: ORDER_DESK_HOME, roles: ["ORDER_DESK"], home: "/dashboard" },
+  // The executive's own workspace, and the same dashboard in the admin shell
+  // for Super Admin. Both endpoints behind them re-check the role.
+  { prefix: APRICART_EXECUTIVE_HOME, roles: ["APRICART_EXECUTIVE"], home: "/dashboard" },
+  { prefix: DELIVERY_DASHBOARD_AREA, roles: ["SUPER_ADMIN"], home: "/dashboard" },
+  // The warehouse's own workspace; every endpoint behind it re-checks the role
+  // and the branch reach.
+  { prefix: WAREHOUSE_HOME, roles: ["WAREHOUSE"], home: "/dashboard" },
+  // Assigning warehouse accounts their branches is Super Admin's alone.
+  { prefix: WAREHOUSE_TEAM_AREA, roles: WAREHOUSE_MANAGER_ROLES, home: "/dashboard" },
+  // Inside /reports, which Branch Admin and Group User also reach; the report
+  // is Super Admin's and Head Office's, and both its endpoints re-check.
+  { prefix: CONSOLIDATED_INVOICE_REPORT_AREA, roles: CONSOLIDATED_INVOICE_REPORT_ROLES, home: "/reports" },
 ]
 
 /** Where to send a caller whose role does not hold the area, or null. */
 function roleGatedAreaRedirect(pathname: string, role: string | undefined): string | null {
-  const area = ROLE_GATED_AREAS.find((candidate) => pathname.startsWith(candidate.prefix))
+  // On a path boundary, like every other area check here: "/warehouse-team"
+  // is not inside "/warehouse".
+  const area = ROLE_GATED_AREAS.find((candidate) => pathMatchesPrefix(pathname, candidate.prefix))
   if (!area || (role !== undefined && area.roles.includes(role))) return null
   return area.home
 }

@@ -1,4 +1,6 @@
 "use client"
+import { BranchRegionSelect } from "@/components/branches/branch-region-select"
+import type { BranchRegion } from "@/lib/branch-region"
 import { useAppContext } from "@/components/context/app-context"
 import { BranchExcelExportButton } from "@/components/organizations/branch-excel-export-button"
 import { BranchListExcelExportButton } from "@/components/organizations/branch-list-excel-export-button"
@@ -36,8 +38,14 @@ type BudgetAllocationMode,
 } from "@/lib/budget-allocation-mode"
 import { DEFAULT_ORGANIZATION_BUDGETS_ENABLED } from "@/lib/organization-budget-policy"
 import { formatCountLabel } from "@/lib/count-label"
-import { PAYMENT_CONTROL_POLICY } from "@/lib/payment-control-policy"
-import { UNACKNOWLEDGED_DELIVERY_BLOCK_THRESHOLD } from "@/lib/unacknowledged-delivery-block"
+import {
+  DEFAULT_ORDERING_BLOCK_THRESHOLD,
+  ORDERING_BLOCK_THRESHOLD_MAX,
+  ORDERING_BLOCK_THRESHOLD_MIN,
+  orderingBlockThresholdOrDefault,
+  parseOrderingBlockThresholdDraft,
+  type OrderingBlockThresholdDraft,
+} from "@/lib/ordering-block-threshold"
 import { useBranches,useOrganizations } from "@/lib/hooks/use-api"
 import {
 DEFAULT_ORDER_APPROVER_ROLE,
@@ -54,6 +62,7 @@ type Organization = {
   name: string
   code: string
   ntnNumber?: string | null
+  strnNumber?: string | null
   emailDomain?: string | null
   status?: "active" | "inactive"
   budgetAllocationMode?: BudgetAllocationMode
@@ -61,18 +70,71 @@ type Organization = {
   orderApprovalRequired?: boolean
   blockOrderingOnUnpaidInvoices?: boolean
   blockOrderingOnUnacknowledgedDeliveries?: boolean
+  unpaidInvoiceBlockThreshold?: number
+  unacknowledgedDeliveryBlockThreshold?: number
   budgetsEnabled?: boolean
+  managedOrdering?: boolean
 }
 
-const UNPAID_INVOICE_BLOCK_HINT =
-  `A branch with ${PAYMENT_CONTROL_POLICY.overdueBlockThreshold} or more unpaid invoices (delivered and not marked paid) cannot place new orders until they are paid.`
+// Each hint prints the limit being typed, so it always says what will be saved.
+// `null` is a limit that does not parse yet.
+function unpaidInvoiceBlockHint(threshold: number | null): string {
+  return threshold === null
+    ? "A branch that reaches the limit below in unpaid invoices (delivered and not marked paid) cannot place new orders until they are paid."
+    : `A branch with ${threshold} or more unpaid invoices (delivered and not marked paid) cannot place new orders until they are paid.`
+}
 
-const UNACKNOWLEDGED_DELIVERY_BLOCK_HINT =
-  `A branch with ${UNACKNOWLEDGED_DELIVERY_BLOCK_THRESHOLD} or more orders that are delivered but not yet acknowledged (still approved) cannot place new orders until they are acknowledged.`
+const MANAGED_ORDERING_HINT =
+  "Apricart's Order Desk may enter this company's orders (received by email or WhatsApp) for the desk users granted it in Order Desk Team. Desk orders are Active immediately."
+
+function unacknowledgedDeliveryBlockHint(threshold: number | null): string {
+  return threshold === null
+    ? "A branch that reaches the limit below in orders that are delivered but not yet acknowledged (still approved) cannot place new orders until they are acknowledged."
+    : `A branch with ${threshold} or more orders that are delivered but not yet acknowledged (still approved) cannot place new orders until they are acknowledged.`
+}
+
+const UNPAID_INVOICE_THRESHOLD_LABEL = "Unpaid invoices that stop ordering"
+const UNACKNOWLEDGED_DELIVERY_THRESHOLD_LABEL = "Unacknowledged deliveries that stop ordering"
+
+/** A stored limit as the field's starting text; anything unusable reads as the default. */
+function thresholdDraftText(value: number | undefined): string {
+  return String(orderingBlockThresholdOrDefault(value))
+}
+
+const thresholdValue = (draft: OrderingBlockThresholdDraft): number | null => (draft.ok ? draft.value : null)
+
+/**
+ * The two limits as the request sends them: a limit that does not parse is left
+ * out (the server keeps what it has, or the default on create). Save is only
+ * refused for one while its block is on — see `orderingBlockThresholdsInvalid`.
+ */
+function orderingBlockThresholdPayload(
+  unpaid: OrderingBlockThresholdDraft,
+  unacknowledged: OrderingBlockThresholdDraft,
+): { unpaidInvoiceBlockThreshold?: number; unacknowledgedDeliveryBlockThreshold?: number } {
+  return {
+    ...(unpaid.ok ? { unpaidInvoiceBlockThreshold: unpaid.value } : {}),
+    ...(unacknowledged.ok ? { unacknowledgedDeliveryBlockThreshold: unacknowledged.value } : {}),
+  }
+}
+
+function orderingBlockThresholdsInvalid(
+  blocks: ReadonlyArray<{ enabled: boolean; draft: OrderingBlockThresholdDraft }>,
+): boolean {
+  return blocks.some((block) => block.enabled && !block.draft.ok)
+}
+
+type OrderingBlockThresholdField = {
+  label: string
+  text: string
+  draft: OrderingBlockThresholdDraft
+  onTextChange: (text: string) => void
+}
 
 /**
  * Super Admin only. Switching one on can stop a branch ordering at once, so
- * each hint says exactly what is counted.
+ * each hint says exactly what is counted. A block with a limit shows the limit
+ * while it is on; the server re-validates it (whole numbers, 1 to 100).
  */
 function OrderingBlockSwitch({
   id,
@@ -81,6 +143,7 @@ function OrderingBlockSwitch({
   checked,
   onCheckedChange,
   disabled,
+  threshold,
 }: Readonly<{
   id: string
   label: string
@@ -88,14 +151,44 @@ function OrderingBlockSwitch({
   checked: boolean
   onCheckedChange: (checked: boolean) => void
   disabled: boolean
+  threshold?: OrderingBlockThresholdField
 }>) {
+  const thresholdId = `${id}-threshold`
+  const thresholdErrorId = `${thresholdId}-error`
+  const thresholdError = threshold && !threshold.draft.ok ? threshold.draft.message : null
   return (
-    <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
-      <div className="pr-4">
-        <Label htmlFor={id}>{label}</Label>
-        <p className="text-xs text-muted-foreground">{hint}</p>
+    <div className="rounded-md border bg-background px-3 py-2">
+      <div className="flex items-center justify-between">
+        <div className="pr-4">
+          <Label htmlFor={id}>{label}</Label>
+          <p className="text-xs text-muted-foreground">{hint}</p>
+        </div>
+        <Switch id={id} checked={checked} onCheckedChange={onCheckedChange} disabled={disabled} />
       </div>
-      <Switch id={id} checked={checked} onCheckedChange={onCheckedChange} disabled={disabled} />
+      {threshold && checked ? (
+        <div className="mt-2 border-t pt-2">
+          <div className="flex items-center justify-between gap-3">
+            <Label htmlFor={thresholdId} className="text-xs font-normal">{threshold.label}</Label>
+            <Input
+              id={thresholdId}
+              type="number"
+              inputMode="numeric"
+              min={ORDERING_BLOCK_THRESHOLD_MIN}
+              max={ORDERING_BLOCK_THRESHOLD_MAX}
+              step={1}
+              value={threshold.text}
+              onChange={(event) => threshold.onTextChange(event.target.value)}
+              disabled={disabled}
+              aria-invalid={thresholdError ? true : undefined}
+              aria-describedby={thresholdError ? thresholdErrorId : undefined}
+              className="h-8 w-24"
+            />
+          </div>
+          {thresholdError ? (
+            <p id={thresholdErrorId} role="alert" className="mt-1 text-xs text-destructive">{thresholdError}</p>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -185,6 +278,7 @@ type Branch = {
   organizationId: number
   province?: string | null
   city?: string | null
+  region?: BranchRegion | null
   address?: string | null
   costCenterId?: string | null
   status?: "active" | "inactive"
@@ -1161,6 +1255,7 @@ function CreateOrgDialog({
   const [name, setName] = useState("")
   const [code, setCode] = useState("")
   const [ntnNumber, setNtnNumber] = useState("")
+  const [strnNumber, setStrnNumber] = useState("")
   const [emailDomain, setEmailDomain] = useState("")
   const [status, setStatus] = useState<boolean>(true)
   const [budgetAllocationMode, setBudgetAllocationMode] = useState<BudgetAllocationMode>("money")
@@ -1171,6 +1266,10 @@ function CreateOrgDialog({
   const [orderApprovalRequired, setOrderApprovalRequired] = useState(true)
   const [blockOrderingOnUnpaidInvoices, setBlockOrderingOnUnpaidInvoices] = useState(false)
   const [blockOrderingOnUnacknowledgedDeliveries, setBlockOrderingOnUnacknowledgedDeliveries] = useState(false)
+  const [unpaidInvoiceBlockThresholdText, setUnpaidInvoiceBlockThresholdText] = useState(String(DEFAULT_ORDERING_BLOCK_THRESHOLD))
+  const [unacknowledgedDeliveryBlockThresholdText, setUnacknowledgedDeliveryBlockThresholdText] = useState(String(DEFAULT_ORDERING_BLOCK_THRESHOLD))
+  // Off by default: no company is reachable by the Order Desk until asked.
+  const [managedOrdering, setManagedOrdering] = useState(false)
   const [hideBranchAdminPrices, setHideBranchAdminPrices] = useState(false)
   const [hideOrderPortalPrices, setHideOrderPortalPrices] = useState(false)
   const [privateNetworkEnabled, setPrivateNetworkEnabled] = useState(false)
@@ -1180,6 +1279,12 @@ function CreateOrgDialog({
 
   const networkError = privateNetworkDraftError(privateNetworkEnabled, networkEntries)
   const emailDomainError = emailDomainDraftError(emailDomain)
+  const unpaidInvoiceBlockThreshold = parseOrderingBlockThresholdDraft(unpaidInvoiceBlockThresholdText)
+  const unacknowledgedDeliveryBlockThreshold = parseOrderingBlockThresholdDraft(unacknowledgedDeliveryBlockThresholdText)
+  const thresholdsInvalid = orderingBlockThresholdsInvalid([
+    { enabled: blockOrderingOnUnpaidInvoices, draft: unpaidInvoiceBlockThreshold },
+    { enabled: blockOrderingOnUnacknowledgedDeliveries, draft: unacknowledgedDeliveryBlockThreshold },
+  ])
 
   async function createCompany() {
     setSaving(true)
@@ -1192,6 +1297,7 @@ function CreateOrgDialog({
           code,
           // Optional: only sent when filled in, so a blank field stays absent.
           ...(ntnNumber.trim() ? { ntnNumber: ntnNumber.trim() } : {}),
+          ...(strnNumber.trim() ? { strnNumber: strnNumber.trim() } : {}),
           ...(emailDomainPayload ? { emailDomain: emailDomainPayload } : {}),
           status: status ? "active" : "inactive",
           budgetsEnabled,
@@ -1200,6 +1306,8 @@ function CreateOrgDialog({
           orderApprovalRequired,
           blockOrderingOnUnpaidInvoices,
           blockOrderingOnUnacknowledgedDeliveries,
+          ...orderingBlockThresholdPayload(unpaidInvoiceBlockThreshold, unacknowledgedDeliveryBlockThreshold),
+          managedOrdering,
           priceVisibility: {
             hideBranchAdminPrices,
             hideOrderPortalPrices,
@@ -1218,6 +1326,7 @@ function CreateOrgDialog({
       setName("")
       setCode("")
       setNtnNumber("")
+      setStrnNumber("")
       setEmailDomain("")
       setStatus(true)
       setBudgetAllocationMode("money")
@@ -1226,6 +1335,8 @@ function CreateOrgDialog({
       setOrderApprovalRequired(true)
       setBlockOrderingOnUnpaidInvoices(false)
       setBlockOrderingOnUnacknowledgedDeliveries(false)
+      setUnpaidInvoiceBlockThresholdText(String(DEFAULT_ORDERING_BLOCK_THRESHOLD))
+      setUnacknowledgedDeliveryBlockThresholdText(String(DEFAULT_ORDERING_BLOCK_THRESHOLD))
       setHideBranchAdminPrices(false)
       setHideOrderPortalPrices(false)
       setPrivateNetworkEnabled(false)
@@ -1240,7 +1351,7 @@ function CreateOrgDialog({
   }
 
   function submit() {
-    if (!name || !code || saving || networkError || emailDomainError) return
+    if (!name || !code || saving || networkError || emailDomainError || thresholdsInvalid) return
     setConfirmModeOpen(true)
   }
 
@@ -1295,6 +1406,17 @@ function CreateOrgDialog({
                   disabled={saving}
                 />
                 <p className="text-xs text-muted-foreground">Tax registration number. Leave blank if not applicable.</p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="strn-number">STRN number (optional)</Label>
+                <Input
+                  id="strn-number"
+                  value={strnNumber}
+                  onChange={(e) => setStrnNumber(e.target.value)}
+                  placeholder="3277876123456"
+                  disabled={saving}
+                />
+                <p className="text-xs text-muted-foreground">Sales tax registration number, printed on invoices beside the NTN.</p>
               </div>
               <EmailDomainField
                 id="email-domain"
@@ -1362,17 +1484,37 @@ function CreateOrgDialog({
               <OrderingBlockSwitch
                 id="create-block-ordering-on-unpaid-invoices"
                 label="Block ordering on unpaid invoices"
-                hint={UNPAID_INVOICE_BLOCK_HINT}
+                hint={unpaidInvoiceBlockHint(thresholdValue(unpaidInvoiceBlockThreshold))}
                 checked={blockOrderingOnUnpaidInvoices}
                 onCheckedChange={setBlockOrderingOnUnpaidInvoices}
                 disabled={saving}
+                threshold={{
+                  label: UNPAID_INVOICE_THRESHOLD_LABEL,
+                  text: unpaidInvoiceBlockThresholdText,
+                  draft: unpaidInvoiceBlockThreshold,
+                  onTextChange: setUnpaidInvoiceBlockThresholdText,
+                }}
               />
               <OrderingBlockSwitch
                 id="create-block-ordering-on-unacknowledged-deliveries"
                 label="Block ordering on unacknowledged deliveries"
-                hint={UNACKNOWLEDGED_DELIVERY_BLOCK_HINT}
+                hint={unacknowledgedDeliveryBlockHint(thresholdValue(unacknowledgedDeliveryBlockThreshold))}
                 checked={blockOrderingOnUnacknowledgedDeliveries}
                 onCheckedChange={setBlockOrderingOnUnacknowledgedDeliveries}
+                disabled={saving}
+                threshold={{
+                  label: UNACKNOWLEDGED_DELIVERY_THRESHOLD_LABEL,
+                  text: unacknowledgedDeliveryBlockThresholdText,
+                  draft: unacknowledgedDeliveryBlockThreshold,
+                  onTextChange: setUnacknowledgedDeliveryBlockThresholdText,
+                }}
+              />
+              <OrderingBlockSwitch
+                id="create-managed-ordering"
+                label="Managed by Apricart Order Desk"
+                hint={MANAGED_ORDERING_HINT}
+                checked={managedOrdering}
+                onCheckedChange={setManagedOrdering}
                 disabled={saving}
               />
               <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
@@ -1434,7 +1576,7 @@ function CreateOrgDialog({
             <Button
               onClick={submit}
               className="gap-2 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100 disabled:shadow-none"
-              disabled={!name || !code || saving || Boolean(networkError) || Boolean(emailDomainError)}
+              disabled={!name || !code || saving || Boolean(networkError) || Boolean(emailDomainError) || thresholdsInvalid}
             >
               <Save className="h-4 w-4" />
               Save Company
@@ -1479,6 +1621,7 @@ function CreateBranchDialog({
   const [name, setName] = useState("")
   const [province, setProvince] = useState("")
   const [city, setCity] = useState("")
+  const [region, setRegion] = useState<BranchRegion | null>(null)
   const [address, setAddress] = useState("")
   const [costCenterId, setCostCenterId] = useState("")
   const [status, setStatus] = useState<boolean>(true)
@@ -1497,6 +1640,7 @@ function CreateBranchDialog({
       name: name.trim(),
       province: province.trim(),
       city: city.trim(),
+      region,
       address: address.trim(),
       costCenterId: costCenterId.trim() || null,
       status: status ? "active" : "inactive",
@@ -1604,6 +1748,7 @@ function CreateBranchDialog({
                     />
                   </div>
                 </div>
+                <BranchRegionSelect id="branch-region" value={region} onChange={setRegion} disabled={saving} />
                 <div className="space-y-2">
                   <Label htmlFor="branch-address">Address</Label>
                   <Textarea
@@ -1674,6 +1819,7 @@ function EditOrgDialog({
   const [name, setName] = useState(org.name)
   const [code, setCode] = useState(org.code)
   const [ntnNumber, setNtnNumber] = useState(org.ntnNumber ?? "")
+  const [strnNumber, setStrnNumber] = useState(org.strnNumber ?? "")
   const [emailDomain, setEmailDomain] = useState(org.emailDomain ?? "")
   const [status, setStatus] = useState<boolean>(isActiveStatus(org.status))
   const [budgetAllocationMode, setBudgetAllocationMode] = useState<BudgetAllocationMode>(
@@ -1691,6 +1837,13 @@ function EditOrgDialog({
   const [blockOrderingOnUnacknowledgedDeliveries, setBlockOrderingOnUnacknowledgedDeliveries] = useState(
     org.blockOrderingOnUnacknowledgedDeliveries === true,
   )
+  const [unpaidInvoiceBlockThresholdText, setUnpaidInvoiceBlockThresholdText] = useState(
+    thresholdDraftText(org.unpaidInvoiceBlockThreshold),
+  )
+  const [unacknowledgedDeliveryBlockThresholdText, setUnacknowledgedDeliveryBlockThresholdText] = useState(
+    thresholdDraftText(org.unacknowledgedDeliveryBlockThreshold),
+  )
+  const [managedOrdering, setManagedOrdering] = useState(org.managedOrdering === true)
   // Anything but an explicit false reads as on, matching the server's
   // fail-safe: a tenant is never shown as unbudgeted when it is not.
   const [budgetsEnabled, setBudgetsEnabled] = useState(org.budgetsEnabled !== false)
@@ -1707,11 +1860,18 @@ function EditOrgDialog({
     ? null
     : privateNetworkDraftError(privateNetworkEnabled, networkEntries)
   const emailDomainError = emailDomainDraftError(emailDomain)
+  const unpaidInvoiceBlockThreshold = parseOrderingBlockThresholdDraft(unpaidInvoiceBlockThresholdText)
+  const unacknowledgedDeliveryBlockThreshold = parseOrderingBlockThresholdDraft(unacknowledgedDeliveryBlockThresholdText)
+  const thresholdsInvalid = isSuperAdmin && orderingBlockThresholdsInvalid([
+    { enabled: blockOrderingOnUnpaidInvoices, draft: unpaidInvoiceBlockThreshold },
+    { enabled: blockOrderingOnUnacknowledgedDeliveries, draft: unacknowledgedDeliveryBlockThreshold },
+  ])
 
   useEffect(() => {
     setName(org.name)
     setCode(org.code)
     setNtnNumber(org.ntnNumber ?? "")
+    setStrnNumber(org.strnNumber ?? "")
     setEmailDomain(org.emailDomain ?? "")
     setStatus(isActiveStatus(org.status))
     setBudgetAllocationMode(parseBudgetAllocationMode(org.budgetAllocationMode))
@@ -1719,11 +1879,15 @@ function EditOrgDialog({
     setOrderApprovalRequired(org.orderApprovalRequired !== false)
     setBlockOrderingOnUnpaidInvoices(org.blockOrderingOnUnpaidInvoices === true)
     setBlockOrderingOnUnacknowledgedDeliveries(org.blockOrderingOnUnacknowledgedDeliveries === true)
+    setUnpaidInvoiceBlockThresholdText(thresholdDraftText(org.unpaidInvoiceBlockThreshold))
+    setUnacknowledgedDeliveryBlockThresholdText(thresholdDraftText(org.unacknowledgedDeliveryBlockThreshold))
+    setManagedOrdering(org.managedOrdering === true)
     setBudgetsEnabled(org.budgetsEnabled !== false)
   }, [
     org.name,
     org.code,
     org.ntnNumber,
+    org.strnNumber,
     org.emailDomain,
     org.status,
     org.budgetAllocationMode,
@@ -1731,7 +1895,10 @@ function EditOrgDialog({
     org.orderApprovalRequired,
     org.blockOrderingOnUnpaidInvoices,
     org.blockOrderingOnUnacknowledgedDeliveries,
+    org.unpaidInvoiceBlockThreshold,
+    org.unacknowledgedDeliveryBlockThreshold,
     org.budgetsEnabled,
+    org.managedOrdering,
   ])
 
   useEffect(() => {
@@ -1850,6 +2017,17 @@ function EditOrgDialog({
               />
               <p className="text-xs text-muted-foreground">Tax registration number. Clear the field to remove it.</p>
             </div>
+            <div className="space-y-2">
+              <Label htmlFor="estrn">STRN number (optional)</Label>
+              <Input
+                id="estrn"
+                value={strnNumber}
+                onChange={(e) => setStrnNumber(e.target.value)}
+                placeholder="3277876123456"
+                disabled={saving}
+              />
+              <p className="text-xs text-muted-foreground">Sales tax registration number. Clear the field to remove it.</p>
+            </div>
             <EmailDomainField
               id="eemail-domain"
               value={emailDomain}
@@ -1928,17 +2106,37 @@ function EditOrgDialog({
                 <OrderingBlockSwitch
                   id={`edit-block-ordering-on-unpaid-invoices-${org.id}`}
                   label="Block ordering on unpaid invoices"
-                  hint={UNPAID_INVOICE_BLOCK_HINT}
+                  hint={unpaidInvoiceBlockHint(thresholdValue(unpaidInvoiceBlockThreshold))}
                   checked={blockOrderingOnUnpaidInvoices}
                   onCheckedChange={setBlockOrderingOnUnpaidInvoices}
                   disabled={loadingSettings || saving}
+                  threshold={{
+                    label: UNPAID_INVOICE_THRESHOLD_LABEL,
+                    text: unpaidInvoiceBlockThresholdText,
+                    draft: unpaidInvoiceBlockThreshold,
+                    onTextChange: setUnpaidInvoiceBlockThresholdText,
+                  }}
                 />
                 <OrderingBlockSwitch
                   id={`edit-block-ordering-on-unacknowledged-deliveries-${org.id}`}
                   label="Block ordering on unacknowledged deliveries"
-                  hint={UNACKNOWLEDGED_DELIVERY_BLOCK_HINT}
+                  hint={unacknowledgedDeliveryBlockHint(thresholdValue(unacknowledgedDeliveryBlockThreshold))}
                   checked={blockOrderingOnUnacknowledgedDeliveries}
                   onCheckedChange={setBlockOrderingOnUnacknowledgedDeliveries}
+                  disabled={loadingSettings || saving}
+                  threshold={{
+                    label: UNACKNOWLEDGED_DELIVERY_THRESHOLD_LABEL,
+                    text: unacknowledgedDeliveryBlockThresholdText,
+                    draft: unacknowledgedDeliveryBlockThreshold,
+                    onTextChange: setUnacknowledgedDeliveryBlockThresholdText,
+                  }}
+                />
+                <OrderingBlockSwitch
+                  id={`edit-managed-ordering-${org.id}`}
+                  label="Managed by Apricart Order Desk"
+                  hint={MANAGED_ORDERING_HINT}
+                  checked={managedOrdering}
+                  onCheckedChange={setManagedOrdering}
                   disabled={loadingSettings || saving}
                 />
                 <BudgetAllocationFields
@@ -2009,7 +2207,8 @@ function EditOrgDialog({
               !name.trim() ||
               !code.trim() ||
               Boolean(networkError) ||
-              Boolean(emailDomainError)
+              Boolean(emailDomainError) ||
+              thresholdsInvalid
             }
             onClick={async () => {
               setSaving(true)
@@ -2020,6 +2219,7 @@ function EditOrgDialog({
                     code,
                     // Optional: an emptied field clears the stored value.
                     ntnNumber: ntnNumber.trim() || null,
+                    strnNumber: strnNumber.trim() || null,
                     emailDomain: toEmailDomainPayload(emailDomain),
                     status: status ? "active" : "inactive",
                     ...(isSuperAdmin
@@ -2030,6 +2230,8 @@ function EditOrgDialog({
                         orderApprovalRequired,
                         blockOrderingOnUnpaidInvoices,
                         blockOrderingOnUnacknowledgedDeliveries,
+                        ...orderingBlockThresholdPayload(unpaidInvoiceBlockThreshold, unacknowledgedDeliveryBlockThreshold),
+                        managedOrdering,
                       }
                       : {}),
                   },
@@ -2064,6 +2266,7 @@ function EditBranchDialog({ branch, onSave }: Readonly<{ branch: Branch; onSave:
   const [code, setCode] = useState(branch.code ?? "")
   const [province, setProvince] = useState(branch.province ?? "")
   const [city, setCity] = useState(branch.city ?? "")
+  const [region, setRegion] = useState<BranchRegion | null>(branch.region ?? null)
   const [address, setAddress] = useState(branch.address ?? "")
   const [costCenterId, setCostCenterId] = useState(branch.costCenterId ?? "")
   const [status, setStatus] = useState<boolean>(isActiveStatus(branch.status))
@@ -2073,10 +2276,11 @@ function EditBranchDialog({ branch, onSave }: Readonly<{ branch: Branch; onSave:
     setCode(branch.code ?? "")
     setProvince(branch.province ?? "")
     setCity(branch.city ?? "")
+    setRegion(branch.region ?? null)
     setAddress(branch.address ?? "")
     setCostCenterId(branch.costCenterId ?? "")
     setStatus(isActiveStatus(branch.status))
-  }, [branch.name, branch.code, branch.province, branch.city, branch.address, branch.costCenterId, branch.status])
+  }, [branch.name, branch.code, branch.province, branch.city, branch.region, branch.address, branch.costCenterId, branch.status])
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
@@ -2122,6 +2326,7 @@ function EditBranchDialog({ branch, onSave }: Readonly<{ branch: Branch; onSave:
                 />
               </div>
             </div>
+            <BranchRegionSelect id="branch-region-edit" value={region} onChange={setRegion} />
             <div className="space-y-2">
               <Label htmlFor="branch-address-edit">Address</Label>
               <Textarea
@@ -2166,6 +2371,7 @@ function EditBranchDialog({ branch, onSave }: Readonly<{ branch: Branch; onSave:
                 name: name.trim(),
                 province: province.trim() || null,
                 city: city.trim() || null,
+                region,
                 address: address.trim() || null,
                 costCenterId: costCenterId.trim() || null,
                 status: status ? "active" : "inactive",

@@ -9,6 +9,7 @@ import useSWR from "swr"
 import { useSession } from "next-auth/react"
 import { useToast } from "@/hooks/use-toast"
 import { useOrganizations,useBranches } from "@/lib/hooks/use-api"
+import { DeliveryChallanPanel } from "@/components/orders/delivery-challan"
 import { useAppContext } from "@/components/context/app-context"
 import { ContextSelector } from "@/components/shell/context-selector"
 import { Card } from "@/components/ui/card"
@@ -17,6 +18,8 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Dialog,DialogContent,DialogHeader,DialogTitle,DialogFooter,DialogDescription } from "@/components/ui/dialog"
 import { ShoppingBag,Search,Plus,Minus,Trash2,Home,CheckCircle,Clock,AlertTriangle,DollarSign,Zap,Package,TrendingDown,Grid,ArrowRight,ArrowLeft,Calendar,MapPin,RefreshCw,Building2,Copy,Send,Pencil,Loader2,PackageCheck,ArrowDownUp,X,SlidersHorizontal,LifeBuoy } from "lucide-react"
+import { OrderCorrectionNotice, ResubmitOrderDialog } from "@/components/orders/order-correction"
+import { isAwaitingCorrection } from "@/lib/order-correction"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from "@/components/ui/select"
 import { CategoryFilter } from "@/components/shop/category-filter"
@@ -160,10 +163,13 @@ interface Order {
   fulfillmentStatus?: string | null
   totalCents: number | null
   createdAt: string
+  fulfilledAt?: string | null
   refundAmountCents?: number | null
   refundedAt?: string | null
   refundReason?: string | null
   rejectionReason?: string | null
+  returnedForCorrectionAt?: string | null
+  correctionRequestNote?: string | null
   poNumber?: string | null
   /**
    * The approved delivery address this order is to be sent to, or null/absent
@@ -330,6 +336,7 @@ export default function OrderPortalPage() {
   const [activeTab, setActiveTab] = useState<ShopTab>("shop")
   const [showOrderDetail, setShowOrderDetail] = useState(false)
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null)
+  const [resubmittingOrder, setResubmittingOrder] = useState<Order | null>(null)
   const [editingOrder, setEditingOrder] = useState<Order | null>(null)
   const [editingOriginalQuantities, setEditingOriginalQuantities] = useState<Record<number, number>>({})
   const [isLoadingOrderForEdit, setIsLoadingOrderForEdit] = useState(false)
@@ -1122,7 +1129,9 @@ export default function OrderPortalPage() {
       toast({
         title: editingOrder ? "Order Updated" : "Order Submitted",
         description: editingOrder
-          ? `Order ${json.order?.tid || editingOrder.tid} was updated and remains pending approval.`
+          ? (isAwaitingCorrection(editingOrder)
+            ? `Order ${json.order?.tid || editingOrder.tid} was updated. Resubmit it when it is ready for approval.`
+            : `Order ${json.order?.tid || editingOrder.tid} was updated and remains pending approval.`)
           : `TID: ${json.order?.tid}. Your order is now pending approval by the organization's assigned approver.`,
       })
       setCart([])
@@ -1690,7 +1699,7 @@ export default function OrderPortalPage() {
                               <p className="font-semibold text-slate-900 dark:text-white">Order {order.tid}</p>
                               <Badge variant="outline" className={`${statusInfo.bg} ${statusInfo.text} border-0`}>
                                 <StatusIcon className="h-3 w-3 mr-1" />
-                                {getOrderDerivedStatus({ status: order.status }).label}
+                                {getOrderDerivedStatus(order).label}
                               </Badge>
                               {['FULFILLED', 'PARTIAL', 'PARTIALLY_FULFILLED'].includes(order.status?.toUpperCase()) && Number(order.refundAmountCents || 0) > 0 && (
                                 <Badge variant="outline" className="px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400">
@@ -1747,6 +1756,15 @@ export default function OrderPortalPage() {
                             </p>
                           </div>
                         </div>
+
+                        {isAwaitingCorrection(order) && (
+                          <OrderCorrectionNotice
+                            className="mb-3"
+                            comment={order.correctionRequestNote}
+                            returnedAt={order.returnedForCorrectionAt}
+                            audience="requester"
+                          />
+                        )}
 
                         {(order.status?.toUpperCase() === 'REJECTED') && order.rejectionReason && (
                           <div className="mb-3 rounded bg-red-50 p-2 text-xs text-red-700 dark:bg-red-950/30 dark:text-red-300 border border-red-100 dark:border-red-900">
@@ -1824,6 +1842,16 @@ export default function OrderPortalPage() {
                             >
                               <Pencil className="h-4 w-4" />
                               Edit Order
+                            </Button>
+                          )}
+                          {isOrderPortal && isAwaitingCorrection(order) && (
+                            <Button
+                              onClick={() => setResubmittingOrder(order)}
+                              size="sm"
+                              className="flex-1 gap-2"
+                            >
+                              <Send className="h-4 w-4" />
+                              Resubmit
                             </Button>
                           )}
                           <ReceiptIconButton
@@ -2694,7 +2722,7 @@ export default function OrderPortalPage() {
                   <p className="text-sm text-muted-foreground mb-1">Status</p>
                   <div className="flex items-center gap-2 flex-wrap">
                     <Badge variant="outline" className="w-fit">
-                      {getOrderDerivedStatus({ status: selectedOrder.status }).label}
+                      {getOrderDerivedStatus(selectedOrder).label}
                     </Badge>
                     {['FULFILLED', 'PARTIAL', 'PARTIALLY_FULFILLED'].includes(selectedOrder.status?.toUpperCase()) && Number(selectedOrder.refundAmountCents || 0) > 0 && (
                       <Badge variant="outline" className="px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400">
@@ -2710,6 +2738,18 @@ export default function OrderPortalPage() {
                   </p>
                 </div>
               </div>
+
+              {isAwaitingCorrection(selectedOrder) && (
+                <OrderCorrectionNotice
+                  comment={selectedOrder.correctionRequestNote}
+                  returnedAt={selectedOrder.returnedForCorrectionAt}
+                  audience="requester"
+                />
+              )}
+
+              {String(selectedOrder.fulfillmentStatus ?? "").toUpperCase() === "DELIVERED" && (
+                <DeliveryChallanPanel orderId={selectedOrder.id} orderTid={selectedOrder.tid} />
+              )}
 
               {(selectedOrder.status.toLowerCase() === 'rejected' || selectedOrder.status === 'REJECTED') && selectedOrder.rejectionReason && (
                 <div className="rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-900 dark:bg-red-950/20">
@@ -2820,7 +2860,7 @@ export default function OrderPortalPage() {
                 orderTotalCents={selectedOrder.totalCents}
                 orderStatus={selectedOrder.status}
                 orderFulfillmentStatus={selectedOrder.fulfillmentStatus}
-                createdAt={selectedOrder.createdAt}
+                fulfilledAt={selectedOrder.fulfilledAt ?? null}
                 // The branch owns its orders, so a requester may claim on a
                 // group order raised for its branch as well as on its own.
                 allowRefundRequest={
@@ -2895,10 +2935,25 @@ export default function OrderPortalPage() {
                 {isLoadingOrderForEdit ? "Loading..." : "Edit Order"}
               </Button>
             )}
+            {isOrderPortal && selectedOrder && isAwaitingCorrection(selectedOrder) && (
+              <Button variant="outline" onClick={() => setResubmittingOrder(selectedOrder)}>
+                <Send className="mr-2 h-4 w-4" />
+                Resubmit for approval
+              </Button>
+            )}
             <Button onClick={() => setShowOrderDetail(false)}>Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ResubmitOrderDialog
+        order={resubmittingOrder}
+        onClose={() => setResubmittingOrder(null)}
+        onResubmitted={() => {
+          setShowOrderDetail(false)
+          void mutateOrders()
+        }}
+      />
     </div>
   )
 }

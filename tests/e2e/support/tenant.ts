@@ -89,6 +89,8 @@ export interface TenantSpec {
     blockOrderingOnUnpaidInvoices?: boolean
     blockOrderingOnUnacknowledgedDeliveries?: boolean
     emailDomain?: string | null
+    /** "Managed by Apricart Order Desk"; off unless a spec asks. */
+    managedOrdering?: boolean
   }
   groups?: string[]
   branches: Array<{
@@ -227,6 +229,7 @@ async function seedCompany(
       blockOrderingOnUnpaidInvoices: org.blockOrderingOnUnpaidInvoices ?? false,
       blockOrderingOnUnacknowledgedDeliveries: org.blockOrderingOnUnacknowledgedDeliveries ?? false,
       emailDomain: org.emailDomain ?? null,
+      managedOrdering: org.managedOrdering ?? false,
     })
     .returning({ id: organizations.id })
 

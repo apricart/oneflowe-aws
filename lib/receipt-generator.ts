@@ -5,7 +5,12 @@ import { formatBranchAddress } from "@/lib/branch-address"
 import { calculateLineCents } from "@/lib/quantity"
 
 export interface ReceiptData {
-    invoiceNumber: string
+    /**
+     * Absent until the tax invoice is issued at delivery
+     * (lib/invoice-policy.ts); orders placed before that change carry the
+     * number drawn when they were created.
+     */
+    invoiceNumber?: string
     /**
      * The buyer's own purchase order reference, when they supplied one. Absent
      * on orders raised without a purchase order, and on every order placed
@@ -168,7 +173,6 @@ export async function generateReceiptData(params: {
 
     // Generate receipt data
     const receiptData: ReceiptData = {
-        invoiceNumber: orderTid,
         date: new Date().toLocaleDateString("en-US", {
             month: "2-digit",
             day: "2-digit",
@@ -281,24 +285,3 @@ function groupItemsHierarchically(
     return result.sort((a, b) => a.mainCategoryName.localeCompare(b.mainCategoryName))
 }
 
-/**
- * Updates receipt data with refund information
- */
-export function updateReceiptWithRefund(
-    receiptData: ReceiptData,
-    refundAmountCents: number,
-    refundedItems?: Array<{ productName: string, quantity: number, amount: number }>
-): ReceiptData {
-    // Merge existing refunded items with new ones if any
-    const existingItems = receiptData.refundedItems || []
-    const updatedRefundedItems = refundedItems
-        ? [...existingItems, ...refundedItems]
-        : existingItems
-
-    return {
-        ...receiptData,
-        refund: (receiptData.refund || 0) + (refundAmountCents / 100),
-        refundedItems: updatedRefundedItems.length > 0 ? updatedRefundedItems : undefined,
-        totalAmount: receiptData.totalAmount - (refundAmountCents / 100),
-    }
-}

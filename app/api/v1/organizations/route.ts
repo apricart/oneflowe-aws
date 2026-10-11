@@ -73,9 +73,10 @@ function validateOrganizationFields(body: OrganizationCreateInput) {
 
   // Optional field: blank input is stored as NULL rather than an empty string.
   const ntnNumber = body.ntnNumber ? body.ntnNumber.trim() || null : null
+  const strnNumber = body.strnNumber ? body.strnNumber.trim() || null : null
 
   return {
-    values: { name, code, ntnNumber, status, budgetAllocationMode, hideBranchAdminPrices, hideOrderPortalPrices },
+    values: { name, code, ntnNumber, strnNumber, status, budgetAllocationMode, hideBranchAdminPrices, hideOrderPortalPrices },
   }
 }
 
@@ -180,6 +181,7 @@ export async function POST(req: Request) {
       name,
       code,
       ntnNumber,
+      strnNumber,
       status,
       budgetAllocationMode,
       hideBranchAdminPrices,
@@ -221,6 +223,7 @@ export async function POST(req: Request) {
           name,
           code,
           ntnNumber,
+          strnNumber,
           // Already normalised by the schema; absent or blank is null.
           emailDomain: body.emailDomain ?? null,
           status,
@@ -228,9 +231,12 @@ export async function POST(req: Request) {
           orderApprovalRequired: body.orderApprovalRequired,
           blockOrderingOnUnpaidInvoices: body.blockOrderingOnUnpaidInvoices,
           blockOrderingOnUnacknowledgedDeliveries: body.blockOrderingOnUnacknowledgedDeliveries,
+          unpaidInvoiceBlockThreshold: body.unpaidInvoiceBlockThreshold,
+          unacknowledgedDeliveryBlockThreshold: body.unacknowledgedDeliveryBlockThreshold,
           // Written explicitly: the column default keeps directly inserted
           // rows budgeted, the product default for a new tenant is off.
           budgetsEnabled: body.budgetsEnabled,
+          managedOrdering: body.managedOrdering,
           privateNetworkLoginEnabled: privateNetworkLogin.enabled,
         })
         .returning()
@@ -270,7 +276,10 @@ export async function POST(req: Request) {
           orderApprovalRequired: body.orderApprovalRequired,
           blockOrderingOnUnpaidInvoices: body.blockOrderingOnUnpaidInvoices,
           blockOrderingOnUnacknowledgedDeliveries: body.blockOrderingOnUnacknowledgedDeliveries,
+          unpaidInvoiceBlockThreshold: body.unpaidInvoiceBlockThreshold,
+          unacknowledgedDeliveryBlockThreshold: body.unacknowledgedDeliveryBlockThreshold,
           budgetsEnabled: body.budgetsEnabled,
+          managedOrdering: body.managedOrdering,
           budgetAllocationMode,
           emailDomain: createdOrganization.emailDomain,
           privateNetworkLoginEnabled: privateNetworkLogin.enabled,

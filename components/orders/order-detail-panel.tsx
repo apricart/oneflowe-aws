@@ -22,10 +22,12 @@ import {
   ChevronDown,
   Loader2,
   User,
+  CornerUpLeft,
 } from "lucide-react"
 import { format } from "date-fns"
 
 import { toast } from "@/hooks/use-toast"
+import { DeliveryChallanPanel } from "@/components/orders/delivery-challan"
 import { cn, formatPKR } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -80,6 +82,8 @@ export function getStatusColor(statusKey: DerivedOrderStatusKey) {
       return { bg: "bg-emerald-500/10 dark:bg-emerald-500/20", text: "text-emerald-600 dark:text-emerald-400", border: "border-emerald-200 dark:border-emerald-800", icon: <CheckCircle className="h-4 w-4" /> }
     case "approved":
       return { bg: "bg-blue-500/10 dark:bg-blue-500/20", text: "text-blue-600 dark:text-blue-400", border: "border-blue-200 dark:border-blue-800", icon: <FileCheck className="h-4 w-4" /> }
+    case "returned_for_correction":
+      return { bg: "bg-amber-500/10 dark:bg-amber-500/20", text: "text-amber-700 dark:text-amber-300", border: "border-amber-200 dark:border-amber-800", icon: <CornerUpLeft className="h-4 w-4" /> }
     case "pending":
       return { bg: "bg-slate-100 dark:bg-slate-800", text: "text-slate-600 dark:text-slate-300", border: "border-slate-200 dark:border-slate-700", icon: <Clock className="h-4 w-4" /> }
     case "rejected":
@@ -362,6 +366,12 @@ export function OrderDetailPanel({
                   onToggle={onToggleDetails}
                   onRetry={onRetryDetails}
                 />
+
+                {/* Proof of delivery, for whoever can read this order; the
+                    endpoints behind it apply the order detail's own rule. */}
+                {isDeliveredOrder && typeof order.id === "number" && (
+                  <DeliveryChallanPanel orderId={order.id} orderTid={String(order.tid ?? order.id)} canReplace={isSuperAdmin} />
+                )}
 
               </div>
 

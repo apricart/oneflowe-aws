@@ -68,6 +68,10 @@ import {
   shouldShowOrderPaymentStatus,
 } from "@/lib/order-status-display"
 import { isUnacknowledgedDelivery } from "@/lib/unacknowledged-delivery-block"
+import { isAwaitingCorrection } from "@/lib/order-correction"
+import { OrderCorrectionNotice, ReturnForCorrectionDialog } from "@/components/orders/order-correction"
+import { DeliveryChallanUploadDialog } from "@/components/orders/delivery-challan"
+import { InvoiceStatusBadge } from "@/components/orders/invoice-status-badge"
 import { TOKEN_SENT_LABEL, isTokenAlreadySent, readTokenSendRefusal } from "@/lib/order-token-handoff"
 import {
   DELIVERED_UNFULFILLED_LABEL,
@@ -79,8 +83,10 @@ type OrderTableColumn = ColumnDef & { width: number }
 const ORDER_TABLE_COLUMNS: OrderTableColumn[] = [
   { key: "id", label: "Order ID", width: 96 },
   { key: "tid", label: "Transaction ID", width: 224 },
+  { key: "organization", label: "Organization", width: 176 },
   { key: "branch", label: "Branch", width: 160 },
   { key: "costCenter", label: "Cost Center", width: 104 },
+  { key: "partialDelivery", label: "Partial Delivery", width: 128 },
   { key: "orderStatus", label: "Order Status", width: 152 },
   { key: "progress", label: "Progress", width: 140 },
   { key: "paymentStatus", label: "Payment", width: 108 },
@@ -88,6 +94,7 @@ const ORDER_TABLE_COLUMNS: OrderTableColumn[] = [
   { key: "orderDate", label: "Order Date", width: 112 },
   { key: "approvalDate", label: "Approval Date", width: 120 },
   { key: "deliveryDate", label: "Delivery Date", width: 120 },
+  { key: "invoiceStatus", label: "Invoice Status", width: 148 },
   { key: "amount", label: "Amount", width: 120 },
 ]
 
@@ -98,6 +105,13 @@ const ORDER_TABLE_COLUMNS: OrderTableColumn[] = [
  */
 const TOKEN_COLUMN_WIDTH = 180
 const ACTION_COLUMN_WIDTH = 150
+const PARTIAL_DELIVERY_STATUSES = new Set(["PARTIAL", "PARTIALLY_FULFILLED"])
+
+function isPartialDelivery(order: { partialDelivery?: boolean; status?: string | null }): boolean {
+  return order.partialDelivery
+    ?? PARTIAL_DELIVERY_STATUSES.has(String(order.status || "").trim().toUpperCase())
+}
+
 /** Numbers and dates show the largest or newest first on the first click. */
 const DESC_FIRST_SORT_KEYS = new Set<OrderListSortKey>(["id", "orderDate", "approvalDate", "deliveryDate", "amount"])
 const PINNED_CELL_CLASS = "sticky z-10 bg-white group-hover:bg-slate-50 dark:bg-slate-900 dark:group-hover:bg-slate-800"
@@ -125,6 +139,23 @@ type OrdersDirectoryProps = {
   sort?: SortState<OrderListSortKey>
   onSort?: (key: OrderListSortKey, firstDirection?: SortDirection) => void
   onUpdate: () => void
+}
+
+/**
+ * Marks an order Apricart's Order Desk entered. An Apricart Executive approves
+ * it; the tenant's approvers see it but cannot decide it, and the decision
+ * routes refuse them (plans/OF-EXEC-APPROVAL-executive-approves-desk-orders.md).
+ */
+function ApricartOrderBadge({ pending }: Readonly<{ pending: boolean }>) {
+  return (
+    <Badge
+      variant="outline"
+      title={pending ? "Entered by Apricart's Order Desk; an Apricart Executive approves it" : "Entered by Apricart's Order Desk"}
+      className="mt-1 rounded-lg border border-sky-200 bg-sky-50 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300"
+    >
+      {pending ? "Awaiting Apricart approval" : "Apricart Order Desk"}
+    </Badge>
+  )
 }
 
 /**
@@ -193,12 +224,17 @@ export function OrdersDirectory({
   const router = useRouter()
   const [viewMode, setViewMode] = useState<"grid" | "table">("table")
   const [viewingOrder, setViewingOrder] = useState<any>(null)
+  // An Order Desk entry is an Apricart Executive's to decide, never the tenant's.
+  const canDecideViewingOrder = canDecideOrders && !viewingOrder?.decidedByApricart
 
   // Modals for actions
   const [actionType, setActionType] = useState<"approve" | "reject" | null>(null)
   const [generatedToken, setGeneratedToken] = useState<string | null>(null)
   const [showTokenDialog, setShowTokenDialog] = useState(false)
   const [rejectReason, setRejectReason] = useState("")
+  const [returningOrder, setReturningOrder] = useState<{ id: number; tid: string } | null>(null)
+  // The order whose delivery is waiting on its challan upload.
+  const [challanOrder, setChallanOrder] = useState<{ id: number; tid: string } | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
   const [isUpdatingProgress, setIsUpdatingProgress] = useState(false)
   const [isUpdatingPayment, setIsUpdatingPayment] = useState(false)
@@ -210,6 +246,7 @@ export function OrdersDirectory({
   const [orderDetailsError, setOrderDetailsError] = useState<string | null>(null)
   const [orderDetailsRequestKey, setOrderDetailsRequestKey] = useState(0)
   const viewingOrderId = viewingOrder?.id
+  const showOrganizationColumn = isSuperAdmin && userRole === "SUPER_ADMIN"
   const viewingOrderCanHandoffToken = !isSuperAdmin
     && String(viewingOrder?.status ?? "").trim().toUpperCase() === "APPROVED"
     && typeof viewingOrder?.approvalToken === "string"
@@ -220,6 +257,7 @@ export function OrdersDirectory({
     "orders-directory-table-v1",
   )
   const availableTableColumns = ORDER_TABLE_COLUMNS.filter((column) => {
+    if (column.key === "organization") return showOrganizationColumn
     if (column.key === "costCenter") return shouldShowCostCenterId
     if (column.key === "amount") return !pricesHidden
     return true
@@ -359,46 +397,68 @@ export function OrdersDirectory({
     }
   }
 
+  /**
+   * Record one step of delivery progress. Delivered needs the uploaded
+   * challan's id; the server refuses it without one. Throws on refusal so the
+   * caller decides how to show it.
+   */
+  const postFulfillmentProgress = async (order: any, nextStatus: FulfillmentStatus, deliveryChallanId?: number) => {
+    const res = await fetch(`/api/v1/orders/${order.id}/fulfillment-status`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        fulfillmentStatus: nextStatus,
+        ...(deliveryChallanId === undefined ? {} : { deliveryChallanId }),
+      }),
+    })
+
+    const responseText = await res.text()
+    const data = responseText
+      ? (() => {
+          try {
+            return JSON.parse(responseText)
+          } catch {
+            return { error: responseText }
+          }
+        })()
+      : {}
+
+    if (!res.ok) throw new Error(data.error || "Failed to update fulfillment progress")
+
+    const updatedOrder = {
+      ...order,
+      fulfillmentStatus: data.item?.fulfillmentStatus || nextStatus,
+      // Recording delivery settles an order whose fulfilment token has
+      // already reached the admin, so the order status is taken from the
+      // server rather than assumed to be unchanged.
+      status: data.item?.status || order.status,
+    }
+    setViewingOrder(updatedOrder)
+    toast({
+      title: data?.fulfilled ? "Delivered — order fulfilled" : "Progress updated",
+      description: data?.fulfilled
+        ? `Order marked ${FULFILLMENT_STATUS_LABELS[nextStatus]}. Its fulfilment token was already sent to the admin, so the order is now fulfilled.`
+        : `Order marked ${FULFILLMENT_STATUS_LABELS[nextStatus]}.`,
+    })
+    onUpdate()
+  }
+
+  /** Delivered goes through the challan dialog; every earlier step posts directly. */
+  const requestFulfillmentProgress = (nextStatus: FulfillmentStatus) => {
+    if (!viewingOrder) return
+    if (nextStatus === "DELIVERED") {
+      setChallanOrder({ id: viewingOrder.id, tid: viewingOrder.tid })
+      return
+    }
+    void updateFulfillmentProgress(nextStatus)
+  }
+
   const updateFulfillmentProgress = async (nextStatus: FulfillmentStatus) => {
     if (!viewingOrder) return
 
     setIsUpdatingProgress(true)
     try {
-      const res = await fetch(`/api/v1/orders/${viewingOrder.id}/fulfillment-status`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fulfillmentStatus: nextStatus }),
-      })
-
-      const responseText = await res.text()
-      const data = responseText
-        ? (() => {
-            try {
-              return JSON.parse(responseText)
-            } catch {
-              return { error: responseText }
-            }
-          })()
-        : {}
-
-      if (!res.ok) throw new Error(data.error || "Failed to update fulfillment progress")
-
-      const updatedOrder = {
-        ...viewingOrder,
-        fulfillmentStatus: data.item?.fulfillmentStatus || nextStatus,
-        // Recording delivery settles an order whose fulfilment token has
-        // already reached the admin, so the order status is taken from the
-        // server rather than assumed to be unchanged.
-        status: data.item?.status || viewingOrder.status,
-      }
-      setViewingOrder(updatedOrder)
-      toast({
-        title: data?.fulfilled ? "Delivered — order fulfilled" : "Progress updated",
-        description: data?.fulfilled
-          ? `Order marked ${FULFILLMENT_STATUS_LABELS[nextStatus]}. Its fulfilment token was already sent to the admin, so the order is now fulfilled.`
-          : `Order marked ${FULFILLMENT_STATUS_LABELS[nextStatus]}.`,
-      })
-      onUpdate()
+      await postFulfillmentProgress(viewingOrder, nextStatus)
     } catch (err: any) {
       toast({
         title: "Progress Update Failed",
@@ -637,6 +697,7 @@ export function OrdersDirectory({
                         Order ID <span className="font-mono">#{order.id}</span>
                       </p>
                       {order.placedByGroupPortal && <GroupOrderBadge />}
+                      {order.decidedByApricart && <ApricartOrderBadge pending={order.status?.toLowerCase() === "pending"} />}
                       {isUnacknowledgedDelivery(order) && <DeliveredUnfulfilledBadge />}
                     </div>
                     <Badge
@@ -730,8 +791,10 @@ export function OrdersDirectory({
                 <tr className="border-b border-slate-200 text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:border-slate-800">
                   {isTableColumnVisible("id") && <th aria-sort={ariaSortFor(sort, "id")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap py-2.5 pl-5 pr-3 text-left font-bold")}>{sortLabel("id", "Order ID")}</th>}
                   {isTableColumnVisible("tid") && <th aria-sort={ariaSortFor(sort, "tid")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-left font-bold")}>{sortLabel("tid", "Transaction ID")}</th>}
+                  {isTableColumnVisible("organization") && <th className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-left font-bold")}>Organization</th>}
                   {isTableColumnVisible("branch") && <th aria-sort={ariaSortFor(sort, "branch")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-left font-bold")}>{sortLabel("branch", "Branch")}</th>}
                   {isTableColumnVisible("costCenter") && <th aria-sort={ariaSortFor(sort, "costCenter")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-left font-bold")}>{sortLabel("costCenter", "Cost Center")}</th>}
+                  {isTableColumnVisible("partialDelivery") && <th className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-center font-bold")}>Partial Delivery</th>}
                   {isTableColumnVisible("orderStatus") && <th aria-sort={ariaSortFor(sort, "orderStatus")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-center font-bold")}>{sortLabel("orderStatus", "Order Status")}</th>}
                   {isTableColumnVisible("progress") && <th aria-sort={ariaSortFor(sort, "progress")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-center font-bold")}>{sortLabel("progress", "Progress")}</th>}
                   {isTableColumnVisible("paymentStatus") && <th aria-sort={ariaSortFor(sort, "paymentStatus")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-center font-bold")}>{sortLabel("paymentStatus", "Payment")}</th>}
@@ -739,6 +802,7 @@ export function OrdersDirectory({
                   {isTableColumnVisible("orderDate") && <th aria-sort={ariaSortFor(sort, "orderDate")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-left font-bold")}>{sortLabel("orderDate", "Order Date")}</th>}
                   {isTableColumnVisible("approvalDate") && <th aria-sort={ariaSortFor(sort, "approvalDate")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-left font-bold")}>{sortLabel("approvalDate", "Approval Date")}</th>}
                   {isTableColumnVisible("deliveryDate") && <th aria-sort={ariaSortFor(sort, "deliveryDate")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-left font-bold")}>{sortLabel("deliveryDate", "Delivery Date")}</th>}
+                  {isTableColumnVisible("invoiceStatus") && <th aria-sort={ariaSortFor(sort, "invoiceStatus")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-center font-bold")}>{sortLabel("invoiceStatus", "Invoice Status")}</th>}
                   {isTableColumnVisible("amount") && <th aria-sort={ariaSortFor(sort, "amount")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap py-2.5 pl-3 pr-5 text-right font-bold")}>{sortLabel("amount", "Amount")}</th>}
                   {showFulfillmentColumns && (
                     <>
@@ -791,7 +855,13 @@ export function OrdersDirectory({
                       {isTableColumnVisible("tid") && <td className="px-3 py-3">
                         <span className="block truncate font-mono text-xs font-bold text-slate-700 dark:text-slate-300 group-hover:text-indigo-600 transition-colors uppercase tracking-wider" title={order.tid}>{order.tid}</span>
                         {order.placedByGroupPortal && <GroupOrderBadge />}
+                        {order.decidedByApricart && <ApricartOrderBadge pending={order.status?.toLowerCase() === "pending"} />}
                         {isUnacknowledgedDelivery(order) && <DeliveredUnfulfilledBadge />}
+                      </td>}
+                      {isTableColumnVisible("organization") && <td className="px-3 py-3">
+                        <span className="block truncate font-medium text-slate-600 dark:text-slate-400" title={order.organizationName || undefined}>
+                          {order.organizationName || "—"}
+                        </span>
                       </td>}
                       {isTableColumnVisible("branch") && <td className="px-3 py-3">
                         <div className="flex items-center gap-2">
@@ -806,6 +876,11 @@ export function OrdersDirectory({
                           <span className="font-mono text-xs font-bold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-md">
                             {order.branchCostCenterId || "-"}
                           </span>
+                        </td>
+                      )}
+                      {isTableColumnVisible("partialDelivery") && (
+                        <td className="px-3 py-3 text-center font-medium text-slate-600 dark:text-slate-400">
+                          {isPartialDelivery(order) ? "Yes" : "No"}
                         </td>
                       )}
                       {isTableColumnVisible("orderStatus") && <td className="px-3 py-3 text-center">
@@ -855,6 +930,9 @@ export function OrdersDirectory({
                       </td>}
                       {isTableColumnVisible("deliveryDate") && <td className="whitespace-nowrap px-3 py-3 text-xs font-medium text-slate-500">
                         {order.deliveredAt ? format(new Date(order.deliveredAt), "dd MMM yyyy") : "—"}
+                      </td>}
+                      {isTableColumnVisible("invoiceStatus") && <td className="px-3 py-3 text-center">
+                        <InvoiceStatusBadge status={order.invoiceStatus} />
                       </td>}
                       {isTableColumnVisible("amount") && <td className="whitespace-nowrap py-3 pl-3 pr-5 text-right font-bold text-slate-800 dark:text-slate-200">
                         {order.totalCents !== null && order.totalCents !== undefined ? formatPKR(order.totalCents / 100) : "-"}
@@ -1025,13 +1103,37 @@ export function OrdersDirectory({
                   </div>
                 )}
 
+                {isAwaitingCorrection(viewingOrder) && (
+                  <OrderCorrectionNotice
+                    comment={viewingOrder.correctionRequestNote}
+                    returnedAt={viewingOrder.returnedForCorrectionAt}
+                    audience="approver"
+                  />
+                )}
+
+                {viewingOrder.status.toLowerCase() === "pending" && canDecideViewingOrder && !isAwaitingCorrection(viewingOrder) && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setReturningOrder({ id: viewingOrder.id, tid: viewingOrder.tid })}
+                    className="w-full h-12 rounded-xl text-amber-700 border-amber-200 hover:bg-amber-50 dark:hover:bg-amber-900/20 dark:border-amber-800"
+                  >
+                    Return for correction
+                  </Button>
+                )}
+
                 <div className="flex gap-3">
-                  {viewingOrder.status.toLowerCase() === "pending" && canDecideOrders && (
+                  {viewingOrder.status.toLowerCase() === "pending" && canDecideViewingOrder && (
                     <>
                       <Button onClick={() => setActionType("reject")} variant="outline" className="flex-1 h-12 rounded-xl text-rose-600 border-rose-200 hover:bg-rose-50 dark:hover:bg-rose-900/20 dark:border-rose-800">
                         Reject
                       </Button>
-                      <Button onClick={() => setActionType("approve")} className="flex-1 h-12 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold shadow-lg shadow-emerald-600/20">
+                      <Button
+                        onClick={() => setActionType("approve")}
+                        disabled={isAwaitingCorrection(viewingOrder)}
+                        title={isAwaitingCorrection(viewingOrder) ? "Waiting for the requester to resubmit" : undefined}
+                        className="flex-1 h-12 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold shadow-lg shadow-emerald-600/20"
+                      >
                         Approve
                       </Button>
                     </>
@@ -1047,7 +1149,7 @@ export function OrdersDirectory({
                           <Button
                             type="button"
                             disabled={isUpdatingProgress}
-                            onClick={() => updateFulfillmentProgress(nextStatus)}
+                            onClick={() => requestFulfillmentProgress(nextStatus)}
                             className="w-full h-12 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold shadow-lg shadow-sky-600/20"
                           >
                             <Truck className={cn("mr-2 h-4 w-4", isUpdatingProgress && "animate-pulse")} />
@@ -1170,7 +1272,24 @@ export function OrdersDirectory({
         </DialogContent>
       </Dialog>
 
+      <DeliveryChallanUploadDialog
+        order={challanOrder}
+        mode="deliver"
+        onClose={() => setChallanOrder(null)}
+        onUploaded={async (challanId) => {
+          if (!viewingOrder) throw new Error("The order is no longer open")
+          await postFulfillmentProgress(viewingOrder, "DELIVERED", challanId)
+        }}
+      />
 
+      <ReturnForCorrectionDialog
+        order={returningOrder}
+        onClose={() => setReturningOrder(null)}
+        onReturned={() => {
+          setViewingOrder(null)
+          onUpdate()
+        }}
+      />
     </div>
   )
 }

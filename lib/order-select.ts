@@ -43,6 +43,11 @@ export const orderSelectColumns = {
   rejectedByUserId: orders.rejectedByUserId,
   rejectedAt: orders.rejectedAt,
   rejectionReason: orders.rejectionReason,
+  // The open correction request, while one is open — see
+  // plans/OF-ORDER-RETURN-for-correction.md. Who sent it back stays out of
+  // the shared read: the history on the order detail names people.
+  returnedForCorrectionAt: orders.returnedForCorrectionAt,
+  correctionRequestNote: orders.correctionRequestNote,
   approvalToken: orders.approvalToken,
   approvalTokenHash: orders.approvalTokenHash,
   approvalTokenCreatedAt: orders.approvalTokenCreatedAt,

@@ -1,0 +1,199 @@
+{
+  "created": {
+    "id": 77,
+    "reference": "SUP-000077"
+  },
+  "list": {
+    "items": [
+      {
+        "id": 77,
+        "reference": "SUP-000077",
+        "subject": "Invoice question S",
+        "category": "OTHER",
+        "status": "OPEN",
+        "priority": "NORMAL",
+        "organizationId": 456,
+        "organizationName": "IT Support Org S",
+        "branchId": null,
+        "branchName": null,
+        "orderId": null,
+        "orderTid": null,
+        "productId": null,
+        "productCode": null,
+        "productName": null,
+        "createdByUserId": "7638c19a-6aa2-4b00-b99b-28edcbf4fd99",
+        "createdByName": "Head Office A S",
+        "assignedToName": null,
+        "messageCount": 1,
+        "lastMessageAt": "2026-10-06T07:40:42.054Z",
+        "lastMessageSide": "CUSTOMER",
+        "createdAt": "2026-10-06T07:40:42.054Z",
+        "unread": false
+      }
+    ],
+    "total": 1,
+    "unreadCount": 0,
+    "page": 1,
+    "pageSize": 20
+  },
+  "thread": {
+    "thread": {
+      "id": 77,
+      "reference": "SUP-000077",
+      "subject": "Invoice question S",
+      "category": "OTHER",
+      "status": "OPEN",
+      "priority": "NORMAL",
+      "organizationId": 456,
+      "organizationName": "IT Support Org S",
+      "branchId": null,
+      "branchName": null,
+      "orderId": null,
+      "orderTid": null,
+      "productId": null,
+      "productCode": null,
+      "productName": null,
+      "createdByUserId": "7638c19a-6aa2-4b00-b99b-28edcbf4fd99",
+      "createdByName": "Head Office A S",
+      "assignedToName": null,
+      "messageCount": 1,
+      "lastMessageAt": "2026-10-06T07:40:42.054Z",
+      "lastMessageSide": "CUSTOMER",
+      "createdAt": "2026-10-06T07:40:42.054Z",
+      "unread": false,
+      "assignedToUserId": null,
+      "resolvedAt": null,
+      "closedAt": null,
+      "messages": [
+        {
+          "id": 121,
+          "authorUserId": "7638c19a-6aa2-4b00-b99b-28edcbf4fd99",
+          "authorName": "Head Office A S",
+          "authorSide": "CUSTOMER",
+          "authorRole": "HEAD_OFFICE",
+          "body": "Totals do not match.",
+          "createdAt": "2026-10-06T07:40:42.054Z",
+          "attachments": []
+        }
+      ]
+    },
+    "viewer": {
+      "side": "CUSTOMER",
+      "canManage": false,
+      "userId": "7638c19a-6aa2-4b00-b99b-28edcbf4fd99"
+    }
+  },
+  "stats": {
+    "total": 1,
+    "open": 1,
+    "awaitingCustomer": 0,
+    "resolved": 0,
+    "closed": 0,
+    "unread": 0,
+    "urgent": 0,
+    "unanswered": 1,
+    "openedLast7Days": 1,
+    "avgFirstResponseMinutes": null
+  },
+  "products": {
+    "items": [
+      {
+        "id": 646,
+        "productCode": "ITS-CARRIED-S",
+        "name": "Our Carried S"
+      }
+    ]
+  },
+  "listApricart": {
+    "items": [
+      {
+        "id": 77,
+        "reference": "SUP-000077",
+        "subject": "Invoice question S",
+        "category": "OTHER",
+        "status": "OPEN",
+        "priority": "NORMAL",
+        "organizationId": 456,
+        "organizationName": "IT Support Org S",
+        "branchId": null,
+        "branchName": null,
+        "orderId": null,
+        "orderTid": null,
+        "productId": null,
+        "productCode": null,
+        "productName": null,
+        "createdByUserId": "7638c19a-6aa2-4b00-b99b-28edcbf4fd99",
+        "createdByName": "Head Office A S",
+        "assignedToName": null,
+        "messageCount": 1,
+        "lastMessageAt": "2026-10-06T07:40:42.054Z",
+        "lastMessageSide": "CUSTOMER",
+        "createdAt": "2026-10-06T07:40:42.054Z",
+        "unread": true
+      }
+    ],
+    "total": 1,
+    "unreadCount": 1,
+    "page": 1,
+    "pageSize": 20
+  },
+  "threadApricart": {
+    "thread": {
+      "id": 77,
+      "reference": "SUP-000077",
+      "subject": "Invoice question S",
+      "category": "OTHER",
+      "status": "OPEN",
+      "priority": "NORMAL",
+      "organizationId": 456,
+      "organizationName": "IT Support Org S",
+      "branchId": null,
+      "branchName": null,
+      "orderId": null,
+      "orderTid": null,
+      "productId": null,
+      "productCode": null,
+      "productName": null,
+      "createdByUserId": "7638c19a-6aa2-4b00-b99b-28edcbf4fd99",
+      "createdByName": "Head Office A S",
+      "assignedToName": null,
+      "messageCount": 1,
+      "lastMessageAt": "2026-10-06T07:40:42.054Z",
+      "lastMessageSide": "CUSTOMER",
+      "createdAt": "2026-10-06T07:40:42.054Z",
+      "unread": true,
+      "assignedToUserId": null,
+      "resolvedAt": null,
+      "closedAt": null,
+      "messages": [
+        {
+          "id": 121,
+          "authorUserId": "7638c19a-6aa2-4b00-b99b-28edcbf4fd99",
+          "authorName": "Head Office A S",
+          "authorSide": "CUSTOMER",
+          "authorRole": "HEAD_OFFICE",
+          "body": "Totals do not match.",
+          "createdAt": "2026-10-06T07:40:42.054Z",
+          "attachments": []
+        }
+      ]
+    },
+    "viewer": {
+      "side": "APRICART",
+      "canManage": true,
+      "userId": "77ed9832-fece-4d1d-ab13-174fcd877e39"
+    }
+  },
+  "statsApricart": {
+    "total": 1,
+    "open": 1,
+    "awaitingCustomer": 0,
+    "resolved": 0,
+    "closed": 0,
+    "unread": 0,
+    "urgent": 0,
+    "unanswered": 1,
+    "openedLast7Days": 1,
+    "avgFirstResponseMinutes": null
+  }
+}

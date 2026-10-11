@@ -44,6 +44,32 @@ function getTextFieldUpdate(value: unknown, minimumLength: number, maximumLength
   return { value: normalized || null }
 }
 
+/** Sets the group and region a patch names, each already validated by `branchUpdateSchema`. */
+function applyReferencePatch(patch: any, body: any) {
+  if (body.groupId !== undefined) patch.groupId = body.groupId === null ? null : Number(body.groupId)
+  if (body.region !== undefined) patch.region = body.region
+}
+
+/**
+ * Why this caller may not write this branch, or null. Head Office writes only
+ * its own organization's branches. The delivery region feeds Apricart's
+ * management dashboard across every tenant, so it is Apricart's to set, not a
+ * tenant's.
+ */
+function branchWriteRefusal(
+  scope: { role: string; organizationId: number | null } | null,
+  branchOrganizationId: number,
+  body: { region?: unknown },
+): string | null {
+  if (scope?.role === "HEAD_OFFICE" && (!scope.organizationId || scope.organizationId !== branchOrganizationId)) {
+    return "Forbidden"
+  }
+  if (body.region !== undefined && scope?.role !== "SUPER_ADMIN") {
+    return "Only Super Admin can set a branch's region"
+  }
+  return null
+}
+
 function buildBranchPatch(body: any) {
   const patch: any = {}
   if (body.name !== undefined) patch.name = String(body.name)
@@ -71,7 +97,7 @@ function buildBranchPatch(body: any) {
     }
     patch.status = normalized
   }
-  if (body.groupId !== undefined) patch.groupId = body.groupId === null ? null : Number(body.groupId)
+  applyReferencePatch(patch, body)
   patch.updatedAt = new Date()
   return { patch }
 }
@@ -105,6 +131,7 @@ export async function GET(
       name: branches.name,
       province: branches.province,
       city: branches.city,
+      region: branches.region,
       address: branches.address,
       costCenterId: branches.costCenterId,
       adminUserId: branches.adminUserId,
@@ -153,11 +180,8 @@ export async function PATCH(
       .where(eq(branches.id, Number(id)))
     if (!currentBranch) return error("Not found", 404)
 
-    if (scope?.role === "HEAD_OFFICE") {
-      if (!scope.organizationId || scope.organizationId !== currentBranch.organizationId) {
-        return error("Forbidden", 403)
-      }
-    }
+    const refusal = branchWriteRefusal(scope, currentBranch.organizationId, body)
+    if (refusal) return error(refusal, 403)
 
     if (await hasDuplicateBranchName(currentBranch, Number(id), body.name)) {
       return error("A branch with this name already exists in this organization.", 409)

@@ -21,6 +21,8 @@ export const ORDER_LIST_SORT_KEYS = [
   "orderDate",
   "approvalDate",
   "deliveryDate",
+  // Sorts by the document's stage (lib/invoice-status.ts), never an amount.
+  "invoiceStatus",
   "amount",
 ] as const
 export type OrderListSortKey = (typeof ORDER_LIST_SORT_KEYS)[number]
@@ -75,3 +77,25 @@ export function sortKeysForCaller<K extends string>(
 ): readonly K[] {
   return pricesHidden ? keys.filter((key) => !priceKeys.includes(key)) : keys
 }
+
+/**
+ * The Consolidated Invoice Report (plans/OF-INVOICE-consolidated-invoices.md).
+ * Sorted on the server, in memory, over the bounded row set, so the preview and
+ * the PDF print in the same order. No key is withheld: only roles that see
+ * prices read this report.
+ */
+export const CONSOLIDATED_INVOICE_SORT_KEYS = [
+  "invoiceNumber",
+  "invoiceDate",
+  "orderId",
+  "orderStatus",
+  "department",
+  "approver",
+  "crc",
+  "quantity",
+  "valueExclTax",
+  "taxRate",
+  "tax",
+  "total",
+] as const
+export type ConsolidatedInvoiceSortKey = (typeof CONSOLIDATED_INVOICE_SORT_KEYS)[number]

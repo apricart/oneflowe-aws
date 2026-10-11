@@ -16,7 +16,10 @@ concurrency:
 jobs:
   scan-and-deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    # Tests, scans, image build and the SSM deploy all share this budget. At
+    # 35 minutes a slow SonarCloud analysis used it up and the run was
+    # cancelled before staging was deployed.
+    timeout-minutes: 60
 
     # The role suites exercise real assignment joins, tenant boundaries, and
     # reporting arithmetic. Run them against a fresh database before an image
@@ -105,7 +108,7 @@ jobs:
       - name: Migrate the throwaway test database
         env:
           MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/oneflowe_test
-        run: npm run db:migrate
+        run: npm run db:migrate:test
 
       - name: Run integration tests
         env:
@@ -152,9 +155,13 @@ jobs:
       - name: Run lint
         run: npm run lint
 
-      # Report-only scan. It will not block deployment.
+      # Report-only scan. It will not block deployment. Its own timeout keeps
+      # a slow TypeScript analysis from spending the job's budget: when it
+      # expires the step fails, continue-on-error carries on, and the image is
+      # still built and deployed.
       - name: SonarCloud scan
         continue-on-error: true
+        timeout-minutes: 15
         uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6.0.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

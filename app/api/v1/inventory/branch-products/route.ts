@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
-import { branchProducts, globalProducts, organizationProducts, auditLogs, categories } from "@/db/schema"
+import { branchProducts, branches, globalProducts, organizationProducts, auditLogs, categories } from "@/db/schema"
 import { eq, and, sql } from "drizzle-orm"
 import { getCached, invalidateByPrefix, scopedCacheKey, CACHE_TTL } from "@/lib/cache-utils"
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
@@ -28,18 +28,29 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Branch ID and Organization ID are required" }, { status: 400 })
     }
 
-    // Access control: users can only view their own organization's branches
-    // BRANCH_ADMIN can only view their own branch
-    if (userRole === "BRANCH_ADMIN") {
-      if (userBranchId !== Number.parseInt(branchId) || userOrgId !== Number.parseInt(organizationId)) {
+    // Access control. Super Admin may name any branch. Everyone else reads
+    // only their own organization, a branch-pinned role only its own branch,
+    // and the branch must belong to the organization named. This used to
+    // check Branch Admin and Head Office alone, so any other signed-in role
+    // could read another tenant's catalogue and prices by naming its ids.
+    if (userRole !== "SUPER_ADMIN") {
+      const requestedOrganizationId = Number.parseInt(organizationId)
+      const requestedBranchId = Number.parseInt(branchId)
+      if (!userOrgId || userOrgId !== requestedOrganizationId) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 })
       }
-    } else if (userRole === "HEAD_OFFICE") {
-      if (userOrgId !== Number.parseInt(organizationId)) {
+      if ((userRole === "BRANCH_ADMIN" || userRole === "ORDER_PORTAL") && userBranchId !== requestedBranchId) {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+      }
+      const [ownedBranch] = await db
+        .select({ id: branches.id })
+        .from(branches)
+        .where(and(eq(branches.id, requestedBranchId), eq(branches.organizationId, requestedOrganizationId)))
+        .limit(1)
+      if (!ownedBranch) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 })
       }
     }
-    // SUPER_ADMIN can view any branch
 
     const pricesHidden = await shouldHidePricesForRole(userRole, organizationId)
     const cacheKey = scopedCacheKey('inv:branch-products', { orgId: organizationId, branchId, role: userRole }, { pricesHidden })

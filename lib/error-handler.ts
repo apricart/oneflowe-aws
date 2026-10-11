@@ -161,6 +161,32 @@ function parseKnownError(errorMsg: string): ErrorDetails | null {
   return KNOWN_ERROR_RULES.find(({ matches }) => matches(errorMsg))?.details ?? null
 }
 
+/**
+ * A 4xx carried on the error (`jsonFetcher` / `fetcher` attach the response
+ * status) means our own API wrote the message for the user. The keyword rules
+ * above exist for raw exceptions; applied to an API message they replaced it
+ * with unrelated canned text — "Branch does not belong to the selected
+ * organization" became "You can only manage users within your own
+ * organization", and "Branch not found" became "User not found".
+ */
+function isApiClientError(error: any, errorMsg: string): boolean {
+  const status = error?.status
+  return typeof status === 'number' &&
+    status >= 400 &&
+    status < 500 &&
+    errorMsg.trim().length > 0 &&
+    !/^(Request failed with status \d+|HTTP \d+:)/.test(errorMsg)
+}
+
+function typeForClientStatus(status: number): ErrorType {
+  if (status === 401) return 'AUTHENTICATION_ERROR'
+  if (status === 403) return 'PERMISSION_ERROR'
+  if (status === 404) return 'NOT_FOUND_ERROR'
+  if (status === 409) return 'CONFLICT_ERROR'
+  if (status === 429) return 'RATE_LIMIT_ERROR'
+  return 'VALIDATION_ERROR'
+}
+
 function isDatabaseFailure(error: any, errorMsg: string, databaseError: any): boolean {
   return [
     error?.name === 'DrizzleQueryError',
@@ -190,6 +216,14 @@ export function parseError(error: any): ErrorDetails {
 
 
   const knownError = parseKnownError(errorMsg)
+  if (isApiClientError(error, errorMsg)) {
+    return {
+      type: typeForClientStatus(error.status),
+      message: errorMsg,
+      field: knownError?.field,
+      statusCode: error.status,
+    }
+  }
   if (knownError) return knownError
 
   // Pre-mapped specific messages from our APIs (e.g. blockers)
@@ -310,9 +344,12 @@ export function isRetryableError(error: any): boolean {
  */
 export function maskSensitiveData(data: any): any {
   if (!data || typeof data !== 'object') return data
+  if (Array.isArray(data)) return data.map((item) => maskSensitiveData(item))
 
   const masked = { ...data }
-  const sensitiveKeys = ['password', 'token', 'secret', 'apiKey', 'otp', 'pin']
+  // Lower case, because the key is lowered before comparing: an `apiKey`
+  // entry here never matched anything, so API keys reached the logs.
+  const sensitiveKeys = ['password', 'token', 'secret', 'apikey', 'api_key', 'otp', 'pin']
 
   for (const key of Object.keys(masked)) {
     if (sensitiveKeys.some(sensitive => key.toLowerCase().includes(sensitive))) {

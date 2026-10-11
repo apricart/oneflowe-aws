@@ -101,6 +101,15 @@ describe("OtherBranchOrders", () => {
     expect(screen.queryByRole("button", { name: /approve|reject/i })).toBeNull()
   })
 
+  // Cancelling is for the requester's own group orders ("My group orders");
+  // these are orders the branch's own staff raised.
+  it("never offers to cancel a branch staff order, even a pending one", () => {
+    render(<OtherBranchOrders />)
+    fireEvent.click(screen.getByRole("button", { name: /mtv4btk0531073d73267a18a/ }))
+
+    expect(screen.queryByRole("button", { name: /cancel order/i })).toBeNull()
+  })
+
   it("opens the editor for the order that was chosen", () => {
     render(<OtherBranchOrders />)
     fireEvent.click(screen.getByRole("button", { name: /mtv4btk0531073d73267a18a/ }))

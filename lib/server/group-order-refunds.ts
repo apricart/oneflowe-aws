@@ -110,6 +110,7 @@ type ChildOrderRow = {
   totalCents: number
   refundAmountCents: number | null
   createdAt: Date | null
+  fulfilledAt: Date | null
 }
 
 type OrderItemRow = typeof orderItems.$inferSelect
@@ -184,6 +185,7 @@ async function loadChildOrders(
       totalCents: orders.totalCents,
       refundAmountCents: orders.refundAmountCents,
       createdAt: orders.createdAt,
+      fulfilledAt: orders.fulfilledAt,
     })
     .from(orders)
     .leftJoin(branches, eq(orders.branchId, branches.id))
@@ -278,7 +280,7 @@ function blockReasonForChild(
   return getRequesterRefundBlockReason({
     status: child.status,
     fulfillmentStatus: child.fulfillmentStatus,
-    createdAt: child.createdAt,
+    fulfilledAt: child.fulfilledAt,
     remainingRefundableCents: remainingCents,
     now,
   })
@@ -519,7 +521,7 @@ async function assertStillRefundable(tx: any, prepared: PreparedOrder, now: Date
       fulfillmentStatus: orders.fulfillmentStatus,
       totalCents: orders.totalCents,
       refundAmountCents: orders.refundAmountCents,
-      createdAt: orders.createdAt,
+      fulfilledAt: orders.fulfilledAt,
     })
     .from(orders)
     .where(eq(orders.id, prepared.order.orderId))
@@ -547,7 +549,7 @@ async function assertStillRefundable(tx: any, prepared: PreparedOrder, now: Date
   const blocked = getRequesterRefundBlockReason({
     status: locked.status,
     fulfillmentStatus: locked.fulfillmentStatus,
-    createdAt: locked.createdAt,
+    fulfilledAt: locked.fulfilledAt,
     remainingRefundableCents: remainingCents,
     now,
   })

@@ -18,12 +18,17 @@ const source = (path: string) => readFileSync(resolve(process.cwd(), path), "utf
 /**
  * Every table whose headers sort (plans/OF-TABLE-column-sorting.md), with the
  * header cells that deliberately do not: the Orders table's pinned token and
- * action columns, the Product ledger's Discount column (always 0), and the
- * Group report's expand-chevron column. A new header cell without `aria-sort`
- * fails here — make it sortable or add it to the exceptions with a reason.
+ * action columns, and its Organization (Super Admin only) and Partial Delivery
+ * columns, which the list endpoint has no sort key for; the Product ledger's
+ * Discount column (always 0); and the Group report's expand-chevron column. A
+ * new header cell without `aria-sort` fails here — make it sortable or add it
+ * to the exceptions with a reason.
  */
 const SORTABLE_TABLES: Array<[path: string, unsortableHeaders: number]> = [
-  ["components/orders/orders-directory.tsx", 2],
+  ["components/orders/orders-directory.tsx", 4],
+  // The two-band header's three band cells, and the S. No / Designation cells
+  // (one template in the column map): Designation is always blank.
+  ["components/reports/consolidated-invoice/consolidated-invoice-document.tsx", 4],
   ["app/(portal)/reports/organization-report/page.tsx", 0],
   ["app/(portal)/reports/order-report/page.tsx", 0],
   ["app/(portal)/reports/refund-report/page.tsx", 0],

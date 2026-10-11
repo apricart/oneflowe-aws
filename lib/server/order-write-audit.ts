@@ -23,9 +23,18 @@ export type OrderWriteNotice = {
   tid: string | null | undefined
   message: string
   type: string
+  /**
+   * Names the occurrence when the same kind of write can recur on one order —
+   * a correction round. Without it the notice is one per order and type.
+   */
+  occurrence?: string | number
 }
 
-type TxClient = { insert: (table: typeof notifications) => { values: (rows: unknown) => Promise<unknown> } }
+type TxClient = {
+  insert: (table: typeof notifications) => {
+    values: (rows: typeof notifications.$inferInsert) => { onConflictDoNothing: () => Promise<unknown> }
+  }
+}
 
 export async function notifyRaiserOfOrderWrite(
   tx: TxClient,
@@ -43,8 +52,13 @@ export async function notifyRaiserOfOrderWrite(
     orderId: notice.orderId,
     // Scoped to this order and this event so a retry of the same write does not
     // stack duplicate notices on the raiser.
-    eventKey: `${notice.type}:${notice.orderId}`,
+    eventKey: notice.occurrence === undefined
+      ? `${notice.type}:${notice.orderId}`
+      : `${notice.type}:${notice.orderId}:${notice.occurrence}`,
     message: notice.message,
-  })
+  // The key is unique. A second colleague edit of the same order produces the
+  // same key; the raiser has already been told this order is being changed by
+  // others, so the repeat is dropped rather than failing the write it reports.
+  }).onConflictDoNothing()
   return true
 }

@@ -1,6 +1,9 @@
+import { readFileSync } from "node:fs"
+
 import { describe, expect, it } from "vitest"
 
 import {
+  lacksAnalyticsTenant,
   narrowRequestedBranchIdsToGroups,
   normalizePositiveIds,
   parseRequestedOrganizationIds,
@@ -93,5 +96,38 @@ describe("group selection as a branch narrowing", () => {
     expect(narrowRequestedBranchIdsToGroups({ requestedBranchIds: [9], groupBranchIds: [4, 5] })).toEqual([])
     expect(narrowRequestedBranchIdsToGroups({ requestedBranchIds: [], groupBranchIds: [] })).toEqual([])
     expect(narrowRequestedBranchIdsToGroups({ requestedBranchIds: [9], groupBranchIds: [] })).toEqual([])
+  })
+})
+
+describe("a caller with no tenant", () => {
+  it("is refused unless it is Super Admin", () => {
+    for (const role of ["WAREHOUSE", "ORDER_DESK", "APRICART_EXECUTIVE", "HEAD_OFFICE", "VIEWER", "GROUP_USER", ""]) {
+      expect(lacksAnalyticsTenant(role, null), role).toBe(true)
+      expect(lacksAnalyticsTenant(role, undefined), role).toBe(true)
+    }
+    expect(lacksAnalyticsTenant("SUPER_ADMIN", null)).toBe(false)
+  })
+
+  it("is not refused when the session carries an organization", () => {
+    for (const role of ["HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL", "GROUP_USER", "VIEWER"]) {
+      expect(lacksAnalyticsTenant(role, 10), role).toBe(false)
+      expect(lacksAnalyticsTenant(role, "10"), role).toBe(false)
+    }
+  })
+
+  it("treats a malformed organization as none", () => {
+    for (const organizationId of [0, -1, 1.5, "abc", "", Number.NaN]) {
+      expect(lacksAnalyticsTenant("HEAD_OFFICE", organizationId), String(organizationId)).toBe(true)
+    }
+  })
+
+  it("is applied by every analytics handler that filters by organization only when it has one", () => {
+    for (const route of [
+      "app/api/v1/analytics/branches/performance/route.ts",
+      "app/api/v1/analytics/budgets/summary/route.ts",
+      "app/api/v1/analytics/organization-stats/route.ts",
+    ]) {
+      expect(readFileSync(route, "utf8"), route).toMatch(/if \(lacksAnalyticsTenant\([\s\S]*?\)\) \{\s*return NextResponse\.json\(\{ error: "Forbidden" \}, \{ status: 403 \}\)/)
+    }
   })
 })

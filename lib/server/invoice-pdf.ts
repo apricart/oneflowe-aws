@@ -8,8 +8,7 @@
  * cannot drift apart.
  */
 import { jsPDF } from "jspdf"
-import path from "node:path"
-import fs from "node:fs"
+import { apricartLogoDataUrl } from "@/lib/server/pdf-logo"
 import { getReceiptItemQuantity, toDisplayNameCase } from "@/lib/receipt-display"
 import {
     buildInvoiceLines,
@@ -23,6 +22,13 @@ import {
 import { INVOICE_ISSUER } from "@/lib/invoice-issuer"
 import { normalizePaymentStatus } from "@/lib/payment-status"
 import { formatInvoiceDisplayDate, INVOICE_SYSTEM_GENERATED_NOTE } from "@/lib/invoice-format"
+import { INVOICE_STATUS_LABELS, invoiceDocumentTitle, toInvoiceStatus } from "@/lib/invoice-status"
+import {
+    CREDIT_NOTE_TITLE,
+    PROFORMA_NOTE,
+    displayedInvoiceNumber,
+    isProformaDocument,
+} from "@/lib/invoice-ledger-document"
 
 type PdfColor = [number, number, number]
 
@@ -59,7 +65,7 @@ export function renderInvoicePdf(receiptData: any) {
 
     drawPageShell(doc)
 
-    let y = drawMasthead(doc, margin, right)
+    let y = drawMasthead(doc, margin, right, documentTitleOf(receiptData))
     if (normalizePaymentStatus(receiptData.paymentStatus) === "PAID") {
         drawPaidStamp(doc, right)
     }
@@ -75,10 +81,51 @@ export function renderInvoicePdf(receiptData: any) {
         y = 24
     }
 
-    y = drawSummary(doc, invoiceTotals, refundedItems, right, y, pageHeight)
-    drawFooter(doc, Math.max(y + 14, 258), margin, right, pageHeight)
+    y = drawSummary(doc, invoiceTotals, refundedItems, right, y, pageHeight, isCreditNote(receiptData) ? "TOTAL CREDIT" : "TOTAL")
+    y = drawCreditNoteReferences(doc, receiptData, margin, y, pageHeight)
+    drawFooter(doc, Math.max(y + 14, 258), margin, right, pageHeight, isProformaDocument(receiptData) ? PROFORMA_NOTE : null)
 
     return doc.output("arraybuffer")
+}
+
+function isCreditNote(receiptData: any): boolean {
+    return receiptData?.documentKind === "CREDIT_NOTE"
+}
+
+/**
+ * The heading: a credit note says so; an invoice is titled from its status,
+ * and anything not yet a tax invoice is a proforma. Older callers that send no
+ * status keep the plain "INVOICE" heading.
+ */
+function documentTitleOf(receiptData: any): string {
+    if (isCreditNote(receiptData)) return CREDIT_NOTE_TITLE
+    const invoiceStatus = toInvoiceStatus(receiptData.invoiceStatus)
+    return invoiceStatus ? invoiceDocumentTitle(invoiceStatus) : "INVOICE"
+}
+
+/** The credit notes issued against an invoice, listed under its totals. */
+function drawCreditNoteReferences(doc: any, receiptData: any, margin: number, y: number, pageHeight: number) {
+    const notes: any[] = Array.isArray(receiptData.creditNotes) ? receiptData.creditNotes : []
+    if (notes.length === 0 || isCreditNote(receiptData)) return y
+    let currentY = y + 6
+    if (currentY + 6 + notes.length * 4.5 > pageHeight - 30) {
+        doc.addPage()
+        drawPageShell(doc)
+        currentY = 24
+    }
+    doc.setFont("helvetica", "bold")
+    doc.setFontSize(7.5)
+    setText(doc, colors.secondary)
+    doc.text("CREDIT NOTES ISSUED AGAINST THIS INVOICE", margin, currentY)
+    currentY += 4.5
+    doc.setFont("helvetica", "normal")
+    for (const note of notes) {
+        const amount = note.total === null || note.total === undefined ? "" : ` - PKR ${formatInvoiceMoney(Number(note.total))}`
+        const date = formatInvoiceDisplayDate(note.date) || String(note.date || "")
+        doc.text(`${note.number}, ${date}${amount}`, margin, currentY)
+        currentY += 4.5
+    }
+    return currentY
 }
 
 function drawPageShell(doc: any) {
@@ -101,22 +148,14 @@ function drawPageShell(doc: any) {
 }
 
 /** Issuer identity on the left, document title on the right. Returns the y to continue from. */
-function drawMasthead(doc: any, margin: number, right: number) {
+function drawMasthead(doc: any, margin: number, right: number, title: string) {
     const textX = margin + 44
     let y = 22
 
-    try {
-        const logoPath = path.join(process.cwd(), "public", "apricart-logo-blue.png")
-        if (fs.existsSync(logoPath)) {
-            const logoData = fs.readFileSync(logoPath).toString("base64")
-            doc.addImage(`data:image/png;base64,${logoData}`, "PNG", margin, 17, 38, 11, undefined, "FAST")
-        } else {
-            setText(doc, colors.primary)
-            doc.setFont("helvetica", "bold")
-            doc.setFontSize(15)
-            doc.text("APRICART", margin, 25)
-        }
-    } catch {
+    const logo = apricartLogoDataUrl()
+    if (logo) {
+        doc.addImage(logo, "PNG", margin, 17, 38, 11, undefined, "FAST")
+    } else {
         setText(doc, colors.primary)
         doc.setFont("helvetica", "bold")
         doc.setFontSize(15)
@@ -143,7 +182,7 @@ function drawMasthead(doc: any, margin: number, right: number) {
     doc.setFont("helvetica", "normal")
     doc.setFontSize(20)
     setText(doc, colors.secondary)
-    doc.text("INVOICE", right, 26, { align: "right" })
+    doc.text(title, right, 26, { align: "right" })
 
     return Math.max(y + 8, 46)
 }
@@ -214,15 +253,7 @@ function drawPartyGrid(doc: any, receiptData: any, itemQuantity: number, x: numb
     const pad = 4
     const headHeight = 7
 
-    const metaLeft: Array<[string, string]> = [
-        ["Invoice#", receiptData.invoiceNumber || "N/A"],
-        ["Invoice Date", formatInvoiceDisplayDate(receiptData.date) || "N/A"],
-        ["Order ID", receiptData.orderId ? String(receiptData.orderId) : "N/A"],
-    ]
-    const metaRight: Array<[string, string]> = [
-        ["Status", String(receiptData.status || "PENDING")],
-        ["Total Items", String(itemQuantity)],
-    ]
+    const { metaLeft, metaRight } = metaRowsOf(receiptData, itemQuantity)
     const metaHeight = pad * 2 + Math.max(metaLeft.length, metaRight.length) * 4.6
 
     const billTo: PartyLine[] = [
@@ -230,6 +261,9 @@ function drawPartyGrid(doc: any, receiptData: any, itemQuantity: number, x: numb
     ]
     if (receiptData.organizationNtn) {
         billTo.push({ label: "NTN:", value: String(receiptData.organizationNtn) })
+    }
+    if (receiptData.organizationStrn) {
+        billTo.push({ label: "STRN:", value: String(receiptData.organizationStrn) })
     }
 
     const deliverTo: PartyLine[] = [
@@ -245,13 +279,19 @@ function drawPartyGrid(doc: any, receiptData: any, itemQuantity: number, x: numb
     if (receiptData.deliveryAddressLabel) {
         deliverTo.push({ label: "Deliver to:", value: toDisplayNameCase(String(receiptData.deliveryAddressLabel)) })
     }
-    deliverTo.push(
-        { label: "Address:", value: toDisplayNameCase(receiptData.buyerAddress || "-") },
-        { label: "Phone:", value: String(receiptData.placedByPhone || receiptData.buyerPhone || "N/A") },
-        { label: "Initiator:", value: toDisplayNameCase(receiptData.placedByName || "N/A") },
-        { label: "Approver:", value: toDisplayNameCase(receiptData.approvedByName || "N/A") },
-        { label: "Fulfiller:", value: toDisplayNameCase(receiptData.fulfilledByName || "N/A") },
-    )
+    deliverTo.push({ label: "Address:", value: toDisplayNameCase(receiptData.buyerAddress || "-") })
+    if (!isCreditNote(receiptData)) {
+        deliverTo.push(
+            { label: "Phone:", value: String(receiptData.placedByPhone || receiptData.buyerPhone || "N/A") },
+            { label: "Initiator:", value: toDisplayNameCase(receiptData.placedByName || "N/A") },
+            { label: "Approver:", value: toDisplayNameCase(receiptData.approvedByName || "N/A") },
+        )
+    }
+    // Fulfilment happens after a tax invoice is issued, so a frozen document
+    // cannot name a fulfiller; the order and its challan record it.
+    if (!receiptData.frozen) {
+        deliverTo.push({ label: "Fulfiller:", value: toDisplayNameCase(receiptData.fulfilledByName || "N/A") })
+    }
 
     const cellWidth = half - pad * 2
     const bodyHeight = pad * 2 + Math.max(
@@ -285,6 +325,39 @@ function drawPartyGrid(doc: any, receiptData: any, itemQuantity: number, x: numb
     drawPartyLines(doc, deliverTo, x + half + pad, bodyY, cellWidth)
 
     return y + gridHeight
+}
+
+/** The reference rows above the parties, for an invoice or a credit note. */
+function metaRowsOf(receiptData: any, itemQuantity: number): { metaLeft: Array<[string, string]>; metaRight: Array<[string, string]> } {
+    if (isCreditNote(receiptData)) {
+        const note = receiptData.creditNote ?? {}
+        return {
+            metaLeft: [
+                ["Credit Note#", String(note.number || "N/A")],
+                ["Date", formatInvoiceDisplayDate(note.date) || "N/A"],
+                ["Invoice#", String(note.invoiceNumber || "N/A")],
+            ],
+            metaRight: [
+                ["Invoice Date", formatInvoiceDisplayDate(note.invoiceDate) || "N/A"],
+                ["Order ID", receiptData.orderId ? String(receiptData.orderId) : "N/A"],
+                ["Reason", String(note.reason || "-")],
+            ],
+        }
+    }
+    const invoiceStatus = toInvoiceStatus(receiptData.invoiceStatus)
+    return {
+        metaLeft: [
+            ["Invoice#", displayedInvoiceNumber(receiptData)],
+            ["Invoice Date", formatInvoiceDisplayDate(receiptData.date) || "N/A"],
+            ["Order ID", receiptData.orderId ? String(receiptData.orderId) : "N/A"],
+        ],
+        metaRight: [
+            // A frozen invoice prints its own status, not the order's.
+            ...(receiptData.frozen ? [] : [["Status", String(receiptData.status || "PENDING")] as [string, string]]),
+            ...(invoiceStatus ? [["Invoice Status", INVOICE_STATUS_LABELS[invoiceStatus]] as [string, string]] : []),
+            ["Total Items", String(itemQuantity)],
+        ],
+    }
 }
 
 function drawMetaColumn(doc: any, rows: Array<[string, string]>, x: number, y: number, width: number) {
@@ -473,7 +546,7 @@ function getSummaryHeight(totals: InvoiceTotals, refundedItems: any[]) {
     return rows * rowHeight + refundedItemsHeight + 14
 }
 
-function drawSummary(doc: any, totals: InvoiceTotals, refundedItems: any[], right: number, y: number, pageHeight: number) {
+function drawSummary(doc: any, totals: InvoiceTotals, refundedItems: any[], right: number, y: number, pageHeight: number, totalLabel: string) {
     let currentY = y
     const x = right - 76
     const width = 76
@@ -543,7 +616,7 @@ function drawSummary(doc: any, totals: InvoiceTotals, refundedItems: any[], righ
     doc.setFont("helvetica", "bold")
     doc.setFontSize(8.5)
     setText(doc, colors.white)
-    doc.text("TOTAL", x + 4, currentY + 9)
+    doc.text(totalLabel, x + 4, currentY + 9)
     doc.setFontSize(12)
     doc.text(`PKR ${formatInvoiceMoney(totals.total)}`, x + width - 4, currentY + 9, { align: "right" })
     currentY += 14
@@ -551,7 +624,7 @@ function drawSummary(doc: any, totals: InvoiceTotals, refundedItems: any[], righ
     return currentY
 }
 
-function drawFooter(doc: any, y: number, margin: number, right: number, pageHeight: number) {
+function drawFooter(doc: any, y: number, margin: number, right: number, pageHeight: number, notice: string | null) {
     let footerY = y
     if (footerY > pageHeight - 24) {
         doc.addPage()
@@ -566,6 +639,11 @@ function drawFooter(doc: any, y: number, margin: number, right: number, pageHeig
     doc.setFont("helvetica", "normal")
     doc.setFontSize(7.5)
     setText(doc, colors.secondary)
+    if (notice) {
+        doc.setFont("helvetica", "bold")
+        doc.text(notice, center, footerY + 4, { align: "center" })
+        doc.setFont("helvetica", "normal")
+    }
     doc.text(INVOICE_SYSTEM_GENERATED_NOTE, center, footerY + 8, { align: "center" })
 
     doc.setFontSize(6.5)

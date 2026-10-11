@@ -1,5 +1,6 @@
-import { isOrderPortalRefundEligible, isRefundEligibleOrderStatus, normalizeOrderStatus } from "@/lib/business-rules"
+import { isRefundEligibleOrderStatus, normalizeOrderStatus } from "@/lib/business-rules"
 import { roundQuantity } from "@/lib/quantity"
+import { requesterRefundTimingReason } from "@/lib/refund-window"
 
 /**
  * The rules a Group Order Portal refund request has to satisfy, with no
@@ -7,10 +8,10 @@ import { roundQuantity } from "@/lib/quantity"
  *
  * The requester tier — ORDER_PORTAL and GROUP_ORDER_PORTAL — may only ask for a
  * refund on an order it raised itself, once that order has actually been
- * delivered, and only inside the calendar month the order was placed in. Those
- * are the same three conditions the single-order endpoint already applies to
- * ORDER_PORTAL; nothing here loosens any of them for the group flow, and
- * nothing here is consulted by any other role's path.
+ * delivered and fulfilled, and only within seven days of fulfilment
+ * (`lib/refund-window.ts`). Those are the conditions the single-order endpoint
+ * applies to every requester; nothing here loosens any of them for the group
+ * flow, and nothing here is consulted by any other role's path.
  */
 
 /** Upper bounds on one submission, so a single request's work stays bounded. */
@@ -25,28 +26,12 @@ export const OUT_OF_SCOPE_REASON =
 export type RefundEligibilityInput = {
   status: unknown
   fulfillmentStatus: unknown
-  createdAt: Date | string | null
+  /** When the order was fulfilled; the seven-day window runs from here. */
+  fulfilledAt: Date | string | null
   /** Order total minus refunds already approved or still pending against it. */
   remainingRefundableCents: number
-  /** Injected so the calendar-month rule is testable rather than clock-bound. */
+  /** Injected so the seven-day rule is testable rather than clock-bound. */
   now?: Date
-}
-
-/**
- * True while `orderCreatedAt` falls in the same calendar month as `now`.
- *
- * This mirrors the window the single-order refund endpoint enforces, kept as
- * its own function so both the eligibility reason and the tests can use it.
- */
-export function isWithinRefundMonth(
-  orderCreatedAt: Date | string | null,
-  now: Date = new Date(),
-): boolean {
-  if (!orderCreatedAt) return false
-  const orderDate = orderCreatedAt instanceof Date ? orderCreatedAt : new Date(orderCreatedAt)
-  if (Number.isNaN(orderDate.getTime())) return false
-  return orderDate.getMonth() === now.getMonth()
-    && orderDate.getFullYear() === now.getFullYear()
 }
 
 /**
@@ -60,7 +45,7 @@ export function isWithinRefundMonth(
 export function getRequesterRefundBlockReason({
   status,
   fulfillmentStatus,
-  createdAt,
+  fulfilledAt,
   remainingRefundableCents,
   now = new Date(),
 }: RefundEligibilityInput): string | null {
@@ -73,13 +58,7 @@ export function getRequesterRefundBlockReason({
   if (!isRefundEligibleOrderStatus(normalized)) {
     return `An order in ${normalized || "an unknown"} state is not eligible for a refund.`
   }
-  if (!isOrderPortalRefundEligible(normalized, fulfillmentStatus)) {
-    return "A refund can be requested once this order has been fulfilled and delivered."
-  }
-  if (!isWithinRefundMonth(createdAt, now)) {
-    return "The refund period has ended. Requests are limited to the calendar month of the order."
-  }
-  return null
+  return requesterRefundTimingReason({ status: normalized, fulfillmentStatus, fulfilledAt }, now)
 }
 
 export type RefundLineAvailability = {

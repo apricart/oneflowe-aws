@@ -71,4 +71,52 @@ describe("initial order approval", () => {
 
     await expect(resolveInitialOrderApproval(tx, 999)).rejects.toThrow("ORGANIZATION_NOT_FOUND")
   })
+
+  // Reversed 2026-10-07 (plans/OF-EXEC-APPROVAL-executive-approves-desk-orders.md):
+  // a desk entry used to be Active at once; it now always waits for an
+  // Apricart Executive, whatever the tenant's own switch says.
+  it.each([true, false])(
+    "creates an Order Desk entry pending for an executive when the tenant's approval switch is %s",
+    async (orderApprovalRequired) => {
+      const { tx, forLock } = transactionReturning(orderApprovalRequired)
+
+      const result = await resolveInitialOrderApproval(tx, 12, new Date("2026-10-05T09:00:00.000Z"), {
+        role: "ORDER_DESK",
+        userId: "desk-user",
+      })
+
+      // The organization row is still read under the same shared lock.
+      expect(forLock).toHaveBeenCalledWith("share")
+      expect(result).toEqual({
+        approvalRequired: true,
+        values: {
+          status: "PENDING",
+          approvedAt: null,
+          approvalToken: null,
+          approvalTokenHash: null,
+          approvalTokenCreatedAt: null,
+        },
+        approvalBasis: "APRICART_EXECUTIVE_APPROVAL",
+      })
+      // No fulfilment token exists until an executive approves it.
+      expect(tokenMocks.generateApprovalToken).not.toHaveBeenCalled()
+    },
+  )
+
+  it("leaves every other creator on the tenant's policy", async () => {
+    for (const role of ["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL", "EMPLOYEE"]) {
+      const { tx } = transactionReturning(true)
+      const result = await resolveInitialOrderApproval(tx, 12, new Date(), { role, userId: "someone" })
+      expect(result.approvalRequired).toBe(true)
+      expect(result.values.status).toBe("PENDING")
+      expect(result.approvalBasis).toBeUndefined()
+    }
+  })
+
+  it("still refuses a desk entry for an organization that does not exist", async () => {
+    const { tx } = transactionReturning(undefined)
+
+    await expect(resolveInitialOrderApproval(tx, 999, new Date(), { role: "ORDER_DESK", userId: "desk-user" }))
+      .rejects.toThrow("ORGANIZATION_NOT_FOUND")
+  })
 })

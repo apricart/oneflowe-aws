@@ -14,7 +14,18 @@
  * underneath — same journal table, same folder, same ordering, same hashes —
  * so the two remain interchangeable.
  *
- * Reads MIGRATION_DATABASE_URL only. Never DATABASE_URL: the runtime identity
+ * One command per environment (`lib/migration-target.ts`):
+ *
+ *   npm run db:migrate:dev     --env=development
+ *   npm run db:migrate:test    --env=test
+ *   npm run db:migrate:prod    --env=production, a dry run that prints a
+ *                              digest; `-- --confirm=<digest>` applies
+ *
+ * Each reads only its own env file and refuses a connection string that does
+ * not look like its environment. Plain `db:migrate` names no environment and
+ * applies nothing.
+ *
+ * Reads the migration identity only, never DATABASE_URL: the runtime identity
  * must not hold schema-admin rights (rule 06).
  */
 import { readFileSync } from "node:fs"
@@ -24,36 +35,28 @@ import { drizzle } from "drizzle-orm/node-postgres"
 import { migrate } from "drizzle-orm/node-postgres/migrator"
 import { Client } from "pg"
 
-import { loadMigrationEnv } from "../lib/server/migration-env"
+import { readMigrationEnvFor } from "../lib/server/migration-env"
 import {
   describeMigrationFailure,
   pendingMigrations,
   type JournalEntry,
 } from "../lib/migration-report"
+import {
+  MIGRATE_USAGE,
+  MigrationTargetRefusal,
+  assertTargetMatchesEnvironment,
+  describeMigrationTarget,
+  migrationSslFor,
+  parseMigrationArgs,
+  productionPlanDigest,
+  selectMigrationUrl,
+} from "../lib/migration-target"
 
 const MIGRATIONS_FOLDER = join(process.cwd(), "drizzle")
 
 function readJournal(): JournalEntry[] {
   const raw = readFileSync(join(MIGRATIONS_FOLDER, "meta", "_journal.json"), "utf8")
   return (JSON.parse(raw) as { entries?: JournalEntry[] }).entries ?? []
-}
-
-/** Where we are pointed, with the password left out. */
-function describeTarget(url: string): string {
-  const parsed = new URL(url)
-  return `${parsed.host}${parsed.pathname} as ${parsed.username}`
-}
-
-/**
- * The same SSL posture the application uses (`lib/db-core.ts`): the Supabase
- * pooler presents a certificate Node does not trust, everything else must be
- * trusted in production, and a local database needs none.
- */
-function sslFor(url: string) {
-  const parsed = new URL(url)
-  if (parsed.hostname.includes("supabase")) return { rejectUnauthorized: false }
-  if (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") return false
-  return process.env.NODE_ENV === "production" ? { rejectUnauthorized: true } : false
 }
 
 async function lastAppliedWhen(client: Client): Promise<number | null> {
@@ -67,13 +70,24 @@ async function lastAppliedWhen(client: Client): Promise<number | null> {
 }
 
 async function main(): Promise<void> {
-  const { MIGRATION_DATABASE_URL: url } = loadMigrationEnv()
+  const { environment, confirm } = parseMigrationArgs(process.argv.slice(2))
+  if (environment === null) {
+    console.error(MIGRATE_USAGE)
+    process.exitCode = 1
+    return
+  }
 
-  console.log(`[migrate] target:  ${describeTarget(url)}`)
+  const { env, filesRead } = readMigrationEnvFor(environment)
+  const { url, variable } = selectMigrationUrl(environment, env)
+  assertTargetMatchesEnvironment(environment, url)
+
+  const source = process.env[variable] ? "shell" : (filesRead.join(", ") || "shell")
+  console.log(`[migrate] environment: ${environment.toUpperCase()}`)
+  console.log(`[migrate] target:  ${describeMigrationTarget(url)}  (${variable} from ${source})`)
 
   const client = new Client({
     connectionString: url,
-    ssl: sslFor(url),
+    ssl: migrationSslFor(environment, url),
     connectionTimeoutMillis: 30_000,
     statement_timeout: 300_000,
   })
@@ -91,9 +105,32 @@ async function main(): Promise<void> {
       return
     }
 
-    console.log(`[migrate] applying ${pending.length}:`)
+    console.log(`[migrate] ${pending.length} pending:`)
     for (const entry of pending) console.log(`             ${entry.tag}`)
 
+    if (environment === "production") {
+      const digest = productionPlanDigest(url, pending.map((entry) => entry.tag))
+      if (confirm === null) {
+        console.log("")
+        console.log("[migrate] DRY RUN — nothing applied. To apply exactly these to this database:")
+        console.log(`             npm run db:migrate:prod -- --confirm=${digest}`)
+        return
+      }
+      if (confirm !== digest) {
+        console.error(
+          "[migrate] REFUSED: --confirm does not match this plan. The target or the pending " +
+            `migrations changed since the dry run; this plan's digest is ${digest}.`,
+        )
+        process.exitCode = 1
+        return
+      }
+    } else if (confirm !== null) {
+      console.error(`[migrate] REFUSED: --confirm is for production only, not ${environment}.`)
+      process.exitCode = 1
+      return
+    }
+
+    console.log(`[migrate] applying ${pending.length}...`)
     await migrate(drizzle(client), { migrationsFolder: MIGRATIONS_FOLDER })
 
     // Confirm from the database rather than from the absence of a throw.
@@ -115,6 +152,11 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
+  if (error instanceof MigrationTargetRefusal) {
+    console.error(`[migrate] REFUSED: ${error.message}`)
+    process.exitCode = 1
+    return
+  }
   console.error("")
   console.error(describeMigrationFailure(error))
   process.exitCode = 1

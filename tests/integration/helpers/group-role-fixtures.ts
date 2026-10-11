@@ -21,6 +21,7 @@ import {
 import { db } from "@/lib/db"
 import { currentBudgetPeriod } from "@/lib/server/group-branch-budgets"
 
+import { purgeInvoiceLedger } from "./invoice-ledger-cleanup"
 export { NO_DATABASE_REASON, hasTestDatabase } from "./pricing-fixtures"
 
 /**
@@ -229,12 +230,16 @@ export async function createGroupRoleFixtures(): Promise<GroupRoleFixtures> {
       organizationId: organization.id,
       createdByUserId: headOfficeId,
     },
-    // Simulate an inconsistent/stale row. Every read must still re-assert the
-    // user's tenant instead of leaking this branch's name or values.
+    // Simulate a stale row pointing this tenant's requester at another
+    // tenant's branch. Every read must still re-assert the user's tenant
+    // instead of leaking this branch's name or values. The row carries the
+    // branch's own organization because `user_branch_assignments_branch_org_fk`
+    // refuses a branch/organization pair that does not exist
+    // (`plans/OF-DB-tenant-composite-foreign-keys.md`).
     {
       userId: requesterId,
       branchId: foreignBranch.id,
-      organizationId: organization.id,
+      organizationId: foreignOrganization.id,
       createdByUserId: headOfficeId,
     },
   ])
@@ -448,6 +453,7 @@ export async function destroyGroupRoleFixtures(
   ]
 
   await db.delete(systemLogs).where(inArray(systemLogs.organizationId, organizationIds))
+  await purgeInvoiceLedger({ organizationIds })
   // A budget allocation writes an audit row naming the acting user; it must go
   // before the user does.
   await db.delete(auditLogs).where(inArray(auditLogs.organizationId, organizationIds))

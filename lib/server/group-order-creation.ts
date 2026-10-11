@@ -20,9 +20,8 @@ import {
 } from "@/db/schema"
 import { db } from "@/lib/db"
 import {
-  generateNextInvoiceNumber,
+  assignInvoiceNumberAtCreation,
   hasInvoiceSequenceTable,
-  lockInvoiceTenantForIssuance,
 } from "@/lib/invoice-number"
 import { calculateLineCents, formatQuantity, roundQuantity, validateProductQuantity } from "@/lib/quantity"
 import { generateReceiptData } from "@/lib/receipt-generator"
@@ -593,12 +592,12 @@ async function attachReceipt(
   // The buyer's own reference, recorded with the invoice so a reissue prints
   // what was agreed rather than the invoice number over again.
   if (context.poNumber) receiptData.poNumber = context.poNumber
-  if (context.invoiceSequenceReady) {
-    receiptData.invoiceNumber = await generateNextInvoiceNumber(tx, context.organizationId)
-  } else {
-    await lockInvoiceTenantForIssuance(tx, context.organizationId)
-    receiptData.invoiceNumber = context.tid
-  }
+  // Numbered at delivery now, when the tax invoice is issued (lib/invoice-policy.ts).
+  await assignInvoiceNumberAtCreation(tx, receiptData, {
+    organizationId: context.organizationId,
+    tid: context.tid,
+    invoiceSequenceReady: context.invoiceSequenceReady,
+  })
   await tx.update(orders).set({ receiptData: receiptData as never }).where(eq(orders.id, context.orderId))
 }
 

@@ -5,6 +5,8 @@ import Image from "next/image"
 import useSWR from "swr"
 import { useSession } from "next-auth/react"
 import { useState } from "react"
+import { DeliveryChallanPanel } from "@/components/orders/delivery-challan"
+import { normalizeFulfillmentStatus } from "@/lib/fulfillment-status"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -21,9 +23,16 @@ import { calculateLineCents,formatQuantity } from "@/lib/quantity"
 import { buildStatusTimeline } from "@/lib/order-utils"
 import { getOrderDerivedStatus,hasPartialRefund } from "@/lib/order-status"
 import { PAYMENT_STATUS_LABELS,normalizePaymentStatus } from "@/lib/payment-status"
-import { ArrowLeft,Clock,CheckCircle,RefreshCw,Package,Ban,Copy,User,XCircle } from "lucide-react"
+import { ArrowLeft,Clock,CheckCircle,CornerUpLeft,RefreshCw,Package,Ban,Copy,User,XCircle } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { RefundManagement } from "@/components/refund-management"
+import {
+  OrderCorrectionHistory,
+  OrderCorrectionNotice,
+  ReturnForCorrectionDialog,
+  type OrderCorrectionHistoryEntry,
+} from "@/components/orders/order-correction"
+import { isAwaitingCorrection } from "@/lib/order-correction"
 
 // ... (existing imports)
 
@@ -67,10 +76,16 @@ type OrderDetail = {
   taxCents: number | null
   totalCents: number | null
   createdAt: string
+  fulfilledAt?: string | null
   orderItems?: OrderItem[]
   approvalToken?: string | null // Only visible to the approver
   rejectionReason?: string | null
+  returnedForCorrectionAt?: string | null
+  correctionRequestNote?: string | null
+  correctionHistory?: OrderCorrectionHistoryEntry[]
   pricesHidden?: boolean
+  /** Entered by Apricart's Order Desk: an Apricart Executive decides it. */
+  decidedByApricart?: boolean
 }
 
 function numericOrderId(orderId: string | string[] | undefined): number | null {
@@ -80,6 +95,79 @@ function numericOrderId(orderId: string | string[] | undefined): number | null {
 
 function canRequestRefund(role: string | undefined): boolean {
   return ["HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL"].includes(role ?? "")
+}
+
+/**
+ * The approver's buttons. Approve waits while the order is with its requester
+ * for correction; reject stays open; return is offered only while it is not
+ * already returned. The server enforces each of these regardless.
+ */
+function OrderDecisionActions({
+  order,
+  canDecideOrders,
+  canReturnOrders,
+  onDecide,
+  onReturn,
+}: Readonly<{
+  order: OrderDetail
+  canDecideOrders: boolean
+  canReturnOrders: boolean
+  onDecide: (decision: "approve" | "reject") => void
+  onReturn: () => void
+}>) {
+  if (order.status.toUpperCase() !== "PENDING") return null
+  if (order.decidedByApricart) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Entered by Apricart&apos;s Order Desk — awaiting approval by an Apricart Executive.
+      </p>
+    )
+  }
+  if (!canDecideOrders) return null
+  const awaitingCorrection = isAwaitingCorrection(order)
+  return (
+    <div className="flex flex-wrap gap-2">
+      <Button variant="outline" className="text-rose-600" onClick={() => onDecide("reject")}>
+        <XCircle className="mr-2 h-4 w-4" />
+        Reject
+      </Button>
+      {canReturnOrders && !awaitingCorrection && (
+        <Button variant="outline" className="text-amber-700" onClick={onReturn}>
+          <CornerUpLeft className="mr-2 h-4 w-4" />
+          Return for correction
+        </Button>
+      )}
+      <Button
+        className="bg-emerald-600 text-white hover:bg-emerald-500"
+        onClick={() => onDecide("approve")}
+        disabled={awaitingCorrection}
+        title={awaitingCorrection ? "Waiting for the requester to resubmit" : undefined}
+      >
+        <CheckCircle className="mr-2 h-4 w-4" />
+        Approve
+      </Button>
+    </div>
+  )
+}
+
+function returnTarget(open: boolean, order: OrderDetail | undefined): { id: number; tid: string } | null {
+  return open && order ? { id: order.id, tid: order.tid } : null
+}
+
+/** The open request, if any, and every round before it. */
+function OrderCorrectionState({ order }: Readonly<{ order: OrderDetail }>) {
+  return (
+    <>
+      {isAwaitingCorrection(order) && (
+        <OrderCorrectionNotice
+          comment={order.correctionRequestNote}
+          returnedAt={order.returnedForCorrectionAt}
+          audience="approver"
+        />
+      )}
+      <OrderCorrectionHistory entries={order.correctionHistory} />
+    </>
+  )
 }
 
 export default function SuperAdminOrderDetailsPage() {
@@ -103,6 +191,7 @@ export default function SuperAdminOrderDetailsPage() {
     capabilities: {
       canApproveOrders: boolean
       canRejectOrders: boolean
+      canReturnOrders?: boolean
     }
   }>(
     numericId ? `/api/v1/orders/${numericId}` : null,
@@ -116,6 +205,8 @@ export default function SuperAdminOrderDetailsPage() {
     data?.capabilities?.canApproveOrders
     && data?.capabilities?.canRejectOrders,
   )
+  const canReturnOrders = Boolean(data?.capabilities?.canReturnOrders)
+  const [returningOrder, setReturningOrder] = useState(false)
   const initiatorName = order?.creatorName?.trim() || order?.creatorEmail?.trim() || "Unknown user"
   const initiatorDetails = [
     order?.creatorEmployeeId ? `Employee #${order.creatorEmployeeId}` : null,
@@ -214,7 +305,7 @@ export default function SuperAdminOrderDetailsPage() {
             </div>
             <div className="flex items-center gap-2">
               <span className="uppercase tracking-wide text-slate-400 dark:text-slate-500">Status</span>
-              <span className="uppercase font-bold text-slate-900 dark:text-white">{getOrderDerivedStatus({ status: order.status }).label}</span>
+              <span className="uppercase font-bold text-slate-900 dark:text-white">{getOrderDerivedStatus(order).label}</span>
             </div>
           </div>
         )}
@@ -225,19 +316,21 @@ export default function SuperAdminOrderDetailsPage() {
           <ArrowLeft className="h-4 w-4" />
           Back to orders
         </Button>
-        {order?.status.toUpperCase() === "PENDING" && canDecideOrders && (
-          <div className="flex gap-2">
-            <Button variant="outline" className="text-rose-600" onClick={() => setDecision("reject")}>
-              <XCircle className="mr-2 h-4 w-4" />
-              Reject
-            </Button>
-            <Button className="bg-emerald-600 text-white hover:bg-emerald-500" onClick={() => setDecision("approve")}>
-              <CheckCircle className="mr-2 h-4 w-4" />
-              Approve
-            </Button>
-          </div>
+        {order && (
+          <OrderDecisionActions
+            order={order}
+            canDecideOrders={canDecideOrders}
+            canReturnOrders={canReturnOrders}
+            onDecide={setDecision}
+            onReturn={() => setReturningOrder(true)}
+          />
         )}
       </div>
+
+      {order && <OrderCorrectionState order={order} />}
+      {order && normalizeFulfillmentStatus(order.fulfillmentStatus) === "DELIVERED" && (
+        <DeliveryChallanPanel orderId={order.id} orderTid={order.tid} canReplace={isSuperAdmin} />
+      )}
 
       {order && (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
@@ -255,7 +348,7 @@ export default function SuperAdminOrderDetailsPage() {
           <Card className="rounded-2xl border-0 bg-white dark:bg-slate-900 dark:border-slate-800 p-4 shadow-md">
             <p className="text-sm text-muted-foreground">Current status</p>
             <p className="text-2xl font-semibold text-slate-900 dark:text-white">
-              {getOrderDerivedStatus({ status: order.status }).label}
+              {getOrderDerivedStatus(order).label}
             </p>
             <span className={cn(
               "mt-2 inline-flex items-center rounded-lg border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider",
@@ -468,7 +561,7 @@ export default function SuperAdminOrderDetailsPage() {
                     orderTotalCents={order.totalCents}
                     orderStatus={order.status}
                     orderFulfillmentStatus={order.fulfillmentStatus}
-                    createdAt={order.createdAt}
+                    fulfilledAt={order.fulfilledAt ?? null}
                     allowRefundRequest={canRequestRefundFromOrderReview}
                     requesterRole={userRole}
                     pricesHidden={pricesHidden}
@@ -491,7 +584,7 @@ export default function SuperAdminOrderDetailsPage() {
                   </div>
                   <div className="flex items-center gap-2 flex-wrap justify-end">
                     <Badge variant="outline">
-                      {getOrderDerivedStatus({ status: order.status }).label}
+                      {getOrderDerivedStatus(order).label}
                     </Badge>
                     {hasPartialRefund(order) && (
                       <Badge variant="outline" className="px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400">
@@ -600,6 +693,12 @@ export default function SuperAdminOrderDetailsPage() {
           )}
         </>
       )}
+
+      <ReturnForCorrectionDialog
+        order={returnTarget(returningOrder, order)}
+        onClose={() => setReturningOrder(false)}
+        onReturned={() => { void mutate() }}
+      />
 
       <Dialog open={decision !== null} onOpenChange={(open) => !open && setDecision(null)}>
         <DialogContent className="max-w-md">

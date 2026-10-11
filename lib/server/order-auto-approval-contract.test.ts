@@ -50,7 +50,7 @@ describe("organization order auto-approval contracts", () => {
 
   it("runs real integration tests before a test-environment deployment", () => {
     const workflow = source(".github/workflows/deploy-test.yml")
-    const migrationIndex = workflow.indexOf("npm run db:migrate")
+    const migrationIndex = workflow.indexOf("npm run db:migrate:test")
     const integrationIndex = workflow.indexOf("npm run test:integration")
     const deploymentIndex = workflow.indexOf("Deploy to staging through SSM")
 
