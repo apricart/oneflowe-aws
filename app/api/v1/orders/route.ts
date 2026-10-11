@@ -3,7 +3,7 @@ import { createHash,randomBytes } from "node:crypto"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
-import { budgets,orders,orderItems,organizationInventory,branchInventory,branches,globalProducts,productQuantityBudgets,refunds,systemLogs,groupAuditLogs,organizations,refundItems,groups } from "@/db/schema"
+import { budgets,orders,orderItems,organizationInventory,branchInventory,branches,globalProducts,productQuantityBudgets,refunds,systemLogs,groupAuditLogs,organizations,refundItems,groups,legacyOrderImports } from "@/db/schema"
 import { headers } from "next/headers"
 import { and,desc,eq,gte,ilike,lte,or,sql,inArray,isNotNull,isNull,type AnyColumn,type SQL } from "drizzle-orm"
 import { logOrderActivity } from "@/lib/global-logger"
@@ -1209,6 +1209,23 @@ export async function GET(req: NextRequest) {
         branchId: orders.branchId,
         status: orders.status,
         fulfillmentStatus: orderSelectColumns.fulfillmentStatus,
+        // Legacy delivery status 505 means part of the order reached the
+        // branch. Imports normalize it to FULFILLED / DELIVERED but retain the
+        // source state, so expose one boolean without leaking import metadata.
+        partialDelivery: sql<boolean>`(
+          UPPER(${orders.status}) IN ('PARTIAL', 'PARTIALLY_FULFILLED')
+          OR EXISTS (
+            SELECT 1
+            FROM ${legacyOrderImports}
+            WHERE ${legacyOrderImports.orderId} = ${orders.id}
+              AND (
+                ${legacyOrderImports.sourcePayload} #>> '{legacyStatus,deliveryStatus}' = '505'
+                OR ${legacyOrderImports.sourcePayload} #>> '{sourceHeader,DeliveryStatus}' = '505'
+                OR ${legacyOrderImports.sourcePayload} #>> '{sourceHeader,OriginalDeliveryStatus}' = '505'
+                OR UPPER(COALESCE(${legacyOrderImports.sourcePayload} #>> '{legacyStatus,text}', '')) = 'PARTIAL'
+              )
+          )
+        )`.mapWith(Boolean),
         paymentStatus: orderSelectColumns.paymentStatus,
         paidAt: orderSelectColumns.paidAt,
         tokenHandoffAt: orderSelectColumns.tokenHandoffAt,

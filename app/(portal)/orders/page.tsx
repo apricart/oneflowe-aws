@@ -87,6 +87,7 @@ interface OrderItem {
   branchName?: string | null
   branchCostCenterId?: string | null
   status: string
+  partialDelivery?: boolean
   fulfillmentStatus?: string | null
   paymentStatus?: string | null
   statusAtRefund?: string | null
