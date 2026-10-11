@@ -108,6 +108,14 @@ test.describe.serial("ordering gates at checkout", () => {
   test("a pending invoice is a notice: Cancel places nothing, Continue places the order", async ({ page, browser }) => {
     test.slow()
     const first = await approvedOrder(browser, tenant.users.opn.username, tenant.users.ban.username)
+    // Only an issued tax invoice is pending, and it is issued at delivery
+    // (plans/OF-INVOICE-invoice-ledger.md): an approved order is a proforma.
+    const superAdmin = await apiSession(browser, tenant.superAdmin.username)
+    try {
+      await markDelivered(superAdmin.page, first.id)
+    } finally {
+      await superAdmin.close()
+    }
 
     await signIn(page, tenant.users.opn.username, /\/shop/)
     await pressPlaceOrder(page)
@@ -181,16 +189,16 @@ test.describe.serial("ordering gates at checkout", () => {
     const superAdmin = await apiSession(browser, tenant.superAdmin.username)
     const approver = await apiSession(browser, tenant.users.ban.username)
     try {
-      // North holds one approved and one pending order from the first test.
+      // North holds one delivered and one pending order from the first test.
       const [first, second] = await ordersAt("north")
       await approveOrder(approver.page, second.id)
-      const tokens = await queryTestDb<{ id: number; approval_token: string }>(
+      const tokens = await queryTestDb<{ id: number; approval_token: string; fulfillment_status: string }>(
         testDatabaseUrl(),
-        "SELECT id, approval_token FROM orders WHERE id = ANY($1::int[]) ORDER BY id",
+        "SELECT id, approval_token, fulfillment_status FROM orders WHERE id = ANY($1::int[]) ORDER BY id",
         [[first.id, second.id]],
       )
       for (const order of tokens) {
-        await markDelivered(superAdmin.page, order.id)
+        if (order.fulfillment_status !== "DELIVERED") await markDelivered(superAdmin.page, order.id)
         await fulfilOrder(superAdmin.page, order.id, order.approval_token)
       }
 

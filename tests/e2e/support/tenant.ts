@@ -412,6 +412,12 @@ export async function destroyTenant(databaseUrl: string, key: string): Promise<v
   const pool = new Pool({ connectionString: databaseUrl, max: 1 })
   const client = await pool.connect()
   try {
+    // A delivered order carries a tax invoice, and the ledger's triggers refuse
+    // to delete an issued document (drizzle/20261015120000_add_invoice_ledger.sql)
+    // — except in a database named for tests, with this switch on. The purge
+    // runs each delete as its own statement, so the switch is set for this
+    // session, on this pool's single connection, which is closed afterwards.
+    await client.query("SELECT set_config('oneflowe.invoice_ledger_test_cleanup', 'on', false)")
     await purge(client, [
       // `E2E <key> …` — the seeded company, and any a spec created through the UI.
       { table: "organizations", where: "name LIKE $1", values: [`E2E ${key} %`] },

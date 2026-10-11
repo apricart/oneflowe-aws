@@ -54,7 +54,7 @@ describe("selectMigrationUrl", () => {
       /No development database configured/,
     )
     expect(() => selectMigrationUrl("production", { TEST_DATABASE_URL: LOCAL_TEST })).toThrow(
-      /\.env\.production\.local/,
+      /\.env\.prod\.local/,
     )
   })
 

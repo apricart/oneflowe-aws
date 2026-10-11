@@ -1,10 +1,16 @@
 /**
  * The status of an order's invoice (plans/OF-INVOICE-invoice-ledger.md, D2).
  *
- * Derived from the order on every read and never stored: roughly ten paths
- * move an order (approve, deliver, fulfil, auto-fulfil, both refund routes,
- * desk and group cancel, admin delete), and a stored copy would have to be
- * kept in step by every one of them.
+ * Once a tax invoice has been issued, its own row in `invoices` is the status:
+ * only a credit note moves it, and a refund approved before delivery was taken
+ * off the invoice rather than credited against it. Reading "refund > 0" from
+ * the order would call such an invoice partially credited when no credit note
+ * exists, and the Orders list would disagree with the invoice page.
+ *
+ * Without an invoice row the status is derived from the order on every read
+ * and never stored: roughly ten paths move an order (approve, deliver, fulfil,
+ * auto-fulfil, both refund routes, desk and group cancel, admin delete), and a
+ * stored copy would have to be kept in step by every one of them.
  *
  * The tax invoice exists once the goods are supplied — delivered, or fulfilled,
  * which requires delivery. Before that an approved order has only a proforma.
@@ -46,7 +52,11 @@ export type InvoiceStatusSource = {
   fulfillmentStatus?: string | null
   statusAtRefund?: string | null
   refundAmountCents?: number | string | null
+  /** `invoices.status` of the order's tax invoice, when one has been issued. */
+  ledgerStatus?: string | null
 }
+
+const LEDGER_STATUSES = new Set<string>(["ISSUED", "PARTIALLY_CREDITED", "CREDITED"])
 
 function normalize(value: unknown): string {
   return typeof value === "string" ? value.trim().toUpperCase() : ""
@@ -60,6 +70,9 @@ export function isOrderSupplied(order: InvoiceStatusSource): boolean {
 }
 
 export function deriveInvoiceStatus(order: InvoiceStatusSource): InvoiceStatus {
+  const ledger = normalize(order.ledgerStatus)
+  if (LEDGER_STATUSES.has(ledger)) return ledger as InvoiceStatus
+
   const status = normalize(order.status)
 
   if (status === "PENDING" || status === "REJECTED") return "NOT_ISSUED"

@@ -8,6 +8,36 @@ const INVOICE_SEQUENCE_WIDTH = 6
 const MAX_INVOICE_SEQUENCE = 999999
 const TENANT_SHORT_NAME_PATTERN = /^[A-Z0-9_]+$/
 
+/**
+ * An organization without a usable code (`organizations.code`, the invoice
+ * prefix) cannot have a tax invoice numbered for it. Since invoices are
+ * numbered at delivery, that used to surface only when someone tried to record
+ * a delivery, as a 500 that rolled the delivery back. It is refused instead
+ * when an order is placed, and answered plainly if a delivery meets it anyway
+ * (plans/OF-INVOICE-invoice-ledger.md, "Fixes after the edge-case review").
+ */
+export const INVOICE_CODE_MISSING = "INVOICE_CODE_MISSING"
+export const INVOICE_CODE_MISSING_MESSAGE =
+  "This organization has no company code yet, so no tax invoice can be issued for it. Ask Apricart to set the company code in Edit Company."
+
+export class InvoiceCodeMissingError extends Error {
+  readonly code = INVOICE_CODE_MISSING
+  constructor() {
+    super(INVOICE_CODE_MISSING_MESSAGE)
+    this.name = "InvoiceCodeMissingError"
+  }
+}
+
+export function isInvoiceCodeMissingError(value: unknown): value is InvoiceCodeMissingError {
+  return value instanceof InvoiceCodeMissingError
+    || (typeof value === "object" && value !== null && (value as { code?: unknown }).code === INVOICE_CODE_MISSING)
+}
+
+/** Whether an organization code can prefix an invoice number. */
+export function isInvoiceableTenantCode(code: unknown): boolean {
+  return typeof code === "string" && TENANT_SHORT_NAME_PATTERN.test(code.trim().toUpperCase())
+}
+
 type InvoiceSequenceClient = {
   select: (fields: { tenantShortName: typeof organizations.code }) => any
   insert: (table: typeof invoiceSequences | typeof creditNoteSequences) => any
@@ -39,11 +69,11 @@ export async function lockInvoiceTenantForIssuance(client: InvoiceSequenceClient
     .for("share")
     .limit(1)
 
-  if (!tenant?.tenantShortName) {
-    throw new Error("Tenant short name is required to generate an invoice number")
+  if (!isInvoiceableTenantCode(tenant?.tenantShortName)) {
+    throw new InvoiceCodeMissingError()
   }
 
-  return tenant.tenantShortName
+  return tenant.tenantShortName as string
 }
 
 function formatDocumentNumber(prefix: string, tenantShortName: string, sequenceValue: number) {
@@ -136,7 +166,13 @@ export async function assignInvoiceNumberAtCreation(
   input: { organizationId: number; tid: string; invoiceSequenceReady: boolean },
 ): Promise<void> {
   delete receiptData.invoiceNumber
-  if (!drawsInvoiceNumberAtCreation()) return
+  if (!drawsInvoiceNumberAtCreation()) {
+    // No number now, but the order will be invoiced on delivery: an
+    // organization that cannot be invoiced takes no order, rather than one it
+    // could never deliver. Holds the same shared lock a code change waits on.
+    await lockInvoiceTenantForIssuance(client, input.organizationId)
+    return
+  }
   if (input.invoiceSequenceReady) {
     receiptData.invoiceNumber = await generateNextInvoiceNumber(client, input.organizationId)
     return

@@ -9,7 +9,7 @@
  *
  *   development  `.env.development.local`, then `.env.local`; loopback hosts only
  *   test         `.env.test.local`; the database name must contain "test"
- *   production   `.env.production.local`; never loopback, never a "test"
+ *   production   `.env.prod.local`; never loopback, never a "test"
  *                database, and nothing is applied without the plan digest
  *                printed by a dry run
  *
@@ -38,7 +38,11 @@ export const MIGRATION_ENV_FILES: Readonly<Record<MigrationEnvironment, readonly
   // Never `.env.local`: it points at the running application's database.
   test: [".env.test.local"],
   // Never `.env.local`: that file is the one switched between local and prod.
-  production: [".env.production.local"],
+  // Deliberately not `.env.production.local`: `@next/env` loads that file, ahead
+  // of `.env.local`, in every production-mode load — `next build`/`next start`
+  // and every `loadEnvConfig(process.cwd())` tool (db:sync, db:studio, the tsx
+  // scripts) — so a prod URL there would silently retarget all of them.
+  production: [".env.prod.local"],
 }
 
 /**
@@ -217,6 +221,6 @@ export const MIGRATE_USAGE = [
   "Choose the environment to migrate:",
   "  npm run db:migrate:dev    local database (.env.development.local, then .env.local)",
   "  npm run db:migrate:test   disposable test database (.env.test.local)",
-  "  npm run db:migrate:prod   production (.env.production.local) — dry run;",
+  "  npm run db:migrate:prod   production (.env.prod.local) — dry run;",
   "                            re-run with -- --confirm=<digest> to apply",
 ].join("\n")
