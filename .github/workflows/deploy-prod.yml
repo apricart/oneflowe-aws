@@ -132,7 +132,7 @@ jobs:
       - name: Migrate the throwaway test database
         env:
           MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/oneflowe_test
-        run: npm run db:migrate
+        run: npm run db:migrate:test
 
       # The runner skips every integration suite, and passes, when it has no
       # database. That is right on a laptop and wrong here: a mis-set variable

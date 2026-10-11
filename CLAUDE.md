@@ -24,7 +24,10 @@ npm run start
 npm run lint
 
 # Database
-npm run db:migrate    # Run pending migrations
+npm run db:migrate:dev   # Migrate the local database (localhost only; .env.development.local, then .env.local)
+npm run db:migrate:test  # Migrate the disposable test database (name must contain "test"; .env.test.local)
+npm run db:migrate:prod  # Production (.env.production.local): dry run printing a digest;
+                         #   npm run db:migrate:prod -- --confirm=<digest> applies it
 npm run db:generate   # Generate new migrations from schema changes
 npm run db:seed       # Seed roles, permissions, and organization settings
 npm run db:bootstrap-admin -- --confirm=CREATE_SUPER_ADMIN  # One-time admin bootstrap

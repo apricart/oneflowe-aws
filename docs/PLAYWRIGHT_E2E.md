@@ -162,5 +162,15 @@ neither failure is about the code it names. The suite sets
 "Server is approaching the used memory threshold, restarting..." in a run, that
 flag is not reaching the server.
 
+**The dev server keeps every route it compiles.** By default `next dev`
+disposes a compiled route after 60 seconds unused and keeps at most five. The
+suite revisits pages minutes apart, so each revisit compiled the page again,
+along with every API route it prefetches. On a 2-vCPU runner that queue
+outlasted the browser fetcher's 30-second timeout on every SWR retry. `/users`
+then sat on "Unable to load users", and a role-switch test timed out waiting
+for the search box. The suite sets `E2E_KEEP_COMPILED_ROUTES=1`, which
+`next.config.mjs` turns into a long `onDemandEntries` lifetime. If one run log
+shows "Compiling /some-route" twice, that flag is not reaching the server.
+
 `next start` is not used: it forces production mode, where the server env
 validator requires HTTPS for `NEXTAUTH_URL` and for the Redis URL.
