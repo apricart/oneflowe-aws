@@ -1,7 +1,12 @@
 # OF-INVOICE — Consolidated Invoice Report (preview and PDF download)
 
-Status: **decided, ready to build** (revised 2026-10-11 on top of the invoice
-ledger). Rename with the Jira ID when one is assigned.
+Status: **built 2026-10-11** on top of the invoice ledger.
+Rename with the Jira ID when one is assigned.
+
+As built, two small departures from the text below: the sort runs in memory
+over the bounded row set rather than in SQL (the same order reaches the
+preview and the PDF either way), and Super Admin's organization comes from the
+shell's context selector, as on the other reports.
 
 Builds on `plans/OF-INVOICE-invoice-ledger.md`, now in production: tax invoices
 are records in `invoices` / `invoice_lines`, issued and dated at delivery;

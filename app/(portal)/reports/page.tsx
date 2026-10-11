@@ -19,6 +19,7 @@ import { useState,useEffect } from "react"
 
 import { useSession } from "next-auth/react"
 import { usesPurchaseWording } from "@/lib/purchase-wording"
+import { canReadConsolidatedInvoiceReport } from "@/lib/consolidated-invoice-access"
 
 const reportCards = [
   {
@@ -124,6 +125,21 @@ const groupUserOnlyReportCards = [
   },
 ]
 
+/**
+ * The Consolidated Invoice Report, for Super Admin and Head Office only
+ * (lib/consolidated-invoice-access.ts). Kept out of `reportCards` for the same
+ * reason as the cards above: no role is offered a page it cannot open.
+ */
+const consolidatedInvoiceReportCards = [
+  {
+    title: "Consolidated Invoice Report",
+    description: "Every tax invoice in a month or date range, net of credit notes, in one document",
+    href: "/reports/consolidated-invoices",
+    icon: FileText,
+    gradient: "from-amber-500 to-yellow-600",
+  },
+]
+
 export default function ReportsPage() {
   const { data: session } = useSession()
   const role = (session?.user as any)?.role
@@ -158,9 +174,12 @@ export default function ReportsPage() {
   // The Analytics Center is layered on separately, the same way and for the
   // same reason: appended for the roles that may open it, never filtered back
   // out of anyone else's hub.
-  const scopedReportCards = role === "SUPER_ADMIN" || role === "HEAD_OFFICE" || role === "GROUP_USER"
+  const analyticsReportCards = role === "SUPER_ADMIN" || role === "HEAD_OFFICE" || role === "GROUP_USER"
     ? [...executiveOnlyReportCards, ...availableReportCards]
     : availableReportCards
+  const scopedReportCards = canReadConsolidatedInvoiceReport(role)
+    ? [...analyticsReportCards, ...consolidatedInvoiceReportCards]
+    : analyticsReportCards
 
   const displayReportCards = scopedReportCards
     .filter(card => {

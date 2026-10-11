@@ -22,6 +22,7 @@ import {
   ORDER_DESK_MANAGER_ROLES,
 } from "@/lib/order-desk-access"
 import { ACTIVITY_LOG_ROLES } from "@/lib/activity-log-access"
+import { CONSOLIDATED_INVOICE_REPORT_AREA, CONSOLIDATED_INVOICE_REPORT_ROLES } from "@/lib/consolidated-invoice-access"
 import {
   APRICART_EXECUTIVE_AREAS,
   APRICART_EXECUTIVE_HOME,
@@ -451,6 +452,9 @@ const ROLE_GATED_AREAS: ReadonlyArray<{ prefix: string; roles: readonly string[]
   { prefix: WAREHOUSE_HOME, roles: ["WAREHOUSE"], home: "/dashboard" },
   // Assigning warehouse accounts their branches is Super Admin's alone.
   { prefix: WAREHOUSE_TEAM_AREA, roles: WAREHOUSE_MANAGER_ROLES, home: "/dashboard" },
+  // Inside /reports, which Branch Admin and Group User also reach; the report
+  // is Super Admin's and Head Office's, and both its endpoints re-check.
+  { prefix: CONSOLIDATED_INVOICE_REPORT_AREA, roles: CONSOLIDATED_INVOICE_REPORT_ROLES, home: "/reports" },
 ]
 
 /** Where to send a caller whose role does not hold the area, or null. */
