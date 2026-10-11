@@ -21,6 +21,7 @@ import {
 import { db } from "@/lib/db"
 import {
   assignInvoiceNumberAtCreation,
+  isInvoiceCodeMissingError,
   hasInvoiceSequenceTable,
 } from "@/lib/invoice-number"
 import { calculateLineCents, formatQuantity, roundQuantity, validateProductQuantity } from "@/lib/quantity"
@@ -205,6 +206,7 @@ export function groupOrderFingerprint(input: {
 function toUserFacingReason(caughtError: unknown): string {
   if (isPaymentControlBlockedError(caughtError)) return caughtError.message
   if (isDeliveryAcknowledgementBlockedError(caughtError)) return caughtError.message
+  if (isInvoiceCodeMissingError(caughtError)) return caughtError.message
   const message = String((caughtError as { message?: unknown })?.message ?? "")
   const normalized = message.toLowerCase()
   const isCustomerError = message.startsWith("Insufficient stock")

@@ -117,6 +117,16 @@ async function getUserDeletionDependencies(userId: string) {
     db.select({ val: count() }).from(schema.branchInventory).where(eq(schema.branchInventory.assignedByUserId, userId)),
     db.select({ val: count() }).from(schema.productAssignments).where(eq(schema.productAssignments.performedByUserId, userId)),
     db.select({ val: count() }).from(schema.modifiers).where(eq(schema.modifiers.createdByUserId, userId)),
+    // Recording a delivery issues the tax invoice under the person who recorded
+    // it, and approving a refund issues a credit note: a warehouse account, or
+    // a Super Admin who has only ever marked deliveries, has history that none
+    // of the order columns above show (plans/OF-INVOICE-invoice-ledger.md).
+    db.select({ val: count() }).from(schema.invoices).where(eq(schema.invoices.issuedByUserId, userId)),
+    db.select({ val: count() }).from(schema.creditNotes).where(eq(schema.creditNotes.issuedByUserId, userId)),
+    db.select({ val: count() }).from(schema.orderDeliveryChallans).where(or(
+      eq(schema.orderDeliveryChallans.uploadedByUserId, userId),
+      eq(schema.orderDeliveryChallans.replacedByUserId, userId),
+    )),
   ])
   const counts = results.map((result) => Number(result[0]?.val || 0))
   return { adminCount: counts[0], hasHistory: counts.slice(1).some((value) => value > 0) }
@@ -135,20 +145,28 @@ async function softDeleteUser(userId: string, email: string) {
   ])
 }
 
+/**
+ * Remove a user with no history, and what only that user owned.
+ *
+ * One transaction: the cleanup detaches the person from every audit row, so if
+ * the delete is then refused by a reference the history check did not know
+ * about, the audit trail must come back with it rather than stay anonymised
+ * for a user who still exists.
+ */
 async function hardDeleteUser(userId: string) {
-  try {
-    await Promise.all([
-      db.delete(mfaCodes).where(eq(mfaCodes.userId, userId)),
-      db.delete(sessions).where(eq(sessions.userId, userId)),
-      db.delete(notifications).where(eq(notifications.userId, userId)),
-      db.delete(groupAuditLogs).where(eq(groupAuditLogs.performedByUserId, userId)),
-      db.update(auditLogs).set({ userId: null }).where(eq(auditLogs.userId, userId)),
-      db.update(systemLogs).set({ userId: null }).where(eq(systemLogs.userId, userId)),
-    ])
-  } catch (cleanupError: any) {
-    throw new Error(`Failed to clean up user dependencies: ${cleanupError.message}. Please contact support.`, { cause: cleanupError })
-  }
-  await db.delete(users).where(eq(users.id, userId))
+  await db.transaction(async (tx) => {
+    try {
+      await tx.delete(mfaCodes).where(eq(mfaCodes.userId, userId))
+      await tx.delete(sessions).where(eq(sessions.userId, userId))
+      await tx.delete(notifications).where(eq(notifications.userId, userId))
+      await tx.delete(groupAuditLogs).where(eq(groupAuditLogs.performedByUserId, userId))
+      await tx.update(auditLogs).set({ userId: null }).where(eq(auditLogs.userId, userId))
+      await tx.update(systemLogs).set({ userId: null }).where(eq(systemLogs.userId, userId))
+    } catch (cleanupError: any) {
+      throw new Error(`Failed to clean up user dependencies: ${cleanupError.message}. Please contact support.`, { cause: cleanupError })
+    }
+    await tx.delete(users).where(eq(users.id, userId))
+  })
 }
 
 async function writeUserDeletionAudit(userId: string) {
@@ -193,17 +211,20 @@ function getForeignKeyDeletionMessage(detail: string) {
 function handleUserDeletionError(caughtError: any) {
   console.error("[API/Users] CRITICAL ERROR IN DELETE:", caughtError)
   const errorMessage = caughtError.message?.toLowerCase() || ""
-  const foreignKeyError = caughtError.code === "23503"
+  // Drizzle wraps the driver's error; the Postgres code and detail are on its cause.
+  const code = String(caughtError?.code ?? caughtError?.cause?.code ?? "")
+  const detail = String(caughtError?.detail ?? caughtError?.cause?.detail ?? "").toLowerCase()
+  const foreignKeyError = code === "23503"
     || errorMessage.includes("foreign key")
     || errorMessage.includes("violates")
   if (foreignKeyError) {
-    return error(getForeignKeyDeletionMessage(caughtError.detail?.toLowerCase() || ""), 400)
+    return error(getForeignKeyDeletionMessage(detail), 400)
   }
   const validationFragments = [
     "unique constraint", "cannot delete", "history", "linked", "please reassign",
   ]
   const isValidationError = validationFragments.some((fragment) => errorMessage.includes(fragment))
-    || caughtError.code === "23505"
+    || code === "23505"
   return error(errorMessage, isValidationError ? 400 : 500)
 }
 

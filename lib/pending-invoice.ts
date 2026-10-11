@@ -1,4 +1,5 @@
 import { deriveInvoiceStatus, type InvoiceStatus } from "@/lib/invoice-status"
+import { orderStillOwes } from "@/lib/unpaid-invoice-block"
 
 /**
  * Invoice statuses that still represent money awaiting payment: a tax invoice
@@ -27,8 +28,11 @@ type PendingInvoiceOrder = {
   fulfillmentStatus?: string | null
   statusAtRefund?: string | null
   refundAmountCents?: number | string | null
+  /** `invoices.status`, when the order's tax invoice has been issued. */
+  ledgerStatus?: string | null
   paymentStatus?: string | null
   receiptData?: unknown
+  totalCents?: number | string | null
 }
 
 function normalize(value: unknown) {
@@ -44,6 +48,7 @@ export function isPendingInvoiceOrder(order: PendingInvoiceOrder): boolean {
   return Boolean(order.receiptData)
     && pendingInvoiceStatuses.has(deriveInvoiceStatus(order))
     && normalize(order.paymentStatus) === "UNPAID"
+    && orderStillOwes(order)
 }
 
 /**

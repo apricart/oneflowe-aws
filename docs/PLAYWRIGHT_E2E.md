@@ -31,6 +31,7 @@ which every spec's header names.
 | `viewer-role.spec.ts` | `OF-VIEWER-readonly-dashboard-role` |
 | `budget-allocation.spec.ts` | `OF-BUDGET-addon-validity`, `OF-GROUP-USER-budget-allocation`, `-per-user` |
 | `group-orders.spec.ts` | `OF-GROUP-ORDER-CROSS-ROLE-VISIBILITY`, `OF-GROUP-branch-owns-order-writes`, `OF-GROUP-PORTAL-other-orders-tab`, `OF-GROUP-USER-other-orders-tab` |
+| `invoice-ledger.spec.ts` | `OF-INVOICE-invoice-ledger` (approve → proforma, deliver → numbered tax invoice, partial refund → credit note, reprint unchanged) |
 | `executive-analytics.spec.ts` | `OF-EXEC-ANALYTICS-*`, `OF-REPORTS-*`, `OF-GROUP-USER-graphical-reports`, `OF-BUDGET-BURN-*`, `OF-PRODUCT-monthly-consumption-trend` |
 
 Plans with no screen of their own are deliberately not here: the K-Electric

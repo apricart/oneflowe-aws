@@ -44,7 +44,12 @@ describe("an issued invoice permanently owns its organization prefix", () => {
 
     expect(invoiceNumber).toContain('.for("share")')
     expect(organizationUpdate).toContain('.for("update")')
-    expect(organizationUpdate).toContain("isNotNull(orders.receiptData)")
+    // Locked once a number has been drawn under the code — not merely once
+    // orders exist, which no longer means a number does.
+    expect(organizationUpdate).toContain("if (await hasDrawnInvoiceNumber(tx, orgId)) return { kind: \"invoice-prefix-locked\" } as const")
+    expect(organizationUpdate).toContain("gt(invoiceSequences.lastValue, 0)")
+    expect(organizationUpdate).toContain("eq(invoices.organizationId, organizationId)")
+    expect(organizationUpdate).toContain("->> 'invoiceNumber' IS NOT NULL")
     expect(organizationUpdate).toContain('kind: "invoice-prefix-locked"')
     expect(organizationUpdate).toContain(
       "Organization code cannot be changed after the organization has issued its first invoice.",

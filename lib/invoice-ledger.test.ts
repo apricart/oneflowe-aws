@@ -77,12 +77,16 @@ describe("planIssuedInvoice", () => {
     expect(plan.lines[0]).toMatchObject({ grossCents: 1_000, taxCents: 200, netCents: 800 })
   })
 
-  it("turns an un-itemised refund into a discount, never more than is left", () => {
+  // An un-itemised refund used to be a header discount that left every line's
+  // tax in place; it is now taken off the lines, which are re-split on what
+  // they still charge (plans/OF-INVOICE-invoice-ledger.md, "Fixes after the
+  // edge-case review").
+  it("takes an un-itemised refund off the lines, never more than is left", () => {
     const plan = planIssuedInvoice({ items: [item()], refundedByItem: new Map(), unitemizedRefundCents: 100 })
-    expect(plan).toMatchObject({ discountCents: 100, totalCents: 2_260 })
-    expect(plan.netCents + plan.taxCents - plan.discountCents).toBe(plan.totalCents)
+    expect(plan).toMatchObject({ discountCents: 0, totalCents: 2_260, taxCents: 345, netCents: 1_915 })
+    expect(plan.netCents + plan.taxCents).toBe(plan.totalCents)
     const capped = planIssuedInvoice({ items: [item()], refundedByItem: new Map(), unitemizedRefundCents: 99_999 })
-    expect(capped).toMatchObject({ discountCents: 2_360, totalCents: 0 })
+    expect(capped).toMatchObject({ discountCents: 0, totalCents: 0, taxCents: 0 })
   })
 
   it("handles decimal quantities", () => {

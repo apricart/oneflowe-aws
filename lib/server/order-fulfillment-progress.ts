@@ -9,6 +9,7 @@ import { orderSelectColumns, transitionOrderFulfillmentStatusColumn } from "@/li
 import { attachDeliveryChallan } from "@/lib/server/delivery-challan"
 import { settleDeliveredOrderAfterTokenHandoff } from "@/lib/server/order-fulfillment"
 import { issueTaxInvoiceAtDelivery } from "@/lib/server/invoice-issuance"
+import { isInvoiceCodeMissingError } from "@/lib/invoice-number"
 
 /**
  * Moving an order's delivery forward one stage — the single place it happens.
@@ -45,6 +46,8 @@ export type FulfillmentProgressOutcome =
   | { kind: "not-approved"; status: string }
   | { kind: "invalid-step"; from: FulfillmentStatus; to: FulfillmentStatus }
   | { kind: "challan-refused" }
+  /** The organization has no usable company code, so its tax invoice cannot be numbered. */
+  | { kind: "invoice-code-missing" }
   | { kind: "conflict" }
   | { kind: "missing-column" }
 
@@ -132,6 +135,7 @@ function transitionErrorOutcome(transitionError: unknown): FulfillmentProgressOu
   if (!(transitionError instanceof Error)) return null
   if (transitionError.message === DELIVERY_CHALLAN_NOT_ATTACHABLE) return { kind: "challan-refused" }
   if (transitionError.message === OUT_OF_SCOPE) return { kind: "out-of-scope" }
+  if (isInvoiceCodeMissingError(transitionError)) return { kind: "invoice-code-missing" }
   return null
 }
 

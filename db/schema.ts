@@ -1276,6 +1276,18 @@ export const invoices = pgTable(
       sql`${t.creditedNetCents} >= 0 AND ${t.creditedTaxCents} >= 0 AND ${t.creditedTotalCents} >= 0 AND ${t.creditedTotalCents} <= ${t.totalCents}`,
     ),
     check("invoices_legacy_snapshot_ck", sql`(${t.origin} = 'ISSUED_AT_SUPPLY') = (${t.legacySnapshot} IS NULL)`),
+    // Credit notes only ever add a reconciled (net, tax, total) to an invoice
+    // (drizzle/20261016120000_invoice_ledger_credit_integrity.sql; the trigger
+    // also refuses lowering a credited total).
+    check("invoices_credited_split_ck", sql`${t.creditedNetCents} + ${t.creditedTaxCents} = ${t.creditedTotalCents}`),
+    check("invoices_credited_tax_ck", sql`${t.creditedTaxCents} <= ${t.taxCents}`),
+    check(
+      "invoices_status_credited_ck",
+      sql`${t.origin} <> 'ISSUED_AT_SUPPLY'
+        OR (${t.status} = 'ISSUED' AND ${t.creditedTotalCents} = 0)
+        OR (${t.status} = 'PARTIALLY_CREDITED' AND ${t.creditedTotalCents} > 0 AND ${t.creditedTotalCents} < ${t.totalCents})
+        OR (${t.status} = 'CREDITED' AND ${t.creditedTotalCents} > 0 AND ${t.creditedTotalCents} = ${t.totalCents})`,
+    ),
     foreignKey({
       name: "invoices_branch_org_fk",
       columns: [t.branchId, t.organizationId],

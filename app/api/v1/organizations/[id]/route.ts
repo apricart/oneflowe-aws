@@ -27,9 +27,11 @@ import {
   budgets,
   groups,
   systemLogs,
-  groupAuditLogs
+  groupAuditLogs,
+  invoiceSequences,
+  invoices,
 } from "@/db/schema"
-import { eq, count, and, ne, isNull, isNotNull } from "drizzle-orm"
+import { eq, count, and, ne, isNull, isNotNull, gt, sql } from "drizzle-orm"
 import { organizationUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
 import { getRequestScope } from "@/lib/auth"
 import { UNPAID_INVOICE_ORDERING_BLOCK_AUDIT_ACTION } from "@/lib/unpaid-invoice-block"
@@ -68,6 +70,27 @@ function copyVerbatimFields(body: OrganizationUpdateInput, patch: Record<string,
 // NTN or STRN can be removed without leaving an empty string behind.
 function normalizeTaxIdentifier(value: string | null) {
   return value === null ? null : value.trim() || null
+}
+
+/**
+ * Whether any invoice number has been drawn under this organization's code:
+ * from its series (even one whose order was later deleted), as an invoice in
+ * the ledger, or held on an order (a number drawn at creation before invoices
+ * were numbered at delivery, or the TID fallback). Since invoices are numbered
+ * at delivery, merely having orders no longer means a number exists
+ * (plans/OF-INVOICE-invoice-ledger.md, D7 and "Fixes after the edge-case review").
+ */
+async function hasDrawnInvoiceNumber(tx: any, organizationId: number): Promise<boolean> {
+  const [drawn] = await tx.select({ id: invoiceSequences.organizationId }).from(invoiceSequences)
+    .where(and(eq(invoiceSequences.organizationId, organizationId), gt(invoiceSequences.lastValue, 0))).limit(1)
+  if (drawn) return true
+  const [issued] = await tx.select({ id: invoices.id }).from(invoices)
+    .where(eq(invoices.organizationId, organizationId)).limit(1)
+  if (issued) return true
+  const [held] = await tx.select({ id: orders.id }).from(orders)
+    .where(and(eq(orders.organizationId, organizationId), sql`${orders.receiptData} ->> 'invoiceNumber' IS NOT NULL`))
+    .limit(1)
+  return Boolean(held)
 }
 
 /** `audit_logs.action` for a change to the NTN or STRN an invoice prints. */
@@ -186,22 +209,15 @@ export async function PATCH(
       if (!existingOrganization) return null
 
       const requestedCode = typeof patch.code === "string" ? patch.code : null
-      if (requestedCode !== null && requestedCode !== existingOrganization.code) {
+      // A code can always be set where there was none: no number can have
+      // been drawn without one (lockInvoiceTenantForIssuance refuses it).
+      if (requestedCode !== null && existingOrganization.code && requestedCode !== existingOrganization.code) {
         // Invoice issuance takes a shared lock on this organization row. Since
         // this transaction holds FOR UPDATE, a concurrent first invoice either
         // finishes before this check (and blocks the change) or waits and uses
         // the newly committed code. A tenant's invoice prefix is therefore
         // never reusable or changed halfway through issuance.
-        const [issuedInvoice] = await tx
-          .select({ id: orders.id })
-          .from(orders)
-          .where(and(
-            eq(orders.organizationId, orgId),
-            isNotNull(orders.receiptData),
-          ))
-          .limit(1)
-
-        if (issuedInvoice) return { kind: "invoice-prefix-locked" } as const
+        if (await hasDrawnInvoiceNumber(tx, orgId)) return { kind: "invoice-prefix-locked" } as const
       }
 
       const [updatedOrganization] = await tx

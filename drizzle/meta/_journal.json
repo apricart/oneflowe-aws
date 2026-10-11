@@ -638,6 +638,13 @@
       "when": 1791057600000,
       "tag": "20261015120000_add_invoice_ledger",
       "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "7",
+      "when": 1791061200000,
+      "tag": "20261016120000_invoice_ledger_credit_integrity",
+      "breakpoints": true
     }
   ]
 }

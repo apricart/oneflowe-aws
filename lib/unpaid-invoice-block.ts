@@ -34,15 +34,31 @@ type InvoiceOrderLike = {
   fulfillmentStatus?: string | null
   paymentStatus?: string | null
   receiptData?: unknown
+  totalCents?: number | string | null
+  refundAmountCents?: number | string | null
 }
 
 const canonical = (value: unknown) => String(value ?? "").trim().toUpperCase()
+
+/**
+ * Whether an order still has money to pay: its total less what was refunded.
+ * Goods delivered free of charge are invoiced at zero
+ * (plans/OF-INVOICE-invoice-ledger.md, "Fixes after the edge-case review"),
+ * and an invoice for nothing is not an unpaid invoice. Mirrored in SQL by
+ * `orderStillOwesSql` (lib/server/overdue-payment-source.ts). An order read
+ * without its total is not judged on it.
+ */
+export function orderStillOwes(order: Pick<InvoiceOrderLike, "totalCents" | "refundAmountCents">): boolean {
+  if (order.totalCents === undefined) return true
+  return Number(order.totalCents || 0) - Number(order.refundAmountCents || 0) > 0
+}
 
 export function isUnpaidInvoiceOrder(order: InvoiceOrderLike): boolean {
   return Boolean(order.receiptData)
     && canonical(order.status) === UNPAID_INVOICE_ORDER_STATUS
     && canonical(order.fulfillmentStatus) === UNPAID_INVOICE_FULFILLMENT_STATUS
     && canonical(order.paymentStatus) === UNPAID_INVOICE_PAYMENT_STATUS
+    && orderStillOwes(order)
 }
 
 /** What the popup needs to explain a refusal. */

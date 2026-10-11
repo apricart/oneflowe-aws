@@ -12,6 +12,9 @@ import {
 } from "@/lib/unpaid-invoice-block"
 import type { db } from "@/lib/db"
 
+/** The SQL twin of `orderStillOwes` (lib/unpaid-invoice-block.ts): an invoice for nothing is not unpaid. */
+export const orderStillOwesSql = sql`${orders.totalCents} - COALESCE(${orders.refundAmountCents}, 0) > 0`
+
 type DbClient = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0]
 
 /**
@@ -70,6 +73,7 @@ export const overduePaymentSource: OverduePaymentSource = async (client, scope) 
     eq(orders.fulfillmentStatus, UNPAID_INVOICE_FULFILLMENT_STATUS),
     eq(orders.paymentStatus, UNPAID_INVOICE_PAYMENT_STATUS),
     isNotNull(orders.receiptData),
+    orderStillOwesSql,
   )
 
   const [{ total }] = await client
