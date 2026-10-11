@@ -27,6 +27,7 @@ import {
 } from "@/db/schema"
 import { db } from "@/lib/db"
 import { currentBudgetPeriod } from "@/lib/server/group-branch-budgets"
+import { purgeInvoiceLedger } from "./invoice-ledger-cleanup"
 
 export { NO_DATABASE_REASON, hasTestDatabase } from "./pricing-fixtures"
 
@@ -260,6 +261,9 @@ export async function destroyOrderDeskFixtures(f: OrderDeskFixtures, extraUserId
   await db.delete(emailOutbox).where(inArray(emailOutbox.organizationId, organizationIds))
   await db.delete(systemLogs).where(or(inArray(systemLogs.organizationId, organizationIds), inArray(systemLogs.userId, userIds)))
   await db.delete(auditLogs).where(or(inArray(auditLogs.organizationId, organizationIds), inArray(auditLogs.userId, userIds)))
+  // Delivering an order issues its tax invoice; those rows hold the orders,
+  // items and refunds deleted below.
+  await purgeInvoiceLedger({ organizationIds })
   const refundRows = await db.select({ id: refunds.id }).from(refunds).where(inArray(refunds.organizationId, organizationIds))
   if (refundRows.length > 0) {
     await db.delete(refundItems).where(inArray(refundItems.refundId, refundRows.map((row) => row.id)))

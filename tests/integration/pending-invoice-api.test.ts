@@ -54,6 +54,7 @@ describe.skipIf(!hasTestDatabase)("GET /api/v1/orders/pending-invoice", () => {
     createdByUserId: string
     status: string
     paymentStatus?: "PAID" | "UNPAID"
+    fulfillmentStatus?: string
     invoiceNumber?: string | null
     createdAt?: Date
     organizationId?: number
@@ -69,6 +70,7 @@ describe.skipIf(!hasTestDatabase)("GET /api/v1/orders/pending-invoice", () => {
         branchId: input.branchId ?? f.alphaNorthId,
         createdByUserId: input.createdByUserId,
         status: input.status,
+        fulfillmentStatus: input.fulfillmentStatus ?? "DELIVERED",
         paymentStatus: input.paymentStatus ?? "UNPAID",
         subtotalCents: 10_000,
         taxCents: 0,
@@ -113,8 +115,10 @@ describe.skipIf(!hasTestDatabase)("GET /api/v1/orders/pending-invoice", () => {
     })
   })
 
+  // A tax invoice exists once the goods are delivered (plans/OF-INVOICE-invoice-ledger.md);
+  // an approved order still on its way has only a proforma.
   it.each(["APPROVED", "FULFILLED", "PARTIAL", "PARTIALLY_FULFILLED", " fulfilled "])(
-    "reports an unpaid invoice on a %s order",
+    "reports an unpaid invoice on a delivered %s order",
     async (status) => {
       signIn(requester())
       const order = await seedInvoice({ createdByUserId: f.requesterId, status, invoiceNumber: "INV-000042" })
@@ -133,6 +137,12 @@ describe.skipIf(!hasTestDatabase)("GET /api/v1/orders/pending-invoice", () => {
       expect((await readStatus()).body.hasPendingInvoice).toBe(false)
     },
   )
+
+  it("does not treat a proforma (approved, not yet delivered) as a pending invoice", async () => {
+    signIn(requester())
+    await seedInvoice({ createdByUserId: f.requesterId, status: "APPROVED", fulfillmentStatus: "OUT_FOR_DELIVERY" })
+    expect((await readStatus()).body.hasPendingInvoice).toBe(false)
+  })
 
   it("does not treat a paid invoice as pending", async () => {
     signIn(requester())

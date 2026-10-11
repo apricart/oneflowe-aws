@@ -125,7 +125,10 @@ describe.skipIf(!hasTestDatabase)("tenant composite foreign keys", () => {
     `)
     const present = new Set((result.rows as Array<{ conname: string }>).map((row) => row.conname))
     expect([...present].sort()).toEqual([...declared].sort())
-    expect(declared.size).toBe(28)
+    // 28 before the invoice ledger, which added orders_id_organization_uq,
+    // invoices_id_organization_uq, credit_notes_id_organization_uq and five
+    // composite keys (plans/OF-INVOICE-invoice-ledger.md).
+    expect(declared.size).toBe(36)
   })
 
   describe("refuse another organization's branch", () => {

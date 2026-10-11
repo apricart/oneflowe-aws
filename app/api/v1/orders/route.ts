@@ -3,15 +3,14 @@ import { createHash,randomBytes } from "node:crypto"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
-import { budgets,orders,orderItems,organizationInventory,branchInventory,branches,globalProducts,productQuantityBudgets,refunds,systemLogs,groupAuditLogs,organizations,refundItems,groups } from "@/db/schema"
+import { budgets,orders,orderItems,organizationInventory,branchInventory,branches,globalProducts,productQuantityBudgets,refunds,systemLogs,groupAuditLogs,organizations,refundItems,groups,legacyOrderImports } from "@/db/schema"
 import { headers } from "next/headers"
 import { and,desc,eq,gte,ilike,lte,or,sql,inArray,isNotNull,isNull,type AnyColumn,type SQL } from "drizzle-orm"
 import { logOrderActivity } from "@/lib/global-logger"
 import { generateReceiptData } from "@/lib/receipt-generator"
 import {
-  generateNextInvoiceNumber,
+  assignInvoiceNumberAtCreation,
   hasInvoiceSequenceTable,
-  lockInvoiceTenantForIssuance,
 } from "@/lib/invoice-number"
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
 import { parseEndDateParam,parseStartDateParam } from "@/lib/date-range-params"
@@ -49,6 +48,8 @@ import { orderCreatedByRoleMatches } from "@/lib/server/order-creator-role-sql"
 import { viewerStatusBucketCondition,viewerStatusBucketCount } from "@/lib/server/order-delivery-status-sql"
 import { parseOrderDeliveryFilter,type OrderDeliveryFilter } from "@/lib/unacknowledged-orders"
 import { parseFulfillmentStatusFilter,type FulfillmentStatus } from "@/lib/fulfillment-status"
+import { parseInvoiceStatusFilter,type InvoiceStatus } from "@/lib/invoice-status"
+import { invoiceStatusSortSql,invoiceStatusSql } from "@/lib/server/invoice-status-sql"
 import { loadApprovedDeliveryAddress } from "@/lib/server/delivery-addresses"
 import { DELIVERY_ADDRESS_UNAVAILABLE } from "@/lib/delivery-address"
 import { ORDER_LIST_PRICE_SORT_KEYS,ORDER_LIST_SORT_KEYS,sortKeysForCaller,type OrderListSortKey } from "@/lib/list-sort-keys"
@@ -88,6 +89,7 @@ const ORDER_LIST_SORT_SQL: Record<OrderListSortKey, SQL | AnyColumn> = {
   orderDate: orders.createdAt,
   approvalDate: orders.approvedAt,
   deliveryDate: orders.deliveredAt,
+  invoiceStatus: invoiceStatusSortSql,
   amount: orders.totalCents,
 }
 
@@ -127,6 +129,7 @@ function parseOrderListQuery(
     creatorRole: OrderCreatorRole | null
     deliveryFilter: OrderDeliveryFilter | null
     fulfillmentStatusFilter: FulfillmentStatus | null
+    invoiceStatusFilter: InvoiceStatus | null
     orderBy: SQL[]
   }
   | { ok: false; error: string } {
@@ -136,6 +139,8 @@ function parseOrderListQuery(
   if (!deliveryFilter.ok) return { ok: false, error: deliveryFilter.message }
   const fulfillmentStatusFilter = parseFulfillmentStatusFilter(params.fulfillmentStatus)
   if (!fulfillmentStatusFilter.ok) return { ok: false, error: fulfillmentStatusFilter.message }
+  const invoiceStatusFilter = parseInvoiceStatusFilter(params.invoiceStatus)
+  if (!invoiceStatusFilter.ok) return { ok: false, error: invoiceStatusFilter.message }
   const listOrder = resolveOrderListOrder(params.searchParams, pricesHidden)
   if (!listOrder.ok) return listOrder
   return {
@@ -143,6 +148,7 @@ function parseOrderListQuery(
     creatorRole: creatorFilter.role,
     deliveryFilter: deliveryFilter.filter,
     fulfillmentStatusFilter: fulfillmentStatusFilter.filter,
+    invoiceStatusFilter: invoiceStatusFilter.filter,
     orderBy: listOrder.orderBy,
   }
 }
@@ -182,6 +188,7 @@ function getOrderListParams(req: NextRequest) {
     createdByRole: searchParams.get("createdByRole"),
     delivery: searchParams.get("delivery"),
     fulfillmentStatus: searchParams.get("fulfillmentStatus"),
+    invoiceStatus: searchParams.get("invoiceStatus"),
     groupIds: parseNumberList(searchParams.get("groupIds") || undefined),
     months: parseNumberList(searchParams.get("months") || undefined, 1, 12),
     years: parseNumberList(searchParams.get("years") || undefined, 2000, 2100),
@@ -404,6 +411,7 @@ function addOrderStatusConditions(
   statusFilter: ReturnType<typeof getOrderStatusFilter>,
   deliveryFilter: OrderDeliveryFilter | null,
   fulfillmentStatus: FulfillmentStatus | null,
+  invoiceStatus: InvoiceStatus | null = null,
 ) {
   const requestedStatuses = getOrderStatusesForFilter(statusFilter)
   if (requestedStatuses.length > 0) {
@@ -420,6 +428,11 @@ function addOrderStatusConditions(
   if (fulfillmentStatus) {
     conditions.push(sql`UPPER(COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED')) = ${fulfillmentStatus}`)
   }
+  // Derived on read (lib/invoice-status.ts), so it is filtered through the
+  // same expression the list selects.
+  if (invoiceStatus) {
+    conditions.push(sql`${invoiceStatusSql} = ${invoiceStatus}`)
+  }
 }
 
 function getOrderListSummaryTotal(statusFilter: string, summaryRow: any, deliveryFilter: OrderDeliveryFilter | null = null) {
@@ -434,6 +447,7 @@ async function getOrderListPaginationTotal(input: {
   summaryRow: any
   deliveryFilter: OrderDeliveryFilter | null
   fulfillmentStatus: FulfillmentStatus | null
+  invoiceStatus: InvoiceStatus | null
   conditions: any[]
 }) {
   const summaryTotal = Number(getOrderListSummaryTotal(
@@ -441,7 +455,9 @@ async function getOrderListPaginationTotal(input: {
     input.summaryRow,
     input.deliveryFilter,
   ))
-  if (!input.fulfillmentStatus) return summaryTotal
+  // The summary cards do not count by fulfilment or invoice status, so either
+  // filter needs its own count.
+  if (!input.fulfillmentStatus && !input.invoiceStatus) return summaryTotal
 
   const { conditions } = input
   const listCondition = conditions.length ? and(...conditions) : undefined
@@ -623,14 +639,12 @@ async function saveOrderReceipt(tx: any, context: any) {
   // Snapshot the buyer's own reference beside the invoice number so a reissued
   // invoice prints exactly what was agreed when the order was placed.
   if (context.poNumber) receiptData.poNumber = context.poNumber
-  if (context.invoiceSequenceReady) receiptData.invoiceNumber = await generateNextInvoiceNumber(tx, context.organizationId)
-  else {
-    // Even the emergency TID fallback participates in the organization-row
-    // lock, so a code update cannot race past the tenant's first invoice.
-    await lockInvoiceTenantForIssuance(tx, context.organizationId)
-    console.error("Invoice sequence table is missing; falling back to order TID for invoice number. Run the invoice sequence migration.")
-    receiptData.invoiceNumber = context.tid
-  }
+  // Numbered at delivery now, when the tax invoice is issued (lib/invoice-policy.ts).
+  await assignInvoiceNumberAtCreation(tx, receiptData, {
+    organizationId: context.organizationId,
+    tid: context.tid,
+    invoiceSequenceReady: context.invoiceSequenceReady,
+  })
   await tx.update(orders).set({ receiptData: receiptData as any }).where(eq(orders.id, context.order.id))
 }
 
@@ -1191,6 +1205,7 @@ export async function GET(req: NextRequest) {
       statusFilter,
       listQuery.deliveryFilter,
       listQuery.fulfillmentStatusFilter,
+      listQuery.invoiceStatusFilter,
     )
 
     // --- Audit Logging for Group Access ---
@@ -1209,6 +1224,23 @@ export async function GET(req: NextRequest) {
         branchId: orders.branchId,
         status: orders.status,
         fulfillmentStatus: orderSelectColumns.fulfillmentStatus,
+        // Legacy delivery status 505 means part of the order reached the
+        // branch. Imports normalize it to FULFILLED / DELIVERED but retain the
+        // source state, so expose one boolean without leaking import metadata.
+        partialDelivery: sql<boolean>`(
+          UPPER(${orders.status}) IN ('PARTIAL', 'PARTIALLY_FULFILLED')
+          OR EXISTS (
+            SELECT 1
+            FROM ${legacyOrderImports}
+            WHERE ${legacyOrderImports.orderId} = ${orders.id}
+              AND (
+                ${legacyOrderImports.sourcePayload} #>> '{legacyStatus,deliveryStatus}' = '505'
+                OR ${legacyOrderImports.sourcePayload} #>> '{sourceHeader,DeliveryStatus}' = '505'
+                OR ${legacyOrderImports.sourcePayload} #>> '{sourceHeader,OriginalDeliveryStatus}' = '505'
+                OR UPPER(COALESCE(${legacyOrderImports.sourcePayload} #>> '{legacyStatus,text}', '')) = 'PARTIAL'
+              )
+          )
+        )`.mapWith(Boolean),
         paymentStatus: orderSelectColumns.paymentStatus,
         paidAt: orderSelectColumns.paidAt,
         tokenHandoffAt: orderSelectColumns.tokenHandoffAt,
@@ -1227,6 +1259,7 @@ export async function GET(req: NextRequest) {
         approvedAt: orders.approvedAt,
         deliveredAt: orders.deliveredAt,
         fulfilledAt: orders.fulfilledAt,
+        invoiceStatus: invoiceStatusSql,
         branchName: branches.name,
         branchAddress: branches.address,
         branchCity: branches.city,
@@ -1304,6 +1337,7 @@ export async function GET(req: NextRequest) {
       summaryRow,
       deliveryFilter: listQuery.deliveryFilter,
       fulfillmentStatus: listQuery.fulfillmentStatusFilter,
+      invoiceStatus: listQuery.invoiceStatusFilter,
       conditions,
     })
 

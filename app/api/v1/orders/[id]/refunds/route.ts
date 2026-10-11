@@ -30,6 +30,7 @@ import {
 import { notifyRaiserOfOrderWrite } from "@/lib/server/order-write-audit"
 import { isOrderDeskRole } from "@/lib/order-desk-access"
 import { loadDeskOrder } from "@/lib/server/order-desk-orders"
+import { CREDIT_NOTE_CONFLICT_ERRORS, issueCreditNoteForRefund } from "@/lib/server/credit-notes"
 
 const refundRequestRoles = new Set([
   "SUPER_ADMIN",
@@ -239,7 +240,7 @@ async function loadRefundRequestData(orderId: number, requestedItems: any[]) {
 }
 
 function getRefundProcessingErrorResponse(caughtError: any) {
-  if (["REFUND_AVAILABILITY_CONFLICT", "REFUND_ELIGIBILITY_CONFLICT", "QUANTITY_BUDGET_LEDGER_INVARIANT"].includes(caughtError?.message)) {
+  if (["REFUND_AVAILABILITY_CONFLICT", "REFUND_ELIGIBILITY_CONFLICT", "QUANTITY_BUDGET_LEDGER_INVARIANT", ...CREDIT_NOTE_CONFLICT_ERRORS].includes(caughtError?.message)) {
     return NextResponse.json({ error: "Refund eligibility changed while the request was being processed. Refresh and try again." }, { status: 409 })
   }
   if (caughtError.code === "23503") return NextResponse.json({ error: "Referenced order or user not found" }, { status: 404 })
@@ -442,6 +443,17 @@ async function processRefundTransaction(tx: any, context: any) {
   if (context.details.length > 0) await tx.insert(refundItems).values(context.details.map((item: any) => ({
     refundId, orderItemId: item.orderItemId, quantity: item.quantity, amountCents: item.amount,
   })))
+  // An approved refund is credited against the order's tax invoice, in this
+  // transaction (plans/OF-INVOICE-invoice-ledger.md, D3). A request waits for
+  // its approval, which goes through the admin route and the same function.
+  if (context.userRole === "SUPER_ADMIN") {
+    await issueCreditNoteForRefund(tx, {
+      refundId,
+      orderId: context.orderId,
+      actor: { id: context.userId, role: context.userRole },
+      reason: context.reason,
+    })
+  }
 }
 
 export async function GET(

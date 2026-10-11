@@ -191,3 +191,43 @@ describe("the paid stamp", () => {
     expect(printedText({ ...receiptData, paymentStatus: "SOMETHING_ELSE" })).not.toContain("PAID")
   })
 })
+
+describe("the invoice status and title", () => {
+  it("keeps the plain INVOICE heading when no status is supplied", () => {
+    const text = printedText()
+    expect(text).toContain("(INVOICE)")
+    expect(text).not.toContain("PROFORMA")
+    expect(text).not.toContain("Invoice Status")
+  })
+
+  it("titles an issued invoice INVOICE and prints its status", () => {
+    const text = printedText({ ...receiptData, invoiceStatus: "PARTIALLY_CREDITED" })
+    expect(text).toContain("(INVOICE)")
+    expect(text).toContain("Invoice Status")
+    expect(text).toContain("Partially credited")
+  })
+
+  it("titles anything not yet a tax invoice PROFORMA INVOICE", () => {
+    const text = printedText({ ...receiptData, invoiceStatus: "PROFORMA_AVAILABLE" })
+    expect(text).toContain("PROFORMA INVOICE")
+    expect(text).toContain("Proforma available")
+  })
+
+  it("ignores a status outside the known set rather than printing it", () => {
+    const text = printedText({ ...receiptData, invoiceStatus: "PAID_IN_FULL" })
+    expect(text).toContain("(INVOICE)")
+    expect(text).not.toContain("PAID_IN_FULL")
+  })
+})
+
+describe("the customer's STRN", () => {
+  it("is printed under Bill To beside the NTN when supplied", () => {
+    const text = printedText({ ...receiptData, organizationStrn: "3277876123456" })
+    expect(text).toContain("STRN:")
+    expect(text).toContain("3277876123456")
+  })
+
+  it("prints only Apricart's own STRN when the customer has none", () => {
+    expect(printedText().match(/STRN:/g)).toHaveLength(1)
+  })
+})

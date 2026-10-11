@@ -624,6 +624,20 @@
       "when": 1791050400000,
       "tag": "20261013120000_add_warehouse_city_assignments",
       "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1791054000000,
+      "tag": "20261014120000_add_organization_strn_number",
+      "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1791057600000,
+      "tag": "20261015120000_add_invoice_ledger",
+      "breakpoints": true
     }
   ]
 }

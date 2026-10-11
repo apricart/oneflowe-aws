@@ -221,6 +221,106 @@ describe("OrdersDirectory", () => {
     expect(tableQueries.queryByRole("columnheader", { name: "Approval Date" })).toBeNull()
   })
 
+  it("shows organization names in the table for Super Admin", () => {
+    render(
+      <OrdersDirectory
+        orders={[{
+          id: 48,
+          tid: "ORD-0048",
+          organizationName: "Acme Organization",
+          status: "PENDING",
+          branchId: 8,
+          branchName: "North Branch",
+          createdAt: "2026-07-28T10:00:00.000Z",
+          totalCents: 125000,
+        }]}
+        userRole="SUPER_ADMIN"
+        isSuperAdmin
+        isBranchAdmin={false}
+        onUpdate={vi.fn()}
+      />,
+    )
+
+    const table = within(screen.getByRole("table"))
+    expect(table.getByRole("columnheader", { name: "Organization" })).toBeTruthy()
+    expect(table.getByText("Acme Organization")).toBeTruthy()
+  })
+
+  it("hides the organization column from non-Super-Admin roles", () => {
+    render(
+      <OrdersDirectory
+        orders={[{
+          id: 49,
+          tid: "ORD-0049",
+          organizationName: "Hidden Organization",
+          status: "PENDING",
+          branchId: 8,
+          branchName: "North Branch",
+          createdAt: "2026-07-28T10:00:00.000Z",
+          totalCents: 125000,
+        }]}
+        userRole="BRANCH_ADMIN"
+        isSuperAdmin={false}
+        isBranchAdmin
+        onUpdate={vi.fn()}
+      />,
+    )
+
+    const table = within(screen.getByRole("table"))
+    expect(table.queryByRole("columnheader", { name: "Organization" })).toBeNull()
+    expect(table.queryByText("Hidden Organization")).toBeNull()
+
+    fireEvent.click(screen.getByRole("button", { name: /Columns/ }))
+    expect(screen.queryByText("Organization", { selector: "span" })).toBeNull()
+  })
+
+  it.each(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER"])(
+    "shows partial delivery to the %s role",
+    (role) => {
+      render(
+        <OrdersDirectory
+          orders={[
+            {
+              id: 50,
+              tid: "ORD-PARTIAL",
+              status: "FULFILLED",
+              partialDelivery: true,
+              branchId: 8,
+              branchName: "North Branch",
+              createdAt: "2026-07-28T10:00:00.000Z",
+              totalCents: 125000,
+            },
+            {
+              id: 51,
+              tid: "ORD-COMPLETE",
+              status: "FULFILLED",
+              partialDelivery: false,
+              branchId: 8,
+              branchName: "North Branch",
+              createdAt: "2026-07-29T10:00:00.000Z",
+              totalCents: 125000,
+            },
+          ]}
+          userRole={role}
+          isSuperAdmin={role === "SUPER_ADMIN"}
+          isBranchAdmin={role === "BRANCH_ADMIN"}
+          isHeadOffice={role === "HEAD_OFFICE"}
+          onUpdate={vi.fn()}
+        />,
+      )
+
+      const table = within(screen.getByRole("table"))
+      const headers = table.getAllByRole("columnheader").map((header) => header.textContent)
+      const partialDeliveryIndex = headers.indexOf("Partial Delivery")
+      const partialRow = table.getByText("ORD-PARTIAL").closest("tr")
+      const completeRow = table.getByText("ORD-COMPLETE").closest("tr")
+
+      expect(partialDeliveryIndex).toBeGreaterThanOrEqual(0)
+      expect(within(partialRow!).getAllByRole("cell")[partialDeliveryIndex]?.textContent).toBe("Yes")
+      expect(within(completeRow!).getAllByRole("cell")[partialDeliveryIndex]?.textContent).toBe("No")
+    },
+  )
+
   it("keeps a visible horizontal scrollbar on the table", () => {
     render(
       <OrdersDirectory

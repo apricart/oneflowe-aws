@@ -56,5 +56,9 @@ export function redactReceiptPrices(receiptData: any) {
       ? receiptData.refundedItems.map((item: any) => ({ ...item, amount: null }))
       : receiptData.refundedItems,
     items: redactReceiptItems(receiptData.items),
+    // The credit notes listed against an invoice are money too.
+    creditNotes: Array.isArray(receiptData.creditNotes)
+      ? receiptData.creditNotes.map((note: any) => ({ ...note, total: null }))
+      : receiptData.creditNotes,
   }
 }

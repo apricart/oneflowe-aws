@@ -2,12 +2,28 @@ import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
-import { orders, orderItems, budgets, globalProducts, refunds } from "@/db/schema"
+import { orders, orderItems, budgets, globalProducts, refunds, invoices } from "@/db/schema"
 import { eq, and, gte, sql } from "drizzle-orm"
 import { releaseQuantityBudgetForDeletedOrder } from "@/lib/server/product-quantity-budget-ledger"
 import { orderTakesBudget } from "@/lib/organization-budget-policy"
 import { orderSelectColumns } from "@/lib/order-select"
 import { auditActorFromSession, recordAuditEvent } from "@/lib/server/activity-audit"
+
+const TAX_INVOICED_MESSAGE = "An order with a tax invoice cannot be deleted; refund it instead"
+
+/**
+ * A delivered order carries a tax invoice (plans/OF-INVOICE-invoice-ledger.md),
+ * and an issued invoice is never destroyed: it is corrected by a credit note.
+ * The database refuses it as well (invoices.order_id has no ON DELETE).
+ */
+function isSupplied(order: { fulfillmentStatus?: string | null }): boolean {
+    return String(order.fulfillmentStatus || "").trim().toUpperCase() === "DELIVERED"
+}
+
+function invoiceNumberOf(receiptData: unknown): string | null {
+    const value = (receiptData as { invoiceNumber?: unknown } | null)?.invoiceNumber
+    return typeof value === "string" && value.trim() ? value.trim() : null
+}
 
 /**
  * DELETE /api/v1/admin/delete-order?id=94
@@ -61,6 +77,9 @@ export async function DELETE(req: NextRequest) {
         if (String(order.paymentStatus || "").toUpperCase() === "PAID") {
             return NextResponse.json({ error: "Paid orders cannot be deleted" }, { status: 409 })
         }
+        if (isSupplied(order)) {
+            return NextResponse.json({ error: TAX_INVOICED_MESSAGE }, { status: 409 })
+        }
 
         // Start transaction to safely delete everything
         await db.transaction(async (tx) => {
@@ -75,6 +94,9 @@ export async function DELETE(req: NextRequest) {
             if (String(lockedOrder.paymentStatus || "").toUpperCase() === "PAID") {
                 throw new Error("ORDER_DELETE_CONFLICT")
             }
+            const [invoice] = await tx.select({ id: invoices.id }).from(invoices)
+                .where(eq(invoices.orderId, orderIdNum)).limit(1)
+            if (invoice || isSupplied(lockedOrder)) throw new Error("ORDER_DELETE_TAX_INVOICED")
 
             const [refund] = await tx
                 .select({ id: refunds.id })
@@ -159,7 +181,12 @@ export async function DELETE(req: NextRequest) {
                 branchId: lockedOrder.branchId,
                 before: {
                     tid: lockedOrder.tid,
+                    // The invoice number this order held, so the gap it leaves
+                    // in the tenant's series can be explained afterwards
+                    // (plans/OF-INVOICE-invoice-ledger.md, D5/D6).
+                    invoiceNumber: invoiceNumberOf(lockedOrder.receiptData),
                     status: lockedOrder.status,
+                    fulfillmentStatus: lockedOrder.fulfillmentStatus,
                     paymentStatus: lockedOrder.paymentStatus,
                     totalCents: lockedOrder.totalCents,
                     createdAt: lockedOrder.createdAt,
@@ -197,6 +224,9 @@ export async function DELETE(req: NextRequest) {
         console.error("Delete order error:", e)
         if (["ORDER_DELETE_CONFLICT", "ORDER_DELETE_HAS_REFUNDS", "BUDGET_LEDGER_INVARIANT", "QUANTITY_BUDGET_LEDGER_INVARIANT"].includes(e?.message)) {
             return NextResponse.json({ error: "Order changed or has financial/refund history and was not deleted" }, { status: 409 })
+        }
+        if (e?.message === "ORDER_DELETE_TAX_INVOICED") {
+            return NextResponse.json({ error: TAX_INVOICED_MESSAGE }, { status: 409 })
         }
         return NextResponse.json({ error: "Internal server error" }, { status: 500 })
     }

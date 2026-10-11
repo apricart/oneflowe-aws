@@ -71,6 +71,7 @@ import { isUnacknowledgedDelivery } from "@/lib/unacknowledged-delivery-block"
 import { isAwaitingCorrection } from "@/lib/order-correction"
 import { OrderCorrectionNotice, ReturnForCorrectionDialog } from "@/components/orders/order-correction"
 import { DeliveryChallanUploadDialog } from "@/components/orders/delivery-challan"
+import { InvoiceStatusBadge } from "@/components/orders/invoice-status-badge"
 import { TOKEN_SENT_LABEL, isTokenAlreadySent, readTokenSendRefusal } from "@/lib/order-token-handoff"
 import {
   DELIVERED_UNFULFILLED_LABEL,
@@ -82,8 +83,10 @@ type OrderTableColumn = ColumnDef & { width: number }
 const ORDER_TABLE_COLUMNS: OrderTableColumn[] = [
   { key: "id", label: "Order ID", width: 96 },
   { key: "tid", label: "Transaction ID", width: 224 },
+  { key: "organization", label: "Organization", width: 176 },
   { key: "branch", label: "Branch", width: 160 },
   { key: "costCenter", label: "Cost Center", width: 104 },
+  { key: "partialDelivery", label: "Partial Delivery", width: 128 },
   { key: "orderStatus", label: "Order Status", width: 152 },
   { key: "progress", label: "Progress", width: 140 },
   { key: "paymentStatus", label: "Payment", width: 108 },
@@ -91,6 +94,7 @@ const ORDER_TABLE_COLUMNS: OrderTableColumn[] = [
   { key: "orderDate", label: "Order Date", width: 112 },
   { key: "approvalDate", label: "Approval Date", width: 120 },
   { key: "deliveryDate", label: "Delivery Date", width: 120 },
+  { key: "invoiceStatus", label: "Invoice Status", width: 148 },
   { key: "amount", label: "Amount", width: 120 },
 ]
 
@@ -101,6 +105,13 @@ const ORDER_TABLE_COLUMNS: OrderTableColumn[] = [
  */
 const TOKEN_COLUMN_WIDTH = 180
 const ACTION_COLUMN_WIDTH = 150
+const PARTIAL_DELIVERY_STATUSES = new Set(["PARTIAL", "PARTIALLY_FULFILLED"])
+
+function isPartialDelivery(order: { partialDelivery?: boolean; status?: string | null }): boolean {
+  return order.partialDelivery
+    ?? PARTIAL_DELIVERY_STATUSES.has(String(order.status || "").trim().toUpperCase())
+}
+
 /** Numbers and dates show the largest or newest first on the first click. */
 const DESC_FIRST_SORT_KEYS = new Set<OrderListSortKey>(["id", "orderDate", "approvalDate", "deliveryDate", "amount"])
 const PINNED_CELL_CLASS = "sticky z-10 bg-white group-hover:bg-slate-50 dark:bg-slate-900 dark:group-hover:bg-slate-800"
@@ -235,6 +246,7 @@ export function OrdersDirectory({
   const [orderDetailsError, setOrderDetailsError] = useState<string | null>(null)
   const [orderDetailsRequestKey, setOrderDetailsRequestKey] = useState(0)
   const viewingOrderId = viewingOrder?.id
+  const showOrganizationColumn = isSuperAdmin && userRole === "SUPER_ADMIN"
   const viewingOrderCanHandoffToken = !isSuperAdmin
     && String(viewingOrder?.status ?? "").trim().toUpperCase() === "APPROVED"
     && typeof viewingOrder?.approvalToken === "string"
@@ -245,6 +257,7 @@ export function OrdersDirectory({
     "orders-directory-table-v1",
   )
   const availableTableColumns = ORDER_TABLE_COLUMNS.filter((column) => {
+    if (column.key === "organization") return showOrganizationColumn
     if (column.key === "costCenter") return shouldShowCostCenterId
     if (column.key === "amount") return !pricesHidden
     return true
@@ -778,8 +791,10 @@ export function OrdersDirectory({
                 <tr className="border-b border-slate-200 text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:border-slate-800">
                   {isTableColumnVisible("id") && <th aria-sort={ariaSortFor(sort, "id")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap py-2.5 pl-5 pr-3 text-left font-bold")}>{sortLabel("id", "Order ID")}</th>}
                   {isTableColumnVisible("tid") && <th aria-sort={ariaSortFor(sort, "tid")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-left font-bold")}>{sortLabel("tid", "Transaction ID")}</th>}
+                  {isTableColumnVisible("organization") && <th className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-left font-bold")}>Organization</th>}
                   {isTableColumnVisible("branch") && <th aria-sort={ariaSortFor(sort, "branch")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-left font-bold")}>{sortLabel("branch", "Branch")}</th>}
                   {isTableColumnVisible("costCenter") && <th aria-sort={ariaSortFor(sort, "costCenter")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-left font-bold")}>{sortLabel("costCenter", "Cost Center")}</th>}
+                  {isTableColumnVisible("partialDelivery") && <th className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-center font-bold")}>Partial Delivery</th>}
                   {isTableColumnVisible("orderStatus") && <th aria-sort={ariaSortFor(sort, "orderStatus")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-center font-bold")}>{sortLabel("orderStatus", "Order Status")}</th>}
                   {isTableColumnVisible("progress") && <th aria-sort={ariaSortFor(sort, "progress")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-center font-bold")}>{sortLabel("progress", "Progress")}</th>}
                   {isTableColumnVisible("paymentStatus") && <th aria-sort={ariaSortFor(sort, "paymentStatus")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-center font-bold")}>{sortLabel("paymentStatus", "Payment")}</th>}
@@ -787,6 +802,7 @@ export function OrdersDirectory({
                   {isTableColumnVisible("orderDate") && <th aria-sort={ariaSortFor(sort, "orderDate")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-left font-bold")}>{sortLabel("orderDate", "Order Date")}</th>}
                   {isTableColumnVisible("approvalDate") && <th aria-sort={ariaSortFor(sort, "approvalDate")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-left font-bold")}>{sortLabel("approvalDate", "Approval Date")}</th>}
                   {isTableColumnVisible("deliveryDate") && <th aria-sort={ariaSortFor(sort, "deliveryDate")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-left font-bold")}>{sortLabel("deliveryDate", "Delivery Date")}</th>}
+                  {isTableColumnVisible("invoiceStatus") && <th aria-sort={ariaSortFor(sort, "invoiceStatus")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap px-3 py-2.5 text-center font-bold")}>{sortLabel("invoiceStatus", "Invoice Status")}</th>}
                   {isTableColumnVisible("amount") && <th aria-sort={ariaSortFor(sort, "amount")} className={cn(HEAD_CELL_CLASS, "h-11 whitespace-nowrap py-2.5 pl-3 pr-5 text-right font-bold")}>{sortLabel("amount", "Amount")}</th>}
                   {showFulfillmentColumns && (
                     <>
@@ -842,6 +858,11 @@ export function OrdersDirectory({
                         {order.decidedByApricart && <ApricartOrderBadge pending={order.status?.toLowerCase() === "pending"} />}
                         {isUnacknowledgedDelivery(order) && <DeliveredUnfulfilledBadge />}
                       </td>}
+                      {isTableColumnVisible("organization") && <td className="px-3 py-3">
+                        <span className="block truncate font-medium text-slate-600 dark:text-slate-400" title={order.organizationName || undefined}>
+                          {order.organizationName || "—"}
+                        </span>
+                      </td>}
                       {isTableColumnVisible("branch") && <td className="px-3 py-3">
                         <div className="flex items-center gap-2">
                           <Building2 className="h-3.5 w-3.5 shrink-0 text-indigo-500 opacity-60" />
@@ -855,6 +876,11 @@ export function OrdersDirectory({
                           <span className="font-mono text-xs font-bold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-md">
                             {order.branchCostCenterId || "-"}
                           </span>
+                        </td>
+                      )}
+                      {isTableColumnVisible("partialDelivery") && (
+                        <td className="px-3 py-3 text-center font-medium text-slate-600 dark:text-slate-400">
+                          {isPartialDelivery(order) ? "Yes" : "No"}
                         </td>
                       )}
                       {isTableColumnVisible("orderStatus") && <td className="px-3 py-3 text-center">
@@ -904,6 +930,9 @@ export function OrdersDirectory({
                       </td>}
                       {isTableColumnVisible("deliveryDate") && <td className="whitespace-nowrap px-3 py-3 text-xs font-medium text-slate-500">
                         {order.deliveredAt ? format(new Date(order.deliveredAt), "dd MMM yyyy") : "—"}
+                      </td>}
+                      {isTableColumnVisible("invoiceStatus") && <td className="px-3 py-3 text-center">
+                        <InvoiceStatusBadge status={order.invoiceStatus} />
                       </td>}
                       {isTableColumnVisible("amount") && <td className="whitespace-nowrap py-3 pl-3 pr-5 text-right font-bold text-slate-800 dark:text-slate-200">
                         {order.totalCents !== null && order.totalCents !== undefined ? formatPKR(order.totalCents / 100) : "-"}

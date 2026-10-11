@@ -11,6 +11,8 @@ import { safeFilenamePart } from "@/lib/security"
 import type { InvoiceOrder } from "@/lib/server/invoice-access"
 import { loadInvoiceParticipants } from "@/lib/server/invoice-participants"
 import { renderInvoicePdf } from "@/lib/server/invoice-pdf"
+import { describeInvoiceStatus } from "@/lib/invoice-status"
+import { invoiceDocumentForOrder } from "@/lib/server/invoice-ledger-reads"
 
 /**
  * One order's invoice PDF — the document itself, with no access decision in
@@ -41,17 +43,20 @@ export async function buildInvoiceDocument(order: InvoiceOrder): Promise<{ pdf: 
 
   let organizationName = ""
   let organizationNtn = ""
+  let organizationStrn = ""
   if (order.organizationId !== null) {
     const [organizationDetails] = await db
       .select({
         name: organizations.name,
         ntnNumber: organizations.ntnNumber,
+        strnNumber: organizations.strnNumber,
       })
       .from(organizations)
       .where(eq(organizations.id, order.organizationId))
       .limit(1)
     organizationName = organizationDetails?.name || ""
     organizationNtn = organizationDetails?.ntnNumber || ""
+    organizationStrn = organizationDetails?.strnNumber || ""
   }
 
   const refundRows = await db
@@ -79,7 +84,7 @@ export async function buildInvoiceDocument(order: InvoiceOrder): Promise<{ pdf: 
     refundAmountCents: order.refundAmountCents,
   }, "fulfilled")
 
-  const receiptData = {
+  const snapshotReceiptData = {
     ...(order.receiptData as any),
     buyerAddress: branchAddress,
     organizationName: (order.receiptData as any)?.organizationName || organizationName || "",
@@ -96,11 +101,14 @@ export async function buildInvoiceDocument(order: InvoiceOrder): Promise<{ pdf: 
     fulfilledByName: participants.fulfilledByName,
     status: derivedStatus.label,
     statusKey: derivedStatus.key,
+    ...describeInvoiceStatus(order, organizationStrn).fields,
     refund: totalApprovedRefundAmount,
     refundedItems,
     totalAmount: getReceiptNetTotal(order.receiptData as any, totalApprovedRefundAmount),
   }
 
+  // An invoice issued at delivery prints from its own ledger rows.
+  const receiptData: any = await invoiceDocumentForOrder(order, snapshotReceiptData)
   const pdf = renderInvoicePdf(receiptData)
   const invoiceFilePart = safeFilenamePart(receiptData.invoiceNumber, String(order.id))
   return { pdf, fileName: `invoice-${invoiceFilePart}.pdf` }

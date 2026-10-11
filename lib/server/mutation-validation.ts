@@ -267,11 +267,15 @@ export const privateNetworkLoginSchema = z.object({
 
 // Optional tax identifier. An empty string is accepted and normalized to null
 // by the route so an operator can clear a wrong value without extra API shape.
-const organizationNtnNumber = z
+/** A tax identifier as printed on an invoice: letters, digits and hyphens. */
+const organizationTaxIdentifier = (label: string) => z
   .string()
   .trim()
   .max(32)
-  .regex(/^[A-Za-z0-9-]*$/, "NTN number may contain only letters, numbers, and hyphens")
+  .regex(/^[A-Za-z0-9-]*$/, `${label} may contain only letters, numbers, and hyphens`)
+
+const organizationNtnNumber = organizationTaxIdentifier("NTN number")
+const organizationStrnNumber = organizationTaxIdentifier("STRN number")
 
 /**
  * The domain self-service applicants must use. Normalised through the single
@@ -302,6 +306,7 @@ export const organizationCreateSchema = z.object({
   name: z.string().trim().min(2).max(100),
   code: z.string().trim().min(2).max(20).regex(/^\w+$/),
   ntnNumber: organizationNtnNumber.optional(),
+  strnNumber: organizationStrnNumber.optional(),
   emailDomain: organizationEmailDomain.optional(),
   status: z.enum(["active", "inactive", "suspended"]).optional().default("active"),
   orderApproverRole: z.enum(ORDER_APPROVER_ROLES).optional().default("BRANCH_ADMIN"),
@@ -328,6 +333,7 @@ export const organizationUpdateSchema = z.object({
   name: z.string().trim().min(2).max(100).optional(),
   code: z.string().trim().min(2).max(20).regex(/^\w+$/).optional(),
   ntnNumber: organizationNtnNumber.nullable().optional(),
+  strnNumber: organizationStrnNumber.nullable().optional(),
   // `null` or a blank string clears the domain, which closes self-service
   // joining for the organization.
   emailDomain: organizationEmailDomain.nullable().optional(),

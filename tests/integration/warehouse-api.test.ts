@@ -36,6 +36,7 @@ import {
   warehouseCityAssignments,
 } from "@/db/schema"
 import { closePool, db } from "@/lib/db"
+import { purgeInvoiceLedger } from "./helpers/invoice-ledger-cleanup"
 
 import { hasTestDatabase } from "./helpers/pricing-fixtures"
 
@@ -278,6 +279,8 @@ describe.skipIf(!hasTestDatabase)("the Warehouse role through the API", () => {
     const orderRows = await db.select({ id: orders.id }).from(orders).where(inArray(orders.organizationId, organizationIds))
     const orderIds = orderRows.map((row) => row.id)
     if (orderIds.length > 0) {
+      // Delivering an order issues its tax invoice, which holds its items.
+      await purgeInvoiceLedger({ organizationIds })
       await db.delete(orderDeliveryChallans).where(inArray(orderDeliveryChallans.orderId, orderIds))
       await db.delete(orderItems).where(inArray(orderItems.orderId, orderIds))
       await db.delete(orders).where(inArray(orders.id, orderIds))

@@ -67,3 +67,12 @@ describe("formatInvoiceNumber", () => {
     await expect(generateNextInvoiceNumber(client, 1)).rejects.toThrow("Tenant short name")
   })
 })
+
+describe("credit note numbers", () => {
+  it("come from their own CN series, in the invoice number's shape", async () => {
+    const { formatCreditNoteNumber } = await import("./invoice-number")
+    expect(formatCreditNoteNumber("ubl", 4)).toBe("UBL-CN-000004")
+    expect(() => formatCreditNoteNumber("U-B", 4)).toThrow()
+    expect(() => formatCreditNoteNumber("UBL", 0)).toThrow()
+  })
+})
