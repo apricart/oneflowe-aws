@@ -13,6 +13,7 @@ import {
   destinationCity,
   groupDeliveries,
   isDeliveryListView,
+  isInDeliveryDateRange,
   karachiDay,
   matchesDeliveryListView,
   overdueAgeBuckets,
@@ -72,7 +73,11 @@ export type DeliveryDashboardFilters = {
   city: string | null
   fulfillmentStatus: FulfillmentStatus | null
   view: DeliveryListView
-  /** Karachi days, inclusive. Delivered orders outside this range are not read; open orders always are. */
+  /**
+   * Karachi days, inclusive. Every figure counts open orders approved, and
+   * delivered orders delivered, inside this range. The names predate that and
+   * are kept so the query string stays stable.
+   */
   deliveredFrom: string
   deliveredTo: string
 }
@@ -300,7 +305,14 @@ export function buildDeliveryDashboard(input: {
   }
   const cityOptions = [...cityLabels.values()].sort((a, b) => a.localeCompare(b))
 
-  const assessed = assessedAll.filter((row) => matchesCity(row, filters.city))
+  // The date range applies to every figure on the screen: open orders by the
+  // day they were approved, delivered ones by the day they were delivered. An
+  // open order approved outside it is not counted, but it is never silently
+  // gone — `openOutsideRange` says how many there are.
+  const inCity = assessedAll.filter((row) => matchesCity(row, filters.city))
+  const assessed = inCity.filter((row) => isInDeliveryDateRange(row.assessment, filters.deliveredFrom, filters.deliveredTo))
+  const openOutsideRange = inCity.filter((row) => row.assessment.isOpen
+    && !isInDeliveryDateRange(row.assessment, filters.deliveredFrom, filters.deliveredTo)).length
   const assessments = assessed.map((row) => row.assessment)
   const listed = assessed
     .filter((row) => matchesDeliveryListView(row.assessment, filters.view, today))
@@ -318,6 +330,7 @@ export function buildDeliveryDashboard(input: {
     kpis: {
       ...countDeliveries(assessments),
       deliveredToday: countDeliveredOn(assessments, today),
+      openOutsideRange,
     },
     alerts: deliveryAlerts(assessments),
     overdueAge: overdueAgeBuckets(assessments),

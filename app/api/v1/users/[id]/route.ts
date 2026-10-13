@@ -117,9 +117,9 @@ async function getUserDeletionDependencies(userId: string) {
     db.select({ val: count() }).from(schema.branchInventory).where(eq(schema.branchInventory.assignedByUserId, userId)),
     db.select({ val: count() }).from(schema.productAssignments).where(eq(schema.productAssignments.performedByUserId, userId)),
     db.select({ val: count() }).from(schema.modifiers).where(eq(schema.modifiers.createdByUserId, userId)),
-    // Recording a delivery issues the tax invoice under the person who recorded
-    // it, and approving a refund issues a credit note: a warehouse account, or
-    // a Super Admin who has only ever marked deliveries, has history that none
+    // Marking an order In Process issues the tax invoice under the person who
+    // did it, and approving a refund issues a credit note: a warehouse account,
+    // or a Super Admin who has only ever moved deliveries, has history that none
     // of the order columns above show (plans/OF-INVOICE-invoice-ledger.md).
     db.select({ val: count() }).from(schema.invoices).where(eq(schema.invoices.issuedByUserId, userId)),
     db.select({ val: count() }).from(schema.creditNotes).where(eq(schema.creditNotes.issuedByUserId, userId)),

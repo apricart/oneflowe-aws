@@ -17,7 +17,7 @@ Builds on: `plans/OF-ORDER-DESK-internal-order-entry.md`,
 | Challan | **Optional for the warehouse.** It may attach one when marking delivered, attach one later to a delivered order that has none, or deliver without one. Super Admin's own delivery route still requires one. |
 | Prices | **The warehouse sees prices and invoice information** — line prices, tax, totals, invoice number, payment status, refunded amount. The org-level price-hiding settings apply only to Branch Admin and Order Portal, so nothing there changes. The invoice PDF is not opened to it in Phase 1 (the invoice access policy is tenant-scoped). |
 | Warehouse owner (OPEN-1) | Apricart's own warehouse, cross-tenant — as assumed. |
-| Stock (OPEN-2) | All global products, read-only. |
+| Stock (OPEN-2) | All global products, read-only. Since replaced by the Product Catalog tab — `plans/OF-WAREHOUSE-read-only-product-catalog.md`. |
 
 OPEN-3 and OPEN-4 belong to Phase 2 and stay open.
 
@@ -394,7 +394,7 @@ now pin the module and both callers (`lib/delivery-challan.test.ts`,
 | `GET`/`POST /api/v1/warehouse/orders/[id]/delivery-challan` | Current challan; add one to a delivered order that has none |
 | `GET /api/v1/warehouse/orders/[id]/delivery-challan/[challanId]/file` | Stream it, same headers as the order readers' route |
 | `GET /api/v1/warehouse/workload` | The management dashboard, fenced (same query, same shape) |
-| `GET /api/v1/warehouse/stock` | Global stock, read-only, no price |
+| `GET /api/v1/warehouse/stock` | Global stock, read-only, no price. Removed; see `plans/OF-WAREHOUSE-read-only-product-catalog.md` |
 | `GET /api/v1/warehouse-team`, `PUT /api/v1/warehouse-team/[userId]/branches` | Super Admin only |
 
 **UI.** `/warehouse` (Orders, Workload, Stock tabs; picking sheet with the

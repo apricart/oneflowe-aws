@@ -36,6 +36,7 @@ export async function GET(req: NextRequest) {
       title: report.title,
       statement: report.statement,
       footnote: report.footnote,
+      filterNote: report.filterNote,
       billTo: { name: report.billTo.name, code: report.billTo.code, ntn: report.billTo.ntn, strn: report.billTo.strn },
       period: report.period,
       rows: report.rows,

@@ -8,7 +8,7 @@ one is assigned.
 
 | # | Question | Answer | Effect on the plan |
 |---|---|---|---|
-| 1 | When is the invoice numbered and dated? | **At delivery** | D2 as written |
+| 1 | When is the invoice numbered and dated? | **At delivery** — *superseded 2026-10-13: **when the order is marked In Process**, so the warehouse can hand the invoice over with the goods (`plans/OF-INVOICE-issue-at-processing.md`)* | D2 as written, then amended by that plan |
 | 2 | Which number series? | **Keep the existing series** (`<ORGCODE>-APR-NNNNNN`, one per customer, continuous, no yearly reset) | D1: `invoice_sequences` stays the tax-invoice counter. No new counter and no seeding for invoices. |
 | 3a | Title "Sales Tax Invoice"? | **No.** Keep "INVOICE". | D4 |
 | 3b | Customer STRN? | **Yes**, entered on the Create / Edit Organization form | D9 (new) |

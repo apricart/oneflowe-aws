@@ -6,7 +6,7 @@ import { getCurrentUser } from "@/lib/auth"
 import { db } from "@/lib/db"
 import { orderSelectColumns } from "@/lib/order-select"
 import { PENDING_INVOICE_STATUSES } from "@/lib/pending-invoice"
-import { invoiceStatusSql } from "@/lib/server/invoice-status-sql"
+import { invoiceStatusSql, orderSuppliedSql } from "@/lib/server/invoice-status-sql"
 import { orderStillOwesSql } from "@/lib/server/overdue-payment-source"
 
 const NO_STORE_HEADERS = { "Cache-Control": "private, no-store, max-age=0" }
@@ -42,9 +42,11 @@ export async function GET() {
       eq(orders.createdByUserId, user.id),
       eq(orderSelectColumns.paymentStatus, "UNPAID"),
       isNotNull(orders.receiptData),
-      // A tax invoice, issued at delivery and not fully credited
-      // (lib/pending-invoice.ts). A proforma is not an invoice.
+      // A tax invoice not fully credited, for goods already supplied
+      // (lib/pending-invoice.ts). A proforma is not an invoice, and an
+      // invoice issued when processing started is owed only once delivered.
       inArray(invoiceStatusSql, [...PENDING_INVOICE_STATUSES]),
+      orderSuppliedSql,
       // An invoice for goods delivered free of charge leaves nothing to pay.
       orderStillOwesSql,
     ))

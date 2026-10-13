@@ -19,6 +19,7 @@
  */
 
 import { isOrderDelivered } from "@/lib/fulfillment-status"
+import { isBeforeTaxInvoiceStage } from "@/lib/invoice-policy"
 import { isAwaitingCorrection } from "@/lib/order-correction"
 import { requesterRefundTimingReason } from "@/lib/refund-window"
 
@@ -269,8 +270,10 @@ export function isOrderIntakeAttachmentKey(value: unknown): value is string {
 export const ORDER_INTAKE_UPLOAD_AUDIT_ACTION = "UPLOAD_ORDER_INTAKE_ATTACHMENT"
 
 /**
- * Where a desk order came from is required; a portal order never carries it,
- * so nothing outside the desk can label its own order as a desk entry.
+ * Where a desk order came from is required — channel, reference and the
+ * screenshot of the customer's message, so every desk order can be traced to
+ * what the customer actually sent. A portal order never carries any of it, so
+ * nothing outside the desk can label its own order as a desk entry.
  */
 export function orderIntakeError(
   creatorRole: unknown,
@@ -282,7 +285,8 @@ export function orderIntakeError(
   if (isOrderDeskRole(creatorRole)) {
     if (!hasChannel) return "intakeChannel is required for an Order Desk order"
     if (!hasReference) return "intakeReference is required for an Order Desk order"
-    if (hasAttachment && !isOrderIntakeAttachmentKey(intake.intakeAttachmentKey)) {
+    if (!hasAttachment) return "intakeAttachmentKey is required: attach a screenshot of the customer's message"
+    if (!isOrderIntakeAttachmentKey(intake.intakeAttachmentKey)) {
       return "intakeAttachmentKey is not a screenshot uploaded through the Order Desk"
     }
     return null
@@ -296,7 +300,12 @@ export type DeskOrderActions = {
    * approval: an edit then would change what the executive approved.
    */
   canEdit: boolean
-  /** Pending, or Active and not yet delivered: it can still be withdrawn. */
+  /**
+   * Pending, or Active and not yet in process: it can still be withdrawn. Once
+   * processing starts its tax invoice is issued, and a numbered invoice is
+   * reversed by a refund's credit note, never by cancelling the order
+   * (plans/OF-INVOICE-issue-at-processing.md).
+   */
   canCancel: boolean
   /** Returned for correction: corrected (or not) and sent back for approval. */
   canResubmit: boolean
@@ -330,7 +339,7 @@ export function deskOrderActions(
   const active = status === "APPROVED"
   return {
     canEdit: pending,
-    canCancel: pending || (active && !delivered),
+    canCancel: pending || (active && isBeforeTaxInvoiceStage(order.fulfillmentStatus)),
     canResubmit: isAwaitingCorrection({ status, returnedForCorrectionAt: order.returnedForCorrectionAt }),
     canFulfil: active && delivered,
     canRequestRefund: requesterRefundTimingReason({ ...order, status }, now) === null,

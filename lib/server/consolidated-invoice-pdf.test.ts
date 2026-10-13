@@ -22,6 +22,7 @@ const source = (index: number): ConsolidatedInvoiceSource => ({
   orderStatus: "FULFILLED",
   refundAmountCents: null,
   invoiceStatus: "ISSUED",
+  paymentStatus: "UNPAID",
   department: "Facility Management",
   approver: "Syed Amir Ali Waris",
   costCenterId: "CC-77",
@@ -36,12 +37,13 @@ const source = (index: number): ConsolidatedInvoiceSource => ({
   creditedTotalCents: 0,
 })
 
-function render(count: number, mode: "invoices" | "proformas" = "invoices", footnote: string | null = null) {
+function render(count: number, mode: "invoices" | "proformas" = "invoices", footnote: string | null = null, filterNote: string | null = null) {
   const rows = buildConsolidatedInvoiceRows(mode, Array.from({ length: count }, (_, index) => source(index + 1)), null)
   const pdf = renderConsolidatedInvoicePdf({
     title: consolidatedInvoiceTitle(mode),
     statement: consolidatedInvoiceStatement(mode),
     footnote,
+    filterNote,
     billTo: { name: "UBL", ntn: "0801164-8", strn: "3277876123456" },
     periodLabel: "24 Aug 2026 – 02 Sep 2026",
     rows,
@@ -96,12 +98,17 @@ describe("the consolidated invoice PDF", () => {
     const text = render(2, "proformas")
     expect(text).toContain("CONSOLIDATED PROFORMA")
     expect(text).toContain("no tax invoice has been issued")
-    // jsPDF escapes parentheses in text: "(on delivery)" is written \(on delivery\).
-    expect(text).toContain("\\(on delivery\\)")
+    // jsPDF escapes parentheses in text: "(when processed)" is written \(when processed\).
+    expect(text).toContain("\\(when processed\\)")
   })
 
   it("prints the legacy-date footnote only when given one", () => {
     expect(render(1, "invoices", "Invoices dated before 11 Oct 2026 carry their order date")).toContain("carry their order date")
     expect(render(1)).not.toContain("carry their order date")
+  })
+
+  it("says beside the period when a payment-status filter narrowed it", () => {
+    expect(render(1, "invoices", null, "Unpaid invoices only")).toContain("Unpaid invoices only")
+    expect(render(1)).not.toContain("invoices only")
   })
 })

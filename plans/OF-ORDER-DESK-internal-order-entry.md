@@ -219,6 +219,12 @@ holds, so the work is split between two roles:
   even in development.
 - **Public route can't serve it.** The public image route is pinned to
   `products/`.
+- **Required (2026-10-12).** Every new desk order must carry a screenshot of
+  the customer's message: `orderIntakeError` refuses one without
+  `intakeAttachmentKey` (400), and the form will not send until one is
+  attached ("Screenshot of the message" on its checklist). Orders entered
+  before this have none and keep working; the attachment routes answer them
+  404 as before. Editing and resubmitting a pending order do not touch it.
 - **Binding.** On order creation the key must:
   - match the generated shape;
   - have been uploaded by this desk user (checked against the
@@ -242,7 +248,7 @@ has no account to notify.
 - **`/order-desk`** — a self-contained workspace, like the group portal, so it
   never mounts the admin shell (whose calls the desk may not make).
   - *New order:* organization → branch → catalogue (the same price ladder as
-    creation), quantities, order channel and reference, an optional screenshot
+    creation), quantities, order channel and reference, a required screenshot
     of the message, an optional PO number and notes. One idempotency key per
     draft, and the button is disabled while a request is in flight.
   - *Orders:* filters (Active / Fulfilled / Cancelled / All), the delivery

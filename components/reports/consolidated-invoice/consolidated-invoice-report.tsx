@@ -19,6 +19,7 @@ import { useToast } from "@/hooks/use-toast"
 import { canReadConsolidatedInvoiceReport, choosesOrganization } from "@/lib/consolidated-invoice-access"
 import { karachiToday, type ConsolidatedInvoiceMode } from "@/lib/consolidated-invoice"
 import { CONSOLIDATED_INVOICE_SORT_KEYS, type ConsolidatedInvoiceSortKey } from "@/lib/list-sort-keys"
+import { PAYMENT_STATUSES, PAYMENT_STATUS_LABELS, type PaymentStatus } from "@/lib/payment-status"
 import { safeFilenamePart } from "@/lib/security"
 import type { SortState } from "@/lib/table-sort"
 
@@ -41,6 +42,11 @@ async function fetchReport(url: string): Promise<ConsolidatedInvoiceResponse> {
 }
 
 type PeriodKind = "month" | "range"
+type PaymentFilter = PaymentStatus | "ALL"
+
+function readInitialPaymentFilter(value: string | null): PaymentFilter {
+  return (PAYMENT_STATUSES as readonly string[]).includes(value ?? "") ? value as PaymentStatus : "ALL"
+}
 
 function readInitialSort(params: URLSearchParams): SortState<ConsolidatedInvoiceSortKey> {
   const key = params.get("sort")
@@ -71,6 +77,7 @@ export function ConsolidatedInvoiceReport() {
   const [branchIds, setBranchIds] = useState<string[]>(() => searchParams.get("branchIds")?.split(",").filter(Boolean) ?? [])
   const [groupIds, setGroupIds] = useState<string[]>(() => searchParams.get("groupId") ? [searchParams.get("groupId") as string] : [])
   const [includeCredited, setIncludeCredited] = useState(searchParams.get("includeCredited") === "true")
+  const [paymentFilter, setPaymentFilter] = useState<PaymentFilter>(() => readInitialPaymentFilter(searchParams.get("paymentStatus")))
   const { sort, toggleSort } = useTableSort<ConsolidatedInvoiceSortKey>(readInitialSort(new URLSearchParams(searchParams.toString())))
   const [downloading, setDownloading] = useState(false)
 
@@ -91,12 +98,13 @@ export function ConsolidatedInvoiceReport() {
     if (branchIds.length > 0) params.set("branchIds", branchIds.join(","))
     if (groupIds.length > 0) params.set("groupId", groupIds[0])
     if (mode === "invoices" && includeCredited) params.set("includeCredited", "true")
+    if (mode === "invoices" && paymentFilter !== "ALL") params.set("paymentStatus", paymentFilter)
     if (sort) {
       params.set("sort", sort.key)
       params.set("dir", sort.direction)
     }
     return params.toString()
-  }, [organizationId, mode, periodKind, month, from, to, branchIds, groupIds, includeCredited, sort])
+  }, [organizationId, mode, periodKind, month, from, to, branchIds, groupIds, includeCredited, paymentFilter, sort])
 
   // Keep the address bar in step, so the report can be bookmarked or shared.
   useEffect(() => {
@@ -234,6 +242,21 @@ export function ConsolidatedInvoiceReport() {
             placeholder="All groups"
           />
         </div>
+
+        {mode === "invoices" && (
+          <div className="space-y-1">
+            <Label htmlFor="cir-payment">Payment</Label>
+            <Select value={paymentFilter} onValueChange={(value) => setPaymentFilter(value as PaymentFilter)}>
+              <SelectTrigger id="cir-payment" className="w-[130px]"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="ALL">All</SelectItem>
+                {PAYMENT_STATUSES.map((status) => (
+                  <SelectItem key={status} value={status}>{PAYMENT_STATUS_LABELS[status]}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
 
         {mode === "invoices" && (
           <div className="flex h-10 items-center gap-2">

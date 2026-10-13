@@ -15,6 +15,7 @@ import {
 } from "@/db/schema"
 import { formatBranchAddress } from "@/lib/branch-address"
 import { db } from "@/lib/db"
+import type { FulfillmentStatus } from "@/lib/fulfillment-status"
 import { INVOICE_ISSUER } from "@/lib/invoice-issuer"
 import {
   karachiDate,
@@ -45,23 +46,26 @@ export function sellerSnapshot(): Record<string, unknown> {
 }
 
 /**
- * Issue the tax invoice for an order whose delivery has just been recorded
- * (plans/OF-INVOICE-invoice-ledger.md, D2).
+ * Issue the tax invoice for an order whose delivery stage has just moved to
+ * the issue stage or past it (plans/OF-INVOICE-invoice-ledger.md, D2, as
+ * amended by plans/OF-INVOICE-issue-at-processing.md: In Process, so the
+ * printed invoice can travel with the goods).
  *
- * Runs inside the delivery's own transaction, after the order row has been
- * moved to DELIVERED (which holds its lock): if issuing fails, the delivery is
- * not recorded either, so a delivered order without its invoice cannot exist.
- * Calling it again for the same order does nothing (`invoices_order_uq`).
+ * Runs inside the stage step's own transaction, after the order row has been
+ * moved (which holds its lock): if issuing fails, the step is not recorded
+ * either, so an order past the issue stage without its invoice can only be one
+ * that was already there before the stage moved, and it is issued on its next
+ * step. Calling it again for the same order does nothing (`invoices_order_uq`).
  *
  * The number is the one the order already holds when it was drawn at creation
  * (the transition reservation), otherwise the next value of the organization's
  * existing series, drawn here so the series stays gap-free. The date is the
- * Karachi date of delivery. Lines are the order lines less what refunds
- * approved before delivery took back.
+ * Karachi date of issue. Lines are the order lines less what refunds approved
+ * before issue took back.
  */
-export async function issueTaxInvoiceAtDelivery(
+export async function issueTaxInvoice(
   tx: Tx,
-  input: { orderId: number; actor: { id: string; role: string } },
+  input: { orderId: number; actor: { id: string; role: string }; stage: FulfillmentStatus },
 ): Promise<InvoiceIssueOutcome> {
   const [existing] = await tx.select({ id: invoices.id }).from(invoices)
     .where(eq(invoices.orderId, input.orderId)).limit(1)
@@ -76,7 +80,6 @@ export async function issueTaxInvoiceAtDelivery(
     receiptData: orders.receiptData,
     createdByUserId: orders.createdByUserId,
     approvedByUserId: orders.approvedByUserId,
-    deliveredAt: orders.deliveredAt,
   }).from(orders).where(eq(orders.id, input.orderId)).limit(1)
   if (!order || order.organizationId === null) return { kind: "skipped", reason: "NO_ORGANIZATION" }
   const organizationId = order.organizationId
@@ -118,7 +121,7 @@ export async function issueTaxInvoiceAtDelivery(
     unitemizedRefundCents: Math.max(0, refundedTotal - itemizedTotal),
   })
   // Skipped only when refunds took every unit, which leaves the order refunded
-  // and undeliverable. Goods delivered free of charge are still a supply, and
+  // and undeliverable. Goods supplied free of charge are still a supply, and
   // are invoiced at zero.
   if (plan.lines.length === 0) return { kind: "skipped", reason: "NOTHING_TO_INVOICE" }
 
@@ -171,7 +174,7 @@ export async function issueTaxInvoiceAtDelivery(
     orderTid: order.tid,
   }
 
-  const issuedAt = order.deliveredAt ?? new Date()
+  const issuedAt = new Date()
   const [invoice] = await tx.insert(invoices).values({
     organizationId,
     branchId: order.branchId,
@@ -240,6 +243,7 @@ export async function issueTaxInvoiceAtDelivery(
       totalCents: plan.totalCents,
       lineCount: plan.lines.length,
       actorRole: input.actor.role,
+      stage: input.stage,
     },
   })
 

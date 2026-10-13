@@ -9,6 +9,7 @@ describe("pending invoice", () => {
     ["legacy partial", { status: "PARTIAL" }],
     ["partially fulfilled", { status: "PARTIALLY_FULFILLED" }],
     ["partly credited", { status: "FULFILLED", fulfillmentStatus: "DELIVERED", refundAmountCents: 500 }],
+    ["issued at processing, now delivered", { status: "APPROVED", fulfillmentStatus: "DELIVERED", ledgerStatus: "ISSUED" }],
   ])("recognizes an unpaid tax invoice: %s", (_, order) => {
     expect(isPendingInvoiceOrder({
       ...order,
@@ -22,8 +23,11 @@ describe("pending invoice", () => {
     ["rejected", { status: "REJECTED" }],
     ["cancelled", { status: "CANCELLED" }],
     ["fully credited", { status: "REFUNDED", statusAtRefund: "FULFILLED", fulfillmentStatus: "DELIVERED" }],
-    // Only a proforma exists until delivery: nothing is owed on it yet.
+    // Nothing is owed until the goods are supplied, whether a proforma or
+    // (since plans/OF-INVOICE-issue-at-processing.md) an issued tax invoice.
     ["approved, not delivered", { status: "APPROVED", fulfillmentStatus: "OUT_FOR_DELIVERY" }],
+    ["invoiced in process, not delivered", { status: "APPROVED", fulfillmentStatus: "IN_PROCESS", ledgerStatus: "ISSUED" }],
+    ["invoiced and out for delivery", { status: "APPROVED", fulfillmentStatus: "OUT_FOR_DELIVERY", ledgerStatus: "PARTIALLY_CREDITED" }],
   ])("does not call a %s order a pending invoice", (_, order) => {
     expect(isPendingInvoiceOrder({
       ...order,

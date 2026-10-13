@@ -16,6 +16,7 @@ import {
   type ConsolidatedInvoiceSortKey,
 } from "@/lib/list-sort-keys"
 import { getOrderDerivedStatus } from "@/lib/order-status"
+import { PAYMENT_STATUSES, PAYMENT_STATUS_LABELS, normalizePaymentStatus, type PaymentStatus } from "@/lib/payment-status"
 import { roundQuantity } from "@/lib/quantity"
 import { safeFilenamePart } from "@/lib/security"
 import { sortRows, type SortState, type SortValue } from "@/lib/table-sort"
@@ -23,7 +24,7 @@ import { sortRows, type SortState, type SortValue } from "@/lib/table-sort"
 export const CONSOLIDATED_INVOICE_MAX_ROWS = 1_000
 export const CONSOLIDATED_INVOICE_MAX_BRANCH_IDS = 200
 export const CONSOLIDATED_INVOICE_MAX_RANGE_DAYS = 366
-/** Invoices dated before this carry their order date; later ones their delivery date. */
+/** Invoices dated before this carry their order date; later ones the date they were issued. */
 export const LEDGER_GO_LIVE_DATE = "2026-10-11"
 
 export const CONSOLIDATED_INVOICE_MODES = ["invoices", "proformas"] as const
@@ -42,6 +43,7 @@ const querySchema = z.object({
   branchIds: z.string().regex(/^[1-9]\d{0,9}(,[1-9]\d{0,9})*$/, "branchIds must be a comma-separated list of ids").optional(),
   groupId: z.string().regex(POSITIVE_ID).optional(),
   includeCredited: z.enum(["true", "false"]).optional(),
+  paymentStatus: z.enum(PAYMENT_STATUSES).optional(),
   sort: z.enum(CONSOLIDATED_INVOICE_SORT_KEYS).optional(),
   dir: z.enum(["asc", "desc"]).optional(),
 }).strict()
@@ -55,6 +57,8 @@ export type ConsolidatedInvoiceQuery = {
   branchIds: number[]
   groupId: number | null
   includeCredited: boolean
+  /** Invoices only: those marked paid, or those not. Null is every invoice. */
+  paymentStatus: PaymentStatus | null
   sort: SortState<ConsolidatedInvoiceSortKey>
 }
 
@@ -123,6 +127,11 @@ export function parseConsolidatedInvoiceQuery(params: URLSearchParams, today: st
   }
   if (new Set(branchIds).size !== branchIds.length) return { ok: false, error: "A branch may be selected once" }
   if (input.dir && !input.sort) return { ok: false, error: "dir needs a sort column" }
+  // A proforma is never paid (payment status moves only once an order is
+  // delivered), so the filter would silently match all of them or none.
+  if (input.paymentStatus && input.mode === "proformas") {
+    return { ok: false, error: "paymentStatus applies to invoices, not proformas" }
+  }
 
   return {
     ok: true,
@@ -134,6 +143,7 @@ export function parseConsolidatedInvoiceQuery(params: URLSearchParams, today: st
       branchIds,
       groupId: input.groupId ? Number(input.groupId) : null,
       includeCredited: input.includeCredited === "true",
+      paymentStatus: input.paymentStatus ?? null,
       sort: input.sort ? { key: input.sort, direction: input.dir ?? "asc" } : null,
     },
   }
@@ -149,6 +159,7 @@ export type ConsolidatedInvoiceSource = {
   orderStatus: string | null
   refundAmountCents: number | null
   invoiceStatus: string | null
+  paymentStatus: string | null
   department: string | null
   approver: string | null
   costCenterId: string | null
@@ -172,6 +183,7 @@ export type ConsolidatedInvoiceRow = {
   invoiceDate: string
   orderStatus: string
   invoiceStatus: InvoiceStatus | null
+  paymentStatus: PaymentStatus
   department: string
   approver: string
   designation: string
@@ -226,7 +238,7 @@ export function taxRateOf(source: Pick<ConsolidatedInvoiceSource, "taxRatesBp" |
 function displayedNumber(mode: ConsolidatedInvoiceMode, number: string | null): string {
   const value = text(number)
   if (mode === "invoices") return value || "—"
-  return value ? `${value} (on delivery)` : "On delivery"
+  return value ? `${value} (when processed)` : "When processed"
 }
 
 /** One row: the invoice less everything credited against it (D4). */
@@ -241,6 +253,7 @@ export function buildConsolidatedInvoiceRow(mode: ConsolidatedInvoiceMode, sourc
     invoiceDate: formatInvoiceDisplayDate(source.date) || source.date,
     orderStatus: derived.label,
     invoiceStatus: toInvoiceStatus(source.invoiceStatus),
+    paymentStatus: normalizePaymentStatus(source.paymentStatus),
     department: text(source.department),
     approver: text(source.approver),
     designation: "",
@@ -306,16 +319,32 @@ export function consolidatedInvoiceStatement(mode: ConsolidatedInvoiceMode): str
 /** Shown when the period includes invoices dated before the ledger, which carry their order date. */
 export function legacyDateFootnote(mode: ConsolidatedInvoiceMode, from: string): string | null {
   if (mode !== "invoices" || from >= LEDGER_GO_LIVE_DATE) return null
-  return "Invoices dated before 11 Oct 2026 carry their order date; later invoices carry their delivery date."
+  return "Invoices dated before 11 Oct 2026 carry their order date; later invoices carry the date they were issued."
+}
+
+/**
+ * What a payment-status filter left out, said on the document beside the
+ * period, so a Grand Total covering only unpaid invoices is never read as the
+ * whole period's.
+ */
+export function consolidatedInvoiceFilterNote(paymentStatus: PaymentStatus | null): string | null {
+  return paymentStatus ? `${PAYMENT_STATUS_LABELS[paymentStatus]} invoices only` : null
 }
 
 export function consolidatedInvoicePeriodLabel(from: string, to: string): string {
   return `${formatInvoiceDisplayDate(from) || from} – ${formatInvoiceDisplayDate(to) || to}`
 }
 
-export function consolidatedInvoiceFileName(mode: ConsolidatedInvoiceMode, organizationCode: string | null, from: string, to: string): string {
+export function consolidatedInvoiceFileName(
+  mode: ConsolidatedInvoiceMode,
+  organizationCode: string | null,
+  from: string,
+  to: string,
+  paymentStatus: PaymentStatus | null = null,
+): string {
   const kind = mode === "invoices" ? "invoice" : "proforma"
-  return `consolidated-${kind}-${safeFilenamePart(organizationCode ?? "", "organization")}-${from}_${to}.pdf`
+  const filter = paymentStatus ? `-${paymentStatus.toLowerCase()}` : ""
+  return `consolidated-${kind}-${safeFilenamePart(organizationCode ?? "", "organization")}-${from}_${to}${filter}.pdf`
 }
 
 /** What the download audit's digest covers: each row's number and total, in printed order. */

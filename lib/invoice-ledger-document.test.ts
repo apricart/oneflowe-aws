@@ -100,8 +100,8 @@ describe("displayedInvoiceNumber", () => {
   })
 
   it("says when a proforma's invoice will be issued", () => {
-    expect(displayedInvoiceNumber({ invoiceStatus: "PROFORMA_AVAILABLE" })).toBe("Issued on delivery")
-    expect(displayedInvoiceNumber({ invoiceStatus: "PROFORMA_AVAILABLE", invoiceNumber: "UBL-APR-000040" })).toBe("UBL-APR-000040 (on delivery)")
+    expect(displayedInvoiceNumber({ invoiceStatus: "PROFORMA_AVAILABLE" })).toBe("Issued when processed")
+    expect(displayedInvoiceNumber({ invoiceStatus: "PROFORMA_AVAILABLE", invoiceNumber: "UBL-APR-000040" })).toBe("UBL-APR-000040 (when processed)")
     expect(displayedInvoiceNumber({ invoiceStatus: "CANCELLED", invoiceNumber: "UBL-APR-000040" })).toBe("UBL-APR-000040 (not issued)")
     expect(displayedInvoiceNumber({ invoiceStatus: "NOT_ISSUED" })).toBe("Not issued")
   })

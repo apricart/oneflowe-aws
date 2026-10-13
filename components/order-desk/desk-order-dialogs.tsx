@@ -238,7 +238,7 @@ export function EditDeskOrderDialog({ order, onClose, onSaved }: DialogProps) {
   )
 }
 
-/** Withdraw an Active order before delivery. The hold and stock are released. */
+/** Withdraw an Active order before processing starts. The hold and stock are released. */
 export function CancelDeskOrderDialog({ order, onClose, onSaved }: DialogProps) {
   const [reason, setReason] = useState("")
   const [saving, setSaving] = useState(false)

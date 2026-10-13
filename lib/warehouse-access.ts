@@ -24,7 +24,10 @@
  * (`NOT_STARTED → IN_PROCESS → OUT_FOR_DELIVERY → DELIVERED`), optionally with
  * a delivery challan. It never approves, rejects, cancels, edits, fulfils,
  * prices, refunds or marks an order paid. It does see prices and invoice
- * figures. See plans/OF-WAREHOUSE-warehouse-fulfilment-role.md.
+ * figures on its own orders. It also reads the global product catalogue,
+ * read-only and without a price. See
+ * plans/OF-WAREHOUSE-warehouse-fulfilment-role.md and
+ * plans/OF-WAREHOUSE-read-only-product-catalog.md.
  */
 
 export const WAREHOUSE_ROLE = "WAREHOUSE" as const
@@ -86,8 +89,9 @@ const ORDERS_ROUTE = "app/api/v1/warehouse/orders"
 
 /**
  * Every API request a warehouse session may make: its own reads and the
- * progress write, the challan upload (the one upload path the WAF allows), and
- * the three calls every account needs to finish a forced password change.
+ * progress write, the read-only catalogue and its product pictures, the challan
+ * upload (the one upload path the WAF allows), and the three calls every
+ * account needs to finish a forced password change.
  */
 export const WAREHOUSE_API_RULES: readonly WarehouseApiRule[] = [
   { route: `${ORDERS_ROUTE}/route.ts`, methods: ["GET"], pattern: /^\/api\/v1\/warehouse\/orders$/ },
@@ -118,7 +122,22 @@ export const WAREHOUSE_API_RULES: readonly WarehouseApiRule[] = [
     pattern: /^\/api\/v1\/warehouse\/orders\/\d+\/delivery-challan\/\d+\/file$/,
   },
   { route: "app/api/v1/warehouse/workload/route.ts", methods: ["GET"], pattern: /^\/api\/v1\/warehouse\/workload$/ },
-  { route: "app/api/v1/warehouse/stock/route.ts", methods: ["GET"], pattern: /^\/api\/v1\/warehouse\/stock$/ },
+  // The global product catalogue, read-only and without a price
+  // (plans/OF-WAREHOUSE-read-only-product-catalog.md).
+  { route: "app/api/v1/warehouse/catalog/route.ts", methods: ["GET"], pattern: /^\/api\/v1\/warehouse\/catalog$/ },
+  {
+    route: "app/api/v1/warehouse/catalog/categories/route.ts",
+    methods: ["GET"],
+    pattern: /^\/api\/v1\/warehouse\/catalog\/categories$/,
+  },
+  // A catalogue product's picture. Pinned to the `products/` key shape the
+  // image route itself enforces (`isValidImageKey`): support attachments, desk
+  // screenshots and challans live under other prefixes it never serves.
+  {
+    route: "app/api/v1/images/[...key]/route.ts",
+    methods: ["GET"],
+    pattern: /^\/api\/v1\/images\/products\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:jpg|png|gif|webp)$/,
+  },
   // The delivery challan only; the handler refuses every other purpose for this role.
   { route: "app/api/v1/upload/image/route.ts", methods: ["POST"], pattern: /^\/api\/v1\/upload\/image$/ },
   { route: "app/api/v1/users/me/change-password/route.ts", methods: ["POST"], pattern: /^\/api\/v1\/users\/me\/change-password$/ },

@@ -76,8 +76,8 @@ function normalizeTaxIdentifier(value: string | null) {
  * Whether any invoice number has been drawn under this organization's code:
  * from its series (even one whose order was later deleted), as an invoice in
  * the ledger, or held on an order (a number drawn at creation before invoices
- * were numbered at delivery, or the TID fallback). Since invoices are numbered
- * at delivery, merely having orders no longer means a number exists
+ * were numbered later, or the TID fallback). Since invoices are numbered when
+ * processing starts, merely having orders no longer means a number exists
  * (plans/OF-INVOICE-invoice-ledger.md, D7 and "Fixes after the edge-case review").
  */
 async function hasDrawnInvoiceNumber(tx: any, organizationId: number): Promise<boolean> {

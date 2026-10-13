@@ -5,8 +5,8 @@ import { Warehouse } from "lucide-react"
 
 import { OrderPortalProfileMenu } from "@/components/auth/order-portal-profile-menu"
 import { DeliveryDashboard } from "@/components/delivery-dashboard/delivery-dashboard"
+import { WarehouseCatalog } from "@/components/warehouse/warehouse-catalog"
 import { WarehouseOrders } from "@/components/warehouse/warehouse-orders"
-import { WarehouseStock } from "@/components/warehouse/warehouse-stock"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { WAREHOUSE_LABEL } from "@/lib/warehouse-access"
 
@@ -14,7 +14,8 @@ const warehouseTimeline = (orderId: number) => `/api/v1/warehouse/orders/${order
 
 /**
  * The warehouse's workspace: its order queue, its workload against the
- * delivery SLA, and stock — under a header of its own, outside the admin shell.
+ * delivery SLA, and the product catalogue, view only and without prices —
+ * under a header of its own, outside the admin shell.
  * Every call made from here is on the role's allowlist (`lib/warehouse-access.ts`).
  */
 export function WarehouseWorkspace() {
@@ -46,7 +47,7 @@ export function WarehouseWorkspace() {
           <TabsList>
             <TabsTrigger value="orders">Orders</TabsTrigger>
             <TabsTrigger value="workload">Workload</TabsTrigger>
-            <TabsTrigger value="stock">Stock</TabsTrigger>
+            <TabsTrigger value="catalog">Product Catalog</TabsTrigger>
           </TabsList>
           <TabsContent value="orders">
             <WarehouseOrders />
@@ -54,8 +55,8 @@ export function WarehouseWorkspace() {
           <TabsContent value="workload">
             <DeliveryDashboard dashboardEndpoint="/api/v1/warehouse/workload" timelineEndpoint={warehouseTimeline} />
           </TabsContent>
-          <TabsContent value="stock">
-            <WarehouseStock />
+          <TabsContent value="catalog">
+            <WarehouseCatalog />
           </TabsContent>
         </Tabs>
       </main>

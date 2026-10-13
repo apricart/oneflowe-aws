@@ -42,6 +42,8 @@ describe("pending invoice notification wiring", () => {
     expect(route).toContain("isNotNull(orders.receiptData)")
     // A tax invoice only, by the shared invoice-status rule (plans/OF-INVOICE-invoice-ledger.md, D7).
     expect(route).toContain("inArray(invoiceStatusSql, [...PENDING_INVOICE_STATUSES])")
+    // Issued when processing starts, owed only once supplied (plans/OF-INVOICE-issue-at-processing.md).
+    expect(route).toContain("orderSuppliedSql,")
     expect(route).not.toMatch(/searchParams|branchId|organizationId/)
   })
 })

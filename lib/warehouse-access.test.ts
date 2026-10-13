@@ -30,6 +30,15 @@ import {
 
 const read = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8")
 
+/** Source with its comments removed, for assertions about what the code does rather than what it says. */
+const code = (path: string) => read(path).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "")
+
+/** The read-only catalogue: Apricart's global products, so no branch reach applies. */
+const WAREHOUSE_CATALOG_ROUTES = [
+  "app/api/v1/warehouse/catalog/route.ts",
+  "app/api/v1/warehouse/catalog/categories/route.ts",
+]
+
 describe("the Warehouse role", () => {
   it("is a known role everywhere roles are listed", () => {
     expect(isValidRbacRole(WAREHOUSE_ROLE)).toBe(true)
@@ -214,7 +223,9 @@ describe("the API allowlist", () => {
     ["POST", "/api/v1/warehouse/orders/42/delivery-challan"],
     ["GET", "/api/v1/warehouse/orders/42/delivery-challan/7/file"],
     ["GET", "/api/v1/warehouse/workload"],
-    ["GET", "/api/v1/warehouse/stock"],
+    ["GET", "/api/v1/warehouse/catalog"],
+    ["GET", "/api/v1/warehouse/catalog/categories"],
+    ["GET", "/api/v1/images/products/0f8fad5b-d9cb-469f-a165-70867728950e.webp"],
     ["POST", "/api/v1/upload/image"],
     ["POST", "/api/v1/users/me/change-password"],
   ])("admits %s %s", (method, path) => {
@@ -241,7 +252,27 @@ describe("the API allowlist", () => {
     ["POST", "/api/v1/warehouse/orders/abc/progress"],
     ["POST", "/api/v1/warehouse/orders/42/progress/extra"],
     ["POST", "/api/v1/warehouse/orders/42/fulfil"],
-    ["POST", "/api/v1/warehouse/stock"],
+    // The Stock tab is gone; the catalogue replaced it and writes nothing.
+    ["GET", "/api/v1/warehouse/stock"],
+    ["POST", "/api/v1/warehouse/catalog"],
+    ["PATCH", "/api/v1/warehouse/catalog"],
+    ["DELETE", "/api/v1/warehouse/catalog"],
+    ["POST", "/api/v1/warehouse/catalog/categories"],
+    ["GET", "/api/v1/warehouse/catalog/categories/3"],
+    // Super Admin's catalogue, taxonomy and price screens stay closed.
+    ["GET", "/api/v1/admin/global-inventory"],
+    ["PUT", "/api/v1/admin/global-inventory"],
+    ["GET", "/api/v1/categories"],
+    ["GET", "/api/v1/subcategories"],
+    ["GET", "/api/v1/inventory/price-history"],
+    // Only a product picture, in exactly the shape the image route serves.
+    ["POST", "/api/v1/images/products/0f8fad5b-d9cb-469f-a165-70867728950e.webp"],
+    ["GET", "/api/v1/images/support/0f8fad5b-d9cb-469f-a165-70867728950e.png"],
+    ["GET", "/api/v1/images/order-intake/0f8fad5b-d9cb-469f-a165-70867728950e.png"],
+    ["GET", "/api/v1/images/delivery-challan/0f8fad5b-d9cb-469f-a165-70867728950e.pdf"],
+    ["GET", "/api/v1/images/products/0f8fad5b-d9cb-469f-a165-70867728950e.svg"],
+    ["GET", "/api/v1/images/products/../support/0f8fad5b-d9cb-469f-a165-70867728950e.png"],
+    ["GET", "/api/v1/images/products/not-a-uuid.png"],
     // The tenant invoice routes stay closed; the warehouse has its own.
     ["GET", "/api/v1/receipts/42"],
     ["GET", "/api/v1/receipts/42/download"],
@@ -261,7 +292,7 @@ describe("the API allowlist", () => {
       const source = read(rule.route)
       if (rule.route.startsWith("app/api/v1/warehouse/")) {
         expect(source, rule.route).toContain('requireApiRole(["WAREHOUSE"])')
-        if (rule.route !== "app/api/v1/warehouse/stock/route.ts") {
+        if (!WAREHOUSE_CATALOG_ROUTES.includes(rule.route)) {
           // Every order read or write is fenced to the user's branches.
           expect(source, rule.route).toMatch(/loadWarehouseReach\(|loadWarehouseOrderInReach\(|isOrderBranchInWarehouseReach\(|listWarehouseOrders\(|loadWarehouseOrder\(/)
         }
@@ -272,6 +303,12 @@ describe("the API allowlist", () => {
       } else if (rule.route === "app/api/v1/upload/image/route.ts") {
         // The challan, and only for an order at a branch it serves.
         expect(source).toContain("warehouseChallanUploadRefusal(actor.id, orderId)")
+      } else if (rule.route === "app/api/v1/images/[...key]/route.ts") {
+        // A product picture only: the handler serves the `products/` key shape
+        // and nothing else, whatever the allowlist pattern admits.
+        expect(source).toContain("isValidImageKey(key)")
+        expect(rule.methods).toEqual(["GET"])
+        expect(source).not.toMatch(/export async function (POST|PUT|PATCH|DELETE)\b/)
       } else {
         expect(rule.route).toMatch(/^app\/api\/v1\/users\/me\//)
       }
@@ -307,6 +344,32 @@ describe("the API allowlist", () => {
     for (const source of sources) {
       expect(source).not.toMatch(/fulfillApprovedOrder|approveOrder|rejectOrder|returnOrderForCorrection|paymentStatus:|refunds\b|replaceDeliveryChallan/)
     }
+  })
+})
+
+describe("the product catalogue", () => {
+  it("is read-only: each handler exports GET alone and the proxy admits GET alone", () => {
+    for (const route of WAREHOUSE_CATALOG_ROUTES) {
+      const source = read(route)
+      expect(source, route).toMatch(/export async function GET\b/)
+      expect(source, route).not.toMatch(/export async function (POST|PUT|PATCH|DELETE)\b/)
+      expect(WAREHOUSE_API_RULES.find((rule) => rule.route === route)?.methods, route).toEqual(["GET"])
+    }
+  })
+
+  it("never selects a price, a tax rate or a discount, so none can reach the payload", () => {
+    const reads = code("lib/server/warehouse-catalog.ts")
+    expect(reads).not.toMatch(/basePrice|base_price|taxRateBp|tax_rate|discount|customPrice|price/i)
+    // Nor a tenant's catalogue rows, whose overrides carry prices and names.
+    expect(reads).not.toMatch(/organizationInventory|branchInventory|groupInventory|effective-price/)
+  })
+
+  it("replaces the Stock tab in the workspace, without a write control", () => {
+    const workspace = read("components/warehouse/warehouse-workspace.tsx")
+    expect(workspace).toContain("<WarehouseCatalog />")
+    expect(workspace).not.toMatch(/WarehouseStock|value="stock"/)
+    const tab = code("components/warehouse/warehouse-catalog.tsx")
+    expect(tab).not.toMatch(/method:\s*"(POST|PUT|PATCH|DELETE)"|formatPKR|basePrice|price/i)
   })
 })
 

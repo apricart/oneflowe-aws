@@ -21,6 +21,7 @@ import { toast } from "@/hooks/use-toast"
 import { DELIVERY_CHALLAN_ACCEPT } from "@/lib/delivery-challan"
 import { fetcher } from "@/lib/fetcher"
 import type { FulfillmentStatus } from "@/lib/fulfillment-status"
+import { TAX_INVOICE_ISSUE_STAGE } from "@/lib/invoice-policy"
 import { formatPKR } from "@/lib/utils"
 import { WAREHOUSE_STAGE_ACTION_LABELS, timelineUnavailableReason } from "@/lib/warehouse-orders"
 
@@ -372,7 +373,13 @@ export function WarehouseOrderSheet({
     setMoving(true)
     try {
       await postJson(`/api/v1/warehouse/orders/${data.order.id}/progress`, { fulfillmentStatus: next })
-      toast({ title: "Delivery progress updated", description: data.order.tid })
+      // This step issues the tax invoice, which goes out with the goods.
+      toast({
+        title: "Delivery progress updated",
+        description: next === TAX_INVOICE_ISSUE_STAGE
+          ? `${data.order.tid} · Tax invoice issued — download it to send with the goods`
+          : data.order.tid,
+      })
       refresh()
     } catch (caught) {
       toast({

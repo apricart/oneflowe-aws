@@ -15,7 +15,7 @@ import * as timelineRoute from "@/app/api/v1/warehouse/orders/[id]/timeline/rout
 import * as challanRoute from "@/app/api/v1/warehouse/orders/[id]/delivery-challan/route"
 import * as challanFileRoute from "@/app/api/v1/warehouse/orders/[id]/delivery-challan/[challanId]/file/route"
 import * as workloadRoute from "@/app/api/v1/warehouse/workload/route"
-import * as stockRoute from "@/app/api/v1/warehouse/stock/route"
+import * as catalogRoute from "@/app/api/v1/warehouse/catalog/route"
 import * as invoiceRoute from "@/app/api/v1/warehouse/orders/[id]/invoice/route"
 import * as tenantInvoiceRoute from "@/app/api/v1/receipts/[orderId]/download/route"
 import * as teamRoute from "@/app/api/v1/warehouse-team/route"
@@ -312,7 +312,7 @@ describe.skipIf(!hasTestDatabase)("the Warehouse role through the API", () => {
       expect((await detail(actors[key], orderX)).status).toBe(403)
       expect((await progress(actors[key], orderX, { fulfillmentStatus: "IN_PROCESS" })).status).toBe(403)
       signIn(actors[key])
-      expect((await stockRoute.GET(request("http://localhost/api/v1/warehouse/stock", "GET"))).status).toBe(403)
+      expect((await catalogRoute.GET(request("http://localhost/api/v1/warehouse/catalog", "GET"))).status).toBe(403)
       expect((await stored(orderX)).fulfillmentStatus).toBe("NOT_STARTED")
     })
   })
@@ -558,7 +558,7 @@ describe.skipIf(!hasTestDatabase)("the Warehouse role through the API", () => {
     })
   })
 
-  describe("workload, timeline and stock", () => {
+  describe("workload, timeline and the catalogue", () => {
     it("fences the workload dashboard to the user's branches", async () => {
       signIn(actors.wh)
       const { status, body } = await read(await workloadRoute.GET(request("http://localhost/api/v1/warehouse/workload", "GET")))
@@ -594,13 +594,13 @@ describe.skipIf(!hasTestDatabase)("the Warehouse role through the API", () => {
       expect((await timelineRoute.GET(request(`http://localhost/api/v1/warehouse/orders/${orderY}/timeline`, "GET"), params(orderY))).status).toBe(404)
     })
 
-    it("lists stock read-only, without prices", async () => {
+    it("lists the catalogue read-only, with stock and without prices", async () => {
       signIn(actors.wh)
-      const { status, body } = await read(await stockRoute.GET(request(`http://localhost/api/v1/warehouse/stock?q=ITWH-RICE-${suffix}`, "GET")))
+      const { status, body } = await read(await catalogRoute.GET(request(`http://localhost/api/v1/warehouse/catalog?q=ITWH-RICE-${suffix}`, "GET")))
       expect(status).toBe(200)
       expect(body.items).toEqual([expect.objectContaining({ id: productId, stockQuantity: 120, unit: "kg", low: false })])
-      expect(JSON.stringify(body)).not.toMatch(/basePrice|35500/)
-      expect(stockRoute).not.toHaveProperty("POST")
+      expect(JSON.stringify(body)).not.toMatch(/price|35500/i)
+      for (const method of ["POST", "PUT", "PATCH", "DELETE"]) expect(catalogRoute).not.toHaveProperty(method)
     })
   })
 

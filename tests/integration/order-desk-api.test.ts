@@ -27,6 +27,7 @@ import {
   branches,
   budgets,
   globalProducts,
+  invoices,
   notifications,
   orderDeskAssignments,
   orderItems,
@@ -43,7 +44,9 @@ import {
   createOrderDeskFixtures,
   destroyOrderDeskFixtures,
   hasTestDatabase,
+  newIntakeAttachmentKey,
   ORDER_DESK_FIXTURE_PRICE_CENTS,
+  stageIntakeAttachment,
   type OrderDeskFixtures,
 } from "./helpers/order-desk-fixtures"
 import { stageDeliveryChallan } from "./helpers/delivery-challan-fixtures"
@@ -152,14 +155,33 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
     return { ...table[kind], email: `${kind}-${f.suffix}@example.test` }
   }
 
-  const deskOrderBody = (overrides: Record<string, unknown> = {}) => ({
-    organizationId: f.organizationA,
-    branchId: f.branchA1,
-    items: [{ organizationInventoryId: f.inventoryA, quantity: 2 }],
-    intakeChannel: "WHATSAPP",
-    intakeReference: "Ali, 05 Oct 10:14",
-    ...overrides,
-  })
+  /**
+   * Every desk order needs the customer's screenshot. `deskOrderBody` names a
+   * fresh key unless the test supplies its own; `createOrder` records that key
+   * as uploaded by whoever is signed in — what the upload route would have
+   * done — once, so a retry or a race on the same body sends the same key.
+   */
+  const generatedIntakeKeys = new Set<string>()
+  const stagedIntakeKeys = new Map<string, Promise<unknown>>()
+  const deskOrderBody = (overrides: Record<string, unknown> = {}) => {
+    const intakeAttachmentKey = newIntakeAttachmentKey()
+    generatedIntakeKeys.add(intakeAttachmentKey)
+    return {
+      organizationId: f.organizationA,
+      branchId: f.branchA1,
+      items: [{ organizationInventoryId: f.inventoryA, quantity: 2 }],
+      intakeChannel: "WHATSAPP",
+      intakeReference: "Ali, 05 Oct 10:14",
+      intakeAttachmentKey,
+      ...overrides,
+    }
+  }
+  const stageGeneratedIntakeKey = (body: unknown) => {
+    const key = (body as { intakeAttachmentKey?: unknown } | null)?.intakeAttachmentKey
+    if (typeof key !== "string" || !generatedIntakeKeys.has(key) || !signedIn) return undefined
+    if (!stagedIntakeKeys.has(key)) stagedIntakeKeys.set(key, stageIntakeAttachment(signedIn.id, key))
+    return stagedIntakeKeys.get(key)
+  }
   const bOrderBody = (quantity: number, overrides: Record<string, unknown> = {}) => deskOrderBody({
     organizationId: f.organizationB,
     branchId: f.branchB1,
@@ -167,8 +189,10 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
     ...overrides,
   })
 
-  const createOrder = async (body: unknown, key = idempotencyKey()) =>
-    read(await ordersRoute.POST(jsonRequest("http://localhost/api/v1/orders", "POST", body, { "Idempotency-Key": key })))
+  const createOrder = async (body: unknown, key = idempotencyKey()) => {
+    await stageGeneratedIntakeKey(body)
+    return read(await ordersRoute.POST(jsonRequest("http://localhost/api/v1/orders", "POST", body, { "Idempotency-Key": key })))
+  }
 
   /** An executive assigned to the order's organization approves it, then the caller is signed back in. */
   const approveAsExecutive = async (orderId: number) => {
@@ -372,7 +396,7 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
       expect(row.createdByRole).toBe("ORDER_DESK")
       expect(row.intakeChannel).toBe("WHATSAPP")
       expect(row.intakeReference).toBe("Ali, 05 Oct 10:14")
-      expect(row.intakeAttachmentKey).toBeNull()
+      expect(row.intakeAttachmentKey).toMatch(/^order-intake\//)
       expect(Number(row.totalCents)).toBe(2 * ORDER_DESK_FIXTURE_PRICE_CENTS.organizationA)
       expect(row.budgetTracked).toBe(false)
       expect(await stock()).toBe(stockBefore - 2)
@@ -390,8 +414,9 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
     it("answers a retried submission with the same order", async () => {
       signIn(actor("desk"))
       const key = idempotencyKey()
-      const first = await createOrder(deskOrderBody({ branchId: f.branchA2 }), key)
-      const second = await createOrder(deskOrderBody({ branchId: f.branchA2 }), key)
+      const body = deskOrderBody({ branchId: f.branchA2 })
+      const first = await createOrder(body, key)
+      const second = await createOrder(body, key)
       expect(first.status).toBe(200)
       expect(second.body.replayed).toBe(true)
       expect(second.body.order.id).toBe(first.body.order.id)
@@ -411,6 +436,11 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
       expect((await createOrder(deskOrderBody({ intakeChannel: undefined }))).status).toBe(400)
       expect((await createOrder(deskOrderBody({ intakeReference: undefined }))).status).toBe(400)
       expect((await createOrder(deskOrderBody({ intakeChannel: "FAX" }))).status).toBe(400)
+      // The customer's screenshot is required too.
+      const noScreenshot = await createOrder(deskOrderBody({ intakeAttachmentKey: undefined }))
+      expect(noScreenshot.status).toBe(400)
+      expect(noScreenshot.body.error).toMatch(/screenshot/)
+      expect((await createOrder(deskOrderBody({ intakeAttachmentKey: null }))).status).toBe(400)
 
       signIn(actor("portal"))
       const portal = await createOrder({
@@ -530,6 +560,8 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
     it("answers 404 for an order without a screenshot", async () => {
       signIn(actor("desk"))
       const created = await createOrder(deskOrderBody())
+      // An order entered before the screenshot was required.
+      await db.update(orders).set({ intakeAttachmentKey: null }).where(eq(orders.id, created.body.order.id))
       expect((await attachment(created.body.order.id)).status).toBe(404)
     })
 
@@ -701,6 +733,35 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
       signIn(actor("desk"))
       expect((await cancel(created.body.order.id)).status).toBe(409)
       expect((await storedOrder(created.body.order.id)).status).toBe("APPROVED")
+    })
+
+    // plans/OF-INVOICE-issue-at-processing.md: In Process issues the tax
+    // invoice, which a cancel would leave standing on a cancelled order.
+    it("refuses to cancel once processing has started and the tax invoice is issued", async () => {
+      signIn(actor("desk"))
+      const created = await createActiveOrder(deskOrderBody())
+      const orderId = created.body.order.id
+      const stockBefore = await stock()
+
+      signIn(actor("super"))
+      const started = await read(await progressRoute.POST(
+        jsonRequest(`http://localhost/api/v1/orders/${orderId}/fulfillment-status`, "POST", { fulfillmentStatus: "IN_PROCESS" }),
+        params(orderId),
+      ))
+      expect(started.status).toBe(200)
+      const [invoice] = await db.select({ status: invoices.status }).from(invoices).where(eq(invoices.orderId, orderId))
+      expect(invoice?.status).toBe("ISSUED")
+
+      signIn(actor("desk"))
+      const listed = (await listDeskOrders("status=awaiting_delivery&limit=50")).body.items.find((item: any) => item.id === orderId)
+      expect(listed).toMatchObject({ fulfillmentStatus: "IN_PROCESS", canCancel: false, canEdit: false, canFulfil: false })
+
+      const refused = await cancel(orderId)
+      expect(refused.status).toBe(409)
+      expect(refused.body.error).toMatch(/tax invoice has been issued/)
+      const row = await storedOrder(orderId)
+      expect(row).toMatchObject({ status: "APPROVED", fulfillmentStatus: "IN_PROCESS", cancelledAt: null })
+      expect(await stock()).toBe(stockBefore)
     })
   })
 
