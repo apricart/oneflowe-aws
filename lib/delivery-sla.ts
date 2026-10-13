@@ -18,7 +18,7 @@ import { FULFILLED_ORDER_STATUSES, normalizeOrderStatus } from "@/lib/order-deli
 export const DELIVERY_SLA_HOURS = 72
 
 /** An open order is "due soon" in the last this-many hours before its deadline. */
-export const DUE_SOON_HOURS = 12
+export const DUE_SOON_HOURS = 24
 
 /**
  * Orders approved before this instant are not counted. Older orders' stage

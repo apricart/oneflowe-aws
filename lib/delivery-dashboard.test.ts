@@ -149,7 +149,7 @@ describe("building the dashboard", () => {
       openOutsideRange: 0,
       onTimeRate: 50,
     })
-    expect(dashboard.sla).toEqual({ hours: 72, dueSoonHours: 12, countsOrdersApprovedFrom: "2026-09-01" })
+    expect(dashboard.sla).toEqual({ hours: 72, dueSoonHours: 24, countsOrdersApprovedFrom: "2026-09-01" })
   })
 
   it("lists the most overdue first, and agrees with the cards", () => {
