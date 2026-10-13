@@ -242,6 +242,27 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # The standard runner for a private repository has about 14 GB of disk.
+      # By this point node_modules, coverage, Chromium, the Snyk and Postgres
+      # images and the Trivy database have used most of it, and the Docker
+      # build needs several GB more (two copies of node_modules plus .next).
+      # When the disk fills, the runner itself dies mid-build and GitHub keeps
+      # no log. Remove preinstalled SDKs this pipeline never uses, and the
+      # browser the smoke tests no longer need, then record what is left so a
+      # future failure shows the numbers. Never blocks the build.
+      - name: Free runner disk space before the image build
+        continue-on-error: true
+        run: |
+          echo "Before:"; df -h /; free -m
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL \
+            "$HOME/.cache/ms-playwright"
+          echo "After:"; df -h /; docker system df
+
       - name: Build image
         if: ${{ steps.ecr-image.outputs.exists != 'true' }}
         env:
