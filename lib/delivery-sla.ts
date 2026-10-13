@@ -401,6 +401,13 @@ export function compareByAttention<T extends { id: number; assessment: DeliveryA
   return a.id - b.id
 }
 
+/** Newest order first: the latest approval at the top, then the higher order id. */
+export function compareNewestFirst<T extends { id: number; assessment: DeliveryAssessment }>(a: T, b: T): number {
+  const approved = b.assessment.approvedAt.getTime() - a.assessment.approvedAt.getTime()
+  if (approved !== 0) return approved
+  return b.id - a.id
+}
+
 // ---------------------------------------------------------------------------
 // Grouping
 // ---------------------------------------------------------------------------

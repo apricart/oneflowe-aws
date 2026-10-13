@@ -73,9 +73,9 @@ function filterConditions(query: WarehouseOrderListQuery, now: Date): SQL[] {
 
 function orderBy(query: WarehouseOrderListQuery) {
   if (query.view === "delivered") return [sql`COALESCE(${orders.deliveredAt}, ${orders.fulfilledAt}) DESC NULLS LAST`, desc(orders.id)]
-  if (query.view === "all") return [desc(orders.approvedAt), desc(orders.id)]
-  // Open work, oldest first: the order nearest its deadline is at the top.
-  return [asc(orders.approvedAt), asc(orders.id)]
+  // Newest order first in every view; the Workload tab is where the warehouse
+  // reads its work by deadline.
+  return [desc(orders.approvedAt), desc(orders.id)]
 }
 
 function destinationLabel(row: {

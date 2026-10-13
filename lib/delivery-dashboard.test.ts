@@ -166,6 +166,43 @@ describe("building the dashboard", () => {
     expect(build({ view: "ACKNOWLEDGED" }).orders.items.map((item) => item.tid)).toEqual(["T5"])
   })
 
+  it("ranks most urgent first unless asked for newest first, which the warehouse is", () => {
+    expect(build().orders.order).toBe("attention")
+    const newest = buildDeliveryDashboard({
+      rows,
+      filters: filters(),
+      now,
+      truncated: false,
+      organizations: [],
+      branches: [],
+      listOrder: "newest",
+    })
+    expect(newest.orders.order).toBe("newest")
+    // Approved 5, 50, 65, 99 and 200 hours ago; open and delivered interleave.
+    expect(newest.orders.items.map((item) => item.tid)).toEqual(["T3", "T4", "T2", "T1", "T5"])
+    // The ranking changes the list only, never a figure.
+    expect(newest.kpis).toEqual(build().kpis)
+  })
+
+  it("keeps the newest orders when newest first meets the cap, and breaks ties by the higher id", () => {
+    const many = Array.from({ length: DELIVERY_ATTENTION_LIMIT + 5 }, (_, index) => order({ approvedHoursAgo: 80 + (index % 2) }))
+    const dashboard = buildDeliveryDashboard({
+      rows: many,
+      filters: filters(),
+      now,
+      truncated: false,
+      organizations: [],
+      branches: [],
+      listOrder: "newest",
+    })
+    const items = dashboard.orders.items
+    expect(items).toHaveLength(DELIVERY_ATTENTION_LIMIT)
+    const approved = items.map((item) => Date.parse(item.approvedAt))
+    expect(approved).toEqual([...approved].sort((a, b) => b - a))
+    const sameHour = items.filter((item) => item.approvedAt === items[0].approvedAt).map((item) => item.id)
+    expect(sameHour).toEqual([...sameHour].sort((a, b) => b - a))
+  })
+
   it("applies the date range to every figure, and counts the open orders it leaves out", () => {
     // T1 approved 2 Oct, T2 3 Oct, T3 6 Oct; T4 delivered 6 Oct, T5 2 Oct (Karachi).
     const early = build({ deliveredFrom: "2026-10-02", deliveredTo: "2026-10-03" })

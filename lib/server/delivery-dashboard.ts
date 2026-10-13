@@ -20,6 +20,7 @@ import {
   UNKNOWN_REGION_FILTER,
   buildDeliveryDashboard,
   type DeliveryDashboardFilters,
+  type DeliveryListOrder,
   type DeliveryOrderRow,
 } from "@/lib/delivery-dashboard"
 import {
@@ -171,12 +172,17 @@ async function loadFilterOptions(organizationId: number | null, reach: DeliveryR
   return { organizations: organizationRows, branches: branchRows }
 }
 
-export async function loadDeliveryDashboard(filters: DeliveryDashboardFilters, now: Date, reach: DeliveryReach = null) {
+export async function loadDeliveryDashboard(
+  filters: DeliveryDashboardFilters,
+  now: Date,
+  reach: DeliveryReach = null,
+  listOrder: DeliveryListOrder = "attention",
+) {
   const [{ rows, truncated }, options] = await Promise.all([
     loadDeliveryRows(filters, reach),
     loadFilterOptions(filters.organizationId, reach),
   ])
-  return buildDeliveryDashboard({ rows, filters, now, truncated, ...options })
+  return buildDeliveryDashboard({ rows, filters, now, truncated, ...options, listOrder })
 }
 
 /**

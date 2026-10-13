@@ -478,18 +478,19 @@ function OrdersCard({
   onViewChange: (view: DeliveryListView) => void
   onOpen: (row: DeliveryListRow) => void
 }>) {
-  const { items, total } = data.orders
+  const { items, total, order } = data.orders
+  const newestFirst = order === "newest"
   return (
     <Card>
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
-        <CardTitle className="text-base">Orders requiring attention</CardTitle>
+        <CardTitle className="text-base">{newestFirst ? "Orders, newest first" : "Orders requiring attention"}</CardTitle>
         <Select value={view} onValueChange={(value) => onViewChange(value as DeliveryListView)}>
           <SelectTrigger className="w-48" aria-label="Which orders to list">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
             {(Object.keys(VIEW_LABELS) as DeliveryListView[]).map((key) => (
-              <SelectItem key={key} value={key}>{VIEW_LABELS[key]}</SelectItem>
+              <SelectItem key={key} value={key}>{key === "ALL" && newestFirst ? "All orders" : VIEW_LABELS[key]}</SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -553,7 +554,7 @@ function OrdersCard({
         )}
         {total > items.length && (
           <p className="border-t p-3 text-center text-xs text-muted-foreground">
-            Showing the {items.length} most urgent of {total}. Narrow the filters to see the rest.
+            Showing the {items.length} {newestFirst ? "newest" : "most urgent"} of {total}. Narrow the filters to see the rest.
           </p>
         )}
       </CardContent>
