@@ -35,6 +35,8 @@ describe("a new desk order", () => {
       "At least one productstill needed",
       "Order channelstill needed",
       "Message referencestill needed",
+      // Required on every new desk order (plans/OF-ORDER-DESK-internal-order-entry.md).
+      "Screenshot of the messagestill needed",
     ])
     expect((screen.getByRole("button", { name: "Create order" }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByText(/Choose the organization and branch first/)).toBeTruthy()
