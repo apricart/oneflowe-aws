@@ -640,7 +640,7 @@ async function saveOrderReceipt(tx: any, context: any) {
   // Snapshot the buyer's own reference beside the invoice number so a reissued
   // invoice prints exactly what was agreed when the order was placed.
   if (context.poNumber) receiptData.poNumber = context.poNumber
-  // Numbered at delivery now, when the tax invoice is issued (lib/invoice-policy.ts).
+  // Numbered when processing starts now, when the tax invoice is issued (lib/invoice-policy.ts).
   await assignInvoiceNumberAtCreation(tx, receiptData, {
     organizationId: context.organizationId,
     tid: context.tid,
@@ -907,15 +907,14 @@ async function orderDeskCreationRefusal(role: unknown, input: {
   if (!await isOrderDeskTarget(db, { userId: input.userId, organizationId: input.organizationId, branchId: input.branchId })) {
     return NextResponse.json({ error: ORDER_DESK_TARGET_UNAVAILABLE }, { status: 403 })
   }
-  // The screenshot must be one this desk user uploaded, not yet on any order
-  // other than the one this same submission already created (a retry).
-  const attachmentError = input.intakeAttachmentKey
-    ? await deskAttachmentRefusal({
-      userId: input.userId,
-      key: input.intakeAttachmentKey,
-      idempotencyKey: input.idempotencyKey,
-    })
-    : null
+  // The screenshot (required by `orderIntakeError`) must be one this desk user
+  // uploaded, not yet on any order other than the one this same submission
+  // already created (a retry).
+  const attachmentError = await deskAttachmentRefusal({
+    userId: input.userId,
+    key: input.intakeAttachmentKey ?? "",
+    idempotencyKey: input.idempotencyKey,
+  })
   return attachmentError ? NextResponse.json({ error: attachmentError }, { status: 400 }) : null
 }
 

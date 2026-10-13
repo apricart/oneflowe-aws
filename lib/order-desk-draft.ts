@@ -28,7 +28,7 @@ export type DeskDraft = {
   intakeReference: string
   poNumber: string
   notes: string
-  /** The key the upload route returned for the customer's screenshot, if any. */
+  /** The key the upload route returned for the customer's screenshot; required before the order can be sent. */
   intakeAttachmentKey: string | null
 }
 
@@ -40,7 +40,7 @@ export type DeskOrderRequest = {
   intakeReference: string
   poNumber?: string
   notes?: string
-  intakeAttachmentKey?: string
+  intakeAttachmentKey: string
 }
 
 export type DeskDraftResult =
@@ -120,6 +120,7 @@ export function buildDeskOrderRequest(draft: DeskDraft, catalogue: readonly Desk
   if (intakeReference.length > INTAKE_REFERENCE_MAX_LENGTH) {
     return { ok: false, error: `The reference must be at most ${INTAKE_REFERENCE_MAX_LENGTH} characters` }
   }
+  if (!draft.intakeAttachmentKey) return { ok: false, error: "Attach a screenshot of the customer's message" }
   const notes = draft.notes.trim()
   if (notes.length > NOTES_MAX_LENGTH) return { ok: false, error: `Notes must be at most ${NOTES_MAX_LENGTH} characters` }
   const poNumber = draft.poNumber.trim()
@@ -134,7 +135,7 @@ export function buildDeskOrderRequest(draft: DeskDraft, catalogue: readonly Desk
       intakeReference,
       ...(poNumber ? { poNumber } : {}),
       ...(notes ? { notes } : {}),
-      ...(draft.intakeAttachmentKey ? { intakeAttachmentKey: draft.intakeAttachmentKey } : {}),
+      intakeAttachmentKey: draft.intakeAttachmentKey,
     },
   }
 }
@@ -204,7 +205,7 @@ export function buildDeskRefundRequest(
   return { ok: true, body: { items, reason: trimmed } }
 }
 
-export type DeskDraftCheck = { key: "customer" | "products" | "channel" | "reference"; label: string; done: boolean }
+export type DeskDraftCheck = { key: "customer" | "products" | "channel" | "reference" | "screenshot"; label: string; done: boolean }
 
 /**
  * What a new order still needs, in the order the form asks for it — shown
@@ -216,5 +217,6 @@ export function deskDraftChecklist(draft: DeskDraft): DeskDraftCheck[] {
     { key: "products", label: "At least one product", done: filledLines(draft).length > 0 },
     { key: "channel", label: "Order channel", done: draft.intakeChannel !== "" },
     { key: "reference", label: "Message reference", done: draft.intakeReference.trim() !== "" },
+    { key: "screenshot", label: "Screenshot of the message", done: Boolean(draft.intakeAttachmentKey) },
   ]
 }

@@ -18,7 +18,8 @@ import { destroyTenant, queryTestDb, seedTenant, tenantNames, type Tenant } from
  * (`plans/OF-INVOICE-invoice-ledger.md`, the plan's E2E line):
  *
  *   approve → proforma, no number drawn
- *   deliver → tax invoice, numbered from the series and dated today
+ *   in process → tax invoice, numbered from the series and dated today
+ *                (plans/OF-INVOICE-issue-at-processing.md); delivery keeps it
  *   partial refund → numbered credit note, listed on the invoice and downloadable
  *   reprint → the invoice body is what was issued, whatever changed since
  *
@@ -111,14 +112,18 @@ test.describe.serial("the invoice ledger", () => {
     const title = await openInvoice(page, orderId)
     await expect(title).toContainText("PROFORMA INVOICE")
     await expect(title).toContainText("Not a tax invoice")
-    await expect(page.getByText("Issued on delivery", { exact: true })).toBeVisible()
+    await expect(page.getByText("Issued when processed", { exact: true })).toBeVisible()
   })
 
-  test("delivery issues the tax invoice, numbered from the series and dated today in Karachi", async ({ page, browser }) => {
+  test("In Process issues the tax invoice, numbered from the series and dated today in Karachi; delivery keeps it", async ({ page, browser }) => {
     test.slow()
     const admin = await apiSession(browser, tenant.superAdmin.username)
     try {
-      await markDelivered(admin.page, orderId)
+      await expectStatus(await post(admin.page, `/api/v1/orders/${orderId}/fulfillment-status`, { fulfillmentStatus: "IN_PROCESS" }))
+      const issued = await invoiceRow(orderId)
+      expect(issued).toMatchObject({ number: `${CODE}-APR-000001`, issue_date: karachiToday(), status: "ISSUED" })
+
+      await markDelivered(admin.page, orderId, { from: "IN_PROCESS" })
     } finally {
       await admin.close()
     }

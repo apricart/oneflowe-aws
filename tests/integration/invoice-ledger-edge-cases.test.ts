@@ -247,7 +247,7 @@ describe.skipIf(!hasTestDatabase)("invoice ledger edge cases", () => {
     })
   })
 
-  describe("a refund approved before delivery", () => {
+  describe("a refund approved before the invoice is issued", () => {
     let orderId: number
     let itemIds: number[]
 
@@ -298,6 +298,31 @@ describe.skipIf(!hasTestDatabase)("invoice ledger edge cases", () => {
       const page = await response.json()
       expect(page.invoiceStatus).toBe("ISSUED")
       expect(await derivedInvoiceStatus(freshOrderId)).toBe(page.invoiceStatus)
+    })
+  })
+
+  // plans/OF-INVOICE-issue-at-processing.md: the invoice exists from In
+  // Process, so a refund between then and delivery is a credit note against
+  // it, never a silent reduction of what is printed and already with the driver.
+  describe("a refund approved in process, before delivery", () => {
+    it("credits the issued invoice with a numbered credit note, and delivery leaves both as they are", async () => {
+      const { orderId, itemIds } = await seedApprovedOrder([
+        { name: "Tea 600pcs", priceCents: 1_180, quantity: 2 },
+        { name: "Sugar 1kg", priceCents: 590, quantity: 1 },
+      ])
+      expect((await progress(orderId, "IN_PROCESS")).kind).toBe("updated")
+      const issued = await invoiceOf(orderId)
+      expect(issued).toMatchObject({ status: "ISSUED", totalCents: 2_950 })
+
+      expect((await directRefund(orderId, [{ id: itemIds[0], quantity: 1 }])).status).toBeLessThan(300)
+      const credited = await invoiceOf(orderId)
+      expect(credited).toMatchObject({ id: issued.id, totalCents: 2_950, status: "PARTIALLY_CREDITED", creditedTotalCents: 1_180 })
+      expect((await notesOf(issued.id)).map((note) => note.totalCents)).toEqual([1_180])
+
+      expect((await progress(orderId, "OUT_FOR_DELIVERY")).kind).toBe("updated")
+      expect((await progress(orderId, "DELIVERED")).kind).toBe("updated")
+      expect(await invoiceOf(orderId)).toMatchObject({ id: issued.id, totalCents: 2_950, creditedTotalCents: 1_180 })
+      expect(await notesOf(issued.id)).toHaveLength(1)
     })
   })
 
@@ -364,17 +389,15 @@ describe.skipIf(!hasTestDatabase)("invoice ledger edge cases", () => {
       expect(notes.reduce((sum, note) => sum + note.totalCents, 0)).toBe(invoice.totalCents)
     })
 
-    it("a refund racing the delivery is either taken off the invoice or credited against it — once", async () => {
+    it("a refund racing the step that issues the invoice is either taken off it or credited against it — once", async () => {
       for (let attempt = 0; attempt < 4; attempt += 1) {
         const { orderId, itemIds } = await seedApprovedOrder([{ name: "Tea 600pcs", priceCents: 1_180, quantity: 2 }])
-        expect((await progress(orderId, "IN_PROCESS")).kind).toBe("updated")
-        expect((await progress(orderId, "OUT_FOR_DELIVERY")).kind).toBe("updated")
 
-        const [delivered, refunded] = await Promise.all([
-          progress(orderId, "DELIVERED"),
+        const [started, refunded] = await Promise.all([
+          progress(orderId, "IN_PROCESS"),
           directRefund(orderId, [{ id: itemIds[0], quantity: 1 }]),
         ])
-        expect(delivered.kind).toBe("updated")
+        expect(started.kind).toBe("updated")
         expect(refunded.status).toBeLessThan(300)
 
         const order = await orderOf(orderId)
@@ -485,10 +508,8 @@ describe.skipIf(!hasTestDatabase)("invoice ledger edge cases", () => {
       expect(pending).toHaveLength(0)
     })
 
-    it("an organization without a code cannot record a delivery, and nothing is half-written", async () => {
+    it("an organization without a code cannot start processing, and nothing is half-written", async () => {
       const { orderId } = await seedApprovedOrder([{ name: "Tea 600pcs", priceCents: 1_180, quantity: 1 }])
-      expect((await progress(orderId, "IN_PROCESS")).kind).toBe("updated")
-      expect((await progress(orderId, "OUT_FOR_DELIVERY")).kind).toBe("updated")
 
       const [{ code }] = await db.select({ code: organizations.code }).from(organizations).where(eq(organizations.id, f.organizationId))
       const [sequenceBefore] = await db.select({ lastValue: invoiceSequences.lastValue }).from(invoiceSequences)
@@ -496,7 +517,7 @@ describe.skipIf(!hasTestDatabase)("invoice ledger edge cases", () => {
       await db.update(organizations).set({ code: null }).where(eq(organizations.id, f.organizationId))
       try {
         // Answered as an outcome the routes turn into a 409, not a 500.
-        expect((await progress(orderId, "DELIVERED")).kind).toBe("invoice-code-missing")
+        expect((await progress(orderId, "IN_PROCESS")).kind).toBe("invoice-code-missing")
         // And no new order is taken for it in the first place.
         await expect(db.transaction((tx) => assignInvoiceNumberAtCreation(tx, {}, {
           organizationId: f.organizationId,
@@ -508,7 +529,7 @@ describe.skipIf(!hasTestDatabase)("invoice ledger edge cases", () => {
       }
 
       const order = await orderOf(orderId)
-      expect(order.fulfillmentStatus).toBe("OUT_FOR_DELIVERY")
+      expect(order.fulfillmentStatus).toBe("NOT_STARTED")
       expect(order.deliveredAt).toBeNull()
       expect(await invoiceOf(orderId)).toBeUndefined()
       const [sequenceAfter] = await db.select({ lastValue: invoiceSequences.lastValue }).from(invoiceSequences)
@@ -610,12 +631,10 @@ describe.skipIf(!hasTestDatabase)("invoice ledger edge cases", () => {
 
     it("lets Super Admin give a code to an organization that has orders but never had one", async () => {
       const orderId = await seedOrderHere()
-      expect((await progress(orderId, "IN_PROCESS")).kind).toBe("updated")
-      expect((await progress(orderId, "OUT_FOR_DELIVERY")).kind).toBe("updated")
-      expect((await progress(orderId, "DELIVERED")).kind).toBe("invoice-code-missing")
+      expect((await progress(orderId, "IN_PROCESS")).kind).toBe("invoice-code-missing")
 
       expect((await setCode(`ILEA${f.suffix}`.slice(0, 20))).status).toBe(200)
-      expect((await progress(orderId, "DELIVERED")).kind).toBe("updated")
+      expect((await progress(orderId, "IN_PROCESS")).kind).toBe("updated")
       expect((await invoiceOf(orderId)).number).toMatch(new RegExp(`^${String(await codeOf())}-APR-000001$`, "i"))
     })
 

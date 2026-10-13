@@ -37,7 +37,11 @@ import { destroyTenant, queryTestDb, seedTenant, tenantNames, withTenantDb, type
  *
  * Delivery itself is Super Admin's, with a challan upload this environment has
  * no object storage for; it is written to the row here and proved in
- * `tests/integration/delivery-challan-api.test.ts`.
+ * `tests/integration/delivery-challan-api.test.ts`. The customer's screenshot,
+ * which every desk order requires, has the same problem: the upload's audit row
+ * is staged here (`stageScreenshot`) and the browser's upload call answered
+ * with its key; the upload itself is proved in
+ * `tests/integration/order-desk-api.test.ts`.
  */
 
 const KEY = "desk"
@@ -91,6 +95,26 @@ async function recordDelivery(orderId: number): Promise<void> {
   )
 }
 
+/**
+ * A screenshot as the upload route leaves it for the desk agent: the audit row
+ * binding a fresh key to its uploader, which order creation checks.
+ */
+async function stageScreenshot(): Promise<string> {
+  const key = `order-intake/${randomUUID()}.png`
+  await queryTestDb(
+    testDatabaseUrl(),
+    "INSERT INTO audit_logs (user_id, action, entity, entity_id) VALUES ($1, 'UPLOAD_ORDER_INTAKE_ATTACHMENT', 'image', $2)",
+    [agentId, key],
+  )
+  return key
+}
+
+/** A 1×1 PNG, for the screenshot picker. */
+const SCREENSHOT_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+  "base64",
+)
+
 /** An order keyed in through the API by the desk agent, for journeys that start after creation. */
 async function deskOrderThroughApi(page: Page, reference: string, quantity = 1): Promise<number> {
   const body = await expectStatus(await post(page, "/api/v1/orders", {
@@ -99,6 +123,7 @@ async function deskOrderThroughApi(page: Page, reference: string, quantity = 1):
     items: [{ organizationInventoryId: tenant.products.RICE.organizationInventoryId, quantity }],
     intakeChannel: "EMAIL",
     intakeReference: reference,
+    intakeAttachmentKey: await stageScreenshot(),
   }, { "Idempotency-Key": `e2e-${randomUUID()}` }))
   return Number(body.order.id)
 }
@@ -255,7 +280,15 @@ test.describe.serial("the Order Desk", () => {
     await page.getByLabel("Reference").fill("E2E customer, WhatsApp 10:14")
     await page.getByLabel(/Customer PO number/).fill("PO-E2E-1")
 
+    // Nothing goes until the customer's screenshot is attached.
     const create = page.getByRole("button", { name: "Create order" })
+    await expect(create).toBeDisabled()
+    const screenshotKey = await stageScreenshot()
+    await page.route("**/api/v1/upload/image", (route) => route.fulfill({
+      json: { attachmentKey: screenshotKey, size: SCREENSHOT_PNG.length, type: "image/png" },
+    }))
+    await page.locator("#desk-screenshot").setInputFiles({ name: "whatsapp.png", mimeType: "image/png", buffer: SCREENSHOT_PNG })
+    await expect(page.getByRole("img", { name: "Screenshot of the customer's message" })).toBeVisible()
     await expect(create).toBeEnabled()
     await create.click()
     await expect(page.getByRole("heading", { name: /Order .* created/ })).toBeVisible({ timeout: 150_000 })
@@ -396,6 +429,7 @@ test.describe.serial("the Order Desk", () => {
         items: [{ organizationInventoryId: tenant.products.RICE.organizationInventoryId, quantity: 1 }],
         intakeChannel: "EMAIL",
         intakeReference: "after the switch",
+        intakeAttachmentKey: await stageScreenshot(),
       }, { "Idempotency-Key": `e2e-${randomUUID()}` })
       expect(refused.status()).toBe(403)
     } finally {

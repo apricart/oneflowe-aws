@@ -319,7 +319,7 @@ function ScreenshotField({
 }>) {
   return (
     <div className="space-y-2">
-      <Label htmlFor="desk-screenshot">Screenshot of the message <Optional /></Label>
+      <Label htmlFor="desk-screenshot">Screenshot of the message</Label>
       {preview ? (
         <div className="relative overflow-hidden rounded-md border bg-muted/30">
           {/* A local object URL of the file just uploaded, not a remote image. */}
@@ -373,7 +373,7 @@ function OriginStep({
       <CardContent className="space-y-5 p-5">
         <StepHeading
           number={3}
-          done={draft.intakeChannel !== "" && draft.intakeReference.trim() !== ""}
+          done={draft.intakeChannel !== "" && draft.intakeReference.trim() !== "" && Boolean(draft.intakeAttachmentKey)}
           title="Where the order came from"
           description="So anyone can trace this order back to the customer's message."
         />

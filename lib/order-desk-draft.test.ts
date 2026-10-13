@@ -6,6 +6,7 @@ import {
   buildDeskEditRequest,
   buildDeskOrderRequest,
   buildDeskRefundRequest,
+  deskDraftChecklist,
   estimateDraftTotalCents,
   SCREENSHOT_MAX_BYTES,
   screenshotFileError,
@@ -13,6 +14,8 @@ import {
   type DeskCatalogueItem,
   type DeskDraft,
 } from "./order-desk-draft"
+
+const SCREENSHOT_KEY = "order-intake/0b9b1c2e-3f4a-4b5c-8d6e-7f8091a2b3c4.png"
 
 const catalogue: DeskCatalogueItem[] = [
   { organizationInventoryId: 1, name: "Rice", allowDecimalQuantity: true, quantityStep: 0.5, priceCents: 25_000 },
@@ -28,7 +31,7 @@ const draft = (overrides: Partial<DeskDraft> = {}): DeskDraft => ({
   intakeReference: "  Sana, 09:40  ",
   poNumber: "",
   notes: "",
-  intakeAttachmentKey: null,
+  intakeAttachmentKey: SCREENSHOT_KEY,
   ...overrides,
 })
 
@@ -45,16 +48,20 @@ describe("turning the desk's draft into an order", () => {
         ],
         intakeChannel: "WHATSAPP",
         intakeReference: "Sana, 09:40",
+        intakeAttachmentKey: SCREENSHOT_KEY,
       },
     })
   })
 
-  it("carries the screenshot key only when one was uploaded", () => {
-    const key = "order-intake/0b9b1c2e-3f4a-4b5c-8d6e-7f8091a2b3c4.png"
-    const withKey = buildDeskOrderRequest(draft({ intakeAttachmentKey: key }), catalogue)
-    expect(withKey.ok && withKey.body.intakeAttachmentKey).toBe(key)
-    const without = buildDeskOrderRequest(draft(), catalogue)
-    expect(without.ok && "intakeAttachmentKey" in without.body).toBe(false)
+  it("requires the customer's screenshot", () => {
+    const without = buildDeskOrderRequest(draft({ intakeAttachmentKey: null }), catalogue)
+    expect(without).toEqual({ ok: false, error: "Attach a screenshot of the customer's message" })
+  })
+
+  it("lists the screenshot among what the order still needs", () => {
+    const pending = deskDraftChecklist(draft({ intakeAttachmentKey: null })).find((check) => check.key === "screenshot")
+    expect(pending).toEqual({ key: "screenshot", label: "Screenshot of the message", done: false })
+    expect(deskDraftChecklist(draft()).every((check) => check.done)).toBe(true)
   })
 
   it("carries the optional PO number and notes when given", () => {

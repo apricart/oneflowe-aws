@@ -16,7 +16,7 @@ import {
   type InvoiceStatus,
 } from "@/lib/invoice-status"
 
-export const PROFORMA_NOTE = "Proforma only. Not a tax invoice: the tax invoice is issued on delivery."
+export const PROFORMA_NOTE = "Proforma only. Not a tax invoice: the tax invoice is issued when the order is processed."
 export const CREDIT_NOTE_TITLE = "CREDIT NOTE"
 
 export type LedgerInvoiceRecord = {
@@ -209,15 +209,15 @@ export function creditNoteDocument(input: {
 /**
  * The invoice number as a document shows it. A proforma has no tax invoice
  * number of its own: it shows the number reserved for it (drawn when the order
- * was placed, before invoices were numbered at delivery) or says when one will
- * be issued.
+ * was placed, before the ledger) or says when one will be issued — when the
+ * order is processed (plans/OF-INVOICE-issue-at-processing.md).
  */
 export function displayedInvoiceNumber(receiptData: unknown): string {
   const data = (receiptData ?? {}) as { invoiceNumber?: unknown; invoiceStatus?: unknown }
   const number = text(data.invoiceNumber)
   const status = toInvoiceStatus(data.invoiceStatus)
   if (status === null || isTaxInvoiceStatus(status)) return number ?? "N/A"
-  if (status === "PROFORMA_AVAILABLE") return number ? `${number} (on delivery)` : "Issued on delivery"
+  if (status === "PROFORMA_AVAILABLE") return number ? `${number} (when processed)` : "Issued when processed"
   return number ? `${number} (not issued)` : "Not issued"
 }
 

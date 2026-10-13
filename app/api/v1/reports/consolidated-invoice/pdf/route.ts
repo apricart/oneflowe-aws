@@ -41,6 +41,7 @@ export async function GET(req: NextRequest) {
       title: report.title,
       statement: report.statement,
       footnote: report.footnote,
+      filterNote: report.filterNote,
       billTo: report.billTo,
       periodLabel: report.period.label,
       rows: report.rows,
@@ -62,6 +63,7 @@ export async function GET(req: NextRequest) {
         branchIds: query.branchIds,
         groupId: query.groupId,
         includeCredited: query.includeCredited,
+        paymentStatus: query.paymentStatus,
         sort: query.sort,
         rowCount: report.rows.length,
         totalCents: report.totals.totalCents,
@@ -70,7 +72,7 @@ export async function GET(req: NextRequest) {
       },
     })
 
-    const fileName = consolidatedInvoiceFileName(report.mode, report.billTo.code, report.period.from, report.period.to)
+    const fileName = consolidatedInvoiceFileName(report.mode, report.billTo.code, report.period.from, report.period.to, query.paymentStatus)
     return new NextResponse(pdf, {
       headers: {
         ...NO_STORE,

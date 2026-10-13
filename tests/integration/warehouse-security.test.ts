@@ -15,7 +15,8 @@ import * as invoiceRoute from "@/app/api/v1/warehouse/orders/[id]/invoice/route"
 import * as challanRoute from "@/app/api/v1/warehouse/orders/[id]/delivery-challan/route"
 import * as challanFileRoute from "@/app/api/v1/warehouse/orders/[id]/delivery-challan/[challanId]/file/route"
 import * as workloadRoute from "@/app/api/v1/warehouse/workload/route"
-import * as stockRoute from "@/app/api/v1/warehouse/stock/route"
+import * as catalogRoute from "@/app/api/v1/warehouse/catalog/route"
+import * as catalogCategoriesRoute from "@/app/api/v1/warehouse/catalog/categories/route"
 import * as teamBranchesRoute from "@/app/api/v1/warehouse-team/[userId]/branches/route"
 import * as teamCitiesRoute from "@/app/api/v1/warehouse-team/[userId]/cities/route"
 import {
@@ -187,9 +188,13 @@ describe.skipIf(!hasTestDatabase)("the Warehouse role, under attack", () => {
     signIn(actor)
     return read(await workloadRoute.GET(request(`http://localhost/api/v1/warehouse/workload${query}`, "GET")))
   }
-  const stock = async (actor: Actor | null) => {
+  const catalog = async (actor: Actor | null) => {
     signIn(actor)
-    return read(await stockRoute.GET(request(`http://localhost/api/v1/warehouse/stock?q=${suffix}`, "GET")))
+    return read(await catalogRoute.GET(request(`http://localhost/api/v1/warehouse/catalog?q=${suffix}`, "GET")))
+  }
+  const catalogCategories = async (actor: Actor | null) => {
+    signIn(actor)
+    return read(await catalogCategoriesRoute.GET(request("http://localhost/api/v1/warehouse/catalog/categories", "GET")))
   }
   let png: Buffer
   const upload = async (actor: Actor | null, orderId: number) => {
@@ -388,7 +393,8 @@ describe.skipIf(!hasTestDatabase)("the Warehouse role, under attack", () => {
       ["adding a challan", (actor) => addChallan(actor, ids.H, { deliveryChallanId: ids.challanH })],
       ["the challan file", (actor) => challanFile(actor, ids.H, ids.challanH)],
       ["the workload", (actor) => workload(actor)],
-      ["the stock", (actor) => stock(actor)],
+      ["the product catalogue", (actor) => catalog(actor)],
+      ["the catalogue's categories", (actor) => catalogCategories(actor)],
     ]
 
     it.each(endpoints)("%s refuses a caller with no session", async (_label, call) => {

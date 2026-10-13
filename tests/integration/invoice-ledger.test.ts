@@ -25,7 +25,7 @@ import { closePool, db } from "@/lib/db"
 import { karachiDate } from "@/lib/invoice-ledger"
 import { planLegacyInvoice } from "@/lib/invoice-ledger-backfill"
 import { issueCreditNoteForRefund } from "@/lib/server/credit-notes"
-import { issueTaxInvoiceAtDelivery } from "@/lib/server/invoice-issuance"
+import { issueTaxInvoice } from "@/lib/server/invoice-issuance"
 import { progressOrderFulfillment } from "@/lib/server/order-fulfillment-progress"
 
 import {
@@ -38,7 +38,8 @@ import { purgeInvoiceLedger } from "./helpers/invoice-ledger-cleanup"
 
 /**
  * The invoice ledger against Postgres (plans/OF-INVOICE-invoice-ledger.md):
- * tax invoices issued, numbered and dated at delivery; credit notes on
+ * tax invoices issued, numbered and dated when processing starts
+ * (plans/OF-INVOICE-issue-at-processing.md); credit notes on
  * approved refunds; documents printed from their own rows; and the database
  * refusing to change or delete an issued document.
  */
@@ -132,17 +133,21 @@ describe.skipIf(!hasTestDatabase)("the invoice ledger", () => {
     return { orderId: order.id, itemIds: items.map((item) => item.id) }
   }
 
+  async function step(orderId: number, nextStatus: "IN_PROCESS" | "OUT_FOR_DELIVERY" | "DELIVERED") {
+    const outcome = await progressOrderFulfillment({
+      orderId,
+      nextStatus,
+      deliveryChallanId: null,
+      challanRequired: false,
+      actor: { id: f.superAdminId, role: "SUPER_ADMIN" },
+      authorize: async () => true,
+    })
+    expect(outcome.kind).toBe("updated")
+  }
+
   async function deliver(orderId: number) {
     for (const nextStatus of ["IN_PROCESS", "OUT_FOR_DELIVERY", "DELIVERED"] as const) {
-      const outcome = await progressOrderFulfillment({
-        orderId,
-        nextStatus,
-        deliveryChallanId: null,
-        challanRequired: false,
-        actor: { id: f.superAdminId, role: "SUPER_ADMIN" },
-        authorize: async () => true,
-      })
-      expect(outcome.kind).toBe("updated")
+      await step(orderId, nextStatus)
     }
   }
 
@@ -185,7 +190,57 @@ describe.skipIf(!hasTestDatabase)("the invoice ledger", () => {
     vi.mocked(getServerSession).mockReset()
   })
 
-  describe("issuing the tax invoice at delivery", () => {
+  describe("issuing the tax invoice when processing starts", () => {
+    it("issues it on In Process, before delivery, and the later steps leave it as it is", async () => {
+      const { orderId } = await seedApprovedOrder()
+      const before = await sequenceValue()
+      await step(orderId, "IN_PROCESS")
+
+      // Issued now, so the warehouse can print it and send it with the goods.
+      const issued = await invoiceOf(orderId)
+      expect(issued).toMatchObject({
+        status: "ISSUED",
+        number: `${await organizationCode()}-APR-${String(before + 1).padStart(6, "0")}`,
+        issueDate: karachiDate(new Date()),
+        issuedByUserId: f.superAdminId,
+        totalCents: 2_950,
+      })
+      const [order] = await db.select({ deliveredAt: orders.deliveredAt }).from(orders).where(eq(orders.id, orderId))
+      expect(order.deliveredAt).toBeNull()
+      const [audit] = await db.select({ metadata: auditLogs.metadata }).from(auditLogs)
+        .where(and(eq(auditLogs.action, "ISSUE_TAX_INVOICE"), eq(auditLogs.entityId, String(issued.id))))
+      expect(audit.metadata).toMatchObject({ orderId, number: issued.number, stage: "IN_PROCESS" })
+
+      await step(orderId, "OUT_FOR_DELIVERY")
+      await step(orderId, "DELIVERED")
+      const rows = await db.select().from(invoices).where(eq(invoices.orderId, orderId))
+      expect(rows).toHaveLength(1)
+      expect(rows[0]).toMatchObject({ id: issued.id, number: issued.number, issueDate: issued.issueDate })
+      expect(await sequenceValue()).toBe(before + 1)
+    })
+
+    it("issues it on the next step to an order that was already past In Process without one", async () => {
+      // An order in process or out for delivery when the issue stage moved
+      // from delivery to processing holds no invoice; it is never skipped.
+      for (const [stage, next] of [["IN_PROCESS", "OUT_FOR_DELIVERY"], ["OUT_FOR_DELIVERY", "DELIVERED"]] as const) {
+        const { orderId } = await seedApprovedOrder()
+        await db.update(orders).set({ fulfillmentStatus: stage }).where(eq(orders.id, orderId))
+        expect(await invoiceOf(orderId)).toBeUndefined()
+
+        await step(orderId, next)
+        expect(await invoiceOf(orderId)).toMatchObject({ status: "ISSUED", issueDate: karachiDate(new Date()) })
+      }
+    })
+
+    it("refuses the admin delete of an order in process, which now holds a tax invoice", async () => {
+      const { orderId } = await seedApprovedOrder()
+      await step(orderId, "IN_PROCESS")
+      signIn(superAdmin())
+      const response = await deleteOrderRoute.DELETE(request("DELETE", `http://localhost/api/v1/admin/delete-order?id=${orderId}`))
+      expect(response.status).toBe(409)
+      expect((await response.json()).error).toMatch(/tax invoice/)
+    })
+
     it("numbers it from the organization's series, dates it today in Karachi, and freezes its lines", async () => {
       const { orderId } = await seedApprovedOrder()
       const before = await sequenceValue()
@@ -230,7 +285,7 @@ describe.skipIf(!hasTestDatabase)("the invoice ledger", () => {
       expect(await sequenceValue()).toBe(before)
     })
 
-    it("invoices only what refunds approved before delivery left", async () => {
+    it("invoices only what refunds approved before it was issued left", async () => {
       const { orderId, itemIds } = await seedApprovedOrder()
       const [refund] = await db.insert(refunds).values({
         organizationId: f.organizationId,
@@ -263,7 +318,7 @@ describe.skipIf(!hasTestDatabase)("the invoice ledger", () => {
       const { orderId } = await seedApprovedOrder()
       await deliver(orderId)
       const first = await invoiceOf(orderId)
-      const again = await db.transaction((tx) => issueTaxInvoiceAtDelivery(tx, { orderId, actor: { id: f.superAdminId, role: "SUPER_ADMIN" } }))
+      const again = await db.transaction((tx) => issueTaxInvoice(tx, { orderId, actor: { id: f.superAdminId, role: "SUPER_ADMIN" }, stage: "DELIVERED" }))
       expect(again).toEqual({ kind: "exists", invoiceId: first.id })
     })
   })

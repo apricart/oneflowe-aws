@@ -1,12 +1,15 @@
-import { deriveInvoiceStatus, type InvoiceStatus } from "@/lib/invoice-status"
+import { deriveInvoiceStatus, isOrderSupplied, type InvoiceStatus } from "@/lib/invoice-status"
 import { orderStillOwes } from "@/lib/unpaid-invoice-block"
 
 /**
- * Invoice statuses that still represent money awaiting payment: a tax invoice
- * issued at delivery, whole or partly credited. A proforma is not an invoice
- * (nothing is owed until the goods are supplied), and a fully credited invoice
- * is no longer payable. See plans/OF-INVOICE-invoice-ledger.md (D7), which
- * narrowed this from "approved onwards".
+ * Invoice statuses that still represent money awaiting payment: a tax invoice,
+ * whole or partly credited. A proforma is not an invoice, and a fully credited
+ * invoice is no longer payable. See plans/OF-INVOICE-invoice-ledger.md (D7),
+ * which narrowed this from "approved onwards".
+ *
+ * The tax invoice is issued when processing starts
+ * (plans/OF-INVOICE-issue-at-processing.md), but nothing is owed until the
+ * goods are supplied, so `isPendingInvoiceOrder` also requires that.
  */
 export const PENDING_INVOICE_STATUSES = ["ISSUED", "PARTIALLY_CREDITED"] as const satisfies readonly InvoiceStatus[]
 
@@ -41,12 +44,14 @@ function normalize(value: unknown) {
 
 /**
  * The shared definition used by tests and mirrored by the status endpoint's
- * query (through `invoiceStatusSql`). The order must have a snapshot, a tax
- * invoice that is not fully credited, and still be marked unpaid.
+ * query (through `invoiceStatusSql` and `orderSuppliedSql`). The order must
+ * have a snapshot, a tax invoice that is not fully credited, goods that were
+ * supplied, and still be marked unpaid.
  */
 export function isPendingInvoiceOrder(order: PendingInvoiceOrder): boolean {
   return Boolean(order.receiptData)
     && pendingInvoiceStatuses.has(deriveInvoiceStatus(order))
+    && isOrderSupplied(order)
     && normalize(order.paymentStatus) === "UNPAID"
     && orderStillOwes(order)
 }

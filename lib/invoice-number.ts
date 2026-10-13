@@ -11,9 +11,11 @@ const TENANT_SHORT_NAME_PATTERN = /^[A-Z0-9_]+$/
 /**
  * An organization without a usable code (`organizations.code`, the invoice
  * prefix) cannot have a tax invoice numbered for it. Since invoices are
- * numbered at delivery, that used to surface only when someone tried to record
- * a delivery, as a 500 that rolled the delivery back. It is refused instead
- * when an order is placed, and answered plainly if a delivery meets it anyway
+ * numbered after the order is placed (at delivery, and since
+ * plans/OF-INVOICE-issue-at-processing.md when processing starts), that used to
+ * surface only when someone tried to move the order's delivery stage, as a 500
+ * that rolled the step back. It is refused instead when an order is placed,
+ * and answered plainly if a stage step meets it anyway
  * (plans/OF-INVOICE-invoice-ledger.md, "Fixes after the edge-case review").
  */
 export const INVOICE_CODE_MISSING = "INVOICE_CODE_MISSING"
@@ -156,7 +158,7 @@ export async function generateNextCreditNoteNumber(client: InvoiceSequenceClient
 
 /**
  * The invoice number an order's snapshot carries when it is placed: none, now
- * that invoices are numbered at delivery (lib/invoice-policy.ts); otherwise the
+ * that invoices are numbered when processing starts (lib/invoice-policy.ts); otherwise the
  * next number in the series, or the TID when the sequence table is missing,
  * as before. Both creation paths call this, so they cannot differ.
  */
@@ -167,7 +169,7 @@ export async function assignInvoiceNumberAtCreation(
 ): Promise<void> {
   delete receiptData.invoiceNumber
   if (!drawsInvoiceNumberAtCreation()) {
-    // No number now, but the order will be invoiced on delivery: an
+    // No number now, but the order will be invoiced when it is processed: an
     // organization that cannot be invoiced takes no order, rather than one it
     // could never deliver. Holds the same shared lock a code change waits on.
     await lockInvoiceTenantForIssuance(client, input.organizationId)

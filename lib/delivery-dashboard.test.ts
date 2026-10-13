@@ -141,6 +141,12 @@ describe("building the dashboard", () => {
       deliveredOnTime: 1,
       deliveredLate: 1,
       deliveredToday: 1,
+      notStarted: 1,
+      inProcess: 1,
+      outForDelivery: 1,
+      awaitingAcknowledgement: 1,
+      acknowledged: 1,
+      openOutsideRange: 0,
       onTimeRate: 50,
     })
     expect(dashboard.sla).toEqual({ hours: 72, dueSoonHours: 12, countsOrdersApprovedFrom: "2026-09-01" })
@@ -154,6 +160,25 @@ describe("building the dashboard", () => {
     expect(build({ view: "OVERDUE" }).orders.total).toBe(dashboard.kpis.overdue)
     expect(build({ view: "OPEN" }).orders.total).toBe(dashboard.kpis.open)
     expect(build({ view: "DELIVERED_TODAY" }).orders.total).toBe(dashboard.kpis.deliveredToday)
+    expect(build({ view: "DELIVERED" }).orders.total).toBe(dashboard.kpis.delivered)
+    expect(build({ view: "IN_PROCESS" }).orders.total).toBe(dashboard.kpis.inProcess)
+    expect(build({ view: "AWAITING_ACKNOWLEDGEMENT" }).orders.total).toBe(dashboard.kpis.awaitingAcknowledgement)
+    expect(build({ view: "ACKNOWLEDGED" }).orders.items.map((item) => item.tid)).toEqual(["T5"])
+  })
+
+  it("applies the date range to every figure, and counts the open orders it leaves out", () => {
+    // T1 approved 2 Oct, T2 3 Oct, T3 6 Oct; T4 delivered 6 Oct, T5 2 Oct (Karachi).
+    const early = build({ deliveredFrom: "2026-10-02", deliveredTo: "2026-10-03" })
+    expect(early.kpis).toMatchObject({ open: 2, overdue: 1, dueSoon: 1, onTrack: 0, delivered: 1, deliveredLate: 1, openOutsideRange: 1 })
+    expect(early.orders.items.map((item) => item.tid)).toEqual(["T1", "T2", "T5"])
+    expect(early.byOrganization.map((group) => [group.label, group.open, group.delivered])).toEqual([["KE", 2, 1]])
+    expect(early.pipeline.map((entry) => entry.count)).toEqual([0, 1, 1])
+
+    const today = build({ deliveredFrom: "2026-10-06", deliveredTo: "2026-10-06" })
+    expect(today.kpis).toMatchObject({ open: 1, delivered: 1, deliveredOnTime: 1, openOutsideRange: 2 })
+
+    // The city filter narrows the left-out count too.
+    expect(build({ city: "Lahore", deliveredFrom: "2026-10-06", deliveredTo: "2026-10-06" }).kpis.openOutsideRange).toBe(1)
   })
 
   it("groups by destination city case-insensitively, and narrows by it", () => {

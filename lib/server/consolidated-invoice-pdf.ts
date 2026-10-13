@@ -39,6 +39,7 @@ export type ConsolidatedInvoicePdfInput = {
   title: string
   statement: string
   footnote: string | null
+  filterNote: string | null
   billTo: { name: string; ntn: string | null; strn: string | null }
   periodLabel: string
   rows: ConsolidatedInvoiceRow[]
@@ -106,6 +107,7 @@ function drawHeaderCards(doc: jsPDF, input: ConsolidatedInvoicePdfInput): number
   drawCard(doc, xs[1], y, widths[1], height, [
     { text: "Invoice Period", size: 7, color: COLORS.muted },
     { text: input.periodLabel, size: 9, bold: true },
+    ...(input.filterNote ? [{ text: input.filterNote, size: 7, color: COLORS.muted }] : []),
   ])
   drawCard(doc, xs[2], y, widths[2], height, [
     { text: "Total Orders", size: 7, color: COLORS.muted },

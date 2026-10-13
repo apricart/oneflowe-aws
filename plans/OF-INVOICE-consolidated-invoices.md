@@ -309,6 +309,7 @@ landscape.
 | `branchIds` | ≤ 200 |
 | `groupId` | one group |
 | `includeCredited` | `true` \| `false` |
+| `paymentStatus` | `PAID` \| `UNPAID`, invoices only (D10) |
 | `sort`, `dir` | allowlisted (D5) |
 
 - **Handler order:** rate limit → session (401) → role (403) → scope from the
@@ -328,6 +329,28 @@ Every PDF download writes one `audit_logs` row: `DOWNLOAD_CONSOLIDATED_INVOICE_R
 - It records a SHA-256 of the ordered `(number, totalCents)` list, so a
   document handed to a client can be verified later.
 - No names, no lines. Previews are not audited, like other reports.
+
+### D10 — Payment-status filter (added 2026-10-12)
+
+Requested after go-live: the report should list only the unpaid (or only the
+paid) invoices of a period.
+
+- **Source:** `orders.payment_status`, the column the Super Admin Paid/Unpaid
+  control writes. Anything not `PAID` reads as unpaid, as
+  `normalizePaymentStatus` does (`<> 'PAID'` in SQL). Absent = every invoice.
+- **Invoices only.** Payment status moves only on a fulfilled, delivered
+  order, so every proforma is unpaid; `paymentStatus` with `mode=proformas` is
+  400 rather than a filter that silently matches all or none.
+- **Combines** with branch, group and `includeCredited`; the 1,000-row cap and
+  its count read the same filtered set (the count query now joins `orders`).
+- **Said on the document:** a filtered report names the filter under the
+  period ("Unpaid invoices only") on the preview and the PDF, so a filtered
+  Grand Total is not read as the whole period's; the PDF file name gains
+  `-paid` / `-unpaid`. The template's columns are unchanged; the preview shows
+  each row's payment status under its order status.
+- **Audit:** the download row records `paymentStatus`; the digest is unchanged.
+- **Security:** a new allowlisted enum on the same strict query; no new
+  route, role or tenant path. Payment status is not a price field.
 
 ## Modules
 

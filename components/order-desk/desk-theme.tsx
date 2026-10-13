@@ -69,7 +69,7 @@ export const STAGE_META: Record<DeskOrderStage, StageMeta> = {
   },
   cancelled: {
     label: "Cancelled",
-    hint: "Withdrawn before delivery. Stock and budget were released.",
+    hint: "Withdrawn before processing started. Stock and budget were released.",
     icon: XCircle,
     dot: "bg-slate-400",
     pill: "bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700",

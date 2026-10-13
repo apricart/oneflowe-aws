@@ -86,14 +86,16 @@ describe("the desk's own order actions", () => {
     expect(service).toContain("fulfillApprovedOrder({")
     expect(service).not.toMatch(/status:\s*"FULFILLED"/)
     expect(edit).not.toMatch(/status:\s*"/)
-    // The cancel claims a pending or an Active, undelivered order, in the
-    // status it read under lock. The edit claims a pending order only: since
+    // The cancel claims a pending or an Active order not yet in process — before
+    // its tax invoice is issued (plans/OF-INVOICE-issue-at-processing.md) — in
+    // the status it read under lock. The edit claims a pending order only: since
     // every desk order waits for an Apricart Executive, an edit after approval
     // would change what was approved
     // (plans/OF-EXEC-APPROVAL-executive-approves-desk-orders.md).
     expect(service).toContain('const CANCELLABLE_STATUSES = ["PENDING", "APPROVED"]')
     expect(service).toContain("sql`UPPER(${orders.status}) = ${previousStatus}`")
-    expect(service).toContain("sql`COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED') <> 'DELIVERED'`")
+    expect(service).toContain("sql`COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED') IN (${CANCELLABLE_STAGES_SQL})`")
+    expect(service).toContain("STAGES_BEFORE_TAX_INVOICE.map(")
     expect(edit).toContain("sql`UPPER(${orders.status}) = 'PENDING'`")
     expect(edit).not.toContain("'APPROVED'")
   })
@@ -144,9 +146,10 @@ describe("the customer's screenshot", () => {
     expect(helper).toContain("if (!isOrderIntakeAttachmentKey(key)) return NextResponse.json")
   })
 
-  it("is bound to its uploader and to one order when the order is created", () => {
+  it("is required, and bound to its uploader and to one order when the order is created", () => {
     const route = source("app/api/v1/orders/route.ts")
-    expect(route).toMatch(/deskAttachmentRefusal\(\{\s*userId: input\.userId,\s*key: input\.intakeAttachmentKey,\s*idempotencyKey: input\.idempotencyKey,\s*\}\)/)
+    // Checked on every desk order, never only when a key happens to be sent.
+    expect(route).toMatch(/const attachmentError = await deskAttachmentRefusal\(\{\s*userId: input\.userId,\s*key: input\.intakeAttachmentKey \?\? "",\s*idempotencyKey: input\.idempotencyKey,\s*\}\)/)
     const binding = source("lib/server/order-desk-attachments.ts")
     expect(binding).toContain("eq(auditLogs.userId, input.userId)")
     expect(binding).toContain("eq(orders.intakeAttachmentKey, input.key)")

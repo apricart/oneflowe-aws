@@ -6,6 +6,7 @@ import {
   CONSOLIDATED_INVOICE_MAX_BRANCH_IDS,
   consolidatedInvoiceDigestInput,
   consolidatedInvoiceFileName,
+  consolidatedInvoiceFilterNote,
   consolidatedInvoicePeriodLabel,
   consolidatedInvoiceStatement,
   consolidatedInvoiceTitle,
@@ -31,6 +32,7 @@ const source = (overrides: Partial<ConsolidatedInvoiceSource> = {}): Consolidate
   orderStatus: "FULFILLED",
   refundAmountCents: null,
   invoiceStatus: "ISSUED",
+  paymentStatus: "UNPAID",
   department: "Compliance",
   approver: "Farruk Khalil",
   costCenterId: "CC-1",
@@ -97,6 +99,7 @@ describe("parseConsolidatedInvoiceQuery — everything else", () => {
           branchIds: [3, 4],
           groupId: 9,
           includeCredited: true,
+          paymentStatus: null,
           sort: { key: "total", direction: "desc" },
         },
       })
@@ -110,6 +113,23 @@ describe("parseConsolidatedInvoiceQuery — everything else", () => {
     expect(parse("period=month&month=2026-08&sort=price")).toMatchObject({ ok: false })
     expect(parse("period=month&month=2026-08&dir=asc")).toMatchObject({ ok: false })
     expect(parse("period=month&month=2026-08&organizationId=0")).toMatchObject({ ok: false })
+  })
+
+  it("filters invoices by payment status, and nothing else", () => {
+    expect(parse("period=month&month=2026-08&paymentStatus=PAID")).toMatchObject({ ok: true, query: { paymentStatus: "PAID" } })
+    expect(parse("period=month&month=2026-08&mode=invoices&paymentStatus=UNPAID")).toMatchObject({ ok: true, query: { paymentStatus: "UNPAID" } })
+    expect(parse("period=month&month=2026-08")).toMatchObject({ ok: true, query: { paymentStatus: null } })
+    for (const value of ["paid", "PARTIALLY_PAID", "", "PAID,UNPAID"]) {
+      expect(parse(`period=month&month=2026-08&paymentStatus=${value}`)).toMatchObject({ ok: false })
+    }
+    expect(parse("period=month&month=2026-08&paymentStatus=PAID&paymentStatus=UNPAID")).toMatchObject({ ok: false })
+  })
+
+  it("refuses a payment-status filter on proformas, which are never paid", () => {
+    expect(parse("period=month&month=2026-08&mode=proformas&paymentStatus=UNPAID")).toEqual({
+      ok: false,
+      error: "paymentStatus applies to invoices, not proformas",
+    })
   })
 
   it("bounds the branch filter", () => {
@@ -158,9 +178,15 @@ describe("a row is its invoice less what has been credited", () => {
     expect(row).toMatchObject({ quantity: 0, valueExclTaxCents: 0, taxCents: 0, totalCents: 0, invoiceStatus: "CREDITED" })
   })
 
-  it("marks a proforma's number as reserved, or says it comes on delivery", () => {
-    expect(buildConsolidatedInvoiceRow("proformas", source({ invoiceNumber: "UBL-APR-000040" }), 1).invoiceNumber).toBe("UBL-APR-000040 (on delivery)")
-    expect(buildConsolidatedInvoiceRow("proformas", source({ invoiceNumber: null }), 1).invoiceNumber).toBe("On delivery")
+  it("carries the order's payment status, reading anything but PAID as unpaid", () => {
+    expect(buildConsolidatedInvoiceRow("invoices", source({ paymentStatus: "PAID" }), 1).paymentStatus).toBe("PAID")
+    expect(buildConsolidatedInvoiceRow("invoices", source({ paymentStatus: "UNPAID" }), 1).paymentStatus).toBe("UNPAID")
+    expect(buildConsolidatedInvoiceRow("invoices", source({ paymentStatus: null }), 1).paymentStatus).toBe("UNPAID")
+  })
+
+  it("marks a proforma's number as reserved, or says it comes when the order is processed", () => {
+    expect(buildConsolidatedInvoiceRow("proformas", source({ invoiceNumber: "UBL-APR-000040" }), 1).invoiceNumber).toBe("UBL-APR-000040 (when processed)")
+    expect(buildConsolidatedInvoiceRow("proformas", source({ invoiceNumber: null }), 1).invoiceNumber).toBe("When processed")
     expect(buildConsolidatedInvoiceRow("invoices", source({ invoiceNumber: null }), 1).invoiceNumber).toBe("—")
   })
 })
@@ -222,6 +248,13 @@ describe("the document's wording", () => {
     expect(consolidatedInvoicePeriodLabel("2026-08-24", "2026-09-02")).toBe("24 Aug 2026 – 02 Sep 2026")
     expect(consolidatedInvoiceFileName("invoices", "UBL_123A", "2026-08-01", "2026-08-31")).toBe("consolidated-invoice-UBL_123A-2026-08-01_2026-08-31.pdf")
     expect(consolidatedInvoiceFileName("proformas", "../x", "2026-08-01", "2026-08-31")).toBe("consolidated-proforma-x-2026-08-01_2026-08-31.pdf")
+    expect(consolidatedInvoiceFileName("invoices", "UBL", "2026-08-01", "2026-08-31", "UNPAID")).toBe("consolidated-invoice-UBL-2026-08-01_2026-08-31-unpaid.pdf")
+  })
+
+  it("names a payment-status filter on the document, and says nothing without one", () => {
+    expect(consolidatedInvoiceFilterNote("UNPAID")).toBe("Unpaid invoices only")
+    expect(consolidatedInvoiceFilterNote("PAID")).toBe("Paid invoices only")
+    expect(consolidatedInvoiceFilterNote(null)).toBeNull()
   })
 
   it("formats quantities and money", () => {

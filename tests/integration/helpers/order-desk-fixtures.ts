@@ -26,6 +26,7 @@ import {
   users,
 } from "@/db/schema"
 import { db } from "@/lib/db"
+import { ORDER_INTAKE_UPLOAD_AUDIT_ACTION } from "@/lib/order-desk-access"
 import { currentBudgetPeriod } from "@/lib/server/group-branch-budgets"
 import { purgeInvoiceLedger } from "./invoice-ledger-cleanup"
 
@@ -239,6 +240,27 @@ export async function createOrderDeskFixtures(): Promise<OrderDeskFixtures> {
     inventoryC: inventoryC.id,
     budgetB1: budget.id,
   }
+}
+
+/** A fresh key in the shape `POST /api/v1/upload/image` generates for a desk screenshot. */
+export function newIntakeAttachmentKey(): string {
+  return `order-intake/${randomUUID()}.png`
+}
+
+/**
+ * A desk screenshot as the upload route leaves it: the object (never read by
+ * order creation) and the audit row binding the key to its uploader, which is
+ * what creation checks. Every desk order needs one; the upload itself is
+ * exercised in `order-desk-api.test.ts` ("the customer's screenshot").
+ */
+export async function stageIntakeAttachment(uploadedByUserId: string, key = newIntakeAttachmentKey()): Promise<string> {
+  await db.insert(auditLogs).values({
+    userId: uploadedByUserId,
+    action: ORDER_INTAKE_UPLOAD_AUDIT_ACTION,
+    entity: "image",
+    entityId: key,
+  })
+  return key
 }
 
 export async function destroyOrderDeskFixtures(f: OrderDeskFixtures, extraUserIds: string[] = []): Promise<void> {

@@ -162,7 +162,7 @@ export async function GET(
             refundedItems,
             totalAmount: getReceiptNetTotal(order.receiptData as any, totalApprovedRefundAmount),
         } : null
-        // An invoice issued at delivery prints from its own ledger rows; a
+        // An invoice issued by the ledger prints from its own ledger rows; a
         // proforma or a legacy invoice keeps the snapshot above.
         const finalReceiptData: any = await invoiceDocumentForOrder(order, snapshotReceiptData)
         const safeReceiptData = pricesHidden ? redactReceiptPrices(finalReceiptData) : finalReceiptData

@@ -338,8 +338,8 @@ const ANSWERS_ANY_SIGNED_IN_CALLER = new Set<string>([
   "app/api/v1/analytics/users/list/route.ts",
   "app/api/v1/notifications/route.ts",
   // The global product catalogue — names, codes, stock — which the warehouse
-  // already reads on its own Stock tab. No tenant's assignment, override or
-  // price is joined for a caller with no organization.
+  // already reads on its own Product Catalog tab. No tenant's assignment,
+  // override or price is joined for a caller with no organization.
   "app/api/v1/analytics/products/list/route.ts",
   "app/api/v1/analytics/products/catalog-performance/route.ts",
 ])

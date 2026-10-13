@@ -74,6 +74,8 @@ export type DeliveryOrderInput = {
 export type DeliveryAssessment = {
   health: DeliveryHealth
   isOpen: boolean
+  /** Delivered and settled as fulfilled: the branch acknowledged receipt (or the 48-hour sweep did). */
+  acknowledged: boolean
   stage: FulfillmentStatus
   approvedAt: Date
   promisedAt: Date
@@ -125,10 +127,12 @@ export function assessDelivery(order: DeliveryOrderInput, now: Date): DeliveryAs
 
   if (delivered) {
     const deliveredAt = toDate(order.deliveredAt)
+    const acknowledged = isFulfilledStatus(status)
     if (!deliveredAt) {
       return {
         health: "DELIVERED_UNTIMED",
         isOpen: false,
+        acknowledged,
         stage: "DELIVERED",
         approvedAt,
         promisedAt,
@@ -142,6 +146,7 @@ export function assessDelivery(order: DeliveryOrderInput, now: Date): DeliveryAs
     return {
       health: late ? "DELIVERED_LATE" : "DELIVERED_ON_TIME",
       isOpen: false,
+      acknowledged,
       stage: "DELIVERED",
       approvedAt,
       promisedAt,
@@ -157,6 +162,7 @@ export function assessDelivery(order: DeliveryOrderInput, now: Date): DeliveryAs
     return {
       health: "OVERDUE",
       isOpen: true,
+      acknowledged: false,
       stage,
       approvedAt,
       promisedAt,
@@ -169,6 +175,7 @@ export function assessDelivery(order: DeliveryOrderInput, now: Date): DeliveryAs
   return {
     health: msRemaining <= DUE_SOON_HOURS * HOUR_MS ? "DUE_SOON" : "ON_TRACK",
     isOpen: true,
+    acknowledged: false,
     stage,
     approvedAt,
     promisedAt,
@@ -210,6 +217,19 @@ export function shiftKarachiDay(day: string, days: number): string {
   return karachiDay(new Date(karachiDayStart(day).getTime() + days * 24 * HOUR_MS + HOUR_MS))
 }
 
+/**
+ * Whether an order falls inside the dashboard's date range (Karachi days,
+ * inclusive): an open order by the day it was approved, a delivered one by the
+ * day it was delivered. A delivered order with no recorded time has no day and
+ * is never inside a range — the read leaves it out for the same reason.
+ */
+export function isInDeliveryDateRange(assessment: DeliveryAssessment, from: string, to: string): boolean {
+  const at = assessment.isOpen ? assessment.approvedAt : assessment.deliveredAt
+  if (!at) return false
+  const day = karachiDay(at)
+  return day >= from && day <= to
+}
+
 // ---------------------------------------------------------------------------
 // Summaries
 // ---------------------------------------------------------------------------
@@ -225,6 +245,13 @@ export type DeliveryCounts = {
   deliveredOnTime: number
   deliveredLate: number
   deliveredUntimed: number
+  /** Open orders by the stage the goods are at; they add up to `open`. */
+  notStarted: number
+  inProcess: number
+  outForDelivery: number
+  /** Delivered orders the branch has not yet acknowledged; with `acknowledged` they add up to `delivered`. */
+  awaitingAcknowledgement: number
+  acknowledged: number
   /** Delivered on time over delivered with a recorded time, 0–100, or null with none. */
   onTimeRate: number | null
   /** Mean approval-to-delivery hours over delivered orders with a recorded time. */
@@ -234,6 +261,21 @@ export type DeliveryCounts = {
 function average(values: number[]): number | null {
   if (values.length === 0) return null
   return Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 10) / 10
+}
+
+type StatusCountKey = "notStarted" | "inProcess" | "outForDelivery" | "awaitingAcknowledgement" | "acknowledged"
+
+const OPEN_STAGE_COUNT_KEYS: Record<(typeof OPEN_PIPELINE_STAGES)[number], StatusCountKey> = {
+  NOT_STARTED: "notStarted",
+  IN_PROCESS: "inProcess",
+  OUT_FOR_DELIVERY: "outForDelivery",
+}
+
+/** The one order-status count an assessment adds to: its open stage, or whether its delivery was acknowledged. */
+function statusCountKey(assessment: DeliveryAssessment): StatusCountKey {
+  if (!assessment.isOpen) return assessment.acknowledged ? "acknowledged" : "awaitingAcknowledgement"
+  // An open order is never at DELIVERED; the fallback only satisfies the type.
+  return assessment.stage === "DELIVERED" ? "outForDelivery" : OPEN_STAGE_COUNT_KEYS[assessment.stage]
 }
 
 export function countDeliveries(assessments: readonly DeliveryAssessment[]): DeliveryCounts {
@@ -246,6 +288,11 @@ export function countDeliveries(assessments: readonly DeliveryAssessment[]): Del
     deliveredOnTime: 0,
     deliveredLate: 0,
     deliveredUntimed: 0,
+    notStarted: 0,
+    inProcess: 0,
+    outForDelivery: 0,
+    awaitingAcknowledgement: 0,
+    acknowledged: 0,
   }
   const durations: number[] = []
   for (const assessment of assessments) {
@@ -269,8 +316,8 @@ export function countDeliveries(assessments: readonly DeliveryAssessment[]): Del
         counts.deliveredUntimed += 1
         break
     }
-    if (assessment.isOpen) counts.open += 1
-    else counts.delivered += 1
+    counts[assessment.isOpen ? "open" : "delivered"] += 1
+    counts[statusCountKey(assessment)] += 1
     if (assessment.deliveryHours !== null) durations.push(assessment.deliveryHours)
   }
   const timed = counts.deliveredOnTime + counts.deliveredLate
@@ -417,6 +464,11 @@ export const DELIVERY_LIST_VIEWS = [
   "DELIVERED",
   "DELIVERED_LATE",
   "DELIVERED_TODAY",
+  "NOT_STARTED",
+  "IN_PROCESS",
+  "OUT_FOR_DELIVERY",
+  "AWAITING_ACKNOWLEDGEMENT",
+  "ACKNOWLEDGED",
 ] as const
 
 export type DeliveryListView = (typeof DELIVERY_LIST_VIEWS)[number]
@@ -435,6 +487,14 @@ export function matchesDeliveryListView(assessment: DeliveryAssessment, view: De
       return !assessment.isOpen
     case "DELIVERED_TODAY":
       return Boolean(assessment.deliveredAt && karachiDay(assessment.deliveredAt) === today)
+    case "NOT_STARTED":
+    case "IN_PROCESS":
+    case "OUT_FOR_DELIVERY":
+      return assessment.isOpen && assessment.stage === view
+    case "AWAITING_ACKNOWLEDGEMENT":
+      return !assessment.isOpen && !assessment.acknowledged
+    case "ACKNOWLEDGED":
+      return assessment.acknowledged
     default:
       return assessment.health === view
   }

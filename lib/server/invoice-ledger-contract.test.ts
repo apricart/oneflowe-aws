@@ -36,11 +36,13 @@ describe("the invoice ledger", () => {
     expect(writers.sort()).toEqual([...LEDGER_WRITERS].sort())
   })
 
-  it("issues the tax invoice inside the delivery transaction, which is the only place delivery is recorded", () => {
+  it("issues the tax invoice inside the stage step's transaction, which is the only place a delivery stage moves", () => {
     const progress = source("lib/server/order-fulfillment-progress.ts")
-    expect(progress).toContain("await issueTaxInvoiceAtDelivery(tx, { orderId, actor })")
+    expect(progress).toContain("await issueTaxInvoice(tx, { orderId, actor, stage: nextStatus })")
     const transaction = progress.slice(progress.indexOf("db.transaction"), progress.indexOf("transitionErrorOutcome(transitionError)"))
-    expect(transaction).toContain("issueTaxInvoiceAtDelivery")
+    // On In Process and every later step (plans/OF-INVOICE-issue-at-processing.md).
+    expect(transaction).toContain("if (issuesTaxInvoiceOnStep(nextStatus)) {")
+    expect(transaction).toContain("issueTaxInvoice(")
   })
 
   it("issues a credit note on both refund-approval paths", () => {

@@ -160,7 +160,7 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
     const orderReference = receiptData.orderId || data?.orderId || orderId || "N/A"
     const invoiceStatus = toInvoiceStatus(receiptData.invoiceStatus)
     const documentTitle = invoiceStatus ? invoiceDocumentTitle(invoiceStatus) : "INVOICE"
-    // An invoice issued at delivery is printed from its own record: it shows
+    // An invoice issued by the ledger is printed from its own record: it shows
     // its own status, and no fulfiller (fulfilment comes after issue).
     const isFrozen = receiptData.frozen === true
     const isProforma = isProformaDocument(receiptData)
