@@ -395,7 +395,7 @@ describe("wiring", () => {
   })
 
   it("fences the workload and the timeline to the user's branches, never management's unfenced read", () => {
-    expect(read("app/api/v1/warehouse/workload/route.ts")).toContain("loadDeliveryDashboard(parsed.filters, now, reach)")
+    expect(read("app/api/v1/warehouse/workload/route.ts")).toContain(`loadDeliveryDashboard(parsed.filters, now, reach, "newest")`)
     expect(read("app/api/v1/warehouse/orders/[id]/timeline/route.ts")).toContain("loadDeliveryTimeline(orderId, new Date(), reach)")
   })
 

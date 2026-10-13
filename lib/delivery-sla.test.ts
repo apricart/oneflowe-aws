@@ -42,23 +42,24 @@ function assess(order: Parameters<typeof assessDelivery>[0], now: Date): Deliver
 }
 
 describe("the delivery promise", () => {
-  it("is the agreed rule: 72 hours from approval, due soon in the last 12, from 1 September Karachi", () => {
+  it("is the agreed rule: 72 hours from approval, due soon in the last 24, from 1 September Karachi", () => {
     expect(DELIVERY_SLA_HOURS).toBe(72)
-    expect(DUE_SOON_HOURS).toBe(12)
+    expect(DUE_SOON_HOURS).toBe(24)
     expect(DELIVERY_DASHBOARD_CUTOFF_AT.toISOString()).toBe("2026-08-31T19:00:00.000Z")
     expect(promisedDeliveryAt(approvedAt)).toEqual(promised)
   })
 })
 
 describe("an open order", () => {
-  it("is on track with more than 12 hours to go", () => {
+  it("is on track with more than 24 hours to go", () => {
     const result = assess(open(), at(10))
     expect(result).toMatchObject({ health: "ON_TRACK", isOpen: true, hoursRemaining: 62, hoursOverdue: null, stage: "IN_PROCESS" })
     expect(result.promisedAt).toEqual(promised)
   })
 
-  it("is due soon from exactly 12 hours before the deadline", () => {
-    expect(assess(open(), at(59.9)).health).toBe("ON_TRACK")
+  it("is due soon from exactly 24 hours before the deadline", () => {
+    expect(assess(open(), at(47.9)).health).toBe("ON_TRACK")
+    expect(assess(open(), at(48)).health).toBe("DUE_SOON")
     expect(assess(open(), at(60)).health).toBe("DUE_SOON")
     expect(assess(open(), at(72)).health).toBe("DUE_SOON")
   })

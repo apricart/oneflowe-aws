@@ -19,7 +19,7 @@ they are stuck, and how each city, region and branch is performing.
 | Role | New role `APRICART_EXECUTIVE` ("Apricart Executive"). Read-only, no organization, created by Super Admin only. |
 | Which orders count | Approved on/after **2026-09-01 00:00 Asia/Karachi**. Orders brought in by the legacy importers (`legacy_order_imports`) are excluded whatever their date — their timestamps are import times. |
 | SLA | **72 calendar hours** from `approved_at` to `delivered_at`. One rule for every location in this release. |
-| Due soon | The last **12 hours** before the deadline. |
+| Due soon | The last **24 hours** before the deadline (widened from 12 on 2026-10-13). |
 | Region | New `branches.region` (`NORTH` / `CENTRAL` / `SOUTH`), set by Super Admin in the branch form. Every branch starts *Unknown*. |
 | City | The order's delivery-address city when it was sent somewhere else, otherwise the branch city. Blank shows *Unknown*. |
 | Stages | The four that exist: Not Started → In Process → Out for Delivery → Delivered. No change to the fulfilment state machine. |
@@ -40,7 +40,7 @@ not delivery work and do not appear.
   bucket (`lib/order-delivery-status.ts`), so this cannot disagree with the
   Viewer dashboard.
 * `promisedAt = approvedAt + 72h`.
-* Open: `OVERDUE` if now > promisedAt; else `DUE_SOON` if within 12h; else
+* Open: `OVERDUE` if now > promisedAt; else `DUE_SOON` if within 24h; else
   `ON_TRACK`.
 * Delivered (fulfilment status `DELIVERED`): `DELIVERED_ON_TIME` if
   `deliveredAt <= promisedAt`, else `DELIVERED_LATE`. A delivered order with no
