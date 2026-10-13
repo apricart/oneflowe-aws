@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { useSession } from "next-auth/react"
-import { ClipboardList, Gauge, Package, Warehouse } from "lucide-react"
+import { ClipboardList, LayoutDashboard, Package, Warehouse } from "lucide-react"
 
 import { OrderPortalProfileMenu } from "@/components/auth/order-portal-profile-menu"
 import { DeliveryDashboard } from "@/components/delivery-dashboard/delivery-dashboard"
@@ -13,25 +13,29 @@ import { cn } from "@/lib/utils"
 
 const warehouseTimeline = (orderId: number) => `/api/v1/warehouse/orders/${orderId}/timeline`
 
-type Section = "orders" | "workload" | "catalog"
+type Section = "dashboard" | "orders" | "catalog"
 
 /** Every lucide icon shares this component type. */
 type LucideIcon = typeof Package
 
 const SECTIONS: ReadonlyArray<{ key: Section; label: string; icon: LucideIcon }> = [
+  { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { key: "orders", label: "Orders", icon: ClipboardList },
-  { key: "workload", label: "Workload", icon: Gauge },
   { key: "catalog", label: "Product Catalog", icon: Package },
 ]
 
+/** Links saved before the Workload section was renamed Dashboard still open it. */
+const LEGACY_SECTION_HASHES: Readonly<Record<string, Section>> = { workload: "dashboard" }
+
 function sectionFromHash(hash: string): Section | null {
-  const key = hash.replace(/^#/, "")
+  const raw = hash.replace(/^#/, "")
+  const key = LEGACY_SECTION_HASHES[raw] ?? raw
   return SECTIONS.some((section) => section.key === key) ? (key as Section) : null
 }
 
 /**
- * The warehouse's workspace: its order queue, its workload against the
- * delivery SLA, and the product catalogue, view only and without prices —
+ * The warehouse's workspace: its dashboard of the workload against the
+ * delivery SLA (the landing section), its order queue, and the product catalogue, view only and without prices —
  * under a header of its own, outside the admin shell, with a side menu between
  * the three. The chosen section is kept in the URL hash, so a refresh or a
  * shared link opens the same one; it never reaches the server.
@@ -40,11 +44,13 @@ function sectionFromHash(hash: string): Section | null {
 export function WarehouseWorkspace() {
   const { data: session } = useSession()
   const user = session?.user as { fullName?: string; name?: string; email?: string } | undefined
-  const [section, setSection] = useState<Section>("orders")
+  const [section, setSection] = useState<Section>("dashboard")
 
   useEffect(() => {
     const fromHash = sectionFromHash(window.location.hash)
-    if (fromHash) setSection(fromHash)
+    if (!fromHash) return
+    setSection(fromHash)
+    window.history.replaceState(null, "", `#${fromHash}`)
   }, [])
 
   const choose = (next: Section) => {
@@ -104,10 +110,10 @@ export function WarehouseWorkspace() {
         </aside>
         <main className="min-w-0 flex-1 px-4 py-6">
           <div className="mx-auto max-w-7xl">
-            {section === "orders" && <WarehouseOrders />}
-            {section === "workload" && (
+            {section === "dashboard" && (
               <DeliveryDashboard dashboardEndpoint="/api/v1/warehouse/workload" timelineEndpoint={warehouseTimeline} />
             )}
+            {section === "orders" && <WarehouseOrders />}
             {section === "catalog" && <WarehouseCatalog />}
           </div>
         </main>
