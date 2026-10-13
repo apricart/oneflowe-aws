@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 /**
@@ -14,8 +14,9 @@ vi.mock("@/components/auth/order-portal-profile-menu", () => ({
 }))
 vi.mock("@/components/warehouse/warehouse-orders", () => ({ WarehouseOrders: () => <div>orders section</div> }))
 vi.mock("@/components/warehouse/warehouse-catalog", () => ({ WarehouseCatalog: () => <div>catalog section</div> }))
+vi.mock("@/components/warehouse/warehouse-notification-bell", () => ({ WarehouseNotificationBell: () => <button type="button">bell</button> }))
 vi.mock("@/components/delivery-dashboard/delivery-dashboard", () => ({
-  DeliveryDashboard: ({ dashboardEndpoint }: { dashboardEndpoint: string }) => <div>workload section {dashboardEndpoint}</div>,
+  DeliveryDashboard: ({ dashboardEndpoint }: { dashboardEndpoint: string }) => <div>dashboard section {dashboardEndpoint}</div>,
 }))
 
 import { WarehouseWorkspace } from "@/components/warehouse/warehouse-workspace"
@@ -27,25 +28,25 @@ beforeEach(() => window.history.replaceState(null, "", "/warehouse"))
 afterEach(() => cleanup())
 
 describe("the warehouse side menu", () => {
-  it("offers the three sections in order and opens on Orders", () => {
+  it("offers the three sections in order and opens on the Dashboard", () => {
     render(<WarehouseWorkspace />)
-    expect(menu().getAllByRole("button").map((button) => button.textContent)).toEqual(["Orders", "Workload", "Product Catalog"])
-    expect(current().map((button) => button.textContent)).toEqual(["Orders"])
-    expect(screen.getByText("orders section")).toBeTruthy()
+    expect(menu().getAllByRole("button").map((button) => button.textContent)).toEqual(["Dashboard", "Orders", "Product Catalog"])
+    expect(current().map((button) => button.textContent)).toEqual(["Dashboard"])
+    expect(screen.getByText("dashboard section /api/v1/warehouse/workload")).toBeTruthy()
     expect(screen.queryByRole("tablist")).toBeNull()
   })
 
   it("shows one section at a time and remembers the choice in the URL hash", () => {
     render(<WarehouseWorkspace />)
-    fireEvent.click(menu().getByRole("button", { name: "Workload" }))
-    expect(screen.getByText("workload section /api/v1/warehouse/workload")).toBeTruthy()
-    expect(screen.queryByText("orders section")).toBeNull()
-    expect(current().map((button) => button.textContent)).toEqual(["Workload"])
-    expect(window.location.hash).toBe("#workload")
+    fireEvent.click(menu().getByRole("button", { name: "Orders" }))
+    expect(screen.getByText("orders section")).toBeTruthy()
+    expect(screen.queryByText(/dashboard section/)).toBeNull()
+    expect(current().map((button) => button.textContent)).toEqual(["Orders"])
+    expect(window.location.hash).toBe("#orders")
 
     fireEvent.click(menu().getByRole("button", { name: "Product Catalog" }))
     expect(screen.getByText("catalog section")).toBeTruthy()
-    expect(screen.queryByText(/workload section/)).toBeNull()
+    expect(screen.queryByText("orders section")).toBeNull()
     expect(window.location.hash).toBe("#catalog")
   })
 
@@ -57,6 +58,27 @@ describe("the warehouse side menu", () => {
 
     window.history.replaceState(null, "", "/warehouse#stock")
     render(<WarehouseWorkspace />)
+    expect(screen.getByText(/dashboard section/)).toBeTruthy()
+  })
+
+  it("follows a link inside the page that changes the section", () => {
+    render(<WarehouseWorkspace />)
+    window.history.replaceState(null, "", "/warehouse#orders")
+    act(() => { window.dispatchEvent(new HashChangeEvent("hashchange")) })
     expect(screen.getByText("orders section")).toBeTruthy()
+    expect(current().map((button) => button.textContent)).toEqual(["Orders"])
+  })
+
+  it("puts the notification bell in the header", () => {
+    render(<WarehouseWorkspace />)
+    expect(screen.getByRole("button", { name: "bell" })).toBeTruthy()
+  })
+
+  it("still opens the Dashboard from a link saved when it was called Workload", () => {
+    window.history.replaceState(null, "", "/warehouse#workload")
+    render(<WarehouseWorkspace />)
+    expect(screen.getByText(/dashboard section/)).toBeTruthy()
+    expect(current().map((button) => button.textContent)).toEqual(["Dashboard"])
+    expect(window.location.hash).toBe("#dashboard")
   })
 })

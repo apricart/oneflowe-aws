@@ -39,6 +39,10 @@ import {
   deliverClaimedSupportEmail,
   isSupportEmailTemplate,
 } from "@/lib/server/support-notifications"
+import {
+  deliverClaimedWarehouseEmail,
+  isWarehouseEmailTemplate,
+} from "@/lib/server/warehouse-order-notifications"
 
 type OrderEventInput = {
   id: number
@@ -701,12 +705,13 @@ async function deliverClaimedOrderEmail(claimed: ClaimedOutboxRow): Promise<Deli
  * Which deliverer a claimed row belongs to.
  *
  * The outbox carries more than one kind of mail. An order lifecycle row takes
- * exactly the path it always has; a support row takes the support path.
+ * exactly the path it always has; a support row takes the support path, and a
+ * warehouse order-stage row the warehouse path.
  */
 function deliverClaimedEmail(row: ClaimedOutboxRow): Promise<DeliveryOutcome> {
-  return isSupportEmailTemplate(row.template)
-    ? deliverClaimedSupportEmail(row)
-    : deliverClaimedOrderEmail(row)
+  if (isSupportEmailTemplate(row.template)) return deliverClaimedSupportEmail(row)
+  if (isWarehouseEmailTemplate(row.template)) return deliverClaimedWarehouseEmail(row)
+  return deliverClaimedOrderEmail(row)
 }
 
 /**

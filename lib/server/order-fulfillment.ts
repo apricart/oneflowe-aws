@@ -15,6 +15,7 @@ import {
   recordOrderTokenHandoff,
   type TokenHandoffTarget,
 } from "@/lib/server/order-token-handoff-store"
+import { queueWarehouseOrderNotifications } from "@/lib/server/warehouse-order-notifications"
 
 /**
  * The APPROVED → FULFILLED transition, extracted so every caller reaches it
@@ -176,6 +177,7 @@ export async function fulfillApprovedOrder({
           period: budgetPeriodOf(fulfilledOrder.createdAt),
         },
       })
+      await queueWarehouseOrderNotifications(tx, { order: fulfilledOrder, event: "FULFILLED" })
     })
   } catch (transitionError: any) {
     const outcome = fulfillmentFailureOutcome(transitionError)

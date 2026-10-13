@@ -32,6 +32,7 @@ import { isOrderDeskRole } from "@/lib/order-desk-access"
 import { loadDeskOrder } from "@/lib/server/order-desk-orders"
 import { CREDIT_NOTE_CONFLICT_ERRORS, issueCreditNoteForRefund } from "@/lib/server/credit-notes"
 import { refundDetailsStillPriced, refundHistoryByLine, refundLineAmountCents } from "@/lib/refund-amount"
+import { queueWarehouseOrderNotifications } from "@/lib/server/warehouse-order-notifications"
 
 const refundRequestRoles = new Set([
   "SUPER_ADMIN",
@@ -474,6 +475,16 @@ async function processRefundTransaction(tx: any, context: any) {
       orderId: context.orderId,
       actor: { id: context.userId, role: context.userRole },
       reason: context.reason,
+    })
+    await queueWarehouseOrderNotifications(tx, {
+      order: {
+        id: context.orderId,
+        tid: context.order.tid,
+        organizationId: context.order.organizationId,
+        branchId: context.order.branchId,
+      },
+      event: "REFUNDED",
+      occurrence: refundId,
     })
   }
 }
