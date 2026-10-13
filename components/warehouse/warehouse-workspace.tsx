@@ -7,6 +7,7 @@ import { ClipboardList, LayoutDashboard, Package, Warehouse } from "lucide-react
 import { OrderPortalProfileMenu } from "@/components/auth/order-portal-profile-menu"
 import { DeliveryDashboard } from "@/components/delivery-dashboard/delivery-dashboard"
 import { WarehouseCatalog } from "@/components/warehouse/warehouse-catalog"
+import { WarehouseNotificationBell } from "@/components/warehouse/warehouse-notification-bell"
 import { WarehouseOrders } from "@/components/warehouse/warehouse-orders"
 import { WAREHOUSE_LABEL } from "@/lib/warehouse-access"
 import { cn } from "@/lib/utils"
@@ -47,10 +48,17 @@ export function WarehouseWorkspace() {
   const [section, setSection] = useState<Section>("dashboard")
 
   useEffect(() => {
-    const fromHash = sectionFromHash(window.location.hash)
-    if (!fromHash) return
-    setSection(fromHash)
-    window.history.replaceState(null, "", `#${fromHash}`)
+    const open = () => {
+      const fromHash = sectionFromHash(window.location.hash)
+      if (!fromHash) return
+      setSection(fromHash)
+      window.history.replaceState(null, "", `#${fromHash}`)
+    }
+    open()
+    // A link inside the page (a notification's "Open order queue") changes the
+    // hash without reloading; follow it.
+    window.addEventListener("hashchange", open)
+    return () => window.removeEventListener("hashchange", open)
   }, [])
 
   const choose = (next: Section) => {
@@ -71,11 +79,14 @@ export function WarehouseWorkspace() {
               <p className="truncate text-xs text-muted-foreground">Warehouse — picking, dispatch and delivery</p>
             </div>
           </div>
-          <OrderPortalProfileMenu
-            name={user?.fullName || user?.name || user?.email || WAREHOUSE_LABEL}
-            email={user?.email}
-            role={WAREHOUSE_LABEL}
-          />
+          <div className="flex items-center gap-1">
+            <WarehouseNotificationBell />
+            <OrderPortalProfileMenu
+              name={user?.fullName || user?.name || user?.email || WAREHOUSE_LABEL}
+              email={user?.email}
+              role={WAREHOUSE_LABEL}
+            />
+          </div>
         </div>
       </header>
       <div className="md:flex">

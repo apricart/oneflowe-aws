@@ -25,6 +25,7 @@ import { settleDueAddonsOnBudget } from "@/lib/server/budget-addon-expiry"
 import { loadGroupPriceOverrides, resolveBranchGroupId, resolveEffectivePriceCents } from "@/lib/server/effective-price"
 import { isOrderDeskTarget, loadOrderDeskReach, orderDeskOrderCondition } from "@/lib/server/order-desk-scope"
 import { getOrganizationTaxRateBp } from "@/lib/server/tax-rate"
+import { queueWarehouseOrderNotifications } from "@/lib/server/warehouse-order-notifications"
 
 /**
  * An Order Desk edit: the lines, notes and PO number of a desk order that is
@@ -170,6 +171,11 @@ async function editInTransaction(tx: any, input: EditInput): Promise<DeskEditOut
     before: { totalCents: order.totalCents, itemCount: inventory.existingItems.length },
     after: { totalCents: priced.totalCents, itemCount: priced.items.length },
     context: { tid: order.tid, via: "ORDER_DESK" },
+  })
+  await queueWarehouseOrderNotifications(tx, {
+    order: { id: order.id, tid: order.tid, organizationId, branchId },
+    event: "EDITED",
+    occurrence: now.getTime(),
   })
 
   return { kind: "updated", totalCents: priced.totalCents }

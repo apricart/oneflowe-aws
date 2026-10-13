@@ -223,6 +223,8 @@ describe("the API allowlist", () => {
     ["POST", "/api/v1/warehouse/orders/42/delivery-challan"],
     ["GET", "/api/v1/warehouse/orders/42/delivery-challan/7/file"],
     ["GET", "/api/v1/warehouse/workload"],
+    ["GET", "/api/v1/warehouse/notifications"],
+    ["PATCH", "/api/v1/warehouse/notifications"],
     ["GET", "/api/v1/warehouse/catalog"],
     ["GET", "/api/v1/warehouse/catalog/categories"],
     ["GET", "/api/v1/images/products/0f8fad5b-d9cb-469f-a165-70867728950e.webp"],
@@ -281,6 +283,10 @@ describe("the API allowlist", () => {
     ["GET", "/api/v1/inventory/global-products"],
     ["GET", "/api/v1/users"],
     ["GET", "/api/v1/notifications"],
+    ["PATCH", "/api/v1/notifications"],
+    ["POST", "/api/v1/warehouse/notifications"],
+    ["DELETE", "/api/v1/warehouse/notifications"],
+    ["PATCH", "/api/v1/warehouse/notifications/3"],
     ["GET", "/api/v1/upload/image"],
   ])("refuses %s %s", (method, path) => {
     expect(isWarehouseApiRequestAllowed(method, path)).toBe(false)

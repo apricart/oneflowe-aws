@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 /**
@@ -14,6 +14,7 @@ vi.mock("@/components/auth/order-portal-profile-menu", () => ({
 }))
 vi.mock("@/components/warehouse/warehouse-orders", () => ({ WarehouseOrders: () => <div>orders section</div> }))
 vi.mock("@/components/warehouse/warehouse-catalog", () => ({ WarehouseCatalog: () => <div>catalog section</div> }))
+vi.mock("@/components/warehouse/warehouse-notification-bell", () => ({ WarehouseNotificationBell: () => <button type="button">bell</button> }))
 vi.mock("@/components/delivery-dashboard/delivery-dashboard", () => ({
   DeliveryDashboard: ({ dashboardEndpoint }: { dashboardEndpoint: string }) => <div>dashboard section {dashboardEndpoint}</div>,
 }))
@@ -58,6 +59,19 @@ describe("the warehouse side menu", () => {
     window.history.replaceState(null, "", "/warehouse#stock")
     render(<WarehouseWorkspace />)
     expect(screen.getByText(/dashboard section/)).toBeTruthy()
+  })
+
+  it("follows a link inside the page that changes the section", () => {
+    render(<WarehouseWorkspace />)
+    window.history.replaceState(null, "", "/warehouse#orders")
+    act(() => { window.dispatchEvent(new HashChangeEvent("hashchange")) })
+    expect(screen.getByText("orders section")).toBeTruthy()
+    expect(current().map((button) => button.textContent)).toEqual(["Orders"])
+  })
+
+  it("puts the notification bell in the header", () => {
+    render(<WarehouseWorkspace />)
+    expect(screen.getByRole("button", { name: "bell" })).toBeTruthy()
   })
 
   it("still opens the Dashboard from a link saved when it was called Workload", () => {

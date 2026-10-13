@@ -18,6 +18,7 @@ import {
   queueSuperAdminApprovalNotifications,
 } from "@/lib/server/order-notifications"
 import { releaseHeldQuantityBudgetForOrder } from "@/lib/server/product-quantity-budget-ledger"
+import { queueWarehouseOrderNotifications } from "@/lib/server/warehouse-order-notifications"
 import { orderTakesBudget } from "@/lib/organization-budget-policy"
 
 /**
@@ -167,6 +168,9 @@ export async function approveOrder({
         approvedByRole: authorization.decisionRole,
       })
       : NO_NOTIFICATIONS
+    // The warehouse is Apricart's and picks every approved order, desk orders
+    // included, so it is told whoever decided.
+    await queueWarehouseOrderNotifications(tx, { order: ord, event: "APPROVED" })
 
     await tx.insert(auditLogs).values({
       userId: user.id,
@@ -313,6 +317,7 @@ export async function rejectOrder({
           rejectionReason: reason,
         })
         : NO_NOTIFICATIONS
+      await queueWarehouseOrderNotifications(tx, { order: rejectedOrder, event: "REJECTED" })
 
       await tx.insert(auditLogs).values({
         userId: user.id,

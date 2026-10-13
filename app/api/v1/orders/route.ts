@@ -34,6 +34,7 @@ import {
   queueOrderCreatedNotifications as enqueueCreatedOrderEvents,
   queueSuperAdminAutoApprovalNotifications as enqueueAutoApprovedOrderEvents,
 } from "@/lib/server/order-notifications"
+import { queueWarehouseOrderNotifications } from "@/lib/server/warehouse-order-notifications"
 import { canViewFulfillmentToken } from "@/lib/fulfillment-token-access"
 import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
 import { resolveInitialOrderApproval } from "@/lib/server/order-creation-approval"
@@ -749,6 +750,13 @@ async function persistCreatedOrder(tx: any, context: any) {
   await saveCreationLedgers(tx, { ...context, order })
   await saveOrderReceipt(tx, { ...context, order })
   await logCreatedOrder(tx, { ...context, order, approvalBasis: initialApproval.approvalBasis })
+  // Every new order, desk entries included: the warehouse is Apricart's, and
+  // is told an order exists whether it awaits approval or was approved now.
+  await queueWarehouseOrderNotifications(tx, {
+    order,
+    event: "CREATED",
+    approvedAtCreation: !initialApproval.approvalRequired,
+  })
   return {
     order,
     queuedNotifications: await queueCreationNotifications(tx, context, order, initialApproval.approvalRequired),

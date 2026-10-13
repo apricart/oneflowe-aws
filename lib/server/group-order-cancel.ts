@@ -13,6 +13,7 @@ import { GROUP_ORDER_PORTAL_ROLE, resolveScopedBranchIds } from "@/lib/server/mu
 import { closeOpenCorrectionRequest } from "@/lib/server/order-correction"
 import { notifyRaiserOfOrderWrite } from "@/lib/server/order-write-audit"
 import { releaseHeldQuantityBudgetForOrder } from "@/lib/server/product-quantity-budget-ledger"
+import { queueWarehouseOrderNotifications } from "@/lib/server/warehouse-order-notifications"
 
 /**
  * A group requester withdrawing group orders that are still waiting for
@@ -183,6 +184,7 @@ async function cancelLockedOrder(tx: Tx, input: {
     },
   )
 
+  await queueWarehouseOrderNotifications(tx, { order, event: "CANCELLED" })
   await recordAuditEvent(tx, {
     action: CANCELLATION_ACTION,
     entity: "order",

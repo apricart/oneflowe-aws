@@ -46,6 +46,7 @@ import {
   queueOrderCreatedNotifications,
   queueSuperAdminAutoApprovalNotifications,
 } from "@/lib/server/order-notifications"
+import { queueWarehouseOrderNotifications } from "@/lib/server/warehouse-order-notifications"
 import {
   loadGroupPriceOverrides,
   resolveBranchGroupId,
@@ -802,6 +803,12 @@ async function createBranchOrder(context: BranchCreationContext): Promise<Branch
           })
           : await queueSuperAdminAutoApprovalNotifications(tx, { order: notificationOrder })
         eventKeys = queued.eventKeys
+        // The warehouse serving this branch is told the order exists either way.
+        await queueWarehouseOrderNotifications(tx, {
+          order: notificationOrder,
+          event: "CREATED",
+          approvedAtCreation: !initialApproval.approvalRequired,
+        })
       } catch (notificationError) {
         console.error("Group order approval notification could not be queued", notificationError)
       }

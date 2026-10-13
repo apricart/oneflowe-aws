@@ -286,6 +286,13 @@ const NOT_AUDITED: readonly { file: string; reason: string }[] = [
       + "a day, and the signal the screen exists to show would drown in it.",
   },
   {
+    file: "app/api/v1/warehouse/notifications/route.ts",
+    reason:
+      "PATCH is the warehouse user's mark-all-read on its own notices — the same "
+      + "per-viewer UI state as the shared notifications route, recorded for the "
+      + "same reason: not at all.",
+  },
+  {
     file: "app/api/v1/notifications/email-outbox/process/route.ts",
     reason:
       "`email_outbox` already carries status, attempts, recipient, template and "

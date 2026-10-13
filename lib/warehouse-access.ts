@@ -122,6 +122,14 @@ export const WAREHOUSE_API_RULES: readonly WarehouseApiRule[] = [
     pattern: /^\/api\/v1\/warehouse\/orders\/\d+\/delivery-challan\/\d+\/file$/,
   },
   { route: "app/api/v1/warehouse/workload/route.ts", methods: ["GET"], pattern: /^\/api\/v1\/warehouse\/workload$/ },
+  // The user's own order-stage notices and mark-all-read
+  // (plans/OF-WAREHOUSE-order-stage-notifications.md). The shared
+  // /api/v1/notifications stays closed to the role.
+  {
+    route: "app/api/v1/warehouse/notifications/route.ts",
+    methods: ["GET", "PATCH"],
+    pattern: /^\/api\/v1\/warehouse\/notifications$/,
+  },
   // The global product catalogue, read-only and without a price
   // (plans/OF-WAREHOUSE-read-only-product-catalog.md).
   { route: "app/api/v1/warehouse/catalog/route.ts", methods: ["GET"], pattern: /^\/api\/v1\/warehouse\/catalog$/ },

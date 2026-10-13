@@ -7,6 +7,7 @@ import { moveHeldQuantityBudgetToUsedForOrder } from "@/lib/server/product-quant
 import { orderTakesBudget } from "@/lib/organization-budget-policy"
 import { orderSelectColumns } from "@/lib/order-select"
 import { env } from "@/lib/server/env"
+import { queueWarehouseOrderNotifications } from "@/lib/server/warehouse-order-notifications"
 
 const BATCH_SIZE = 50
 // Auto-fulfillment is measured from the immutable physical-delivery timestamp.
@@ -137,6 +138,7 @@ async function runAutoFulfill(dryRun = false) {
             deliveryCutoff: cutoff.toISOString(),
           },
         })
+        await queueWarehouseOrderNotifications(tx, { order, event: "FULFILLED" })
 
         return true
       })

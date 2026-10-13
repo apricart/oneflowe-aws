@@ -28,6 +28,7 @@ import {
 import { orderSelectColumns } from "@/lib/order-select"
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
 import { notifyRaiserOfOrderWrite } from "@/lib/server/order-write-audit"
+import { queueWarehouseOrderNotifications } from "@/lib/server/warehouse-order-notifications"
 
 type CurrentOrderUser = NonNullable<Awaited<ReturnType<typeof getCurrentUser>>>
 
@@ -515,6 +516,12 @@ async function persistEditedOrder(tx: any, context: any) {
     tid: context.existingOrder.tid,
     message: `Order ${context.existingOrder.tid} was edited by a colleague at your branch.`,
     type: "ORDER_EDITED_BY_COLLEAGUE",
+  })
+  // Each edit is its own occurrence, named by the moment it was written.
+  await queueWarehouseOrderNotifications(tx, {
+    order: updatedOrder,
+    event: "EDITED",
+    occurrence: new Date(updatedOrder.updatedAt ?? Date.now()).getTime(),
   })
   return { kind: "updated", order: updatedOrder } as const
 }
