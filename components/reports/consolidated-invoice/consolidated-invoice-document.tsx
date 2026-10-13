@@ -12,6 +12,7 @@ import {
   type ConsolidatedInvoiceTotals,
 } from "@/lib/consolidated-invoice"
 import { INVOICE_ISSUER } from "@/lib/invoice-issuer"
+import { PAYMENT_STATUS_LABELS } from "@/lib/payment-status"
 import type { ConsolidatedInvoiceSortKey } from "@/lib/list-sort-keys"
 import type { SortDirection, SortState } from "@/lib/table-sort"
 import { cn } from "@/lib/utils"
@@ -21,6 +22,7 @@ export type ConsolidatedInvoiceResponse = {
   title: string
   statement: string
   footnote: string | null
+  filterNote: string | null
   billTo: { name: string; code: string | null; ntn: string | null; strn: string | null }
   period: { from: string; to: string; label: string }
   rows: ConsolidatedInvoiceRow[]
@@ -99,7 +101,7 @@ export function ConsolidatedInvoiceDocument({
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4">
         <HeaderCard label="BILL TO" value={report.billTo.name} detail={taxIds || null} />
-        <HeaderCard label="Invoice Period" value={report.period.label} />
+        <HeaderCard label="Invoice Period" value={report.period.label} detail={report.filterNote} />
         <HeaderCard label="Total Orders" value={String(report.totals.orders)} detail={`Total Items: ${formatReportQuantity(report.totals.quantity)}`} />
         <HeaderCard
           label="Grand Total"
@@ -138,7 +140,14 @@ export function ConsolidatedInvoiceDocument({
                 </td>
                 <td className="whitespace-nowrap border border-slate-200 px-2 py-1.5 dark:border-slate-800">{row.invoiceDate}</td>
                 <td className="border border-slate-200 px-2 py-1.5 text-center dark:border-slate-800">{row.orderId}</td>
-                <td className="border border-slate-200 px-2 py-1.5 dark:border-slate-800">{row.orderStatus}</td>
+                <td className="border border-slate-200 px-2 py-1.5 dark:border-slate-800">
+                  {row.orderStatus}
+                  {report.mode === "invoices" ? (
+                    <div className={cn("mt-0.5 text-[10px] font-semibold", row.paymentStatus === "PAID" ? "text-emerald-700 dark:text-emerald-400" : "text-amber-700 dark:text-amber-400")}>
+                      {PAYMENT_STATUS_LABELS[row.paymentStatus]}
+                    </div>
+                  ) : null}
+                </td>
                 <td className="border border-slate-200 px-2 py-1.5 dark:border-slate-800">{row.department}</td>
                 <td className="border border-slate-200 px-2 py-1.5 dark:border-slate-800">{row.approver}</td>
                 <td className="border border-slate-200 px-2 py-1.5 dark:border-slate-800">{row.designation}</td>

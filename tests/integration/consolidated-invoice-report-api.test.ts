@@ -148,6 +148,8 @@ describe.skipIf(!hasTestDatabase)("the Consolidated Invoice Report", () => {
     proforma = await seedOrder()
     otherBranch = await seedOrder({ branchId: f.betaBranchId })
     for (const order of [delivered, credited, fullyCredited, otherBranch]) await deliver(order.orderId)
+    // Marked paid as the Super Admin control does it; every other order stays UNPAID.
+    await db.update(orders).set({ paymentStatus: "PAID" }).where(eq(orders.id, delivered.orderId))
     await refund(credited.orderId, [{ id: credited.itemIds[1], quantity: 1 }])
     await refund(fullyCredited.orderId, [{ id: fullyCredited.itemIds[0], quantity: 2 }, { id: fullyCredited.itemIds[1], quantity: 1 }])
     const foreign = await seedOrder({ organizationId: f.foreignOrganizationId, branchId: f.foreignBranchId })
@@ -252,7 +254,7 @@ describe.skipIf(!hasTestDatabase)("the Consolidated Invoice Report", () => {
       expect(status).toBe(200)
       expect(body.title).toBe("CONSOLIDATED PROFORMA")
       expect(body.rows.map((row: any) => row.orderId)).toEqual([proforma.orderId])
-      expect(body.rows[0]).toMatchObject({ invoiceNumber: "On delivery", totalCents: 2_950, invoiceStatus: "PROFORMA_AVAILABLE" })
+      expect(body.rows[0]).toMatchObject({ invoiceNumber: "When processed", totalCents: 2_950, invoiceStatus: "PROFORMA_AVAILABLE" })
     })
 
     it("narrows to a branch, and to a group", async () => {
@@ -260,6 +262,57 @@ describe.skipIf(!hasTestDatabase)("the Consolidated Invoice Report", () => {
       expect(branch.body.rows.map((row: any) => row.orderId)).toEqual([otherBranch.orderId])
       const group = await get(`period=month&month=${MONTH}&groupId=${f.betaGroupId}`)
       expect(group.body.rows.map((row: any) => row.orderId)).toEqual([otherBranch.orderId])
+    })
+  })
+
+  describe("payment status", () => {
+    it("lists only the paid invoices, or only the unpaid, and totals what it lists", async () => {
+      const paid = await get(`period=month&month=${MONTH}&paymentStatus=PAID`)
+      expect(paid.status).toBe(200)
+      expect(paid.body.rows.map((row: any) => row.orderId)).toEqual([delivered.orderId])
+      expect(paid.body.rows[0].paymentStatus).toBe("PAID")
+      expect(paid.body.totals).toMatchObject({ orders: 1, totalCents: 2_950 })
+      expect(paid.body.filterNote).toBe("Paid invoices only")
+
+      const unpaid = await get(`period=month&month=${MONTH}&paymentStatus=UNPAID`)
+      expect(unpaid.body.rows.map((row: any) => row.orderId).sort()).toEqual([credited.orderId, otherBranch.orderId].sort())
+      expect(unpaid.body.rows.every((row: any) => row.paymentStatus === "UNPAID")).toBe(true)
+      expect(unpaid.body.totals).toMatchObject({ orders: 2, totalCents: 2_360 + 2_950 })
+      expect(unpaid.body.filterNote).toBe("Unpaid invoices only")
+
+      const all = await get(`period=month&month=${MONTH}`)
+      expect(all.body.totals.totalCents).toBe(paid.body.totals.totalCents + unpaid.body.totals.totalCents)
+      expect(all.body.filterNote).toBeNull()
+    })
+
+    it("combines with the branch filter and the fully credited option", async () => {
+      const branch = await get(`period=month&month=${MONTH}&branchIds=${f.betaBranchId}&paymentStatus=PAID`)
+      expect(branch.body.rows).toEqual([])
+      const credit = await get(`period=month&month=${MONTH}&includeCredited=true&paymentStatus=UNPAID`)
+      expect(credit.body.rows.map((row: any) => row.orderId)).toContain(fullyCredited.orderId)
+    })
+
+    it("refuses the filter on proformas, and a value it does not know", async () => {
+      expect((await get(`period=month&month=${MONTH}&mode=proformas&paymentStatus=UNPAID`)).status).toBe(400)
+      expect((await get(`period=month&month=${MONTH}&paymentStatus=paid`)).status).toBe(400)
+    })
+
+    it("keeps Head Office inside its organization when filtering", async () => {
+      const { body } = await get(`period=month&month=${MONTH}&paymentStatus=UNPAID&organizationId=${f.foreignOrganizationId}`)
+      expect(body.rows.map((row: any) => row.orderId)).not.toContain(foreignOrderId)
+    })
+
+    it("prints and audits the filter on the PDF", async () => {
+      signIn(headOffice())
+      const response = await reportPdfRoute.GET(new NextRequest(`http://localhost/api/v1/reports/consolidated-invoice/pdf?period=month&month=${MONTH}&paymentStatus=UNPAID`))
+      expect(response.status).toBe(200)
+      expect(response.headers.get("content-disposition")).toMatch(/-unpaid\.pdf"$/)
+      expect(Buffer.from(await response.arrayBuffer()).toString("latin1")).toContain("Unpaid invoices only")
+      const [audit] = await db.select({ metadata: auditLogs.metadata })
+        .from(auditLogs)
+        .where(and(eq(auditLogs.action, "DOWNLOAD_CONSOLIDATED_INVOICE_REPORT"), eq(auditLogs.organizationId, f.organizationId)))
+        .orderBy(desc(auditLogs.id)).limit(1)
+      expect(audit.metadata).toMatchObject({ paymentStatus: "UNPAID", rowCount: 2 })
     })
   })
 
@@ -334,6 +387,13 @@ describe.skipIf(!hasTestDatabase)("the Consolidated Invoice Report", () => {
       const { status, body } = await get("period=month&month=2024-03")
       expect(status).toBe(422)
       expect(body.count).toBe(count)
+      // The count honours the payment filter too.
+      const unpaid = await get("period=month&month=2024-03&paymentStatus=UNPAID")
+      expect(unpaid.status).toBe(422)
+      expect(unpaid.body.count).toBe(count)
+      const paid = await get("period=month&month=2024-03&paymentStatus=PAID")
+      expect(paid.status).toBe(200)
+      expect(paid.body.count).toBe(0)
     })
   })
 })

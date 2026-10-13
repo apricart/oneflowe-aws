@@ -6,6 +6,7 @@ import { branches, budgets, globalProducts, orderItems, orders, organizations, r
 import { db } from "@/lib/db"
 import { budgetPeriodOf } from "@/lib/budget-consumption"
 import { isOrderDelivered, normalizeFulfillmentStatus, type FulfillmentStatus } from "@/lib/fulfillment-status"
+import { STAGES_BEFORE_TAX_INVOICE, isBeforeTaxInvoiceStage } from "@/lib/invoice-policy"
 import { deskOrderActions, type DeskOrderActions, type IntakeChannel } from "@/lib/order-desk-access"
 import {
   ORDER_RESUBMITTED_ACTION,
@@ -39,9 +40,10 @@ import { releaseHeldQuantityBudgetForOrder } from "@/lib/server/product-quantity
  * Delivery is not the desk's to record either: Super Admin moves it through
  * the existing progress route. The desk fulfils once that delivery is
  * recorded, through `fulfillApprovedOrder`, which refuses an undelivered order
- * in its own claim. Until delivery the desk may cancel (here); after
- * fulfilment it may request a refund through the shared refund route, which
- * Super Admin approves.
+ * in its own claim. Until processing starts the desk may cancel (here) — after
+ * that the order holds a tax invoice, which only a refund's credit note
+ * reverses; after fulfilment it may request a refund through the shared refund
+ * route, which Super Admin approves.
  */
 
 export type DeskOrderSummary = DeskOrderActions & {
@@ -279,19 +281,24 @@ export async function fulfilDeskOrder(input: {
 /** A desk user acting on an order; the role is recorded on any correction round it closes. */
 type DeskActor = AuditActor & { id: string; role: string }
 
-/** What the desk may cancel: pending, or Active and not yet delivered. */
+/** What the desk may cancel: pending, or Active and not yet in process. */
 const CANCELLABLE_STATUSES = ["PENDING", "APPROVED"]
+
+/** The delivery stages a cancel may claim: those before the tax invoice is issued. */
+const CANCELLABLE_STAGES_SQL = sql.join(STAGES_BEFORE_TAX_INVOICE.map((stage) => sql`${stage}`), sql`, `)
 
 export type DeskCancelOutcome =
   | { kind: "cancelled" }
   | { kind: "not-found" }
   | { kind: "not-active"; status: string }
-  | { kind: "delivered" }
+  /** Processing has started, so its tax invoice is issued: refund it instead. */
+  | { kind: "invoiced" }
   | { kind: "conflict" }
 
 /**
- * Withdraw a desk order before it is delivered — pending, or Active and not
- * yet delivered: status `CANCELLED`, the budget hold and the quantity hold it
+ * Withdraw a desk order before processing starts — pending, or Active and not
+ * yet in process, so before its tax invoice is issued
+ * (plans/OF-INVOICE-issue-at-processing.md): status `CANCELLED`, the budget hold and the quantity hold it
  * took released from the order's own period, and its stock put back — all in
  * one transaction, under a lock on the order. A pending order took the same
  * holds and stock at creation as an Active one, so the release is the same.
@@ -333,7 +340,7 @@ function cancelInTransaction(input: {
     if (!current) return { kind: "not-found" }
     const previousStatus = String(current.status).toUpperCase()
     if (!CANCELLABLE_STATUSES.includes(previousStatus)) return { kind: "not-active", status: current.status }
-    if (isOrderDelivered(current.fulfillmentStatus)) return { kind: "delivered" }
+    if (!isBeforeTaxInvoiceStage(current.fulfillmentStatus)) return { kind: "invoiced" }
 
     const now = new Date()
     const [cancelled] = await tx
@@ -351,7 +358,7 @@ function cancelInTransaction(input: {
       .where(and(
         eq(orders.id, current.id),
         sql`UPPER(${orders.status}) = ${previousStatus}`,
-        sql`COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED') <> 'DELIVERED'`,
+        sql`COALESCE(${orders.fulfillmentStatus}, 'NOT_STARTED') IN (${CANCELLABLE_STAGES_SQL})`,
       ))
       .returning(orderSelectColumns)
     if (!cancelled) throw new Error("ORDER_TRANSITION_CONFLICT")

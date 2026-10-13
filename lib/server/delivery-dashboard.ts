@@ -78,7 +78,11 @@ function populationCondition(): SQL {
   )!
 }
 
-/** Open orders always; delivered ones only when delivered inside the range. */
+/**
+ * Open orders always; delivered ones only when delivered inside the range.
+ * Open orders are narrowed to the range by approval day afterwards, in
+ * `buildDeliveryDashboard`, which also counts the ones it leaves out.
+ */
 function openOrDeliveredInRange(filters: DeliveryDashboardFilters): SQL {
   const delivered = sql`(${stage} = 'DELIVERED' OR ${orderStatus} IN (${fulfilledStatuses}))`
   return sql`(

@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react"
 import useSWR from "swr"
 import { format } from "date-fns"
-import { AlertTriangle, CheckCircle2, Clock, Loader2, PackageCheck, RefreshCw, Timer, Truck } from "lucide-react"
+import { AlertTriangle, CheckCircle2, CircleDashed, ClipboardCheck, Clock, Hourglass, Loader2, PackageCheck, PackageOpen, RefreshCw, Timer, Truck } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -246,7 +246,7 @@ function FilterBar({
           allLabel="All stages"
         />
         <div className="space-y-1">
-          <Label htmlFor="delivery-filter-from" className="text-xs">Delivered from</Label>
+          <Label htmlFor="delivery-filter-from" className="text-xs">From</Label>
           <Input
             id="delivery-filter-from"
             type="date"
@@ -255,7 +255,7 @@ function FilterBar({
           />
         </div>
         <div className="space-y-1">
-          <Label htmlFor="delivery-filter-to" className="text-xs">Delivered to</Label>
+          <Label htmlFor="delivery-filter-to" className="text-xs">To</Label>
           <div className="flex gap-2">
             <Input
               id="delivery-filter-to"
@@ -266,6 +266,9 @@ function FilterBar({
             <Button type="button" variant="ghost" size="sm" onClick={onReset}>Reset</Button>
           </div>
         </div>
+        <p className="text-xs text-muted-foreground sm:col-span-2 lg:col-span-4 xl:col-span-7">
+          The dates apply to every figure: open orders by the day they were approved, delivered orders by the day they were delivered.
+        </p>
       </CardContent>
     </Card>
   )
@@ -306,54 +309,121 @@ function FilterSelect({
   )
 }
 
+type KpiCard = {
+  view: DeliveryListView
+  label: string
+  value: string
+  icon: typeof Clock
+  tone: string
+  hint?: string
+}
+
 function KpiCards({
   data,
   view,
   onSelect,
 }: Readonly<{ data: DeliveryDashboardResponse; view: DeliveryListView; onSelect: (view: DeliveryListView) => void }>) {
   const { kpis } = data
-  const cards: Array<{ view: DeliveryListView; label: string; value: string; icon: typeof Clock; tone: string; hint?: string }> = [
+  const health: KpiCard[] = [
     { view: "OPEN", label: "Open orders", value: String(kpis.open), icon: Truck, tone: "text-slate-900 dark:text-white" },
     { view: "ON_TRACK", label: "On track", value: String(kpis.onTrack), icon: CheckCircle2, tone: "text-sky-700 dark:text-sky-300" },
     { view: "DUE_SOON", label: "Due soon", value: String(kpis.dueSoon), icon: Clock, tone: "text-amber-700 dark:text-amber-300" },
     { view: "OVERDUE", label: "Overdue", value: String(kpis.overdue), icon: AlertTriangle, tone: "text-rose-700 dark:text-rose-300" },
-    { view: "DELIVERED_TODAY", label: "Delivered today", value: String(kpis.deliveredToday), icon: PackageCheck, tone: "text-emerald-700 dark:text-emerald-300" },
     {
       view: "DELIVERED",
+      label: "Delivered",
+      value: String(kpis.delivered),
+      icon: PackageCheck,
+      tone: "text-emerald-700 dark:text-emerald-300",
+      hint: `${kpis.deliveredOnTime} on time · ${kpis.deliveredLate} late`,
+    },
+    {
+      view: "DELIVERED_LATE",
       label: "Avg approval → delivery",
       value: formatHours(kpis.averageDeliveryHours),
       icon: Timer,
       tone: "text-slate-900 dark:text-white",
-      hint: kpis.onTimeRate === null ? "No timed deliveries in range" : `${kpis.onTimeRate}% on time · ${kpis.delivered} delivered in range`,
+      hint: kpis.onTimeRate === null ? "No timed deliveries in range" : `${kpis.onTimeRate}% on time`,
+    },
+  ]
+  const stages: KpiCard[] = [
+    { view: "NOT_STARTED", label: "Not started", value: String(kpis.notStarted), icon: CircleDashed, tone: "text-slate-700 dark:text-slate-200" },
+    { view: "IN_PROCESS", label: "In process", value: String(kpis.inProcess), icon: PackageOpen, tone: "text-indigo-700 dark:text-indigo-300" },
+    { view: "OUT_FOR_DELIVERY", label: "Out for delivery", value: String(kpis.outForDelivery), icon: Truck, tone: "text-violet-700 dark:text-violet-300" },
+    {
+      view: "AWAITING_ACKNOWLEDGEMENT",
+      label: "Delivered · awaiting acknowledgement",
+      value: String(kpis.awaitingAcknowledgement),
+      icon: Hourglass,
+      tone: "text-amber-700 dark:text-amber-300",
+    },
+    {
+      view: "ACKNOWLEDGED",
+      label: "Fulfilled · receipt acknowledged",
+      value: String(kpis.acknowledged),
+      icon: ClipboardCheck,
+      tone: "text-emerald-700 dark:text-emerald-300",
     },
   ]
   return (
-    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-      {cards.map((card) => {
-        const active = view === card.view
-        const overdue = card.view === "OVERDUE" && kpis.overdue > 0
-        return (
-          <button
-            key={card.view}
-            type="button"
-            onClick={() => onSelect(active ? "ALL" : card.view)}
-            aria-pressed={active}
-            className={cn(
-              "rounded-2xl border bg-white p-4 text-left shadow-sm transition hover:border-indigo-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:bg-slate-900",
-              active && "border-indigo-500 ring-1 ring-indigo-500",
-              overdue && "border-rose-300 bg-rose-50 dark:border-rose-800 dark:bg-rose-950/30",
-            )}
-          >
-            <div className="flex items-center justify-between text-xs font-medium text-muted-foreground">
-              {card.label}
-              <card.icon className={cn("h-4 w-4", card.tone)} aria-hidden="true" />
-            </div>
-            <p className={cn("mt-2 text-2xl font-semibold", card.tone, overdue && "text-3xl")}>{card.value}</p>
-            {card.hint && <p className="mt-1 text-[11px] text-muted-foreground">{card.hint}</p>}
-          </button>
-        )
-      })}
+    <div className="space-y-3">
+      <KpiRow heading="Delivery health" cards={health} view={view} onSelect={onSelect} overdue={kpis.overdue > 0} columns="xl:grid-cols-6" />
+      <KpiRow heading="Order status" cards={stages} view={view} onSelect={onSelect} overdue={false} columns="xl:grid-cols-5" />
+      {kpis.openOutsideRange > 0 && (
+        <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+          {kpis.openOutsideRange === 1 ? "1 open order was" : `${kpis.openOutsideRange} open orders were`} approved outside
+          this date range and {kpis.openOutsideRange === 1 ? "is" : "are"} not counted. Widen the range to include {kpis.openOutsideRange === 1 ? "it" : "them"}.
+        </p>
+      )}
     </div>
+  )
+}
+
+function KpiRow({
+  heading,
+  cards,
+  view,
+  onSelect,
+  overdue,
+  columns,
+}: Readonly<{
+  heading: string
+  cards: KpiCard[]
+  view: DeliveryListView
+  onSelect: (view: DeliveryListView) => void
+  overdue: boolean
+  columns: string
+}>) {
+  return (
+    <section aria-label={heading} className="space-y-2">
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{heading}</h3>
+      <div className={cn("grid gap-3 sm:grid-cols-2 lg:grid-cols-3", columns)}>
+        {cards.map((card) => {
+          const active = view === card.view
+          const alarm = overdue && card.view === "OVERDUE"
+          return (
+            <button
+              key={card.view}
+              type="button"
+              onClick={() => onSelect(active ? "ALL" : card.view)}
+              aria-pressed={active}
+              className={cn(
+                "rounded-2xl border bg-white p-4 text-left shadow-sm transition hover:border-indigo-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:bg-slate-900",
+                active && "border-indigo-500 ring-1 ring-indigo-500",
+                alarm && "border-rose-300 bg-rose-50 dark:border-rose-800 dark:bg-rose-950/30",
+              )}
+            >
+              <div className="flex items-center justify-between gap-2 text-xs font-medium text-muted-foreground">
+                {card.label}
+                <card.icon className={cn("h-4 w-4 shrink-0", card.tone)} aria-hidden="true" />
+              </div>
+              <p className={cn("mt-2 text-2xl font-semibold", card.tone, alarm && "text-3xl")}>{card.value}</p>
+              {card.hint && <p className="mt-1 text-[11px] text-muted-foreground">{card.hint}</p>}
+            </button>
+          )
+        })}
+      </div>
+    </section>
   )
 }
 
@@ -390,6 +460,11 @@ const VIEW_LABELS: Record<DeliveryListView, string> = {
   DELIVERED: "Delivered",
   DELIVERED_LATE: "Delivered late",
   DELIVERED_TODAY: "Delivered today",
+  NOT_STARTED: "Not started",
+  IN_PROCESS: "In process",
+  OUT_FOR_DELIVERY: "Out for delivery",
+  AWAITING_ACKNOWLEDGEMENT: "Awaiting acknowledgement",
+  ACKNOWLEDGED: "Fulfilled (acknowledged)",
 }
 
 function OrdersCard({

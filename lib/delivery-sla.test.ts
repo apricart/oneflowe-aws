@@ -11,6 +11,7 @@ import {
   deliveryAlerts,
   destinationCity,
   groupDeliveries,
+  isInDeliveryDateRange,
   karachiDay,
   matchesDeliveryListView,
   overdueAgeBuckets,
@@ -87,6 +88,13 @@ describe("a delivered order", () => {
     expect(assess({ ...delivered(10, "FULFILLED"), fulfillmentStatus: "IN_PROCESS" }, at(500)).isOpen).toBe(false)
   })
 
+  it("is acknowledged only once settled as fulfilled", () => {
+    expect(assess(delivered(10), at(500)).acknowledged).toBe(false)
+    expect(assess(delivered(10, "FULFILLED"), at(500)).acknowledged).toBe(true)
+    expect(assess(delivered(null, "PARTIALLY_FULFILLED"), at(500)).acknowledged).toBe(true)
+    expect(assess(open(), at(1)).acknowledged).toBe(false)
+  })
+
   it("is never guessed when its delivery time was not recorded", () => {
     expect(assess(delivered(null), at(500))).toMatchObject({ health: "DELIVERED_UNTIMED", deliveryHours: null })
   })
@@ -136,10 +144,22 @@ describe("the summaries", () => {
       deliveredOnTime: 1,
       deliveredLate: 1,
       deliveredUntimed: 1,
+      notStarted: 1,
+      inProcess: 1,
+      outForDelivery: 1,
+      awaitingAcknowledgement: 3,
+      acknowledged: 0,
       onTimeRate: 50,
       averageDeliveryHours: 70,
     })
     expect(countDeliveries([])).toMatchObject({ onTimeRate: null, averageDeliveryHours: null })
+  })
+
+  it("splits open orders by stage and delivered ones by acknowledgement, each adding up", () => {
+    const counts = countDeliveries([...assessments, assess(delivered(40, "FULFILLED"), now)])
+    expect(counts).toMatchObject({ awaitingAcknowledgement: 3, acknowledged: 1, delivered: 4 })
+    expect(counts.notStarted + counts.inProcess + counts.outForDelivery).toBe(counts.open)
+    expect(counts.awaitingAcknowledgement + counts.acknowledged).toBe(counts.delivered)
   })
 
   it("counts deliveries on one Karachi day", () => {
@@ -233,5 +253,40 @@ describe("the list views", () => {
     expect(matchesDeliveryListView(deliveredToday, "DELIVERED_LATE", today)).toBe(true)
     expect(matchesDeliveryListView(deliveredToday, "OPEN", today)).toBe(false)
     expect(matchesDeliveryListView(deliveredToday, "ALL", today)).toBe(true)
+  })
+
+  it("narrows by stage and by acknowledgement", () => {
+    const today = karachiDay(now)
+    const outForDelivery = assess(open("OUT_FOR_DELIVERY"), now)
+    const awaiting = assess(delivered(50), now)
+    const fulfilled = assess(delivered(50, "FULFILLED"), now)
+    expect(matchesDeliveryListView(outForDelivery, "OUT_FOR_DELIVERY", today)).toBe(true)
+    expect(matchesDeliveryListView(outForDelivery, "IN_PROCESS", today)).toBe(false)
+    // A delivered order is never counted at an open stage, whatever its column says.
+    expect(matchesDeliveryListView({ ...awaiting, stage: "NOT_STARTED" }, "NOT_STARTED", today)).toBe(false)
+    expect(matchesDeliveryListView(awaiting, "AWAITING_ACKNOWLEDGEMENT", today)).toBe(true)
+    expect(matchesDeliveryListView(awaiting, "ACKNOWLEDGED", today)).toBe(false)
+    expect(matchesDeliveryListView(fulfilled, "ACKNOWLEDGED", today)).toBe(true)
+    expect(matchesDeliveryListView(fulfilled, "AWAITING_ACKNOWLEDGEMENT", today)).toBe(false)
+  })
+})
+
+describe("the date range", () => {
+  // approvedAt is 1 October, 10:00 Karachi.
+  it("places an open order by the Karachi day it was approved", () => {
+    const order = assess(open(), at(100))
+    expect(isInDeliveryDateRange(order, "2026-10-01", "2026-10-01")).toBe(true)
+    expect(isInDeliveryDateRange(order, "2026-10-02", "2026-10-31")).toBe(false)
+    expect(isInDeliveryDateRange(order, "2026-09-01", "2026-09-30")).toBe(false)
+  })
+
+  it("places a delivered order by the Karachi day it was delivered, inclusive at both ends", () => {
+    const order = assess(delivered(50), at(100)) // 3 October, 12:00 Karachi
+    expect(isInDeliveryDateRange(order, "2026-10-03", "2026-10-03")).toBe(true)
+    expect(isInDeliveryDateRange(order, "2026-10-01", "2026-10-02")).toBe(false)
+  })
+
+  it("never places a delivery whose time was not recorded", () => {
+    expect(isInDeliveryDateRange(assess(delivered(null), at(100)), "2026-01-01", "2026-12-31")).toBe(false)
   })
 })

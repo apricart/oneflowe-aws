@@ -185,8 +185,17 @@ export async function stageDeliveryChallan(orderId: number, uploadedByUserId: st
  * Walk an approved order's delivery progress to DELIVERED, one step at a time,
  * as Super Admin — who may not mark it delivered without a challan.
  */
-export async function markDelivered(page: Page, orderId: number): Promise<void> {
-  for (const fulfillmentStatus of ["IN_PROCESS", "OUT_FOR_DELIVERY"]) {
+/**
+ * Moves an order through every remaining delivery stage to DELIVERED, from
+ * Not Started unless `from` names the stage it has already reached.
+ */
+export async function markDelivered(
+  page: Page,
+  orderId: number,
+  options: { from?: "NOT_STARTED" | "IN_PROCESS" } = {},
+): Promise<void> {
+  const steps = options.from === "IN_PROCESS" ? ["OUT_FOR_DELIVERY"] : ["IN_PROCESS", "OUT_FOR_DELIVERY"]
+  for (const fulfillmentStatus of steps) {
     await expectStatus(await post(page, `/api/v1/orders/${orderId}/fulfillment-status`, { fulfillmentStatus }))
   }
   const session = await responseJson(await getReconnecting(page, `${E2E_BASE_URL}/api/auth/session`))

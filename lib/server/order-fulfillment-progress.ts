@@ -8,8 +8,9 @@ import { FULFILLMENT_STATUSES, normalizeFulfillmentStatus, type FulfillmentStatu
 import { orderSelectColumns, transitionOrderFulfillmentStatusColumn } from "@/lib/order-select"
 import { attachDeliveryChallan } from "@/lib/server/delivery-challan"
 import { settleDeliveredOrderAfterTokenHandoff } from "@/lib/server/order-fulfillment"
-import { issueTaxInvoiceAtDelivery } from "@/lib/server/invoice-issuance"
+import { issueTaxInvoice } from "@/lib/server/invoice-issuance"
 import { isInvoiceCodeMissingError } from "@/lib/invoice-number"
+import { issuesTaxInvoiceOnStep } from "@/lib/invoice-policy"
 
 /**
  * Moving an order's delivery forward one stage — the single place it happens.
@@ -22,9 +23,10 @@ import { isInvoiceCodeMissingError } from "@/lib/invoice-number"
  * a delivery recorded by either has exactly the same effects.
  *
  * Delivery is recorded nowhere else. Fulfilment requires it and never writes
- * it (`fulfillApprovedOrder`). Recording it also issues the order's tax
- * invoice, in the same transaction (`issueTaxInvoiceAtDelivery`,
- * plans/OF-INVOICE-invoice-ledger.md). See
+ * it (`fulfillApprovedOrder`). Marking an order In Process issues its tax
+ * invoice, in the same transaction, so the warehouse can print it and send it
+ * with the goods (`issueTaxInvoice`, `issuesTaxInvoiceOnStep`,
+ * plans/OF-INVOICE-issue-at-processing.md). See
  * plans/OF-WAREHOUSE-warehouse-fulfilment-role.md and
  * plans/OF-DELIVERY-CHALLAN-proof-of-delivery.md.
  */
@@ -211,11 +213,12 @@ export async function progressOrderFulfillment(input: {
         },
       })
 
-      // The goods are supplied, so the tax invoice is issued now, numbered and
-      // dated in this transaction: if it cannot be, the delivery is not
-      // recorded either.
-      if (nextStatus === "DELIVERED") {
-        await issueTaxInvoiceAtDelivery(tx, { orderId, actor })
+      // Processing has started, so the tax invoice is issued now, numbered and
+      // dated in this transaction: if it cannot be, the step is not recorded
+      // either. A later step finds it issued and does nothing — or issues it,
+      // for an order that was already past In Process when the stage moved.
+      if (issuesTaxInvoiceOnStep(nextStatus)) {
+        await issueTaxInvoice(tx, { orderId, actor, stage: nextStatus })
       }
 
       return (await loadOrder(tx, orderId)) ?? { ...order, fulfillmentStatus: nextStatus }

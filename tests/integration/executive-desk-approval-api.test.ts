@@ -40,6 +40,7 @@ import {
   destroyOrderDeskFixtures,
   hasTestDatabase,
   ORDER_DESK_FIXTURE_PRICE_CENTS,
+  stageIntakeAttachment,
   type OrderDeskFixtures,
 } from "./helpers/order-desk-fixtures"
 
@@ -143,6 +144,7 @@ describe.skipIf(!hasTestDatabase)("Apricart Executives approving Order Desk orde
       items: [{ organizationInventoryId: options.atB ? f.inventoryB : f.inventoryA, quantity: options.quantity ?? 2 }],
       intakeChannel: "EMAIL",
       intakeReference: `Executive approvals ${f.suffix}`,
+      intakeAttachmentKey: await stageIntakeAttachment(f.deskId),
     })
     expect(created.status, "desk order").toBe(200)
     expect(created.body.order.status).toBe("PENDING")
@@ -651,8 +653,7 @@ describe.skipIf(!hasTestDatabase)("Apricart Executives approving Order Desk orde
 
     it("is shown to an executive whose reach covers the order, and to nobody else", async () => {
       const orderId = await deskOrder()
-      const key = "order-intake/0b9b1c2e-3f4a-4b5c-8d6e-7f8091a2b3c4.png"
-      await db.update(orders).set({ intakeAttachmentKey: key }).where(eq(orders.id, orderId))
+      const key = (await storedOrder(orderId)).intakeAttachmentKey
       vi.mocked(getImage).mockResolvedValue({
         body: { transformToWebStream: () => new Response(new Uint8Array([1, 2, 3])).body } as any,
         contentType: "image/png",
@@ -669,8 +670,9 @@ describe.skipIf(!hasTestDatabase)("Apricart Executives approving Order Desk orde
       signIn("executiveC")
       expect((await attachment(orderId)).status).toBe(404)
 
-      // A desk order with no screenshot is the same 404.
+      // A desk order with no screenshot (entered before one was required) is the same 404.
       const withoutScreenshot = await deskOrder()
+      await db.update(orders).set({ intakeAttachmentKey: null }).where(eq(orders.id, withoutScreenshot))
       signIn("executive")
       expect((await attachment(withoutScreenshot)).status).toBe(404)
     })

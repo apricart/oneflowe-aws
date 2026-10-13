@@ -8,10 +8,11 @@ import { orderDeskCancelSchema, validationMessage } from "@/lib/server/mutation-
 import { cancelDeskOrder } from "@/lib/server/order-desk-orders"
 
 /**
- * Withdraw an Order Desk order before it is delivered. Its budget hold and
+ * Withdraw an Order Desk order before processing starts. Its budget hold and
  * stock are released in the same transaction, and the reason is recorded. An
- * order outside the desk user's reach is 404; a delivered one is 409 — after
- * delivery the route is fulfilment and then, if needed, a refund request.
+ * order outside the desk user's reach is 404; one already in process is 409 —
+ * its tax invoice is issued then, and a numbered invoice is reversed by a
+ * refund's credit note, never by cancelling (plans/OF-INVOICE-issue-at-processing.md).
  * The audit row is written by `lib/server/order-desk-orders.ts`.
  */
 export async function POST(req: Request, props: { params: Promise<{ id: string }> }) {
@@ -47,8 +48,10 @@ export async function POST(req: Request, props: { params: Promise<{ id: string }
         return NextResponse.json({ error: `Cannot cancel an order in ${outcome.status} state` }, { status: 409 })
       case "conflict":
         return NextResponse.json({ error: "The order was changed by another request; reload and try again" }, { status: 409 })
-      case "delivered":
-        return NextResponse.json({ error: "A delivered order cannot be cancelled; fulfil it and request a refund instead" }, { status: 409 })
+      case "invoiced":
+        return NextResponse.json({
+          error: "Processing has started and the tax invoice has been issued, so this order can no longer be cancelled. Ask Super Admin to refund it, which issues a credit note.",
+        }, { status: 409 })
     }
   } catch (error) {
     const handled = handleError(error, "POST /api/v1/order-desk/orders/[id]/cancel")

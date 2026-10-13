@@ -225,10 +225,13 @@ describe("orders the desk enters", () => {
     }
   })
 
-  it("requires the desk to say where an order came from", () => {
-    expect(orderIntakeError("ORDER_DESK", { intakeChannel: "EMAIL", intakeReference: "subject" })).toBeNull()
-    expect(orderIntakeError("ORDER_DESK", { intakeReference: "subject" })).toMatch(/intakeChannel/)
-    expect(orderIntakeError("ORDER_DESK", { intakeChannel: "EMAIL", intakeReference: "   " })).toMatch(/intakeReference/)
+  it("requires the desk to say where an order came from, with the customer's screenshot", () => {
+    const key = "order-intake/0b9b1c2e-3f4a-4b5c-8d6e-7f8091a2b3c4.png"
+    expect(orderIntakeError("ORDER_DESK", { intakeChannel: "EMAIL", intakeReference: "subject", intakeAttachmentKey: key })).toBeNull()
+    expect(orderIntakeError("ORDER_DESK", { intakeReference: "subject", intakeAttachmentKey: key })).toMatch(/intakeChannel/)
+    expect(orderIntakeError("ORDER_DESK", { intakeChannel: "EMAIL", intakeReference: "   ", intakeAttachmentKey: key })).toMatch(/intakeReference/)
+    expect(orderIntakeError("ORDER_DESK", { intakeChannel: "EMAIL", intakeReference: "subject" })).toMatch(/screenshot/)
+    expect(orderIntakeError("ORDER_DESK", { intakeChannel: "EMAIL", intakeReference: "subject", intakeAttachmentKey: null })).toMatch(/screenshot/)
   })
 
   it("accepts a screenshot key only in the shape the upload route generates", () => {
@@ -277,11 +280,18 @@ describe("orders the desk enters", () => {
     }, NOW)).toEqual({ ...none, canEdit: true, canCancel: true, canResubmit: true })
   })
 
-  it("lets an Active order be cancelled, never edited, until Super Admin records delivery", () => {
+  it("lets an Active order be cancelled, never edited, until processing starts", () => {
     // An edit after approval would change what the executive approved.
-    for (const fulfillmentStatus of [null, "NOT_STARTED", "IN_PROCESS", "OUT_FOR_DELIVERY"]) {
+    for (const fulfillmentStatus of [null, "NOT_STARTED"]) {
       expect(deskOrderActions({ status: "APPROVED", fulfillmentStatus, fulfilledAt: null }, NOW))
         .toEqual({ ...none, canCancel: true })
+    }
+  })
+
+  it("offers nothing on an Active order in process or out for delivery: its tax invoice is issued", () => {
+    // plans/OF-INVOICE-issue-at-processing.md — reversed by a refund's credit note, not a cancel.
+    for (const fulfillmentStatus of ["IN_PROCESS", "OUT_FOR_DELIVERY"]) {
+      expect(deskOrderActions({ status: "APPROVED", fulfillmentStatus, fulfilledAt: null }, NOW)).toEqual(none)
     }
   })
 

@@ -1,6 +1,6 @@
 import "server-only"
 
-import { and, asc, count, eq, gte, inArray, isNotNull, lte, sql, type SQL } from "drizzle-orm"
+import { and, asc, count, eq, gte, inArray, isNotNull, lte, ne, sql, type SQL } from "drizzle-orm"
 import { alias } from "drizzle-orm/pg-core"
 
 import { branches, groups, invoices, orders, organizations, users } from "@/db/schema"
@@ -8,6 +8,7 @@ import { getRequestScope, getSharedServerSession } from "@/lib/auth"
 import {
   CONSOLIDATED_INVOICE_MAX_ROWS,
   buildConsolidatedInvoiceRows,
+  consolidatedInvoiceFilterNote,
   consolidatedInvoicePeriodLabel,
   consolidatedInvoiceStatement,
   consolidatedInvoiceTitle,
@@ -41,6 +42,8 @@ export type ConsolidatedInvoiceReport = {
   title: string
   statement: string
   footnote: string | null
+  /** The payment-status filter, in words, when one narrowed the report. */
+  filterNote: string | null
   billTo: { id: number; name: string; code: string | null; ntn: string | null; strn: string | null }
   period: { from: string; to: string; label: string }
   rows: ConsolidatedInvoiceRow[]
@@ -130,6 +133,9 @@ async function loadInvoiceSources(organizationId: number, query: ConsolidatedInv
   ]
   if (query.branchIds.length > 0) conditions.push(inArray(invoices.branchId, query.branchIds))
   if (query.groupId !== null) conditions.push(eq(branches.groupId, query.groupId))
+  // Anything not marked PAID is unpaid, as `normalizePaymentStatus` reads it.
+  if (query.paymentStatus === "PAID") conditions.push(eq(orders.paymentStatus, "PAID"))
+  if (query.paymentStatus === "UNPAID") conditions.push(ne(orders.paymentStatus, "PAID"))
   const where = and(...conditions)
 
   const supplied = sql`${invoices.origin} = 'ISSUED_AT_SUPPLY'`
@@ -139,6 +145,7 @@ async function loadInvoiceSources(organizationId: number, query: ConsolidatedInv
     issueDate: invoices.issueDate,
     invoiceStatus: invoices.status,
     orderStatus: orders.status,
+    paymentStatus: orders.paymentStatus,
     refundAmountCents: orders.refundAmountCents,
     department: sql<string | null>`COALESCE(NULLIF(${invoices.buyer} ->> 'branchName', ''), ${branches.name})`,
     costCenterId: sql<string | null>`${invoices.buyer} ->> 'costCenterId'`,
@@ -179,6 +186,7 @@ async function loadInvoiceSources(organizationId: number, query: ConsolidatedInv
 
   const total = rows.length > CONSOLIDATED_INVOICE_MAX_ROWS
     ? Number((await db.select({ value: count() }).from(invoices)
+      .innerJoin(orders, and(eq(orders.id, invoices.orderId), eq(orders.organizationId, invoices.organizationId)))
       .innerJoin(branches, and(eq(branches.id, invoices.branchId), eq(branches.organizationId, invoices.organizationId)))
       .where(where))[0]?.value ?? 0)
     : rows.length
@@ -192,6 +200,7 @@ async function loadInvoiceSources(organizationId: number, query: ConsolidatedInv
       orderStatus: row.orderStatus,
       refundAmountCents: row.refundAmountCents,
       invoiceStatus: row.invoiceStatus,
+      paymentStatus: row.paymentStatus,
       department: row.department,
       approver: approverName(row.recordedApprover, row.approverFullName !== undefined ? {
         fullName: row.approverFullName, firstName: row.approverFirstName, lastName: row.approverLastName,
@@ -230,6 +239,7 @@ async function loadProformaSources(organizationId: number, query: ConsolidatedIn
     reservedNumber: sql<string | null>`${orders.receiptData} ->> 'invoiceNumber'`,
     approvedOn: sql<string>`to_char(${approvedOn}, 'YYYY-MM-DD')`,
     orderStatus: orders.status,
+    paymentStatus: orders.paymentStatus,
     refundAmountCents: orders.refundAmountCents,
     department: branches.name,
     costCenterId: branches.costCenterId,
@@ -288,6 +298,7 @@ async function loadProformaSources(organizationId: number, query: ConsolidatedIn
         orderStatus: row.orderStatus,
         refundAmountCents: row.refundAmountCents,
         invoiceStatus: "PROFORMA_AVAILABLE",
+        paymentStatus: row.paymentStatus,
         department: row.department,
         approver: approverName(null, row.approverFullName !== undefined ? {
           fullName: row.approverFullName, firstName: row.approverFirstName, lastName: row.approverLastName,
@@ -348,6 +359,7 @@ export async function loadConsolidatedInvoiceReport(params: URLSearchParams, now
       title: consolidatedInvoiceTitle(query.mode),
       statement: consolidatedInvoiceStatement(query.mode),
       footnote: legacyDateFootnote(query.mode, query.from),
+      filterNote: consolidatedInvoiceFilterNote(query.paymentStatus),
       billTo: organization,
       period: { from: query.from, to: query.to, label: consolidatedInvoicePeriodLabel(query.from, query.to) },
       rows,

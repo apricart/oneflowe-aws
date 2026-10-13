@@ -149,3 +149,31 @@ Price visibility therefore never comes into it.
 
 Delay reasons, per-city/branch SLA configuration, business hours and holidays,
 new fulfilment stages, notifications, PO attachments.
+
+## Revision 2026-10-12: the dates drive every figure, and order-status cards
+
+Feedback from the warehouse Workload tab: the cards did not move when the dates
+changed, and "Delivered today" ignored the range.
+
+* **The date range applies to every figure** — cards, alerts, the list, the
+  pipeline, overdue age and the breakdowns: an open order by the Karachi day it
+  was **approved**, a delivered one by the day it was **delivered**
+  (`isInDeliveryDateRange` in `lib/delivery-sla.ts`). Before, open orders were
+  counted whatever the dates. The query keys stay `deliveredFrom` /
+  `deliveredTo` so the query string does not break; the UI labels them
+  From / To and says what they mean.
+* **No open order disappears silently.** The read still loads every open order;
+  `buildDeliveryDashboard` narrows them in memory and returns
+  `kpis.openOutsideRange`, the open orders (after the other filters) approved
+  outside the range. The page shows a notice when it is above zero, because the
+  default 30-day window would otherwise hide a long-overdue order.
+* **"Delivered today" became "Delivered"**: the delivered count in the range,
+  with on-time / late beneath it. `kpis.deliveredToday` and the
+  `DELIVERED_TODAY` list view are kept for API compatibility.
+* **Order-status cards**, each opening its own list view: Not started,
+  In process, Out for delivery (open orders by stage, adding up to Open), and
+  Delivered · awaiting acknowledgement / Fulfilled · receipt acknowledged
+  (adding up to Delivered; acknowledged = the order status is fulfilled,
+  `DeliveryAssessment.acknowledged`). Pending, rejected and cancelled orders are
+  deliberately **not** counted: they are outside the dashboard's population,
+  and the warehouse must not see orders before approval.

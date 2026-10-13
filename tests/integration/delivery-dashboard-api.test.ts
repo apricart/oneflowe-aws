@@ -291,6 +291,12 @@ describe.skipIf(!hasTestDatabase)("the management delivery dashboard through the
         deliveredOnTime: 1,
         deliveredLate: 1,
         deliveredToday,
+        notStarted: 1,
+        inProcess: 1,
+        outForDelivery: 1,
+        awaitingAcknowledgement: 1,
+        acknowledged: 1,
+        openOutsideRange: 0,
         onTimeRate: 50,
         averageDeliveryHours: 64,
       })
@@ -355,10 +361,11 @@ describe.skipIf(!hasTestDatabase)("the management delivery dashboard through the
       expect(body.orders.total).toBe(0)
     })
 
-    it("drops delivered orders outside the delivered range, but never open ones", async () => {
+    it("applies the date range to open and delivered orders alike, and counts the open ones it leaves out", async () => {
       const { body } = await tenantA("deliveredFrom=2026-09-01&deliveredTo=2026-09-02")
-      expect(body.kpis.delivered).toBe(0)
-      expect(body.kpis.open).toBe(3)
+      expect(body.kpis).toMatchObject({ open: 0, overdue: 0, delivered: 0, acknowledged: 0, openOutsideRange: 3 })
+      expect(body.orders.total).toBe(0)
+      expect(body.byCity).toEqual([])
     })
 
     it.each(["status=PENDING", "region=EAST", "branchId=1", "deliveredFrom=bad", "view=NOPE"])("refuses %s", async (query) => {

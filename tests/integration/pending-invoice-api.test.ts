@@ -1,10 +1,12 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 import * as mockedNextAuth from "next-auth"
-import { inArray } from "drizzle-orm"
+import { eq, inArray } from "drizzle-orm"
 
 import * as pendingInvoiceRoute from "@/app/api/v1/orders/pending-invoice/route"
-import { orders } from "@/db/schema"
+import { invoices, orderItems, orders } from "@/db/schema"
+import type { FulfillmentStatus } from "@/lib/fulfillment-status"
 import { closePool, db } from "@/lib/db"
+import { progressOrderFulfillment } from "@/lib/server/order-fulfillment-progress"
 
 import {
   createGroupRoleFixtures,
@@ -12,6 +14,7 @@ import {
   hasTestDatabase,
   type GroupRoleFixtures,
 } from "./helpers/group-role-fixtures"
+import { purgeInvoiceLedger } from "./helpers/invoice-ledger-cleanup"
 
 /**
  * The unit test mocks the database, so the one thing it cannot prove is the
@@ -93,7 +96,10 @@ describe.skipIf(!hasTestDatabase)("GET /api/v1/orders/pending-invoice", () => {
 
   afterEach(async () => {
     if (seededOrderIds.length > 0) {
-      await db.delete(orders).where(inArray(orders.id, seededOrderIds.splice(0)))
+      const orderIds = seededOrderIds.splice(0)
+      await purgeInvoiceLedger({ orderIds })
+      await db.delete(orderItems).where(inArray(orderItems.orderId, orderIds))
+      await db.delete(orders).where(inArray(orders.id, orderIds))
     }
   })
 
@@ -142,6 +148,48 @@ describe.skipIf(!hasTestDatabase)("GET /api/v1/orders/pending-invoice", () => {
     signIn(requester())
     await seedInvoice({ createdByUserId: f.requesterId, status: "APPROVED", fulfillmentStatus: "OUT_FOR_DELIVERY" })
     expect((await readStatus()).body.hasPendingInvoice).toBe(false)
+  })
+
+  // plans/OF-INVOICE-issue-at-processing.md: the tax invoice is issued when
+  // processing starts, but nothing is owed on it until the goods are supplied.
+  it("does not treat a tax invoice issued when processing started as pending until delivery", async () => {
+    signIn(requester())
+    const order = await seedInvoice({
+      createdByUserId: f.requesterId,
+      status: "APPROVED",
+      fulfillmentStatus: "NOT_STARTED",
+      invoiceNumber: null,
+    })
+    await db.insert(orderItems).values({
+      organizationId: f.organizationId,
+      orderId: order.id,
+      globalProductId: f.productId,
+      productName: "Tea",
+      unit: "pcs",
+      quantity: 1,
+      priceCents: 10_000,
+      taxRateBp: 0,
+      taxCents: 0,
+    })
+    const step = async (nextStatus: FulfillmentStatus) => (await progressOrderFulfillment({
+      orderId: order.id,
+      nextStatus,
+      deliveryChallanId: null,
+      challanRequired: false,
+      actor: { id: f.superAdminId, role: "SUPER_ADMIN" },
+      authorize: async () => true,
+    })).kind
+
+    expect(await step("IN_PROCESS")).toBe("updated")
+    const [invoice] = await db.select({ status: invoices.status }).from(invoices).where(eq(invoices.orderId, order.id))
+    expect(invoice?.status).toBe("ISSUED")
+    expect((await readStatus()).body.hasPendingInvoice).toBe(false)
+
+    expect(await step("OUT_FOR_DELIVERY")).toBe("updated")
+    expect((await readStatus()).body.hasPendingInvoice).toBe(false)
+
+    expect(await step("DELIVERED")).toBe("updated")
+    expect((await readStatus()).body).toMatchObject({ hasPendingInvoice: true, pendingInvoice: { orderId: order.id } })
   })
 
   it("does not treat a paid invoice as pending", async () => {
