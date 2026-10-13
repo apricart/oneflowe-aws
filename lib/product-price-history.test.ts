@@ -50,7 +50,9 @@ describe("product price history persistence contract", () => {
   const source = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8")
 
   it("uses the dedicated ledger rather than rebuilding the feature from orders", () => {
-    const route = source("app/api/v1/admin/product-price-history/route.ts")
+    // The query lives in the shared server module every reader goes through.
+    const route = source("lib/server/product-price-history.ts")
+    expect(source("app/api/v1/admin/product-price-history/route.ts")).toContain("loadProductPriceHistory(")
 
     expect(route).toContain("productPriceHistory")
     expect(route).not.toContain("orderItems")

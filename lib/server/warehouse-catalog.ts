@@ -1,6 +1,6 @@
 import "server-only"
 
-import { and, asc, eq, ilike, inArray, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm"
+import { and, asc, desc, eq, ilike, inArray, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm"
 import { alias } from "drizzle-orm/pg-core"
 
 import { categories, globalProducts } from "@/db/schema"
@@ -8,6 +8,8 @@ import { db } from "@/lib/db"
 import { IMAGE_PATH_PREFIX, isStoredImagePath } from "@/lib/server/image-storage"
 import { escapeLikePattern } from "@/lib/utils"
 import {
+  WAREHOUSE_TAXONOMY_ROW_MAX,
+  type WarehouseTaxonomyQuery,
   WAREHOUSE_CATALOG_CATEGORY_MAX,
   WAREHOUSE_LOW_STOCK_THRESHOLD,
   buildWarehouseCatalogCategories,
@@ -18,11 +20,11 @@ import {
 } from "@/lib/warehouse-catalog"
 
 /**
- * The warehouse's product catalogue, read-only: Apricart's global catalogue,
- * so no tenant fence applies and no tenant's assignment, override or price is
- * joined. Every column is named, and none of them is a price — not
- * `base_price_cents`, not `tax_rate_bp`, not a discount — so there is no price
- * in the payload to hide. See plans/OF-WAREHOUSE-read-only-product-catalog.md.
+ * The warehouse's product catalogue, read-only: Apricart's global catalogue
+ * (Global Products, Categories, Subcategories), so no tenant fence applies and
+ * no tenant's assignment or override is joined. Every column is named; the
+ * global base price is shown, as on Super Admin's Global Products
+ * (plans/OF-WAREHOUSE-full-read-only-catalog.md). Nothing here writes.
  */
 
 export type WarehouseCatalogItem = {
@@ -31,6 +33,7 @@ export type WarehouseCatalogItem = {
   name: string
   unit: string
   status: string
+  basePriceCents: number
   stockQuantity: number
   low: boolean
   imageUrl: string | null
@@ -79,6 +82,7 @@ export async function listWarehouseCatalog(query: WarehouseCatalogQuery): Promis
         name: globalProducts.name,
         unit: globalProducts.unit,
         status: globalProducts.status,
+        basePriceCents: globalProducts.basePrice,
         stockQuantity: globalProducts.stockQuantity,
         imageUrl: storedImageSql,
         categoryName: direct.name,
@@ -104,6 +108,7 @@ export async function listWarehouseCatalog(query: WarehouseCatalogQuery): Promis
         name: row.name,
         unit: row.unit,
         status: row.status,
+        basePriceCents: Number(row.basePriceCents),
         stockQuantity,
         low: isLowStock(stockQuantity),
         imageUrl: isStoredImagePath(row.imageUrl) ? row.imageUrl : null,
@@ -138,4 +143,70 @@ export async function listWarehouseCatalogCategories(): Promise<WarehouseCatalog
     .limit(WAREHOUSE_CATALOG_CATEGORY_MAX)
 
   return buildWarehouseCatalogCategories(rows)
+}
+
+export type WarehouseTaxonomyRow = {
+  id: number
+  name: string
+  parentId: number | null
+  parentName: string | null
+  subcategoriesCount: number
+  productsCount: number
+  createdAt: string | null
+}
+
+export type WarehouseTaxonomyList = { items: WarehouseTaxonomyRow[]; total: number; truncated: boolean }
+
+/**
+ * Super Admin's Categories (top level) or Subcategories (with a parent) list,
+ * with the same counts: subcategories under a category, live global products
+ * filed under it (a category counts its subcategories' products). Newest first,
+ * as there.
+ */
+export async function listWarehouseTaxonomy(
+  query: WarehouseTaxonomyQuery,
+  level: "category" | "subcategory",
+): Promise<WarehouseTaxonomyList> {
+  const parent = alias(categories, "warehouse_taxonomy_parent")
+  const conditions: SQL[] = [level === "category" ? isNull(categories.parentId) : isNotNull(categories.parentId)]
+  if (query.search) conditions.push(ilike(categories.name, `%${escapeLikePattern(query.search)}%`))
+  if (level === "subcategory" && query.categoryId !== null) conditions.push(eq(categories.parentId, query.categoryId))
+  const where = and(...conditions)
+
+  const productsCount = level === "category"
+    ? sql<number>`(SELECT COUNT(*)::int FROM global_products gp WHERE gp.deleted_at IS NULL AND (gp.category_id = ${categories.id} OR gp.category_id IN (SELECT sub.id FROM categories sub WHERE sub.parent_id = ${categories.id})))`
+    : sql<number>`(SELECT COUNT(*)::int FROM global_products gp WHERE gp.deleted_at IS NULL AND gp.category_id = ${categories.id})`
+
+  const [rows, [{ total }]] = await Promise.all([
+    db
+      .select({
+        id: categories.id,
+        name: categories.name,
+        parentId: categories.parentId,
+        parentName: parent.name,
+        createdAt: categories.createdAt,
+        subcategoriesCount: sql<number>`(SELECT COUNT(*)::int FROM categories sub WHERE sub.parent_id = ${categories.id})`,
+        productsCount,
+      })
+      .from(categories)
+      .leftJoin(parent, eq(categories.parentId, parent.id))
+      .where(where)
+      .orderBy(desc(categories.createdAt), desc(categories.id))
+      .limit(WAREHOUSE_TAXONOMY_ROW_MAX),
+    db.select({ total: sql<number>`COUNT(*)`.mapWith(Number) }).from(categories).where(where),
+  ])
+
+  return {
+    items: rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      parentId: row.parentId,
+      parentName: row.parentName,
+      subcategoriesCount: Number(row.subcategoriesCount),
+      productsCount: Number(row.productsCount),
+      createdAt: row.createdAt ? row.createdAt.toISOString() : null,
+    })),
+    total,
+    truncated: total > rows.length,
+  }
 }

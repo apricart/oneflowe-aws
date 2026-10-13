@@ -1,7 +1,7 @@
 export const PRODUCT_PRICE_HISTORY_RANGE_KEYS = ["90d", "180d", "1y", "all"] as const
 
 export type ProductPriceHistoryRangeKey = (typeof PRODUCT_PRICE_HISTORY_RANGE_KEYS)[number]
-export type ProductPriceHistoryRole = "SUPER_ADMIN" | "HEAD_OFFICE"
+export type ProductPriceHistoryRole = "SUPER_ADMIN" | "HEAD_OFFICE" | "WAREHOUSE"
 export type ProductPriceHistoryScope = "GLOBAL" | "ORGANIZATION" | "GROUP" | "BRANCH"
 export type ProductPriceHistorySource = "CATALOG_CHANGE" | "ORDER_BACKFILL" | "MIGRATION_BASELINE"
 

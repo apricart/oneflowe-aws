@@ -24,10 +24,11 @@
  * (`NOT_STARTED → IN_PROCESS → OUT_FOR_DELIVERY → DELIVERED`), optionally with
  * a delivery challan. It never approves, rejects, cancels, edits, fulfils,
  * prices, refunds or marks an order paid. It does see prices and invoice
- * figures on its own orders. It also reads the global product catalogue,
- * read-only and without a price. See
+ * figures on its own orders. It also reads the whole product catalogue —
+ * every menu Super Admin has, prices included — strictly read-only, the
+ * tenant-owned menus fenced to the organizations it serves. See
  * plans/OF-WAREHOUSE-warehouse-fulfilment-role.md and
- * plans/OF-WAREHOUSE-read-only-product-catalog.md.
+ * plans/OF-WAREHOUSE-full-read-only-catalog.md.
  */
 
 export const WAREHOUSE_ROLE = "WAREHOUSE" as const
@@ -130,13 +131,49 @@ export const WAREHOUSE_API_RULES: readonly WarehouseApiRule[] = [
     methods: ["GET", "PATCH"],
     pattern: /^\/api\/v1\/warehouse\/notifications$/,
   },
-  // The global product catalogue, read-only and without a price
-  // (plans/OF-WAREHOUSE-read-only-product-catalog.md).
+  // The product catalogue, read-only: every menu Super Admin has, prices
+  // included, the tenant ones fenced to the organizations the warehouse serves
+  // (plans/OF-WAREHOUSE-full-read-only-catalog.md). GET only, every one.
   { route: "app/api/v1/warehouse/catalog/route.ts", methods: ["GET"], pattern: /^\/api\/v1\/warehouse\/catalog$/ },
   {
     route: "app/api/v1/warehouse/catalog/categories/route.ts",
     methods: ["GET"],
     pattern: /^\/api\/v1\/warehouse\/catalog\/categories$/,
+  },
+  {
+    route: "app/api/v1/warehouse/catalog/taxonomy/categories/route.ts",
+    methods: ["GET"],
+    pattern: /^\/api\/v1\/warehouse\/catalog\/taxonomy\/categories$/,
+  },
+  {
+    route: "app/api/v1/warehouse/catalog/taxonomy/subcategories/route.ts",
+    methods: ["GET"],
+    pattern: /^\/api\/v1\/warehouse\/catalog\/taxonomy\/subcategories$/,
+  },
+  {
+    route: "app/api/v1/warehouse/catalog/organizations/route.ts",
+    methods: ["GET"],
+    pattern: /^\/api\/v1\/warehouse\/catalog\/organizations$/,
+  },
+  {
+    route: "app/api/v1/warehouse/catalog/organization-products/route.ts",
+    methods: ["GET"],
+    pattern: /^\/api\/v1\/warehouse\/catalog\/organization-products$/,
+  },
+  {
+    route: "app/api/v1/warehouse/catalog/group-products/route.ts",
+    methods: ["GET"],
+    pattern: /^\/api\/v1\/warehouse\/catalog\/group-products$/,
+  },
+  {
+    route: "app/api/v1/warehouse/catalog/price-history/route.ts",
+    methods: ["GET"],
+    pattern: /^\/api\/v1\/warehouse\/catalog\/price-history$/,
+  },
+  {
+    route: "app/api/v1/warehouse/catalog/product-requests/route.ts",
+    methods: ["GET"],
+    pattern: /^\/api\/v1\/warehouse\/catalog\/product-requests$/,
   },
   // A catalogue product's picture. Pinned to the `products/` key shape the
   // image route itself enforces (`isValidImageKey`): support attachments, desk
