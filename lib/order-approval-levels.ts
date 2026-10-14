@@ -3,10 +3,14 @@
  * (plans/OF-APPROVAL-LEVELS-organization-approval-levels.md).
  *
  * An organization with the feature on carries an ordered list of levels. Level
- * N's amount says that an order below or equal to it may be approved by a user
- * who holds Level N. Level 1 is the first level and has the lowest amount, and
- * every level after it must be higher than the one before: a level whose limit
- * is no higher than the level below it would add nothing.
+ * N's amount says that an order equal to or above it may be approved by a user
+ * who holds Level N. Level 1 is the highest level and has the highest amount,
+ * and every level after it must be lower than the one before: a level whose
+ * threshold is no lower than the level above it would add nothing.
+ *
+ * The amount is stored as `max_amount_cents` / `maxAmountCents`, a name kept
+ * from the first version of this feature, when the order ran the other way. It
+ * is the level's threshold: the smallest order that level approves.
  *
  * Pure. The bounds live here and nowhere else: the Zod schema, the Company
  * form and the database checks on `organization_approval_levels` all hold
@@ -115,8 +119,8 @@ export const APPROVAL_LEVELS_REQUIRED_MESSAGE =
 export const APPROVAL_LEVELS_TOO_MANY_MESSAGE =
   `An organization can have at most ${MAX_APPROVAL_LEVELS} approval levels.`
 
-function notHigherMessage(level: number, previousCents: number): string {
-  return `Level ${level}'s amount must be higher than Level ${level - 1}'s (${formatApprovalLevelAmount(previousCents)}).`
+function notLowerMessage(level: number, previousCents: number): string {
+  return `Level ${level}'s amount must be lower than Level ${level - 1}'s (${formatApprovalLevelAmount(previousCents)}).`
 }
 
 /**
@@ -138,8 +142,8 @@ export function approvalLevelsError(
     if (!isApprovalLevelAmountCents(cents)) {
       return `Level ${index + 1}: ${APPROVAL_LEVEL_AMOUNT_RANGE_MESSAGE}`
     }
-    if (index > 0 && cents <= amountsCents[index - 1]) {
-      return notHigherMessage(index + 1, amountsCents[index - 1])
+    if (index > 0 && cents >= amountsCents[index - 1]) {
+      return notLowerMessage(index + 1, amountsCents[index - 1])
     }
   }
   return null
@@ -177,8 +181,8 @@ export function approvalLevelDraftErrors(drafts: readonly string[]): (string | n
   return parsed.map((draft, index) => {
     if (!draft.ok) return draft.message
     const previous = index > 0 ? parsed[index - 1] : null
-    if (previous?.ok && draft.cents <= previous.cents) {
-      return notHigherMessage(index + 1, previous.cents)
+    if (previous?.ok && draft.cents >= previous.cents) {
+      return notLowerMessage(index + 1, previous.cents)
     }
     return null
   })

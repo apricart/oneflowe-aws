@@ -12,8 +12,8 @@ import { organizationCreateSchema, orderApprovalLevelsSchema } from "@/lib/serve
 const levels = (...amounts: number[]) => amounts.map((maxAmountCents) => ({ maxAmountCents }))
 
 describe("orderApprovalLevelsSchema", () => {
-  it("accepts levels that strictly increase", () => {
-    const parsed = orderApprovalLevelsSchema.safeParse({ enabled: true, levels: levels(4_000_000, 8_000_000) })
+  it("accepts levels that strictly fall, Level 1 highest", () => {
+    const parsed = orderApprovalLevelsSchema.safeParse({ enabled: true, levels: levels(8_000_000, 4_000_000) })
     expect(parsed.success).toBe(true)
   })
 
@@ -35,8 +35,8 @@ describe("orderApprovalLevelsSchema", () => {
     ["a negative amount", { enabled: true, levels: levels(-100) }],
     ["an amount over the maximum", { enabled: true, levels: levels(100_000_000_001) }],
     ["equal amounts", { enabled: true, levels: levels(4_000_000, 4_000_000) }],
-    ["a falling amount", { enabled: true, levels: levels(8_000_000, 4_000_000) }],
-    ["a falling amount while switched off", { enabled: false, levels: levels(8_000_000, 4_000_000) }],
+    ["a rising amount", { enabled: true, levels: levels(4_000_000, 8_000_000) }],
+    ["a rising amount while switched off", { enabled: false, levels: levels(4_000_000, 8_000_000) }],
     ["an unknown field on a level", { enabled: true, levels: [{ maxAmountCents: 100, level: 7 }] }],
     ["an unknown field on the body", { enabled: true, levels: levels(100), organizationId: 9 }],
     ["a missing switch", { levels: levels(100) }],
@@ -46,7 +46,7 @@ describe("orderApprovalLevelsSchema", () => {
   })
 
   it("allows exactly the maximum number of levels and not one more", () => {
-    const amounts = (count: number) => Array.from({ length: count }, (_, index) => (index + 1) * 100)
+    const amounts = (count: number) => Array.from({ length: count }, (_, index) => (count - index) * 100)
     expect(orderApprovalLevelsSchema.safeParse({ enabled: true, levels: levels(...amounts(MAX_APPROVAL_LEVELS)) }).success)
       .toBe(true)
     expect(orderApprovalLevelsSchema.safeParse({ enabled: true, levels: levels(...amounts(MAX_APPROVAL_LEVELS + 1)) }).success)
@@ -66,11 +66,11 @@ describe("organizationCreateSchema.orderApprovalLevels", () => {
   it("carries the same rules as the Edit endpoint", () => {
     expect(organizationCreateSchema.safeParse({
       ...company,
-      orderApprovalLevels: { enabled: true, levels: levels(4_000_000, 8_000_000) },
+      orderApprovalLevels: { enabled: true, levels: levels(8_000_000, 4_000_000) },
     }).success).toBe(true)
     expect(organizationCreateSchema.safeParse({
       ...company,
-      orderApprovalLevels: { enabled: true, levels: levels(8_000_000, 4_000_000) },
+      orderApprovalLevels: { enabled: true, levels: levels(4_000_000, 8_000_000) },
     }).success).toBe(false)
     expect(organizationCreateSchema.safeParse({
       ...company,

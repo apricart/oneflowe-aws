@@ -181,16 +181,16 @@ describe.skipIf(!hasTestDatabase)("order approval levels", () => {
 
     it("creates the switch and the levels in one go, and records them", async () => {
       const result = await createOrganization({
-        orderApprovalLevels: { enabled: true, levels: levels(4_000_000, 8_000_000, 15_000_000) },
+        orderApprovalLevels: { enabled: true, levels: levels(15_000_000, 8_000_000, 4_000_000) },
       })
       expect(result.status).toBe(201)
       const id = result.body.item.id
       expect(await stored(id)).toEqual({
         enabled: true,
         levels: [
-          { level: 1, maxAmountCents: 4_000_000 },
+          { level: 1, maxAmountCents: 15_000_000 },
           { level: 2, maxAmountCents: 8_000_000 },
-          { level: 3, maxAmountCents: 15_000_000 },
+          { level: 3, maxAmountCents: 4_000_000 },
         ],
       })
 
@@ -201,16 +201,16 @@ describe.skipIf(!hasTestDatabase)("order approval levels", () => {
       expect(created.metadata).toMatchObject({
         orderApprovalLevelsEnabled: true,
         orderApprovalLevels: [
-          { level: 1, maxAmountCents: 4_000_000 },
+          { level: 1, maxAmountCents: 15_000_000 },
           { level: 2, maxAmountCents: 8_000_000 },
-          { level: 3, maxAmountCents: 15_000_000 },
+          { level: 3, maxAmountCents: 4_000_000 },
         ],
       })
     })
 
     it.each([
       ["switched on with no levels", { enabled: true }],
-      ["levels that do not increase", { enabled: true, levels: levels(8_000_000, 4_000_000) }],
+      ["levels that do not fall", { enabled: true, levels: levels(4_000_000, 8_000_000) }],
       ["an amount sent as a string", { enabled: true, levels: [{ maxAmountCents: "4000000" }] }],
     ])("refuses %s and creates nothing", async (_label, orderApprovalLevels) => {
       const before = createdOrganizationIds.length
@@ -228,34 +228,34 @@ describe.skipIf(!hasTestDatabase)("order approval levels", () => {
 
     it("switches on with levels, records before and after, and reads them back", async () => {
       signIn(superAdmin())
-      const saved = await putLevels(f.organizationId, { enabled: true, levels: levels(4_000_000, 8_000_000) })
+      const saved = await putLevels(f.organizationId, { enabled: true, levels: levels(8_000_000, 4_000_000) })
       expect(saved.status).toBe(200)
       expect(saved.body).toMatchObject({
         enabled: true,
         changed: true,
-        levels: [{ level: 1, maxAmountCents: 4_000_000 }, { level: 2, maxAmountCents: 8_000_000 }],
+        levels: [{ level: 1, maxAmountCents: 8_000_000 }, { level: 2, maxAmountCents: 4_000_000 }],
       })
       expect(await getLevels(f.organizationId)).toEqual({
         status: 200,
-        body: { enabled: true, levels: [{ level: 1, maxAmountCents: 4_000_000 }, { level: 2, maxAmountCents: 8_000_000 }] },
+        body: { enabled: true, levels: [{ level: 1, maxAmountCents: 8_000_000 }, { level: 2, maxAmountCents: 4_000_000 }] },
       })
 
       const [audit] = await auditRows(f.organizationId)
       expect(audit.userId).toBe(f.superAdminId)
       expect(audit.metadata).toMatchObject({
         before: { enabled: false, levels: [] },
-        after: { enabled: true, levels: [{ level: 1, maxAmountCents: 4_000_000 }, { level: 2, maxAmountCents: 8_000_000 }] },
+        after: { enabled: true, levels: [{ level: 1, maxAmountCents: 8_000_000 }, { level: 2, maxAmountCents: 4_000_000 }] },
       })
     })
 
     it("replaces the whole list: adding, changing and removing levels", async () => {
       signIn(superAdmin())
-      await putLevels(f.organizationId, { enabled: true, levels: levels(4_000_000, 8_000_000) })
-      await putLevels(f.organizationId, { enabled: true, levels: levels(5_000_000, 8_000_000, 20_000_000) })
+      await putLevels(f.organizationId, { enabled: true, levels: levels(8_000_000, 4_000_000) })
+      await putLevels(f.organizationId, { enabled: true, levels: levels(20_000_000, 8_000_000, 5_000_000) })
       expect((await stored(f.organizationId)).levels).toEqual([
-        { level: 1, maxAmountCents: 5_000_000 },
+        { level: 1, maxAmountCents: 20_000_000 },
         { level: 2, maxAmountCents: 8_000_000 },
-        { level: 3, maxAmountCents: 20_000_000 },
+        { level: 3, maxAmountCents: 5_000_000 },
       ])
 
       await putLevels(f.organizationId, { enabled: true, levels: levels(5_000_000) })
@@ -264,26 +264,26 @@ describe.skipIf(!hasTestDatabase)("order approval levels", () => {
 
     it("switching off without levels keeps them, and switching back on restores them", async () => {
       signIn(superAdmin())
-      await putLevels(f.organizationId, { enabled: true, levels: levels(4_000_000, 8_000_000) })
+      await putLevels(f.organizationId, { enabled: true, levels: levels(8_000_000, 4_000_000) })
 
       const off = await putLevels(f.organizationId, { enabled: false })
       expect(off.status).toBe(200)
       expect(off.body).toMatchObject({ enabled: false, changed: true })
       expect(await stored(f.organizationId)).toEqual({
         enabled: false,
-        levels: [{ level: 1, maxAmountCents: 4_000_000 }, { level: 2, maxAmountCents: 8_000_000 }],
+        levels: [{ level: 1, maxAmountCents: 8_000_000 }, { level: 2, maxAmountCents: 4_000_000 }],
       })
 
-      await putLevels(f.organizationId, { enabled: true, levels: levels(4_000_000, 8_000_000) })
+      await putLevels(f.organizationId, { enabled: true, levels: levels(8_000_000, 4_000_000) })
       expect((await stored(f.organizationId)).enabled).toBe(true)
     })
 
     it("writes no audit row for a save that changes nothing", async () => {
       signIn(superAdmin())
-      await putLevels(f.organizationId, { enabled: true, levels: levels(4_000_000, 8_000_000) })
+      await putLevels(f.organizationId, { enabled: true, levels: levels(8_000_000, 4_000_000) })
       expect(await auditRows(f.organizationId)).toHaveLength(1)
 
-      const again = await putLevels(f.organizationId, { enabled: true, levels: levels(4_000_000, 8_000_000) })
+      const again = await putLevels(f.organizationId, { enabled: true, levels: levels(8_000_000, 4_000_000) })
       expect(again.body).toMatchObject({ changed: false, message: "Approval levels unchanged" })
       expect(await auditRows(f.organizationId)).toHaveLength(1)
 
@@ -296,12 +296,12 @@ describe.skipIf(!hasTestDatabase)("order approval levels", () => {
       ["switched on with no levels", { enabled: true }],
       ["switched on with an empty list", { enabled: true, levels: [] }],
       ["equal amounts", { enabled: true, levels: levels(4_000_000, 4_000_000) }],
-      ["a falling amount", { enabled: true, levels: levels(8_000_000, 4_000_000) }],
+      ["a rising amount", { enabled: true, levels: levels(4_000_000, 8_000_000) }],
       ["a zero amount", { enabled: true, levels: levels(0) }],
       ["an amount over the maximum", { enabled: true, levels: levels(100_000_000_001) }],
       ["a fractional amount", { enabled: true, levels: levels(100.5) }],
       ["an amount sent as a string", { enabled: true, levels: [{ maxAmountCents: "100" }] }],
-      ["eleven levels", { enabled: true, levels: levels(...Array.from({ length: 11 }, (_, i) => (i + 1) * 100)) }],
+      ["eleven levels", { enabled: true, levels: levels(...Array.from({ length: 11 }, (_, i) => (11 - i) * 100)) }],
       ["an unknown field", { enabled: true, levels: levels(100), organizationId: 1 }],
     ])("refuses %s and stores nothing", async (_label, body) => {
       signIn(superAdmin())
@@ -334,13 +334,13 @@ describe.skipIf(!hasTestDatabase)("order approval levels", () => {
     it("lets two concurrent saves both finish, leaving one of the two complete lists", async () => {
       signIn(superAdmin())
       const [first, second] = await Promise.all([
-        putLevels(f.organizationId, { enabled: true, levels: levels(1_000, 2_000) }),
-        putLevels(f.organizationId, { enabled: true, levels: levels(3_000, 4_000, 5_000) }),
+        putLevels(f.organizationId, { enabled: true, levels: levels(2_000, 1_000) }),
+        putLevels(f.organizationId, { enabled: true, levels: levels(5_000, 4_000, 3_000) }),
       ])
       expect(first.status).toBe(200)
       expect(second.status).toBe(200)
       const amounts = (await stored(f.organizationId)).levels.map((level) => level.maxAmountCents)
-      expect([[1_000, 2_000], [3_000, 4_000, 5_000]]).toContainEqual(amounts)
+      expect([[2_000, 1_000], [5_000, 4_000, 3_000]]).toContainEqual(amounts)
     })
   })
 
@@ -359,7 +359,7 @@ describe.skipIf(!hasTestDatabase)("order approval levels", () => {
     })
 
     it("removes an organization's levels with the organization", async () => {
-      const result = await createOrganization({ orderApprovalLevels: { enabled: true, levels: levels(100, 200) } })
+      const result = await createOrganization({ orderApprovalLevels: { enabled: true, levels: levels(200, 100) } })
       const id = result.body.item.id
       expect((await stored(id)).levels).toHaveLength(2)
 

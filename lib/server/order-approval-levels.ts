@@ -20,7 +20,8 @@ import { recordAuditEvent, type AuditActor } from "@/lib/server/activity-audit"
  *
  * Validation happens before anything reaches here — `orderApprovalLevelsSchema`
  * runs `approvalLevelsError` on every request — so these functions take amounts
- * that are already known to be well formed and strictly increasing.
+ * that are already known to be well formed and strictly decreasing (Level 1
+ * highest).
  */
 
 type Executor = Pick<typeof db, "select">

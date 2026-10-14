@@ -854,7 +854,7 @@ describe("OrganizationsPage order approval levels", () => {
     expect(created.body.orderApprovalLevels).toEqual({ enabled: false })
   })
 
-  it("Create Company shows Level 1 when switched on, adds levels, refuses a level no higher than the one before, and sends cents", async () => {
+  it("Create Company shows Level 1 when switched on, adds levels, refuses a level no lower than the one before, and sends cents", async () => {
     const calls = stubOrganizationApi()
     render(<OrganizationsPage />)
 
@@ -866,15 +866,15 @@ describe("OrganizationsPage order approval levels", () => {
     // Level 1 is there at once; Save waits for its amount.
     expect(screen.getByLabelText("Level 1 approver")).toBeTruthy()
     expect(save.disabled).toBe(true)
-    fireEvent.change(screen.getByLabelText("Level 1 approver"), { target: { value: "40,000" } })
+    fireEvent.change(screen.getByLabelText("Level 1 approver"), { target: { value: "80,000" } })
     expect(save.disabled).toBe(false)
 
     fireEvent.click(screen.getByRole("button", { name: /add approver level/i }))
     expect(save.disabled).toBe(true)
-    fireEvent.change(screen.getByLabelText("Level 2 approver"), { target: { value: "40000" } })
-    expect(screen.getByText("Level 2's amount must be higher than Level 1's (PKR 40,000.00).")).toBeTruthy()
+    fireEvent.change(screen.getByLabelText("Level 2 approver"), { target: { value: "80000" } })
+    expect(screen.getByText("Level 2's amount must be lower than Level 1's (PKR 80,000.00).")).toBeTruthy()
     expect(save.disabled).toBe(true)
-    fireEvent.change(screen.getByLabelText("Level 2 approver"), { target: { value: "80000.50" } })
+    fireEvent.change(screen.getByLabelText("Level 2 approver"), { target: { value: "40000.50" } })
     expect(save.disabled).toBe(false)
 
     await confirmCreate((confirm) => {
@@ -885,7 +885,7 @@ describe("OrganizationsPage order approval levels", () => {
     const created = calls.find((call) => call.url === "/api/v1/organizations")!
     expect(created.body.orderApprovalLevels).toEqual({
       enabled: true,
-      levels: [{ maxAmountCents: 4_000_000 }, { maxAmountCents: 8_000_050 }],
+      levels: [{ maxAmountCents: 8_000_000 }, { maxAmountCents: 4_000_050 }],
     })
   })
 
@@ -893,7 +893,7 @@ describe("OrganizationsPage order approval levels", () => {
     const calls = stubOrganizationApi({
       approvalLevels: {
         status: 200,
-        body: { enabled: true, levels: [{ level: 1, maxAmountCents: 4_000_000 }, { level: 2, maxAmountCents: 8_000_000 }] },
+        body: { enabled: true, levels: [{ level: 1, maxAmountCents: 8_000_000 }, { level: 2, maxAmountCents: 4_000_000 }] },
       },
     })
     render(<OrganizationsPage />)
@@ -901,11 +901,11 @@ describe("OrganizationsPage order approval levels", () => {
     const { dialog, save } = await openEdit(0)
     await waitFor(() => expect(save.disabled).toBe(false))
     expect(within(dialog).getByRole("switch", { name: TOGGLE }).getAttribute("data-state")).toBe("checked")
-    expect((within(dialog).getByLabelText("Level 1 approver") as HTMLInputElement).value).toBe("40000")
-    expect((within(dialog).getByLabelText("Level 2 approver") as HTMLInputElement).value).toBe("80000")
+    expect((within(dialog).getByLabelText("Level 1 approver") as HTMLInputElement).value).toBe("80000")
+    expect((within(dialog).getByLabelText("Level 2 approver") as HTMLInputElement).value).toBe("40000")
 
     fireEvent.click(within(dialog).getByRole("button", { name: /add approver level/i }))
-    fireEvent.change(within(dialog).getByLabelText("Level 3 approver"), { target: { value: "150000" } })
+    fireEvent.change(within(dialog).getByLabelText("Level 3 approver"), { target: { value: "15000" } })
     await act(async () => {
       fireEvent.click(save)
     })
@@ -913,7 +913,7 @@ describe("OrganizationsPage order approval levels", () => {
     await waitFor(() => expect(putsTo(calls, 1)).toHaveLength(1))
     expect(putsTo(calls, 1)[0].body).toEqual({
       enabled: true,
-      levels: [{ maxAmountCents: 4_000_000 }, { maxAmountCents: 8_000_000 }, { maxAmountCents: 15_000_000 }],
+      levels: [{ maxAmountCents: 8_000_000 }, { maxAmountCents: 4_000_000 }, { maxAmountCents: 1_500_000 }],
     })
   })
 

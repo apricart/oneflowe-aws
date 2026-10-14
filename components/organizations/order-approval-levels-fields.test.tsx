@@ -68,19 +68,19 @@ describe("OrderApprovalLevelsFields", () => {
   })
 
   it("adds Level 2, Level 3 and so on, each with its own amount", () => {
-    render(<Harness initialEnabled initialLevels={["40000"]} />)
+    render(<Harness initialEnabled initialLevels={["80000"]} />)
 
     fireEvent.click(addButton())
-    fireEvent.change(levelInput(2), { target: { value: "80000" } })
+    fireEvent.change(levelInput(2), { target: { value: "40000" } })
     fireEvent.click(addButton())
 
-    expect(levelInput(1).value).toBe("40000")
-    expect(levelInput(2).value).toBe("80000")
+    expect(levelInput(1).value).toBe("80000")
+    expect(levelInput(2).value).toBe("40000")
     expect(levelInput(3).value).toBe("")
   })
 
   it("offers Remove on the last level only, and never on a lone Level 1", () => {
-    render(<Harness initialEnabled initialLevels={["40000", "80000", "120000"]} />)
+    render(<Harness initialEnabled initialLevels={["120000", "80000", "40000"]} />)
 
     expect(screen.queryByRole("button", { name: "Remove level 1" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Remove level 2" })).toBeNull()
@@ -92,10 +92,10 @@ describe("OrderApprovalLevelsFields", () => {
     expect(screen.queryByRole("button", { name: "Remove level 1" })).toBeNull()
   })
 
-  it("explains, on the level itself, an amount that is malformed or not higher than the one before", () => {
-    render(<Harness initialEnabled initialLevels={["40000", "30000"]} />)
+  it("explains, on the level itself, an amount that is malformed or not lower than the one before", () => {
+    render(<Harness initialEnabled initialLevels={["40000", "50000"]} />)
 
-    expect(screen.getByText("Level 2's amount must be higher than Level 1's (PKR 40,000.00).")).toBeTruthy()
+    expect(screen.getByText("Level 2's amount must be lower than Level 1's (PKR 40,000.00).")).toBeTruthy()
     expect(levelInput(2).getAttribute("aria-invalid")).toBe("true")
     expect(levelInput(1).hasAttribute("aria-invalid")).toBe(false)
 
@@ -115,19 +115,19 @@ describe("OrderApprovalLevelsFields", () => {
 
   it("keeps the levels when switched off, so switching back on restores them", () => {
     const onChange = vi.fn()
-    render(<Harness initialEnabled initialLevels={["40000", "80000"]} onChange={onChange} />)
+    render(<Harness initialEnabled initialLevels={["80000", "40000"]} onChange={onChange} />)
 
     fireEvent.click(toggle())
     expect(isOn(toggle())).toBe(false)
     expect(screen.queryByLabelText("Level 1 approver")).toBeNull()
     fireEvent.click(toggle())
 
-    expect(levelInput(1).value).toBe("40000")
-    expect(levelInput(2).value).toBe("80000")
+    expect(levelInput(1).value).toBe("80000")
+    expect(levelInput(2).value).toBe("40000")
   })
 
   it("locks every control while saving", () => {
-    render(<Harness initialEnabled initialLevels={["40000", "80000"]} disabled />)
+    render(<Harness initialEnabled initialLevels={["80000", "40000"]} disabled />)
 
     expect(toggle().disabled).toBe(true)
     expect(levelInput(1).disabled).toBe(true)

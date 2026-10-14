@@ -95,9 +95,9 @@ describe("isApprovalLevelAmountCents", () => {
 })
 
 describe("approvalLevelsError", () => {
-  it("accepts strictly increasing amounts", () => {
+  it("accepts amounts that strictly fall, Level 1 highest", () => {
     expect(approvalLevelsError(true, [4_000_000])).toBeNull()
-    expect(approvalLevelsError(true, [4_000_000, 8_000_000, 8_000_001])).toBeNull()
+    expect(approvalLevelsError(true, [8_000_001, 8_000_000, 4_000_000])).toBeNull()
   })
 
   it("requires a level when switched on, and none when switched off", () => {
@@ -105,14 +105,14 @@ describe("approvalLevelsError", () => {
     expect(approvalLevelsError(false, [])).toBeNull()
   })
 
-  it("refuses an amount no higher than the level before it, equal included", () => {
-    expect(approvalLevelsError(true, [8_000_000, 4_000_000])).toBe(
-      "Level 2's amount must be higher than Level 1's (PKR 80,000.00).",
+  it("refuses an amount no lower than the level before it, equal included", () => {
+    expect(approvalLevelsError(true, [4_000_000, 8_000_000])).toBe(
+      "Level 2's amount must be lower than Level 1's (PKR 40,000.00).",
     )
     expect(approvalLevelsError(true, [4_000_000, 4_000_000])).toBe(
-      "Level 2's amount must be higher than Level 1's (PKR 40,000.00).",
+      "Level 2's amount must be lower than Level 1's (PKR 40,000.00).",
     )
-    expect(approvalLevelsError(false, [4_000_000, 8_000_000, 6_000_000])).toContain("Level 3's amount")
+    expect(approvalLevelsError(false, [8_000_000, 4_000_000, 6_000_000])).toContain("Level 3's amount")
   })
 
   it("refuses an amount outside the bounds", () => {
@@ -124,7 +124,7 @@ describe("approvalLevelsError", () => {
   })
 
   it("allows exactly the maximum number of levels and not one more", () => {
-    const amounts = (count: number) => Array.from({ length: count }, (_, index) => (index + 1) * 100)
+    const amounts = (count: number) => Array.from({ length: count }, (_, index) => (count - index) * 100)
     expect(approvalLevelsError(true, amounts(MAX_APPROVAL_LEVELS))).toBeNull()
     expect(approvalLevelsError(true, amounts(MAX_APPROVAL_LEVELS + 1))).toBe(APPROVAL_LEVELS_TOO_MANY_MESSAGE)
   })
@@ -161,11 +161,11 @@ describe("approvalLevelsChanged", () => {
 
 describe("the form's drafts", () => {
   it("reports each level's own problem, then its order against the level before", () => {
-    expect(approvalLevelDraftErrors(["40000", "80000"])).toEqual([null, null])
+    expect(approvalLevelDraftErrors(["80000", "40000"])).toEqual([null, null])
     expect(approvalLevelDraftErrors(["40000", ""])).toEqual([null, APPROVAL_LEVEL_AMOUNT_FORMAT_MESSAGE])
-    expect(approvalLevelDraftErrors(["80000", "40000"])).toEqual([
+    expect(approvalLevelDraftErrors(["40000", "80000"])).toEqual([
       null,
-      "Level 2's amount must be higher than Level 1's (PKR 80,000.00).",
+      "Level 2's amount must be lower than Level 1's (PKR 40,000.00).",
     ])
     // A level after one that does not parse is judged on its own text only.
     expect(approvalLevelDraftErrors(["abc", "40000"])).toEqual([APPROVAL_LEVEL_AMOUNT_FORMAT_MESSAGE, null])
@@ -175,8 +175,8 @@ describe("the form's drafts", () => {
     expect(approvalLevelDraftsError(false, [])).toBeNull()
     expect(approvalLevelDraftsError(false, ["garbage"])).toBeNull()
     expect(approvalLevelDraftsError(true, [])).toBe(APPROVAL_LEVELS_REQUIRED_MESSAGE)
-    expect(approvalLevelDraftsError(true, ["40000", "30000"])).toBe("Fix the approval level amounts before saving.")
-    expect(approvalLevelDraftsError(true, ["40000", "80,000"])).toBeNull()
+    expect(approvalLevelDraftsError(true, ["30000", "40000"])).toBe("Fix the approval level amounts before saving.")
+    expect(approvalLevelDraftsError(true, ["80,000", "40000"])).toBeNull()
     expect(approvalLevelDraftsError(true, Array.from({ length: MAX_APPROVAL_LEVELS + 1 }, (_, i) => String(i + 1))))
       .toBe(APPROVAL_LEVELS_TOO_MANY_MESSAGE)
   })

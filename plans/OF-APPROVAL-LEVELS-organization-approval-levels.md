@@ -1,9 +1,18 @@
 # OF-APPROVAL-LEVELS — Phase 1: per-organization order approval levels
 
 Phase 1 of the amount-based approval work discussed in
-`plans/OF-JOIN-department-signup-multi-user.md`. That plan numbered the bands
-the other way round (Level 3 lowest). **This plan supersedes that numbering:**
-Level 1 is the first level, with the lowest amount.
+`plans/OF-JOIN-department-signup-multi-user.md`. **Level 1 is the highest
+level, with the highest amount**, as in that plan's original request.
+
+> **Revised 2026-10-14.** The first version shipped the opposite direction
+> (Level 1 lowest, each level approving orders *up to* its amount). Super Admin
+> asked for Level 1 to be the highest level, approving orders *equal to or
+> above* its amount. Only the ordering rule and the wording changed; the
+> storage, endpoints and schema shapes are as before. The column keeps its name
+> `max_amount_cents` (the API field `maxAmountCents`): it now holds the level's
+> threshold, the smallest order that level approves. Renaming it would need a
+> migration and a breaking API change for no behaviour, so it is left for a
+> later release if wanted.
 
 ## What is being asked
 
@@ -13,8 +22,8 @@ Level 1 is the first level, with the lowest amount.
 3. Switching it on shows **Level 1 approver** with an amount field. "Add level"
    adds Level 2 with its own amount, then Level 3, and so on, as many as
    needed.
-4. A level's amount means: an order **below or equal to** that amount can be
-   approved by a user who holds that level.
+4. A level's amount means: an order **equal to or above** that amount can be
+   approved by a user who holds that level. Level 1 is the highest level.
 5. **Only Super Admin** may switch it on or off, or change the levels.
 
 ## Scope of this phase
@@ -37,9 +46,14 @@ this phase.
 
 ## Decisions
 
-1. **Amounts must strictly increase.** Level 2's amount must be higher than
-   Level 1's, and so on. A level whose limit is no higher than the one below it
-   would add nothing. Equal amounts are refused for the same reason.
+1. **Amounts must strictly fall.** Level 1 has the highest amount; Level 2's
+   must be lower than Level 1's, and so on. A level whose threshold is no lower
+   than the level above it would add nothing. Equal amounts are refused for the
+   same reason.
+   *Open for phase 2:* who approves an order below the lowest level's amount,
+   and whether a higher level may also approve a smaller order (a ceiling) or
+   only its own band. Phase 1 stores the thresholds only, so neither question
+   changes anything yet.
 2. **Levels are positional and contiguous.** The request carries an ordered
    list; level number = position (1, 2, 3, …). Gaps are impossible by
    construction.
@@ -155,7 +169,7 @@ No Viewer marker goes in any write handler (`lib/viewer-access.test.ts`).
 
 * `components/organizations/order-approval-levels-fields.tsx`:
   * the switch;
-  * one row per level, "Level N approver — approves orders up to (PKR)",
+  * one row per level, "Level N approver — approves orders from (PKR)",
     each with its own inline error;
   * "Add approver level" (disabled at 10);
   * Remove on the last level only;
@@ -192,7 +206,7 @@ No Viewer marker goes in any write handler (`lib/viewer-access.test.ts`).
 * **Unit** (`lib/order-approval-levels.test.ts`):
   * the parser at its edges (blank, 0, negative, letters, three decimals,
     commas, the maximum and one past it);
-  * strictly increasing (equal refused);
+  * strictly falling, Level 1 highest (equal refused);
   * at most 10 levels;
   * enabled with no levels refused;
   * the payload builder (disabled omits levels);

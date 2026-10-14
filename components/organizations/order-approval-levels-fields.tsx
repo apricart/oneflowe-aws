@@ -62,7 +62,7 @@ export function OrderApprovalLevelsFields({
         <div>
           <Label htmlFor={switchId}>Order approval levels</Label>
           <p className="text-xs text-muted-foreground">
-            Give this company&apos;s orders approval levels, each approving orders up to its own amount.
+            Give this company&apos;s orders approval levels, each approving orders from its own amount upwards.
           </p>
         </div>
         <Switch
@@ -76,8 +76,9 @@ export function OrderApprovalLevelsFields({
       {enabled && (
         <div className="space-y-3 border-t pt-3">
           <p className="text-xs text-muted-foreground">
-            An order below or equal to a level&apos;s amount can be approved by a user who holds that
-            level. Each level&apos;s amount must be higher than the level before it.
+            An order equal to or above a level&apos;s amount can be approved by a user who holds that
+            level. Level 1 is the highest level, so each level&apos;s amount must be lower than the
+            level before it.
           </p>
 
           <ol className="space-y-2">
@@ -106,7 +107,7 @@ export function OrderApprovalLevelsFields({
                         autoComplete="off"
                         value={text}
                         onChange={(event) => updateLevel(index, event.target.value)}
-                        placeholder="Approves orders up to, e.g. 40000"
+                        placeholder="Approves orders from, e.g. 40000"
                         disabled={disabled}
                         aria-invalid={problem ? true : undefined}
                         aria-describedby={problem ? errorId : undefined}
