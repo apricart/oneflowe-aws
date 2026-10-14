@@ -180,6 +180,9 @@ const VIA_LIB: readonly { file: string; module: string }[] = [
   // UPDATE_ORDER_APPROVAL_LEVELS, with before and after, inside the locked
   // transaction that replaces them (plans/OF-APPROVAL-LEVELS-organization-approval-levels.md).
   { file: "app/api/v1/organizations/[id]/approval-levels/route.ts", module: "lib/server/order-approval-levels.ts" },
+  // Giving a user an approval level records ASSIGN_ORDER_APPROVAL_LEVEL inside
+  // the transaction that writes it (plans/OF-APPROVAL-LEVELS-assign-users-to-levels.md).
+  { file: "app/api/v1/users/[id]/approval-level/route.ts", module: "lib/server/user-approval-level.ts" },
 
   // Delivery addresses. Asking for a destination and granting one are both on
   // the trail — an approved address diverts stock to somewhere the branch's own

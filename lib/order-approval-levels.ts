@@ -222,3 +222,60 @@ export function toApprovalLevelsPayload(enabled: boolean, drafts: readonly strin
     }),
   }
 }
+
+/* ── Users holding a level ───────────────────────────────────────────────── */
+/* plans/OF-APPROVAL-LEVELS-assign-users-to-levels.md                         */
+
+/** `audit_logs.action` when a user's level is set or cleared. */
+export const USER_APPROVAL_LEVEL_AUDIT_ACTION = "ASSIGN_ORDER_APPROVAL_LEVEL"
+
+/** What decides whether a user of an organization may hold a level. */
+export type ApprovalLevelOrganization = {
+  orderApprovalRequired: boolean
+  orderApprovalLevelsEnabled: boolean
+  /** The organization's configured approver role (`organizations.order_approver_role`). */
+  orderApproverRole: string | null
+}
+
+/**
+ * Whether a user of this role may hold one of this organization's levels: the
+ * organization requires approval and has levels on, and the role is one that
+ * decides its orders — a Group User always, or the configured approver role.
+ */
+export function canHoldApprovalLevel(role: string, organization: ApprovalLevelOrganization): boolean {
+  if (!organization.orderApprovalRequired || !organization.orderApprovalLevelsEnabled) return false
+  return role === "GROUP_USER" || (organization.orderApproverRole !== null && role === organization.orderApproverRole)
+}
+
+export const APPROVAL_LEVEL_NOT_APPLICABLE_MESSAGE =
+  "Approval levels apply only to order approvers of an organization that requires order approval and has approval levels switched on."
+
+/**
+ * Why `level` cannot be given to a user of `role`, or null when it can. Null
+ * (no level) is always allowed. `levelCount` is how many levels the
+ * organization has now.
+ */
+export function approvalLevelAssignmentRefusal(input: {
+  role: string
+  organization: ApprovalLevelOrganization | null
+  levelCount: number
+  level: number | null
+}): string | null {
+  if (input.level === null) return null
+  if (!Number.isInteger(input.level) || input.level < 1 || input.level > MAX_APPROVAL_LEVELS) {
+    return `Choose a level between 1 and ${MAX_APPROVAL_LEVELS}.`
+  }
+  if (!input.organization || !canHoldApprovalLevel(input.role, input.organization)) {
+    return APPROVAL_LEVEL_NOT_APPLICABLE_MESSAGE
+  }
+  if (input.level > input.levelCount) {
+    return `This organization has no Level ${input.level}.`
+  }
+  return null
+}
+
+/** The 409 when removing levels that users still hold. */
+export function heldLevelsRemovalMessage(held: readonly { level: number; users: number }[]): string {
+  const parts = held.map(({ level, users }) => `Level ${level} (${users} ${users === 1 ? "user" : "users"})`)
+  return `These levels are still assigned: ${parts.join(", ")}. Give those users another level, or none, before removing them.`
+}

@@ -110,6 +110,14 @@ const assignedIdList = z.array(positiveId)
   .max(MAX_ASSIGNED_SCOPE_IDS)
   .refine(isUniquePositiveIdList, { message: "Duplicate ids are not allowed" })
 
+/** A level number (1 = highest) or null for none. A JSON integer only. */
+const userOrderApprovalLevel = z.number().int().min(1).max(MAX_APPROVAL_LEVELS).nullable()
+
+/** `PUT /api/v1/users/[id]/approval-level`. */
+export const userApprovalLevelUpdateSchema = z.object({
+  level: userOrderApprovalLevel,
+}).strict()
+
 export const userCreateSchema = z.object({
   firstName: z.string().trim().min(1).max(100),
   lastName: z.string().trim().min(1).max(100),
@@ -132,6 +140,10 @@ export const userCreateSchema = z.object({
   // other role, so existing single-branch roles are unaffected.
   groupIds: assignedIdList.optional().default([]),
   branchIds: assignedIdList.optional().default([]),
+  // The organization's order approval level this user holds, or null. Whether
+  // the role and organization admit one is checked inside the creation
+  // transaction (plans/OF-APPROVAL-LEVELS-assign-users-to-levels.md).
+  orderApprovalLevel: userOrderApprovalLevel.optional().default(null),
 }).strict().refine((input) => input.role === "GROUP_USER" || input.budgetAllocationEnabled === undefined, {
   message: "Budget allocation access applies only to Group Users",
   path: ["budgetAllocationEnabled"],

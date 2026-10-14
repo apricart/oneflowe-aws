@@ -652,6 +652,13 @@
       "when": 1791064800000,
       "tag": "20261017120000_add_organization_approval_levels",
       "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "7",
+      "when": 1791068400000,
+      "tag": "20261018120000_add_user_order_approval_level",
+      "breakpoints": true
     }
   ]
 }

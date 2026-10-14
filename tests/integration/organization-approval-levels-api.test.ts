@@ -148,13 +148,23 @@ describe.skipIf(!hasTestDatabase)("order approval levels", () => {
     })
 
     it.each([
-      ["Head Office of the same organization", () => headOffice()],
       ["a Group User", () => groupUser()],
       ["a Branch Admin", () => branchAdmin()],
       ["an Order Portal user", () => orderPortal()],
     ])("refuses %s on both methods, and stores nothing", async (_label, actor) => {
       signIn(actor())
       expect((await getLevels(f.organizationId)).status).toBe(403)
+      expect((await putLevels(f.organizationId, { enabled: true, levels: levels(100) })).status).toBe(403)
+      expect(await stored(f.organizationId)).toEqual({ enabled: false, levels: [] })
+      expect(await auditRows(f.organizationId)).toHaveLength(0)
+    })
+
+    // Head Office reads its own organization's levels for the user forms
+    // (plans/OF-APPROVAL-LEVELS-assign-users-to-levels.md), but never writes them.
+    it("lets Head Office read its own organization's levels but never write them", async () => {
+      signIn(headOffice())
+      expect((await getLevels(f.organizationId)).status).toBe(200)
+      expect((await getLevels(f.foreignOrganizationId)).status).toBe(404)
       expect((await putLevels(f.organizationId, { enabled: true, levels: levels(100) })).status).toBe(403)
       expect(await stored(f.organizationId)).toEqual({ enabled: false, levels: [] })
       expect(await auditRows(f.organizationId)).toHaveLength(0)
@@ -223,7 +233,10 @@ describe.skipIf(!hasTestDatabase)("order approval levels", () => {
   describe("Edit Organization", () => {
     it("reads an organization that has never set levels as off, with none", async () => {
       signIn(superAdmin())
-      expect(await getLevels(f.organizationId)).toEqual({ status: 200, body: { enabled: false, levels: [] } })
+      expect(await getLevels(f.organizationId)).toEqual({
+        status: 200,
+        body: { enabled: false, levels: [], orderApprovalRequired: true, orderApproverRole: "BRANCH_ADMIN" },
+      })
     })
 
     it("switches on with levels, records before and after, and reads them back", async () => {
@@ -235,7 +248,7 @@ describe.skipIf(!hasTestDatabase)("order approval levels", () => {
         changed: true,
         levels: [{ level: 1, maxAmountCents: 8_000_000 }, { level: 2, maxAmountCents: 4_000_000 }],
       })
-      expect(await getLevels(f.organizationId)).toEqual({
+      expect(await getLevels(f.organizationId)).toMatchObject({
         status: 200,
         body: { enabled: true, levels: [{ level: 1, maxAmountCents: 8_000_000 }, { level: 2, maxAmountCents: 4_000_000 }] },
       })
@@ -328,7 +341,7 @@ describe.skipIf(!hasTestDatabase)("order approval levels", () => {
     it("keeps one organization's levels out of another's", async () => {
       signIn(superAdmin())
       await putLevels(f.organizationId, { enabled: true, levels: levels(4_000_000) })
-      expect(await getLevels(f.foreignOrganizationId)).toEqual({ status: 200, body: { enabled: false, levels: [] } })
+      expect(await getLevels(f.foreignOrganizationId)).toMatchObject({ status: 200, body: { enabled: false, levels: [] } })
     })
 
     it("lets two concurrent saves both finish, leaving one of the two complete lists", async () => {

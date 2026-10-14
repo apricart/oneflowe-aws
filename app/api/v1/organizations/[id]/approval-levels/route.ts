@@ -14,10 +14,12 @@ export const dynamic = "force-dynamic"
  * An organization's order approval levels
  * (plans/OF-APPROVAL-LEVELS-organization-approval-levels.md).
  *
- * Both methods are SUPER_ADMIN only: whether a tenant's orders carry approval
- * levels, and what each level may approve, is set by Apricart, never by the
- * tenant. Kept off the organization PATCH, as private network login is, so the
- * whole set is read and replaced as one thing.
+ * Writing is SUPER_ADMIN only: whether a tenant's orders carry approval levels,
+ * and what each level may approve, is set by Apricart, never by the tenant.
+ * Reading is also open to HEAD_OFFICE for its own organization, whose user
+ * forms list the levels to assign (plans/OF-APPROVAL-LEVELS-assign-users-to-levels.md).
+ * Kept off the organization PATCH, as private network login is, so the whole
+ * set is read and replaced as one thing.
  */
 
 function parseOrganizationId(value: string): number | null {
@@ -32,13 +34,21 @@ export async function GET(
   _req: Request,
   props: { params: Promise<{ id: string }> },
 ) {
-  const authError = await requireApiRole(["SUPER_ADMIN"])
+  const authError = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE"])
   if (authError) return authError
 
   try {
     const { id } = await props.params
     const organizationId = parseOrganizationId(id)
     if (organizationId === null) return error("Invalid organization ID", 400)
+
+    // Head Office reads its own organization only; any other reads as absent.
+    // The organization comes from the session's user row, never the request.
+    const scope = await getRequestScope()
+    if (!scope) return error("Invalid session data", 401)
+    if (scope.role !== "SUPER_ADMIN" && scope.organizationId !== organizationId) {
+      return error("Organization not found", 404)
+    }
 
     const state = await readOrganizationApprovalLevels(organizationId)
     if (!state) return error("Organization not found", 404)
@@ -81,6 +91,7 @@ export async function PUT(
       actor: { id: scope.userId, role: scope.role },
     })
     if (outcome.kind === "not-found") return error("Organization not found", 404)
+    if (outcome.kind === "levels-held") return error(outcome.message, 409)
 
     if (outcome.changed) await invalidateByPrefix("organizations")
 

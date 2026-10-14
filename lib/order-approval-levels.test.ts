@@ -7,7 +7,11 @@ import {
   APPROVAL_LEVELS_REQUIRED_MESSAGE,
   APPROVAL_LEVELS_TOO_MANY_MESSAGE,
   MAX_APPROVAL_LEVELS,
+  APPROVAL_LEVEL_NOT_APPLICABLE_MESSAGE,
   approvalLevelAmountText,
+  approvalLevelAssignmentRefusal,
+  canHoldApprovalLevel,
+  heldLevelsRemovalMessage,
   approvalLevelDraftErrors,
   approvalLevelDraftsError,
   approvalLevelsChanged,
@@ -188,5 +192,72 @@ describe("the form's drafts", () => {
     })
     expect(toApprovalLevelsPayload(false, ["40,000"])).toEqual({ enabled: false })
     expect(() => toApprovalLevelsPayload(true, ["nope"])).toThrow()
+  })
+})
+
+/* plans/OF-APPROVAL-LEVELS-assign-users-to-levels.md */
+describe("who may hold a level", () => {
+  const branchApproved = { orderApprovalRequired: true, orderApprovalLevelsEnabled: true, orderApproverRole: "BRANCH_ADMIN" }
+
+  it("admits a Group User always, and the organization's configured approver role", () => {
+    expect(canHoldApprovalLevel("GROUP_USER", branchApproved)).toBe(true)
+    expect(canHoldApprovalLevel("BRANCH_ADMIN", branchApproved)).toBe(true)
+    expect(canHoldApprovalLevel("HEAD_OFFICE", branchApproved)).toBe(false)
+    const headOfficeApproved = { ...branchApproved, orderApproverRole: "HEAD_OFFICE" }
+    expect(canHoldApprovalLevel("HEAD_OFFICE", headOfficeApproved)).toBe(true)
+    expect(canHoldApprovalLevel("BRANCH_ADMIN", headOfficeApproved)).toBe(false)
+    expect(canHoldApprovalLevel("GROUP_USER", headOfficeApproved)).toBe(true)
+  })
+
+  it.each(["ORDER_PORTAL", "GROUP_ORDER_PORTAL", "VIEWER", "SUPER_ADMIN", "ORDER_DESK", "WAREHOUSE", ""])(
+    "never admits %j",
+    (role) => {
+      expect(canHoldApprovalLevel(role, branchApproved)).toBe(false)
+    },
+  )
+
+  it("admits no one while approval is not required or levels are off", () => {
+    expect(canHoldApprovalLevel("GROUP_USER", { ...branchApproved, orderApprovalRequired: false })).toBe(false)
+    expect(canHoldApprovalLevel("BRANCH_ADMIN", { ...branchApproved, orderApprovalLevelsEnabled: false })).toBe(false)
+  })
+})
+
+describe("approvalLevelAssignmentRefusal", () => {
+  const organization = { orderApprovalRequired: true, orderApprovalLevelsEnabled: true, orderApproverRole: "BRANCH_ADMIN" }
+  const refusal = (overrides: Partial<Parameters<typeof approvalLevelAssignmentRefusal>[0]>) =>
+    approvalLevelAssignmentRefusal({ role: "BRANCH_ADMIN", organization, levelCount: 3, level: 2, ...overrides })
+
+  it("allows an existing level for an eligible role", () => {
+    expect(refusal({})).toBeNull()
+    expect(refusal({ level: 1 })).toBeNull()
+    expect(refusal({ level: 3 })).toBeNull()
+  })
+
+  it("always allows no level, whatever the role or organization", () => {
+    expect(refusal({ level: null, role: "ORDER_PORTAL", organization: null, levelCount: 0 })).toBeNull()
+  })
+
+  it("refuses a level the organization does not have", () => {
+    expect(refusal({ level: 4 })).toBe("This organization has no Level 4.")
+    expect(refusal({ level: 1, levelCount: 0 })).toBe("This organization has no Level 1.")
+  })
+
+  it("refuses a role or organization that admits no level", () => {
+    expect(refusal({ role: "ORDER_PORTAL" })).toBe(APPROVAL_LEVEL_NOT_APPLICABLE_MESSAGE)
+    expect(refusal({ organization: null })).toBe(APPROVAL_LEVEL_NOT_APPLICABLE_MESSAGE)
+    expect(refusal({ organization: { ...organization, orderApprovalLevelsEnabled: false } }))
+      .toBe(APPROVAL_LEVEL_NOT_APPLICABLE_MESSAGE)
+  })
+
+  it.each([0, -1, 11, 1.5])("refuses the malformed level %d", (level) => {
+    expect(refusal({ level })).toBe(`Choose a level between 1 and ${MAX_APPROVAL_LEVELS}.`)
+  })
+})
+
+describe("heldLevelsRemovalMessage", () => {
+  it("names each held level and how many hold it", () => {
+    expect(heldLevelsRemovalMessage([{ level: 3, users: 1 }, { level: 4, users: 2 }])).toBe(
+      "These levels are still assigned: Level 3 (1 user), Level 4 (2 users). Give those users another level, or none, before removing them.",
+    )
   })
 })

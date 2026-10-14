@@ -7,11 +7,13 @@ import { db } from "@/lib/db"
 import {
   ORDER_APPROVAL_LEVELS_AUDIT_ACTION,
   approvalLevelsChanged,
+  heldLevelsRemovalMessage,
   toApprovalLevels,
   type ApprovalLevel,
   type ApprovalLevelsState,
 } from "@/lib/order-approval-levels"
 import { recordAuditEvent, type AuditActor } from "@/lib/server/activity-audit"
+import { heldRemovedApprovalLevels } from "@/lib/server/user-approval-level"
 
 /**
  * The only writer of an organization's order approval levels and of
@@ -42,19 +44,27 @@ export async function loadOrganizationApprovalLevels(
     .orderBy(asc(organizationApprovalLevels.level))
 }
 
-/** The switch and the levels together, or null for an unknown organization. */
+/**
+ * The switch and the levels, plus what decides who may hold a level, or null
+ * for an unknown organization. The user forms read this to offer a level
+ * (plans/OF-APPROVAL-LEVELS-assign-users-to-levels.md).
+ */
 export async function readOrganizationApprovalLevels(
   organizationId: number,
-): Promise<ApprovalLevelsState | null> {
+): Promise<(ApprovalLevelsState & { orderApprovalRequired: boolean; orderApproverRole: string }) | null> {
   const [organization] = await db
-    .select({ enabled: organizations.orderApprovalLevelsEnabled })
+    .select({
+      enabled: organizations.orderApprovalLevelsEnabled,
+      orderApprovalRequired: organizations.orderApprovalRequired,
+      orderApproverRole: organizations.orderApproverRole,
+    })
     .from(organizations)
     .where(eq(organizations.id, organizationId))
     .limit(1)
   if (!organization) return null
 
   return {
-    enabled: organization.enabled,
+    ...organization,
     levels: await loadOrganizationApprovalLevels(db, organizationId),
   }
 }
@@ -86,6 +96,7 @@ export async function replaceOrganizationApprovalLevels(
 
 export type SaveApprovalLevelsOutcome =
   | { kind: "not-found" }
+  | { kind: "levels-held"; message: string }
   | { kind: "saved"; changed: boolean; state: ApprovalLevelsState }
 
 /**
@@ -125,6 +136,14 @@ export async function saveOrganizationApprovalLevels(input: {
 
     if (!approvalLevelsChanged(before, { enabled: input.enabled, amountsCents: input.amountsCents })) {
       return { kind: "saved" as const, changed: false, state: before }
+    }
+
+    // A level a user holds is never removed from under them: the save is
+    // refused until those users are given another level or none. Under the
+    // FOR UPDATE above, which every assignment's FOR SHARE waits on.
+    if (input.amountsCents !== undefined && input.amountsCents.length < before.levels.length) {
+      const held = await heldRemovedApprovalLevels(tx, input.organizationId, input.amountsCents.length)
+      if (held.length > 0) return { kind: "levels-held" as const, message: heldLevelsRemovalMessage(held) }
     }
 
     if (before.enabled !== after.enabled) {

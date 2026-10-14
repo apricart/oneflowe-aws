@@ -237,6 +237,14 @@ export const users = pgTable(
       .notNull(),
     isActive: boolean("is_active").notNull().default(true),
     budgetAllocationEnabled: boolean("budget_allocation_enabled").notNull().default(false),
+    // The organization's order approval level this user holds (1 = highest),
+    // or null. Assigned by Super Admin / Head Office only to a role that can
+    // decide the organization's orders (`canHoldApprovalLevel` in
+    // lib/order-approval-levels.ts); written only by
+    // lib/server/user-approval-level.ts, user creation, and cleared by an
+    // access change of role or organization.
+    // See plans/OF-APPROVAL-LEVELS-assign-users-to-levels.md.
+    orderApprovalLevel: integer("order_approval_level"),
     fullName: varchar("full_name", { length: 255 }),
     firstName: varchar("first_name", { length: 100 }),
     lastName: varchar("last_name", { length: 100 }),
@@ -290,6 +298,11 @@ export const users = pgTable(
       .on(t.organizationId, t.externalSource, t.externalId, t.roleId)
       .where(sql`${t.externalSource} IS NOT NULL AND ${t.externalId} IS NOT NULL`),
     index("users_external_identity_idx").on(t.externalSource, t.externalId),
+    // MAX_APPROVAL_LEVELS in lib/order-approval-levels.ts.
+    check(
+      "users_order_approval_level_ck",
+      sql`${t.orderApprovalLevel} IS NULL OR ${t.orderApprovalLevel} BETWEEN 1 AND 10`,
+    ),
     check(
       "users_external_identity_pair_ck",
       sql`(${t.externalSource} IS NULL) = (${t.externalId} IS NULL)

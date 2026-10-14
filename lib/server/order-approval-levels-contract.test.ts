@@ -36,6 +36,37 @@ const PRODUCTION_SOURCES = [...sourceFiles("app"), ...sourceFiles("lib"), ...sou
 const ROUTE = "app/api/v1/organizations/[id]/approval-levels/route.ts"
 const SERVER_MODULE = "lib/server/order-approval-levels.ts"
 const ORGANIZATIONS_ROUTE = "app/api/v1/organizations/route.ts"
+const USER_LEVEL_MODULE = "lib/server/user-approval-level.ts"
+const USER_LEVEL_ROUTE = "app/api/v1/users/[id]/approval-level/route.ts"
+
+/**
+ * The text of every `.set(...)` and `.values(...)` call in a source — where a
+ * Drizzle write names the columns it writes. Parentheses are balanced, so a
+ * nested call does not end the block early.
+ */
+function writeBlocks(source: string): string[] {
+  const blocks: string[] = []
+  for (const match of source.matchAll(/\.(?:set|values)\(/g)) {
+    let depth = 1
+    let index = (match.index ?? 0) + match[0].length
+    const start = index
+    while (index < source.length && depth > 0) {
+      if (source[index] === "(") depth += 1
+      else if (source[index] === ")") depth -= 1
+      index += 1
+    }
+    blocks.push(source.slice(start, index - 1))
+  }
+  return blocks
+}
+
+/** Files whose Drizzle writes name `property`, explicitly or as shorthand. */
+function writersOf(property: string): string[] {
+  const pattern = new RegExp(`\\b${property}\\s*[:,}\\n]`)
+  return PRODUCTION_SOURCES
+    .filter((file) => !file.startsWith("components/") && !file.startsWith("app/(portal)/"))
+    .filter((file) => writeBlocks(read(file)).some((block) => pattern.test(block)))
+}
 
 /** The handler named, from its `export async function` to the next one. */
 function handlerBody(source: string, method: string): string {
@@ -54,10 +85,7 @@ describe("order approval levels — who writes them", () => {
   })
 
   it("sets the switch only on creation and through the server module", () => {
-    // Written as a property, explicit (`orderApprovalLevelsEnabled: x`) or shorthand.
-    const writers = PRODUCTION_SOURCES.filter((file) => /\borderApprovalLevelsEnabled\s*[:,]/.test(read(file)))
-      .filter((file) => !file.startsWith("components/") && !file.startsWith("app/(portal)/"))
-    expect(writers.sort()).toEqual([ORGANIZATIONS_ROUTE, SERVER_MODULE].sort())
+    expect(writersOf("orderApprovalLevelsEnabled").sort()).toEqual([ORGANIZATIONS_ROUTE, SERVER_MODULE].sort())
   })
 
   it("reaches the levels from the organization POST through the shared replacement only", () => {
@@ -74,10 +102,20 @@ describe("order approval levels — who writes them", () => {
 describe("order approval levels — the endpoint", () => {
   const route = read(ROUTE)
 
-  it.each(["GET", "PUT"])("%s is Super Admin only, before anything else runs", (method) => {
-    const body = handlerBody(route, method)
+  it("PUT is Super Admin only, before anything else runs", () => {
+    const body = handlerBody(route, "PUT")
     expect(body).toMatch(/requireApiRole\(\["SUPER_ADMIN"\]\)/)
     expect(body.indexOf("requireApiRole")).toBeLessThan(body.indexOf("await props.params"))
+  })
+
+  it("GET admits Super Admin and Head Office only, and fences Head Office to its own organization", () => {
+    // plans/OF-APPROVAL-LEVELS-assign-users-to-levels.md: the user forms list
+    // the levels to assign.
+    const body = handlerBody(route, "GET")
+    expect(body).toMatch(/requireApiRole\(\["SUPER_ADMIN", "HEAD_OFFICE"\]\)/)
+    expect(body.indexOf("requireApiRole")).toBeLessThan(body.indexOf("await props.params"))
+    expect(body).toContain("getRequestScope()")
+    expect(body).toMatch(/scope\.role !== "SUPER_ADMIN" && scope\.organizationId !== organizationId/)
   })
 
   it("validates the body with the shared strict schema", () => {
@@ -117,7 +155,7 @@ describe("order approval levels — the write", () => {
   })
 })
 
-describe("order approval levels — phase 1 reads nothing in the order path", () => {
+describe("order approval levels — nothing in the order path reads them yet", () => {
   it("is not read by any order, decision or notification module yet", () => {
     const readers = PRODUCTION_SOURCES.filter((file) =>
       /order-approval-levels|organizationApprovalLevels|orderApprovalLevelsEnabled/.test(read(file)),
@@ -130,9 +168,54 @@ describe("order approval levels — phase 1 reads nothing in the order path", ()
       "lib/server/mutation-validation.ts",
       "components/organizations/order-approval-levels-fields.tsx",
       "app/(portal)/organizations/page.tsx",
+      // Phase 2a: assigning users to levels (plans/OF-APPROVAL-LEVELS-assign-users-to-levels.md).
+      USER_LEVEL_MODULE,
+      "components/users/approval-level-field.tsx",
     ])
-    // A new reader is phase 2: route orders deliberately, and update this list
+    // A new reader is phase 2b: route orders deliberately, and update this list
     // and the plan together.
     expect(readers.filter((file) => !allowed.has(file))).toEqual([])
+  })
+})
+
+/* plans/OF-APPROVAL-LEVELS-assign-users-to-levels.md */
+describe("a user's approval level", () => {
+  it("is written only by user creation, the access route (clearing it) and the server module", () => {
+    expect(writersOf("orderApprovalLevel").sort()).toEqual([
+      "app/api/v1/users/[id]/access/route.ts",
+      "app/api/v1/users/route.ts",
+      USER_LEVEL_MODULE,
+    ].sort())
+  })
+
+  it("lets the access route only clear it, never set one", () => {
+    const access = read("app/api/v1/users/[id]/access/route.ts")
+    expect(access).toContain("orderApprovalLevel: clearsApprovalLevel ? null : undefined")
+  })
+
+  it("is assigned through an endpoint for the user-management roles, which does not end sessions", () => {
+    const route = read(USER_LEVEL_ROUTE)
+    const put = handlerBody(route, "PUT")
+    expect(put).toContain("requireApiRole(USER_MANAGEMENT_ROLES)")
+    expect(put.indexOf("requireApiRole")).toBeLessThan(put.indexOf("await props.params"))
+    expect(put).toContain("userApprovalLevelUpdateSchema.safeParse(")
+    expect(put).not.toMatch(/sessions|sessionVersion|VIEWER|viewerRead/)
+    expect(route).not.toMatch(/export async function (GET|POST|PATCH|DELETE)\(/)
+  })
+
+  it("checks the level under the organization lock, and fences Head Office to its tenant", () => {
+    const serverModule = read(USER_LEVEL_MODULE)
+    expect(serverModule.startsWith('import "server-only"')).toBe(true)
+    expect(serverModule).toMatch(/\.for\("share"\)/)
+    expect(serverModule).toMatch(/\.for\("update", \{ of: users \}\)/)
+    expect(serverModule).toContain("isSelfAccessChange(")
+    expect(serverModule).toContain("canManageUser(")
+    expect(serverModule).toMatch(/recordAuditEvent\(\s*tx\s*,/)
+  })
+
+  it("refuses to remove a level someone holds, inside the levels save", () => {
+    const save = read(SERVER_MODULE)
+    expect(save).toContain("heldRemovedApprovalLevels(tx")
+    expect(read(ROUTE)).toContain('outcome.kind === "levels-held"')
   })
 })
