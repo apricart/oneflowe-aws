@@ -2,15 +2,18 @@
  * Order approval levels — set per organization by Super Admin
  * (plans/OF-APPROVAL-LEVELS-organization-approval-levels.md).
  *
- * An organization with the feature on carries an ordered list of levels. Level
- * N's amount says that an order equal to or above it may be approved by a user
- * who holds Level N. Level 1 is the highest level and has the highest amount,
- * and every level after it must be lower than the one before: a level whose
- * threshold is no lower than the level above it would add nothing.
+ * An organization with the feature on carries an ordered list of levels, each
+ * approving one band of order amounts — `approvalLevelBands` is the rule. Level
+ * 1 is the highest and approves orders equal to or above its amount. Every
+ * later level approves orders equal to or above its own amount and below the
+ * amount of the level before it. The lowest level has no level below it, so it
+ * also approves every order below its own amount. Each level's amount must be
+ * lower than the one before, so the bands never overlap and leave no gap.
  *
  * The amount is stored as `max_amount_cents` / `maxAmountCents`, a name kept
  * from the first version of this feature, when the order ran the other way. It
- * is the level's threshold: the smallest order that level approves.
+ * is the level's threshold: the smallest order that level approves (except for
+ * the lowest level, whose band reaches down to zero).
  *
  * Pure. The bounds live here and nowhere else: the Zod schema, the Company
  * form and the database checks on `organization_approval_levels` all hold
@@ -152,6 +155,47 @@ export function approvalLevelsError(
 /** Stored levels in level order, numbered from their position. */
 export function toApprovalLevels(amountsCents: readonly number[]): ApprovalLevel[] {
   return amountsCents.map((maxAmountCents, index) => ({ level: index + 1, maxAmountCents }))
+}
+
+/**
+ * The orders one level approves: equal to or above `fromCents` and below
+ * `belowCents`. A null bound is open — `fromCents` null reaches down to zero,
+ * `belowCents` null has no ceiling.
+ */
+export type ApprovalLevelBand = {
+  level: number
+  fromCents: number | null
+  belowCents: number | null
+}
+
+/**
+ * The band each level approves, Level 1 first — the one statement of which
+ * level approves which order. `amountsCents[0]` is Level 1, and the list must
+ * already satisfy `approvalLevelsError`.
+ *
+ * * Level 1 approves orders equal to or above its amount, with no ceiling.
+ * * Level N approves orders equal to or above its amount and below Level N−1's.
+ * * The lowest level has no level below it, so its band also reaches down to
+ *   zero: it approves every order below the level above it. Its own amount
+ *   takes effect only once a lower level is added.
+ * * A single level therefore approves every order.
+ */
+export function approvalLevelBands(amountsCents: readonly number[]): ApprovalLevelBand[] {
+  const lowest = amountsCents.length - 1
+  return amountsCents.map((cents, index) => ({
+    level: index + 1,
+    fromCents: index === lowest ? null : cents,
+    belowCents: index === 0 ? null : amountsCents[index - 1],
+  }))
+}
+
+/** "PKR 40,000.00 to under PKR 80,000.00", for labels and hints. */
+export function approvalLevelBandText(band: ApprovalLevelBand): string {
+  const { fromCents, belowCents } = band
+  if (fromCents === null && belowCents === null) return "any amount"
+  if (fromCents === null) return `under ${formatApprovalLevelAmount(belowCents as number)}`
+  if (belowCents === null) return `${formatApprovalLevelAmount(fromCents)} and above`
+  return `${formatApprovalLevelAmount(fromCents)} to under ${formatApprovalLevelAmount(belowCents)}`
 }
 
 /**

@@ -2,7 +2,8 @@
 
 Builds on `plans/OF-APPROVAL-LEVELS-organization-approval-levels.md` (phase 1:
 the per-organization switch and levels; Level 1 is the highest, each level
-approving orders equal to or above its amount).
+approves its own band of order amounts, and the lowest level's band reaches
+down to zero).
 
 ## What is being asked
 
@@ -18,10 +19,10 @@ levels switched on**, they can give that user one of the organization's levels.
 * It does **not** change how any order is approved. No order path reads the
   level yet.
 * Routing orders to levels and enforcing them at approve, reject and return
-  time is phase 2b. That phase must also settle the two open questions from
-  phase 1:
-  * who decides an order below the lowest level's amount;
-  * strict bands, or a higher level covering lower amounts.
+  time is phase 2b. The two questions phase 1 left open are now settled (see
+  the phase 1 plan): strict bands, so a higher level does not also approve a
+  smaller order, and an order below the lowest level's amount goes to the
+  lowest level.
 
 ## Decisions
 
@@ -120,7 +121,8 @@ ALTER TABLE users DROP COLUMN IF EXISTS order_approval_level;
 * `components/users/approval-level-field.tsx`:
   * reads the organization's levels;
   * shows a select only when `canHoldApprovalLevel` allows it: "No level",
-    then "Level N — orders from PKR X";
+    then each level with its band, e.g. "Level 2 — PKR 40,000.00 to under
+    PKR 80,000.00" (`approvalLevelBandText`);
   * shows nothing otherwise.
 * **Create User** (step 2, under Role): sends `orderApprovalLevel`. The choice
   resets when the role or organization changes.
@@ -138,7 +140,7 @@ ALTER TABLE users DROP COLUMN IF EXISTS order_approval_level;
   decision 6.
 * **Audit.** `audit_logs` for assignments, and `system_logs` for creation (as
   user creation already does).
-* **Exposure.** Head Office learns only its own organization's thresholds.
+* **Exposure.** Head Office learns only its own organization's level amounts.
 
 ## Tests
 

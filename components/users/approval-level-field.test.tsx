@@ -60,7 +60,16 @@ describe("ApprovalLevelField", () => {
     await waitFor(() => expect(screen.getByTestId("applicable").textContent).toBe("true"))
     expect(fetchMock).toHaveBeenCalledWith("/api/v1/organizations/7/approval-levels", expect.anything())
     expect(screen.getByLabelText("Approval level (optional)")).toBeTruthy()
-    expect(screen.getByText("Level 2 — orders from PKR 20,000.00")).toBeTruthy()
+    // Level 2 is the lowest of two, so it takes every order below Level 1.
+    expect(screen.getByText("Level 2 — under PKR 60,000.00")).toBeTruthy()
+  })
+
+  it("labels Level 1 with its band: its own amount and above", async () => {
+    stubLevels(LEVELS_ON)
+    renderHarness({ organizationId: "7", role: "BRANCH_ADMIN", value: "1" })
+
+    await waitFor(() => expect(screen.getByTestId("applicable").textContent).toBe("true"))
+    expect(screen.getByText("Level 1 — PKR 60,000.00 and above")).toBeTruthy()
   })
 
   it("offers a level to a Group User whatever the configured approver role", async () => {

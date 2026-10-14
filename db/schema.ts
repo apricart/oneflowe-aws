@@ -777,10 +777,11 @@ export const organizationAllowedIps = pgTable(
 )
 
 /**
- * An organization's order approval levels, in order. Level N's amount means an
- * order equal to or above it may be approved by a user holding Level N. Level 1
- * has the highest amount and every level's amount is lower than the one before
- * (`max_amount_cents` is that threshold, despite its name; `approvalLevelsError` in
+ * An organization's order approval levels, in order. Each level approves one
+ * band: orders equal to or above its `max_amount_cents` (the band's lower bound,
+ * despite its name) and below the level before it; the lowest level also takes
+ * every order below its own amount (`approvalLevelBands`). Every level's amount
+ * is lower than the one before (`approvalLevelsError` in
  * lib/order-approval-levels.ts, enforced by the only writer,
  * lib/server/order-approval-levels.ts).
  *

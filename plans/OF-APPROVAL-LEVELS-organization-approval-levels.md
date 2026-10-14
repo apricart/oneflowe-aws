@@ -2,9 +2,38 @@
 
 Phase 1 of the amount-based approval work discussed in
 `plans/OF-JOIN-department-signup-multi-user.md`. **Level 1 is the highest
-level, with the highest amount**, as in that plan's original request.
+level; each level approves its own band of order amounts.**
 
-> **Revised 2026-10-14.** The first version shipped the opposite direction
+> **The approval rule, settled 2026-10-14.** Each level approves one band, and
+> the bands never overlap:
+>
+> * **Level 1** approves orders **equal to or above** its amount.
+> * **Level N** approves orders **equal to or above** its own amount and
+>   **below** Level N−1's amount.
+> * **The lowest level** has no level below it, so it also approves every
+>   order **below** its own amount: its band is everything below the level
+>   above it. Its own amount takes effect only once a lower level is added.
+> * With **one level**, Level 1 approves every order.
+>
+> Example, Level 1 = 80,000, Level 2 = 40,000, Level 3 = 10,000: 100,000 →
+> Level 1; 80,000 → Level 1; 50,000 → Level 2; 40,000 → Level 2; 39,999.99 →
+> Level 3; 5,000 → Level 3. With only Level 1 = 80,000 and Level 2 = 40,000,
+> Level 2 approves every order below 80,000.
+>
+> These are **strict bands**: a higher level does not also approve a smaller
+> order. Every order falls in exactly one band, so there is always exactly one
+> level that may approve it. That settles both questions phase 1 left open
+> (decision 1). The rule is `approvalLevelBands` in
+> `lib/order-approval-levels.ts`; the Company form shows each level's band
+> beside it and the user forms label each level with it. Nothing in the order
+> path reads it yet. The storage, the validation rule (amounts strictly fall),
+> the endpoints and the API shape are unchanged.
+>
+> An interim rule the same day (Level 1 approving any amount, later levels
+> approving up to their amount) was replaced by this one before any order read
+> it.
+
+> **Revised 2026-10-14 (direction).** The first version shipped the opposite direction
 > (Level 1 lowest, each level approving orders *up to* its amount). Super Admin
 > asked for Level 1 to be the highest level, approving orders *equal to or
 > above* its amount. Only the ordering rule and the wording changed; the
@@ -22,8 +51,10 @@ level, with the highest amount**, as in that plan's original request.
 3. Switching it on shows **Level 1 approver** with an amount field. "Add level"
    adds Level 2 with its own amount, then Level 3, and so on, as many as
    needed.
-4. A level's amount means: an order **equal to or above** that amount can be
-   approved by a user who holds that level. Level 1 is the highest level.
+4. Level 1 is the highest level and approves orders **equal to or above** its
+   amount. Each later level approves orders equal to or above its own amount
+   and below the amount of the level before it. The lowest level also approves
+   every order below its own amount.
 5. **Only Super Admin** may switch it on or off, or change the levels.
 
 ## Scope of this phase
@@ -47,13 +78,13 @@ this phase.
 ## Decisions
 
 1. **Amounts must strictly fall.** Level 1 has the highest amount; Level 2's
-   must be lower than Level 1's, and so on. A level whose threshold is no lower
+   must be lower than Level 1's, and so on. A level whose ceiling is no lower
    than the level above it would add nothing. Equal amounts are refused for the
    same reason.
-   *Open for phase 2:* who approves an order below the lowest level's amount,
-   and whether a higher level may also approve a smaller order (a ceiling) or
-   only its own band. Phase 1 stores the thresholds only, so neither question
-   changes anything yet.
+   *Settled for phase 2b:* strict bands. A level approves only its own band, a
+   higher level does not also approve a smaller order, and the lowest level's
+   band reaches down to zero, so an order below the lowest level's amount goes
+   to the lowest level (`approvalLevelBands`).
 2. **Levels are positional and contiguous.** The request carries an ordered
    list; level number = position (1, 2, 3, …). Gaps are impossible by
    construction.
@@ -170,7 +201,8 @@ No Viewer marker goes in any write handler (`lib/viewer-access.test.ts`).
 * `components/organizations/order-approval-levels-fields.tsx`:
   * the switch;
   * one row per level, "Level N approver — approves orders from (PKR)",
-    each with its own inline error;
+    each with its own inline error, and its band ("Approves orders: PKR
+    40,000.00 to under PKR 80,000.00") once every amount is valid;
   * "Add approver level" (disabled at 10);
   * Remove on the last level only;
   * the phase note.

@@ -6,8 +6,9 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { jsonFetcher } from "@/lib/fetcher"
 import {
+  approvalLevelBandText,
+  approvalLevelBands,
   canHoldApprovalLevel,
-  formatApprovalLevelAmount,
   type ApprovalLevel,
 } from "@/lib/order-approval-levels"
 
@@ -91,9 +92,9 @@ export function ApprovalLevelField({
         </SelectTrigger>
         <SelectContent>
           <SelectItem value={NO_LEVEL}>No level</SelectItem>
-          {choice.levels.map((level) => (
-            <SelectItem key={level.level} value={String(level.level)}>
-              Level {level.level} — orders from {formatApprovalLevelAmount(level.maxAmountCents)}
+          {approvalLevelBands(choice.levels.map((level) => level.maxAmountCents)).map((band) => (
+            <SelectItem key={band.level} value={String(band.level)}>
+              Level {band.level} — {approvalLevelBandText(band)}
             </SelectItem>
           ))}
         </SelectContent>

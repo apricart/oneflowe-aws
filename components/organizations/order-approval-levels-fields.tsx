@@ -8,8 +8,11 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import {
   MAX_APPROVAL_LEVELS,
+  approvalLevelBandText,
+  approvalLevelBands,
   approvalLevelDraftErrors,
   approvalLevelDraftsError,
+  parseApprovalLevelAmountDraft,
 } from "@/lib/order-approval-levels"
 import { cn } from "@/lib/utils"
 
@@ -45,6 +48,14 @@ export function OrderApprovalLevelsFields({
   const levelErrors = approvalLevelDraftErrors(levels)
   const sectionError = enabled && levels.length === 0 ? approvalLevelDraftsError(enabled, levels) : null
   const canAddLevel = levels.length < MAX_APPROVAL_LEVELS
+  // Each level's band, shown beside it once every amount is valid — a band
+  // depends on its neighbours, so a half-entered list has none to show.
+  const bands = levels.length > 0 && levelErrors.every((problem) => problem === null)
+    ? approvalLevelBands(levels.map((text) => {
+      const draft = parseApprovalLevelAmountDraft(text)
+      return draft.ok ? draft.cents : 0
+    }))
+    : null
 
   const handleToggle = (nextEnabled: boolean) => {
     onEnabledChange(nextEnabled)
@@ -62,7 +73,7 @@ export function OrderApprovalLevelsFields({
         <div>
           <Label htmlFor={switchId}>Order approval levels</Label>
           <p className="text-xs text-muted-foreground">
-            Give this company&apos;s orders approval levels, each approving orders from its own amount upwards.
+            Give this company&apos;s orders approval levels, each approving its own band of order amounts.
           </p>
         </div>
         <Switch
@@ -76,9 +87,10 @@ export function OrderApprovalLevelsFields({
       {enabled && (
         <div className="space-y-3 border-t pt-3">
           <p className="text-xs text-muted-foreground">
-            An order equal to or above a level&apos;s amount can be approved by a user who holds that
-            level. Level 1 is the highest level, so each level&apos;s amount must be lower than the
-            level before it.
+            Level 1 is the highest level and approves orders equal to or above its amount. Each later
+            level approves orders equal to or above its own amount and below the level before it, so each
+            amount must be lower than the one before. The lowest level also approves every order below
+            its own amount.
           </p>
 
           <ol className="space-y-2">
@@ -89,6 +101,8 @@ export function OrderApprovalLevelsFields({
               // An empty field is not an error yet — Save stays disabled until
               // it is filled, as for the company's other required fields.
               const problem = text.trim().length > 0 ? levelErrors[index] : null
+              const band = bands?.[index] ?? null
+              const bandId = `${inputId}-band`
               const isLast = index === levels.length - 1
 
               return (
@@ -110,7 +124,7 @@ export function OrderApprovalLevelsFields({
                         placeholder="Approves orders from, e.g. 40000"
                         disabled={disabled}
                         aria-invalid={problem ? true : undefined}
-                        aria-describedby={problem ? errorId : undefined}
+                        aria-describedby={problem ? errorId : (band ? bandId : undefined)}
                         className={cn("pl-11", problem && "border-rose-500 focus-visible:ring-rose-500/20")}
                       />
                     </div>
@@ -133,6 +147,11 @@ export function OrderApprovalLevelsFields({
                   </div>
                   {problem ? (
                     <p id={errorId} role="alert" className="text-xs font-medium text-rose-600">{problem}</p>
+                  ) : null}
+                  {!problem && band ? (
+                    <p id={bandId} className="text-xs text-muted-foreground">
+                      Approves orders: {approvalLevelBandText(band)}
+                    </p>
                   ) : null}
                 </li>
               )

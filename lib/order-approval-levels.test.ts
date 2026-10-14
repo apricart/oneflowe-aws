@@ -10,6 +10,8 @@ import {
   APPROVAL_LEVEL_NOT_APPLICABLE_MESSAGE,
   approvalLevelAmountText,
   approvalLevelAssignmentRefusal,
+  approvalLevelBandText,
+  approvalLevelBands,
   canHoldApprovalLevel,
   heldLevelsRemovalMessage,
   approvalLevelDraftErrors,
@@ -131,6 +133,52 @@ describe("approvalLevelsError", () => {
     const amounts = (count: number) => Array.from({ length: count }, (_, index) => (count - index) * 100)
     expect(approvalLevelsError(true, amounts(MAX_APPROVAL_LEVELS))).toBeNull()
     expect(approvalLevelsError(true, amounts(MAX_APPROVAL_LEVELS + 1))).toBe(APPROVAL_LEVELS_TOO_MANY_MESSAGE)
+  })
+})
+
+describe("approvalLevelBands", () => {
+  // Level 1 = 80,000, Level 2 = 40,000, Level 3 = 10,000.
+  const three = [8_000_000, 4_000_000, 1_000_000]
+
+  it("gives Level 1 its amount and above, each middle level its amount up to the level before", () => {
+    const [first, second] = approvalLevelBands(three)
+    expect(first).toEqual({ level: 1, fromCents: 8_000_000, belowCents: null })
+    expect(second).toEqual({ level: 2, fromCents: 4_000_000, belowCents: 8_000_000 })
+  })
+
+  it("lets the lowest level take every order below the level above it, its own amount included", () => {
+    expect(approvalLevelBands(three)[2]).toEqual({ level: 3, fromCents: null, belowCents: 4_000_000 })
+  })
+
+  it("with two levels, Level 2 approves everything below Level 1's amount", () => {
+    expect(approvalLevelBands([8_000_000, 4_000_000])).toEqual([
+      { level: 1, fromCents: 8_000_000, belowCents: null },
+      { level: 2, fromCents: null, belowCents: 8_000_000 },
+    ])
+  })
+
+  it("with one level, Level 1 approves every order", () => {
+    expect(approvalLevelBands([8_000_000])).toEqual([{ level: 1, fromCents: null, belowCents: null }])
+  })
+
+  it("leaves no gap and no overlap: each band starts where the one above stops", () => {
+    const bands = approvalLevelBands(three)
+    for (let index = 1; index < bands.length; index += 1) {
+      expect(bands[index].belowCents).toBe(bands[index - 1].fromCents)
+    }
+  })
+
+  it("is empty for no levels", () => {
+    expect(approvalLevelBands([])).toEqual([])
+  })
+
+  it("describes each band in words", () => {
+    expect(approvalLevelBands(three).map(approvalLevelBandText)).toEqual([
+      "PKR 80,000.00 and above",
+      "PKR 40,000.00 to under PKR 80,000.00",
+      "under PKR 40,000.00",
+    ])
+    expect(approvalLevelBandText({ level: 1, fromCents: null, belowCents: null })).toBe("any amount")
   })
 })
 

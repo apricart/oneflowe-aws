@@ -105,6 +105,21 @@ describe("OrderApprovalLevelsFields", () => {
     expect(document.getElementById(describedBy)?.textContent).toMatch(/Enter an amount in rupees/)
   })
 
+  it("shows each level's band once every amount is valid, the lowest taking everything below", () => {
+    render(<Harness initialEnabled initialLevels={["80000", "40000", "10000"]} />)
+
+    expect(screen.getByText("Approves orders: PKR 80,000.00 and above")).toBeTruthy()
+    expect(screen.getByText("Approves orders: PKR 40,000.00 to under PKR 80,000.00")).toBeTruthy()
+    expect(screen.getByText("Approves orders: under PKR 40,000.00")).toBeTruthy()
+    expect(levelInput(3).getAttribute("aria-describedby")).toBe(
+      screen.getByText("Approves orders: under PKR 40,000.00").id,
+    )
+
+    // A band depends on its neighbours, so an invalid list shows none.
+    fireEvent.change(levelInput(2), { target: { value: "90000" } })
+    expect(screen.queryByText(/^Approves orders:/)).toBeNull()
+  })
+
   it("stops adding at the maximum number of levels", () => {
     const amounts = Array.from({ length: MAX_APPROVAL_LEVELS }, (_, index) => String((index + 1) * 1000))
     render(<Harness initialEnabled initialLevels={amounts} />)
