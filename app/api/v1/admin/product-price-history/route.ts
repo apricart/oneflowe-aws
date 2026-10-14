@@ -1,3 +1,4 @@
+import { viewerReadRole } from "@/lib/viewer-access"
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 
@@ -11,15 +12,19 @@ async function getProductPriceHistory(request: NextRequest) {
   const session = await getServerSession(authOptions)
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
-  const actor = session.user as { role?: string; organizationId?: number | string | null }
-  if (!ALLOWED_ROLES.has(actor.role as ProductPriceHistoryRole)) {
+  const actor = session.user as { role?: string; organizationId?: number | string | null; branchId?: number | null }
+  // An organization-wide Viewer reads its tenant's history as Head Office does;
+  // a pinned one is refused. Everything below reads `role`, never `actor.role`,
+  // because the fallback at the end is Super Admin's unfenced access.
+  const role = viewerReadRole(actor)
+  if (!role || !ALLOWED_ROLES.has(role as ProductPriceHistoryRole)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 })
   }
   const sessionOrganizationId = Number(actor.organizationId)
-  if (actor.role === "HEAD_OFFICE" && (!Number.isSafeInteger(sessionOrganizationId) || sessionOrganizationId <= 0)) {
+  if (role === "HEAD_OFFICE" && (!Number.isSafeInteger(sessionOrganizationId) || sessionOrganizationId <= 0)) {
     return NextResponse.json({ error: "Organization context required" }, { status: 403 })
   }
-  const access: ProductPriceHistoryAccess = actor.role === "HEAD_OFFICE"
+  const access: ProductPriceHistoryAccess = role === "HEAD_OFFICE"
     ? { role: "HEAD_OFFICE", organizationId: sessionOrganizationId }
     : { role: "SUPER_ADMIN" }
 

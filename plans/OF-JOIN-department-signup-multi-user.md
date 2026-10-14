@@ -23,6 +23,12 @@ below.** Nothing is implemented.
 
    This is **not** a sequential chain. One order needs one approval, by the
    approver for its band.
+
+   > **Superseded (2026-10-14):** levels are now configured per organization,
+   > as many as needed. **Level 1 is the lowest amount**, and each level
+   > approves orders up to and including its amount. See
+   > `plans/OF-APPROVAL-LEVELS-organization-approval-levels.md` (phase 1). The
+   > fixed three bands above are kept only as the original request.
 4. For each approver level:
    * if the email already belongs to a user, that user becomes the main user's
      approver at that level;

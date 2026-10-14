@@ -1,3 +1,4 @@
+import { VIEWER_READ_REFUSED, viewerReadRole } from "@/lib/viewer-access"
 import { NextResponse, type NextRequest } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
@@ -132,7 +133,10 @@ function getTrendGrouping(
 export async function GET(req: NextRequest) {
     const session = await getServerSession(authOptions)
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-    if (lacksAnalyticsTenant((session.user as any).role, (session.user as any).organizationId)) {
+    // An organization-wide Viewer reads as Head Office; a pinned one is refused.
+    const userRole = viewerReadRole(session.user as any)
+    if (!userRole) return NextResponse.json({ error: VIEWER_READ_REFUSED }, { status: 403 })
+    if (lacksAnalyticsTenant(userRole, (session.user as any).organizationId)) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
 
@@ -151,7 +155,6 @@ export async function GET(req: NextRequest) {
     const parsedCompMonths = parseNumberList(url.searchParams.get("compareMonths"), true).filter((number) => number <= 12)
     const parsedCompYears = parseNumberList(url.searchParams.get("compareYears"), true).filter((number) => number > 2000)
 
-    const userRole = (session.user as any).role || ""
     const userOrgId = (session.user as any).organizationId
 
     const branchConditions = buildBranchConditions(url.searchParams, userRole, userOrgId)

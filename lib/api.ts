@@ -3,6 +3,7 @@ import { getCurrentUser, getSharedServerSession } from "@/lib/auth"
 import type { Role } from "@/lib/rbac"
 import { requireRole, isValidRole } from "@/lib/rbac"
 import { isSessionValidationUnavailablePayload } from "@/lib/session-response"
+import { isViewerRole, viewerReadRole } from "@/lib/viewer-access"
 
 /**
  * Return a successful JSON response
@@ -121,10 +122,21 @@ export async function readJson<T = any>(req: Request): Promise<T | null> {
   }
 }
 
+export type RequireApiRoleOptions = {
+  /**
+   * Admit an organization-wide Viewer wherever `HEAD_OFFICE` is admitted.
+   * Pass it from a **GET** handler only, and only after scoping the query by
+   * `viewerReadScope` — the handler must then read as Head Office, never as the
+   * Viewer, or an unrecognised role could fall through to a wider branch.
+   * A branch-pinned Viewer is still refused. See `lib/viewer-access.ts`.
+   */
+  viewerReadsAsHeadOffice?: boolean
+}
+
 /**
  * Require specific role for API access
  */
-export async function requireApiRole(allowed: Role[]) {
+export async function requireApiRole(allowed: Role[], options: RequireApiRoleOptions = {}) {
   try {
     // Validate allowed roles array
     if (!Array.isArray(allowed) || allowed.length === 0) {
@@ -186,6 +198,16 @@ export async function requireApiRole(allowed: Role[]) {
         { status: 403 }
       )
     }
+
+    const viewerReadsAsHeadOffice = options.viewerReadsAsHeadOffice === true
+      && allowed.includes("HEAD_OFFICE")
+      && isViewerRole(current.role)
+      && viewerReadRole({
+        role: current.role,
+        organizationId: (session?.user as any)?.organizationId,
+        branchId: (session?.user as any)?.branchId,
+      }) === "HEAD_OFFICE"
+    if (viewerReadsAsHeadOffice) return null
 
     try {
       requireRole(current.role, allowed)

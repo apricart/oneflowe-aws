@@ -1,4 +1,5 @@
 "use client"
+import { useViewerAccess } from "@/lib/hooks/use-viewer-access"
 import { ReactNode } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { HeadOfficeUsersTable } from "@/components/users/head-office-users-table"
@@ -16,7 +17,10 @@ type CollectionResponse = {
 }
 
 export default function UsersPage() {
-  const { organizationId, branchId, branchIds, userRole, isInitialized } = useAppContext()
+  const { organizationId, branchId, branchIds, userRole: contextRole, isInitialized } = useAppContext()
+  // An organization-wide Viewer reads the directory as Head Office does.
+  const { viewRole, readOnly } = useViewerAccess()
+  const userRole = contextRole === "VIEWER" ? viewRole : contextRole
   const isContextReady = isInitialized && userRole !== null
 
   const {
@@ -111,7 +115,9 @@ export default function UsersPage() {
               <RefreshCw className="h-4 w-4" />
               <span className="hidden sm:inline">Refresh</span>
             </Button>
-            <CreateUserDialog onSuccess={() => mutateUsers()} />
+            {!readOnly && (
+              <CreateUserDialog onSuccess={() => mutateUsers()} />
+            )}
           </div>
         ) : (
           <div className="flex items-center gap-2" aria-hidden="true">

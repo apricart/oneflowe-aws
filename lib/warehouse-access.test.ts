@@ -436,7 +436,7 @@ describe("the product catalogue", () => {
 describe("wiring", () => {
   it("confines the role in proxy.ts to its area and its allowlist", () => {
     const proxy = read("proxy.ts")
-    expect(proxy).toContain("{ matches: isWarehouseRole, areas: WAREHOUSE_AREAS, home: WAREHOUSE_HOME }")
+    expect(proxy).toContain("{ matches: isWarehouseRole, allows: withinAreas(WAREHOUSE_AREAS), home: WAREHOUSE_HOME }")
     expect(proxy).toContain("isWarehouseRole((token as any)?.role) && !isWarehouseApiRequestAllowed(req.method, pathname)")
     expect(proxy).toContain('{ prefix: WAREHOUSE_HOME, roles: ["WAREHOUSE"], home: "/dashboard" }')
     expect(WAREHOUSE_HOME).toBe("/warehouse")

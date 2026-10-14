@@ -16,6 +16,10 @@ const mocks = vi.hoisted(() => ({
   swrKeys: [] as Array<string | null>,
 }))
 
+// The page reads the signed-in role to tell a read-only Viewer apart; with no
+// session it renders exactly as before, for the role the test sets up.
+vi.mock("next-auth/react", () => ({ useSession: () => ({ data: null, status: "unauthenticated" }) }))
+
 vi.mock("@/components/context/app-context", () => ({
   useAppContext: () => mocks.context,
 }))

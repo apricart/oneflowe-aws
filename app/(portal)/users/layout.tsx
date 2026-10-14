@@ -1,3 +1,4 @@
+import { viewerReadRole } from "@/lib/viewer-access"
 import type { ReactNode } from "react"
 import { redirect } from "next/navigation"
 import { AlertCircle } from "lucide-react"
@@ -17,7 +18,9 @@ export default async function UsersLayout({
     redirect("/login")
   }
 
-  if (!canAccessUserManagement((session.user as any).role)) {
+  // An organization-wide Viewer reads the directory read-only; every write
+  // endpoint refuses it.
+  if (!canAccessUserManagement(viewerReadRole(session.user as any) ?? undefined)) {
     return (
       <main className="flex min-h-[calc(100vh-4rem)] items-center justify-center p-6">
         <Card className="w-full max-w-md">

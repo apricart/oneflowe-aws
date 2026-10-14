@@ -1,3 +1,4 @@
+import { viewerReadRole } from "@/lib/viewer-access"
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { and, eq, inArray, isNull, sql } from "drizzle-orm"
@@ -267,7 +268,9 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const role = (session.user as any).role
+    // An organization-wide Viewer reads as Head Office; a pinned one maps to
+    // no role, which the allowlist just below refuses.
+    const role = viewerReadRole(session.user as any)
     const rawUserOrgId = (session.user as any).organizationId
     const userOrgId = Number.isFinite(Number(rawUserOrgId)) ? Number(rawUserOrgId) : undefined
 

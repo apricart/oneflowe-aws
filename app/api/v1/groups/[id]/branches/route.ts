@@ -6,6 +6,7 @@ import { groups,branches,groupAuditLogs,branchInventory } from "@/db/schema"
 import { eq,inArray,and,sql,isNull,count } from "drizzle-orm"
 import { invalidateByPrefix } from "@/lib/cache-utils"
 import { groupBranchesUpdateSchema,validationMessage } from "@/lib/server/mutation-validation"
+import { viewerReadRole } from "@/lib/viewer-access"
 
 /**
  * Who may read or change a group's branch list.
@@ -28,13 +29,18 @@ type AuthorizedGroup = {
 
 async function authorizeGroupBranchAccess(
     idParam: string,
+    options: { viewerReadsAsHeadOffice?: boolean } = {},
 ): Promise<{ authorized: AuthorizedGroup; failure?: undefined } | { authorized?: undefined; failure: NextResponse }> {
     const session = await getServerSession(authOptions)
     if (!session?.user) {
         return { failure: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) }
     }
 
-    const role = (session.user as any).role
+    // Only the GET passes the option: an organization-wide Viewer then reads as
+    // Head Office, and a pinned one is refused.
+    const role = options.viewerReadsAsHeadOffice
+        ? viewerReadRole(session.user as any)
+        : (session.user as any).role
     if (!GROUP_BRANCH_ROLES.has(role)) {
         return { failure: NextResponse.json({ error: "Forbidden" }, { status: 403 }) }
     }
@@ -208,7 +214,7 @@ async function updateGroupBranchesTransaction({ group, groupId, branchIds, curre
 export async function GET(_: Request, props: { params: Promise<{ id: string }> }) {
     try {
         const { id } = await props.params
-        const { authorized, failure } = await authorizeGroupBranchAccess(id)
+        const { authorized, failure } = await authorizeGroupBranchAccess(id, { viewerReadsAsHeadOffice: true })
         if (failure) return failure
 
         const assignedBranches = await db

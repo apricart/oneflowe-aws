@@ -1,3 +1,5 @@
+import { getRequestScope } from "@/lib/auth"
+import { isOrganizationViewer } from "@/lib/viewer-access"
 import type { NextRequest } from "next/server"
 
 import { error, ok, readJson, requireApiRole } from "@/lib/api"
@@ -64,6 +66,23 @@ async function resolveReadableScope(
     }
   }
 
+  // An organization-wide Viewer reads the tenant's list as Head Office does,
+  // and decides nothing: `canDecide` stays false, and the decision handler
+  // refuses the role regardless.
+  const caller = await getRequestScope()
+  if (caller && isOrganizationViewer(caller)) {
+    return {
+      ok: true,
+      organizationId: Number(caller.organizationId),
+      actorUserId: caller.userId,
+      branches: requested === null
+        ? { scope: "tenant" }
+        : { scope: "branches", branchIds: [requested] },
+      requestableBranchIds: [],
+      canDecide: false,
+    }
+  }
+
   const approver = await resolveDeliveryAddressApproverScope()
   if (approver.ok) {
     return {
@@ -114,7 +133,7 @@ async function resolveReadableScope(
  */
 export async function GET(req: NextRequest) {
   try {
-    const authError = await requireApiRole(DELIVERY_ADDRESS_READ_ROLES)
+    const authError = await requireApiRole(DELIVERY_ADDRESS_READ_ROLES, { viewerReadsAsHeadOffice: true })
     if (authError) return authError
 
     const { searchParams } = new URL(req.url)

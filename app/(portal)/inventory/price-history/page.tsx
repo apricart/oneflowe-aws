@@ -1,3 +1,4 @@
+import { viewerReadRole } from "@/lib/viewer-access"
 import { getServerSession } from "next-auth"
 import { ShieldAlert } from "lucide-react"
 
@@ -6,7 +7,9 @@ import { authOptions } from "@/lib/auth-options"
 
 export default async function ProductPriceHistoryPage() {
   const session = await getServerSession(authOptions)
-  const role = (session?.user as { role?: string } | undefined)?.role
+  // An organization-wide Viewer reads its tenant's history as Head Office
+  // does; the page changes nothing for anyone.
+  const role = viewerReadRole((session?.user ?? {}) as { role?: string; organizationId?: number; branchId?: number })
   if (role !== "SUPER_ADMIN" && role !== "HEAD_OFFICE") {
     return (
       <div className="flex min-h-[60vh] items-center justify-center p-6">

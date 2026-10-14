@@ -1,5 +1,6 @@
 "use client"
 
+import { useViewerAccess } from "@/lib/hooks/use-viewer-access"
 import { useState,useEffect } from "react"
 import useSWR,{ mutate } from "swr"
 import { Plus,Pencil,Trash2,Building,CheckCircle2,Users,AlertCircle,Eraser,Package,Loader2,Search,Tag } from "lucide-react"
@@ -66,6 +67,9 @@ interface Branch {
 }
 
 export function GroupManagement({ role }: Readonly<{ role: string }>) {
+    // The read-only Viewer gets Head Office's view: it reads groups, their
+    // branches and their prices, and creates, edits, deletes or assigns nothing.
+    const { readOnly } = useViewerAccess()
     const { toast } = useToast()
     const { organizationId: globalOrgId } = useAppContext()
     const [isCreateOpen, setIsCreateOpen] = useState(false)
@@ -382,7 +386,7 @@ export function GroupManagement({ role }: Readonly<{ role: string }>) {
                     </h2>
                     <p className="text-slate-500 dark:text-slate-400">Manage branch groups for reporting and analytics</p>
                 </div>
-                {(role === "SUPER_ADMIN" || role === "HEAD_OFFICE") && (
+                {(role === "SUPER_ADMIN" || role === "HEAD_OFFICE") && !readOnly && (
                     <Button onClick={() => setIsCreateOpen(true)} className="bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-md transition-all hover:scale-105">
                         <Plus className="mr-2 h-4 w-4" /> Create Group
                     </Button>
@@ -450,7 +454,7 @@ export function GroupManagement({ role }: Readonly<{ role: string }>) {
                                 </TableCell>
                                 <TableCell className="text-right">
                                     <div className="flex justify-end gap-1">
-                                        <Button variant="ghost" size="icon" onClick={() => openBranchManager(group)} title="Manage Branches" className="hover:bg-blue-50 hover:text-blue-600 rounded-lg">
+                                        <Button variant="ghost" size="icon" onClick={() => openBranchManager(group)} title={readOnly ? "View Branches" : "Manage Branches"} className="hover:bg-blue-50 hover:text-blue-600 rounded-lg">
                                             <Users className="h-4 w-4" />
                                         </Button>
                                         {(role === "SUPER_ADMIN" || role === "HEAD_OFFICE") && (
@@ -458,12 +462,16 @@ export function GroupManagement({ role }: Readonly<{ role: string }>) {
                                                 <Button variant="ghost" size="icon" onClick={() => setPricedGroup(group)} title={role === "SUPER_ADMIN" ? "Group Prices" : "Group Prices (read-only)"} className="hover:bg-emerald-50 hover:text-emerald-600 rounded-lg">
                                                     <Tag className="h-4 w-4" />
                                                 </Button>
-                                                <Button variant="ghost" size="icon" onClick={() => openEdit(group)} className="hover:bg-amber-50 hover:text-amber-600 rounded-lg">
-                                                    <Pencil className="h-4 w-4" />
-                                                </Button>
-                                                <Button variant="ghost" size="icon" onClick={() => setConfirmDelete({ open: true, id: group.id })} disabled={isDeleting === group.id} className="hover:bg-rose-50 hover:text-rose-600 rounded-lg">
-                                                    <Trash2 className={`h-4 w-4 ${isDeleting === group.id ? "animate-spin" : ""}`} />
-                                                </Button>
+                                                {!readOnly && (
+                                                  <Button variant="ghost" size="icon" onClick={() => openEdit(group)} className="hover:bg-amber-50 hover:text-amber-600 rounded-lg">
+                                                      <Pencil className="h-4 w-4" />
+                                                  </Button>
+                                                )}
+                                                {!readOnly && (
+                                                  <Button variant="ghost" size="icon" onClick={() => setConfirmDelete({ open: true, id: group.id })} disabled={isDeleting === group.id} className="hover:bg-rose-50 hover:text-rose-600 rounded-lg">
+                                                      <Trash2 className={`h-4 w-4 ${isDeleting === group.id ? "animate-spin" : ""}`} />
+                                                  </Button>
+                                                )}
                                             </>
                                         )}
                                     </div>
@@ -712,19 +720,21 @@ export function GroupManagement({ role }: Readonly<{ role: string }>) {
                         </div>
                         <div className="flex gap-2">
                             <Button variant="outline" onClick={() => setIsBranchOpen(false)} className="rounded-xl">Cancel</Button>
-                            <Button
-                                onClick={handleManageBranches}
-                                disabled={isSaving}
-                                className="bg-blue-600 hover:bg-blue-700 text-white rounded-xl px-8 shadow-lg shadow-blue-500/20"
-                            >
-                                {isSaving ? (
-                                    <>Saving...</>
-                                ) : (
-                                    <>
-                                        <CheckCircle2 className="mr-2 h-4 w-4" /> Save Assignments
-                                    </>
-                                )}
-                            </Button>
+                            {!readOnly && (
+                              <Button
+                                  onClick={handleManageBranches}
+                                  disabled={isSaving}
+                                  className="bg-blue-600 hover:bg-blue-700 text-white rounded-xl px-8 shadow-lg shadow-blue-500/20"
+                              >
+                                  {isSaving ? (
+                                      <>Saving...</>
+                                  ) : (
+                                      <>
+                                          <CheckCircle2 className="mr-2 h-4 w-4" /> Save Assignments
+                                      </>
+                                  )}
+                              </Button>
+                            )}
                         </div>
                     </DialogFooter>
                 </DialogContent>

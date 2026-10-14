@@ -85,6 +85,14 @@ export const organizations = pgTable(
     privateNetworkLoginEnabled: boolean("private_network_login_enabled")
       .notNull()
       .default(false),
+    // Whether this tenant's orders carry approval levels, defined in
+    // organizationApprovalLevels. Super Admin only; off by default so no
+    // existing tenant changes. Phase 1 stores the configuration only — nothing
+    // in the order path reads it yet.
+    // See plans/OF-APPROVAL-LEVELS-organization-approval-levels.md.
+    orderApprovalLevelsEnabled: boolean("order_approval_levels_enabled")
+      .notNull()
+      .default(false),
     logoUrl: varchar("logo_url", { length: 512 }),
     // The domain an applicant's address must be at, e.g. `ke.com.pk`. Set by
     // Super Admin; null means self-service applications are refused. Not
@@ -751,6 +759,45 @@ export const organizationAllowedIps = pgTable(
     check(
       "organization_allowed_ips_address_nonempty_ck",
       sql`length(trim(${t.ipAddress})) > 0`,
+    ),
+  ],
+)
+
+/**
+ * An organization's order approval levels, in order. Level N's amount means an
+ * order below or equal to it may be approved by a user holding Level N; every
+ * level's amount is higher than the one before (`approvalLevelsError` in
+ * lib/order-approval-levels.ts, enforced by the only writer,
+ * lib/server/order-approval-levels.ts).
+ *
+ * Positional: levels are written 1..N with no gaps, and replaced as a whole
+ * set. Kept while the feature is switched off, so switching it back on
+ * restores them. Super Admin only.
+ * See plans/OF-APPROVAL-LEVELS-organization-approval-levels.md.
+ */
+export const organizationApprovalLevels = pgTable(
+  "organization_approval_levels",
+  {
+    id: serial("id").primaryKey(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id, { onDelete: "cascade" })
+      .notNull(),
+    level: integer("level").notNull(),
+    maxAmountCents: bigint("max_amount_cents", { mode: "number" }).notNull(),
+    createdBy: uuid("created_by"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("organization_approval_levels_org_level_uq").on(t.organizationId, t.level),
+    // MAX_APPROVAL_LEVELS in lib/order-approval-levels.ts.
+    check(
+      "organization_approval_levels_level_ck",
+      sql`${t.level} BETWEEN 1 AND 10`,
+    ),
+    // APPROVAL_LEVEL_MIN_AMOUNT_CENTS..APPROVAL_LEVEL_MAX_AMOUNT_CENTS.
+    check(
+      "organization_approval_levels_amount_ck",
+      sql`${t.maxAmountCents} BETWEEN 1 AND 100000000000`,
     ),
   ],
 )

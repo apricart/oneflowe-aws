@@ -1,3 +1,4 @@
+import { VIEWER_READ_REFUSED, viewerReadRole } from "@/lib/viewer-access"
 import { NextResponse, type NextRequest } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
@@ -17,7 +18,9 @@ export async function GET(req: NextRequest) {
         const groupIdsParam = url.searchParams.get("groupIds")
         const branchIdsParam = url.searchParams.get("branchIds")
 
-        const role = String((session.user as any).role || "")
+        // An organization-wide Viewer reads as Head Office; a pinned one is refused.
+        const role = viewerReadRole(session.user as any)
+        if (!role) return NextResponse.json({ error: VIEWER_READ_REFUSED }, { status: 403 })
         const userOrganizationId = (session.user as any).organizationId
         // Which products a tenant has assigned is the tenant's own business:
         // anyone but Super Admin filters by its own organization only.

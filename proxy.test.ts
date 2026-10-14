@@ -191,34 +191,6 @@ describe("session policy proxy enforcement", () => {
     ["GROUP_USER", "/join-requests", "/dashboard"],
     ["GROUP_ORDER_PORTAL", "/join-requests", "/group-portal"],
     ["ORDER_PORTAL", "/join-requests", "/shop"],
-    // The read-only account reaches its dashboard and nothing else — not the
-    // shared invoice page, not the support area, not another role's portal.
-    // The proxy is navigation only; every endpoint refuses it besides.
-    ["VIEWER", "/dashboard", null],
-    ["VIEWER", "/orders", "/dashboard"],
-    ["VIEWER", "/orders/42", "/dashboard"],
-    ["VIEWER", "/users", "/dashboard"],
-    ["VIEWER", "/budgets", "/dashboard"],
-    ["VIEWER", "/budget-by-quantity", "/dashboard"],
-    ["VIEWER", "/reports", "/dashboard"],
-    ["VIEWER", "/reports/graphical", "/dashboard"],
-    ["VIEWER", "/settings", "/dashboard"],
-    ["VIEWER", "/inventory", "/dashboard"],
-    ["VIEWER", "/branch-inventory", "/dashboard"],
-    ["VIEWER", "/groups", "/dashboard"],
-    ["VIEWER", "/refunds", "/dashboard"],
-    ["VIEWER", "/products", "/dashboard"],
-    ["VIEWER", "/employee-management", "/dashboard"],
-    ["VIEWER", "/approvals", "/dashboard"],
-    ["VIEWER", "/branches", "/dashboard"],
-    ["VIEWER", "/join-requests", "/dashboard"],
-    ["VIEWER", "/organizations", "/dashboard"],
-    ["VIEWER", "/shop", "/dashboard"],
-    ["VIEWER", "/group-portal", "/dashboard"],
-    ["VIEWER", "/group-portal/bulk-order", "/dashboard"],
-    ["VIEWER", "/invoices/42", "/dashboard"],
-    ["VIEWER", "/receipts/42", "/dashboard"],
-    ["VIEWER", "/support", "/dashboard"],
   ])(
     "preserves %s routing for %s",
     async (role, path, redirectedPath) => {
@@ -583,5 +555,112 @@ describe("Apricart's Order Desk session", () => {
     } else {
       expect(response.status).toBe(200)
     }
+  })
+})
+
+describe("the read-only Viewer session", () => {
+  beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW)
+    mocks.getToken.mockReset()
+    mocks.logger.mockReset()
+  })
+
+  afterEach(() => vi.restoreAllMocks())
+
+  const organizationWide = () => ({ ...validToken("VIEWER"), organizationId: 17, branchId: null })
+  const pinned = () => ({ ...validToken("VIEWER"), organizationId: 17, branchId: 42 })
+
+  async function landing(token: object, path: string): Promise<string | null> {
+    mocks.getToken.mockResolvedValue(token)
+    const response = await proxy(request(path))
+    if (response.status === 307) return new URL(response.headers.get("location")!).pathname
+    expect(response.status).toBe(200)
+    return null
+  }
+
+  // Head Office's menu, every entry of it, and the pages they open.
+  it.each([
+    "/dashboard", "/branches", "/users", "/join-requests", "/delivery-addresses",
+    "/orders", "/orders/42", "/inventory", "/inventory/price-history", "/inventory/product-requests",
+    "/groups", "/budgets", "/budget-by-quantity", "/reports", "/reports/graphical",
+    "/reports/organization-report", "/reports/order-report", "/reports/consolidated-invoices",
+    "/reports/refund-report", "/reports/budget-summary", "/reports/product-performance",
+    "/reports/user-report", "/reports/branch-reports", "/reports/groups",
+    "/support", "/support/7", "/activity", "/settings", "/invoices/42", "/change-password",
+  ])("lets an organization-wide Viewer reach %s", async (path) => {
+    expect(await landing(organizationWide(), path)).toBeNull()
+  })
+
+  // Head Office's write pages, and everything outside Head Office's menu.
+  it.each([
+    "/inventory/add", "/inventory/adjust", "/inventory/assign", "/inventory/assigned",
+    "/inventory/branch", "/inventory/org", "/inventory/suppliers",
+    "/branch-inventory", "/refunds", "/products", "/employee-management", "/approvals",
+    "/organizations", "/shop", "/group-portal", "/group-portal/bulk-order", "/receipts/42",
+    "/delivery-dashboard", "/desk-team", "/warehouse", "/warehouse-team", "/order-desk",
+  ])("sends an organization-wide Viewer home from %s", async (path) => {
+    expect(await landing(organizationWide(), path)).toBe("/dashboard")
+  })
+
+  // A branch-pinned Viewer keeps exactly what it had: its dashboard.
+  it.each([
+    "/orders", "/orders/42", "/users", "/budgets", "/budget-by-quantity", "/reports",
+    "/reports/graphical", "/settings", "/inventory", "/groups", "/branches", "/join-requests",
+    "/delivery-addresses", "/activity", "/invoices/42", "/support", "/shop", "/group-portal",
+  ])("sends a branch-pinned Viewer home from %s", async (path) => {
+    expect(await landing(pinned(), path)).toBe("/dashboard")
+  })
+
+  it("lets a branch-pinned Viewer reach its dashboard and the password change", async () => {
+    expect(await landing(pinned(), "/dashboard")).toBeNull()
+    expect(await landing(pinned(), "/change-password")).toBeNull()
+  })
+
+  function apiRequest(path: string, method: string) {
+    return new NextRequest(`https://app.test${path}`, {
+      method,
+      headers: { "sec-fetch-site": "same-origin", origin: "https://app.test" },
+    })
+  }
+
+  it.each([
+    ["POST", "/api/v1/orders"],
+    ["POST", "/api/v1/orders/42/approve"],
+    ["POST", "/api/v1/orders/42/reject"],
+    ["PUT", "/api/v1/budgets"],
+    ["POST", "/api/v1/users"],
+    ["PATCH", "/api/v1/users/u-1/access"],
+    ["PATCH", "/api/v1/branches/42"],
+    ["PATCH", "/api/v1/organizations/17"],
+    ["PUT", "/api/v1/groups/3"],
+    ["PATCH", "/api/v1/join-requests/9"],
+    ["PUT", "/api/v1/organizations/join-code"],
+    ["POST", "/api/v1/support/threads"],
+    ["POST", "/api/v1/product-requests"],
+    ["PATCH", "/api/v1/delivery-addresses/5"],
+    ["POST", "/api/v1/upload/image"],
+    ["DELETE", "/api/v1/users/u-1"],
+    ["PATCH", "/api/v1/notifications"],
+    ["POST", "/api/v1/mfa/toggle"],
+  ])("refuses a Viewer %s %s before any handler runs", async (method, path) => {
+    for (const token of [organizationWide(), pinned()]) {
+      mocks.getToken.mockResolvedValue(token)
+      const response = await proxy(apiRequest(path, method))
+      expect(response.status, `${method} ${path}`).toBe(403)
+    }
+  })
+
+  it.each([
+    ["GET", "/api/v1/orders"],
+    ["GET", "/api/v1/users"],
+    ["HEAD", "/api/v1/orders"],
+    ["POST", "/api/v1/users/me/change-password"],
+    ["POST", "/api/v1/users/me/email-verification/send"],
+    ["POST", "/api/v1/users/me/email-verification/verify"],
+  ])("leaves a Viewer's %s %s to its handler", async (method, path) => {
+    mocks.getToken.mockResolvedValue(organizationWide())
+    const response = await proxy(apiRequest(path, method))
+    expect(response.status).toBe(200)
+    expect(response.headers.get("x-middleware-next")).toBe("1")
   })
 })

@@ -10,7 +10,7 @@ import { assertUniqueUserFields,normalizeEmail,normalizeOptionalText,UserUniqueF
 import { sendWelcomeEmail } from "@/lib/email"
 import { userCreateSchema,validationMessage } from "@/lib/server/mutation-validation"
 import { canAssignRole } from "@/lib/server/user-access-policy"
-import { isViewerRole } from "@/lib/viewer-access"
+import { isViewerRole, VIEWER_READ_REFUSED, viewerReadScope } from "@/lib/viewer-access"
 import { isOrderDeskRole, orderDeskUserShapeError } from "@/lib/order-desk-access"
 import { apricartExecutiveUserShapeError, isApricartExecutiveRole } from "@/lib/apricart-executive-access"
 import { isWarehouseRole, warehouseUserShapeError } from "@/lib/warehouse-access"
@@ -179,12 +179,14 @@ function handleUserCreationError(caughtError: any) {
 
 
 export async function GET(req: Request) {
-  const err = await requireApiRole(USER_MANAGEMENT_ROLES)
+  // An organization-wide Viewer reads its tenant's directory as Head Office does.
+  const err = await requireApiRole(USER_MANAGEMENT_ROLES, { viewerReadsAsHeadOffice: true })
   if (err) return err
   const { searchParams } = new URL(req.url)
   const organizationId = searchParams.get("organizationId")
   const shouldRefresh = searchParams.has("refresh")
-  const scope = await getRequestScope()
+  const scope = viewerReadScope(await getRequestScope())
+  if (!scope) return error(VIEWER_READ_REFUSED, 403)
   const scopedOrgId = (() => {
     if (scope?.role === "SUPER_ADMIN") {
       return (organizationId ? Number(organizationId) : undefined)

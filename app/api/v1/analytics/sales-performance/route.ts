@@ -678,6 +678,11 @@ export async function GET(req: NextRequest) {
         if (scopedBranchIds !== null) {
             branchListConditions.push(inArray(branches.id, scopedBranchIds))
         }
+        // A pinned Viewer reads its own branch alone, so the breakdown names
+        // no sibling either (`tests/integration/viewer-isolation-sweep.test.ts`).
+        if (viewerBranchIds && viewerBranchIds.length > 0) {
+            branchListConditions.push(inArray(branches.id, viewerBranchIds))
+        }
         if (branchListConditions.length > 0) {
             branchQuery = branchQuery.where(and(...branchListConditions)) as any
         }

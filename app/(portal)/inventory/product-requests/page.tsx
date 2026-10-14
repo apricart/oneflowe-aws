@@ -1,3 +1,4 @@
+import { viewerReadRole } from "@/lib/viewer-access"
 import { redirect } from "next/navigation"
 import { ShieldAlert } from "lucide-react"
 
@@ -18,7 +19,9 @@ export default async function ProductRequestsPage() {
   if (!session?.user) redirect("/login")
 
   const role = (session.user as { role?: string }).role
-  if (!canOpenProductRequests(role)) {
+  // An organization-wide Viewer opens the page as Head Office would; the view
+  // gets its real role, so it can neither raise nor review a request.
+  if (!canOpenProductRequests(viewerReadRole(session.user as { role?: string }))) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center p-6">
         <div className="max-w-md rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm dark:border-slate-800 dark:bg-slate-900">

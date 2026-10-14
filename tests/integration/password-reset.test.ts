@@ -267,8 +267,8 @@ async function challengeRows(subjectId: string) {
 }
 
 /**
- * Request a reset the way the route does â€” the email leaves only when
- * `afterResponse` runs â€” and return the challenge id and the code that was
+ * Request a reset the way the route does — the email leaves only when
+ * `afterResponse` runs — and return the challenge id and the code that was
  * mailed, if any.
  */
 async function requestAndDeliver(identifier: string): Promise<{ challengeId: string; code: string | null }> {

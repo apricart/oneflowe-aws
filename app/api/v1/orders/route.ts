@@ -1,3 +1,4 @@
+import { VIEWER_READ_REFUSED, viewerReadRole } from "@/lib/viewer-access"
 import { NextRequest,NextResponse } from "next/server"
 import { createHash,randomBytes } from "node:crypto"
 import { getServerSession } from "next-auth"
@@ -1166,7 +1167,13 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Forbidden", message: "Password change required" }, { status: 403 })
     }
 
-    const role = (session.user as any).role
+    const sessionRole = (session.user as any).role
+    // The role the list is *scoped* by: an organization-wide Viewer reads the
+    // tenant's orders as Head Office does, a branch-pinned one is refused.
+    // What the caller may *do* — decide, see the fulfilment token — and the
+    // access audit below keep the real role.
+    const role = viewerReadRole(session.user as any)
+    if (!role) return NextResponse.json({ error: VIEWER_READ_REFUSED }, { status: 403 })
     const organizationIdRaw = (session.user as any).organizationId
     const branchIdFromUserRaw = (session.user as any).branchId
 
@@ -1174,9 +1181,9 @@ export async function GET(req: NextRequest) {
     const branchIdFromUser = parseScopedNumericId(branchIdFromUserRaw)
     const currentUserId = (session.user as any).id
     const decisionCapabilities = await getOrderDecisionCapabilities(
-      isValidRole(role) && typeof currentUserId === "string"
+      isValidRole(sessionRole) && typeof currentUserId === "string"
         ? {
-          role,
+          role: sessionRole,
           userId: currentUserId,
           organizationId: orgIdNum ?? null,
           branchId: branchIdFromUser ?? null,
@@ -1220,7 +1227,7 @@ export async function GET(req: NextRequest) {
     )
 
     // --- Audit Logging for Group Access ---
-    auditOrderGroupAccess(params, { organizationId: orgIdNum, userId: currentUserId, role })
+    auditOrderGroupAccess(params, { organizationId: orgIdNum, userId: currentUserId, role: sessionRole })
 
 
 
@@ -1332,7 +1339,7 @@ export async function GET(req: NextRequest) {
 
     // Sanitize items: Only show approvalToken to authorized roles
     const filtered = sanitizeOrderListItems(items, {
-      role,
+      role: sessionRole,
       userId: currentUserId,
       pricesHidden,
       capabilities: decisionCapabilities,

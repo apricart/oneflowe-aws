@@ -1,4 +1,5 @@
 "use client"
+import { useViewerAccess } from "@/lib/hooks/use-viewer-access"
 import { useEffect,useRef,useState,useMemo } from "react"
 import useSWR from "swr"
 import { jsonFetcher } from "@/lib/fetcher"
@@ -898,6 +899,9 @@ function RoleAssignmentFields({
 }
 
 export function HeadOfficeUsersTable({ users, branches, organizations, userRole, onUserUpdate }: Readonly<HeadOfficeUsersTableProps>) {
+  // The read-only Viewer opens the same directory and drawer, without the
+  // controls that edit, deactivate, delete or reset an account.
+  const { readOnly } = useViewerAccess()
   const PAGE_SIZE = 20
   const [viewMode, setViewMode] = useState<"grid" | "table">("table")
   const [searchQuery, setSearchQuery] = useState("")
@@ -1792,6 +1796,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
               </div>
 
               <SheetFooter className="mt-auto p-6 bg-white dark:bg-slate-950 border-t border-slate-200 dark:border-slate-800 flex flex-col gap-3 sticky bottom-0 z-20">
+                {!readOnly && (
                 <div className="grid grid-cols-2 gap-3 w-full">
                   <Button 
                     variant="outline" 
@@ -1852,6 +1857,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>
+                )}
                 <Button 
                   variant="ghost" 
                   className="w-full text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-colors h-9 text-xs"

@@ -10,8 +10,10 @@ vi.mock("@/lib/db", () => ({
   db: {
     select: () => ({
       from: () => ({
-        where: () => ({
-          orderBy: () => ({ limit: async () => mocks.rows }),
+        innerJoin: () => ({
+          where: () => ({
+            orderBy: () => ({ limit: async () => mocks.rows }),
+          }),
         }),
       }),
     }),

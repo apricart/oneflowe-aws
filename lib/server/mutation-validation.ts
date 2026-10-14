@@ -37,6 +37,7 @@ import { GROUP_ORDER_CANCEL_REASON_MAX_LENGTH } from "@/lib/group-order-cancel"
 import { APRICART_EXECUTIVE_ASSIGNMENT_MAX } from "@/lib/apricart-executive-access"
 import { WAREHOUSE_ASSIGNMENT_MAX_PER_ORGANIZATION, WAREHOUSE_CITY_MAX_LENGTH } from "@/lib/warehouse-access"
 import { MAX_ALLOWLIST_ENTRIES } from "@/lib/security/ip-allowlist"
+import { MAX_APPROVAL_LEVELS, approvalLevelsError } from "@/lib/order-approval-levels"
 import {
   DEFAULT_ORDERING_BLOCK_THRESHOLD,
   ORDERING_BLOCK_THRESHOLD_MAX,
@@ -265,6 +266,30 @@ export const privateNetworkLoginSchema = z.object({
   path: ["entries"],
 })
 
+/**
+ * An organization's order approval levels, as Super Admin sends them on Create
+ * Organization and on PUT /api/v1/organizations/[id]/approval-levels.
+ *
+ * `levels` is ordered: the first entry is Level 1. Amounts are JSON integers in
+ * cents — a string is refused, not coerced. Omitting `levels` leaves the stored
+ * ones alone, which is what a save with the feature switched off sends; it is
+ * required when switching on. Every rule about the list is
+ * `approvalLevelsError` (lib/order-approval-levels.ts), shared with the form.
+ */
+export const orderApprovalLevelsSchema = z.object({
+  enabled: z.boolean(),
+  levels: z.array(z.object({
+    maxAmountCents: z.number().int(),
+  }).strict()).max(MAX_APPROVAL_LEVELS).optional(),
+}).strict().superRefine((input, context) => {
+  if (input.enabled && input.levels === undefined) {
+    context.addIssue({ code: "custom", path: ["levels"], message: "Send the approval levels when turning them on" })
+    return
+  }
+  const problem = approvalLevelsError(input.enabled, (input.levels ?? []).map((level) => level.maxAmountCents))
+  if (problem) context.addIssue({ code: "custom", path: ["levels"], message: problem })
+})
+
 // Optional tax identifier. An empty string is accepted and normalized to null
 // by the route so an operator can clear a wrong value without extra API shape.
 /** A tax identifier as printed on an invoice: letters, digits and hyphens. */
@@ -327,6 +352,8 @@ export const organizationCreateSchema = z.object({
     hideOrderPortalPrices: z.boolean().optional(),
   }).strict().optional(),
   privateNetworkLogin: privateNetworkLoginSchema.optional(),
+  // Absent means off with no levels (plans/OF-APPROVAL-LEVELS-organization-approval-levels.md).
+  orderApprovalLevels: orderApprovalLevelsSchema.optional(),
 }).strict()
 
 export const organizationUpdateSchema = z.object({

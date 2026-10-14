@@ -1,5 +1,6 @@
 "use client"
 
+import { isReadOnlyRole } from "@/lib/viewer-access"
 import { useEffect, useId, useMemo, useState } from "react"
 import Link from "next/link"
 import { useSearchParams } from "next/navigation"
@@ -133,7 +134,8 @@ export function SupportList() {
         backHref={embedded ? undefined : home.href}
         backLabel={embedded ? undefined : home.label}
         actions={
-          apricart ? null : (
+          // The read-only Viewer reads its organization's threads and raises none.
+          apricart || isReadOnlyRole(role) ? null : (
             <NewThreadDialog
               orderId={linkedOrderId}
               orderLabel={linkedOrderLabel}

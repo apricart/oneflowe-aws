@@ -30,7 +30,10 @@ describe("the consolidated invoice report", () => {
 
   it("checks the role and takes Head Office's organization from its user row", () => {
     const report = source("lib/server/consolidated-invoice-report.ts")
-    expect(report).toContain("canReadConsolidatedInvoiceReport(user.role)")
+    // Checked on the read role: an organization-wide Viewer reads it as Head
+    // Office (its own organization below), a pinned one maps to no role.
+    expect(report).toContain("const readRole = viewerReadRole(user)")
+    expect(report).toContain("canReadConsolidatedInvoiceReport(readRole)")
     expect(report).toContain("const scope = await getRequestScope()")
     expect(report).toContain("organizationId = scope?.organizationId ?? null")
   })
@@ -54,7 +57,7 @@ describe("the consolidated invoice report", () => {
     expect(sidebar.split('href: "/reports/consolidated-invoices"').length - 1).toBe(2)
     expect(source("app/(portal)/reports/page.tsx")).toContain("canReadConsolidatedInvoiceReport(role)")
     expect(source("proxy.ts")).toContain(
-      "{ prefix: CONSOLIDATED_INVOICE_REPORT_AREA, roles: CONSOLIDATED_INVOICE_REPORT_ROLES, home: \"/reports\" }",
+      "{ prefix: CONSOLIDATED_INVOICE_REPORT_AREA, roles: [...CONSOLIDATED_INVOICE_REPORT_ROLES, \"VIEWER\"], home: \"/reports\" }",
     )
   })
 })

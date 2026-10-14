@@ -1,4 +1,5 @@
 "use client"
+import { viewerAccessFor } from "@/lib/viewer-access"
 import React,{ Suspense,useState,useMemo,useEffect,useCallback } from "react"
 import { useSearchParams } from "next/navigation"
 import useSWR from "swr"
@@ -167,7 +168,12 @@ function OrdersManagementContent() {
     branchId,
     branchIds,
     isInitialized  } = useAppContext()
-  const userRole = (session?.user as any)?.role
+  // An organization-wide Viewer reads the directory as Head Office does. It
+  // decides and hands over nothing: the decision capabilities and the token
+  // that drive those controls come from the server, which never grants them
+  // to the role.
+  const { viewRole } = viewerAccessFor(session?.user)
+  const userRole = viewRole ?? undefined
   const isBranchAdmin = userRole === "BRANCH_ADMIN"
   const isHeadOffice = userRole === "HEAD_OFFICE"
   const isSuperAdmin = userRole === "SUPER_ADMIN"

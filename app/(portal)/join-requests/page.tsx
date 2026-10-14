@@ -1,5 +1,6 @@
 "use client"
 
+import { useViewerAccess } from "@/lib/hooks/use-viewer-access"
 import { useState } from "react"
 
 import useSWR from "swr"
@@ -39,6 +40,8 @@ const FILTERS: ReadonlyArray<{ value: JoinRequestStatus | "all"; label: string }
 ]
 
 export default function JoinRequestsPage() {
+  // The read-only Viewer reads the queue and decides nothing.
+  const { readOnly } = useViewerAccess()
   const { organizationId } = useAppContext()
   const [filter, setFilter] = useState<JoinRequestStatus | "all">("pending")
   const [reviewing, setReviewing] = useState<JoinRequestRow | null>(null)
@@ -145,7 +148,7 @@ export default function JoinRequestsPage() {
                 <JoinRequestListRow
                   key={request.id}
                   request={request}
-                  onReview={setReviewing}
+                  onReview={readOnly ? undefined : setReviewing}
                 />
               ))}
             </ul>
@@ -153,12 +156,14 @@ export default function JoinRequestsPage() {
         </CardContent>
       </Card>
 
-      <JoinDecisionDialog
-        request={reviewing}
-        organizationId={organizationId ? Number.parseInt(organizationId, 10) : null}
-        onClose={() => setReviewing(null)}
-        onDecided={() => mutate()}
-      />
+      {!readOnly && (
+        <JoinDecisionDialog
+          request={reviewing}
+          organizationId={organizationId ? Number.parseInt(organizationId, 10) : null}
+          onClose={() => setReviewing(null)}
+          onDecided={() => mutate()}
+        />
+      )}
     </main>
   )
 }

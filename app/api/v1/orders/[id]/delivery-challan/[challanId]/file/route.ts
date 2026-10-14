@@ -28,7 +28,7 @@ export async function GET(
   _req: Request,
   props: { params: Promise<{ id: string; challanId: string }> },
 ) {
-  const roleError = await requireApiRole([...ORDER_DETAIL_READ_ROLES])
+  const roleError = await requireApiRole([...ORDER_DETAIL_READ_ROLES], { viewerReadsAsHeadOffice: true })
   if (roleError) return roleError
 
   const { id, challanId } = await props.params
@@ -44,7 +44,7 @@ export async function GET(
   if (rateLimited) return rateLimited
 
   try {
-    if (!await canReadOrderDetail({ orderId, scope })) return error("Not found", 404)
+    if (!await canReadOrderDetail({ orderId, scope, viewerReadsAsHeadOffice: true })) return error("Not found", 404)
     const file = await loadDeliveryChallanFile({
       orderId,
       challanId: fileId,

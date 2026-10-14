@@ -176,6 +176,11 @@ const VIA_LIB: readonly { file: string; module: string }[] = [
   { file: "app/api/v1/organizations/join-code/route.ts", module: "lib/server/organization-join-audit.ts" },
   { file: "app/api/v1/join-requests/[id]/route.ts", module: "lib/server/organization-join-audit.ts" },
 
+  // Order approval levels. Super Admin changing a tenant's levels records
+  // UPDATE_ORDER_APPROVAL_LEVELS, with before and after, inside the locked
+  // transaction that replaces them (plans/OF-APPROVAL-LEVELS-organization-approval-levels.md).
+  { file: "app/api/v1/organizations/[id]/approval-levels/route.ts", module: "lib/server/order-approval-levels.ts" },
+
   // Delivery addresses. Asking for a destination and granting one are both on
   // the trail — an approved address diverts stock to somewhere the branch's own
   // record does not mention — and both record through one module so the two

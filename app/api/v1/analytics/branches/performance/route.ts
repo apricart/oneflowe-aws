@@ -1,3 +1,4 @@
+import { VIEWER_READ_REFUSED, viewerReadRole } from "@/lib/viewer-access"
 import { NextResponse, type NextRequest } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
@@ -186,7 +187,9 @@ export async function GET(req: NextRequest) {
         const session = await getServerSession(authOptions)
         if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
-        const userRole = ((session.user as any).role || "").toUpperCase().replace(/\s+/g, '_')
+        // An organization-wide Viewer reads as Head Office; a pinned one is refused.
+        const userRole = viewerReadRole({ ...(session.user as any), role: ((session.user as any).role || "").toUpperCase().replace(/\s+/g, '_') })
+        if (!userRole) return NextResponse.json({ error: VIEWER_READ_REFUSED }, { status: 403 })
         const userOrganizationId = (session.user as any).organizationId
         if (lacksAnalyticsTenant(userRole, userOrganizationId)) {
             return NextResponse.json({ error: "Forbidden" }, { status: 403 })

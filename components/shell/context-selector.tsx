@@ -1,5 +1,6 @@
 "use client"
 
+import { isViewerRole } from "@/lib/viewer-access"
 import { useAppContext } from "@/components/context/app-context"
 import { Button } from "@/components/ui/button"
 import {
@@ -325,9 +326,10 @@ export function ContextSelector() {
   // Don't render until initialized
   if (!isInitialized) return null
 
-  // Branch Admin, Head Office and the group approver: read-only breadcrumb.
-  // None of them may re-point the shell at another tenant or branch.
-  if (READ_ONLY_CONTEXT_ROLES.has(userRole ?? "") || userRole === "HEAD_OFFICE") {
+  // Branch Admin, Head Office, the group approver and the read-only Viewer:
+  // read-only breadcrumb. None of them may re-point the shell at another
+  // tenant or branch.
+  if (READ_ONLY_CONTEXT_ROLES.has(userRole ?? "") || userRole === "HEAD_OFFICE" || isViewerRole(userRole)) {
     const org = organizations.find((o: any) => o.id.toString() === scopedOrganizationId)
     const branch = listedBranch || assignedBranchData?.item
     return (
