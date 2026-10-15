@@ -6,6 +6,7 @@ import Image from "next/image"
 import Link from "next/link"
 import { AlertCircle, ArrowLeft, CheckCircle2, KeyRound, MailWarning } from "lucide-react"
 
+import { DepartmentSignupForm } from "@/components/join/department-signup-form"
 import { JoinRequestForm, type JoinFormOptions } from "@/components/join/join-request-form"
 import {
   AlertDialog,
@@ -28,6 +29,7 @@ import {
   joinCodeError,
   normalizeJoinCode,
 } from "@/lib/organization-join"
+import type { ApprovalLevelBand } from "@/lib/order-approval-levels"
 
 /**
  * The public join page: `/login` -> "Join an organization" -> here.
@@ -48,13 +50,28 @@ import {
  * account.
  */
 
+/**
+ * Which form the organization takes. `department` is the department sign-up of
+ * an organization with order approval levels on
+ * (plans/OF-JOIN-department-signup-multi-user.md); every other organization
+ * keeps the standard form. The server refuses the wrong one, so this is only
+ * which form to draw.
+ */
+type JoinFormKind = "standard" | "department"
+
+type ResolvedOptions = JoinFormOptions & { form: JoinFormKind; approvalLevels: ApprovalLevelBand[] }
+
 type Step =
   | { kind: "code" }
-  | { kind: "details"; code: string; options: JoinFormOptions }
+  | { kind: "details"; code: string; options: ResolvedOptions }
   | { kind: "sent"; message: string }
 
 /** What `POST /api/v1/join/lookup` answers for a valid code. */
-type JoinLookupResult = Omit<JoinFormOptions, "emailDomain"> & { emailDomain: string | null }
+type JoinLookupResult = Omit<JoinFormOptions, "emailDomain"> & {
+  emailDomain: string | null
+  form?: JoinFormKind
+  approvalLevels?: ApprovalLevelBand[]
+}
 
 function PageShell({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
@@ -130,7 +147,7 @@ function EmailDomainMissingPrompt({
   )
 }
 
-function CodeStep({ onResolved }: Readonly<{ onResolved: (code: string, options: JoinFormOptions) => void }>) {
+function CodeStep({ onResolved }: Readonly<{ onResolved: (code: string, options: ResolvedOptions) => void }>) {
   const [code, setCode] = useState("")
   const [loading, setLoading] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
@@ -156,7 +173,12 @@ function CodeStep({ onResolved }: Readonly<{ onResolved: (code: string, options:
         setDomainMissingFor(result.organizationName)
         return
       }
-      onResolved(normalized, { ...result, emailDomain: result.emailDomain })
+      onResolved(normalized, {
+        ...result,
+        emailDomain: result.emailDomain,
+        form: result.form === "department" ? "department" : "standard",
+        approvalLevels: Array.isArray(result.approvalLevels) ? result.approvalLevels : [],
+      })
     } catch (caughtError: any) {
       setFailure(caughtError?.message || "We could not check that code. Please try again.")
     } finally {
@@ -248,21 +270,22 @@ export default function JoinPage() {
   }
 
   if (step.kind === "details") {
+    // The code is resent rather than an organization id, so the server
+    // resolves the tenant itself on this request too.
+    const submit = async (payload: Record<string, unknown>) => {
+      const response = await jsonFetcher<{ message: string }>("/api/v1/join/requests", {
+        method: "POST",
+        body: JSON.stringify({ ...payload, code: step.code }),
+      })
+      setStep({ kind: "sent", message: response.message })
+    }
+    const back = () => setStep({ kind: "code" })
+
     return (
       <PageShell>
-        <JoinRequestForm
-          options={step.options}
-          onBack={() => setStep({ kind: "code" })}
-          onSubmit={async (payload) => {
-            // The code is resent rather than an organization id, so the server
-            // resolves the tenant itself on this request too.
-            const response = await jsonFetcher<{ message: string }>("/api/v1/join/requests", {
-              method: "POST",
-              body: JSON.stringify({ ...payload, code: step.code }),
-            })
-            setStep({ kind: "sent", message: response.message })
-          }}
-        />
+        {step.options.form === "department"
+          ? <DepartmentSignupForm options={step.options} onBack={back} onSubmit={submit} />
+          : <JoinRequestForm options={step.options} onBack={back} onSubmit={submit} />}
       </PageShell>
     )
   }

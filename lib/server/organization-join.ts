@@ -375,7 +375,7 @@ async function scopeTenantError(input: {
  *
  * The caller collapses every one of these into a single field-less message.
  */
-async function identityConflictReason(input: {
+export async function identityConflictReason(input: {
   organizationId: number
   email: string
   username: string
@@ -478,6 +478,8 @@ export async function createJoinRequest(
 
 export type JoinRequestListRow = {
   id: number
+  /** 1 = the standard form; 2 = the department sign-up (reviewed through its own read). */
+  formVersion: number
   status: JoinRequestStatus
   requestedRole: JoinableRole
   requestedBranchId: number | null
@@ -520,6 +522,7 @@ export async function listJoinRequests(input: {
   const rows = await db
     .select({
       id: organizationJoinRequests.id,
+      formVersion: organizationJoinRequests.formVersion,
       status: organizationJoinRequests.status,
       requestedRole: organizationJoinRequests.requestedRole,
       requestedBranchId: organizationJoinRequests.requestedBranchId,
@@ -670,6 +673,10 @@ export async function decideJoinRequest(input: {
       .where(and(
         eq(organizationJoinRequests.id, input.requestId),
         eq(organizationJoinRequests.organizationId, input.organizationId),
+        // A department sign-up is decided by decideDepartmentJoinRequest,
+        // which creates its approvers and branches; this path must never
+        // approve one as a lone user.
+        eq(organizationJoinRequests.formVersion, 1),
       ))
       .for("update")
       .limit(1)

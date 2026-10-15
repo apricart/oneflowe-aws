@@ -23,6 +23,7 @@ import {
   usesMultiBranchScope,
   rejectScopeForSingleBranchRole,
   replaceMultiBranchScope,
+  resolveScopedBranchesForUsers,
   validateMultiBranchScope,
 } from "@/lib/server/multi-branch-scope"
 
@@ -237,6 +238,14 @@ export async function GET(req: Request) {
       .orderBy(desc(usersTable.createdAt))
       .limit(500)
 
+    // A group-based user has no `branch_id`; its branches are its assignments,
+    // resolved with the same tenant fences as the order paths, so the
+    // directory can show them instead of mislabelling the user "Head Office".
+    const scopedBranches = await resolveScopedBranchesForUsers(
+      db,
+      rows.filter((r: any) => usesMultiBranchScope(r.role)).map((r: any) => r.id),
+    )
+
     return rows.map((r: any) => ({
       id: r.id,
       email: r.email,
@@ -262,6 +271,8 @@ export async function GET(req: Request) {
       // The level is shown and editable only while the organization admits it
       // (plans/OF-APPROVAL-LEVELS-assign-users-to-levels.md).
       orderApprovalLevel: r.orderApprovalLevel ?? null,
+      // Null for every role pinned to (or not using) a single branch.
+      assignedBranches: usesMultiBranchScope(r.role) ? (scopedBranches.get(r.id) ?? []) : null,
     }))
   }
 

@@ -37,6 +37,12 @@ import {
   approvalLevelPayload,
   useApprovalLevelChoice,
 } from "@/components/users/approval-level-field"
+import { UserBranchCell } from "@/components/users/user-branch-cell"
+import {
+  describeUserBranches,
+  userBranchExportText,
+  type DirectoryBranch,
+} from "@/lib/user-branch-display"
 
 type UserRow = {
   id: string
@@ -61,6 +67,8 @@ type UserRow = {
   externalSource?: string | null
   /** The organization approval level held, or null (plans/OF-APPROVAL-LEVELS-assign-users-to-levels.md). */
   orderApprovalLevel?: number | null
+  /** A group-based user's effective branches; null for every other role. */
+  assignedBranches?: DirectoryBranch[] | null
 }
 
 type HeadOfficeUsersTableProps = {
@@ -1058,10 +1066,8 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
     return map
   }, [branches])
 
-  const getBranchName = (branchId: number | null | undefined) => {
-    if (!branchId) return "—"
-    return branchMap.get(branchId as number) || "Unknown"
-  }
+  const getBranchDisplay = (user: UserRow) => describeUserBranches(user, branchMap)
+  const getBranchExportText = (user: UserRow) => userBranchExportText(getBranchDisplay(user))
 
   const getOrganizationName = (organizationId: number | null | undefined) => {
     if (!organizationId) return "—"
@@ -1327,7 +1333,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
       user.phone || "—",
       user.role,
       getOrganizationName(user.organizationId) || "—",
-      getBranchName(user.branchId),
+      getBranchExportText(user),
       orgStatusMap.get(user.organizationId as number) || "—",
       user.isActive ? "Active" : "Inactive",
       user.mfaEnabled ? "Enabled" : "Disabled"
@@ -1352,7 +1358,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
       "Phone": user.phone || "—",
       "Role": user.role,
       "Organization": getOrganizationName(user.organizationId) || "—",
-      "Branch": getBranchName(user.branchId),
+      "Branch": getBranchExportText(user),
       "Company Status": orgStatusMap.get(user.organizationId as number) || "—",
       "User Status": user.isActive ? "Active" : "Inactive",
       "Security (MFA)": user.mfaEnabled ? "Enabled" : "Disabled"
@@ -1379,7 +1385,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
       user.phone || "—",
       user.role,
       getOrganizationName(user.organizationId) || "—",
-      getBranchName(user.branchId),
+      getBranchExportText(user),
       orgStatusMap.get(user.organizationId as number) || "—",
       user.isActive ? "Active" : "Inactive",
       user.mfaEnabled ? "Enabled" : "Disabled"
@@ -1548,6 +1554,10 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
                     </div>
                   </div>
 
+                  <div className="mb-4 relative z-10">
+                    <UserBranchCell display={getBranchDisplay(user)} />
+                  </div>
+
                   <div className="mt-auto pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between relative z-10">
                     <div>
                       {getRoleBadge(user.role)}
@@ -1636,12 +1646,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
                         {getRoleBadge(user.role)}
                       </TableCell>
                       <TableCell>
-                        <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
-                          <Building2 className="h-3.5 w-3.5 opacity-60 shrink-0" />
-                          <span className="truncate max-w-[140px]" title={branches.find((b: any) => b.id === user.branchId)?.name || 'Head Office'}>
-                            {branches.find((b: any) => b.id === user.branchId)?.name || 'Head Office'}
-                          </span>
-                        </div>
+                        <UserBranchCell display={getBranchDisplay(user)} />
                       </TableCell>
                       <TableCell className="text-right pr-6">
                         <Badge
@@ -1768,7 +1773,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
                       </div>
                       <div className="space-y-0.5 text-right">
                          <p className="text-xs text-muted-foreground">Branch</p>
-                         <p className="text-sm font-semibold">{getBranchName(viewingUser.branchId)}</p>
+                         <UserBranchCell display={getBranchDisplay(viewingUser)} className="justify-end font-semibold" />
                       </div>
                     </div>
                     <div className="flex items-start justify-between">

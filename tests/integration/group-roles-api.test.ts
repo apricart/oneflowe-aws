@@ -64,7 +64,7 @@ const { GET: listMoneyBudgets, PUT: allocateMoneyBudget } = moneyBudgetsRoute
 const { GET: getGroups } = groupsRoute
 const { GET: getReport } = reportRoute
 const { GET: getScope } = scopeRoute
-const { POST: createUser } = usersRoute
+const { GET: listUsers, POST: createUser } = usersRoute
 const { PATCH: changeUserAccess } = userAccessRoute
 
 type Actor = {
@@ -268,6 +268,25 @@ describe.skipIf(!hasTestDatabase)("group-based roles through their real API and 
         remainingCents: 75_000,
       })
       expect(byBranch.has(fixtures.foreignBranchId)).toBe(false)
+    })
+
+    it("lists each group user's effective branches in the user directory, inside its own tenant only", async () => {
+      signIn(actor("head"))
+
+      const response = await listUsers(new Request("http://localhost/api/v1/users?refresh=1"))
+      const body = await response.json()
+      const byId = new Map<string, any>(body.items.map((item: any) => [item.id, item]))
+
+      expect(response.status).toBe(200)
+      const requesterBranches = byId.get(fixtures.requesterId).assignedBranches
+      expect(requesterBranches.map((branch: { id: number }) => branch.id).sort((a: number, b: number) => a - b))
+        .toEqual([fixtures.alphaNorthId, fixtures.alphaSouthId, fixtures.betaBranchId].sort((a, b) => a - b))
+      expect(requesterBranches.map((branch: { name: string }) => branch.name))
+        .toEqual([...requesterBranches.map((branch: { name: string }) => branch.name)].sort((a, b) => a.localeCompare(b)))
+      // The stale foreign-tenant assignment never reaches the directory.
+      expect(requesterBranches.map((branch: { id: number }) => branch.id)).not.toContain(fixtures.foreignBranchId)
+      expect(byId.get(fixtures.emptyApproverId).assignedBranches).toEqual([])
+      expect(byId.get(fixtures.headOfficeId).assignedBranches).toBeNull()
     })
 
     it("never resolves another tenant's branch into the scope, even from a stale assignment row", async () => {

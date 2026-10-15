@@ -362,3 +362,87 @@ describe("the way in is reachable and the way out is not mislabelled", () => {
     expect(layout).toContain('redirect("/login")')
   })
 })
+
+/*
+ * The department sign-up (plans/OF-JOIN-department-signup-multi-user.md).
+ *
+ * The rule above, "only one code path turns a request into a user", is
+ * deliberately extended rather than broken: a department sign-up is approved
+ * by decideDepartmentJoinRequest, which creates the initiator **and** any new
+ * approvers, still only inside Head Office's approval transaction, and the
+ * standard approval refuses a department request outright.
+ */
+describe("the department sign-up", () => {
+  const department = "lib/server/organization-join-department.ts"
+  const submit = "app/api/v1/join/requests/route.ts"
+  const decideRoute = "app/api/v1/join-requests/[id]/route.ts"
+
+  it("is taken only by an organization with approval levels on, judged on this request", () => {
+    const route = codeOf(submit)
+    // The standard form is refused for a levels-enabled organization, and the
+    // department form for any other, both after the code resolved the tenant.
+    expect(route).toContain("if (settings && usesDepartmentSignup(settings)) return error(DEPARTMENT_FORM_ONLY_MESSAGE, 400)")
+    expect(route).toContain("if (!settings || !usesDepartmentSignup(settings)) return error(STANDARD_FORM_ONLY_MESSAGE, 400)")
+    expect(route.indexOf("loadDepartmentJoinSettings(db, organization.organizationId)"))
+      .toBeGreaterThan(route.indexOf("resolveOrganizationByJoinCode(input.code)"))
+  })
+
+  it("lets the applicant name no tenant, role or username", async () => {
+    const { departmentJoinSubmitSchema } = await import("@/lib/server/mutation-validation")
+    const keys = Object.keys(departmentJoinSubmitSchema.shape)
+    for (const forbidden of ["organizationId", "role", "username", "isActive", "mfaEnabled", "budgetAllocationEnabled"]) {
+      expect(keys).not.toContain(forbidden)
+    }
+  })
+
+  it("never looks an approver's email up for a public caller", () => {
+    const server = repositoryFile(department)
+    const create = server.slice(
+      server.indexOf("export async function createDepartmentJoinRequest"),
+      server.indexOf("/* ── Reading a request back"),
+    )
+    expect(create).not.toContain("loadApproverCandidates")
+    expect(create).not.toMatch(/\.from\(users\)/)
+  })
+
+  it("creates users only inside the approval transaction, after locking the request", () => {
+    const server = repositoryFile(department)
+    expect(server.match(/\.insert\(users\)/g) || []).toHaveLength(2)
+    expect(server).toContain('.for("update")')
+    expect(server.indexOf("const stored = await lockDepartmentRequest(tx, input)"))
+      .toBeLessThan(server.indexOf("approveDepartmentRequest(context, stored, roleIdByName)"))
+  })
+
+  it("assigns approval levels only through the shipped writer", () => {
+    const server = repositoryFile(department)
+    expect(server).toContain("writeApprovalLevelInTx(")
+    expect(server).not.toMatch(/orderApprovalLevel:/)
+  })
+
+  it("gives a new approver a rotated temporary password, and never returns it", () => {
+    const server = repositoryFile(department)
+    expect(server).toContain("generateRandomPassword(16)")
+    expect(server).toContain("mustChangePassword: true")
+    const route = codeOf(decideRoute)
+    expect(route).toContain("sendWelcomeEmail(")
+    // Read once, by the email loop alone: never into the audit or the response.
+    expect(route.match(/newApproverCredentials/g) || []).toHaveLength(1)
+    expect(route).toContain("for (const credentials of outcome.newApproverCredentials)")
+    expect(route).not.toMatch(/ok\(\{[^}]*temporaryPassword/)
+  })
+
+  it("is decided by its own path, chosen by the stored version, never the body", () => {
+    const route = codeOf(decideRoute)
+    expect(route.indexOf("readJoinRequestFormVersion(requestId, scope.organizationId)"))
+      .toBeLessThan(route.indexOf("joinRequestDecisionSchema.safeParse(rawBody)"))
+    // And the standard approval cannot decide a department request.
+    expect(repositoryFile("lib/server/organization-join.ts")).toContain("eq(organizationJoinRequests.formVersion, 1)")
+  })
+
+  it("refuses an approval that does not reproduce what Head Office reviewed", () => {
+    const server = repositoryFile(department)
+    expect(server).toContain("assertReviewedResolutions(input, plans)")
+    expect(server.indexOf("assertReviewedResolutions(input, plans)"))
+      .toBeLessThan(server.indexOf("await createInitiator("))
+  })
+})

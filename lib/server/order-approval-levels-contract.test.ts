@@ -171,6 +171,16 @@ describe("order approval levels — nothing in the order path reads them yet", (
       // Phase 2a: assigning users to levels (plans/OF-APPROVAL-LEVELS-assign-users-to-levels.md).
       USER_LEVEL_MODULE,
       "components/users/approval-level-field.tsx",
+      // The department sign-up (plans/OF-JOIN-department-signup-multi-user.md):
+      // the join form of a levels-enabled organization shows the bands, and its
+      // approval assigns levels through USER_LEVEL_MODULE. Still not the order
+      // path: nothing here routes or decides an order.
+      "lib/join-department-signup.ts",
+      "lib/join-approver-resolution.ts",
+      "lib/server/organization-join-department.ts",
+      "app/join/page.tsx",
+      "components/join/department-signup-form.tsx",
+      "components/join/department-join-review-dialog.tsx",
     ])
     // A new reader is phase 2b: route orders deliberately, and update this list
     // and the plan together.

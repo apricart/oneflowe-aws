@@ -19,6 +19,8 @@ import {
  */
 export type JoinRequestRow = {
   id: number
+  /** 2 = a department sign-up, reviewed in its own dialog. */
+  formVersion?: number
   status: JoinRequestStatus
   requestedRole: JoinableRole
   requestedBranchId: number | null

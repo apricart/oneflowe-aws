@@ -147,38 +147,69 @@ export async function setUserApprovalLevel(input: {
       return { kind: "forbidden" as const, message: "You cannot manage a user at this privilege level" }
     }
 
-    if (target.level === input.level) {
-      return { kind: "saved" as const, changed: false, level: target.level }
-    }
-
-    if (input.level !== null) {
-      const organization = target.organizationId === null
-        ? null
-        : await loadApprovalLevelContext(tx, target.organizationId, true)
-      const refusal = approvalLevelAssignmentRefusal({
+    const written = await writeApprovalLevelInTx(tx, {
+      target: {
+        userId: input.targetUserId,
         role: target.role,
-        organization,
-        levelCount: organization?.levelCount ?? 0,
-        level: input.level,
-      })
-      if (refusal) return { kind: "refused" as const, message: refusal }
-    }
-
-    await tx
-      .update(users)
-      .set({ orderApprovalLevel: input.level, updatedAt: new Date() })
-      .where(eq(users.id, input.targetUserId))
-
-    await recordAuditEvent(tx, {
-      action: USER_APPROVAL_LEVEL_AUDIT_ACTION,
-      entity: "user",
-      entityId: input.targetUserId,
-      actor: { id: input.actor.userId, role: input.actor.role },
-      organizationId: target.organizationId,
-      before: { orderApprovalLevel: target.level },
-      after: { orderApprovalLevel: input.level },
+        organizationId: target.organizationId,
+        level: target.level,
+      },
+      level: input.level,
+      actor: { userId: input.actor.userId, role: input.actor.role },
     })
-
-    return { kind: "saved" as const, changed: true, level: input.level }
+    if (written.kind === "refused") return written
+    return { kind: "saved" as const, changed: written.changed, level: input.level }
   })
+}
+
+/**
+ * The write itself, shared by `setUserApprovalLevel` and the department
+ * sign-up's approval (plans/OF-JOIN-department-signup-multi-user.md), so both
+ * hold a level to the same refusal rule, under the same organization
+ * `FOR SHARE`, with the same audit row.
+ *
+ * The caller has already fenced the actor to the target and locked the target's
+ * row `FOR UPDATE` (or created it in this transaction). An unchanged level
+ * writes nothing.
+ */
+export async function writeApprovalLevelInTx(
+  tx: TransactionExecutor,
+  input: {
+    target: { userId: string; role: string; organizationId: number | null; level: number | null }
+    level: number | null
+    actor: { userId: string; role: string }
+  },
+): Promise<{ kind: "refused"; message: string } | { kind: "saved"; changed: boolean }> {
+  const { target } = input
+  if (target.level === input.level) return { kind: "saved", changed: false }
+
+  if (input.level !== null) {
+    const organization = target.organizationId === null
+      ? null
+      : await loadApprovalLevelContext(tx, target.organizationId, true)
+    const refusal = approvalLevelAssignmentRefusal({
+      role: target.role,
+      organization,
+      levelCount: organization?.levelCount ?? 0,
+      level: input.level,
+    })
+    if (refusal) return { kind: "refused", message: refusal }
+  }
+
+  await tx
+    .update(users)
+    .set({ orderApprovalLevel: input.level, updatedAt: new Date() })
+    .where(eq(users.id, target.userId))
+
+  await recordAuditEvent(tx, {
+    action: USER_APPROVAL_LEVEL_AUDIT_ACTION,
+    entity: "user",
+    entityId: target.userId,
+    actor: { id: input.actor.userId, role: input.actor.role },
+    organizationId: target.organizationId,
+    before: { orderApprovalLevel: target.level },
+    after: { orderApprovalLevel: input.level },
+  })
+
+  return { kind: "saved", changed: true }
 }

@@ -6,7 +6,19 @@ import { eq, inArray, sql } from "drizzle-orm"
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core"
 
 import * as schema from "@/db/schema"
-import { budgets, branches, groups, organizations, roles, userBranchAssignments, userGroupAssignments, users } from "@/db/schema"
+import {
+  budgets,
+  branches,
+  groups,
+  organizationJoinRequestAddresses,
+  organizationJoinRequestBranches,
+  organizationJoinRequests,
+  organizations,
+  roles,
+  userBranchAssignments,
+  userGroupAssignments,
+  users,
+} from "@/db/schema"
 import { closePool, db } from "@/lib/db"
 
 import { hasTestDatabase } from "./helpers/pricing-fixtures"
@@ -127,8 +139,9 @@ describe.skipIf(!hasTestDatabase)("tenant composite foreign keys", () => {
     expect([...present].sort()).toEqual([...declared].sort())
     // 28 before the invoice ledger, which added orders_id_organization_uq,
     // invoices_id_organization_uq, credit_notes_id_organization_uq and five
-    // composite keys (plans/OF-INVOICE-invoice-ledger.md).
-    expect(declared.size).toBe(36)
+    // composite keys (plans/OF-INVOICE-invoice-ledger.md). 39 with the
+    // department sign-up's three (plans/OF-JOIN-department-signup-multi-user.md).
+    expect(declared.size).toBe(39)
   })
 
   describe("refuse another organization's branch", () => {
@@ -142,6 +155,32 @@ describe.skipIf(!hasTestDatabase)("tenant composite foreign keys", () => {
       expect(await failureOf(db.insert(userBranchAssignments).values({
         userId: f.personId, organizationId: f.home, branchId: f.foreignBranch,
       }))).toEqual(refusedBy("user_branch_assignments_branch_org_fk"))
+    })
+
+    it("on a department sign-up's branch and address", async () => {
+      const [request] = await db.insert(organizationJoinRequests).values({
+        organizationId: f.home,
+        formVersion: 2,
+        requestedRole: "ORDER_PORTAL",
+        firstName: "Tenant",
+        lastName: "Keys",
+        email: `itk-join-${randomUUID().slice(0, 8)}@example.test`,
+        username: `itk-join-${randomUUID().slice(0, 8)}`,
+        passwordHash: "x",
+      }).returning({ id: organizationJoinRequests.id })
+      try {
+        expect(await failureOf(db.insert(organizationJoinRequestBranches).values({
+          requestId: request.id, organizationId: f.home, existingBranchId: f.foreignBranch,
+        }))).toEqual(refusedBy("organization_join_request_branches_branch_org_fk"))
+        expect(await failureOf(db.insert(organizationJoinRequestBranches).values({
+          requestId: request.id, organizationId: f.home, costCenterId: "ITK-1", resolvedBranchId: f.foreignBranch,
+        }))).toEqual(refusedBy("organization_join_request_branches_resolved_org_fk"))
+        expect(await failureOf(db.insert(organizationJoinRequestAddresses).values({
+          requestId: request.id, organizationId: f.home, address: "Plot 1", branchId: f.foreignBranch,
+        }))).toEqual(refusedBy("organization_join_request_addresses_branch_org_fk"))
+      } finally {
+        await db.delete(organizationJoinRequests).where(eq(organizationJoinRequests.id, request.id))
+      }
     })
 
     it("on a user, which had no branch key at all before", async () => {

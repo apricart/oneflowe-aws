@@ -39,6 +39,20 @@ import { WAREHOUSE_ASSIGNMENT_MAX_PER_ORGANIZATION, WAREHOUSE_CITY_MAX_LENGTH } 
 import { MAX_ALLOWLIST_ENTRIES } from "@/lib/security/ip-allowlist"
 import { MAX_APPROVAL_LEVELS, approvalLevelsError } from "@/lib/order-approval-levels"
 import {
+  CRC_MAX_LENGTH,
+  DEPARTMENTS,
+  DEPARTMENT_SIGNUP_FORM_VERSION,
+  SIGNUP_ADDRESS_MAX_LENGTH,
+  SIGNUP_APPROVER_EMAIL_MAX_LENGTH,
+  SIGNUP_DESIGNATION_MAX_LENGTH,
+  SIGNUP_EMPLOYEE_ID_MAX_LENGTH,
+  SIGNUP_FULL_NAME_MAX_LENGTH,
+  SIGNUP_IP_EXTENSION_PATTERN,
+  SIGNUP_MAX_ADDRESSES,
+  SIGNUP_MAX_BRANCHES,
+  SIGNUP_PHONE_PATTERN,
+} from "@/lib/join-department-signup"
+import {
   DEFAULT_ORDERING_BLOCK_THRESHOLD,
   ORDERING_BLOCK_THRESHOLD_MAX,
   ORDERING_BLOCK_THRESHOLD_MIN,
@@ -1163,6 +1177,81 @@ export const joinRequestDecisionSchema = z.object({
   ),
   { message: "Assignment fields apply only when approving a request" },
 )
+
+/*
+ * The department sign-up (plans/OF-JOIN-department-signup-multi-user.md): the
+ * join form of an organization with order approval levels on. Like the
+ * standard submission there is no organizationId, role or username — the
+ * tenant comes from the code, the role from the number of branches, and the
+ * username from the email — and `.strict()` refuses any of them.
+ */
+const signupApproverSchema = z.object({
+  level: z.number().int().min(1).max(MAX_APPROVAL_LEVELS),
+  email: z.string().trim().toLowerCase().pipe(z.email().max(SIGNUP_APPROVER_EMAIL_MAX_LENGTH)),
+  designation: z.string().trim().min(2).max(SIGNUP_DESIGNATION_MAX_LENGTH),
+}).strict()
+
+export const departmentJoinSubmitSchema = z.object({
+  formVersion: z.literal(DEPARTMENT_SIGNUP_FORM_VERSION),
+  code: joinCodeSchema,
+  fullName: z.string().trim().min(3).max(SIGNUP_FULL_NAME_MAX_LENGTH),
+  email: z.string().trim().pipe(z.email().max(255)),
+  password: passwordSchema,
+  phone: z.string().trim().regex(SIGNUP_PHONE_PATTERN, "Enter an 11-digit mobile number starting with 0"),
+  ipExtension: z.string().trim().regex(SIGNUP_IP_EXTENSION_PATTERN, "Enter an IP extension of 3 to 6 digits"),
+  employeeId: z.string().trim().min(1).max(SIGNUP_EMPLOYEE_ID_MAX_LENGTH),
+  department: z.enum(DEPARTMENTS),
+  // An existing branch picked by name, or a CRC number typed in.
+  branches: z.array(z.union([
+    z.object({ branchId: positiveId }).strict(),
+    z.object({ crc: z.string().trim().min(1).max(CRC_MAX_LENGTH) }).strict(),
+  ])).min(1).max(SIGNUP_MAX_BRANCHES),
+  addresses: z.array(z.string().trim().min(5).max(SIGNUP_ADDRESS_MAX_LENGTH)).min(1).max(SIGNUP_MAX_ADDRESSES),
+  approvers: z.array(signupApproverSchema).min(1).max(MAX_APPROVAL_LEVELS),
+  termsAccepted: z.literal(true),
+}).strict()
+
+/**
+ * Head Office deciding a department sign-up. For each CRC to create, either
+ * the details of the new branch or an existing branch to map it onto; for each
+ * address, the request branch it goes to (optional when there is one); and the
+ * per-level outcome Head Office reviewed, which the approval must reproduce.
+ */
+export const departmentJoinDecisionSchema = z.object({
+  decision: z.enum(JOIN_DECISIONS),
+  reason: nullableText(1_000).optional(),
+  username: z.string().trim().toLowerCase().min(3).max(255).optional(),
+  newBranches: z.array(z.object({
+    requestBranchId: positiveId,
+    mapToBranchId: positiveId.optional(),
+    name: z.string().trim().min(2).max(100).optional(),
+    province: z.string().trim().min(2).max(100).optional(),
+    city: z.string().trim().min(2).max(100).optional(),
+    address: z.string().trim().min(5).max(500).optional(),
+  }).strict()).max(SIGNUP_MAX_BRANCHES).optional(),
+  addressBranches: z.array(z.object({
+    requestAddressId: positiveId,
+    requestBranchId: positiveId,
+  }).strict()).max(SIGNUP_MAX_ADDRESSES).optional(),
+  expectedResolutions: z.array(z.object({
+    level: z.number().int().min(1).max(MAX_APPROVAL_LEVELS),
+    kind: z.enum(["create", "assign", "extend", "covered", "not_applied", "blocked"]),
+    userId: z.string().uuid().nullable(),
+  }).strict()).max(MAX_APPROVAL_LEVELS).optional(),
+}).strict().refine(
+  (input) => input.decision === "approve" || (
+    input.username === undefined
+    && input.newBranches === undefined
+    && input.addressBranches === undefined
+    && input.expectedResolutions === undefined
+  ),
+  { message: "Assignment fields apply only when approving a request" },
+)
+
+/** Head Office naming a different approver for one level of a pending sign-up. */
+export const departmentJoinApproverReplaceSchema = z.object({
+  replaceApprover: signupApproverSchema,
+}).strict()
 
 /**
  * Asking for an extra delivery address at a branch.

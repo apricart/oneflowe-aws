@@ -129,3 +129,69 @@ export async function sendJoinDecisionEmail(payload: JoinDecisionEmail): Promise
     return false
   }
 }
+
+export type JoinApproverNoticeEmail = {
+  to: string
+  firstName: string
+  level: number
+  initiatorName: string
+  organizationName: string
+  loginUrl: string
+}
+
+/**
+ * Telling an existing approver that a department sign-up made them an order
+ * approver, or gave them more branches (plans/OF-JOIN-department-signup-multi-user.md).
+ * Names the level and the person, nothing else: no amounts, no branches.
+ * Best effort, like the decision email.
+ */
+export async function sendJoinApproverNoticeEmail(payload: JoinApproverNoticeEmail): Promise<boolean> {
+  try {
+    if (!payload.to) return false
+    if (!validateSesConfig()) {
+      console.error("[Email] AWS SES not configured — skipping join approver notice")
+      return false
+    }
+
+    const who = payload.firstName || "there"
+    await sendAppEmail({
+      fromName: "OneFlowe",
+      to: payload.to,
+      subject: `You are a Level ${payload.level} order approver at ${payload.organizationName}`,
+      html: `
+        <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;color:#0f172a;">
+          <h1 style="font-size:22px;margin:0 0 16px;">You have been named an order approver</h1>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 16px;">Hello ${escapeHtml(who)},</p>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 16px;">
+            ${escapeHtml(payload.organizationName)} has approved ${escapeHtml(payload.initiatorName)}'s
+            request to join, naming you as their Level ${escapeHtml(payload.level)} financial approver.
+            Orders at their branches in your level's range will come to you for approval.
+          </p>
+          <p style="margin:24px 0;">
+            <a href="${escapeHtml(payload.loginUrl)}" style="background:#2563eb;color:#ffffff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:700;">Sign in</a>
+          </p>
+          <p style="font-size:13px;line-height:1.6;color:#64748b;margin:0;">
+            This is an automated message, please do not reply.
+          </p>
+        </div>`,
+      text: [
+        `You have been named an order approver at ${payload.organizationName}.`,
+        ``,
+        `Hello ${who},`,
+        ``,
+        `${payload.organizationName} has approved ${payload.initiatorName}'s request to join, naming you`,
+        `as their Level ${payload.level} financial approver. Orders at their branches in your`,
+        `level's range will come to you for approval.`,
+        ``,
+        `Sign in: ${payload.loginUrl}`,
+        ``,
+        `This is an automated message, please do not reply.`,
+      ].join("\n"),
+      tags: [{ name: "type", value: "join_approver_notice" }],
+    })
+    return true
+  } catch (error) {
+    logError(error, "EMAIL_SEND_JOIN_APPROVER_NOTICE", { to: payload.to })
+    return false
+  }
+}

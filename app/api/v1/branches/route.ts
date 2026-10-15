@@ -3,13 +3,14 @@ import { isViewerRole } from "@/lib/viewer-access"
 export const dynamic = 'force-dynamic'
 import { NextResponse } from "next/server"
 import { db } from "@/lib/db"
-import { auditLogs, branches as branchesTable, organizations } from "@/db/schema"
+import { branches as branchesTable } from "@/db/schema"
 import { and, desc, eq, sql, inArray } from "drizzle-orm"
 import { getRequestScope } from "@/lib/auth"
 import { handleError } from "@/lib/error-handler"
 import { logError } from "@/lib/global-logger"
 import { getCached, invalidateByPrefix, scopedCacheKey, CACHE_TTL } from "@/lib/cache-utils"
 import { branchCreateSchema, validationMessage } from "@/lib/server/mutation-validation"
+import { createBranchInTx } from "@/lib/server/branch-creation"
 import {
   BRANCH_CREATION_ROLES,
   resolveBranchCreationAccess,
@@ -278,88 +279,20 @@ export async function POST(req: Request) {
     if (validated.response) return validated.response
     const { name, province, city, address, costCenterId, status } = validated.values!
 
-    const creation = await db.transaction(async (tx) => {
-      // Branch codes are based on the current branch count. Serialize creation
-      // within this tenant so concurrent requests cannot choose the same code.
-      await tx.execute(sql`
-        SELECT pg_advisory_xact_lock(
-          hashtext('oneflowe:branch-creation'),
-          ${organizationId}::integer
-        )
-      `)
-
-      const [org] = await tx
-        .select({ id: organizations.id, name: organizations.name, code: organizations.code })
-        .from(organizations)
-        .where(eq(organizations.id, organizationId))
-        .limit(1)
-
-      if (!org) return { kind: "organization-not-found" } as const
-
-      const [existingBranchWithName] = await tx
-        .select({ id: branchesTable.id })
-        .from(branchesTable)
-        .where(and(
-          eq(branchesTable.organizationId, organizationId),
-          sql`lower(btrim(${branchesTable.name})) = ${name.toLowerCase()}`,
-        ))
-        .limit(1)
-
-      if (existingBranchWithName) return { kind: "duplicate-name" } as const
-
-      // Preserve the existing {ORG_CODE}-{COUNT+1} branch-code format.
-      const [{ count: branchCount }] = await tx
-        .select({ count: sql<number>`count(*)` })
-        .from(branchesTable)
-        .where(eq(branchesTable.organizationId, organizationId))
-
-      const nextNumber = (Number(branchCount) + 1).toString().padStart(2, "0")
-      const generatedCode = `${org.code}-${nextNumber}`
-      const [existingCode] = await tx
-        .select({ id: branchesTable.id })
-        .from(branchesTable)
-        .where(and(
-          eq(branchesTable.organizationId, organizationId),
-          eq(branchesTable.code, generatedCode),
-        ))
-        .limit(1)
-
-      const finalCode = existingCode
-        ? `${org.code}-${nextNumber}-${Date.now().toString().slice(-4)}`
-        : generatedCode
-
-      const [item] = await tx
-        .insert(branchesTable)
-        .values({
-          organizationId,
-          name,
-          province,
-          city,
-          address,
-          costCenterId: costCenterId || null,
-          code: finalCode,
-          status,
-          region: body.region ?? null,
-        })
-        .returning()
-
-      await tx.insert(auditLogs).values({
-        userId: scope.userId,
+    const creation = await db.transaction((tx) => createBranchInTx(
+      tx,
+      {
         organizationId,
-        branchId: item.id,
-        action: "CREATE_BRANCH",
-        entity: "BRANCH",
-        entityId: String(item.id),
-        metadata: {
-          performedByRole: scope.role,
-          name: item.name,
-          code: item.code,
-          status: item.status,
-        },
-      })
-
-      return { kind: "created", item } as const
-    })
+        name,
+        province,
+        city,
+        address,
+        costCenterId: costCenterId || null,
+        status,
+        region: body.region ?? null,
+      },
+      { userId: scope.userId, role: scope.role },
+    ))
 
     if (creation.kind === "organization-not-found") {
       return error(`Organization with ID ${organizationId} not found`, 404)

@@ -245,6 +245,12 @@ export const users = pgTable(
     // access change of role or organization.
     // See plans/OF-APPROVAL-LEVELS-assign-users-to-levels.md.
     orderApprovalLevel: integer("order_approval_level"),
+    // Recorded by the department sign-up (plans/OF-JOIN-department-signup-multi-user.md):
+    // the initiator's department and IP extension, an approver's designation.
+    // Descriptive only; nothing authorizes on them.
+    department: varchar("department", { length: 80 }),
+    designation: varchar("designation", { length: 80 }),
+    ipExtension: varchar("ip_extension", { length: 16 }),
     fullName: varchar("full_name", { length: 255 }),
     firstName: varchar("first_name", { length: 100 }),
     lastName: varchar("last_name", { length: 100 }),
@@ -2990,6 +2996,18 @@ export const organizationJoinRequests = pgTable(
     requestedBranchId: integer("requested_branch_id").references(() => branches.id),
     requestedGroupIds: jsonb("requested_group_ids").$type<number[]>().notNull().default([]),
     requestedBranchIds: jsonb("requested_branch_ids").$type<number[]>().notNull().default([]),
+    // 1 = the standard form; 2 = the department sign-up, used only by an
+    // organization with order approval levels on. A version 2 request keeps its
+    // branches, approvers and addresses in the three child tables below.
+    // See plans/OF-JOIN-department-signup-multi-user.md.
+    formVersion: integer("form_version").notNull().default(1),
+    department: varchar("department", { length: 80 }),
+    ipExtension: varchar("ip_extension", { length: 16 }),
+    termsAcceptedAt: timestamp("terms_accepted_at", { withTimezone: true }),
+    // The level bands shown to the applicant, for the review only. Never read
+    // by order routing.
+    approvalLevelsSnapshot: jsonb("approval_levels_snapshot")
+      .$type<Array<{ level: number; fromCents: number | null; belowCents: number | null }>>(),
     firstName: varchar("first_name", { length: 100 }).notNull(),
     lastName: varchar("last_name", { length: 100 }).notNull(),
     // Stored already lower-cased by `normalizeEmail`, which is what lets the
@@ -3048,9 +3066,16 @@ export const organizationJoinRequests = pgTable(
     // A single-branch role names one branch and no lists; a group role names at
     // least one group or branch and no single branch. The same rule as
     // `joinRequestScopeShapeError`, held where it cannot be bypassed.
+    //
+    // A version 2 request names its branches in organization_join_request_branches
+    // (a CRC to create has no id yet), so it is held only to the two roles the
+    // department sign-up grants and to no groups.
     check(
       "organization_join_requests_scope_shape_ck",
-      sql`CASE WHEN ${t.requestedRole} IN ('BRANCH_ADMIN', 'ORDER_PORTAL')
+      sql`CASE WHEN ${t.formVersion} = 2
+            THEN ${t.requestedRole} IN ('ORDER_PORTAL', 'GROUP_ORDER_PORTAL')
+              AND jsonb_array_length(${t.requestedGroupIds}) = 0
+          WHEN ${t.requestedRole} IN ('BRANCH_ADMIN', 'ORDER_PORTAL')
             THEN ${t.requestedBranchId} IS NOT NULL
               AND jsonb_array_length(${t.requestedGroupIds}) = 0
               AND jsonb_array_length(${t.requestedBranchIds}) = 0
@@ -3071,6 +3096,114 @@ export const organizationJoinRequests = pgTable(
       "organization_join_requests_approved_user_ck",
       sql`${t.status} <> 'approved' OR ${t.createdUserId} IS NOT NULL`,
     ),
+    check("organization_join_requests_form_version_ck", sql`${t.formVersion} IN (1, 2)`),
+  ],
+)
+
+/**
+ * A department sign-up's branches: each is an existing branch, or a CRC (cost
+ * centre) to be created at approval. `resolved_branch_id` records the branch
+ * the CRC became. See plans/OF-JOIN-department-signup-multi-user.md.
+ */
+export const organizationJoinRequestBranches = pgTable(
+  "organization_join_request_branches",
+  {
+    id: serial("id").primaryKey(),
+    requestId: integer("request_id")
+      .references(() => organizationJoinRequests.id, { onDelete: "cascade" })
+      .notNull(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id)
+      .notNull(),
+    existingBranchId: integer("existing_branch_id"),
+    // Upper-cased and trimmed by `normalizeCrc`.
+    costCenterId: varchar("cost_center_id", { length: 64 }),
+    resolvedBranchId: integer("resolved_branch_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    index("organization_join_request_branches_request_idx").on(t.requestId),
+    uniqueIndex("organization_join_request_branches_existing_uq").on(t.requestId, t.existingBranchId),
+    uniqueIndex("organization_join_request_branches_crc_uq").on(t.requestId, t.costCenterId),
+    check(
+      "organization_join_request_branches_shape_ck",
+      sql`(${t.existingBranchId} IS NULL) <> (${t.costCenterId} IS NULL)
+        AND (${t.costCenterId} IS NULL OR length(btrim(${t.costCenterId})) > 0)`,
+    ),
+    foreignKey({
+      name: "organization_join_request_branches_branch_org_fk",
+      columns: [t.existingBranchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
+    foreignKey({
+      name: "organization_join_request_branches_resolved_org_fk",
+      columns: [t.resolvedBranchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
+  ],
+)
+
+/**
+ * A department sign-up's financial approver per level, and what the approval
+ * did with each one (`resolution`, see `planApproverResolution`).
+ */
+export const organizationJoinRequestApprovers = pgTable(
+  "organization_join_request_approvers",
+  {
+    id: serial("id").primaryKey(),
+    requestId: integer("request_id")
+      .references(() => organizationJoinRequests.id, { onDelete: "cascade" })
+      .notNull(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id)
+      .notNull(),
+    level: integer("level").notNull(),
+    // Lower-cased by `normalizeEmail`.
+    email: varchar("email", { length: 255 }).notNull(),
+    designation: varchar("designation", { length: 80 }).notNull(),
+    resolution: varchar("resolution", { length: 16 }),
+    approverUserId: uuid("approver_user_id").references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("organization_join_request_approvers_level_uq").on(t.requestId, t.level),
+    uniqueIndex("organization_join_request_approvers_email_uq").on(t.requestId, t.email),
+    // MAX_APPROVAL_LEVELS in lib/order-approval-levels.ts.
+    check("organization_join_request_approvers_level_ck", sql`${t.level} BETWEEN 1 AND 10`),
+    check(
+      "organization_join_request_approvers_resolution_ck",
+      sql`${t.resolution} IS NULL OR ${t.resolution} IN ('created', 'assigned', 'extended', 'covered', 'not_applied')`,
+    ),
+  ],
+)
+
+/**
+ * A department sign-up's delivery addresses. The branch is Head Office's to
+ * assign at approval, when the address is written to branch_delivery_addresses.
+ */
+export const organizationJoinRequestAddresses = pgTable(
+  "organization_join_request_addresses",
+  {
+    id: serial("id").primaryKey(),
+    requestId: integer("request_id")
+      .references(() => organizationJoinRequests.id, { onDelete: "cascade" })
+      .notNull(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id)
+      .notNull(),
+    address: varchar("address", { length: 200 }).notNull(),
+    branchId: integer("branch_id"),
+    deliveryAddressId: integer("delivery_address_id").references(() => branchDeliveryAddresses.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    index("organization_join_request_addresses_request_idx").on(t.requestId),
+    check("organization_join_request_addresses_text_ck", sql`length(btrim(${t.address})) > 0`),
+    foreignKey({
+      name: "organization_join_request_addresses_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
   ],
 )
 

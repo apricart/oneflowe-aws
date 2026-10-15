@@ -128,6 +128,8 @@ const VIA_LIB: readonly { file: string; module: string }[] = [
   { file: "app/api/v1/mfa/login/send-otp/route.ts", module: "lib/server/auth-audit.ts" },
   { file: "app/api/v1/mfa/login/verify-otp/route.ts", module: "lib/server/auth-audit.ts" },
   { file: "app/api/v1/users/me/change-password/route.ts", module: "lib/server/password-change.ts" },
+  // Branch creation, shared with the department sign-up's approval.
+  { file: "app/api/v1/branches/route.ts", module: "lib/server/branch-creation.ts" },
   // Public recovery. Every outcome — including requests for accounts that do
   // not exist — is recorded by the service, never by the route.
   { file: "app/api/v1/auth/password-reset/request/route.ts", module: "lib/server/password-reset.ts" },
@@ -253,7 +255,6 @@ const LEGACY_DIRECT: readonly string[] = [
   "app/api/v1/admin/refunds/[id]/route.ts",
   "app/api/v1/admin/refunds/route.ts",
   "app/api/v1/branch/inventory/route.ts",
-  "app/api/v1/branches/route.ts",
   "app/api/v1/budget-quantity/route.ts",
   "app/api/v1/budgets/route.ts",
   "app/api/v1/groups/[id]/branches/clean/route.ts",
@@ -493,7 +494,9 @@ describe("routes that still audit by hand", () => {
     // deliberate edit to this file rather than something nobody notices.
     // 37: the fulfillment-status route moved to VIA_LIB when its transition
     // became `lib/server/order-fulfillment-progress.ts`, shared with the warehouse.
-    expect(LEGACY_DIRECT).toHaveLength(37)
+    // 36: branch creation moved to `lib/server/branch-creation.ts`, shared with
+    // the department sign-up's approval.
+    expect(LEGACY_DIRECT).toHaveLength(36)
   })
 })
 

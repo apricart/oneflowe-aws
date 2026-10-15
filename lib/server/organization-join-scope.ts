@@ -18,7 +18,7 @@ import { getRequestScope } from "@/lib/auth"
  * global — a null tenant must never widen to "all tenants".
  */
 export type ResolvedJoinScope =
-  | { ok: true; organizationId: number; actorUserId: string }
+  | { ok: true; organizationId: number; actorUserId: string; actorRole: string }
   | { ok: false; response: NextResponse }
 
 export async function resolveJoinManagementScope(): Promise<ResolvedJoinScope> {
@@ -33,5 +33,6 @@ export async function resolveJoinManagementScope(): Promise<ResolvedJoinScope> {
     ok: true,
     organizationId: Number(scope.organizationId),
     actorUserId: scope.userId,
+    actorRole: scope.role,
   }
 }
