@@ -22,6 +22,7 @@ import { recordAuditEvent, type AuditActor } from "@/lib/server/activity-audit"
 import { closeOpenCorrectionRequest } from "@/lib/server/order-correction"
 import { loadOrderDeskReach, orderDeskOrderCondition } from "@/lib/server/order-desk-scope"
 import { fulfillApprovedOrder, type OrderFulfillmentOutcome } from "@/lib/server/order-fulfillment"
+import { queueWarehouseOrderNotifications } from "@/lib/server/warehouse-order-notifications"
 import { releaseHeldQuantityBudgetForOrder } from "@/lib/server/product-quantity-budget-ledger"
 
 /**
@@ -398,6 +399,7 @@ function cancelInTransaction(input: {
         .where(eq(globalProducts.id, item.globalProductId))
     }
 
+    await queueWarehouseOrderNotifications(tx, { order: cancelled, event: "CANCELLED" })
     await recordAuditEvent(tx, {
       action: "ORDER_CANCELLED",
       entity: "order",
@@ -432,8 +434,9 @@ export type DeskResubmitOutcome =
  * the claim is conditional on it still being returned, and the round is closed
  * `RESUBMITTED` on the same transaction.
  *
- * Unlike the requester path it queues no notification: that one tells the
- * tenant's approvers, who do not decide a desk order.
+ * Unlike the requester path it queues no notification to the tenant's
+ * approvers, who do not decide a desk order. The warehouse, which will pick the
+ * order once approved, is told (plans/OF-WAREHOUSE-order-stage-notifications.md).
  */
 export async function resubmitDeskOrder(input: {
   orderId: number
@@ -489,6 +492,7 @@ export async function resubmitDeskOrder(input: {
       // other means the state is not what this transition assumes.
       if (correctionRequestId === null) throw new Error("ORDER_TRANSITION_CONFLICT")
 
+      await queueWarehouseOrderNotifications(tx, { order, event: "RESUBMITTED", occurrence: correctionRequestId })
       await recordAuditEvent(tx, {
         action: ORDER_RESUBMITTED_ACTION,
         entity: "order",

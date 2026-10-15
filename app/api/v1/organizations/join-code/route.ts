@@ -31,7 +31,7 @@ import {
 
 export async function GET() {
   try {
-    const authError = await requireApiRole(JOIN_REQUEST_MANAGEMENT_ROLES)
+    const authError = await requireApiRole(JOIN_REQUEST_MANAGEMENT_ROLES, { viewerReadsAsHeadOffice: true })
     if (authError) return authError
 
     const scope = await resolveJoinManagementScope()

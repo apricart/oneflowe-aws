@@ -1,5 +1,6 @@
 "use client"
 
+import { viewerAccessFor } from "@/lib/viewer-access"
 import { useAppContext } from "@/components/context/app-context"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -318,7 +319,9 @@ export default function BudgetSummaryPage() {
     const [reportGroupIds, setReportGroupIds] = useState<string[]>([])
 
     const { data: session } = useSession()
-    const role = (session?.user as any)?.role as Role
+    // An organization-wide Viewer reads this report as Head Office does.
+    const { viewRole } = viewerAccessFor(session?.user)
+    const role = viewRole as Role
     const [hasMounted, setHasMounted] = useState(false)
 
     // URL States for filtering

@@ -1,3 +1,4 @@
+import { isViewerRole, viewerReadScope } from "@/lib/viewer-access"
 import { eq } from "drizzle-orm"
 import { db } from "@/lib/db"
 import { orders } from "@/db/schema"
@@ -30,11 +31,17 @@ export type InvoiceAccessResult =
 export async function authorizeInvoiceRequest(
   orderId: number,
 ): Promise<InvoiceAccessResult> {
-  const [session, scope] = await Promise.all([
+  const [session, requestScope] = await Promise.all([
     getSharedServerSession(),
     getRequestScope(),
   ])
-  const role = (session?.user as any)?.role as Role | undefined
+  const sessionRole = (session?.user as any)?.role as Role | undefined
+  // Every caller is a GET handler (pinned by `lib/viewer-access.test.ts`). An
+  // organization-wide Viewer reads its tenant's invoices as Head Office does;
+  // a branch-pinned one keeps its own rule, which reads none.
+  const viewerScope = isViewerRole(sessionRole) ? viewerReadScope(requestScope) : null
+  const role = (viewerScope?.role ?? sessionRole) as Role | undefined
+  const scope = viewerScope ?? requestScope
 
   // Reject an unusable caller before touching the database.
   const identityDenial = resolveInvoiceAccess({ role, scope, order: null })

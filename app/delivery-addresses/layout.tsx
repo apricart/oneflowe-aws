@@ -1,3 +1,4 @@
+import { viewerReadRole } from "@/lib/viewer-access"
 import type { ReactNode } from "react"
 import { redirect } from "next/navigation"
 import { AlertCircle } from "lucide-react"
@@ -42,7 +43,9 @@ export default async function DeliveryAddressesLayout({
 
   const role = (pageSession.session.user as { role?: string } | undefined)?.role
 
-  const body = canReadDeliveryAddresses(role) ? children : (
+  // An organization-wide Viewer reads the tenant's list, read-only.
+  const readRole = viewerReadRole(pageSession.session.user as { role?: string } | undefined ?? {})
+  const body = canReadDeliveryAddresses(readRole) ? children : (
     <main className="flex min-h-[calc(100vh-4rem)] items-center justify-center p-6">
       <Card className="w-full max-w-md">
         <CardContent className="p-8 text-center">

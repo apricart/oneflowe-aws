@@ -85,6 +85,14 @@ export const organizations = pgTable(
     privateNetworkLoginEnabled: boolean("private_network_login_enabled")
       .notNull()
       .default(false),
+    // Whether this tenant's orders carry approval levels, defined in
+    // organizationApprovalLevels. Super Admin only; off by default so no
+    // existing tenant changes. Phase 1 stores the configuration only — nothing
+    // in the order path reads it yet.
+    // See plans/OF-APPROVAL-LEVELS-organization-approval-levels.md.
+    orderApprovalLevelsEnabled: boolean("order_approval_levels_enabled")
+      .notNull()
+      .default(false),
     logoUrl: varchar("logo_url", { length: 512 }),
     // The domain an applicant's address must be at, e.g. `ke.com.pk`. Set by
     // Super Admin; null means self-service applications are refused. Not
@@ -229,6 +237,14 @@ export const users = pgTable(
       .notNull(),
     isActive: boolean("is_active").notNull().default(true),
     budgetAllocationEnabled: boolean("budget_allocation_enabled").notNull().default(false),
+    // The organization's order approval level this user holds (1 = highest),
+    // or null. Assigned by Super Admin / Head Office only to a role that can
+    // decide the organization's orders (`canHoldApprovalLevel` in
+    // lib/order-approval-levels.ts); written only by
+    // lib/server/user-approval-level.ts, user creation, and cleared by an
+    // access change of role or organization.
+    // See plans/OF-APPROVAL-LEVELS-assign-users-to-levels.md.
+    orderApprovalLevel: integer("order_approval_level"),
     fullName: varchar("full_name", { length: 255 }),
     firstName: varchar("first_name", { length: 100 }),
     lastName: varchar("last_name", { length: 100 }),
@@ -282,6 +298,11 @@ export const users = pgTable(
       .on(t.organizationId, t.externalSource, t.externalId, t.roleId)
       .where(sql`${t.externalSource} IS NOT NULL AND ${t.externalId} IS NOT NULL`),
     index("users_external_identity_idx").on(t.externalSource, t.externalId),
+    // MAX_APPROVAL_LEVELS in lib/order-approval-levels.ts.
+    check(
+      "users_order_approval_level_ck",
+      sql`${t.orderApprovalLevel} IS NULL OR ${t.orderApprovalLevel} BETWEEN 1 AND 10`,
+    ),
     check(
       "users_external_identity_pair_ck",
       sql`(${t.externalSource} IS NULL) = (${t.externalId} IS NULL)
@@ -751,6 +772,47 @@ export const organizationAllowedIps = pgTable(
     check(
       "organization_allowed_ips_address_nonempty_ck",
       sql`length(trim(${t.ipAddress})) > 0`,
+    ),
+  ],
+)
+
+/**
+ * An organization's order approval levels, in order. Each level approves one
+ * band: orders equal to or above its `max_amount_cents` (the band's lower bound,
+ * despite its name) and below the level before it; the lowest level also takes
+ * every order below its own amount (`approvalLevelBands`). Every level's amount
+ * is lower than the one before (`approvalLevelsError` in
+ * lib/order-approval-levels.ts, enforced by the only writer,
+ * lib/server/order-approval-levels.ts).
+ *
+ * Positional: levels are written 1..N with no gaps, and replaced as a whole
+ * set. Kept while the feature is switched off, so switching it back on
+ * restores them. Super Admin only.
+ * See plans/OF-APPROVAL-LEVELS-organization-approval-levels.md.
+ */
+export const organizationApprovalLevels = pgTable(
+  "organization_approval_levels",
+  {
+    id: serial("id").primaryKey(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id, { onDelete: "cascade" })
+      .notNull(),
+    level: integer("level").notNull(),
+    maxAmountCents: bigint("max_amount_cents", { mode: "number" }).notNull(),
+    createdBy: uuid("created_by"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("organization_approval_levels_org_level_uq").on(t.organizationId, t.level),
+    // MAX_APPROVAL_LEVELS in lib/order-approval-levels.ts.
+    check(
+      "organization_approval_levels_level_ck",
+      sql`${t.level} BETWEEN 1 AND 10`,
+    ),
+    // APPROVAL_LEVEL_MIN_AMOUNT_CENTS..APPROVAL_LEVEL_MAX_AMOUNT_CENTS.
+    check(
+      "organization_approval_levels_amount_ck",
+      sql`${t.maxAmountCents} BETWEEN 1 AND 100000000000`,
     ),
   ],
 )

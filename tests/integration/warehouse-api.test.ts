@@ -330,6 +330,16 @@ describe.skipIf(!hasTestDatabase)("the Warehouse role through the API", () => {
       expect(body.reach.organizations.map((organization: { id: number }) => organization.id).sort()).toEqual([orgA, orgB].sort())
     })
 
+    it("lists the newest order first in every view", async () => {
+      for (const view of ["open", "all"]) {
+        const { status, body } = await list(actors.wh, `?view=${view}`)
+        expect(status).toBe(200)
+        const keys = body.items.map((item: { id: number; approvedAt: string | null }) => [Date.parse(item.approvedAt ?? ""), item.id])
+        const newestFirst = [...keys].sort((a, b) => b[0] - a[0] || b[1] - a[1])
+        expect(keys).toEqual(newestFirst)
+      }
+    })
+
     it("carries prices and invoice figures, and lines when asked", async () => {
       const { body } = await list(actors.wh, `?view=all&branchId=${branchA1}&lines=1`)
       const row = body.items.find((item: { id: number }) => item.id === orderX)
@@ -564,6 +574,8 @@ describe.skipIf(!hasTestDatabase)("the Warehouse role through the API", () => {
       const { status, body } = await read(await workloadRoute.GET(request("http://localhost/api/v1/warehouse/workload", "GET")))
       expect(status).toBe(200)
       const ids = body.orders.items.map((item: { id: number }) => item.id)
+      // The warehouse reads its workload newest first; management's stays most urgent first.
+      expect(body.orders.order).toBe("newest")
       // Its own branches' work, delivered or not, and never A2's order.
       expect(ids).toEqual(expect.arrayContaining([orderX, orderC]))
       expect(ids).not.toContain(orderY)
@@ -594,12 +606,14 @@ describe.skipIf(!hasTestDatabase)("the Warehouse role through the API", () => {
       expect((await timelineRoute.GET(request(`http://localhost/api/v1/warehouse/orders/${orderY}/timeline`, "GET"), params(orderY))).status).toBe(404)
     })
 
-    it("lists the catalogue read-only, with stock and without prices", async () => {
+    // The base price is shown since plans/OF-WAREHOUSE-full-read-only-catalog.md
+    // reversed the no-price rule; the catalogue is still strictly read-only.
+    it("lists the catalogue read-only, with stock and the base price", async () => {
       signIn(actors.wh)
       const { status, body } = await read(await catalogRoute.GET(request(`http://localhost/api/v1/warehouse/catalog?q=ITWH-RICE-${suffix}`, "GET")))
       expect(status).toBe(200)
-      expect(body.items).toEqual([expect.objectContaining({ id: productId, stockQuantity: 120, unit: "kg", low: false })])
-      expect(JSON.stringify(body)).not.toMatch(/price|35500/i)
+      expect(body.items).toEqual([expect.objectContaining({ id: productId, stockQuantity: 120, unit: "kg", low: false, basePriceCents: 35_500 })])
+      expect(JSON.stringify(body)).not.toMatch(/taxRate|discount/i)
       for (const method of ["POST", "PUT", "PATCH", "DELETE"]) expect(catalogRoute).not.toHaveProperty(method)
     })
   })

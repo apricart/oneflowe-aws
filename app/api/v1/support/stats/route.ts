@@ -6,7 +6,7 @@ import { handleError } from "@/lib/error-handler"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { isSupportParticipantRole } from "@/lib/support-access"
 import { getSupportThreadStats } from "@/lib/server/support-threads"
-import { supportViewerFromSession } from "@/lib/server/support-session"
+import { supportReaderFromSession } from "@/lib/server/support-session"
 
 /**
  * The figures above the support queue.
@@ -27,7 +27,7 @@ export async function GET() {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const viewer = supportViewerFromSession(session)
+    const viewer = supportReaderFromSession(session)
     if (!viewer || !isSupportParticipantRole(viewer.role)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }

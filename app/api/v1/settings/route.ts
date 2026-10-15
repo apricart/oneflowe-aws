@@ -18,6 +18,7 @@ import {
   SESSION_IDLE_TIMEOUT_MINUTES_MAX,
   SESSION_IDLE_TIMEOUT_MINUTES_MIN,
 } from "@/lib/session-policy"
+import { VIEWER_READ_REFUSED, viewerReadScope } from "@/lib/viewer-access"
 
 // Valid setting keys
 const VALID_SETTING_KEYS = new Set([
@@ -126,7 +127,7 @@ function getSettingValidationError(organizationId: number, key: string, value: u
  * GET /api/v1/settings - Fetch organization settings
  */
 export async function GET(req: NextRequest) {
-  const authErr = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE"])
+  const authErr = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE"], { viewerReadsAsHeadOffice: true })
   if (authErr) return authErr
 
   try {
@@ -134,7 +135,8 @@ export async function GET(req: NextRequest) {
     let organizationIdParam = searchParams.get("organizationId")
 
     // BOLA: HEAD_OFFICE must be scoped to their own organization
-    const scope = await getRequestScope()
+    const scope = viewerReadScope(await getRequestScope())
+    if (!scope) return err(VIEWER_READ_REFUSED, 403)
     if (scope?.role === "HEAD_OFFICE") {
       organizationIdParam = scope.organizationId ? String(scope.organizationId) : null
       if (!organizationIdParam) return err("Organization context required", 400)

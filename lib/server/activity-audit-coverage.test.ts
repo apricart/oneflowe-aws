@@ -176,6 +176,14 @@ const VIA_LIB: readonly { file: string; module: string }[] = [
   { file: "app/api/v1/organizations/join-code/route.ts", module: "lib/server/organization-join-audit.ts" },
   { file: "app/api/v1/join-requests/[id]/route.ts", module: "lib/server/organization-join-audit.ts" },
 
+  // Order approval levels. Super Admin changing a tenant's levels records
+  // UPDATE_ORDER_APPROVAL_LEVELS, with before and after, inside the locked
+  // transaction that replaces them (plans/OF-APPROVAL-LEVELS-organization-approval-levels.md).
+  { file: "app/api/v1/organizations/[id]/approval-levels/route.ts", module: "lib/server/order-approval-levels.ts" },
+  // Giving a user an approval level records ASSIGN_ORDER_APPROVAL_LEVEL inside
+  // the transaction that writes it (plans/OF-APPROVAL-LEVELS-assign-users-to-levels.md).
+  { file: "app/api/v1/users/[id]/approval-level/route.ts", module: "lib/server/user-approval-level.ts" },
+
   // Delivery addresses. Asking for a destination and granting one are both on
   // the trail — an approved address diverts stock to somewhere the branch's own
   // record does not mention — and both record through one module so the two
@@ -284,6 +292,13 @@ const NOT_AUDITED: readonly { file: string; reason: string }[] = [
       "PATCH is mark-all-read on the caller's own notifications — per-viewer UI "
       + "state. A row every time somebody opens the bell menu would be thousands "
       + "a day, and the signal the screen exists to show would drown in it.",
+  },
+  {
+    file: "app/api/v1/warehouse/notifications/route.ts",
+    reason:
+      "PATCH is the warehouse user's mark-all-read on its own notices — the same "
+      + "per-viewer UI state as the shared notifications route, recorded for the "
+      + "same reason: not at all.",
   },
   {
     file: "app/api/v1/notifications/email-outbox/process/route.ts",

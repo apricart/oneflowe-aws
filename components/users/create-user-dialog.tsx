@@ -23,6 +23,12 @@ import { Switch } from "@/components/ui/switch"
 import { PremiumAlert, AlertType } from "@/components/premium/premium-alert"
 import { MultiAssignSelector } from "@/components/users/multi-assign-selector"
 import {
+  ApprovalLevelField,
+  approvalLevelPayload,
+  useApprovalLevelChoice,
+  type ApprovalLevelChoice,
+} from "@/components/users/approval-level-field"
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -109,6 +115,11 @@ function toggleId(current: string[], id: string) {
   return current.includes(id) ? current.filter((value) => value !== id) : [...current, id]
 }
 
+/** The level, sent only where the role and organization admit one and one is chosen. */
+function approvalLevelBody(choice: ApprovalLevelChoice, value: string) {
+  return choice.applicable && value ? { orderApprovalLevel: approvalLevelPayload(value) } : {}
+}
+
 function getInitialCreateUserForm(
   organizationId?: string | null,
   branchId?: string | null,
@@ -131,6 +142,9 @@ function getInitialCreateUserForm(
     mfaEnabled: false,
     isActive: true,
     budgetAllocationEnabled: false,
+    // "" = no level; otherwise the level number. Offered only where the role
+    // and organization admit one (components/users/approval-level-field.tsx).
+    orderApprovalLevel: "",
     employeeId: "",
     imprestHolder: "",
     contactPerson: "",
@@ -361,6 +375,7 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
   )
 
   const organizations = (organizationsData as any)?.items || []
+  const approvalLevelChoice = useApprovalLevelChoice(form.organizationId, form.role)
   const branches = (branchesData as any)?.items || []
   const groups = (groupsData as any)?.groups || []
 
@@ -464,6 +479,7 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
           groupIds: usesMultiBranchScope(form.role) ? form.groupIds.map(Number) : [],
           branchIds: usesMultiBranchScope(form.role) ? form.branchIds.map(Number) : [],
           ...(form.role === "GROUP_USER" ? { budgetAllocationEnabled: form.budgetAllocationEnabled } : {}),
+          ...approvalLevelBody(approvalLevelChoice, form.orderApprovalLevel),
           mfaEnabled: form.mfaEnabled,
           isActive: form.isActive,
           employeeId: form.employeeId.trim() || null,
@@ -860,7 +876,7 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                     <Label htmlFor="organization">Organization *</Label>
                     <Select
                       value={form.organizationId}
-                      onValueChange={value => setForm({ ...form, organizationId: value, branchId: "", groupIds: [], branchIds: [] })}
+                      onValueChange={value => setForm({ ...form, organizationId: value, branchId: "", groupIds: [], branchIds: [], orderApprovalLevel: "" })}
                     >
                       <SelectTrigger name="organizationId" className={errors.organizationId ? 'border-red-500' : ''}>
                         <SelectValue placeholder="Select organization" />
@@ -908,7 +924,7 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                 {/* Role Selector */}
                 <div className="space-y-2">
                   <Label htmlFor="role">Role *</Label>
-                  <Select value={form.role} onValueChange={value => setForm({ ...form, role: value, branchId: "", groupIds: [], branchIds: [], budgetAllocationEnabled: false })}>
+                  <Select value={form.role} onValueChange={value => setForm({ ...form, role: value, branchId: "", groupIds: [], branchIds: [], budgetAllocationEnabled: false, orderApprovalLevel: "" })}>
                     <SelectTrigger name="role" className={errors.role ? 'border-red-500' : ''}>
                       <SelectValue placeholder="Select role" />
                     </SelectTrigger>
@@ -949,6 +965,14 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                     </p>
                   )}
                 </div>
+
+                <ApprovalLevelField
+                  id="create-approval-level"
+                  choice={approvalLevelChoice}
+                  value={form.orderApprovalLevel}
+                  onChange={(orderApprovalLevel) => setForm({ ...form, orderApprovalLevel })}
+                  disabled={submitting}
+                />
 
                 {form.role === "GROUP_USER" && (
                   <div className="flex items-center justify-between rounded-lg border p-4">

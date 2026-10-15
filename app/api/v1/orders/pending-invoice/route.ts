@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm"
 
-import { orders } from "@/db/schema"
+import { orders, organizations } from "@/db/schema"
 import { getCurrentUser } from "@/lib/auth"
 import { db } from "@/lib/db"
 import { orderSelectColumns } from "@/lib/order-select"
@@ -18,6 +18,11 @@ const NO_STORE_HEADERS = { "Cache-Control": "private, no-store, max-age=0" }
  * organization, or branch identifier from the browser. It therefore behaves
  * the same for the single-branch and group storefronts without widening either
  * role's access to somebody else's invoice.
+ *
+ * The notice belongs to the payment control: it is shown only for an invoice
+ * whose organization has `block_ordering_on_unpaid_invoices` switched on
+ * (plans/OF-ORDERS-pending-invoice-notice.md). A tenant that does not chase
+ * payment through OneFlowe is never told an invoice is pending.
  */
 export async function GET() {
   const user = await getCurrentUser()
@@ -38,8 +43,10 @@ export async function GET() {
       invoiceNumber: sql<string | null>`${orders.receiptData} ->> 'invoiceNumber'`,
     })
     .from(orders)
+    .innerJoin(organizations, eq(organizations.id, orders.organizationId))
     .where(and(
       eq(orders.createdByUserId, user.id),
+      eq(organizations.blockOrderingOnUnpaidInvoices, true),
       eq(orderSelectColumns.paymentStatus, "UNPAID"),
       isNotNull(orders.receiptData),
       // A tax invoice not fully credited, for goods already supplied

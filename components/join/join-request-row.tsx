@@ -67,7 +67,8 @@ export function JoinRequestListRow({
   onReview,
 }: Readonly<{
   request: JoinRequestRow
-  onReview: (request: JoinRequestRow) => void
+  /** Absent for a read-only reader: the row then shows no decision control. */
+  onReview?: (request: JoinRequestRow) => void
 }>) {
   return (
     <li className="flex flex-col gap-3 border-b border-slate-100 p-4 last:border-b-0 sm:flex-row sm:items-center sm:justify-between dark:border-slate-800">
@@ -106,11 +107,15 @@ export function JoinRequestListRow({
         )}
       </div>
 
-      {request.status === "pending" ? (
+      {request.status === "pending" && onReview && (
         <Button type="button" size="sm" onClick={() => onReview(request)} className="sm:shrink-0">
           Review
         </Button>
-      ) : (
+      )}
+      {request.status === "pending" && !onReview && (
+        <p className="text-xs text-slate-400 sm:shrink-0">Awaiting Head Office</p>
+      )}
+      {request.status !== "pending" && (
         <p className="text-xs text-slate-400 sm:shrink-0">
           {request.decidedAt ? formatWhen(request.decidedAt) : "—"}
         </p>

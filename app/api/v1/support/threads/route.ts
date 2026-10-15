@@ -22,7 +22,7 @@ import {
   listSupportThreads,
 } from "@/lib/server/support-threads"
 import { attemptImmediateEmailDelivery } from "@/lib/server/order-notifications"
-import { resolveSupportAuthor, supportViewerFromSession } from "@/lib/server/support-session"
+import { resolveSupportAuthor, supportReaderFromSession } from "@/lib/server/support-session"
 
 /**
  * The support thread directory.
@@ -40,7 +40,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const viewer = supportViewerFromSession(session)
+    const viewer = supportReaderFromSession(session)
     if (!viewer || !isSupportParticipantRole(viewer.role)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }

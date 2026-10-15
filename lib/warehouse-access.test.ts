@@ -34,9 +34,21 @@ const read = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8"
 const code = (path: string) => read(path).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "")
 
 /** The read-only catalogue: Apricart's global products, so no branch reach applies. */
+/** Apricart's own catalogue and taxonomy: no tenant data, so no branch fence. */
 const WAREHOUSE_CATALOG_ROUTES = [
   "app/api/v1/warehouse/catalog/route.ts",
   "app/api/v1/warehouse/catalog/categories/route.ts",
+  "app/api/v1/warehouse/catalog/taxonomy/categories/route.ts",
+  "app/api/v1/warehouse/catalog/taxonomy/subcategories/route.ts",
+]
+
+/** The tenant-owned catalogue menus, each fenced to the organizations the warehouse serves. */
+const WAREHOUSE_TENANT_CATALOG_ROUTES = [
+  "app/api/v1/warehouse/catalog/organizations/route.ts",
+  "app/api/v1/warehouse/catalog/organization-products/route.ts",
+  "app/api/v1/warehouse/catalog/group-products/route.ts",
+  "app/api/v1/warehouse/catalog/price-history/route.ts",
+  "app/api/v1/warehouse/catalog/product-requests/route.ts",
 ]
 
 describe("the Warehouse role", () => {
@@ -223,8 +235,17 @@ describe("the API allowlist", () => {
     ["POST", "/api/v1/warehouse/orders/42/delivery-challan"],
     ["GET", "/api/v1/warehouse/orders/42/delivery-challan/7/file"],
     ["GET", "/api/v1/warehouse/workload"],
+    ["GET", "/api/v1/warehouse/notifications"],
+    ["PATCH", "/api/v1/warehouse/notifications"],
     ["GET", "/api/v1/warehouse/catalog"],
     ["GET", "/api/v1/warehouse/catalog/categories"],
+    ["GET", "/api/v1/warehouse/catalog/taxonomy/categories"],
+    ["GET", "/api/v1/warehouse/catalog/taxonomy/subcategories"],
+    ["GET", "/api/v1/warehouse/catalog/organizations"],
+    ["GET", "/api/v1/warehouse/catalog/organization-products"],
+    ["GET", "/api/v1/warehouse/catalog/group-products"],
+    ["GET", "/api/v1/warehouse/catalog/price-history"],
+    ["GET", "/api/v1/warehouse/catalog/product-requests"],
     ["GET", "/api/v1/images/products/0f8fad5b-d9cb-469f-a165-70867728950e.webp"],
     ["POST", "/api/v1/upload/image"],
     ["POST", "/api/v1/users/me/change-password"],
@@ -259,6 +280,19 @@ describe("the API allowlist", () => {
     ["DELETE", "/api/v1/warehouse/catalog"],
     ["POST", "/api/v1/warehouse/catalog/categories"],
     ["GET", "/api/v1/warehouse/catalog/categories/3"],
+    // Every catalogue menu is read-only: no write verb reaches any of them.
+    ["POST", "/api/v1/warehouse/catalog/organization-products"],
+    ["PUT", "/api/v1/warehouse/catalog/group-products"],
+    ["PATCH", "/api/v1/warehouse/catalog/product-requests"],
+    ["DELETE", "/api/v1/warehouse/catalog/taxonomy/categories"],
+    ["POST", "/api/v1/warehouse/catalog/price-history"],
+    ["GET", "/api/v1/warehouse/catalog/organization-products/3"],
+    // Super Admin's own catalogue endpoints stay closed: they write.
+    ["GET", "/api/v1/admin/organization-assignments"],
+    ["GET", "/api/v1/admin/product-price-history"],
+    ["GET", "/api/v1/head-office/branch-assignments"],
+    ["GET", "/api/v1/product-requests"],
+    ["GET", "/api/v1/groups"],
     // Super Admin's catalogue, taxonomy and price screens stay closed.
     ["GET", "/api/v1/admin/global-inventory"],
     ["PUT", "/api/v1/admin/global-inventory"],
@@ -281,6 +315,10 @@ describe("the API allowlist", () => {
     ["GET", "/api/v1/inventory/global-products"],
     ["GET", "/api/v1/users"],
     ["GET", "/api/v1/notifications"],
+    ["PATCH", "/api/v1/notifications"],
+    ["POST", "/api/v1/warehouse/notifications"],
+    ["DELETE", "/api/v1/warehouse/notifications"],
+    ["PATCH", "/api/v1/warehouse/notifications/3"],
     ["GET", "/api/v1/upload/image"],
   ])("refuses %s %s", (method, path) => {
     expect(isWarehouseApiRequestAllowed(method, path)).toBe(false)
@@ -294,7 +332,7 @@ describe("the API allowlist", () => {
         expect(source, rule.route).toContain('requireApiRole(["WAREHOUSE"])')
         if (!WAREHOUSE_CATALOG_ROUTES.includes(rule.route)) {
           // Every order read or write is fenced to the user's branches.
-          expect(source, rule.route).toMatch(/loadWarehouseReach\(|loadWarehouseOrderInReach\(|isOrderBranchInWarehouseReach\(|listWarehouseOrders\(|loadWarehouseOrder\(/)
+          expect(source, rule.route).toMatch(/loadWarehouseReach\(|loadWarehouseOrderInReach\(|isOrderBranchInWarehouseReach\(|listWarehouseOrders\(|loadWarehouseOrder\(|loadWarehouseCatalogFence\(/)
         }
         for (const method of ["GET", "POST", "PUT", "PATCH", "DELETE"]) {
           const exported = new RegExp(`export async function ${method}\\b`).test(source)
@@ -357,26 +395,48 @@ describe("the product catalogue", () => {
     }
   })
 
-  it("never selects a price, a tax rate or a discount, so none can reach the payload", () => {
+  // Reversed deliberately by plans/OF-WAREHOUSE-full-read-only-catalog.md: the
+  // product owner chose to show prices exactly as Super Admin's catalogue does.
+  // The global reads still carry no tax rate or discount (Super Admin's list
+  // shows neither), and still join no tenant's catalogue — that is the fenced
+  // tenant module's job alone.
+  it("shows the global base price, but no tax rate, discount or tenant row", () => {
     const reads = code("lib/server/warehouse-catalog.ts")
-    expect(reads).not.toMatch(/basePrice|base_price|taxRateBp|tax_rate|discount|customPrice|price/i)
-    // Nor a tenant's catalogue rows, whose overrides carry prices and names.
+    expect(reads).toMatch(/basePriceCents: globalProducts\.basePrice/)
+    expect(reads).not.toMatch(/taxRateBp|tax_rate|discount/i)
     expect(reads).not.toMatch(/organizationInventory|branchInventory|groupInventory|effective-price/)
   })
 
-  it("replaces the Stock tab in the workspace, without a write control", () => {
+  // Prices are shown since plans/OF-WAREHOUSE-full-read-only-catalog.md; what
+  // stays pinned is that no catalogue view can write anything.
+  it("replaces the Stock tab in the workspace, and no catalogue view has a write control", () => {
     const workspace = read("components/warehouse/warehouse-workspace.tsx")
     expect(workspace).toContain("<WarehouseCatalog />")
     expect(workspace).not.toMatch(/WarehouseStock|value="stock"/)
-    const tab = code("components/warehouse/warehouse-catalog.tsx")
-    expect(tab).not.toMatch(/method:\s*"(POST|PUT|PATCH|DELETE)"|formatPKR|basePrice|price/i)
+    const views = [
+      "components/warehouse/warehouse-catalog.tsx",
+      ...readdirSync(resolve(process.cwd(), "components/warehouse/catalog"))
+        .filter((name) => name.endsWith(".tsx") && !name.endsWith(".test.tsx"))
+        .map((name) => `components/warehouse/catalog/${name}`),
+    ]
+    expect(views.length).toBeGreaterThanOrEqual(6)
+    for (const view of views) {
+      const source = code(view)
+      expect(source, view).not.toMatch(/method:\s*["'`](POST|PUT|PATCH|DELETE)["'`]|useSWRMutation|<form\b|onSubmit=/i)
+      // Every request a catalogue view makes is one of the warehouse's own GET routes.
+      for (const [, path] of source.matchAll(/["'`](\/api\/v1\/[^"'`?$]*)/g)) {
+        expect(path, view).toMatch(/^\/api\/v1\/warehouse\/catalog(\/|$)/)
+      }
+    }
+    // Price history reuses Super Admin's chart, pointed at the warehouse's route.
+    expect(workspace).toContain('endpoint="/api/v1/warehouse/catalog/price-history"')
   })
 })
 
 describe("wiring", () => {
   it("confines the role in proxy.ts to its area and its allowlist", () => {
     const proxy = read("proxy.ts")
-    expect(proxy).toContain("{ matches: isWarehouseRole, areas: WAREHOUSE_AREAS, home: WAREHOUSE_HOME }")
+    expect(proxy).toContain("{ matches: isWarehouseRole, allows: withinAreas(WAREHOUSE_AREAS), home: WAREHOUSE_HOME }")
     expect(proxy).toContain("isWarehouseRole((token as any)?.role) && !isWarehouseApiRequestAllowed(req.method, pathname)")
     expect(proxy).toContain('{ prefix: WAREHOUSE_HOME, roles: ["WAREHOUSE"], home: "/dashboard" }')
     expect(WAREHOUSE_HOME).toBe("/warehouse")
@@ -395,7 +455,7 @@ describe("wiring", () => {
   })
 
   it("fences the workload and the timeline to the user's branches, never management's unfenced read", () => {
-    expect(read("app/api/v1/warehouse/workload/route.ts")).toContain("loadDeliveryDashboard(parsed.filters, now, reach)")
+    expect(read("app/api/v1/warehouse/workload/route.ts")).toContain(`loadDeliveryDashboard(parsed.filters, now, reach, "newest")`)
     expect(read("app/api/v1/warehouse/orders/[id]/timeline/route.ts")).toContain("loadDeliveryTimeline(orderId, new Date(), reach)")
   })
 
@@ -411,5 +471,42 @@ describe("wiring", () => {
   it("keeps Super Admin's challan requirement while making it optional for the warehouse", () => {
     expect(read("app/api/v1/orders/[id]/fulfillment-status/route.ts")).toContain("challanRequired: true")
     expect(read("app/api/v1/warehouse/orders/[id]/progress/route.ts")).toContain("challanRequired: false")
+  })
+})
+
+describe("the full read-only catalogue (plans/OF-WAREHOUSE-full-read-only-catalog.md)", () => {
+  const catalogRules = WAREHOUSE_API_RULES.filter((rule) => rule.route.startsWith("app/api/v1/warehouse/catalog/"))
+
+  it("admits GET alone on every catalogue route, and each handler exports GET alone", () => {
+    expect(catalogRules.map((rule) => rule.route).sort()).toEqual([...WAREHOUSE_CATALOG_ROUTES, ...WAREHOUSE_TENANT_CATALOG_ROUTES].sort())
+    for (const rule of catalogRules) {
+      expect(rule.methods, rule.route).toEqual(["GET"])
+      const source = read(rule.route)
+      expect(source, rule.route).toMatch(/export async function GET\b/)
+      expect(source, rule.route).not.toMatch(/export async function (POST|PUT|PATCH|DELETE)\b/)
+    }
+  })
+
+  it("fences every tenant-owned menu to the organizations the warehouse serves", () => {
+    for (const route of WAREHOUSE_TENANT_CATALOG_ROUTES) {
+      expect(read(route), route).toContain("loadWarehouseCatalogFence(user.id)")
+    }
+    for (const route of WAREHOUSE_TENANT_CATALOG_ROUTES.filter((path) => /organization-products|group-products|product-requests/.test(path))) {
+      expect(read(route), route).toContain("fenceAdmitsOrganization(fence, parsed.value.organizationId)")
+    }
+    expect(read("app/api/v1/warehouse/catalog/price-history/route.ts")).toContain('role: "WAREHOUSE"')
+  })
+
+  it("never writes from any catalogue read", () => {
+    for (const path of ["lib/server/warehouse-catalog.ts", "lib/server/warehouse-catalog-tenant.ts", "lib/server/product-price-history.ts"]) {
+      const source = read(path)
+      expect(source, path).not.toMatch(/\.(insert|update|delete)\(/)
+      expect(source, path).not.toMatch(/\btransaction\(/)
+    }
+  })
+
+  it("names no person on a tenant catalogue read", () => {
+    const source = read("lib/server/warehouse-catalog-tenant.ts")
+    expect(source).not.toMatch(/fullName|requestedByUserId\)|requesterName|reviewedByName|\busers\b/)
   })
 })

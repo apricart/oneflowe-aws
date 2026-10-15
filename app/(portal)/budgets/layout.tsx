@@ -1,3 +1,4 @@
+import { viewerReadRole } from "@/lib/viewer-access"
 import type { ReactNode } from "react"
 import { redirect } from "next/navigation"
 
@@ -9,8 +10,9 @@ export default async function BudgetsLayout({ children }: Readonly<{ children: R
   const session = await getSharedServerSession()
   if (!session?.user) redirect("/login")
 
-  const user = session.user as { id?: string; role?: string; organizationId?: number | null }
-  if (!canManageMoneyBudgets(user.role)) redirect("/dashboard")
+  const user = session.user as { id?: string; role?: string; organizationId?: number | null; branchId?: number | null }
+  // An organization-wide Viewer reads the budgets read-only, as Head Office sees them.
+  if (!canManageMoneyBudgets(viewerReadRole(user) ?? undefined)) redirect("/dashboard")
   if (user.role === "GROUP_USER" && !await isGroupUserBudgetAllocationEnabled(user.id, user.organizationId)) {
     redirect("/dashboard")
   }

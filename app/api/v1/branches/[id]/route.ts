@@ -120,7 +120,7 @@ export async function GET(
   _: Request,
   props: { params: Promise<{ id: string }> }
 ) {
-  const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"])
+  const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"], { viewerReadsAsHeadOffice: true })
   if (err) return err
   const params = await props.params
   const { id } = params
@@ -148,7 +148,7 @@ export async function GET(
 
   // BOLA Protection: verify user has access to this branch's organization
   const { verifyResourceAccess } = await import("@/lib/auth")
-  const hasAccess = await verifyResourceAccess(item.organizationId, item.id)
+  const hasAccess = await verifyResourceAccess(item.organizationId, item.id, { viewerReadsAsHeadOffice: true })
   if (!hasAccess) return error("Forbidden: You do not have access to this branch", 403)
 
   return ok({ item })

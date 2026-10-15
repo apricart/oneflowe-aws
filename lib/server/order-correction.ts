@@ -28,6 +28,7 @@ import {
   queueOrderResubmittedNotifications,
   queueOrderReturnedNotification,
 } from "@/lib/server/order-notifications"
+import { queueWarehouseOrderNotifications } from "@/lib/server/warehouse-order-notifications"
 import { notifyRaiserOfOrderWrite } from "@/lib/server/order-write-audit"
 import { resolveScopedBranchIds, usesMultiBranchScope } from "@/lib/server/multi-branch-scope"
 
@@ -156,6 +157,7 @@ export async function returnOrderForCorrection(input: {
         returnedByRole: authorization.decisionRole,
       })
       : { eventKeys: [] as string[], recipientCount: 0 }
+    await queueWarehouseOrderNotifications(tx, { order: claimed, event: "RETURNED", occurrence: request.id })
 
     await recordAuditEvent(tx, {
       action: ORDER_RETURNED_FOR_CORRECTION_ACTION,
@@ -297,6 +299,7 @@ export async function resubmitOrderForApproval(input: {
       if (correctionRequestId === null) throw new Error("ORDER_CORRECTION_CONFLICT")
 
       const write = describeOrderWrite(writeActor, subject)
+      await queueWarehouseOrderNotifications(tx, { order, event: "RESUBMITTED", occurrence: correctionRequestId })
       await recordAuditEvent(tx, {
         action: ORDER_RESUBMITTED_ACTION,
         entity: "order",

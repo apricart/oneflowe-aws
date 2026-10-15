@@ -102,7 +102,7 @@ assigned to it (revision 2026-10-07: branches only, never a whole organization):
 - **F5 — The workload view is the delivery dashboard, unfenced.**
   `loadDeliveryDashboard` and `loadDeliveryTimeline`
   (`lib/server/delivery-dashboard.ts`) read every tenant, deliberately, for
-  management. The SLA rules (`assessDelivery`, 72 h, due soon in last 12) are
+  management. The SLA rules (`assessDelivery`, 72 h, due soon in last 24) are
   exactly what the warehouse needs; the query needs a reach predicate added.
   The dashboard response already carries no amount and no person.
 - **F6 — Stock is one global number.** `global_products.stock_quantity` is the

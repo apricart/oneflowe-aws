@@ -1,5 +1,6 @@
 "use client"
 
+import { isReadOnlyRole } from "@/lib/viewer-access"
 import { useParams,useRouter } from "next/navigation"
 import Image from "next/image"
 import useSWR from "swr"
@@ -260,6 +261,9 @@ export default function SuperAdminOrderDetailsPage() {
     }
     if (isHeadOffice) {
       return "HEAD OFFICE"
+    }
+    if (isReadOnlyRole(userRole)) {
+      return "VIEW ONLY"
     }
     return "BRANCH ADMIN"
   })()

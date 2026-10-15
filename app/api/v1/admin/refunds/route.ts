@@ -14,6 +14,7 @@ import { isRefundEligibleOrderStatus } from "@/lib/business-rules"
 import { budgetPeriodOf, planRefundLedgerMove } from "@/lib/budget-consumption"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { CREDIT_NOTE_CONFLICT_ERRORS, issueCreditNoteForRefund } from "@/lib/server/credit-notes"
+import { queueWarehouseOrderNotifications } from "@/lib/server/warehouse-order-notifications"
 import { refundDetailsStillPriced, refundHistoryByLine, refundLineAmountCents, type LineRefundHistory } from "@/lib/refund-amount"
 
 const parseRefundRequestId = (value: string | null) => {
@@ -723,6 +724,16 @@ export async function POST(req: NextRequest) {
                 orderId,
                 actor: { id: userId, role: userRole },
                 reason: effectiveReason,
+            })
+            await queueWarehouseOrderNotifications(tx, {
+                order: {
+                    id: orderId,
+                    tid: orderData.tid,
+                    organizationId: orderData.organizationId,
+                    branchId: orderData.branchId,
+                },
+                event: "REFUNDED",
+                occurrence: approvedRefundId,
             })
 
             // 6. Mark only other pending requests for this order as superseded.

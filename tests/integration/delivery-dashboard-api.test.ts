@@ -300,7 +300,7 @@ describe.skipIf(!hasTestDatabase)("the management delivery dashboard through the
         onTimeRate: 50,
         averageDeliveryHours: 64,
       })
-      expect(body.sla).toEqual({ hours: 72, dueSoonHours: 12, countsOrdersApprovedFrom: "2026-09-01" })
+      expect(body.sla).toEqual({ hours: 72, dueSoonHours: 24, countsOrdersApprovedFrom: "2026-09-01" })
     })
 
     it("leaves out pre-cutoff, imported, pending and rejected orders", async () => {

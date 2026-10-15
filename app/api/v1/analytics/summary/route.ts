@@ -1,3 +1,4 @@
+import { VIEWER_READ_REFUSED, viewerReadRole } from "@/lib/viewer-access"
 import { stringifyPrimitive } from "@/lib/stringify-primitive"
 import { NextResponse, type NextRequest } from "next/server"
 import { getServerSession } from "next-auth"
@@ -267,7 +268,10 @@ export async function GET(req: NextRequest) {
     const userId = (session.user as any).id
 
     const userContext = await loadSummaryUserContext(userId, (session.user as any).role)
-    const roleName = userContext.role
+    // Read from the user row: an organization-wide Viewer reads as Head Office,
+    // a pinned one is refused.
+    const roleName = viewerReadRole(userContext)
+    if (!roleName) return NextResponse.json({ error: VIEWER_READ_REFUSED }, { status: 403 })
     const currentUserBranchId = userContext.branchId
     const currentUserOrgId = userContext.organizationId
 

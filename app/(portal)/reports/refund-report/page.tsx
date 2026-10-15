@@ -1,5 +1,6 @@
 "use client"
 
+import { viewerAccessFor } from "@/lib/viewer-access"
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useSession } from "next-auth/react"
 import useSWR from "swr"
@@ -221,7 +222,9 @@ export default function RefundReportPage() {
         isInitialized,
     } = useAppContext()
 
-    const role = String((session?.user as any)?.role || "")
+    // An organization-wide Viewer reads this report as Head Office does.
+    const { viewRole } = viewerAccessFor(session?.user)
+    const role = String(viewRole || "")
     const userOrganizationId = (session?.user as any)?.organizationId
     const organizationId = userOrganizationId || contextOrganizationId
     const [search, setSearch] = useState("")

@@ -11,6 +11,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { CatalogHeader, money } from "@/components/warehouse/catalog/catalog-parts"
 import { useDebounce } from "@/hooks/use-debounce"
 import { fetcher } from "@/lib/fetcher"
 import {
@@ -20,10 +21,9 @@ import {
 } from "@/lib/warehouse-catalog"
 
 /**
- * The global product catalogue, view only: what Super Admin sees under Global
- * Products, with no price and nothing to create, edit or delete. The endpoint
- * selects no price, so there is none in the payload
- * (plans/OF-WAREHOUSE-read-only-product-catalog.md).
+ * Global Products, view only: what Super Admin sees under Global Products,
+ * base price included, with nothing to create, edit or delete
+ * (plans/OF-WAREHOUSE-full-read-only-catalog.md).
  */
 
 type CatalogItem = {
@@ -32,6 +32,7 @@ type CatalogItem = {
   name: string
   unit: string
   status: string
+  basePriceCents: number
   stockQuantity: number
   low: boolean
   imageUrl: string | null
@@ -85,6 +86,7 @@ export function WarehouseCatalog() {
 
   return (
     <div className="space-y-4">
+      <CatalogHeader title="Global Products" description="Apricart's product catalogue, with base prices and stock." />
       <div className="flex flex-wrap items-end gap-4">
         <div className="space-y-1">
           <Label htmlFor="catalog-search">Search</Label>
@@ -173,6 +175,7 @@ export function WarehouseCatalog() {
                     <th className="px-3 py-2">Category</th>
                     <th className="px-3 py-2">Subcategory</th>
                     <th className="px-3 py-2">Unit</th>
+                    <th className="px-3 py-2 text-right">Base price</th>
                     <th className="px-3 py-2">Status</th>
                     <th className="px-3 py-2 text-right">In stock</th>
                   </tr>
@@ -205,6 +208,7 @@ export function WarehouseCatalog() {
                       <td className="px-3 py-2">{item.category ?? <span className="text-muted-foreground">Uncategorized</span>}</td>
                       <td className="px-3 py-2">{item.subcategory ?? <span className="text-muted-foreground">—</span>}</td>
                       <td className="px-3 py-2">{item.unit}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{money(item.basePriceCents)}</td>
                       <td className="px-3 py-2">
                         <Badge variant={item.status === "active" ? "default" : "secondary"}>{item.status}</Badge>
                       </td>

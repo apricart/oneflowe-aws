@@ -803,7 +803,7 @@ function salesPerfTooltipModel(data: any, activeMetric: string, isBuyer: boolean
   const previousValue = isRevenue ? compSales : compOrders
   let metricLabel = 'Orders'
   if (isRevenue) metricLabel = isBuyer ? 'Purchased' : 'Revenue'
-  const formatValue = (value: number) => isRevenue ? `â‚¨ ${value.toLocaleString()}` : value.toLocaleString()
+  const formatValue = (value: number) => isRevenue ? `₨ ${value.toLocaleString()}` : value.toLocaleString()
   const changePercent = hasComparison && previousValue > 0
     ? ((currentValue - previousValue) / previousValue) * 100
     : 0
@@ -844,7 +844,7 @@ function SalesPerfComparisonCard({ model }: Readonly<{ model: ReturnType<typeof 
       <div className="flex items-center justify-between">
         <span className="text-xl font-bold text-amber-600 dark:text-amber-400 tracking-tight">{model.formatValue(model.previousValue)}</span>
         <div className={cn("flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black", model.changeDirection === 'up' ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400' : 'bg-red-500/20 text-red-600 dark:text-red-400')}>
-          {model.changeDirection === 'up' ? 'â–²' : 'â–¼'} {Math.abs(model.changePercent).toFixed(1)}%
+          {model.changeDirection === 'up' ? '▲' : '▼'} {Math.abs(model.changePercent).toFixed(1)}%
         </div>
       </div>
     </div>
@@ -860,7 +860,7 @@ function SalesPerfSummary({ model }: Readonly<{ model: ReturnType<typeof salesPe
       </div>
       <div className="p-3 rounded-xl bg-slate-500/5 ring-1 ring-inset ring-slate-500/10">
         <span className="text-[9px] font-bold text-slate-500 dark:text-slate-400 uppercase block mb-1">Avg Value</span>
-        <span className="text-sm font-bold text-slate-900 dark:text-white">â‚¨{model.orders > 0 ? Math.round(model.sales / model.orders).toLocaleString() : 0}</span>
+        <span className="text-sm font-bold text-slate-900 dark:text-white">₨{model.orders > 0 ? Math.round(model.sales / model.orders).toLocaleString() : 0}</span>
       </div>
     </div>
   )

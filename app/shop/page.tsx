@@ -2662,12 +2662,12 @@ export default function OrderPortalPage() {
         </DialogContent>
       </Dialog>
 
-      <PendingInvoiceAlert
+      {/* <PendingInvoiceAlert
         invoice={pendingInvoiceGuard.pendingInvoice}
         continuing={isPlacingOrder}
         onCancel={pendingInvoiceGuard.dismiss}
         onContinue={() => { void pendingInvoiceGuard.continueAfterNotice() }}
-      />
+      /> */}
 
       <UnpaidInvoicesDialog
         notice={unpaidInvoicesNotice}

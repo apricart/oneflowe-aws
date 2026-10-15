@@ -25,7 +25,7 @@ import { resolveJoinManagementScope } from "@/lib/server/organization-join-scope
  */
 export async function GET(req: Request) {
   try {
-    const authError = await requireApiRole(JOIN_REQUEST_MANAGEMENT_ROLES)
+    const authError = await requireApiRole(JOIN_REQUEST_MANAGEMENT_ROLES, { viewerReadsAsHeadOffice: true })
     if (authError) return authError
 
     const scope = await resolveJoinManagementScope()

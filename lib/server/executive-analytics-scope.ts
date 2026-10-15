@@ -1,3 +1,4 @@
+import { viewerReadRole } from "@/lib/viewer-access"
 import "server-only"
 
 import { and, eq, inArray } from "drizzle-orm"
@@ -152,7 +153,11 @@ export async function resolveExecutiveScope(
     return { ok: false, error: "Unauthorized", status: 401 }
   }
 
-  const caller = await loadCallerContext(userId, sessionUser?.role)
+  // Every caller of this resolver is a GET handler (pinned by
+  // `lib/viewer-access.test.ts`), so an organization-wide Viewer reads these
+  // reports as Head Office does; a pinned one maps to no role and is refused.
+  const loaded = await loadCallerContext(userId, sessionUser?.role)
+  const caller = { ...loaded, role: viewerReadRole(loaded) ?? "" }
   if (!isExecutiveAnalyticsRole(caller.role)) {
     return { ok: false, error: "Forbidden: Insufficient permissions", status: 403 }
   }

@@ -1,5 +1,6 @@
 "use client"
 
+import { viewerAccessFor } from "@/lib/viewer-access"
 import * as React from "react"
 import { useSession } from "next-auth/react"
 import { usePathname, useSearchParams } from "next/navigation"
@@ -178,7 +179,9 @@ export default function GraphicalReportsPage() {
 
 function GraphicalReportsContent() {
   const { data: session, status } = useSession()
-  const role = ((session?.user as { role?: string } | undefined)?.role || "").toUpperCase()
+  // An organization-wide Viewer reads the Analytics Center as Head Office does.
+  const { viewRole } = viewerAccessFor(session?.user)
+  const role = (viewRole || "").toUpperCase()
   const authorized = (EXECUTIVE_ANALYTICS_ROLES as readonly string[]).includes(role)
 
   const [tab, setTab] = useAnalyticsTab()

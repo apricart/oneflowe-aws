@@ -1,5 +1,6 @@
 "use client"
 
+import { useViewerAccess } from "@/lib/hooks/use-viewer-access"
 import { useState } from "react"
 
 import useSWR from "swr"
@@ -38,6 +39,9 @@ type JoinCodeResponse = {
 }
 
 export function JoinCodeCard() {
+  // The read-only Viewer sees the code and copies it; it issues, replaces and
+  // closes nothing.
+  const { readOnly } = useViewerAccess()
   const { data, error, isLoading, mutate } = useSWR<JoinCodeResponse>(
     "/api/v1/organizations/join-code",
     fetcher,
@@ -162,6 +166,8 @@ export function JoinCodeCard() {
           </div>
         )}
 
+        {!readOnly && (
+          <>
         <div className="flex flex-col gap-2 sm:flex-row">
           <Button
             type="button"
@@ -219,6 +225,8 @@ export function JoinCodeCard() {
             old one working immediately; requests already waiting are unaffected.
           </p>
         </div>
+          </>
+        )}
 
         {failure && (
           <p role="alert" className="text-sm font-medium text-red-600">{failure}</p>

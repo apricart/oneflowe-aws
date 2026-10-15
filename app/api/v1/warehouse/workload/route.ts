@@ -32,7 +32,7 @@ export async function GET(req: Request) {
     if (!parsed.ok) return error(parsed.message, 400)
 
     const reach = await loadWarehouseReach(db, user.id)
-    const dashboard = await loadDeliveryDashboard(parsed.filters, now, reach)
+    const dashboard = await loadDeliveryDashboard(parsed.filters, now, reach, "newest")
     return NextResponse.json(dashboard, { headers: { "Cache-Control": "private, no-store" } })
   } catch (caught) {
     const handled = handleError(caught, "GET /api/v1/warehouse/workload")

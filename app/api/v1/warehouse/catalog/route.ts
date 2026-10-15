@@ -10,10 +10,10 @@ import { parseWarehouseCatalogQuery } from "@/lib/warehouse-catalog"
 export const dynamic = "force-dynamic"
 
 /**
- * The product catalogue, read-only, for the warehouse: every global product's
- * code, name, unit, status, stock, picture and category — never a price. There
- * is no write method here, and the warehouse changes nothing in the catalogue
- * (plans/OF-WAREHOUSE-read-only-product-catalog.md).
+ * Super Admin's Global Products, read-only, for the warehouse: every global
+ * product's code, name, unit, status, base price, stock, picture and category.
+ * There is no write method here, and the warehouse changes nothing in the
+ * catalogue (plans/OF-WAREHOUSE-full-read-only-catalog.md).
  */
 export async function GET(req: Request) {
   try {

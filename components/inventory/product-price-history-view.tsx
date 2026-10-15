@@ -187,9 +187,19 @@ function FilterSelect({
   )
 }
 
+const ADMIN_PRICE_HISTORY_ENDPOINT = "/api/v1/admin/product-price-history"
+
+/**
+ * `endpoint` defaults to Super Admin's and Head Office's route; the warehouse
+ * passes its own read-only one, which answers the same query with the same
+ * shape, fenced to the organizations it serves.
+ */
 // This boundary coordinates dependent catalogue filters and their server query.
 // eslint-disable-next-line sonarjs/cognitive-complexity
-export default function ProductPriceHistoryView({ role }: Readonly<{ role: ProductPriceHistoryRole }>) {
+export default function ProductPriceHistoryView({
+  role,
+  endpoint: baseEndpoint = ADMIN_PRICE_HISTORY_ENDPOINT,
+}: Readonly<{ role: ProductPriceHistoryRole; endpoint?: string }>) {
   const [range, setRange] = useState<ProductPriceHistoryRangeKey>("1y")
   const [selectedProductId, setSelectedProductId] = useState<number | null>(null)
   const [organizationId, setOrganizationId] = useState<number | null>(null)
@@ -203,8 +213,8 @@ export default function ProductPriceHistoryView({ role }: Readonly<{ role: Produ
     if (groupId) params.set("groupId", String(groupId))
     if (branchId) params.set("branchId", String(branchId))
     if (selectedProductId) params.set("productId", String(selectedProductId))
-    return `/api/v1/admin/product-price-history?${params.toString()}`
-  }, [branchId, groupId, organizationId, range, selectedProductId])
+    return `${baseEndpoint}?${params.toString()}`
+  }, [baseEndpoint, branchId, groupId, organizationId, range, selectedProductId])
 
   const { data, error, isLoading, isValidating, mutate } = useSWR<ProductPriceHistoryResponse>(endpoint, fetcher, {
     revalidateOnFocus: false,
@@ -234,11 +244,11 @@ export default function ProductPriceHistoryView({ role }: Readonly<{ role: Produ
   const organizations = (data?.options.organizations ?? []).map((option) => ({ value: String(option.id), label: option.name }))
   const groups = (data?.options.groups ?? []).map((option) => ({
     value: String(option.id),
-    label: organizationId === null && role === "SUPER_ADMIN" ? `${option.name} · ${option.organizationName}` : option.name,
+    label: organizationId === null && role !== "HEAD_OFFICE" ? `${option.name} · ${option.organizationName}` : option.name,
   }))
   const branches = (data?.options.branches ?? []).map((option) => ({
     value: String(option.id),
-    label: organizationId === null && role === "SUPER_ADMIN" ? `${option.name} · ${option.organizationName}` : option.name,
+    label: organizationId === null && role !== "HEAD_OFFICE" ? `${option.name} · ${option.organizationName}` : option.name,
   }))
 
   const exportScopeDescription = [
@@ -316,7 +326,7 @@ export default function ProductPriceHistoryView({ role }: Readonly<{ role: Produ
             label="Organization"
             value={effectiveOrganizationId === null ? "all" : String(effectiveOrganizationId)}
             disabled={role === "HEAD_OFFICE"}
-            allLabel={role === "SUPER_ADMIN" ? "All organizations" : undefined}
+            allLabel={role === "HEAD_OFFICE" ? undefined : "All organizations"}
             options={organizations}
             onChange={changeOrganization}
           />

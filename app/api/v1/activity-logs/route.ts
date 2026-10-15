@@ -1,3 +1,4 @@
+import { VIEWER_READ_REFUSED, viewerReadScope } from "@/lib/viewer-access"
 import { NextResponse, type NextRequest } from "next/server"
 
 import { applyActivityReach, resolveActivityLogReach } from "@/lib/activity-log-access"
@@ -29,9 +30,16 @@ export async function GET(req: NextRequest) {
   try {
     // Enumerable and expensive: three tables, a free-text term and a date
     // window. `search` rather than `api` because that is what this is.
-    const scope = await getRequestScope()
-    const limited = await withRateLimit("search", scope?.userId)
+    const requestScope = await getRequestScope()
+    const limited = await withRateLimit("search", requestScope?.userId)
     if (limited) return limited
+
+    // An organization-wide Viewer reads its own organization's trail as Head
+    // Office does — anonymised the same way; a pinned one is refused.
+    const scope = viewerReadScope(requestScope)
+    if (requestScope && !scope) {
+      return NextResponse.json({ error: VIEWER_READ_REFUSED }, { status: 403 })
+    }
 
     // The reach comes from the server-resolved scope — the organization is
     // re-read from the `users` row — never from anything in the request.

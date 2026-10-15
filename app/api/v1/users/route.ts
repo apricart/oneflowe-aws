@@ -9,8 +9,9 @@ import { getCached,invalidateByPrefix,scopedCacheKey,CACHE_TTL } from "@/lib/cac
 import { assertUniqueUserFields,normalizeEmail,normalizeOptionalText,UserUniqueFieldError } from "@/lib/user-uniqueness"
 import { sendWelcomeEmail } from "@/lib/email"
 import { userCreateSchema,validationMessage } from "@/lib/server/mutation-validation"
+import { approvalLevelRefusalForNewUser } from "@/lib/server/user-approval-level"
 import { canAssignRole } from "@/lib/server/user-access-policy"
-import { isViewerRole } from "@/lib/viewer-access"
+import { isViewerRole, VIEWER_READ_REFUSED, viewerReadScope } from "@/lib/viewer-access"
 import { isOrderDeskRole, orderDeskUserShapeError } from "@/lib/order-desk-access"
 import { apricartExecutiveUserShapeError, isApricartExecutiveRole } from "@/lib/apricart-executive-access"
 import { isWarehouseRole, warehouseUserShapeError } from "@/lib/warehouse-access"
@@ -130,6 +131,9 @@ async function validateUserAssignment(
     ?? await getTenantReferenceError(organizationId, branchId)
 }
 
+/** A requested approval level the role or organization does not admit; rolls the creation back. */
+class ApprovalLevelRefusedError extends Error {}
+
 async function writeUserCreationAudit(createdUser: any, scope: any, role: string, organizationId: number | null, branchId: number | null) {
   try {
     const headersList = await headers()
@@ -148,6 +152,7 @@ async function writeUserCreationAudit(createdUser: any, scope: any, role: string
         createdUserRole: role,
         createdUserOrgId: organizationId,
         createdUserBranchId: branchId,
+        createdUserOrderApprovalLevel: createdUser.orderApprovalLevel ?? null,
       },
       ipAddress: forwardedFor ? forwardedFor.split(',')[0] : "unknown",
       userAgent: headersList.get("user-agent"),
@@ -160,6 +165,7 @@ async function writeUserCreationAudit(createdUser: any, scope: any, role: string
 
 function handleUserCreationError(caughtError: any) {
   if (caughtError instanceof UserUniqueFieldError) return error(caughtError.message, 400)
+  if (caughtError instanceof ApprovalLevelRefusedError) return error(caughtError.message, 400)
   const errorCode = String(caughtError.code || caughtError.cause?.code || "")
   const errorMessage = String(caughtError.message || "").toLowerCase()
   const detail = String(caughtError.detail || caughtError.cause?.detail || "").toLowerCase()
@@ -179,12 +185,14 @@ function handleUserCreationError(caughtError: any) {
 
 
 export async function GET(req: Request) {
-  const err = await requireApiRole(USER_MANAGEMENT_ROLES)
+  // An organization-wide Viewer reads its tenant's directory as Head Office does.
+  const err = await requireApiRole(USER_MANAGEMENT_ROLES, { viewerReadsAsHeadOffice: true })
   if (err) return err
   const { searchParams } = new URL(req.url)
   const organizationId = searchParams.get("organizationId")
   const shouldRefresh = searchParams.has("refresh")
-  const scope = await getRequestScope()
+  const scope = viewerReadScope(await getRequestScope())
+  if (!scope) return error(VIEWER_READ_REFUSED, 403)
   const scopedOrgId = (() => {
     if (scope?.role === "SUPER_ADMIN") {
       return (organizationId ? Number(organizationId) : undefined)
@@ -221,6 +229,7 @@ export async function GET(req: Request) {
         contactPerson: usersTable.contactPerson,
         address: usersTable.address,
         externalSource: usersTable.externalSource,
+        orderApprovalLevel: usersTable.orderApprovalLevel,
       })
       .from(usersTable)
       .leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
@@ -250,6 +259,9 @@ export async function GET(req: Request) {
       // Present so the admin UI can tell a mirrored account apart: its role is
       // managed by the source system and cannot be switched here.
       externalSource: r.externalSource || null,
+      // The level is shown and editable only while the organization admits it
+      // (plans/OF-APPROVAL-LEVELS-assign-users-to-levels.md).
+      orderApprovalLevel: r.orderApprovalLevel ?? null,
     }))
   }
 
@@ -335,6 +347,15 @@ export async function POST(req: Request) {
     await assertUniqueUserFields({ email, phone, employeeId })
 
     const [item] = await db.transaction(async (tx) => {
+      // Under the organization's FOR SHARE, so the level cannot be removed
+      // between this check and the insert.
+      const levelRefusal = await approvalLevelRefusalForNewUser(tx, {
+        organizationId,
+        role,
+        level: input.orderApprovalLevel,
+      })
+      if (levelRefusal) throw new ApprovalLevelRefusedError(levelRefusal)
+
       const [created] = await tx
         .insert(usersTable)
         .values({
@@ -357,6 +378,7 @@ export async function POST(req: Request) {
           location: input.location ?? null,
           address: input.address ?? null,
           mustChangePassword: true,
+          orderApprovalLevel: input.orderApprovalLevel,
         })
         .returning()
 

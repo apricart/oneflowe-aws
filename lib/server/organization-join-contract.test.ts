@@ -166,7 +166,8 @@ describe("the managed join endpoints admit Head Office alone", () => {
   it("gates every one of them on the shared allowlist", () => {
     for (const path of MANAGED_JOIN_ROUTES) {
       const route = repositoryFile(path)
-      expect(route).toContain("requireApiRole(JOIN_REQUEST_MANAGEMENT_ROLES)")
+      // A GET may add the read-only Viewer opt-in; nothing else may differ.
+      expect(route).toMatch(/requireApiRole\(JOIN_REQUEST_MANAGEMENT_ROLES(?:, \{ viewerReadsAsHeadOffice: true \})?\)/)
       expect(route).toContain('from "@/lib/organization-join-access"')
     }
   })
@@ -350,9 +351,9 @@ describe("the way in is reachable and the way out is not mislabelled", () => {
     const proxy = repositoryFile("proxy.ts")
     expect(proxy).toContain('const isPublicPath = ["/login", "/join"].includes(pathname)')
     expect(proxy).toContain('"/join-requests",')
-    // Head Office alone: the area table takes a role list since the activity
-    // log admitted two roles, and this entry must still list exactly one.
-    expect(proxy).toContain('{ prefix: "/join-requests", roles: ["HEAD_OFFICE"]')
+    // Head Office decides; the read-only Viewer may open the page and read the
+    // queue (every decision endpoint still refuses it). No one else.
+    expect(proxy).toContain('{ prefix: "/join-requests", roles: ["HEAD_OFFICE", "VIEWER"]')
   })
 
   it("gates the Head Office page in a server layout as well", () => {

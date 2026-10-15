@@ -1,3 +1,4 @@
+import { viewerReadRole } from "@/lib/viewer-access"
 import { and, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm"
 import { getServerSession } from "next-auth"
 import {
@@ -28,6 +29,7 @@ import {
 import { orderSelectColumns } from "@/lib/order-select"
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
 import { notifyRaiserOfOrderWrite } from "@/lib/server/order-write-audit"
+import { queueWarehouseOrderNotifications } from "@/lib/server/warehouse-order-notifications"
 
 type CurrentOrderUser = NonNullable<Awaited<ReturnType<typeof getCurrentUser>>>
 
@@ -516,6 +518,12 @@ async function persistEditedOrder(tx: any, context: any) {
     message: `Order ${context.existingOrder.tid} was edited by a colleague at your branch.`,
     type: "ORDER_EDITED_BY_COLLEAGUE",
   })
+  // Each edit is its own occurrence, named by the moment it was written.
+  await queueWarehouseOrderNotifications(tx, {
+    order: updatedOrder,
+    event: "EDITED",
+    occurrence: new Date(updatedOrder.updatedAt ?? Date.now()).getTime(),
+  })
   return { kind: "updated", order: updatedOrder } as const
 }
 
@@ -602,7 +610,7 @@ export async function GET(
   _: Request,
   props: { params: Promise<{ id: string }> },
 ) {
-  const authError = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "GROUP_ORDER_PORTAL", "ORDER_PORTAL"])
+  const authError = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "GROUP_ORDER_PORTAL", "ORDER_PORTAL"], { viewerReadsAsHeadOffice: true })
   if (authError) return authError
 
   const { id } = await props.params
@@ -611,7 +619,13 @@ export async function GET(
 
   const session = await getServerSession(authOptions)
   const currentUserId = (session?.user as any)?.id
+  // The real role decides what the caller may do and see of the token; the
+  // read role only decides which orders it reaches. An organization-wide
+  // Viewer reaches what Head Office reaches; a pinned one is refused.
+  // A pinned Viewer has no read role and keeps its own, which the branch
+  // check below refuses (requireApiRole above already has).
   const currentRole = (session?.user as any)?.role
+  const readRole = viewerReadRole(session?.user as any) ?? currentRole
   const [item] = await db
     .select({
       ...orderSelectColumns,
@@ -649,10 +663,10 @@ export async function GET(
   }
 
   const requestScope = await getRequestScope()
-  const hasAccess = await hasBranchAccessForOrderRead(currentRole, currentUserId, requestScope, {
+  const hasAccess = await hasBranchAccessForOrderRead(readRole, currentUserId, requestScope, {
     organizationId: item.organizationId,
     branchId: item.branchId,
-  })
+  }, { viewerReadsAsHeadOffice: true })
   if (!hasAccess) {
     return currentRole === "ORDER_PORTAL"
       ? error("Not found", 404)
