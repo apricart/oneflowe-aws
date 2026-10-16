@@ -48,9 +48,13 @@ npm run test:all       # both projects
 npm run typecheck
 ```
 
-Two Vitest projects: `vitest.config.ts` (jsdom, tests beside the code) and
+Two Vitest projects: `vitest.config.ts` (tests beside the code) and
 `vitest.integration.config.ts` (node, `tests/integration/**`, one file at a
-time). Both alias `server-only` to an empty module so tests can import code
+time). The unit config runs `.test.tsx` files and any `.test.ts` that mentions a
+browser global (`window`, `localStorage`, `renderHook`, …) under jsdom, and the
+rest under node, which starts much faster — the rule is
+`tests/support/unit-test-environments.ts`, and a `@vitest-environment` pragma
+overrides it. Both alias `server-only` to an empty module so tests can import code
 under `lib/server/` directly.
 
 Integration tests need `TEST_DATABASE_URL` pointing at a **migrated, disposable**
