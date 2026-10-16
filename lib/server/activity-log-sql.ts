@@ -2,6 +2,7 @@ import "server-only"
 
 import { sql, type SQL } from "drizzle-orm"
 
+import { roles, users } from "@/db/schema"
 import {
   ACTIVITY_SOURCE_RANK,
   CATEGORY_RULES,
@@ -14,6 +15,7 @@ import {
   type ActivityReach,
   type ActivitySource,
 } from "@/lib/activity-log"
+import { PLATFORM_ACTOR_ROLE_NAMES } from "@/lib/activity-log-reach"
 
 /**
  * The SQL half of the activity log: one merged, keyset-paginated read across
@@ -283,6 +285,10 @@ function branchFilters(shape: SourceShape, filters: ActivityFilters): SQL[] {
     conditions.push(sql`${column(shape, shape.actorId)}::text = ${filters.actorId}`)
   }
 
+  if (filters.actorRole !== null) {
+    conditions.push(actorRolePredicate(shape, filters.actorRole, filters.reach))
+  }
+
   if (filters.success !== null && shape.success) {
     conditions.push(sql`${column(shape, shape.success)} = ${filters.success}`)
   }
@@ -306,6 +312,55 @@ function branchFilters(shape: SourceShape, filters: ActivityFilters): SQL[] {
   }
 
   return conditions
+}
+
+/** `select users.id::text … where <condition>`: the accounts one arm of the role filter reads. */
+function accountIdsWhere(condition: SQL): SQL {
+  return sql`select ${users.id}::text from ${users} left join ${roles} on ${roles.id} = ${users.roleId} where ${condition}`
+}
+
+/**
+ * The actor-role filter, matching exactly the role the **Who** column shows.
+ *
+ * The screen shows the role the row recorded (`system_logs.user_role`,
+ * `group_audit_logs.performed_by_role`), and only where there is none the
+ * account's role today (`buildActor` in `lib/server/activity-log-queries.ts`).
+ * `audit_logs` records no role, so for it the account is the only answer. The
+ * account lookups are uncorrelated `IN` subqueries, which Postgres runs once
+ * and hashes, so the per-branch time-index scan stays the shape of the plan.
+ *
+ * An organization reader sees people outside the tenant anonymised, their role
+ * withheld unless it is Super Admin (`lib/activity-log-reach.ts`). A filter
+ * that still matched such a row would say what the page hides — "someone with
+ * the Warehouse role did this here" — so for that reach a tenant role matches
+ * only a person `classifyActivityActor` would show: an account in the tenant
+ * that is not platform staff, or, for a principal with no account at all, the
+ * role the row itself recorded. An organization reader may name only a tenant
+ * role (`applyActivityReach` refuses the rest); were an Apricart role to reach
+ * here anyway, this arm matches nothing, since no tenant account holds one.
+ */
+function actorRolePredicate(shape: SourceShape, role: string, reach: ActivityReach): SQL {
+  const actor = sql`${column(shape, shape.actorId)}::text`
+  // `trimmed()` on the read side: a blank recorded role falls back to the account's.
+  const rowRole = shape.actorRole ? sql`nullif(trim(${column(shape, shape.actorRole)}), '')` : null
+
+  if (reach.kind === "platform") {
+    const holders = sql`${actor} in (${accountIdsWhere(sql`${roles.name} = ${role}`)})`
+    if (!rowRole) return holders
+    return sql`(${rowRole} = ${role} or (${rowRole} is null and ${holders}))`
+  }
+
+  const platformRoles = sql.join(PLATFORM_ACTOR_ROLE_NAMES.map((name) => sql`${name}`), sql`, `)
+  const tenantHolders = sql`${actor} in (${accountIdsWhere(
+    sql`${roles.name} = ${role} and ${users.organizationId} = ${reach.organizationId}`,
+  )})`
+  if (!rowRole) return tenantHolders
+
+  const tenantPeople = sql`${actor} in (${accountIdsWhere(
+    sql`${users.organizationId} = ${reach.organizationId} and (${roles.name} is null or ${roles.name} not in (${platformRoles}))`,
+  )})`
+  const noAccount = sql`not exists (select 1 from ${users} where ${users.id}::text = ${actor})`
+  return sql`((${rowRole} = ${role} and (${tenantPeople} or ${noAccount})) or (${rowRole} is null and ${tenantHolders}))`
 }
 
 /**

@@ -43,6 +43,10 @@ import {
   isWarehouseApiRequestAllowed,
   isWarehouseRole,
 } from "@/lib/warehouse-access"
+import {
+  HEAD_COUNT_REQUESTS_AREA,
+  HEAD_COUNT_REQUEST_READ_ROLES,
+} from "@/lib/branch-head-count-access"
 
 const protectedPrefixes = [
   // The activity log was gated in ROLE_GATED_AREAS but missing here, so the
@@ -65,6 +69,9 @@ const protectedPrefixes = [
   "/executive",
   "/group-portal",
   "/groups",
+  // Branch head count requests: raised by Branch Admin / Group User, decided by
+  // Head Office. Gated to those three in ROLE_GATED_AREAS below.
+  HEAD_COUNT_REQUESTS_AREA,
   "/inventory",
   "/invoices",
   "/join-requests",
@@ -288,6 +295,8 @@ const GROUP_USER_AREAS = [
   "/approvals",
   "/budgets",
   "/dashboard",
+  // It asks Head Office to set the head count of the branches assigned to it.
+  HEAD_COUNT_REQUESTS_AREA,
   "/orders",
   "/reports",
   "/settings",
@@ -473,6 +482,10 @@ const ROLE_GATED_AREAS: ReadonlyArray<{ prefix: string; roles: readonly string[]
   { prefix: "/activity", roles: [...ACTIVITY_LOG_ROLES, "VIEWER"], home: "/dashboard" },
   { prefix: "/branches", roles: ["HEAD_OFFICE", "VIEWER"], home: "/dashboard" },
   { prefix: "/join-requests", roles: ["HEAD_OFFICE", "VIEWER"], home: "/dashboard" },
+  // Head count requests: the two requester roles and the Head Office that
+  // decides (lib/branch-head-count-access.ts). Both handlers re-check.
+  // VIEWER: an organization-wide one reads the queue as Head Office does.
+  { prefix: HEAD_COUNT_REQUESTS_AREA, roles: [...HEAD_COUNT_REQUEST_READ_ROLES, "VIEWER"], home: "/dashboard" },
   // Creating desk users and granting their reach is Super Admin's alone.
   { prefix: DESK_TEAM_AREA, roles: ORDER_DESK_MANAGER_ROLES, home: "/dashboard" },
   // The desk's own workspace; no other role has a reason to render it.

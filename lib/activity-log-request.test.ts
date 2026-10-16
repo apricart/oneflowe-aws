@@ -48,6 +48,7 @@ describe("defaults", () => {
       organizationId: null,
       branchId: null,
       actorId: null,
+      actorRole: null,
       success: null,
       search: null,
     })
@@ -129,6 +130,15 @@ describe("filters", () => {
   it("refuses an unknown source", () => {
     expect(parse("source=everything")).toMatchObject({ ok: false })
     expect(parse("source=audit,nope")).toMatchObject({ ok: false })
+  })
+
+  it("takes an actor role from the closed set of application roles", () => {
+    expect(filtersOf("actorRole=BRANCH_ADMIN").actorRole).toBe("BRANCH_ADMIN")
+    expect(filtersOf("actorRole=WAREHOUSE").actorRole).toBe("WAREHOUSE")
+    // Exact names only: a lower-cased or invented role is refused, never read as "all".
+    expect(parse("actorRole=branch_admin")).toMatchObject({ ok: false, field: "actorRole" })
+    expect(parse("actorRole=ADMIN")).toMatchObject({ ok: false, field: "actorRole" })
+    expect(parse("actorRole=HEAD_OFFICE' or '1'='1")).toMatchObject({ ok: false, field: "actorRole" })
   })
 
   it("takes an operation and a category from the closed sets", () => {

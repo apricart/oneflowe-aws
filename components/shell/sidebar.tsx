@@ -2,7 +2,7 @@
 import Link from "next/link"
 import { usePathname, useSearchParams } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { Home,Building2,Users,Package,Boxes,Wallet,BarChart3,Settings,FolderTree,ChevronDown,ClipboardCheck,DoorOpen,Headset,LifeBuoy,MapPinned,PanelLeftClose,PanelLeftOpen,ScrollText,Gauge,Warehouse } from "lucide-react"
+import { Home,Building2,Users,Package,Boxes,Wallet,BarChart3,Settings,FolderTree,ChevronDown,ClipboardCheck,DoorOpen,Headset,LifeBuoy,MapPinned,PanelLeftClose,PanelLeftOpen,ScrollText,Gauge,Warehouse,UsersRound } from "lucide-react"
 import Image from "next/image"
 import { useCallback,useEffect,useState,type ReactNode } from "react"
 import { Tooltip,TooltipContent,TooltipTrigger } from "@/components/ui/tooltip"
@@ -174,6 +174,9 @@ const navigationByRole = (role: string, budgetAllocationEnabled: boolean) => {
       // page is shared with the branches that raise them; who may decide one is
       // `lib/delivery-address-access.ts`, on the handlers.
       { href: "/delivery-addresses", label: "Delivery Addresses", icon: MapPinned },
+      // Head Office decides every head count request in the tenant
+      // (lib/branch-head-count-access.ts); it sets the figure directly on My Branches.
+      { href: "/head-count-requests", label: "Head Count Requests", icon: UsersRound },
       { href: "/orders", label: "Orders", icon: Package },
       {
         href: "/inventory",
@@ -222,6 +225,7 @@ const navigationByRole = (role: string, budgetAllocationEnabled: boolean) => {
       { href: "/orders", label: "Orders", icon: Package },
       { href: "/branch-inventory", label: "Inventory", icon: Boxes },
       { href: "/delivery-addresses", label: "Delivery Addresses", icon: MapPinned },
+      { href: "/head-count-requests", label: "Head Count", icon: UsersRound },
       {
         href: "/reports",
         label: "Reports",
@@ -253,6 +257,7 @@ const navigationByRole = (role: string, budgetAllocationEnabled: boolean) => {
       { href: "/orders", label: "Orders", icon: Package },
       { href: "/approvals", label: "Approvals", icon: ClipboardCheck },
       { href: "/delivery-addresses", label: "Delivery Addresses", icon: MapPinned },
+      { href: "/head-count-requests", label: "Head Count", icon: UsersRound },
       ...(budgetAllocationEnabled ? [{ href: "/budgets", label: "Budgets", icon: Wallet }] : []),
       {
         href: "/reports",

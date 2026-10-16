@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
+import { organizationUsername } from "@/lib/username-prefix"
 
 import { and, eq, inArray } from "drizzle-orm"
 import { NextRequest } from "next/server"
@@ -58,7 +59,7 @@ vi.mock("@/lib/rate-limiter", async (importOriginal) => {
 const { getServerSession } = mockedNextAuth
 const { POST: lookup } = lookupRoute
 const { POST: submit } = submitRoute
-const { GET: readCode, PUT: setCode, DELETE: clearCode } = joinCodeRoute
+const { GET: readCode, PUT: setCode } = joinCodeRoute
 const { GET: listQueue } = queueRoute
 const { PATCH: decide } = decideRoute
 
@@ -130,7 +131,9 @@ describe.skipIf(!hasTestDatabase)("joining an organization, end to end", () => {
 
   async function issueCode(): Promise<string> {
     signIn(actor("head"))
-    const response = await setCode(jsonRequest("/api/v1/organizations/join-code", "PUT", {}))
+    const response = await setCode(jsonRequest("/api/v1/organizations/join-code", "PUT", {
+      code: `JOIN-${fixtures.suffix}`,
+    }))
     expect(response.status).toBe(200)
     return (await body(response)).code as string
   }
@@ -165,10 +168,11 @@ describe.skipIf(!hasTestDatabase)("joining an organization, end to end", () => {
   describe("issuing the code", () => {
     it("is refused to an unauthenticated caller", async () => {
       signIn(null)
-      expect((await setCode(jsonRequest("/api/v1/organizations/join-code", "PUT", {}))).status)
+      expect((await setCode(jsonRequest("/api/v1/organizations/join-code", "PUT", {
+        code: "UNAUTH-CODE",
+      }))).status)
         .toBe(401)
       expect((await readCode()).status).toBe(401)
-      expect((await clearCode()).status).toBe(401)
     })
 
     it.each(["branchAdmin", "orderPortal"] as const)(
@@ -176,14 +180,23 @@ describe.skipIf(!hasTestDatabase)("joining an organization, end to end", () => {
       async (kind) => {
         signIn(actor(kind))
         expect((await readCode()).status).toBe(403)
-        expect((await setCode(jsonRequest("/api/v1/organizations/join-code", "PUT", {}))).status)
+        expect((await setCode(jsonRequest("/api/v1/organizations/join-code", "PUT", {
+          code: "FORBIDDEN-CODE",
+        }))).status)
           .toBe(403)
-        expect((await clearCode()).status).toBe(403)
       },
     )
 
-    it("generates a code that satisfies the shape its check constraint enforces", async () => {
+    it("stores the manually supplied code in the shape its check constraint enforces", async () => {
+      expect(code).toBe(`JOIN-${fixtures.suffix}`.toUpperCase())
       expect(code).toMatch(/^[A-Z0-9-]{8,32}$/)
+    })
+
+    it("requires a manual code and exposes no delete operation", async () => {
+      signIn(actor("head"))
+      expect((await setCode(jsonRequest("/api/v1/organizations/join-code", "PUT", {}))).status)
+        .toBe(400)
+      expect((joinCodeRoute as Record<string, unknown>).DELETE).toBeUndefined()
     })
 
     it("reads back only to the head office that owns it", async () => {
@@ -217,26 +230,23 @@ describe.skipIf(!hasTestDatabase)("joining an organization, end to end", () => {
       expect(response.status).toBe(400)
     })
 
-    it("accepts a typed code, upper-cased, and replaces the previous one", async () => {
+    it("refuses to replace a saved code and keeps the original working", async () => {
       signIn(actor("head"))
       const typed = `it-typed-${fixtures.suffix}`
       const response = await setCode(
         jsonRequest("/api/v1/organizations/join-code", "PUT", { code: typed }),
       )
-      expect(response.status).toBe(200)
-      expect((await body(response)).code).toBe(typed.toUpperCase())
+      expect(response.status).toBe(409)
+      expect((await body(response)).error).toMatch(/cannot be changed/i)
 
-      // The old code stops working the moment it is replaced.
-      const stale = await lookup(jsonRequest("/api/v1/join/lookup", "POST", { code }))
-      expect(stale.status).toBe(404)
-
-      // Put the generated one back for the rest of the suite.
-      code = await issueCode()
+      const original = await lookup(jsonRequest("/api/v1/join/lookup", "POST", { code }))
+      expect(original.status).toBe(200)
+      const refused = await lookup(jsonRequest("/api/v1/join/lookup", "POST", { code: typed }))
+      expect(refused.status).toBe(404)
     })
 
     it("writes an audit row naming who opened joining, and never the code", async () => {
       signIn(actor("head"))
-      await setCode(jsonRequest("/api/v1/organizations/join-code", "PUT", {}))
 
       const rows = await db
         .select({ action: auditLogs.action, userId: auditLogs.userId, metadata: auditLogs.metadata })
@@ -245,25 +255,11 @@ describe.skipIf(!hasTestDatabase)("joining an organization, end to end", () => {
           eq(auditLogs.organizationId, fixtures.organizationId),
           eq(auditLogs.action, "SET_ORGANIZATION_JOIN_CODE"),
         ))
-      expect(rows.length).toBeGreaterThan(0)
+      expect(rows).toHaveLength(1)
       for (const row of rows) {
         expect(row.userId).toBe(fixtures.headOfficeId)
         expect(JSON.stringify(row.metadata)).not.toContain(code)
       }
-
-      code = await issueCode()
-    })
-
-    it("closes joining when the code is cleared, and reopens on a new one", async () => {
-      signIn(actor("head"))
-      expect((await clearCode()).status).toBe(200)
-
-      const closed = await lookup(jsonRequest("/api/v1/join/lookup", "POST", { code }))
-      expect(closed.status).toBe(404)
-
-      code = await issueCode()
-      const open = await lookup(jsonRequest("/api/v1/join/lookup", "POST", { code }))
-      expect(open.status).toBe(200)
     })
   })
 
@@ -325,7 +321,9 @@ describe.skipIf(!hasTestDatabase)("joining an organization, end to end", () => {
         organizationId: fixtures.suspendedOrganizationId,
       })
       const suspendedCode = (await body(
-        await setCode(jsonRequest("/api/v1/organizations/join-code", "PUT", {})),
+        await setCode(jsonRequest("/api/v1/organizations/join-code", "PUT", {
+          code: `SUSPENDED-${fixtures.suffix}`,
+        })),
       )).code as string
       signIn(null)
 
@@ -402,7 +400,8 @@ describe.skipIf(!hasTestDatabase)("joining an organization, end to end", () => {
       expect(response.status).toBe(201)
 
       const stored = await findRequestByEmail(`mixed-${fixtures.suffix}@example.test`)
-      expect(stored?.username).toBe(`mixed-${fixtures.suffix}`)
+      // Lower-cased, under the organization's prefix (plans/OF-USERS-organization-username-prefix.md).
+      expect(stored?.username).toBe(organizationUsername(fixtures.organizationName, `mixed-${fixtures.suffix}`))
     })
 
     it("refuses an administrative role at the schema boundary", async () => {
@@ -545,7 +544,9 @@ describe.skipIf(!hasTestDatabase)("joining an organization, end to end", () => {
       // application-wide, so only one of them can be approved.
       signIn(actor("foreignHead"))
       const foreignCode = (await body(
-        await setCode(jsonRequest("/api/v1/organizations/join-code", "PUT", {})),
+        await setCode(jsonRequest("/api/v1/organizations/join-code", "PUT", {
+          code: `FOREIGN-${fixtures.suffix}`,
+        })),
       )).code as string
       signIn(null)
 
@@ -593,9 +594,6 @@ describe.skipIf(!hasTestDatabase)("joining an organization, end to end", () => {
         .where(eq(users.email, String(shared.email).toLowerCase()))
       expect(accounts).toHaveLength(1)
       expect(accounts[0].organizationId).toBe(fixtures.organizationId)
-
-      signIn(actor("foreignHead"))
-      await clearCode()
     })
 
     it("still refuses a duplicate pending request inside the same tenant", async () => {
@@ -747,7 +745,7 @@ describe.skipIf(!hasTestDatabase)("joining an organization, end to end", () => {
       expect(account.roleName).toBe("ORDER_PORTAL")
       expect(account.organizationId).toBe(fixtures.organizationId)
       expect(account.branchId).toBe(fixtures.northBranchId)
-      expect(account.username).toBe(String(input.username).toLowerCase())
+      expect(account.username).toBe(organizationUsername(fixtures.organizationName, String(input.username)))
       expect(account.email).toBe(String(input.email).toLowerCase())
       // The hash chosen at submission is carried over untouched.
       expect(account.passwordHash).toBe(`hashed:${STRONG_PASSWORD}`)
@@ -976,7 +974,8 @@ describe.skipIf(!hasTestDatabase)("joining an organization, end to end", () => {
         .insert(users)
         .values({
           email: `collision-${fixtures.suffix}-${stored.id}@example.test`,
-          username: String(input.username).toLowerCase(),
+          // The username the approval would create: the typed one under the prefix.
+          username: organizationUsername(fixtures.organizationName, String(input.username)),
           passwordHash: "not-a-real-hash",
           roleId: roleRow.id,
           organizationId: fixtures.organizationId,
@@ -1087,13 +1086,14 @@ describe.skipIf(!hasTestDatabase)("joining an organization, end to end", () => {
       .select({ id: users.id, roleName: roles.name, branchId: users.branchId })
       .from(users)
       .leftJoin(roles, eq(roles.id, users.roleId))
-      .where(inArray(users.username, [String(input.username).toLowerCase()]))
+      .where(inArray(users.username, [organizationUsername(fixtures.organizationName, String(input.username))]))
     expect(accounts).toHaveLength(1)
     expect(accounts[0].roleName).toBe("BRANCH_ADMIN")
     expect(accounts[0].branchId).toBe(fixtures.northBranchId)
 
     expect(mocks.sendJoinDecisionEmail).toHaveBeenCalledWith(
-      expect.objectContaining({ approved: true, username: String(input.username).toLowerCase() }),
+      // The username to sign in with is the prefixed one, so that is the one the mail names.
+      expect.objectContaining({ approved: true, username: organizationUsername(fixtures.organizationName, String(input.username)) }),
     )
   })
 })

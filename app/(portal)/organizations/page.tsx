@@ -1,5 +1,7 @@
 "use client"
+import { BranchHeadCountField, headCountFieldValue } from "@/components/branches/branch-head-count-field"
 import { BranchRegionSelect } from "@/components/branches/branch-region-select"
+import { parseHeadCountInput } from "@/lib/branch-head-count"
 import type { BranchRegion } from "@/lib/branch-region"
 import { useAppContext } from "@/components/context/app-context"
 import { BranchExcelExportButton } from "@/components/organizations/branch-excel-export-button"
@@ -294,6 +296,7 @@ type Branch = {
   region?: BranchRegion | null
   address?: string | null
   costCenterId?: string | null
+  headCount?: number | null
   status?: "active" | "inactive"
 }
 
@@ -1666,9 +1669,12 @@ function CreateBranchDialog({
   const [region, setRegion] = useState<BranchRegion | null>(null)
   const [address, setAddress] = useState("")
   const [costCenterId, setCostCenterId] = useState("")
+  const [headCountText, setHeadCountText] = useState("")
   const [status, setStatus] = useState<boolean>(true)
   const [saving, setSaving] = useState(false)
+  const headCount = parseHeadCountInput(headCountText)
   const canSubmit = Boolean(
+    headCount !== undefined &&
     orgId &&
     name.trim() &&
     province.trim() &&
@@ -1685,6 +1691,7 @@ function CreateBranchDialog({
       region,
       address: address.trim(),
       costCenterId: costCenterId.trim() || null,
+      headCount: headCount ?? null,
       status: status ? "active" : "inactive",
     }
     console.log("[CreateBranchDialog] Submitting new branch:", payload)
@@ -1708,6 +1715,7 @@ function CreateBranchDialog({
       setCity("")
       setAddress("")
       setCostCenterId("")
+      setHeadCountText("")
       setStatus(true)
       setOrgId(undefined)
 
@@ -1813,6 +1821,12 @@ function CreateBranchDialog({
                     maxLength={128}
                   />
                 </div>
+                <BranchHeadCountField
+                  id="branch-head-count"
+                  value={headCountText}
+                  onChange={setHeadCountText}
+                  disabled={saving}
+                />
                 <p className="text-xs text-muted-foreground">Branch code will be automatically generated.</p>
               </div>
             </div>
@@ -2380,7 +2394,9 @@ function EditBranchDialog({ branch, onSave }: Readonly<{ branch: Branch; onSave:
   const [region, setRegion] = useState<BranchRegion | null>(branch.region ?? null)
   const [address, setAddress] = useState(branch.address ?? "")
   const [costCenterId, setCostCenterId] = useState(branch.costCenterId ?? "")
+  const [headCountText, setHeadCountText] = useState(headCountFieldValue(branch.headCount))
   const [status, setStatus] = useState<boolean>(isActiveStatus(branch.status))
+  const headCount = parseHeadCountInput(headCountText)
 
   useEffect(() => {
     setName(branch.name)
@@ -2390,8 +2406,9 @@ function EditBranchDialog({ branch, onSave }: Readonly<{ branch: Branch; onSave:
     setRegion(branch.region ?? null)
     setAddress(branch.address ?? "")
     setCostCenterId(branch.costCenterId ?? "")
+    setHeadCountText(headCountFieldValue(branch.headCount))
     setStatus(isActiveStatus(branch.status))
-  }, [branch.name, branch.code, branch.province, branch.city, branch.region, branch.address, branch.costCenterId, branch.status])
+  }, [branch.name, branch.code, branch.province, branch.city, branch.region, branch.address, branch.costCenterId, branch.headCount, branch.status])
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
@@ -2458,6 +2475,11 @@ function EditBranchDialog({ branch, onSave }: Readonly<{ branch: Branch; onSave:
                 maxLength={128}
               />
             </div>
+            <BranchHeadCountField
+              id="branch-head-count-edit"
+              value={headCountText}
+              onChange={setHeadCountText}
+            />
             <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
               <div>
                 <Label htmlFor="branch-status-edit">Status</Label>
@@ -2485,11 +2507,12 @@ function EditBranchDialog({ branch, onSave }: Readonly<{ branch: Branch; onSave:
                 region,
                 address: address.trim() || null,
                 costCenterId: costCenterId.trim() || null,
+                headCount: headCount ?? null,
                 status: status ? "active" : "inactive",
               })
               setOpen(false)
             }}
-            disabled={!name.trim()}
+            disabled={!name.trim() || headCount === undefined}
           >
             <Save className="h-4 w-4" />
             Save Changes

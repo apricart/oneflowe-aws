@@ -59,6 +59,8 @@ const ORDER_REPORT_SORT_SQL: Record<OrderReportSortKey, SQL | AnyColumn> = {
     status: sql`UPPER(${orders.status})`,
     deliveryStatus: orderSelectColumns.fulfillmentStatus,
     paymentStatus: orderSelectColumns.paymentStatus,
+    approvalLevel: orders.approvalLevel,
+    approver: sql`LOWER(${approverUsers.fullName})`,
     quantityOrdered: quantityOrderedSql,
     quantityDelivered: sql`(${quantityOrderedSql} - ${quantityRefundedSql})`,
     quantityRefunded: quantityRefundedSql,
@@ -391,6 +393,10 @@ export async function GET(req: NextRequest) {
         // The approver and the fulfiller are separate people from the raiser,
         // so each needs its own join rather than reusing the creator row.
         approverName: approverUsers.fullName,
+        approverDesignation: approverUsers.designation,
+        // The band the order was decided at, never the approver's current
+        // level, which may have changed since. Null for an unlevelled order.
+        approvalLevel: orders.approvalLevel,
         fulfillerName: fulfillerUsers.fullName,
         // The invoice number lives in the receipt snapshot taken when the order
         // was raised, exactly as the branch export reads it.

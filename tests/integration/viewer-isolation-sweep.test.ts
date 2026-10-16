@@ -9,6 +9,7 @@ import {
   auditLogs,
   branches,
   globalProducts,
+  groupAuditLogs,
   groups,
   orderItems,
   orders,
@@ -214,6 +215,11 @@ describe.skipIf(!hasTestDatabase)("a Viewer, calling every GET handler directly"
     }
     await db.delete(auditLogs).where(or(inArray(auditLogs.organizationId, organizationIds), inArray(auditLogs.userId, userIds)))
     await db.delete(systemLogs).where(or(inArray(systemLogs.organizationId, organizationIds), inArray(systemLogs.userId, userIds)))
+    await db.delete(groupAuditLogs).where(or(
+      inArray(groupAuditLogs.organizationId, organizationIds),
+      eq(groupAuditLogs.groupId, ids.groupB),
+      inArray(groupAuditLogs.performedByUserId, userIds),
+    ))
     await db.delete(groups).where(eq(groups.id, ids.groupB))
     await db.delete(globalProducts).where(eq(globalProducts.id, ids.productId))
     await db.delete(branches).where(inArray(branches.organizationId, organizationIds))

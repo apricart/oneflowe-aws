@@ -22,6 +22,8 @@ import {
 import { motion,AnimatePresence } from "framer-motion"
 import { useRouter } from "next/navigation"
 import { HeadOfficeCreateBranchDialog } from "@/components/organizations/head-office-create-branch-dialog"
+import { HeadOfficeEditBranchDialog } from "@/components/organizations/head-office-edit-branch-dialog"
+import { formatBranchHeadCount } from "@/lib/branch-head-count"
 
 type Branch = {
   id: number
@@ -38,6 +40,7 @@ type Branch = {
   costCenterId?: string | null
   groupId?: number | null
   groupName?: string | null
+  headCount?: number | null
 }
 
 type User = {
@@ -390,7 +393,7 @@ export default function BranchesPage() {
                                 </Badge>
                               </div>
 
-                              <div className="grid grid-cols-2 gap-4 mb-6 relative z-10">
+                              <div className="grid grid-cols-3 gap-4 mb-6 relative z-10">
                                 <div className="space-y-1">
                                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
                                     <Boxes className="h-3 w-3 text-blue-500" /> Code
@@ -403,6 +406,14 @@ export default function BranchesPage() {
                                   </p>
                                   <p className="text-sm font-bold text-slate-700 dark:text-slate-300">
                                     {branch.createdAt ? new Date(branch.createdAt).toLocaleDateString(undefined, { day: "2-digit", month: "short" }) : "—"}
+                                  </p>
+                                </div>
+                                <div className="space-y-1">
+                                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                                    <Users className="h-3 w-3 text-indigo-500" /> Head Count
+                                  </p>
+                                  <p className="text-sm font-bold text-slate-700 dark:text-slate-300">
+                                    {formatBranchHeadCount(branch.headCount)}
                                   </p>
                                 </div>
                               </div>
@@ -512,6 +523,7 @@ export default function BranchesPage() {
                             <TableHead className="py-4 pl-6">Branch</TableHead>
                             <TableHead>Code</TableHead>
                             <TableHead>Cost Center</TableHead>
+                            <TableHead>Head Count</TableHead>
                             <TableHead>Primary Admin</TableHead>
                             <TableHead>Created</TableHead>
                             <TableHead>Status</TableHead>
@@ -551,6 +563,9 @@ export default function BranchesPage() {
                                   <span className="font-mono text-xs font-bold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-md">
                                     {branch.costCenterId || "—"}
                                   </span>
+                                </TableCell>
+                                <TableCell className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+                                  {formatBranchHeadCount(branch.headCount)}
                                 </TableCell>
                                 <TableCell>
                                   {admin ? (
@@ -753,6 +768,10 @@ export default function BranchesPage() {
                       Details
                     </h3>
                     <div className="bg-slate-50 dark:bg-slate-900/50 border border-slate-100 dark:border-slate-800 p-5 rounded-[2rem] space-y-4">
+                      <div className="flex items-center justify-between group">
+                        <span className="text-xs font-semibold text-slate-500 flex items-center gap-1.5"><Users className="h-3.5 w-3.5" /> Head count</span>
+                        <span className="text-sm font-bold text-slate-800 dark:text-slate-200">{formatBranchHeadCount(viewingBranch.headCount)}</span>
+                      </div>
                       {viewingBranch.groupName && (
                         <div className="flex items-center justify-between group">
                           <span className="text-xs font-semibold text-slate-500 flex items-center gap-1.5"><Layers className="h-3.5 w-3.5" /> Group</span>
@@ -798,6 +817,13 @@ export default function BranchesPage() {
                     <UserCog className="h-4 w-4" />
                     {readOnly ? "View Team" : admin ? "Manage Team" : "Assign Admin"}
                   </Button>
+                  {!readOnly && (
+                    <HeadOfficeEditBranchDialog
+                      branch={viewingBranch}
+                      onSaved={() => { void refetchBranches() }}
+                      triggerClassName="w-full h-12 rounded-2xl font-bold gap-2"
+                    />
+                  )}
                   {!readOnly && (
                     <Button
                       variant="outline"

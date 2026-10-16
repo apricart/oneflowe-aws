@@ -9,8 +9,8 @@ import { resolveRequestClientIp } from "@/lib/server/request-ip"
 /**
  * The trail for joining.
  *
- * Every privileged act in this feature is recorded: opening a tenant to
- * joining, closing it again, and each approval or rejection. A reviewer must be
+ * Every privileged act in this feature is recorded: setting the tenant's
+ * permanent join code, and each approval or rejection. A reviewer must be
  * able to reconstruct who let a given account in, when, and with what role —
  * which matters more here than for administrator-created accounts, because the
  * person's own details arrived from outside the application.
@@ -26,7 +26,6 @@ import { resolveRequestClientIp } from "@/lib/server/request-ip"
 
 export type JoinAuditAction =
   | "SET_ORGANIZATION_JOIN_CODE"
-  | "CLEAR_ORGANIZATION_JOIN_CODE"
   | "APPROVE_ORGANIZATION_JOIN_REQUEST"
   | "REJECT_ORGANIZATION_JOIN_REQUEST"
   // Head Office naming a different approver on a pending department sign-up.

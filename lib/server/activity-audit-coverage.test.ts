@@ -192,6 +192,10 @@ const VIA_LIB: readonly { file: string; module: string }[] = [
   // halves of the story cannot be spelled differently.
   { file: "app/api/v1/delivery-addresses/route.ts", module: "lib/server/delivery-address-audit.ts" },
   { file: "app/api/v1/delivery-addresses/[id]/route.ts", module: "lib/server/delivery-address-audit.ts" },
+  // Branch head count requests: raised and decided inside the module's own
+  // transactions, which record the trail beside the write.
+  { file: "app/api/v1/branch-head-count-requests/route.ts", module: "lib/server/branch-head-count-requests.ts" },
+  { file: "app/api/v1/branch-head-count-requests/[id]/route.ts", module: "lib/server/branch-head-count-requests.ts" },
 
   // Apricart's Order Desk. Its fulfil step reaches `fulfillApprovedOrder`,
   // which records the APPROVED → FULFILLED move with the ledger; cancel and

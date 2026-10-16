@@ -7,6 +7,7 @@ import { getTableConfig, PgTable } from "drizzle-orm/pg-core"
 
 import * as schema from "@/db/schema"
 import {
+  branchHeadCountRequests,
   budgets,
   branches,
   groups,
@@ -141,7 +142,8 @@ describe.skipIf(!hasTestDatabase)("tenant composite foreign keys", () => {
     // invoices_id_organization_uq, credit_notes_id_organization_uq and five
     // composite keys (plans/OF-INVOICE-invoice-ledger.md). 39 with the
     // department sign-up's three (plans/OF-JOIN-department-signup-multi-user.md).
-    expect(declared.size).toBe(39)
+    // 40 with branch_head_count_requests_branch_org_fk (plans/OF-BRANCH-head-count.md).
+    expect(declared.size).toBe(40)
   })
 
   describe("refuse another organization's branch", () => {
@@ -155,6 +157,12 @@ describe.skipIf(!hasTestDatabase)("tenant composite foreign keys", () => {
       expect(await failureOf(db.insert(userBranchAssignments).values({
         userId: f.personId, organizationId: f.home, branchId: f.foreignBranch,
       }))).toEqual(refusedBy("user_branch_assignments_branch_org_fk"))
+    })
+
+    it("on a head count request", async () => {
+      expect(await failureOf(db.insert(branchHeadCountRequests).values({
+        organizationId: f.home, branchId: f.foreignBranch, requestedHeadCount: 1, requestedByUserId: f.personId,
+      }))).toEqual(refusedBy("branch_head_count_requests_branch_org_fk"))
     })
 
     it("on a department sign-up's branch and address", async () => {

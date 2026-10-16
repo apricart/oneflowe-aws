@@ -22,6 +22,9 @@ import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
 import { PremiumAlert, AlertType } from "@/components/premium/premium-alert"
 import { MultiAssignSelector } from "@/components/users/multi-assign-selector"
+import { PrefixedUsernameInput } from "@/components/users/prefixed-username-input"
+import { organizationUsernamePrefix, prefixedUsername, withoutUsernamePrefix } from "@/lib/username-prefix"
+import { USER_DESIGNATION_MAX_LENGTH } from "@/lib/user-designation"
 import {
   ApprovalLevelField,
   approvalLevelPayload,
@@ -146,6 +149,7 @@ function getInitialCreateUserForm(
     // and organization admit one (components/users/approval-level-field.tsx).
     orderApprovalLevel: "",
     employeeId: "",
+    designation: "",
     imprestHolder: "",
     contactPerson: "",
     location: "",
@@ -351,7 +355,6 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
     visible: false
   })
 
-  useUsernameAvailability(form.username, setUsernameStatus, setErrors)
 
   // The endpoint scopes non-Super Admins to their assigned organization.
   // Fetch it for every role so the read-only assignment summary has a name.
@@ -375,6 +378,13 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
   )
 
   const organizations = (organizationsData as any)?.items || []
+  // The organization's prefix, as the server will add it (plans/OF-USERS-organization-username-prefix.md):
+  // only an account that is sent an organization gets one.
+  const usernameOrganization = !APRICART_STAFF_ROLES.has(form.role) && form.organizationId
+    ? organizations.find((organization: any) => organization.id === Number.parseInt(form.organizationId))
+    : undefined
+  const usernamePrefix = organizationUsernamePrefix(usernameOrganization?.name)
+  useUsernameAvailability(prefixedUsername(usernamePrefix, form.username), setUsernameStatus, setErrors)
   const approvalLevelChoice = useApprovalLevelChoice(form.organizationId, form.role)
   const branches = (branchesData as any)?.items || []
   const groups = (groupsData as any)?.groups || []
@@ -483,6 +493,7 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
           mfaEnabled: form.mfaEnabled,
           isActive: form.isActive,
           employeeId: form.employeeId.trim() || null,
+          designation: form.designation.trim() || null,
           imprestHolder: form.imprestHolder.trim() || null,
           contactPerson: form.contactPerson.trim() || null,
           location: form.location.trim() || null,
@@ -684,8 +695,9 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                 <div className="space-y-2">
                   <Label htmlFor="username">Username *</Label>
                   <div className="relative">
-                    <Input
+                    <PrefixedUsernameInput
                       id="username"
+                      prefix={usernamePrefix}
                       name="createUserUsername"
                       autoComplete="off"
                       value={form.username}
@@ -704,6 +716,11 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                   {errors.username && (
                     <p className="text-xs text-red-600">{errors.username}</p>
                   )}
+                  {!usernamePrefix && !form.organizationId && !APRICART_STAFF_ROLES.has(form.role) && (
+                    <p className="text-xs text-muted-foreground">
+                      An account in an organization gets its prefix in front, for example ubl-ali.khan.
+                    </p>
+                  )}
                   {usernameStatus.available === false && usernameStatus.suggestions.length > 0 && (
                     <div className="mt-2 space-y-1">
                       <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">Suggested Lookups:</p>
@@ -714,7 +731,7 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                             variant="outline"
                             className="cursor-pointer hover:bg-blue-50 hover:text-blue-700 transition-colors border-blue-200"
                             onClick={() => {
-                              setForm({ ...form, username: s })
+                              setForm({ ...form, username: withoutUsernamePrefix(usernamePrefix, s) })
                               setUsernameStatus(prev => ({ ...prev, available: true, suggestions: [] }))
                               setErrors(prev => {
                                 const next = { ...prev }
@@ -827,6 +844,17 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                       placeholder="Enter contact person"
                     />
                   </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="designation">Designation</Label>
+                  <Input
+                    id="designation"
+                    name="designation"
+                    value={form.designation}
+                    maxLength={USER_DESIGNATION_MAX_LENGTH}
+                    onChange={e => setForm({ ...form, designation: e.target.value })}
+                    placeholder="e.g. Procurement Manager (optional)"
+                  />
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">

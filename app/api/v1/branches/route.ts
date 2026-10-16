@@ -214,6 +214,7 @@ export async function GET(req: Request) {
           status: branchesTable.status,
           groupId: branchesTable.groupId,
           adminUserId: branchesTable.adminUserId,
+          headCount: branchesTable.headCount,
           createdAt: branchesTable.createdAt,
           updatedAt: branchesTable.updatedAt,
           groupName: sql<string | null>`(
@@ -290,6 +291,7 @@ export async function POST(req: Request) {
         costCenterId: costCenterId || null,
         status,
         region: body.region ?? null,
+        headCount: body.headCount ?? null,
       },
       { userId: scope.userId, role: scope.role },
     ))

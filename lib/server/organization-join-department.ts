@@ -38,7 +38,8 @@ import {
   deriveUsernameFromEmail,
   initiatorRoleForBranchCount,
   joinUsesApprovalLevels,
-  normalizeCrc,
+  type RequestedBranchEntry,
+  requestedNewBranches,
 } from "@/lib/join-department-signup"
 import {
   type ApprovalLevel,
@@ -46,6 +47,7 @@ import {
   approvalLevelBands,
 } from "@/lib/order-approval-levels"
 import { generateRandomPassword, hashPassword } from "@/lib/password"
+import { organizationUsername } from "@/lib/username-prefix"
 import { totalBlockingOrders } from "@/lib/role-change-preconditions"
 import { assertUniqueUserFields, normalizeEmail } from "@/lib/user-uniqueness"
 import { usernameExists } from "@/lib/user-username-uniqueness"
@@ -85,6 +87,7 @@ type TransactionExecutor = Parameters<Parameters<typeof db.transaction>[0]>[0]
 /* ── The organization's settings ─────────────────────────────────────────── */
 
 export type DepartmentJoinSettings = {
+  name: string
   orderApprovalRequired: boolean
   orderApprovalLevelsEnabled: boolean
   orderApproverRole: string | null
@@ -98,6 +101,7 @@ export async function loadDepartmentJoinSettings(
 ): Promise<DepartmentJoinSettings | null> {
   const [organization] = await executor
     .select({
+      name: organizations.name,
       orderApprovalRequired: organizations.orderApprovalRequired,
       orderApprovalLevelsEnabled: organizations.orderApprovalLevelsEnabled,
       orderApproverRole: organizations.orderApproverRole,
@@ -136,7 +140,7 @@ export type DepartmentJoinSubmission = {
   employeeId: string
   ipExtension: string
   department: string
-  branches: Array<{ branchId: number } | { crc: string }>
+  branches: RequestedBranchEntry[]
   addresses: string[]
   approvers: SignupApprover[]
   approvalLevelsSnapshot: ApprovalLevelBand[]
@@ -175,9 +179,10 @@ export async function matchCrcsToBranches(
  * the answer to a public caller must not reveal whether a colleague has an
  * account. Head Office sees who they are at review.
  *
- * A typed CRC that belongs to exactly one active branch of the organization is
- * stored as that branch; the CRC itself never leaves the server, and the
- * caller's answer is the same either way.
+ * A new branch is stored with the name the applicant gave it and its CRC. A
+ * typed CRC that belongs to exactly one active branch of the organization is
+ * stored as that branch instead (the name is then not needed); the CRC itself
+ * never leaves the server, and the caller's answer is the same either way.
  */
 export async function createDepartmentJoinRequest(
   submission: DepartmentJoinSubmission,
@@ -185,7 +190,8 @@ export async function createDepartmentJoinRequest(
   const { organizationId } = submission
 
   const pickedIds = [...new Set(submission.branches.flatMap((entry) => ("branchId" in entry ? [entry.branchId] : [])))]
-  const typedCrcs = [...new Set(submission.branches.flatMap((entry) => ("crc" in entry ? [normalizeCrc(entry.crc)] : [])))]
+  const typed = requestedNewBranches(submission.branches)
+  const typedCrcs = typed.map((entry) => entry.crc)
 
   if (pickedIds.length > 0) {
     const found = await db
@@ -203,8 +209,8 @@ export async function createDepartmentJoinRequest(
 
   const matchedByCrc = await matchCrcsToBranches(db, organizationId, typedCrcs)
   const existingIds = [...new Set([...pickedIds, ...matchedByCrc.values()])]
-  const newCrcs = typedCrcs.filter((crc) => !matchedByCrc.has(crc))
-  const branchCount = existingIds.length + newCrcs.length
+  const newBranches = typed.filter((entry) => !matchedByCrc.has(entry.crc))
+  const branchCount = existingIds.length + newBranches.length
   const role = initiatorRoleForBranchCount(branchCount)
 
   const [{ pendingCount }] = await db
@@ -264,7 +270,12 @@ export async function createDepartmentJoinRequest(
 
       await tx.insert(organizationJoinRequestBranches).values([
         ...existingIds.map((existingBranchId) => ({ requestId: created.id, organizationId, existingBranchId })),
-        ...newCrcs.map((costCenterId) => ({ requestId: created.id, organizationId, costCenterId })),
+        ...newBranches.map((entry) => ({
+          requestId: created.id,
+          organizationId,
+          costCenterId: entry.crc,
+          requestedBranchName: entry.name,
+        })),
       ])
       await tx.insert(organizationJoinRequestApprovers).values(submission.approvers.map((approver) => ({
         requestId: created.id,
@@ -295,6 +306,7 @@ type StoredRequestBranch = {
   id: number
   existingBranchId: number | null
   costCenterId: string | null
+  requestedBranchName: string | null
   resolvedBranchId: number | null
 }
 
@@ -316,6 +328,7 @@ export async function loadRequestChildren(executor: Executor, requestId: number)
         id: organizationJoinRequestBranches.id,
         existingBranchId: organizationJoinRequestBranches.existingBranchId,
         costCenterId: organizationJoinRequestBranches.costCenterId,
+        requestedBranchName: organizationJoinRequestBranches.requestedBranchName,
         resolvedBranchId: organizationJoinRequestBranches.resolvedBranchId,
       })
       .from(organizationJoinRequestBranches)
@@ -429,6 +442,8 @@ export type DepartmentJoinReview = {
     branchId: number | null
     name: string | null
     costCenterId: string | null
+    /** The name the applicant gave a branch to create; null when it gave none. */
+    requestedName: string | null
   }>
   addresses: Array<{ requestAddressId: number; address: string; branchId: number | null }>
   approvers: Array<{
@@ -553,6 +568,7 @@ export async function loadDepartmentJoinReview(input: {
         branchId,
         name: branchId === null ? null : branchNames.get(branchId) ?? null,
         costCenterId: row.costCenterId,
+        requestedName: row.requestedBranchName,
       }
     }),
     addresses: children.addresses.map((row) => ({
@@ -731,9 +747,13 @@ async function roleIds(names: string[]): Promise<Map<string, number>> {
   return new Map(rows.map((row) => [row.name, row.id]))
 }
 
-/** A free username for a new approver: the email's local part, else `<local>.<orgcode>`. */
-async function freeApproverUsername(email: string, organizationCode: string): Promise<string> {
-  const base = deriveUsernameFromEmail(email)
+/**
+ * A free username for a new approver: the organization's prefix and the
+ * email's local part, else that with `.<orgcode>` after it.
+ */
+async function freeApproverUsername(email: string, context: DecisionContext): Promise<string> {
+  const base = organizationUsername(context.organizationName, deriveUsernameFromEmail(email))
+  const organizationCode = context.organizationCode
   if (!(await usernameExists(base))) return base
   const qualified = `${base}.${organizationCode.toLowerCase()}`
   if (!(await usernameExists(qualified))) return qualified
@@ -760,6 +780,7 @@ type DecisionContext = {
   tx: TransactionExecutor
   input: DepartmentJoinDecisionInput
   organizationCode: string
+  organizationName: string
   decidedAt: Date
 }
 
@@ -899,7 +920,8 @@ async function createInitiator(
   branchIds: number[],
 ): Promise<{ id: string; username: string }> {
   const { tx, input } = context
-  const username = input.username ?? stored.username
+  // Head Office's replacement takes the organization's prefix too.
+  const username = input.username ? organizationUsername(context.organizationName, input.username) : stored.username
   if (await usernameExists(username)) {
     throw new JoinDecisionAbort(409, `The username ${username} has since been taken. Choose another.`)
   }
@@ -1012,7 +1034,7 @@ async function createApprover(
   if (asBranchAdmin && branchIds.length !== 1) {
     throw new JoinDecisionAbort(409, `Level ${approver.level}: a Branch Admin approver needs exactly one branch.`)
   }
-  const username = await freeApproverUsername(approver.email, context.organizationCode)
+  const username = await freeApproverUsername(approver.email, context)
   const name = deriveNameFromEmail(approver.email)
   const temporaryPassword = generateRandomPassword(16)
   const [created] = await tx
@@ -1290,6 +1312,7 @@ export async function decideDepartmentJoinRequest(
         tx,
         input,
         organizationCode: organization.code ?? String(input.organizationId),
+        organizationName: organization.name,
         decidedAt: new Date(),
       }
       const stored = await lockDepartmentRequest(tx, input)

@@ -16,6 +16,7 @@ import {
   systemLogs,
   users,
 } from "../../../db/schema"
+import { organizationUsername } from "../../../lib/username-prefix"
 
 import { E2E_PASSWORD } from "./environment"
 
@@ -192,7 +193,8 @@ export async function readJoinRequestEmail(
       .innerJoin(organizations, eq(organizations.id, organizationJoinRequests.organizationId))
       .where(and(
         eq(organizations.name, organizationName),
-        eq(organizationJoinRequests.username, username),
+        // Stored under the organization's prefix (plans/OF-USERS-organization-username-prefix.md).
+        eq(organizationJoinRequests.username, organizationUsername(organizationName, username)),
       ))
       .limit(1)
     return row?.email

@@ -65,7 +65,14 @@ type Review = {
     ipExtension: string | null
   }
   initiatorRole: "ORDER_PORTAL" | "GROUP_ORDER_PORTAL"
-  branches: Array<{ requestBranchId: number; kind: "existing" | "new"; branchId: number | null; name: string | null; costCenterId: string | null }>
+  branches: Array<{
+    requestBranchId: number
+    kind: "existing" | "new"
+    branchId: number | null
+    name: string | null
+    costCenterId: string | null
+    requestedName: string | null
+  }>
   addresses: Array<{ requestAddressId: number; address: string; branchId: number | null }>
   approvers: Array<{
     level: number
@@ -229,21 +236,23 @@ export function DepartmentJoinReviewDialog({
 
   const pending = review?.status === "pending"
   const blocked = review?.approvers.some((approver) => approver.resolution.kind === "blocked") ?? false
-  const branchLabel = (row: Review["branches"][number]) => row.name ?? `New branch for CRC ${row.costCenterId}`
-  const draftFor = (requestBranchId: number, crc: string | null): NewBranchDraft =>
+  const branchLabel = (row: Review["branches"][number]) =>
+    row.name ?? row.requestedName ?? `New branch for CRC ${row.costCenterId}`
+  // A new branch starts from the name the applicant gave it, never from its CRC.
+  const draftFor = (requestBranchId: number, requestedName: string | null): NewBranchDraft =>
     newBranches[requestBranchId] ?? {
       mapToBranchId: "",
-      name: crc ?? "",
+      name: requestedName ?? "",
       province: "",
       city: "",
       address: review?.addresses[0]?.address ?? "",
     }
-  const updateDraft = (requestBranchId: number, crc: string | null, patch: Partial<NewBranchDraft>) =>
-    setNewBranches((previous) => ({ ...previous, [requestBranchId]: { ...draftFor(requestBranchId, crc), ...patch } }))
+  const updateDraft = (requestBranchId: number, requestedName: string | null, patch: Partial<NewBranchDraft>) =>
+    setNewBranches((previous) => ({ ...previous, [requestBranchId]: { ...draftFor(requestBranchId, requestedName), ...patch } }))
   /** The new branches Head Office still has to complete; mapping a CRC onto an existing branch needs no details. */
   const incompleteNewBranches = (review?.branches ?? []).flatMap((row) => {
     if (row.kind !== "new" || row.branchId !== null) return []
-    const draft = draftFor(row.requestBranchId, row.costCenterId)
+    const draft = draftFor(row.requestBranchId, row.requestedName)
     if (draft.mapToBranchId) return []
     const errors = newBranchDraftErrors(draft)
     return Object.keys(errors).length > 0 ? [{ row, errors }] : []
@@ -287,7 +296,7 @@ export function DepartmentJoinReviewDialog({
             newBranches: review.branches
               .filter((row) => row.kind === "new" && row.branchId === null)
               .map((row) => {
-                const draft = draftFor(row.requestBranchId, row.costCenterId)
+                const draft = draftFor(row.requestBranchId, row.requestedName)
                 return draft.mapToBranchId
                   ? { requestBranchId: row.requestBranchId, mapToBranchId: Number(draft.mapToBranchId) }
                   : {
@@ -389,7 +398,7 @@ export function DepartmentJoinReviewDialog({
               <h3 className="text-sm font-semibold text-slate-900">Branches (CRC)</h3>
               <ul className="space-y-2">
                 {review.branches.map((row) => {
-                  const draft = draftFor(row.requestBranchId, row.costCenterId)
+                  const draft = draftFor(row.requestBranchId, row.requestedName)
                   const isNew = row.kind === "new" && row.branchId === null
                   return (
                     <li key={row.requestBranchId} className="rounded-md border border-slate-200 p-3 text-sm">
@@ -402,7 +411,7 @@ export function DepartmentJoinReviewDialog({
                           <select
                             aria-label={`Map CRC ${row.costCenterId} to an existing branch`}
                             value={draft.mapToBranchId}
-                            onChange={(event) => updateDraft(row.requestBranchId, row.costCenterId, { mapToBranchId: event.target.value })}
+                            onChange={(event) => updateDraft(row.requestBranchId, row.requestedName, { mapToBranchId: event.target.value })}
                             className="h-9 rounded-md border border-slate-300 px-2 text-sm sm:col-span-2"
                           >
                             <option value="">Create a new branch</option>
@@ -417,7 +426,7 @@ export function DepartmentJoinReviewDialog({
                                   aria-label={NEW_BRANCH_FIELD_LABELS[field]}
                                   placeholder={NEW_BRANCH_FIELD_LABELS[field]}
                                   value={draft[field]}
-                                  onChange={(event) => updateDraft(row.requestBranchId, row.costCenterId, { [field]: event.target.value })}
+                                  onChange={(event) => updateDraft(row.requestBranchId, row.requestedName, { [field]: event.target.value })}
                                   aria-invalid={Boolean(fieldError)}
                                   aria-describedby={fieldError ? errorId : undefined}
                                 />

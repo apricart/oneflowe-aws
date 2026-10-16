@@ -23,7 +23,7 @@ const REVIEW = {
     department: "Finance",
     ipExtension: "1234",
   },
-  branches: [{ kind: "new" as const, branchId: null, name: null, costCenterId: "CRC-9" }],
+  branches: [{ kind: "new" as const, branchId: null, name: null, costCenterId: "CRC-9", requestedName: "Saddar Office" }],
   addresses: [{ requestAddressId: 41, address: "Plot 4, Clifton" }],
   approvers: [{ level: 1, email: "one@demo.test", designation: "Director" }],
 }
@@ -60,7 +60,7 @@ describe("DepartmentJoinEditForm", () => {
     fireEvent.change(screen.getByLabelText(/^Level 1 email/), { target: { value: "boss@demo.test" } })
     fireEvent.change(screen.getByLabelText("Add an existing branch"), { target: { value: "5" } })
     fireEvent.click(screen.getAllByRole("button", { name: "Add" })[0])
-    fireEvent.click(screen.getByRole("button", { name: "Remove New branch for CRC CRC-9" }))
+    fireEvent.click(screen.getByRole("button", { name: "Remove Saddar Office (new, CRC CRC-9)" }))
     fireEvent.change(screen.getByLabelText("Delivery address 1"), { target: { value: "Plot 5, Clifton" } })
     save()
 
@@ -83,6 +83,29 @@ describe("DepartmentJoinEditForm", () => {
         approvers: [{ level: 1, email: "boss@demo.test", designation: "Director" }],
       },
     })
+  })
+
+  it("adds a new branch with its name and CRC, and keeps the existing new branch's name", async () => {
+    jsonFetcher.mockResolvedValue({ id: 9, updated: true })
+    const onSaved = renderForm()
+
+    const add = () => fireEvent.click(screen.getAllByRole("button", { name: "Add" })[1])
+    fireEvent.change(screen.getByLabelText("New branch CRC number"), { target: { value: "new-2" } })
+    expect((screen.getAllByRole("button", { name: "Add" })[1] as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText("New branch name"), { target: { value: "K" } })
+    add()
+    expect(screen.getByText("The branch name needs at least 2 characters")).toBeTruthy()
+
+    fireEvent.change(screen.getByLabelText("New branch name"), { target: { value: " Korangi   Depot " } })
+    add()
+    expect(screen.getByText("Korangi Depot (new, CRC NEW-2)")).toBeTruthy()
+    save()
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalled())
+    expect(JSON.parse(jsonFetcher.mock.calls[0][1].body).update.branches).toEqual([
+      { crc: "CRC-9", name: "Saddar Office" },
+      { crc: "NEW-2", name: "Korangi Depot" },
+    ])
   })
 
   it("names the problem and sends nothing when an email is off the domain", () => {

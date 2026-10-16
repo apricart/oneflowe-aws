@@ -162,6 +162,8 @@ export type ConsolidatedInvoiceSource = {
   paymentStatus: string | null
   department: string | null
   approver: string | null
+  /** `orders.approval_level`: the level the order was decided at; null when it was not levelled. */
+  approvalLevel: number | null
   costCenterId: string | null
   quantity: number
   creditedQuantity: number
@@ -186,6 +188,10 @@ export type ConsolidatedInvoiceRow = {
   paymentStatus: PaymentStatus
   department: string
   approver: string
+  /** "Level 1"…; blank when the order was not decided at a level. */
+  approverLevel: string
+  /** The level, for sorting; null when the order was not levelled. */
+  approvalLevel: number | null
   designation: string
   crc: string
   quantity: number
@@ -241,6 +247,17 @@ function displayedNumber(mode: ConsolidatedInvoiceMode, number: string | null): 
   return value ? `${value} (when processed)` : "When processed"
 }
 
+/**
+ * The level the order was approved at, as printed beside the approver. Only a
+ * level the database could hold (1–10, `orders_approval_level_ck`) is named;
+ * anything else prints blank, as an order decided without levels does.
+ */
+export function approverLevelOf(level: number | null | undefined): { approverLevel: string; approvalLevel: number | null } {
+  return Number.isInteger(level) && (level as number) >= 1 && (level as number) <= 10
+    ? { approverLevel: `Level ${level}`, approvalLevel: level as number }
+    : { approverLevel: "", approvalLevel: null }
+}
+
 /** One row: the invoice less everything credited against it (D4). */
 export function buildConsolidatedInvoiceRow(mode: ConsolidatedInvoiceMode, source: ConsolidatedInvoiceSource, serial: number): ConsolidatedInvoiceRow {
   const rate = taxRateOf(source)
@@ -256,6 +273,7 @@ export function buildConsolidatedInvoiceRow(mode: ConsolidatedInvoiceMode, sourc
     paymentStatus: normalizePaymentStatus(source.paymentStatus),
     department: text(source.department),
     approver: text(source.approver),
+    ...approverLevelOf(source.approvalLevel),
     designation: "",
     crc: text(source.costCenterId),
     quantity: Math.max(0, roundQuantity(Number(source.quantity) - Number(source.creditedQuantity))),
@@ -274,6 +292,7 @@ const SORT_ACCESSORS: Record<ConsolidatedInvoiceSortKey, (row: ConsolidatedInvoi
   orderStatus: (row) => row.orderStatus,
   department: (row) => row.department.toLowerCase(),
   approver: (row) => row.approver.toLowerCase(),
+  approverLevel: (row) => row.approvalLevel,
   crc: (row) => row.crc.toLowerCase(),
   quantity: (row) => row.quantity,
   valueExclTax: (row) => row.valueExclTaxCents,
@@ -335,16 +354,21 @@ export function consolidatedInvoicePeriodLabel(from: string, to: string): string
   return `${formatInvoiceDisplayDate(from) || from} – ${formatInvoiceDisplayDate(to) || to}`
 }
 
+/** The formats the report downloads in; each is built from the same rows. */
+export const CONSOLIDATED_INVOICE_DOWNLOAD_FORMATS = ["pdf", "xlsx", "csv"] as const
+export type ConsolidatedInvoiceDownloadFormat = (typeof CONSOLIDATED_INVOICE_DOWNLOAD_FORMATS)[number]
+
 export function consolidatedInvoiceFileName(
   mode: ConsolidatedInvoiceMode,
   organizationCode: string | null,
   from: string,
   to: string,
   paymentStatus: PaymentStatus | null = null,
+  format: ConsolidatedInvoiceDownloadFormat = "pdf",
 ): string {
   const kind = mode === "invoices" ? "invoice" : "proforma"
   const filter = paymentStatus ? `-${paymentStatus.toLowerCase()}` : ""
-  return `consolidated-${kind}-${safeFilenamePart(organizationCode ?? "", "organization")}-${from}_${to}${filter}.pdf`
+  return `consolidated-${kind}-${safeFilenamePart(organizationCode ?? "", "organization")}-${from}_${to}${filter}.${format}`
 }
 
 /** What the download audit's digest covers: each row's number and total, in printed order. */

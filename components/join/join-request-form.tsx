@@ -24,7 +24,9 @@ import {
   type JoinableRole,
   isSingleBranchJoinableRole,
 } from "@/lib/organization-join"
+import { PrefixedUsernameInput } from "@/components/users/prefixed-username-input"
 import { joinPasswordError } from "@/lib/join-department-signup-form"
+import { organizationUsernamePrefix } from "@/lib/username-prefix"
 import { cn } from "@/lib/utils"
 
 /**
@@ -281,8 +283,9 @@ export function JoinRequestForm({
           </div>
         </Field>
         <Field id="join-username" label="Username" required error={errors.username}>
-          <Input
+          <PrefixedUsernameInput
             id="join-username"
+            prefix={organizationUsernamePrefix(options.organizationName)}
             value={form.username}
             onChange={(event) => set("username", event.target.value.toLowerCase())}
             aria-invalid={Boolean(errors.username)}

@@ -23,6 +23,7 @@ import {
   users,
 } from "@/db/schema"
 import { closePool, db } from "@/lib/db"
+import { organizationUsername } from "@/lib/username-prefix"
 
 import {
   createJoinFixtures,
@@ -194,7 +195,8 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, end to end", () => {
       },
       {
         email: `holder-${fixtures.suffix}@example.test`,
-        username: `it-dept-holder-${fixtures.suffix}`,
+        // Held under the organization's prefix, as an edit typing it bare would create it.
+        username: organizationUsername(fixtures.organizationName, `it-dept-holder-${fixtures.suffix}`),
         passwordHash: "x",
         roleId: groupUserRole,
         organizationId: fixtures.organizationId,
@@ -213,9 +215,13 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, end to end", () => {
     crcBranchId = crcBranch.id
 
     signIn(head())
-    code = (await (await joinCodeRoute.PUT(jsonRequest("/api/v1/organizations/join-code", "PUT", {}))).json()).code
+    code = (await (await joinCodeRoute.PUT(jsonRequest("/api/v1/organizations/join-code", "PUT", {
+      code: `JOIN-${fixtures.suffix}`,
+    }))).json()).code
     signIn(foreignHead())
-    foreignCode = (await (await joinCodeRoute.PUT(jsonRequest("/api/v1/organizations/join-code", "PUT", {}))).json()).code
+    foreignCode = (await (await joinCodeRoute.PUT(jsonRequest("/api/v1/organizations/join-code", "PUT", {
+      code: `FOREIGN-${fixtures.suffix}`,
+    }))).json()).code
   })
 
   afterAll(async () => {
@@ -322,8 +328,9 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, end to end", () => {
   describe("approving a package", () => {
     it("creates the initiator, a new branch, the addresses, and each approver, in one go", async () => {
       const crc = `IT-NEW-${unique()}`.toUpperCase()
+      const requestedName = `Signup Depot ${unique()}`
       const body = signup({
-        branches: [{ branchId: fixtures.northBranchId }, { crc }],
+        branches: [{ branchId: fixtures.northBranchId }, { name: `  ${requestedName} `, crc: crc.toLowerCase() }],
         addresses: ["Plot 1, Clifton, Karachi", "Office 9, Saddar, Karachi"],
       })
       const stored = await submitAccepted(body)
@@ -335,12 +342,17 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, end to end", () => {
       expect(item.approvers.map((approver: any) => approver.resolution.kind)).toEqual(["assign", "create"])
       const newBranch = item.branches.find((row: any) => row.kind === "new")
       const northRow = item.branches.find((row: any) => row.branchId === fixtures.northBranchId)
+      // The branch is asked for by the applicant's name, with its CRC beside it.
+      expect(newBranch).toMatchObject({ costCenterId: crc, requestedName, name: null })
+      const [storedRow] = await db.select().from(organizationJoinRequestBranches)
+        .where(eq(organizationJoinRequestBranches.id, newBranch.requestBranchId))
+      expect(storedRow).toMatchObject({ costCenterId: crc, requestedBranchName: requestedName })
 
       const response = await decide(stored.id, {
         decision: "approve",
         newBranches: [{
           requestBranchId: newBranch.requestBranchId,
-          name: `Signup Branch ${unique()}`,
+          name: newBranch.requestedName,
           province: "Sindh",
           city: "Karachi",
           address: "Plot 1, Clifton, Karachi",
@@ -355,6 +367,8 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, end to end", () => {
 
       const [createdBranch] = await db.select().from(branches).where(eq(branches.costCenterId, crc))
       expect(createdBranch.organizationId).toBe(fixtures.organizationId)
+      // Named as the applicant named it, never after its CRC.
+      expect(createdBranch.name).toBe(requestedName)
 
       const [initiator] = await db
         .select({ id: users.id, role: roles.name, branchId: users.branchId, mustChange: users.mustChangePassword, department: users.department, ipExtension: users.ipExtension })
@@ -403,7 +417,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, end to end", () => {
     })
 
     it("gives one CRC the shop, and stores a typed CRC that names an existing branch as that branch", async () => {
-      const body = signup({ branches: [{ crc: `it-crc-${fixtures.suffix}` }] })
+      const body = signup({ branches: [{ name: "Typed CRC Depot", crc: `it-crc-${fixtures.suffix}` }] })
       const stored = await submitAccepted(body)
       const rows = await db.select().from(organizationJoinRequestBranches).where(eq(organizationJoinRequestBranches.requestId, stored.id))
       expect(rows).toHaveLength(1)
@@ -532,7 +546,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, end to end", () => {
         ipExtension: "98765",
         employeeId: `EE-${fixtures.suffix}-${tag}`,
         department: "IT",
-        branches: [{ branchId: fixtures.northBranchId }, { crc }],
+        branches: [{ branchId: fixtures.northBranchId }, { crc, name: "Edited Depot" }],
         addresses: ["Plot 1, Clifton, Karachi", "Office 10, Saddar, Karachi"],
         approvers: [
           { level: 1, email: `edited-cfo-${fixtures.suffix}-${tag}@example.test`, designation: "Chief Financial Officer" },
@@ -548,7 +562,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, end to end", () => {
         firstName: "Sana",
         lastName: "Mir Khan",
         email: edited.email,
-        username: edited.username,
+        username: organizationUsername(fixtures.organizationName, edited.username),
         phone: edited.phone,
         ipExtension: "98765",
         employeeId: edited.employeeId,
@@ -556,8 +570,8 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, end to end", () => {
       })
       expect(after.initiatorRole).toBe("GROUP_ORDER_PORTAL")
       // Unchanged rows keep their ids, so a choice made against them still names them.
-      expect(after.branches.map((row: any) => [row.requestBranchId === keptBranchRow, row.kind, row.costCenterId]))
-        .toEqual([[true, "existing", null], [false, "new", crc]])
+      expect(after.branches.map((row: any) => [row.requestBranchId === keptBranchRow, row.kind, row.costCenterId, row.requestedName]))
+        .toEqual([[true, "existing", null, null], [false, "new", crc, "Edited Depot"]])
       expect(after.addresses.map((row: any) => row.address)).toEqual(edited.addresses)
       expect(after.addresses[0].requestAddressId).toBe(keptAddressRow)
       expect(after.approvers.map((approver: any) => [approver.email, approver.designation, approver.resolution.kind]))
@@ -590,7 +604,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, end to end", () => {
         .select({ username: users.username, phone: users.phone, department: users.department, ipExtension: users.ipExtension, passwordHash: users.passwordHash, firstName: users.firstName })
         .from(users)
         .where(eq(users.email, edited.email))
-      expect(initiator).toMatchObject({ username: edited.username, phone: edited.phone, department: "IT", ipExtension: "98765", firstName: "Sana" })
+      expect(initiator).toMatchObject({ username: organizationUsername(fixtures.organizationName, edited.username), phone: edited.phone, department: "IT", ipExtension: "98765", firstName: "Sana" })
       expect(initiator.passwordHash).toBe(`hashed:${STRONG_PASSWORD}`)
       expect(await db.select({ id: users.id }).from(users).where(eq(users.email, String(stored.email)))).toHaveLength(0)
     })

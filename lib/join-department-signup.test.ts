@@ -11,7 +11,10 @@ import {
   joinUsesApprovalLevels,
   newBranchDraftErrors,
   newBranchFieldError,
+  normalizeBranchName,
   normalizeCrc,
+  requestedBranchNameError,
+  requestedNewBranches,
   splitFullName,
 } from "./join-department-signup"
 
@@ -69,6 +72,35 @@ describe("CRC numbers", () => {
     expect(crcError("-AB")).toMatch(/letters, numbers/)
     expect(crcError("AB 12")).toMatch(/letters, numbers/)
     expect(crcError("A".repeat(33))).toMatch(/at most 32/)
+  })
+})
+
+describe("new branches", () => {
+  it("take the applicant's name, trimmed with inner spaces collapsed", () => {
+    expect(normalizeBranchName("  Korangi   Depot ")).toBe("Korangi Depot")
+    expect(normalizeBranchName(undefined)).toBe("")
+    expect(requestedBranchNameError("Korangi Depot")).toBeNull()
+    expect(requestedBranchNameError("  ")).toBe("Enter the branch name")
+    expect(requestedBranchNameError("K")).toBe("The branch name needs at least 2 characters")
+    expect(requestedBranchNameError("x".repeat(101))).toBe("The branch name can be at most 100 characters")
+  })
+
+  it("are one per CRC, normalised, keeping the first name given", () => {
+    expect(requestedNewBranches([
+      { branchId: 4 },
+      { crc: " ab-1 ", name: " Korangi  Depot " },
+      { crc: "AB-1", name: "Another name" },
+      { crc: "cd-2" },
+      { crc: "CD-2", name: "Saddar" },
+    ])).toEqual([
+      { crc: "AB-1", name: "Korangi Depot" },
+      { crc: "CD-2", name: "Saddar" },
+    ])
+  })
+
+  it("leave a CRC with no name unnamed, for Head Office to name at review", () => {
+    expect(requestedNewBranches([{ crc: "OLD-1" }, { crc: "OLD-2", name: "  " }]))
+      .toEqual([{ crc: "OLD-1", name: null }, { crc: "OLD-2", name: null }])
   })
 })
 

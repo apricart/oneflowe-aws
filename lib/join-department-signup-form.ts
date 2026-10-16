@@ -17,8 +17,12 @@ import {
   SIGNUP_MAX_BODY_BYTES,
   SIGNUP_MAX_BRANCHES,
   SIGNUP_PHONE_PATTERN,
+  crcError,
   encodedBodyBytes,
   isDepartment,
+  normalizeBranchName,
+  normalizeCrc,
+  requestedBranchNameError,
 } from "@/lib/join-department-signup"
 import { composeDomainEmail, emailLocalPartError } from "@/lib/organization-email-domain"
 
@@ -33,10 +37,10 @@ export function joinPasswordError(password: string): string | undefined {
   return complete ? undefined : "Include an uppercase letter, a lowercase letter, a number and a symbol"
 }
 
-/** One CRC chip: an existing branch picked by name, or a CRC number typed in. */
+/** One branch chip: an existing branch picked by name, or a new branch named with its CRC number. */
 export type BranchChip =
   | { key: string; kind: "existing"; branchId: number; label: string; checked: boolean }
-  | { key: string; kind: "crc"; crc: string; label: string; checked: boolean }
+  | { key: string; kind: "crc"; crc: string; name: string; label: string; checked: boolean }
 
 export type AddressChip = { key: string; address: string; checked: boolean }
 
@@ -108,8 +112,8 @@ export function departmentSignupErrors(draft: DepartmentSignupDraft): Record<str
   approverErrors(draft, errors)
 
   const branches = draft.branches.filter((chip) => chip.checked)
-  if (branches.length === 0) errors.branches = "Add at least one CRC and keep it checked"
-  else if (branches.length > SIGNUP_MAX_BRANCHES) errors.branches = `At most ${SIGNUP_MAX_BRANCHES} CRCs`
+  if (branches.length === 0) errors.branches = "Add at least one branch and keep it checked"
+  else if (branches.length > SIGNUP_MAX_BRANCHES) errors.branches = `At most ${SIGNUP_MAX_BRANCHES} branches`
 
   const addresses = draft.addresses.filter((chip) => chip.checked)
   if (addresses.length === 0) errors.addresses = "Add at least one delivery address and keep it checked"
@@ -121,6 +125,48 @@ export function departmentSignupErrors(draft: DepartmentSignupDraft): Record<str
 
   if (!draft.termsAccepted) errors.terms = "Accept the terms to continue"
   return errors
+}
+
+/** Whether two branch names read as the same one: case and spacing aside. */
+export function sameBranchName(a: string, b: string): boolean {
+  return normalizeBranchName(a).toLowerCase() === normalizeBranchName(b).toLowerCase()
+}
+
+/**
+ * Why a name cannot be taken for a new branch, or null. `knownBranchNames` are
+ * the organization's branches the page was given: a name that is one of them
+ * is that branch, to be picked, not created again.
+ */
+export function newBranchNameChipError(
+  chips: readonly BranchChip[],
+  knownBranchNames: readonly string[],
+  name: string,
+): string | null {
+  const nameProblem = requestedBranchNameError(name)
+  if (nameProblem) return nameProblem
+  if (knownBranchNames.some((known) => sameBranchName(known, name))) {
+    return "This branch already exists. Pick it from the suggestions instead."
+  }
+  if (chips.some((chip) => chip.kind === "crc" && sameBranchName(chip.name, name))) {
+    return "This branch is already added"
+  }
+  return null
+}
+
+/** Why a new branch (its name and its CRC) cannot be added as typed, or null. */
+export function newBranchChipError(
+  chips: readonly BranchChip[],
+  knownBranchNames: readonly string[],
+  entry: Readonly<{ name: string; crc: string }>,
+): { field: "name" | "crc"; message: string } | null {
+  const nameProblem = newBranchNameChipError(chips, knownBranchNames, entry.name)
+  if (nameProblem) return { field: "name", message: nameProblem }
+  const crcProblem = crcError(entry.crc)
+  if (crcProblem) return { field: "crc", message: crcProblem }
+  if (chips.some((chip) => chip.kind === "crc" && chip.crc === normalizeCrc(entry.crc))) {
+    return { field: "crc", message: "This CRC is already added" }
+  }
+  return null
 }
 
 /** Why an address cannot be added as typed, or null. */
@@ -147,7 +193,7 @@ export function toDepartmentSignupPayload(draft: DepartmentSignupDraft, emailDom
     department: draft.department,
     branches: draft.branches
       .filter((chip) => chip.checked)
-      .map((chip) => (chip.kind === "existing" ? { branchId: chip.branchId } : { crc: chip.crc })),
+      .map((chip) => (chip.kind === "existing" ? { branchId: chip.branchId } : { name: chip.name, crc: chip.crc })),
     addresses: draft.addresses.filter((chip) => chip.checked).map((chip) => chip.address.trim()),
     approvers: draft.approvers.map((approver) => ({
       level: approver.level,

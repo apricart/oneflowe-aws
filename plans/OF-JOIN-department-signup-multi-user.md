@@ -34,7 +34,9 @@ was implemented 2026-10-15: `plans/OF-APPROVAL-LEVELS-route-orders-by-level.md`.
      account is reused; one who does not is created.
 3. **CRC means branch** (UBL's cost centre). While typing, the applicant is
    offered the organization's existing branches. A chosen branch is assigned;
-   an unknown one is **created** with its details and CRC number.
+   an unknown one is **created** with its details and CRC number. The
+   applicant types the branch **name** first; only a branch that is not listed
+   is then asked for its CRC (see "Branch names", below).
    **Several branches → `GROUP_ORDER_PORTAL`; one branch → see D2.**
 4. **Nothing is created until Head Office approves**: no user, branch,
    approver, level or address.
@@ -105,7 +107,7 @@ each field maps:
 | Department | Required, one of the HTML's nine values (`DEPARTMENTS`) |
 | Role "Order Initiator" (read-only) | Display only; the role is D2 |
 | Financial Approver Levels | One card per configured level (not fixed at 3): email (domain-locked), username (auto, read-only), designation; titled with the level's band |
-| CRC No (multiple, chips with a checkbox) | Each checked CRC becomes a branch. While typing, existing branches are suggested **by name** from the lookup list (no CRC number ever leaves the server); picking one adds it as a chip. A typed CRC is matched by the server to an existing branch with that cost centre if exactly one exists; otherwise Head Office creates the branch at approval, filling in its name, province, city and address (the HTML collects only the CRC) |
+| Branch (multiple, chips with a checkbox; the design's "CRC No") | Each checked chip is a branch. While typing, existing branches are suggested **by name** from the lookup list (no CRC number ever leaves the server); picking one adds it as a chip. A name that is not listed is added as a new branch, and only then is its CRC asked for ("Branch names", below). A typed CRC is matched by the server to an existing branch with that cost centre if exactly one exists; otherwise Head Office creates the branch at approval under the applicant's name for it (correctable), filling in its province, city and address |
 | Delivery Address (multiple, chips with a checkbox) | Each checked address is stored on the request; at approval Head Office assigns each to one of the initiator's branches (automatic when there is one), and it is written to `branch_delivery_addresses` as approved |
 | Password / Confirm | The app's rule (12+, upper, lower, digit, symbol) |
 | UBL Master Code | **Removed.** The join code, checked on the server, is the first step |
@@ -139,6 +141,10 @@ Additive except one replaced check. Hand-written, journal `when` = last + 360000
     never both (check)
   * `resolved_branch_id`, set at approval: the branch created for the CRC, or
     the existing branch Head Office mapped it onto
+  * `requested_branch_name varchar(100)`, added by
+    `20261021120000_join_request_branch_name.sql`: the name the applicant gave
+    a branch to create; null for an existing branch and for a request submitted
+    before names were asked for (`organization_join_request_branches_name_ck`)
   * composite tenant keys `(existing_branch_id, organization_id)` and
     `(resolved_branch_id, organization_id)` → `branches (id, organization_id)`;
     added to `tests/integration/tenant-composite-foreign-keys.test.ts`
@@ -346,11 +352,12 @@ the applicant's alone: the **password** and the **acceptance of the terms**.
 | Field | Bound |
 |---|---|
 | Approvers | one per level (≤ 10); email ≤ 120; designation ≤ 60 |
-| Branches (existing ids and CRCs together) | ≤ 10; a CRC ≤ 32, letters, digits and inner dashes |
+| Branches (existing ids and new branches together) | ≤ 10; a new branch's name 2–100, its CRC ≤ 32, letters, digits and inner dashes |
 | Addresses | ≤ 5, each 5–200 |
 | Initiator | complete name ≤ 120, employee ID ≤ 64, phone `0` + 10 digits, IP extension 3–6 digits |
 
-New branch details are given by Head Office at review, not by the applicant.
+A new branch's name and CRC come from the applicant; its province, city and
+address are given by Head Office at review.
 
 At these bounds the worst-case ASCII body is about 5.7 KB. A unit test builds
 it from the bounds and asserts it stays under 7,500 bytes. The form also
@@ -448,6 +455,39 @@ Phase 2b scope, as far as this plan needs it:
 3. **Join version 2, UI**: the department form and the review dialog.
 4. Later: catalogue copy and baseline budget at approval; a report on possible
    purchase splitting.
+
+## Branch names (2026-10-16)
+
+The first version asked for a CRC alone, and the review dialog offered the CRC
+as the new branch's name, so approved sign-ups created branches named after
+their cost centre. The field now works name-first:
+
+* **Form.** The field is "Branch". The applicant searches the organization's
+  branches by name and picks one. A name that is not listed is offered as
+  "Add "…" as a new branch", and only then is its **CRC / Cost Centre No**
+  asked for. A name that is an existing branch (case and spacing aside) adds
+  that branch instead of a new one. Each new branch is listed by its name,
+  with its CRC beside it.
+* **Body.** A new branch is `{ name, crc }`, both required on the public
+  submission (`departmentJoinSubmitSchema`); `{ crc }` alone is now 400.
+  The Head Office edit (`departmentJoinUpdateSchema`) takes `{ crc, name? }`,
+  because a request submitted earlier has no name to send back.
+  `requestedNewBranches` (`lib/join-department-signup.ts`) is the one place
+  that normalises them, one per CRC, keeping the first name given.
+* **Storage.** The name goes in `requested_branch_name`. A typed CRC that
+  matches exactly one active branch is still stored as that branch, and the
+  name is then dropped.
+* **Review.** The review answers `requestedName` per branch; the dialog
+  prefills the new branch's name from it, and starts **empty** (never the
+  CRC) for a request that has none. Head Office may still correct the name
+  before approving, and the approval creates the branch with whatever name
+  the decision carries, as before.
+* **Edit.** Head Office adds a new branch with a name and a CRC. A kept CRC
+  row takes the edit's name if one is sent (`planRequestBranchEdit` →
+  `renames`) and keeps its own otherwise.
+
+Apply `20261021120000` before deploying: the join reads select the column.
+Rollback: revert the code, then drop the column.
 
 ## Risk and rollback
 

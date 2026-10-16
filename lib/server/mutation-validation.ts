@@ -20,6 +20,11 @@ import {
 import { PROPAGATION_MODES } from "@/lib/group-price-propagation"
 import { BRANCH_REGIONS } from "@/lib/branch-region"
 import {
+  HEAD_COUNT_REQUEST_DECISIONS,
+  MAX_BRANCH_HEAD_COUNT,
+  MAX_HEAD_COUNT_REQUEST_REASON,
+} from "@/lib/branch-head-count"
+import {
   EMAIL_DOMAIN_MAX_LENGTH,
   emailDomainError,
   normalizeEmailDomain,
@@ -38,6 +43,8 @@ import { APRICART_EXECUTIVE_ASSIGNMENT_MAX } from "@/lib/apricart-executive-acce
 import { WAREHOUSE_ASSIGNMENT_MAX_PER_ORGANIZATION, WAREHOUSE_CITY_MAX_LENGTH } from "@/lib/warehouse-access"
 import { MAX_ALLOWLIST_ENTRIES } from "@/lib/security/ip-allowlist"
 import { MAX_APPROVAL_LEVELS, approvalLevelsError } from "@/lib/order-approval-levels"
+import { USERNAME_BASE_MAX_LENGTH } from "@/lib/username-prefix"
+import { USER_DESIGNATION_MAX_LENGTH } from "@/lib/user-designation"
 import {
   CRC_MAX_LENGTH,
   DEPARTMENTS,
@@ -147,13 +154,14 @@ export const userCreateSchema = z.object({
   firstName: z.string().trim().min(1).max(100),
   lastName: z.string().trim().min(1).max(100),
   email: z.string().trim().pipe(z.email().max(255)),
-  username: z.string().trim().min(1).max(255),
+  username: z.string().trim().min(1).max(USERNAME_BASE_MAX_LENGTH),
   password: passwordSchema,
   role: systemRoleSchema,
   organizationId: nullablePositiveId,
   branchId: nullablePositiveId,
   phone: nullableText(32).optional(),
   employeeId: nullableText(64).optional(),
+  designation: nullableText(USER_DESIGNATION_MAX_LENGTH).optional(),
   imprestHolder: nullableText(255).optional(),
   contactPerson: nullableText(255).optional(),
   location: nullableText(255).optional(),
@@ -219,6 +227,7 @@ export const userProfileUpdateSchema = z.object({
   username: z.string().trim().min(1).max(255).optional(),
   phone: nullableText(32).optional(),
   employeeId: nullableText(64).optional(),
+  designation: nullableText(USER_DESIGNATION_MAX_LENGTH).optional(),
   imprestHolder: nullableText(255).optional(),
   contactPerson: nullableText(255).optional(),
   location: nullableText(255).optional(),
@@ -243,6 +252,12 @@ export const userAccessUpdateSchema = z.object({
   message: "At least one access field is required",
 })
 
+/**
+ * A branch's head count as the API takes it: a JSON integer, never a string,
+ * inside `MAX_BRANCH_HEAD_COUNT`. Pinned again by `branches_head_count_ck`.
+ */
+const branchHeadCount = z.number().int().min(0).max(MAX_BRANCH_HEAD_COUNT)
+
 export const branchCreateSchema = z.object({
   organizationId: positiveId,
   name: z.string().trim().min(2).max(100),
@@ -253,6 +268,8 @@ export const branchCreateSchema = z.object({
   status: z.enum(["active", "inactive"]).optional().default("active"),
   // Delivery region; Super Admin only, enforced by the route.
   region: z.union([z.enum(BRANCH_REGIONS), z.null()]).optional(),
+  // How many people work there; null or absent = not provided.
+  headCount: z.union([branchHeadCount, z.null()]).optional(),
 }).strict()
 
 export const branchUpdateSchema = z.object({
@@ -265,6 +282,8 @@ export const branchUpdateSchema = z.object({
   groupId: nullablePositiveId.optional(),
   // Delivery region, or null for Unknown; Super Admin only, enforced by the route.
   region: z.union([z.enum(BRANCH_REGIONS), z.null()]).optional(),
+  // Null clears it back to "not provided".
+  headCount: z.union([branchHeadCount, z.null()]).optional(),
 }).strict().refine((input) => Object.keys(input).length > 0, {
   message: "At least one branch field is required",
 })
@@ -765,7 +784,11 @@ const globalProductAdminFields = {
 }
 
 const globalProductAdminBaseSchema = z.object(globalProductAdminFields)
-export const globalProductAdminCreateSchema = globalProductAdminBaseSchema.strict()
+// The code is assigned by the server on create (lib/server/global-product-code.ts),
+// so a create that names one is refused rather than silently renumbered.
+export const globalProductAdminCreateSchema = globalProductAdminBaseSchema
+  .omit({ productCode: true })
+  .strict()
 export const globalProductAdminUpdateSchema = globalProductAdminBaseSchema
   .partial()
   .extend({ id: positiveId })
@@ -1136,7 +1159,7 @@ export const joinRequestSubmitSchema = z.object({
   firstName: z.string().trim().min(1).max(100),
   lastName: z.string().trim().min(1).max(100),
   email: z.string().trim().pipe(z.email().max(255)),
-  username: z.string().trim().min(3).max(255),
+  username: z.string().trim().min(3).max(USERNAME_BASE_MAX_LENGTH),
   password: passwordSchema,
   role: z.enum(JOINABLE_ROLES),
   branchId: nullablePositiveId.optional().default(null),
@@ -1151,13 +1174,10 @@ export const joinRequestSubmitSchema = z.object({
 }).strict()
 
 /**
- * Head Office setting its organization's code.
- *
- * Omitting `code` asks the server to generate one — the recommended path, and
- * the reason generation lives on the server rather than in the browser.
+ * Head Office setting its organization's manually chosen, permanent code.
  */
 export const joinCodeSetSchema = z.object({
-  code: joinCodeSchema.optional(),
+  code: joinCodeSchema,
 }).strict()
 
 /**
@@ -1202,6 +1222,13 @@ const signupApproverSchema = z.object({
   designation: z.string().trim().min(2).max(SIGNUP_DESIGNATION_MAX_LENGTH),
 }).strict()
 
+const signupCrcSchema = z.string().trim().min(1).max(CRC_MAX_LENGTH)
+
+/** The name given to a branch still to be created (`NEW_BRANCH_FIELD_RULES.name`). */
+const requestedBranchNameSchema = z.string().trim()
+  .min(NEW_BRANCH_FIELD_RULES.name.min, `A new branch's name needs at least ${NEW_BRANCH_FIELD_RULES.name.min} characters`)
+  .max(NEW_BRANCH_FIELD_RULES.name.max, `A new branch's name can be at most ${NEW_BRANCH_FIELD_RULES.name.max} characters`)
+
 export const departmentJoinSubmitSchema = z.object({
   formVersion: z.literal(DEPARTMENT_SIGNUP_FORM_VERSION),
   code: joinCodeSchema,
@@ -1212,10 +1239,10 @@ export const departmentJoinSubmitSchema = z.object({
   ipExtension: z.string().trim().regex(SIGNUP_IP_EXTENSION_PATTERN, "Enter an IP extension of 3 to 6 digits"),
   employeeId: z.string().trim().min(1).max(SIGNUP_EMPLOYEE_ID_MAX_LENGTH),
   department: z.enum(DEPARTMENTS),
-  // An existing branch picked by name, or a CRC number typed in.
+  // An existing branch picked by name, or a new branch: its name and its CRC number.
   branches: z.array(z.union([
     z.object({ branchId: positiveId }).strict(),
-    z.object({ crc: z.string().trim().min(1).max(CRC_MAX_LENGTH) }).strict(),
+    z.object({ name: requestedBranchNameSchema, crc: signupCrcSchema }).strict(),
   ])).min(1).max(SIGNUP_MAX_BRANCHES),
   addresses: z.array(z.string().trim().min(5).max(SIGNUP_ADDRESS_MAX_LENGTH)).min(1).max(SIGNUP_MAX_ADDRESSES),
   approvers: z.array(signupApproverSchema).min(1).max(MAX_APPROVAL_LEVELS),
@@ -1240,7 +1267,7 @@ function newBranchText(field: NewBranchField) {
 export const departmentJoinDecisionSchema = z.object({
   decision: z.enum(JOIN_DECISIONS),
   reason: nullableText(1_000).optional(),
-  username: z.string().trim().toLowerCase().min(3).max(255).optional(),
+  username: z.string().trim().toLowerCase().min(3).max(USERNAME_BASE_MAX_LENGTH).optional(),
   newBranches: z.array(z.object({
     requestBranchId: positiveId,
     mapToBranchId: positiveId.optional(),
@@ -1292,9 +1319,11 @@ export const departmentJoinUpdateSchema = z.object({
     ipExtension: z.string().trim().regex(SIGNUP_IP_EXTENSION_PATTERN, "Enter an IP extension of 3 to 6 digits"),
     employeeId: z.string().trim().min(1).max(SIGNUP_EMPLOYEE_ID_MAX_LENGTH),
     department: z.enum(DEPARTMENTS),
+    // A new branch's name is optional here: a request submitted before names
+    // were asked for has none, and Head Office names it at approval anyway.
     branches: z.array(z.union([
       z.object({ branchId: positiveId }).strict(),
-      z.object({ crc: z.string().trim().min(1).max(CRC_MAX_LENGTH) }).strict(),
+      z.object({ crc: signupCrcSchema, name: requestedBranchNameSchema.optional() }).strict(),
     ])).min(1).max(SIGNUP_MAX_BRANCHES)
       .refine((list) => editedBranchListError(list) === null, { message: "The same branch is listed twice" }),
     addresses: z.array(z.string().trim().min(5).max(SIGNUP_ADDRESS_MAX_LENGTH)).min(1).max(SIGNUP_MAX_ADDRESSES)
@@ -1335,6 +1364,28 @@ export const deliveryAddressCreateSchema = z.object({
 export const deliveryAddressDecisionSchema = z.object({
   decision: z.enum(DELIVERY_ADDRESS_DECISIONS),
   reason: nullableText(MAX_DELIVERY_ADDRESS_REASON).optional(),
+}).strict()
+
+/**
+ * A Branch Admin or Group User asking Head Office to set a branch's head count.
+ *
+ * `.strict()` and narrow, like `deliveryAddressCreateSchema`: no `status`,
+ * `organizationId` or decision field, so none can be mass assigned. `branchId`
+ * is intersected with the caller's resolved branch set before anything is read.
+ */
+export const branchHeadCountRequestCreateSchema = z.object({
+  branchId: positiveId,
+  headCount: branchHeadCount,
+  reason: nullableText(MAX_HEAD_COUNT_REQUEST_REASON).optional(),
+}).strict()
+
+/**
+ * Head Office's decision. The figure itself is not editable here: an approver
+ * who wants a different number sets it on the branch directly.
+ */
+export const branchHeadCountDecisionSchema = z.object({
+  decision: z.enum(HEAD_COUNT_REQUEST_DECISIONS),
+  reason: nullableText(MAX_HEAD_COUNT_REQUEST_REASON).optional(),
 }).strict()
 
 export function validationMessage(error: z.ZodError): string {

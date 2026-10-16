@@ -270,6 +270,28 @@ describe.skipIf(!hasTestDatabase)("PATCH/DELETE /api/v1/users/[id]", () => {
       expect(JSON.stringify(audit.details)).not.toContain(NEW_PASSWORD)
     })
 
+    it("sets and clears a designation, and refuses one too long for the column", async () => {
+      signIn(headOffice())
+      expect((await patch(f.branchAdminId, { designation: "  Store Lead " })).status).toBe(200)
+      expect((await readUser(f.branchAdminId)).designation).toBe("Store Lead")
+
+      expect((await patch(f.branchAdminId, { designation: "x".repeat(81) })).status).toBe(400)
+      expect((await readUser(f.branchAdminId)).designation).toBe("Store Lead")
+
+      // An edit that does not name the field leaves it alone.
+      expect((await patch(f.branchAdminId, { phone: "0300-1111111" })).status).toBe(200)
+      expect((await readUser(f.branchAdminId)).designation).toBe("Store Lead")
+
+      expect((await patch(f.branchAdminId, { designation: "" })).status).toBe(200)
+      expect((await readUser(f.branchAdminId)).designation).toBeNull()
+    })
+
+    it("refuses a designation edit on another organization's user", async () => {
+      signIn(headOffice())
+      expect((await patch(f.foreignOrderPortalId, { designation: "Planted" })).status).toBe(403)
+      expect((await readUser(f.foreignOrderPortalId)).designation).toBeNull()
+    })
+
     it("does not touch sessions for an ordinary profile edit", async () => {
       const before = await readUser(f.branchAdminId)
       signIn(headOffice())

@@ -1,7 +1,5 @@
 import "server-only"
 
-import { randomInt } from "node:crypto"
-
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm"
 
 import {
@@ -64,23 +62,6 @@ export const MAX_JOIN_REQUEST_PAGE = 200
  * the queue. Chosen well above any plausible real intake.
  */
 export const MAX_PENDING_REQUESTS_PER_ORGANIZATION = 200
-
-/**
- * A generated code: 14 characters in three dash-separated groups, drawn with
- * `randomInt` from an alphabet with no character that survives being read aloud
- * ambiguously — no O/0, no I/1, no S/5, no B/8, no Z/2.
- *
- * ~4.7e15 combinations, which is what makes generating one the recommended path
- * over typing a memorable one.
- */
-const CODE_ALPHABET = "ACDEFGHJKLMNPQRTUVWXY34679"
-
-export function generateJoinCode(): string {
-  const groupsOfFour = Array.from({ length: 3 }, () =>
-    Array.from({ length: 4 }, () => CODE_ALPHABET[randomInt(CODE_ALPHABET.length)]).join(""),
-  )
-  return groupsOfFour.join("-")
-}
 
 export type JoinCodeRecord = {
   code: string
@@ -216,26 +197,29 @@ export async function readJoinCode(organizationId: number): Promise<JoinCodeReco
 export type JoinCodeWriteFailure = { message: string; status: number }
 
 /**
- * Set or replace the organization's code.
+ * Set the organization's code exactly once.
  *
- * One row per organization, so this is an upsert on `organization_id`. A code
- * already held by another tenant is refused rather than stolen: the unique index
- * on `code` is what guarantees a code resolves to exactly one organization, and
- * without that guarantee the whole lookup is ambiguous.
+ * Existing rows are never updated or deleted. A code already held by another
+ * tenant is refused rather than stolen: the unique index on `code` is what
+ * guarantees a code resolves to exactly one organization, and without that
+ * guarantee the whole lookup is ambiguous.
  */
 export async function setJoinCode(input: {
   organizationId: number
-  code?: string
+  code: string
   actorUserId: string
 }): Promise<{ code: string } | JoinCodeWriteFailure> {
-  const code = input.code ?? generateJoinCode()
+  const existing = await readJoinCode(input.organizationId)
+  if (existing) {
+    return { message: "This organization already has a join code. It cannot be changed.", status: 409 }
+  }
 
   const [takenElsewhere] = await db
     .select({ organizationId: organizationJoinCodes.organizationId })
     .from(organizationJoinCodes)
-    .where(eq(organizationJoinCodes.code, code))
+    .where(eq(organizationJoinCodes.code, input.code))
     .limit(1)
-  if (takenElsewhere && takenElsewhere.organizationId !== input.organizationId) {
+  if (takenElsewhere) {
     return { message: "That join code is already in use. Choose another.", status: 409 }
   }
 
@@ -244,40 +228,25 @@ export async function setJoinCode(input: {
       .insert(organizationJoinCodes)
       .values({
         organizationId: input.organizationId,
-        code,
+        code: input.code,
         createdByUserId: input.actorUserId,
         updatedByUserId: input.actorUserId,
       })
-      .onConflictDoUpdate({
-        target: organizationJoinCodes.organizationId,
-        set: {
-          code,
-          updatedByUserId: input.actorUserId,
-          updatedAt: new Date(),
-        },
-      })
   } catch (caughtError: any) {
-    // The read above can be overtaken: two tenants issuing the same code at the
-    // same instant both see it free, and `organization_join_codes_code_uq`
-    // decides between them. The loser gets the same answer it would have got a
-    // moment earlier, rather than a 500.
+    // Either read above can be overtaken. The organization and code unique
+    // indexes decide the race; re-reading this tenant distinguishes a competing
+    // first write from a code another tenant claimed.
     const errorCode = String(caughtError?.code ?? caughtError?.cause?.code ?? "")
     if (errorCode === "23505") {
+      if (await readJoinCode(input.organizationId)) {
+        return { message: "This organization already has a join code. It cannot be changed.", status: 409 }
+      }
       return { message: "That join code is already in use. Choose another.", status: 409 }
     }
     throw caughtError
   }
 
-  return { code }
-}
-
-/** Close joining for this tenant. Pending requests are left to be decided. */
-export async function clearJoinCode(organizationId: number): Promise<boolean> {
-  const removed = await db
-    .delete(organizationJoinCodes)
-    .where(eq(organizationJoinCodes.organizationId, organizationId))
-    .returning({ id: organizationJoinCodes.id })
-  return removed.length > 0
+  return { code: input.code }
 }
 
 /* ── Submitting a request ────────────────────────────────────────────────── */

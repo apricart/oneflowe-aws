@@ -325,16 +325,42 @@ function addOrderDateConditions(conditions: any[], params: ReturnType<typeof get
   if (legacyEnd) conditions.push(lte(orders.createdAt, legacyEnd))
 }
 
-function auditOrderGroupAccess(params: ReturnType<typeof getOrderListParams>, context: any) {
+async function auditOrderGroupAccess(
+  params: ReturnType<typeof getOrderListParams>,
+  context: { organizationId: number | null; userId: string; role: string },
+) {
   if (!params.groupId || !/^\d+$/.test(params.groupId)) return
-  void db.insert(groupAuditLogs).values({
-    organizationId: context.organizationId || 0,
-    groupId: Number(params.groupId),
-    action: "VIEW_GROUP_REPORT",
-    performedByUserId: context.userId,
-    performedByRole: context.role,
-    metadata: { filters: Object.fromEntries(params.searchParams.entries()) },
-  }).catch((error) => console.error("Audit log failed", error))
+  const groupId = Number(params.groupId)
+  if (!Number.isSafeInteger(groupId) || groupId <= 0) return
+
+  // The filter came from the URL. Resolve it inside the caller's tenant before
+  // recording access so an out-of-scope id cannot create a cross-tenant audit.
+  const tenantCondition = context.role === "SUPER_ADMIN"
+    ? eq(groups.id, groupId)
+    : context.organizationId
+      ? and(eq(groups.id, groupId), eq(groups.organizationId, context.organizationId))
+      : null
+  if (!tenantCondition) return
+
+  try {
+    const [group] = await db
+      .select({ id: groups.id, organizationId: groups.organizationId })
+      .from(groups)
+      .where(tenantCondition)
+      .limit(1)
+    if (!group) return
+
+    await db.insert(groupAuditLogs).values({
+      organizationId: group.organizationId,
+      groupId: group.id,
+      action: "VIEW_GROUP_REPORT",
+      performedByUserId: context.userId,
+      performedByRole: context.role,
+      metadata: { filters: Object.fromEntries(params.searchParams.entries()) },
+    })
+  } catch (error) {
+    console.error("Audit log failed", error)
+  }
 }
 
 function sanitizeOrderListItems(items: any[], context: any) {
@@ -1256,7 +1282,7 @@ export async function GET(req: NextRequest) {
     )
 
     // --- Audit Logging for Group Access ---
-    auditOrderGroupAccess(params, { organizationId: orgIdNum, userId: currentUserId, role: sessionRole })
+    await auditOrderGroupAccess(params, { organizationId: orgIdNum ?? null, userId: currentUserId, role: sessionRole })
 
 
 

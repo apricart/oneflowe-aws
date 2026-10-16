@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { useSession } from "next-auth/react"
 import useSWR from "swr"
-import { Download, FileText, Loader2 } from "lucide-react"
+import { ChevronDown, Download, FileSpreadsheet, FileText, Loader2 } from "lucide-react"
 
 import { useAppContext } from "@/components/context/app-context"
 import { BranchFilter } from "@/components/reports/branch-filter"
@@ -13,12 +13,13 @@ import { GroupFilter } from "@/components/reports/group-filter"
 import { useTableSort } from "@/components/reports/sortable-header"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/hooks/use-toast"
 import { canReadConsolidatedInvoiceReport, choosesOrganization } from "@/lib/consolidated-invoice-access"
-import { karachiToday, type ConsolidatedInvoiceMode } from "@/lib/consolidated-invoice"
+import { karachiToday, type ConsolidatedInvoiceDownloadFormat, type ConsolidatedInvoiceMode } from "@/lib/consolidated-invoice"
 import { CONSOLIDATED_INVOICE_SORT_KEYS, type ConsolidatedInvoiceSortKey } from "@/lib/list-sort-keys"
 import { PAYMENT_STATUSES, PAYMENT_STATUS_LABELS, type PaymentStatus } from "@/lib/payment-status"
 import { safeFilenamePart } from "@/lib/security"
@@ -43,6 +44,12 @@ async function fetchReport(url: string): Promise<ConsolidatedInvoiceResponse> {
 }
 
 type PeriodKind = "month" | "range"
+
+const DOWNLOAD_LABELS: Record<ConsolidatedInvoiceDownloadFormat, string> = {
+  pdf: "PDF",
+  xlsx: "Excel",
+  csv: "CSV",
+}
 type PaymentFilter = PaymentStatus | "ALL"
 
 function readInitialPaymentFilter(value: string | null): PaymentFilter {
@@ -83,7 +90,7 @@ export function ConsolidatedInvoiceReport() {
   const [includeCredited, setIncludeCredited] = useState(searchParams.get("includeCredited") === "true")
   const [paymentFilter, setPaymentFilter] = useState<PaymentFilter>(() => readInitialPaymentFilter(searchParams.get("paymentStatus")))
   const { sort, toggleSort } = useTableSort<ConsolidatedInvoiceSortKey>(readInitialSort(new URLSearchParams(searchParams.toString())))
-  const [downloading, setDownloading] = useState(false)
+  const [downloading, setDownloading] = useState<ConsolidatedInvoiceDownloadFormat | null>(null)
 
   const organizationId = choosesOrganization(role) ? contextOrganizationId : null
   const needsOrganization = choosesOrganization(role) && !organizationId
@@ -122,21 +129,22 @@ export function ConsolidatedInvoiceReport() {
     { keepPreviousData: true },
   )
 
-  const download = useCallback(async () => {
-    setDownloading(true)
+  const download = useCallback(async (format: ConsolidatedInvoiceDownloadFormat) => {
+    const failure = `The ${DOWNLOAD_LABELS[format]} file could not be generated`
+    setDownloading(format)
     try {
-      const response = await fetch(`/api/v1/reports/consolidated-invoice/pdf?${query}`)
+      const response = await fetch(`/api/v1/reports/consolidated-invoice/${format}?${query}`)
       if (!response.ok) {
         const body = await response.json().catch(() => null)
-        throw new Error(body?.error || "The PDF could not be generated")
+        throw new Error(body?.error || failure)
       }
       const blob = await response.blob()
       const disposition = response.headers.get("content-disposition") ?? ""
-      const fileName = /filename="([^"]+)"/.exec(disposition)?.[1] ?? `consolidated-${mode}.pdf`
+      const fileName = /filename="([^"]+)"/.exec(disposition)?.[1] ?? `consolidated-${mode}.${format}`
       const url = window.URL.createObjectURL(blob)
       const anchor = document.createElement("a")
       anchor.href = url
-      anchor.download = safeFilenamePart(fileName, "consolidated-invoice.pdf")
+      anchor.download = safeFilenamePart(fileName, `consolidated-invoice.${format}`)
       document.body.appendChild(anchor)
       anchor.click()
       anchor.remove()
@@ -144,11 +152,11 @@ export function ConsolidatedInvoiceReport() {
     } catch (downloadError) {
       toast({
         title: "Download failed",
-        description: downloadError instanceof Error ? downloadError.message : "The PDF could not be generated",
+        description: downloadError instanceof Error ? downloadError.message : failure,
         variant: "destructive",
       })
     } finally {
-      setDownloading(false)
+      setDownloading(null)
     }
   }, [query, mode, toast])
 
@@ -157,7 +165,7 @@ export function ConsolidatedInvoiceReport() {
   }
 
   const years = Array.from({ length: Number(today.slice(0, 4)) - FIRST_YEAR + 1 }, (_, index) => String(Number(today.slice(0, 4)) - index))
-  const canDownload = Boolean(report && report.count > 0 && !isLoading && !downloading)
+  const canDownload = Boolean(report && report.count > 0 && !isLoading && downloading === null)
 
   return (
     <div className="space-y-5">
@@ -270,10 +278,26 @@ export function ConsolidatedInvoiceReport() {
         )}
 
         <div className="ml-auto">
-          <Button onClick={download} disabled={!canDownload} className="gap-2">
-            {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-            {downloading ? "Generating…" : "Download PDF"}
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button disabled={!canDownload} className="gap-2">
+                {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                {downloading ? `Generating ${DOWNLOAD_LABELS[downloading]}…` : "Download"}
+                <ChevronDown className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={() => download("pdf")} className="gap-2">
+                <FileText className="h-4 w-4" /> PDF
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => download("xlsx")} className="gap-2">
+                <FileSpreadsheet className="h-4 w-4" /> Excel (.xlsx)
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => download("csv")} className="gap-2">
+                <FileSpreadsheet className="h-4 w-4" /> CSV
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 

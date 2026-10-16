@@ -410,7 +410,7 @@ describe.skipIf(!hasTestDatabase)("a Viewer, calling every write handler directl
       ["PATCH", "app/api/v1/branches/[id]/route.ts", `/api/v1/branches/${ids.branchA1}`, { name: `Hijacked ${suffix}` }],
       ["PATCH", "app/api/v1/users/[id]/access/route.ts", `/api/v1/users/${ids.raiserA1}/access`, { isActive: false }],
       ["PATCH", "app/api/v1/users/[id]/access/route.ts", `/api/v1/users/${ids.viewer}/access`, { role: "HEAD_OFFICE" }],
-      ["PUT", "app/api/v1/organizations/join-code/route.ts", "/api/v1/organizations/join-code", {}],
+      ["PUT", "app/api/v1/organizations/join-code/route.ts", "/api/v1/organizations/join-code", { code: `VIEWER-${suffix}` }],
       ["POST", "app/api/v1/groups/route.ts", "/api/v1/groups", { name: `IT VWSWEEP new group ${suffix}`, organizationId: ids.orgA }],
     ]
     const notRefused: string[] = []

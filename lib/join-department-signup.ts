@@ -4,7 +4,8 @@
  *
  * The department sign-up is the join form of an organization with order
  * approval levels on. It asks for one person (the order initiator), the
- * branches they order for (CRC numbers), their delivery addresses, and one
+ * branches they order for (an existing branch picked by name, or a new
+ * branch's name and its CRC number), their delivery addresses, and one
  * financial approver per approval level. Nothing is created until Head Office
  * approves.
  *
@@ -71,6 +72,38 @@ export function crcError(value: unknown): string | null {
   return null
 }
 
+/** The one spelling of a requested branch name: trimmed, inner spaces collapsed. */
+export function normalizeBranchName(value: unknown): string {
+  return typeof value === "string" ? value.trim().replaceAll(/\s+/g, " ") : ""
+}
+
+/** Why a name for a branch to be created cannot be accepted, or null. */
+export function requestedBranchNameError(value: unknown): string | null {
+  return newBranchFieldError("name", normalizeBranchName(value))
+}
+
+/** One branch of a sign-up: an existing one picked by name, or one to create from its CRC. */
+export type RequestedBranchEntry = { branchId: number } | { crc: string; name?: string | null }
+
+export type RequestedNewBranch = { crc: string; name: string | null }
+
+/**
+ * The branches to create, one per CRC, normalised. A CRC listed twice is one
+ * branch, and the first name given for it is kept.
+ */
+export function requestedNewBranches(entries: readonly RequestedBranchEntry[]): RequestedNewBranch[] {
+  const byCrc = new Map<string, RequestedNewBranch>()
+  for (const entry of entries) {
+    if (!("crc" in entry)) continue
+    const crc = normalizeCrc(entry.crc)
+    const name = normalizeBranchName(entry.name) || null
+    const known = byCrc.get(crc)
+    if (!known) byCrc.set(crc, { crc, name })
+    else if (known.name === null && name !== null) known.name = name
+  }
+  return [...byCrc.values()]
+}
+
 /** The username an address gets: the part before the `@`, lower-cased. */
 export function deriveUsernameFromEmail(email: string): string {
   const at = email.lastIndexOf("@")
@@ -99,7 +132,7 @@ export function splitFullName(fullName: string): { firstName: string; lastName: 
 
 export type InitiatorRole = "ORDER_PORTAL" | "GROUP_ORDER_PORTAL"
 
-/** One branch (one CRC) orders through the shop; more than one through the group storefront. */
+/** One branch orders through the shop; more than one through the group storefront. */
 export function initiatorRoleForBranchCount(count: number): InitiatorRole {
   return count === 1 ? "ORDER_PORTAL" : "GROUP_ORDER_PORTAL"
 }

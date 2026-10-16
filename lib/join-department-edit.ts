@@ -25,15 +25,21 @@ import {
   SIGNUP_MAX_ADDRESSES,
   SIGNUP_MAX_BRANCHES,
   SIGNUP_PHONE_PATTERN,
+  type RequestedBranchEntry,
+  type RequestedNewBranch,
   crcError,
   isDepartment,
+  normalizeBranchName,
   normalizeCrc,
+  requestedBranchNameError,
 } from "@/lib/join-department-signup"
 import { emailMatchesDomain } from "@/lib/organization-email-domain"
+import { USERNAME_BASE_MAX_LENGTH } from "@/lib/username-prefix"
 
 export const JOIN_EDIT_NAME_MAX_LENGTH = 100
 export const JOIN_EDIT_USERNAME_MIN_LENGTH = 3
-export const JOIN_EDIT_USERNAME_MAX_LENGTH = 255
+/** Room is left for the organization's prefix (`USERNAME_BASE_MAX_LENGTH`). */
+export const JOIN_EDIT_USERNAME_MAX_LENGTH = USERNAME_BASE_MAX_LENGTH
 export const JOIN_EDIT_USERNAME_PATTERN = /^\S+$/
 export const JOIN_EDIT_EMAIL_MAX_LENGTH = 255
 
@@ -58,34 +64,50 @@ export function changedPersonFields(before: Readonly<JoinEditPerson>, after: Rea
 
 /* ── Server planners ─────────────────────────────────────────────────────── */
 
-export type StoredRequestBranchRow = { id: number; existingBranchId: number | null; costCenterId: string | null }
+export type StoredRequestBranchRow = {
+  id: number
+  existingBranchId: number | null
+  costCenterId: string | null
+  requestedBranchName: string | null
+}
 
 export type RequestBranchEditPlan = {
   deleteIds: number[]
   insertExistingIds: number[]
-  insertCrcs: string[]
+  insertNewBranches: RequestedNewBranch[]
+  /** Kept CRC rows whose name the edit gives or changes. */
+  renames: Array<{ id: number; name: string }>
 }
 
 /**
  * The request branch rows an edit keeps, drops and adds. `next` is the edited
- * list after typed CRCs were matched: existing branch ids, and the CRCs still
- * to be created. A row is kept when it names the same branch or the same CRC.
+ * list after typed CRCs were matched: existing branch ids, and the branches
+ * still to be created. A row is kept when it names the same branch or the same
+ * CRC; a kept CRC row takes the edit's name when one is given, and keeps its
+ * own when none is.
  */
 export function planRequestBranchEdit(
   current: readonly StoredRequestBranchRow[],
-  next: Readonly<{ existingIds: readonly number[]; newCrcs: readonly string[] }>,
+  next: Readonly<{ existingIds: readonly number[]; newBranches: readonly RequestedNewBranch[] }>,
 ): RequestBranchEditPlan {
   const wantedExisting = new Set(next.existingIds)
-  const wantedCrcs = new Set(next.newCrcs.map(normalizeCrc))
+  const wantedNew = new Map(next.newBranches.map((entry) => [
+    normalizeCrc(entry.crc),
+    normalizeBranchName(entry.name) || null,
+  ]))
   const keptExisting = new Set<number>()
   const keptCrcs = new Set<string>()
   const deleteIds: number[] = []
+  const renames: Array<{ id: number; name: string }> = []
 
   for (const row of current) {
+    const crc = row.costCenterId === null ? null : normalizeCrc(row.costCenterId)
     if (row.existingBranchId !== null && wantedExisting.has(row.existingBranchId)) {
       keptExisting.add(row.existingBranchId)
-    } else if (row.existingBranchId === null && row.costCenterId !== null && wantedCrcs.has(normalizeCrc(row.costCenterId))) {
-      keptCrcs.add(normalizeCrc(row.costCenterId))
+    } else if (row.existingBranchId === null && crc !== null && wantedNew.has(crc)) {
+      keptCrcs.add(crc)
+      const name = wantedNew.get(crc)
+      if (name && name !== row.requestedBranchName) renames.push({ id: row.id, name })
     } else {
       deleteIds.push(row.id)
     }
@@ -94,7 +116,10 @@ export function planRequestBranchEdit(
   return {
     deleteIds,
     insertExistingIds: [...wantedExisting].filter((id) => !keptExisting.has(id)),
-    insertCrcs: [...wantedCrcs].filter((crc) => !keptCrcs.has(crc)),
+    insertNewBranches: [...wantedNew.entries()]
+      .filter(([crc]) => !keptCrcs.has(crc))
+      .map(([crc, name]) => ({ crc, name: name ?? null })),
+    renames,
   }
 }
 
@@ -148,7 +173,7 @@ export function editedAddressListError(addresses: readonly string[]): string | n
 }
 
 /** Why the edited branch list cannot be accepted, or null. */
-export function editedBranchListError(branches: ReadonlyArray<{ branchId: number } | { crc: string }>): string | null {
+export function editedBranchListError(branches: readonly RequestedBranchEntry[]): string | null {
   if (branches.length === 0) return "Keep at least one branch"
   if (branches.length > SIGNUP_MAX_BRANCHES) return `At most ${SIGNUP_MAX_BRANCHES} branches`
   const keys = branches.map((entry) => ("branchId" in entry ? `b:${entry.branchId}` : `c:${normalizeCrc(entry.crc)}`))
@@ -159,7 +184,7 @@ export function editedBranchListError(branches: ReadonlyArray<{ branchId: number
 
 export type JoinEditBranch =
   | { key: string; kind: "existing"; branchId: number; label: string }
-  | { key: string; kind: "crc"; crc: string; label: string }
+  | { key: string; kind: "crc"; crc: string; name: string | null; label: string }
 
 export type DepartmentJoinEditDraft = {
   firstName: string
@@ -188,7 +213,13 @@ export type JoinEditSource = {
     department: string | null
     ipExtension: string | null
   }
-  branches: ReadonlyArray<{ kind: "existing" | "new"; branchId: number | null; name: string | null; costCenterId: string | null }>
+  branches: ReadonlyArray<{
+    kind: "existing" | "new"
+    branchId: number | null
+    name: string | null
+    costCenterId: string | null
+    requestedName: string | null
+  }>
   addresses: ReadonlyArray<{ requestAddressId: number; address: string }>
   approvers: ReadonlyArray<{ level: number; email: string; designation: string }>
 }
@@ -199,6 +230,12 @@ export function existingBranchKey(branchId: number): string {
 
 export function crcBranchKey(crc: string): string {
   return `crc:${normalizeCrc(crc)}`
+}
+
+/** How a branch still to be created is listed: by its name when it has one, always with its CRC. */
+export function newBranchLabel(crc: string, name: string | null): string {
+  const normalized = normalizeCrc(crc)
+  return name ? `${name} (new, CRC ${normalized})` : `New branch for CRC ${normalized}`
 }
 
 export function draftFromReview(review: JoinEditSource): DepartmentJoinEditDraft {
@@ -216,7 +253,13 @@ export function draftFromReview(review: JoinEditSource): DepartmentJoinEditDraft
         return [{ key: existingBranchKey(row.branchId), kind: "existing", branchId: row.branchId, label: row.name ?? `Branch ${row.branchId}` }]
       }
       if (row.costCenterId) {
-        return [{ key: crcBranchKey(row.costCenterId), kind: "crc", crc: normalizeCrc(row.costCenterId), label: `New branch for CRC ${normalizeCrc(row.costCenterId)}` }]
+        return [{
+          key: crcBranchKey(row.costCenterId),
+          kind: "crc",
+          crc: normalizeCrc(row.costCenterId),
+          name: row.requestedName,
+          label: newBranchLabel(row.costCenterId, row.requestedName),
+        }]
       }
       return []
     }),
@@ -307,6 +350,17 @@ export function crcDraftError(draft: DepartmentJoinEditDraft, crc: string): stri
   return null
 }
 
+/** Why a new branch (its name and its CRC) cannot be added to the draft, or null. */
+export function newBranchDraftError(
+  draft: DepartmentJoinEditDraft,
+  entry: Readonly<{ name: string; crc: string }>,
+): { field: "name" | "crc"; message: string } | null {
+  const nameProblem = requestedBranchNameError(entry.name)
+  if (nameProblem) return { field: "name", message: nameProblem }
+  const crcProblem = crcDraftError(draft, entry.crc)
+  return crcProblem ? { field: "crc", message: crcProblem } : null
+}
+
 /** The PATCH body. Call only once `departmentJoinEditErrors` is empty. */
 export function toDepartmentJoinUpdatePayload(draft: DepartmentJoinEditDraft) {
   return {
@@ -319,7 +373,10 @@ export function toDepartmentJoinUpdatePayload(draft: DepartmentJoinEditDraft) {
       ipExtension: draft.ipExtension.trim(),
       employeeId: draft.employeeId.trim(),
       department: draft.department,
-      branches: draft.branches.map((entry) => (entry.kind === "existing" ? { branchId: entry.branchId } : { crc: entry.crc })),
+      branches: draft.branches.map((entry) => {
+        if (entry.kind === "existing") return { branchId: entry.branchId }
+        return entry.name ? { crc: entry.crc, name: entry.name } : { crc: entry.crc }
+      }),
       addresses: draft.addresses.map((row) => row.address.trim()),
       approvers: draft.approvers.map((approver) => ({
         level: approver.level,

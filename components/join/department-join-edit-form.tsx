@@ -13,16 +13,20 @@ import {
   type DepartmentJoinEditDraft,
   type JoinEditSource,
   crcBranchKey,
-  crcDraftError,
   departmentJoinEditErrors,
   draftFromReview,
   existingBranchKey,
+  newBranchDraftError,
+  newBranchLabel,
   toDepartmentJoinUpdatePayload,
 } from "@/lib/join-department-edit"
 import {
+  CRC_MAX_LENGTH,
   DEPARTMENTS,
+  NEW_BRANCH_FIELD_RULES,
   SIGNUP_MAX_ADDRESSES,
   SIGNUP_MAX_BRANCHES,
+  normalizeBranchName,
   normalizeCrc,
 } from "@/lib/join-department-signup"
 import { payloadSizeError } from "@/lib/join-department-signup-form"
@@ -66,8 +70,9 @@ export function DepartmentJoinEditForm({
 }>) {
   const [draft, setDraft] = useState<DepartmentJoinEditDraft>(() => draftFromReview(review))
   const [pickBranchId, setPickBranchId] = useState("")
+  const [newName, setNewName] = useState("")
   const [crc, setCrc] = useState("")
-  const [crcProblem, setCrcProblem] = useState<string | null>(null)
+  const [newBranchProblem, setNewBranchProblem] = useState<string | null>(null)
   const [showErrors, setShowErrors] = useState(false)
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
@@ -88,12 +93,19 @@ export function DepartmentJoinEditForm({
     setPickBranchId("")
   }
 
-  const addCrc = () => {
-    const problem = crcDraftError(draft, crc)
-    setCrcProblem(problem)
+  const addNewBranch = () => {
+    const problem = newBranchDraftError(draft, { name: newName, crc })
+    setNewBranchProblem(problem?.message ?? null)
     if (problem) return
     const normalized = normalizeCrc(crc)
-    patch({ branches: [...draft.branches, { key: crcBranchKey(normalized), kind: "crc", crc: normalized, label: `New branch for CRC ${normalized}` }] })
+    const name = normalizeBranchName(newName)
+    patch({
+      branches: [
+        ...draft.branches,
+        { key: crcBranchKey(normalized), kind: "crc", crc: normalized, name, label: newBranchLabel(normalized, name) },
+      ],
+    })
+    setNewName("")
     setCrc("")
   }
 
@@ -166,7 +178,7 @@ export function DepartmentJoinEditForm({
       </section>
 
       <section className="space-y-2">
-        <h3 className="text-sm font-semibold text-slate-900">Branches (CRC)</h3>
+        <h3 className="text-sm font-semibold text-slate-900">Branches</h3>
         <ul className="space-y-1.5">
           {draft.branches.map((entry) => (
             <li key={entry.key} className="flex items-center justify-between gap-2 rounded-md border border-slate-200 px-3 py-1.5 text-sm">
@@ -203,17 +215,32 @@ export function DepartmentJoinEditForm({
           <div className="space-y-1">
             <div className="flex gap-2">
               <Input
-                aria-label="Add a CRC number"
-                placeholder="CRC number"
-                value={crc}
-                onChange={(event) => { setCrc(event.target.value); setCrcProblem(null) }}
+                aria-label="New branch name"
+                placeholder="New branch name"
+                value={newName}
+                maxLength={NEW_BRANCH_FIELD_RULES.name.max}
+                onChange={(event) => { setNewName(event.target.value); setNewBranchProblem(null) }}
                 disabled={branchesFull}
               />
-              <Button type="button" variant="outline" onClick={addCrc} disabled={!crc.trim() || branchesFull}>
+              <Input
+                aria-label="New branch CRC number"
+                placeholder="CRC number"
+                value={crc}
+                maxLength={CRC_MAX_LENGTH}
+                onChange={(event) => { setCrc(event.target.value); setNewBranchProblem(null) }}
+                disabled={branchesFull}
+                className="w-36 shrink-0"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={addNewBranch}
+                disabled={!newName.trim() || !crc.trim() || branchesFull}
+              >
                 Add
               </Button>
             </div>
-            {crcProblem && <p className="text-xs font-medium text-red-600">{crcProblem}</p>}
+            {newBranchProblem && <p className="text-xs font-medium text-red-600">{newBranchProblem}</p>}
           </div>
         </div>
         <p className="text-xs text-slate-500">

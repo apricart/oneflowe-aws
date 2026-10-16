@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  approverLevelOf,
   buildConsolidatedInvoiceRow,
   buildConsolidatedInvoiceRows,
   CONSOLIDATED_INVOICE_MAX_BRANCH_IDS,
@@ -35,6 +36,7 @@ const source = (overrides: Partial<ConsolidatedInvoiceSource> = {}): Consolidate
   paymentStatus: "UNPAID",
   department: "Compliance",
   approver: "Farruk Khalil",
+  approvalLevel: null,
   costCenterId: "CC-1",
   quantity: 169,
   creditedQuantity: 0,
@@ -184,10 +186,28 @@ describe("a row is its invoice less what has been credited", () => {
     expect(buildConsolidatedInvoiceRow("invoices", source({ paymentStatus: null }), 1).paymentStatus).toBe("UNPAID")
   })
 
+  it("names the level the order was approved at beside the approver, and nothing for an order without one", () => {
+    expect(buildConsolidatedInvoiceRow("invoices", source({ approvalLevel: 2 }), 1)).toMatchObject({
+      approver: "Farruk Khalil", approverLevel: "Level 2", approvalLevel: 2,
+    })
+    expect(buildConsolidatedInvoiceRow("proformas", source({ approvalLevel: 1 }), 1).approverLevel).toBe("Level 1")
+    expect(buildConsolidatedInvoiceRow("invoices", source(), 1)).toMatchObject({ approverLevel: "", approvalLevel: null })
+  })
+
   it("marks a proforma's number as reserved, or says it comes when the order is processed", () => {
     expect(buildConsolidatedInvoiceRow("proformas", source({ invoiceNumber: "UBL-APR-000040" }), 1).invoiceNumber).toBe("UBL-APR-000040 (when processed)")
     expect(buildConsolidatedInvoiceRow("proformas", source({ invoiceNumber: null }), 1).invoiceNumber).toBe("When processed")
     expect(buildConsolidatedInvoiceRow("invoices", source({ invoiceNumber: null }), 1).invoiceNumber).toBe("—")
+  })
+})
+
+describe("approverLevelOf", () => {
+  it("names only a level the database could hold", () => {
+    expect(approverLevelOf(1)).toEqual({ approverLevel: "Level 1", approvalLevel: 1 })
+    expect(approverLevelOf(10)).toEqual({ approverLevel: "Level 10", approvalLevel: 10 })
+    for (const value of [null, undefined, 0, 11, -1, 1.5, Number.NaN]) {
+      expect(approverLevelOf(value)).toEqual({ approverLevel: "", approvalLevel: null })
+    }
   })
 })
 
@@ -213,6 +233,15 @@ describe("ordering and totals", () => {
 
   it("sorts as asked and numbers the rows in that order", () => {
     expect(rows.map((row) => [row.serial, row.orderId])).toEqual([[1, 1], [2, 3], [3, 2]])
+  })
+
+  it("sorts by approver level, unlevelled orders last", () => {
+    const sorted = buildConsolidatedInvoiceRows("invoices", [
+      source({ orderId: 1, approvalLevel: null }),
+      source({ orderId: 2, approvalLevel: 3 }),
+      source({ orderId: 3, approvalLevel: 1 }),
+    ], { key: "approverLevel", direction: "asc" })
+    expect(sorted.map((row) => row.orderId)).toEqual([3, 2, 1])
   })
 
   it("keeps the query's order when no sort is asked for", () => {
@@ -249,6 +278,8 @@ describe("the document's wording", () => {
     expect(consolidatedInvoiceFileName("invoices", "UBL_123A", "2026-08-01", "2026-08-31")).toBe("consolidated-invoice-UBL_123A-2026-08-01_2026-08-31.pdf")
     expect(consolidatedInvoiceFileName("proformas", "../x", "2026-08-01", "2026-08-31")).toBe("consolidated-proforma-x-2026-08-01_2026-08-31.pdf")
     expect(consolidatedInvoiceFileName("invoices", "UBL", "2026-08-01", "2026-08-31", "UNPAID")).toBe("consolidated-invoice-UBL-2026-08-01_2026-08-31-unpaid.pdf")
+    expect(consolidatedInvoiceFileName("invoices", "UBL", "2026-08-01", "2026-08-31", "PAID", "xlsx")).toBe("consolidated-invoice-UBL-2026-08-01_2026-08-31-paid.xlsx")
+    expect(consolidatedInvoiceFileName("proformas", "UBL", "2026-08-01", "2026-08-31", null, "csv")).toBe("consolidated-proforma-UBL-2026-08-01_2026-08-31.csv")
   })
 
   it("names a payment-status filter on the document, and says nothing without one", () => {

@@ -11,7 +11,8 @@ import { DepartmentJoinReviewDialog } from "./department-join-review-dialog"
  * Head Office approving a department sign-up that asks for a new branch
  * (plans/OF-JOIN-department-signup-multi-user.md). The schema is the control;
  * this pins that the dialog names the missing new-branch details instead of
- * sending them and showing the server's refusal.
+ * sending them and showing the server's refusal, and that a new branch is
+ * named as the applicant named it — never after its CRC.
  */
 
 const REVIEW = {
@@ -29,16 +30,16 @@ const REVIEW = {
     ipExtension: "1234",
   },
   initiatorRole: "ORDER_PORTAL",
-  branches: [{ requestBranchId: 31, kind: "new", branchId: null, name: null, costCenterId: "DEMOTTTT" }],
+  branches: [{ requestBranchId: 31, kind: "new", branchId: null, name: null, costCenterId: "DEMOTTTT", requestedName: "Demo Tower" as string | null }],
   addresses: [{ requestAddressId: 41, address: "Plot 4, Clifton", branchId: null }],
   approvers: [],
   approvalLevelsApply: true,
   decisionReason: null,
 }
 
-function renderDialog(organizationBranches: Array<{ id: number; name: string }> = []) {
+function renderDialog(organizationBranches: Array<{ id: number; name: string }> = [], review: typeof REVIEW = REVIEW) {
   fetcher.mockImplementation(async (url: string) => (url.startsWith("/api/v1/join-requests/")
-    ? { item: REVIEW }
+    ? { item: review }
     : { items: organizationBranches }))
   jsonFetcher.mockResolvedValue({ id: 9, status: "approved" })
   const onDecided = vi.fn()
@@ -83,8 +84,26 @@ describe("DepartmentJoinReviewDialog — a new branch's details", () => {
     await waitFor(() => expect(onDecided).toHaveBeenCalled())
     const body = JSON.parse(jsonFetcher.mock.calls[0][1].body)
     expect(body.newBranches).toEqual([
-      { requestBranchId: 31, name: "DEMOTTTT", province: "Sindh", city: "Karachi", address: "Plot 4, Clifton" },
+      { requestBranchId: 31, name: "Demo Tower", province: "Sindh", city: "Karachi", address: "Plot 4, Clifton" },
     ])
+  })
+
+  it("starts the branch name from the applicant's, and lists the branch by it", async () => {
+    renderDialog()
+    expect(((await screen.findByLabelText("Branch name")) as HTMLInputElement).value).toBe("Demo Tower")
+    expect(screen.getByText("Demo Tower")).toBeTruthy()
+    expect(screen.getByText("CRC DEMOTTTT")).toBeTruthy()
+  })
+
+  it("never offers the CRC as the name of a branch an older request did not name", async () => {
+    const unnamed = { ...REVIEW, branches: [{ ...REVIEW.branches[0], requestedName: null }] }
+    renderDialog([], unnamed)
+    expect(((await screen.findByLabelText("Branch name")) as HTMLInputElement).value).toBe("")
+
+    approve()
+    expect(screen.getByRole("alert").textContent)
+      .toBe("Complete the new branch for CRC DEMOTTTT before approving: branch name, province, city.")
+    expect(jsonFetcher).not.toHaveBeenCalled()
   })
 
   it("asks for no details when the CRC is mapped onto an existing branch", async () => {

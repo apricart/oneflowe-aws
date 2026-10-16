@@ -101,14 +101,15 @@ test.describe.serial("joining an organization with approval levels, and ordering
 
       await page.locator("#signup-full-name").fill("Level Applicant")
       await page.locator("#signup-email").fill(initiatorLocal)
-      await expect(page.locator("#signup-username")).toHaveValue(initiatorLocal)
+      // The organization's prefix, then the part of the email before the "@".
+      await expect(page.locator("#signup-username")).toHaveValue(new RegExp(`^[a-z0-9]{1,3}-${initiatorLocal}$`))
       await page.locator("#signup-phone").fill(applicantPhone)
       await page.locator("#signup-ip-extension").fill("4321")
       await page.locator("#signup-employee-id").fill(`E2E-LVLJ-${applicantPhone.slice(-4)}`)
       await page.locator("#signup-department").selectOption("Finance")
 
       // The branch is picked by name; no CRC number of an existing branch is ever shown.
-      await page.locator("#signup-crc").fill("lvlj north")
+      await page.locator("#signup-branch").fill("lvlj north")
       await page.getByRole("option", { name: tenant.branches.north.name }).click()
       await page.locator("#signup-address").fill("Plot 7, Clifton, Karachi")
       await page.locator("#signup-address").press("Enter")

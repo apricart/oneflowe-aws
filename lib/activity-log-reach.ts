@@ -28,8 +28,14 @@
 
 import type { ActivityActor, ActivityReach } from "@/lib/activity-log"
 
-/** The roles whose holders are Apricart's, not any tenant's. */
-const PLATFORM_ACTOR_ROLES: ReadonlySet<string> = new Set(["SUPER_ADMIN"])
+/**
+ * The roles whose holders are Apricart's, not any tenant's. Exported for the
+ * actor-role filter's SQL, which must exclude the same people this classifier
+ * anonymises (`lib/server/activity-log-sql.ts`).
+ */
+export const PLATFORM_ACTOR_ROLE_NAMES: readonly string[] = ["SUPER_ADMIN"]
+
+const PLATFORM_ACTOR_ROLES: ReadonlySet<string> = new Set(PLATFORM_ACTOR_ROLE_NAMES)
 
 /** What the reader is told about an actor they may not identify. */
 export const PLATFORM_ACTOR_LABEL = "Apricart administrator"

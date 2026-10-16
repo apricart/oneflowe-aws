@@ -25,6 +25,7 @@ const source = (index: number): ConsolidatedInvoiceSource => ({
   paymentStatus: "UNPAID",
   department: "Facility Management",
   approver: "Syed Amir Ali Waris",
+  approvalLevel: 2,
   costCenterId: "CC-77",
   quantity: 53,
   creditedQuantity: 0,
@@ -73,6 +74,7 @@ describe("the consolidated invoice PDF", () => {
     const text = render(3)
     for (const number of ["UBL-APR-000030", "UBL-APR-000031", "UBL-APR-000032"]) expect(text).toContain(number)
     expect(text).toContain("40,815.00")
+    expect(text).toContain("Level 2")
     expect(text).toContain("18%")
     expect(text).toContain("(Total)")
     expect(text).toContain("103,767.00")

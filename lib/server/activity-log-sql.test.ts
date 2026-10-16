@@ -57,6 +57,7 @@ function baseFilters(overrides: Partial<ActivityFilters> = {}): ActivityFilters 
     organizationId: null,
     branchId: null,
     actorId: null,
+    actorRole: null,
     success: null,
     search: null,
     ...overrides,
@@ -354,5 +355,71 @@ describe("the organization fence", () => {
       activityPageQuery(baseFilters({ reach: OWN, search: "ali", searchActorIds: ids })),
     )
     expect(rendered.params).toContain(ids[0])
+  })
+})
+
+describe("the actor-role filter", () => {
+  const OWN = { kind: "organization", organizationId: 4242 } as const
+
+  function branches(text: string): string[] {
+    return text.split(/ union all /i)
+  }
+
+  it("passes the role as a parameter, never as SQL text", () => {
+    const rendered = render(activityPageQuery(baseFilters({ actorRole: "BRANCH_ADMIN" })))
+    expect(rendered.params).toContain("BRANCH_ADMIN")
+    expect(rendered.sql).not.toContain("BRANCH_ADMIN")
+  })
+
+  it("prefers the role a row recorded, and falls back to the account only where it recorded none", () => {
+    const [audit, system, group] = branches(
+      render(activityPageQuery(baseFilters({ actorRole: "HEAD_OFFICE" }))).sql,
+    )
+    // `audit_logs` records no role, so the account is its only answer.
+    expect(audit).not.toContain("user_role")
+    expect(audit).toMatch(/al\."user_id"::text in \(select "users"\."id"::text from "users"/)
+    expect(system).toMatch(/nullif\(trim\(sl\."user_role"\), ''\) = \$\d+ or \(nullif\(trim\(sl\."user_role"\), ''\) is null and/)
+    expect(group).toMatch(/nullif\(trim\(gal\."performed_by_role"\), ''\) = \$\d+/)
+  })
+
+  it("reads accounts across tenants for the whole-platform reader", () => {
+    const rendered = render(activityPageQuery(baseFilters({ actorRole: "HEAD_OFFICE" })))
+    expect(rendered.sql).not.toContain(`"users"."organization_id"`)
+  })
+
+  it("matches an organization reader's tenant role only among that tenant's people", () => {
+    const rendered = render(activityPageQuery(baseFilters({ reach: OWN, actorRole: "BRANCH_ADMIN" })))
+    for (const branch of branches(rendered.sql)) {
+      expect(branch).toMatch(/"users"\."organization_id" = \$\d+/)
+    }
+    // A row whose recorded role names someone of another tenant, or platform
+    // staff, must not match: the page withholds that actor's role.
+    const [, system] = branches(rendered.sql)
+    expect(system).toMatch(/not in \(\$\d+\)/)
+    expect(system).toMatch(/not exists \(select 1 from "users" where "users"\."id"::text = sl\."user_id"::text\)/)
+    expect(rendered.params).toContain("SUPER_ADMIN")
+    expect(rendered.params).toContain(4242)
+  })
+
+  it("keeps the tenant condition even for an Apricart role, so one that slipped past the refusal matches nothing", () => {
+    const rendered = render(activityPageQuery(baseFilters({ reach: OWN, actorRole: "SUPER_ADMIN" })))
+    for (const branch of branches(rendered.sql)) {
+      expect(branch).toMatch(/"users"\."organization_id" = \$\d+/)
+    }
+  })
+
+  it("names only the identifiers this module owns or the schema's own tables", () => {
+    const rendered = render(activityPageQuery(baseFilters({ reach: OWN, actorRole: "ORDER_PORTAL" })))
+    const identifiers = rendered.sql.match(/"[a-z_]+"/g) ?? []
+    const allowed = new Set([
+      "id", "created_at", "timestamp", "action", "entity", "entity_id", "resource_type",
+      "resource_id", "user_id", "user_role", "user_email", "organization_id", "branch_id",
+      "metadata", "details", "ip_address", "user_agent", "success", "error_message",
+      "group_id", "performed_by_user_id", "performed_by_role",
+      "users", "roles", "role_id", "name",
+    ])
+    for (const identifier of identifiers) {
+      expect(allowed.has(identifier.replaceAll('"', ""))).toBe(true)
+    }
   })
 })
