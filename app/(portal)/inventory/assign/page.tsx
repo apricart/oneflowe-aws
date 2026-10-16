@@ -2,6 +2,7 @@
 
 import { OrganizationPricePropagationDialog, type PropagationChoice } from "@/components/admin/organization-price-propagation-dialog"
 import { useAppContext } from "@/components/context/app-context"
+import { OrganizationProductsExport } from "@/components/inventory/organization-products-export"
 import { ProductNameCell } from "@/components/inventory/product-name-cell"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -12,6 +13,7 @@ import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from "@/com
 import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from "@/components/ui/table"
 import { Tabs,TabsContent,TabsList,TabsTrigger } from "@/components/ui/tabs"
 import { useToast } from "@/hooks/use-toast"
+import { organizationProductsFilterDescription } from "@/lib/organization-products-export"
 import { cn,formatPKR } from "@/lib/utils"
 import { Building2,Check,Edit,Package,Plus,RefreshCw,Search } from "lucide-react"
 import { useMemo,useState } from "react"
@@ -55,7 +57,10 @@ type AssignedProduct = {
     organizationName: string
     categoryName?: string
     parentCategoryName?: string
+    globalStatus?: string
 }
+
+type NamedOption = { id: number, name: string }
 
 export default function AssignProductPage() {
     const { toast } = useToast()
@@ -79,9 +84,10 @@ export default function AssignProductPage() {
     const selectedOrgId = contextOrgId || localOrgId
     const showOrgSelector = !contextOrgId
 
-    // Fetch organizations (only needed when no context org)
+    // Fetch organizations: the selector lists them, and the export names the
+    // selected one even when it was chosen in the header.
     const { data: orgsData } = useSWR<{ items: Organization[] }>(
-        showOrgSelector ? "/api/v1/organizations" : null,
+        "/api/v1/organizations",
         fetcher,
         { fallbackData: { items: [] } }
     )
@@ -133,6 +139,21 @@ export default function AssignProductPage() {
 
     const filteredNotAssigned = notAssignedProducts
     const filteredAssigned = assignedProducts
+
+    // Same keys as the filter dropdowns below, so SWR serves these from cache.
+    const { data: categoriesData } = useSWR<{ items: NamedOption[] }>("/api/v1/categories?limit=100", fetcher)
+    const { data: subcategoriesData } = useSWR<{ items: NamedOption[] }>(
+        categoryFilter === "all" ? "/api/v1/subcategories?limit=100" : `/api/v1/subcategories?categoryId=${categoryFilter}&limit=100`,
+        fetcher
+    )
+    const selectedOrgName = orgsData?.items?.find((org) => org.id.toString() === selectedOrgId)?.name
+        ?? assignedProducts[0]?.organizationName
+        ?? `Organization ${selectedOrgId}`
+    const exportFilterDescription = organizationProductsFilterDescription({
+        search: searchQuery,
+        category: categoryFilter === "all" ? null : categoriesData?.items?.find((c) => c.id.toString() === categoryFilter)?.name ?? categoryFilter,
+        subcategory: subCategoryFilter === "all" ? null : subcategoriesData?.items?.find((c) => c.id.toString() === subCategoryFilter)?.name ?? subCategoryFilter,
+    })
 
     const handleAssignClick = (product: GlobalProduct) => {
         setSelectedProduct(product)
@@ -252,6 +273,15 @@ export default function AssignProductPage() {
                     </div>
                 </div>
                 <div className="flex items-center gap-2">
+                    {selectedOrgId && (
+                        <OrganizationProductsExport
+                            organizationName={selectedOrgName}
+                            notAssigned={filteredNotAssigned}
+                            assigned={filteredAssigned}
+                            filterDescription={exportFilterDescription}
+                            disabled={productsLoading || assignmentsLoading}
+                        />
+                    )}
                     <Button variant="outline" size="sm" className="h-9 gap-2 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 bg-white hover:bg-slate-50 dark:bg-slate-800 dark:hover:bg-slate-700 shadow-sm" onClick={() => mutateAssignments()}>
                         <RefreshCw className="h-4 w-4" />
                         <span className="hidden sm:inline">Refresh</span>
@@ -466,8 +496,8 @@ export default function AssignProductPage() {
                                                                 : <span className="text-muted-foreground">Not set</span>}
                                                         </TableCell>
                                                         <TableCell>
-                                                            <Badge variant={(assignment as any).globalStatus === "active" ? "default" : "secondary"}>
-                                                                {(assignment as any).globalStatus === "active" ? "Active" : "Inactive"}
+                                                            <Badge variant={assignment.globalStatus === "active" ? "default" : "secondary"}>
+                                                                {assignment.globalStatus === "active" ? "Active" : "Inactive"}
                                                             </Badge>
                                                         </TableCell>
                                                         <TableCell className="text-right">

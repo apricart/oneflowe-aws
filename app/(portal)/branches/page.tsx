@@ -1,5 +1,6 @@
 "use client"
 
+import { useViewerAccess } from "@/lib/hooks/use-viewer-access"
 import { useEffect,useMemo,useState } from "react"
 import { useBranches,useUsers } from "@/lib/hooks/use-api"
 import { fetcher } from "@/lib/fetcher"
@@ -52,6 +53,10 @@ type User = {
 export default function BranchesPage() {
   const router = useRouter()
   const { organizationId, userOrgId, userRole, isInitialized, setBranchId } = useAppContext()
+  // An organization-wide Viewer reads this workspace as Head Office does, with
+  // every control that changes a branch hidden.
+  const { viewRole: viewerViewRole, readOnly } = useViewerAccess()
+  const viewRole = userRole === "VIEWER" ? viewerViewRole : userRole
   const { data: branchesRes, isLoading, isValidating: isRefreshingBranches, mutate: refetchBranches } = useBranches(organizationId || undefined)
   const { data: usersRes, isValidating: isRefreshingUsers, mutate: refetchUsers } = useUsers(organizationId || undefined)
 
@@ -194,7 +199,7 @@ export default function BranchesPage() {
     )
   }
 
-  if (userRole !== "HEAD_OFFICE") {
+  if (viewRole !== "HEAD_OFFICE") {
     return (
       <main className="p-6">
         <Card>
@@ -220,10 +225,12 @@ export default function BranchesPage() {
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <HeadOfficeCreateBranchDialog
-            organizationId={userOrgId}
-            onCreated={() => { void refetchBranches() }}
-          />
+          {!readOnly && (
+            <HeadOfficeCreateBranchDialog
+              organizationId={userOrgId}
+              onCreated={() => { void refetchBranches() }}
+            />
+          )}
           <Badge variant="outline" className="h-8 px-3 rounded-full border-blue-200 bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:border-blue-800/60 dark:text-blue-400 font-semibold uppercase tracking-wider text-[10px]">
             {totalBranches} Branches
           </Badge>
@@ -441,34 +448,36 @@ export default function BranchesPage() {
                                   }}
                                 >
                                   <UserCog className="h-4 w-4" />
-                                  {admin ? "Manage Team" : "Assign Admin"}
+                                  {readOnly ? "View Team" : admin ? "Manage Team" : "Assign Admin"}
                                 </Button>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  loading={isUpdatingThisBranch}
-                                  className={cn(
-                                    "h-10 min-w-[112px] px-4 gap-2 rounded-xl border-slate-200 dark:border-slate-800 shadow-sm transition-all",
-                                    isActive
-                                      ? "text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/30"
-                                      : "text-emerald-600 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/30"
-                                  )}
-                                  disabled={!!updatingBranchId}
-                                  onClick={(event) => {
-                                    event.stopPropagation()
-                                    void handleStatusToggle(branch.id, branch.status)
-                                  }}
-                                >
-                                  {(() => {
-                                    if (isUpdatingThisBranch) {
-                                      return "Updating"
-                                    }
-                                    if (isActive) {
-                                      return "Deactivate"
-                                    }
-                                    return "Activate"
-                                  })()}
-                                </Button>
+                                {!readOnly && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    loading={isUpdatingThisBranch}
+                                    className={cn(
+                                      "h-10 min-w-[112px] px-4 gap-2 rounded-xl border-slate-200 dark:border-slate-800 shadow-sm transition-all",
+                                      isActive
+                                        ? "text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/30"
+                                        : "text-emerald-600 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/30"
+                                    )}
+                                    disabled={!!updatingBranchId}
+                                    onClick={(event) => {
+                                      event.stopPropagation()
+                                      void handleStatusToggle(branch.id, branch.status)
+                                    }}
+                                  >
+                                    {(() => {
+                                      if (isUpdatingThisBranch) {
+                                        return "Updating"
+                                      }
+                                      if (isActive) {
+                                        return "Deactivate"
+                                      }
+                                      return "Activate"
+                                    })()}
+                                  </Button>
+                                )}
                               </div>
                             </motion.div>
                           )
@@ -540,7 +549,7 @@ export default function BranchesPage() {
                                 </TableCell>
                                 <TableCell>
                                   <span className="font-mono text-xs font-bold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-md">
-                                    {branch.costCenterId || "â€”"}
+                                    {branch.costCenterId || "—"}
                                   </span>
                                 </TableCell>
                                 <TableCell>
@@ -595,34 +604,36 @@ export default function BranchesPage() {
                                       }}
                                     >
                                       <UserCog className="h-3.5 w-3.5" />
-                                      {admin ? "Manage" : "Assign"}
+                                      {readOnly ? "View" : admin ? "Manage" : "Assign"}
                                     </Button>
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      loading={isUpdatingThisBranch}
-                                      className={cn(
-                                        "h-8 px-3 rounded-lg text-xs font-bold border-slate-200 dark:border-slate-700 shadow-sm transition-all",
-                                        isActive
-                                          ? "text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/30"
-                                          : "text-emerald-600 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/30"
-                                      )}
-                                      disabled={!!updatingBranchId}
-                                      onClick={(event) => {
-                                        event.stopPropagation()
-                                        void handleStatusToggle(branch.id, branch.status)
-                                      }}
-                                    >
-                                      {(() => {
-                                        if (isUpdatingThisBranch) {
-                                          return "Updating..."
-                                        }
-                                        if (isActive) {
-                                          return "Deactivate"
-                                        }
-                                        return "Activate"
-                                      })()}
-                                    </Button>
+                                    {!readOnly && (
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        loading={isUpdatingThisBranch}
+                                        className={cn(
+                                          "h-8 px-3 rounded-lg text-xs font-bold border-slate-200 dark:border-slate-700 shadow-sm transition-all",
+                                          isActive
+                                            ? "text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/30"
+                                            : "text-emerald-600 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/30"
+                                        )}
+                                        disabled={!!updatingBranchId}
+                                        onClick={(event) => {
+                                          event.stopPropagation()
+                                          void handleStatusToggle(branch.id, branch.status)
+                                        }}
+                                      >
+                                        {(() => {
+                                          if (isUpdatingThisBranch) {
+                                            return "Updating..."
+                                          }
+                                          if (isActive) {
+                                            return "Deactivate"
+                                          }
+                                          return "Activate"
+                                        })()}
+                                      </Button>
+                                    )}
                                   </div>
                                 </TableCell>
                               </motion.tr>
@@ -785,30 +796,32 @@ export default function BranchesPage() {
                     }}
                   >
                     <UserCog className="h-4 w-4" />
-                    {admin ? "Manage Team" : "Assign Admin"}
+                    {readOnly ? "View Team" : admin ? "Manage Team" : "Assign Admin"}
                   </Button>
-                  <Button
-                    variant="outline"
-                    loading={isUpdatingThisBranch}
-                    disabled={!!updatingBranchId}
-                    className={cn(
-                      "w-full h-12 rounded-2xl font-bold border-slate-200 dark:border-slate-700 transition-all",
-                      isActive
-                        ? "text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/20 dark:border-rose-900/40"
-                        : "text-emerald-600 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/20 dark:border-emerald-900/40"
-                    )}
-                    onClick={() => { void handleStatusToggle(viewingBranch.id, viewingBranch.status) }}
-                  >
-                    {(() => {
-                      if (isUpdatingThisBranch) {
-                        return "Updating..."
-                      }
-                      if (isActive) {
-                        return "Deactivate Branch"
-                      }
-                      return "Activate Branch"
-                    })()}
-                  </Button>
+                  {!readOnly && (
+                    <Button
+                      variant="outline"
+                      loading={isUpdatingThisBranch}
+                      disabled={!!updatingBranchId}
+                      className={cn(
+                        "w-full h-12 rounded-2xl font-bold border-slate-200 dark:border-slate-700 transition-all",
+                        isActive
+                          ? "text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/20 dark:border-rose-900/40"
+                          : "text-emerald-600 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/20 dark:border-emerald-900/40"
+                      )}
+                      onClick={() => { void handleStatusToggle(viewingBranch.id, viewingBranch.status) }}
+                    >
+                      {(() => {
+                        if (isUpdatingThisBranch) {
+                          return "Updating..."
+                        }
+                        if (isActive) {
+                          return "Deactivate Branch"
+                        }
+                        return "Activate Branch"
+                      })()}
+                    </Button>
+                  )}
                 </div>
               </div>
             )

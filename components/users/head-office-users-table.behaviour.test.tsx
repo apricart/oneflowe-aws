@@ -67,6 +67,40 @@ beforeEach(() => {
 })
 
 describe("Head Office user directory", () => {
+  it("shows Multiple for a user reaching several branches and lists them without opening the drawer", async () => {
+    renderTable(vi.fn(), [
+      user(1, {
+        role: "GROUP_USER",
+        branchId: null,
+        assignedBranches: [{ id: 11, name: "North" }, { id: 12, name: "South" }],
+      }),
+      user(2, { role: "GROUP_ORDER_PORTAL", branchId: null, assignedBranches: [{ id: 12, name: "South" }] }),
+      user(3, { role: "HEAD_OFFICE", branchId: null }),
+    ])
+
+    const multiple = screen.getByRole("button", { name: "Multiple: 2 branches" })
+    // A group user is never labelled with the tenant-wide "Head Office".
+    expect(screen.getAllByTitle("Head Office")).toHaveLength(1)
+    expect(screen.getAllByTitle("South")).toHaveLength(1)
+
+    fireEvent.click(multiple)
+    expect(await screen.findByText("Assigned branches (2)")).toBeTruthy()
+    expect(screen.getAllByText("North").length).toBeGreaterThan(0)
+    expect(screen.queryByRole("button", { name: /Deactivate/ })).toBeNull()
+  })
+
+  it("opens the branch list on hover", async () => {
+    renderTable(vi.fn(), [
+      user(1, {
+        role: "GROUP_USER",
+        branchId: null,
+        assignedBranches: [{ id: 11, name: "North" }, { id: 12, name: "South" }],
+      }),
+    ])
+    fireEvent.mouseEnter(screen.getByRole("button", { name: "Multiple: 2 branches" }))
+    expect(await screen.findByText("Assigned branches (2)")).toBeTruthy()
+  })
+
   it("shows twenty users a page and pages through the rest", async () => {
     renderTable()
     expect(screen.getAllByText("First1 Last1").length).toBeGreaterThan(0)

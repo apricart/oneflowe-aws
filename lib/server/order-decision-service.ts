@@ -12,6 +12,7 @@ import { budgetPeriodOf } from "@/lib/budget-consumption"
 import { isAwaitingCorrection } from "@/lib/order-correction"
 import { decisionQueuesNotifications } from "@/lib/order-desk-approval"
 import { closeOpenCorrectionRequest } from "@/lib/server/order-correction"
+import { approvalLevelMatches } from "@/lib/server/order-approval-routing"
 import { authorizeOrderDecision } from "@/lib/server/order-decision-policy"
 import {
   queueOrderDecisionNotification,
@@ -150,6 +151,7 @@ export async function approveOrder({
       // and an approval racing each other cannot both succeed.
       isNull(orders.returnedForCorrectionAt),
       expectedUpdatedAt === undefined ? undefined : updatedAtMatches(expectedUpdatedAt),
+      approvalLevelMatches(authorization.approvalLevel),
     )).returning({ id: orders.id })
 
     if (!approved) return { kind: "conflict" } as const
@@ -184,6 +186,7 @@ export async function approveOrder({
         actorRole: user.role,
         decisionRole: authorization.decisionRole,
         configuredApproverRole: authorization.configuredApproverRole,
+        ...(authorization.approvalLevel === null ? {} : { approvalLevel: authorization.approvalLevel }),
       },
     })
 
@@ -258,6 +261,7 @@ export async function rejectOrder({
       }).where(and(
         eq(orders.id, orderId),
         sql`UPPER(${orders.status}) = 'PENDING'`,
+        approvalLevelMatches(authorization.approvalLevel),
       )).returning(orderSelectColumns)
 
       if (!rejectedOrder) throw new Error("ORDER_TRANSITION_CONFLICT")
@@ -333,6 +337,7 @@ export async function rejectOrder({
           closedCorrectionRequestId,
           decisionRole: authorization.decisionRole,
           configuredApproverRole: authorization.configuredApproverRole,
+          ...(authorization.approvalLevel === null ? {} : { approvalLevel: authorization.approvalLevel }),
         },
       })
 

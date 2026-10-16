@@ -24,6 +24,7 @@ import {
   type JoinableRole,
   isSingleBranchJoinableRole,
 } from "@/lib/organization-join"
+import { joinPasswordError } from "@/lib/join-department-signup-form"
 import { cn } from "@/lib/utils"
 
 /**
@@ -90,17 +91,6 @@ const EMPTY_FORM: FormState = {
   branchIds: [],
 }
 
-/** The same four rules `passwordSchema` enforces on the server. */
-function passwordError(password: string) {
-  if (!password) return "Choose a password"
-  if (password.length < 12) return "Use at least 12 characters"
-  const complete = /[A-Z]/.test(password)
-    && /[a-z]/.test(password)
-    && /\d/.test(password)
-    && /[^a-zA-Z0-9]/.test(password)
-  return complete ? undefined : "Include an uppercase letter, a lowercase letter, a number and a symbol"
-}
-
 function phoneError(phone: string) {
   if (!phone) return undefined
   if (!/^\d+$/.test(phone)) return "Digits only"
@@ -115,7 +105,7 @@ function validate(form: FormState): Record<string, string> {
   if (email) errors.email = email
   if (form.username.trim().length < 3) errors.username = "At least 3 characters"
 
-  const password = passwordError(form.password)
+  const password = joinPasswordError(form.password)
   if (password) errors.password = password
   else if (form.password !== form.confirmPassword) errors.confirmPassword = "Passwords do not match"
 
@@ -140,7 +130,7 @@ function toggle(list: number[], id: number) {
   return list.includes(id) ? list.filter((value) => value !== id) : [...list, id]
 }
 
-function Field({
+export function Field({
   id,
   label,
   required,

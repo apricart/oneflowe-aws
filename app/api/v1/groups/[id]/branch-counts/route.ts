@@ -5,6 +5,7 @@ import { db } from "@/lib/db"
 import { groups, branches, branchInventory } from "@/db/schema"
 import { eq, and, isNull, count, sql } from "drizzle-orm"
 import { getCached, scopedCacheKey, CACHE_TTL } from "@/lib/cache-utils"
+import { viewerReadRole } from "@/lib/viewer-access"
 
 export async function GET(
     req: NextRequest,
@@ -19,7 +20,8 @@ export async function GET(
             return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
         }
 
-        const role = (session.user as any).role
+        // An organization-wide Viewer reads as Head Office; a pinned one is refused.
+        const role = viewerReadRole(session.user as any)
         if (role !== "HEAD_OFFICE" && role !== "SUPER_ADMIN") {
             return NextResponse.json({ error: "Forbidden" }, { status: 403 })
         }

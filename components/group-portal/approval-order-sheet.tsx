@@ -17,7 +17,7 @@ import { fetcher } from "@/lib/fetcher"
 
 import { OrderCorrectionNotice, ReturnForCorrectionDialog } from "@/components/orders/order-correction"
 
-import { type ApprovalOrder, isPending, isReturnedForCorrection } from "./approval-types"
+import { type ApprovalOrder, isDecidableByApprover, isReturnedForCorrection } from "./approval-types"
 
 type Props = Readonly<{
   order: ApprovalOrder | null
@@ -54,7 +54,7 @@ export function ApprovalOrderSheet({ order, onClose, onDecide, onChanged, busy }
   const fetched = data?.item
   // The queue row paints immediately; the fetched record only adds detail.
   const detailedOrder = { ...order, ...(fetched?.id === order?.id ? fetched : {}) }
-  const decidable = order ? isPending(order) : false
+  const decidable = order ? isDecidableByApprover(order) : false
   const returned = order ? isReturnedForCorrection(order) : false
 
   const closeSheet = () => {

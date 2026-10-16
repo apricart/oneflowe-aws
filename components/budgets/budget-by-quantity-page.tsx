@@ -1,5 +1,6 @@
 "use client"
 
+import { viewerAccessFor } from "@/lib/viewer-access"
 import React,{ useCallback,useEffect,useMemo,useState } from "react"
 import useSWR,{ useSWRConfig } from "swr"
 import { BudgetsDisabledNotice } from "@/components/budgets/budgets-disabled-notice"
@@ -134,7 +135,10 @@ export default function BudgetByQuantityPage() {
   const { data: session, status } = useSession()
   const { toast } = useToast()
   const { mutate: globalMutate } = useSWRConfig()
-  const role = (session?.user as any)?.role
+  // An organization-wide Viewer reads quantity budgets as Head Office does,
+  // with every control that allocates or empties one hidden.
+  const { viewRole, readOnly } = viewerAccessFor(session?.user)
+  const role = viewRole ?? undefined
   const isHeadOffice = role === "HEAD_OFFICE" || role === "SUPER_ADMIN"
   const {
     organizationId,
@@ -612,15 +616,17 @@ export default function BudgetByQuantityPage() {
             <Badge className="w-fit rounded-full bg-slate-900 px-4 py-2 text-[10px] font-black uppercase tracking-widest text-white dark:bg-white dark:text-slate-950">
               {filteredBudgets.length} branch{filteredBudgets.length === 1 ? "" : "es"} ready for quantity allocation
             </Badge>
-            <Button
-              variant="outline"
-              onClick={() => setShowEmptyAllDialog(true)}
-              disabled={scopedBudgets.length === 0 || isResettingBudgets}
-              className="w-fit rounded-xl border-slate-200 px-4 text-[10px] font-bold uppercase tracking-widest text-rose-600 transition-colors hover:bg-rose-50 dark:border-slate-800 dark:hover:bg-rose-950/20"
-            >
-              {isResettingBudgets ? <RefreshCw className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Trash2 className="mr-2 h-3.5 w-3.5" />}
-              Empty All
-            </Button>
+            {!readOnly && (
+              <Button
+                variant="outline"
+                onClick={() => setShowEmptyAllDialog(true)}
+                disabled={scopedBudgets.length === 0 || isResettingBudgets}
+                className="w-fit rounded-xl border-slate-200 px-4 text-[10px] font-bold uppercase tracking-widest text-rose-600 transition-colors hover:bg-rose-50 dark:border-slate-800 dark:hover:bg-rose-950/20"
+              >
+                {isResettingBudgets ? <RefreshCw className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Trash2 className="mr-2 h-3.5 w-3.5" />}
+                Empty All
+              </Button>
+            )}
           </div>
         </div>
 
@@ -715,17 +721,19 @@ export default function BudgetByQuantityPage() {
                           {formatQuantity(summary.totalQuantity)}
                         </TableCell>
                         <TableCell className="py-2.5 pr-5 text-right">
-                          <Button
-                            size="sm"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              handleEditBudget(budget)
-                            }}
-                            className="h-7 rounded-lg bg-indigo-600 px-2.5 text-[10px] font-bold uppercase tracking-wide text-white shadow-sm hover:bg-indigo-700"
-                          >
-                            <Edit2 className="mr-1 h-3 w-3" />
-                            Allocate
-                          </Button>
+                          {!readOnly && (
+                            <Button
+                              size="sm"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                handleEditBudget(budget)
+                              }}
+                              className="h-7 rounded-lg bg-indigo-600 px-2.5 text-[10px] font-bold uppercase tracking-wide text-white shadow-sm hover:bg-indigo-700"
+                            >
+                              <Edit2 className="mr-1 h-3 w-3" />
+                              Allocate
+                            </Button>
+                          )}
                         </TableCell>
                       </TableRow>
 

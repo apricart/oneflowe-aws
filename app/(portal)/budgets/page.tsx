@@ -1,4 +1,5 @@
 "use client"
+import { viewerAccessFor } from "@/lib/viewer-access"
 import { useState,useMemo,ReactNode,useEffect,useCallback } from "react"
 import { BudgetsDisabledNotice } from "@/components/budgets/budgets-disabled-notice"
 import useSWR,{ useSWRConfig } from "swr"
@@ -117,7 +118,10 @@ export default function BudgetsPage() {
   const { data: session, status } = useSession()
   const { toast } = useToast()
   const { mutate: globalMutate } = useSWRConfig()
-  const role = (session?.user as any)?.role
+  // An organization-wide Viewer reads budgets as Head Office does, with every
+  // control that allocates, adds to or empties a budget hidden.
+  const { viewRole, readOnly } = viewerAccessFor(session?.user)
+  const role = viewRole ?? undefined
   // Who gets the page at all. The name predates the approver joining the list;
   // every endpoint behind the page fences the approver to its assigned
   // branches on the server, so this decides what renders, never what is read.
@@ -657,26 +661,30 @@ export default function BudgetsPage() {
           />
         </div>
         <div className="flex gap-2 w-full sm:w-auto">
-          <Button
-            onClick={() => setShowBulkDialog(true)}
-            disabled={scopedBudgets.length > 0 && moneyBasedScopedBudgets.length === 0}
-            title={(() => {
-              if (moneyBasedScopedBudgets.length === 0) {
-                return moneyAllocationDisabledTitle || "No money-based branches available for bulk allocation."
-              }
-              if (quantityBasedScopedBudgetCount > 0) {
-                return "Quantity-based branches will be skipped."
-              }
-              return undefined
-            })()}
-            variant="outline"
-            className="flex-1 font-bold uppercase text-[10px] tracking-widest border-slate-200 dark:border-slate-800 rounded-xl px-6"
-          >
-            <Zap className="h-3.5 w-3.5 mr-2 text-amber-500" /> Bulk Allocate
-          </Button>
-          <Button onClick={() => setShowEmptyAllDialog(true)} disabled={isQuantityBudgetMode} title={moneyAllocationDisabledTitle} variant="outline" className="flex-1 font-bold uppercase text-[10px] tracking-widest border-slate-200 dark:border-slate-800 rounded-xl px-6 hover:bg-rose-50 dark:hover:bg-rose-950/20 text-rose-600 transition-colors">
-            <Trash2 className="h-3.5 w-3.5 mr-2" /> Empty All
-          </Button>
+          {!readOnly && (
+            <Button
+              onClick={() => setShowBulkDialog(true)}
+              disabled={scopedBudgets.length > 0 && moneyBasedScopedBudgets.length === 0}
+              title={(() => {
+                if (moneyBasedScopedBudgets.length === 0) {
+                  return moneyAllocationDisabledTitle || "No money-based branches available for bulk allocation."
+                }
+                if (quantityBasedScopedBudgetCount > 0) {
+                  return "Quantity-based branches will be skipped."
+                }
+                return undefined
+              })()}
+              variant="outline"
+              className="flex-1 font-bold uppercase text-[10px] tracking-widest border-slate-200 dark:border-slate-800 rounded-xl px-6"
+            >
+              <Zap className="h-3.5 w-3.5 mr-2 text-amber-500" /> Bulk Allocate
+            </Button>
+          )}
+          {!readOnly && (
+            <Button onClick={() => setShowEmptyAllDialog(true)} disabled={isQuantityBudgetMode} title={moneyAllocationDisabledTitle} variant="outline" className="flex-1 font-bold uppercase text-[10px] tracking-widest border-slate-200 dark:border-slate-800 rounded-xl px-6 hover:bg-rose-50 dark:hover:bg-rose-950/20 text-rose-600 transition-colors">
+              <Trash2 className="h-3.5 w-3.5 mr-2" /> Empty All
+            </Button>
+          )}
         </div>
       </div>
 
@@ -869,26 +877,30 @@ export default function BudgetsPage() {
 
                     <TableCell className="text-right pr-5 py-2.5">
                       <div className="flex gap-1.5 justify-end">
-                        <Button
-                          size="sm"
-                          onClick={() => handleEditBudget(budget)}
-                          disabled={rowIsQuantityBudgetMode}
-                          title={rowMoneyAllocationDisabledTitle}
-                          className="h-7 px-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold uppercase tracking-wide shadow-sm"
-                        >
-                          <Edit2 className="h-3 w-3 mr-1" />
-                          Allocate
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => handleEmptyBudget(budget)}
-                          disabled={rowIsQuantityBudgetMode}
-                          className="h-7 w-7 p-0 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/20"
-                          title={rowMoneyAllocationDisabledTitle || "Reset budget to zero"}
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
+                        {!readOnly && (
+                          <Button
+                            size="sm"
+                            onClick={() => handleEditBudget(budget)}
+                            disabled={rowIsQuantityBudgetMode}
+                            title={rowMoneyAllocationDisabledTitle}
+                            className="h-7 px-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold uppercase tracking-wide shadow-sm"
+                          >
+                            <Edit2 className="h-3 w-3 mr-1" />
+                            Allocate
+                          </Button>
+                        )}
+                        {!readOnly && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleEmptyBudget(budget)}
+                            disabled={rowIsQuantityBudgetMode}
+                            className="h-7 w-7 p-0 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/20"
+                            title={rowMoneyAllocationDisabledTitle || "Reset budget to zero"}
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        )}
                       </div>
                     </TableCell>
                   </TableRow>

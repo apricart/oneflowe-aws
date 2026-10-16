@@ -4,6 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { JoinCodeCard } from "./join-code-card"
 
+// The page reads the signed-in role to tell a read-only Viewer apart; with no
+// session it renders exactly as before, for the role the test sets up.
+vi.mock("next-auth/react", () => ({ useSession: () => ({ data: null, status: "unauthenticated" }) }))
+
 const mocks = vi.hoisted(() => ({ fetch: vi.fn() }))
 
 function reply(body: unknown) {

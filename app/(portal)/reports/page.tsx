@@ -1,5 +1,6 @@
 "use client"
 
+import { viewerAccessFor } from "@/lib/viewer-access"
 import { Card,CardContent,CardHeader,CardTitle } from "@/components/ui/card"
 import Link from "next/link"
 import {
@@ -142,7 +143,8 @@ const consolidatedInvoiceReportCards = [
 
 export default function ReportsPage() {
   const { data: session } = useSession()
-  const role = (session?.user as any)?.role
+  // An organization-wide Viewer gets Head Office's report hub.
+  const { viewRole: role } = viewerAccessFor(session?.user)
   const isBuyer = usesPurchaseWording(role)
   const [hasMounted, setHasMounted] = useState(false)
 

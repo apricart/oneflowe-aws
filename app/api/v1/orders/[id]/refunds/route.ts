@@ -1,3 +1,4 @@
+import { VIEWER_READ_REFUSED, viewerReadRole } from "@/lib/viewer-access"
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
@@ -513,7 +514,10 @@ export async function GET(
       .limit(1)
     if (!order) return NextResponse.json({ error: "Order not found" }, { status: 404 })
 
-    const userRole = (session.user as any).role
+    // An organization-wide Viewer reads an order's refunds as Head Office does;
+    // a pinned one is refused. Reading only — the POST below never maps it.
+    const userRole = viewerReadRole(session.user as any)
+    if (!userRole) return NextResponse.json({ error: VIEWER_READ_REFUSED }, { status: 403 })
     const userOrgId = (session.user as any).organizationId
     const userBranchId = (session.user as any).branchId
     const userId = (session.user as any).id as string

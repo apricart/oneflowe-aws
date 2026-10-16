@@ -1,3 +1,4 @@
+import { viewerReadRole } from "@/lib/viewer-access"
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { and, asc, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm"
@@ -57,13 +58,19 @@ type Authorized = {
 
 async function authorizeGroupPricing(
   idParam: string,
+  options: { viewerReadsAsHeadOffice?: boolean } = {},
 ): Promise<{ authorized: Authorized; failure?: undefined } | { authorized?: undefined; failure: NextResponse }> {
   const session = await getServerSession(authOptions)
   if (!session?.user) {
     return { failure: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) }
   }
 
-  const role = (session.user as any).role
+  // Only the GET passes the option: an organization-wide Viewer then reads
+  // prices as Head Office does, and a pinned one is refused. The PUT never
+  // does, and `rejectPriceFieldsForRole` refuses the role besides.
+  const role = options.viewerReadsAsHeadOffice
+    ? viewerReadRole(session.user as any) ?? ""
+    : (session.user as any).role
   if (!PRICING_READ_ROLES.includes(role)) {
     return { failure: NextResponse.json({ error: "Forbidden: Insufficient permissions" }, { status: 403 }) }
   }
@@ -108,7 +115,7 @@ async function authorizeGroupPricing(
 export async function GET(req: NextRequest, props: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await props.params
-    const { authorized, failure } = await authorizeGroupPricing(id)
+    const { authorized, failure } = await authorizeGroupPricing(id, { viewerReadsAsHeadOffice: true })
     if (failure) return failure
 
     const { searchParams } = new URL(req.url)

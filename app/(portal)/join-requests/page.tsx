@@ -1,5 +1,6 @@
 "use client"
 
+import { useViewerAccess } from "@/lib/hooks/use-viewer-access"
 import { useState } from "react"
 
 import useSWR from "swr"
@@ -7,6 +8,7 @@ import { AlertCircle, DoorOpen, RefreshCw } from "lucide-react"
 
 import { useAppContext } from "@/components/context/app-context"
 import { JoinCodeCard } from "@/components/join/join-code-card"
+import { DepartmentJoinReviewDialog } from "@/components/join/department-join-review-dialog"
 import { JoinDecisionDialog } from "@/components/join/join-decision-dialog"
 import { JoinRequestListRow, type JoinRequestRow } from "@/components/join/join-request-row"
 import { Badge } from "@/components/ui/badge"
@@ -39,6 +41,8 @@ const FILTERS: ReadonlyArray<{ value: JoinRequestStatus | "all"; label: string }
 ]
 
 export default function JoinRequestsPage() {
+  // The read-only Viewer reads the queue and decides nothing.
+  const { readOnly } = useViewerAccess()
   const { organizationId } = useAppContext()
   const [filter, setFilter] = useState<JoinRequestStatus | "all">("pending")
   const [reviewing, setReviewing] = useState<JoinRequestRow | null>(null)
@@ -145,7 +149,7 @@ export default function JoinRequestsPage() {
                 <JoinRequestListRow
                   key={request.id}
                   request={request}
-                  onReview={setReviewing}
+                  onReview={readOnly ? undefined : setReviewing}
                 />
               ))}
             </ul>
@@ -153,12 +157,24 @@ export default function JoinRequestsPage() {
         </CardContent>
       </Card>
 
-      <JoinDecisionDialog
-        request={reviewing}
-        organizationId={organizationId ? Number.parseInt(organizationId, 10) : null}
-        onClose={() => setReviewing(null)}
-        onDecided={() => mutate()}
-      />
+      {/* A department sign-up (plans/OF-JOIN-department-signup-multi-user.md)
+          creates approvers and branches too, so it has its own review. */}
+      {!readOnly && reviewing?.formVersion === 2 && (
+        <DepartmentJoinReviewDialog
+          requestId={reviewing.id}
+          organizationId={organizationId ? Number.parseInt(organizationId, 10) : null}
+          onClose={() => setReviewing(null)}
+          onDecided={() => mutate()}
+        />
+      )}
+      {!readOnly && reviewing?.formVersion !== 2 && (
+        <JoinDecisionDialog
+          request={reviewing}
+          organizationId={organizationId ? Number.parseInt(organizationId, 10) : null}
+          onClose={() => setReviewing(null)}
+          onDecided={() => mutate()}
+        />
+      )}
     </main>
   )
 }

@@ -2,6 +2,7 @@ import { error, ok, requireApiRole } from "@/lib/api"
 import { getRequestScope } from "@/lib/auth"
 import type { Role } from "@/lib/rbac"
 import { isOrganizationBudgetEnabled } from "@/lib/server/organization-budget-policy"
+import { VIEWER_READ_REFUSED, viewerReadScope } from "@/lib/viewer-access"
 
 export const dynamic = "force-dynamic"
 
@@ -22,10 +23,11 @@ const BUDGET_POLICY_READER_ROLES: Role[] = ["SUPER_ADMIN", "HEAD_OFFICE", "GROUP
 export async function GET() {
   // Exactly the roles whose navigation carries budget entries. The ordering
   // roles learn the setting from the budget read they already make.
-  const authError = await requireApiRole(BUDGET_POLICY_READER_ROLES)
+  const authError = await requireApiRole(BUDGET_POLICY_READER_ROLES, { viewerReadsAsHeadOffice: true })
   if (authError) return authError
 
-  const scope = await getRequestScope()
+  const scope = viewerReadScope(await getRequestScope())
+  if (!scope) return error(VIEWER_READ_REFUSED, 403)
   if (!scope) return error("Unauthorized", 401)
 
   const budgetsEnabled = scope.role === "SUPER_ADMIN"

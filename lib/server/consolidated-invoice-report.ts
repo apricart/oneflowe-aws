@@ -1,3 +1,4 @@
+import { viewerReadRole } from "@/lib/viewer-access"
 import "server-only"
 
 import { and, asc, count, eq, gte, inArray, isNotNull, lte, ne, sql, type SQL } from "drizzle-orm"
@@ -80,13 +81,17 @@ async function resolveOrganization(query: ConsolidatedInvoiceQuery): Promise<
   | { ok: false; status: 400 | 401 | 403 | 404; error: string }
 > {
   const session = await getSharedServerSession()
-  const user = (session?.user ?? null) as { id?: unknown; role?: unknown } | null
+  const user = (session?.user ?? null) as { id?: unknown; role?: unknown; organizationId?: unknown; branchId?: unknown } | null
   if (!user || typeof user.id !== "string") return { ok: false, status: 401, error: "Unauthorized" }
-  if (!canReadConsolidatedInvoiceReport(user.role)) return { ok: false, status: 403, error: "Forbidden" }
+  // Both callers are GET handlers. An organization-wide Viewer reads the
+  // report as Head Office does (its own organization, whatever was sent); a
+  // pinned one is refused. The caller keeps its real role for the audit row.
+  const readRole = viewerReadRole(user)
+  if (!canReadConsolidatedInvoiceReport(readRole)) return { ok: false, status: 403, error: "Forbidden" }
   const caller: ReportCaller = { userId: user.id, role: String(user.role), session }
 
   let organizationId: number | null
-  if (choosesOrganization(user.role)) {
+  if (choosesOrganization(readRole)) {
     if (query.organizationId === null) return { ok: false, status: 400, error: "organizationId is required" }
     organizationId = query.organizationId
   } else {

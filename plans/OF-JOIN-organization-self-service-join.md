@@ -124,7 +124,14 @@ Three oracles, closed:
   generic message and no organization detail.
 * **Whether an email or username is already registered.** The submit endpoint
   answers a conflict on email, username, phone, employee number or a duplicate
-  pending request with one message that names no field. The public surface
+  pending request with one constant message per form that never singles out
+  the field: it lists every field that form checks (email, username, mobile,
+  employee number — the department sign-up omits username, which it never
+  asks for) and why each can clash, so the applicant knows what to check
+  without learning which one clashed (revised 2026-10-16; the earlier text
+  named nothing and left applicants guessing). The department sign-up does not
+  refuse on its derived username at all — the review flags it and Head Office
+  picks another before approving. The public surface
   deliberately has **no** username-availability endpoint; the authenticated
   `/api/v1/users/check-username` stays authenticated.
 * **How often either may be tried.** Both public endpoints are rate-limited on

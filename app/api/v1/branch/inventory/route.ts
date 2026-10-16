@@ -1,3 +1,4 @@
+import { VIEWER_READ_REFUSED, viewerReadRole } from "@/lib/viewer-access"
 import { NextRequest,NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
@@ -39,7 +40,10 @@ function resolveInventoryContext(
   if (!branchIdParam) return { error: "branchId parameter required for admin users", status: 400 }
   branchId = Number.parseInt(branchIdParam)
   if (!Number.isFinite(branchId)) return { error: "Invalid branch ID", status: 400 }
-  if (organizationIdParam) organizationId = Number.parseInt(organizationIdParam)
+  // Only Super Admin chooses the tenant. Head Office (and a Viewer reading as
+  // it) stays on the session's organization, so a branch id from another
+  // tenant matches no inventory row instead of reading that tenant's catalogue.
+  if (organizationIdParam && userRole === "SUPER_ADMIN") organizationId = Number.parseInt(organizationIdParam)
   if (!organizationId) return { error: "Organization context not found", status: 400 }
   if (!Number.isFinite(organizationId)) return { error: "Invalid organization ID", status: 400 }
   return { organizationId, branchId }
@@ -115,7 +119,9 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Forbidden", message: "Password change required" }, { status: 403 })
     }
 
-    const userRole = (session.user as any).role
+    // An organization-wide Viewer reads as Head Office; a pinned one is refused.
+    const userRole = viewerReadRole(session.user as any)
+    if (!userRole) return NextResponse.json({ error: VIEWER_READ_REFUSED }, { status: 403 })
     const { searchParams } = new URL(req.url)
     const context = resolveInventoryContext(
       userRole,

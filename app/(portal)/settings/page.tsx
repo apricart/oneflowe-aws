@@ -1,5 +1,6 @@
 "use client"
 
+import { viewerAccessFor } from "@/lib/viewer-access"
 import { useEffect,useState } from "react"
 import { Card,CardContent,CardDescription,CardHeader,CardTitle } from "@/components/ui/card"
 import { MFASettings } from "@/components/mfa/mfa-settings"
@@ -14,6 +15,9 @@ export default function SettingsPage() {
   const userEmail = (session?.user as any)?.email
   const username = (session?.user as any)?.username
   const { organizationId: contextOrgId, branchId: contextBranchId } = useAppContext()
+  // The read-only Viewer has no MFA self-service (`MFA_SELF_SERVICE_ROLES`), so
+  // its account page shows the profile alone.
+  const { readOnly } = viewerAccessFor(session?.user)
 
   // Prefer active context (from header selector); fall back to user's assigned org/branch
   const organizationId =
@@ -163,20 +167,22 @@ export default function SettingsPage() {
         </Card>
 
         {/* Security Settings */}
-        <Card className="border border-slate-200 dark:border-slate-800 shadow-sm dark:shadow-slate-900/50 bg-white dark:bg-slate-900">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-slate-900 dark:text-white">
-              <Shield className="h-5 w-5" />
-              Security Settings
-            </CardTitle>
-            <CardDescription>
-              Manage your account security and authentication
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <MFASettings username={username} />
-          </CardContent>
-        </Card>
+        {!readOnly && (
+          <Card className="border border-slate-200 dark:border-slate-800 shadow-sm dark:shadow-slate-900/50 bg-white dark:bg-slate-900">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-slate-900 dark:text-white">
+                <Shield className="h-5 w-5" />
+                Security Settings
+              </CardTitle>
+              <CardDescription>
+                Manage your account security and authentication
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <MFASettings username={username} />
+            </CardContent>
+          </Card>
+        )}
       </div>
     </div>
   )

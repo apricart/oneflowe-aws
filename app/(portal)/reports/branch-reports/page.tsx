@@ -1,5 +1,6 @@
 "use client"
 
+import { viewerAccessFor } from "@/lib/viewer-access"
 import { useAppContext } from "@/components/context/app-context"
 import { GlobalDateFilter,type FilterPreset,type GlobalDateFilterChange } from "@/components/dashboard/global-date-filter"
 import { MultiBranchFilter } from "@/components/dashboard/multi-branch-filter"
@@ -85,7 +86,9 @@ export default function BranchReportsPage() {
         isInitialized
     } = useAppContext()
 
-    const role = (session?.user as any)?.role as Role
+    // An organization-wide Viewer reads this report as Head Office does.
+    const { viewRole } = viewerAccessFor(session?.user)
+    const role = viewRole as Role
     const userOrgId = (session?.user as any)?.organizationId
     const userBranchId = sessionUserBranchId || (session?.user as any)?.branchId
     const isBuyer = usesPurchaseWording(role)

@@ -645,6 +645,34 @@
       "when": 1791061200000,
       "tag": "20261016120000_invoice_ledger_credit_integrity",
       "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1791064800000,
+      "tag": "20261017120000_add_organization_approval_levels",
+      "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "7",
+      "when": 1791068400000,
+      "tag": "20261018120000_add_user_order_approval_level",
+      "breakpoints": true
+    },
+    {
+      "idx": 94,
+      "version": "7",
+      "when": 1791072000000,
+      "tag": "20261019120000_join_department_signup",
+      "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "7",
+      "when": 1791075600000,
+      "tag": "20261020120000_order_approval_level",
+      "breakpoints": true
     }
   ]
 }

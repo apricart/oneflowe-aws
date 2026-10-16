@@ -77,7 +77,9 @@ describe('group sub-resources are confined to the tenant that owns the group', (
     const route = repositoryFile('app/api/v1/groups/[id]/branches/route.ts')
     // GET and PUT share one rule so a future edit cannot re-open the read side
     // while leaving the write side guarded.
-    expect(route.match(/await authorizeGroupBranchAccess\(id\)/g) || []).toHaveLength(2)
+    // Only the GET opts in to the read-only Viewer; the PUT never does.
+    expect(route.match(/await authorizeGroupBranchAccess\(id(?:, \{ viewerReadsAsHeadOffice: true \})?\)/g) || []).toHaveLength(2)
+    expect(route.match(/await authorizeGroupBranchAccess\(id\)/g) || []).toHaveLength(1)
     expect(route).not.toMatch(/db\s*\n?\s*\.select\(\)\s*\.from\(branches\)/)
     // The listing is pinned to the group's tenant and exposes identity fields
     // only — not budget baselines, the branch admin, or external identifiers.

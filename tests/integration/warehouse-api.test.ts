@@ -606,12 +606,14 @@ describe.skipIf(!hasTestDatabase)("the Warehouse role through the API", () => {
       expect((await timelineRoute.GET(request(`http://localhost/api/v1/warehouse/orders/${orderY}/timeline`, "GET"), params(orderY))).status).toBe(404)
     })
 
-    it("lists the catalogue read-only, with stock and without prices", async () => {
+    // The base price is shown since plans/OF-WAREHOUSE-full-read-only-catalog.md
+    // reversed the no-price rule; the catalogue is still strictly read-only.
+    it("lists the catalogue read-only, with stock and the base price", async () => {
       signIn(actors.wh)
       const { status, body } = await read(await catalogRoute.GET(request(`http://localhost/api/v1/warehouse/catalog?q=ITWH-RICE-${suffix}`, "GET")))
       expect(status).toBe(200)
-      expect(body.items).toEqual([expect.objectContaining({ id: productId, stockQuantity: 120, unit: "kg", low: false })])
-      expect(JSON.stringify(body)).not.toMatch(/price|35500/i)
+      expect(body.items).toEqual([expect.objectContaining({ id: productId, stockQuantity: 120, unit: "kg", low: false, basePriceCents: 35_500 })])
+      expect(JSON.stringify(body)).not.toMatch(/taxRate|discount/i)
       for (const method of ["POST", "PUT", "PATCH", "DELETE"]) expect(catalogRoute).not.toHaveProperty(method)
     })
   })

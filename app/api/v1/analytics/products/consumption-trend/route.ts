@@ -1,3 +1,4 @@
+import { VIEWER_READ_REFUSED, viewerReadRole } from "@/lib/viewer-access"
 import { categories, globalProducts, orderItems, orders, refundItems, refunds } from "@/db/schema"
 import { authOptions } from "@/lib/auth-options"
 import { parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
@@ -158,7 +159,9 @@ export async function GET(req: NextRequest) {
     const limited = await withRateLimit("search", sessionUser.id)
     if (limited) return limited
 
-    const userRole = (sessionUser.role || "").toUpperCase().replace(/\s+/g, "_")
+    // An organization-wide Viewer reads as Head Office; a pinned one is refused.
+    const userRole = viewerReadRole({ ...sessionUser, role: (sessionUser.role || "").toUpperCase().replace(/\s+/g, "_") })
+    if (!userRole) return NextResponse.json({ error: VIEWER_READ_REFUSED }, { status: 403 })
     const userOrgId = sessionUser.organizationId ?? null
     const url = new URL(req.url)
     const searchParams = url.searchParams

@@ -25,7 +25,9 @@ import { hasTestDatabase } from "./helpers/pricing-fixtures"
  * ```
  *
  * Every product carries a base price, a tax rate and a discount with values
- * found nowhere else, so a leak of any of them is visible in the payload.
+ * found nowhere else. Since plans/OF-WAREHOUSE-full-read-only-catalog.md the
+ * base price is shown, as on Super Admin's Global Products; a leak of the tax
+ * rate or the discount is still visible in the payload.
  */
 vi.mock("next-auth", () => ({ getServerSession: vi.fn() }))
 vi.mock("@/lib/auth-options", () => ({ authOptions: {} }))
@@ -65,7 +67,7 @@ const PRICE_CENTS = 35_517
 const TAX_RATE_BP = 1_731
 const DISCOUNT_CENTS = 98_765
 const STORED_IMAGE = `/api/v1/images/products/${randomUUID()}.webp`
-const ITEM_KEYS = ["category", "id", "imageUrl", "low", "name", "productCode", "status", "stockQuantity", "subcategory", "unit"]
+const ITEM_KEYS = ["basePriceCents", "category", "id", "imageUrl", "low", "name", "productCode", "status", "stockQuantity", "subcategory", "unit"]
 
 describe.skipIf(!hasTestDatabase)("the warehouse's product catalogue through the API", () => {
   const suffix = randomUUID().slice(0, 8)
@@ -175,7 +177,7 @@ describe.skipIf(!hasTestDatabase)("the warehouse's product catalogue through the
   })
 
   describe("the product list", () => {
-    it("lists the active catalogue by name, with category, unit and stock, and never a price", async () => {
+    it("lists the active catalogue by name, with category, unit, stock and base price, never tax or discount", async () => {
       const { status, body } = await own()
       expect(status).toBe(200)
       expect(names(body)).toEqual(["Coffee", "Pens", "Tea"])
@@ -183,16 +185,16 @@ describe.skipIf(!hasTestDatabase)("the warehouse's product catalogue through the
 
       for (const item of body.items) {
         expect(Object.keys(item).sort()).toEqual(ITEM_KEYS)
-        expect(Object.values(item)).not.toEqual(expect.arrayContaining([PRICE_CENTS]))
+        expect(item.basePriceCents).toBe(PRICE_CENTS)
       }
       const raw = JSON.stringify(body)
-      expect(raw).not.toMatch(/price|discount|tax/i)
-      for (const figure of [PRICE_CENTS, TAX_RATE_BP, DISCOUNT_CENTS]) expect(raw).not.toContain(`:${figure}`)
+      expect(raw).not.toMatch(/discount|tax/i)
+      for (const figure of [TAX_RATE_BP, DISCOUNT_CENTS]) expect(raw).not.toContain(`:${figure}`)
 
       const byName = Object.fromEntries(body.items.map((item: { name: string }) => [item.name.replace(`${suffix} `, ""), item]))
       expect(byName.Tea).toEqual({
         id: product.Tea, productCode: `${codePrefix}-Tea`, name: `${suffix} Tea`, unit: "80 gm", status: "active",
-        stockQuantity: 120, low: false, imageUrl: STORED_IMAGE,
+        stockQuantity: 120, low: false, imageUrl: STORED_IMAGE, basePriceCents: PRICE_CENTS,
         category: `IT WHC Beverages ${suffix}`, subcategory: `IT WHC Tea ${suffix}`,
       })
       // A legacy data: picture is left out rather than sent inline.

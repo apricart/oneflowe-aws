@@ -175,7 +175,7 @@ describe("the API allowlist", () => {
     const proxy = read("proxy.ts")
     expect(proxy).toContain("isApricartExecutiveRole((token as any)?.role)")
     expect(proxy).toContain("!isApricartExecutiveApiRequestAllowed(req.method, pathname)")
-    expect(proxy).toContain("{ matches: isApricartExecutiveRole, areas: APRICART_EXECUTIVE_AREAS, home: APRICART_EXECUTIVE_HOME }")
+    expect(proxy).toContain("{ matches: isApricartExecutiveRole, allows: withinAreas(APRICART_EXECUTIVE_AREAS), home: APRICART_EXECUTIVE_HOME }")
     expect(proxy).toContain('{ prefix: DELIVERY_DASHBOARD_AREA, roles: ["SUPER_ADMIN"], home: "/dashboard" }')
   })
 

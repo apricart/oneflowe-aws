@@ -1,5 +1,6 @@
 "use client"
 
+import { viewerAccessFor } from "@/lib/viewer-access"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { useSession } from "next-auth/react"
@@ -61,7 +62,10 @@ function readInitialSort(params: URLSearchParams): SortState<ConsolidatedInvoice
  */
 export function ConsolidatedInvoiceReport() {
   const { data: session } = useSession()
-  const role = (session?.user as { role?: string } | undefined)?.role
+  // An organization-wide Viewer reads its own organization's report, as Head
+  // Office does: no organization picker.
+  const { viewRole } = viewerAccessFor(session?.user)
+  const role = viewRole ?? undefined
   const { organizationId: contextOrganizationId, isInitialized } = useAppContext()
   const searchParams = useSearchParams()
   const router = useRouter()

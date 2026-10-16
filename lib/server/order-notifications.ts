@@ -43,6 +43,7 @@ import {
   deliverClaimedWarehouseEmail,
   isWarehouseEmailTemplate,
 } from "@/lib/server/warehouse-order-notifications"
+import { loadApprovalLevelSettings, loadLevelHolders } from "@/lib/server/order-approval-routing"
 
 type OrderEventInput = {
   id: number
@@ -188,6 +189,96 @@ async function loadConfiguredApprovers(
     ))
 }
 
+/*
+ * Approval levels (plans/OF-APPROVAL-LEVELS-route-orders-by-level.md, R7).
+ * An order waiting at a level, in an organization that uses levels now, is
+ * announced to the holders of that level who reach its branch instead of the
+ * configured approver role. Every other order is announced exactly as before:
+ * `levelledApprovers` answers null for it.
+ */
+type LevelHolder = { id: string; email: string; role: string }
+
+async function levelledApprovers(tx: any, orderId: number): Promise<{ level: number; holders: LevelHolder[] } | null> {
+  const [row] = await tx
+    .select({
+      approvalLevel: orders.approvalLevel,
+      organizationId: orders.organizationId,
+      branchId: orders.branchId,
+      createdByUserId: orders.createdByUserId,
+    })
+    .from(orders)
+    .where(eq(orders.id, orderId))
+    .limit(1)
+  if (!row || row.approvalLevel === null || row.organizationId === null) return null
+
+  const settings = await loadApprovalLevelSettings(tx, row.organizationId)
+  if (!settings?.active) return null
+  const holders = await loadLevelHolders(tx, {
+    organizationId: row.organizationId,
+    branchId: row.branchId,
+    level: row.approvalLevel,
+    excludeUserId: row.createdByUserId,
+    settings,
+  })
+  return { level: row.approvalLevel, holders }
+}
+
+/** One event per holder, each filed under the holder's own role. */
+async function insertLevelledRecipientEvents(
+  tx: any,
+  input: Omit<Parameters<typeof insertRecipientEvents>[1], "targetRole" | "recipients"> & { holders: LevelHolder[] },
+): Promise<QueuedOrderNotifications> {
+  const byRole = new Map<string, NotificationRecipient[]>()
+  for (const holder of input.holders) {
+    byRole.set(holder.role, [...(byRole.get(holder.role) ?? []), { id: holder.id, email: holder.email }])
+  }
+  const queued: QueuedOrderNotifications = { eventKeys: [], recipientCount: 0 }
+  for (const [role, recipients] of byRole) {
+    const { holders: _holders, ...rest } = input
+    const result = await insertRecipientEvents(tx, {
+      ...rest,
+      targetRole: role as NotificationTargetRole,
+      recipients,
+    })
+    queued.eventKeys.push(...result.eventKeys)
+    queued.recipientCount += result.recipientCount
+  }
+  return queued
+}
+
+/**
+ * An edit moved a levelled order to another level (R6): the new level's
+ * holders are asked to decide it. Keyed by the level, so a holder of the new
+ * level is told even if it was told about the order before.
+ */
+export async function queueLevelChangedNotifications(tx: any, input: {
+  order: OrderEventInput
+  requestedBy: string
+}): Promise<QueuedOrderNotifications> {
+  const { order } = input
+  if (!order.organizationId) return { eventKeys: [], recipientCount: 0 }
+  const levelled = await levelledApprovers(tx, order.id)
+  if (!levelled) return { eventKeys: [], recipientCount: 0 }
+  const context = await getOrderContext(tx, order)
+  if (!context) return { eventKeys: [], recipientCount: 0 }
+
+  return insertLevelledRecipientEvents(tx, {
+    order: { ...order, organizationId: order.organizationId },
+    template: "ORDER_CREATED",
+    message: `Order ${order.tid} was changed and is awaiting Level ${levelled.level} approval.`,
+    payload: {
+      orderId: order.id,
+      tid: order.tid,
+      organizationName: context.organizationName,
+      branchName: context.branchName,
+      requestedBy: input.requestedBy,
+    },
+    holders: levelled.holders,
+    eventKeyFor: (recipientUserId: string) =>
+      `${orderNotificationEventKey("ORDER_CREATED", order.id, recipientUserId)}:level-${levelled.level}`,
+  })
+}
+
 export async function queueOrderCreatedNotifications(tx: any, input: {
   order: OrderEventInput
   requestedBy: string
@@ -226,6 +317,24 @@ export async function queueOrderCreatedNotifications(tx: any, input: {
   if (!context || !isOrderApproverRole(context.orderApproverRole)) {
     throw new Error("ORDER_NOTIFICATION_SCOPE_INVALID")
   }
+
+  const levelled = await levelledApprovers(tx, order.id)
+  if (levelled) {
+    return insertLevelledRecipientEvents(tx, {
+      order: { ...order, organizationId: order.organizationId },
+      template: "ORDER_CREATED",
+      message: `Order ${order.tid} was submitted and is awaiting Level ${levelled.level} approval.`,
+      payload: {
+        orderId: order.id,
+        tid: order.tid,
+        organizationName: context.organizationName,
+        branchName: context.branchName,
+        requestedBy: creator.fullName?.trim() || input.requestedBy,
+      },
+      holders: levelled.holders,
+    })
+  }
+
   const approverRole = context.orderApproverRole
   const recipients = await loadConfiguredApprovers(tx, approverRole, {
     organizationId: order.organizationId,
@@ -493,6 +602,32 @@ export async function queueOrderResubmittedNotifications(tx: any, input: {
     throw new Error("ORDER_NOTIFICATION_SCOPE_INVALID")
   }
 
+  // A levelled order goes back to its level's holders, who are also the only
+  // people who could have returned it.
+  const levelled = await levelledApprovers(tx, order.id)
+  if (levelled) {
+    return insertLevelledRecipientEvents(tx, {
+      order: { ...order, organizationId: order.organizationId },
+      template: "ORDER_RESUBMITTED",
+      message: `Order ${order.tid} was corrected and resubmitted for Level ${levelled.level} approval.`,
+      payload: {
+        orderId: order.id,
+        tid: order.tid,
+        organizationName: context.organizationName,
+        branchName: context.branchName,
+        requestedBy: input.resubmittedBy,
+        resubmissionNote: input.note,
+      },
+      holders: levelled.holders,
+      eventKeyFor: (recipientUserId: string) => correctionNotificationEventKey(
+        "ORDER_RESUBMITTED",
+        order.id,
+        input.correctionRequestId,
+        recipientUserId,
+      ),
+    })
+  }
+
   const approvers = await loadConfiguredApprovers(tx, context.orderApproverRole, {
     organizationId: order.organizationId,
     branchId: order.branchId,
@@ -632,6 +767,19 @@ function currentApproverConditionFor(row: OrderScopedOutboxRow) {
     : undefined
 }
 
+/**
+ * At send time, for an "awaiting approval" notice: whether the order is still
+ * waiting at a level its organization still uses, and if so whether this
+ * recipient still holds that level and reaches the branch (R7). "not-levelled"
+ * leaves the long-standing checks exactly as they were.
+ */
+async function levelledRecipientCheck(row: OrderScopedOutboxRow): Promise<"not-levelled" | "eligible" | "ineligible"> {
+  if (row.template !== "ORDER_CREATED" && row.template !== "ORDER_RESUBMITTED") return "not-levelled"
+  const levelled = await levelledApprovers(db, row.orderId)
+  if (!levelled) return "not-levelled"
+  return levelled.holders.some((holder) => holder.id === row.recipientUserId) ? "eligible" : "ineligible"
+}
+
 /** Recipients who receive mail only because they raised the order. */
 function isRaiserRecipientRole(role: string): boolean {
   return role === "ORDER_PORTAL" || role === GROUP_ORDER_PORTAL_ROLE
@@ -656,7 +804,12 @@ async function deliverClaimedOrderEmail(claimed: ClaimedOutboxRow): Promise<Deli
   }
   const row: OrderScopedOutboxRow = { ...claimed, orderId: claimed.orderId, branchId: claimed.branchId }
 
-  const currentApproverCondition = currentApproverConditionFor(row)
+  const levelled = await levelledRecipientCheck(row)
+  if (levelled === "ineligible") {
+    await markSkipped(row.id, "Recipient no longer holds the approval level this order waits at")
+    return "skipped"
+  }
+  const currentApproverCondition = levelled === "eligible" ? undefined : currentApproverConditionFor(row)
   const [recipient] = await db
     .select({ email: users.email, role: roles.name, orderCreatorId: orders.createdByUserId })
     .from(users)
@@ -681,7 +834,7 @@ async function deliverClaimedOrderEmail(claimed: ClaimedOutboxRow): Promise<Deli
     !recipient
     || !creatorMatches
     || !isValidEmailAddress(recipient.email)
-    || !await groupRecipientStillInScope(row)
+    || (levelled !== "eligible" && !await groupRecipientStillInScope(row))
   ) {
     await markSkipped(row.id, "Recipient is no longer authorized for this order scope")
     return "skipped"

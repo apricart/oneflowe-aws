@@ -173,6 +173,41 @@ export async function replaceMultiBranchScope(
   }
 }
 
+/**
+ * Give a user these branches on top of what it already has. Additive and
+ * idempotent: an assignment it already holds is left as it is, and nothing is
+ * ever removed. The department sign-up's approval uses this on an existing
+ * approver, whose other branches are not this request's to take away
+ * (plans/OF-JOIN-department-signup-multi-user.md). Caller supplies the
+ * transaction and has already checked the branches belong to `organizationId`.
+ */
+export async function addBranchesToScope(
+  tx: DbClient,
+  {
+    userId,
+    organizationId,
+    branchIds,
+    createdByUserId,
+  }: {
+    userId: string
+    organizationId: number
+    branchIds: number[]
+    createdByUserId?: string | null
+  },
+): Promise<void> {
+  const unique = [...new Set(branchIds)]
+  if (unique.length === 0) return
+  await tx
+    .insert(userBranchAssignments)
+    .values(unique.map((branchId) => ({
+      userId,
+      branchId,
+      organizationId,
+      createdByUserId: createdByUserId ?? null,
+    })))
+    .onConflictDoNothing({ target: [userBranchAssignments.userId, userBranchAssignments.branchId] })
+}
+
 /** Remove every assignment for a user (role change off a group role, deletion). */
 export async function clearMultiBranchScope(tx: DbClient, userId: string): Promise<void> {
   await tx.delete(userGroupAssignments).where(eq(userGroupAssignments.userId, userId))
@@ -409,4 +444,67 @@ export async function canUseScopedBranch(
   if (!branchId) return false
   const allowed = await resolveScopedBranchIds(db, userId)
   return allowed.includes(branchId)
+}
+
+/** One branch a listed user reaches, as the user directory shows it. */
+export type ScopedBranchSummary = { id: number; name: string }
+
+/**
+ * The effective branch set of many users at once, for the user directory.
+ *
+ * The same union and the same fences as `resolveScopedBranchIds` — assigned
+ * groups resolved to their current member branches, plus individually assigned
+ * branches, each re-asserting the tenant it was written under, and only
+ * branches of the user's own organization — answered in two bounded reads
+ * instead of one per user. Each list is sorted by name. A user with no
+ * effective branch is absent from the map; a caller treats that as "none",
+ * never as "all branches".
+ */
+export async function resolveScopedBranchesForUsers(
+  client: DbClient,
+  userIds: string[],
+): Promise<Map<string, ScopedBranchSummary[]>> {
+  const result = new Map<string, ScopedBranchSummary[]>()
+  if (userIds.length === 0) return result
+
+  const [byBranch, byGroup] = await Promise.all([
+    client
+      .select({ userId: userBranchAssignments.userId, id: branches.id, name: branches.name })
+      .from(userBranchAssignments)
+      .innerJoin(branches, and(
+        eq(branches.id, userBranchAssignments.branchId),
+        eq(branches.organizationId, userBranchAssignments.organizationId),
+      ))
+      .innerJoin(users, and(
+        eq(users.id, userBranchAssignments.userId),
+        eq(users.organizationId, branches.organizationId),
+      ))
+      .where(inArray(userBranchAssignments.userId, userIds)),
+    client
+      .select({ userId: userGroupAssignments.userId, id: branches.id, name: branches.name })
+      .from(userGroupAssignments)
+      .innerJoin(branches, and(
+        eq(branches.groupId, userGroupAssignments.groupId),
+        eq(branches.organizationId, userGroupAssignments.organizationId),
+      ))
+      .innerJoin(users, and(
+        eq(users.id, userGroupAssignments.userId),
+        eq(users.organizationId, branches.organizationId),
+      ))
+      .where(inArray(userGroupAssignments.userId, userIds)),
+  ])
+
+  const seen = new Set<string>()
+  for (const row of [...byBranch, ...byGroup] as { userId: string; id: number; name: string }[]) {
+    const key = `${row.userId}:${row.id}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    const list = result.get(row.userId) ?? []
+    list.push({ id: row.id, name: row.name })
+    result.set(row.userId, list)
+  }
+  for (const list of result.values()) {
+    list.sort((a, b) => a.name.localeCompare(b.name) || a.id - b.id)
+  }
+  return result
 }

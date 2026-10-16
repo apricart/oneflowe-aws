@@ -14,6 +14,13 @@ vi.mock("@/components/auth/order-portal-profile-menu", () => ({
 }))
 vi.mock("@/components/warehouse/warehouse-orders", () => ({ WarehouseOrders: () => <div>orders section</div> }))
 vi.mock("@/components/warehouse/warehouse-catalog", () => ({ WarehouseCatalog: () => <div>catalog section</div> }))
+vi.mock("@/components/warehouse/catalog/warehouse-organization-products", () => ({ WarehouseOrganizationProducts: () => <div>organization products section</div> }))
+vi.mock("@/components/warehouse/catalog/warehouse-group-products", () => ({ WarehouseGroupProducts: () => <div>group products section</div> }))
+vi.mock("@/components/warehouse/catalog/warehouse-product-requests", () => ({ WarehouseProductRequests: () => <div>product requests section</div> }))
+vi.mock("@/components/warehouse/catalog/warehouse-taxonomy", () => ({ WarehouseTaxonomy: ({ level }: { level: string }) => <div>{level} taxonomy section</div> }))
+vi.mock("next/dynamic", () => ({
+  default: () => ({ endpoint, role }: { endpoint: string; role: string }) => <div>price history section {role} {endpoint}</div>,
+}))
 vi.mock("@/components/warehouse/warehouse-notification-bell", () => ({ WarehouseNotificationBell: () => <button type="button">bell</button> }))
 vi.mock("@/components/delivery-dashboard/delivery-dashboard", () => ({
   DeliveryDashboard: ({ dashboardEndpoint }: { dashboardEndpoint: string }) => <div>dashboard section {dashboardEndpoint}</div>,
@@ -31,6 +38,7 @@ describe("the warehouse side menu", () => {
   it("offers the three sections in order and opens on the Dashboard", () => {
     render(<WarehouseWorkspace />)
     expect(menu().getAllByRole("button").map((button) => button.textContent)).toEqual(["Dashboard", "Orders", "Product Catalog"])
+    expect(menu().getByRole("button", { name: "Product Catalog" }).getAttribute("aria-expanded")).toBe("false")
     expect(current().map((button) => button.textContent)).toEqual(["Dashboard"])
     expect(screen.getByText("dashboard section /api/v1/warehouse/workload")).toBeTruthy()
     expect(screen.queryByRole("tablist")).toBeNull()
@@ -45,6 +53,7 @@ describe("the warehouse side menu", () => {
     expect(window.location.hash).toBe("#orders")
 
     fireEvent.click(menu().getByRole("button", { name: "Product Catalog" }))
+    fireEvent.click(menu().getByRole("button", { name: "Global Products" }))
     expect(screen.getByText("catalog section")).toBeTruthy()
     expect(screen.queryByText("orders section")).toBeNull()
     expect(window.location.hash).toBe("#catalog")
@@ -80,5 +89,47 @@ describe("the warehouse side menu", () => {
     expect(screen.getByText(/dashboard section/)).toBeTruthy()
     expect(current().map((button) => button.textContent)).toEqual(["Dashboard"])
     expect(window.location.hash).toBe("#dashboard")
+  })
+
+  it("opens the Product Catalog submenu with Super Admin's seven menus, in its order", () => {
+    render(<WarehouseWorkspace />)
+    fireEvent.click(menu().getByRole("button", { name: "Product Catalog" }))
+    expect(menu().getByRole("button", { name: "Product Catalog" }).getAttribute("aria-expanded")).toBe("true")
+    const submenu = within(screen.getByRole("list", { name: "Product Catalog" }))
+    expect(submenu.getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "Global Products",
+      "Product Price History",
+      "Organization Products",
+      "Group Products",
+      "Categories",
+      "Subcategories",
+      "Product Requests",
+    ])
+    fireEvent.click(menu().getByRole("button", { name: "Product Catalog" }))
+    expect(screen.queryByRole("list", { name: "Product Catalog" })).toBeNull()
+  })
+
+  it.each([
+    ["Product Price History", "price history section WAREHOUSE /api/v1/warehouse/catalog/price-history", "#catalog-price-history"],
+    ["Organization Products", "organization products section", "#catalog-organization-products"],
+    ["Group Products", "group products section", "#catalog-group-products"],
+    ["Categories", "category taxonomy section", "#catalog-categories"],
+    ["Subcategories", "subcategory taxonomy section", "#catalog-subcategories"],
+    ["Product Requests", "product requests section", "#catalog-product-requests"],
+  ])("opens %s on its own, read-only view", (label, text, hash) => {
+    render(<WarehouseWorkspace />)
+    fireEvent.click(menu().getByRole("button", { name: "Product Catalog" }))
+    fireEvent.click(menu().getByRole("button", { name: label }))
+    expect(screen.getByText(text)).toBeTruthy()
+    expect(screen.queryByText(/dashboard section/)).toBeNull()
+    expect(window.location.hash).toBe(hash)
+    expect(current().map((button) => button.textContent)).toEqual([label])
+  })
+
+  it("opens the submenu at the catalogue view a link names", () => {
+    window.history.replaceState(null, "", "/warehouse#catalog-group-products")
+    render(<WarehouseWorkspace />)
+    expect(screen.getByText("group products section")).toBeTruthy()
+    expect(screen.getByRole("list", { name: "Product Catalog" })).toBeTruthy()
   })
 })

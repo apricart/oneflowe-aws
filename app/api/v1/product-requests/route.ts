@@ -14,6 +14,7 @@ import {
 import { withRateLimit } from "@/lib/rate-limiter"
 import { validationMessage } from "@/lib/server/mutation-validation"
 import { createProductRequest, listProductRequests } from "@/lib/server/product-requests"
+import { VIEWER_READ_REFUSED, viewerReadScope } from "@/lib/viewer-access"
 
 /**
  * New-product requests: Head Office raises them, Super Admin reads them all.
@@ -34,7 +35,8 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const scope = await getRequestScope()
+    const scope = viewerReadScope(await getRequestScope())
+    if (!scope) return NextResponse.json({ error: VIEWER_READ_REFUSED }, { status: 403 })
     if (!scope) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }

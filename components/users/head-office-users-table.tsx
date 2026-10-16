@@ -1,4 +1,5 @@
 "use client"
+import { useViewerAccess } from "@/lib/hooks/use-viewer-access"
 import { useEffect,useRef,useState,useMemo } from "react"
 import useSWR from "swr"
 import { jsonFetcher } from "@/lib/fetcher"
@@ -31,6 +32,17 @@ import {
   createCsv,
   sanitizeSpreadsheetRecords,
 } from "@/lib/spreadsheet"
+import {
+  ApprovalLevelField,
+  approvalLevelPayload,
+  useApprovalLevelChoice,
+} from "@/components/users/approval-level-field"
+import { UserBranchCell } from "@/components/users/user-branch-cell"
+import {
+  describeUserBranches,
+  userBranchExportText,
+  type DirectoryBranch,
+} from "@/lib/user-branch-display"
 
 type UserRow = {
   id: string
@@ -53,6 +65,10 @@ type UserRow = {
   username?: string | null
   /** Set when the account is mirrored from another system; its role is managed there. */
   externalSource?: string | null
+  /** The organization approval level held, or null (plans/OF-APPROVAL-LEVELS-assign-users-to-levels.md). */
+  orderApprovalLevel?: number | null
+  /** A group-based user's effective branches; null for every other role. */
+  assignedBranches?: DirectoryBranch[] | null
 }
 
 type HeadOfficeUsersTableProps = {
@@ -79,6 +95,9 @@ type EditFormState = {
   // for one — `resolveNextScope` rejects a stray list outright.
   groupIds: string[]
   branchIds: string[]
+  // "" = no level. Saved through its own endpoint, never `.../access`, which
+  // would end the user's sessions.
+  orderApprovalLevel: string
   password: string
   confirmPassword: string
   employeeId: string
@@ -267,6 +286,25 @@ const submitUserUpdates = async (userId: string, body: Record<string, unknown>) 
       body: JSON.stringify(profileBody),
     })
   }
+}
+
+/**
+ * The level to send, or undefined to send nothing. Where the role and
+ * organization admit no level the stored one is left alone (it is inert, and
+ * comes back if the organization switches levels on again); an access change
+ * of role or organization has already cleared it on the server.
+ */
+const approvalLevelUpdate = (
+  form: EditFormState,
+  user: UserRow,
+  applicable: boolean,
+): number | null | undefined => {
+  if (!applicable) return undefined
+  const moved = form.role !== (user.role || "")
+    || form.organizationId !== (user.organizationId ? String(user.organizationId) : "")
+  const current = moved ? null : (user.orderApprovalLevel ?? null)
+  const next = approvalLevelPayload(form.orderApprovalLevel)
+  return next === current ? undefined : next
 }
 
 type PasswordResetFieldsProps = {
@@ -898,6 +936,9 @@ function RoleAssignmentFields({
 }
 
 export function HeadOfficeUsersTable({ users, branches, organizations, userRole, onUserUpdate }: Readonly<HeadOfficeUsersTableProps>) {
+  // The read-only Viewer opens the same directory and drawer, without the
+  // controls that edit, deactivate, delete or reset an account.
+  const { readOnly } = useViewerAccess()
   const PAGE_SIZE = 20
   const [viewMode, setViewMode] = useState<"grid" | "table">("table")
   const [searchQuery, setSearchQuery] = useState("")
@@ -947,6 +988,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
     mfaEnabled: false,
     isActive: true,
     budgetAllocationEnabled: false,
+    orderApprovalLevel: "",
     password: "",
     confirmPassword: "",
     employeeId: "",
@@ -954,6 +996,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
     contactPerson: "",
     address: ""
   })
+  const approvalLevelChoice = useApprovalLevelChoice(editForm.organizationId, editForm.role)
 
   const showEditFeedback = (message: string, type: AlertType = "warning") => {
     setEditFeedback({ message, type, visible: true })
@@ -1023,10 +1066,8 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
     return map
   }, [branches])
 
-  const getBranchName = (branchId: number | null | undefined) => {
-    if (!branchId) return "—"
-    return branchMap.get(branchId as number) || "Unknown"
-  }
+  const getBranchDisplay = (user: UserRow) => describeUserBranches(user, branchMap)
+  const getBranchExportText = (user: UserRow) => userBranchExportText(getBranchDisplay(user))
 
   const getOrganizationName = (organizationId: number | null | undefined) => {
     if (!organizationId) return "—"
@@ -1051,6 +1092,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
       mfaEnabled: user.mfaEnabled || false,
       isActive: user.isActive,
       budgetAllocationEnabled: user.budgetAllocationEnabled === true,
+      orderApprovalLevel: user.orderApprovalLevel ? String(user.orderApprovalLevel) : "",
       groupIds: [],
       branchIds: [],
       password: "",
@@ -1081,6 +1123,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
       mfaEnabled: false,
       isActive: true,
       budgetAllocationEnabled: false,
+      orderApprovalLevel: "",
       groupIds: [],
       branchIds: [],
       password: "",
@@ -1186,6 +1229,15 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
       setEditErrors({})
       const body = buildUserUpdate(editForm, editingUser, showPasswordReset, existingScope.scope)
       await submitUserUpdates(editingUser.id, body)
+      // After the access change, which clears the level when the role or
+      // organization moved — so the level is judged against the new shape.
+      const nextLevel = approvalLevelUpdate(editForm, editingUser, approvalLevelChoice.applicable)
+      if (nextLevel !== undefined) {
+        await jsonFetcher(`/api/v1/users/${editingUser.id}/approval-level`, {
+          method: "PUT",
+          body: JSON.stringify({ level: nextLevel }),
+        })
+      }
 
       onUserUpdate()
       closeEditDialog()
@@ -1281,7 +1333,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
       user.phone || "—",
       user.role,
       getOrganizationName(user.organizationId) || "—",
-      getBranchName(user.branchId),
+      getBranchExportText(user),
       orgStatusMap.get(user.organizationId as number) || "—",
       user.isActive ? "Active" : "Inactive",
       user.mfaEnabled ? "Enabled" : "Disabled"
@@ -1306,7 +1358,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
       "Phone": user.phone || "—",
       "Role": user.role,
       "Organization": getOrganizationName(user.organizationId) || "—",
-      "Branch": getBranchName(user.branchId),
+      "Branch": getBranchExportText(user),
       "Company Status": orgStatusMap.get(user.organizationId as number) || "—",
       "User Status": user.isActive ? "Active" : "Inactive",
       "Security (MFA)": user.mfaEnabled ? "Enabled" : "Disabled"
@@ -1333,7 +1385,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
       user.phone || "—",
       user.role,
       getOrganizationName(user.organizationId) || "—",
-      getBranchName(user.branchId),
+      getBranchExportText(user),
       orgStatusMap.get(user.organizationId as number) || "—",
       user.isActive ? "Active" : "Inactive",
       user.mfaEnabled ? "Enabled" : "Disabled"
@@ -1502,6 +1554,10 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
                     </div>
                   </div>
 
+                  <div className="mb-4 relative z-10">
+                    <UserBranchCell display={getBranchDisplay(user)} />
+                  </div>
+
                   <div className="mt-auto pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between relative z-10">
                     <div>
                       {getRoleBadge(user.role)}
@@ -1590,12 +1646,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
                         {getRoleBadge(user.role)}
                       </TableCell>
                       <TableCell>
-                        <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
-                          <Building2 className="h-3.5 w-3.5 opacity-60 shrink-0" />
-                          <span className="truncate max-w-[140px]" title={branches.find((b: any) => b.id === user.branchId)?.name || 'Head Office'}>
-                            {branches.find((b: any) => b.id === user.branchId)?.name || 'Head Office'}
-                          </span>
-                        </div>
+                        <UserBranchCell display={getBranchDisplay(user)} />
                       </TableCell>
                       <TableCell className="text-right pr-6">
                         <Badge
@@ -1722,7 +1773,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
                       </div>
                       <div className="space-y-0.5 text-right">
                          <p className="text-xs text-muted-foreground">Branch</p>
-                         <p className="text-sm font-semibold">{getBranchName(viewingUser.branchId)}</p>
+                         <UserBranchCell display={getBranchDisplay(viewingUser)} className="justify-end font-semibold" />
                       </div>
                     </div>
                     <div className="flex items-start justify-between">
@@ -1792,6 +1843,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
               </div>
 
               <SheetFooter className="mt-auto p-6 bg-white dark:bg-slate-950 border-t border-slate-200 dark:border-slate-800 flex flex-col gap-3 sticky bottom-0 z-20">
+                {!readOnly && (
                 <div className="grid grid-cols-2 gap-3 w-full">
                   <Button 
                     variant="outline" 
@@ -1852,6 +1904,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>
+                )}
                 <Button 
                   variant="ghost" 
                   className="w-full text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-colors h-9 text-xs"
@@ -2081,6 +2134,14 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
               userId={editingUser?.id}
               currentRole={editingUser?.role ?? ""}
               externalSource={editingUser?.externalSource}
+            />
+
+            <ApprovalLevelField
+              id="edit-approval-level"
+              choice={approvalLevelChoice}
+              value={editForm.orderApprovalLevel}
+              onChange={(orderApprovalLevel) => setEditForm({ ...editForm, orderApprovalLevel })}
+              disabled={submittingUserId === editingUser?.id}
             />
 
             {/* Security & Access */}

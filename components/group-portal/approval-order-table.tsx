@@ -16,6 +16,7 @@ import {
   type ApprovalOrder,
   STATUS_STYLES,
   formatDateTime,
+  isDecidableByApprover,
   isPending,
   isReturnedForCorrection,
   normalizeStatus,
@@ -127,8 +128,9 @@ function OrderRow({
   onRefresh?: () => void
 }>) {
   const status = normalizeStatus(order.status)
-  const pending = isPending(order)
+  const pending = isDecidableByApprover(order)
   const returned = isReturnedForCorrection(order)
+  const otherLevel = isPending(order) && order.levelDecisionLocked && order.approvalLevel
 
   return (
     <>
@@ -207,6 +209,9 @@ function OrderRow({
                 Approve
               </Button>
             </div>
+          ) : otherLevel ? (
+            // Pending, but at an approval level this approver does not hold.
+            <p className="text-right text-xs text-slate-500">Awaiting a Level {order.approvalLevel} approver</p>
           ) : (
             // A decided order can no longer be acted on, so this cell carries
             // the decision time and the invoice, which the endpoints release

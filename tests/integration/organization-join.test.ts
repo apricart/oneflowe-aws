@@ -18,6 +18,7 @@ import {
   users,
 } from "@/db/schema"
 import { closePool, db } from "@/lib/db"
+import { JOIN_IDENTITY_CONFLICT_MESSAGE } from "@/lib/organization-join"
 
 import {
   NO_DATABASE_REASON,
@@ -526,15 +527,14 @@ describe.skipIf(!hasTestDatabase)("joining an organization, end to end", () => {
       expect(after).toHaveLength(before.length)
     })
 
-    it("answers a duplicate pending request without naming the field", async () => {
+    it("answers a duplicate pending request without singling out the field", async () => {
       const input = submission()
       await submitAccepted(input)
 
       const again = await submit(jsonRequest("/api/v1/join/requests", "POST", input))
       expect(again.status).toBe(409)
-      const message = (await body(again)).error as string
-      expect(message).not.toMatch(/email|username|phone|employee/i)
-      expect(message).toMatch(/cannot be used to join/i)
+      // Every checked field is listed, whichever one clashed.
+      expect((await body(again)).error).toBe(JOIN_IDENTITY_CONFLICT_MESSAGE)
     })
 
     it("lets a second tenant queue the same person, and resolves it at approval", async () => {
@@ -617,7 +617,7 @@ describe.skipIf(!hasTestDatabase)("joining an organization, end to end", () => {
         jsonRequest("/api/v1/join/requests", "POST", submission({ email: row.email })),
       )
       expect(response.status).toBe(409)
-      expect((await body(response)).error).toMatch(/cannot be used to join/i)
+      expect((await body(response)).error).toBe(JOIN_IDENTITY_CONFLICT_MESSAGE)
     })
   })
 

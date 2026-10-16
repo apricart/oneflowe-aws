@@ -163,18 +163,34 @@ export function asSystemRole(role: JoinableRole): Role {
  *   * `UNKNOWN_JOIN_CODE` — a wrong code, a code belonging to a de-activated
  *     tenant, and a tenant that has never opened joining are indistinguishable.
  *     Otherwise a guesser learns which codes exist before learning which work.
- *   * `JOIN_IDENTITY_CONFLICT` — names no field. An email, a username, a phone
- *     number, an employee number and an already-queued request all answer the
- *     same way, so the form cannot be used to test whether a colleague has an
- *     account. This is why there is deliberately no public
- *     username-availability endpoint; `/api/v1/users/check-username` stays
- *     behind a session.
+ *   * `JOIN_IDENTITY_CONFLICT` — never singles out the field that clashed. It
+ *     lists **every** field that is checked, and says why each can clash, so
+ *     the applicant knows exactly what to look at — but an email, a username, a
+ *     phone number, an employee number and an already-queued request all
+ *     answer with the identical text, so the form cannot be used to test
+ *     whether a colleague has an account. This is why there is deliberately no
+ *     public username-availability endpoint; `/api/v1/users/check-username`
+ *     stays behind a session.
+ *
+ *     There is one text per form, because each must list the fields *that form*
+ *     asks for: the department sign-up has no username field (the username is
+ *     derived from the email, and Head Office may change it at review), so its
+ *     text must not send the applicant looking for one.
  */
 export const UNKNOWN_JOIN_CODE_MESSAGE =
   "That join code is not recognised. Check it with your organization's head office."
 
 export const JOIN_IDENTITY_CONFLICT_MESSAGE =
-  "The details you entered cannot be used to join. If you already have an account, or a request is already waiting, contact your organization's head office."
+  "Your request was not sent because one of these is already in use: your email address, username, mobile number or employee number. " +
+  "Each one can belong to only one account, and an email address or username can be on only one waiting request. " +
+  "Check that each is your own and typed correctly, and change the one that is not. " +
+  "If they are all yours, you may already have an account or a request waiting: use \"Forgot password\" on the sign-in page, or contact your organization's head office."
+
+export const DEPARTMENT_JOIN_IDENTITY_CONFLICT_MESSAGE =
+  "Your request was not sent because one of these is already in use: your email address, mobile number or employee number. " +
+  "Each one can belong to only one account, and an email address can be on only one waiting request. " +
+  "Check that each is your own and typed correctly, and change the one that is not. " +
+  "If they are all yours, you may already have an account or a request waiting: use \"Forgot password\" on the sign-in page, or contact your organization's head office."
 
 export const JOIN_REQUEST_RECEIVED_MESSAGE =
   "Your request has been sent to your organization's head office. You will be able to sign in once it is approved."

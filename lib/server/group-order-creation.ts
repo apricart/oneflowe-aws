@@ -30,6 +30,10 @@ import { resolveTaxRateBp, splitInclusiveCents } from "@/lib/tax"
 import { getOrganizationTaxRateBp } from "@/lib/server/tax-rate"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
 import { resolveInitialOrderApproval } from "@/lib/server/order-creation-approval"
+import {
+  isApprovalLevelUnavailableError,
+  resolveOrderApprovalLevel,
+} from "@/lib/server/order-approval-routing"
 import { isOrganizationBudgetEnabled, resolveOrderBudgetTracking } from "@/lib/server/organization-budget-policy"
 import { BUDGET_POLICY_CHANGED_MESSAGE } from "@/lib/organization-budget-policy"
 import { settleDueAddonsOnBudget } from "@/lib/server/budget-addon-expiry"
@@ -208,6 +212,7 @@ function toUserFacingReason(caughtError: unknown): string {
   if (isPaymentControlBlockedError(caughtError)) return caughtError.message
   if (isDeliveryAcknowledgementBlockedError(caughtError)) return caughtError.message
   if (isInvoiceCodeMissingError(caughtError)) return caughtError.message
+  if (isApprovalLevelUnavailableError(caughtError)) return caughtError.message
   const message = String((caughtError as { message?: unknown })?.message ?? "")
   const normalized = message.toLowerCase()
   const isCustomerError = message.startsWith("Insufficient stock")
@@ -706,6 +711,16 @@ async function createBranchOrder(context: BranchCreationContext): Promise<Branch
 
       const tid = generateTid()
       const initialApproval = await resolveInitialOrderApproval(tx, organizationId)
+      // Banded on this branch order's own total, as a single order is
+      // (plans/OF-APPROVAL-LEVELS-route-orders-by-level.md, R2). Null for an
+      // organization without levels; a branch nobody could decide fails alone.
+      const approvalLevel = await resolveOrderApprovalLevel(tx, {
+        organizationId,
+        branchId,
+        totalCents: priced.total,
+        approvalRequired: initialApproval.approvalRequired,
+        creator: { userId: context.actor.userId, role: context.actor.role },
+      })
       const [order] = await tx
         .insert(orders)
         .values({
@@ -728,6 +743,7 @@ async function createBranchOrder(context: BranchCreationContext): Promise<Branch
           // an ordinary order of the branch's and is attributed the same way.
           createdByRole: context.actor.role,
           ...(budgetTracked ? {} : { budgetTracked: false }),
+          ...(approvalLevel === null ? {} : { approvalLevel }),
         })
         .returning({ id: orders.id, tid: orders.tid, totalCents: orders.totalCents })
 

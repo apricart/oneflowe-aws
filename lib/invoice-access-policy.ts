@@ -80,10 +80,10 @@ type InvoiceRoleRule = {
  *                          for, like its group order history.
  *  - GROUP_USER          — every order in its assigned branches, like its
  *                          approval queue.
- *  - VIEWER              — nothing. It reads aggregates on its dashboard and
- *                          never reaches the invoice page, which is not in its
- *                          areas at all; this entry is the server-side half of
- *                          that and fails closed on its own.
+ *  - VIEWER              — nothing, as itself. An organization-wide Viewer is
+ *                          read as HEAD_OFFICE by `authorizeInvoiceRequest`
+ *                          (`lib/viewer-access.ts`); this row is what a
+ *                          branch-pinned one gets, and it fails closed.
  *  - ORDER_DESK          — nothing, for now: it has no organization, so it is
  *                          refused by the tenant check like an unknown scope.
  *  - APRICART_EXECUTIVE  — nothing, for the same reason; its dashboard shows no

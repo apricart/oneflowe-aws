@@ -197,7 +197,10 @@ describe("the permissions behind it", () => {
 
   it("give the organization key to exactly the roles this module admits", () => {
     // Super Admin holds every key by construction (`Object.values(Permission)`).
-    expect(holdersOf(Permission.ORG_VIEW_AUDIT_LOGS)).toEqual([...ACTIVITY_LOG_ROLES].sort())
+    // The Viewer holds it too: an organization-wide Viewer reads its own
+    // organization's trail as Head Office does (`viewerReadScope` in the
+    // handler), so it is not a reach of its own in this module.
+    expect(holdersOf(Permission.ORG_VIEW_AUDIT_LOGS)).toEqual([...ACTIVITY_LOG_ROLES, "VIEWER"].sort())
     expect([...ACTIVITY_LOG_ORGANIZATION_ROLES]).toEqual(["HEAD_OFFICE"])
   })
 })

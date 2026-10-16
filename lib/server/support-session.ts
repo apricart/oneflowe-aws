@@ -1,3 +1,4 @@
+import { viewerReadRole } from "@/lib/viewer-access"
 import "server-only"
 
 import { eq } from "drizzle-orm"
@@ -41,6 +42,21 @@ export function supportViewerFromSession(session: unknown): SupportViewer | null
     organizationId: scopeId(user.organizationId),
     branchId: scopeId(user.branchId),
   }
+}
+
+/**
+ * The caller as a support *reader*, for GET handlers only: an
+ * organization-wide Viewer reads its tenant's threads as Head Office does, a
+ * branch-pinned one reads none (`null`), and every other caller is exactly
+ * `supportViewerFromSession`. Never use it on a write path — the Viewer raises,
+ * answers and closes nothing.
+ */
+export function supportReaderFromSession(session: unknown): SupportViewer | null {
+  const viewer = supportViewerFromSession(session)
+  if (!viewer) return null
+  const role = viewerReadRole(viewer)
+  if (role === null) return null
+  return { ...viewer, role }
 }
 
 /**

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  DEPARTMENT_JOIN_IDENTITY_CONFLICT_MESSAGE,
   JOINABLE_ROLES,
   JOINABLE_ROLE_LABELS,
   JOIN_CODE_MAX_LENGTH,
@@ -172,9 +173,28 @@ describe("the statuses and decisions", () => {
 })
 
 describe("the messages the public endpoints answer with", () => {
-  it("never name the field that conflicted", () => {
-    for (const field of ["email", "username", "phone", "employee"]) {
-      expect(JOIN_IDENTITY_CONFLICT_MESSAGE.toLowerCase()).not.toContain(field)
+  // A constant per form is what keeps a clash from singling out its field: the
+  // same text answers every cause. Listing every checked field is what tells
+  // the applicant what to look at.
+  it("list every field the standard form checks, including the username it asks for", () => {
+    for (const field of ["email address", "username", "mobile number", "employee number"]) {
+      expect(JOIN_IDENTITY_CONFLICT_MESSAGE).toContain(field)
+    }
+  })
+
+  it("list every field the department sign-up checks, and no username, which it never asks for", () => {
+    for (const field of ["email address", "mobile number", "employee number"]) {
+      expect(DEPARTMENT_JOIN_IDENTITY_CONFLICT_MESSAGE).toContain(field)
+    }
+    expect(DEPARTMENT_JOIN_IDENTITY_CONFLICT_MESSAGE.toLowerCase()).not.toContain("username")
+  })
+
+  it("say why a field can clash and where to go if every field is the applicant's own", () => {
+    for (const message of [JOIN_IDENTITY_CONFLICT_MESSAGE, DEPARTMENT_JOIN_IDENTITY_CONFLICT_MESSAGE]) {
+      expect(message).toMatch(/only one account/)
+      expect(message).toMatch(/waiting request/)
+      expect(message).toMatch(/Forgot password/)
+      expect(message).toMatch(/head office/)
     }
   })
 

@@ -16,6 +16,10 @@ const mocks = vi.hoisted(() => ({
   swrKeys: [] as Array<string | null>,
 }))
 
+// The page reads the signed-in role to tell a read-only Viewer apart; with no
+// session it renders exactly as before, for the role the test sets up.
+vi.mock("next-auth/react", () => ({ useSession: () => ({ data: null, status: "unauthenticated" }) }))
+
 vi.mock("@/components/context/app-context", () => ({
   useAppContext: () => mocks.context,
 }))
@@ -201,6 +205,31 @@ describe("UsersPage readiness and scoping", () => {
 
     expect(screen.getByTestId("rendered-user-ids").textContent).toBe(
       "org-2-ho,org-2-admin,org-2-order",
+    )
+  })
+
+  it("lists group-based users under a branch filter by their assignments, as a join approval creates them", () => {
+    mocks.context = {
+      organizationId: "1",
+      branchId: "11",
+      branchIds: [],
+      userRole: "HEAD_OFFICE",
+      isInitialized: true,
+    }
+    mocks.usersData = {
+      items: [
+        ...users,
+        { id: "org-1-group-op", organizationId: 1, branchId: null, role: "GROUP_ORDER_PORTAL", assignedBranches: [{ id: 11, name: "North" }, { id: 12, name: "South" }] },
+        { id: "org-1-approver", organizationId: 1, branchId: null, role: "GROUP_USER", assignedBranches: [{ id: 11, name: "North" }] },
+        { id: "org-1-elsewhere", organizationId: 1, branchId: null, role: "GROUP_USER", assignedBranches: [{ id: 12, name: "South" }] },
+      ],
+    }
+    mocks.usersLoading = false
+
+    render(<UsersPage />)
+
+    expect(screen.getByTestId("rendered-user-ids").textContent).toBe(
+      "org-1-admin,org-1-order,org-1-group-op,org-1-approver",
     )
   })
 

@@ -25,6 +25,9 @@ import {
   resolvePrivateNetworkLoginRows,
 } from "@/lib/server/network-policy"
 import { formatAllowlistEntry } from "@/lib/security/ip-allowlist"
+import { replaceOrganizationApprovalLevels } from "@/lib/server/order-approval-levels"
+import { toApprovalLevels } from "@/lib/order-approval-levels"
+import { VIEWER_READ_REFUSED, viewerReadScope } from "@/lib/viewer-access"
 
 type OrganizationCreateInput = ReturnType<typeof organizationCreateSchema.parse>
 
@@ -85,10 +88,11 @@ function validateOrganizationFields(body: OrganizationCreateInput) {
  */
 export async function GET() {
   try {
-    const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "ORDER_PORTAL"])
+    const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "ORDER_PORTAL"], { viewerReadsAsHeadOffice: true })
     if (err) return err
 
-    const scope = await getRequestScope()
+    const scope = viewerReadScope(await getRequestScope())
+    if (!scope) return error(VIEWER_READ_REFUSED, 403)
 
     // Validate scope data
     if (!scope?.role) {
@@ -194,6 +198,11 @@ export async function POST(req: Request) {
     const resolvedNetworkRows = resolvePrivateNetworkLoginRows(privateNetworkLogin)
     if (!resolvedNetworkRows.ok) return error(resolvedNetworkRows.message, 400)
 
+    // Absent means off with no levels; the schema has already held the list to
+    // approvalLevelsError (plans/OF-APPROVAL-LEVELS-organization-approval-levels.md).
+    const orderApprovalLevelsEnabled = body.orderApprovalLevels?.enabled ?? false
+    const approvalLevelAmountsCents = (body.orderApprovalLevels?.levels ?? []).map((level) => level.maxAmountCents)
+
     // Check for duplicate name
     const existingName = await db
       .select({ id: orgsTable.id })
@@ -238,12 +247,19 @@ export async function POST(req: Request) {
           budgetsEnabled: body.budgetsEnabled,
           managedOrdering: body.managedOrdering,
           privateNetworkLoginEnabled: privateNetworkLogin.enabled,
+          orderApprovalLevelsEnabled,
         })
         .returning()
 
       await replaceOrganizationAllowedIps(tx, {
         organizationId: createdOrganization.id,
         rows: resolvedNetworkRows.rows,
+        actorUserId: scope.userId,
+      })
+
+      await replaceOrganizationApprovalLevels(tx, {
+        organizationId: createdOrganization.id,
+        amountsCents: approvalLevelAmountsCents,
         actorUserId: scope.userId,
       })
 
@@ -284,6 +300,8 @@ export async function POST(req: Request) {
           emailDomain: createdOrganization.emailDomain,
           privateNetworkLoginEnabled: privateNetworkLogin.enabled,
           allowedNetworks: resolvedNetworkRows.rows.map(formatAllowlistEntry),
+          orderApprovalLevelsEnabled,
+          orderApprovalLevels: toApprovalLevels(approvalLevelAmountsCents),
         },
       })
 

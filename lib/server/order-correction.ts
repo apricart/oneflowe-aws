@@ -23,6 +23,7 @@ import {
   isOrderWriteRole,
 } from "@/lib/order-write-access"
 import { recordAuditEvent } from "@/lib/server/activity-audit"
+import { approvalLevelMatches } from "@/lib/server/order-approval-routing"
 import { authorizeOrderDecision } from "@/lib/server/order-decision-policy"
 import {
   queueOrderResubmittedNotifications,
@@ -127,6 +128,7 @@ export async function returnOrderForCorrection(input: {
       eq(orders.id, input.orderId),
       sql`UPPER(${orders.status}) = 'PENDING'`,
       isNull(orders.returnedForCorrectionAt),
+      approvalLevelMatches(authorization.approvalLevel),
     )).returning({
       id: orders.id,
       tid: orders.tid,

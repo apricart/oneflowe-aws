@@ -22,6 +22,18 @@ excluded: nothing is owed on them.
 The rule is pure in `lib/pending-invoice.ts` (`PENDING_INVOICE_ORDER_STATUSES`,
 `isPendingInvoiceOrder`); the endpoint's SQL mirrors it.
 
+## Only where the organization blocks ordering on unpaid invoices
+
+Added 2026-10-14. The notice is part of the payment control
+(`plans/OF-PAYMENT-CONTROL-unpaid-invoice-ordering-block.md`): it is shown only
+for an invoice whose organization has `block_ordering_on_unpaid_invoices`
+switched on. With it off, `payment_status` is not maintained for that tenant,
+so every delivered order stays `UNPAID` and the notice told requesters an
+invoice was pending on every order (UBL and K-Electric, both on `APR-000060`).
+The endpoint joins each order to its own organization and filters on the flag;
+it still takes no parameter. With the block on, the notice warns below the
+organization's limit and the block refuses at it.
+
 ## Behaviour
 
 - **A notice, not a block.** The dialog names the invoice number and offers
