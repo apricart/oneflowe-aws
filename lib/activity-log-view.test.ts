@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  ACTIVITY_ACTOR_ROLES,
   ACTIVITY_MAX_WINDOW_DAYS,
   ACTIVITY_OPERATIONS,
   ACTIVITY_SEVERITIES,
@@ -8,6 +9,7 @@ import {
   type ActivityEvent,
 } from "@/lib/activity-log"
 import {
+  ACTOR_ROLE_LABEL,
   CSV_COLUMNS,
   OPERATION_LABEL,
   OPERATION_TONE,
@@ -16,6 +18,7 @@ import {
   SEVERITY_TONE,
   WINDOW_PRESETS,
   actorLabel,
+  actorRoleOptions,
   changedFields,
   contextEntries,
   csvCell,
@@ -100,6 +103,27 @@ describe("tones and labels", () => {
     for (const tone of [...Object.values(SEVERITY_TONE), ...Object.values(OPERATION_TONE)]) {
       expect(tone).toContain("dark:")
     }
+  })
+})
+
+describe("actorRoleOptions", () => {
+  it("offers every role to the whole-platform reader, each with a label", () => {
+    const options = actorRoleOptions(true)
+    expect(options.map((option) => option.value)).toEqual([...ACTIVITY_ACTOR_ROLES])
+    for (const role of ACTIVITY_ACTOR_ROLES) expect(ACTOR_ROLE_LABEL[role]).toBeTruthy()
+  })
+
+  it("offers a tenant reader its own roles and none of Apricart's", () => {
+    expect(actorRoleOptions(false).map((option) => option.value)).toEqual([
+      "HEAD_OFFICE",
+      "GROUP_USER",
+      "BRANCH_ADMIN",
+      "GROUP_ORDER_PORTAL",
+      "ORDER_PORTAL",
+      "VIEWER",
+    ])
+    const labels = actorRoleOptions(false).map((option) => option.label).join(" ")
+    expect(labels).not.toMatch(/Apricart|Super Admin|Warehouse|Order Desk/)
   })
 })
 

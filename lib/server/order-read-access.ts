@@ -1,3 +1,4 @@
+import { viewerReadScope } from "@/lib/viewer-access"
 import "server-only"
 
 import { eq } from "drizzle-orm"
@@ -24,6 +25,14 @@ export const ORDER_DETAIL_READ_ROLES = [
   "ORDER_PORTAL",
 ] as const
 
+export type OrderReadOptions = {
+  /**
+   * Check an organization-wide Viewer as Head Office. Passed by GET handlers
+   * only; see `viewerReadScope` in `lib/viewer-access.ts`.
+   */
+  viewerReadsAsHeadOffice?: boolean
+}
+
 /**
  * Branch authorization for reading one order.
  *
@@ -40,9 +49,10 @@ export async function hasBranchAccessForOrderRead(
   userId: unknown,
   scope: RequestScope | null,
   order: { organizationId: number; branchId: number },
+  options: OrderReadOptions = {},
 ): Promise<boolean> {
   if (!usesMultiBranchScope(role)) {
-    return verifyResourceAccess(order.organizationId, order.branchId)
+    return verifyResourceAccess(order.organizationId, order.branchId, options)
   }
   if (typeof userId !== "string" || !scope || scope.userId !== userId || scope.role !== role) {
     return false
@@ -60,8 +70,9 @@ export async function hasBranchAccessForOrderRead(
 export async function canReadOrderDetail(input: {
   orderId: number
   scope: RequestScope | null
-}): Promise<{ organizationId: number; branchId: number } | null> {
-  const { scope } = input
+} & OrderReadOptions): Promise<{ organizationId: number; branchId: number } | null> {
+  const options: OrderReadOptions = { viewerReadsAsHeadOffice: input.viewerReadsAsHeadOffice === true }
+  const scope = options.viewerReadsAsHeadOffice ? viewerReadScope(input.scope) : input.scope
   if (!scope || !(ORDER_DETAIL_READ_ROLES as readonly string[]).includes(scope.role)) return null
 
   const [order] = await db
@@ -79,7 +90,7 @@ export async function canReadOrderDetail(input: {
   if (!order?.organizationId || order.branchOrganizationId !== order.organizationId) return null
 
   const reach = { organizationId: order.organizationId, branchId: order.branchId }
-  if (!await hasBranchAccessForOrderRead(scope.role, scope.userId, scope, reach)) return null
+  if (!await hasBranchAccessForOrderRead(scope.role, scope.userId, scope, reach, options)) return null
   if (scope.role === "ORDER_PORTAL" && !canOrderPortalReadOrder({ viewerUserId: scope.userId, order })) return null
   return reach
 }

@@ -54,6 +54,7 @@ vi.mock("@/lib/fetcher", () => ({
 }))
 
 import { CreateUserDialog } from "@/components/users/create-user-dialog"
+import { jsonFetcher } from "@/lib/fetcher"
 
 describe("CreateUserDialog", () => {
   afterEach(() => {
@@ -132,6 +133,21 @@ describe("CreateUserDialog", () => {
     expect(
       await screen.findByText("Apricart Pakistan"),
     ).not.toBeNull()
+  })
+
+  it("shows the organization's prefix and checks the username it will really get", async () => {
+    const fetchMock = vi.mocked(fetch)
+    fetchMock.mockClear()
+    render(<CreateUserDialog />)
+    fireEvent.click(screen.getByRole("button", { name: "Create User" }))
+
+    // "Apricart Pakistan" → ap-
+    expect(await screen.findByText("ap-")).not.toBeNull()
+    fireEvent.change(screen.getByLabelText(/^Username/), { target: { value: "Ali.Khan" } })
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/v1/users/check-username?username=ap-ali.khan")
+    })
   })
 
   it("shows an off-by-default budget allocation switch only for Group User", async () => {
@@ -234,5 +250,31 @@ describe("CreateUserDialog", () => {
     await screen.findByLabelText(/^First Name/)
 
     expect(screen.queryByText("User created successfully.")).toBeNull()
+  })
+
+  it("sends the optional designation, trimmed, with the new user", async () => {
+    mockAppContext.userRole = "SUPER_ADMIN"
+    vi.mocked(jsonFetcher).mockClear()
+    render(<CreateUserDialog />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Create User" }))
+    fireEvent.change(await screen.findByLabelText(/^First Name/), { target: { value: "Titled" } })
+    fireEvent.change(screen.getByLabelText(/^Last Name/), { target: { value: "User" } })
+    fireEvent.change(screen.getByLabelText(/^Email Address/), { target: { value: "titled.user@example.com" } })
+    fireEvent.change(screen.getByLabelText(/^Username/), { target: { value: "titled.user" } })
+    fireEvent.change(screen.getByLabelText(/^Password/), { target: { value: "StrongPassword1!" } })
+    fireEvent.change(screen.getByLabelText("Designation"), { target: { value: "  Procurement Manager " } })
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+
+    fireEvent.keyDown(document.querySelector('[name="role"]') as Element, { key: "Enter" })
+    fireEvent.click(await screen.findByRole("option", { name: "Head Office", hidden: true }))
+    const nextButton = screen.getByRole("button", { name: "Next" })
+    await waitFor(() => expect((nextButton as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(nextButton)
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Create User" }))
+
+    await waitFor(() => expect(vi.mocked(jsonFetcher)).toHaveBeenCalledWith("/api/v1/users", expect.anything()))
+    const [, init] = vi.mocked(jsonFetcher).mock.calls.find(([url]) => url === "/api/v1/users")!
+    expect(JSON.parse(String((init as RequestInit).body)).designation).toBe("Procurement Manager")
   })
 })

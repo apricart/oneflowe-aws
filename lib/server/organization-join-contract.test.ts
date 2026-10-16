@@ -110,9 +110,19 @@ describe("the public join endpoints never let a caller name a tenant", () => {
     expect(submit).not.toMatch(/password:\s*input\.password/)
   })
 
-  it("flattens an identity conflict to a message that names no field", () => {
+  it("flattens an identity conflict to one constant message per form, never the cause", () => {
     const submit = repositoryFile("app/api/v1/join/requests/route.ts")
-    expect(submit).toContain("JOIN_IDENTITY_CONFLICT_MESSAGE")
+    expect(submit).toContain("failureResponse(outcome, JOIN_IDENTITY_CONFLICT_MESSAGE)")
+    expect(submit).toContain("failureResponse(outcome, DEPARTMENT_JOIN_IDENTITY_CONFLICT_MESSAGE)")
+    // The identity outcome's own message (which says what clashed) never reaches the caller.
+    expect(submit).toContain('outcome.kind === "identity" ? identityConflictMessage : outcome.message')
+  })
+
+  it("checks a username against accounts only where the applicant typed it", () => {
+    const standard = repositoryFile("lib/server/organization-join.ts")
+    const department = repositoryFile("lib/server/organization-join-department.ts")
+    expect(standard).toContain("identityConflictReason({ ...submission, checkAccountUsername: true })")
+    expect(department).toContain("checkAccountUsername: false")
   })
 })
 
@@ -166,7 +176,8 @@ describe("the managed join endpoints admit Head Office alone", () => {
   it("gates every one of them on the shared allowlist", () => {
     for (const path of MANAGED_JOIN_ROUTES) {
       const route = repositoryFile(path)
-      expect(route).toContain("requireApiRole(JOIN_REQUEST_MANAGEMENT_ROLES)")
+      // A GET may add the read-only Viewer opt-in; nothing else may differ.
+      expect(route).toMatch(/requireApiRole\(JOIN_REQUEST_MANAGEMENT_ROLES(?:, \{ viewerReadsAsHeadOffice: true \})?\)/)
       expect(route).toContain('from "@/lib/organization-join-access"')
     }
   })
@@ -199,14 +210,37 @@ describe("the managed join endpoints admit Head Office alone", () => {
     }
   })
 
-  it("audits the code being issued and every decision", () => {
+  it("audits the code being set and every decision", () => {
     const code = repositoryFile("app/api/v1/organizations/join-code/route.ts")
     expect(code).toContain("SET_ORGANIZATION_JOIN_CODE")
-    expect(code).toContain("CLEAR_ORGANIZATION_JOIN_CODE")
+    expect(code).not.toContain("CLEAR_ORGANIZATION_JOIN_CODE")
 
     const decide = repositoryFile("app/api/v1/join-requests/[id]/route.ts")
     expect(decide).toContain("APPROVE_ORGANIZATION_JOIN_REQUEST")
     expect(decide).toContain("REJECT_ORGANIZATION_JOIN_REQUEST")
+  })
+
+  it("makes the organization's manually entered code permanent", () => {
+    const route = repositoryFile("app/api/v1/organizations/join-code/route.ts")
+    expect(route).not.toMatch(/export async function DELETE/)
+
+    const server = repositoryFile("lib/server/organization-join.ts")
+    const setter = server.slice(
+      server.indexOf("export async function setJoinCode"),
+      server.indexOf("/* ── Submitting a request"),
+    )
+    expect(setter).toContain(".insert(organizationJoinCodes)")
+    expect(setter).not.toContain(".onConflictDoUpdate(")
+    expect(setter).not.toContain(".update(organizationJoinCodes)")
+    expect(setter).not.toContain(".delete(organizationJoinCodes)")
+
+    const validation = repositoryFile("lib/server/mutation-validation.ts")
+    const schema = validation.slice(
+      validation.indexOf("export const joinCodeSetSchema"),
+      validation.indexOf("export const joinRequestDecisionSchema"),
+    )
+    expect(schema).toContain("code: joinCodeSchema,")
+    expect(schema).not.toContain("code: joinCodeSchema.optional()")
   })
 
   it("keeps the code out of its own audit trail", () => {
@@ -350,14 +384,120 @@ describe("the way in is reachable and the way out is not mislabelled", () => {
     const proxy = repositoryFile("proxy.ts")
     expect(proxy).toContain('const isPublicPath = ["/login", "/join"].includes(pathname)')
     expect(proxy).toContain('"/join-requests",')
-    // Head Office alone: the area table takes a role list since the activity
-    // log admitted two roles, and this entry must still list exactly one.
-    expect(proxy).toContain('{ prefix: "/join-requests", roles: ["HEAD_OFFICE"]')
+    // Head Office decides; the read-only Viewer may open the page and read the
+    // queue (every decision endpoint still refuses it). No one else.
+    expect(proxy).toContain('{ prefix: "/join-requests", roles: ["HEAD_OFFICE", "VIEWER"]')
   })
 
   it("gates the Head Office page in a server layout as well", () => {
     const layout = repositoryFile("app/(portal)/join-requests/layout.tsx")
     expect(layout).toContain("canManageJoinRequests")
     expect(layout).toContain('redirect("/login")')
+  })
+})
+
+/*
+ * The department sign-up (plans/OF-JOIN-department-signup-multi-user.md).
+ *
+ * The rule above, "only one code path turns a request into a user", is
+ * deliberately extended rather than broken: a department sign-up is approved
+ * by decideDepartmentJoinRequest, which creates the initiator **and** any new
+ * approvers, still only inside Head Office's approval transaction, and the
+ * standard approval refuses a department request outright.
+ */
+describe("the department sign-up", () => {
+  const department = "lib/server/organization-join-department.ts"
+  const submit = "app/api/v1/join/requests/route.ts"
+  const decideRoute = "app/api/v1/join-requests/[id]/route.ts"
+
+  it("is taken only by an organization with approval levels on, judged on this request", () => {
+    const route = codeOf(submit)
+    // The standard form is refused for a levels-enabled organization, and the
+    // department form for any other, both after the code resolved the tenant.
+    expect(route).toContain("if (settings && usesDepartmentSignup(settings)) return error(DEPARTMENT_FORM_ONLY_MESSAGE, 400)")
+    expect(route).toContain("if (!settings || !usesDepartmentSignup(settings)) return error(STANDARD_FORM_ONLY_MESSAGE, 400)")
+    expect(route.indexOf("loadDepartmentJoinSettings(db, organization.organizationId)"))
+      .toBeGreaterThan(route.indexOf("resolveOrganizationByJoinCode(input.code)"))
+  })
+
+  it("lets the applicant name no tenant, role or username", async () => {
+    const { departmentJoinSubmitSchema } = await import("@/lib/server/mutation-validation")
+    const keys = Object.keys(departmentJoinSubmitSchema.shape)
+    for (const forbidden of ["organizationId", "role", "username", "isActive", "mfaEnabled", "budgetAllocationEnabled"]) {
+      expect(keys).not.toContain(forbidden)
+    }
+  })
+
+  it("never looks an approver's email up for a public caller", () => {
+    const server = repositoryFile(department)
+    const create = server.slice(
+      server.indexOf("export async function createDepartmentJoinRequest"),
+      server.indexOf("/* ── Reading a request back"),
+    )
+    expect(create).not.toContain("loadApproverCandidates")
+    expect(create).not.toMatch(/\.from\(users\)/)
+  })
+
+  it("creates users only inside the approval transaction, after locking the request", () => {
+    const server = repositoryFile(department)
+    expect(server.match(/\.insert\(users\)/g) || []).toHaveLength(2)
+    expect(server).toContain('.for("update")')
+    expect(server.indexOf("const stored = await lockDepartmentRequest(tx, input)"))
+      .toBeLessThan(server.indexOf("approveDepartmentRequest(context, stored, roleIdByName)"))
+  })
+
+  it("assigns approval levels only through the shipped writer", () => {
+    const server = repositoryFile(department)
+    expect(server).toContain("writeApprovalLevelInTx(")
+    expect(server).not.toMatch(/orderApprovalLevel:/)
+  })
+
+  it("gives a new approver a rotated temporary password, and never returns it", () => {
+    const server = repositoryFile(department)
+    expect(server).toContain("generateRandomPassword(16)")
+    expect(server).toContain("mustChangePassword: true")
+    const route = codeOf(decideRoute)
+    expect(route).toContain("sendWelcomeEmail(")
+    // Read once, by the email loop alone: never into the audit or the response.
+    expect(route.match(/newApproverCredentials/g) || []).toHaveLength(1)
+    expect(route).toContain("for (const credentials of outcome.newApproverCredentials)")
+    expect(route).not.toMatch(/ok\(\{[^}]*temporaryPassword/)
+  })
+
+  it("is decided by its own path, chosen by the stored version, never the body", () => {
+    const route = codeOf(decideRoute)
+    expect(route.indexOf("readJoinRequestFormVersion(requestId, scope.organizationId)"))
+      .toBeLessThan(route.indexOf("joinRequestDecisionSchema.safeParse(rawBody)"))
+    // And the standard approval cannot decide a department request.
+    expect(repositoryFile("lib/server/organization-join.ts")).toContain("eq(organizationJoinRequests.formVersion, 1)")
+  })
+
+  it("lets Head Office edit a pending request, never its password, and never outside the request", () => {
+    const edit = codeOf("lib/server/organization-join-department-edit.ts")
+    // Fenced and locked like the approval: this tenant, this form, pending.
+    expect(edit).toContain("eq(organizationJoinRequests.organizationId, organizationId)")
+    expect(edit).toContain("eq(organizationJoinRequests.formVersion, DEPARTMENT_SIGNUP_FORM_VERSION)")
+    expect(edit).toContain('.for("update")')
+    expect(edit).toContain('if (stored.status !== "pending")')
+    // Held to the submission's rules.
+    expect(edit).toContain("joinEmailDomainRefusal(identity.email, settings.emailDomain)")
+    expect(edit).toContain("approverListError(")
+    // Writes only the request and its own rows: no account, no password.
+    expect(edit).not.toMatch(/\.(insert|update|delete)\(users\)/)
+    expect(edit).not.toMatch(/passwordHash|termsAcceptedAt/)
+
+    // Dispatched only after the stored version chose the department path.
+    const route = codeOf(decideRoute)
+    expect(route.indexOf("readJoinRequestFormVersion(requestId, scope.organizationId)"))
+      .toBeLessThan(route.indexOf("return updateRequest(requestId, scope, rawBody)"))
+    expect(route).toContain("departmentJoinUpdateSchema.safeParse(rawBody)")
+    expect(route).toContain('action: "UPDATE_ORGANIZATION_JOIN_REQUEST"')
+  })
+
+  it("refuses an approval that does not reproduce what Head Office reviewed", () => {
+    const server = repositoryFile(department)
+    expect(server).toContain("assertReviewedResolutions(input, plans)")
+    expect(server.indexOf("assertReviewedResolutions(input, plans)"))
+      .toBeLessThan(server.indexOf("await createInitiator("))
   })
 })

@@ -128,6 +128,8 @@ const VIA_LIB: readonly { file: string; module: string }[] = [
   { file: "app/api/v1/mfa/login/send-otp/route.ts", module: "lib/server/auth-audit.ts" },
   { file: "app/api/v1/mfa/login/verify-otp/route.ts", module: "lib/server/auth-audit.ts" },
   { file: "app/api/v1/users/me/change-password/route.ts", module: "lib/server/password-change.ts" },
+  // Branch creation, shared with the department sign-up's approval.
+  { file: "app/api/v1/branches/route.ts", module: "lib/server/branch-creation.ts" },
   // Public recovery. Every outcome — including requests for accounts that do
   // not exist — is recorded by the service, never by the route.
   { file: "app/api/v1/auth/password-reset/request/route.ts", module: "lib/server/password-reset.ts" },
@@ -176,12 +178,24 @@ const VIA_LIB: readonly { file: string; module: string }[] = [
   { file: "app/api/v1/organizations/join-code/route.ts", module: "lib/server/organization-join-audit.ts" },
   { file: "app/api/v1/join-requests/[id]/route.ts", module: "lib/server/organization-join-audit.ts" },
 
+  // Order approval levels. Super Admin changing a tenant's levels records
+  // UPDATE_ORDER_APPROVAL_LEVELS, with before and after, inside the locked
+  // transaction that replaces them (plans/OF-APPROVAL-LEVELS-organization-approval-levels.md).
+  { file: "app/api/v1/organizations/[id]/approval-levels/route.ts", module: "lib/server/order-approval-levels.ts" },
+  // Giving a user an approval level records ASSIGN_ORDER_APPROVAL_LEVEL inside
+  // the transaction that writes it (plans/OF-APPROVAL-LEVELS-assign-users-to-levels.md).
+  { file: "app/api/v1/users/[id]/approval-level/route.ts", module: "lib/server/user-approval-level.ts" },
+
   // Delivery addresses. Asking for a destination and granting one are both on
   // the trail — an approved address diverts stock to somewhere the branch's own
   // record does not mention — and both record through one module so the two
   // halves of the story cannot be spelled differently.
   { file: "app/api/v1/delivery-addresses/route.ts", module: "lib/server/delivery-address-audit.ts" },
   { file: "app/api/v1/delivery-addresses/[id]/route.ts", module: "lib/server/delivery-address-audit.ts" },
+  // Branch head count requests: raised and decided inside the module's own
+  // transactions, which record the trail beside the write.
+  { file: "app/api/v1/branch-head-count-requests/route.ts", module: "lib/server/branch-head-count-requests.ts" },
+  { file: "app/api/v1/branch-head-count-requests/[id]/route.ts", module: "lib/server/branch-head-count-requests.ts" },
 
   // Apricart's Order Desk. Its fulfil step reaches `fulfillApprovedOrder`,
   // which records the APPROVED → FULFILLED move with the ledger; cancel and
@@ -245,7 +259,6 @@ const LEGACY_DIRECT: readonly string[] = [
   "app/api/v1/admin/refunds/[id]/route.ts",
   "app/api/v1/admin/refunds/route.ts",
   "app/api/v1/branch/inventory/route.ts",
-  "app/api/v1/branches/route.ts",
   "app/api/v1/budget-quantity/route.ts",
   "app/api/v1/budgets/route.ts",
   "app/api/v1/groups/[id]/branches/clean/route.ts",
@@ -284,6 +297,13 @@ const NOT_AUDITED: readonly { file: string; reason: string }[] = [
       "PATCH is mark-all-read on the caller's own notifications — per-viewer UI "
       + "state. A row every time somebody opens the bell menu would be thousands "
       + "a day, and the signal the screen exists to show would drown in it.",
+  },
+  {
+    file: "app/api/v1/warehouse/notifications/route.ts",
+    reason:
+      "PATCH is the warehouse user's mark-all-read on its own notices — the same "
+      + "per-viewer UI state as the shared notifications route, recorded for the "
+      + "same reason: not at all.",
   },
   {
     file: "app/api/v1/notifications/email-outbox/process/route.ts",
@@ -478,7 +498,9 @@ describe("routes that still audit by hand", () => {
     // deliberate edit to this file rather than something nobody notices.
     // 37: the fulfillment-status route moved to VIA_LIB when its transition
     // became `lib/server/order-fulfillment-progress.ts`, shared with the warehouse.
-    expect(LEGACY_DIRECT).toHaveLength(37)
+    // 36: branch creation moved to `lib/server/branch-creation.ts`, shared with
+    // the department sign-up's approval.
+    expect(LEGACY_DIRECT).toHaveLength(36)
   })
 })
 

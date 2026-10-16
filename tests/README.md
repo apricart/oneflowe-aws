@@ -7,7 +7,7 @@ Two Vitest projects, split by what they need to run.
 | Command | `npm test` (or `npm run test:unit`) | `npm run test:integration` |
 | Config | `vitest.config.ts` | `vitest.integration.config.ts` |
 | Location | beside the code (`lib/**/*.test.ts`) | `tests/integration/**` |
-| Environment | jsdom | node |
+| Environment | jsdom or node, per file (below) | node |
 | Needs | nothing | a disposable Postgres |
 
 `npm run test:all` runs both. `npm run test:watch` watches the unit project.
@@ -25,6 +25,17 @@ Live next to the code they cover. Two kinds:
 
 Anything requiring Postgres, Redis, or the network belongs in the integration
 project, so `npm test` stays runnable with nothing installed.
+
+### Which environment a unit test gets
+
+Every `.test.tsx` file runs under jsdom, and so does any `.test.ts` file whose
+source mentions a browser global — `window`, `document`, `localStorage`,
+`sessionStorage`, `navigator`, `renderHook`, `HTMLElement`, `@testing-library`
+or `jsdom` (`tests/support/unit-test-environments.ts`). Everything else runs
+under node, which skips jsdom's start-up cost on every file. The rule reads the
+test file, so nothing needs registering; a `@vitest-environment` pragma at the
+top of a file overrides it either way. Run one half with
+`npx vitest run --project dom` or `--project node`.
 
 ### Importing server modules
 

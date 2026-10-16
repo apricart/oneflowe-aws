@@ -146,6 +146,23 @@ type OrdersDirectoryProps = {
  * it; the tenant's approvers see it but cannot decide it, and the decision
  * routes refuse them (plans/OF-EXEC-APPROVAL-executive-approves-desk-orders.md).
  */
+/**
+ * The approval level a pending order waits at, for an organization that uses
+ * levels. Nothing is drawn for any other order.
+ */
+function ApprovalLevelBadge({ order }: Readonly<{ order: { approvalLevel?: number | null; status?: string } }>) {
+  if (!order.approvalLevel || order.status?.toLowerCase() !== "pending") return null
+  return (
+    <Badge
+      variant="outline"
+      title={`Only a Level ${order.approvalLevel} approver at this branch can decide this order`}
+      className="mt-1 rounded-lg border border-violet-200 bg-violet-50 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-violet-700 dark:border-violet-800 dark:bg-violet-950/40 dark:text-violet-300"
+    >
+      Level {order.approvalLevel} approval
+    </Badge>
+  )
+}
+
 function ApricartOrderBadge({ pending }: Readonly<{ pending: boolean }>) {
   return (
     <Badge
@@ -224,8 +241,12 @@ export function OrdersDirectory({
   const router = useRouter()
   const [viewMode, setViewMode] = useState<"grid" | "table">("table")
   const [viewingOrder, setViewingOrder] = useState<any>(null)
-  // An Order Desk entry is an Apricart Executive's to decide, never the tenant's.
-  const canDecideViewingOrder = canDecideOrders && !viewingOrder?.decidedByApricart
+  // An Order Desk entry is an Apricart Executive's to decide, never the tenant's;
+  // an order waiting at an approval level this reader does not hold is that
+  // level's holders' (plans/OF-APPROVAL-LEVELS-route-orders-by-level.md).
+  const canDecideViewingOrder = canDecideOrders
+    && !viewingOrder?.decidedByApricart
+    && !viewingOrder?.levelDecisionLocked
 
   // Modals for actions
   const [actionType, setActionType] = useState<"approve" | "reject" | null>(null)
@@ -698,6 +719,7 @@ export function OrdersDirectory({
                       </p>
                       {order.placedByGroupPortal && <GroupOrderBadge />}
                       {order.decidedByApricart && <ApricartOrderBadge pending={order.status?.toLowerCase() === "pending"} />}
+                      <ApprovalLevelBadge order={order} />
                       {isUnacknowledgedDelivery(order) && <DeliveredUnfulfilledBadge />}
                     </div>
                     <Badge
@@ -856,6 +878,7 @@ export function OrdersDirectory({
                         <span className="block truncate font-mono text-xs font-bold text-slate-700 dark:text-slate-300 group-hover:text-indigo-600 transition-colors uppercase tracking-wider" title={order.tid}>{order.tid}</span>
                         {order.placedByGroupPortal && <GroupOrderBadge />}
                         {order.decidedByApricart && <ApricartOrderBadge pending={order.status?.toLowerCase() === "pending"} />}
+                        <ApprovalLevelBadge order={order} />
                         {isUnacknowledgedDelivery(order) && <DeliveredUnfulfilledBadge />}
                       </td>}
                       {isTableColumnVisible("organization") && <td className="px-3 py-3">

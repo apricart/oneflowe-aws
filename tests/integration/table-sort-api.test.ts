@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { NextRequest } from "next/server"
 import * as mockedNextAuth from "next-auth"
-import { inArray } from "drizzle-orm"
+import { eq, inArray } from "drizzle-orm"
 
 import * as ordersRoute from "@/app/api/v1/orders/route"
 import * as summaryRoute from "@/app/api/v1/analytics/summary/route"
 import * as refundsRoute from "@/app/api/v1/analytics/refunds/route"
-import { refunds } from "@/db/schema"
+import { orders, refunds, users } from "@/db/schema"
 import { closePool, db } from "@/lib/db"
 
 import {
@@ -142,6 +142,26 @@ describe.skipIf(!hasTestDatabase)("column sorting through the paginated list API
     it("refuses a key outside its allowlist", async () => {
       const { status } = await orderReport("sort=amount")
       expect(status).toBe(400)
+    })
+
+    it("names each order's approval level, approver and designation, and sorts by them", async () => {
+      await db.update(users).set({ fullName: "Zara Approver", designation: "Finance Manager" }).where(eq(users.id, f.headOfficeId))
+      await db.update(orders).set({ approvalLevel: 2, approvedByUserId: f.headOfficeId }).where(eq(orders.id, f.alphaNorthOrderId))
+      await db.update(orders).set({ approvalLevel: 1 }).where(eq(orders.id, f.betaOrderId))
+
+      const byLevel = await orderReport("sort=approvalLevel&dir=asc&limit=10")
+      expect(byLevel.status).toBe(200)
+      // Unlevelled orders sort last in either direction.
+      expect(byLevel.body.orders.slice(0, 2).map((order: any) => order.id)).toEqual([f.betaOrderId, f.alphaNorthOrderId])
+
+      const levelled = byLevel.body.orders.find((order: any) => order.id === f.alphaNorthOrderId)
+      expect(levelled).toMatchObject({ approvalLevel: 2, approverName: "Zara Approver", approverDesignation: "Finance Manager" })
+      const unapproved = byLevel.body.orders.find((order: any) => order.id === f.betaOrderId)
+      expect(unapproved).toMatchObject({ approvalLevel: 1, approverDesignation: null })
+
+      const byApprover = await orderReport("sort=approver&dir=desc&limit=10")
+      expect(byApprover.status).toBe(200)
+      expect(byApprover.body.orders[0].id).toBe(f.alphaNorthOrderId)
     })
   })
 

@@ -22,6 +22,15 @@ import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
 import { PremiumAlert, AlertType } from "@/components/premium/premium-alert"
 import { MultiAssignSelector } from "@/components/users/multi-assign-selector"
+import { PrefixedUsernameInput } from "@/components/users/prefixed-username-input"
+import { organizationUsernamePrefix, prefixedUsername, withoutUsernamePrefix } from "@/lib/username-prefix"
+import { USER_DESIGNATION_MAX_LENGTH } from "@/lib/user-designation"
+import {
+  ApprovalLevelField,
+  approvalLevelPayload,
+  useApprovalLevelChoice,
+  type ApprovalLevelChoice,
+} from "@/components/users/approval-level-field"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -109,6 +118,11 @@ function toggleId(current: string[], id: string) {
   return current.includes(id) ? current.filter((value) => value !== id) : [...current, id]
 }
 
+/** The level, sent only where the role and organization admit one and one is chosen. */
+function approvalLevelBody(choice: ApprovalLevelChoice, value: string) {
+  return choice.applicable && value ? { orderApprovalLevel: approvalLevelPayload(value) } : {}
+}
+
 function getInitialCreateUserForm(
   organizationId?: string | null,
   branchId?: string | null,
@@ -131,7 +145,11 @@ function getInitialCreateUserForm(
     mfaEnabled: false,
     isActive: true,
     budgetAllocationEnabled: false,
+    // "" = no level; otherwise the level number. Offered only where the role
+    // and organization admit one (components/users/approval-level-field.tsx).
+    orderApprovalLevel: "",
     employeeId: "",
+    designation: "",
     imprestHolder: "",
     contactPerson: "",
     location: "",
@@ -337,7 +355,6 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
     visible: false
   })
 
-  useUsernameAvailability(form.username, setUsernameStatus, setErrors)
 
   // The endpoint scopes non-Super Admins to their assigned organization.
   // Fetch it for every role so the read-only assignment summary has a name.
@@ -361,6 +378,14 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
   )
 
   const organizations = (organizationsData as any)?.items || []
+  // The organization's prefix, as the server will add it (plans/OF-USERS-organization-username-prefix.md):
+  // only an account that is sent an organization gets one.
+  const usernameOrganization = !APRICART_STAFF_ROLES.has(form.role) && form.organizationId
+    ? organizations.find((organization: any) => organization.id === Number.parseInt(form.organizationId))
+    : undefined
+  const usernamePrefix = organizationUsernamePrefix(usernameOrganization?.name)
+  useUsernameAvailability(prefixedUsername(usernamePrefix, form.username), setUsernameStatus, setErrors)
+  const approvalLevelChoice = useApprovalLevelChoice(form.organizationId, form.role)
   const branches = (branchesData as any)?.items || []
   const groups = (groupsData as any)?.groups || []
 
@@ -464,9 +489,11 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
           groupIds: usesMultiBranchScope(form.role) ? form.groupIds.map(Number) : [],
           branchIds: usesMultiBranchScope(form.role) ? form.branchIds.map(Number) : [],
           ...(form.role === "GROUP_USER" ? { budgetAllocationEnabled: form.budgetAllocationEnabled } : {}),
+          ...approvalLevelBody(approvalLevelChoice, form.orderApprovalLevel),
           mfaEnabled: form.mfaEnabled,
           isActive: form.isActive,
           employeeId: form.employeeId.trim() || null,
+          designation: form.designation.trim() || null,
           imprestHolder: form.imprestHolder.trim() || null,
           contactPerson: form.contactPerson.trim() || null,
           location: form.location.trim() || null,
@@ -668,8 +695,9 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                 <div className="space-y-2">
                   <Label htmlFor="username">Username *</Label>
                   <div className="relative">
-                    <Input
+                    <PrefixedUsernameInput
                       id="username"
+                      prefix={usernamePrefix}
                       name="createUserUsername"
                       autoComplete="off"
                       value={form.username}
@@ -688,6 +716,11 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                   {errors.username && (
                     <p className="text-xs text-red-600">{errors.username}</p>
                   )}
+                  {!usernamePrefix && !form.organizationId && !APRICART_STAFF_ROLES.has(form.role) && (
+                    <p className="text-xs text-muted-foreground">
+                      An account in an organization gets its prefix in front, for example ubl-ali.khan.
+                    </p>
+                  )}
                   {usernameStatus.available === false && usernameStatus.suggestions.length > 0 && (
                     <div className="mt-2 space-y-1">
                       <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">Suggested Lookups:</p>
@@ -698,7 +731,7 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                             variant="outline"
                             className="cursor-pointer hover:bg-blue-50 hover:text-blue-700 transition-colors border-blue-200"
                             onClick={() => {
-                              setForm({ ...form, username: s })
+                              setForm({ ...form, username: withoutUsernamePrefix(usernamePrefix, s) })
                               setUsernameStatus(prev => ({ ...prev, available: true, suggestions: [] }))
                               setErrors(prev => {
                                 const next = { ...prev }
@@ -812,6 +845,17 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                     />
                   </div>
                 </div>
+                <div className="space-y-2">
+                  <Label htmlFor="designation">Designation</Label>
+                  <Input
+                    id="designation"
+                    name="designation"
+                    value={form.designation}
+                    maxLength={USER_DESIGNATION_MAX_LENGTH}
+                    onChange={e => setForm({ ...form, designation: e.target.value })}
+                    placeholder="e.g. Procurement Manager (optional)"
+                  />
+                </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="imprestHolder">Imprest Holder</Label>
@@ -860,7 +904,7 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                     <Label htmlFor="organization">Organization *</Label>
                     <Select
                       value={form.organizationId}
-                      onValueChange={value => setForm({ ...form, organizationId: value, branchId: "", groupIds: [], branchIds: [] })}
+                      onValueChange={value => setForm({ ...form, organizationId: value, branchId: "", groupIds: [], branchIds: [], orderApprovalLevel: "" })}
                     >
                       <SelectTrigger name="organizationId" className={errors.organizationId ? 'border-red-500' : ''}>
                         <SelectValue placeholder="Select organization" />
@@ -908,7 +952,7 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                 {/* Role Selector */}
                 <div className="space-y-2">
                   <Label htmlFor="role">Role *</Label>
-                  <Select value={form.role} onValueChange={value => setForm({ ...form, role: value, branchId: "", groupIds: [], branchIds: [], budgetAllocationEnabled: false })}>
+                  <Select value={form.role} onValueChange={value => setForm({ ...form, role: value, branchId: "", groupIds: [], branchIds: [], budgetAllocationEnabled: false, orderApprovalLevel: "" })}>
                     <SelectTrigger name="role" className={errors.role ? 'border-red-500' : ''}>
                       <SelectValue placeholder="Select role" />
                     </SelectTrigger>
@@ -949,6 +993,14 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                     </p>
                   )}
                 </div>
+
+                <ApprovalLevelField
+                  id="create-approval-level"
+                  choice={approvalLevelChoice}
+                  value={form.orderApprovalLevel}
+                  onChange={(orderApprovalLevel) => setForm({ ...form, orderApprovalLevel })}
+                  disabled={submitting}
+                />
 
                 {form.role === "GROUP_USER" && (
                   <div className="flex items-center justify-between rounded-lg border p-4">

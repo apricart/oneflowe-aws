@@ -12,20 +12,26 @@ describe("branch creation security contracts", () => {
     expect(route).toContain("const scope = await getRequestScope()")
     expect(route).toContain("resolveBranchCreationAccess(scope, requestedOrganizationId)")
     expect(route.indexOf("resolveBranchCreationAccess(scope")).toBeLessThan(
-      route.indexOf(".insert(branchesTable)"),
+      route.indexOf("createBranchInTx("),
     )
   })
 
+  // The insert moved to lib/server/branch-creation.ts so the department
+  // sign-up's approval creates a branch by the same rules
+  // (plans/OF-JOIN-department-signup-multi-user.md). The route still opens the
+  // transaction; the module does the serialized work inside it.
   it("creates the branch and its audit event in the same serialized transaction", () => {
     const route = source("app/api/v1/branches/route.ts")
-    const transactionStart = route.indexOf("db.transaction")
+    const creation = source("lib/server/branch-creation.ts")
 
-    expect(route).toContain("pg_advisory_xact_lock")
-    expect(route.indexOf(".insert(branchesTable)")).toBeGreaterThan(transactionStart)
-    expect(route.indexOf("tx.insert(auditLogs)")).toBeGreaterThan(transactionStart)
-    expect(route).toContain('action: "CREATE_BRANCH"')
-    expect(route).toContain("userId: scope.userId")
-    expect(route).toContain("organizationId,")
+    expect(route).toContain("db.transaction((tx) => createBranchInTx(")
+    expect(route).toContain("{ userId: scope.userId, role: scope.role }")
+    expect(creation).toContain("pg_advisory_xact_lock")
+    expect(creation.indexOf("pg_advisory_xact_lock")).toBeLessThan(creation.indexOf(".insert(branchesTable)"))
+    expect(creation.indexOf(".insert(branchesTable)")).toBeLessThan(creation.indexOf("tx.insert(auditLogs)"))
+    expect(creation).toContain('action: "CREATE_BRANCH"')
+    expect(creation).toContain("userId: actor.userId")
+    expect(creation).toContain("organizationId,")
   })
 
   it("adds normalized tenant-level uniqueness without modifying legacy rows", () => {
@@ -56,7 +62,8 @@ describe("branch creation security contracts", () => {
     expect(guardMigration).toContain("branches_org_name_identity_guard")
     expect(guardMigration).toContain("branch.external_source <> NEW.external_source")
 
-    expect(createRoute).toContain("lower(btrim(${branchesTable.name}))")
+    expect(source("lib/server/branch-creation.ts")).toContain("lower(btrim(${branchesTable.name}))")
+    expect(createRoute).toContain("createBranchInTx(")
     expect(updateRoute).toContain("currentHasExternalIdentity")
     expect(updateRoute).toContain("isDistinctSiblingFromSameSource")
   })

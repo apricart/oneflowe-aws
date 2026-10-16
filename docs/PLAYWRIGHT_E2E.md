@@ -22,6 +22,7 @@ which every spec's header names.
 | `organization-budget-toggle.spec.ts` | `OF-BUDGET-organization-budget-toggle` |
 | `organization-join-domain.spec.ts` | `OF-JOIN-email-domain-lock` |
 | `organization-join.spec.ts` | `OF-JOIN-organization-self-service-join` (code → request → approval → sign-in) |
+| `approval-levels-join.spec.ts` | `OF-JOIN-department-signup-multi-user`, `OF-APPROVAL-LEVELS-route-orders-by-level` (department sign-up → Head Office edit and approval → orders decided by level → levels off restores the standard form) |
 | `order-auto-approval.spec.ts` | `OF-ORDERS-organization-auto-approval` |
 | `ordering-gates.spec.ts` | `OF-ORDERS-pending-invoice-notice`, `OF-PAYMENT-CONTROL-unpaid-invoice-ordering-block`, `OF-ORDERS-unacknowledged-delivery-ordering-block` |
 | `delivery-addresses.spec.ts` | `OF-ADDR-multiple-delivery-addresses` |

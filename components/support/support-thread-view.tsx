@@ -1,5 +1,6 @@
 "use client"
 
+import { isReadOnlyRole } from "@/lib/viewer-access"
 import { useState } from "react"
 import Link from "next/link"
 import { CheckCircle2, Download, Loader2, Lock, RotateCcw, Send } from "lucide-react"
@@ -75,7 +76,7 @@ export function SupportThreadView({ threadId }: Readonly<{ threadId: number }>) 
   const { toast } = useToast()
   // Whether the portal chrome is around us — read from the session, so it is
   // settled before the thread itself arrives.
-  const { embedded } = useSupportSide()
+  const { embedded, role: sessionRole } = useSupportSide()
   const { data, error, isLoading, mutate } = useAPI<SupportThreadResponse>(
     `/api/v1/support/threads/${threadId}`,
     { refreshInterval: 30_000 },
@@ -94,6 +95,9 @@ export function SupportThreadView({ threadId }: Readonly<{ threadId: number }>) 
   const { thread, viewer } = data
   const apricart = viewer.side === "APRICART"
   const closed = thread.status === "CLOSED"
+  // The read-only Viewer reads the conversation; it replies, resolves, closes
+  // and reopens nothing (every write endpoint refuses it besides).
+  const readOnly = isReadOnlyRole(sessionRole)
 
   async function send() {
     if (sending || !reply.trim()) return
@@ -193,13 +197,19 @@ export function SupportThreadView({ threadId }: Readonly<{ threadId: number }>) 
           ))}
         </ol>
 
-        {closed ? (
+        {readOnly && (
+          <p className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+            This account is view only. It can read this conversation but not reply to it.
+          </p>
+        )}
+        {!readOnly && closed && (
           <ClosedNotice
             apricart={apricart}
             busy={updating}
             onReopen={() => void patch({ status: "OPEN" }, "Request reopened")}
           />
-        ) : (
+        )}
+        {!readOnly && !closed && (
           <ReplyComposer
             threadId={thread.id}
             apricart={apricart}

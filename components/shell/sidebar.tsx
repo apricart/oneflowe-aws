@@ -2,7 +2,7 @@
 import Link from "next/link"
 import { usePathname, useSearchParams } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { Home,Building2,Users,Package,Boxes,Wallet,BarChart3,Settings,FolderTree,ChevronDown,ClipboardCheck,DoorOpen,Headset,LifeBuoy,MapPinned,PanelLeftClose,PanelLeftOpen,ScrollText,Gauge,Warehouse } from "lucide-react"
+import { Home,Building2,Users,Package,Boxes,Wallet,BarChart3,Settings,FolderTree,ChevronDown,ClipboardCheck,DoorOpen,Headset,LifeBuoy,MapPinned,PanelLeftClose,PanelLeftOpen,ScrollText,Gauge,Warehouse,UsersRound } from "lucide-react"
 import Image from "next/image"
 import { useCallback,useEffect,useState,type ReactNode } from "react"
 import { Tooltip,TooltipContent,TooltipTrigger } from "@/components/ui/tooltip"
@@ -11,7 +11,7 @@ import { HoverCard,HoverCardContent,HoverCardTrigger } from "@/components/ui/hov
 import { useSession } from "next-auth/react"
 import useSWR from "swr"
 import { fetcher } from "@/lib/fetcher"
-import { isViewerRole } from "@/lib/viewer-access"
+import { isOrganizationViewer, isViewerRole } from "@/lib/viewer-access"
 
 const COLLAPSED_STORAGE_KEY = "oneflowe.sidebar.collapsed"
 
@@ -85,8 +85,14 @@ export const getNavigationByRole = (
   role: string,
   budgetAllocationEnabled = false,
   organizationBudgetsEnabled = true,
+  /** A Viewer with an organization and no branch: `isOrganizationViewer`. */
+  organizationWideViewer = false,
 ) => {
-  const nav = navigationByRole(role, budgetAllocationEnabled)
+  // An organization-wide Viewer gets Head Office's menu: every page renders
+  // read-only for it, and every endpoint behind them refuses it a write
+  // (`lib/viewer-access.ts`). A pinned one keeps its own branch below.
+  const menuRole = isViewerRole(role) && organizationWideViewer ? "HEAD_OFFICE" : role
+  const nav = navigationByRole(menuRole, budgetAllocationEnabled)
   return organizationBudgetsEnabled ? nav : withoutBudgetNavigation(nav)
 }
 
@@ -168,6 +174,9 @@ const navigationByRole = (role: string, budgetAllocationEnabled: boolean) => {
       // page is shared with the branches that raise them; who may decide one is
       // `lib/delivery-address-access.ts`, on the handlers.
       { href: "/delivery-addresses", label: "Delivery Addresses", icon: MapPinned },
+      // Head Office decides every head count request in the tenant
+      // (lib/branch-head-count-access.ts); it sets the figure directly on My Branches.
+      { href: "/head-count-requests", label: "Head Count Requests", icon: UsersRound },
       { href: "/orders", label: "Orders", icon: Package },
       {
         href: "/inventory",
@@ -216,6 +225,7 @@ const navigationByRole = (role: string, budgetAllocationEnabled: boolean) => {
       { href: "/orders", label: "Orders", icon: Package },
       { href: "/branch-inventory", label: "Inventory", icon: Boxes },
       { href: "/delivery-addresses", label: "Delivery Addresses", icon: MapPinned },
+      { href: "/head-count-requests", label: "Head Count", icon: UsersRound },
       {
         href: "/reports",
         label: "Reports",
@@ -247,6 +257,7 @@ const navigationByRole = (role: string, budgetAllocationEnabled: boolean) => {
       { href: "/orders", label: "Orders", icon: Package },
       { href: "/approvals", label: "Approvals", icon: ClipboardCheck },
       { href: "/delivery-addresses", label: "Delivery Addresses", icon: MapPinned },
+      { href: "/head-count-requests", label: "Head Count", icon: UsersRound },
       ...(budgetAllocationEnabled ? [{ href: "/budgets", label: "Budgets", icon: Wallet }] : []),
       {
         href: "/reports",
@@ -270,8 +281,10 @@ const navigationByRole = (role: string, budgetAllocationEnabled: boolean) => {
     ]
   }
 
-  // The read-only account has one page. Stated rather than left to the fallback
-  // below, so that widening the fallback later cannot widen this role's menu.
+  // The read-only account pinned to a branch has its dashboard alone (an
+  // organization-wide one is given Head Office's menu by
+  // `getNavigationByRole`). Stated rather than left to the fallback below, so
+  // widening the fallback later cannot widen this role's menu.
   if (isViewerRole(role)) {
     return baseNav
   }
@@ -377,7 +390,8 @@ export function Sidebar() {
   const isLoading = status === "loading"
   // Only the tenant-pinned roles that are shown budget entries need to know
   // whether their tenant has budgets; a Super Admin's pages are per tenant.
-  const needsBudgetPolicy = role === "HEAD_OFFICE" || role === "GROUP_USER"
+  const organizationWideViewer = isOrganizationViewer({ role, ...(session?.user as any) })
+  const needsBudgetPolicy = role === "HEAD_OFFICE" || role === "GROUP_USER" || organizationWideViewer
   const { data: budgetPolicy } = useSWR<{ budgetsEnabled?: boolean }>(
     needsBudgetPolicy ? "/api/v1/organizations/budget-policy" : null,
     fetcher,
@@ -386,6 +400,7 @@ export function Sidebar() {
     role || "",
     (session?.user as any)?.budgetAllocationEnabled === true,
     budgetPolicy?.budgetsEnabled !== false,
+    organizationWideViewer,
   )
   const [expandedItems, setExpandedItems] = useState<string[]>([])
   const { collapsed, changeCollapsed } = useCollapsedRail()

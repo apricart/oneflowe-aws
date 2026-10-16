@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 
 import { error, ok, readJson } from "@/lib/api"
+import { db } from "@/lib/db"
 import { handleError } from "@/lib/error-handler"
 import { UNKNOWN_JOIN_CODE_MESSAGE } from "@/lib/organization-join"
 import {
@@ -13,6 +14,11 @@ import {
   loadJoinFormOptions,
   resolveOrganizationByJoinCode,
 } from "@/lib/server/organization-join"
+import {
+  departmentSignupBands,
+  loadDepartmentJoinSettings,
+  usesDepartmentSignup,
+} from "@/lib/server/organization-join-department"
 
 /**
  * POST /api/v1/join/lookup — which organization a join code opens.
@@ -67,7 +73,17 @@ export async function POST(req: Request) {
     if (!organization) return error(UNKNOWN_JOIN_CODE_MESSAGE, 404)
 
     const options = await loadJoinFormOptions(organization)
-    return ok(options)
+    // A domainless organization takes no request at all; its answer is
+    // exactly as before, and the page shows the "domain not set" prompt.
+    if (!options.emailDomain) return ok(options)
+
+    // An organization with order approval levels on takes the department
+    // sign-up instead (plans/OF-JOIN-department-signup-multi-user.md), and its
+    // applicant names one approver per level, so the bands are shown. Every
+    // other organization's answer is exactly as before, plus `form`.
+    const settings = await loadDepartmentJoinSettings(db, organization.organizationId)
+    if (!settings || !usesDepartmentSignup(settings)) return ok({ ...options, form: "standard" })
+    return ok({ ...options, form: "department", approvalLevels: departmentSignupBands(settings) })
   } catch (caughtError) {
     const { message, status } = handleError(caughtError, "join lookup")
     return error(message, status)

@@ -1,3 +1,4 @@
+import { VIEWER_READ_REFUSED, viewerReadRole } from "@/lib/viewer-access"
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
@@ -32,6 +33,7 @@ import { isOrderDeskRole } from "@/lib/order-desk-access"
 import { loadDeskOrder } from "@/lib/server/order-desk-orders"
 import { CREDIT_NOTE_CONFLICT_ERRORS, issueCreditNoteForRefund } from "@/lib/server/credit-notes"
 import { refundDetailsStillPriced, refundHistoryByLine, refundLineAmountCents } from "@/lib/refund-amount"
+import { queueWarehouseOrderNotifications } from "@/lib/server/warehouse-order-notifications"
 
 const refundRequestRoles = new Set([
   "SUPER_ADMIN",
@@ -475,6 +477,16 @@ async function processRefundTransaction(tx: any, context: any) {
       actor: { id: context.userId, role: context.userRole },
       reason: context.reason,
     })
+    await queueWarehouseOrderNotifications(tx, {
+      order: {
+        id: context.orderId,
+        tid: context.order.tid,
+        organizationId: context.order.organizationId,
+        branchId: context.order.branchId,
+      },
+      event: "REFUNDED",
+      occurrence: refundId,
+    })
   }
 }
 
@@ -502,7 +514,10 @@ export async function GET(
       .limit(1)
     if (!order) return NextResponse.json({ error: "Order not found" }, { status: 404 })
 
-    const userRole = (session.user as any).role
+    // An organization-wide Viewer reads an order's refunds as Head Office does;
+    // a pinned one is refused. Reading only — the POST below never maps it.
+    const userRole = viewerReadRole(session.user as any)
+    if (!userRole) return NextResponse.json({ error: VIEWER_READ_REFUSED }, { status: 403 })
     const userOrgId = (session.user as any).organizationId
     const userBranchId = (session.user as any).branchId
     const userId = (session.user as any).id as string

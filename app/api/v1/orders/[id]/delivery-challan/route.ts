@@ -25,7 +25,7 @@ function parseOrderId(raw: string): number | null {
 }
 
 export async function GET(_req: Request, props: { params: Promise<{ id: string }> }) {
-  const roleError = await requireApiRole([...ORDER_DETAIL_READ_ROLES])
+  const roleError = await requireApiRole([...ORDER_DETAIL_READ_ROLES], { viewerReadsAsHeadOffice: true })
   if (roleError) return roleError
 
   const orderId = parseOrderId((await props.params).id)
@@ -37,7 +37,7 @@ export async function GET(_req: Request, props: { params: Promise<{ id: string }
   if (rateLimited) return rateLimited
 
   try {
-    if (!await canReadOrderDetail({ orderId, scope })) return error("Order not found", 404)
+    if (!await canReadOrderDetail({ orderId, scope, viewerReadsAsHeadOffice: true })) return error("Order not found", 404)
     const items = await listDeliveryChallans({ orderId, includeReplaced: scope.role === "SUPER_ADMIN" })
     return NextResponse.json({ items }, { headers: { "Cache-Control": "private, no-store" } })
   } catch (loadError) {

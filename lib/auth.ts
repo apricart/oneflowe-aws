@@ -6,6 +6,7 @@ import { eq } from "drizzle-orm"
 import { authOptions } from "./auth-options"
 import { logError } from "@/lib/global-logger"
 import { coalesceInFlight } from "@/lib/cache-utils"
+import { viewerReadScope } from "@/lib/viewer-access"
 
 export type CurrentUser = {
   id: string
@@ -242,8 +243,19 @@ function logErrorOnly(error: any, context: string, meta?: any) {
  * Verify if the current user has access to a specific resource scope (BOLA protection)
  * @returns boolean indicating if access is allowed
  */
-export async function verifyResourceAccess(organizationId?: number | null, branchId?: number | null): Promise<boolean> {
-  const scope = await getRequestScope()
+export async function verifyResourceAccess(
+  organizationId?: number | null,
+  branchId?: number | null,
+  options: {
+    /**
+     * Check an organization-wide Viewer as Head Office. Pass it from a GET
+     * handler only; see `viewerReadScope` in `lib/viewer-access.ts`.
+     */
+    viewerReadsAsHeadOffice?: boolean
+  } = {},
+): Promise<boolean> {
+  const requestScope = await getRequestScope()
+  const scope = options.viewerReadsAsHeadOffice ? viewerReadScope(requestScope) : requestScope
   if (!scope) return false
 
   // Super Admin can access everything

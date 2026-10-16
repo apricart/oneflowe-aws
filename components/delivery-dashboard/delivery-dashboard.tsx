@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useMemo, useRef, useState } from "react"
 import useSWR from "swr"
 import { format } from "date-fns"
 import { AlertTriangle, CheckCircle2, CircleDashed, ClipboardCheck, Clock, Hourglass, Loader2, PackageCheck, PackageOpen, RefreshCw, Timer, Truck } from "lucide-react"
@@ -109,6 +109,7 @@ export function DeliveryDashboard({
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS)
   const [view, setView] = useState<DeliveryListView>("ALL")
   const [timelineOrder, setTimelineOrder] = useState<DeliveryListRow | null>(null)
+  const ordersRef = useRef<HTMLDivElement>(null)
   const endpoint = useMemo(() => buildQuery(filters, view, dashboardEndpoint), [filters, view, dashboardEndpoint])
 
   const { data, error, isLoading, isValidating, mutate } = useSWR<DeliveryDashboardResponse>(
@@ -118,6 +119,13 @@ export function DeliveryDashboard({
   )
 
   const update = (patch: Partial<Filters>) => setFilters((current) => ({ ...current, ...patch }))
+
+  // A KPI card or alert narrows the order list below to its orders, and brings
+  // that list into view so the click visibly does something.
+  const showView = (next: DeliveryListView) => {
+    setView(next)
+    if (next !== "ALL") ordersRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" })
+  }
 
   return (
     <div className="space-y-6">
@@ -160,15 +168,17 @@ export function DeliveryDashboard({
             </p>
           )}
 
-          <KpiCards data={data} view={view} onSelect={setView} />
-          <AlertStrip data={data} onSelect={setView} />
+          <KpiCards data={data} view={view} onSelect={showView} />
+          <AlertStrip data={data} onSelect={showView} />
 
-          <OrdersCard
-            data={data}
-            view={view}
-            onViewChange={setView}
-            onOpen={setTimelineOrder}
-          />
+          <div ref={ordersRef} className="scroll-mt-20">
+            <OrdersCard
+              data={data}
+              view={view}
+              onViewChange={setView}
+              onOpen={setTimelineOrder}
+            />
+          </div>
 
           <div className="grid gap-6 lg:grid-cols-2">
             <PipelineCard data={data} />
@@ -467,6 +477,12 @@ const VIEW_LABELS: Record<DeliveryListView, string> = {
   ACKNOWLEDGED: "Fulfilled (acknowledged)",
 }
 
+/** The list's heading names the card that narrowed it, if one did. */
+function ordersTitle(view: DeliveryListView, newestFirst: boolean): string {
+  if (view !== "ALL") return `Orders: ${VIEW_LABELS[view]}`
+  return newestFirst ? "Orders, newest first" : "Orders requiring attention"
+}
+
 function OrdersCard({
   data,
   view,
@@ -478,21 +494,36 @@ function OrdersCard({
   onViewChange: (view: DeliveryListView) => void
   onOpen: (row: DeliveryListRow) => void
 }>) {
-  const { items, total } = data.orders
+  const { items, total, order } = data.orders
+  const newestFirst = order === "newest"
+  const narrowed = view !== "ALL"
   return (
     <Card>
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
-        <CardTitle className="text-base">Orders requiring attention</CardTitle>
-        <Select value={view} onValueChange={(value) => onViewChange(value as DeliveryListView)}>
-          <SelectTrigger className="w-48" aria-label="Which orders to list">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {(Object.keys(VIEW_LABELS) as DeliveryListView[]).map((key) => (
-              <SelectItem key={key} value={key}>{VIEW_LABELS[key]}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <div className="space-y-1">
+          <CardTitle className="text-base">
+            {ordersTitle(view, newestFirst)}
+          </CardTitle>
+          <p className="text-xs text-muted-foreground" aria-live="polite">
+            {total === 1 ? "1 order" : `${total} orders`}
+            {narrowed ? " · chosen from the cards above" : ""}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {narrowed && (
+            <Button type="button" variant="ghost" size="sm" onClick={() => onViewChange("ALL")}>Show all</Button>
+          )}
+          <Select value={view} onValueChange={(value) => onViewChange(value as DeliveryListView)}>
+            <SelectTrigger className="w-48" aria-label="Which orders to list">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {(Object.keys(VIEW_LABELS) as DeliveryListView[]).map((key) => (
+                <SelectItem key={key} value={key}>{key === "ALL" && newestFirst ? "All orders" : VIEW_LABELS[key]}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </CardHeader>
       <CardContent className="p-0">
         {items.length === 0 ? (
@@ -553,7 +584,7 @@ function OrdersCard({
         )}
         {total > items.length && (
           <p className="border-t p-3 text-center text-xs text-muted-foreground">
-            Showing the {items.length} most urgent of {total}. Narrow the filters to see the rest.
+            Showing the {items.length} {newestFirst ? "newest" : "most urgent"} of {total}. Narrow the filters to see the rest.
           </p>
         )}
       </CardContent>

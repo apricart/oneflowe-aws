@@ -12,12 +12,14 @@ import { budgetPeriodOf } from "@/lib/budget-consumption"
 import { isAwaitingCorrection } from "@/lib/order-correction"
 import { decisionQueuesNotifications } from "@/lib/order-desk-approval"
 import { closeOpenCorrectionRequest } from "@/lib/server/order-correction"
+import { approvalLevelMatches } from "@/lib/server/order-approval-routing"
 import { authorizeOrderDecision } from "@/lib/server/order-decision-policy"
 import {
   queueOrderDecisionNotification,
   queueSuperAdminApprovalNotifications,
 } from "@/lib/server/order-notifications"
 import { releaseHeldQuantityBudgetForOrder } from "@/lib/server/product-quantity-budget-ledger"
+import { queueWarehouseOrderNotifications } from "@/lib/server/warehouse-order-notifications"
 import { orderTakesBudget } from "@/lib/organization-budget-policy"
 
 /**
@@ -149,6 +151,7 @@ export async function approveOrder({
       // and an approval racing each other cannot both succeed.
       isNull(orders.returnedForCorrectionAt),
       expectedUpdatedAt === undefined ? undefined : updatedAtMatches(expectedUpdatedAt),
+      approvalLevelMatches(authorization.approvalLevel),
     )).returning({ id: orders.id })
 
     if (!approved) return { kind: "conflict" } as const
@@ -167,6 +170,9 @@ export async function approveOrder({
         approvedByRole: authorization.decisionRole,
       })
       : NO_NOTIFICATIONS
+    // The warehouse is Apricart's and picks every approved order, desk orders
+    // included, so it is told whoever decided.
+    await queueWarehouseOrderNotifications(tx, { order: ord, event: "APPROVED" })
 
     await tx.insert(auditLogs).values({
       userId: user.id,
@@ -180,6 +186,7 @@ export async function approveOrder({
         actorRole: user.role,
         decisionRole: authorization.decisionRole,
         configuredApproverRole: authorization.configuredApproverRole,
+        ...(authorization.approvalLevel === null ? {} : { approvalLevel: authorization.approvalLevel }),
       },
     })
 
@@ -254,6 +261,7 @@ export async function rejectOrder({
       }).where(and(
         eq(orders.id, orderId),
         sql`UPPER(${orders.status}) = 'PENDING'`,
+        approvalLevelMatches(authorization.approvalLevel),
       )).returning(orderSelectColumns)
 
       if (!rejectedOrder) throw new Error("ORDER_TRANSITION_CONFLICT")
@@ -313,6 +321,7 @@ export async function rejectOrder({
           rejectionReason: reason,
         })
         : NO_NOTIFICATIONS
+      await queueWarehouseOrderNotifications(tx, { order: rejectedOrder, event: "REJECTED" })
 
       await tx.insert(auditLogs).values({
         userId: user.id,
@@ -328,6 +337,7 @@ export async function rejectOrder({
           closedCorrectionRequestId,
           decisionRole: authorization.decisionRole,
           configuredApproverRole: authorization.configuredApproverRole,
+          ...(authorization.approvalLevel === null ? {} : { approvalLevel: authorization.approvalLevel }),
         },
       })
 

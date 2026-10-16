@@ -46,6 +46,7 @@ const COLUMNS: Column[] = [
   { key: "orderStatus", label: "Order Status" },
   { key: "department", label: "Department" },
   { key: "approver", label: "Approver" },
+  { key: "approverLevel", label: "Approver Level", align: "center" },
   { key: null, label: "Designation" },
   { key: "crc", label: "CRC" },
   { key: "quantity", label: "Items (Qty)", align: "right", firstDirection: "desc" },
@@ -111,12 +112,12 @@ export function ConsolidatedInvoiceDocument({
       </div>
 
       <div className="mt-4 overflow-x-auto">
-        <table className="w-full min-w-[1100px] border-collapse text-xs">
+        <table className="w-full min-w-[1180px] border-collapse text-xs">
           <thead>
             <tr>
               <th className="border-0 bg-transparent" aria-hidden />
               <th colSpan={2} className="border border-amber-700/40 bg-[#b8941f] px-2 py-1.5 text-center text-xs font-bold text-white">Apricart Details</th>
-              <th colSpan={11} className="border border-slate-700/40 bg-[#101e40] px-2 py-1.5 text-center text-xs font-bold text-white">{report.billTo.name} Details</th>
+              <th colSpan={12} className="border border-slate-700/40 bg-[#101e40] px-2 py-1.5 text-center text-xs font-bold text-white">{report.billTo.name} Details</th>
             </tr>
             <tr className="bg-[#101e40]">
               {COLUMNS.map((column) => (
@@ -150,6 +151,7 @@ export function ConsolidatedInvoiceDocument({
                 </td>
                 <td className="border border-slate-200 px-2 py-1.5 dark:border-slate-800">{row.department}</td>
                 <td className="border border-slate-200 px-2 py-1.5 dark:border-slate-800">{row.approver}</td>
+                <td className="whitespace-nowrap border border-slate-200 px-2 py-1.5 text-center dark:border-slate-800">{row.approverLevel}</td>
                 <td className="border border-slate-200 px-2 py-1.5 dark:border-slate-800">{row.designation}</td>
                 <td className="border border-slate-200 px-2 py-1.5 dark:border-slate-800">{row.crc}</td>
                 <td className="border border-slate-200 px-2 py-1.5 text-right tabular-nums dark:border-slate-800">{formatReportQuantity(row.quantity)}</td>
@@ -162,7 +164,7 @@ export function ConsolidatedInvoiceDocument({
           </tbody>
           <tfoot>
             <tr className="bg-slate-100 font-bold dark:bg-slate-800">
-              <td colSpan={9} className="border border-slate-200 px-2 py-2 dark:border-slate-700">Total</td>
+              <td colSpan={10} className="border border-slate-200 px-2 py-2 dark:border-slate-700">Total</td>
               <td className="border border-slate-200 px-2 py-2 text-right tabular-nums dark:border-slate-700">{formatReportQuantity(report.totals.quantity)}</td>
               <td className="border border-slate-200 px-2 py-2 text-right tabular-nums dark:border-slate-700">{formatReportMoney(report.totals.valueExclTaxCents)}</td>
               <td className="border border-slate-200 px-2 py-2 dark:border-slate-700" />

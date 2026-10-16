@@ -1,5 +1,6 @@
 "use client"
 
+import { isReadOnlyRole } from "@/lib/viewer-access"
 import { useParams,useRouter } from "next/navigation"
 import Image from "next/image"
 import useSWR from "swr"
@@ -86,6 +87,9 @@ type OrderDetail = {
   pricesHidden?: boolean
   /** Entered by Apricart's Order Desk: an Apricart Executive decides it. */
   decidedByApricart?: boolean
+  /** plans/OF-APPROVAL-LEVELS-route-orders-by-level.md */
+  approvalLevel?: number | null
+  levelDecisionLocked?: boolean
 }
 
 function numericOrderId(orderId: string | string[] | undefined): number | null {
@@ -120,6 +124,13 @@ function OrderDecisionActions({
     return (
       <p className="text-sm text-muted-foreground">
         Entered by Apricart&apos;s Order Desk — awaiting approval by an Apricart Executive.
+      </p>
+    )
+  }
+  if (order.levelDecisionLocked && order.approvalLevel) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Awaiting approval by a Level {order.approvalLevel} approver at this branch.
       </p>
     )
   }
@@ -260,6 +271,9 @@ export default function SuperAdminOrderDetailsPage() {
     }
     if (isHeadOffice) {
       return "HEAD OFFICE"
+    }
+    if (isReadOnlyRole(userRole)) {
+      return "VIEW ONLY"
     }
     return "BRANCH ADMIN"
   })()

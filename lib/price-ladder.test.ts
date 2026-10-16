@@ -265,8 +265,10 @@ describe("group pricing access control", () => {
   it("confines Head Office to its own organization on both reads and writes", () => {
     expect(route).toContain('if (role === "HEAD_OFFICE" && group.organizationId !== (session.user as any).organizationId)')
     // One authorization helper serves GET and PUT, so the two cannot drift.
+    // Only the GET opts in to the read-only Viewer; the PUT never does.
     expect(route).toContain("const { authorized, failure } = await authorizeGroupPricing(id)")
-    expect(route.match(/await authorizeGroupPricing\(id\)/g) || []).toHaveLength(2)
+    expect(route).toContain("const { authorized, failure } = await authorizeGroupPricing(id, { viewerReadsAsHeadOffice: true })")
+    expect(route.match(/await authorizeGroupPricing\(id(?:, \{ viewerReadsAsHeadOffice: true \})?\)/g) || []).toHaveLength(2)
   })
 
   it("verifies every priced product belongs to the group's own organization", () => {

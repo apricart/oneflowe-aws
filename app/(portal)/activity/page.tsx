@@ -1,3 +1,4 @@
+import { viewerReadRole } from "@/lib/viewer-access"
 import { getServerSession } from "next-auth"
 import { redirect } from "next/navigation"
 
@@ -20,7 +21,9 @@ export default async function ActivityPage() {
     redirect("/login")
   }
 
-  const role = (session.user as { role?: string }).role
+  // An organization-wide Viewer reads its own organization's trail, as Head
+  // Office does; a pinned one maps to no role and is sent home.
+  const role = viewerReadRole(session.user as { role?: string }) ?? undefined
   if (!canViewActivityLog(role)) {
     redirect("/dashboard")
   }

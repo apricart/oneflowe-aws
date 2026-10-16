@@ -1,5 +1,6 @@
 "use client"
 
+import { viewerAccessFor } from "@/lib/viewer-access"
 import { useAppContext } from "@/components/context/app-context"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -15,6 +16,7 @@ import { Input } from "@/components/ui/input"
 import { Pagination,PaginationContent,PaginationItem } from "@/components/ui/pagination"
 import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from "@/components/ui/table"
 import { Tabs,TabsContent,TabsList,TabsTrigger } from "@/components/ui/tabs"
+import { approverLevelOf } from "@/lib/consolidated-invoice"
 import { getOrderDerivedStatus } from "@/lib/order-status"
 import { getOrderStatusDisplay } from "@/lib/order-status-display"
 import { getFulfillmentProgressColor, getPaymentStatusColor } from "@/lib/order-status-colors"
@@ -100,6 +102,8 @@ const ALL_COLUMNS: ColumnDef[] = [
     { key: "status", label: "Status", defaultVisible: true },
     { key: "deliveryStatus", label: "Delivery Status", defaultVisible: true },
     { key: "paymentStatus", label: "Payment", defaultVisible: true },
+    { key: "approvalLevel", label: "Approval Level", defaultVisible: true },
+    { key: "approver", label: "Approver", defaultVisible: true },
     { key: "quantityOrdered", label: "Qty Ordered", defaultVisible: true },
     { key: "quantityDelivered", label: "Qty Delivered", defaultVisible: true },
     { key: "quantityRefunded", label: "Qty Refunded", defaultVisible: true },
@@ -131,7 +135,9 @@ export default function OrderReportPage() {
 
     const { data: session, status: sessionStatus } = useSession()
     const { toast } = useToast()
-    const role = (session?.user as any)?.role as Role
+    // An organization-wide Viewer reads this report as Head Office does.
+    const { viewRole } = viewerAccessFor(session?.user)
+    const role = viewRole as Role
     const userOrgId = (session?.user as any)?.organizationId
     const organizationId = userOrgId || contextOrgId
     const isBuyer = usesPurchaseWording(role)
@@ -652,6 +658,8 @@ export default function OrderReportPage() {
         isVisible("status"),
         isVisible("deliveryStatus"),
         isVisible("paymentStatus"),
+        isVisible("approvalLevel"),
+        isVisible("approver"),
         isVisible("quantityOrdered"),
         isVisible("quantityDelivered"),
         isVisible("quantityRefunded"),
@@ -1055,6 +1063,8 @@ export default function OrderReportPage() {
                                         {isVisible("status") && <col className="w-[135px]" />}
                                         {isVisible("deliveryStatus") && <col className="w-[140px]" />}
                                         {isVisible("paymentStatus") && <col className="w-[110px]" />}
+                                        {isVisible("approvalLevel") && <col className="w-[110px]" />}
+                                        {isVisible("approver") && <col className="w-[190px]" />}
                                         {isVisible("quantityOrdered") && <col className="w-[90px]" />}
                                         {isVisible("quantityDelivered") && <col className="w-[90px]" />}
                                         {isVisible("quantityRefunded") && <col className="w-[90px]" />}
@@ -1084,6 +1094,8 @@ export default function OrderReportPage() {
                                             {isVisible("status") && <TableHead aria-sort={ariaSortFor(reportSort, "status")} className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500 text-center">{sortHead("status", "Status")}</TableHead>}
                                             {isVisible("deliveryStatus") && <TableHead aria-sort={ariaSortFor(reportSort, "deliveryStatus")} className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500 text-center">{sortHead("deliveryStatus", "Delivery")}</TableHead>}
                                             {isVisible("paymentStatus") && <TableHead aria-sort={ariaSortFor(reportSort, "paymentStatus")} className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500 text-center">{sortHead("paymentStatus", "Payment")}</TableHead>}
+                                            {isVisible("approvalLevel") && <TableHead aria-sort={ariaSortFor(reportSort, "approvalLevel")} className="h-14 px-2 text-center text-[9px] font-black uppercase leading-tight tracking-wide text-slate-500 whitespace-normal">{sortHead("approvalLevel", "Approval Level")}</TableHead>}
+                                            {isVisible("approver") && <TableHead aria-sort={ariaSortFor(reportSort, "approver")} className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">{sortHead("approver", "Approver")}</TableHead>}
                                             {isVisible("quantityOrdered") && <TableHead aria-sort={ariaSortFor(reportSort, "quantityOrdered")} className="h-14 px-2 text-center text-[9px] font-black uppercase leading-tight tracking-wide text-slate-500 whitespace-normal">{sortHead("quantityOrdered", "Qty Ordered")}</TableHead>}
                                             {isVisible("quantityDelivered") && <TableHead aria-sort={ariaSortFor(reportSort, "quantityDelivered")} className="h-14 px-2 text-center text-[9px] font-black uppercase leading-tight tracking-wide text-emerald-600 whitespace-normal">{sortHead("quantityDelivered", "Qty Delivered")}</TableHead>}
                                             {isVisible("quantityRefunded") && <TableHead aria-sort={ariaSortFor(reportSort, "quantityRefunded")} className="h-14 px-2 text-center text-[9px] font-black uppercase leading-tight tracking-wide text-rose-500 whitespace-normal">{sortHead("quantityRefunded", "Qty Refunded")}</TableHead>}
@@ -1201,6 +1213,31 @@ export default function OrderReportPage() {
                                                                     >
                                                                         {getOrderStatusDisplay(order).paymentStatus}
                                                                     </Badge>
+                                                                )
+                                                                : <span className="text-[10px] font-bold text-slate-400">—</span>}
+                                                        </TableCell>
+                                                    )}
+                                                    {isVisible("approvalLevel") && (
+                                                        <TableCell className="px-2 py-5 text-center">
+                                                            {approverLevelOf(order.approvalLevel).approverLevel
+                                                                ? (
+                                                                    <Badge variant="outline" className="rounded-xl border-indigo-200 bg-indigo-50 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-indigo-600 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-300">
+                                                                        {approverLevelOf(order.approvalLevel).approverLevel}
+                                                                    </Badge>
+                                                                )
+                                                                : <span className="text-[10px] font-bold text-slate-400">—</span>}
+                                                        </TableCell>
+                                                    )}
+                                                    {isVisible("approver") && (
+                                                        <TableCell className="px-3 2xl:px-4 py-5 whitespace-normal break-words">
+                                                            {order.approverName
+                                                                ? (
+                                                                    <div className="flex min-w-0 flex-col gap-0.5">
+                                                                        <span className="block text-[11px] font-black text-slate-900 dark:text-white uppercase tracking-tighter" title={order.approverName}>{order.approverName}</span>
+                                                                        {order.approverDesignation && (
+                                                                            <span className="block text-[9px] font-bold text-slate-400 uppercase tracking-wide" title={order.approverDesignation}>{order.approverDesignation}</span>
+                                                                        )}
+                                                                    </div>
                                                                 )
                                                                 : <span className="text-[10px] font-bold text-slate-400">—</span>}
                                                         </TableCell>

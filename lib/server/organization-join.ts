@@ -1,7 +1,5 @@
 import "server-only"
 
-import { randomInt } from "node:crypto"
-
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm"
 
 import {
@@ -64,23 +62,6 @@ export const MAX_JOIN_REQUEST_PAGE = 200
  * the queue. Chosen well above any plausible real intake.
  */
 export const MAX_PENDING_REQUESTS_PER_ORGANIZATION = 200
-
-/**
- * A generated code: 14 characters in three dash-separated groups, drawn with
- * `randomInt` from an alphabet with no character that survives being read aloud
- * ambiguously — no O/0, no I/1, no S/5, no B/8, no Z/2.
- *
- * ~4.7e15 combinations, which is what makes generating one the recommended path
- * over typing a memorable one.
- */
-const CODE_ALPHABET = "ACDEFGHJKLMNPQRTUVWXY34679"
-
-export function generateJoinCode(): string {
-  const groupsOfFour = Array.from({ length: 3 }, () =>
-    Array.from({ length: 4 }, () => CODE_ALPHABET[randomInt(CODE_ALPHABET.length)]).join(""),
-  )
-  return groupsOfFour.join("-")
-}
 
 export type JoinCodeRecord = {
   code: string
@@ -216,26 +197,29 @@ export async function readJoinCode(organizationId: number): Promise<JoinCodeReco
 export type JoinCodeWriteFailure = { message: string; status: number }
 
 /**
- * Set or replace the organization's code.
+ * Set the organization's code exactly once.
  *
- * One row per organization, so this is an upsert on `organization_id`. A code
- * already held by another tenant is refused rather than stolen: the unique index
- * on `code` is what guarantees a code resolves to exactly one organization, and
- * without that guarantee the whole lookup is ambiguous.
+ * Existing rows are never updated or deleted. A code already held by another
+ * tenant is refused rather than stolen: the unique index on `code` is what
+ * guarantees a code resolves to exactly one organization, and without that
+ * guarantee the whole lookup is ambiguous.
  */
 export async function setJoinCode(input: {
   organizationId: number
-  code?: string
+  code: string
   actorUserId: string
 }): Promise<{ code: string } | JoinCodeWriteFailure> {
-  const code = input.code ?? generateJoinCode()
+  const existing = await readJoinCode(input.organizationId)
+  if (existing) {
+    return { message: "This organization already has a join code. It cannot be changed.", status: 409 }
+  }
 
   const [takenElsewhere] = await db
     .select({ organizationId: organizationJoinCodes.organizationId })
     .from(organizationJoinCodes)
-    .where(eq(organizationJoinCodes.code, code))
+    .where(eq(organizationJoinCodes.code, input.code))
     .limit(1)
-  if (takenElsewhere && takenElsewhere.organizationId !== input.organizationId) {
+  if (takenElsewhere) {
     return { message: "That join code is already in use. Choose another.", status: 409 }
   }
 
@@ -244,40 +228,25 @@ export async function setJoinCode(input: {
       .insert(organizationJoinCodes)
       .values({
         organizationId: input.organizationId,
-        code,
+        code: input.code,
         createdByUserId: input.actorUserId,
         updatedByUserId: input.actorUserId,
       })
-      .onConflictDoUpdate({
-        target: organizationJoinCodes.organizationId,
-        set: {
-          code,
-          updatedByUserId: input.actorUserId,
-          updatedAt: new Date(),
-        },
-      })
   } catch (caughtError: any) {
-    // The read above can be overtaken: two tenants issuing the same code at the
-    // same instant both see it free, and `organization_join_codes_code_uq`
-    // decides between them. The loser gets the same answer it would have got a
-    // moment earlier, rather than a 500.
+    // Either read above can be overtaken. The organization and code unique
+    // indexes decide the race; re-reading this tenant distinguishes a competing
+    // first write from a code another tenant claimed.
     const errorCode = String(caughtError?.code ?? caughtError?.cause?.code ?? "")
     if (errorCode === "23505") {
+      if (await readJoinCode(input.organizationId)) {
+        return { message: "This organization already has a join code. It cannot be changed.", status: 409 }
+      }
       return { message: "That join code is already in use. Choose another.", status: 409 }
     }
     throw caughtError
   }
 
-  return { code }
-}
-
-/** Close joining for this tenant. Pending requests are left to be decided. */
-export async function clearJoinCode(organizationId: number): Promise<boolean> {
-  const removed = await db
-    .delete(organizationJoinCodes)
-    .where(eq(organizationJoinCodes.organizationId, organizationId))
-    .returning({ id: organizationJoinCodes.id })
-  return removed.length > 0
+  return { code: input.code }
 }
 
 /* ── Submitting a request ────────────────────────────────────────────────── */
@@ -305,9 +274,10 @@ export type JoinRequestSubmission = {
 
 export type JoinRequestFailure = {
   /**
-   * `identity` is answered to the caller with one field-less message, because
-   * naming the field turns the public form into a way of testing whether a
-   * colleague has an account. `scope` and `limit` are safe to describe: they are
+   * `identity` is answered to the caller with one message per form, listing
+   * every field checked but never singling one out, because naming the field
+   * turns the public form into a way of testing whether a colleague has an
+   * account. `scope` and `limit` are safe to describe: they are
    * about the tenant's own structure, which the code already disclosed.
    */
   kind: "identity" | "scope" | "limit"
@@ -373,16 +343,25 @@ async function scopeTenantError(input: {
  *     business. The two-tenant race it allows is resolved at approval, where the
  *     application-wide checks above run again.
  *
- * The caller collapses every one of these into a single field-less message.
+ * `checkAccountUsername` is false for the department sign-up, whose username
+ * is not something the applicant typed: it is the email's local part, so
+ * `ali@ke.example` would be refused because another tenant has a user `ali`,
+ * and the applicant would have no field to change. That clash is not refused
+ * here; the review flags it (`usernameTaken`) and Head Office picks another
+ * username before approving, where `usernameExists` runs again.
+ *
+ * The caller collapses every one of these into a single message that singles
+ * out no field.
  */
-async function identityConflictReason(input: {
+export async function identityConflictReason(input: {
   organizationId: number
   email: string
   username: string
   phone: string | null
   employeeId: string | null
+  checkAccountUsername: boolean
 }): Promise<string | null> {
-  if (await usernameExists(input.username)) return "username taken"
+  if (input.checkAccountUsername && await usernameExists(input.username)) return "username taken"
 
   try {
     await assertUniqueUserFields({
@@ -433,7 +412,7 @@ export async function createJoinRequest(
     }
   }
 
-  if (await identityConflictReason(submission)) {
+  if (await identityConflictReason({ ...submission, checkAccountUsername: true })) {
     return { kind: "identity", message: "identity conflict", status: 409 }
   }
 
@@ -478,6 +457,8 @@ export async function createJoinRequest(
 
 export type JoinRequestListRow = {
   id: number
+  /** 1 = the standard form; 2 = the department sign-up (reviewed through its own read). */
+  formVersion: number
   status: JoinRequestStatus
   requestedRole: JoinableRole
   requestedBranchId: number | null
@@ -520,6 +501,7 @@ export async function listJoinRequests(input: {
   const rows = await db
     .select({
       id: organizationJoinRequests.id,
+      formVersion: organizationJoinRequests.formVersion,
       status: organizationJoinRequests.status,
       requestedRole: organizationJoinRequests.requestedRole,
       requestedBranchId: organizationJoinRequests.requestedBranchId,
@@ -670,6 +652,10 @@ export async function decideJoinRequest(input: {
       .where(and(
         eq(organizationJoinRequests.id, input.requestId),
         eq(organizationJoinRequests.organizationId, input.organizationId),
+        // A department sign-up is decided by decideDepartmentJoinRequest,
+        // which creates its approvers and branches; this path must never
+        // approve one as a lone user.
+        eq(organizationJoinRequests.formVersion, 1),
       ))
       .for("update")
       .limit(1)

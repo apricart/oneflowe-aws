@@ -1,6 +1,9 @@
 import {
+  ACTIVITY_ACTOR_ROLES,
   ACTIVITY_MAX_WINDOW_DAYS,
+  ACTIVITY_TENANT_ACTOR_ROLES,
   MS_PER_DAY,
+  type ActivityActorRole,
   type ActivityEvent,
   type ActivityOperation,
   type ActivitySeverity,
@@ -110,6 +113,31 @@ export const OPERATION_LABEL: Readonly<Record<ActivityOperation, string>> = {
   reject: "Rejected",
   export: "Viewed",
   other: "Other",
+}
+
+export const ACTOR_ROLE_LABEL: Readonly<Record<ActivityActorRole, string>> = {
+  SUPER_ADMIN: "Super Admin",
+  HEAD_OFFICE: "Head Office",
+  GROUP_USER: "Group User",
+  BRANCH_ADMIN: "Branch Admin",
+  GROUP_ORDER_PORTAL: "Group Order Portal",
+  ORDER_PORTAL: "Order Portal",
+  VIEWER: "Viewer",
+  ORDER_DESK: "Order Desk",
+  APRICART_EXECUTIVE: "Apricart Executive",
+  WAREHOUSE: "Warehouse",
+}
+
+export type ActorRoleOption = { value: ActivityActorRole; label: string }
+
+/**
+ * The role filter's options for this reader. Presentation only — the endpoint
+ * refuses an Apricart role from a tenant reader. A tenant sees its own roles
+ * and nothing of Apricart's internal ones.
+ */
+export function actorRoleOptions(platformWide: boolean): ActorRoleOption[] {
+  const roles = platformWide ? ACTIVITY_ACTOR_ROLES : ACTIVITY_TENANT_ACTOR_ROLES
+  return roles.map((role) => ({ value: role, label: ACTOR_ROLE_LABEL[role] }))
 }
 
 /** Who did it, in one line, preferring the most identifying thing available. */

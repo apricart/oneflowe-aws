@@ -274,6 +274,7 @@ async function updateUserProfile(userId: string, input: any, targetUser: any, ne
     lastName: input.lastName,
     phone: input.phone !== undefined ? values.nextPhone : undefined,
     employeeId: input.employeeId !== undefined ? values.nextEmployeeId : undefined,
+    designation: input.designation,
     imprestHolder: input.imprestHolder,
     contactPerson: input.contactPerson,
     location: input.location,

@@ -7,6 +7,7 @@ import {
   DUE_SOON_HOURS,
   assessDelivery,
   compareByAttention,
+  compareNewestFirst,
   countDeliveredOn,
   countDeliveries,
   deliveryAlerts,
@@ -64,6 +65,13 @@ const ALLOWED_QUERY_KEYS = new Set([
   "deliveredFrom",
   "deliveredTo",
 ])
+
+/**
+ * How the order list is ranked. Management reads it most urgent first; the
+ * warehouse reads it newest first. It decides which orders survive the
+ * `DELIVERY_ATTENTION_LIMIT` cut, so it is applied before the slice.
+ */
+export type DeliveryListOrder = "attention" | "newest"
 
 export type DeliveryDashboardFilters = {
   organizationId: number | null
@@ -280,8 +288,10 @@ export function buildDeliveryDashboard(input: {
   truncated: boolean
   organizations: ReadonlyArray<{ id: number; name: string }>
   branches: ReadonlyArray<{ id: number; name: string }>
+  listOrder?: DeliveryListOrder
 }) {
   const { filters, now } = input
+  const listOrder = input.listOrder ?? "attention"
   const today = karachiDay(now)
 
   const assessedAll: Assessed[] = []
@@ -316,7 +326,7 @@ export function buildDeliveryDashboard(input: {
   const assessments = assessed.map((row) => row.assessment)
   const listed = assessed
     .filter((row) => matchesDeliveryListView(row.assessment, filters.view, today))
-    .sort(compareByAttention)
+    .sort(listOrder === "newest" ? compareNewestFirst : compareByAttention)
 
   return {
     generatedAt: now.toISOString(),
@@ -349,6 +359,7 @@ export function buildDeliveryDashboard(input: {
       label: `${row.branchName} · ${row.organizationName}`,
     })).slice(0, DELIVERY_BRANCH_LIMIT),
     orders: {
+      order: listOrder,
       total: listed.length,
       items: listed.slice(0, DELIVERY_ATTENTION_LIMIT).map(toListRow),
     },

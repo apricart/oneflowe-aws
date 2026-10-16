@@ -1,5 +1,6 @@
 "use client"
 
+import { viewerAccessFor } from "@/lib/viewer-access"
 import { useAppContext } from "@/components/context/app-context"
 import { type FilterPreset,GlobalDateFilter,type GlobalDateFilterChange } from "@/components/dashboard/global-date-filter"
 import { BranchFilter } from "@/components/reports/branch-filter"
@@ -129,7 +130,8 @@ const ORGANIZATION_DESC_FIRST_SORT_KEYS = new Set<OrganizationSortKey>(["branche
 
 export default function OrganizationReportPage() {
     const { data: session } = useSession()
-    const role = (session?.user as any)?.role
+    // An organization-wide Viewer reads this report as Head Office does.
+    const { viewRole: role } = viewerAccessFor(session?.user)
     const isBuyer = usesPurchaseWording(role)
     const userOrgId = (session?.user as any)?.organizationId
     const router = useRouter()

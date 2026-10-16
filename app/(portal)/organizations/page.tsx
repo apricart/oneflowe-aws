@@ -1,5 +1,7 @@
 "use client"
+import { BranchHeadCountField, headCountFieldValue } from "@/components/branches/branch-head-count-field"
 import { BranchRegionSelect } from "@/components/branches/branch-region-select"
+import { parseHeadCountInput } from "@/lib/branch-head-count"
 import type { BranchRegion } from "@/lib/branch-region"
 import { useAppContext } from "@/components/context/app-context"
 import { BranchExcelExportButton } from "@/components/organizations/branch-excel-export-button"
@@ -9,6 +11,7 @@ EmailDomainField,
 emailDomainDraftError,
 toEmailDomainPayload,
 } from "@/components/organizations/email-domain-field"
+import { OrderApprovalLevelsFields } from "@/components/organizations/order-approval-levels-fields"
 import { OrganizationExcelExportButton } from "@/components/organizations/organization-excel-export-button"
 import { OrganizationListExcelExportButton } from "@/components/organizations/organization-list-excel-export-button"
 import {
@@ -48,6 +51,12 @@ import {
 } from "@/lib/ordering-block-threshold"
 import { useBranches,useOrganizations } from "@/lib/hooks/use-api"
 import {
+  approvalLevelAmountText,
+  approvalLevelDraftsError,
+  toApprovalLevelsPayload,
+  type ApprovalLevelsPayload,
+} from "@/lib/order-approval-levels"
+import {
 DEFAULT_ORDER_APPROVER_ROLE,
 ORDER_APPROVER_ROLE_LABELS,
 parseOrderApproverRole,
@@ -74,6 +83,12 @@ type Organization = {
   unacknowledgedDeliveryBlockThreshold?: number
   budgetsEnabled?: boolean
   managedOrdering?: boolean
+}
+
+/** The Create confirmation's sentence about approval levels, or nothing while they are off. */
+function approvalLevelsSummary(enabled: boolean, count: number): string {
+  if (!enabled) return ""
+  return ` It will have ${formatCountLabel(count, "order approval level")}.`
 }
 
 // Each hint prints the limit being typed, so it always says what will be saved.
@@ -281,6 +296,7 @@ type Branch = {
   region?: BranchRegion | null
   address?: string | null
   costCenterId?: string | null
+  headCount?: number | null
   status?: "active" | "inactive"
 }
 
@@ -511,6 +527,7 @@ export default function OrganizationsPage() {
     payload: Partial<Organization>,
     priceVisibility?: PriceVisibilitySettings,
     privateNetworkLogin?: ReturnType<typeof toPrivateNetworkLoginPayload>,
+    orderApprovalLevels?: ApprovalLevelsPayload,
   ): Promise<boolean> {
     try {
       const res = await fetch(`/api/v1/organizations/${id}`, {
@@ -557,6 +574,18 @@ export default function OrganizationsPage() {
         const networkData = await networkRes.json()
         if (!networkRes.ok) {
           throw new Error(networkData.error || "Failed to update private network login")
+        }
+      }
+
+      if (orderApprovalLevels) {
+        const levelsRes = await fetch(`/api/v1/organizations/${id}/approval-levels`, {
+          method: "PUT",
+          body: JSON.stringify(orderApprovalLevels),
+          headers: { "Content-Type": "application/json" },
+        })
+        const levelsData = await levelsRes.json()
+        if (!levelsRes.ok) {
+          throw new Error(levelsData.error || "Failed to update approval levels")
         }
       }
 
@@ -1274,9 +1303,14 @@ function CreateOrgDialog({
   const [hideOrderPortalPrices, setHideOrderPortalPrices] = useState(false)
   const [privateNetworkEnabled, setPrivateNetworkEnabled] = useState(false)
   const [networkEntries, setNetworkEntries] = useState<PrivateNetworkEntryDraft[]>([])
+  // Off by default: a new company's orders carry no approval levels until a
+  // Super Admin switches them on (plans/OF-APPROVAL-LEVELS-organization-approval-levels.md).
+  const [approvalLevelsEnabled, setApprovalLevelsEnabled] = useState(false)
+  const [approvalLevelDrafts, setApprovalLevelDrafts] = useState<string[]>([])
   const [confirmModeOpen, setConfirmModeOpen] = useState(false)
   const [saving, setSaving] = useState(false)
 
+  const approvalLevelsError = approvalLevelDraftsError(approvalLevelsEnabled, approvalLevelDrafts)
   const networkError = privateNetworkDraftError(privateNetworkEnabled, networkEntries)
   const emailDomainError = emailDomainDraftError(emailDomain)
   const unpaidInvoiceBlockThreshold = parseOrderingBlockThresholdDraft(unpaidInvoiceBlockThresholdText)
@@ -1316,6 +1350,7 @@ function CreateOrgDialog({
             privateNetworkEnabled,
             networkEntries,
           ),
+          orderApprovalLevels: toApprovalLevelsPayload(approvalLevelsEnabled, approvalLevelDrafts),
         }),
         headers: { "Content-Type": "application/json" }
       })
@@ -1341,6 +1376,8 @@ function CreateOrgDialog({
       setHideOrderPortalPrices(false)
       setPrivateNetworkEnabled(false)
       setNetworkEntries([])
+      setApprovalLevelsEnabled(false)
+      setApprovalLevelDrafts([])
       setConfirmModeOpen(false)
       onCreated(data.item)
     } catch (e: any) {
@@ -1351,7 +1388,7 @@ function CreateOrgDialog({
   }
 
   function submit() {
-    if (!name || !code || saving || networkError || emailDomainError || thresholdsInvalid) return
+    if (!name || !code || saving || networkError || emailDomainError || thresholdsInvalid || approvalLevelsError) return
     setConfirmModeOpen(true)
   }
 
@@ -1481,6 +1518,14 @@ function CreateOrgDialog({
                   </button>
                 </div>
               </div>
+              <OrderApprovalLevelsFields
+                idPrefix="create"
+                enabled={approvalLevelsEnabled}
+                levels={approvalLevelDrafts}
+                disabled={saving}
+                onEnabledChange={setApprovalLevelsEnabled}
+                onLevelsChange={setApprovalLevelDrafts}
+              />
               <OrderingBlockSwitch
                 id="create-block-ordering-on-unpaid-invoices"
                 label="Block ordering on unpaid invoices"
@@ -1576,7 +1621,7 @@ function CreateOrgDialog({
             <Button
               onClick={submit}
               className="gap-2 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100 disabled:shadow-none"
-              disabled={!name || !code || saving || Boolean(networkError) || Boolean(emailDomainError) || thresholdsInvalid}
+              disabled={!name || !code || saving || Boolean(networkError) || Boolean(emailDomainError) || thresholdsInvalid || Boolean(approvalLevelsError)}
             >
               <Save className="h-4 w-4" />
               Save Company
@@ -1590,7 +1635,7 @@ function CreateOrgDialog({
         onOpenChange={setConfirmModeOpen}
         onConfirm={createCompany}
         title="Confirm Budget Model"
-        description={`${budgetsEnabled ? `This company will use ${budgetAllocationMode === "quantity" ? "quantity-based" : "money-value"} budget allocation.` : "This company will order without budget allocation."} ${orderApprovalRequired ? `${ORDER_APPROVER_ROLE_LABELS[orderApproverRole]} will approve or reject new orders.` : "New orders will be approved immediately when they are created."} Super Admins can change this later from Edit Company.`}
+        description={`${budgetsEnabled ? `This company will use ${budgetAllocationMode === "quantity" ? "quantity-based" : "money-value"} budget allocation.` : "This company will order without budget allocation."} ${orderApprovalRequired ? `${ORDER_APPROVER_ROLE_LABELS[orderApproverRole]} will approve or reject new orders.` : "New orders will be approved immediately when they are created."}${approvalLevelsSummary(approvalLevelsEnabled, approvalLevelDrafts.length)} Super Admins can change this later from Edit Company.`}
         confirmText="Create Company"
         cancelText="Review"
         type="warning"
@@ -1624,9 +1669,12 @@ function CreateBranchDialog({
   const [region, setRegion] = useState<BranchRegion | null>(null)
   const [address, setAddress] = useState("")
   const [costCenterId, setCostCenterId] = useState("")
+  const [headCountText, setHeadCountText] = useState("")
   const [status, setStatus] = useState<boolean>(true)
   const [saving, setSaving] = useState(false)
+  const headCount = parseHeadCountInput(headCountText)
   const canSubmit = Boolean(
+    headCount !== undefined &&
     orgId &&
     name.trim() &&
     province.trim() &&
@@ -1643,6 +1691,7 @@ function CreateBranchDialog({
       region,
       address: address.trim(),
       costCenterId: costCenterId.trim() || null,
+      headCount: headCount ?? null,
       status: status ? "active" : "inactive",
     }
     console.log("[CreateBranchDialog] Submitting new branch:", payload)
@@ -1666,6 +1715,7 @@ function CreateBranchDialog({
       setCity("")
       setAddress("")
       setCostCenterId("")
+      setHeadCountText("")
       setStatus(true)
       setOrgId(undefined)
 
@@ -1771,6 +1821,12 @@ function CreateBranchDialog({
                     maxLength={128}
                   />
                 </div>
+                <BranchHeadCountField
+                  id="branch-head-count"
+                  value={headCountText}
+                  onChange={setHeadCountText}
+                  disabled={saving}
+                />
                 <p className="text-xs text-muted-foreground">Branch code will be automatically generated.</p>
               </div>
             </div>
@@ -1813,6 +1869,7 @@ function EditOrgDialog({
     payload: Partial<Organization>,
     priceVisibility?: PriceVisibilitySettings,
     privateNetworkLogin?: ReturnType<typeof toPrivateNetworkLoginPayload>,
+    orderApprovalLevels?: ApprovalLevelsPayload,
   ) => Promise<boolean>
 }>) {
   const [open, setOpen] = useState(false)
@@ -1853,12 +1910,19 @@ function EditOrgDialog({
   const [networkEntries, setNetworkEntries] = useState<PrivateNetworkEntryDraft[]>([])
   const [loadingNetwork, setLoadingNetwork] = useState(false)
   const [networkLoadFailed, setNetworkLoadFailed] = useState(false)
+  const [approvalLevelsEnabled, setApprovalLevelsEnabled] = useState(false)
+  const [approvalLevelDrafts, setApprovalLevelDrafts] = useState<string[]>([])
+  const [loadingApprovalLevels, setLoadingApprovalLevels] = useState(false)
+  const [approvalLevelsLoadFailed, setApprovalLevelsLoadFailed] = useState(false)
   const [loadingSettings, setLoadingSettings] = useState(false)
   const [saving, setSaving] = useState(false)
 
   const networkError = networkLoadFailed
     ? null
     : privateNetworkDraftError(privateNetworkEnabled, networkEntries)
+  const approvalLevelsError = approvalLevelsLoadFailed
+    ? null
+    : approvalLevelDraftsError(approvalLevelsEnabled, approvalLevelDrafts)
   const emailDomainError = emailDomainDraftError(emailDomain)
   const unpaidInvoiceBlockThreshold = parseOrderingBlockThresholdDraft(unpaidInvoiceBlockThresholdText)
   const unacknowledgedDeliveryBlockThreshold = parseOrderingBlockThresholdDraft(unacknowledgedDeliveryBlockThresholdText)
@@ -1968,6 +2032,43 @@ function EditOrgDialog({
       })
       .finally(() => {
         if (!cancelled) setLoadingNetwork(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [open, isSuperAdmin, org.id])
+
+  useEffect(() => {
+    if (!open || !isSuperAdmin) return
+
+    let cancelled = false
+    setLoadingApprovalLevels(true)
+    setApprovalLevelsLoadFailed(false)
+    fetch(`/api/v1/organizations/${org.id}/approval-levels`)
+      .then(async (res) => {
+        if (!res.ok) throw new Error("Failed to load approval levels")
+        return res.json()
+      })
+      .then((data) => {
+        if (cancelled) return
+        const loaded: unknown[] = Array.isArray(data?.levels) ? data.levels : []
+        setApprovalLevelsEnabled(data?.enabled === true)
+        setApprovalLevelDrafts(
+          loaded.map((item) => approvalLevelAmountText(Number((item as { maxAmountCents?: unknown })?.maxAmountCents))),
+        )
+      })
+      .catch(() => {
+        // As for private network login: a failed read must never become an
+        // empty draft that a later save writes back, switching the levels off.
+        if (!cancelled) {
+          setApprovalLevelsLoadFailed(true)
+          setApprovalLevelsEnabled(false)
+          setApprovalLevelDrafts([])
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingApprovalLevels(false)
       })
 
     return () => {
@@ -2103,6 +2204,23 @@ function EditOrgDialog({
                     </button>
                   </div>
                 </div>
+                {approvalLevelsLoadFailed ? (
+                  <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 dark:border-amber-700 dark:bg-amber-950/40">
+                    <p className="text-xs font-medium text-amber-900 dark:text-amber-100">
+                      Order approval levels could not be loaded. They are left unchanged when
+                      you save. Close and reopen this dialog to retry.
+                    </p>
+                  </div>
+                ) : (
+                  <OrderApprovalLevelsFields
+                    idPrefix={`edit-${org.id}`}
+                    enabled={approvalLevelsEnabled}
+                    levels={approvalLevelDrafts}
+                    disabled={loadingApprovalLevels || saving}
+                    onEnabledChange={setApprovalLevelsEnabled}
+                    onLevelsChange={setApprovalLevelDrafts}
+                  />
+                )}
                 <OrderingBlockSwitch
                   id={`edit-block-ordering-on-unpaid-invoices-${org.id}`}
                   label="Block ordering on unpaid invoices"
@@ -2204,11 +2322,13 @@ function EditOrgDialog({
               saving ||
               loadingSettings ||
               loadingNetwork ||
+              loadingApprovalLevels ||
               !name.trim() ||
               !code.trim() ||
               Boolean(networkError) ||
               Boolean(emailDomainError) ||
-              thresholdsInvalid
+              thresholdsInvalid ||
+              Boolean(approvalLevelsError)
             }
             onClick={async () => {
               setSaving(true)
@@ -2243,6 +2363,11 @@ function EditOrgDialog({
                     : undefined,
                   isSuperAdmin && !networkLoadFailed
                     ? toPrivateNetworkLoginPayload(privateNetworkEnabled, networkEntries)
+                    : undefined,
+                  // Switched off, this omits the levels so the stored ones are
+                  // kept; never sent at all if they could not be loaded.
+                  isSuperAdmin && !approvalLevelsLoadFailed
+                    ? toApprovalLevelsPayload(approvalLevelsEnabled, approvalLevelDrafts)
                     : undefined
                 )
                 if (saved) setOpen(false)
@@ -2269,7 +2394,9 @@ function EditBranchDialog({ branch, onSave }: Readonly<{ branch: Branch; onSave:
   const [region, setRegion] = useState<BranchRegion | null>(branch.region ?? null)
   const [address, setAddress] = useState(branch.address ?? "")
   const [costCenterId, setCostCenterId] = useState(branch.costCenterId ?? "")
+  const [headCountText, setHeadCountText] = useState(headCountFieldValue(branch.headCount))
   const [status, setStatus] = useState<boolean>(isActiveStatus(branch.status))
+  const headCount = parseHeadCountInput(headCountText)
 
   useEffect(() => {
     setName(branch.name)
@@ -2279,8 +2406,9 @@ function EditBranchDialog({ branch, onSave }: Readonly<{ branch: Branch; onSave:
     setRegion(branch.region ?? null)
     setAddress(branch.address ?? "")
     setCostCenterId(branch.costCenterId ?? "")
+    setHeadCountText(headCountFieldValue(branch.headCount))
     setStatus(isActiveStatus(branch.status))
-  }, [branch.name, branch.code, branch.province, branch.city, branch.region, branch.address, branch.costCenterId, branch.status])
+  }, [branch.name, branch.code, branch.province, branch.city, branch.region, branch.address, branch.costCenterId, branch.headCount, branch.status])
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
@@ -2347,6 +2475,11 @@ function EditBranchDialog({ branch, onSave }: Readonly<{ branch: Branch; onSave:
                 maxLength={128}
               />
             </div>
+            <BranchHeadCountField
+              id="branch-head-count-edit"
+              value={headCountText}
+              onChange={setHeadCountText}
+            />
             <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
               <div>
                 <Label htmlFor="branch-status-edit">Status</Label>
@@ -2374,11 +2507,12 @@ function EditBranchDialog({ branch, onSave }: Readonly<{ branch: Branch; onSave:
                 region,
                 address: address.trim() || null,
                 costCenterId: costCenterId.trim() || null,
+                headCount: headCount ?? null,
                 status: status ? "active" : "inactive",
               })
               setOpen(false)
             }}
-            disabled={!name.trim()}
+            disabled={!name.trim() || headCount === undefined}
           >
             <Save className="h-4 w-4" />
             Save Changes

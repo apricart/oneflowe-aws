@@ -145,7 +145,7 @@ function reply(status: number, body: unknown) {
  * Every request the dialogs make, answered by URL and method, with the calls
  * recorded so a test can read back exactly what was sent.
  */
-function stubOrganizationApi() {
+function stubOrganizationApi(options: { approvalLevels?: { status: number; body: unknown } } = {}) {
   const calls: Array<{ url: string; method: string; body: any }> = []
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET"
@@ -156,6 +156,10 @@ function stubOrganizationApi() {
     if (url.startsWith("/api/v1/settings") && method === "GET") return reply(200, { data: [] })
     if (url.endsWith("/network-policy") && method === "GET") {
       return reply(200, { enabled: false, entries: [] })
+    }
+    if (url.endsWith("/approval-levels") && method === "GET") {
+      const answer = options.approvalLevels ?? { status: 200, body: { enabled: false, levels: [] } }
+      return reply(answer.status, answer.body)
     }
     return reply(200, { ok: true })
   })
@@ -802,5 +806,167 @@ describe("OrganizationsPage ordering-block limits", () => {
     const patch = await patchSentFor(calls, 2)
     expect(patch).not.toHaveProperty("unpaidInvoiceBlockThreshold")
     expect(patch).not.toHaveProperty("unacknowledgedDeliveryBlockThreshold")
+  })
+})
+
+// plans/OF-APPROVAL-LEVELS-organization-approval-levels.md
+describe("OrganizationsPage order approval levels", () => {
+  const TOGGLE = "Order approval levels"
+
+  function nameTheCompany() {
+    fireEvent.change(screen.getByLabelText("Company name"), { target: { value: "Acme Inc." } })
+    fireEvent.change(screen.getByLabelText("Code"), { target: { value: "ACME" } })
+  }
+
+  /** Opens the confirmation, hands it to `inspect` before it is answered, then confirms. */
+  async function confirmCreate(inspect: (confirm: HTMLElement) => void = () => undefined) {
+    fireEvent.click(screen.getByRole("button", { name: "Save Company" }))
+    const confirm = await screen.findByRole("alertdialog")
+    inspect(confirm)
+    await act(async () => {
+      fireEvent.click(within(confirm).getByRole("button", { name: "Create Company" }))
+    })
+  }
+
+  async function openEdit(index: number) {
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[index])
+    const dialog = await screen.findByRole("dialog", { name: "Edit Company" })
+    const save = within(dialog).getByRole("button", { name: "Save Changes" }) as HTMLButtonElement
+    return { dialog, save }
+  }
+
+  const putsTo = (calls: ReturnType<typeof stubOrganizationApi>, id: number) =>
+    calls.filter((call) => call.url === `/api/v1/organizations/${id}/approval-levels` && call.method === "PUT")
+
+  it("is off by default in Create Company and is sent as off", async () => {
+    const calls = stubOrganizationApi()
+    render(<OrganizationsPage />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Company" }))
+    expect(screen.getByRole("switch", { name: TOGGLE }).getAttribute("data-state")).toBe("unchecked")
+    expect(screen.queryByLabelText("Level 1 approver")).toBeNull()
+
+    nameTheCompany()
+    await confirmCreate()
+
+    await waitFor(() => expect(calls.some((call) => call.url === "/api/v1/organizations")).toBe(true))
+    const created = calls.find((call) => call.url === "/api/v1/organizations")!
+    expect(created.body.orderApprovalLevels).toEqual({ enabled: false })
+  })
+
+  it("Create Company shows Level 1 when switched on, adds levels, refuses a level no lower than the one before, and sends cents", async () => {
+    const calls = stubOrganizationApi()
+    render(<OrganizationsPage />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Company" }))
+    nameTheCompany()
+    fireEvent.click(screen.getByRole("switch", { name: TOGGLE }))
+    const save = screen.getByRole("button", { name: "Save Company" }) as HTMLButtonElement
+
+    // Level 1 is there at once; Save waits for its amount.
+    expect(screen.getByLabelText("Level 1 approver")).toBeTruthy()
+    expect(save.disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText("Level 1 approver"), { target: { value: "80,000" } })
+    expect(save.disabled).toBe(false)
+
+    fireEvent.click(screen.getByRole("button", { name: /add approver level/i }))
+    expect(save.disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText("Level 2 approver"), { target: { value: "80000" } })
+    expect(screen.getByText("Level 2's amount must be lower than Level 1's (PKR 80,000.00).")).toBeTruthy()
+    expect(save.disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText("Level 2 approver"), { target: { value: "40000.50" } })
+    expect(save.disabled).toBe(false)
+
+    await confirmCreate((confirm) => {
+      expect(within(confirm).getByText(/It will have 2 order approval levels\./)).toBeTruthy()
+    })
+
+    await waitFor(() => expect(calls.some((call) => call.url === "/api/v1/organizations")).toBe(true))
+    const created = calls.find((call) => call.url === "/api/v1/organizations")!
+    expect(created.body.orderApprovalLevels).toEqual({
+      enabled: true,
+      levels: [{ maxAmountCents: 8_000_000 }, { maxAmountCents: 4_000_050 }],
+    })
+  })
+
+  it("Edit Company prefills the stored levels and sends a change", async () => {
+    const calls = stubOrganizationApi({
+      approvalLevels: {
+        status: 200,
+        body: { enabled: true, levels: [{ level: 1, maxAmountCents: 8_000_000 }, { level: 2, maxAmountCents: 4_000_000 }] },
+      },
+    })
+    render(<OrganizationsPage />)
+
+    const { dialog, save } = await openEdit(0)
+    await waitFor(() => expect(save.disabled).toBe(false))
+    expect(within(dialog).getByRole("switch", { name: TOGGLE }).getAttribute("data-state")).toBe("checked")
+    expect((within(dialog).getByLabelText("Level 1 approver") as HTMLInputElement).value).toBe("80000")
+    expect((within(dialog).getByLabelText("Level 2 approver") as HTMLInputElement).value).toBe("40000")
+
+    fireEvent.click(within(dialog).getByRole("button", { name: /add approver level/i }))
+    fireEvent.change(within(dialog).getByLabelText("Level 3 approver"), { target: { value: "15000" } })
+    await act(async () => {
+      fireEvent.click(save)
+    })
+
+    await waitFor(() => expect(putsTo(calls, 1)).toHaveLength(1))
+    expect(putsTo(calls, 1)[0].body).toEqual({
+      enabled: true,
+      levels: [{ maxAmountCents: 8_000_000 }, { maxAmountCents: 4_000_000 }, { maxAmountCents: 1_500_000 }],
+    })
+  })
+
+  it("Edit Company switching off sends no levels, so the stored ones are kept", async () => {
+    const calls = stubOrganizationApi({
+      approvalLevels: { status: 200, body: { enabled: true, levels: [{ level: 1, maxAmountCents: 4_000_000 }] } },
+    })
+    render(<OrganizationsPage />)
+
+    const { dialog, save } = await openEdit(0)
+    await waitFor(() => expect(save.disabled).toBe(false))
+    fireEvent.click(within(dialog).getByRole("switch", { name: TOGGLE }))
+    await act(async () => {
+      fireEvent.click(save)
+    })
+
+    await waitFor(() => expect(putsTo(calls, 1)).toHaveLength(1))
+    expect(putsTo(calls, 1)[0].body).toEqual({ enabled: false })
+  })
+
+  it("Edit Company leaves the levels alone when they cannot be loaded, and says so", async () => {
+    const calls = stubOrganizationApi({ approvalLevels: { status: 500, body: { error: "boom" } } })
+    render(<OrganizationsPage />)
+
+    const { dialog, save } = await openEdit(0)
+    expect(await within(dialog).findByText(/Order approval levels could not be loaded/)).toBeTruthy()
+    expect(within(dialog).queryByRole("switch", { name: TOGGLE })).toBeNull()
+    await waitFor(() => expect(save.disabled).toBe(false))
+    await act(async () => {
+      fireEvent.click(save)
+    })
+
+    await waitFor(() => {
+      expect(calls.some((call) => call.url === "/api/v1/organizations/1" && call.method === "PATCH")).toBe(true)
+    })
+    expect(putsTo(calls, 1)).toHaveLength(0)
+  })
+
+  it("a Head Office user neither sees, reads nor sends the levels", async () => {
+    mocks.role = "HEAD_OFFICE"
+    const calls = stubOrganizationApi()
+    render(<OrganizationsPage />)
+
+    const { dialog, save } = await openEdit(0)
+    expect(within(dialog).queryByRole("switch", { name: TOGGLE })).toBeNull()
+    await waitFor(() => expect(save.disabled).toBe(false))
+    await act(async () => {
+      fireEvent.click(save)
+    })
+
+    await waitFor(() => {
+      expect(calls.some((call) => call.url === "/api/v1/organizations/1" && call.method === "PATCH")).toBe(true)
+    })
+    expect(calls.some((call) => call.url.endsWith("/approval-levels"))).toBe(false)
   })
 })

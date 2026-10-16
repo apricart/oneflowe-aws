@@ -1,3 +1,4 @@
+import { approverLevelOf } from "@/lib/consolidated-invoice"
 import { getOrderDerivedStatus } from "@/lib/order-status"
 import { getOrderStatusDisplay } from "@/lib/order-status-display"
 
@@ -17,6 +18,8 @@ export type OrderReportExportColumnKey =
   | "initiator"
   | "initiatedDate"
   | "approver"
+  | "approvalLevel"
+  | "approverDesignation"
   | "approvedDate"
   | "deliveredDate"
   | "fulfiller"
@@ -49,6 +52,8 @@ export const ORDER_REPORT_EXPORT_COLUMNS: readonly OrderReportExportColumn[] = [
   { key: "initiator", label: "Initiator" },
   { key: "initiatedDate", label: "Initiated Date" },
   { key: "approver", label: "Approver" },
+  { key: "approvalLevel", label: "Approval Level" },
+  { key: "approverDesignation", label: "Approver Designation" },
   { key: "approvedDate", label: "Approved Date" },
   { key: "deliveredDate", label: "Delivered Date" },
   { key: "fulfiller", label: "Fulfiller" },
@@ -82,6 +87,9 @@ export interface OrderReportExportRecord {
   paymentStatus?: string | null
   userName?: string | null
   approverName?: string | null
+  approverDesignation?: string | null
+  /** The band the order was decided at (1 = highest), null when unlevelled. */
+  approvalLevel?: number | null
   fulfillerName?: string | null
   createdAt?: ReportDate
   approvedAt?: ReportDate
@@ -170,6 +178,10 @@ export function resolveOrderReportExportValue(
       return toDate(order.createdAt)
     case "approver":
       return toText(order.approverName)
+    case "approvalLevel":
+      return approverLevelOf(order.approvalLevel).approverLevel
+    case "approverDesignation":
+      return toText(order.approverDesignation)
     case "approvedDate":
       return toDate(order.approvedAt)
     case "deliveredDate":

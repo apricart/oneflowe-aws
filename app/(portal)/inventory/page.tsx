@@ -1,4 +1,5 @@
 "use client"
+import { viewerAccessFor } from "@/lib/viewer-access"
 import { useSession } from "next-auth/react"
 import dynamic from "next/dynamic"
 
@@ -7,7 +8,9 @@ const HeadOfficeInventoryView = dynamic(() => import("@/components/head-office/o
 
 export default function InventoryPage() {
   const { data: session } = useSession()
-  const userRole = (session?.user as any)?.role
+  // An organization-wide Viewer reads Head Office's catalogue view, which
+  // changes nothing.
+  const { viewRole: userRole } = viewerAccessFor(session?.user)
 
   if (!session) {
     return (

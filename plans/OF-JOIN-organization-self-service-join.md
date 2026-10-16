@@ -44,8 +44,9 @@ wide selects that many existing clients depend on is a bigger and riskier change
 than adding a table.
 
 So the code lives in **`organization_join_codes`**, one row per organization,
-reachable only through `GET/PUT/DELETE /api/v1/organizations/join-code`, which
-admits Head Office alone. `organizations` is not touched.
+reachable only through `GET/PUT /api/v1/organizations/join-code`, which admits
+Head Office alone. PUT inserts a manually entered code only when no row exists;
+there is no replace or delete operation. `organizations` is not touched.
 
 The code is stored in plaintext because the flow requires both directions: an
 anonymous caller looks an organization up *by* code, and Head Office has to be
@@ -124,7 +125,14 @@ Three oracles, closed:
   generic message and no organization detail.
 * **Whether an email or username is already registered.** The submit endpoint
   answers a conflict on email, username, phone, employee number or a duplicate
-  pending request with one message that names no field. The public surface
+  pending request with one constant message per form that never singles out
+  the field: it lists every field that form checks (email, username, mobile,
+  employee number — the department sign-up omits username, which it never
+  asks for) and why each can clash, so the applicant knows what to check
+  without learning which one clashed (revised 2026-10-16; the earlier text
+  named nothing and left applicants guessing). The department sign-up does not
+  refuse on its derived username at all — the review flags it and Head Office
+  picks another before approving. The public surface
   deliberately has **no** username-availability endpoint; the authenticated
   `/api/v1/users/check-username` stays authenticated.
 * **How often either may be tried.** Both public endpoints are rate-limited on
@@ -166,7 +174,7 @@ Additive only; rollback is two `DROP TABLE`s.
 ### Server logic — `lib/server/organization-join.ts`
 
 `resolveOrganizationByJoinCode`, `loadJoinFormOptions`, `readJoinCode`,
-`setJoinCode` (generates when none is supplied), `clearJoinCode`,
+`setJoinCode` (requires a manually supplied code and inserts it once),
 `createJoinRequest`, `listJoinRequests`, `decideJoinRequest`. Approval runs in
 one transaction: re-read the request `FOR UPDATE`, re-validate the scope, insert
 the user, write the group/branch assignments through
@@ -178,7 +186,7 @@ the user, write the group/branch assignments through
 |---|---|---|
 | `/api/v1/join/lookup` | POST | anonymous, rate-limited |
 | `/api/v1/join/requests` | POST | anonymous, rate-limited |
-| `/api/v1/organizations/join-code` | GET / PUT / DELETE | HEAD_OFFICE, own organization |
+| `/api/v1/organizations/join-code` | GET / PUT | HEAD_OFFICE, own organization |
 | `/api/v1/join-requests` | GET | HEAD_OFFICE, own organization |
 | `/api/v1/join-requests/[id]` | PATCH | HEAD_OFFICE, own organization |
 
@@ -260,9 +268,9 @@ row. Separately, the submit route no longer reaches for `next/headers` — the
 * **XSS.** React escapes every applicant-supplied field the queue and the dialog
   render; no `dangerouslySetInnerHTML`; the decision email escapes each
   interpolation and takes its only URL from `NEXTAUTH_URL`.
-* **Secrets.** The generated code comes from `node:crypto` `randomInt`, never
-  `Math.random`. The code never reaches the audit trail, and no password or hash
-  reaches a log, a mail, or any read.
+* **Secrets.** Head Office chooses the code manually. It is accepted only once,
+  can never be replaced or removed through the application, and never reaches
+  the audit trail. No password or hash reaches a log, a mail, or any read.
 * **Over-exposure.** `listJoinRequests` selects explicit columns and omits
   `password_hash`, `submitted_ip` and `submitted_user_agent`. The lookup returns
   `{id, name}` only.

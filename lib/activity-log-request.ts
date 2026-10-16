@@ -2,6 +2,7 @@ import { z } from "zod"
 
 import {
   ACTIVITY_ACTION_MAX_LENGTH,
+  ACTIVITY_ACTOR_ROLES,
   ACTIVITY_CATEGORIES,
   ACTIVITY_OPERATIONS,
   ACTIVITY_PAGE_SIZE_DEFAULT,
@@ -72,6 +73,7 @@ export const activityLogQuerySchema = z
     organizationId: z.coerce.number().int().positive().optional(),
     branchId: z.coerce.number().int().positive().optional(),
     actorId: trimmedString(128).optional(),
+    actorRole: z.enum(ACTIVITY_ACTOR_ROLES).optional(),
     // Only ever the two literals, so a typo cannot silently mean "all".
     outcome: z.enum(["success", "failure"]).optional(),
     search: trimmedString(ACTIVITY_SEARCH_MAX_LENGTH).optional(),
@@ -139,6 +141,7 @@ export function parseActivityLogRequest(
       organizationId: query.organizationId ?? null,
       branchId: query.branchId ?? null,
       actorId: query.actorId ?? null,
+      actorRole: query.actorRole ?? null,
       success: outcome,
       search: query.search ?? null,
     },

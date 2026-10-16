@@ -479,11 +479,13 @@ describe.skipIf(!hasTestDatabase)("the read-only Viewer role through its real AP
 
       expect(response.status).toBe(201)
       const [created] = await db
-        .select({ id: users.id, branchId: users.branchId })
+        .select({ id: users.id, branchId: users.branchId, username: users.username })
         .from(users)
-        .where(eq(users.username, `new-viewer-${fixtures.suffix}`))
+        .where(eq(users.email, `new-viewer-${fixtures.suffix}@example.test`))
         .limit(1)
       expect(created.branchId).toBeNull()
+      // Created under the organization's prefix (plans/OF-USERS-organization-username-prefix.md).
+      expect(created.username).toMatch(new RegExp(`^[a-z0-9]{1,3}-new-viewer-${fixtures.suffix}$`))
       fixtures.createdUserIds.push(created.id)
     })
 

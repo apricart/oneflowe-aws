@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { globalProducts,categories,organizationInventory,auditLogs } from "@/db/schema"
-import { eq,and,ilike,or,desc,sql,inArray,isNull,ne,type SQL } from "drizzle-orm"
+import { eq,and,ilike,or,desc,sql,inArray,isNull,type SQL } from "drizzle-orm"
 import { alias } from "drizzle-orm/pg-core"
 import { cascadeGlobalProductStatusChange,cascadeGlobalProductFieldUpdate } from "@/lib/inventory-cascade"
 import { escapeLikePattern } from "@/lib/utils"
@@ -15,6 +15,7 @@ import {
 } from "@/lib/server/mutation-validation"
 import { parseQuantity,sanitizeQuantityStep,validateProductQuantity } from "@/lib/quantity"
 import { isHistoricalOnlyProduct, taxRatePercentToBp } from "@/lib/tax"
+import { assignGlobalProductCodeInTx } from "@/lib/server/global-product-code"
 
 async function getProductImagesResponse(searchParams: URLSearchParams) {
   if (searchParams.get("imagesOnly") !== "true") return null
@@ -301,7 +302,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
     }
     const {
-      productCode,
       name,
       description,
       categoryId,
@@ -321,23 +321,8 @@ export async function POST(req: NextRequest) {
       discountActive,
     } = parsedBody.data
 
-    if (!productCode || !name || !basePrice) {
-      return NextResponse.json({ error: "Product code, name, and base price are required" }, { status: 400 })
-    }
-
-    // Check if product code already exists (excluding soft-deleted products)
-    const existingProduct = await db.select()
-      .from(globalProducts)
-      .where(
-        and(
-          eq(globalProducts.productCode, productCode),
-          isNull(globalProducts.deletedAt)
-        )
-      )
-      .limit(1)
-
-    if (existingProduct.length > 0) {
-      return NextResponse.json({ error: "Product code already exists" }, { status: 400 })
+    if (!name || !basePrice) {
+      return NextResponse.json({ error: "Name and base price are required" }, { status: 400 })
     }
 
     const decimalEnabled = Boolean(allowDecimalQuantity)
@@ -354,30 +339,43 @@ export async function POST(req: NextRequest) {
 
     const normalizedStockQuantity = Math.max(0, parseQuantity(stockQuantity ?? 0) || 0)
 
-    const [newProduct] = await db.insert(globalProducts)
-      .values({
-        productCode,
-        name,
-        description: description || null,
-        categoryId: categoryId ?? null,
-        imageUrl: imageUrl || null,
-        basePrice: Math.round(basePrice * 100), // Convert to cents
-        // Null leaves the product following its organization's rate, which is
-        // what the great majority of the catalogue does.
-        taxRateBp: taxRatePercent == null ? null : taxRatePercentToBp(taxRatePercent),
-        unit: unit || "unit",
-        status,
-        stockQuantity: normalizedStockQuantity,
-        allowDecimalQuantity: decimalEnabled,
-        quantityStep: normalizedQuantityStep,
-        metadata,
-        discountType: discountType || null,
-        discountValue: discountValue ?? null,
-        discountStartAt: discountStartAt ? new Date(discountStartAt) : null,
-        discountEndAt: discountEndAt ? new Date(discountEndAt) : null,
-        discountActive: !!discountActive,
-      })
-      .returning()
+    // The code is the server's to assign; drawing it and inserting the row in
+    // one transaction keeps two concurrent creates from taking the same one.
+    const newProduct = await db.transaction(async (tx) => {
+      const productCode = await assignGlobalProductCodeInTx(tx)
+      if (!productCode) return null
+
+      const [product] = await tx.insert(globalProducts)
+        .values({
+          productCode,
+          name,
+          description: description || null,
+          categoryId: categoryId ?? null,
+          imageUrl: imageUrl || null,
+          basePrice: Math.round(basePrice * 100), // Convert to cents
+          // Null leaves the product following its organization's rate, which is
+          // what the great majority of the catalogue does.
+          taxRateBp: taxRatePercent == null ? null : taxRatePercentToBp(taxRatePercent),
+          unit: unit || "unit",
+          status,
+          stockQuantity: normalizedStockQuantity,
+          allowDecimalQuantity: decimalEnabled,
+          quantityStep: normalizedQuantityStep,
+          metadata,
+          discountType: discountType || null,
+          discountValue: discountValue ?? null,
+          discountStartAt: discountStartAt ? new Date(discountStartAt) : null,
+          discountEndAt: discountEndAt ? new Date(discountEndAt) : null,
+          discountActive: !!discountActive,
+        })
+        .returning()
+      return product
+    })
+
+    if (!newProduct) {
+      return NextResponse.json({ error: "Unable to generate a unique product code" }, { status: 409 })
+    }
+    const { productCode } = newProduct
 
     // Log the creation
     await db.insert(auditLogs).values({
@@ -402,8 +400,7 @@ export async function POST(req: NextRequest) {
 }
 
 function applyBasicProductUpdates(updateData: Record<string, any>, input: Record<string, any>) {
-  const { productCode, name, description, categoryId, imageUrl, basePrice, taxRatePercent, unit, status, metadata } = input
-  if (productCode !== undefined) updateData.productCode = productCode
+  const { name, description, categoryId, imageUrl, basePrice, taxRatePercent, unit, status, metadata } = input
   if (name !== undefined) updateData.name = name
   if (description !== undefined) updateData.description = description
   if (categoryId !== undefined) updateData.categoryId = categoryId
@@ -600,7 +597,6 @@ export async function PUT(req: NextRequest) {
     }
     const {
       id,
-      productCode,
       name,
       description,
       categoryId,
@@ -625,26 +621,6 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: "Product ID is required" }, { status: 400 })
     }
 
-    const productId = id
-
-    // Check if product code already exists for another product (excluding soft-deleted)
-    if (productCode) {
-      const [existingProductWithCode] = await db.select()
-        .from(globalProducts)
-        .where(
-          and(
-            eq(globalProducts.productCode, productCode.toString().trim()),
-            ne(globalProducts.id, productId),
-            isNull(globalProducts.deletedAt)
-          )
-        )
-        .limit(1)
-
-      if (existingProductWithCode) {
-        return NextResponse.json({ error: "Product code already exists" }, { status: 400 })
-      }
-    }
-
     // Check if product exists and get current status
     const [existingProduct] = await db.select({
       id: globalProducts.id,
@@ -667,7 +643,7 @@ export async function PUT(req: NextRequest) {
     }
 
     const productInput = {
-      productCode, name, description, categoryId, imageUrl, basePrice, taxRatePercent, unit, status,
+      name, description, categoryId, imageUrl, basePrice, taxRatePercent, unit, status,
       stockQuantity, allowDecimalQuantity, quantityStep, metadata, discountType,
       discountValue, discountStartAt, discountEndAt, discountActive,
       confirmTaxInclusivePrice,

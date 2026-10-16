@@ -70,7 +70,7 @@ describe("group user decision surface", () => {
     // Reading a single order is how the approver opens the detail drawer, so
     // the role is on the GET allowlist only. The requester role joined this
     // list for its own read-only tab; neither is on any write allowlist below.
-    expect(detail).toContain('requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "GROUP_ORDER_PORTAL", "ORDER_PORTAL"])')
+    expect(detail).toContain('requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "GROUP_ORDER_PORTAL", "ORDER_PORTAL"], { viewerReadsAsHeadOffice: true })')
     // Editing stays with the two requester roles and deletion with the Super
     // Admin; neither list may quietly pick up a deciding role.
     expect(detail).toContain('requireApiRole(["ORDER_PORTAL", "GROUP_ORDER_PORTAL"])')
@@ -88,7 +88,7 @@ describe("group user decision surface", () => {
     // predicate names the mechanism rather than one role, so the approver and
     // the requester cannot drift apart.
     expect(detail).toContain("if (!usesMultiBranchScope(role)) {")
-    expect(detail).toContain("return verifyResourceAccess(order.organizationId, order.branchId)")
+    expect(detail).toContain("return verifyResourceAccess(order.organizationId, order.branchId, options)")
     // The approver is checked against its resolved assignments, tenant first.
     expect(detail).toContain("if (!scope.organizationId || scope.organizationId !== order.organizationId) return false")
     expect(detail).toContain("canUseScopedBranch(userId, order.branchId)")

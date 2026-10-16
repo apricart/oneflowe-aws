@@ -391,6 +391,7 @@ export async function PATCH(
       organizationId: users.organizationId,
       branchId: users.branchId,
       budgetAllocationEnabled: users.budgetAllocationEnabled,
+      orderApprovalLevel: users.orderApprovalLevel,
       sessionVersion: users.sessionVersion,
     })
     .from(users)
@@ -420,6 +421,12 @@ export async function PATCH(
   // Decided inside the write transaction below, not here — see
   // `getRoleChangeBlock`. Nothing reads it at this point.
   const roleChangeRequested = roleChangeRequiresSettledOrders(targetRole, nextRole)
+
+  // An approval level belongs to one role in one organization; it is cleared
+  // when either changes, so it cannot quietly come back if the user is moved
+  // back later (plans/OF-APPROVAL-LEVELS-assign-users-to-levels.md).
+  const clearsApprovalLevel = target.orderApprovalLevel !== null
+    && (nextRole !== targetRole || nextOrganizationId !== target.organizationId)
 
   const scopeResolution = await resolveNextScope({
     targetUserId,
@@ -461,6 +468,7 @@ export async function PATCH(
         isActive: input.isActive,
         mfaEnabled: input.mfaEnabled,
         budgetAllocationEnabled: nextBudgetAllocationEnabled,
+        orderApprovalLevel: clearsApprovalLevel ? null : undefined,
         sessionVersion: target.sessionVersion + 1,
         updatedAt: new Date(),
       })
@@ -496,6 +504,7 @@ export async function PATCH(
         nextBranchId,
         previousBudgetAllocationEnabled: target.budgetAllocationEnabled,
         nextBudgetAllocationEnabled,
+        ...(clearsApprovalLevel ? { previousOrderApprovalLevel: target.orderApprovalLevel, nextOrderApprovalLevel: null } : {}),
       },
       success: true,
     })

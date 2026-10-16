@@ -18,11 +18,18 @@ import {
   ACTIVITY_OPERATIONS,
   ACTIVITY_SEARCH_MAX_LENGTH,
   ACTIVITY_SOURCES,
+  type ActivityActorRole,
   type ActivityCategory,
   type ActivityOperation,
   type ActivitySource,
 } from "@/lib/activity-log"
-import { OPERATION_LABEL, WINDOW_PRESETS, type WindowPresetId } from "@/lib/activity-log-view"
+import {
+  ACTOR_ROLE_LABEL,
+  OPERATION_LABEL,
+  WINDOW_PRESETS,
+  actorRoleOptions,
+  type WindowPresetId,
+} from "@/lib/activity-log-view"
 
 /**
  * The filter bar.
@@ -40,6 +47,7 @@ export type ActivityFilterState = {
   source: ActivitySource | "all"
   operation: ActivityOperation | "all"
   category: ActivityCategory | "all"
+  role: ActivityActorRole | "all"
   outcome: "all" | "success" | "failure"
   search: string
 }
@@ -51,6 +59,7 @@ export const EMPTY_FILTERS: ActivityFilterState = {
   source: "all",
   operation: "all",
   category: "all",
+  role: "all",
   outcome: "all",
   search: "",
 }
@@ -71,6 +80,9 @@ export function activeFilterChips(
     chips.push({ key: "operation", label: `Operation: ${OPERATION_LABEL[filters.operation]}` })
   }
   if (filters.category !== "all") chips.push({ key: "category", label: `Area: ${filters.category}` })
+  if (filters.role !== "all") {
+    chips.push({ key: "role", label: `Role: ${ACTOR_ROLE_LABEL[filters.role]}` })
+  }
   if (filters.outcome !== "all") chips.push({ key: "outcome", label: `Outcome: ${filters.outcome}` })
   if (filters.search.trim().length > 0) chips.push({ key: "search", label: `Search: ${filters.search.trim()}` })
   return chips
@@ -80,9 +92,11 @@ type Props = Readonly<{
   filters: ActivityFilterState
   onChange: (next: ActivityFilterState) => void
   disabled?: boolean
+  /** Which role options to offer. Presentation only — the endpoint fences the rows. */
+  platformWide?: boolean
 }>
 
-export function ActivityLogFilters({ filters, onChange, disabled }: Props) {
+export function ActivityLogFilters({ filters, onChange, disabled, platformWide = false }: Props) {
   const set = <K extends keyof ActivityFilterState>(key: K, value: ActivityFilterState[K]) =>
     onChange({ ...filters, [key]: value })
 
@@ -207,6 +221,29 @@ export function ActivityLogFilters({ filters, onChange, disabled }: Props) {
               {ACTIVITY_CATEGORIES.map((category) => (
                 <SelectItem key={category} value={category} className="capitalize">
                   {category}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="activity-role" className="text-xs font-semibold">
+            Role
+          </Label>
+          <Select
+            value={filters.role}
+            onValueChange={(value) => set("role", value as ActivityActorRole | "all")}
+            disabled={disabled}
+          >
+            <SelectTrigger id="activity-role" className="h-9">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All roles</SelectItem>
+              {actorRoleOptions(platformWide).map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
                 </SelectItem>
               ))}
             </SelectContent>

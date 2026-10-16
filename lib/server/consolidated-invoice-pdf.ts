@@ -123,13 +123,14 @@ function drawHeaderCards(doc: jsPDF, input: ConsolidatedInvoicePdfInput): number
 }
 
 const COLUMN_TITLES = [
-  "S. No", "Invoice No", "Invoice Date", "Order ID", "Order Status", "Department", "Approver",
+  "S. No", "Invoice No", "Invoice Date", "Order ID", "Order Status", "Department", "Approver", "Approver Level",
   "Designation", "CRC", "Items (Qty)", "Value Excl. Sales Tax", "Sales Tax %", "Sales Tax Amount", "Total Amount",
 ]
 
 /** Column widths in mm across the 273 mm of a landscape page inside its margins. */
-const COLUMN_WIDTHS = [11, 25, 20, 15, 18, 28, 28, 20, 15, 15, 23, 15, 18, 22]
-const NUMERIC_COLUMNS = new Set([9, 10, 11, 12, 13])
+const COLUMN_WIDTHS = [11, 23, 18, 14, 18, 26, 26, 14, 18, 14, 13, 23, 13, 18, 24]
+const NUMERIC_COLUMNS = new Set([10, 11, 12, 13, 14])
+const CENTERED_COLUMNS = new Set([0, 3, 7])
 
 export function renderConsolidatedInvoicePdf(input: ConsolidatedInvoicePdfInput): ArrayBuffer {
   const doc = new jsPDF({ unit: "mm", format: "a4", orientation: "landscape" })
@@ -140,7 +141,7 @@ export function renderConsolidatedInvoicePdf(input: ConsolidatedInvoicePdfInput)
 
   const columnStyles = Object.fromEntries(COLUMN_WIDTHS.map((width, index) => [index, {
     cellWidth: width,
-    halign: NUMERIC_COLUMNS.has(index) ? "right" : index === 0 || index === 3 ? "center" : "left",
+    halign: NUMERIC_COLUMNS.has(index) ? "right" : CENTERED_COLUMNS.has(index) ? "center" : "left",
   }]))
 
   autoTable(doc, {
@@ -158,7 +159,7 @@ export function renderConsolidatedInvoicePdf(input: ConsolidatedInvoicePdfInput)
       [
         { content: "", styles: { fillColor: COLORS.white, lineWidth: 0 } },
         { content: "Apricart Details", colSpan: 2, styles: { fillColor: COLORS.gold } },
-        { content: `${input.billTo.name} Details`, colSpan: 11, styles: { fillColor: COLORS.navy } },
+        { content: `${input.billTo.name} Details`, colSpan: 12, styles: { fillColor: COLORS.navy } },
       ],
       COLUMN_TITLES,
     ],
@@ -170,6 +171,7 @@ export function renderConsolidatedInvoicePdf(input: ConsolidatedInvoicePdfInput)
       row.orderStatus,
       row.department,
       row.approver,
+      row.approverLevel,
       row.designation,
       row.crc,
       formatReportQuantity(row.quantity),
@@ -179,7 +181,7 @@ export function renderConsolidatedInvoicePdf(input: ConsolidatedInvoicePdfInput)
       formatReportMoney(row.totalCents),
     ]),
     foot: [[
-      { content: "Total", colSpan: 9, styles: { halign: "left" } },
+      { content: "Total", colSpan: 10, styles: { halign: "left" } },
       { content: formatReportQuantity(input.totals.quantity), styles: { halign: "right" } },
       { content: formatReportMoney(input.totals.valueExclTaxCents), styles: { halign: "right" } },
       { content: "", styles: { halign: "right" } },

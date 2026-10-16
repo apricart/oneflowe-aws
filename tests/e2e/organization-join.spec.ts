@@ -58,7 +58,7 @@ test.describe.serial("joining an organization", () => {
     await openFromSidebar(page, "Join Requests")
     await expect(page.getByRole("heading", { name: "Join Requests" })).toBeVisible({ timeout: 150_000 })
 
-    await page.getByLabel("Or set your own code").fill(JOIN_CODE)
+    await page.getByLabel("Set your organization join code").fill(JOIN_CODE)
     await page.getByRole("button", { name: "Save code" }).click()
     await expect.poll(async () => (await queryTestDb<{ code: string }>(
       testDatabaseUrl(),

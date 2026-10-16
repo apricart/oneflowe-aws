@@ -2,10 +2,11 @@
  * The warehouse's read-only product catalogue: the query string, parsed and
  * bounded, and how a product's category is labelled. Pure.
  *
- * It is Apricart's global catalogue — what Super Admin sees under Global
- * Products — without a single price: the reads never select one, so there is
- * nothing in the payload to hide. See
- * plans/OF-WAREHOUSE-read-only-product-catalog.md.
+ * It is what Super Admin sees under Product Catalog, read-only: the global
+ * catalogue with its base price, and — for the organizations whose branches the
+ * warehouse serves — their products, group products, price history and product
+ * requests. See plans/OF-WAREHOUSE-full-read-only-catalog.md, which reverses the
+ * no-price rule of plans/OF-WAREHOUSE-read-only-product-catalog.md.
  */
 
 export const WAREHOUSE_CATALOG_STATUSES = ["active", "inactive", "all"] as const
@@ -133,4 +134,114 @@ export function buildWarehouseCatalogCategories(
   return [...byId.values()]
     .map((category) => ({ ...category, subcategories: [...category.subcategories].sort(byName) }))
     .sort(byName)
+}
+
+// ---------------------------------------------------------------------------
+// The rest of the read-only catalogue: the same menus Super Admin has
+// (plans/OF-WAREHOUSE-full-read-only-catalog.md). Every parser refuses an
+// unknown key and bounds every list.
+// ---------------------------------------------------------------------------
+
+/** Most taxonomy rows one Categories or Subcategories view reads. */
+export const WAREHOUSE_TAXONOMY_ROW_MAX = 500
+export const WAREHOUSE_TENANT_PAGE_SIZE_DEFAULT = 50
+export const WAREHOUSE_TENANT_PAGE_SIZE_MAX = 200
+export const WAREHOUSE_PRODUCT_REQUEST_STATUSES = ["PENDING", "UNDER_REVIEW", "APPROVED", "REJECTED"] as const
+
+type Parsed<T> = { ok: true; value: T } | { ok: false; error: string }
+
+function unknownKey(params: URLSearchParams, allowed: readonly string[]): string | null {
+  return [...params.keys()].find((key) => !allowed.includes(key)) ?? null
+}
+
+function searchOf(params: URLSearchParams): string | { error: string } {
+  const search = (params.get("q") ?? "").trim()
+  return search.length > WAREHOUSE_CATALOG_SEARCH_MAX_LENGTH
+    ? { error: `q must be at most ${WAREHOUSE_CATALOG_SEARCH_MAX_LENGTH} characters` }
+    : search
+}
+
+function paging(params: URLSearchParams): { page: number; limit: number } {
+  return {
+    page: boundedInt(params.get("page"), 1, WAREHOUSE_CATALOG_PAGE_MAX),
+    limit: boundedInt(params.get("limit"), WAREHOUSE_TENANT_PAGE_SIZE_DEFAULT, WAREHOUSE_TENANT_PAGE_SIZE_MAX),
+  }
+}
+
+export type WarehouseTaxonomyQuery = { search: string; categoryId: number | null }
+
+/** Categories (`categoryId` refused) or Subcategories (`categoryId` optional). */
+export function parseWarehouseTaxonomyQuery(params: URLSearchParams, level: "category" | "subcategory"): Parsed<WarehouseTaxonomyQuery> {
+  const key = unknownKey(params, level === "category" ? ["q"] : ["q", "categoryId"])
+  if (key) return { ok: false, error: `Unknown filter: ${key}` }
+  const search = searchOf(params)
+  if (typeof search !== "string") return { ok: false, error: search.error }
+  const categoryId = optionalId(params.get("categoryId"))
+  if (categoryId === "invalid") return { ok: false, error: "categoryId must be a positive integer" }
+  return { ok: true, value: { search, categoryId } }
+}
+
+export type WarehouseOrganizationProductsQuery = {
+  organizationId: number
+  search: string
+  status: WarehouseCatalogStatus
+  page: number
+  limit: number
+}
+
+export function parseWarehouseOrganizationProductsQuery(params: URLSearchParams): Parsed<WarehouseOrganizationProductsQuery> {
+  const key = unknownKey(params, ["organizationId", "q", "status", "page", "limit"])
+  if (key) return { ok: false, error: `Unknown filter: ${key}` }
+  const organizationId = optionalId(params.get("organizationId"))
+  if (organizationId === null || organizationId === "invalid") return { ok: false, error: "organizationId must be a positive integer" }
+  const search = searchOf(params)
+  if (typeof search !== "string") return { ok: false, error: search.error }
+  const status = (params.get("status") ?? "all").trim().toLowerCase()
+  if (!(WAREHOUSE_CATALOG_STATUSES as readonly string[]).includes(status)) {
+    return { ok: false, error: `status must be one of: ${WAREHOUSE_CATALOG_STATUSES.join(", ")}` }
+  }
+  return { ok: true, value: { organizationId, search, status: status as WarehouseCatalogStatus, ...paging(params) } }
+}
+
+export type WarehouseGroupProductsQuery = { organizationId: number; groupId: number | null; page: number; limit: number }
+
+/** `groupId` absent lists the organization's groups only. */
+export function parseWarehouseGroupProductsQuery(params: URLSearchParams): Parsed<WarehouseGroupProductsQuery> {
+  const key = unknownKey(params, ["organizationId", "groupId", "page", "limit"])
+  if (key) return { ok: false, error: `Unknown filter: ${key}` }
+  const organizationId = optionalId(params.get("organizationId"))
+  if (organizationId === null || organizationId === "invalid") return { ok: false, error: "organizationId must be a positive integer" }
+  const groupId = optionalId(params.get("groupId"))
+  if (groupId === "invalid") return { ok: false, error: "groupId must be a positive integer" }
+  return { ok: true, value: { organizationId, groupId, ...paging(params) } }
+}
+
+export type WarehouseProductRequestStatus = (typeof WAREHOUSE_PRODUCT_REQUEST_STATUSES)[number]
+export type WarehouseProductRequestsQuery = {
+  organizationId: number | null
+  status: WarehouseProductRequestStatus | null
+  page: number
+  limit: number
+}
+
+export function parseWarehouseProductRequestsQuery(params: URLSearchParams): Parsed<WarehouseProductRequestsQuery> {
+  const key = unknownKey(params, ["organizationId", "status", "page", "limit"])
+  if (key) return { ok: false, error: `Unknown filter: ${key}` }
+  const organizationId = optionalId(params.get("organizationId"))
+  if (organizationId === "invalid") return { ok: false, error: "organizationId must be a positive integer" }
+  const rawStatus = (params.get("status") ?? "").trim().toUpperCase()
+  if (rawStatus !== "" && !(WAREHOUSE_PRODUCT_REQUEST_STATUSES as readonly string[]).includes(rawStatus)) {
+    return { ok: false, error: `status must be one of: ${WAREHOUSE_PRODUCT_REQUEST_STATUSES.join(", ")}` }
+  }
+  return {
+    ok: true,
+    value: { organizationId, status: rawStatus === "" ? null : rawStatus as WarehouseProductRequestStatus, ...paging(params) },
+  }
+}
+
+/** The price-history filters the shared loader understands; anything else is refused. */
+export const WAREHOUSE_PRICE_HISTORY_KEYS = ["range", "organizationId", "groupId", "branchId", "productId"] as const
+
+export function warehousePriceHistoryUnknownKey(params: URLSearchParams): string | null {
+  return unknownKey(params, WAREHOUSE_PRICE_HISTORY_KEYS)
 }

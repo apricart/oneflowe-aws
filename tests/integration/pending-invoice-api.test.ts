@@ -3,7 +3,7 @@ import * as mockedNextAuth from "next-auth"
 import { eq, inArray } from "drizzle-orm"
 
 import * as pendingInvoiceRoute from "@/app/api/v1/orders/pending-invoice/route"
-import { invoices, orderItems, orders } from "@/db/schema"
+import { invoices, orderItems, orders, organizations } from "@/db/schema"
 import type { FulfillmentStatus } from "@/lib/fulfillment-status"
 import { closePool, db } from "@/lib/db"
 import { progressOrderFulfillment } from "@/lib/server/order-fulfillment-progress"
@@ -20,6 +20,9 @@ import { purgeInvoiceLedger } from "./helpers/invoice-ledger-cleanup"
  * The unit test mocks the database, so the one thing it cannot prove is the
  * query itself: that the status, payment and owner predicates together select
  * exactly the invoices `lib/pending-invoice.ts` calls pending, against Postgres.
+ * The notice is shown only for an organization that blocks ordering on unpaid
+ * invoices, so both fixture tenants switch that on and the last cases switch
+ * it off again.
  */
 vi.mock("next-auth", () => ({ getServerSession: vi.fn() }))
 vi.mock("@/lib/auth-options", () => ({ authOptions: {} }))
@@ -90,11 +93,21 @@ describe.skipIf(!hasTestDatabase)("GET /api/v1/orders/pending-invoice", () => {
     return row
   }
 
+  async function setUnpaidInvoiceBlock(organizationId: number, enabled: boolean) {
+    await db
+      .update(organizations)
+      .set({ blockOrderingOnUnpaidInvoices: enabled })
+      .where(eq(organizations.id, organizationId))
+  }
+
   beforeAll(async () => {
     f = await createGroupRoleFixtures()
+    await setUnpaidInvoiceBlock(f.organizationId, true)
+    await setUnpaidInvoiceBlock(f.foreignOrganizationId, true)
   })
 
   afterEach(async () => {
+    await setUnpaidInvoiceBlock(f.organizationId, true)
     if (seededOrderIds.length > 0) {
       const orderIds = seededOrderIds.splice(0)
       await purgeInvoiceLedger({ orderIds })
@@ -231,5 +244,28 @@ describe.skipIf(!hasTestDatabase)("GET /api/v1/orders/pending-invoice", () => {
     signIn(requester())
     const order = await seedInvoice({ createdByUserId: f.requesterId, status: "APPROVED", invoiceNumber: null })
     expect((await readStatus()).body.pendingInvoice.invoiceNumber).toBe(order.tid)
+  })
+
+  // plans/OF-ORDERS-pending-invoice-notice.md: an organization that does not
+  // block ordering on unpaid invoices is never shown the notice.
+  it("reports nothing when the organization does not block ordering on unpaid invoices", async () => {
+    signIn(requester())
+    await seedInvoice({ createdByUserId: f.requesterId, status: "FULFILLED", invoiceNumber: "INV-OFF" })
+    expect((await readStatus()).body.hasPendingInvoice).toBe(true)
+
+    await setUnpaidInvoiceBlock(f.organizationId, false)
+    expect(await readStatus()).toEqual({
+      status: 200,
+      body: { hasPendingInvoice: false, pendingInvoice: null },
+    })
+  })
+
+  it("reports a delivered, not yet acknowledged order only while the block is on", async () => {
+    signIn(requester())
+    await seedInvoice({ createdByUserId: f.requesterId, status: "APPROVED", fulfillmentStatus: "DELIVERED" })
+    await setUnpaidInvoiceBlock(f.organizationId, false)
+    expect((await readStatus()).body.hasPendingInvoice).toBe(false)
+    await setUnpaidInvoiceBlock(f.organizationId, true)
+    expect((await readStatus()).body.hasPendingInvoice).toBe(true)
   })
 })

@@ -12,7 +12,12 @@ import {
   isPasswordChangePendingApiPathAllowed,
   PASSWORD_CHANGE_REQUIRED_CODE,
 } from "@/lib/password-change-pending"
-import { isViewerRole, VIEWER_AREAS, VIEWER_HOME } from "@/lib/viewer-access"
+import {
+  isViewerApiRequestAllowed,
+  isViewerAreaAllowed,
+  isViewerRole,
+  VIEWER_HOME,
+} from "@/lib/viewer-access"
 import {
   DESK_TEAM_AREA,
   isOrderDeskApiRequestAllowed,
@@ -38,8 +43,15 @@ import {
   isWarehouseApiRequestAllowed,
   isWarehouseRole,
 } from "@/lib/warehouse-access"
+import {
+  HEAD_COUNT_REQUESTS_AREA,
+  HEAD_COUNT_REQUEST_READ_ROLES,
+} from "@/lib/branch-head-count-access"
 
 const protectedPrefixes = [
+  // The activity log was gated in ROLE_GATED_AREAS but missing here, so the
+  // gate never ran for it; the page and its endpoint check regardless.
+  "/activity",
   "/approvals",
   "/branches",
   "/branch-inventory",
@@ -57,6 +69,9 @@ const protectedPrefixes = [
   "/executive",
   "/group-portal",
   "/groups",
+  // Branch head count requests: raised by Branch Admin / Group User, decided by
+  // Head Office. Gated to those three in ROLE_GATED_AREAS below.
+  HEAD_COUNT_REQUESTS_AREA,
   "/inventory",
   "/invoices",
   "/join-requests",
@@ -235,6 +250,17 @@ async function handleApiRequest(req: NextRequest, pathname: string, response: Ne
       pathname,
     )
   }
+  // A Viewer changes nothing: it reads, and it may change its own password.
+  // Every write handler refuses the role on its own; this refuses the rest of
+  // the write API before any handler runs, so a handler that forgot to is not
+  // the only thing standing between a read-only account and a change.
+  if (isViewerRole((token as any)?.role) && !isViewerApiRequestAllowed(req.method, pathname)) {
+    logger("middleware", { reason: "viewer_write_not_allowed", path: pathname })
+    return withSecurityHeaders(
+      NextResponse.json({ error: "Forbidden: this account is view only" }, { status: 403 }),
+      pathname,
+    )
+  }
   // And for Apricart's warehouse, which also has no organization of its own:
   // its queue, its progress write and the challan upload, nothing else.
   if (isWarehouseRole((token as any)?.role) && !isWarehouseApiRequestAllowed(req.method, pathname)) {
@@ -269,6 +295,8 @@ const GROUP_USER_AREAS = [
   "/approvals",
   "/budgets",
   "/dashboard",
+  // It asks Head Office to set the head count of the branches assigned to it.
+  HEAD_COUNT_REQUESTS_AREA,
   "/orders",
   "/reports",
   "/settings",
@@ -348,20 +376,30 @@ function adminPortalRedirect(pathname: string): string | null {
 /**
  * Roles confined to one area of their own and no shared page at all.
  *
- *   * VIEWER — read-only: its dashboard, and not the invoice page or support.
- *     It drills into orders through an analytics endpoint rather than the
- *     orders directory, so it needs nothing else.
+ *   * VIEWER — read-only: Head Office's pages when organization-wide, its
+ *     dashboard alone when pinned to a branch (`isViewerAreaAllowed`). Every
+ *     endpoint behind them re-checks, and refuses it any write.
  *   * ORDER_DESK — Apricart's order entry: its workspace, and not the invoice
  *     or support pages, which are scoped to a tenant it does not belong to.
  *   * APRICART_EXECUTIVE — Apricart's management: the delivery dashboard and
  *     nothing else, for the same reason.
  *   * WAREHOUSE — Apricart's warehouse: its delivery queue, for the same reason.
  */
-const SINGLE_AREA_ROLES: ReadonlyArray<{ matches: (role: unknown) => boolean; areas: readonly string[]; home: string }> = [
-  { matches: isViewerRole, areas: VIEWER_AREAS, home: VIEWER_HOME },
-  { matches: isOrderDeskRole, areas: ORDER_DESK_AREAS, home: ORDER_DESK_HOME },
-  { matches: isApricartExecutiveRole, areas: APRICART_EXECUTIVE_AREAS, home: APRICART_EXECUTIVE_HOME },
-  { matches: isWarehouseRole, areas: WAREHOUSE_AREAS, home: WAREHOUSE_HOME },
+type TenantClaims = { organizationId: unknown; branchId: unknown }
+
+function withinAreas(areas: readonly string[]): (pathname: string) => boolean {
+  return (pathname) => areas.some((prefix) => pathMatchesPrefix(pathname, prefix))
+}
+
+const SINGLE_AREA_ROLES: ReadonlyArray<{
+  matches: (role: unknown) => boolean
+  allows: (pathname: string, tenant: TenantClaims) => boolean
+  home: string
+}> = [
+  { matches: isViewerRole, allows: isViewerAreaAllowed, home: VIEWER_HOME },
+  { matches: isOrderDeskRole, allows: withinAreas(ORDER_DESK_AREAS), home: ORDER_DESK_HOME },
+  { matches: isApricartExecutiveRole, allows: withinAreas(APRICART_EXECUTIVE_AREAS), home: APRICART_EXECUTIVE_HOME },
+  { matches: isWarehouseRole, allows: withinAreas(WAREHOUSE_AREAS), home: WAREHOUSE_HOME },
 ]
 
 /**
@@ -373,7 +411,12 @@ const SINGLE_AREA_ROLES: ReadonlyArray<{ matches: (role: unknown) => boolean; ar
  * ORDER_PORTAL -> /shop and the group roles -> /group-portal are mutually
  * exclusive: neither can reach the other's area or the admin shell.
  */
-function rolePortalRedirect(role: string | undefined, pathname: string, budgetAllocationEnabled = false): string | null {
+function rolePortalRedirect(
+  role: string | undefined,
+  pathname: string,
+  budgetAllocationEnabled = false,
+  tenant: TenantClaims = { organizationId: null, branchId: null },
+): string | null {
   if (pathname.startsWith("/change-password")) return null
 
   if (role === "ORDER_PORTAL") {
@@ -387,9 +430,7 @@ function rolePortalRedirect(role: string | undefined, pathname: string, budgetAl
   }
   const confined = SINGLE_AREA_ROLES.find((entry) => entry.matches(role))
   if (confined) {
-    return confined.areas.some((prefix) => pathMatchesPrefix(pathname, prefix))
-      ? null
-      : confined.home
+    return confined.allows(pathname, tenant) ? null : confined.home
   }
   if (role === "GROUP_ORDER_PORTAL") {
     // The requester keeps its own workspace and never reaches the admin shell,
@@ -436,9 +477,15 @@ function rolePortalRedirect(role: string | undefined, pathname: string, budgetAl
  */
 const ROLE_GATED_AREAS: ReadonlyArray<{ prefix: string; roles: readonly string[]; home: string }> = [
   { prefix: "/organizations", roles: ["SUPER_ADMIN"], home: "/login" },
-  { prefix: "/activity", roles: ACTIVITY_LOG_ROLES, home: "/dashboard" },
-  { prefix: "/branches", roles: ["HEAD_OFFICE"], home: "/dashboard" },
-  { prefix: "/join-requests", roles: ["HEAD_OFFICE"], home: "/dashboard" },
+  // VIEWER on the next four: an organization-wide Viewer reads Head Office's
+  // pages, and `rolePortalRedirect` has already sent a pinned one home.
+  { prefix: "/activity", roles: [...ACTIVITY_LOG_ROLES, "VIEWER"], home: "/dashboard" },
+  { prefix: "/branches", roles: ["HEAD_OFFICE", "VIEWER"], home: "/dashboard" },
+  { prefix: "/join-requests", roles: ["HEAD_OFFICE", "VIEWER"], home: "/dashboard" },
+  // Head count requests: the two requester roles and the Head Office that
+  // decides (lib/branch-head-count-access.ts). Both handlers re-check.
+  // VIEWER: an organization-wide one reads the queue as Head Office does.
+  { prefix: HEAD_COUNT_REQUESTS_AREA, roles: [...HEAD_COUNT_REQUEST_READ_ROLES, "VIEWER"], home: "/dashboard" },
   // Creating desk users and granting their reach is Super Admin's alone.
   { prefix: DESK_TEAM_AREA, roles: ORDER_DESK_MANAGER_ROLES, home: "/dashboard" },
   // The desk's own workspace; no other role has a reason to render it.
@@ -454,7 +501,7 @@ const ROLE_GATED_AREAS: ReadonlyArray<{ prefix: string; roles: readonly string[]
   { prefix: WAREHOUSE_TEAM_AREA, roles: WAREHOUSE_MANAGER_ROLES, home: "/dashboard" },
   // Inside /reports, which Branch Admin and Group User also reach; the report
   // is Super Admin's and Head Office's, and both its endpoints re-check.
-  { prefix: CONSOLIDATED_INVOICE_REPORT_AREA, roles: CONSOLIDATED_INVOICE_REPORT_ROLES, home: "/reports" },
+  { prefix: CONSOLIDATED_INVOICE_REPORT_AREA, roles: [...CONSOLIDATED_INVOICE_REPORT_ROLES, "VIEWER"], home: "/reports" },
 ]
 
 /** Where to send a caller whose role does not hold the area, or null. */
@@ -520,7 +567,10 @@ export async function proxy(req: NextRequest) {
   }
 
   // Role-based routing enforcement
-  const roleRedirect = rolePortalRedirect(role, pathname, (token as any).budgetAllocationEnabled === true)
+  const roleRedirect = rolePortalRedirect(role, pathname, (token as any).budgetAllocationEnabled === true, {
+    organizationId: (token as any).organizationId,
+    branchId: (token as any).branchId,
+  })
   if (roleRedirect) {
     const url = new URL(roleRedirect, req.url || "http://localhost")
     const redirectRes = NextResponse.redirect(url)

@@ -50,6 +50,7 @@ function requested(overrides: Partial<ActivityRequestFilters> = {}): ActivityReq
     organizationId: null,
     branchId: null,
     actorId: null,
+    actorRole: null,
     success: null,
     search: null,
     ...overrides,
@@ -175,6 +176,29 @@ describe("applyActivityReach", () => {
   it("lets the whole-platform reader name any organization", () => {
     expect(applyActivityReach(requested({ organizationId: 2 }), { kind: "platform" }).ok).toBe(true)
   })
+
+  it.each(["HEAD_OFFICE", "GROUP_USER", "BRANCH_ADMIN", "GROUP_ORDER_PORTAL", "ORDER_PORTAL", "VIEWER"] as const)(
+    "lets an organization reader filter by the tenant role %s",
+    (actorRole) => {
+      expect(applyActivityReach(requested({ actorRole }), own).ok).toBe(true)
+    },
+  )
+
+  it.each(["SUPER_ADMIN", "ORDER_DESK", "APRICART_EXECUTIVE", "WAREHOUSE"] as const)(
+    "refuses an organization reader filtering by Apricart's internal role %s",
+    (actorRole) => {
+      const result = applyActivityReach(requested({ actorRole }), own)
+      expect(result).toEqual({ ok: false, failure: expect.objectContaining({ status: 403 }) })
+      // The refusal does not repeat the role it was asked about.
+      expect(result.ok ? "" : result.failure.message).not.toContain(actorRole)
+    },
+  )
+
+  it("lets the whole-platform reader filter by any role", () => {
+    for (const actorRole of ["SUPER_ADMIN", "WAREHOUSE", "ORDER_PORTAL"] as const) {
+      expect(applyActivityReach(requested({ actorRole }), { kind: "platform" }).ok).toBe(true)
+    }
+  })
 })
 
 describe("the permissions behind it", () => {
@@ -197,7 +221,10 @@ describe("the permissions behind it", () => {
 
   it("give the organization key to exactly the roles this module admits", () => {
     // Super Admin holds every key by construction (`Object.values(Permission)`).
-    expect(holdersOf(Permission.ORG_VIEW_AUDIT_LOGS)).toEqual([...ACTIVITY_LOG_ROLES].sort())
+    // The Viewer holds it too: an organization-wide Viewer reads its own
+    // organization's trail as Head Office does (`viewerReadScope` in the
+    // handler), so it is not a reach of its own in this module.
+    expect(holdersOf(Permission.ORG_VIEW_AUDIT_LOGS)).toEqual([...ACTIVITY_LOG_ROLES, "VIEWER"].sort())
     expect([...ACTIVITY_LOG_ORGANIZATION_ROLES]).toEqual(["HEAD_OFFICE"])
   })
 })

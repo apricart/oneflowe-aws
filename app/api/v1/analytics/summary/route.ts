@@ -1,3 +1,4 @@
+import { VIEWER_READ_REFUSED, viewerReadRole } from "@/lib/viewer-access"
 import { stringifyPrimitive } from "@/lib/stringify-primitive"
 import { NextResponse, type NextRequest } from "next/server"
 import { getServerSession } from "next-auth"
@@ -58,6 +59,8 @@ const ORDER_REPORT_SORT_SQL: Record<OrderReportSortKey, SQL | AnyColumn> = {
     status: sql`UPPER(${orders.status})`,
     deliveryStatus: orderSelectColumns.fulfillmentStatus,
     paymentStatus: orderSelectColumns.paymentStatus,
+    approvalLevel: orders.approvalLevel,
+    approver: sql`LOWER(${approverUsers.fullName})`,
     quantityOrdered: quantityOrderedSql,
     quantityDelivered: sql`(${quantityOrderedSql} - ${quantityRefundedSql})`,
     quantityRefunded: quantityRefundedSql,
@@ -267,7 +270,10 @@ export async function GET(req: NextRequest) {
     const userId = (session.user as any).id
 
     const userContext = await loadSummaryUserContext(userId, (session.user as any).role)
-    const roleName = userContext.role
+    // Read from the user row: an organization-wide Viewer reads as Head Office,
+    // a pinned one is refused.
+    const roleName = viewerReadRole(userContext)
+    if (!roleName) return NextResponse.json({ error: VIEWER_READ_REFUSED }, { status: 403 })
     const currentUserBranchId = userContext.branchId
     const currentUserOrgId = userContext.organizationId
 
@@ -387,6 +393,10 @@ export async function GET(req: NextRequest) {
         // The approver and the fulfiller are separate people from the raiser,
         // so each needs its own join rather than reusing the creator row.
         approverName: approverUsers.fullName,
+        approverDesignation: approverUsers.designation,
+        // The band the order was decided at, never the approver's current
+        // level, which may have changed since. Null for an unlevelled order.
+        approvalLevel: orders.approvalLevel,
         fulfillerName: fulfillerUsers.fullName,
         // The invoice number lives in the receipt snapshot taken when the order
         // was raised, exactly as the branch export reads it.

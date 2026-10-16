@@ -18,7 +18,7 @@ import { FULFILLED_ORDER_STATUSES, normalizeOrderStatus } from "@/lib/order-deli
 export const DELIVERY_SLA_HOURS = 72
 
 /** An open order is "due soon" in the last this-many hours before its deadline. */
-export const DUE_SOON_HOURS = 12
+export const DUE_SOON_HOURS = 24
 
 /**
  * Orders approved before this instant are not counted. Older orders' stage
@@ -399,6 +399,13 @@ export function compareByAttention<T extends { id: number; assessment: DeliveryA
   const deadline = a.assessment.promisedAt.getTime() - b.assessment.promisedAt.getTime()
   if (deadline !== 0) return deadline
   return a.id - b.id
+}
+
+/** Newest order first: the latest approval at the top, then the higher order id. */
+export function compareNewestFirst<T extends { id: number; assessment: DeliveryAssessment }>(a: T, b: T): number {
+  const approved = b.assessment.approvedAt.getTime() - a.assessment.approvedAt.getTime()
+  if (approved !== 0) return approved
+  return b.id - a.id
 }
 
 // ---------------------------------------------------------------------------

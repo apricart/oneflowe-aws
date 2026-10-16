@@ -1,3 +1,4 @@
+import { VIEWER_READ_REFUSED, viewerReadRole } from "@/lib/viewer-access"
 import { NextRequest,NextResponse } from "next/server"
 import { createHash,randomBytes } from "node:crypto"
 import { getServerSession } from "next-auth"
@@ -34,9 +35,16 @@ import {
   queueOrderCreatedNotifications as enqueueCreatedOrderEvents,
   queueSuperAdminAutoApprovalNotifications as enqueueAutoApprovedOrderEvents,
 } from "@/lib/server/order-notifications"
+import { queueWarehouseOrderNotifications } from "@/lib/server/warehouse-order-notifications"
 import { canViewFulfillmentToken } from "@/lib/fulfillment-token-access"
 import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
 import { resolveInitialOrderApproval } from "@/lib/server/order-creation-approval"
+import {
+  isApprovalLevelUnavailableError,
+  levelledViewFlags,
+  loadLevelledViewContext,
+  resolveOrderApprovalLevel,
+} from "@/lib/server/order-approval-routing"
 import { resolveScopedBranchIds,usesMultiBranchScope } from "@/lib/server/multi-branch-scope"
 import { loadGroupPriceOverrides,resolveBranchGroupId,resolveEffectivePriceCents } from "@/lib/server/effective-price"
 import { isValidRole } from "@/lib/rbac"
@@ -317,16 +325,42 @@ function addOrderDateConditions(conditions: any[], params: ReturnType<typeof get
   if (legacyEnd) conditions.push(lte(orders.createdAt, legacyEnd))
 }
 
-function auditOrderGroupAccess(params: ReturnType<typeof getOrderListParams>, context: any) {
+async function auditOrderGroupAccess(
+  params: ReturnType<typeof getOrderListParams>,
+  context: { organizationId: number | null; userId: string; role: string },
+) {
   if (!params.groupId || !/^\d+$/.test(params.groupId)) return
-  void db.insert(groupAuditLogs).values({
-    organizationId: context.organizationId || 0,
-    groupId: Number(params.groupId),
-    action: "VIEW_GROUP_REPORT",
-    performedByUserId: context.userId,
-    performedByRole: context.role,
-    metadata: { filters: Object.fromEntries(params.searchParams.entries()) },
-  }).catch((error) => console.error("Audit log failed", error))
+  const groupId = Number(params.groupId)
+  if (!Number.isSafeInteger(groupId) || groupId <= 0) return
+
+  // The filter came from the URL. Resolve it inside the caller's tenant before
+  // recording access so an out-of-scope id cannot create a cross-tenant audit.
+  const tenantCondition = context.role === "SUPER_ADMIN"
+    ? eq(groups.id, groupId)
+    : context.organizationId
+      ? and(eq(groups.id, groupId), eq(groups.organizationId, context.organizationId))
+      : null
+  if (!tenantCondition) return
+
+  try {
+    const [group] = await db
+      .select({ id: groups.id, organizationId: groups.organizationId })
+      .from(groups)
+      .where(tenantCondition)
+      .limit(1)
+    if (!group) return
+
+    await db.insert(groupAuditLogs).values({
+      organizationId: group.organizationId,
+      groupId: group.id,
+      action: "VIEW_GROUP_REPORT",
+      performedByUserId: context.userId,
+      performedByRole: context.role,
+      metadata: { filters: Object.fromEntries(params.searchParams.entries()) },
+    })
+  } catch (error) {
+    console.error("Audit log failed", error)
+  }
 }
 
 function sanitizeOrderListItems(items: any[], context: any) {
@@ -353,6 +387,10 @@ function sanitizeOrderListItems(items: any[], context: any) {
       ...publicItem,
       placedByGroupPortal: isGroupPortalOrder(item),
       decidedByApricart: isDeskEnteredOrder(item),
+      // The level the order waits at, and whether this reader may not decide
+      // it because of it. Null and false for every organization without
+      // levels (plans/OF-APPROVAL-LEVELS-route-orders-by-level.md, R10).
+      ...levelledViewFlags(context.levelledView ?? null, item),
     }
     const safeItem = context.pricesHidden ? {
       ...withOrigin,
@@ -710,6 +748,17 @@ async function persistCreatedOrder(tx: any, context: any) {
     role: context.role,
     userId: context.userId,
   })
+  // The approval level the order waits at, for an organization that uses
+  // levels; null (decided as before) for every other. Refuses the order when
+  // nobody could decide it at its level, before anything is held.
+  // See plans/OF-APPROVAL-LEVELS-route-orders-by-level.md.
+  const approvalLevel = await resolveOrderApprovalLevel(tx, {
+    organizationId: context.organizationId,
+    branchId: context.branchId,
+    totalCents: context.total,
+    approvalRequired: initialApproval.approvalRequired,
+    creator: { userId: context.userId, role: context.role },
+  })
   const [order] = await tx.insert(orders).values({
     tid: context.tid,
     idempotencyKey: context.idempotencyKey,
@@ -735,6 +784,8 @@ async function persistCreatedOrder(tx: any, context: any) {
     // order, not the tenant's current setting. Written only when false, so a
     // budgeted order produces the INSERT it produced before the column existed.
     ...(context.budgetTracked ? {} : { budgetTracked: false }),
+    // Written only when levelled, so every other organization's INSERT is unchanged.
+    ...(approvalLevel === null ? {} : { approvalLevel }),
     // Order Desk only (`orderIntakeError` refused them on any other order), and
     // written only when present so every other INSERT is unchanged.
     ...(context.intakeChannel ? { intakeChannel: context.intakeChannel } : {}),
@@ -749,6 +800,13 @@ async function persistCreatedOrder(tx: any, context: any) {
   await saveCreationLedgers(tx, { ...context, order })
   await saveOrderReceipt(tx, { ...context, order })
   await logCreatedOrder(tx, { ...context, order, approvalBasis: initialApproval.approvalBasis })
+  // Every new order, desk entries included: the warehouse is Apricart's, and
+  // is told an order exists whether it awaits approval or was approved now.
+  await queueWarehouseOrderNotifications(tx, {
+    order,
+    event: "CREATED",
+    approvedAtCreation: !initialApproval.approvalRequired,
+  })
   return {
     order,
     queuedNotifications: await queueCreationNotifications(tx, context, order, initialApproval.approvalRequired),
@@ -1130,6 +1188,12 @@ async function getOrderCreationErrorResponse(caughtError: any, replayContext: an
   if (isInvoiceCodeMissingError(caughtError)) {
     return NextResponse.json({ error: caughtError.message, code: caughtError.code }, { status: 409 })
   }
+  if (isApprovalLevelUnavailableError(caughtError)) {
+    return NextResponse.json(
+      { error: caughtError.message, code: caughtError.code, approvalLevel: caughtError.level },
+      { status: 409 },
+    )
+  }
   const message = String(caughtError.message || "")
   if (message === ORDER_DESK_TARGET_UNAVAILABLE) return NextResponse.json({ error: message }, { status: 403 })
   const normalized = message.toLowerCase()
@@ -1158,7 +1222,13 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Forbidden", message: "Password change required" }, { status: 403 })
     }
 
-    const role = (session.user as any).role
+    const sessionRole = (session.user as any).role
+    // The role the list is *scoped* by: an organization-wide Viewer reads the
+    // tenant's orders as Head Office does, a branch-pinned one is refused.
+    // What the caller may *do* — decide, see the fulfilment token — and the
+    // access audit below keep the real role.
+    const role = viewerReadRole(session.user as any)
+    if (!role) return NextResponse.json({ error: VIEWER_READ_REFUSED }, { status: 403 })
     const organizationIdRaw = (session.user as any).organizationId
     const branchIdFromUserRaw = (session.user as any).branchId
 
@@ -1166,9 +1236,9 @@ export async function GET(req: NextRequest) {
     const branchIdFromUser = parseScopedNumericId(branchIdFromUserRaw)
     const currentUserId = (session.user as any).id
     const decisionCapabilities = await getOrderDecisionCapabilities(
-      isValidRole(role) && typeof currentUserId === "string"
+      isValidRole(sessionRole) && typeof currentUserId === "string"
         ? {
-          role,
+          role: sessionRole,
           userId: currentUserId,
           organizationId: orgIdNum ?? null,
           branchId: branchIdFromUser ?? null,
@@ -1212,7 +1282,7 @@ export async function GET(req: NextRequest) {
     )
 
     // --- Audit Logging for Group Access ---
-    auditOrderGroupAccess(params, { organizationId: orgIdNum, userId: currentUserId, role })
+    await auditOrderGroupAccess(params, { organizationId: orgIdNum ?? null, userId: currentUserId, role: sessionRole })
 
 
 
@@ -1247,6 +1317,7 @@ export async function GET(req: NextRequest) {
         paymentStatus: orderSelectColumns.paymentStatus,
         paidAt: orderSelectColumns.paidAt,
         tokenHandoffAt: orderSelectColumns.tokenHandoffAt,
+        approvalLevel: orderSelectColumns.approvalLevel,
         statusAtRefund: orders.statusAtRefund,
         refundedAt: orders.refundedAt,
         refundedByUserId: orders.refundedByUserId,
@@ -1323,11 +1394,13 @@ export async function GET(req: NextRequest) {
         .where(summaryCondition)
 
     // Sanitize items: Only show approvalToken to authorized roles
+    const levelledView = await loadLevelledViewContext({ userId: currentUserId, organizationId: orgIdNum })
     const filtered = sanitizeOrderListItems(items, {
-      role,
+      role: sessionRole,
       userId: currentUserId,
       pricesHidden,
       capabilities: decisionCapabilities,
+      levelledView,
     })
     const singleOrderResponse = await getSingleOrderListResponse(params.id, filtered, {
       pricesHidden,

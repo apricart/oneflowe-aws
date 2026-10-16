@@ -1,4 +1,5 @@
 "use client"
+import { viewerAccessFor } from "@/lib/viewer-access"
 import { useAppContext } from "@/components/context/app-context"
 import { MultiBranchFilter } from "@/components/dashboard/multi-branch-filter"
 import { NotificationBell } from "@/components/notifications/notification-center"
@@ -35,7 +36,10 @@ export function Topbar() {
   const router = useRouter()
   const [mounted, setMounted] = useState(false)
   const { theme, setTheme } = useTheme()
-  const { organizationId, branchIds, setBranchIds, userRole } = useAppContext()
+  const { organizationId, branchIds, setBranchIds } = useAppContext()
+  // An organization-wide Viewer gets Head Office's filters and links; it reads
+  // the same pages, read-only.
+  const { viewRole: userRole } = viewerAccessFor(session?.user)
 
   useEffect(() => {
     setMounted(true)

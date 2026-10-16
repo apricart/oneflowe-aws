@@ -1,551 +1,507 @@
-# OF-JOIN — Department sign-up and amount-based order approval
+# OF-JOIN — Department sign-up for organizations with approval levels
 
-Builds on `plans/OF-JOIN-organization-self-service-join.md` and
-`plans/OF-JOIN-email-domain-lock.md`. Status: **plan, awaiting decisions D1–D7
-below.** Nothing is implemented.
+Builds on `plans/OF-JOIN-organization-self-service-join.md`,
+`plans/OF-JOIN-email-domain-lock.md`,
+`plans/OF-APPROVAL-LEVELS-organization-approval-levels.md` (phase 1) and
+`plans/OF-APPROVAL-LEVELS-assign-users-to-levels.md` (phase 2a).
+
+Status: **department sign-up implemented 2026-10-15** (migration
+`20261019120000_join_department_signup`). Phase 2b, routing orders by level,
+was implemented 2026-10-15: `plans/OF-APPROVAL-LEVELS-route-orders-by-level.md`.
+
+> **Revision 2026-10-15.** The first draft (2026-10-13) designed its own
+> approval machinery: fixed three bands with "up to" limits on the
+> `organizations` row, a per-requester `user_order_approvers` table, and a
+> Super Admin form section for the limits. Phases 1 and 2a have since shipped
+> a different model: a per-organization list of 1–10 levels, and **a level held
+> by the approver** (`users.order_approval_level`), not a link from a requester
+> to an approver. This revision drops everything the shipped model replaces
+> and re-designs the join side around it. The superseded design is in git
+> history (`git log -- plans/OF-JOIN-department-signup-multi-user.md`).
 
 ## What is being asked
 
-1. The public join form (`/join`) is restyled and restructured to match the
-   attached `Apricart Department_Signup_Portal.html`.
-2. One submission can create **several accounts**:
-   * the **main user** (the "Order Initiator") from the main form;
-   * three **Financial Approvers** (levels 1–3), each given by email and
-     designation.
-3. **An approver level is an amount band.** Each of the main user's orders is
-   decided by the one approver whose band its amount falls in:
+1. **The join form depends on the organization's approval-levels setting.**
+   * **Approval levels off** (or approval not required): the current join
+     form, unchanged. The applicant picks a role and a branch or groups, as
+     today.
+   * **Approval levels on:** a new form, the *department sign-up*, restyled
+     to match `Apricart Department_Signup_Portal.html`.
+2. One department sign-up creates, on Head Office's approval:
+   * the **Order Initiator** (the main user) from the main form;
+   * one **Financial Approver per level** the organization has configured,
+     each given by email and designation. An approver who already has an
+     account is reused; one who does not is created.
+3. **CRC means branch** (UBL's cost centre). While typing, the applicant is
+   offered the organization's existing branches. A chosen branch is assigned;
+   an unknown one is **created** with its details and CRC number. The
+   applicant types the branch **name** first; only a branch that is not listed
+   is then asked for its CRC (see "Branch names", below).
+   **Several branches → `GROUP_ORDER_PORTAL`; one branch → see D2.**
+4. **Nothing is created until Head Office approves**: no user, branch,
+   approver, level or address.
+5. Usernames are derived from email addresses.
 
-   | Order amount (PKR) | Decided by |
-   |---|---|
-   | below 40,000 | Level 3 approver |
-   | 40,000 to 80,000 | Level 2 approver |
-   | above 80,000 | Level 1 approver |
+## What the shipped approval levels mean for this plan
 
-   This is **not** a sequential chain. One order needs one approval, by the
-   approver for its band.
-4. For each approver level:
-   * if the email already belongs to a user, that user becomes the main user's
-     approver at that level;
-   * if that approver does not already reach the main user's branches, they
-     are given those branches.
-5. **CRC means branch** (CRC is UBL's name for a cost centre). While the
-   applicant types, existing branches of the organization are suggested.
-   * A chosen existing branch is assigned to the main user.
-   * A branch that does not exist is **created**, with full branch details
-     including the cost-centre (CRC) number.
-   * **Several branches → `GROUP_ORDER_PORTAL`. One branch → `BRANCH_ADMIN`.**
-     (The second half is discussed in D3.)
-6. **Nothing is created until Head Office approves.** That covers users,
-   branches, approver assignments and addresses.
-7. Usernames are derived from email addresses.
-8. **Amount-based approval is a per-organization feature.** Super Admin
-   switches it on or off, and sets the band limits, in the **Create / Edit
-   Organization** form.
-
-## What already exists, and what it means for this
-
-### The order side
-
-| Fact | Where | Consequence |
+| Shipped fact | Where | Consequence for the join |
 |---|---|---|
-| Approval is **per branch**, never per requester. An order is decided by the tenant's configured role (`BRANCH_ADMIN` of the order's branch, or `HEAD_OFFICE`) or by any `GROUP_USER` assigned to the branch. | `canMakeOrderDecision` in `lib/order-approver-role.ts` | "The approver for *this user*, for *this amount*" does not exist. It is a new rule. |
-| Approval is one decision by one person: `PENDING → APPROVED`. | `lib/server/order-decision-service.ts` | This fits the bands: each order still needs exactly one approval. **No new order states are needed.** |
-| Every decision path goes through `authorizeOrderDecision`: approve, reject, return for correction, the group-portal bulk decide, and the executive path. | `lib/server/order-decision-policy.ts` | The band rule lives in **one place**, and `lib/server/order-approver-contract.test.ts` already pins that choke point. |
-| The order row is read **without a lock** during a decision. The approval only requires the order to still be `PENDING`. | `approveOrder`, line ~137 | If the band were worked out from a row read earlier, a requester's edit (35,000 → 90,000) landing between that read and the approval would let the Level 3 approver approve a Level 1 order. **The band has to be stored on the order, and the approval has to re-check it.** |
-| Approve/reject/return buttons are granted **per role**, not per order (`getOrderDecisionCapabilities`). | orders list and detail, group-portal approvals | The screens need a per-order "can I decide this?" answer, or a Level 3 approver sees an Approve button on a 90,000 order that the server then refuses. |
-| "Awaiting approval" emails go **only** to the tenant's configured approver role (Branch Admin of the branch, or Head Office). Group Users are not emailed at all. | `queueOrderCreatedNotifications` in `lib/server/order-notifications.ts` | The email must go to the approver for the band instead. The re-check at send time (`currentApproverConditionFor`) must accept that approver. |
-| Auto-approval is an organization switch (`orders.order_approval_required`). Order Desk orders already override it and always wait. | `resolveInitialOrderApproval` | There is precedent for "this kind of order always waits, whatever the switch says" (D1.7). |
-| A group submission becomes **one order per branch**, each with its own total. | `lib/server/group-order-creation.ts` | Banding each branch order separately would let a 100,000 request split across three branches reach no one above Level 3 (D1.5). |
-| Pending orders hold budget. | `CLAUDE.md`, consumption rules | An order with no approver to decide it holds money until someone fixes it (D1.6). |
-| No self-approval guard exists. | `order-decision-policy.ts`, `order-approver-role.ts` | Relevant to D3. |
+| Levels are per organization: 1–10, Level 1 highest, each level one **strict band** (≥ its amount and below the level above; the lowest level also takes everything below its own amount). | `approvalLevelBands` in `lib/order-approval-levels.ts` | The form asks for **one approver per configured level**, not a fixed three, and shows each level's band. |
+| A level belongs to the **approver**: `users.order_approval_level`, at most one per user. | `lib/server/user-approval-level.ts` | An approver is not "Ali's approver". A Level 2 holder approves Level 2 orders **at every branch they reach**, for everyone at those branches. Head Office must see that at review. |
+| A user may hold a level only if the organization requires approval **and** has levels on, and the role is `GROUP_USER` or the organization's `order_approver_role`. | `canHoldApprovalLevel` | Decides which existing accounts can be reused as approvers, and which form the page shows. |
+| A user holding a *different* level cannot also hold this one. | phase 2a decision 3 | A new conflict case at review. |
+| Every assignment takes the organization row `FOR SHARE`; the levels save takes it `FOR UPDATE` and refuses to remove a held level. | phase 2a decision 6 | The join approval assigns through the same helper, under the same locks. |
+| **Nothing in the order path reads levels yet.** Routing, enforcement and notifications are phase 2b, not built. | `lib/server/order-approval-levels-contract.test.ts` | See *Dependency on phase 2b*: without it, the approvers this form names can approve **any** amount at the initiator's branches. |
 
-### The join side
+## The rule that picks the form
 
-| Fact | Where | Consequence |
-|---|---|---|
-| Join code → organization, server-side; no `organizationId` is ever accepted | `lib/server/organization-join.ts`, `app/api/v1/join/*` | Kept as is. The HTML's "UBL Master Code" **is** the join code (D5). |
-| Email locked to the organization's domain | `lib/organization-email-domain.ts`, `joinEmailDomainRefusal` | Kept, and applied to the approver emails too. |
-| Lookup already returns the organization's active branches as `{id, name}` (up to 500) and **deliberately withholds cost centres** | `loadJoinFormOptions` | A name-based typeahead needs no new endpoint (D4). |
-| Approval is one transaction with the request row taken `FOR UPDATE` | `decideJoinRequest` | Extended to create the whole package or nothing. |
-| `branches.cost_center_id`, indexed, **not unique** | `db/schema.ts:137` | CRC maps onto it with no new column. A duplicate CRC is flagged to Head Office, not refused. |
-| Branch creation logic is **written inside the route handler** | `app/api/v1/branches/route.ts:246` | Must be moved to `lib/server/branch-creation.ts` and shared. |
-| `HEAD_OFFICE` may already create branches | `lib/server/branch-creation-access.ts` | Head Office approving branch creation stays inside its existing authority. |
-| A new branch has **no catalogue** and a **zero budget baseline** | `lib/server/group-order-catalog.ts`, `branches.baseline_budget_cents` | An approved user at a new branch sees an empty shop (D6). |
-| Extra delivery addresses are per branch and approved by Head Office | `branch_delivery_addresses` | The form's addresses map onto this table, but each needs a branch. |
-| `replaceMultiBranchScope` **replaces** a user's branch list wholesale | `lib/server/multi-branch-scope.ts:135` | Extending an existing approver needs a new **additive** helper. |
-| Usernames are globally unique. Emails are unique in the application but not in the database (K-Electric mirrored accounts share an email across rows). | `db/schema.ts:272`, `lib/user-uniqueness.ts` | A lookup by approver email can return more than one row. |
-| App password rule: 12+ characters with upper, lower, digit and special | `passwordSchema` | Stricter than the HTML's. The app rule is kept. |
-| Production WAF refuses any JSON body over **8 KB** with an opaque 403 | memory: WAF note; `lib/product-request.ts` | The submission needs hard bounds and a client-side size guard. |
+`joinUsesApprovalLevels(organization)` in `lib/organization-join.ts`:
+`orderApprovalRequired && orderApprovalLevelsEnabled && levels.length > 0`,
+read from the organization the code resolves to. It is the organization half
+of `canHoldApprovalLevel` plus "at least one level". Pure, shared by:
 
-## Decisions needed before implementation
+* **the lookup**, which tells the page which form to show;
+* **the submit endpoint**, which re-reads the organization on that request and
+  **refuses the wrong form (400)**: a version 1 body while levels are on (or an
+  applicant could skip naming approvers), a version 2 body while they are off.
+  Never judged on what the page sends back;
+* **the decision**, which re-reads it again (see D7).
 
-Each has a recommendation.
+## Decisions
 
-### D1 — How the amount bands work
+Settled by the 2026-10-14/15 discussions:
 
-| # | Question | Recommendation |
-|---|---|---|
-| **D1.1** | Exactly 40,000 and exactly 80,000 are not covered by "below 40,000 / above 80,000". Which level decides them? | Each level's limit is **inclusive**: up to and including 40,000 → Level 3; 40,000.01 to 80,000 → Level 2; above 80,000 → Level 1. This is the usual "may approve up to X" rule. |
-| **D1.2** | Strict bands, or ceilings? | **Strict, as you wrote it.** Level 1 decides only orders above 80,000, and so on. The alternative ("ceiling") lets a higher level also approve smaller orders, which gives cover when a Level 3 approver is away. With strict bands, an absent approver's orders wait until Head Office reassigns that level. |
-| **D1.3** | Which amount? | The order total **including tax** (`orders.total_cents`): the figure the requester and approver both see. |
-| **D1.4** | Can anyone else approve these orders: Head Office, the branch's Branch Admin, another Group User at the branch? | **No.** For a requester who has approvers, only the approver for the band may approve, reject or return the order. Otherwise anyone with branch access could approve a 100,000 order and the bands would mean nothing. Head Office's control is to **reassign** a level (audited). It does not decide in that approver's place. |
-| **D1.5** | Splitting. A 100,000 group submission across three branches becomes three orders of about 33,000 each. | Band every branch order of a group submission by the **submission's total**, so the whole request reaches the approver it would have reached as one order. Splitting by placing several small single-branch orders over a few days is **not** prevented in this release. If needed, it can be surfaced later in a report. |
-| **D1.6** | No approver at the needed level, or that approver is inactive. | **Refuse the order at creation** (409, "No Level N approver is set for you; contact Head Office"), because a pending order holds budget. If an approver is deactivated after an order is placed, the order waits. Head Office sees a warning on that user and reassigns the level, and the order then goes to the new approver. |
-| **D1.7** | Tenants with auto-approval switched on. | Orders from a requester who has approvers **always wait for approval**, whatever the switch says. This matches the Order Desk precedent. Having approvers *is* the approval policy for that person. |
-| **D1.8** | Are the 40,000 / 80,000 limits fixed for everyone? Who can change them? | **Decided:** per organization, set by **Super Admin** in the Create / Edit Organization form, together with an on/off switch. Defaults are 40,000 and 80,000. Head Office can see them but not change them. The switch's behaviour is in D7. |
-| **D1.9** | The same person at two levels? | **Not allowed**, as in the HTML (its validation rejects duplicates). |
-
-### D2 — Which role does an approver have, and why branches are still given
-
-New approvers are created as **`GROUP_USER`**. Under D1.4, the right to decide
-a requester's orders comes from being their approver for the band, not from a
-role. Branch access is still needed so the approver can **see** those orders:
-order reads are branch-scoped. That is why the main user's branches are
-added, as you asked.
-
-One side effect, shown to Head Office at approval: a `GROUP_USER` with a
-branch can also decide orders at that branch from people who have **no**
-approvers (the existing rule). If every UBL user comes through this form, every
-UBL order is banded and that never happens.
-
-For an **existing** user found by approver email:
-
-| Existing role (same organization) | Proposal |
+| # | Decision |
 |---|---|
-| `GROUP_USER` | Add only the branches they lack (additive). Never remove any. |
-| `HEAD_OFFICE` | Nothing to add: they already see the whole tenant. Under D1.4 they decide the orders routed to them, whatever the tenant's configured approver role. |
-| `BRANCH_ADMIN` | Sees only their own branch, so they could not see the requester's orders at other branches. Head Office chooses at approval: convert to `GROUP_USER` (their branch plus the new ones), or choose another approver. A conversion is refused while they have orders in flight (`OF-ROLE-branch-admin-order-portal-switch`). Never converted automatically. |
-| Any other role (`ORDER_PORTAL`, `GROUP_ORDER_PORTAL`, …) | Cannot approve: these roles have no approval screens. Flagged; Head Office replaces that level. |
-| Inactive, deleted, or several matching rows | Flagged; Head Office resolves it. |
-| Email belongs to **another organization** | Unavailable. Flagged to Head Office, **never shown to the applicant**. |
+| **S1** | Levels are strict bands (`approvalLevelBands`). |
+| **S2** | Routing is by **branch + amount**: an order goes to the holders of its band who reach its branch. No per-requester approver table. |
+| **S3** | The form variant follows `joinUsesApprovalLevels`; off = today's form, unchanged. |
+| **S4** | The master code in the HTML is replaced by the existing server-checked **join code**, kept as the first step. The HTML's in-page code check must never ship. |
+| **S5** | Email domain lock applies to the initiator **and** every approver email. |
+| **S6** | The app's password rule (12+ chars, upper, lower, digit, special) is kept over the HTML's. |
 
-Approver emails must be at the organization's domain, distinct from each other
-(D1.9), and distinct from the main user's email.
+Decided 2026-10-15:
 
-### D3 — One branch → `BRANCH_ADMIN`, or `ORDER_PORTAL`?
+| # | Decision |
+|---|---|
+| **D1** | **Every configured level must have an approver** on the form. Strict bands mean an order in a band with no holder at its branch has no one to decide it. |
+| **D2** | **One branch (one CRC) → `ORDER_PORTAL`; more than one → `GROUP_ORDER_PORTAL`.** Derived on the server from the branches finally assigned at approval, never chosen by the applicant. |
+| **D3** | **A new approver gets its password the way every new user does**: a random password from `generateRandomPassword`, `must_change_password = true`, and `sendWelcomeEmail` (username + temporary password) after the approval commits, exactly as `POST /api/v1/users` does. The HTML's "Login credentials will be sent to this email" is shown on each level. |
+| **D4** | An existing user holding a **different** level is **blocked at review**, never changed automatically. Head Office replaces that level's email at review, or rejects. |
+| **D5** | The public lookup shows each level's **band** for a levels-enabled organization, so the applicant can pick the right person. This widens disclosure of the amounts to code holders, deliberately. |
+| **D6** | Head Office or a non-level approver deciding a levelled order: **no**. A phase 2b rule. |
+| **D7** | The setting changes between submission and decision: the request is decided **as the version it was sent as**. A version 2 request decided while levels are now off (or a level named no longer exists) creates the initiator, branches and addresses, and **assigns no level**; those approver lines are recorded `not_applied`. |
+| **D8** | **Everything in this plan applies only to an organization with order approval levels on** (`joinUsesApprovalLevels`). Every other organization keeps today's join form and approval, untouched, and the server refuses a version 2 body for it. |
 
-The bands change this question. Under D1.4, a requester's banded orders can be
-decided only by their approvers. So a Branch Admin requester **cannot approve
-their own orders**, which was the main risk raised earlier.
+What the design file (`Apricart Department_Signup_Portal.html`) fixes, and how
+each field maps:
 
-What remains:
+| HTML field | Here |
+|---|---|
+| Complete Name | One field; split into first name (first word) and last name (the rest) |
+| Email (`name.surname@ubl.com.pk`) | Local part typed, the organization's own domain fixed as the suffix (the existing domain lock). The `first.last` shape is not enforced: it is UBL's, and the form serves any levels-enabled tenant |
+| Username (auto, read-only) | Local part of the email, lower-cased, derived on the server |
+| Phone (11 digits) | Required, `0` + 10 digits |
+| IP Extension No (3–6 digits) | Required, stored on the user |
+| Employee ID | Required |
+| Department | Required, one of the HTML's nine values (`DEPARTMENTS`) |
+| Role "Order Initiator" (read-only) | Display only; the role is D2 |
+| Financial Approver Levels | One card per configured level (not fixed at 3): email (domain-locked), username (auto, read-only), designation; titled with the level's band |
+| Branch (multiple, chips with a checkbox; the design's "CRC No") | Each checked chip is a branch. While typing, existing branches are suggested **by name** from the lookup list (no CRC number ever leaves the server); picking one adds it as a chip. A name that is not listed is added as a new branch, and only then is its CRC asked for ("Branch names", below). A typed CRC is matched by the server to an existing branch with that cost centre if exactly one exists; otherwise Head Office creates the branch at approval under the applicant's name for it (correctable), filling in its province, city and address |
+| Delivery Address (multiple, chips with a checkbox) | Each checked address is stored on the request; at approval Head Office assigns each to one of the initiator's branches (automatic when there is one), and it is written to `branch_delivery_addresses` as approved |
+| Password / Confirm | The app's rule (12+, upper, lower, digit, symbol) |
+| UBL Master Code | **Removed.** The join code, checked on the server, is the first step |
+| Terms checkbox | Required, stored as `terms_accepted_at`; the links are omitted until a Terms page exists |
 
-* **Portal.** `BRANCH_ADMIN` uses the admin portal (dashboard, orders page).
-  `ORDER_PORTAL` uses the shop, which is the single-branch counterpart of the
-  storefront `GROUP_ORDER_PORTAL` uses.
-* **Residual approval right.** In a tenant whose approver role is
-  `BRANCH_ADMIN`, the main user could still decide *other* people's unbanded
-  orders at their branch.
+Kept from the first draft unchanged: new branches get a "next steps: assign
+products, allocate budget" notice; copying a catalogue or setting a baseline
+is later work.
 
-Recommendation: **`ORDER_PORTAL`**, so a one-branch and a several-branch
-initiator get the same kind of experience. `BRANCH_ADMIN` is acceptable if
-single-branch initiators should see the admin portal. Check UBL's
-`order_approver_role` before deciding.
+## Design
 
-### D4 — How does the branch (CRC) typeahead match?
+### Data — `drizzle/<ts>_join_department_signup.sql`
 
-* **Recommended.** Match on **branch name**, using the list the lookup already
-  returns. There is no new public endpoint and nothing new is disclosed.
-* Matching on **CRC number** means either sending every branch's cost centre
-  to anyone with the code, or adding a new public search endpoint. Typing would
-  quickly use up the 15-per-15-minutes rate limit.
-* Middle ground: at review, Head Office is warned when a requested new
-  branch's CRC already belongs to an existing branch.
-
-### D5 — The master code
-
-The HTML checks `1020265000` **in the browser**, so anyone can read it from
-the page source. That must not ship. The existing server-checked **join code**
-takes its place.
-
-* It stays the **first step**, styled like the HTML card, because branch
-  suggestions need the organization first.
-* The master-code field is removed from the bottom of the form.
-* Head Office should set a fresh code if that HTML was ever public.
-
-### D6 — New branches after approval
-
-A new branch has no products and no budget.
-
-* **Recommended.** Show Head Office a "next steps" notice after approval
-  (assign products, allocate budget), and let Head Office set the branch's
-  group at approval.
-* Copying another branch's catalogue, or setting a baseline budget, at approval
-  is a later step.
-
-### D7 — What the on/off switch does
-
-Super Admin sets `organizations.order_approval_bands_enabled` in Create / Edit
-Organization. It is off by default, for existing tenants and new ones.
-
-| # | Question | Recommendation |
-|---|---|---|
-| **D7.1** | Super Admin **switches it off** while banded orders are pending. Who decides them? | **The normal approvers, immediately.** The switch is read at decision time, as the tenant's configured approver role already is (changing that role re-routes pending orders today). "Off" therefore means the app behaves exactly as before, for every order. Each order keeps its stored band, so switching back on routes those still pending to their band approvers again. The alternative, fixing each order's routing when it is created (as `budget_tracked` does for budgets), would leave a disabled feature still controlling orders. The budget precedent exists to keep the money ledger consistent, which is not at stake here. |
-| **D7.2** | Super Admin **switches it on**. What changes? | **New orders only.** An order placed while the feature was off has no band and keeps the normal rules. A requester with no approvers set keeps the normal rules too, so switching on never stops anyone ordering. Head Office's Users screen lists who has no approvers yet. |
-| **D7.3** | Can the limits be changed while the feature is off? | **Yes**, so a tenant can be set up before it is switched on. This matches the ordering-block limits. A pending order keeps the band it was given. Its band is worked out again only if the order is edited, and then with the new limits. |
-| **D7.4** | Does the join form ask for approvers while the feature is off? | **No.** The lookup tells the page whether the feature is on and what the limits are. While off, the approver section is hidden and the server refuses approver fields (400). While on, all three levels are required. |
-| **D7.5** | A request sent while the feature was on is decided after it is switched off, or the other way round. | **Approve it as it was sent.** Approvers on the request are still created and recorded, and take effect whenever the feature is on. A request with no approvers is approved without them, and Head Office can add them later. The review dialog states which case applies. |
-| **D7.6** | Can Head Office edit a user's approvers while the feature is off? | **Yes**, with a "not in effect: amount-based approval is off for your organization" notice. |
-
-What switching off does **not** do: it does not email the normal approvers
-about orders already pending. Those orders simply appear in their queue.
-
-### Smaller choices (defaults proposed; say if any is wrong)
-
-* **New user columns.** `department`, `ip_extension` and `designation` are
-  added to `users` as nullable columns.
-* **Department list.** The HTML's fixed list is held as a constant in `lib/`.
-* **Email shape.** Domain lock only. The HTML's stricter `first.last@` rule
-  becomes an optional per-organization switch, or is dropped.
-* **Username.** Derived on the server as the email's local part, lower-cased.
-  The page shows it read-only. If it is taken (only possible by someone at
-  another domain), approval proposes `<local>.<orgcode>` and Head Office
-  confirms.
-* **New approver's name.** Derived from the email (`huzaifa.abid` → "Huzaifa
-  Abid"). Head Office can edit it at approval.
-* **Addresses.** Each address gets a branch selector, hidden when there is
-  one branch. On approval each is written to `branch_delivery_addresses` as
-  approved.
-* **Terms checkbox.** Kept, required, stored as `terms_accepted_at`. The links
-  are omitted until a Terms page exists.
-* **Bounds** (for the 8 KB WAF limit):
-  * at most 10 branches, of which at most 5 are new;
-  * at most 5 addresses of 300 characters each;
-  * exactly 3 approver levels (every band needs an approver);
-  * a client-side encoded-body size guard, as in
-    `lib/product-request-form.ts`.
-
-## Design (assuming the recommendations)
-
-The work splits cleanly in two. The order side is useful on its own: it lets
-Head Office set approvers for existing users too. The join side writes what the
-order side reads.
-
-### Part A — Amount-based approval on orders
-
-#### Data — migration `drizzle/<ts>_order_approval_bands.sql`
-
-Additive only.
-
-* `user_order_approvers` (new)
-  * `organization_id`, `user_id` (the requester), `approver_user_id`,
-    `level 1..3`, `created_by_user_id`, `created_at`, `updated_at`
-  * `UNIQUE(user_id, level)` and `UNIQUE(user_id, approver_user_id)` (D1.9)
-  * a check that `user_id <> approver_user_id`
-  * Both users must belong to `organization_id`, enforced in the writer and
-    re-checked in the authorizer.
-* `organizations`
-  * `order_approval_bands_enabled boolean NOT NULL DEFAULT false`: the switch
-    (D7)
-  * `approval_level3_max_cents bigint NOT NULL DEFAULT 4000000` (40,000.00)
-  * `approval_level2_max_cents bigint NOT NULL DEFAULT 8000000` (80,000.00)
-  * `organizations_approval_band_limits_ck`: `0 < level3 < level2`, plus an
-    upper bound held in `lib/order-approval-band.ts`
-  * Defaulted, so no tenant's behaviour changes. A band applies only when the
-    switch is on **and** the requester has rows in `user_order_approvers`.
-  * `GET /api/v1/organizations` returns the whole row to tenant roles. That is
-    acceptable for these columns: none of them is secret, and the limits are
-    shown on the join form anyway.
-* `orders`
-  * `approval_level smallint NULL CHECK (approval_level BETWEEN 1 AND 3)`
-  * `approval_basis_cents bigint NULL`: the amount the band was worked out
-    from (the submission total for a group order)
-  * Both null on every existing order and on every order from a requester
-    without approvers. **Null means "decided exactly as today".**
-  * Nullable with no default, so the `ALTER` is a metadata change on the live
-    `orders` table.
-
-#### Pure logic
-
-* `lib/order-approval-band.ts`:
-  * `approvalLevelForAmount(cents, limits)`: the D1.1 boundaries, in integer
-    cents;
-  * `bandLabel`;
-  * `canDecideBandedOrder({ actorUserId, approverForLevel })`;
-  * `orderIsBanded({ bandsEnabled, approvalLevel })`: the one statement of
-    "this order is decided by band" (switch on **and** a stored level, D7.1).
-    No reader restates it.
-  * the limits' bounds and defaults;
-  * `parseApprovalBandLimitDraft`: PKR text from the form → integer cents.
-    Digits with at most two decimals; anything else is refused, never coerced.
-    No floating-point arithmetic.
-  * the audit action names.
-
-  Pure, shared by the authorizer, the screens, the creation paths and the
-  organization form, as `lib/ordering-block-threshold.ts` is for the ordering
-  blocks.
-
-#### Server logic
-
-* **Order creation.** Both creation paths: `POST /api/v1/orders` and
-  `lib/server/group-order-creation.ts`. The switch and the limits are read in
-  the same `FOR SHARE` read of the organization row that
-  `resolveInitialOrderApproval` already takes. A Super Admin edit (which holds
-  `FOR UPDATE`) therefore lands wholly before or wholly after an order. If the
-  switch is on and the creator has approvers:
-  1. work out the level from the priced total (for a group order, the
-     submission total);
-  2. confirm the approver at that level exists and is active, or refuse with
-     409 (D1.6);
-  3. create the order `PENDING` whatever the auto-approval switch (D1.7);
-  4. store `approval_level` and `approval_basis_cents`.
-
-  All inside the creation transaction, before the transaction commits its
-  holds.
-* **Order edits.** Every path that rewrites a pending order's total works out
-  the level again, with the current limits, for any order that already has
-  one, whether the switch is on or off. Its band is then correct whenever the
-  feature is on (D7.1). Today that path is `PATCH /api/v1/orders/[id]`; the
-  Order Desk edit is never banded. If the level changes while the switch is
-  on, the new approver is emailed. A contract test lists these writers.
-* **Authorizer.** `authorizeOrderDecision` already reads the organization row
-  `FOR SHARE`, so it also reads the switch there, and a switch flip waits for
-  an in-flight decision. A new branch, checked before the existing role rules:
-  if `orderIsBanded` holds, re-read the requester's approver at that level
-  (`FOR SHARE`, so a concurrent reassignment waits). The caller must be that active user in the same
-  organization; anyone else is refused (D1.4). The level is returned with the
-  authorization, and **every claim** (approve, reject, return) adds
-  `approval_level = <that level>` to its `WHERE`. An edit that moved the order
-  into another band in the meantime then makes the decision a 409, not a
-  wrong-level approval. Unbanded orders take the existing path unchanged.
-* **Per-order decision flag.** The orders list, order detail and group-portal
-  approvals responses carry `canDecide` for each order, from the same pure
-  rule. The page-level role capability stays for navigation only.
-* **Notifications.** For a banded order:
-  * "awaiting approval" (on creation, on resubmission, and on an edit that
-    changes the level) goes to **the approver for the band only**;
-  * the send-time re-check accepts that approver.
-* **Audit.** Every decision on a banded order records `approvalLevel` and
-  `approvalBasisCents`.
-
-#### Head Office: managing approvers
-
-* Users screen → an **Approvers** section on an `ORDER_PORTAL` /
-  `GROUP_ORDER_PORTAL` user: Level 1–3, picked from the organization's users.
-* Written through `PUT /api/v1/users/[id]/order-approvers`:
-  * Head Office only, own organization (`getRequestScope`);
-  * strict Zod;
-  * audited `UPDATE_USER_ORDER_APPROVERS` with the before and after values;
-  * applies the same branch-extension rule as the join approval
-    (`planApproverResolution`, below).
-* A warning when a user's approver is inactive, or when deactivating someone
-  who is another user's approver.
-* The Approvers section and the "no approvers yet" list carry the D7.6
-  "not in effect" notice while the switch is off.
-
-#### Super Admin: the switch and limits in Create / Edit Organization
-
-* **Form** (`app/(portal)/organizations/page.tsx`): an "Amount-based order
-  approval" section with:
-  * an on/off switch;
-  * two PKR inputs, "Level 3 approves up to" and "Level 2 approves up to",
-    with "Level 1 approves above the Level 2 limit" stated beneath them.
-
-  The inputs stay editable while the switch is off (D7.3). They are validated
-  inline with `parseApprovalBandLimitDraft` and the `level3 < level2` rule.
-  Create defaults the switch to off.
-* **Endpoints.** These fields are written only through
-  `POST /api/v1/organizations` and `PATCH /api/v1/organizations/[id]`, which
-  are already Super Admin only:
-  * `organizationCreateSchema` and `organizationUpdateSchema` gain
-    `orderApprovalBandsEnabled` (boolean),
-    `approvalLevel3MaxCents` and `approvalLevel2MaxCents` (JSON integers in
-    cents; strings refused).
-  * The PATCH checks `level3 < level2` against the **merged** values (what
-    was sent, otherwise what is stored), so sending only one limit cannot
-    produce an inverted pair. Inverted → 400.
-  * The PATCH already locks the organization row `FOR UPDATE`. Each change is
-    audited in that transaction:
-    * `UPDATE_ORDER_APPROVAL_BANDS_ENABLED` (before and after);
-    * `UPDATE_ORDER_APPROVAL_BAND_LIMITS` (before and after for both limits).
-  * `CREATE_ORGANIZATION` metadata records the initial values.
-* **Head Office** sees the switch state and limits read-only on its Users
-  screen. It never writes them.
-* `lib/server/order-approval-band-contract.test.ts` pins:
-  * the two writers of these columns;
-  * every reader of the switch (both creation paths, the authorizer,
-    notifications, the per-order decision flag, the join lookup and submit),
-    each going through `orderIsBanded` rather than restating it.
-
-### Part B — Department sign-up
-
-#### Data — migration `drizzle/<ts>_join_department_signup.sql`
-
-Additive, except one replaced check constraint.
+Additive except one replaced check. Hand-written, journal `when` = last + 3600000.
 
 * `organization_join_requests`
   * `form_version smallint NOT NULL DEFAULT 1`
-  * `department`, `ip_extension`, `terms_accepted_at`, all nullable
-  * `organization_join_requests_scope_shape_ck` is replaced by
-    `form_version = 1 AND (the old rule) OR form_version = 2`. Every existing
-    row is version 1 and passes unchanged.
+  * `department varchar(80)`, `designation varchar(80)`,
+    `ip_extension varchar(16)`, `terms_accepted_at timestamptz`, all nullable
+  * `approval_levels_snapshot jsonb`: the bands shown to the applicant
+    (`[{level, fromCents, belowCents}]`). Used only so the review shows what the
+    applicant agreed to; never read by order routing.
+  * `organization_join_requests_scope_shape_ck` becomes
+    `(form_version = 1 AND <old rule>) OR (form_version = 2 AND requested_role IN ('ORDER_PORTAL','GROUP_ORDER_PORTAL'))`.
+    Every existing row is version 1 and passes.
+  * `organization_join_requests_form_version_ck`: `form_version IN (1, 2)`.
 * `organization_join_request_branches` (new)
-  * either `existing_branch_id`, or the new-branch fields (`name`,
-    `cost_center_id`, `province`, `city`, `address`), never both
-  * `created_branch_id`, set at approval
-  * composite tenant FK, and added to
-    `tests/integration/tenant-composite-foreign-keys.test.ts`
+  * `request_id → organization_join_requests ON DELETE CASCADE`, `organization_id`
+  * either `existing_branch_id` (picked by name, or a typed CRC the server
+    matched to exactly one branch) or `cost_center_id` (a CRC to create),
+    never both (check)
+  * `resolved_branch_id`, set at approval: the branch created for the CRC, or
+    the existing branch Head Office mapped it onto
+  * `requested_branch_name varchar(100)`, added by
+    `20261021120000_join_request_branch_name.sql`: the name the applicant gave
+    a branch to create; null for an existing branch and for a request submitted
+    before names were asked for (`organization_join_request_branches_name_ck`)
+  * composite tenant keys `(existing_branch_id, organization_id)` and
+    `(resolved_branch_id, organization_id)` → `branches (id, organization_id)`;
+    added to `tests/integration/tenant-composite-foreign-keys.test.ts`
 * `organization_join_request_approvers` (new)
-  * `request_id`, `level 1..3`, `email`, `designation`
-  * at decision: `resolution` and `approver_user_id`
+  * `request_id`, `level smallint CHECK (level BETWEEN 1 AND 10)`, `email`,
+    `designation`, `UNIQUE (request_id, level)`, `UNIQUE (request_id, email)`
+  * at decision: `resolution` (`created` / `assigned` / `extended` /
+    `covered` / `not_applied`) and `approver_user_id`
 * `organization_join_request_addresses` (new)
-  * `request_id`, `request_branch_id`, `address`
-* `users`: `department`, `ip_extension`, `designation`, all nullable.
+  * `request_id`, `organization_id`, `address` (≤ 200)
+  * at approval: `branch_id` (Head Office's assignment) and
+    `delivery_address_id` (the `branch_delivery_addresses` row written),
+    composite tenant key on `(branch_id, organization_id)`
+* `users`: `department varchar(80)`, `designation varchar(80)`,
+  `ip_extension varchar(16)`, all nullable. No default: an instant `ALTER`.
 
-#### Pure logic
+No `orders` column here: an order's level snapshot belongs to phase 2b.
 
-* `lib/join-department-signup.ts`:
-  * `deriveUsernameFromEmail`, `deriveNameFromEmail`;
-  * `roleForBranchCount` (D3);
-  * `approverEmailsError`;
-  * the bounds and the department list.
-* `lib/join-approver-resolution.ts`: `planApproverResolution(existingRows,
-  branchIds)` returns, per level, `reuse` / `extend(branchIds)` / `create` /
-  `blocked(reason)` from the D2 table. It is shared by the review preview, the
-  join approval, and Head Office's Approvers editor, so what Head Office sees
-  is what gets written.
+### Pure logic
 
-#### Server logic
+* `lib/organization-join.ts`
+  * `joinUsesApprovalLevels`
+  * `JOIN_FORM_VERSIONS`, the version 2 messages
+* `lib/join-department-signup.ts` (new)
+  * `deriveUsernameFromEmail` (local part, lower-cased), `deriveNameFromEmail`
+    (`huzaifa.abid` → "Huzaifa Abid")
+  * `initiatorRoleForBranchCount` (D2)
+  * `approverEmailsError`: one per level, at the domain, distinct from each
+    other and from the initiator
+  * `DEPARTMENTS`, the bounds below, `estimateSubmissionBytes`
+* `lib/join-approver-resolution.ts` (new): `planApproverResolution({ level,
+  initiatorBranchIds, candidates, organization })`. It returns one of:
+  * `create` (no account at that email);
+  * `assign` (eligible, holds no level);
+  * `extend(branchIds)` (eligible, holds this level, lacks some branches);
+  * `covered` (holds this level and already reaches every branch);
+  * `blocked(reason)`.
 
-* `lib/server/branch-creation.ts`: `createBranchInTx`, moved out of
-  `POST /api/v1/branches` with its behaviour unchanged.
-* `lib/server/multi-branch-scope.ts`: `addBranchesToScope`, additive and
-  idempotent.
-* `createJoinRequest` (version 2):
-  * stores the package;
-  * **never looks approver emails up**, so the public answer cannot reveal
-    whether a colleague has an account.
-* `loadJoinReview`: a new Head Office read returning the package plus the
-  preview (approver matches and conflicts, duplicate branch names and CRCs,
-  username conflicts).
-* `decideJoinRequest` (version 2), in **one transaction**:
-  1. Lock the request `FOR UPDATE`.
-  2. Create the new branches, or map a new branch onto an existing one if
-     Head Office chooses.
-  3. Create the main user and its branch scope.
-  4. Create the addresses.
-  5. For each level, re-run `planApproverResolution`. If the outcome differs
-     from what Head Office reviewed, stop with a 409. Otherwise extend or
-     create the approver.
-  6. Write `user_order_approvers` (Part A).
-  7. Mark the request approved; write one audit row per object.
+  The `blocked` reasons:
+  * another organization;
+  * inactive or deleted;
+  * several accounts share the email (K-Electric mirrored accounts);
+  * a role that cannot hold a level;
+  * holds a different level (D4);
+  * a new approver for one branch where the approver role is `HEAD_OFFICE`
+    (it would be a `BRANCH_ADMIN`, which cannot hold a level there);
+  * a `BRANCH_ADMIN` that would have to become a `GROUP_USER` while orders it
+    raised are still pending or approved;
+  * is the deciding Head Office user (no self-assignment).
 
-  Any failure rolls the whole package back. After commit:
-  * the decision email to the main user;
-  * a welcome email with credentials to each **new** approver (generated
-    password, `must_change_password = true`);
-  * a notice to existing approvers who gained branches.
+  A `HEAD_OFFICE` holder (approver role `HEAD_OFFICE`) reaches the whole
+  tenant and is never extended. Shared by the review preview and the approval,
+  so what Head Office sees is what is written.
 
-#### Endpoints
+### Server
+
+* `lib/server/branch-creation.ts`: `createBranchInTx(tx, …)`, moved out of
+  `POST /api/v1/branches`, behaviour unchanged. That includes the per-tenant
+  advisory lock, the duplicate-name check and the `{ORGCODE}-NN` code. The
+  route calls it.
+* `lib/server/multi-branch-scope.ts`: `addBranchesToScope(tx, …)`, additive
+  and idempotent (`ON CONFLICT DO NOTHING` on
+  `user_branch_assignments_user_branch_uq`). Never `replaceMultiBranchScope`
+  on an existing approver.
+* `lib/server/user-approval-level.ts`: extract the body of
+  `setUserApprovalLevel` into `assignApprovalLevelInTx(tx, …)`, which both
+  the existing route and the join approval call. One writer of
+  `orderApprovalLevel`, one refusal rule, one `ASSIGN_ORDER_APPROVAL_LEVEL`
+  audit. The writers list in `order-approval-levels-contract.test.ts` stays
+  as it is.
+* `createJoinRequest`, version 2: stores the package. It **never looks
+  approver emails up**, so the public answer cannot reveal whether a colleague
+  has an account. Initiator identity conflicts keep the one flattened message.
+* `loadJoinReview` (new): the package plus the preview, for Head Office only:
+  * the per-level resolution;
+  * who else each approver will approve for ("Level 2 for everyone at Branch
+    A, Branch B");
+  * duplicate branch names and CRC numbers;
+  * username conflicts;
+  * which D7 case applies.
+* `decideJoinRequest`, version 2, in **one transaction**, locks in the order
+  the existing writers use:
+  1. Lock the request `FOR UPDATE`. Refuse unless `pending`.
+  2. Lock the existing approver users `FOR UPDATE`, in id order. This is the
+     same user → organization order as `setUserApprovalLevel`, so the two
+     cannot deadlock behind a levels save's `FOR UPDATE`.
+  3. Read the organization `FOR SHARE`: approval switch, levels switch,
+     approver role and level count.
+  4. Create the new branches through `createBranchInTx`, or map them onto
+     existing ones as Head Office chose. Set each new branch's group if Head
+     Office picked one.
+  5. Create the initiator with its role and scope. A one-branch initiator gets
+     `branch_id`; a multi-branch one gets `addBranchesToScope`.
+  6. Write the addresses to `branch_delivery_addresses` as approved, with
+     `requested_by_user_id` = the initiator.
+  7. For each level, re-run `planApproverResolution`. If the outcome differs
+     from what Head Office reviewed, stop with a 409. Otherwise apply it:
+     * create the user (random temporary password, `must_change_password`,
+       D3): a `BRANCH_ADMIN` pinned to the one branch, or a `GROUP_USER`
+       assigned to every branch when there are more (see "Approver roles");
+     * or convert an existing `BRANCH_ADMIN` to `GROUP_USER`, or add the
+       missing branches;
+     * then `assignApprovalLevelInTx`.
+     `covered` and `not_applied` (D7) write nothing.
+  8. Record each resolution on the request's approver rows, mark the request
+     approved, and write one audit row per object.
+
+  Any failure rolls the whole package back. After commit, through `after()`:
+  * the decision email to the initiator;
+  * `sendWelcomeEmail` to each new approver with its temporary password (D3);
+  * a notice to each existing approver who gained branches or a level.
+
+### Approver roles
+
+Decided 2026-10-16: **an approver's role follows how many branches it will
+reach — one branch is a Branch Admin of that branch, more than one is a Group
+User.** Applies to the approval-level users only; the initiator keeps
+Order Portal (one branch) / Group Order Portal (more).
+
+| Approver | One branch | More than one branch |
+|---|---|---|
+| New (no account) | Created `BRANCH_ADMIN`, `branch_id` = that branch. **Blocked** where `order_approver_role` is `HEAD_OFFICE`, because a Branch Admin cannot hold a level there. | Created `GROUP_USER`, assigned to every branch. |
+| Existing `BRANCH_ADMIN` | Its own branch: stays Branch Admin (assign/covered). Another branch: converted, as below. | **Converted to `GROUP_USER`**: `branch_id` cleared, its old branch kept as an assignment beside the initiator's, budget allocation off, `session_version` bumped and `sessions` deleted, `USER_ACCESS_UPDATE` in `system_logs` (`source: DEPARTMENT_JOIN_APPROVAL`), as `PATCH /api/v1/users/[id]/access` would. **Blocked** while orders it raised are pending or approved (`loadRoleChangeReadiness`, the rule every role change follows). Judged as the Group User it becomes, so it is converted even where the approver role is Head Office. |
+| Existing `GROUP_USER` | Stays `GROUP_USER` — never turned into a Branch Admin. | Stays `GROUP_USER`; missing branches added. |
+| Existing `HEAD_OFFICE` | Unchanged (covered if it holds the level, else blocked). | Same. |
+| Any other existing role | Blocked, as before (never converted). | Same. |
+
+The count is the initiator's branches after Head Office's choices at review:
+existing branches, plus CRCs mapped onto branches, plus CRCs to create — each
+counted once (`branchCountAfterReview`). Mapping a CRC onto a branch already in
+the request lowers it, so the approval decides roles on its final branches and
+the dialog previews them with the same count, warning when it differs from the
+request's. For the same reason the drift check (`sameResolution`) compares the
+kind and the account but not the role, the branches added, or extend-versus-
+covered for a holder of the level. Pure in `lib/join-approver-resolution.ts`
+(`newApproverRole`, `branchAdminBecomesGroupUser`, `approverRoleAfterApproval`);
+applied in `createApprover` / `convertBranchAdminToGroupUser`
+(`lib/server/organization-join-department.ts`). A converted approver's notice
+email says it is now a Group User and was signed out.
+
+### Endpoints
 
 | Route | Change |
 |---|---|
-| `POST /api/v1/join/lookup` | Also returns `approvalBandsEnabled` and the two limits (D7.4). |
-| `POST /api/v1/join/requests` | Version 2 body: strict, no `username`, no `role`, no organization id. Approvers required when the switch is on, refused (400) when off, judged against the switch re-read on that request, never what the page sends back. Same rate limits and generic messages. |
-| `GET /api/v1/join-requests/[id]` | **New.** Head Office, own organization: package and preview. |
-| `PATCH /api/v1/join-requests/[id]` | Version 2 decision: per-level choices, new → existing branch mapping, group per new branch, username override. All re-validated. |
+| `POST /api/v1/join/lookup` | Also returns `form: "standard" \| "department"` and, for `department`, `approvalLevels: [{ level, fromCents, belowCents }]` (D5) and `departments`. Unchanged for `standard`. |
+| `POST /api/v1/join/requests` | Accepts the version 1 body (unchanged) or a version 2 body (`formVersion: 2`, strict). The version must match `joinUsesApprovalLevels` re-read on this request, otherwise 400. Version 2 has no `role`, `username` or organization id, and its `approvers` must cover exactly levels `1..N` of the organization's current levels. Same rate limits, same flattened identity message. |
+| `GET /api/v1/join-requests/[id]` | **New.** Head Office, own organization (`resolveJoinManagementScope`), any other is 404: the package and the review preview. |
+| `PATCH /api/v1/join-requests/[id]` | Dispatches on the **stored** version. Version 2 takes `{ replaceApprover: { level, email, designation } }` (Head Office names a different approver for a pending request, audited `REPLACE_ORGANIZATION_JOIN_REQUEST_APPROVER`), `{ update: {...} }` (Head Office edits the pending request — see "Editing at review" below), or a decision: `newBranches` (details, or `mapToBranchId`, per CRC to create), `addressBranches`, an optional initiator `username`, and the `expectedResolutions` reviewed (required to approve). Strict, re-validated, picked field by field. Version 1 decisions unchanged, and the version 1 path refuses a version 2 request. |
 
-#### UI
+### Editing at review
 
-* `app/join/page.tsx` and `components/join/join-request-form.tsx`: rebuilt to
-  the HTML. The code comes first (D5). The CRC field is a branch combobox with
-  "Create new branch…". The approver panel states each level's band ("Level 3
-  — orders up to PKR 40,000"), read from the organization. The panel is shown
-  only when the organization has the feature on.
-* `components/join/join-decision-dialog.tsx`: a version 2 review with person,
-  branches, approvers with their bands and resolution, addresses, and next
-  steps. Version 1 requests keep the current dialog.
+Head Office may correct **every field the applicant typed** before deciding:
+first and last name, email, username, phone, IP extension, employee ID,
+department, the branch/CRC list, the delivery addresses, and each level's
+approver email and designation. Two things are not editable, because they are
+the applicant's alone: the **password** and the **acceptance of the terms**.
+
+* `PATCH /api/v1/join-requests/[id]` with `{ update: { ...the whole request as it should read } }`,
+  `departmentJoinUpdateSchema` (strict; no password, role, status or tenant).
+  Version 2 requests only, chosen by the stored version as for the decision.
+* `updateDepartmentJoinRequest` (`lib/server/organization-join-department-edit.ts`)
+  runs in one transaction under the request's `FOR UPDATE` lock (the lock the
+  approval takes first, so an edit and an approval cannot interleave), and only
+  while pending (else 409). It re-applies every submission rule: the
+  organization's email domain (`joinEmailDomainRefusal`), the patterns, one
+  distinct approver per level who is not the initiator (`approverListError`,
+  against the levels the request was made with), branches active in this
+  organization, CRCs matched as at submission. Changed identity fields are held
+  to what the approval will require — no account holds the username, email,
+  phone or employee ID, and no other pending request of the tenant the email or
+  username (409). The role is recomputed from the branch count.
+* It writes only the request and its own child rows. Unchanged branch and
+  address rows keep their ids (`planRequestBranchEdit`, `planAddressEdit` in
+  `lib/join-department-edit.ts`), so choices made against them in the dialog
+  still name them; a changed approver level is replaced, so two levels may swap
+  approvers.
+* Audited `UPDATE_ORGANIZATION_JOIN_REQUEST` with the **names** of the changed
+  fields and levels and whether branches/addresses changed — never the values.
+  No row when nothing changed.
+* UI: "Edit details" in the review dialog opens `DepartmentJoinEditForm`
+  (`components/join/department-join-edit-form.tsx`); saving reloads the review,
+  so the resolutions Approve sends are judged on the corrected request.
+
+### UI
+
+* `app/join/page.tsx`: the code step is unchanged. After lookup, render
+  `JoinRequestForm` (today's form) for `standard`, or the new
+  `DepartmentSignupForm` for `department`.
+* `components/join/department-signup-form.tsx` (new), to the HTML:
+  * initiator fields;
+  * a department select;
+  * a branch/CRC combobox with "Create new branch…";
+  * addresses, each with a branch selector (hidden when there is one branch);
+  * one approver row per level, labelled with its band;
+  * terms;
+  * the username shown read-only, derived from the email;
+  * the 8 KB size guard (below).
+* `components/join/join-decision-dialog.tsx`: version 1 unchanged. Version 2
+  gets a review layout (person, branches, approvers with their bands and
+  resolutions, the "also approves for" line, addresses, D7 notice, next steps)
+  fed by `GET /api/v1/join-requests/[id]`.
+
+### Bounds (production WAF refuses JSON bodies over 8 KB)
+
+| Field | Bound |
+|---|---|
+| Approvers | one per level (≤ 10); email ≤ 120; designation ≤ 60 |
+| Branches (existing ids and new branches together) | ≤ 10; a new branch's name 2–100, its CRC ≤ 32, letters, digits and inner dashes |
+| Addresses | ≤ 5, each 5–200 |
+| Initiator | complete name ≤ 120, employee ID ≤ 64, phone `0` + 10 digits, IP extension 3–6 digits |
+
+A new branch's name and CRC come from the applicant; its province, city and
+address are given by Head Office at review.
+
+At these bounds the worst-case ASCII body is about 5.7 KB. A unit test builds
+it from the bounds and asserts it stays under 7,500 bytes. The form also
+measures the encoded body (`TextEncoder`, so non-Latin text counts at its real
+size) and refuses over 8,000 bytes, as `lib/product-request-form.ts` does.
+
+## Dependency on phase 2b (order routing)
+
+This plan writes levels; it does not route orders by them. Until phase 2b
+(`plans/OF-APPROVAL-LEVELS-route-orders-by-level.md`, to be written) ships, an
+initiator's orders are decided exactly as today. The decider is the branch's
+Branch Admin or Head Office (the approver role), or **any** Group User
+assigned to the branch. Every approver this form creates is such a Group User,
+so **each could approve any amount** at the initiator's branches, whatever
+their level.
+
+Phase 2b scope, as far as this plan needs it:
+
+* store the band on the order at creation (`orders.approval_level`, basis
+  cents; a group submission is banded on its total);
+* in `authorizeOrderDecision`, a levelled order may be decided only by an
+  active holder of exactly that level who reaches the branch. No one else may,
+  Head Office included (D6). Every claim matches `approval_level`;
+* refuse an order at creation when no holder of its band reaches the branch,
+  before any hold is taken;
+* add a creator ≠ decider guard (D2);
+* refuse to remove a level while pending orders sit at it;
+* send "awaiting approval" notifications to the band's holders;
+* show Head Office a coverage view: for each branch, which levels have no
+  holder.
 
 ## Security
 
-* **Authorization.** The band rule is enforced in `authorizeOrderDecision`,
-  the single choke point, and re-checked by the claim's `WHERE`. Hiding the
-  Approve button is presentation only.
-* **Race.** A level change between the authorization read and the approval
-  becomes a 409. A reassignment waits on the `FOR SHARE` read.
-* **Tenant isolation.**
-  * Approver rows are fenced to the organization at write time and again at
-    decision time.
-  * The join organization still comes only from the code.
-  * The new tables carry composite tenant FKs.
-* **Privilege.**
-  * The applicant cannot pick a role.
-  * Approvers are created by Head Office's approval, never by the applicant.
-  * Only Head Office sets approvers; only Super Admin sets the band limits.
-* **Money.** Amounts are integer cents. Banded orders always wait, regardless
-  of the auto-approval switch. An order without an available approver is
-  refused before it holds budget.
-* **Enumeration.** Approver lookups happen only on the authenticated Head
-  Office read.
-* **Accepted.** Splitting purchases across several single-branch orders is
-  not blocked (D1.5). Account creation for colleagues' addresses is bounded by
-  the domain lock, Head Office approval, and credentials going only to the
-  mailbox itself.
-* **WAF.** Hard bounds and a client-side size guard.
+* **Tenant.** The organization comes only from the code. Every branch id is
+  re-checked against it at submission and inside the approval. The new tables
+  carry composite tenant keys.
+* **Privilege.** The applicant chooses no role, no level and no username. The
+  initiator's role is derived from the branch count. Approvers are created
+  and levels assigned only by Head Office's approval, through the shipped
+  assignment rule. No self-assignment.
+* **Enumeration.** Approver emails are looked up only on the authenticated
+  Head Office read. The public answers are unchanged: one identity message,
+  one unknown-code message.
+* **Credentials.** No password is emailed (D3).
+* **Disclosure.** The level bands are shown to code holders (D5). The CRC
+  numbers of existing branches are never sent to the public page.
+* **Races.** Request `FOR UPDATE`, approver users `FOR UPDATE`, organization
+  `FOR SHARE`, per-tenant branch advisory lock, and a re-check against the
+  reviewed resolution (409 on drift).
+* **WAF.** Hard bounds plus the client size guard.
 
 ## Tests
 
-* **Unit.** `approvalLevelForAmount` at 0, 39,999.99, 40,000.00, 40,000.01,
-  80,000.00, 80,000.01 and at custom limits; `canDecideBandedOrder`;
-  `planApproverResolution` across the D2 table; username and name derivation;
-  form bounds including the 8 KB worst case.
+* **Unit.**
+  * `joinUsesApprovalLevels`;
+  * username and name derivation;
+  * `approverEmailsError`;
+  * `initiatorRoleForBranchCount`;
+  * every `planApproverResolution` outcome;
+  * the worst-case body size.
 * **Contract.**
-  * The authorizer's band check runs before the role rules.
-  * Every claim matches `approval_level`.
-  * The list of creation and edit paths that write `approval_level`.
-  * `organization-join-contract.test.ts`'s "exactly one user insert" rule
-    **is deliberately changed**, and says why.
-* **Integration** (`tests/integration/order-approval-bands-api.test.ts` and
-  `organization-join-v2.test.ts`):
-  * Each level decides only its band. Head Office, the Branch Admin and other
-    Group Users are refused on banded orders. Unbanded orders behave as today.
-  * The switch:
-    * off → no band stored at creation, and auto-approval honoured;
-    * switched off with banded orders pending → the normal approvers can
-      decide them at once;
-    * switched back on → they return to their band approvers;
-    * an order placed while off stays unbanded after switching on.
-  * Organization endpoints:
-    * 401/403 for every role but Super Admin on the switch and limits;
-    * an inverted pair refused, including a one-sided PATCH;
-    * string, negative and over-bound values refused;
-    * the audit rows with before and after values;
-    * the check constraint refusing a raw write.
-  * Join with the switch off: approvers refused. With it on: approvers
-    required.
-  * An edit across a band boundary → 409 for the old approver, and an email to
-    the new one.
-  * A group submission banded on its total.
-  * A missing or inactive approver → 409 at creation, with no hold taken.
-  * Auto-approval tenant: banded orders still pending.
-  * Reassignment moves a waiting order.
-  * Cross-tenant approver refused.
-  * The join package approved and rejected atomically, including each
-    approver resolution case.
-  * Audit rows.
-* **E2E.** Sign-up with three approvers → Head Office approves → the main user
-  places orders of 30,000, 60,000 and 100,000 → each reaches only the right
-  approver.
+  * the submit route checks the version against the re-read organization;
+  * no approver lookup on the public path;
+  * one writer of `order_approval_level` (unchanged list);
+  * `lib/server/organization-join.ts` added deliberately to the
+    approval-levels readers list;
+  * the "exactly one user insert" rule in `organization-join-contract.test.ts`
+    is changed on purpose, with the reason stated.
+* **Integration** (`tests/integration/organization-join-v2.test.ts`):
+  * levels off → version 2 refused and version 1 works as today; levels on →
+    version 1 refused;
+  * approvers must cover exactly the configured levels;
+  * domain lock on approver emails;
+  * the package approved and rejected atomically, with each resolution case;
+  * a level holder who gained branches;
+  * a new approver created with no usable password;
+  * a different-level conflict blocked;
+  * a cross-tenant email blocked;
+  * mirrored-account emails blocked;
+  * self-assignment refused;
+  * drift between review and approval → 409;
+  * D7 in both directions;
+  * a levels save racing an approval;
+  * Head Office of another tenant gets 404;
+  * the audit rows.
+* **E2E.** A sign-up with three approvers → Head Office approves → the
+  initiator and approvers sign in. Routing assertions are added with phase 2b.
 
 ## Phasing
 
-1. **Part A**: amount bands on orders, plus Head Office's Approvers editor.
-   Usable at once for existing users.
-2. **Part B**: the department sign-up form and package approval, which write
-   the approvers Part A reads.
-3. Later: catalogue copy and baseline budget at approval (D6); a report on
-   possible purchase splitting (D1.5).
+1. **Phase 2b: order routing by level**, its own plan. Recommended before or
+   alongside this, so the sign-up's approvers mean what the customer expects.
+2. **Join version 2, server and data**: migration, pure modules, branch-creation
+   extraction, assignment helper extraction, submit, review, decision.
+3. **Join version 2, UI**: the department form and the review dialog.
+4. Later: catalogue copy and baseline budget at approval; a report on possible
+   purchase splitting.
+
+## Branch names (2026-10-16)
+
+The first version asked for a CRC alone, and the review dialog offered the CRC
+as the new branch's name, so approved sign-ups created branches named after
+their cost centre. The field now works name-first:
+
+* **Form.** The field is "Branch". The applicant searches the organization's
+  branches by name and picks one. A name that is not listed is offered as
+  "Add "…" as a new branch", and only then is its **CRC / Cost Centre No**
+  asked for. A name that is an existing branch (case and spacing aside) adds
+  that branch instead of a new one. Each new branch is listed by its name,
+  with its CRC beside it.
+* **Body.** A new branch is `{ name, crc }`, both required on the public
+  submission (`departmentJoinSubmitSchema`); `{ crc }` alone is now 400.
+  The Head Office edit (`departmentJoinUpdateSchema`) takes `{ crc, name? }`,
+  because a request submitted earlier has no name to send back.
+  `requestedNewBranches` (`lib/join-department-signup.ts`) is the one place
+  that normalises them, one per CRC, keeping the first name given.
+* **Storage.** The name goes in `requested_branch_name`. A typed CRC that
+  matches exactly one active branch is still stored as that branch, and the
+  name is then dropped.
+* **Review.** The review answers `requestedName` per branch; the dialog
+  prefills the new branch's name from it, and starts **empty** (never the
+  CRC) for a request that has none. Head Office may still correct the name
+  before approving, and the approval creates the branch with whatever name
+  the decision carries, as before.
+* **Edit.** Head Office adds a new branch with a name and a CRC. A kept CRC
+  row takes the edit's name if one is sent (`planRequestBranchEdit` →
+  `renames`) and keeps its own otherwise.
+
+Apply `20261021120000` before deploying: the join reads select the column.
+Rollback: revert the code, then drop the column.
 
 ## Risk and rollback
 
-* Nothing changes for any organization until Super Admin switches the
-  feature on, and then only for requesters with approvers.
-* **The switch is the first line of rollback.** Switching it off returns
-  every order in that organization to the normal approvers at once, with no
-  deploy (D7.1).
-* Rollback, Part A: revert the code. Banded pending orders then fall back to
-  the existing branch rules (the columns are simply ignored). Drop the columns
-  and table afterwards.
-* Rollback, Part B: revert the code, reject any pending version 2 requests,
-  drop the new tables and columns, and restore the old check. Users and
-  branches already approved are ordinary rows and stay.
+* Nothing changes for an organization with levels off: it keeps today's form
+  and today's approval.
+* Rollback: revert the code; pending version 2 requests are rejected by
+  script or left. Drop the new tables and columns, and restore the old check.
+  Users, branches, addresses and levels already approved are ordinary rows and
+  stay.
+
+## Open items
+
+1. Phase 2b is built (`plans/OF-APPROVAL-LEVELS-route-orders-by-level.md`). It
+   bands each order on its own total, including group-portal branch orders,
+   rather than on a whole submission as sketched above.
+2. The design file was supplied in conversation on 2026-10-15; its field list
+   is recorded above.

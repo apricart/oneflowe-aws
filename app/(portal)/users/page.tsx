@@ -1,9 +1,12 @@
 "use client"
+import { useViewerAccess } from "@/lib/hooks/use-viewer-access"
 import { ReactNode } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { HeadOfficeUsersTable } from "@/components/users/head-office-users-table"
 import { CreateUserDialog } from "@/components/users/create-user-dialog"
+import { ApprovalLevelCoverage } from "@/components/users/approval-level-coverage"
 import { useAppContext } from "@/components/context/app-context"
+import { userReachesAnyBranch } from "@/lib/user-branch-reach"
 import { Button } from "@/components/ui/button"
 import { ListSkeleton, Skeleton } from "@/components/ui/skeleton"
 import { AlertCircle, RefreshCw, Users, UserPlus, Building2, UserCircle, ShoppingCart } from "lucide-react"
@@ -16,7 +19,10 @@ type CollectionResponse = {
 }
 
 export default function UsersPage() {
-  const { organizationId, branchId, branchIds, userRole, isInitialized } = useAppContext()
+  const { organizationId, branchId, branchIds, userRole: contextRole, isInitialized } = useAppContext()
+  // An organization-wide Viewer reads the directory as Head Office does.
+  const { viewRole, readOnly } = useViewerAccess()
+  const userRole = contextRole === "VIEWER" ? viewRole : contextRole
   const isContextReady = isInitialized && userRole !== null
 
   const {
@@ -78,7 +84,7 @@ export default function UsersPage() {
     }
 
     if (effectiveBranchFilterSet.size > 0) {
-      return user.branchId != null && effectiveBranchFilterSet.has(Number(user.branchId))
+      return userReachesAnyBranch(user, effectiveBranchFilterSet)
     }
 
     return true
@@ -111,7 +117,9 @@ export default function UsersPage() {
               <RefreshCw className="h-4 w-4" />
               <span className="hidden sm:inline">Refresh</span>
             </Button>
-            <CreateUserDialog onSuccess={() => mutateUsers()} />
+            {!readOnly && (
+              <CreateUserDialog onSuccess={() => mutateUsers()} />
+            )}
           </div>
         ) : (
           <div className="flex items-center gap-2" aria-hidden="true">
@@ -156,6 +164,9 @@ export default function UsersPage() {
       ) : (
         <UsersStatsSkeleton />
       )}
+
+      {/* Draws nothing unless the organization uses approval levels. */}
+      <ApprovalLevelCoverage organizationId={organizationFilterId} role={userRole} />
 
       {/* Main Directory Area */}
       <div className="flex flex-col pt-2">

@@ -44,6 +44,16 @@ describe("pending invoice notification wiring", () => {
     expect(route).toContain("inArray(invoiceStatusSql, [...PENDING_INVOICE_STATUSES])")
     // Issued when processing starts, owed only once supplied (plans/OF-INVOICE-issue-at-processing.md).
     expect(route).toContain("orderSuppliedSql,")
-    expect(route).not.toMatch(/searchParams|branchId|organizationId/)
+    // No identifier reaches the query from the browser: the handler takes no
+    // request, and the only organization it names is the order's own.
+    expect(route).toContain("export async function GET() {")
+    expect(route).not.toMatch(/searchParams|branchId|request/)
+    expect(route.match(/organizationId/g)).toEqual(["organizationId"])
+    expect(route).toContain("eq(organizations.id, orders.organizationId)")
+  })
+
+  it("shows the notice only where the organization blocks ordering on unpaid invoices", () => {
+    const route = source("app/api/v1/orders/pending-invoice/route.ts")
+    expect(route).toContain("eq(organizations.blockOrderingOnUnpaidInvoices, true)")
   })
 })

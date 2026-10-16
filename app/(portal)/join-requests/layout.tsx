@@ -1,3 +1,4 @@
+import { viewerReadRole } from "@/lib/viewer-access"
 import type { ReactNode } from "react"
 
 import { redirect } from "next/navigation"
@@ -25,7 +26,9 @@ export default async function JoinRequestsLayout({
     redirect("/login")
   }
 
-  if (!canManageJoinRequests((session.user as any).role)) {
+  // An organization-wide Viewer reads the queue read-only; every decision
+  // endpoint refuses it.
+  if (!canManageJoinRequests(viewerReadRole(session.user as any) ?? undefined)) {
     return (
       <main className="flex min-h-[calc(100vh-4rem)] items-center justify-center p-6">
         <Card className="w-full max-w-md">

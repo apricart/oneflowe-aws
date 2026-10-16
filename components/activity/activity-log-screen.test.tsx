@@ -99,7 +99,7 @@ describe("the query the screen builds", () => {
 
   it("sends only the filters that are set", () => {
     const params = new URLSearchParams(activityQueryFor(EMPTY_FILTERS, now).split("?")[1])
-    for (const key of ["source", "operation", "category", "outcome", "search", "cursor"]) {
+    for (const key of ["source", "operation", "category", "actorRole", "outcome", "search", "cursor"]) {
       expect(params.has(key)).toBe(false)
     }
   })
@@ -112,6 +112,7 @@ describe("the query the screen builds", () => {
           source: "group",
           operation: "delete",
           category: "pricing",
+          role: "BRANCH_ADMIN",
           outcome: "failure",
           search: "  ali  ",
         },
@@ -121,6 +122,7 @@ describe("the query the screen builds", () => {
     expect(params.get("source")).toBe("group")
     expect(params.get("operation")).toBe("delete")
     expect(params.get("category")).toBe("pricing")
+    expect(params.get("actorRole")).toBe("BRANCH_ADMIN")
     expect(params.get("outcome")).toBe("failure")
     // Trimmed, so a stray space is not part of the term.
     expect(params.get("search")).toBe("ali")
@@ -151,6 +153,7 @@ describe("activeFilterChips", () => {
       source: "audit",
       operation: "delete",
       category: "pricing",
+      role: "ORDER_PORTAL",
       outcome: "failure",
       search: "ali",
     })
@@ -158,10 +161,12 @@ describe("activeFilterChips", () => {
       "source",
       "operation",
       "category",
+      "role",
       "outcome",
       "search",
     ])
     expect(chips.find((chip) => chip.key === "operation")?.label).toContain("Deleted")
+    expect(chips.find((chip) => chip.key === "role")?.label).toBe("Role: Order Portal")
   })
 
   it("ignores a blank search", () => {

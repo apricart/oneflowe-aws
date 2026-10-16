@@ -1,3 +1,4 @@
+import { VIEWER_READ_REFUSED, viewerReadRole } from "@/lib/viewer-access"
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
@@ -16,7 +17,9 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const userRole = (session.user as any).role
+    // An organization-wide Viewer reads as Head Office; a pinned one is refused.
+    const userRole = viewerReadRole(session.user as any)
+    if (!userRole) return NextResponse.json({ error: VIEWER_READ_REFUSED }, { status: 403 })
     // The catalogue taxonomy: top-level category names and counts, with no
     // tenant rows in it. Readable by every role that reads inventory or
     // filters a report by category — the multi-branch approver holds the same

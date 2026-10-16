@@ -71,8 +71,10 @@ type ProductFormState = {
   discountActive: boolean
 }
 
+type ProductFormMode = "create" | "edit"
+
 type ProductFormProps = {
-  mode: "create" | "edit"
+  mode: ProductFormMode
   initialProduct?: GlobalProduct | null
   onCancel?: () => void
   onSuccess?: () => void
@@ -85,15 +87,16 @@ type NextProductCodeResponse = {
 const NEXT_PRODUCT_CODE_ENDPOINT = "/api/v1/admin/global-inventory/next-code"
 
 const getProductValidationError = (productData: ProductFormState) => {
+  // The code is the server's: assigned on create and fixed after, so it is
+  // neither required here nor sent.
   const requiredValues = [
-    productData.productCode,
     productData.name,
     productData.basePrice,
     productData.unit,
     productData.stockQuantity,
   ]
   if (requiredValues.some((value) => !value)) {
-    return "Product code, name, price, unit, and stock quantity are required"
+    return "Name, price, unit, and stock quantity are required"
   }
   if (!productData.subcategoryId) return "Please select a category and subcategory"
 
@@ -110,7 +113,8 @@ const getProductValidationError = (productData: ProductFormState) => {
 }
 
 const getProductPayload = (
-  productData: ProductFormState,
+  // Both endpoints refuse a code: create assigns it, and it never changes after.
+  { productCode: _productCode, ...productData }: ProductFormState,
   initialProduct?: GlobalProduct | null,
   confirmTaxInclusivePrice = false,
 ) => ({
@@ -142,6 +146,15 @@ const getSaveErrorMessage = (status: number, fallback?: string) => {
     return "The image is too large to save. Please use a smaller image or remove it and try again."
   }
   return fallback || "Failed to save product"
+}
+
+/** On create, name the code the server assigned: it may differ from the preview. */
+const getSaveSuccessMessage = (
+  mode: ProductFormMode,
+  result: { message?: string; product?: { productCode?: string } },
+) => {
+  const assignedCode = mode === "create" ? result.product?.productCode : undefined
+  return assignedCode ? `${result.message} — code ${assignedCode}` : result.message
 }
 
 /**
@@ -430,7 +443,7 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Reado
       if (response.ok) {
         toast({
           title: mode === "edit" ? "Product updated" : "Product created",
-          description: result.message,
+          description: getSaveSuccessMessage(mode, result),
         })
         if (mode === "create") {
           await mutateSWRCache(NEXT_PRODUCT_CODE_ENDPOINT)
@@ -471,15 +484,20 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Reado
           <CardContent className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <div>
-                <label htmlFor="product-code" className="block text-sm font-medium mb-1">Product Code <span className="text-destructive">*</span></label>
+                <label htmlFor="product-code" className="block text-sm font-medium mb-1">Product Code</label>
                 <Input
                   id="product-code"
-                  value={productData.productCode ?? ""}
-                  onChange={(e) => setProductData({ ...productData, productCode: e.target.value })}
-                  placeholder="PRD-001"
-                  required
+                  value={productData.productCode || (mode === "create" ? "Generating…" : "")}
+                  readOnly
+                  aria-readonly="true"
+                  aria-describedby="product-code-hint"
+                  className="bg-muted text-muted-foreground cursor-not-allowed"
                 />
-                <p className="mt-1 text-xs text-muted-foreground">Avoid spaces; use dashes.</p>
+                <p id="product-code-hint" className="mt-1 text-xs text-muted-foreground">
+                  {mode === "create"
+                    ? "Generated automatically and confirmed when the product is saved."
+                    : "Assigned when the product was created; it cannot be changed."}
+                </p>
               </div>
               <div>
                 <label htmlFor="product-name" className="block text-sm font-medium mb-1">Name <span className="text-destructive">*</span></label>

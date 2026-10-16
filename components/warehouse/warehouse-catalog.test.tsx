@@ -2,10 +2,12 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 /**
- * The warehouse's Product Catalog tab. The server selects no price and admits
- * only GET (lib/warehouse-access.test.ts, tests/integration/warehouse-*.test.ts);
- * this pins what the screen does with what it is given: no price column, no
- * control that creates, edits or deletes, and the query it asks for.
+ * The warehouse's Global Products view. The server admits only GET
+ * (lib/warehouse-access.test.ts, tests/integration/warehouse-*.test.ts); this
+ * pins what the screen does with what it is given: the base price, as Super
+ * Admin's Global Products shows it (plans/OF-WAREHOUSE-full-read-only-catalog.md,
+ * which reversed the earlier no-price rule), no control that creates, edits or
+ * deletes, and the query it asks for.
  */
 
 const state = vi.hoisted(() => ({
@@ -30,6 +32,7 @@ const item = (overrides: Record<string, unknown> = {}) => ({
   name: "Green Tea 80gm",
   unit: "80 gm",
   status: "active",
+  basePriceCents: 35_500,
   stockQuantity: 120,
   low: false,
   imageUrl: null,
@@ -55,7 +58,7 @@ beforeEach(() => {
 afterEach(() => cleanup())
 
 describe("the Product Catalog tab", () => {
-  it("lists products with their category, unit, status and stock, and no price column", () => {
+  it("lists products with their category, unit, base price, status and stock", () => {
     answer(page([
       item(),
       item({ id: 2, productCode: "PRD-2", name: "A4 Paper", unit: "Ream", status: "inactive", stockQuantity: 0, low: true, category: null, subcategory: null }),
@@ -63,14 +66,14 @@ describe("the Product Catalog tab", () => {
     render(<WarehouseCatalog />)
 
     const headers = screen.getAllByRole("columnheader").map((cell) => cell.textContent)
-    expect(headers).toEqual(["Product", "Category", "Subcategory", "Unit", "Status", "In stock"])
-    expect(headers.join(" ")).not.toMatch(/price|amount|rs|pkr/i)
+    expect(headers).toEqual(["Product", "Category", "Subcategory", "Unit", "Base price", "Status", "In stock"])
 
     const rows = screen.getAllByRole("row").slice(1)
     expect(within(rows[0]).getByText("Green Tea 80gm")).toBeTruthy()
     expect(within(rows[0]).getByText("PRD-1")).toBeTruthy()
     expect(within(rows[0]).getByText("Beverages")).toBeTruthy()
     expect(within(rows[0]).getByText("Tea")).toBeTruthy()
+    expect(within(rows[0]).getByText(/355/)).toBeTruthy()
     expect(within(rows[1]).getByText("Uncategorized")).toBeTruthy()
     expect(within(rows[1]).getByText("Low")).toBeTruthy()
     expect(screen.getByText("Showing 1–2 of 2 products")).toBeTruthy()

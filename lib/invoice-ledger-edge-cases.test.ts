@@ -484,6 +484,7 @@ describe("the consolidated report on a fully credited invoice", () => {
     paymentStatus: "PAID",
     department: "Alpha",
     approver: "Approver",
+    approvalLevel: null,
     costCenterId: null,
     quantity: 3,
     creditedQuantity: 3,

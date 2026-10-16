@@ -631,23 +631,36 @@ export const ROLE_TEMPLATES = {
   },
   VIEWER: {
     name: "Viewer",
-    description: "Read-only dashboard access. Cannot create, edit or delete anything",
+    description: "Read-only access to its organization: what Head Office sees, and nothing it may change",
     permissions: [
       // Every key here is a read. The role holds no *_CREATE, *_EDIT, *_DELETE,
       // *_APPROVE or *_MANAGE key of any kind, and that is the whole point of
-      // it — see `plans/OF-VIEWER-readonly-dashboard-role.md`.
+      // it — see `plans/OF-VIEWER-readonly-dashboard-role.md` and
+      // `plans/OF-VIEWER-head-office-read-only-menu.md`. They are Head Office's
+      // read keys; a branch-pinned Viewer still reaches its dashboard alone,
+      // which `lib/viewer-access.ts` decides, not these keys.
       //
       // Authorization in this codebase is still role-name matching rather than
       // permission evaluation (see
       // `plans/OF-CUSTOM-ROLES-rbac-permission-engine.md`), so what actually
       // keeps this role read-only is its absence from every mutating route's
       // allowlist. These keys describe the role; they do not enforce it.
+      Permission.ORG_VIEW,
       Permission.ORG_VIEW_METRICS,
-      // The KPI cards drill into the orders behind the number.
+      Permission.ORG_VIEW_AUDIT_LOGS,
+      Permission.USER_VIEW,
       Permission.ORDER_VIEW,
+      Permission.ORDER_VIEW_ALL,
+      Permission.INVENTORY_VIEW,
+      Permission.GROUP_VIEW,
+      Permission.FINANCE_VIEW_BUDGETS,
+      Permission.FINANCE_VIEW_REPORTS,
       Permission.REPORTS_VIEW_ORGANIZATION,
-      // Deliberately no SUPPORT_* keys, unlike every other client role: this
-      // account is confined to its dashboard and raises nothing.
+      Permission.REPORTS_VIEW_BRANCH,
+      Permission.SETTINGS_VIEW,
+      // Reads its organization's threads; SUPPORT_CREATE and SUPPORT_REPLY are
+      // deliberately absent — it raises and answers nothing.
+      Permission.SUPPORT_VIEW,
     ],
   },
   ORDER_PORTAL: {

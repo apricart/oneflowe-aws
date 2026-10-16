@@ -16,26 +16,97 @@ concurrency:
   group: oneflowe-production-deployment
   cancel-in-progress: false
 
-jobs:
-  # ============================================================
-  # JOB 1 - Runs immediately on push. Verifies the commit, scans,
-  # builds, pushes the image to ECR, generates a PDF report, and
-  # emails it. Does NOT deploy anything yet.
-  # ============================================================
-  build-and-report:
-    runs-on: ubuntu-latest
-    # Tests, scans, image build, push and the report share this budget; the
-    # staging run hit its own 35-minute limit inside the SonarCloud step.
-    timeout-minutes: 60
-    permissions:
-      contents: read
-    outputs:
-      commit_sha: ${{ github.sha }}
+# The gates run as parallel jobs, so a run takes about as long as the slowest
+# of them rather than the sum of all of them (it was ~45 minutes run end to
+# end in one job). Typecheck and lint have a job of their own and report in a
+# few minutes, so a broken commit is caught without waiting for the test
+# suites.
+#
+# The image is built and scanned while the tests run, but it is pushed to ECR
+# only by `build-and-report`, after every gate has passed, so a failing commit
+# never reaches ECR or the approval queue. `build-and-report` pushes the exact
+# image `build-image` scanned, handed over as a run artifact, then generates
+# the PDF report and emails it. `deploy` still waits for a reviewer.
 
-    # A throwaway Postgres for the integration suite. It lives and dies with
-    # this job, holds nothing but the fixtures the tests create, and needs no
-    # secret. The database name carries "test" because the test runner refuses
-    # anything else — a guard against ever pointing the suite at a real tenant.
+jobs:
+  # workflow_dispatch can be pointed at any branch. Production is only ever
+  # built from main. Every other job needs this one.
+  verify-ref:
+    name: Refuse any ref other than main
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Refuse any ref other than main
+        if: ${{ github.ref != 'refs/heads/main' }}
+        run: |
+          echo "deploy-prod only builds and deploys refs/heads/main." >&2
+          exit 1
+
+  checks:
+    name: Typecheck and lint
+    needs: verify-ref
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.x
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Run TypeScript checks
+        run: npm run typecheck
+
+      - name: Run lint
+        run: npm run lint
+
+  # The unit suite needs no secrets and no database.
+  unit-tests:
+    name: Unit tests
+    needs: verify-ref
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.x
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Run unit tests
+        run: npm run test:coverage
+
+      # Read by the SonarCloud job.
+      - name: Upload unit coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-unit
+          path: coverage/unit/lcov.info
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  # A throwaway Postgres for the integration suite. It lives and dies with
+  # this job, holds nothing but the fixtures the tests create, and needs no
+  # secret. The database name carries "test" because the test runner refuses
+  # anything else — a guard against ever pointing the suite at a real tenant.
+  integration-tests:
+    name: Integration tests
+    needs: verify-ref
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16
@@ -50,16 +121,120 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
-
     steps:
-      # workflow_dispatch can be pointed at any branch. Production is only
-      # ever built from main.
-      - name: Refuse any ref other than main
-        if: ${{ github.ref != 'refs/heads/main' }}
-        run: |
-          echo "deploy-prod only builds and deploys refs/heads/main." >&2
-          exit 1
+      - name: Checkout code
+        uses: actions/checkout@v4
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.x
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Migrate the throwaway test database
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/oneflowe_test
+        run: npm run db:migrate:test
+
+      # The runner skips every integration suite, and passes, when it has no
+      # database. That is right on a laptop and wrong here: a mis-set variable
+      # would turn the gate green without running a test. The runner says on
+      # stderr whether it ran or skipped, and this step fails on a skip.
+      - name: Run integration tests
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/oneflowe_test
+        run: |
+          set -Eeuo pipefail
+          npm run test:integration:coverage 2>&1 | tee integration-run.log
+          if ! grep -q "running against oneflowe_test" integration-run.log; then
+            echo "Integration suites did not run against the test database." >&2
+            exit 1
+          fi
+          if grep -q "will SKIP" integration-run.log; then
+            echo "Integration suites skipped themselves." >&2
+            exit 1
+          fi
+
+      # Read by the SonarCloud job.
+      - name: Upload integration coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-integration
+          path: coverage/integration/lcov.info
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  # The browser suite seeds its own fixtures (tests/e2e/global-setup.ts), so it
+  # needs only a freshly migrated database of its own.
+  e2e-smoke:
+    name: Role smoke tests
+    needs: verify-ref
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: oneflowe_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.x
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Migrate the throwaway test database
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/oneflowe_test
+        run: npm run db:migrate:test
+
+      - name: Install Chromium for role smoke tests
+        run: ./node_modules/.bin/playwright install --with-deps chromium
+
+      - name: Run role deployment smoke tests
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/oneflowe_test
+        run: npm run e2e:smoke
+
+      - name: Upload role smoke failure evidence
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: role-smoke-prod-${{ github.sha }}
+          path: |
+            playwright-report
+            test-results
+          if-no-files-found: ignore
+          retention-days: 14
+          overwrite: true
+
+  # Report-only scans. None of them will block deployment; their output goes
+  # into the PDF report.
+  security-scans:
+    name: Security scans
+    needs: verify-ref
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
@@ -112,6 +287,8 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      # The dependency scans read the installed tree, as they did when they
+      # ran in the same job as the tests.
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -120,83 +297,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci --ignore-scripts
-
-      # ---- Quality gates ----
-      # These run before the image is built so a failing commit never reaches
-      # ECR or the approval queue. The unit suite needs no secrets and no
-      # database; the integration suite runs against the service container
-      # above, migrated fresh on every run.
-      - name: Run unit tests
-        run: npm run test:coverage
-
-      - name: Migrate the throwaway test database
-        env:
-          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/oneflowe_test
-        run: npm run db:migrate:test
-
-      # The runner skips every integration suite, and passes, when it has no
-      # database. That is right on a laptop and wrong here: a mis-set variable
-      # would turn the gate green without running a test. The runner says on
-      # stderr whether it ran or skipped, and this step fails on a skip.
-      - name: Run integration tests
-        env:
-          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/oneflowe_test
-        run: |
-          set -Eeuo pipefail
-          npm run test:integration:coverage 2>&1 | tee integration-run.log
-          if ! grep -q "running against oneflowe_test" integration-run.log; then
-            echo "Integration suites did not run against the test database." >&2
-            exit 1
-          fi
-          if grep -q "will SKIP" integration-run.log; then
-            echo "Integration suites skipped themselves." >&2
-            exit 1
-          fi
-
-      - name: Install Chromium for role smoke tests
-        run: ./node_modules/.bin/playwright install --with-deps chromium
-
-      - name: Run role deployment smoke tests
-        env:
-          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/oneflowe_test
-        run: npm run e2e:smoke
-
-      - name: Upload role smoke failure evidence
-        if: ${{ failure() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: role-smoke-prod-${{ github.sha }}
-          path: |
-            playwright-report
-            test-results
-          if-no-files-found: ignore
-          retention-days: 14
-
-      # This disposable webpack cache can exceed 1 GB. It is not needed by
-      # later checks, the Docker context, or the production image.
-      - name: Reclaim browser-test build output
-        run: rm -rf -- .next-e2e
-
-      - name: Run TypeScript checks
-        run: npm run typecheck
-
-      - name: Run lint
-        run: npm run lint
-
-      # ---- SonarCloud scan (report only) ----
-      # Its own timeout keeps a slow TypeScript analysis from spending the
-      # job's budget: when it expires the step fails, continue-on-error carries
-      # on, and the image is still built and queued for approval.
-      - name: SonarCloud Scan
-        continue-on-error: true
-        timeout-minutes: 15
-        uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6.0.0
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        with:
-          args: >
-            -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
-            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
 
       # ---- Trivy filesystem/dependency scan ----
       - name: Trivy filesystem scan (JSON)
@@ -230,25 +330,88 @@ jobs:
         with:
           args: --json-file-output=snyk-report.json
 
-      # ---- Build the Docker image ----
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+      # Read by build-and-report, which bundles them with the PDF.
+      - name: Upload scan reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
         with:
-          aws-access-key-id: ${{ secrets.DEPLOY_AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.DEPLOY_AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.DEPLOY_AWS_REGION }}
+          name: fs-scan-reports
+          path: |
+            gitleaks-report.json
+            trivy-fs-report.json
+            trivy-fs-report.txt
+            snyk-report.json
+          if-no-files-found: warn
+          retention-days: 1
+          overwrite: true
 
-      - name: Log in to ECR
-        uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64 # v2
+  # ---- SonarCloud scan (report only) ----
+  # Needs both coverage reports, so it starts once the two test suites finish.
+  # The report waits for it, so the dashboard the email links to is current.
+  sonarcloud:
+    name: SonarCloud scan
+    needs: [unit-tests, integration-tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      # The standard runner for a private repository has about 14 GB of disk.
-      # By this point node_modules, coverage, Chromium, the Snyk and Postgres
-      # images and the Trivy database have used most of it, and the Docker
-      # build needs several GB more (two copies of node_modules plus .next).
-      # When the disk fills, the runner itself dies mid-build and GitHub keeps
-      # no log. Remove preinstalled SDKs this pipeline never uses, and the
-      # browser the smoke tests no longer need, then record what is left so a
-      # future failure shows the numbers. Never blocks the build.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.x
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Download unit coverage
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-unit
+          path: coverage/unit
+
+      - name: Download integration coverage
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-integration
+          path: coverage/integration
+
+      # Its own timeout keeps a slow TypeScript analysis from running on: when
+      # it expires the step fails, continue-on-error carries on, and the image
+      # is still pushed and queued for approval.
+      - name: SonarCloud Scan
+        continue-on-error: true
+        timeout-minutes: 15
+        uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6.0.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
+            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
+
+  # Builds and scans the image without pushing it, and needs no AWS access.
+  build-image:
+    name: Build and scan image
+    needs: verify-ref
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # The standard runner for a private repository has about 14 GB of disk,
+      # and the Docker build needs several GB (two copies of node_modules plus
+      # .next). When the disk fills, the runner itself dies mid-build and
+      # GitHub keeps no log. Remove preinstalled SDKs this pipeline never uses,
+      # then record what is left so a future failure shows the numbers. Never
+      # blocks the build.
       - name: Free runner disk space before the image build
         continue-on-error: true
         run: |
@@ -258,15 +421,27 @@ jobs:
             /usr/local/lib/android \
             /opt/ghc \
             /usr/local/.ghcup \
-            /opt/hostedtoolcache/CodeQL \
-            "$HOME/.cache/ms-playwright"
+            /opt/hostedtoolcache/CodeQL
           echo "After:"; df -h /; docker system df
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Layers are cached between runs in the GitHub Actions cache, so an
+      # unchanged lockfile skips the dependency install. The Alpine security
+      # upgrade is keyed to this run (SECURITY_UPGRADE_KEY in the Dockerfile)
+      # and is never served from the cache.
       - name: Build image
-        env:
-          ECR_REPOSITORY_URL: ${{ secrets.ECR_REPOSITORY_URL }}
-        run: |
-          docker build -t "${ECR_REPOSITORY_URL}:prod-${GITHUB_SHA}" .
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          push: false
+          tags: ${{ secrets.ECR_REPOSITORY_URL }}:prod-${{ github.sha }}
+          build-args: |
+            SECURITY_UPGRADE_KEY=${{ github.run_id }}-${{ github.run_attempt }}
+          cache-from: type=gha,scope=oneflowe-production-image
+          cache-to: type=gha,scope=oneflowe-production-image,mode=max
 
       # ---- Trivy image scan ----
       - name: Trivy image scan
@@ -278,6 +453,68 @@ jobs:
           exit-code: 0
           format: table
           output: trivy-image-report.txt
+
+      - name: Upload image scan report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-scan-report
+          path: trivy-image-report.txt
+          if-no-files-found: warn
+          retention-days: 1
+          overwrite: true
+
+      # Hands the scanned image to build-and-report, which pushes it only once
+      # every gate has passed.
+      - name: Save image for the push
+        env:
+          ECR_REPOSITORY_URL: ${{ secrets.ECR_REPOSITORY_URL }}
+        run: |
+          set -Eeuo pipefail
+          docker save "${ECR_REPOSITORY_URL}:prod-${GITHUB_SHA}" | gzip -1 > "$RUNNER_TEMP/image.tar.gz"
+          ls -lh "$RUNNER_TEMP/image.tar.gz"
+
+      - name: Upload image for the push
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-prod-${{ github.sha }}
+          path: ${{ runner.temp }}/image.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+          overwrite: true
+
+  # ============================================================
+  # Runs once every gate has passed. Pushes the image to ECR,
+  # generates the PDF report, and emails it. Does NOT deploy
+  # anything yet.
+  # ============================================================
+  build-and-report:
+    name: Push image and report
+    needs: [checks, unit-tests, integration-tests, e2e-smoke, security-scans, sonarcloud, build-image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      commit_sha: ${{ github.sha }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download scan reports
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: fs-scan-reports
+          path: .
+
+      - name: Download image scan report
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: image-scan-report
+          path: .
 
       # ---- Generate the PDF report ----
       - name: Generate PDF report
@@ -301,9 +538,20 @@ jobs:
             pipeline-report-${{ github.sha }}.pdf
           if-no-files-found: warn
           retention-days: 90
+          overwrite: true
 
-      # ---- Push image to ECR (ready and waiting for approval) ----
-      - name: Push image to ECR
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          aws-access-key-id: ${{ secrets.DEPLOY_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.DEPLOY_AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.DEPLOY_AWS_REGION }}
+
+      - name: Log in to ECR
+        uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64 # v2
+
+      - name: Check whether the image is already in ECR
+        id: ecr-image
         env:
           DEPLOY_AWS_REGION: ${{ secrets.DEPLOY_AWS_REGION }}
           ECR_REPOSITORY_URL: ${{ secrets.ECR_REPOSITORY_URL }}
@@ -312,9 +560,27 @@ jobs:
 
           if aws ecr describe-images --repository-name "$REPOSITORY_NAME" --region "$DEPLOY_AWS_REGION" --image-ids "imageTag=prod-${GITHUB_SHA}" >/dev/null 2>&1; then
             echo "Image tag prod-${GITHUB_SHA} already exists in ECR (likely a re-run on the same commit) - skipping push."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
           else
-            docker push "${ECR_REPOSITORY_URL}:prod-${GITHUB_SHA}"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Download the scanned image
+        if: ${{ steps.ecr-image.outputs.exists != 'true' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: image-prod-${{ github.sha }}
+          path: ${{ runner.temp }}/image
+
+      # ---- Push image to ECR (ready and waiting for approval) ----
+      - name: Push image to ECR
+        if: ${{ steps.ecr-image.outputs.exists != 'true' }}
+        env:
+          ECR_REPOSITORY_URL: ${{ secrets.ECR_REPOSITORY_URL }}
+        run: |
+          set -Eeuo pipefail
+          gunzip -c "$RUNNER_TEMP/image/image.tar.gz" | docker load
+          docker push "${ECR_REPOSITORY_URL}:prod-${GITHUB_SHA}"
 
       # ---- Email the PDF report ----
       # Report-only notification. A mail outage must not be able to block a

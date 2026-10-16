@@ -7,6 +7,7 @@ import { canViewFulfillmentToken } from "@/lib/fulfillment-token-access"
 import { db } from "@/lib/db"
 import { roundQuantity } from "@/lib/quantity"
 import { GROUP_USER_ROLE } from "@/lib/server/multi-branch-scope"
+import { levelledViewFlags, loadLevelledViewContext } from "@/lib/server/order-approval-routing"
 import { UNGROUPED_BUCKET_NAME } from "@/lib/server/group-order-portal"
 
 /**
@@ -59,6 +60,13 @@ export type ApprovalOrder = {
   correctionRequestNote: string | null
   /** Present only for orders this approver may still see a token for. */
   approvalToken: string | null
+  /**
+   * The approval level the order waits at, and whether this approver may not
+   * decide it because of it. Null and false for an organization without levels
+   * (plans/OF-APPROVAL-LEVELS-route-orders-by-level.md, R10).
+   */
+  approvalLevel: number | null
+  levelDecisionLocked: boolean
 }
 
 export type ApprovalGroupOrder = {
@@ -196,12 +204,15 @@ export async function listApprovalQueue({
   page,
   limit,
   filter,
+  viewerUserId = null,
 }: {
   organizationId: number | null
   scopedBranchIds: number[]
   page: number
   limit: number
   filter: ApprovalFilter
+  /** The approver reading the queue, for the per-order level flags. */
+  viewerUserId?: string | null
 }): Promise<ApprovalQueuePage> {
   const scope = approverScope(organizationId, scopedBranchIds)
   if (!scope.usable) return emptyPage(page, limit)
@@ -281,6 +292,8 @@ export async function listApprovalQueue({
       returnedForCorrectionAt: orders.returnedForCorrectionAt,
       correctionRequestNote: orders.correctionRequestNote,
       approvalToken: orders.approvalToken,
+      approvalLevel: orders.approvalLevel,
+      createdByUserId: orders.createdByUserId,
       itemCount: sql<number>`(
         SELECT COALESCE(SUM(${orderItems.quantity}), 0)
         FROM ${orderItems} WHERE ${orderItems.orderId} = ${orders.id}
@@ -297,6 +310,7 @@ export async function listApprovalQueue({
     ))
     .orderBy(orders.branchId)
 
+  const levelledView = await loadLevelledViewContext({ userId: viewerUserId, organizationId: scope.organizationId })
   const childrenByEnvelope = new Map<number, ApprovalOrder[]>()
   for (const row of childRows) {
     if (row.groupOrderId === null) continue
@@ -327,6 +341,12 @@ export async function listApprovalQueue({
       })
         ? row.approvalToken
         : null,
+      ...levelledViewFlags(levelledView, {
+        approvalLevel: row.approvalLevel,
+        organizationId: scope.organizationId,
+        branchId: row.branchId,
+        createdByUserId: row.createdByUserId,
+      }),
     })
     childrenByEnvelope.set(row.groupOrderId, bucket)
   }

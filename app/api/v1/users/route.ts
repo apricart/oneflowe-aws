@@ -9,19 +9,22 @@ import { getCached,invalidateByPrefix,scopedCacheKey,CACHE_TTL } from "@/lib/cac
 import { assertUniqueUserFields,normalizeEmail,normalizeOptionalText,UserUniqueFieldError } from "@/lib/user-uniqueness"
 import { sendWelcomeEmail } from "@/lib/email"
 import { userCreateSchema,validationMessage } from "@/lib/server/mutation-validation"
+import { approvalLevelRefusalForNewUser } from "@/lib/server/user-approval-level"
 import { canAssignRole } from "@/lib/server/user-access-policy"
-import { isViewerRole } from "@/lib/viewer-access"
+import { isViewerRole, VIEWER_READ_REFUSED, viewerReadScope } from "@/lib/viewer-access"
 import { isOrderDeskRole, orderDeskUserShapeError } from "@/lib/order-desk-access"
 import { apricartExecutiveUserShapeError, isApricartExecutiveRole } from "@/lib/apricart-executive-access"
 import { isWarehouseRole, warehouseUserShapeError } from "@/lib/warehouse-access"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { USER_MANAGEMENT_ROLES } from "@/lib/user-management-access"
 import { usernameExists } from "@/lib/user-username-uniqueness"
+import { organizationUsernameFor } from "@/lib/server/organization-username"
 import type { SystemRole } from "@/lib/server/mutation-validation"
 import {
   usesMultiBranchScope,
   rejectScopeForSingleBranchRole,
   replaceMultiBranchScope,
+  resolveScopedBranchesForUsers,
   validateMultiBranchScope,
 } from "@/lib/server/multi-branch-scope"
 
@@ -130,6 +133,9 @@ async function validateUserAssignment(
     ?? await getTenantReferenceError(organizationId, branchId)
 }
 
+/** A requested approval level the role or organization does not admit; rolls the creation back. */
+class ApprovalLevelRefusedError extends Error {}
+
 async function writeUserCreationAudit(createdUser: any, scope: any, role: string, organizationId: number | null, branchId: number | null) {
   try {
     const headersList = await headers()
@@ -148,6 +154,7 @@ async function writeUserCreationAudit(createdUser: any, scope: any, role: string
         createdUserRole: role,
         createdUserOrgId: organizationId,
         createdUserBranchId: branchId,
+        createdUserOrderApprovalLevel: createdUser.orderApprovalLevel ?? null,
       },
       ipAddress: forwardedFor ? forwardedFor.split(',')[0] : "unknown",
       userAgent: headersList.get("user-agent"),
@@ -160,6 +167,7 @@ async function writeUserCreationAudit(createdUser: any, scope: any, role: string
 
 function handleUserCreationError(caughtError: any) {
   if (caughtError instanceof UserUniqueFieldError) return error(caughtError.message, 400)
+  if (caughtError instanceof ApprovalLevelRefusedError) return error(caughtError.message, 400)
   const errorCode = String(caughtError.code || caughtError.cause?.code || "")
   const errorMessage = String(caughtError.message || "").toLowerCase()
   const detail = String(caughtError.detail || caughtError.cause?.detail || "").toLowerCase()
@@ -179,12 +187,14 @@ function handleUserCreationError(caughtError: any) {
 
 
 export async function GET(req: Request) {
-  const err = await requireApiRole(USER_MANAGEMENT_ROLES)
+  // An organization-wide Viewer reads its tenant's directory as Head Office does.
+  const err = await requireApiRole(USER_MANAGEMENT_ROLES, { viewerReadsAsHeadOffice: true })
   if (err) return err
   const { searchParams } = new URL(req.url)
   const organizationId = searchParams.get("organizationId")
   const shouldRefresh = searchParams.has("refresh")
-  const scope = await getRequestScope()
+  const scope = viewerReadScope(await getRequestScope())
+  if (!scope) return error(VIEWER_READ_REFUSED, 403)
   const scopedOrgId = (() => {
     if (scope?.role === "SUPER_ADMIN") {
       return (organizationId ? Number(organizationId) : undefined)
@@ -217,16 +227,26 @@ export async function GET(req: Request) {
         isActive: usersTable.isActive,
         budgetAllocationEnabled: usersTable.budgetAllocationEnabled,
         employeeId: usersTable.employeeId,
+        designation: usersTable.designation,
         imprestHolder: usersTable.imprestHolder,
         contactPerson: usersTable.contactPerson,
         address: usersTable.address,
         externalSource: usersTable.externalSource,
+        orderApprovalLevel: usersTable.orderApprovalLevel,
       })
       .from(usersTable)
       .leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
       .where(and(...conditions))
       .orderBy(desc(usersTable.createdAt))
       .limit(500)
+
+    // A group-based user has no `branch_id`; its branches are its assignments,
+    // resolved with the same tenant fences as the order paths, so the
+    // directory can show them instead of mislabelling the user "Head Office".
+    const scopedBranches = await resolveScopedBranchesForUsers(
+      db,
+      rows.filter((r: any) => usesMultiBranchScope(r.role)).map((r: any) => r.id),
+    )
 
     return rows.map((r: any) => ({
       id: r.id,
@@ -244,12 +264,18 @@ export async function GET(req: Request) {
       isActive: !!r.isActive,
       budgetAllocationEnabled: r.role === "GROUP_USER" && r.budgetAllocationEnabled === true,
       employeeId: r.employeeId || null,
+      designation: r.designation || null,
       imprestHolder: r.imprestHolder || null,
       contactPerson: r.contactPerson || null,
       address: r.address || null,
       // Present so the admin UI can tell a mirrored account apart: its role is
       // managed by the source system and cannot be switched here.
       externalSource: r.externalSource || null,
+      // The level is shown and editable only while the organization admits it
+      // (plans/OF-APPROVAL-LEVELS-assign-users-to-levels.md).
+      orderApprovalLevel: r.orderApprovalLevel ?? null,
+      // Null for every role pinned to (or not using) a single branch.
+      assignedBranches: usesMultiBranchScope(r.role) ? (scopedBranches.get(r.id) ?? []) : null,
     }))
   }
 
@@ -274,7 +300,6 @@ export async function POST(req: Request) {
   const firstName = input.firstName
   const lastName = input.lastName
   const email = normalizeEmail(input.email)
-  const username = input.username.toLowerCase()
   const password = input.password
   const role = input.role
   const phone = normalizeOptionalText(input.phone)
@@ -327,6 +352,9 @@ export async function POST(req: Request) {
     const passwordHash = await hashPassword(password)
     console.log("[USERS_API] Password hashed successfully")
 
+    // The organization's prefix, from its own row (plans/OF-USERS-organization-username-prefix.md).
+    const username = await organizationUsernameFor(db, organizationId, input.username)
+
     // Username uniqueness is enforced by DB unique index and the check-username API
     if (await usernameExists(username)) {
       return error("Username already exists. Please choose a different username.", 400)
@@ -335,6 +363,15 @@ export async function POST(req: Request) {
     await assertUniqueUserFields({ email, phone, employeeId })
 
     const [item] = await db.transaction(async (tx) => {
+      // Under the organization's FOR SHARE, so the level cannot be removed
+      // between this check and the insert.
+      const levelRefusal = await approvalLevelRefusalForNewUser(tx, {
+        organizationId,
+        role,
+        level: input.orderApprovalLevel,
+      })
+      if (levelRefusal) throw new ApprovalLevelRefusedError(levelRefusal)
+
       const [created] = await tx
         .insert(usersTable)
         .values({
@@ -352,11 +389,13 @@ export async function POST(req: Request) {
           branchId,
           fullName: `${firstName} ${lastName}`,
           employeeId,
+          designation: input.designation ?? null,
           imprestHolder: input.imprestHolder ?? null,
           contactPerson: input.contactPerson ?? null,
           location: input.location ?? null,
           address: input.address ?? null,
           mustChangePassword: true,
+          orderApprovalLevel: input.orderApprovalLevel,
         })
         .returning()
 

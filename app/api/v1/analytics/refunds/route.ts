@@ -1,3 +1,4 @@
+import { VIEWER_READ_REFUSED, viewerReadRole } from "@/lib/viewer-access"
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { alias } from "drizzle-orm/pg-core"
@@ -212,9 +213,16 @@ export async function GET(req: NextRequest) {
             .where(eq(users.id, sessionUser.id))
             .limit(1)
 
-        const role = String(currentUser?.roleName || sessionUser.role || "")
-            .toUpperCase()
-            .replace(/\s+/g, "_")
+        // Read from the user row: an organization-wide Viewer reads as Head
+        // Office, a pinned one is refused.
+        const role = viewerReadRole({
+            role: String(currentUser?.roleName || sessionUser.role || "")
+                .toUpperCase()
+                .replace(/\s+/g, "_"),
+            organizationId: currentUser?.organizationId,
+            branchId: currentUser?.branchId,
+        })
+        if (!role) return NextResponse.json({ error: VIEWER_READ_REFUSED }, { status: 403 })
         if (!["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "BRANCH_MANAGER", "GROUP_USER"].includes(role)) {
             return NextResponse.json({ error: "Access denied" }, { status: 403 })
         }

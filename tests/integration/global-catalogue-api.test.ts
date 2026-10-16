@@ -73,6 +73,14 @@ describe.skipIf(!hasTestDatabase)("global catalogue", () => {
   const code = (label: string) => `ITGC-${label}-${suffix}`
   let superAdminId = ""
   let headOfficeId = ""
+  // The create endpoint assigns PRD--<n> codes, so its rows are tracked by id.
+  const createdIds: number[] = []
+
+  async function create(body: Record<string, unknown>) {
+    const created = await json(await inventoryRoute.POST(req("/x", "POST", body)))
+    if (created.body?.product?.id) createdIds.push(created.body.product.id)
+    return created
+  }
 
   beforeAll(async () => {
     const [sa, ho] = await db.insert(users).values([
@@ -85,7 +93,7 @@ describe.skipIf(!hasTestDatabase)("global catalogue", () => {
 
   afterAll(async () => {
     const products = await db.select({ id: globalProducts.id }).from(globalProducts).where(like(globalProducts.productCode, `ITGC-%-${suffix}`))
-    const ids = products.map((row) => row.id)
+    const ids = [...products.map((row) => row.id), ...createdIds]
     if (ids.length) {
       await db.delete(productPriceHistory).where(inArray(productPriceHistory.globalProductId, ids))
     }
@@ -107,29 +115,38 @@ describe.skipIf(!hasTestDatabase)("global catalogue", () => {
     expect((await inventoryRoute.GET(req("/x"))).status).toBe(401)
     signIn({ id: headOfficeId, role: "HEAD_OFFICE" })
     expect((await inventoryRoute.GET(req("/x"))).status).toBe(403)
-    expect((await inventoryRoute.POST(req("/x", "POST", { productCode: code("X"), name: "x", basePrice: 1 }))).status).toBe(403)
+    expect((await inventoryRoute.POST(req("/x", "POST", { name: "x", basePrice: 1 }))).status).toBe(403)
     expect((await inventoryRoute.DELETE(req("/x?id=1", "DELETE"))).status).toBe(403)
     expect((await importRoute.POST(csvRequest("name,productcode,baseprice\nx,y,1"))).status).toBe(403)
     expect((await productRoute.PUT(req("/x", "PUT", { name: "x" }), { params: Promise.resolve({ id: "1" }) })).status).toBe(403)
   })
 
-  it("creates a product, refuses its code twice, edits it, lists and searches it, and retires it", async () => {
-    const created = await json(await inventoryRoute.POST(req("/x", "POST", {
-      productCode: code("A"), name: `Alpha ${suffix}`, basePrice: 12.5, unit: "Box", stockQuantity: 10,
-    })))
+  it("creates a product under a code it assigns, edits it, lists and searches it, and retires it", async () => {
+    const created = await create({ name: `Alpha ${suffix}`, basePrice: 12.5, unit: "Box", stockQuantity: 10 })
     expect(created.status, JSON.stringify(created.body)).toBeLessThan(300)
-    const [row] = await db.select().from(globalProducts).where(eq(globalProducts.productCode, code("A")))
+    const assignedCode: string = created.body.product.productCode
+    expect(assignedCode).toMatch(/^PRD--\d+$/)
+    const [row] = await db.select().from(globalProducts).where(eq(globalProducts.id, created.body.product.id))
+    expect(row.productCode).toBe(assignedCode)
     expect(row.basePrice).toBe(1_250)
 
-    expect((await inventoryRoute.POST(req("/x", "POST", { productCode: code("A"), name: "dup", basePrice: 1 }))).status).toBeGreaterThanOrEqual(400)
-    expect((await inventoryRoute.POST(req("/x", "POST", { productCode: code("B"), name: "no price" }))).status).toBe(400)
-    expect((await inventoryRoute.POST(req("/x", "POST", { productCode: code("C"), name: "neg", basePrice: -1 }))).status).toBe(400)
+    const named = await create({ productCode: code("A"), name: "named", basePrice: 1 })
+    expect(named.status).toBe(400)
+    expect(await db.select().from(globalProducts).where(eq(globalProducts.productCode, code("A")))).toHaveLength(0)
+    expect((await create({ name: "no price" })).status).toBe(400)
+    expect((await create({ name: "neg", basePrice: -1 })).status).toBe(400)
 
     const edited = await json(await inventoryRoute.PUT(req("/x", "PUT", { id: row.id, name: `Alpha Prime ${suffix}` })))
     expect(edited.status, JSON.stringify(edited.body)).toBeLessThan(300)
 
+    // The code never changes after create, through either update endpoint.
+    expect((await inventoryRoute.PUT(req("/x", "PUT", { id: row.id, productCode: code("R") }))).status).toBe(400)
+    expect((await productRoute.PUT(req("/x", "PUT", { productCode: code("R") }), { params: Promise.resolve({ id: String(row.id) }) })).status).toBe(400)
+    const [unchanged] = await db.select().from(globalProducts).where(eq(globalProducts.id, row.id))
+    expect(unchanged.productCode).toBe(assignedCode)
+
     const listed = await json(await inventoryRoute.GET(req(`/x?search=${encodeURIComponent(`Alpha Prime ${suffix}`)}`)))
-    expect(JSON.stringify(listed.body)).toContain(code("A"))
+    expect(JSON.stringify(listed.body)).toContain(assignedCode)
     const one = await json(await inventoryRoute.GET(req(`/x?id=${row.id}`)))
     expect(one.status).toBe(200)
     expect((await inventoryRoute.GET(req("/x?id=abc"))).status).toBe(400)
@@ -143,8 +160,8 @@ describe.skipIf(!hasTestDatabase)("global catalogue", () => {
   })
 
   it("hides the base price from every reader of a single product but Super Admin", async () => {
-    await inventoryRoute.POST(req("/x", "POST", { productCode: code("P"), name: `Priced ${suffix}`, basePrice: 99 }))
-    const [row] = await db.select().from(globalProducts).where(eq(globalProducts.productCode, code("P")))
+    const created = await create({ name: `Priced ${suffix}`, basePrice: 99 })
+    const [row] = await db.select().from(globalProducts).where(eq(globalProducts.id, created.body.product.id))
 
     const asAdmin = await json(await productRoute.GET(req("/x"), { params: Promise.resolve({ id: String(row.id) }) }))
     expect(asAdmin.body.product.basePrice).toBe(9_900)
@@ -157,6 +174,15 @@ describe.skipIf(!hasTestDatabase)("global catalogue", () => {
     }
     signIn(null)
     expect((await productRoute.GET(req("/x"), { params: Promise.resolve({ id: String(row.id) }) })).status).toBe(401)
+  })
+
+  it("gives concurrent creates distinct codes", async () => {
+    const results = await Promise.all(
+      [1, 2, 3, 4].map((n) => create({ name: `Concurrent ${n} ${suffix}`, basePrice: 5 })),
+    )
+    for (const result of results) expect(result.status, JSON.stringify(result.body)).toBeLessThan(300)
+    const codes = results.map((result) => result.body.product.productCode as string)
+    expect(new Set(codes).size).toBe(codes.length)
   })
 
   it("imports a valid CSV and refuses the whole file when any row is invalid", async () => {

@@ -146,7 +146,7 @@ export async function GET(
   _: Request,
   props: { params: Promise<{ id: string }> }
 ) {
-  const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER"])
+  const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER"], { viewerReadsAsHeadOffice: true })
   if (err) return err
   const params = await props.params
   const { id } = params
@@ -154,7 +154,7 @@ export async function GET(
   // BOLA Protection
   const orgId = Number(id)
   const { verifyResourceAccess } = await import("@/lib/auth")
-  const hasAccess = await verifyResourceAccess(orgId)
+  const hasAccess = await verifyResourceAccess(orgId, undefined, { viewerReadsAsHeadOffice: true })
   if (!hasAccess) return error("Forbidden: You do not have access to this organization", 403)
 
   const [item] = await db.select().from(organizations).where(eq(organizations.id, orgId))

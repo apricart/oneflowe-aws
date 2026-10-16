@@ -1,3 +1,4 @@
+import { viewerReadRole } from "@/lib/viewer-access"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { redirect } from "next/navigation"
@@ -9,7 +10,8 @@ export default async function GroupAnalyticsPage() {
         redirect("/login")
     }
 
-    const role = (session.user as any).role
+    // An organization-wide Viewer reads these figures as Head Office does.
+    const role = viewerReadRole(session.user as any)
     if (role !== "SUPER_ADMIN" && role !== "HEAD_OFFICE") {
         redirect("/dashboard")
     }

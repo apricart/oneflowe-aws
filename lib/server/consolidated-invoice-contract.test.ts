@@ -15,6 +15,14 @@ const source = (path: string) => readFileSync(resolve(process.cwd(), path), "utf
 const ROUTES = [
   "app/api/v1/reports/consolidated-invoice/route.ts",
   "app/api/v1/reports/consolidated-invoice/pdf/route.ts",
+  "app/api/v1/reports/consolidated-invoice/xlsx/route.ts",
+  "app/api/v1/reports/consolidated-invoice/csv/route.ts",
+]
+
+const DOWNLOAD_ROUTES: ReadonlyArray<[path: string, format: string]> = [
+  ["app/api/v1/reports/consolidated-invoice/pdf/route.ts", "pdf"],
+  ["app/api/v1/reports/consolidated-invoice/xlsx/route.ts", "xlsx"],
+  ["app/api/v1/reports/consolidated-invoice/csv/route.ts", "csv"],
 ]
 
 describe("the consolidated invoice report", () => {
@@ -30,7 +38,10 @@ describe("the consolidated invoice report", () => {
 
   it("checks the role and takes Head Office's organization from its user row", () => {
     const report = source("lib/server/consolidated-invoice-report.ts")
-    expect(report).toContain("canReadConsolidatedInvoiceReport(user.role)")
+    // Checked on the read role: an organization-wide Viewer reads it as Head
+    // Office (its own organization below), a pinned one maps to no role.
+    expect(report).toContain("const readRole = viewerReadRole(user)")
+    expect(report).toContain("canReadConsolidatedInvoiceReport(readRole)")
     expect(report).toContain("const scope = await getRequestScope()")
     expect(report).toContain("organizationId = scope?.organizationId ?? null")
   })
@@ -43,10 +54,16 @@ describe("the consolidated invoice report", () => {
     expect(report).not.toContain("to_date(")
   })
 
-  it("audits every PDF download with a digest of what it printed", () => {
-    const pdf = source("app/api/v1/reports/consolidated-invoice/pdf/route.ts")
-    expect(pdf).toContain('action: "DOWNLOAD_CONSOLIDATED_INVOICE_REPORT"')
-    expect(pdf).toContain("consolidatedInvoiceDigestInput(report.rows)")
+  it("audits every download, in every format, with a digest of what it printed", () => {
+    const audit = source("lib/server/consolidated-invoice-download.ts")
+    expect(audit).toContain('action: "DOWNLOAD_CONSOLIDATED_INVOICE_REPORT"')
+    expect(audit).toContain("consolidatedInvoiceDigestInput(report.rows)")
+    for (const [path, format] of DOWNLOAD_ROUTES) {
+      const route = source(path)
+      expect(route, path).toContain(`await recordConsolidatedInvoiceDownload({ format: "${format}", report, query, caller, generatedAt })`)
+      expect(route, path).toContain("X-Content-Type-Options")
+      expect(route, path).toContain("attachment; filename=")
+    }
   })
 
   it("is offered only to Super Admin and Head Office, and gated for everyone else", () => {
@@ -54,7 +71,7 @@ describe("the consolidated invoice report", () => {
     expect(sidebar.split('href: "/reports/consolidated-invoices"').length - 1).toBe(2)
     expect(source("app/(portal)/reports/page.tsx")).toContain("canReadConsolidatedInvoiceReport(role)")
     expect(source("proxy.ts")).toContain(
-      "{ prefix: CONSOLIDATED_INVOICE_REPORT_AREA, roles: CONSOLIDATED_INVOICE_REPORT_ROLES, home: \"/reports\" }",
+      "{ prefix: CONSOLIDATED_INVOICE_REPORT_AREA, roles: [...CONSOLIDATED_INVOICE_REPORT_ROLES, \"VIEWER\"], home: \"/reports\" }",
     )
   })
 })

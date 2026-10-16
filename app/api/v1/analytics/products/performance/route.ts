@@ -1,3 +1,4 @@
+import { VIEWER_READ_REFUSED, viewerReadRole } from "@/lib/viewer-access"
 import { branches,branchInventory,categories,globalProducts,groups,orderItems,orders,organizationInventory,organizations,refundItems,refunds,users } from "@/db/schema"
 import { authOptions } from "@/lib/auth-options"
 import { parseEndDateParam,parseStartDateParam } from "@/lib/date-range-params"
@@ -349,7 +350,9 @@ export async function GET(req: NextRequest) {
         const session = await getServerSession(authOptions)
         if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
-        const userRole = ((session.user as any).role || "").toUpperCase().replace(/\s+/g, '_')
+        // An organization-wide Viewer reads as Head Office; a pinned one is refused.
+        const userRole = viewerReadRole({ ...(session.user as any), role: ((session.user as any).role || "").toUpperCase().replace(/\s+/g, '_') })
+        if (!userRole) return NextResponse.json({ error: VIEWER_READ_REFUSED }, { status: 403 })
         const userOrgId = (session.user as any).organizationId
         const userBranchId = (session.user as any).branchId
         const pricesHidden = await shouldHidePricesForRole(userRole, userOrgId)

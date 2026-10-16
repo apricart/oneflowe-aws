@@ -67,6 +67,40 @@ beforeEach(() => {
 })
 
 describe("Head Office user directory", () => {
+  it("shows Multiple for a user reaching several branches and lists them without opening the drawer", async () => {
+    renderTable(vi.fn(), [
+      user(1, {
+        role: "GROUP_USER",
+        branchId: null,
+        assignedBranches: [{ id: 11, name: "North" }, { id: 12, name: "South" }],
+      }),
+      user(2, { role: "GROUP_ORDER_PORTAL", branchId: null, assignedBranches: [{ id: 12, name: "South" }] }),
+      user(3, { role: "HEAD_OFFICE", branchId: null }),
+    ])
+
+    const multiple = screen.getByRole("button", { name: "Multiple: 2 branches" })
+    // A group user is never labelled with the tenant-wide "Head Office".
+    expect(screen.getAllByTitle("Head Office")).toHaveLength(1)
+    expect(screen.getAllByTitle("South")).toHaveLength(1)
+
+    fireEvent.click(multiple)
+    expect(await screen.findByText("Assigned branches (2)")).toBeTruthy()
+    expect(screen.getAllByText("North").length).toBeGreaterThan(0)
+    expect(screen.queryByRole("button", { name: /Deactivate/ })).toBeNull()
+  })
+
+  it("opens the branch list on hover", async () => {
+    renderTable(vi.fn(), [
+      user(1, {
+        role: "GROUP_USER",
+        branchId: null,
+        assignedBranches: [{ id: 11, name: "North" }, { id: 12, name: "South" }],
+      }),
+    ])
+    fireEvent.mouseEnter(screen.getByRole("button", { name: "Multiple: 2 branches" }))
+    expect(await screen.findByText("Assigned branches (2)")).toBeTruthy()
+  })
+
   it("shows twenty users a page and pages through the rest", async () => {
     renderTable()
     expect(screen.getAllByText("First1 Last1").length).toBeGreaterThan(0)
@@ -136,6 +170,33 @@ describe("Head Office user directory", () => {
     expect(patch.body).toMatchObject({ firstName: "Renamed" })
     expect(patch.body).not.toHaveProperty("role")
     await waitFor(() => expect(onUserUpdate).toHaveBeenCalled())
+  })
+
+  it("shows the designation and saves a change to it as a profile edit, not an access change", async () => {
+    renderTable(vi.fn(), [user(1, { designation: "Store Lead" })])
+    fireEvent.click(screen.getAllByText("First1 Last1")[0])
+    expect(await screen.findByText("Store Lead")).toBeTruthy()
+    fireEvent.click(await screen.findByRole("button", { name: "Edit Profile" }))
+
+    const designation = await screen.findByLabelText("Designation")
+    expect((designation as HTMLInputElement).value).toBe("Store Lead")
+    fireEvent.change(designation, { target: { value: "Regional Manager" } })
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }))
+
+    await waitFor(() => expect(callsTo(/^\/api\/v1\/users\/[^/]+$/, "PATCH")).toHaveLength(1))
+    expect(callsTo(/^\/api\/v1\/users\/[^/]+$/, "PATCH")[0].body).toEqual({ designation: "Regional Manager" })
+    expect(callsTo(/\/access/, "PATCH")).toHaveLength(0)
+  })
+
+  it("clears a designation by sending null", async () => {
+    renderTable(vi.fn(), [user(1, { designation: "Store Lead" })])
+    fireEvent.click(screen.getAllByText("First1 Last1")[0])
+    fireEvent.click(await screen.findByRole("button", { name: "Edit Profile" }))
+    fireEvent.change(await screen.findByLabelText("Designation"), { target: { value: "  " } })
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }))
+
+    await waitFor(() => expect(callsTo(/^\/api\/v1\/users\/[^/]+$/, "PATCH")).toHaveLength(1))
+    expect(callsTo(/^\/api\/v1\/users\/[^/]+$/, "PATCH")[0].body).toEqual({ designation: null })
   })
 
   it("shows the server's refusal against the field it concerns", async () => {
