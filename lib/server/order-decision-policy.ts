@@ -14,6 +14,7 @@ import {
   type OrderDecisionRole,
 } from "@/lib/order-approver-role"
 import { loadExecutiveApprovalReach } from "@/lib/server/apricart-executive-scope"
+import { levelledDecisionFor } from "@/lib/server/order-approval-routing"
 import {
   GROUP_USER_ROLE,
   isGroupApproverRole,
@@ -42,6 +43,13 @@ export type OrderDecisionAuthorization =
     configuredApproverRole: OrderApproverRole
     /** The role that actually decided — GROUP_USER, APRICART_EXECUTIVE, or the configured role. */
     decisionRole: OrderDecisionRole
+    /**
+     * The approval level this decision was authorized at, or null when the
+     * order is decided as before. Every claim matches it, so an edit that moved
+     * the order to another level in between makes the decision a conflict.
+     * See plans/OF-APPROVAL-LEVELS-route-orders-by-level.md.
+     */
+    approvalLevel: number | null
   }
   | {
     ok: false
@@ -142,6 +150,21 @@ export async function authorizeOrderDecision(
     return { ok: false, reason: "forbidden" }
   }
 
+  // An order waiting at an approval level, in an organization that uses levels
+  // now, is decided only by a holder of that level who reaches its branch and
+  // did not raise it. Narrower than the rule above, never wider; an order
+  // without a level, or of an organization without levels, is untouched.
+  const levelled = await levelledDecisionFor(tx, {
+    order: {
+      approvalLevel: order.approvalLevel ?? null,
+      organizationId: order.organizationId,
+      branchId: order.branchId,
+      createdByUserId: order.createdByUserId,
+    },
+    actorUserId: input.scope.userId,
+  })
+  if (levelled.levelled && !levelled.allowed) return { ok: false, reason: "forbidden" }
+
   return {
     ok: true,
     order,
@@ -149,6 +172,7 @@ export async function authorizeOrderDecision(
     decisionRole: isGroupApproverRole(input.scope.role)
       ? GROUP_USER_ROLE
       : organization.orderApproverRole,
+    approvalLevel: levelled.levelled ? levelled.level : null,
   }
 }
 
@@ -210,6 +234,8 @@ async function authorizeExecutiveOrderDecision(
     // Recorded for the trail only; it does not decide anything here.
     configuredApproverRole: organization.orderApproverRole,
     decisionRole: APRICART_EXECUTIVE_ROLE,
+    // Order Desk orders are never levelled.
+    approvalLevel: null,
   }
 }
 

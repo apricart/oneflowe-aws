@@ -9,6 +9,8 @@ import {
   initiatorRoleForBranchCount,
   isDepartment,
   joinUsesApprovalLevels,
+  newBranchDraftErrors,
+  newBranchFieldError,
   normalizeCrc,
   splitFullName,
 } from "./join-department-signup"
@@ -109,5 +111,40 @@ describe("approverListError", () => {
       .toMatch(/cannot be the person placing the orders/)
     expect(approverListError({ ...base, approvers: [approvers[0], { ...approvers[1], email: approvers[0].email }] }))
       .toMatch(/different approver/)
+  })
+})
+
+describe("newBranchFieldError — the details Head Office gives a new branch at review", () => {
+  it("asks for a field left empty or only spaces, by name", () => {
+    expect(newBranchFieldError("province", "")).toBe("Enter the province")
+    expect(newBranchFieldError("city", "   ")).toBe("Enter the city")
+  })
+
+  it("names the field and its minimum when too short", () => {
+    expect(newBranchFieldError("province", "S")).toBe("The province needs at least 2 characters")
+    expect(newBranchFieldError("address", "B-12")).toBe("The branch address needs at least 5 characters")
+  })
+
+  it("accepts exactly the minimum and exactly the maximum, after trimming", () => {
+    expect(newBranchFieldError("city", " KH ")).toBeNull()
+    expect(newBranchFieldError("name", "x".repeat(100))).toBeNull()
+    expect(newBranchFieldError("address", "x".repeat(500))).toBeNull()
+  })
+
+  it("names the field and its maximum when too long", () => {
+    expect(newBranchFieldError("name", "x".repeat(101))).toBe("The branch name can be at most 100 characters")
+  })
+})
+
+describe("newBranchDraftErrors", () => {
+  it("is empty when every field is acceptable", () => {
+    expect(newBranchDraftErrors({ name: "DEMOTTTT", province: "Sindh", city: "Karachi", address: "Plot 4, Clifton" })).toEqual({})
+  })
+
+  it("lists every field that is not, and only those", () => {
+    expect(newBranchDraftErrors({ name: "DEMOTTTT", province: "", city: "K", address: "Plot 4, Clifton" })).toEqual({
+      province: "Enter the province",
+      city: "The city needs at least 2 characters",
+    })
   })
 })

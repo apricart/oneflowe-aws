@@ -31,6 +31,8 @@ export type JoinAuditAction =
   | "REJECT_ORGANIZATION_JOIN_REQUEST"
   // Head Office naming a different approver on a pending department sign-up.
   | "REPLACE_ORGANIZATION_JOIN_REQUEST_APPROVER"
+  // Head Office correcting a pending department sign-up's details.
+  | "UPDATE_ORGANIZATION_JOIN_REQUEST"
 
 /**
  * The request's address and agent, or nulls.

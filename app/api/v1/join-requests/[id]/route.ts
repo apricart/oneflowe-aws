@@ -8,10 +8,12 @@ import { handleError } from "@/lib/error-handler"
 import { DEPARTMENT_SIGNUP_FORM_VERSION } from "@/lib/join-department-signup"
 import { JOIN_REQUEST_MANAGEMENT_ROLES } from "@/lib/organization-join-access"
 import { withRateLimit } from "@/lib/rate-limiter"
+import { invalidateSessionValidationCache } from "@/lib/session-validation-cache"
 import { env } from "@/lib/server/env"
 import {
   departmentJoinApproverReplaceSchema,
   departmentJoinDecisionSchema,
+  departmentJoinUpdateSchema,
   joinRequestDecisionSchema,
   validationMessage,
 } from "@/lib/server/mutation-validation"
@@ -23,6 +25,7 @@ import {
   readJoinRequestFormVersion,
   replaceDepartmentJoinApprover,
 } from "@/lib/server/organization-join-department"
+import { updateDepartmentJoinRequest } from "@/lib/server/organization-join-department-edit"
 import { resolveJoinManagementScope } from "@/lib/server/organization-join-scope"
 
 /** Digits only, before parsing: "1.5" or "1abc" must never decide request 1. */
@@ -215,6 +218,57 @@ async function replaceApprover(requestId: number, scope: ManagementScope, rawBod
   return ok({ id: requestId, replaced: true })
 }
 
+/**
+ * Head Office correcting a pending sign-up before deciding it. The edited
+ * request is re-validated as the submission was; the audit names what
+ * changed, never the values, which are personal data.
+ */
+async function updateRequest(requestId: number, scope: ManagementScope, rawBody: unknown) {
+  const parsedUpdate = departmentJoinUpdateSchema.safeParse(rawBody)
+  if (!parsedUpdate.success) return error(validationMessage(parsedUpdate.error), 400)
+  const fields = parsedUpdate.data.update
+  const updated = await updateDepartmentJoinRequest({
+    requestId,
+    organizationId: scope.organizationId,
+    // Picked field by field rather than spread.
+    update: {
+      firstName: fields.firstName,
+      lastName: fields.lastName,
+      email: fields.email,
+      username: fields.username,
+      phone: fields.phone,
+      ipExtension: fields.ipExtension,
+      employeeId: fields.employeeId,
+      department: fields.department,
+      branches: fields.branches,
+      addresses: fields.addresses,
+      approvers: fields.approvers,
+    },
+  })
+  if (!updated.ok) return error(updated.message, updated.status)
+
+  const changed = updated.changedFields.length > 0
+    || updated.changedApproverLevels.length > 0
+    || updated.branchesChanged
+    || updated.addressesChanged
+  if (changed) {
+    await writeJoinAudit({
+      action: "UPDATE_ORGANIZATION_JOIN_REQUEST",
+      organizationId: scope.organizationId,
+      actorUserId: scope.actorUserId,
+      entityId: String(requestId),
+      metadata: {
+        formVersion: DEPARTMENT_SIGNUP_FORM_VERSION,
+        changedFields: updated.changedFields,
+        changedApproverLevels: updated.changedApproverLevels,
+        branchesChanged: updated.branchesChanged,
+        addressesChanged: updated.addressesChanged,
+      },
+    })
+  }
+  return ok({ id: requestId, updated: changed })
+}
+
 /** The emails a committed decision sends; best effort, after the commit. */
 function sendDepartmentDecisionEmails(
   outcome: Extract<Awaited<ReturnType<typeof decideDepartmentJoinRequest>>, { ok: true }>,
@@ -249,6 +303,7 @@ function sendDepartmentDecisionEmails(
       level: approver.level,
       initiatorName: outcome.firstName,
       organizationName: outcome.organizationName,
+      becameGroupUser: approver.becameGroupUser,
       loginUrl,
     }).catch((emailError) => {
       console.error("[JOIN_REQUESTS] Failed to send an approver notice:", emailError)
@@ -259,6 +314,9 @@ function sendDepartmentDecisionEmails(
 async function patchDepartmentSignup(requestId: number, scope: ManagementScope, rawBody: unknown) {
   if (typeof rawBody === "object" && rawBody !== null && "replaceApprover" in rawBody) {
     return replaceApprover(requestId, scope, rawBody)
+  }
+  if (typeof rawBody === "object" && rawBody !== null && "update" in rawBody) {
+    return updateRequest(requestId, scope, rawBody)
   }
 
   const parsed = departmentJoinDecisionSchema.safeParse(rawBody)
@@ -304,6 +362,9 @@ async function patchDepartmentSignup(requestId: number, scope: ManagementScope, 
   if (outcome.decision === "approve") {
     await invalidateByPrefix("users")
     if (outcome.createdBranchIds.length > 0) await invalidateByPrefix("branches")
+    // A Branch Admin converted to Group User was signed out in the transaction;
+    // its cached session check must not outlive that.
+    for (const userId of outcome.convertedUserIds) await invalidateSessionValidationCache(userId)
   }
 
   // Non-blocking: the decision is committed, and a mail failure must not make

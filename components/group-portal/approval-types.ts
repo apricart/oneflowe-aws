@@ -29,6 +29,10 @@ export type ApprovalOrder = {
   returnedForCorrectionAt?: string | null
   correctionRequestNote?: string | null
   approvalToken: string | null
+  /** The approval level it waits at; null where the organization has no levels. */
+  approvalLevel?: number | null
+  /** This approver does not hold the order's level, so it is someone else's to decide. */
+  levelDecisionLocked?: boolean
 }
 
 export type ApprovalGroupOrder = {
@@ -100,7 +104,16 @@ export function isPending(order: ApprovalOrder): boolean {
  * requester, so it is kept out of approvals and bulk selection.
  */
 export function isAwaitingApprovalDecision(order: ApprovalOrder): boolean {
-  return isAwaitingApproval(order)
+  return isAwaitingApproval(order) && !order.levelDecisionLocked
+}
+
+/**
+ * Pending and this approver's to decide: an order waiting at an approval
+ * level this approver does not hold is someone else's (the server refuses it
+ * anyway). See plans/OF-APPROVAL-LEVELS-route-orders-by-level.md.
+ */
+export function isDecidableByApprover(order: ApprovalOrder): boolean {
+  return isPending(order) && !order.levelDecisionLocked
 }
 
 export function isReturnedForCorrection(order: ApprovalOrder): boolean {

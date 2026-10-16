@@ -499,6 +499,168 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, end to end", () => {
     })
   })
 
+  describe("Head Office editing a pending request before deciding it", () => {
+    /** The request as the review shows it, as an edit body that changes nothing. */
+    const unchangedEdit = (item: any) => ({
+      firstName: item.person.firstName,
+      lastName: item.person.lastName,
+      email: item.person.email,
+      username: item.person.username,
+      phone: item.person.phone,
+      ipExtension: item.person.ipExtension,
+      employeeId: item.person.employeeId,
+      department: item.person.department,
+      branches: item.branches.map((row: any) => (row.kind === "existing" ? { branchId: row.branchId } : { crc: row.costCenterId })),
+      addresses: item.addresses.map((row: any) => row.address),
+      approvers: item.approvers.map((approver: any) => ({ level: approver.level, email: approver.email, designation: approver.designation })),
+    })
+
+    it("edits every field, and the approval creates the corrected package with the applicant's own password", async () => {
+      const stored = await submitAccepted(signup({ addresses: ["Plot 1, Clifton, Karachi", "Office 9, Saddar, Karachi"] }))
+      const { item } = await review(stored.id)
+      const keptBranchRow = item.branches[0].requestBranchId
+      const keptAddressRow = item.addresses[0].requestAddressId
+
+      const tag = unique()
+      const crc = `IT-EDIT-${tag}`.toUpperCase()
+      const edited = {
+        firstName: "Sana",
+        lastName: "Mir Khan",
+        email: `edited-${fixtures.suffix}-${tag}@example.test`,
+        username: `edited-${fixtures.suffix}-${tag}`,
+        phone: `031${Math.floor(10_000_000 + Math.random() * 89_999_999)}`,
+        ipExtension: "98765",
+        employeeId: `EE-${fixtures.suffix}-${tag}`,
+        department: "IT",
+        branches: [{ branchId: fixtures.northBranchId }, { crc }],
+        addresses: ["Plot 1, Clifton, Karachi", "Office 10, Saddar, Karachi"],
+        approvers: [
+          { level: 1, email: `edited-cfo-${fixtures.suffix}-${tag}@example.test`, designation: "Chief Financial Officer" },
+          { level: 2, email: `edited-approver-${fixtures.suffix}-${tag}@example.test`, designation: "Finance Manager" },
+        ],
+      }
+      const response = await decide(stored.id, { update: edited })
+      expect(response.status, JSON.stringify(await response.clone().json())).toBe(200)
+      expect(await response.json()).toEqual({ id: stored.id, updated: true })
+
+      const { item: after } = await review(stored.id)
+      expect(after.person).toMatchObject({
+        firstName: "Sana",
+        lastName: "Mir Khan",
+        email: edited.email,
+        username: edited.username,
+        phone: edited.phone,
+        ipExtension: "98765",
+        employeeId: edited.employeeId,
+        department: "IT",
+      })
+      expect(after.initiatorRole).toBe("GROUP_ORDER_PORTAL")
+      // Unchanged rows keep their ids, so a choice made against them still names them.
+      expect(after.branches.map((row: any) => [row.requestBranchId === keptBranchRow, row.kind, row.costCenterId]))
+        .toEqual([[true, "existing", null], [false, "new", crc]])
+      expect(after.addresses.map((row: any) => row.address)).toEqual(edited.addresses)
+      expect(after.addresses[0].requestAddressId).toBe(keptAddressRow)
+      expect(after.approvers.map((approver: any) => [approver.email, approver.designation, approver.resolution.kind]))
+        .toEqual([
+          [edited.approvers[0].email, "Chief Financial Officer", "create"],
+          [edited.approvers[1].email, "Finance Manager", "create"],
+        ])
+
+      // The trail names what changed, never the values.
+      const [audit] = await db.select({ metadata: auditLogs.metadata }).from(auditLogs).where(and(
+        eq(auditLogs.action, "UPDATE_ORGANIZATION_JOIN_REQUEST"),
+        eq(auditLogs.entityId, String(stored.id)),
+      ))
+      expect(audit.metadata).toMatchObject({
+        changedFields: ["firstName", "lastName", "email", "username", "phone", "ipExtension", "employeeId", "department"],
+        changedApproverLevels: [1, 2],
+        branchesChanged: true,
+        addressesChanged: true,
+      })
+      expect(JSON.stringify(audit.metadata)).not.toContain(edited.email)
+
+      const approved = await decide(stored.id, {
+        decision: "approve",
+        expectedResolutions: expectedFrom(after),
+        newBranches: [{ requestBranchId: after.branches[1].requestBranchId, name: `Edited ${tag}`, province: "Sindh", city: "Karachi", address: "Plot 9, Clifton, Karachi" }],
+        addressBranches: after.addresses.map((row: any) => ({ requestAddressId: row.requestAddressId, requestBranchId: keptBranchRow })),
+      })
+      expect(approved.status, JSON.stringify(await approved.clone().json())).toBe(200)
+      const [initiator] = await db
+        .select({ username: users.username, phone: users.phone, department: users.department, ipExtension: users.ipExtension, passwordHash: users.passwordHash, firstName: users.firstName })
+        .from(users)
+        .where(eq(users.email, edited.email))
+      expect(initiator).toMatchObject({ username: edited.username, phone: edited.phone, department: "IT", ipExtension: "98765", firstName: "Sana" })
+      expect(initiator.passwordHash).toBe(`hashed:${STRONG_PASSWORD}`)
+      expect(await db.select({ id: users.id }).from(users).where(eq(users.email, String(stored.email)))).toHaveLength(0)
+    })
+
+    it("lets two levels swap approvers", async () => {
+      const stored = await submitAccepted(signup())
+      const { item } = await review(stored.id)
+      const edit = unchangedEdit(item)
+      const [one, two] = edit.approvers
+      edit.approvers = [{ ...one, email: two.email }, { ...two, email: one.email }]
+
+      expect((await decide(stored.id, { update: edit })).status).toBe(200)
+      const { item: after } = await review(stored.id)
+      expect(after.approvers.map((approver: any) => approver.email)).toEqual([two.email, one.email])
+    })
+
+    it("writes no audit row when nothing changed", async () => {
+      const stored = await submitAccepted(signup())
+      const { item } = await review(stored.id)
+      const response = await decide(stored.id, { update: unchangedEdit(item) })
+      expect(await response.json()).toEqual({ id: stored.id, updated: false })
+      expect(await db.select({ id: auditLogs.id }).from(auditLogs).where(and(
+        eq(auditLogs.action, "UPDATE_ORGANIZATION_JOIN_REQUEST"),
+        eq(auditLogs.entityId, String(stored.id)),
+      ))).toHaveLength(0)
+    })
+
+    it.each([
+      ["an email at another domain", (edit: any) => ({ ...edit, email: "someone@gmail.com" }), 400],
+      ["an approver who is the initiator", (edit: any) => ({ ...edit, approvers: [{ ...edit.approvers[0], email: edit.email }, edit.approvers[1]] }), 400],
+      ["a missing level", (edit: any) => ({ ...edit, approvers: [edit.approvers[0]] }), 400],
+      ["a branch of another organization", (edit: any) => ({ ...edit, branches: [{ branchId: fixtures.foreignBranchId }] }), 400],
+      ["a password", (edit: any) => ({ ...edit, password: STRONG_PASSWORD }), 400],
+      ["a role", (edit: any) => ({ ...edit, requestedRole: "HEAD_OFFICE" }), 400],
+      ["a username an account holds", (edit: any) => ({ ...edit, username: `it-dept-holder-${fixtures.suffix}` }), 409],
+      ["an email an account holds", (edit: any) => ({ ...edit, email: `holder-${fixtures.suffix}@example.test` }), 409],
+    ])("refuses %s and changes nothing", async (_case, spoil, status) => {
+      const stored = await submitAccepted(signup())
+      const { item } = await review(stored.id)
+      const response = await decide(stored.id, { update: spoil(unchangedEdit(item)) })
+      expect(response.status, JSON.stringify(await response.clone().json())).toBe(status)
+      const { item: after } = await review(stored.id)
+      expect(unchangedEdit(after)).toEqual(unchangedEdit(item))
+    })
+
+    it("refuses the email of another pending request", async () => {
+      const first = await submitAccepted(signup())
+      const second = await submitAccepted(signup())
+      const { item } = await review(second.id)
+      const response = await decide(second.id, { update: { ...unchangedEdit(item), email: first.email } })
+      expect(response.status).toBe(409)
+    })
+
+    it("is Head Office of the request's own organization only, and only while pending", async () => {
+      const stored = await submitAccepted(signup())
+      const { item } = await review(stored.id)
+      const edit = { ...unchangedEdit(item), firstName: "Intruder" }
+
+      const branchAdmin: Actor = { id: fixtures.branchAdminId, role: "BRANCH_ADMIN", organizationId: fixtures.organizationId }
+      expect((await decide(stored.id, { update: edit }, branchAdmin)).status).toBe(403)
+      expect((await decide(stored.id, { update: edit }, foreignHead())).status).toBe(404)
+
+      expect((await decide(stored.id, { decision: "reject" })).status).toBe(200)
+      expect((await decide(stored.id, { update: edit })).status).toBe(409)
+      const [row] = await db.select({ firstName: organizationJoinRequests.firstName }).from(organizationJoinRequests)
+        .where(eq(organizationJoinRequests.id, stored.id))
+      expect(row.firstName).toBe(item.person.firstName)
+    })
+  })
+
   describe("who may review and decide", () => {
     it("is Head Office of the request's own organization only", async () => {
       const stored = await submitAccepted(signup())

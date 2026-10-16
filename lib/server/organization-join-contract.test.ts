@@ -110,9 +110,19 @@ describe("the public join endpoints never let a caller name a tenant", () => {
     expect(submit).not.toMatch(/password:\s*input\.password/)
   })
 
-  it("flattens an identity conflict to a message that names no field", () => {
+  it("flattens an identity conflict to one constant message per form, never the cause", () => {
     const submit = repositoryFile("app/api/v1/join/requests/route.ts")
-    expect(submit).toContain("JOIN_IDENTITY_CONFLICT_MESSAGE")
+    expect(submit).toContain("failureResponse(outcome, JOIN_IDENTITY_CONFLICT_MESSAGE)")
+    expect(submit).toContain("failureResponse(outcome, DEPARTMENT_JOIN_IDENTITY_CONFLICT_MESSAGE)")
+    // The identity outcome's own message (which says what clashed) never reaches the caller.
+    expect(submit).toContain('outcome.kind === "identity" ? identityConflictMessage : outcome.message')
+  })
+
+  it("checks a username against accounts only where the applicant typed it", () => {
+    const standard = repositoryFile("lib/server/organization-join.ts")
+    const department = repositoryFile("lib/server/organization-join-department.ts")
+    expect(standard).toContain("identityConflictReason({ ...submission, checkAccountUsername: true })")
+    expect(department).toContain("checkAccountUsername: false")
   })
 })
 
@@ -437,6 +447,28 @@ describe("the department sign-up", () => {
       .toBeLessThan(route.indexOf("joinRequestDecisionSchema.safeParse(rawBody)"))
     // And the standard approval cannot decide a department request.
     expect(repositoryFile("lib/server/organization-join.ts")).toContain("eq(organizationJoinRequests.formVersion, 1)")
+  })
+
+  it("lets Head Office edit a pending request, never its password, and never outside the request", () => {
+    const edit = codeOf("lib/server/organization-join-department-edit.ts")
+    // Fenced and locked like the approval: this tenant, this form, pending.
+    expect(edit).toContain("eq(organizationJoinRequests.organizationId, organizationId)")
+    expect(edit).toContain("eq(organizationJoinRequests.formVersion, DEPARTMENT_SIGNUP_FORM_VERSION)")
+    expect(edit).toContain('.for("update")')
+    expect(edit).toContain('if (stored.status !== "pending")')
+    // Held to the submission's rules.
+    expect(edit).toContain("joinEmailDomainRefusal(identity.email, settings.emailDomain)")
+    expect(edit).toContain("approverListError(")
+    // Writes only the request and its own rows: no account, no password.
+    expect(edit).not.toMatch(/\.(insert|update|delete)\(users\)/)
+    expect(edit).not.toMatch(/passwordHash|termsAcceptedAt/)
+
+    // Dispatched only after the stored version chose the department path.
+    const route = codeOf(decideRoute)
+    expect(route.indexOf("readJoinRequestFormVersion(requestId, scope.organizationId)"))
+      .toBeLessThan(route.indexOf("return updateRequest(requestId, scope, rawBody)"))
+    expect(route).toContain("departmentJoinUpdateSchema.safeParse(rawBody)")
+    expect(route).toContain('action: "UPDATE_ORGANIZATION_JOIN_REQUEST"')
   })
 
   it("refuses an approval that does not reproduce what Head Office reviewed", () => {

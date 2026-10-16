@@ -208,6 +208,31 @@ describe("UsersPage readiness and scoping", () => {
     )
   })
 
+  it("lists group-based users under a branch filter by their assignments, as a join approval creates them", () => {
+    mocks.context = {
+      organizationId: "1",
+      branchId: "11",
+      branchIds: [],
+      userRole: "HEAD_OFFICE",
+      isInitialized: true,
+    }
+    mocks.usersData = {
+      items: [
+        ...users,
+        { id: "org-1-group-op", organizationId: 1, branchId: null, role: "GROUP_ORDER_PORTAL", assignedBranches: [{ id: 11, name: "North" }, { id: 12, name: "South" }] },
+        { id: "org-1-approver", organizationId: 1, branchId: null, role: "GROUP_USER", assignedBranches: [{ id: 11, name: "North" }] },
+        { id: "org-1-elsewhere", organizationId: 1, branchId: null, role: "GROUP_USER", assignedBranches: [{ id: 12, name: "South" }] },
+      ],
+    }
+    mocks.usersLoading = false
+
+    render(<UsersPage />)
+
+    expect(screen.getByTestId("rendered-user-ids").textContent).toBe(
+      "org-1-admin,org-1-order,org-1-group-op,org-1-approver",
+    )
+  })
+
   it("shows a retryable error instead of an empty tenant when the initial request fails", () => {
     mocks.context = {
       organizationId: null,

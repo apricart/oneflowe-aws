@@ -11,6 +11,8 @@ import {
   organizationJoinRequests,
   organizations,
   roles as rolesTable,
+  sessions,
+  systemLogs,
   users,
 } from "@/db/schema"
 import { db } from "@/lib/db"
@@ -22,6 +24,7 @@ import {
   type ApproverCandidate,
   type ApproverResolution,
   type ApproverResolutionKind,
+  type NewApproverRole,
   RECORDED_RESOLUTION,
   planApproverResolution,
   sameResolution,
@@ -43,6 +46,7 @@ import {
   approvalLevelBands,
 } from "@/lib/order-approval-levels"
 import { generateRandomPassword, hashPassword } from "@/lib/password"
+import { totalBlockingOrders } from "@/lib/role-change-preconditions"
 import { assertUniqueUserFields, normalizeEmail } from "@/lib/user-uniqueness"
 import { usernameExists } from "@/lib/user-username-uniqueness"
 import { createBranchInTx } from "@/lib/server/branch-creation"
@@ -57,6 +61,7 @@ import {
   type JoinRequestFailure,
 } from "@/lib/server/organization-join"
 import { loadOrganizationApprovalLevels } from "@/lib/server/order-approval-levels"
+import { loadRoleChangeReadiness } from "@/lib/server/role-change-readiness"
 import { loadApprovalLevelContext, writeApprovalLevelInTx } from "@/lib/server/user-approval-level"
 
 /**
@@ -144,10 +149,14 @@ export type DepartmentJoinSubmission = {
  * as that branch. A CRC shared by several branches stays a CRC, for Head Office
  * to map at review.
  */
-async function matchCrcsToBranches(organizationId: number, crcs: string[]): Promise<Map<string, number>> {
+export async function matchCrcsToBranches(
+  executor: Executor,
+  organizationId: number,
+  crcs: string[],
+): Promise<Map<string, number>> {
   const matched = new Map<string, number>()
   if (crcs.length === 0) return matched
-  const rows = await db
+  const rows = await executor
     .select({ id: branches.id, crc: sql<string>`upper(btrim(${branches.costCenterId}))` })
     .from(branches)
     .where(and(
@@ -192,7 +201,7 @@ export async function createDepartmentJoinRequest(
     }
   }
 
-  const matchedByCrc = await matchCrcsToBranches(organizationId, typedCrcs)
+  const matchedByCrc = await matchCrcsToBranches(db, organizationId, typedCrcs)
   const existingIds = [...new Set([...pickedIds, ...matchedByCrc.values()])]
   const newCrcs = typedCrcs.filter((crc) => !matchedByCrc.has(crc))
   const branchCount = existingIds.length + newCrcs.length
@@ -219,6 +228,9 @@ export async function createDepartmentJoinRequest(
     username: submission.username,
     phone: submission.phone,
     employeeId: submission.employeeId,
+    // Derived from the email, not typed: a clash is Head Office's to resolve
+    // at review, never the applicant's (see `identityConflictReason`).
+    checkAccountUsername: false,
   })) {
     return { kind: "identity", message: "identity conflict", status: 409 }
   }
@@ -297,7 +309,7 @@ type StoredApprover = {
 
 type StoredAddress = { id: number; address: string; branchId: number | null }
 
-async function loadRequestChildren(executor: Executor, requestId: number) {
+export async function loadRequestChildren(executor: Executor, requestId: number) {
   const [requestBranches, approvers, addresses] = await Promise.all([
     executor
       .select({
@@ -374,6 +386,11 @@ async function loadApproverCandidates(
     const scopedBranchIds = row.role === "GROUP_USER" || row.role === "GROUP_ORDER_PORTAL"
       ? await resolveScopedBranchIds(executor as TransactionExecutor, row.userId)
       : []
+    // Only a Branch Admin can be converted, and a role change waits for the
+    // orders it raised; read on the same executor, inside the approval.
+    const readiness = row.role === "BRANCH_ADMIN"
+      ? await loadRoleChangeReadiness(row.userId, undefined, executor as TransactionExecutor)
+      : null
     result.get(row.email)?.push({
       userId: row.userId,
       organizationId: row.organizationId,
@@ -382,6 +399,7 @@ async function loadApproverCandidates(
       level: row.level,
       branchId: row.branchId,
       scopedBranchIds,
+      ordersInFlight: readiness && !readiness.ready ? totalBlockingOrders(readiness.blockers) : 0,
     })
   }
   return result
@@ -421,11 +439,15 @@ export type DepartmentJoinReview = {
     resolution: ApproverResolution
     /** Who the existing account is, when there is one in this organization. */
     existingName: string | null
+    /** Its role now, when there is one in this organization. */
+    existingRole: string | null
     /** The recorded outcome, once decided. */
     recordedResolution: string | null
   }>
   /** The organization's current switch, for the D7 notice. */
   approvalLevelsApply: boolean
+  /** Head Office's own organization's domain, which an edited address must be at. */
+  emailDomain: string | null
   decisionReason: string | null
   decidedAt: Date | null
   createdAt: Date
@@ -489,14 +511,16 @@ export async function loadDepartmentJoinReview(input: {
   const emails = children.approvers.map((approver) => approver.email)
   const candidates = await loadApproverCandidates(db, emails, false)
   const nameRows = emails.length === 0 ? [] : await db
-    .select({ email: sql<string>`lower(${users.email})`, firstName: users.firstName, lastName: users.lastName })
+    .select({ email: sql<string>`lower(${users.email})`, firstName: users.firstName, lastName: users.lastName, role: rolesTable.name })
     .from(users)
+    .innerJoin(rolesTable, eq(users.roleId, rolesTable.id))
     .where(and(
       eq(users.organizationId, input.organizationId),
       inArray(sql`lower(${users.email})`, emails),
       sql`${users.deletedAt} IS NULL`,
     ))
   const names = new Map(nameRows.map((row) => [row.email, `${row.firstName ?? ""} ${row.lastName ?? ""}`.trim() || null]))
+  const existingRoles = new Map(nameRows.map((row) => [row.email, row.role]))
 
   const organization = {
     orderApprovalRequired: settings.orderApprovalRequired,
@@ -551,9 +575,11 @@ export async function loadDepartmentJoinReview(input: {
         deciderUserId: input.deciderUserId,
       }),
       existingName: names.get(approver.email) ?? null,
+      existingRole: existingRoles.get(approver.email) ?? null,
       recordedResolution: approver.resolution,
     })),
     approvalLevelsApply: usesDepartmentSignup(settings),
+    emailDomain: settings.emailDomain,
     decisionReason: stored.decisionReason,
     decidedAt: stored.decidedAt,
     createdAt: stored.createdAt,
@@ -682,11 +708,21 @@ export type DepartmentJoinDecisionOutcome =
       organizationName: string
       branchIds: number[]
       createdBranchIds: number[]
-      approvers: Array<{ level: number; email: string; resolution: string; userId: string | null; addedBranchIds: number[] }>
+      approvers: Array<{
+        level: number
+        email: string
+        resolution: string
+        userId: string | null
+        addedBranchIds: number[]
+        /** The role the approval created it as, or converted it to; null when unchanged. */
+        roleSet: string | null
+      }>
+      /** Branch Admins converted to Group User; their sessions were ended. */
+      convertedUserIds: string[]
       /** Only for the welcome emails; never returned to the caller or logged. */
       newApproverCredentials: NewApproverCredentials[]
       /** Existing approvers given a level or branches, for the notice email. */
-      notifiedApprovers: Array<{ email: string; firstName: string; level: number }>
+      notifiedApprovers: Array<{ email: string; firstName: string; level: number; becameGroupUser: boolean }>
     }
   | JoinFailure
 
@@ -954,16 +990,28 @@ type AppliedApprover = {
   addedBranchIds: number[]
   credentials?: NewApproverCredentials
   notify?: boolean
+  roleSet: string | null
+  converted?: boolean
 }
 
-/** A new approver: a Group User with a temporary password, the branches and the level. */
+type ApproverRoleIds = { groupUser: number; branchAdmin: number }
+
+/**
+ * A new approver with a temporary password and the level: a Branch Admin of the
+ * one branch, or a Group User assigned to every branch when there are more.
+ */
 async function createApprover(
   context: DecisionContext,
   approver: StoredApprover,
+  role: NewApproverRole,
   branchIds: number[],
-  groupUserRoleId: number,
+  roleIdsFor: ApproverRoleIds,
 ): Promise<AppliedApprover> {
   const { tx, input } = context
+  const asBranchAdmin = role === "BRANCH_ADMIN"
+  if (asBranchAdmin && branchIds.length !== 1) {
+    throw new JoinDecisionAbort(409, `Level ${approver.level}: a Branch Admin approver needs exactly one branch.`)
+  }
   const username = await freeApproverUsername(approver.email, context.organizationCode)
   const name = deriveNameFromEmail(approver.email)
   const temporaryPassword = generateRandomPassword(16)
@@ -973,13 +1021,13 @@ async function createApprover(
       email: approver.email,
       username,
       passwordHash: await hashPassword(temporaryPassword),
-      roleId: groupUserRoleId,
+      roleId: asBranchAdmin ? roleIdsFor.branchAdmin : roleIdsFor.groupUser,
       firstName: name.firstName,
       lastName: name.lastName,
       fullName: `${name.firstName} ${name.lastName}`.trim(),
       designation: approver.designation,
       organizationId: input.organizationId,
-      branchId: null,
+      branchId: asBranchAdmin ? branchIds[0] : null,
       mfaEnabled: false,
       isActive: true,
       budgetAllocationEnabled: false,
@@ -989,18 +1037,73 @@ async function createApprover(
     })
     .returning({ id: users.id })
 
-  await addBranchesToScope(tx, {
-    userId: created.id,
-    organizationId: input.organizationId,
-    branchIds,
-    createdByUserId: input.actor.userId,
-  })
-  await assignLevel(context, approver.level, { userId: created.id, role: "GROUP_USER", level: null })
+  if (!asBranchAdmin) {
+    await addBranchesToScope(tx, {
+      userId: created.id,
+      organizationId: input.organizationId,
+      branchIds,
+      createdByUserId: input.actor.userId,
+    })
+  }
+  await assignLevel(context, approver.level, { userId: created.id, role, level: null })
   return {
     userId: created.id,
     addedBranchIds: branchIds,
     credentials: { email: approver.email, firstName: name.firstName, username, temporaryPassword },
+    roleSet: role,
   }
+}
+
+/**
+ * An existing Branch Admin that must reach more than its own branch becomes a
+ * Group User, as `PATCH /api/v1/users/[id]/access` would make it: its own
+ * branch kept as an assignment beside the initiator's, budget allocation off,
+ * every session ended, and the change in the system log. The caller has
+ * already refused one with orders in flight (`planApproverResolution`), on rows
+ * this transaction holds `FOR UPDATE`.
+ */
+async function convertBranchAdminToGroupUser(
+  context: DecisionContext,
+  candidate: ApproverCandidate,
+  addBranchIds: number[],
+  groupUserRoleId: number,
+): Promise<void> {
+  const { tx, input } = context
+  await tx
+    .update(users)
+    .set({
+      roleId: groupUserRoleId,
+      branchId: null,
+      budgetAllocationEnabled: false,
+      sessionVersion: sql`${users.sessionVersion} + 1`,
+      updatedAt: context.decidedAt,
+    })
+    .where(eq(users.id, candidate.userId))
+  await addBranchesToScope(tx, {
+    userId: candidate.userId,
+    organizationId: input.organizationId,
+    branchIds: [...(candidate.branchId === null ? [] : [candidate.branchId]), ...addBranchIds],
+    createdByUserId: input.actor.userId,
+  })
+  await tx.delete(sessions).where(eq(sessions.userId, candidate.userId))
+  await tx.insert(systemLogs).values({
+    userId: input.actor.userId,
+    userRole: input.actor.role,
+    organizationId: input.organizationId,
+    action: "USER_ACCESS_UPDATE",
+    resourceType: "user",
+    resourceId: candidate.userId,
+    details: {
+      changedFields: ["role", "branchId"],
+      previousRole: "BRANCH_ADMIN",
+      nextRole: "GROUP_USER",
+      previousBranchId: candidate.branchId,
+      nextBranchId: null,
+      source: "DEPARTMENT_JOIN_APPROVAL",
+      joinRequestId: input.requestId,
+    },
+    success: true,
+  })
 }
 
 async function assignLevel(
@@ -1023,13 +1126,15 @@ async function applyApprover(
   plan: ApproverResolution,
   candidate: ApproverCandidate | undefined,
   branchIds: number[],
-  groupUserRoleId: number,
+  roleIdsFor: ApproverRoleIds,
 ): Promise<AppliedApprover> {
-  if (plan.kind === "create") return createApprover(context, approver, branchIds, groupUserRoleId)
-  if (plan.kind === "covered") return { userId: plan.userId, addedBranchIds: [] }
-  if ((plan.kind !== "assign" && plan.kind !== "extend") || !candidate) return { userId: null, addedBranchIds: [] }
+  if (plan.kind === "create") return createApprover(context, approver, plan.role, branchIds, roleIdsFor)
+  if (plan.kind === "covered") return { userId: plan.userId, addedBranchIds: [], roleSet: null }
+  if ((plan.kind !== "assign" && plan.kind !== "extend") || !candidate) return { userId: null, addedBranchIds: [], roleSet: null }
 
-  if (candidate.role === "GROUP_USER" && plan.addBranchIds.length > 0) {
+  if (plan.becomesGroupUser) {
+    await convertBranchAdminToGroupUser(context, candidate, plan.addBranchIds, roleIdsFor.groupUser)
+  } else if (candidate.role === "GROUP_USER" && plan.addBranchIds.length > 0) {
     await addBranchesToScope(context.tx, {
       userId: plan.userId,
       organizationId: context.input.organizationId,
@@ -1037,10 +1142,17 @@ async function applyApprover(
       createdByUserId: context.input.actor.userId,
     })
   }
+  const roleNow = plan.becomesGroupUser ? "GROUP_USER" : candidate.role
   if (plan.kind === "assign") {
-    await assignLevel(context, approver.level, { userId: plan.userId, role: candidate.role, level: candidate.level })
+    await assignLevel(context, approver.level, { userId: plan.userId, role: roleNow, level: candidate.level })
   }
-  return { userId: plan.userId, addedBranchIds: plan.addBranchIds, notify: true }
+  return {
+    userId: plan.userId,
+    addedBranchIds: plan.addBranchIds,
+    notify: true,
+    roleSet: plan.becomesGroupUser ? "GROUP_USER" : null,
+    converted: plan.becomesGroupUser,
+  }
 }
 
 async function approveDepartmentRequest(
@@ -1059,7 +1171,9 @@ async function approveDepartmentRequest(
   const role = initiatorRoleForBranchCount(branchIds.length)
   const roleId = roleIdByName.get(role)
   const groupUserRoleId = roleIdByName.get("GROUP_USER")
-  if (!roleId || !groupUserRoleId) throw new JoinDecisionAbort(500, "Roles are not set up")
+  const branchAdminRoleId = roleIdByName.get("BRANCH_ADMIN")
+  if (!roleId || !groupUserRoleId || !branchAdminRoleId) throw new JoinDecisionAbort(500, "Roles are not set up")
+  const roleIdsFor: ApproverRoleIds = { groupUser: groupUserRoleId, branchAdmin: branchAdminRoleId }
 
   const plans = children.approvers.map((approver) => ({
     approver,
@@ -1079,17 +1193,31 @@ async function approveDepartmentRequest(
   await writeRequestAddresses(context, children.addresses, branchByRequestBranch, branchIds, initiator.id)
 
   const newApproverCredentials: NewApproverCredentials[] = []
-  const notifiedApprovers: Array<{ email: string; firstName: string; level: number }> = []
-  const approverSummary: Array<{ level: number; email: string; resolution: string; userId: string | null; addedBranchIds: number[] }> = []
+  const notifiedApprovers: Array<{ email: string; firstName: string; level: number; becameGroupUser: boolean }> = []
+  const convertedUserIds: string[] = []
+  const approverSummary: Array<{
+    level: number
+    email: string
+    resolution: string
+    userId: string | null
+    addedBranchIds: number[]
+    roleSet: string | null
+  }> = []
   for (const { approver, plan } of plans) {
     const candidate = (candidates.get(approver.email) ?? [])[0]
     // Blocked plans were refused by assertReviewedResolutions above.
     if (plan.kind === "blocked") throw new JoinDecisionAbort(409, plan.reason)
     const recorded = RECORDED_RESOLUTION[plan.kind]
-    const applied = await applyApprover(context, approver, plan, candidate, branchIds, groupUserRoleId)
+    const applied = await applyApprover(context, approver, plan, candidate, branchIds, roleIdsFor)
     if (applied.credentials) newApproverCredentials.push(applied.credentials)
+    if (applied.converted && applied.userId) convertedUserIds.push(applied.userId)
     if (applied.notify) {
-      notifiedApprovers.push({ email: approver.email, firstName: deriveNameFromEmail(approver.email).firstName, level: approver.level })
+      notifiedApprovers.push({
+        email: approver.email,
+        firstName: deriveNameFromEmail(approver.email).firstName,
+        level: approver.level,
+        becameGroupUser: applied.converted === true,
+      })
     }
     await tx
       .update(organizationJoinRequestApprovers)
@@ -1101,6 +1229,7 @@ async function approveDepartmentRequest(
       resolution: recorded,
       userId: applied.userId,
       addedBranchIds: applied.addedBranchIds,
+      roleSet: applied.roleSet,
     })
   }
 
@@ -1128,6 +1257,7 @@ async function approveDepartmentRequest(
     branchIds,
     createdBranchIds,
     approvers: approverSummary,
+    convertedUserIds,
     newApproverCredentials,
     notifiedApprovers,
   }
@@ -1152,7 +1282,7 @@ export async function decideDepartmentJoinRequest(
     .where(eq(organizations.id, input.organizationId))
     .limit(1)
   if (!organization) return { ok: false, message: "Organization not found", status: 404 }
-  const roleIdByName = await roleIds(["ORDER_PORTAL", "GROUP_ORDER_PORTAL", "GROUP_USER"])
+  const roleIdByName = await roleIds(["ORDER_PORTAL", "GROUP_ORDER_PORTAL", "GROUP_USER", "BRANCH_ADMIN"])
 
   try {
     return await db.transaction(async (tx) => {
@@ -1191,6 +1321,7 @@ export async function decideDepartmentJoinRequest(
           branchIds: [],
           createdBranchIds: [],
           approvers: [],
+          convertedUserIds: [],
           newApproverCredentials: [],
           notifiedApprovers: [],
         }

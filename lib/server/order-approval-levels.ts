@@ -1,13 +1,14 @@
 import "server-only"
 
-import { asc, eq } from "drizzle-orm"
+import { and, asc, count, eq, gt, sql } from "drizzle-orm"
 
-import { organizationApprovalLevels, organizations } from "@/db/schema"
+import { orders, organizationApprovalLevels, organizations } from "@/db/schema"
 import { db } from "@/lib/db"
 import {
   ORDER_APPROVAL_LEVELS_AUDIT_ACTION,
   approvalLevelsChanged,
   heldLevelsRemovalMessage,
+  pendingLevelsRemovalMessage,
   toApprovalLevels,
   type ApprovalLevel,
   type ApprovalLevelsState,
@@ -94,6 +95,30 @@ export async function replaceOrganizationApprovalLevels(
   )
 }
 
+/**
+ * The levels above `keepCount` that pending orders of the organization are
+ * waiting at, with how many wait at each. Removing one would leave those
+ * orders with no one able to decide them
+ * (plans/OF-APPROVAL-LEVELS-route-orders-by-level.md, R8).
+ */
+export async function pendingOrdersAtRemovedLevels(
+  tx: TransactionExecutor,
+  organizationId: number,
+  keepCount: number,
+): Promise<{ level: number; orders: number }[]> {
+  const rows = await tx
+    .select({ level: orders.approvalLevel, orders: count() })
+    .from(orders)
+    .where(and(
+      eq(orders.organizationId, organizationId),
+      sql`UPPER(${orders.status}) = 'PENDING'`,
+      gt(orders.approvalLevel, keepCount),
+    ))
+    .groupBy(orders.approvalLevel)
+    .orderBy(orders.approvalLevel)
+  return rows.map((row) => ({ level: Number(row.level), orders: Number(row.orders) }))
+}
+
 export type SaveApprovalLevelsOutcome =
   | { kind: "not-found" }
   | { kind: "levels-held"; message: string }
@@ -144,6 +169,8 @@ export async function saveOrganizationApprovalLevels(input: {
     if (input.amountsCents !== undefined && input.amountsCents.length < before.levels.length) {
       const held = await heldRemovedApprovalLevels(tx, input.organizationId, input.amountsCents.length)
       if (held.length > 0) return { kind: "levels-held" as const, message: heldLevelsRemovalMessage(held) }
+      const waiting = await pendingOrdersAtRemovedLevels(tx, input.organizationId, input.amountsCents.length)
+      if (waiting.length > 0) return { kind: "levels-held" as const, message: pendingLevelsRemovalMessage(waiting) }
     }
 
     if (before.enabled !== after.enabled) {

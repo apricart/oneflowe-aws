@@ -4,7 +4,9 @@ import { ReactNode } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { HeadOfficeUsersTable } from "@/components/users/head-office-users-table"
 import { CreateUserDialog } from "@/components/users/create-user-dialog"
+import { ApprovalLevelCoverage } from "@/components/users/approval-level-coverage"
 import { useAppContext } from "@/components/context/app-context"
+import { userReachesAnyBranch } from "@/lib/user-branch-reach"
 import { Button } from "@/components/ui/button"
 import { ListSkeleton, Skeleton } from "@/components/ui/skeleton"
 import { AlertCircle, RefreshCw, Users, UserPlus, Building2, UserCircle, ShoppingCart } from "lucide-react"
@@ -82,7 +84,7 @@ export default function UsersPage() {
     }
 
     if (effectiveBranchFilterSet.size > 0) {
-      return user.branchId != null && effectiveBranchFilterSet.has(Number(user.branchId))
+      return userReachesAnyBranch(user, effectiveBranchFilterSet)
     }
 
     return true
@@ -162,6 +164,9 @@ export default function UsersPage() {
       ) : (
         <UsersStatsSkeleton />
       )}
+
+      {/* Draws nothing unless the organization uses approval levels. */}
+      <ApprovalLevelCoverage organizationId={organizationFilterId} role={userRole} />
 
       {/* Main Directory Area */}
       <div className="flex flex-col pt-2">

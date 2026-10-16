@@ -41,6 +41,7 @@ export async function GET(req: NextRequest) {
       page: parsePositiveInt(searchParams.get("page")) ?? 1,
       limit: Math.min(requestedLimit, APPROVAL_PAGE_SIZE_MAX),
       filter: parseFilter(searchParams.get("filter")),
+      viewerUserId: actor.scope.userId,
     }),
     getApprovalQueueSummary(actor.organizationId, actor.scopedBranchIds),
   ])

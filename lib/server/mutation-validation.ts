@@ -42,6 +42,8 @@ import {
   CRC_MAX_LENGTH,
   DEPARTMENTS,
   DEPARTMENT_SIGNUP_FORM_VERSION,
+  NEW_BRANCH_FIELD_RULES,
+  type NewBranchField,
   SIGNUP_ADDRESS_MAX_LENGTH,
   SIGNUP_APPROVER_EMAIL_MAX_LENGTH,
   SIGNUP_DESIGNATION_MAX_LENGTH,
@@ -52,6 +54,15 @@ import {
   SIGNUP_MAX_BRANCHES,
   SIGNUP_PHONE_PATTERN,
 } from "@/lib/join-department-signup"
+import {
+  JOIN_EDIT_EMAIL_MAX_LENGTH,
+  JOIN_EDIT_NAME_MAX_LENGTH,
+  JOIN_EDIT_USERNAME_MAX_LENGTH,
+  JOIN_EDIT_USERNAME_MIN_LENGTH,
+  JOIN_EDIT_USERNAME_PATTERN,
+  editedAddressListError,
+  editedBranchListError,
+} from "@/lib/join-department-edit"
 import {
   DEFAULT_ORDERING_BLOCK_THRESHOLD,
   ORDERING_BLOCK_THRESHOLD_MAX,
@@ -1211,6 +1222,15 @@ export const departmentJoinSubmitSchema = z.object({
   termsAccepted: z.literal(true),
 }).strict()
 
+/** One field of a new branch, refused with a message that names it (`NEW_BRANCH_FIELD_RULES`). */
+function newBranchText(field: NewBranchField) {
+  const { label, min, max } = NEW_BRANCH_FIELD_RULES[field]
+  return z.string().trim()
+    .min(min, `New branch: the ${label} needs at least ${min} characters`)
+    .max(max, `New branch: the ${label} can be at most ${max} characters`)
+    .optional()
+}
+
 /**
  * Head Office deciding a department sign-up. For each CRC to create, either
  * the details of the new branch or an existing branch to map it onto; for each
@@ -1224,10 +1244,10 @@ export const departmentJoinDecisionSchema = z.object({
   newBranches: z.array(z.object({
     requestBranchId: positiveId,
     mapToBranchId: positiveId.optional(),
-    name: z.string().trim().min(2).max(100).optional(),
-    province: z.string().trim().min(2).max(100).optional(),
-    city: z.string().trim().min(2).max(100).optional(),
-    address: z.string().trim().min(5).max(500).optional(),
+    name: newBranchText("name"),
+    province: newBranchText("province"),
+    city: newBranchText("city"),
+    address: newBranchText("address"),
   }).strict()).max(SIGNUP_MAX_BRANCHES).optional(),
   addressBranches: z.array(z.object({
     requestAddressId: positiveId,
@@ -1251,6 +1271,36 @@ export const departmentJoinDecisionSchema = z.object({
 /** Head Office naming a different approver for one level of a pending sign-up. */
 export const departmentJoinApproverReplaceSchema = z.object({
   replaceApprover: signupApproverSchema,
+}).strict()
+
+/**
+ * Head Office correcting a pending department sign-up before deciding it: the
+ * whole request as it should read, every field the applicant typed except the
+ * password and the acceptance of the terms, which are the applicant's alone.
+ * No organizationId, role, status or password, and `.strict()` refuses them.
+ */
+export const departmentJoinUpdateSchema = z.object({
+  update: z.object({
+    firstName: z.string().trim().min(1).max(JOIN_EDIT_NAME_MAX_LENGTH),
+    lastName: z.string().trim().max(JOIN_EDIT_NAME_MAX_LENGTH),
+    email: z.string().trim().toLowerCase().pipe(z.email().max(JOIN_EDIT_EMAIL_MAX_LENGTH)),
+    username: z.string().trim().toLowerCase()
+      .min(JOIN_EDIT_USERNAME_MIN_LENGTH)
+      .max(JOIN_EDIT_USERNAME_MAX_LENGTH)
+      .regex(JOIN_EDIT_USERNAME_PATTERN, "A username cannot contain spaces"),
+    phone: z.string().trim().regex(SIGNUP_PHONE_PATTERN, "Enter an 11-digit mobile number starting with 0"),
+    ipExtension: z.string().trim().regex(SIGNUP_IP_EXTENSION_PATTERN, "Enter an IP extension of 3 to 6 digits"),
+    employeeId: z.string().trim().min(1).max(SIGNUP_EMPLOYEE_ID_MAX_LENGTH),
+    department: z.enum(DEPARTMENTS),
+    branches: z.array(z.union([
+      z.object({ branchId: positiveId }).strict(),
+      z.object({ crc: z.string().trim().min(1).max(CRC_MAX_LENGTH) }).strict(),
+    ])).min(1).max(SIGNUP_MAX_BRANCHES)
+      .refine((list) => editedBranchListError(list) === null, { message: "The same branch is listed twice" }),
+    addresses: z.array(z.string().trim().min(5).max(SIGNUP_ADDRESS_MAX_LENGTH)).min(1).max(SIGNUP_MAX_ADDRESSES)
+      .refine((list) => editedAddressListError(list) === null, { message: "The same delivery address is listed twice" }),
+    approvers: z.array(signupApproverSchema).min(1).max(MAX_APPROVAL_LEVELS),
+  }).strict(),
 }).strict()
 
 /**

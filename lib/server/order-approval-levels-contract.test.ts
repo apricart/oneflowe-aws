@@ -155,8 +155,15 @@ describe("order approval levels — the write", () => {
   })
 })
 
-describe("order approval levels — nothing in the order path reads them yet", () => {
-  it("is not read by any order, decision or notification module yet", () => {
+/*
+ * Phase 2b (plans/OF-APPROVAL-LEVELS-route-orders-by-level.md): the order path
+ * reads the levels through one module only, lib/server/order-approval-routing.ts,
+ * which gates every rule on the organization using levels now. So the direct
+ * readers stay this short list, and the order path's use of the routing module
+ * is pinned below.
+ */
+describe("order approval levels — read by the order path only through the routing module", () => {
+  it("is read directly only by its own modules, the join, and the routing module", () => {
     const readers = PRODUCTION_SOURCES.filter((file) =>
       /order-approval-levels|organizationApprovalLevels|orderApprovalLevelsEnabled/.test(read(file)),
     )
@@ -181,10 +188,55 @@ describe("order approval levels — nothing in the order path reads them yet", (
       "app/join/page.tsx",
       "components/join/department-signup-form.tsx",
       "components/join/department-join-review-dialog.tsx",
+      // Phase 2b: the one module the order path routes through, and the coverage panel.
+      "lib/server/order-approval-routing.ts",
+      "components/users/approval-level-coverage.tsx",
     ])
-    // A new reader is phase 2b: route orders deliberately, and update this list
-    // and the plan together.
+    // A new direct reader goes through the routing module instead, or onto this
+    // list with the plan updated.
     expect(readers.filter((file) => !allowed.has(file))).toEqual([])
+  })
+
+  it("routes every order path that creates, edits, decides or announces an order through it", () => {
+    const routing = "@/lib/server/order-approval-routing"
+    for (const file of [
+      "app/api/v1/orders/route.ts",
+      "app/api/v1/orders/[id]/route.ts",
+      "lib/server/group-order-creation.ts",
+      "lib/server/order-decision-policy.ts",
+      "lib/server/order-decision-service.ts",
+      "lib/server/order-correction.ts",
+      "lib/server/order-notifications.ts",
+      "lib/server/group-order-approvals.ts",
+    ]) {
+      expect(read(file), `${file} no longer routes through the approval levels`).toContain(routing)
+    }
+  })
+
+  it("gates every routing rule on the organization using levels now", () => {
+    const routing = read("lib/server/order-approval-routing.ts")
+    for (const gate of [
+      "if (!settings?.active) return null",
+      "if (!settings?.active) return { level: current, changed: false }",
+      "if (!settings?.active) return { levelled: false }",
+    ]) {
+      expect(routing).toContain(gate)
+    }
+    // An order without a level is decided as before.
+    expect(routing).toContain("if (level === null) return { levelled: false }")
+    expect(routing).toContain("if (current === null) return { level: null, changed: false }")
+  })
+
+  it("matches the authorized level on approve, reject and return", () => {
+    const service = read("lib/server/order-decision-service.ts")
+    expect(service.match(/approvalLevelMatches\(authorization\.approvalLevel\)/g) || []).toHaveLength(2)
+    expect(read("lib/server/order-correction.ts")).toContain("approvalLevelMatches(authorization.approvalLevel)")
+  })
+
+  it("never lets the routing widen who decides: the role rule still runs first", () => {
+    const policy = read("lib/server/order-decision-policy.ts")
+    expect(policy.indexOf("canMakeOrderDecision({")).toBeLessThan(policy.indexOf("levelledDecisionFor(tx"))
+    expect(policy).toContain('if (levelled.levelled && !levelled.allowed) return { ok: false, reason: "forbidden" }')
   })
 })
 

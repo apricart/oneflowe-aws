@@ -159,3 +159,40 @@ export function approverListError(input: {
 export function encodedBodyBytes(body: unknown): number {
   return new TextEncoder().encode(JSON.stringify(body)).length
 }
+
+/*
+ * A new branch Head Office creates from a CRC at review. The decision schema
+ * and the review dialog both read these bounds, so the dialog can name the
+ * field it refuses instead of the server answering with a bare length error.
+ */
+export const NEW_BRANCH_FIELDS = ["name", "province", "city", "address"] as const
+export type NewBranchField = (typeof NEW_BRANCH_FIELDS)[number]
+
+export const NEW_BRANCH_FIELD_RULES: Record<NewBranchField, { label: string; min: number; max: number }> = {
+  name: { label: "branch name", min: 2, max: 100 },
+  province: { label: "province", min: 2, max: 100 },
+  city: { label: "city", min: 2, max: 100 },
+  address: { label: "branch address", min: 5, max: 500 },
+}
+
+/** Why one field of a new branch cannot be accepted, or null. */
+export function newBranchFieldError(field: NewBranchField, value: string): string | null {
+  const { label, min, max } = NEW_BRANCH_FIELD_RULES[field]
+  const length = value.trim().length
+  if (length === 0) return `Enter the ${label}`
+  if (length < min) return `The ${label} needs at least ${min} characters`
+  if (length > max) return `The ${label} can be at most ${max} characters`
+  return null
+}
+
+/** Every field of a new branch that cannot be accepted, keyed by field; empty when all are fine. */
+export function newBranchDraftErrors(
+  draft: Readonly<Record<NewBranchField, string>>,
+): Partial<Record<NewBranchField, string>> {
+  const errors: Partial<Record<NewBranchField, string>> = {}
+  for (const field of NEW_BRANCH_FIELDS) {
+    const problem = newBranchFieldError(field, draft[field])
+    if (problem) errors[field] = problem
+  }
+  return errors
+}

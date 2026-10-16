@@ -7,7 +7,7 @@ Builds on `plans/OF-JOIN-organization-self-service-join.md`,
 
 Status: **department sign-up implemented 2026-10-15** (migration
 `20261019120000_join_department_signup`). Phase 2b, routing orders by level,
-is not built; see *Dependency on phase 2b*.
+was implemented 2026-10-15: `plans/OF-APPROVAL-LEVELS-route-orders-by-level.md`.
 
 > **Revision 2026-10-15.** The first draft (2026-10-13) designed its own
 > approval machinery: fixed three bands with "up to" limits on the
@@ -183,7 +183,10 @@ No `orders` column here: an order's level snapshot belongs to phase 2b.
   * several accounts share the email (K-Electric mirrored accounts);
   * a role that cannot hold a level;
   * holds a different level (D4);
-  * a `BRANCH_ADMIN` whose one branch does not cover the initiator's branches;
+  * a new approver for one branch where the approver role is `HEAD_OFFICE`
+    (it would be a `BRANCH_ADMIN`, which cannot hold a level there);
+  * a `BRANCH_ADMIN` that would have to become a `GROUP_USER` while orders it
+    raised are still pending or approved;
   * is the deciding Head Office user (no self-assignment).
 
   A `HEAD_OFFICE` holder (approver role `HEAD_OFFICE`) reaches the whole
@@ -233,9 +236,11 @@ No `orders` column here: an order's level snapshot belongs to phase 2b.
      `requested_by_user_id` = the initiator.
   7. For each level, re-run `planApproverResolution`. If the outcome differs
      from what Head Office reviewed, stop with a 409. Otherwise apply it:
-     * create the user (`GROUP_USER`, random temporary password,
-       `must_change_password`, D3) and assign its branches;
-     * or add the missing branches;
+     * create the user (random temporary password, `must_change_password`,
+       D3): a `BRANCH_ADMIN` pinned to the one branch, or a `GROUP_USER`
+       assigned to every branch when there are more (see "Approver roles");
+     * or convert an existing `BRANCH_ADMIN` to `GROUP_USER`, or add the
+       missing branches;
      * then `assignApprovalLevelInTx`.
      `covered` and `not_applied` (D7) write nothing.
   8. Record each resolution on the request's approver rows, mark the request
@@ -246,6 +251,34 @@ No `orders` column here: an order's level snapshot belongs to phase 2b.
   * `sendWelcomeEmail` to each new approver with its temporary password (D3);
   * a notice to each existing approver who gained branches or a level.
 
+### Approver roles
+
+Decided 2026-10-16: **an approver's role follows how many branches it will
+reach — one branch is a Branch Admin of that branch, more than one is a Group
+User.** Applies to the approval-level users only; the initiator keeps
+Order Portal (one branch) / Group Order Portal (more).
+
+| Approver | One branch | More than one branch |
+|---|---|---|
+| New (no account) | Created `BRANCH_ADMIN`, `branch_id` = that branch. **Blocked** where `order_approver_role` is `HEAD_OFFICE`, because a Branch Admin cannot hold a level there. | Created `GROUP_USER`, assigned to every branch. |
+| Existing `BRANCH_ADMIN` | Its own branch: stays Branch Admin (assign/covered). Another branch: converted, as below. | **Converted to `GROUP_USER`**: `branch_id` cleared, its old branch kept as an assignment beside the initiator's, budget allocation off, `session_version` bumped and `sessions` deleted, `USER_ACCESS_UPDATE` in `system_logs` (`source: DEPARTMENT_JOIN_APPROVAL`), as `PATCH /api/v1/users/[id]/access` would. **Blocked** while orders it raised are pending or approved (`loadRoleChangeReadiness`, the rule every role change follows). Judged as the Group User it becomes, so it is converted even where the approver role is Head Office. |
+| Existing `GROUP_USER` | Stays `GROUP_USER` — never turned into a Branch Admin. | Stays `GROUP_USER`; missing branches added. |
+| Existing `HEAD_OFFICE` | Unchanged (covered if it holds the level, else blocked). | Same. |
+| Any other existing role | Blocked, as before (never converted). | Same. |
+
+The count is the initiator's branches after Head Office's choices at review:
+existing branches, plus CRCs mapped onto branches, plus CRCs to create — each
+counted once (`branchCountAfterReview`). Mapping a CRC onto a branch already in
+the request lowers it, so the approval decides roles on its final branches and
+the dialog previews them with the same count, warning when it differs from the
+request's. For the same reason the drift check (`sameResolution`) compares the
+kind and the account but not the role, the branches added, or extend-versus-
+covered for a holder of the level. Pure in `lib/join-approver-resolution.ts`
+(`newApproverRole`, `branchAdminBecomesGroupUser`, `approverRoleAfterApproval`);
+applied in `createApprover` / `convertBranchAdminToGroupUser`
+(`lib/server/organization-join-department.ts`). A converted approver's notice
+email says it is now a Group User and was signed out.
+
 ### Endpoints
 
 | Route | Change |
@@ -253,7 +286,41 @@ No `orders` column here: an order's level snapshot belongs to phase 2b.
 | `POST /api/v1/join/lookup` | Also returns `form: "standard" \| "department"` and, for `department`, `approvalLevels: [{ level, fromCents, belowCents }]` (D5) and `departments`. Unchanged for `standard`. |
 | `POST /api/v1/join/requests` | Accepts the version 1 body (unchanged) or a version 2 body (`formVersion: 2`, strict). The version must match `joinUsesApprovalLevels` re-read on this request, otherwise 400. Version 2 has no `role`, `username` or organization id, and its `approvers` must cover exactly levels `1..N` of the organization's current levels. Same rate limits, same flattened identity message. |
 | `GET /api/v1/join-requests/[id]` | **New.** Head Office, own organization (`resolveJoinManagementScope`), any other is 404: the package and the review preview. |
-| `PATCH /api/v1/join-requests/[id]` | Dispatches on the **stored** version. Version 2 takes either `{ replaceApprover: { level, email, designation } }` (Head Office names a different approver for a pending request, audited `REPLACE_ORGANIZATION_JOIN_REQUEST_APPROVER`), or a decision: `newBranches` (details, or `mapToBranchId`, per CRC to create), `addressBranches`, an optional initiator `username`, and the `expectedResolutions` reviewed (required to approve). Strict, re-validated, picked field by field. Version 1 decisions unchanged, and the version 1 path refuses a version 2 request. |
+| `PATCH /api/v1/join-requests/[id]` | Dispatches on the **stored** version. Version 2 takes `{ replaceApprover: { level, email, designation } }` (Head Office names a different approver for a pending request, audited `REPLACE_ORGANIZATION_JOIN_REQUEST_APPROVER`), `{ update: {...} }` (Head Office edits the pending request — see "Editing at review" below), or a decision: `newBranches` (details, or `mapToBranchId`, per CRC to create), `addressBranches`, an optional initiator `username`, and the `expectedResolutions` reviewed (required to approve). Strict, re-validated, picked field by field. Version 1 decisions unchanged, and the version 1 path refuses a version 2 request. |
+
+### Editing at review
+
+Head Office may correct **every field the applicant typed** before deciding:
+first and last name, email, username, phone, IP extension, employee ID,
+department, the branch/CRC list, the delivery addresses, and each level's
+approver email and designation. Two things are not editable, because they are
+the applicant's alone: the **password** and the **acceptance of the terms**.
+
+* `PATCH /api/v1/join-requests/[id]` with `{ update: { ...the whole request as it should read } }`,
+  `departmentJoinUpdateSchema` (strict; no password, role, status or tenant).
+  Version 2 requests only, chosen by the stored version as for the decision.
+* `updateDepartmentJoinRequest` (`lib/server/organization-join-department-edit.ts`)
+  runs in one transaction under the request's `FOR UPDATE` lock (the lock the
+  approval takes first, so an edit and an approval cannot interleave), and only
+  while pending (else 409). It re-applies every submission rule: the
+  organization's email domain (`joinEmailDomainRefusal`), the patterns, one
+  distinct approver per level who is not the initiator (`approverListError`,
+  against the levels the request was made with), branches active in this
+  organization, CRCs matched as at submission. Changed identity fields are held
+  to what the approval will require — no account holds the username, email,
+  phone or employee ID, and no other pending request of the tenant the email or
+  username (409). The role is recomputed from the branch count.
+* It writes only the request and its own child rows. Unchanged branch and
+  address rows keep their ids (`planRequestBranchEdit`, `planAddressEdit` in
+  `lib/join-department-edit.ts`), so choices made against them in the dialog
+  still name them; a changed approver level is replaced, so two levels may swap
+  approvers.
+* Audited `UPDATE_ORGANIZATION_JOIN_REQUEST` with the **names** of the changed
+  fields and levels and whether branches/addresses changed — never the values.
+  No row when nothing changed.
+* UI: "Edit details" in the review dialog opens `DepartmentJoinEditForm`
+  (`components/join/department-join-edit-form.tsx`); saving reloads the review,
+  so the resolutions Approve sends are judged on the corrected request.
 
 ### UI
 
@@ -393,7 +460,8 @@ Phase 2b scope, as far as this plan needs it:
 
 ## Open items
 
-1. **Phase 2b is not built.** Until it is, the sign-up's approvers do not
-   enforce amounts (see *Dependency on phase 2b*).
+1. Phase 2b is built (`plans/OF-APPROVAL-LEVELS-route-orders-by-level.md`). It
+   bands each order on its own total, including group-portal branch orders,
+   rather than on a whole submission as sketched above.
 2. The design file was supplied in conversation on 2026-10-15; its field list
    is recorded above.

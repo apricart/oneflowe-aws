@@ -323,3 +323,87 @@ export function heldLevelsRemovalMessage(held: readonly { level: number; users: 
   const parts = held.map(({ level, users }) => `Level ${level} (${users} ${users === 1 ? "user" : "users"})`)
   return `These levels are still assigned: ${parts.join(", ")}. Give those users another level, or none, before removing them.`
 }
+
+/* ── Routing orders by level ─────────────────────────────────────────────── */
+/* plans/OF-APPROVAL-LEVELS-route-orders-by-level.md                          */
+
+/**
+ * Whether an organization uses approval levels **now**: approval required,
+ * levels switched on, and at least one level saved. Every routing rule below
+ * is gated on this, so an organization that never turned levels on is
+ * untouched.
+ */
+export function approvalLevelsActive(organization: {
+  orderApprovalRequired: boolean
+  orderApprovalLevelsEnabled: boolean
+  levelCount: number
+}): boolean {
+  return organization.orderApprovalRequired
+    && organization.orderApprovalLevelsEnabled
+    && organization.levelCount > 0
+}
+
+/**
+ * The level whose band an amount falls in (`approvalLevelBands`): the highest
+ * level whose amount it reaches, else the lowest level. Null when there are no
+ * levels. `amountsCents[0]` is Level 1.
+ */
+export function approvalLevelForAmount(amountCents: number, amountsCents: readonly number[]): number | null {
+  if (amountsCents.length === 0) return null
+  const bands = approvalLevelBands(amountsCents)
+  const band = bands.find((candidate) => (candidate.fromCents === null || amountCents >= candidate.fromCents)
+    && (candidate.belowCents === null || amountCents < candidate.belowCents))
+  return band?.level ?? amountsCents.length
+}
+
+/** The person trying to decide a levelled order, as read from the database. */
+export type LevelledDecisionActor = {
+  userId: string
+  role: string
+  organizationId: number | null
+  /** The single branch of a single-branch role. */
+  branchId: number | null
+  level: number | null
+  /** A Group User's resolved reach; empty for every other role. */
+  scopedBranchIds: readonly number[]
+}
+
+/**
+ * Whether this person may approve, reject or return this levelled order:
+ * same organization, holds exactly the order's level in a role that may hold
+ * one, reaches the order's branch, and did not raise the order.
+ */
+export function canDecideLevelledOrder(input: {
+  actor: LevelledDecisionActor
+  order: { approvalLevel: number; organizationId: number; branchId: number; createdByUserId: string | null }
+  organization: ApprovalLevelOrganization
+}): boolean {
+  const { actor, order } = input
+  if (actor.organizationId === null || actor.organizationId !== order.organizationId) return false
+  if (actor.level !== order.approvalLevel) return false
+  if (!canHoldApprovalLevel(actor.role, input.organization)) return false
+  if (order.createdByUserId !== null && actor.userId === order.createdByUserId) return false
+  return reachesBranch(actor, order.branchId)
+}
+
+/** Whether a level holder's reach covers a branch, by its role. */
+export function reachesBranch(
+  actor: Pick<LevelledDecisionActor, "role" | "branchId" | "scopedBranchIds">,
+  branchId: number,
+): boolean {
+  if (actor.role === "HEAD_OFFICE") return true
+  if (actor.role === "BRANCH_ADMIN") return actor.branchId === branchId
+  if (actor.role === "GROUP_USER") return actor.scopedBranchIds.includes(branchId)
+  return false
+}
+
+/** What an order refused for want of an approver is told. */
+export function approvalLevelUnavailableMessage(level: number): string {
+  return `No Level ${level} approver covers this branch, so this order cannot be placed yet. Contact your head office.`
+}
+
+/** The 409 when removing levels that pending orders are waiting at. */
+export function pendingLevelsRemovalMessage(pending: readonly { level: number; orders: number }[]): string {
+  const parts = pending.map(({ level, orders }) => `Level ${level} (${orders} ${orders === 1 ? "order" : "orders"})`)
+  return `Pending orders are waiting at: ${parts.join(", ")}. Decide them, or keep the level, before removing it.`
+}

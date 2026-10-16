@@ -914,6 +914,11 @@ export const orders = pgTable(
     // budgets on or off can never release or spend a hold the order did not
     // take. See `orderTakesBudget` in lib/organization-budget-policy.ts.
     budgetTracked: boolean("budget_tracked").notNull().default(true),
+    // The approval level this order waits at, fixed when it is created and
+    // moved only by an edit. Null on every order of an organization that does
+    // not use approval levels, which means "decided exactly as today".
+    // See plans/OF-APPROVAL-LEVELS-route-orders-by-level.md.
+    approvalLevel: integer("approval_level"),
     // Where an Order Desk order came from — the customer's email, WhatsApp
     // message or call — so it can be traced back to its source. Required for a
     // desk order and null on every portal order (lib/order-desk-access.ts).
@@ -1034,6 +1039,8 @@ export const orders = pgTable(
     uniqueIndex("orders_creator_idempotency_uq").on(t.createdByUserId, t.idempotencyKey),
     check("orders_amounts_nonnegative_ck", sql`${t.subtotalCents} >= 0 AND ${t.taxCents} >= 0 AND ${t.totalCents} >= 0 AND COALESCE(${t.refundAmountCents}, 0) >= 0 AND COALESCE(${t.refundAmountCents}, 0) <= ${t.totalCents}`),
     check("orders_idempotency_pair_ck", sql`(${t.idempotencyKey} IS NULL AND ${t.requestFingerprint} IS NULL) OR (${t.idempotencyKey} IS NOT NULL AND ${t.requestFingerprint} IS NOT NULL)`),
+    // MAX_APPROVAL_LEVELS in lib/order-approval-levels.ts.
+    check("orders_approval_level_ck", sql`${t.approvalLevel} IS NULL OR ${t.approvalLevel} BETWEEN 1 AND 10`),
     check("orders_intake_channel_ck", sql`${t.intakeChannel} IS NULL OR ${t.intakeChannel} IN ('EMAIL', 'WHATSAPP', 'PHONE', 'OTHER')`),
     check(
       "orders_intake_attachment_key_ck",

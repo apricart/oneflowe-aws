@@ -17,6 +17,13 @@ import {
   users,
 } from "@/db/schema"
 import { error, ok, requireApiRole } from "@/lib/api"
+import {
+  isApprovalLevelUnavailableError,
+  levelledViewFlags,
+  loadLevelledViewContext,
+  rebandEditedOrder,
+} from "@/lib/server/order-approval-routing"
+import { queueLevelChangedNotifications } from "@/lib/server/order-notifications"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { applyOrderCreatorContactVisibility } from "@/lib/order-detail-visibility"
@@ -88,6 +95,8 @@ const getOrderEditErrorResponse = (editError: any) => {
     return error("Order was already approved, rejected, or otherwise changed", 409)
   }
   if (message === DELIVERY_ADDRESS_UNAVAILABLE) return error(message, 400)
+  // The edited total falls in an approval level nobody at the branch holds.
+  if (isApprovalLevelUnavailableError(editError)) return error(message, 409)
   if (["BUDGET_LEDGER_INVARIANT", "QUANTITY_BUDGET_LEDGER_INVARIANT", "STOCK_LEDGER_INVARIANT"].includes(message)) {
     return error("Order reservations are inconsistent; the order was not changed", 409)
   }
@@ -449,10 +458,22 @@ async function regenerateEditedOrderReceipt(tx: any, context: any) {
 
 async function persistEditedOrder(tx: any, context: any) {
   const { lockedBudget, existingOrder, totalCents } = context
+  // An order waiting at an approval level is banded again on its new total;
+  // every other order keeps none (plans/OF-APPROVAL-LEVELS-route-orders-by-level.md, R6).
+  const reband = await rebandEditedOrder(tx, {
+    order: {
+      approvalLevel: existingOrder.approvalLevel ?? null,
+      organizationId: context.organizationId,
+      branchId: context.branchId,
+      createdByUserId: existingOrder.createdByUserId,
+    },
+    totalCents,
+  })
   const [updatedOrder] = await tx.update(orders).set({
     subtotalCents: context.subtotalCents,
     taxCents: context.taxCents,
     totalCents: context.totalCents,
+    ...(reband.changed ? { approvalLevel: reband.level } : {}),
     ...(context.notes !== undefined ? { notes: context.notes || null } : {}),
     ...(context.poNumber !== undefined ? { poNumber: context.poNumber || null } : {}),
     // Written only when the client said something about the address, so an
@@ -507,8 +528,18 @@ async function persistEditedOrder(tx: any, context: any) {
       // whenever the editor is not the person who raised the order.
       onBehalfOfUserId: context.write?.onBehalfOfUserId ?? null,
       crossRequesterWrite: Boolean(context.write?.isCrossRequesterWrite),
+      ...(reband.changed
+        ? { previousApprovalLevel: existingOrder.approvalLevel, approvalLevel: reband.level }
+        : {}),
     },
   })
+  // Moved to another level: that level's holders are asked to decide it.
+  if (reband.changed) {
+    await queueLevelChangedNotifications(tx, {
+      order: updatedOrder,
+      requestedBy: context.actor?.name ?? "A requester",
+    })
+  }
   await notifyRaiserOfOrderWrite(tx, {
     write: context.write,
     organizationId: context.organizationId,
@@ -697,8 +728,15 @@ export async function GET(
   // The creator's contact row is then withheld from a requester reading an
   // order it did not raise, so reaching many branches does not turn this into a
   // staff directory. Every other role's response is unchanged.
+  const levelledView = await loadLevelledViewContext({ userId: currentUserId, organizationId: requestScope?.organizationId })
   const safeItem = applyOrderCreatorContactVisibility(
-    { ...detailItem, placedByGroupPortal: isGroupPortalOrder(item), decidedByApricart },
+    {
+      ...detailItem,
+      placedByGroupPortal: isGroupPortalOrder(item),
+      decidedByApricart,
+      // plans/OF-APPROVAL-LEVELS-route-orders-by-level.md, R10.
+      ...levelledViewFlags(levelledView, item),
+    },
     {
       role: currentRole,
       viewerUserId: currentUserId,

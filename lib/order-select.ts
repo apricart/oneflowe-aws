@@ -34,6 +34,10 @@ export const orderSelectColumns = {
   // above: before the migration every order took a hold, so a missing column
   // honestly reads "tracked".
   budgetTracked: sql<boolean>`COALESCE((to_jsonb("orders") ->> 'budget_tracked')::boolean, true)`,
+  // The approval level the order waits at, or null (decided as before). Read
+  // defensively like the columns above: before its migration no order had one.
+  // See plans/OF-APPROVAL-LEVELS-route-orders-by-level.md.
+  approvalLevel: sql<number | null>`NULLIF(to_jsonb("orders") ->> 'approval_level', '')::int`,
   createdAt: orders.createdAt,
   deliveredAt: orders.deliveredAt,
   fulfilledAt: orders.fulfilledAt,

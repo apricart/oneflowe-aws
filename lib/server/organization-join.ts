@@ -305,9 +305,10 @@ export type JoinRequestSubmission = {
 
 export type JoinRequestFailure = {
   /**
-   * `identity` is answered to the caller with one field-less message, because
-   * naming the field turns the public form into a way of testing whether a
-   * colleague has an account. `scope` and `limit` are safe to describe: they are
+   * `identity` is answered to the caller with one message per form, listing
+   * every field checked but never singling one out, because naming the field
+   * turns the public form into a way of testing whether a colleague has an
+   * account. `scope` and `limit` are safe to describe: they are
    * about the tenant's own structure, which the code already disclosed.
    */
   kind: "identity" | "scope" | "limit"
@@ -373,7 +374,15 @@ async function scopeTenantError(input: {
  *     business. The two-tenant race it allows is resolved at approval, where the
  *     application-wide checks above run again.
  *
- * The caller collapses every one of these into a single field-less message.
+ * `checkAccountUsername` is false for the department sign-up, whose username
+ * is not something the applicant typed: it is the email's local part, so
+ * `ali@ke.example` would be refused because another tenant has a user `ali`,
+ * and the applicant would have no field to change. That clash is not refused
+ * here; the review flags it (`usernameTaken`) and Head Office picks another
+ * username before approving, where `usernameExists` runs again.
+ *
+ * The caller collapses every one of these into a single message that singles
+ * out no field.
  */
 export async function identityConflictReason(input: {
   organizationId: number
@@ -381,8 +390,9 @@ export async function identityConflictReason(input: {
   username: string
   phone: string | null
   employeeId: string | null
+  checkAccountUsername: boolean
 }): Promise<string | null> {
-  if (await usernameExists(input.username)) return "username taken"
+  if (input.checkAccountUsername && await usernameExists(input.username)) return "username taken"
 
   try {
     await assertUniqueUserFields({
@@ -433,7 +443,7 @@ export async function createJoinRequest(
     }
   }
 
-  if (await identityConflictReason(submission)) {
+  if (await identityConflictReason({ ...submission, checkAccountUsername: true })) {
     return { kind: "identity", message: "identity conflict", status: 409 }
   }
 

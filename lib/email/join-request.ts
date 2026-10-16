@@ -136,6 +136,8 @@ export type JoinApproverNoticeEmail = {
   level: number
   initiatorName: string
   organizationName: string
+  /** The approval converted this Branch Admin to a Group User and ended its sessions. */
+  becameGroupUser?: boolean
   loginUrl: string
 }
 
@@ -166,7 +168,12 @@ export async function sendJoinApproverNoticeEmail(payload: JoinApproverNoticeEma
             ${escapeHtml(payload.organizationName)} has approved ${escapeHtml(payload.initiatorName)}'s
             request to join, naming you as their Level ${escapeHtml(payload.level)} financial approver.
             Orders at their branches in your level's range will come to you for approval.
-          </p>
+          </p>${payload.becameGroupUser ? `
+          <p style="font-size:15px;line-height:1.6;margin:0 0 16px;">
+            To approve for all of their branches, your account is now a Group User instead of a
+            Branch Admin, and you keep your own branch. You have been signed out; sign in again
+            with your usual username and password.
+          </p>` : ""}
           <p style="margin:24px 0;">
             <a href="${escapeHtml(payload.loginUrl)}" style="background:#2563eb;color:#ffffff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:700;">Sign in</a>
           </p>
@@ -182,6 +189,14 @@ export async function sendJoinApproverNoticeEmail(payload: JoinApproverNoticeEma
         `${payload.organizationName} has approved ${payload.initiatorName}'s request to join, naming you`,
         `as their Level ${payload.level} financial approver. Orders at their branches in your`,
         `level's range will come to you for approval.`,
+        ...(payload.becameGroupUser
+          ? [
+              ``,
+              `To approve for all of their branches, your account is now a Group User instead of a`,
+              `Branch Admin, and you keep your own branch. You have been signed out; sign in again`,
+              `with your usual username and password.`,
+            ]
+          : []),
         ``,
         `Sign in: ${payload.loginUrl}`,
         ``,

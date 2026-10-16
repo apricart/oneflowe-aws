@@ -3,6 +3,7 @@ import { createHash } from "node:crypto"
 import { error, ok, readJson } from "@/lib/api"
 import { handleError } from "@/lib/error-handler"
 import {
+  DEPARTMENT_JOIN_IDENTITY_CONFLICT_MESSAGE,
   JOIN_IDENTITY_CONFLICT_MESSAGE,
   JOIN_REQUEST_RECEIVED_MESSAGE,
   UNKNOWN_JOIN_CODE_MESSAGE,
@@ -47,10 +48,10 @@ const DEPARTMENT_FORM_ONLY_MESSAGE =
 
 type JoinFailure = { kind: "identity" | "scope" | "limit"; message: string; status: number }
 
-function failureResponse(outcome: JoinFailure) {
+function failureResponse(outcome: JoinFailure, identityConflictMessage: string) {
   // Only the identity conflict is flattened: the other two describe the
   // tenant's own structure or its queue, which the code already disclosed.
-  const message = outcome.kind === "identity" ? JOIN_IDENTITY_CONFLICT_MESSAGE : outcome.message
+  const message = outcome.kind === "identity" ? identityConflictMessage : outcome.message
   return error(message, outcome.status)
 }
 
@@ -81,8 +82,9 @@ function failureResponse(outcome: JoinFailure) {
  *      or edits what it was told — is held to the same rule.
  *   5. **Role allowlist** — `JOINABLE_ROLES`, in the schema, in the server
  *      module and in a check constraint. `HEAD_OFFICE` is unreachable.
- *   6. **One generic conflict message.** Email, username, phone, employee
- *      number and an already-waiting request all answer identically, so the
+ *   6. **One conflict message per form.** It lists every field that is checked
+ *      and why each can clash, but email, username, phone, employee number and
+ *      an already-waiting request all answer with the identical text, so the
  *      form cannot be used to test whether a colleague has an account.
  *   7. **The password is hashed here** and only its hash is stored, on the
  *      request row. There is no path that reads it back.
@@ -153,7 +155,7 @@ export async function POST(req: Request) {
       submittedUserAgent: req.headers.get("user-agent")?.slice(0, 512) ?? null,
     })
 
-    if ("kind" in outcome) return failureResponse(outcome)
+    if ("kind" in outcome) return failureResponse(outcome, JOIN_IDENTITY_CONFLICT_MESSAGE)
 
     return ok({ message: JOIN_REQUEST_RECEIVED_MESSAGE }, { status: 201 })
   } catch (caughtError) {
@@ -226,7 +228,7 @@ async function submitDepartmentSignup(req: Request, rawBody: unknown) {
     submittedIp: await resolveRequestClientIp(),
     submittedUserAgent: req.headers.get("user-agent")?.slice(0, 512) ?? null,
   })
-  if ("kind" in outcome) return failureResponse(outcome)
+  if ("kind" in outcome) return failureResponse(outcome, DEPARTMENT_JOIN_IDENTITY_CONFLICT_MESSAGE)
 
   return ok({ message: JOIN_REQUEST_RECEIVED_MESSAGE }, { status: 201 })
 }
