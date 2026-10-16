@@ -9,7 +9,7 @@
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import * as bcryptjs from "bcryptjs"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 
 vi.mock("server-only", () => ({}))
 
@@ -27,15 +27,22 @@ function source(path: string) {
 
 const originalPreference = process.env.PASSWORD_HASHER
 
-beforeEach(() => {
-  resetPasswordHasherForTests()
-})
-
-afterEach(() => {
+function restorePreference(): void {
   if (originalPreference === undefined) delete process.env.PASSWORD_HASHER
   else process.env.PASSWORD_HASHER = originalPreference
   resetPasswordHasherForTests()
+}
+
+// Production selects the backend -- and runs its self-test -- once per
+// process, so the compatibility suites below share one selection, as a server
+// does. Re-selecting before every test re-ran the self-test's twelve real
+// bcrypt checks each time and cost the suite over a minute and a half. The
+// backend-selection tests re-select explicitly and restore afterwards.
+beforeAll(() => {
+  resetPasswordHasherForTests()
 })
+
+afterAll(restorePreference)
 
 /**
  * The whole point of this change is that it must be invisible to users. These
@@ -124,6 +131,8 @@ describe("malformed input cannot throw into the login path", () => {
 })
 
 describe("backend selection", () => {
+  afterEach(restorePreference)
+
   it("honours PASSWORD_HASHER=bcryptjs as a rollback lever", async () => {
     process.env.PASSWORD_HASHER = "bcryptjs"
     resetPasswordHasherForTests()

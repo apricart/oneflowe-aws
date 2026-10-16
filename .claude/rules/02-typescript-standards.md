@@ -9,7 +9,7 @@ Replaces the Python/Poetry/Ruff/Black section of the standard.
 | Package management | npm (lockfile committed) | `npm ci` |
 | Types | TypeScript | `npm run typecheck` |
 | Lint | ESLint 10 (flat config, `typescript-eslint`, `sonarjs`, `react-hooks`) | `npm run lint` |
-| Unit/contract tests | Vitest (jsdom) | `npm test` |
+| Unit/contract tests | Vitest (jsdom or node per file) | `npm test` |
 | Integration tests | Vitest (node) | `npm run test:integration` |
 | E2E | Playwright | `npm run e2e` |
 | Build | Next.js | `npm run build` |
