@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { globalProducts, auditLogs } from "@/db/schema"
-import { eq, and, ne } from "drizzle-orm"
+import { eq } from "drizzle-orm"
 import { globalProductUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
 import { taxRatePercentToBp } from "@/lib/tax"
 
@@ -60,27 +60,7 @@ export async function PUT(
       return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
     }
     const input = parsedBody.data
-    const { productCode, name, description, categoryId, imageUrl, basePrice, taxRatePercent, unit, status, metadata } = input
-
-    // Check if product code already exists
-    if (productCode) {
-      const start = Date.now()
-      const [existingProductWithCode] = await db.select()
-        .from(globalProducts)
-        .where(
-          and(
-            eq(globalProducts.productCode, productCode.toString().trim()),
-            ne(globalProducts.id, productId)
-          )
-        )
-        .limit(1)
-
-      console.log(`[UpdateProduct] Check for duplicate code '${productCode}' took ${Date.now() - start}ms. Found: ${!!existingProductWithCode}`)
-
-      if (existingProductWithCode) {
-        return NextResponse.json({ error: "Product code already exists" }, { status: 400 })
-      }
-    }
+    const { name, description, categoryId, imageUrl, basePrice, taxRatePercent, unit, status, metadata } = input
 
     // Check if product exists
     const [existingProduct] = await db.select().from(globalProducts).where(eq(globalProducts.id, productId)).limit(1)
@@ -91,7 +71,6 @@ export async function PUT(
     // Update product
     const [updatedProduct] = await db.update(globalProducts)
       .set({
-        productCode,
         name,
         description,
         categoryId,

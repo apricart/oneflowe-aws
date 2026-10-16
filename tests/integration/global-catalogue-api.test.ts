@@ -139,6 +139,12 @@ describe.skipIf(!hasTestDatabase)("global catalogue", () => {
     const edited = await json(await inventoryRoute.PUT(req("/x", "PUT", { id: row.id, name: `Alpha Prime ${suffix}` })))
     expect(edited.status, JSON.stringify(edited.body)).toBeLessThan(300)
 
+    // The code never changes after create, through either update endpoint.
+    expect((await inventoryRoute.PUT(req("/x", "PUT", { id: row.id, productCode: code("R") }))).status).toBe(400)
+    expect((await productRoute.PUT(req("/x", "PUT", { productCode: code("R") }), { params: Promise.resolve({ id: String(row.id) }) })).status).toBe(400)
+    const [unchanged] = await db.select().from(globalProducts).where(eq(globalProducts.id, row.id))
+    expect(unchanged.productCode).toBe(assignedCode)
+
     const listed = await json(await inventoryRoute.GET(req(`/x?search=${encodeURIComponent(`Alpha Prime ${suffix}`)}`)))
     expect(JSON.stringify(listed.body)).toContain(assignedCode)
     const one = await json(await inventoryRoute.GET(req(`/x?id=${row.id}`)))

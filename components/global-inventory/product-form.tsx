@@ -86,19 +86,17 @@ type NextProductCodeResponse = {
 
 const NEXT_PRODUCT_CODE_ENDPOINT = "/api/v1/admin/global-inventory/next-code"
 
-const getProductValidationError = (productData: ProductFormState, mode: ProductFormMode) => {
+const getProductValidationError = (productData: ProductFormState) => {
+  // The code is the server's: assigned on create and fixed after, so it is
+  // neither required here nor sent.
   const requiredValues = [
     productData.name,
     productData.basePrice,
     productData.unit,
     productData.stockQuantity,
   ]
-  // On create the server assigns the code, so there is nothing to require.
-  if (mode === "edit") requiredValues.push(productData.productCode)
   if (requiredValues.some((value) => !value)) {
-    return mode === "edit"
-      ? "Product code, name, price, unit, and stock quantity are required"
-      : "Name, price, unit, and stock quantity are required"
+    return "Name, price, unit, and stock quantity are required"
   }
   if (!productData.subcategoryId) return "Please select a category and subcategory"
 
@@ -115,14 +113,12 @@ const getProductValidationError = (productData: ProductFormState, mode: ProductF
 }
 
 const getProductPayload = (
-  mode: ProductFormMode,
-  { productCode, ...productData }: ProductFormState,
+  // Both endpoints refuse a code: create assigns it, and it never changes after.
+  { productCode: _productCode, ...productData }: ProductFormState,
   initialProduct?: GlobalProduct | null,
   confirmTaxInclusivePrice = false,
 ) => ({
   ...productData,
-  // The create endpoint assigns the code itself and refuses one sent to it.
-  ...(mode === "edit" ? { productCode } : {}),
   id: initialProduct?.id,
   confirmTaxInclusivePrice,
   basePrice: Number.parseFloat(productData.basePrice),
@@ -418,7 +414,7 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Reado
   }
 
   const handleSubmitProduct = async () => {
-    const validationError = getProductValidationError(productData, mode)
+    const validationError = getProductValidationError(productData)
     if (validationError) {
       toast({
         title: "Validation Error",
@@ -433,7 +429,7 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Reado
       const response = await fetch(`/api/v1/admin/global-inventory`, {
         method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(getProductPayload(mode, productData, initialProduct, confirmTaxInclusivePrice)),
+        body: JSON.stringify(getProductPayload(productData, initialProduct, confirmTaxInclusivePrice)),
       })
 
       // Handle non-JSON responses (e.g. Vercel 413 Request Entity Too Large returns HTML)
@@ -488,34 +484,20 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Reado
           <CardContent className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <div>
-                {mode === "create" ? (
-                  <>
-                    <label htmlFor="product-code" className="block text-sm font-medium mb-1">Product Code</label>
-                    <Input
-                      id="product-code"
-                      value={productData.productCode || "Generating…"}
-                      readOnly
-                      aria-readonly="true"
-                      aria-describedby="product-code-hint"
-                      className="bg-muted text-muted-foreground cursor-not-allowed"
-                    />
-                    <p id="product-code-hint" className="mt-1 text-xs text-muted-foreground">
-                      Generated automatically and confirmed when the product is saved.
-                    </p>
-                  </>
-                ) : (
-                  <>
-                    <label htmlFor="product-code" className="block text-sm font-medium mb-1">Product Code <span className="text-destructive">*</span></label>
-                    <Input
-                      id="product-code"
-                      value={productData.productCode ?? ""}
-                      onChange={(e) => setProductData({ ...productData, productCode: e.target.value })}
-                      placeholder="PRD-001"
-                      required
-                    />
-                    <p className="mt-1 text-xs text-muted-foreground">Avoid spaces; use dashes.</p>
-                  </>
-                )}
+                <label htmlFor="product-code" className="block text-sm font-medium mb-1">Product Code</label>
+                <Input
+                  id="product-code"
+                  value={productData.productCode || (mode === "create" ? "Generating…" : "")}
+                  readOnly
+                  aria-readonly="true"
+                  aria-describedby="product-code-hint"
+                  className="bg-muted text-muted-foreground cursor-not-allowed"
+                />
+                <p id="product-code-hint" className="mt-1 text-xs text-muted-foreground">
+                  {mode === "create"
+                    ? "Generated automatically and confirmed when the product is saved."
+                    : "Assigned when the product was created; it cannot be changed."}
+                </p>
               </div>
               <div>
                 <label htmlFor="product-name" className="block text-sm font-medium mb-1">Name <span className="text-destructive">*</span></label>

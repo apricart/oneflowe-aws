@@ -736,8 +736,8 @@ const nullableImageUrl = z.union([
 ])
 const nullableLongText = z.union([z.string().trim().max(10_000), z.null()])
 
+// A product's code is fixed once assigned, so an update naming one is refused.
 export const globalProductUpdateSchema = z.object({
-  productCode: z.string().trim().min(1).max(64).optional(),
   name: z.string().trim().min(1).max(255).optional(),
   description: nullableLongText.optional(),
   categoryId: nullablePositiveId.optional(),
@@ -784,12 +784,14 @@ const globalProductAdminFields = {
 }
 
 const globalProductAdminBaseSchema = z.object(globalProductAdminFields)
-// The code is assigned by the server on create (lib/server/global-product-code.ts),
-// so a create that names one is refused rather than silently renumbered.
+// The code is assigned by the server on create (lib/server/global-product-code.ts)
+// and never changes after, so a create or an edit that names one is refused
+// rather than silently renumbered.
 export const globalProductAdminCreateSchema = globalProductAdminBaseSchema
   .omit({ productCode: true })
   .strict()
 export const globalProductAdminUpdateSchema = globalProductAdminBaseSchema
+  .omit({ productCode: true })
   .partial()
   .extend({ id: positiveId })
   .strict()
