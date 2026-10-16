@@ -29,7 +29,14 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # managers. The runtime only ever executes 'node server.js', so npm, yarn
 # and corepack contribute nothing to it except their own vulnerable bundled
 # dependencies (node-tar, minimatch, brace-expansion, cross-spawn, glob).
-RUN apk --no-cache upgrade \
+#
+# CI builds with a layer cache. A cached copy of this step would keep serving
+# the packages from whenever it last ran, so CI passes a value that changes on
+# every run (SECURITY_UPGRADE_KEY) and the upgrade always runs fresh. A plain
+# `docker build` leaves it empty, which changes nothing.
+ARG SECURITY_UPGRADE_KEY=""
+RUN echo "Alpine package upgrade key: ${SECURITY_UPGRADE_KEY:-none}" \
+  && apk --no-cache upgrade \
   && apk add --no-cache libc6-compat \
   && rm -rf /usr/local/lib/node_modules/npm \
             /usr/local/lib/node_modules/corepack \

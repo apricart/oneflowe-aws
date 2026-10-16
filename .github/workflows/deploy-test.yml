@@ -13,17 +13,79 @@ concurrency:
   group: oneflowe-staging-deployment
   cancel-in-progress: false
 
-jobs:
-  scan-and-deploy:
-    runs-on: ubuntu-latest
-    # Tests, scans, image build and the SSM deploy all share this budget. At
-    # 35 minutes a slow SonarCloud analysis used it up and the run was
-    # cancelled before staging was deployed.
-    timeout-minutes: 60
+# The gates run as parallel jobs, so a run takes about as long as the slowest
+# of them rather than the sum of all of them (it was ~40 minutes run end to
+# end in one job). Typecheck and lint have a job of their own and report in a
+# few minutes, so a broken commit is caught without waiting for the test
+# suites. `deploy` waits for every gate and for the scans; SonarCloud is
+# report-only and staging does not wait for it.
+#
+# The image is built and scanned while the tests run, but it is pushed to ECR
+# only by `deploy`, after every gate has passed, so a failing commit never
+# reaches the registry or staging. `deploy` pushes the exact image
+# `build-image` scanned, handed over as a run artifact.
 
-    # The role suites exercise real assignment joins, tenant boundaries, and
-    # reporting arithmetic. Run them against a fresh database before an image
-    # can reach staging, matching the production deployment gate.
+jobs:
+  checks:
+    name: Typecheck and lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.x
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Run TypeScript checks
+        run: npm run typecheck
+
+      - name: Run lint
+        run: npm run lint
+
+  unit-tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.x
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Run unit tests
+        run: npm run test:coverage
+
+      # Read by the SonarCloud job.
+      - name: Upload unit coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-unit
+          path: coverage/unit/lcov.info
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  # The role suites exercise real assignment joins, tenant boundaries, and
+  # reporting arithmetic. Run them against a fresh database before an image
+  # can reach staging, matching the production deployment gate.
+  integration-tests:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16
@@ -38,14 +100,118 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.x
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Migrate the throwaway test database
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/oneflowe_test
+        run: npm run db:migrate:test
+
+      - name: Run integration tests
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/oneflowe_test
+        run: |
+          set -Eeuo pipefail
+          npm run test:integration:coverage 2>&1 | tee integration-run.log
+          if ! grep -q "running against oneflowe_test" integration-run.log; then
+            echo "Integration suites did not run against the test database." >&2
+            exit 1
+          fi
+          if grep -q "will SKIP" integration-run.log; then
+            echo "Integration suites skipped themselves." >&2
+            exit 1
+          fi
+
+      # Read by the SonarCloud job.
+      - name: Upload integration coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-integration
+          path: coverage/integration/lcov.info
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  # The browser suite seeds its own fixtures (tests/e2e/global-setup.ts), so it
+  # needs only a freshly migrated database of its own.
+  e2e-smoke:
+    name: Role smoke tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: oneflowe_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.x
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Migrate the throwaway test database
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/oneflowe_test
+        run: npm run db:migrate:test
+
+      - name: Install Chromium for role smoke tests
+        run: ./node_modules/.bin/playwright install --with-deps chromium
+
+      - name: Run role deployment smoke tests
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/oneflowe_test
+        run: npm run e2e:smoke
+
+      - name: Upload role smoke failure evidence
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: role-smoke-staging-${{ github.sha }}
+          path: |
+            playwright-report
+            test-results
+          if-no-files-found: ignore
+          retention-days: 14
+          overwrite: true
+
+  # Report-only scans. None of them will block deployment.
+  security-scans:
+    name: Security scans
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # Report-only scan. It will not block deployment.
       # This uses the open-source CLI rather than gitleaks-action, which exits
       # 1 on organization-owned repositories unless a paid GITLEAKS_LICENSE
       # secret is configured. Known false positives live in .gitleaksignore.
@@ -93,6 +259,8 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      # The dependency scans read the installed tree, as they did when they
+      # ran in the same job as the tests.
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -102,75 +270,6 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
-      - name: Run unit tests
-        run: npm run test:coverage
-
-      - name: Migrate the throwaway test database
-        env:
-          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/oneflowe_test
-        run: npm run db:migrate:test
-
-      - name: Run integration tests
-        env:
-          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/oneflowe_test
-        run: |
-          set -Eeuo pipefail
-          npm run test:integration:coverage 2>&1 | tee integration-run.log
-          if ! grep -q "running against oneflowe_test" integration-run.log; then
-            echo "Integration suites did not run against the test database." >&2
-            exit 1
-          fi
-          if grep -q "will SKIP" integration-run.log; then
-            echo "Integration suites skipped themselves." >&2
-            exit 1
-          fi
-
-      - name: Install Chromium for role smoke tests
-        run: ./node_modules/.bin/playwright install --with-deps chromium
-
-      - name: Run role deployment smoke tests
-        env:
-          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/oneflowe_test
-        run: npm run e2e:smoke
-
-      - name: Upload role smoke failure evidence
-        if: ${{ failure() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: role-smoke-staging-${{ github.sha }}
-          path: |
-            playwright-report
-            test-results
-          if-no-files-found: ignore
-          retention-days: 14
-
-      # This disposable webpack cache can exceed 1 GB. It is not needed by
-      # later checks, the Docker context, or the production image.
-      - name: Reclaim browser-test build output
-        run: rm -rf -- .next-e2e
-
-      - name: Run TypeScript checks
-        run: npm run typecheck
-
-      - name: Run lint
-        run: npm run lint
-
-      # Report-only scan. It will not block deployment. Its own timeout keeps
-      # a slow TypeScript analysis from spending the job's budget: when it
-      # expires the step fails, continue-on-error carries on, and the image is
-      # still built and deployed.
-      - name: SonarCloud scan
-        continue-on-error: true
-        timeout-minutes: 15
-        uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6.0.0
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        with:
-          args: >
-            -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
-            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
-
-      # Report-only scan. It will not block deployment.
       - name: Trivy filesystem scan (JSON)
         continue-on-error: true
         uses: aquasecurity/trivy-action@2736533278103862a861f4a35ebac3e97854d956 # master
@@ -182,7 +281,6 @@ jobs:
           format: json
           output: trivy-fs-report.json
 
-      # Report-only scan. It will not block deployment.
       - name: Trivy filesystem scan (table)
         continue-on-error: true
         uses: aquasecurity/trivy-action@2736533278103862a861f4a35ebac3e97854d956 # master
@@ -194,7 +292,6 @@ jobs:
           format: table
           output: trivy-fs-report.txt
 
-      # Report-only scan. It will not block deployment.
       - name: Snyk scan
         continue-on-error: true
         uses: snyk/actions/node@12140f4059e244892ae643824a95459a102120dd # master
@@ -202,6 +299,79 @@ jobs:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
           args: --json-file-output=snyk-report.json
+
+      - name: Upload scan reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-reports-test-${{ github.sha }}
+          path: |
+            gitleaks-report.json
+            trivy-fs-report.json
+            trivy-fs-report.txt
+            snyk-report.json
+          if-no-files-found: warn
+          retention-days: 30
+          overwrite: true
+
+  # Report-only. It needs both coverage reports, so it starts once the two test
+  # suites finish, and staging does not wait for it.
+  sonarcloud:
+    name: SonarCloud scan
+    needs: [unit-tests, integration-tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.x
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Download unit coverage
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-unit
+          path: coverage/unit
+
+      - name: Download integration coverage
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-integration
+          path: coverage/integration
+
+      # Its own timeout keeps a slow TypeScript analysis from running on: when
+      # it expires the step fails and continue-on-error carries on.
+      - name: SonarCloud scan
+        continue-on-error: true
+        timeout-minutes: 15
+        uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6.0.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
+            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
+
+  build-image:
+    name: Build and scan image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      image_exists: ${{ steps.ecr-image.outputs.exists }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
@@ -211,7 +381,6 @@ jobs:
           aws-region: ${{ secrets.DEPLOY_AWS_REGION }}
 
       - name: Log in to ECR
-        id: ecr-login
         uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64 # v2
 
       # Makes rerunning the same workflow safe when ECR tags are immutable.
@@ -242,15 +411,14 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # The standard runner for a private repository has about 14 GB of disk.
-      # By this point node_modules, coverage, Chromium, the Snyk and Postgres
-      # images and the Trivy database have used most of it, and the Docker
-      # build needs several GB more (two copies of node_modules plus .next).
-      # When the disk fills, the runner itself dies mid-build and GitHub keeps
-      # no log. Remove preinstalled SDKs this pipeline never uses, and the
-      # browser the smoke tests no longer need, then record what is left so a
-      # future failure shows the numbers. Never blocks the build.
+      # The standard runner for a private repository has about 14 GB of disk,
+      # and the Docker build needs several GB (two copies of node_modules plus
+      # .next). When the disk fills, the runner itself dies mid-build and
+      # GitHub keeps no log. Remove preinstalled SDKs this pipeline never uses,
+      # then record what is left so a future failure shows the numbers. Never
+      # blocks the build.
       - name: Free runner disk space before the image build
+        if: ${{ steps.ecr-image.outputs.exists != 'true' }}
         continue-on-error: true
         run: |
           echo "Before:"; df -h /; free -m
@@ -259,19 +427,30 @@ jobs:
             /usr/local/lib/android \
             /opt/ghc \
             /usr/local/.ghcup \
-            /opt/hostedtoolcache/CodeQL \
-            "$HOME/.cache/ms-playwright"
+            /opt/hostedtoolcache/CodeQL
           echo "After:"; df -h /; docker system df
 
+      - name: Set up Docker Buildx
+        if: ${{ steps.ecr-image.outputs.exists != 'true' }}
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Layers are cached between runs in the GitHub Actions cache, so an
+      # unchanged lockfile skips the dependency install. The Alpine security
+      # upgrade is keyed to this run (SECURITY_UPGRADE_KEY in the Dockerfile)
+      # and is never served from the cache.
       - name: Build image
         if: ${{ steps.ecr-image.outputs.exists != 'true' }}
-        env:
-          ECR_REPOSITORY_URL: ${{ secrets.ECR_REPOSITORY_URL }}
-        run: |
-          set -Eeuo pipefail
-          docker build --pull \
-            -t "${ECR_REPOSITORY_URL}:test-${GITHUB_SHA}" \
-            .
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          pull: true
+          load: true
+          push: false
+          tags: ${{ secrets.ECR_REPOSITORY_URL }}:test-${{ github.sha }}
+          build-args: |
+            SECURITY_UPGRADE_KEY=${{ github.run_id }}-${{ github.run_attempt }}
+          cache-from: type=gha,scope=oneflowe-staging-image
+          cache-to: type=gha,scope=oneflowe-staging-image,mode=max
 
       # On a workflow rerun, pull the existing immutable image so Trivy
       # can scan the exact image that will be deployed.
@@ -294,20 +473,86 @@ jobs:
           format: table
           output: trivy-image-report.txt
 
-      - name: Upload scan reports
+      - name: Upload image scan report
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: scan-reports-test-${{ github.sha }}
-          path: |
-            gitleaks-report.json
-            trivy-fs-report.json
-            trivy-fs-report.txt
-            trivy-image-report.txt
-            snyk-report.json
+          name: image-scan-report-test-${{ github.sha }}
+          path: trivy-image-report.txt
           if-no-files-found: warn
           retention-days: 30
           overwrite: true
+
+      # Hands the scanned image to `deploy`, which pushes it only once every
+      # gate has passed.
+      - name: Save image for the deploy job
+        if: ${{ steps.ecr-image.outputs.exists != 'true' }}
+        env:
+          ECR_REPOSITORY_URL: ${{ secrets.ECR_REPOSITORY_URL }}
+        run: |
+          set -Eeuo pipefail
+          docker save "${ECR_REPOSITORY_URL}:test-${GITHUB_SHA}" | gzip -1 > "$RUNNER_TEMP/image.tar.gz"
+          ls -lh "$RUNNER_TEMP/image.tar.gz"
+
+      - name: Upload image for the deploy job
+        if: ${{ steps.ecr-image.outputs.exists != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-test-${{ github.sha }}
+          path: ${{ runner.temp }}/image.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+          overwrite: true
+
+  deploy:
+    name: Deploy to staging
+    needs: [checks, unit-tests, integration-tests, e2e-smoke, security-scans, build-image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          aws-access-key-id: ${{ secrets.DEPLOY_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.DEPLOY_AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.DEPLOY_AWS_REGION }}
+
+      - name: Log in to ECR
+        uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64 # v2
+
+      # Checked again here, not taken from build-image: re-running only this
+      # job after an earlier attempt pushed the image must not try to push an
+      # immutable tag twice.
+      - name: Check whether immutable image already exists
+        id: ecr-image
+        shell: bash
+        env:
+          DEPLOY_AWS_REGION: ${{ secrets.DEPLOY_AWS_REGION }}
+          ECR_REPOSITORY_URL: ${{ secrets.ECR_REPOSITORY_URL }}
+        run: |
+          set -Eeuo pipefail
+
+          IMAGE_TAG="test-${GITHUB_SHA}"
+          REPOSITORY_NAME="${ECR_REPOSITORY_URL#*/}"
+
+          if aws ecr describe-images \
+            --repository-name "$REPOSITORY_NAME" \
+            --image-ids "imageTag=$IMAGE_TAG" \
+            --region "$DEPLOY_AWS_REGION" \
+            >/dev/null 2>&1; then
+            echo "Image $IMAGE_TAG already exists; nothing to push."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download the scanned image
+        if: ${{ steps.ecr-image.outputs.exists != 'true' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: image-test-${{ github.sha }}
+          path: ${{ runner.temp }}/image
 
       # Skip this step on a safe rerun because the immutable image exists.
       - name: Push immutable image to ECR
@@ -316,6 +561,7 @@ jobs:
           ECR_REPOSITORY_URL: ${{ secrets.ECR_REPOSITORY_URL }}
         run: |
           set -Eeuo pipefail
+          gunzip -c "$RUNNER_TEMP/image/image.tar.gz" | docker load
           docker push "${ECR_REPOSITORY_URL}:test-${GITHUB_SHA}"
 
       - name: Deploy to staging through SSM
