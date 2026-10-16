@@ -16,6 +16,8 @@ const FULL_LAYOUT = [
   "Initiator",
   "Initiated Date",
   "Approver",
+  "Approval Level",
+  "Approver Designation",
   "Approved Date",
   "Delivered Date",
   "Fulfiller",
@@ -41,6 +43,8 @@ const fulfilledOrder: OrderReportExportRecord = {
   paymentStatus: "UNPAID",
   userName: "Taliya Khan",
   approverName: "Brendon Dias Anthony",
+  approverDesignation: "Finance Manager",
+  approvalLevel: 2,
   fulfillerName: "Taliya Khan",
   createdAt: "2026-09-04T09:44:00.000Z",
   groupName: "Contact Center",
@@ -99,6 +103,8 @@ describe("order report export layout", () => {
       expect(value("Transaction ID")).toBe("mtmiah8dee1839daa7fb5ed2")
       expect(value("Initiator")).toBe("Taliya Khan")
       expect(value("Approver")).toBe("Brendon Dias Anthony")
+      expect(value("Approval Level")).toBe("Level 2")
+      expect(value("Approver Designation")).toBe("Finance Manager")
       expect(value("Fulfiller")).toBe("Taliya Khan")
       expect(value("Group")).toBe("Contact Center")
       expect(value("Branch")).toBe("Credit Policy & Research")
@@ -148,10 +154,12 @@ describe("order report export layout", () => {
 
     it("blanks missing text rather than dashing it", () => {
       const [row] = buildOrderReportExportRows([
-        { ...fulfilledOrder, approverName: null, fulfillerName: undefined, invoiceNumber: "   " },
+        { ...fulfilledOrder, approverName: null, approverDesignation: null, approvalLevel: null, fulfillerName: undefined, invoiceNumber: "   " },
       ])
 
       expect(row[FULL_LAYOUT.indexOf("Approver")]).toBe("")
+      expect(row[FULL_LAYOUT.indexOf("Approval Level")]).toBe("")
+      expect(row[FULL_LAYOUT.indexOf("Approver Designation")]).toBe("")
       expect(row[FULL_LAYOUT.indexOf("Fulfiller")]).toBe("")
       expect(row[FULL_LAYOUT.indexOf("Invoice No")]).toBe("")
     })

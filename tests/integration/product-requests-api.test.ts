@@ -130,6 +130,7 @@ describe.skipIf(!hasTestDatabase)("Product requests — routes against a real da
   let secondHeadOffice: Actor
   let neighbourHeadOffice: Actor
   let strayHeadOffice: Actor
+  let viewer: Actor
   let refusedRoles: Array<[string, Actor]>
   let pngBytes: Buffer
 
@@ -144,12 +145,13 @@ describe.skipIf(!hasTestDatabase)("Product requests — routes against a real da
     secondHeadOffice = { id: f.secondHeadOfficeId, role: "HEAD_OFFICE", organizationId: f.organizationId, branchId: null }
     neighbourHeadOffice = { id: f.neighbourHeadOfficeId, role: "HEAD_OFFICE", organizationId: f.neighbourOrganizationId, branchId: null }
     strayHeadOffice = { id: f.strayHeadOfficeId, role: "HEAD_OFFICE", organizationId: null, branchId: null }
+    viewer = { id: f.viewerId, role: "VIEWER", organizationId: f.organizationId, branchId: null }
     refusedRoles = [
       ["BRANCH_ADMIN", { id: f.branchAdminId, role: "BRANCH_ADMIN", organizationId: f.organizationId, branchId: f.branchId }],
       ["ORDER_PORTAL", { id: f.orderPortalId, role: "ORDER_PORTAL", organizationId: f.organizationId, branchId: f.branchId }],
       ["GROUP_USER", { id: f.groupUserId, role: "GROUP_USER", organizationId: f.organizationId, branchId: null }],
       ["GROUP_ORDER_PORTAL", { id: f.groupOrderPortalId, role: "GROUP_ORDER_PORTAL", organizationId: f.organizationId, branchId: null }],
-      ["VIEWER", { id: f.viewerId, role: "VIEWER", organizationId: f.organizationId, branchId: null }],
+      ["VIEWER", viewer],
     ]
     pngBytes = await sharp({ create: { width: 4, height: 4, channels: 3, background: "#00aa00" } }).png().toBuffer()
   })
@@ -170,7 +172,7 @@ describe.skipIf(!hasTestDatabase)("Product requests — routes against a real da
   })
 
   describe("role gates", () => {
-    it.each(["BRANCH_ADMIN", "ORDER_PORTAL", "GROUP_USER", "GROUP_ORDER_PORTAL", "VIEWER"])(
+    it.each(["BRANCH_ADMIN", "ORDER_PORTAL", "GROUP_USER", "GROUP_ORDER_PORTAL"])(
       "refuses %s on every handler, and writes nothing",
       async (roleName) => {
         const actor = refusedRoles.find(([name]) => name === roleName)![1]
@@ -183,6 +185,16 @@ describe.skipIf(!hasTestDatabase)("Product requests — routes against a real da
         expect(await requestCount([f.organizationId])).toBe(before)
       },
     )
+
+    it("lets an organization-wide Viewer list requests, but rejects every write", async () => {
+      signIn(viewer)
+      const before = await requestCount([f.organizationId])
+
+      expect((await list()).status).toBe(200)
+      expect((await create({ productName: "Soap" })).status).toBe(403)
+      expect((await review(1, { status: "APPROVED" })).status).toBe(403)
+      expect(await requestCount([f.organizationId])).toBe(before)
+    })
 
     it("does not let Super Admin raise a request — it adds products directly", async () => {
       signIn(apricart)
@@ -366,6 +378,15 @@ describe.skipIf(!hasTestDatabase)("Product requests — routes against a real da
       const response = await list({ organizationId: f.organizationId })
       expect(response.status).toBe(200)
       expect(response.body.items.map((item: any) => item.id)).toEqual([neighbourRequestId])
+    })
+
+    it("shows an organization-wide Viewer only its own tenant's requests", async () => {
+      signIn(viewer)
+      const response = await list({ organizationId: f.neighbourOrganizationId })
+      expect(response.status).toBe(200)
+      expect(response.body.items.map((item: any) => item.id)).toContain(fullRequestId)
+      expect(response.body.items.map((item: any) => item.id)).not.toContain(neighbourRequestId)
+      expect(response.body.organizations).toEqual([])
     })
 
     it("shows Super Admin every tenant's requests and lets it narrow to one", async () => {

@@ -352,6 +352,55 @@ paid) invoices of a period.
 - **Security:** a new allowlisted enum on the same strict query; no new
   route, role or tenant path. Payment status is not a price field.
 
+### D11 — Approver Level column (added 2026-10-16)
+
+Requested: the approver's level printed after the approver's name.
+
+- **Source:** `orders.approval_level`, the band the order was decided at
+  (`plans/OF-APPROVAL-LEVELS-route-orders-by-level.md`). It is fixed once the
+  order is approved — only an edit while pending re-bands it — and the decider
+  must have held exactly that level, so it is the approver's level *at the
+  time*. The approver's current `users.order_approval_level` is deliberately
+  not used: it can change after the invoice, and a historical document would
+  then print a level nobody approved at.
+- **Blank** when the order was not levelled (null: every order of an
+  organization without levels, and every order from before routing), and for
+  any value outside 1–10.
+- Printed as "Level N" in its own column right after Approver, on the preview,
+  the PDF and both spreadsheets; sortable (`approverLevel`, unlevelled last).
+  The PDF's column widths were rebalanced to keep the 273 mm table.
+- Read straight from the order row the report already joins. It does not go
+  through `order-approval-routing` or name `order-approval-levels`, so
+  `lib/server/order-approval-levels-contract.test.ts` still holds: the report
+  reads a recorded fact and makes no routing decision.
+
+### D12 — Excel and CSV downloads (added 2026-10-16)
+
+- **Routes:** `GET /api/v1/reports/consolidated-invoice/xlsx` and `.../csv`,
+  beside `.../pdf`, taking exactly the preview's query. Each calls
+  `loadConsolidatedInvoiceReport` and nothing else, so authorization, the
+  organization, the fence, the payment filter, the cap and the order are the
+  PDF's. Rate-limited `report`, `private, no-store`, `nosniff`, attachment.
+- **Built server-side** (`lib/server/consolidated-invoice-spreadsheet.ts`), not
+  in the browser as the other reports do, so the download is audited like the
+  PDF: every format goes through `recordConsolidatedInvoiceDownload`
+  (`lib/server/consolidated-invoice-download.ts`), which writes
+  `DOWNLOAD_CONSOLIDATED_INVOICE_REPORT` with the same digest plus `format`.
+- **Columns:** the PDF's, plus Payment Status and Invoice Status (invoices
+  only), because a spreadsheet is filtered by column. Money is integer cents
+  converted exactly: a number formatted `#,##0.00` in the workbook, a plain
+  decimal (`1234.50`) in the CSV.
+- **Workbook** = the document: bill-to, NTN/STRN, period, filter note, totals,
+  then the table with an autofilter, the Total row, the statement and footnote.
+  **CSV** = the table and its Total row only (UTF-8 with BOM, CRLF), so it opens
+  as a table anywhere.
+- Every text cell passes `neutralizeSpreadsheetFormula` (department, approver
+  and CRC are tenant-typed).
+- The page's single "Download PDF" button became a Download menu: PDF, Excel,
+  CSV. File names follow the PDF's, with the format's extension.
+- Both routes are on `VIEWER_ORGANIZATION_READ_ROUTES` (they call the read
+  helper) and on the contract test's route list.
+
 ## Modules
 
 | File | Layer | Contents |

@@ -210,14 +210,37 @@ describe("the managed join endpoints admit Head Office alone", () => {
     }
   })
 
-  it("audits the code being issued and every decision", () => {
+  it("audits the code being set and every decision", () => {
     const code = repositoryFile("app/api/v1/organizations/join-code/route.ts")
     expect(code).toContain("SET_ORGANIZATION_JOIN_CODE")
-    expect(code).toContain("CLEAR_ORGANIZATION_JOIN_CODE")
+    expect(code).not.toContain("CLEAR_ORGANIZATION_JOIN_CODE")
 
     const decide = repositoryFile("app/api/v1/join-requests/[id]/route.ts")
     expect(decide).toContain("APPROVE_ORGANIZATION_JOIN_REQUEST")
     expect(decide).toContain("REJECT_ORGANIZATION_JOIN_REQUEST")
+  })
+
+  it("makes the organization's manually entered code permanent", () => {
+    const route = repositoryFile("app/api/v1/organizations/join-code/route.ts")
+    expect(route).not.toMatch(/export async function DELETE/)
+
+    const server = repositoryFile("lib/server/organization-join.ts")
+    const setter = server.slice(
+      server.indexOf("export async function setJoinCode"),
+      server.indexOf("/* ── Submitting a request"),
+    )
+    expect(setter).toContain(".insert(organizationJoinCodes)")
+    expect(setter).not.toContain(".onConflictDoUpdate(")
+    expect(setter).not.toContain(".update(organizationJoinCodes)")
+    expect(setter).not.toContain(".delete(organizationJoinCodes)")
+
+    const validation = repositoryFile("lib/server/mutation-validation.ts")
+    const schema = validation.slice(
+      validation.indexOf("export const joinCodeSetSchema"),
+      validation.indexOf("export const joinRequestDecisionSchema"),
+    )
+    expect(schema).toContain("code: joinCodeSchema,")
+    expect(schema).not.toContain("code: joinCodeSchema.optional()")
   })
 
   it("keeps the code out of its own audit trail", () => {

@@ -3,6 +3,7 @@
 import { useState, type SubmitEvent } from "react"
 import { GitBranch, Save } from "lucide-react"
 
+import { BranchHeadCountField } from "@/components/branches/branch-head-count-field"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -18,6 +19,7 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { useToast } from "@/hooks/use-toast"
+import { parseHeadCountInput } from "@/lib/branch-head-count"
 
 export type CreatedBranch = {
   id: number
@@ -38,6 +40,7 @@ const initialForm = {
   city: "",
   address: "",
   costCenterId: "",
+  headCount: "",
   isActive: true,
 }
 
@@ -54,7 +57,9 @@ export function HeadOfficeCreateBranchDialog({ organizationId, onCreated }: Read
     address: form.address.trim(),
     costCenterId: form.costCenterId.trim(),
   }
+  const headCount = parseHeadCountInput(form.headCount)
   const canSubmit = Boolean(
+    headCount !== undefined &&
     organizationId &&
     normalized.name.length >= 2 && normalized.name.length <= 100 &&
     normalized.province.length >= 2 && normalized.province.length <= 100 &&
@@ -84,6 +89,7 @@ export function HeadOfficeCreateBranchDialog({ organizationId, onCreated }: Read
           city: normalized.city,
           address: normalized.address,
           costCenterId: normalized.costCenterId || null,
+          headCount: headCount ?? null,
           status: form.isActive ? "active" : "inactive",
         }),
       })
@@ -215,6 +221,13 @@ export function HeadOfficeCreateBranchDialog({ organizationId, onCreated }: Read
                 disabled={saving}
               />
             </div>
+
+            <BranchHeadCountField
+              id="head-office-branch-head-count"
+              value={form.headCount}
+              onChange={(value) => updateField("headCount", value)}
+              disabled={saving}
+            />
 
             <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
               <div>

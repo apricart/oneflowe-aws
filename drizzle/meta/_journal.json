@@ -673,6 +673,20 @@
       "when": 1791075600000,
       "tag": "20261020120000_order_approval_level",
       "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1791079200000,
+      "tag": "20261021120000_join_request_branch_name",
+      "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "7",
+      "when": 1791082800000,
+      "tag": "20261022120000_branch_head_count",
+      "breakpoints": true
     }
   ]
 }

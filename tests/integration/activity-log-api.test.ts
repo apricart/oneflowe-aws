@@ -14,6 +14,7 @@ import {
   supportMessages,
   supportThreadReads,
   supportThreads,
+  systemLogs,
   users,
 } from "@/db/schema"
 import {
@@ -603,6 +604,113 @@ describe.skipIf(!hasTestDatabase)("GET /api/v1/activity-logs", () => {
         await db.delete(users).where(eq(users.id, orphan.id))
         signIn(headOffice())
       }
+    })
+  })
+
+  describe("the actor-role filter", () => {
+    // Expected sets read off the fixture table: audit rows take the account's
+    // role (E2/E5/E8/E10/E12 Super Admin, E6 Head Office); system and group rows
+    // take the role they recorded (E1/E4 Branch Admin, E3 Head Office, E7/E11
+    // Order Portal, E9 Group User).
+    function headOffice(): Actor {
+      return { id: fixtures.headOfficeId, role: "HEAD_OFFICE", organizationId: fixtures.organizationId, branchId: null }
+    }
+
+    /**
+     * A row in organization A whose recorded role is a tenant role but whose
+     * actor is platform staff. The page shows it with the role withheld to Head
+     * Office, so Head Office's role filter must not find it either.
+     */
+    let disguisedId: number
+
+    beforeAll(async () => {
+      const [row] = await db
+        .insert(systemLogs)
+        .values({
+          action: "UPDATE_SUPPLIER",
+          resourceType: "supplier",
+          resourceId: "79",
+          organizationId: fixtures.organizationId,
+          branchId: fixtures.southBranchId,
+          userId: fixtures.superAdminId,
+          userRole: "HEAD_OFFICE",
+          userEmail: null,
+          success: true,
+          details: {},
+          timestamp: new Date("2031-05-10T02:00:00.000Z"),
+          createdAt: new Date("2031-05-10T02:00:00.000Z"),
+        })
+        .returning({ id: systemLogs.id })
+      disguisedId = row.id
+    })
+
+    afterAll(async () => {
+      if (disguisedId) await db.delete(systemLogs).where(eq(systemLogs.id, disguisedId))
+    })
+
+    it.each([
+      ["SUPER_ADMIN", ["E2", "E5", "E8", "E10", "E12"]],
+      ["BRANCH_ADMIN", ["E1", "E4"]],
+      ["ORDER_PORTAL", ["E7", "E11"]],
+      ["GROUP_USER", ["E9"]],
+      ["WAREHOUSE", []],
+    ] as const)("finds every %s row for the platform reader, by recorded or account role", async (role, expected) => {
+      signIn(superAdmin(fixtures))
+      const { status, body } = await read({ actorRole: role, limit: ACTIVITY_PAGE_SIZE_MAX })
+      expect(status).toBe(200)
+      expect(keysOf(fixtures, body.items)).toEqual([...expected])
+      for (const item of body.items) expect(item.actor.role).toBe(role)
+    })
+
+    it("lets the platform reader find a row by the role it recorded, whoever the account is now", async () => {
+      signIn(superAdmin(fixtures))
+      const { body } = await read({ actorRole: "HEAD_OFFICE", limit: ACTIVITY_PAGE_SIZE_MAX })
+      expect(keysOf(fixtures, body.items)).toEqual(["E3", "E6"])
+      expect(body.items.map((item) => item.id)).toContain(`system:${disguisedId}`)
+    })
+
+    it.each([
+      ["HEAD_OFFICE", ["E3", "E6"]],
+      ["BRANCH_ADMIN", ["E1", "E4"]],
+      // E7's principal has no account; the role it recorded is what the page shows.
+      ["ORDER_PORTAL", ["E7"]],
+      ["GROUP_USER", ["E9"]],
+    ] as const)("finds %s rows for Head Office inside its own organization only", async (role, expected) => {
+      signIn(headOffice())
+      const { status, body } = await read({ actorRole: role, limit: ACTIVITY_PAGE_SIZE_MAX })
+      expect(status).toBe(200)
+      expect(keysOf(fixtures, body.items)).toEqual([...expected])
+      expect(body.items.every((item) => item.organizationId === fixtures.organizationId)).toBe(true)
+      for (const item of body.items) expect(item.actor.role).toBe(role)
+    })
+
+    it("does not let Head Office find platform staff by the tenant role a row recorded", async () => {
+      signIn(headOffice())
+      const all = await read({ limit: ACTIVITY_PAGE_SIZE_MAX })
+      const disguised = all.body.items.find((item) => item.id === `system:${disguisedId}`)
+      // The row itself is the tenant's and is shown — anonymised, role withheld.
+      expect(disguised?.actor).toMatchObject({ redacted: true, role: null })
+
+      const filtered = await read({ actorRole: "HEAD_OFFICE", limit: ACTIVITY_PAGE_SIZE_MAX })
+      expect(filtered.body.items.map((item) => item.id)).not.toContain(`system:${disguisedId}`)
+      expect(JSON.stringify(filtered.body)).not.toContain(fixtures.superAdminId)
+    })
+
+    it.each(["SUPER_ADMIN", "ORDER_DESK", "APRICART_EXECUTIVE", "WAREHOUSE"])(
+      "refuses Head Office a filter on Apricart's internal role %s",
+      async (role) => {
+        signIn(headOffice())
+        const { status, body } = await read({ actorRole: role, limit: ACTIVITY_PAGE_SIZE_MAX })
+        expect(status).toBe(403)
+        expect(body.items).toBeUndefined()
+      },
+    )
+
+    it("refuses a role outside the application's roles", async () => {
+      signIn(superAdmin(fixtures))
+      const { status, body } = await read({ actorRole: "ROOT" })
+      expect(status).toBe(400)
+      expect(body.items).toBeUndefined()
     })
   })
 

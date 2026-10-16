@@ -18,6 +18,7 @@ import { isWarehouseRole, warehouseUserShapeError } from "@/lib/warehouse-access
 import { withRateLimit } from "@/lib/rate-limiter"
 import { USER_MANAGEMENT_ROLES } from "@/lib/user-management-access"
 import { usernameExists } from "@/lib/user-username-uniqueness"
+import { organizationUsernameFor } from "@/lib/server/organization-username"
 import type { SystemRole } from "@/lib/server/mutation-validation"
 import {
   usesMultiBranchScope,
@@ -226,6 +227,7 @@ export async function GET(req: Request) {
         isActive: usersTable.isActive,
         budgetAllocationEnabled: usersTable.budgetAllocationEnabled,
         employeeId: usersTable.employeeId,
+        designation: usersTable.designation,
         imprestHolder: usersTable.imprestHolder,
         contactPerson: usersTable.contactPerson,
         address: usersTable.address,
@@ -262,6 +264,7 @@ export async function GET(req: Request) {
       isActive: !!r.isActive,
       budgetAllocationEnabled: r.role === "GROUP_USER" && r.budgetAllocationEnabled === true,
       employeeId: r.employeeId || null,
+      designation: r.designation || null,
       imprestHolder: r.imprestHolder || null,
       contactPerson: r.contactPerson || null,
       address: r.address || null,
@@ -297,7 +300,6 @@ export async function POST(req: Request) {
   const firstName = input.firstName
   const lastName = input.lastName
   const email = normalizeEmail(input.email)
-  const username = input.username.toLowerCase()
   const password = input.password
   const role = input.role
   const phone = normalizeOptionalText(input.phone)
@@ -350,6 +352,9 @@ export async function POST(req: Request) {
     const passwordHash = await hashPassword(password)
     console.log("[USERS_API] Password hashed successfully")
 
+    // The organization's prefix, from its own row (plans/OF-USERS-organization-username-prefix.md).
+    const username = await organizationUsernameFor(db, organizationId, input.username)
+
     // Username uniqueness is enforced by DB unique index and the check-username API
     if (await usernameExists(username)) {
       return error("Username already exists. Please choose a different username.", 400)
@@ -384,6 +389,7 @@ export async function POST(req: Request) {
           branchId,
           fullName: `${firstName} ${lastName}`,
           employeeId,
+          designation: input.designation ?? null,
           imprestHolder: input.imprestHolder ?? null,
           contactPerson: input.contactPerson ?? null,
           location: input.location ?? null,

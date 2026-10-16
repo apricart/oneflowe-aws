@@ -57,6 +57,7 @@ export const VIEWER_ORGANIZATION_AREAS: readonly string[] = [
   "/budgets",
   "/delivery-addresses",
   "/groups",
+  "/head-count-requests",
   "/invoices",
   "/join-requests",
   "/orders",
@@ -220,6 +221,8 @@ export const VIEWER_ORGANIZATION_READ_ROUTES: readonly string[] = [
   "app/api/v1/branches/[id]/route.ts",
   // Delivery Addresses
   "app/api/v1/delivery-addresses/route.ts",
+  // Head Count Requests (read-only; the decision route refuses a Viewer)
+  "app/api/v1/branch-head-count-requests/route.ts",
   // Orders, and the invoice behind an order
   "app/api/v1/orders/route.ts",
   "app/api/v1/orders/[id]/route.ts",
@@ -269,6 +272,8 @@ export const VIEWER_ORGANIZATION_READ_ROUTES: readonly string[] = [
   "app/api/v1/analytics/executive/overview/route.ts",
   "app/api/v1/reports/consolidated-invoice/route.ts",
   "app/api/v1/reports/consolidated-invoice/pdf/route.ts",
+  "app/api/v1/reports/consolidated-invoice/xlsx/route.ts",
+  "app/api/v1/reports/consolidated-invoice/csv/route.ts",
   // Support
   "app/api/v1/support/threads/route.ts",
   "app/api/v1/support/threads/[id]/route.ts",

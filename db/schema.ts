@@ -156,6 +156,10 @@ export const branches = pgTable(
     groupId: integer("group_id"),
     // Base budget for "Add-on" calculation
     baselineBudgetCents: bigint("baseline_budget_cents", { mode: "number" }).notNull().default(0),
+    // How many people work at the branch; NULL = not provided. Written directly
+    // by Super Admin / Head Office, or by Head Office approving a
+    // branch_head_count_requests row. See plans/OF-BRANCH-head-count.md.
+    headCount: integer("head_count"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
@@ -175,6 +179,8 @@ export const branches = pgTable(
     // See plans/OF-WAREHOUSE-city-assignments.md.
     index("branches_city_key_idx").on(sql`lower(btrim(regexp_replace(${t.city}, '\\s+', ' ', 'g')))`),
     check("branches_region_ck", sql`${t.region} IS NULL OR ${t.region} IN ('NORTH', 'CENTRAL', 'SOUTH')`),
+    // MAX_BRANCH_HEAD_COUNT in lib/branch-head-count.ts.
+    check("branches_head_count_ck", sql`${t.headCount} IS NULL OR ${t.headCount} BETWEEN 0 AND 1000000`),
     check(
       "branches_external_identity_pair_ck",
       sql`(${t.externalSource} IS NULL) = (${t.externalId} IS NULL)
@@ -607,6 +613,74 @@ export const branchDeliveryAddresses = pgTable(
     ),
     foreignKey({
       name: "branch_delivery_addresses_branch_org_fk",
+      columns: [t.branchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
+  ],
+)
+
+/**
+ * A branch asking Head Office to set its head count
+ * (plans/OF-BRANCH-head-count.md).
+ *
+ * Raised by a Branch Admin or Group User, decided by Head Office alone; an
+ * approval writes `branches.head_count` in the same transaction. Shaped like
+ * `branch_delivery_addresses` so the codebase runs one kind of approval queue.
+ *
+ * `current_head_count` is what the branch held when the request was raised,
+ * for the reviewer; `applied_previous_head_count` is what an approval actually
+ * overwrote, which may differ if an administrator edited it in between.
+ */
+export const branchHeadCountRequests = pgTable(
+  "branch_head_count_requests",
+  {
+    id: serial("id").primaryKey(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id)
+      .notNull(),
+    branchId: integer("branch_id")
+      .references(() => branches.id)
+      .notNull(),
+    requestedHeadCount: integer("requested_head_count").notNull(),
+    currentHeadCount: integer("current_head_count"),
+    status: varchar("status", { length: 16 }).notNull().default("pending"),
+    requestReason: text("request_reason"),
+    requestedByUserId: uuid("requested_by_user_id")
+      .references(() => users.id)
+      .notNull(),
+    appliedPreviousHeadCount: integer("applied_previous_head_count"),
+    decisionReason: text("decision_reason"),
+    decidedByUserId: uuid("decided_by_user_id").references(() => users.id),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("branch_head_count_requests_org_status_idx").on(t.organizationId, t.status, t.createdAt),
+    index("branch_head_count_requests_branch_status_idx").on(t.branchId, t.status, t.createdAt),
+    index("branch_head_count_requests_requested_by_idx").on(t.requestedByUserId),
+    // One request awaiting a decision per branch. A second is refused by the
+    // database, not by a read-then-write check two callers could race past.
+    uniqueIndex("branch_head_count_requests_pending_uq")
+      .on(t.branchId)
+      .where(sql`${t.status} = 'pending'`),
+    check(
+      "branch_head_count_requests_status_ck",
+      sql`${t.status} IN ('pending', 'approved', 'rejected')`,
+    ),
+    check(
+      "branch_head_count_requests_decision_ck",
+      sql`CASE WHEN ${t.status} = 'pending'
+            THEN ${t.decidedAt} IS NULL AND ${t.decidedByUserId} IS NULL
+            ELSE ${t.decidedAt} IS NOT NULL AND ${t.decidedByUserId} IS NOT NULL
+          END`,
+    ),
+    check(
+      "branch_head_count_requests_count_ck",
+      sql`${t.requestedHeadCount} BETWEEN 0 AND 1000000`,
+    ),
+    foreignKey({
+      name: "branch_head_count_requests_branch_org_fk",
       columns: [t.branchId, t.organizationId],
       foreignColumns: [branches.id, branches.organizationId],
     }),
@@ -3125,6 +3199,9 @@ export const organizationJoinRequestBranches = pgTable(
     existingBranchId: integer("existing_branch_id"),
     // Upper-cased and trimmed by `normalizeCrc`.
     costCenterId: varchar("cost_center_id", { length: 64 }),
+    // The name the applicant gave a branch to be created; null for an existing
+    // branch and for a request submitted before names were asked for.
+    requestedBranchName: varchar("requested_branch_name", { length: 100 }),
     resolvedBranchId: integer("resolved_branch_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -3136,6 +3213,11 @@ export const organizationJoinRequestBranches = pgTable(
       "organization_join_request_branches_shape_ck",
       sql`(${t.existingBranchId} IS NULL) <> (${t.costCenterId} IS NULL)
         AND (${t.costCenterId} IS NULL OR length(btrim(${t.costCenterId})) > 0)`,
+    ),
+    check(
+      "organization_join_request_branches_name_ck",
+      sql`${t.requestedBranchName} IS NULL
+        OR (${t.costCenterId} IS NOT NULL AND length(btrim(${t.requestedBranchName})) > 0)`,
     ),
     foreignKey({
       name: "organization_join_request_branches_branch_org_fk",

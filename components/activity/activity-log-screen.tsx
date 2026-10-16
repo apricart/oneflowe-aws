@@ -78,6 +78,7 @@ function buildQuery(filters: ActivityFilterState, cursor: string | null, now: Da
   if (filters.source !== "all") params.set("source", filters.source)
   if (filters.operation !== "all") params.set("operation", filters.operation)
   if (filters.category !== "all") params.set("category", filters.category)
+  if (filters.role !== "all") params.set("actorRole", filters.role)
   if (filters.outcome !== "all") params.set("outcome", filters.outcome)
   const search = filters.search.trim()
   if (search.length > 0) params.set("search", search)
@@ -219,7 +220,7 @@ export function ActivityLogScreen({ platformWide = false }: ScreenProps = {}) {
           <CardTitle className="text-sm font-semibold">Filters</CardTitle>
         </CardHeader>
         <CardContent>
-          <ActivityLogFilters filters={filters} onChange={setFilters} />
+          <ActivityLogFilters filters={filters} onChange={setFilters} platformWide={platformWide} />
         </CardContent>
       </Card>
 

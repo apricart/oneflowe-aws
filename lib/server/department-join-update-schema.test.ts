@@ -33,6 +33,11 @@ describe("departmentJoinUpdateSchema", () => {
     }
   })
 
+  it("accepts a new branch with or without a name, since an older request has none", () => {
+    expect(parse({ ...valid, branches: [{ crc: "CRC-9", name: "Saddar Office" }] }).success).toBe(true)
+    expect(parse({ ...valid, branches: [{ crc: "CRC-9" }] }).success).toBe(true)
+  })
+
   it("accepts an empty last name", () => {
     expect(parse({ ...valid, lastName: "" }).success).toBe(true)
   })
@@ -61,6 +66,9 @@ describe("departmentJoinUpdateSchema", () => {
     ["branches", [{ branchId: 5 }, { branchId: 5 }]],
     ["branches", [{ crc: "a-1" }, { crc: "A-1" }]],
     ["branches", [{ branchId: 5, crc: "A-1" }]],
+    ["branches", [{ crc: "A-1", name: "K" }]],
+    ["branches", [{ crc: "A-1", name: "x".repeat(101) }]],
+    ["branches", [{ branchId: 5, name: "Korangi" }]],
     ["addresses", []],
     ["addresses", ["abc"]],
     ["addresses", ["Plot 4, Clifton", "plot 4, clifton"]],

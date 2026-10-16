@@ -26,10 +26,11 @@
  * pin the whole matrix.
  */
 
-import type {
-  ActivityFilters,
-  ActivityReach,
-  ActivityRequestFilters,
+import {
+  isTenantActorRole,
+  type ActivityFilters,
+  type ActivityReach,
+  type ActivityRequestFilters,
 } from "@/lib/activity-log"
 import { Permission } from "@/lib/permissions"
 import type { Role } from "@/lib/rbac"
@@ -74,6 +75,11 @@ const FORBIDDEN_ROLE: ActivityLogFailure = {
 
 const FORBIDDEN_NO_ORGANIZATION: ActivityLogFailure = {
   message: "Forbidden - your account is not assigned to an organization",
+  status: 403,
+}
+
+const FORBIDDEN_APRICART_ROLE: ActivityLogFailure = {
+  message: "Forbidden - you can filter only by your organization's roles",
   status: 403,
 }
 
@@ -159,6 +165,15 @@ export function applyActivityReach(
     requested.organizationId !== reach.organizationId
   ) {
     return { ok: false, failure: FORBIDDEN_OTHER_ORGANIZATION }
+  }
+  // Apricart's internal roles are not the tenant's to name, so filtering by one
+  // is refused outright rather than answered with an empty page.
+  if (
+    reach.kind === "organization" &&
+    requested.actorRole !== null &&
+    !isTenantActorRole(requested.actorRole)
+  ) {
+    return { ok: false, failure: FORBIDDEN_APRICART_ROLE }
   }
   return { ok: true, filters: { ...requested, reach } }
 }

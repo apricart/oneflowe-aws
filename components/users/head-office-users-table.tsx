@@ -3,6 +3,7 @@ import { useViewerAccess } from "@/lib/hooks/use-viewer-access"
 import { useEffect,useRef,useState,useMemo } from "react"
 import useSWR from "swr"
 import { jsonFetcher } from "@/lib/fetcher"
+import { USER_DESIGNATION_MAX_LENGTH } from "@/lib/user-designation"
 import { MultiAssignSelector } from "@/components/users/multi-assign-selector"
 import { Button } from "@/components/ui/button"
 import { Table,TableHeader,TableRow,TableHead,TableBody,TableCell } from "@/components/ui/table"
@@ -59,6 +60,7 @@ type UserRow = {
   budgetAllocationEnabled?: boolean
   createdAt: string
   employeeId?: string | null
+  designation?: string | null
   imprestHolder?: string | null
   contactPerson?: string | null
   address?: string | null
@@ -101,6 +103,7 @@ type EditFormState = {
   password: string
   confirmPassword: string
   employeeId: string
+  designation: string
   imprestHolder: string
   contactPerson: string
   address: string
@@ -246,6 +249,7 @@ const buildUserUpdate = (
     addChangedValue(body, "budgetAllocationEnabled", form.budgetAllocationEnabled, user.budgetAllocationEnabled === true)
   }
   addChangedValue(body, "employeeId", form.employeeId.trim() || null, user.employeeId?.trim() || null)
+  addChangedValue(body, "designation", form.designation.trim() || null, user.designation?.trim() || null)
   addChangedValue(body, "imprestHolder", form.imprestHolder.trim() || null, user.imprestHolder?.trim() || null)
   addChangedValue(body, "contactPerson", form.contactPerson.trim() || null, user.contactPerson?.trim() || null)
   addChangedValue(body, "address", form.address.trim() || null, user.address?.trim() || null)
@@ -992,6 +996,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
     password: "",
     confirmPassword: "",
     employeeId: "",
+    designation: "",
     imprestHolder: "",
     contactPerson: "",
     address: ""
@@ -1098,6 +1103,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
       password: "",
       confirmPassword: "",
       employeeId: user.employeeId || "",
+      designation: user.designation || "",
       imprestHolder: user.imprestHolder || "",
       contactPerson: user.contactPerson || "",
       address: user.address || ""
@@ -1129,6 +1135,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
       password: "",
       confirmPassword: "",
       employeeId: "",
+      designation: "",
       imprestHolder: "",
       contactPerson: "",
       address: ""
@@ -1791,6 +1798,10 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
                          <p className="text-xs text-muted-foreground">Imprest Holder</p>
                          <p className="text-sm font-semibold">{viewingUser.imprestHolder || "Not Applicable"}</p>
                       </div>
+                      <div className="space-y-0.5 text-right">
+                         <p className="text-xs text-muted-foreground">Designation</p>
+                         <p className="text-sm font-semibold">{viewingUser.designation || "Not Set"}</p>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -2103,6 +2114,17 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
                   placeholder="Enter contact person"
                 />
               </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-designation">Designation</Label>
+              <Input
+                id="edit-designation"
+                name="designation"
+                value={editForm.designation}
+                maxLength={USER_DESIGNATION_MAX_LENGTH}
+                onChange={e => setEditForm({ ...editForm, designation: e.target.value })}
+                placeholder="e.g. Procurement Manager (optional)"
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="edit-address">Address</Label>

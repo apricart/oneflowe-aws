@@ -18,6 +18,8 @@
  * See `plans/OF-AUDIT-admin-activity-log.md`.
  */
 
+import type { Role } from "@/lib/rbac"
+
 /** Which table an event came out of. */
 export const ACTIVITY_SOURCES = ["audit", "system", "group"] as const
 
@@ -79,6 +81,52 @@ export const ACTIVITY_CATEGORIES = [
 ] as const
 
 export type ActivityCategory = (typeof ACTIVITY_CATEGORIES)[number]
+
+/**
+ * The roles the actor filter accepts — every role the application assigns
+ * (`Role` in `lib/rbac.ts`). An allowlist, so the value reaches SQL only as one
+ * of these literals.
+ *
+ * The filter selects on the role the **Who** column shows: the role the row
+ * itself recorded where its table has one, else the account's role today. See
+ * `actorRolePredicate` in `lib/server/activity-log-sql.ts`.
+ */
+export const ACTIVITY_ACTOR_ROLES = [
+  "SUPER_ADMIN",
+  "HEAD_OFFICE",
+  "GROUP_USER",
+  "BRANCH_ADMIN",
+  "GROUP_ORDER_PORTAL",
+  "ORDER_PORTAL",
+  "VIEWER",
+  "ORDER_DESK",
+  "APRICART_EXECUTIVE",
+  "WAREHOUSE",
+] as const satisfies readonly Role[]
+
+export type ActivityActorRole = (typeof ACTIVITY_ACTOR_ROLES)[number]
+
+/**
+ * The roles a tenant's own people hold. An organization reader (Head Office, an
+ * organization-wide Viewer) may filter by these alone: Apricart's internal
+ * roles are not the tenant's to see, and `applyActivityReach` refuses them.
+ */
+export const ACTIVITY_TENANT_ACTOR_ROLES = [
+  "HEAD_OFFICE",
+  "GROUP_USER",
+  "BRANCH_ADMIN",
+  "GROUP_ORDER_PORTAL",
+  "ORDER_PORTAL",
+  "VIEWER",
+] as const satisfies readonly ActivityActorRole[]
+
+export function isTenantActorRole(value: unknown): boolean {
+  return typeof value === "string" && (ACTIVITY_TENANT_ACTOR_ROLES as readonly string[]).includes(value)
+}
+
+export function isActivityActorRole(value: unknown): value is ActivityActorRole {
+  return typeof value === "string" && (ACTIVITY_ACTOR_ROLES as readonly string[]).includes(value)
+}
 
 /**
  * How much a reader scanning the page should care. Presentation only — nothing
@@ -699,6 +747,8 @@ export type ActivityFilters = {
   organizationId: number | null
   branchId: number | null
   actorId: string | null
+  /** The role shown beside the actor. For an organization reach, only people the reader may identify match. */
+  actorRole: ActivityActorRole | null
   success: boolean | null
   search: string | null
   /**

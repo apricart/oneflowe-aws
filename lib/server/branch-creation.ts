@@ -30,6 +30,8 @@ export type BranchCreationValues = {
   costCenterId: string | null
   status: string
   region: BranchRegion | null
+  // Absent for callers that do not ask for one (the department sign-up).
+  headCount?: number | null
 }
 
 export type BranchCreationOutcome =
@@ -105,6 +107,7 @@ export async function createBranchInTx(
       code: finalCode,
       status,
       region: values.region,
+      headCount: values.headCount ?? null,
     })
     .returning()
 
@@ -120,6 +123,7 @@ export async function createBranchInTx(
       name: item.name,
       code: item.code,
       status: item.status,
+      headCount: item.headCount,
     },
   })
 

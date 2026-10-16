@@ -1,11 +1,9 @@
-import { createHash } from "node:crypto"
 import { NextRequest, NextResponse } from "next/server"
 
 import { getSharedServerSession } from "@/lib/auth"
-import { consolidatedInvoiceDigestInput, consolidatedInvoiceFileName } from "@/lib/consolidated-invoice"
-import { db } from "@/lib/db"
+import { consolidatedInvoiceFileName } from "@/lib/consolidated-invoice"
 import { withRateLimit } from "@/lib/rate-limiter"
-import { auditActorFromSession, recordAuditEvent } from "@/lib/server/activity-audit"
+import { recordConsolidatedInvoiceDownload } from "@/lib/server/consolidated-invoice-download"
 import { renderConsolidatedInvoicePdf } from "@/lib/server/consolidated-invoice-pdf"
 import { loadConsolidatedInvoiceReport } from "@/lib/server/consolidated-invoice-report"
 
@@ -49,30 +47,9 @@ export async function GET(req: NextRequest) {
       generatedAt,
     })
 
-    const digest = createHash("sha256").update(consolidatedInvoiceDigestInput(report.rows)).digest("hex")
-    await recordAuditEvent(db, {
-      action: "DOWNLOAD_CONSOLIDATED_INVOICE_REPORT",
-      entity: "consolidated_invoice_report",
-      entityId: digest.slice(0, 16),
-      actor: auditActorFromSession(caller.session),
-      organizationId: report.billTo.id,
-      context: {
-        mode: report.mode,
-        from: report.period.from,
-        to: report.period.to,
-        branchIds: query.branchIds,
-        groupId: query.groupId,
-        includeCredited: query.includeCredited,
-        paymentStatus: query.paymentStatus,
-        sort: query.sort,
-        rowCount: report.rows.length,
-        totalCents: report.totals.totalCents,
-        digest,
-        generatedAt: generatedAt.toISOString(),
-      },
-    })
+    await recordConsolidatedInvoiceDownload({ format: "pdf", report, query, caller, generatedAt })
 
-    const fileName = consolidatedInvoiceFileName(report.mode, report.billTo.code, report.period.from, report.period.to, query.paymentStatus)
+    const fileName = consolidatedInvoiceFileName(report.mode, report.billTo.code, report.period.from, report.period.to, query.paymentStatus, "pdf")
     return new NextResponse(pdf, {
       headers: {
         ...NO_STORE,

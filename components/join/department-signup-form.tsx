@@ -12,10 +12,11 @@ import { Spinner } from "@/components/ui/skeleton"
 import {
   CRC_MAX_LENGTH,
   DEPARTMENTS,
+  NEW_BRANCH_FIELD_RULES,
   SIGNUP_ADDRESS_MAX_LENGTH,
   SIGNUP_DESIGNATION_MAX_LENGTH,
-  crcError,
   deriveUsernameFromEmail,
+  normalizeBranchName,
   normalizeCrc,
 } from "@/lib/join-department-signup"
 import {
@@ -25,11 +26,15 @@ import {
   addressDraftError,
   departmentSignupErrors,
   emptyDepartmentSignupDraft,
+  newBranchChipError,
+  newBranchNameChipError,
   payloadSizeError,
+  sameBranchName,
   toDepartmentSignupPayload,
 } from "@/lib/join-department-signup-form"
 import { type ApprovalLevelBand, approvalLevelBandText } from "@/lib/order-approval-levels"
 import { EMAIL_LOCAL_PART_MAX_LENGTH } from "@/lib/organization-email-domain"
+import { organizationUsername } from "@/lib/username-prefix"
 import { cn } from "@/lib/utils"
 
 /**
@@ -41,8 +46,9 @@ import { cn } from "@/lib/utils"
  *   * no master code — the join code, checked on the server, was the first step;
  *   * the email domain is the organization's own, fixed as the suffix;
  *   * one approver card per level the organization has, not a fixed three;
- *   * the CRC field also suggests existing branches by name. No CRC number of
- *     an existing branch is ever sent to this page.
+ *   * the branch is picked by name from the organization's branches; a new
+ *     one is named by the applicant and only then given its CRC. No CRC
+ *     number of an existing branch is ever sent to this page.
  *
  * Nothing here decides anything: the server re-validates all of it, and Head
  * Office approves before any account, branch or approver exists.
@@ -125,7 +131,12 @@ function ChipRemove({ label, onClick }: Readonly<{ label: string; onClick: () =>
   )
 }
 
-/** The CRC field: a typed CRC, or an existing branch suggested by name. */
+/**
+ * The Branch field: the applicant searches the organization's branches by name
+ * and picks one. A branch that is not listed is added as new, and only then is
+ * its CRC (cost centre) number asked for, so a new branch always has a name of
+ * its own and is never named after its CRC.
+ */
 function BranchChipsField({
   chips,
   onChange,
@@ -138,89 +149,182 @@ function BranchChipsField({
   error?: string
 }>) {
   const [text, setText] = useState("")
-  const [problem, setProblem] = useState<string | null>(null)
+  // The name of the new branch whose CRC is being asked for, or null.
+  const [newBranchName, setNewBranchName] = useState<string | null>(null)
+  const [crc, setCrc] = useState("")
+  const [problem, setProblem] = useState<{ field: "name" | "crc"; message: string } | null>(null)
 
+  const chosenIds = useMemo(
+    () => new Set(chips.flatMap((chip) => (chip.kind === "existing" ? [chip.branchId] : []))),
+    [chips],
+  )
+  const knownNames = useMemo(() => branches.map((branch) => branch.name), [branches])
+  const typed = normalizeBranchName(text)
+  const exactMatch = typed ? branches.find((branch) => sameBranchName(branch.name, typed)) : undefined
   const suggestions = useMemo(() => {
     const needle = text.trim().toLowerCase()
     if (needle.length < 2) return []
-    const chosen = new Set(chips.flatMap((chip) => (chip.kind === "existing" ? [chip.branchId] : [])))
     return branches
-      .filter((branch) => !chosen.has(branch.id) && branch.name.toLowerCase().includes(needle))
+      .filter((branch) => !chosenIds.has(branch.id) && branch.name.toLowerCase().includes(needle))
       .slice(0, 6)
-  }, [text, branches, chips])
+  }, [text, branches, chosenIds])
+  const offerNew = typed.length >= 2 && !exactMatch
 
-  const addBranch = (branch: JoinOption) => {
-    onChange([...chips, { key: `b${branch.id}`, kind: "existing", branchId: branch.id, label: branch.name, checked: true }])
+  const addExisting = (branch: JoinOption) => {
+    if (!chosenIds.has(branch.id)) {
+      onChange([...chips, { key: `b${branch.id}`, kind: "existing", branchId: branch.id, label: branch.name, checked: true }])
+    }
     setText("")
     setProblem(null)
   }
 
-  const addCrc = () => {
-    const crc = normalizeCrc(text)
-    if (!crc) return
-    const refusal = crcError(crc)
+  /** Add what was typed: the listed branch when the name is one, else start a new branch. */
+  const addTyped = () => {
+    if (!typed) return
+    if (exactMatch) {
+      addExisting(exactMatch)
+      return
+    }
+    const refusal = newBranchNameChipError(chips, knownNames, typed)
+    if (refusal) {
+      setProblem({ field: "name", message: refusal })
+      return
+    }
+    setNewBranchName(typed)
+    setText("")
+    setCrc("")
+    setProblem(null)
+  }
+
+  const addNewBranch = () => {
+    if (newBranchName === null) return
+    const refusal = newBranchChipError(chips, knownNames, { name: newBranchName, crc })
     if (refusal) {
       setProblem(refusal)
       return
     }
-    if (!chips.some((chip) => chip.kind === "crc" && chip.crc === crc)) {
-      onChange([...chips, { key: `c${crc}`, kind: "crc", crc, label: crc, checked: true }])
-    }
-    setText("")
+    const normalized = normalizeCrc(crc)
+    onChange([...chips, { key: `c${normalized}`, kind: "crc", crc: normalized, name: newBranchName, label: newBranchName, checked: true }])
+    setNewBranchName(null)
+    setCrc("")
     setProblem(null)
   }
 
-  const shownError = problem ?? error
+  const cancelNewBranch = () => {
+    setText(newBranchName ?? "")
+    setNewBranchName(null)
+    setCrc("")
+    setProblem(null)
+  }
+
+  const nameError = problem?.field === "name" ? problem.message : undefined
+  const crcProblem = problem?.field === "crc" ? problem.message : undefined
   return (
     <div className="space-y-2">
-      <div className="relative">
-        <div className="flex gap-2">
-          <Input
-            id="signup-crc"
-            value={text}
-            onChange={(event) => {
-              setText(event.target.value.toUpperCase())
-              setProblem(null)
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault()
-                addCrc()
-              }
-            }}
-            placeholder="Type a CRC number, or search your branch"
-            autoComplete="off"
-            maxLength={CRC_MAX_LENGTH}
-            aria-invalid={Boolean(shownError)}
-            aria-describedby={shownError ? "signup-crc-error" : "signup-crc-hint"}
-          />
-          <Button type="button" variant="outline" onClick={addCrc} className="shrink-0 gap-1">
-            <Plus className="h-4 w-4" aria-hidden="true" /> Add
-          </Button>
-        </div>
-        {suggestions.length > 0 && (
-          <ul className="absolute z-10 mt-1 w-full overflow-hidden rounded-md border border-slate-200 bg-white shadow-lg" role="listbox">
-            {suggestions.map((branch) => (
-              <li key={branch.id}>
-                <button
-                  type="button"
-                  role="option"
-                  aria-selected={false}
-                  onClick={() => addBranch(branch)}
-                  className="w-full px-3 py-2 text-left text-sm hover:bg-slate-50"
-                >
-                  {branch.name}
-                </button>
-              </li>
-            ))}
-          </ul>
+      {newBranchName === null
+        ? (
+          <div className="relative">
+            <div className="flex gap-2">
+              <Input
+                id="signup-branch"
+                value={text}
+                onChange={(event) => {
+                  setText(event.target.value)
+                  setProblem(null)
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault()
+                    addTyped()
+                  }
+                }}
+                placeholder="Search your branch by name"
+                autoComplete="off"
+                maxLength={NEW_BRANCH_FIELD_RULES.name.max}
+                aria-invalid={Boolean(nameError)}
+                aria-describedby={nameError ? "signup-branch-error" : "signup-branch-hint"}
+              />
+              <Button type="button" variant="outline" onClick={addTyped} className="shrink-0 gap-1">
+                <Plus className="h-4 w-4" aria-hidden="true" /> Add
+              </Button>
+            </div>
+            {(suggestions.length > 0 || offerNew) && (
+              <ul className="absolute z-10 mt-1 w-full overflow-hidden rounded-md border border-slate-200 bg-white shadow-lg" role="listbox">
+                {suggestions.map((branch) => (
+                  <li key={branch.id}>
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={false}
+                      onClick={() => addExisting(branch)}
+                      className="w-full px-3 py-2 text-left text-sm hover:bg-slate-50"
+                    >
+                      {branch.name}
+                    </button>
+                  </li>
+                ))}
+                {offerNew && (
+                  <li className={cn(suggestions.length > 0 && "border-t border-slate-100")}>
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={false}
+                      onClick={addTyped}
+                      className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-sm font-medium text-blue-700 hover:bg-blue-50"
+                    >
+                      <Plus className="h-4 w-4" aria-hidden="true" /> Add “{typed}” as a new branch
+                    </button>
+                  </li>
+                )}
+              </ul>
+            )}
+            {nameError && <p id="signup-branch-error" className="mt-1 text-xs font-medium text-red-600">{nameError}</p>}
+          </div>
+        )
+        : (
+          <div className="space-y-2 rounded-lg border border-blue-200 bg-blue-50/60 p-3">
+            <p className="text-sm text-slate-700">
+              New branch: <span className="font-semibold text-slate-900">{newBranchName}</span>
+            </p>
+            <div className="space-y-1">
+              <label htmlFor="signup-new-branch-crc" className="text-sm font-medium text-slate-700">
+                CRC / Cost Centre No<span className="text-red-500"> *</span>
+              </label>
+              <div className="flex flex-wrap gap-2 sm:flex-nowrap">
+                <Input
+                  id="signup-new-branch-crc"
+                  value={crc}
+                  onChange={(event) => {
+                    setCrc(event.target.value.toUpperCase())
+                    setProblem(null)
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault()
+                      addNewBranch()
+                    }
+                  }}
+                  placeholder="e.g. AB-ABC-123"
+                  autoComplete="off"
+                  autoFocus
+                  maxLength={CRC_MAX_LENGTH}
+                  className="bg-white"
+                  aria-invalid={Boolean(crcProblem)}
+                  aria-describedby={crcProblem ? "signup-new-branch-crc-error" : undefined}
+                />
+                <Button type="button" onClick={addNewBranch} className="shrink-0">Add branch</Button>
+                <Button type="button" variant="outline" onClick={cancelNewBranch} className="shrink-0">Cancel</Button>
+              </div>
+              {crcProblem && <p id="signup-new-branch-crc-error" className="text-xs font-medium text-red-600">{crcProblem}</p>}
+            </div>
+          </div>
         )}
-      </div>
-      <p id="signup-crc-hint" className="text-xs text-slate-500">
-        One CRC places your orders through the shop; more than one through the group storefront.
+      <p id="signup-branch-hint" className="text-xs text-slate-500">
+        Pick your branch if it is listed. If it is not, add it as a new branch and give its CRC number.
+        One branch places your orders through the shop; more than one through the group storefront.
       </p>
       {chips.length === 0
-        ? <p className="text-xs text-slate-500">No CRCs added yet.</p>
+        ? <p className="text-xs text-slate-500">No branches added yet.</p>
         : (
           <ul className="flex flex-wrap gap-2">
             {chips.map((chip) => (
@@ -232,22 +336,22 @@ function BranchChipsField({
                 )}
               >
                 <input
-                  id={`signup-crc-${chip.key}`}
+                  id={`signup-branch-${chip.key}`}
                   type="checkbox"
                   checked={chip.checked}
                   onChange={() => onChange(chips.map((item) => (item.key === chip.key ? { ...item, checked: !item.checked } : item)))}
                   className="accent-blue-600"
                 />
-                <label htmlFor={`signup-crc-${chip.key}`} className="cursor-pointer">
+                <label htmlFor={`signup-branch-${chip.key}`} className="cursor-pointer">
                   {chip.label}
-                  {chip.kind === "crc" && <span className="ml-1 text-xs text-slate-500">(new)</span>}
+                  {chip.kind === "crc" && <span className="ml-1 text-xs text-slate-500">(new · CRC {chip.crc})</span>}
                 </label>
                 <ChipRemove label={chip.label} onClick={() => onChange(chips.filter((item) => item.key !== chip.key))} />
               </li>
             ))}
           </ul>
         )}
-      {shownError && <p id="signup-crc-error" className="text-xs font-medium text-red-600">{shownError}</p>}
+      {error && <p id="signup-branches-error" className="text-xs font-medium text-red-600">{error}</p>}
     </div>
   )
 }
@@ -331,19 +435,28 @@ function AddressChipsField({
   )
 }
 
+/** The username an address will get: the organization's prefix, then the part before the `@`. */
+function usernameFromEmail(organizationName: string, emailLocalPart: string): string {
+  const base = deriveUsernameFromEmail(emailLocalPart)
+  return base ? organizationUsername(organizationName, base) : ""
+}
+
 function ApproverLevels({
   draft,
   setDraft,
   bands,
   domain,
+  organizationName,
   errors,
 }: Readonly<{
   draft: DepartmentSignupDraft
   setDraft: (update: (previous: DepartmentSignupDraft) => DepartmentSignupDraft) => void
   bands: ApprovalLevelBand[]
   domain: string
+  organizationName: string
   errors: Record<string, string>
 }>) {
+  const usernameFor = (emailLocalPart: string) => usernameFromEmail(organizationName, emailLocalPart)
   const update = (level: number, patch: Partial<{ emailLocalPart: string; designation: string }>) =>
     setDraft((previous) => ({
       ...previous,
@@ -382,7 +495,7 @@ function ApproverLevels({
               <Field id={`signup-approver-${approver.level}-username`} label="Username">
                 <ReadOnlyValue
                   id={`signup-approver-${approver.level}-username`}
-                  value={deriveUsernameFromEmail(approver.emailLocalPart)}
+                  value={usernameFor(approver.emailLocalPart)}
                   placeholder="Auto-generated"
                 />
               </Field>
@@ -422,6 +535,7 @@ export function DepartmentSignupForm({
   const [failure, setFailure] = useState<string | null>(null)
 
   const setDraft = (update: (previous: DepartmentSignupDraft) => DepartmentSignupDraft) => setDraftState(update)
+  const usernameFor = (emailLocalPart: string) => usernameFromEmail(options.organizationName, emailLocalPart)
   const set = <K extends keyof DepartmentSignupDraft>(key: K, value: DepartmentSignupDraft[K]) =>
     setDraftState((previous) => ({ ...previous, [key]: value }))
 
@@ -482,7 +596,7 @@ export function DepartmentSignupForm({
           />
         </Field>
         <Field id="signup-username" label="Username">
-          <ReadOnlyValue id="signup-username" value={deriveUsernameFromEmail(draft.emailLocalPart)} placeholder="Auto-generated from your email" />
+          <ReadOnlyValue id="signup-username" value={usernameFor(draft.emailLocalPart)} placeholder="Auto-generated from your email" />
         </Field>
       </div>
 
@@ -547,10 +661,11 @@ export function DepartmentSignupForm({
         setDraft={setDraft}
         bands={options.approvalLevels}
         domain={options.emailDomain}
+        organizationName={options.organizationName}
         errors={errors}
       />
 
-      <Field id="signup-crc" label="CRC No" required>
+      <Field id="signup-branch" label="Branch" required>
         <BranchChipsField
           chips={draft.branches}
           onChange={(branches) => set("branches", branches)}

@@ -75,6 +75,7 @@ describe("HeadOfficeCreateBranchDialog", () => {
       city: "Lahore",
       address: "1 Mall Road",
       costCenterId: "CC-12",
+      headCount: null,
       status: "active",
     })
     expect(request).toMatchObject({
@@ -87,6 +88,32 @@ describe("HeadOfficeCreateBranchDialog", () => {
       title: "Branch created",
       variant: "success",
     }))
+  })
+
+  it("sends the head count when one is given, and refuses a malformed one", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({ item: { id: 78, organizationId: 12, name: "Multan" } }),
+    } as Response)
+
+    render(<HeadOfficeCreateBranchDialog organizationId={12} onCreated={vi.fn()} />)
+    fireEvent.click(screen.getByRole("button", { name: "Create Branch" }))
+    fireEvent.change(screen.getByLabelText("Branch name"), { target: { value: "Multan" } })
+    fireEvent.change(screen.getByLabelText("Province"), { target: { value: "Punjab" } })
+    fireEvent.change(screen.getByLabelText("City"), { target: { value: "Multan" } })
+    fireEvent.change(screen.getByLabelText("Address"), { target: { value: "2 Cantt Road" } })
+
+    const save = screen.getByRole("button", { name: "Save Branch" }) as HTMLButtonElement
+    fireEvent.change(screen.getByLabelText("Head count"), { target: { value: "-3" } })
+    expect(save.disabled).toBe(true)
+
+    fireEvent.change(screen.getByLabelText("Head count"), { target: { value: "42" } })
+    expect(save.disabled).toBe(false)
+    fireEvent.click(save)
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    const [, request] = fetchMock.mock.calls[0]
+    expect(JSON.parse(String(request?.body))).toMatchObject({ headCount: 42 })
   })
 
   it("disables creation when the user has no organization assignment", () => {

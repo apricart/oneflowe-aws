@@ -366,7 +366,7 @@ describe.skipIf(!hasTestDatabase)("the delivery challan through the API", () => 
       expect((await file(null, orderX, pdfChallanId)).status).toBe(401)
     })
 
-    it.each(["superAdmin", "headOffice", "branchAdminA1", "groupUser", "groupOrderPortal", "raiser"])(
+    it.each(["superAdmin", "headOffice", "branchAdminA1", "groupUser", "groupOrderPortal", "raiser", "viewer"])(
       "lets %s, who can read the order, read its challan",
       async (key) => {
         const { status, body } = await list(actors[key], orderX)
@@ -385,9 +385,13 @@ describe.skipIf(!hasTestDatabase)("the delivery challan through the API", () => 
       expect((await file(actors[key], orderX, pdfChallanId)).status).toBe(404)
     })
 
-    it.each(["viewer", "orderDesk"])("refuses %s outright", async (key) => {
-      expect((await list(actors[key], orderX)).status).toBe(403)
-      expect((await file(actors[key], orderX, pdfChallanId)).status).toBe(403)
+    it("keeps the Viewer inside its own organization", async () => {
+      expect((await list(actors.viewer, orderZ)).status).toBe(404)
+    })
+
+    it("refuses Order Desk outright", async () => {
+      expect((await list(actors.orderDesk, orderX)).status).toBe(403)
+      expect((await file(actors.orderDesk, orderX, pdfChallanId)).status).toBe(403)
     })
 
     it("never serves a challan through another order's id", async () => {

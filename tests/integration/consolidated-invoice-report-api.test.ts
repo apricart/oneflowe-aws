@@ -4,9 +4,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { NextRequest } from "next/server"
 import * as mockedNextAuth from "next-auth"
 import { and, desc, eq, inArray, like } from "drizzle-orm"
+import * as XLSX from "xlsx"
 
 import * as reportRoute from "@/app/api/v1/reports/consolidated-invoice/route"
 import * as reportPdfRoute from "@/app/api/v1/reports/consolidated-invoice/pdf/route"
+import * as reportXlsxRoute from "@/app/api/v1/reports/consolidated-invoice/xlsx/route"
+import * as reportCsvRoute from "@/app/api/v1/reports/consolidated-invoice/csv/route"
 import * as refundsRoute from "@/app/api/v1/orders/[id]/refunds/route"
 import { auditLogs, invoices, orderItems, orders, refundItems, refunds } from "@/db/schema"
 import { consolidatedInvoiceDigestInput, karachiToday } from "@/lib/consolidated-invoice"
@@ -150,6 +153,9 @@ describe.skipIf(!hasTestDatabase)("the Consolidated Invoice Report", () => {
     for (const order of [delivered, credited, fullyCredited, otherBranch]) await deliver(order.orderId)
     // Marked paid as the Super Admin control does it; every other order stays UNPAID.
     await db.update(orders).set({ paymentStatus: "PAID" }).where(eq(orders.id, delivered.orderId))
+    // Decided at a level, as an organization using approval levels records it.
+    await db.update(orders).set({ approvalLevel: 2 }).where(eq(orders.id, delivered.orderId))
+    await db.update(orders).set({ approvalLevel: 1 }).where(eq(orders.id, proforma.orderId))
     await refund(credited.orderId, [{ id: credited.itemIds[1], quantity: 1 }])
     await refund(fullyCredited.orderId, [{ id: fullyCredited.itemIds[0], quantity: 2 }, { id: fullyCredited.itemIds[1], quantity: 1 }])
     const foreign = await seedOrder({ organizationId: f.foreignOrganizationId, branchId: f.foreignBranchId })
@@ -367,6 +373,105 @@ describe.skipIf(!hasTestDatabase)("the Consolidated Invoice Report", () => {
       signIn(roleAs("BRANCH_ADMIN"))
       const response = await reportPdfRoute.GET(new NextRequest(`http://localhost/api/v1/reports/consolidated-invoice/pdf?period=month&month=${MONTH}`))
       expect(response.status).toBe(403)
+    })
+  })
+
+  describe("approver level", () => {
+    it("prints the level the order was approved at beside the approver, blank when it was not levelled", async () => {
+      const { body } = await get(`period=month&month=${MONTH}`)
+      const byOrder = new Map<number, any>(body.rows.map((row: any) => [row.orderId, row]))
+      expect(byOrder.get(delivered.orderId)).toMatchObject({ approverLevel: "Level 2", approvalLevel: 2 })
+      expect(byOrder.get(delivered.orderId).approver).not.toBe("")
+      expect(byOrder.get(credited.orderId)).toMatchObject({ approverLevel: "", approvalLevel: null })
+      const proformas = await get(`period=month&month=${MONTH}&mode=proformas`)
+      expect(proformas.body.rows[0]).toMatchObject({ orderId: proforma.orderId, approverLevel: "Level 1" })
+    })
+
+    it("sorts by it, unlevelled orders last", async () => {
+      const { status, body } = await get(`period=month&month=${MONTH}&sort=approverLevel&dir=asc`)
+      expect(status).toBe(200)
+      expect(body.rows[0].orderId).toBe(delivered.orderId)
+      expect(body.rows.slice(1).every((row: any) => row.approvalLevel === null)).toBe(true)
+    })
+  })
+
+  describe("Excel and CSV downloads", () => {
+    const download = async (format: "xlsx" | "csv", query: string, actor: Actor | null = headOffice()) => {
+      signIn(actor)
+      const route = format === "xlsx" ? reportXlsxRoute : reportCsvRoute
+      return route.GET(new NextRequest(`http://localhost/api/v1/reports/consolidated-invoice/${format}?${query}`))
+    }
+    const latestAudit = async () => {
+      const [audit] = await db.select({ metadata: auditLogs.metadata, userId: auditLogs.userId })
+        .from(auditLogs)
+        .where(and(eq(auditLogs.action, "DOWNLOAD_CONSOLIDATED_INVOICE_REPORT"), eq(auditLogs.organizationId, f.organizationId)))
+        .orderBy(desc(auditLogs.id)).limit(1)
+      return audit
+    }
+    const csvLines = (text: string) => text.replace(/^\uFEFF/, "").trimEnd().split("\r\n")
+      .map((line) => [...line.matchAll(/"((?:[^"]|"")*)"/g)].map((match) => match[1].replace(/""/g, '"')))
+    const sheetRows = (bytes: Uint8Array) => {
+      const workbook = XLSX.read(bytes, { type: "array" })
+      return XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[workbook.SheetNames[0]], { header: 1, blankrows: true, defval: "" })
+    }
+
+    it("downloads the CSV with the preview's rows, in its order, filtered and audited", async () => {
+      const query = `period=month&month=${MONTH}&paymentStatus=UNPAID&sort=total&dir=desc`
+      const { body } = await get(query)
+      const response = await download("csv", query)
+      expect(response.status).toBe(200)
+      expect(response.headers.get("content-type")).toBe("text/csv; charset=utf-8")
+      expect(response.headers.get("cache-control")).toContain("no-store")
+      expect(response.headers.get("content-disposition")).toMatch(/-unpaid\.csv"$/)
+      const [header, ...rest] = csvLines(await response.text())
+      const lines = rest.slice(0, -1)
+      expect(lines.map((line) => Number(line[header.indexOf("Order ID")]))).toEqual(body.rows.map((row: any) => row.orderId))
+      expect(lines.every((line) => line[header.indexOf("Payment Status")] === "Unpaid")).toBe(true)
+      expect(rest[rest.length - 1][0]).toBe("Total")
+
+      const digest = createHash("sha256").update(consolidatedInvoiceDigestInput(body.rows)).digest("hex")
+      const audit = await latestAudit()
+      expect(audit.userId).toBe(f.headOfficeId)
+      expect(audit.metadata).toMatchObject({ format: "csv", digest, paymentStatus: "UNPAID", rowCount: body.rows.length })
+    })
+
+    it("downloads the workbook with the preview's rows and the approver level", async () => {
+      const query = `period=month&month=${MONTH}`
+      const { body } = await get(query)
+      const response = await download("xlsx", query)
+      expect(response.status).toBe(200)
+      expect(response.headers.get("content-type")).toBe("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+      expect(response.headers.get("content-disposition")).toMatch(/\.xlsx"$/)
+      const sheet = sheetRows(new Uint8Array(await response.arrayBuffer()))
+      const headerIndex = sheet.findIndex((row) => row[0] === "S. No")
+      const header = sheet[headerIndex] as string[]
+      const rows = sheet.slice(headerIndex + 1, headerIndex + 1 + body.rows.length)
+      expect(rows.map((row) => row[header.indexOf("Order ID")])).toEqual(body.rows.map((row: any) => row.orderId))
+      const levelled = rows.find((row) => row[header.indexOf("Order ID")] === delivered.orderId)
+      expect(levelled?.[header.indexOf("Approver Level")]).toBe("Level 2")
+      expect(sheet[headerIndex + 1 + body.rows.length][header.indexOf("Total Amount")]).toBe(body.totals.totalCents / 100)
+      expect((await latestAudit()).metadata).toMatchObject({ format: "xlsx", rowCount: body.rows.length })
+    })
+
+    it.each(["xlsx", "csv"] as const)("refuses the %s download to an anonymous caller and to a role that may not read the report", async (format) => {
+      expect((await download(format, `period=month&month=${MONTH}`, null)).status).toBe(401)
+      expect((await download(format, `period=month&month=${MONTH}`, roleAs("BRANCH_ADMIN"))).status).toBe(403)
+      expect((await download(format, `period=month&month=${MONTH}`, roleAs("ORDER_PORTAL"))).status).toBe(403)
+    })
+
+    it.each(["xlsx", "csv"] as const)("keeps Head Office's %s download inside its organization", async (format) => {
+      const response = await download(format, `period=month&month=${MONTH}&organizationId=${f.foreignOrganizationId}`)
+      expect(response.status).toBe(200)
+      const bytes = new Uint8Array(await response.arrayBuffer())
+      const cells = format === "csv" ? csvLines(new TextDecoder().decode(bytes)).flat() : sheetRows(bytes).flat().map(String)
+      expect(cells).not.toContain(String(foreignOrderId))
+      expect(cells).toContain(String(delivered.orderId))
+      expect((await download(format, `period=month&month=${MONTH}&branchIds=${f.foreignBranchId}`)).status).toBe(404)
+    })
+
+    it("refuses a bad query the same way the preview does", async () => {
+      expect((await download("csv", `period=month&month=${MONTH}&format=xlsx`)).status).toBe(400)
+      expect((await download("xlsx", `period=month&month=${MONTH}&mode=proformas&paymentStatus=PAID`)).status).toBe(400)
     })
   })
 

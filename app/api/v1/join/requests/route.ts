@@ -22,6 +22,7 @@ import {
   deriveUsernameFromEmail,
   splitFullName,
 } from "@/lib/join-department-signup"
+import { organizationUsername } from "@/lib/username-prefix"
 import {
   departmentJoinSubmitSchema,
   joinRequestSubmitSchema,
@@ -116,7 +117,14 @@ export async function POST(req: Request) {
     const organization = await resolveOrganizationByJoinCode(input.code)
     if (!organization) return error(UNKNOWN_JOIN_CODE_MESSAGE, 404)
 
-    const identity = normalizeJoinSubmissionIdentity(input)
+    // The username asked for, under the organization's prefix
+    // (plans/OF-USERS-organization-username-prefix.md).
+    const identity = normalizeJoinSubmissionIdentity({
+      email: input.email,
+      username: organizationUsername(organization.organizationName, input.username),
+      phone: input.phone,
+      employeeId: input.employeeId,
+    })
 
     // Before the password is hashed or the queue is read: neither is worth
     // doing for an address the organization would never accept.
@@ -190,7 +198,7 @@ async function submitDepartmentSignup(req: Request, rawBody: unknown) {
 
   const identity = normalizeJoinSubmissionIdentity({
     email: input.email,
-    username: deriveUsernameFromEmail(input.email),
+    username: organizationUsername(organization.organizationName, deriveUsernameFromEmail(input.email)),
     phone: input.phone,
     employeeId: input.employeeId,
   })

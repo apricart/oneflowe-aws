@@ -172,6 +172,33 @@ describe("Head Office user directory", () => {
     await waitFor(() => expect(onUserUpdate).toHaveBeenCalled())
   })
 
+  it("shows the designation and saves a change to it as a profile edit, not an access change", async () => {
+    renderTable(vi.fn(), [user(1, { designation: "Store Lead" })])
+    fireEvent.click(screen.getAllByText("First1 Last1")[0])
+    expect(await screen.findByText("Store Lead")).toBeTruthy()
+    fireEvent.click(await screen.findByRole("button", { name: "Edit Profile" }))
+
+    const designation = await screen.findByLabelText("Designation")
+    expect((designation as HTMLInputElement).value).toBe("Store Lead")
+    fireEvent.change(designation, { target: { value: "Regional Manager" } })
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }))
+
+    await waitFor(() => expect(callsTo(/^\/api\/v1\/users\/[^/]+$/, "PATCH")).toHaveLength(1))
+    expect(callsTo(/^\/api\/v1\/users\/[^/]+$/, "PATCH")[0].body).toEqual({ designation: "Regional Manager" })
+    expect(callsTo(/\/access/, "PATCH")).toHaveLength(0)
+  })
+
+  it("clears a designation by sending null", async () => {
+    renderTable(vi.fn(), [user(1, { designation: "Store Lead" })])
+    fireEvent.click(screen.getAllByText("First1 Last1")[0])
+    fireEvent.click(await screen.findByRole("button", { name: "Edit Profile" }))
+    fireEvent.change(await screen.findByLabelText("Designation"), { target: { value: "  " } })
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }))
+
+    await waitFor(() => expect(callsTo(/^\/api\/v1\/users\/[^/]+$/, "PATCH")).toHaveLength(1))
+    expect(callsTo(/^\/api\/v1\/users\/[^/]+$/, "PATCH")[0].body).toEqual({ designation: null })
+  })
+
   it("shows the server's refusal against the field it concerns", async () => {
     installFetch([
       [/^\/api\/v1\/users\/[^/]+\/scope/, { item: { groups: [], branches: [], effectiveBranchIds: [] } }],

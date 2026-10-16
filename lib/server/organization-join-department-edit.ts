@@ -19,12 +19,15 @@ import {
 } from "@/lib/join-department-edit"
 import {
   DEPARTMENT_SIGNUP_FORM_VERSION,
+  type RequestedBranchEntry,
+  type RequestedNewBranch,
   type SignupApprover,
   approverListError,
   initiatorRoleForBranchCount,
-  normalizeCrc,
+  requestedNewBranches,
 } from "@/lib/join-department-signup"
 import { joinEmailDomainRefusal } from "@/lib/organization-join"
+import { organizationUsername } from "@/lib/username-prefix"
 import { assertUniqueUserFields } from "@/lib/user-uniqueness"
 import { usernameExists } from "@/lib/user-username-uniqueness"
 import { normalizeJoinSubmissionIdentity } from "@/lib/server/organization-join"
@@ -64,7 +67,7 @@ export type DepartmentJoinUpdate = {
   ipExtension: string
   employeeId: string
   department: string
-  branches: Array<{ branchId: number } | { crc: string }>
+  branches: RequestedBranchEntry[]
   addresses: string[]
   approvers: SignupApprover[]
 }
@@ -152,14 +155,15 @@ async function assertEditedIdentityFree(
   if (other) throw new JoinEditAbort(409, "Another pending request already uses this email or username.")
 }
 
-/** The edited branches as existing branch ids and CRCs still to create, all of this organization. */
+/** The edited branches as existing branch ids and branches still to create, all of this organization. */
 async function resolveEditedBranches(
   tx: TransactionExecutor,
   organizationId: number,
   edited: DepartmentJoinUpdate["branches"],
-): Promise<{ existingIds: number[]; newCrcs: string[] }> {
+): Promise<{ existingIds: number[]; newBranches: RequestedNewBranch[] }> {
   const pickedIds = [...new Set(edited.flatMap((entry) => ("branchId" in entry ? [entry.branchId] : [])))]
-  const typedCrcs = [...new Set(edited.flatMap((entry) => ("crc" in entry ? [normalizeCrc(entry.crc)] : [])))]
+  const typed = requestedNewBranches(edited)
+  const typedCrcs = typed.map((entry) => entry.crc)
 
   if (pickedIds.length > 0) {
     const found = await tx
@@ -179,7 +183,7 @@ async function resolveEditedBranches(
   const matchedByCrc = await matchCrcsToBranches(tx, organizationId, typedCrcs)
   return {
     existingIds: [...new Set([...pickedIds, ...matchedByCrc.values()])],
-    newCrcs: typedCrcs.filter((crc) => !matchedByCrc.has(crc)),
+    newBranches: typed.filter((entry) => !matchedByCrc.has(entry.crc)),
   }
 }
 
@@ -187,8 +191,8 @@ async function writeBranchEdit(
   tx: TransactionExecutor,
   requestId: number,
   organizationId: number,
-  current: Array<{ id: number; existingBranchId: number | null; costCenterId: string | null }>,
-  next: { existingIds: number[]; newCrcs: string[] },
+  current: Array<{ id: number; existingBranchId: number | null; costCenterId: string | null; requestedBranchName: string | null }>,
+  next: { existingIds: number[]; newBranches: RequestedNewBranch[] },
 ): Promise<boolean> {
   const plan = planRequestBranchEdit(current, next)
   if (plan.deleteIds.length > 0) {
@@ -199,10 +203,24 @@ async function writeBranchEdit(
   }
   const inserts = [
     ...plan.insertExistingIds.map((existingBranchId) => ({ requestId, organizationId, existingBranchId })),
-    ...plan.insertCrcs.map((costCenterId) => ({ requestId, organizationId, costCenterId })),
+    ...plan.insertNewBranches.map((entry) => ({
+      requestId,
+      organizationId,
+      costCenterId: entry.crc,
+      requestedBranchName: entry.name,
+    })),
   ]
   if (inserts.length > 0) await tx.insert(organizationJoinRequestBranches).values(inserts)
-  return plan.deleteIds.length > 0 || inserts.length > 0
+  for (const rename of plan.renames) {
+    await tx
+      .update(organizationJoinRequestBranches)
+      .set({ requestedBranchName: rename.name })
+      .where(and(
+        eq(organizationJoinRequestBranches.requestId, requestId),
+        eq(organizationJoinRequestBranches.id, rename.id),
+      ))
+  }
+  return plan.deleteIds.length > 0 || inserts.length > 0 || plan.renames.length > 0
 }
 
 async function writeAddressEdit(
@@ -274,7 +292,8 @@ export async function updateDepartmentJoinRequest(input: {
 
       const identity = normalizeJoinSubmissionIdentity({
         email: input.update.email,
-        username: input.update.username,
+        // An edited username keeps the organization's prefix.
+        username: organizationUsername(settings.name, input.update.username),
         phone: input.update.phone,
         employeeId: input.update.employeeId,
       })
@@ -306,7 +325,7 @@ export async function updateDepartmentJoinRequest(input: {
       await assertEditedIdentityFree(tx, input, nextPerson, new Set(changedFields))
 
       const nextBranches = await resolveEditedBranches(tx, input.organizationId, input.update.branches)
-      const branchCount = nextBranches.existingIds.length + nextBranches.newCrcs.length
+      const branchCount = nextBranches.existingIds.length + nextBranches.newBranches.length
       const role = initiatorRoleForBranchCount(branchCount)
 
       const branchesChanged = await writeBranchEdit(tx, stored.id, input.organizationId, children.requestBranches, nextBranches)

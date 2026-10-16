@@ -21,6 +21,7 @@ import {
   canUseOrganization,
   isSelfAccessChange,
 } from "@/lib/server/user-access-policy"
+import { USER_DESIGNATION_MAX_LENGTH } from "@/lib/user-designation"
 
 const strongPassword = "ValidPassword1!"
 
@@ -82,6 +83,35 @@ describe("strict mutation schemas", () => {
       permissions: ["ALL"],
     }).success).toBe(false)
     expect(userAccessUpdateSchema.safeParse({ role: "OWNER" }).success).toBe(false)
+  })
+
+  it("takes an optional designation on user creation and profile edit, bounded by the column", () => {
+    const createBody = {
+      firstName: "Test",
+      lastName: "User",
+      email: "test@example.com",
+      username: "test.user",
+      password: strongPassword,
+      role: "BRANCH_ADMIN",
+      organizationId: 10,
+      branchId: 20,
+    }
+
+    expect(userCreateSchema.parse(createBody).designation).toBeUndefined()
+    expect(userCreateSchema.parse({ ...createBody, designation: "  Procurement Manager " }).designation)
+      .toBe("Procurement Manager")
+    expect(userCreateSchema.parse({ ...createBody, designation: "   " }).designation).toBeNull()
+    expect(userCreateSchema.safeParse({ ...createBody, designation: "x".repeat(USER_DESIGNATION_MAX_LENGTH) }).success).toBe(true)
+    expect(userCreateSchema.safeParse({ ...createBody, designation: "x".repeat(USER_DESIGNATION_MAX_LENGTH + 1) }).success).toBe(false)
+    expect(userCreateSchema.safeParse({ ...createBody, designation: 5 }).success).toBe(false)
+
+    expect(userProfileUpdateSchema.parse({ designation: "Head of Finance" }).designation).toBe("Head of Finance")
+    // Clearing it is an edit in its own right.
+    expect(userProfileUpdateSchema.parse({ designation: null }).designation).toBeNull()
+    expect(userProfileUpdateSchema.parse({ designation: "" }).designation).toBeNull()
+    expect(userProfileUpdateSchema.safeParse({ designation: "x".repeat(USER_DESIGNATION_MAX_LENGTH + 1) }).success).toBe(false)
+    // It is a profile field, never an access one.
+    expect(userAccessUpdateSchema.safeParse({ designation: "Head of Finance" }).success).toBe(false)
   })
 
   it("rejects creator, approval, price, total, and status manipulation on orders", () => {

@@ -4,7 +4,7 @@ import { useViewerAccess } from "@/lib/hooks/use-viewer-access"
 import { useState } from "react"
 
 import useSWR from "swr"
-import { AtSign, Check, Copy, KeyRound, Loader2, MailWarning, RefreshCw, ShieldOff } from "lucide-react"
+import { AtSign, Check, Copy, KeyRound, Loader2, MailWarning } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -21,13 +21,12 @@ import {
 /**
  * The join code, as Head Office manages it.
  *
- * The place the request asked for: "somewhere in the head office where he can
- * type the code". Typing one is supported; generating one is offered first and
- * recommended, because a code somebody invents is a code somebody can guess.
+ * Head Office types the code once. After it is saved, every authorized reader
+ * can see and copy it, but the page offers no way to replace or remove it.
  *
- * Every button here calls `/api/v1/organizations/join-code`, which admits Head
- * Office alone and always acts on the caller's own organization — this component
- * never sends an organization id, because the endpoint does not accept one.
+ * Saving calls `/api/v1/organizations/join-code`, which admits Head Office alone
+ * and always acts on the caller's own organization — this component never sends
+ * an organization id, because the endpoint does not accept one.
  */
 
 type JoinCodeResponse = {
@@ -39,8 +38,7 @@ type JoinCodeResponse = {
 }
 
 export function JoinCodeCard() {
-  // The read-only Viewer sees the code and copies it; it issues, replaces and
-  // closes nothing.
+  // The read-only Viewer sees and copies an existing code, but cannot set one.
   const { readOnly } = useViewerAccess()
   const { data, error, isLoading, mutate } = useSWR<JoinCodeResponse>(
     "/api/v1/organizations/join-code",
@@ -48,49 +46,40 @@ export function JoinCodeCard() {
   )
 
   const [typedCode, setTypedCode] = useState("")
-  const [busy, setBusy] = useState<"generate" | "save" | "clear" | null>(null)
+  const [saving, setSaving] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
 
-  const run = async (
-    kind: "generate" | "save" | "clear",
-    request: () => Promise<unknown>,
-  ) => {
-    setFailure(null)
-    setBusy(kind)
-    try {
-      await request()
-      setTypedCode("")
-      await mutate()
-    } catch (caughtError: any) {
-      setFailure(caughtError?.message || "That did not work. Please try again.")
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  const generate = () => run("generate", () =>
-    jsonFetcher("/api/v1/organizations/join-code", { method: "PUT", body: JSON.stringify({}) }),
-  )
-
-  const save = () => {
+  const save = async () => {
     const normalized = normalizeJoinCode(typedCode)
     const localError = joinCodeError(normalized)
     if (localError) {
       setFailure(localError)
       return
     }
-    return run("save", () =>
-      jsonFetcher("/api/v1/organizations/join-code", {
-        method: "PUT",
-        body: JSON.stringify({ code: normalized }),
-      }),
-    )
+    setFailure(null)
+    setSaving(true)
+    try {
+      const outcome = await jsonFetcher<{ code: string; joiningOpen: true }>(
+        "/api/v1/organizations/join-code",
+        {
+          method: "PUT",
+          body: JSON.stringify({ code: normalized }),
+        },
+      )
+      setTypedCode("")
+      await mutate(
+        (current) => current
+          ? { ...current, code: outcome.code, joiningOpen: outcome.joiningOpen }
+          : current,
+        { revalidate: false },
+      )
+    } catch (caughtError: any) {
+      setFailure(caughtError?.message || "That did not work. Please try again.")
+    } finally {
+      setSaving(false)
+    }
   }
-
-  const clear = () => run("clear", () =>
-    jsonFetcher("/api/v1/organizations/join-code", { method: "DELETE" }),
-  )
 
   const copy = async () => {
     if (!data?.code) return
@@ -149,8 +138,8 @@ export function JoinCodeCard() {
 
         {data && !data.joiningOpen && (
           <p className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-            Joining is <strong>closed</strong>. Nobody can request to join this organization until you
-            issue a code.
+            Joining is <strong>closed</strong>. Nobody can request to join this organization until Head
+            Office sets its code.
           </p>
         )}
 
@@ -163,69 +152,41 @@ export function JoinCodeCard() {
               {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
               {copied ? "Copied" : "Copy"}
             </Button>
+            <p className="w-full text-xs text-slate-500 dark:text-slate-400">
+              This code is permanent and cannot be edited after it is saved.
+            </p>
           </div>
         )}
 
-        {!readOnly && (
-          <>
-        <div className="flex flex-col gap-2 sm:flex-row">
-          <Button
-            type="button"
-            onClick={generate}
-            disabled={busy !== null}
-            className="gap-2 sm:w-auto"
-          >
-            {busy === "generate"
-              ? <Loader2 className="h-4 w-4 animate-spin" />
-              : <RefreshCw className="h-4 w-4" />}
-            {data?.joiningOpen ? "Generate a new code" : "Generate a code"}
-          </Button>
-          {data?.joiningOpen && (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={clear}
-              disabled={busy !== null}
-              className="gap-2 text-red-600 hover:text-red-700 sm:w-auto"
-            >
-              {busy === "clear"
-                ? <Loader2 className="h-4 w-4 animate-spin" />
-                : <ShieldOff className="h-4 w-4" />}
-              Close joining
-            </Button>
-          )}
-        </div>
-
-        <div className="space-y-1.5 border-t border-slate-200 pt-4 dark:border-slate-800">
-          <label htmlFor="join-code-input" className="text-sm font-medium text-slate-700 dark:text-slate-300">
-            Or set your own code
-          </label>
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <Input
-              id="join-code-input"
-              value={typedCode}
-              onChange={(event) => setTypedCode(event.target.value.toUpperCase())}
-              placeholder={`${JOIN_CODE_MIN_LENGTH}-${JOIN_CODE_MAX_LENGTH} characters, A-Z 0-9 and dashes`}
-              autoComplete="off"
-              spellCheck={false}
-              className="font-mono tracking-wider"
-            />
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={save}
-              disabled={busy !== null || typedCode.trim().length === 0}
-              className="sm:w-auto"
-            >
-              {busy === "save" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save code"}
-            </Button>
+        {data && !data.code && !readOnly && (
+          <div className="space-y-1.5 border-t border-slate-200 pt-4 dark:border-slate-800">
+            <label htmlFor="join-code-input" className="text-sm font-medium text-slate-700 dark:text-slate-300">
+              Set your organization join code
+            </label>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Input
+                id="join-code-input"
+                value={typedCode}
+                onChange={(event) => setTypedCode(event.target.value.toUpperCase())}
+                placeholder={`${JOIN_CODE_MIN_LENGTH}-${JOIN_CODE_MAX_LENGTH} characters, A-Z 0-9 and dashes`}
+                autoComplete="off"
+                spellCheck={false}
+                className="font-mono tracking-wider"
+              />
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={save}
+                disabled={saving || typedCode.trim().length === 0}
+                className="sm:w-auto"
+              >
+                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save code"}
+              </Button>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Choose carefully. Once this code is saved, it cannot be changed or removed.
+            </p>
           </div>
-          <p className="text-xs text-slate-500 dark:text-slate-400">
-            A generated code is far harder to guess than one you invent. Replacing a code stops the
-            old one working immediately; requests already waiting are unaffected.
-          </p>
-        </div>
-          </>
         )}
 
         {failure && (
