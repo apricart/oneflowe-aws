@@ -150,8 +150,9 @@ export type DepartmentJoinSubmission = {
 
 /**
  * The typed CRCs that belong to exactly one active branch of the organization,
- * as that branch. A CRC shared by several branches stays a CRC, for Head Office
- * to map at review.
+ * as that branch. Read only for Head Office's review, which shows the match and
+ * asks whether to use that branch or create a new one; a request never stores
+ * a typed CRC as an existing branch (plans/OF-JOIN-crc-match-at-review.md).
  */
 export async function matchCrcsToBranches(
   executor: Executor,
@@ -179,37 +180,34 @@ export async function matchCrcsToBranches(
  * the answer to a public caller must not reveal whether a colleague has an
  * account. Head Office sees who they are at review.
  *
- * A new branch is stored with the name the applicant gave it and its CRC. A
- * typed CRC that belongs to exactly one active branch of the organization is
- * stored as that branch instead (the name is then not needed); the CRC itself
- * never leaves the server, and the caller's answer is the same either way.
+ * A new branch is stored with the name the applicant gave it and its CRC, even
+ * when an existing branch already carries that CRC: the applicant asked for a
+ * new branch, and folding it silently into another one lost the request
+ * (plans/OF-JOIN-crc-match-at-review.md). Head Office sees the match at review
+ * and chooses. No CRC of an existing branch is ever sent to the caller.
  */
 export async function createDepartmentJoinRequest(
   submission: DepartmentJoinSubmission,
 ): Promise<{ id: number } | JoinRequestFailure> {
   const { organizationId } = submission
 
-  const pickedIds = [...new Set(submission.branches.flatMap((entry) => ("branchId" in entry ? [entry.branchId] : [])))]
-  const typed = requestedNewBranches(submission.branches)
-  const typedCrcs = typed.map((entry) => entry.crc)
+  const existingIds = [...new Set(submission.branches.flatMap((entry) => ("branchId" in entry ? [entry.branchId] : [])))]
+  const newBranches = requestedNewBranches(submission.branches)
 
-  if (pickedIds.length > 0) {
+  if (existingIds.length > 0) {
     const found = await db
       .select({ id: branches.id })
       .from(branches)
       .where(and(
         eq(branches.organizationId, organizationId),
         eq(branches.status, "active"),
-        inArray(branches.id, pickedIds),
+        inArray(branches.id, existingIds),
       ))
-    if (found.length !== pickedIds.length) {
+    if (found.length !== existingIds.length) {
       return { kind: "scope", message: "A branch you chose is not available in this organization", status: 400 }
     }
   }
 
-  const matchedByCrc = await matchCrcsToBranches(db, organizationId, typedCrcs)
-  const existingIds = [...new Set([...pickedIds, ...matchedByCrc.values()])]
-  const newBranches = typed.filter((entry) => !matchedByCrc.has(entry.crc))
   const branchCount = existingIds.length + newBranches.length
   const role = initiatorRoleForBranchCount(branchCount)
 
@@ -444,6 +442,12 @@ export type DepartmentJoinReview = {
     costCenterId: string | null
     /** The name the applicant gave a branch to create; null when it gave none. */
     requestedName: string | null
+    /**
+     * A CRC still to resolve that exactly one active branch of this
+     * organization already carries: Head Office must choose between that
+     * branch and a new one. Null otherwise.
+     */
+    crcMatch: { branchId: number; name: string } | null
   }>
   addresses: Array<{ requestAddressId: number; address: string; branchId: number | null }>
   approvers: Array<{
@@ -507,8 +511,17 @@ export async function loadDepartmentJoinReview(input: {
   if (!settings) return null
   const children = await loadRequestChildren(db, stored.id)
 
-  const branchIds = children.requestBranches.flatMap((row) => [row.existingBranchId, row.resolvedBranchId])
-    .filter((id): id is number => id !== null)
+  const unresolvedCrcs = children.requestBranches.flatMap((row) => (
+    row.existingBranchId === null && row.resolvedBranchId === null && row.costCenterId !== null ? [row.costCenterId] : []
+  ))
+  const matchedByCrc = stored.status === "pending"
+    ? await matchCrcsToBranches(db, input.organizationId, unresolvedCrcs)
+    : new Map<string, number>()
+
+  const branchIds = [
+    ...children.requestBranches.flatMap((row) => [row.existingBranchId, row.resolvedBranchId]),
+    ...matchedByCrc.values(),
+  ].filter((id): id is number => id !== null)
   const branchNames = new Map<number, string>()
   if (branchIds.length > 0) {
     const rows = await db
@@ -562,6 +575,8 @@ export async function loadDepartmentJoinReview(input: {
     initiatorRole: initiatorRoleForBranchCount(children.requestBranches.length),
     branches: children.requestBranches.map((row) => {
       const branchId = row.existingBranchId ?? row.resolvedBranchId
+      const matchedId = branchId === null && row.costCenterId !== null ? matchedByCrc.get(row.costCenterId) : undefined
+      const matchedName = matchedId === undefined ? undefined : branchNames.get(matchedId)
       return {
         requestBranchId: row.id,
         kind: row.existingBranchId === null ? "new" as const : "existing" as const,
@@ -569,6 +584,7 @@ export async function loadDepartmentJoinReview(input: {
         name: branchId === null ? null : branchNames.get(branchId) ?? null,
         costCenterId: row.costCenterId,
         requestedName: row.requestedBranchName,
+        crcMatch: matchedId !== undefined && matchedName !== undefined ? { branchId: matchedId, name: matchedName } : null,
       }
     }),
     addresses: children.addresses.map((row) => ({

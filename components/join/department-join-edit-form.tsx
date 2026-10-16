@@ -244,7 +244,7 @@ export function DepartmentJoinEditForm({
           </div>
         </div>
         <p className="text-xs text-slate-500">
-          A CRC that belongs to exactly one of your branches becomes that branch when saved.
+          If a CRC already belongs to one of your branches, the review asks whether to use that branch or create a new one.
         </p>
       </section>
 

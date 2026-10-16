@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { and, eq, inArray, notInArray, sql } from "drizzle-orm"
+import { and, eq, inArray, ne, notInArray, sql } from "drizzle-orm"
 import { NextRequest } from "next/server"
 import * as mockedNextAuth from "next-auth"
 
@@ -416,21 +416,78 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, end to end", () => {
       expect((await decide(stored.id, { decision: "approve", expectedResolutions: expectedFrom(item) })).status).toBe(409)
     })
 
-    it("gives one CRC the shop, and stores a typed CRC that names an existing branch as that branch", async () => {
+    // plans/OF-JOIN-crc-match-at-review.md: a typed CRC an existing branch
+    // carries used to be stored as that branch, dropping the new branch the
+    // applicant asked for. It is now kept, and the review names the match.
+    it("keeps a typed CRC an existing branch carries as a new branch, and shows Head Office the match", async () => {
       const body = signup({ branches: [{ name: "Typed CRC Depot", crc: `it-crc-${fixtures.suffix}` }] })
       const stored = await submitAccepted(body)
       const rows = await db.select().from(organizationJoinRequestBranches).where(eq(organizationJoinRequestBranches.requestId, stored.id))
-      expect(rows).toHaveLength(1)
-      expect(rows[0].existingBranchId).toBe(crcBranchId)
+      expect(rows).toEqual([expect.objectContaining({
+        existingBranchId: null,
+        costCenterId: `IT-CRC-${fixtures.suffix}`.toUpperCase(),
+        requestedBranchName: "Typed CRC Depot",
+      })])
       expect(stored.requestedRole).toBe("ORDER_PORTAL")
 
       const { item } = await review(stored.id)
-      const response = await decide(stored.id, { decision: "approve", expectedResolutions: expectedFrom(item) })
+      expect(item.branches).toEqual([expect.objectContaining({
+        kind: "new",
+        branchId: null,
+        requestedName: "Typed CRC Depot",
+        crcMatch: { branchId: crcBranchId, name: `CRC Branch ${fixtures.suffix}` },
+      })])
+
+      // An approval that settles nothing for the CRC is refused, as for any CRC.
+      const unsettled = await decide(stored.id, { decision: "approve", expectedResolutions: expectedFrom(item) })
+      expect(unsettled.status).toBe(400)
+
+      const response = await decide(stored.id, {
+        decision: "approve",
+        newBranches: [{ requestBranchId: item.branches[0].requestBranchId, mapToBranchId: crcBranchId }],
+        expectedResolutions: expectedFrom(item),
+      })
       expect(response.status, JSON.stringify(await response.clone().json())).toBe(200)
 
       const [initiator] = await db.select({ role: roles.name, branchId: users.branchId }).from(users)
         .innerJoin(roles, eq(users.roleId, roles.id)).where(eq(users.email, String(body.email)))
       expect(initiator).toEqual({ role: "ORDER_PORTAL", branchId: crcBranchId })
+    })
+
+    it("creates the branch the applicant named when Head Office chooses a new one over the matching branch", async () => {
+      const crc = `IT-CRC-NEW-${unique()}`.toUpperCase()
+      const [matching] = await db.insert(branches).values({
+        organizationId: fixtures.organizationId,
+        name: `Matching ${crc}`,
+        status: "active",
+        costCenterId: crc,
+      }).returning({ id: branches.id })
+      const body = signup({ branches: [{ name: `Orangi ${crc}`, crc }] })
+      const stored = await submitAccepted(body)
+      const { item } = await review(stored.id)
+      expect(item.branches[0].crcMatch).toEqual({ branchId: matching.id, name: `Matching ${crc}` })
+
+      const response = await decide(stored.id, {
+        decision: "approve",
+        newBranches: [{
+          requestBranchId: item.branches[0].requestBranchId,
+          name: item.branches[0].requestedName,
+          province: "Sindh",
+          city: "Karachi",
+          address: "Plot 1, Orangi, Karachi",
+        }],
+        expectedResolutions: expectedFrom(item),
+      })
+      expect(response.status, JSON.stringify(await response.clone().json())).toBe(200)
+
+      const created = await db.select({ id: branches.id, name: branches.name }).from(branches)
+        .where(and(eq(branches.costCenterId, crc), ne(branches.id, matching.id)))
+      expect(created).toEqual([{ id: expect.any(Number), name: `Orangi ${crc}` }])
+      const [initiator] = await db.select({ branchId: users.branchId }).from(users).where(eq(users.email, String(body.email)))
+      expect(initiator.branchId).toBe(created[0].id)
+
+      // Once decided, the review reports no match.
+      expect((await review(stored.id)).item.branches[0].crcMatch).toBeNull()
     })
 
     it("refuses an approval when an approver changed since the review, and creates nothing", async () => {
