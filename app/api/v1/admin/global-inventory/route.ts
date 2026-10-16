@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { globalProducts,categories,organizationInventory,auditLogs } from "@/db/schema"
-import { eq,and,ilike,or,desc,sql,inArray,isNull,ne,type SQL } from "drizzle-orm"
+import { eq,and,ilike,or,desc,sql,inArray,isNull,type SQL } from "drizzle-orm"
 import { alias } from "drizzle-orm/pg-core"
 import { cascadeGlobalProductStatusChange,cascadeGlobalProductFieldUpdate } from "@/lib/inventory-cascade"
 import { escapeLikePattern } from "@/lib/utils"
@@ -400,8 +400,7 @@ export async function POST(req: NextRequest) {
 }
 
 function applyBasicProductUpdates(updateData: Record<string, any>, input: Record<string, any>) {
-  const { productCode, name, description, categoryId, imageUrl, basePrice, taxRatePercent, unit, status, metadata } = input
-  if (productCode !== undefined) updateData.productCode = productCode
+  const { name, description, categoryId, imageUrl, basePrice, taxRatePercent, unit, status, metadata } = input
   if (name !== undefined) updateData.name = name
   if (description !== undefined) updateData.description = description
   if (categoryId !== undefined) updateData.categoryId = categoryId
@@ -598,7 +597,6 @@ export async function PUT(req: NextRequest) {
     }
     const {
       id,
-      productCode,
       name,
       description,
       categoryId,
@@ -623,26 +621,6 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: "Product ID is required" }, { status: 400 })
     }
 
-    const productId = id
-
-    // Check if product code already exists for another product (excluding soft-deleted)
-    if (productCode) {
-      const [existingProductWithCode] = await db.select()
-        .from(globalProducts)
-        .where(
-          and(
-            eq(globalProducts.productCode, productCode.toString().trim()),
-            ne(globalProducts.id, productId),
-            isNull(globalProducts.deletedAt)
-          )
-        )
-        .limit(1)
-
-      if (existingProductWithCode) {
-        return NextResponse.json({ error: "Product code already exists" }, { status: 400 })
-      }
-    }
-
     // Check if product exists and get current status
     const [existingProduct] = await db.select({
       id: globalProducts.id,
@@ -665,7 +643,7 @@ export async function PUT(req: NextRequest) {
     }
 
     const productInput = {
-      productCode, name, description, categoryId, imageUrl, basePrice, taxRatePercent, unit, status,
+      name, description, categoryId, imageUrl, basePrice, taxRatePercent, unit, status,
       stockQuantity, allowDecimalQuantity, quantityStep, metadata, discountType,
       discountValue, discountStartAt, discountEndAt, discountActive,
       confirmTaxInclusivePrice,

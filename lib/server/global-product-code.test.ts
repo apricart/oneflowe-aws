@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest"
 import {
   globalProductAdminCreateSchema,
   globalProductAdminUpdateSchema,
+  globalProductUpdateSchema,
 } from "@/lib/server/mutation-validation"
 
 const read = (file: string) => readFileSync(path.join(process.cwd(), file), "utf8")
@@ -18,8 +19,11 @@ describe("a global product's code is assigned by the server", () => {
     ).toBe(false)
   })
 
-  it("still lets an edit change the code", () => {
-    expect(globalProductAdminUpdateSchema.safeParse({ id: 1, productCode: "PRD--9" }).success).toBe(true)
+  it("refuses an edit that names a code, on both update endpoints", () => {
+    expect(globalProductAdminUpdateSchema.safeParse({ id: 1, name: "Tea" }).success).toBe(true)
+    expect(globalProductAdminUpdateSchema.safeParse({ id: 1, productCode: "PRD--9" }).success).toBe(false)
+    expect(globalProductUpdateSchema.safeParse({ name: "Tea" }).success).toBe(true)
+    expect(globalProductUpdateSchema.safeParse({ productCode: "PRD--9" }).success).toBe(false)
   })
 
   it("draws the code and inserts the product in one transaction, under the lock", () => {
