@@ -32,6 +32,7 @@ import {
   newBranchDraftErrors,
 } from "@/lib/join-department-signup"
 import { type ApprovalLevelBand, approvalLevelBandText } from "@/lib/order-approval-levels"
+import { ROLE_DISPLAY_NAMES } from "@/lib/role-display-names"
 
 /**
  * Head Office reviewing a department sign-up
@@ -114,11 +115,11 @@ const NEW_BRANCH_FIELD_LABELS: Record<NewBranchField, string> = {
 }
 
 const ROLE_LABELS = {
-  ORDER_PORTAL: "Order Portal User (one branch)",
-  GROUP_ORDER_PORTAL: "Group Order Portal User (several branches)",
+  ORDER_PORTAL: `${ROLE_DISPLAY_NAMES.ORDER_PORTAL} (one branch)`,
+  GROUP_ORDER_PORTAL: `${ROLE_DISPLAY_NAMES.GROUP_ORDER_PORTAL} (several branches)`,
 } as const
 
-const CONVERTED_NOTE = "They become a Group User instead of a Branch Admin, keep their own branch, and are signed out."
+const CONVERTED_NOTE = "They become a Group Financial Approver instead of a Financial Approver, keep their own branch, and are signed out."
 
 /**
  * What approving does with one approver. `branchCount` is the count after
@@ -136,8 +137,8 @@ function resolutionText(
   switch (resolution.kind) {
     case "create":
       return newApproverRole(branchCount) === "BRANCH_ADMIN"
-        ? `No account yet: a Branch Admin of ${onlyBranch} is created with Level ${level}, and a temporary password is emailed.`
-        : `No account yet: a Group User is created with Level ${level} and these branches, and a temporary password is emailed.`
+        ? `No account yet: a Financial Approver of ${onlyBranch} is created with Level ${level}, and a temporary password is emailed.`
+        : `No account yet: a Group Financial Approver is created with Level ${level} and these branches, and a temporary password is emailed.`
     case "assign":
       return resolution.becomesGroupUser
         ? `${who}: is given Level ${level} and these branches. ${CONVERTED_NOTE}`
@@ -521,7 +522,7 @@ export function DepartmentJoinReviewDialog({
                 <p className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
                   With your branch choices this person has {finalBranchCount} branch{finalBranchCount === 1 ? "" : "es"}, not {reviewedBranchCount}.
-                  Approver roles follow the final branches: one branch makes a Branch Admin, more make a Group User.
+                  Approver roles follow the final branches: one branch makes a Financial Approver, more make a Group Financial Approver.
                 </p>
               )}
               {!review.approvalLevelsApply && (

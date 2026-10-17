@@ -131,7 +131,7 @@ describe("OrganizationsPage organization selection", () => {
     fireEvent.click(approvalSwitch)
 
     expect((approvalSwitch as HTMLButtonElement).getAttribute("data-state")).toBe("unchecked")
-    expect((screen.getByRole("button", { name: /Branch Admin/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole("button", { name: /Financial Approver/ }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByText("Saved for use if approval is required again later.")).toBeTruthy()
   })
 })

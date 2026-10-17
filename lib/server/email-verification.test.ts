@@ -99,11 +99,11 @@ beforeEach(() => {
 
 describe("accountLabelForRole — the words the mail uses for the account the code opens", () => {
   it.each([
-    ["BRANCH_ADMIN", "Branch Admin"],
-    ["ORDER_PORTAL", "Order Portal User"],
+    ["BRANCH_ADMIN", "Financial Approver"],
+    ["ORDER_PORTAL", "Order Initiator"],
     ["HEAD_OFFICE", "Head Office"],
-    ["GROUP_ORDER_PORTAL", "Group Order Portal User"],
-    ["GROUP_USER", "Group User"],
+    ["GROUP_ORDER_PORTAL", "Group Order Initiator"],
+    ["GROUP_USER", "Group Financial Approver"],
     ["SUPER_ADMIN", "Super Admin"],
   ])("names a %s account after its role template", (role, label) => {
     expect(accountLabelForRole(role)).toBe(label)
@@ -122,7 +122,7 @@ describe("sendEmailVerificationCode", () => {
     expect(outcome).toEqual({ kind: "sent", emailHint: "i***@ke.com.pk", validForMinutes: 10 })
     expect(mocks.generateAndSendOTP).toHaveBeenCalledWith(USER_ID, "imrank@ke.com.pk", "VERIFY_EMAIL", {
       username: "imran-17655-ba",
-      accountLabel: "Branch Admin",
+      accountLabel: "Financial Approver",
     })
     expect(auditActions()).toEqual(["AUTH_EMAIL_VERIFICATION_SENT"])
     expect(mocks.recordAuthAuditEvent).toHaveBeenCalledWith(expect.objectContaining({

@@ -33,7 +33,7 @@ export default function EmployeeManagementPage() {
         <Card>
           <CardContent className="p-6">
             <p className="text-muted-foreground">
-              Employee management is only available to Branch Administrators.
+              Employee management is only available to Financial Approvers.
             </p>
           </CardContent>
         </Card>
@@ -45,7 +45,7 @@ export default function EmployeeManagementPage() {
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 space-y-6 p-6">
       <SectionHeader
         title="Employee Management"
-        subtitle="Manage employee credentials and access to the Order Portal"
+        subtitle="Manage employee credentials and access to the Order Initiator Portal"
         actions={
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Users className="h-4 w-4" />
@@ -117,7 +117,7 @@ export default function EmployeeManagementPage() {
             Employee Portal Access
           </CardTitle>
           <CardDescription>
-            Create and manage employee credentials for the Order Portal. Employees can use these credentials to access the shop portal and place orders.
+            Create and manage employee credentials for the Order Initiator Portal. Employees can use these credentials to access the shop portal and place orders.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -138,7 +138,7 @@ export default function EmployeeManagementPage() {
             <div>
               <h4 className="font-medium mb-2 text-slate-900 dark:text-white">What are Employee Credentials?</h4>
               <p className="text-sm text-muted-foreground">
-                Employee credentials allow your branch staff to access the Order Portal where they can place orders,
+                Employee credentials allow your branch staff to access the Order Initiator Portal where they can place orders,
                 view inventory, and manage their work-related tasks. Each employee gets their own secure login.
               </p>
             </div>
@@ -154,7 +154,7 @@ export default function EmployeeManagementPage() {
             <div>
               <h4 className="font-medium mb-2 text-slate-900 dark:text-white">Employee Access</h4>
               <p className="text-sm text-muted-foreground">
-                Once created, employees can log in at the Order Portal using their email and password.
+                Once created, employees can log in at the Order Initiator Portal using their email and password.
                 They will have access to place orders within your branch's budget limits.
               </p>
             </div>

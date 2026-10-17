@@ -12,6 +12,7 @@ import { useSession } from "next-auth/react"
 import useSWR from "swr"
 import { fetcher } from "@/lib/fetcher"
 import { isOrganizationViewer, isViewerRole } from "@/lib/viewer-access"
+import { ROLE_DISPLAY_NAMES } from "@/lib/role-display-names"
 
 const COLLAPSED_STORAGE_KEY = "oneflowe.sidebar.collapsed"
 
@@ -300,10 +301,10 @@ const describeRole = (role: string) => {
     return "Head Office"
   }
   if (role === "BRANCH_ADMIN") {
-    return "Branch Admin"
+    return ROLE_DISPLAY_NAMES.BRANCH_ADMIN
   }
   if (role === "GROUP_USER") {
-    return "Group User"
+    return ROLE_DISPLAY_NAMES.GROUP_USER
   }
   if (isViewerRole(role)) {
     return "Viewer"

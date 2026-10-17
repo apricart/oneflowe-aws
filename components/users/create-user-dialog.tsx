@@ -25,6 +25,7 @@ import { MultiAssignSelector } from "@/components/users/multi-assign-selector"
 import { PrefixedUsernameInput } from "@/components/users/prefixed-username-input"
 import { organizationUsernamePrefix, prefixedUsername, withoutUsernamePrefix } from "@/lib/username-prefix"
 import { USER_DESIGNATION_MAX_LENGTH } from "@/lib/user-designation"
+import { ROLE_DISPLAY_NAMES } from "@/lib/role-display-names"
 import {
   ApprovalLevelField,
   approvalLevelPayload,
@@ -76,13 +77,13 @@ function getBranchSelectorLabel(branchId: string, organizationId: string, branch
 
 function getRoleLabel(role: string) {
   if (role === "HEAD_OFFICE") return "Head Office User"
-  if (role === "BRANCH_ADMIN") return "Branch Admin User"
-  if (role === "GROUP_ORDER_PORTAL") return "Group Order Portal User"
-  if (role === "GROUP_USER") return "Group User"
+  if (role === "BRANCH_ADMIN") return ROLE_DISPLAY_NAMES.BRANCH_ADMIN
+  if (role === "GROUP_ORDER_PORTAL") return ROLE_DISPLAY_NAMES.GROUP_ORDER_PORTAL
+  if (role === "GROUP_USER") return ROLE_DISPLAY_NAMES.GROUP_USER
   if (role === "VIEWER") return "Viewer (read-only)"
   if (role === APRICART_EXECUTIVE_ROLE) return APRICART_EXECUTIVE_LABEL
   if (role === WAREHOUSE_ROLE) return WAREHOUSE_LABEL
-  return "Order Portal User"
+  return ROLE_DISPLAY_NAMES.ORDER_PORTAL
 }
 
 // Apricart's own cross-tenant staff created from this dialog: no organization,
@@ -220,7 +221,7 @@ function getAssignmentErrors(form: CreateUserForm) {
     errors.organizationId = "Organization is required for this role"
   }
   if (isSingleBranchRole(form.role) && !form.branchId) {
-    errors.branchId = "Branch assignment is required for Branch Admin and Order Portal roles"
+    errors.branchId = "Branch assignment is required for Financial Approver and Order Initiator roles"
   }
   if (
     usesMultiBranchScope(form.role)
@@ -602,7 +603,7 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
           <DialogHeader>
             <DialogTitle>Create New User</DialogTitle>
             <DialogDescription>
-              Add a new Head Office or Branch Admin user to your organization
+              Add a new Head Office or Financial Approver user to your organization
             </DialogDescription>
           </DialogHeader>
 
@@ -960,10 +961,10 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                       {userRole === "SUPER_ADMIN" && (
                         <SelectItem value="HEAD_OFFICE">Head Office</SelectItem>
                       )}
-                      <SelectItem value="BRANCH_ADMIN">Branch Admin</SelectItem>
-                      <SelectItem value="ORDER_PORTAL">Order Portal User</SelectItem>
-                      <SelectItem value="GROUP_ORDER_PORTAL">Group Order Portal User</SelectItem>
-                      <SelectItem value="GROUP_USER">Group User</SelectItem>
+                      <SelectItem value="BRANCH_ADMIN">{ROLE_DISPLAY_NAMES.BRANCH_ADMIN}</SelectItem>
+                      <SelectItem value="ORDER_PORTAL">{ROLE_DISPLAY_NAMES.ORDER_PORTAL}</SelectItem>
+                      <SelectItem value="GROUP_ORDER_PORTAL">{ROLE_DISPLAY_NAMES.GROUP_ORDER_PORTAL}</SelectItem>
+                      <SelectItem value="GROUP_USER">{ROLE_DISPLAY_NAMES.GROUP_USER}</SelectItem>
                       <SelectItem value="VIEWER">Viewer (read-only)</SelectItem>
                       {userRole === "SUPER_ADMIN" && (
                         <SelectItem value={APRICART_EXECUTIVE_ROLE}>
@@ -1168,7 +1169,7 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                             </p>
                           )}
                           {form.role === "HEAD_OFFICE" && (
-                            <p>Can manage organization-wide settings and create branch admins</p>
+                            <p>Can manage organization-wide settings and create financial approvers</p>
                           )}
                           {isSingleBranchRole(form.role) && !form.branchId && (
                             <p className="text-amber-600">Please select a branch assignment</p>

@@ -39,6 +39,7 @@ import {
   useApprovalLevelChoice,
 } from "@/components/users/approval-level-field"
 import { UserBranchCell } from "@/components/users/user-branch-cell"
+import { ROLE_DISPLAY_NAMES } from "@/lib/role-display-names"
 import {
   describeUserBranches,
   userBranchExportText,
@@ -619,7 +620,7 @@ function RoleSwitchNotice({
   if (!offered) {
     return (
       <p className="text-xs text-muted-foreground">
-        This role cannot be changed here. Only Branch Admin and Order Portal users can be switched.
+        This role cannot be changed here. Only Financial Approver and Order Initiator users can be switched.
       </p>
     )
   }
@@ -649,7 +650,7 @@ function RoleSwitchNotice({
         {leavingApprover && readiness.ordersAwaitingApproval > 0 && (
           <p className="text-xs text-amber-700 dark:text-amber-500">
             {readiness.ordersAwaitingApproval} order(s) across their assigned branches are still
-            awaiting approval. They will no longer be able to decide those — a Branch Admin or Head
+            awaiting approval. They will no longer be able to decide those — a Financial Approver or Head
             Office user still can.
           </p>
         )}
@@ -843,18 +844,18 @@ function RoleAssignmentFields({
           <SelectContent>
             {roleSwitchOffered ? (
               <>
-                <SelectItem value="BRANCH_ADMIN">Branch Admin</SelectItem>
-                <SelectItem value="ORDER_PORTAL">Order Portal User</SelectItem>
-                <SelectItem value="GROUP_ORDER_PORTAL">Group Order Portal User</SelectItem>
-                <SelectItem value="GROUP_USER">Group User</SelectItem>
+                <SelectItem value="BRANCH_ADMIN">{ROLE_DISPLAY_NAMES.BRANCH_ADMIN}</SelectItem>
+                <SelectItem value="ORDER_PORTAL">{ROLE_DISPLAY_NAMES.ORDER_PORTAL}</SelectItem>
+                <SelectItem value="GROUP_ORDER_PORTAL">{ROLE_DISPLAY_NAMES.GROUP_ORDER_PORTAL}</SelectItem>
+                <SelectItem value="GROUP_USER">{ROLE_DISPLAY_NAMES.GROUP_USER}</SelectItem>
               </>
             ) : (
               <>
                 <SelectItem value="HEAD_OFFICE">Head Office</SelectItem>
-                <SelectItem value="BRANCH_ADMIN">Branch Admin</SelectItem>
-                <SelectItem value="ORDER_PORTAL">Order Portal User</SelectItem>
-                <SelectItem value="GROUP_ORDER_PORTAL">Group Order Portal User</SelectItem>
-                <SelectItem value="GROUP_USER">Group User</SelectItem>
+                <SelectItem value="BRANCH_ADMIN">{ROLE_DISPLAY_NAMES.BRANCH_ADMIN}</SelectItem>
+                <SelectItem value="ORDER_PORTAL">{ROLE_DISPLAY_NAMES.ORDER_PORTAL}</SelectItem>
+                <SelectItem value="GROUP_ORDER_PORTAL">{ROLE_DISPLAY_NAMES.GROUP_ORDER_PORTAL}</SelectItem>
+                <SelectItem value="GROUP_USER">{ROLE_DISPLAY_NAMES.GROUP_USER}</SelectItem>
                 {/* Present so a Viewer's own role renders in this disabled
                     select. VIEWER is not in SWITCHABLE_ROLES, so the control is
                     read-only for it, exactly as it is for Head Office. */}
@@ -1309,15 +1310,15 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
       case "HEAD_OFFICE":
         return <Badge className="bg-blue-100 text-blue-800">Head Office</Badge>
       case "BRANCH_ADMIN":
-        return <Badge className="bg-green-100 text-green-800">Branch Admin</Badge>
+        return <Badge className="bg-green-100 text-green-800">{ROLE_DISPLAY_NAMES.BRANCH_ADMIN}</Badge>
       case "SUPER_ADMIN":
         return <Badge className="bg-purple-100 text-purple-800">Super Admin</Badge>
       case "ORDER_PORTAL":
-        return <Badge className="bg-orange-100 text-orange-800">Order Portal</Badge>
+        return <Badge className="bg-orange-100 text-orange-800">{ROLE_DISPLAY_NAMES.ORDER_PORTAL}</Badge>
       case "GROUP_ORDER_PORTAL":
-        return <Badge className="bg-teal-100 text-teal-800">Group Order Portal</Badge>
+        return <Badge className="bg-teal-100 text-teal-800">{ROLE_DISPLAY_NAMES.GROUP_ORDER_PORTAL}</Badge>
       case "GROUP_USER":
-        return <Badge className="bg-cyan-100 text-cyan-800">Group User</Badge>
+        return <Badge className="bg-cyan-100 text-cyan-800">{ROLE_DISPLAY_NAMES.GROUP_USER}</Badge>
       case "VIEWER":
         return <Badge className="bg-slate-100 text-slate-800">Viewer</Badge>
       case "ORDER_DESK":
@@ -1431,10 +1432,10 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
           <SelectContent>
             <SelectItem value="all">All Roles</SelectItem>
             <SelectItem value="HEAD_OFFICE">Head Office</SelectItem>
-            <SelectItem value="BRANCH_ADMIN">Branch Admin</SelectItem>
-            <SelectItem value="ORDER_PORTAL">Order Portal User</SelectItem>
-            <SelectItem value="GROUP_ORDER_PORTAL">Group Order Portal User</SelectItem>
-            <SelectItem value="GROUP_USER">Group User</SelectItem>
+            <SelectItem value="BRANCH_ADMIN">{ROLE_DISPLAY_NAMES.BRANCH_ADMIN}</SelectItem>
+            <SelectItem value="ORDER_PORTAL">{ROLE_DISPLAY_NAMES.ORDER_PORTAL}</SelectItem>
+            <SelectItem value="GROUP_ORDER_PORTAL">{ROLE_DISPLAY_NAMES.GROUP_ORDER_PORTAL}</SelectItem>
+            <SelectItem value="GROUP_USER">{ROLE_DISPLAY_NAMES.GROUP_USER}</SelectItem>
             <SelectItem value="VIEWER">Viewer (read-only)</SelectItem>
             <SelectItem value="ORDER_DESK">Order Desk (Apricart)</SelectItem>
             <SelectItem value="APRICART_EXECUTIVE">Apricart Executive</SelectItem>

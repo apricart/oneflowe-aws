@@ -195,11 +195,11 @@ describe("order lifecycle mail", () => {
     expect(rejected.html).not.toContain(HOSTILE)
   })
 
-  it("names the approving role for a Super Admin, defaulting to Branch Admin", () => {
+  it("names the approving role for a Super Admin, defaulting to Financial Approver", () => {
     expect(buildOrderLifecycleEmail("ORDER_APPROVED_ADMIN", { ...payload, approvedByRole: "GROUP_USER" }).subject)
-      .toBe("Order TID 41 was approved by Group User")
+      .toBe("Order TID 41 was approved by Group Financial Approver")
     expect(buildOrderLifecycleEmail("ORDER_APPROVED_ADMIN", payload).subject)
-      .toBe("Order TID 41 was approved by Branch Admin")
+      .toBe("Order TID 41 was approved by Financial Approver")
   })
 
   it("tells the raiser what to correct, escaped, linking to the portal they order from", () => {

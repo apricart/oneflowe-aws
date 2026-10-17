@@ -14,6 +14,7 @@ import {
   seedJoinDomainE2E,
   setOrganizationEmailDomain,
 } from "./support/join-domain-seed"
+import { closeRoleRenameNoticeWhenShown } from "./support/session"
 
 /**
  * The organization's email domain, in a real browser.
@@ -47,6 +48,7 @@ async function signIn(page: Page, username: string): Promise<void> {
   await page.goto("/login")
   await page.getByLabel("Username or Email").fill(username)
   await page.getByLabel("Password", { exact: true }).fill(E2E_PASSWORD)
+  await closeRoleRenameNoticeWhenShown(page)
   await page.getByRole("button", { name: /sign in/i }).click()
   // Leaving /login is the proof of sign-in. Waiting for the landing page's full
   // `load` as well would time out while the dev server compiles the dashboard
@@ -97,7 +99,7 @@ async function fillApplicantDetails(page: Page, username: string, branchName: st
   await page.getByLabel(/^Password/).fill("Join-Flow-2026!x")
   await page.getByLabel(/^Confirm password/).fill("Join-Flow-2026!x")
   // Exact, or it also matches "Group Order Portal User".
-  await page.getByRole("button", { name: "Order Portal User", exact: true }).click()
+  await page.getByRole("button", { name: "Order Initiator", exact: true }).click()
   await page.getByLabel(/^Branch/).selectOption({ label: branchName })
 }
 

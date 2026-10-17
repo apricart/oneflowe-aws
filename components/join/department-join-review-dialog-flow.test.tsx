@@ -286,18 +286,18 @@ describe("DepartmentJoinReviewDialog — the role each approver ends with", () =
     branches: [{ requestBranchId: 31, kind: "existing", branchId: 5, name: "Clifton", costCenterId: null }],
   }
 
-  it("says a new approver for one branch becomes that branch's Branch Admin", async () => {
+  it("says a new approver for one branch becomes that branch's Financial Approver", async () => {
     renderDialog(baseReview(oneBranch))
-    expect(await screen.findByText(/a Branch Admin of Clifton is created with Level 2/)).toBeTruthy()
-    expect(screen.getByText("Order Portal User (one branch)")).toBeTruthy()
+    expect(await screen.findByText(/a Financial Approver of Clifton is created with Level 2/)).toBeTruthy()
+    expect(screen.getByText("Order Initiator (one branch)")).toBeTruthy()
   })
 
-  it("says a new approver for several branches becomes a Group User", async () => {
+  it("says a new approver for several branches becomes a Group Financial Approver", async () => {
     renderDialog(baseReview())
-    expect(await screen.findByText(/a Group User is created with Level 2 and these branches/)).toBeTruthy()
+    expect(await screen.findByText(/a Group Financial Approver is created with Level 2 and these branches/)).toBeTruthy()
   })
 
-  it("says an existing Branch Admin becomes a Group User and is signed out", async () => {
+  it("says an existing Financial Approver becomes a Group Financial Approver and is signed out", async () => {
     const review = baseReview()
     review.approvers[0] = {
       ...review.approvers[0],
@@ -305,7 +305,7 @@ describe("DepartmentJoinReviewDialog — the role each approver ends with", () =
       resolution: { kind: "assign", userId: "11111111-1111-4111-8111-111111111111", addBranchIds: [6], becomesGroupUser: true },
     }
     renderDialog(review)
-    expect(await screen.findByText(/become a Group User instead of a Branch Admin, keep their own branch, and are signed out/)).toBeTruthy()
+    expect(await screen.findByText(/become a Group Financial Approver instead of a Financial Approver, keep their own branch, and are signed out/)).toBeTruthy()
   })
 
   it("warns, and changes the roles shown, when mapping a CRC leaves fewer branches", async () => {
@@ -316,12 +316,12 @@ describe("DepartmentJoinReviewDialog — the role each approver ends with", () =
       ],
     }))
     const select = await screen.findByLabelText("Map CRC NEW-1 to an existing branch")
-    expect(screen.getByText(/a Group User is created with Level 2/)).toBeTruthy()
+    expect(screen.getByText(/a Group Financial Approver is created with Level 2/)).toBeTruthy()
     await screen.findByRole("option", { name: "Use existing: Clifton" })
     fireEvent.change(select, { target: { value: "5" } })
 
     expect(screen.getByText(/this person has 1 branch, not 2/)).toBeTruthy()
-    expect(screen.getByText(/a Branch Admin of Clifton is created with Level 2/)).toBeTruthy()
-    expect(screen.getByText("Order Portal User (one branch)")).toBeTruthy()
+    expect(screen.getByText(/a Financial Approver of Clifton is created with Level 2/)).toBeTruthy()
+    expect(screen.getByText("Order Initiator (one branch)")).toBeTruthy()
   })
 })

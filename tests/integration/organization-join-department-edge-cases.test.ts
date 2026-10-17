@@ -741,7 +741,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
       try {
         const { item } = await review(stored.id)
         expect(item.approvers[1].resolution.kind).toBe("blocked")
-        expect(item.approvers[1].resolution.reason).toMatch(/created as a Branch Admin/)
+        expect(item.approvers[1].resolution.reason).toMatch(/created as a Financial Approver/)
         const response = await patch(stored.id, { decision: "approve", expectedResolutions: expectedFrom(item) })
         expect(response.status).toBe(409)
         expect(await accountsAt(body.email)).toHaveLength(0)

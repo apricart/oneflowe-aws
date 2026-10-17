@@ -470,7 +470,7 @@ function OrdersManagementContent() {
   })()
 
   const scopeDescription = (() => {
-    if (isBranchAdmin) return "Review orders placed from your branch's Order Portal."
+    if (isBranchAdmin) return "Review orders placed from your branch's Order Initiator Portal."
     if (isGroupUser) return "Review orders placed from the branches assigned to you."
     return `Monitor approvals and fulfillment pipelines across ${scopeText.toLowerCase()}.`
   })()

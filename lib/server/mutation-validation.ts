@@ -178,7 +178,7 @@ export const userCreateSchema = z.object({
   // transaction (plans/OF-APPROVAL-LEVELS-assign-users-to-levels.md).
   orderApprovalLevel: userOrderApprovalLevel.optional().default(null),
 }).strict().refine((input) => input.role === "GROUP_USER" || input.budgetAllocationEnabled === undefined, {
-  message: "Budget allocation access applies only to Group Users",
+  message: "Budget allocation access applies only to Group Financial Approvers",
   path: ["budgetAllocationEnabled"],
 })
 

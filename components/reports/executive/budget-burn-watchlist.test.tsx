@@ -320,7 +320,7 @@ describe("what the reader sees", () => {
   it("marks a retired account", () => {
     respond({ rows: [row({ accountStatus: "INACTIVE" })] })
     render(<BudgetBurnWatchlist filters={filters} onDrill={vi.fn()} />)
-    expect(screen.getByText(/7712 · order portal · inactive/)).toBeTruthy()
+    expect(screen.getByText(/7712 · order initiator · inactive/)).toBeTruthy()
   })
 })
 

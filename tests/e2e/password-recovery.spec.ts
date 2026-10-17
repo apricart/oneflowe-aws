@@ -3,7 +3,7 @@ import { createHmac } from "node:crypto"
 import { expect, test, type Page } from "@playwright/test"
 
 import { E2E_PASSWORD, e2eNextAuthSecret } from "./support/environment"
-import { expectStatus, signIn, testDatabaseUrl } from "./support/session"
+import { closeRoleRenameNoticeWhenShown, expectStatus, signIn, testDatabaseUrl } from "./support/session"
 import { destroyTenant, queryTestDb, seedTenant, type Tenant } from "./support/tenant"
 
 /**
@@ -37,6 +37,7 @@ async function signInWith(page: Page, username: string, password: string): Promi
   await page.goto("/login")
   await page.getByLabel("Username or Email").fill(username)
   await page.getByLabel("Password", { exact: true }).fill(password)
+  await closeRoleRenameNoticeWhenShown(page)
   await page.getByRole("button", { name: /sign in/i }).click()
 }
 

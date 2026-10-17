@@ -17,6 +17,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "@/hooks/use-toast"
 import { ORDER_CORRECTION_TEXT_MAX_LENGTH } from "@/lib/order-correction"
+import { ROLE_DISPLAY_NAMES } from "@/lib/role-display-names"
 
 /**
  * The shared pieces of "return for correction" — see
@@ -85,11 +86,11 @@ export type OrderCorrectionHistoryEntry = {
 }
 
 const ROLE_LABELS: Record<string, string> = {
-  BRANCH_ADMIN: "Branch Admin",
+  BRANCH_ADMIN: ROLE_DISPLAY_NAMES.BRANCH_ADMIN,
   HEAD_OFFICE: "Head Office",
-  GROUP_USER: "Group User",
-  ORDER_PORTAL: "Order Portal",
-  GROUP_ORDER_PORTAL: "Group Order Portal",
+  GROUP_USER: ROLE_DISPLAY_NAMES.GROUP_USER,
+  ORDER_PORTAL: ROLE_DISPLAY_NAMES.ORDER_PORTAL,
+  GROUP_ORDER_PORTAL: ROLE_DISPLAY_NAMES.GROUP_ORDER_PORTAL,
   APRICART_EXECUTIVE: "Apricart Executive",
   ORDER_DESK: "Order Desk",
 }

@@ -1,6 +1,7 @@
 "use client"
 
 import { viewerAccessFor } from "@/lib/viewer-access"
+import { renamedRoleName } from "@/lib/role-display-names"
 import { useEffect,useState } from "react"
 import { Card,CardContent,CardDescription,CardHeader,CardTitle } from "@/components/ui/card"
 import { MFASettings } from "@/components/mfa/mfa-settings"
@@ -62,7 +63,7 @@ export default function SettingsPage() {
   const heroStats = [
     {
       label: "Role",
-      value: ((session?.user as any)?.role || "N/A").toString().replace(/_/g, " "),
+      value: renamedRoleName((session?.user as any)?.role) ?? ((session?.user as any)?.role || "N/A").toString().replace(/_/g, " "),
       icon: Shield,
       gradient: "from-sky-400 to-indigo-500",
       sub: "Current permissions",
@@ -96,7 +97,7 @@ export default function SettingsPage() {
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <p className="text-xs tracking-[0.2em] text-white/70">
-              {((session?.user as any)?.role || "HEAD_OFFICE").toString().replace(/_/g, " ")} · ACCOUNT
+              {(renamedRoleName((session?.user as any)?.role)?.toUpperCase() ?? ((session?.user as any)?.role || "HEAD_OFFICE").toString().replace(/_/g, " "))} · ACCOUNT
             </p>
             <h1 className="text-3xl font-semibold">Preferences & security</h1>
             <p className="text-sm text-white/80">

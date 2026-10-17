@@ -1048,7 +1048,7 @@ async function createApprover(
   const { tx, input } = context
   const asBranchAdmin = role === "BRANCH_ADMIN"
   if (asBranchAdmin && branchIds.length !== 1) {
-    throw new JoinDecisionAbort(409, `Level ${approver.level}: a Branch Admin approver needs exactly one branch.`)
+    throw new JoinDecisionAbort(409, `Level ${approver.level}: a Financial Approver needs exactly one branch.`)
   }
   const username = await freeApproverUsername(approver.email, context)
   const name = deriveNameFromEmail(approver.email)

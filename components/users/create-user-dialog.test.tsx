@@ -150,7 +150,7 @@ describe("CreateUserDialog", () => {
     })
   })
 
-  it("shows an off-by-default budget allocation switch only for Group User", async () => {
+  it("shows an off-by-default budget allocation switch only for Group Financial Approver", async () => {
     render(<CreateUserDialog />)
     fireEvent.click(screen.getByRole("button", { name: "Create User" }))
     fireEvent.change(await screen.findByLabelText(/^First Name/), { target: { value: "Budget" } })
@@ -163,7 +163,7 @@ describe("CreateUserDialog", () => {
     expect(screen.queryByLabelText("Budget Allocation")).toBeNull()
     const roleSelect = document.querySelector('[name="role"]')
     fireEvent.keyDown(roleSelect as Element, { key: "Enter" })
-    fireEvent.click(await screen.findByRole("option", { name: "Group User", hidden: true }))
+    fireEvent.click(await screen.findByRole("option", { name: "Group Financial Approver", hidden: true }))
 
     const budgetSwitch = await screen.findByLabelText("Budget Allocation")
     expect(budgetSwitch.getAttribute("aria-checked")).toBe("false")

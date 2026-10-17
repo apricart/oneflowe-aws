@@ -25,7 +25,7 @@ describe("Super Admin approval email", () => {
     expect(email.text).toContain("Approved by: Jane Approver")
   })
 
-  it("says an auto-approved order was approved by policy, not by a Branch Admin", () => {
+  it("says an auto-approved order was approved by policy, not by a Financial Approver", () => {
     const email = buildOrderLifecycleEmail("ORDER_APPROVED_ADMIN", {
       ...basePayload,
       approvedBy: null,
@@ -35,7 +35,7 @@ describe("Super Admin approval email", () => {
 
     expect(email.subject).toBe("Order TID-0041 was approved automatically")
     expect(email.text).toContain("approved automatically under its organization's order approval policy")
-    expect(email.text).not.toContain("Branch Admin")
+    expect(email.text).not.toContain("Financial Approver")
     expect(email.text).not.toContain("Approved by:")
     expect(email.text).toContain("Review order: https://portal.example.test/orders/41")
   })

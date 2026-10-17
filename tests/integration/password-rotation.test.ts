@@ -274,7 +274,7 @@ describe.skipIf(!hasTestDatabase)("forced password rotation through its real end
       type: "VERIFY_EMAIL",
       details: {
         validForMinutes: 10,
-        account: { username: `imran-${fixtures.suffix}-ba`, accountLabel: "Branch Admin" },
+        account: { username: `imran-${fixtures.suffix}-ba`, accountLabel: "Financial Approver" },
       },
     })
     expect(mocks.sent[0].code).toMatch(/^\d{6}$/)

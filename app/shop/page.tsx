@@ -1206,7 +1206,7 @@ export default function OrderPortalPage() {
           >
             <ShoppingBag className="h-6 w-6 text-white animate-pulse" />
           </div>
-          <p className="text-sm font-medium text-foreground/80">Loading Order Portal…</p>
+          <p className="text-sm font-medium text-foreground/80">Loading Order Initiator Portal…</p>
         </div>
       </div>
     )
@@ -1256,7 +1256,7 @@ export default function OrderPortalPage() {
             </div>
             <div>
               <h1 className="text-2xl font-semibold tracking-tight text-slate-900 dark:text-white">
-                Order Portal
+                Order Initiator Portal
               </h1>
               <div className="text-xs text-muted-foreground space-y-0.5">
                 <p>Welcome, <span >{userName}</span></p>
@@ -1718,7 +1718,7 @@ export default function OrderPortalPage() {
                               {order.placedByGroupPortal && (
                                 <Badge
                                   variant="outline"
-                                  title="Raised for this branch through the Group Order Portal"
+                                  title="Raised for this branch through the Group Order Initiator Portal"
                                   className="px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider rounded-lg border border-indigo-300 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400"
                                 >
                                   Group Order

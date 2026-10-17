@@ -379,8 +379,8 @@ describe.skipIf(!hasTestDatabase)("the management delivery dashboard through the
       expect(status).toBe(200)
       expect(body.delivery).toMatchObject({ health: "OVERDUE", hoursOverdue: 27, deliveredAt: null })
       expect(body.events.map((event: { label: string; by: string | null }) => [event.label, event.by])).toEqual([
-        ["Placed", "Order Portal"],
-        ["Approved", "Branch Admin"],
+        ["Placed", "Order Initiator"],
+        ["Approved", "Financial Approver"],
         ["In Process", "Super Admin"],
         ["Out for Delivery", "Super Admin"],
       ])

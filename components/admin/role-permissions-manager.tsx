@@ -216,7 +216,7 @@ export function RolePermissionsManager({ roleId, roleName }: Readonly<RolePermis
                   size="sm"
                   onClick={() => handleApplyTemplate("BRANCH_ADMIN")}
                 >
-                  Apply Branch Admin Template
+                  Apply Financial Approver Template
                 </Button>
               </div>
             )}

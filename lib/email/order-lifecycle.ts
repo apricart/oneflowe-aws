@@ -3,6 +3,7 @@ import "server-only"
 
 import { sendAppEmail } from "@/lib/email/ses"
 import type { OrderDecisionRole } from "@/lib/order-approver-role"
+import { ROLE_DISPLAY_NAMES } from "@/lib/role-display-names"
 import { env } from "@/lib/server/env"
 
 export type OrderLifecycleEmailTemplate =
@@ -61,9 +62,9 @@ const RED = "#dc2626"
 
 function approverRoleLabelOf(payload: OrderLifecycleEmailPayload): string {
   if (payload.approvedByRole === "HEAD_OFFICE") return "Head Office"
-  if (payload.approvedByRole === "GROUP_USER") return "Group User"
+  if (payload.approvedByRole === "GROUP_USER") return ROLE_DISPLAY_NAMES.GROUP_USER
   if (payload.approvedByRole === "APRICART_EXECUTIVE") return "Apricart Executive"
-  return "Branch Admin"
+  return ROLE_DISPLAY_NAMES.BRANCH_ADMIN
 }
 
 /** The wording and colour for each template, in one place. */
@@ -92,7 +93,7 @@ function lifecycleCopy(
   const copy: Record<Exclude<OrderLifecycleEmailTemplate, "ORDER_APPROVED_ADMIN">, LifecycleCopy> = {
     ORDER_CREATED: {
       heading: "New order awaiting approval",
-      intro: "An Order Portal user submitted a new order that requires your approval.",
+      intro: "An Order Initiator submitted a new order that requires your approval.",
       subject: `Order ${tid} is awaiting approval`,
       accent: AMBER,
     },
