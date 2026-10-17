@@ -13,6 +13,7 @@ export type OrderLifecycleEmailTemplate =
   | "ORDER_APPROVED_ADMIN"
   | "ORDER_RETURNED"
   | "ORDER_RESUBMITTED"
+  | "ORDER_DELIVERED"
 
 export type OrderLifecycleEmailPayload = {
   orderId: number
@@ -40,6 +41,11 @@ const escapeHtml = (value: unknown) => stringifyPrimitive(value)
 
 const safeTagValue = (value: string) => value.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 256) || "unknown"
 
+/** Recipients who are mailed about an order because they raised it. */
+function isRequesterRole(recipientRole?: string | null): boolean {
+  return recipientRole === "ORDER_PORTAL" || recipientRole === "GROUP_ORDER_PORTAL"
+}
+
 /**
  * Where the button goes. Approver-facing mail opens the order; requester-facing
  * mail opens the requester's own portal, which for a Group Order Portal raiser
@@ -49,6 +55,7 @@ function orderUrl(template: OrderLifecycleEmailTemplate, orderId: number, recipi
   const opensOrder = template === "ORDER_CREATED"
     || template === "ORDER_APPROVED_ADMIN"
     || template === "ORDER_RESUBMITTED"
+    || (template === "ORDER_DELIVERED" && !isRequesterRole(recipientRole))
   const requesterPortal = recipientRole === "GROUP_ORDER_PORTAL" ? "/group-portal" : "/shop"
   const path = opensOrder ? `/orders/${orderId}` : requesterPortal
   return new URL(path, env.NEXTAUTH_URL).toString()
@@ -71,8 +78,25 @@ function approverRoleLabelOf(payload: OrderLifecycleEmailPayload): string {
 function lifecycleCopy(
   template: OrderLifecycleEmailTemplate,
   payload: OrderLifecycleEmailPayload,
+  recipientRole?: string | null,
 ): LifecycleCopy {
   const tid = payload.tid
+  if (template === "ORDER_DELIVERED") {
+    const acknowledge = "Please acknowledge the delivery by sending the order's fulfilment token, so the order is fulfilled."
+    return isRequesterRole(recipientRole)
+      ? {
+        heading: "Your order was delivered",
+        intro: `Your order has been delivered to your branch. ${acknowledge}`,
+        subject: `Order ${tid} was delivered — please acknowledge`,
+        accent: GREEN,
+      }
+      : {
+        heading: "An order you approved was delivered",
+        intro: `An order you approved has been delivered to its branch. ${acknowledge}`,
+        subject: `Order ${tid} was delivered — please acknowledge`,
+        accent: GREEN,
+      }
+  }
   if (template === "ORDER_APPROVED_ADMIN") {
     if (payload.autoApproved === true) {
       return {
@@ -90,7 +114,7 @@ function lifecycleCopy(
       accent: GREEN,
     }
   }
-  const copy: Record<Exclude<OrderLifecycleEmailTemplate, "ORDER_APPROVED_ADMIN">, LifecycleCopy> = {
+  const copy: Record<Exclude<OrderLifecycleEmailTemplate, "ORDER_APPROVED_ADMIN" | "ORDER_DELIVERED">, LifecycleCopy> = {
     ORDER_CREATED: {
       heading: "New order awaiting approval",
       intro: "An Order Initiator submitted a new order that requires your approval.",
@@ -154,8 +178,11 @@ export function buildOrderLifecycleEmail(
   const isCreated = template === "ORDER_CREATED"
   const isResubmitted = template === "ORDER_RESUBMITTED"
   const isAdminApproval = template === "ORDER_APPROVED_ADMIN"
-  const { heading, intro, subject, accent } = lifecycleCopy(template, payload)
-  const actionLabel = isCreated || isAdminApproval || isResubmitted ? "Review order" : "View my orders"
+  const { heading, intro, subject, accent } = lifecycleCopy(template, payload, recipientRole)
+  const actionLabel = (() => {
+    if (template === "ORDER_DELIVERED") return "Acknowledge delivery"
+    return isCreated || isAdminApproval || isResubmitted ? "Review order" : "View my orders"
+  })()
 
   const note = noteFor(template, payload)
   const noteBlock = note

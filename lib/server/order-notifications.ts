@@ -22,6 +22,7 @@ import {
 } from "@/lib/order-approver-role"
 import { ORDER_CREATOR_ROLES } from "@/lib/group-order-visibility"
 import { correctionNotificationEventKey } from "@/lib/order-correction"
+import { isUnacknowledgedDelivery } from "@/lib/unacknowledged-delivery-block"
 import {
   GROUP_ORDER_PORTAL_ROLE,
   GROUP_USER_ROLE,
@@ -685,13 +686,135 @@ export async function queueOrderResubmittedNotifications(tx: any, input: {
   }
 }
 
+/** The roles that approve a tenant's order, and so may be asked to acknowledge its delivery. */
+const DELIVERY_APPROVER_ROLES = ["BRANCH_ADMIN", "HEAD_OFFICE", GROUP_USER_ROLE] as const
+
+/** Whether an approver in this role still reaches the order's branch. */
+async function approverReachesOrderBranch(
+  tx: any,
+  approver: { id: string; role: string; branchId: number | null },
+  branchId: number,
+): Promise<boolean> {
+  if (approver.role === GROUP_USER_ROLE) {
+    return (await resolveScopedBranchIds(tx, approver.id)).includes(branchId)
+  }
+  if (approver.role === "BRANCH_ADMIN") return approver.branchId === branchId
+  return approver.role === "HEAD_OFFICE"
+}
+
+/**
+ * Tell the person who raised an order, and the person who approved it, that
+ * it has been delivered and is waiting for them to acknowledge it — by
+ * handing the fulfilment token over, which settles it to FULFILLED
+ * (plans/OF-NOTIFY-order-delivered-acknowledge.md).
+ *
+ * Called from `progressOrderFulfillment`, inside the transaction that records
+ * the delivery, so a rolled-back delivery announces nothing. Nobody is told
+ * when the token was already handed over (the delivery settles the order at
+ * once) or for an Order Desk order, which Apricart fulfils itself. Each
+ * recipient must still be active, in the tenant and reach the branch; an order
+ * approved at creation has no approver, so only its raiser is told.
+ */
+export async function queueOrderDeliveredNotifications(tx: any, input: {
+  orderId: number
+}): Promise<QueuedOrderNotifications> {
+  const none: QueuedOrderNotifications = { eventKeys: [], recipientCount: 0 }
+  const [order] = await tx
+    .select({
+      id: orders.id,
+      tid: orders.tid,
+      organizationId: orders.organizationId,
+      branchId: orders.branchId,
+      createdByUserId: orders.createdByUserId,
+      createdByRole: orders.createdByRole,
+      approvedByUserId: orders.approvedByUserId,
+      status: orders.status,
+      fulfillmentStatus: orders.fulfillmentStatus,
+      tokenHandoffAt: orders.tokenHandoffAt,
+    })
+    .from(orders)
+    .where(eq(orders.id, input.orderId))
+    .limit(1)
+
+  if (!order || order.organizationId === null) return none
+  if (!isUnacknowledgedDelivery(order) || order.tokenHandoffAt) return none
+  if (order.createdByRole === "ORDER_DESK") return none
+
+  // A notice never holds a delivery back: an order whose branch cannot be
+  // placed in its tenant is simply not announced.
+  const context = await getOrderContext(tx, order)
+  if (!context) return none
+
+  const scopedOrder = { ...order, organizationId: order.organizationId as number }
+  const payload: OrderLifecycleEmailPayload = {
+    orderId: order.id,
+    tid: order.tid,
+    organizationName: context.organizationName,
+    branchName: context.branchName,
+  }
+
+  const [creator] = await tx
+    .select({ id: users.id, email: users.email, branchId: users.branchId, role: roles.name })
+    .from(users)
+    .innerJoin(roles, eq(users.roleId, roles.id))
+    .where(and(
+      eq(users.id, order.createdByUserId),
+      inArray(roles.name, [...ORDER_CREATOR_ROLES]),
+      eq(users.organizationId, order.organizationId),
+      eq(users.isActive, true),
+      isNull(users.deletedAt),
+    ))
+    .limit(1)
+  const toCreator = creator && await creatorReachesOrderBranch(tx, creator, order.branchId)
+    ? await insertRecipientEvents(tx, {
+      order: scopedOrder,
+      template: "ORDER_DELIVERED",
+      targetRole: creator.role === GROUP_ORDER_PORTAL_ROLE ? "GROUP_ORDER_PORTAL" : "ORDER_PORTAL",
+      message: `Order ${order.tid} was delivered. Please acknowledge the delivery by sending its fulfilment token so the order is fulfilled.`,
+      payload,
+      recipients: [{ id: creator.id, email: creator.email }],
+    })
+    : none
+
+  const [approver] = order.approvedByUserId && order.approvedByUserId !== order.createdByUserId
+    ? await tx
+      .select({ id: users.id, email: users.email, branchId: users.branchId, role: roles.name })
+      .from(users)
+      .innerJoin(roles, eq(users.roleId, roles.id))
+      .where(and(
+        eq(users.id, order.approvedByUserId),
+        inArray(roles.name, [...DELIVERY_APPROVER_ROLES]),
+        eq(users.organizationId, order.organizationId),
+        eq(users.isActive, true),
+        isNull(users.deletedAt),
+      ))
+      .limit(1)
+    : []
+  const toApprover = approver && await approverReachesOrderBranch(tx, approver, order.branchId)
+    ? await insertRecipientEvents(tx, {
+      order: scopedOrder,
+      template: "ORDER_DELIVERED",
+      targetRole: approver.role as NotificationTargetRole,
+      message: `Order ${order.tid}, which you approved, was delivered. Please acknowledge the delivery by sending its fulfilment token so the order is fulfilled.`,
+      payload,
+      recipients: [{ id: approver.id, email: approver.email }],
+    })
+    : none
+
+  return {
+    eventKeys: [...toCreator.eventKeys, ...toApprover.eventKeys],
+    recipientCount: toCreator.recipientCount + toApprover.recipientCount,
+  }
+}
+
 function isLifecycleTemplate(value: string): value is OrderLifecycleEmailTemplate {
   return value === "ORDER_CREATED" ||
     value === "ORDER_APPROVED" ||
     value === "ORDER_REJECTED" ||
     value === "ORDER_APPROVED_ADMIN" ||
     value === "ORDER_RETURNED" ||
-    value === "ORDER_RESUBMITTED"
+    value === "ORDER_RESUBMITTED" ||
+    value === "ORDER_DELIVERED"
 }
 
 function parsePayload(value: Record<string, unknown>): OrderLifecycleEmailPayload | null {
@@ -738,13 +861,14 @@ function recipientScopeCondition(row: OrderScopedOutboxRow) {
 }
 
 /**
- * The one template each group role may be sent. A Group Order Portal raiser is
+ * The templates each group role may be sent. A Group Order Portal raiser is
  * told its order came back; a Group User is told an order it sent back has
- * returned. A row naming either role on any other template is malformed.
+ * returned. Either is told an order it raised or approved was delivered. A row
+ * naming either role on any other template is malformed.
  */
-const GROUP_RECIPIENT_TEMPLATES: Record<string, OrderLifecycleEmailTemplate> = {
-  [GROUP_ORDER_PORTAL_ROLE]: "ORDER_RETURNED",
-  [GROUP_USER_ROLE]: "ORDER_RESUBMITTED",
+const GROUP_RECIPIENT_TEMPLATES: Record<string, readonly OrderLifecycleEmailTemplate[]> = {
+  [GROUP_ORDER_PORTAL_ROLE]: ["ORDER_RETURNED", "ORDER_DELIVERED"],
+  [GROUP_USER_ROLE]: ["ORDER_RESUBMITTED", "ORDER_DELIVERED"],
 }
 
 function isGroupRecipientRole(role: string): boolean {
@@ -753,7 +877,7 @@ function isGroupRecipientRole(role: string): boolean {
 
 async function groupRecipientStillInScope(row: OrderScopedOutboxRow): Promise<boolean> {
   if (!isGroupRecipientRole(row.recipientRole)) return true
-  if (GROUP_RECIPIENT_TEMPLATES[row.recipientRole] !== row.template) return false
+  if (!GROUP_RECIPIENT_TEMPLATES[row.recipientRole]?.includes(row.template as OrderLifecycleEmailTemplate)) return false
   const scopedBranchIds = await resolveScopedBranchIds(db, row.recipientUserId)
   return scopedBranchIds.includes(row.branchId)
 }
@@ -785,6 +909,21 @@ function isRaiserRecipientRole(role: string): boolean {
   return role === "ORDER_PORTAL" || role === GROUP_ORDER_PORTAL_ROLE
 }
 
+/**
+ * At send time, for a delivery notice: the order is still delivered and not
+ * yet fulfilled, and an approver recipient is still the person who approved it.
+ */
+function deliveredNoticeStillDue(
+  recipient: { orderApproverId: string | null; orderStatus: string; orderFulfillmentStatus: string | null },
+  row: OrderScopedOutboxRow,
+): boolean {
+  if (!isUnacknowledgedDelivery({
+    status: recipient.orderStatus,
+    fulfillmentStatus: recipient.orderFulfillmentStatus,
+  })) return false
+  return isRaiserRecipientRole(row.recipientRole) || recipient.orderApproverId === row.recipientUserId
+}
+
 async function deliverClaimedOrderEmail(claimed: ClaimedOutboxRow): Promise<DeliveryOutcome> {
   const template = isLifecycleTemplate(claimed.template) ? claimed.template : null
   const payload = parsePayload(claimed.payload)
@@ -811,7 +950,14 @@ async function deliverClaimedOrderEmail(claimed: ClaimedOutboxRow): Promise<Deli
   }
   const currentApproverCondition = levelled === "eligible" ? undefined : currentApproverConditionFor(row)
   const [recipient] = await db
-    .select({ email: users.email, role: roles.name, orderCreatorId: orders.createdByUserId })
+    .select({
+      email: users.email,
+      role: roles.name,
+      orderCreatorId: orders.createdByUserId,
+      orderApproverId: orders.approvedByUserId,
+      orderStatus: orders.status,
+      orderFulfillmentStatus: orders.fulfillmentStatus,
+    })
     .from(users)
     .innerJoin(roles, eq(users.roleId, roles.id))
     .innerJoin(orders, eq(orders.id, row.orderId))
@@ -830,6 +976,10 @@ async function deliverClaimedOrderEmail(claimed: ClaimedOutboxRow): Promise<Deli
 
   const creatorMatches = !isRaiserRecipientRole(row.recipientRole)
     || recipient?.orderCreatorId === row.recipientUserId
+  if (template === "ORDER_DELIVERED" && recipient && !deliveredNoticeStillDue(recipient, row)) {
+    await markSkipped(row.id, "Order is no longer waiting for its delivery to be acknowledged")
+    return "skipped"
+  }
   if (
     !recipient
     || !creatorMatches

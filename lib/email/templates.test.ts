@@ -234,6 +234,24 @@ describe("order lifecycle mail", () => {
     expect(email.html).not.toContain(HOSTILE)
   })
 
+  it("asks the raiser to acknowledge a delivery, linking to the portal they order from", () => {
+    const toShop = buildOrderLifecycleEmail("ORDER_DELIVERED", payload, "ORDER_PORTAL")
+    expect(toShop.subject).toBe("Order TID 41 was delivered — please acknowledge")
+    expect(toShop.text).toContain("Your order has been delivered to your branch.")
+    expect(toShop.text).toContain("fulfilment token")
+    expect(toShop.text).toContain("Acknowledge delivery: https://portal.example.test/shop")
+    expect(toShop.html).not.toContain(HOSTILE)
+
+    const toGroupPortal = buildOrderLifecycleEmail("ORDER_DELIVERED", payload, "GROUP_ORDER_PORTAL")
+    expect(toGroupPortal.text).toContain("Acknowledge delivery: https://portal.example.test/group-portal")
+  })
+
+  it.each(["BRANCH_ADMIN", "HEAD_OFFICE", "GROUP_USER"])("asks a %s approver to acknowledge a delivery on the order page", (role) => {
+    const email = buildOrderLifecycleEmail("ORDER_DELIVERED", payload, role)
+    expect(email.text).toContain("An order you approved has been delivered")
+    expect(email.text).toContain("Acknowledge delivery: https://portal.example.test/orders/41")
+  })
+
   it("leaves out an empty correction or resubmission note", () => {
     expect(buildOrderLifecycleEmail("ORDER_RESUBMITTED", payload).text).not.toContain("Requester's note")
     expect(buildOrderLifecycleEmail("ORDER_RETURNED", payload).text).not.toContain("What to correct")

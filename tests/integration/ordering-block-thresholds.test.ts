@@ -65,6 +65,7 @@ vi.mock("@/lib/cache-utils", async (importOriginal) => {
 })
 vi.mock("@/lib/server/order-notifications", () => ({
   queueOrderCreatedNotifications: vi.fn(async () => ({ eventKeys: [], recipientCount: 0 })),
+  queueOrderDeliveredNotifications: vi.fn(async () => ({ eventKeys: [], recipientCount: 0 })),
   attemptImmediateOrderEmailDelivery: vi.fn(async () => undefined),
 }))
 
