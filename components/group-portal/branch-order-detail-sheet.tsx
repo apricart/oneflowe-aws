@@ -29,6 +29,7 @@ export type BranchOrder = {
   branchCostCenterId?: string | null
   status: string
   fulfillmentStatus?: string | null
+  paymentStatus?: string | null
   totalCents?: number | null
   itemCount?: number | string | null
   itemNames?: string | null

@@ -34,6 +34,8 @@ export type GroupOrderChild = {
    */
   statusAtRefund: string | null
   fulfillmentStatus: string
+  /** UNPAID / PAID, set by Super Admin once the order is invoiced. */
+  paymentStatus: string
   totalCents: number
   itemCount: number
   createdAt: Date | null
@@ -146,6 +148,7 @@ export async function listGroupOrders({
       status: orders.status,
       statusAtRefund: orders.statusAtRefund,
       fulfillmentStatus: orders.fulfillmentStatus,
+      paymentStatus: orders.paymentStatus,
       totalCents: orders.totalCents,
       createdAt: orders.createdAt,
       approvedAt: orders.approvedAt,
@@ -183,6 +186,7 @@ export async function listGroupOrders({
       status: row.status,
       statusAtRefund: row.statusAtRefund,
       fulfillmentStatus: row.fulfillmentStatus,
+      paymentStatus: row.paymentStatus,
       totalCents: row.totalCents,
       itemCount: row.itemCount,
       createdAt: row.createdAt,

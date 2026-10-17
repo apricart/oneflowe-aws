@@ -4,6 +4,7 @@ import * as React from "react"
 import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, ListTree, X } from "lucide-react"
 
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
+import { PaymentStatusBadge } from "@/components/orders/payment-status-badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useAPI } from "@/lib/hooks/use-api"
 import { cn } from "@/lib/utils"
@@ -39,6 +40,7 @@ type DrillDownRow = {
   tid: string
   createdAt: string
   status: string
+  paymentStatus: string
   branchName: string
   requesterName: string
   productName: string
@@ -75,6 +77,7 @@ const COLUMNS: Array<{ id: DrillDownSortKey | null; label: string; numeric?: boo
   { id: "unitPrice", label: "Unit price", numeric: true },
   { id: "value", label: "Value", numeric: true },
   { id: null, label: "Status" },
+  { id: null, label: "Payment" },
 ]
 
 const dateFormatter = new Intl.DateTimeFormat("en-GB", {
@@ -394,6 +397,9 @@ function LineTable({ rows, sort, direction, onSort }: Readonly<{
                 >
                   {row.status}
                 </span>
+              </td>
+              <td className="whitespace-nowrap px-3 py-1.5">
+                <PaymentStatusBadge order={row} fallback={<span className="text-slate-300 dark:text-slate-600">—</span>} />
               </td>
             </tr>
           ))}
