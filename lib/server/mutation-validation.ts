@@ -60,7 +60,9 @@ import {
   SIGNUP_MAX_ADDRESSES,
   SIGNUP_MAX_BRANCHES,
   SIGNUP_PHONE_PATTERN,
+  UNLISTED_CITY_MESSAGE,
 } from "@/lib/join-department-signup"
+import { findPakistanCity } from "@/lib/pakistan-cities"
 import {
   JOIN_EDIT_EMAIL_MAX_LENGTH,
   JOIN_EDIT_NAME_MAX_LENGTH,
@@ -1275,9 +1277,18 @@ export const departmentJoinDecisionSchema = z.object({
     mapToBranchId: positiveId.optional(),
     name: newBranchText("name"),
     province: newBranchText("province"),
-    city: newBranchText("city"),
+    // One of Pakistan's listed cities, stored in the list's spelling, and the
+    // province its own (plans/OF-JOIN-new-branch-city-warehouse.md).
+    city: newBranchText("city")
+      .refine((city) => city === undefined || findPakistanCity(city) !== null, `New branch: ${UNLISTED_CITY_MESSAGE.toLowerCase()}`)
+      .transform((city) => (city === undefined ? undefined : findPakistanCity(city)?.name ?? city)),
     address: newBranchText("address"),
-  }).strict()).max(SIGNUP_MAX_BRANCHES).optional(),
+  }).strict().superRefine((branch, context) => {
+    const city = branch.city === undefined ? null : findPakistanCity(branch.city)
+    if (city && branch.province !== undefined && branch.province !== city.province) {
+      context.addIssue({ code: "custom", path: ["province"], message: `New branch: ${city.name} is in ${city.province}` })
+    }
+  })).max(SIGNUP_MAX_BRANCHES).optional(),
   addressBranches: z.array(z.object({
     requestAddressId: positiveId,
     requestBranchId: positiveId,

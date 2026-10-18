@@ -1,11 +1,12 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { type ReactNode, useEffect, useMemo, useState } from "react"
 
 import useSWR from "swr"
 import { AlertTriangle, Loader2, Pencil } from "lucide-react"
 
 import { DepartmentJoinEditForm } from "@/components/join/department-join-edit-form"
+import { PakistanCityCombobox } from "@/components/join/pakistan-city-combobox"
 import type { JoinOption } from "@/components/join/join-scope-picker"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -32,6 +33,7 @@ import {
   newBranchDraftErrors,
 } from "@/lib/join-department-signup"
 import { type ApprovalLevelBand, approvalLevelBandText } from "@/lib/order-approval-levels"
+import { findPakistanCity } from "@/lib/pakistan-cities"
 import { ROLE_DISPLAY_NAMES } from "@/lib/role-display-names"
 
 /**
@@ -89,6 +91,8 @@ type Review = {
   }>
   approvalLevelsApply: boolean
   emailDomain: string | null
+  /** Listed cities an Apricart warehouse serves, and how many; absent from older responses. */
+  warehouseCities?: Array<{ city: string; warehouseCount: number }>
   decisionReason: string | null
 }
 
@@ -112,6 +116,45 @@ const NEW_BRANCH_FIELD_LABELS: Record<NewBranchField, string> = {
   province: "Province",
   city: "City",
   address: "Branch address",
+}
+
+/** The city before its province, which is filled in from it. */
+const NEW_BRANCH_FIELD_ORDER: readonly NewBranchField[] = ["name", "city", "province", "address"]
+
+/**
+ * The draft's errors, without a blank province while the city is missing too:
+ * the province comes from the city, so the city is the one thing to fix.
+ */
+function draftErrors(draft: NewBranchDraft): Partial<Record<NewBranchField, string>> {
+  const errors = newBranchDraftErrors(draft)
+  if (errors.city && !draft.province.trim()) delete errors.province
+  return errors
+}
+
+/**
+ * What approving means for deliveries from the new branch's city
+ * (plans/OF-JOIN-new-branch-city-warehouse.md). Counts only: Head Office is
+ * never told which Apricart account serves it.
+ */
+function WarehouseCoverageNote({ city, served }: Readonly<{ city: string; served: Review["warehouseCities"] }>) {
+  const listed = findPakistanCity(city)
+  if (!listed || served === undefined) return null
+  const count = served.find((entry) => entry.city === listed.name)?.warehouseCount ?? 0
+  if (count > 0) {
+    return (
+      <p className="text-xs text-emerald-800 sm:col-span-2">
+        {listed.name} is served by {count === 1 ? "an Apricart warehouse" : `${count} Apricart warehouses`}. Approving
+        adds this branch to {count === 1 ? "its" : "their"} deliveries.
+      </p>
+    )
+  }
+  return (
+    <p className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900 sm:col-span-2">
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+      No Apricart warehouse serves {listed.name} yet. This branch&apos;s orders will not reach a warehouse until
+      Apricart assigns one.
+    </p>
+  )
 }
 
 const ROLE_LABELS = {
@@ -277,7 +320,7 @@ export function DepartmentJoinReviewDialog({
     const draft = draftFor(row)
     if (draft.mapToBranchId === UNDECIDED) return [{ row, errors: {} as Partial<Record<NewBranchField, string>>, undecided: true }]
     if (draft.mapToBranchId !== CREATE_NEW_BRANCH) return []
-    const errors = newBranchDraftErrors(draft)
+    const errors = draftErrors(draft)
     return Object.keys(errors).length > 0 ? [{ row, errors, undecided: false }] : []
   })
   // The count the approval will see once each CRC's choice here is applied.
@@ -464,23 +507,44 @@ export function DepartmentJoinReviewDialog({
                               .filter((branch) => branch.id !== match?.branchId)
                               .map((branch) => <option key={branch.id} value={branch.id}>Use existing: {branch.name}</option>)}
                           </select>
-                          {draft.mapToBranchId === CREATE_NEW_BRANCH && NEW_BRANCH_FIELDS.map((field) => {
+                          {draft.mapToBranchId === CREATE_NEW_BRANCH && NEW_BRANCH_FIELD_ORDER.map((field) => {
                             const fieldError = branchErrorsFor(row.requestBranchId)[field]
                             const errorId = `review-branch-${row.requestBranchId}-${field}-error`
-                            return (
-                              <div key={field} className="space-y-1">
+                            let control: ReactNode
+                            if (field === "city") {
+                              control = (
+                                <PakistanCityCombobox
+                                  value={draft.city}
+                                  onSelect={(city) => updateDraft(row, { city: city.name, province: city.province })}
+                                  invalid={Boolean(fieldError)}
+                                  describedBy={fieldError ? errorId : undefined}
+                                />
+                              )
+                            } else {
+                              control = (
                                 <Input
                                   aria-label={NEW_BRANCH_FIELD_LABELS[field]}
-                                  placeholder={NEW_BRANCH_FIELD_LABELS[field]}
+                                  placeholder={field === "province" ? "Filled in from the city" : NEW_BRANCH_FIELD_LABELS[field]}
                                   value={draft[field]}
+                                  // The province is the city's own; it follows the city chosen.
+                                  readOnly={field === "province"}
+                                  className={field === "province" ? "bg-slate-50" : undefined}
                                   onChange={(event) => updateDraft(row, { [field]: event.target.value })}
                                   aria-invalid={Boolean(fieldError)}
                                   aria-describedby={fieldError ? errorId : undefined}
                                 />
+                              )
+                            }
+                            return (
+                              <div key={field} className="space-y-1">
+                                {control}
                                 {fieldError && <p id={errorId} className="text-xs font-medium text-red-600">{fieldError}</p>}
                               </div>
                             )
                           })}
+                          {draft.mapToBranchId === CREATE_NEW_BRANCH && draft.city && (
+                            <WarehouseCoverageNote city={draft.city} served={review.warehouseCities} />
+                          )}
                         </div>
                       )}
                     </li>

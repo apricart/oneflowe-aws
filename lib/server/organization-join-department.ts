@@ -46,6 +46,7 @@ import {
   type ApprovalLevelBand,
   approvalLevelBands,
 } from "@/lib/order-approval-levels"
+import { PAKISTAN_CITIES, findPakistanCity } from "@/lib/pakistan-cities"
 import { generateRandomPassword, hashPassword } from "@/lib/password"
 import { organizationUsername } from "@/lib/username-prefix"
 import { totalBlockingOrders } from "@/lib/role-change-preconditions"
@@ -65,6 +66,11 @@ import {
 import { loadOrganizationApprovalLevels } from "@/lib/server/order-approval-levels"
 import { loadRoleChangeReadiness } from "@/lib/server/role-change-readiness"
 import { loadApprovalLevelContext, writeApprovalLevelInTx } from "@/lib/server/user-approval-level"
+import {
+  type NewBranchWarehouseCoverage,
+  attachNewBranchToCityWarehouses,
+  loadWarehouseServedCities,
+} from "@/lib/server/warehouse-city-coverage"
 
 /**
  * The department sign-up: the join form of an organization with order approval
@@ -467,6 +473,13 @@ export type DepartmentJoinReview = {
   approvalLevelsApply: boolean
   /** Head Office's own organization's domain, which an edited address must be at. */
   emailDomain: string | null
+  /**
+   * The listed cities an Apricart warehouse serves, with how many do; a city
+   * missing here is served by none. Counts only, never who
+   * (plans/OF-JOIN-new-branch-city-warehouse.md). Empty unless a pending
+   * request has a branch to create.
+   */
+  warehouseCities: Array<{ city: string; warehouseCount: number }>
   decisionReason: string | null
   decidedAt: Date | null
   createdAt: Date
@@ -612,6 +625,9 @@ export async function loadDepartmentJoinReview(input: {
     })),
     approvalLevelsApply: usesDepartmentSignup(settings),
     emailDomain: settings.emailDomain,
+    warehouseCities: stored.status === "pending" && newBranchCount > 0
+      ? await loadWarehouseServedCities(db, PAKISTAN_CITIES.map((city) => city.name))
+      : [],
     decisionReason: stored.decisionReason,
     decidedAt: stored.decidedAt,
     createdAt: stored.createdAt,
@@ -740,6 +756,8 @@ export type DepartmentJoinDecisionOutcome =
       organizationName: string
       branchIds: number[]
       createdBranchIds: number[]
+      /** Per created branch: how many warehouses reach it, by city or by the row written. */
+      warehouseCoverage: NewBranchWarehouseCoverage[]
       approvers: Array<{
         level: number
         email: string
@@ -850,10 +868,10 @@ async function activeBranchInOrganization(tx: TransactionExecutor, branchId: num
 async function resolveRequestBranches(
   context: DecisionContext,
   requestBranches: StoredRequestBranch[],
-): Promise<{ branchByRequestBranch: Map<number, number>; createdBranchIds: number[] }> {
+): Promise<{ branchByRequestBranch: Map<number, number>; createdBranches: Array<{ id: number; city: string }> }> {
   const { tx, input } = context
   const branchByRequestBranch = new Map<number, number>()
-  const createdBranchIds: number[] = []
+  const createdBranches: Array<{ id: number; city: string }> = []
 
   for (const row of requestBranches) {
     if (row.existingBranchId !== null) {
@@ -866,11 +884,15 @@ async function resolveRequestBranches(
 
     const choice = input.newBranches?.find((entry) => entry.requestBranchId === row.id)
     if (!choice) throw new JoinDecisionAbort(400, `Give the details of the new branch for CRC ${row.costCenterId}.`)
-    const resolvedId = choice.mapToBranchId === undefined
-      ? await createRequestedBranch(context, row, choice)
-      : await activeBranchInOrganization(tx, choice.mapToBranchId, input.organizationId)
+    let resolvedId: number | null
+    if (choice.mapToBranchId === undefined) {
+      const created = await createRequestedBranch(context, row, choice)
+      createdBranches.push(created)
+      resolvedId = created.id
+    } else {
+      resolvedId = await activeBranchInOrganization(tx, choice.mapToBranchId, input.organizationId)
+    }
     if (resolvedId === null) throw new JoinDecisionAbort(400, "That branch is not available in your organization.")
-    if (choice.mapToBranchId === undefined) createdBranchIds.push(resolvedId)
 
     branchByRequestBranch.set(row.id, resolvedId)
     await tx
@@ -878,22 +900,29 @@ async function resolveRequestBranches(
       .set({ resolvedBranchId: resolvedId })
       .where(eq(organizationJoinRequestBranches.id, row.id))
   }
-  return { branchByRequestBranch, createdBranchIds }
+  return { branchByRequestBranch, createdBranches }
 }
 
 async function createRequestedBranch(
   context: DecisionContext,
   row: StoredRequestBranch,
   choice: NonNullable<DepartmentJoinDecisionInput["newBranches"]>[number],
-): Promise<number> {
+): Promise<{ id: number; city: string }> {
   if (!choice.name || !choice.province || !choice.city || !choice.address) {
     throw new JoinDecisionAbort(400, `Give the name, province, city and address of the new branch for CRC ${row.costCenterId}.`)
+  }
+  // The decision schema holds both rules already; held here too so no caller
+  // can create a branch in an unlisted city or under the wrong province.
+  const city = findPakistanCity(choice.city)
+  if (!city) throw new JoinDecisionAbort(400, `Choose the city of the new branch for CRC ${row.costCenterId} from the list.`)
+  if (choice.province !== city.province) {
+    throw new JoinDecisionAbort(400, `New branch: ${city.name} is in ${city.province}.`)
   }
   const creation = await createBranchInTx(context.tx, {
     organizationId: context.input.organizationId,
     name: choice.name,
-    province: choice.province,
-    city: choice.city,
+    province: city.province,
+    city: city.name,
     address: choice.address,
     costCenterId: row.costCenterId,
     status: "active",
@@ -903,7 +932,7 @@ async function createRequestedBranch(
     throw new JoinDecisionAbort(409, `A branch named "${choice.name}" already exists in your organization.`)
   }
   if (creation.kind !== "created") throw new JoinDecisionAbort(404, "Organization not found")
-  return creation.item.id
+  return { id: creation.item.id, city: city.name }
 }
 
 /**
@@ -1204,7 +1233,8 @@ async function approveDepartmentRequest(
   const organization = await loadApprovalLevelContext(tx, input.organizationId, true)
   if (!organization) throw new JoinDecisionAbort(404, "Organization not found")
 
-  const { branchByRequestBranch, createdBranchIds } = await resolveRequestBranches(context, children.requestBranches)
+  const { branchByRequestBranch, createdBranches } = await resolveRequestBranches(context, children.requestBranches)
+  const createdBranchIds = createdBranches.map((branch) => branch.id)
   const branchIds = [...new Set(branchByRequestBranch.values())]
   const role = initiatorRoleForBranchCount(branchIds.length)
   const roleId = roleIdByName.get(role)
@@ -1226,6 +1256,19 @@ async function approveDepartmentRequest(
     }),
   }))
   assertReviewedResolutions(input, plans)
+
+  // A branch created here is served at once by the warehouses that serve its
+  // city (plans/OF-JOIN-new-branch-city-warehouse.md).
+  const warehouseCoverage: NewBranchWarehouseCoverage[] = []
+  for (const branch of createdBranches) {
+    warehouseCoverage.push(await attachNewBranchToCityWarehouses(tx, {
+      branchId: branch.id,
+      organizationId: input.organizationId,
+      city: branch.city,
+      actor: input.actor,
+      joinRequestId: stored.id,
+    }))
+  }
 
   const initiator = await createInitiator(context, stored, role, roleId, branchIds)
   await writeRequestAddresses(context, children.addresses, branchByRequestBranch, branchIds, initiator.id)
@@ -1294,6 +1337,7 @@ async function approveDepartmentRequest(
     role,
     branchIds,
     createdBranchIds,
+    warehouseCoverage,
     approvers: approverSummary,
     convertedUserIds,
     newApproverCredentials,
@@ -1359,6 +1403,7 @@ export async function decideDepartmentJoinRequest(
           role: stored.requestedRole as InitiatorRole,
           branchIds: [],
           createdBranchIds: [],
+          warehouseCoverage: [],
           approvers: [],
           convertedUserIds: [],
           newApproverCredentials: [],
