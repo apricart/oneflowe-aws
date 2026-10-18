@@ -49,6 +49,8 @@ const getDeliveryStatusColor = (status?: string | null) => {
 }
 
 import { Badge } from "@/components/ui/badge"
+import { PaymentStatusBadge } from "@/components/orders/payment-status-badge"
+import { shouldShowOrderPaymentStatus } from "@/lib/order-status-display"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
@@ -538,6 +540,7 @@ export function DrillDownSheet({
                                                         <div>
                                                             <div className="flex items-center gap-2">
                                                                 <span className="text-sm font-semibold text-slate-900 dark:text-white tracking-tight">{item.tid}</span>
+                                                                <PaymentStatusBadge order={item} className="h-5 rounded-md px-1.5 py-0" />
                                                             </div>
                                                             <div className="flex flex-wrap items-center gap-3 mt-1 text-[10px] font-medium text-slate-400 uppercase tracking-widest opacity-80">
                                                                 <span className="flex items-center gap-1 normal-case tracking-normal" title="Date and time this order was placed">
@@ -720,6 +723,15 @@ export function DrillDownSheet({
                                                                                 {item.status}
                                                                             </Badge>
                                                                         </div>
+                                                                        {shouldShowOrderPaymentStatus(item) && (
+                                                                            <div className="flex items-center justify-between">
+                                                                                <div className="flex items-center gap-2">
+                                                                                    <div className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                                                                                    <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Payment Status</span>
+                                                                                </div>
+                                                                                <PaymentStatusBadge order={item} />
+                                                                            </div>
+                                                                        )}
                                                                     </div>
                                                                 </div>
                                                             </div>

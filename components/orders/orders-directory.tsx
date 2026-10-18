@@ -185,7 +185,7 @@ function GroupOrderBadge() {
   return (
     <Badge
       variant="outline"
-      title="Raised for this branch through the Group Order Portal"
+      title="Raised for this branch through the Group Order Initiator Portal"
       className="mt-1 rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-indigo-600 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-400"
     >
       Group Order

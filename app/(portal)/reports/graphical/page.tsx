@@ -224,7 +224,7 @@ function GraphicalReportsContent() {
             </h1>
             <p className="max-w-md text-xs text-slate-500 dark:text-slate-400">
               This report compares budgets and procurement across branches, and is limited to Super Admin, Head
-              Office and Group User accounts.
+              Office and Group Financial Approver accounts.
             </p>
           </CardContent>
         </Card>

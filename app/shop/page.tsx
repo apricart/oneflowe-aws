@@ -38,6 +38,7 @@ import {
 } from "@/lib/shop-category-filter"
 import { RefundManagement } from "@/components/refund-management"
 import { getOrderDerivedStatus } from "@/lib/order-status"
+import { PaymentStatusBadge } from "@/components/orders/payment-status-badge"
 import { formatCountLabel } from "@/lib/count-label"
 import { formatAddonValidUntil } from "@/lib/budget-addon-expiry"
 import { MAX_PO_NUMBER_LENGTH, PO_NUMBER_HINT, normalizePoNumberInput } from "@/lib/purchase-order"
@@ -1206,7 +1207,7 @@ export default function OrderPortalPage() {
           >
             <ShoppingBag className="h-6 w-6 text-white animate-pulse" />
           </div>
-          <p className="text-sm font-medium text-foreground/80">Loading Order Portal…</p>
+          <p className="text-sm font-medium text-foreground/80">Loading Order Initiator Portal…</p>
         </div>
       </div>
     )
@@ -1256,7 +1257,7 @@ export default function OrderPortalPage() {
             </div>
             <div>
               <h1 className="text-2xl font-semibold tracking-tight text-slate-900 dark:text-white">
-                Order Portal
+                Order Initiator Portal
               </h1>
               <div className="text-xs text-muted-foreground space-y-0.5">
                 <p>Welcome, <span >{userName}</span></p>
@@ -1701,6 +1702,7 @@ export default function OrderPortalPage() {
                                 <StatusIcon className="h-3 w-3 mr-1" />
                                 {getOrderDerivedStatus(order).label}
                               </Badge>
+                              <PaymentStatusBadge order={order} />
                               {['FULFILLED', 'PARTIAL', 'PARTIALLY_FULFILLED'].includes(order.status?.toUpperCase()) && Number(order.refundAmountCents || 0) > 0 && (
                                 <Badge variant="outline" className="px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400">
                                   Partial Refund
@@ -1718,7 +1720,7 @@ export default function OrderPortalPage() {
                               {order.placedByGroupPortal && (
                                 <Badge
                                   variant="outline"
-                                  title="Raised for this branch through the Group Order Portal"
+                                  title="Raised for this branch through the Group Order Initiator Portal"
                                   className="px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider rounded-lg border border-indigo-300 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400"
                                 >
                                   Group Order
@@ -2724,6 +2726,7 @@ export default function OrderPortalPage() {
                     <Badge variant="outline" className="w-fit">
                       {getOrderDerivedStatus(selectedOrder).label}
                     </Badge>
+                    <PaymentStatusBadge order={selectedOrder} />
                     {['FULFILLED', 'PARTIAL', 'PARTIALLY_FULFILLED'].includes(selectedOrder.status?.toUpperCase()) && Number(selectedOrder.refundAmountCents || 0) > 0 && (
                       <Badge variant="outline" className="px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400">
                         Partial Refund

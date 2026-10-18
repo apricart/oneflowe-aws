@@ -166,7 +166,7 @@ describe("activeFilterChips", () => {
       "search",
     ])
     expect(chips.find((chip) => chip.key === "operation")?.label).toContain("Deleted")
-    expect(chips.find((chip) => chip.key === "role")?.label).toBe("Role: Order Portal")
+    expect(chips.find((chip) => chip.key === "role")?.label).toBe("Role: Order Initiator")
   })
 
   it("ignores a blank search", () => {

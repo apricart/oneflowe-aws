@@ -18,6 +18,7 @@ import { BranchOrderEditSheet } from "@/components/group-portal/branch-order-edi
 import { CancelGroupOrderDialog, type GroupCancelTarget } from "@/components/group-portal/cancel-group-order-dialog"
 import { isCancellableGroupOrderStatus } from "@/lib/group-order-cancel"
 import { ResubmitOrderDialog } from "@/components/orders/order-correction"
+import { PaymentStatusBadge } from "@/components/orders/payment-status-badge"
 import { isAwaitingCorrection } from "@/lib/order-correction"
 
 import { GroupRefundDialog } from "./group-refund-dialog"
@@ -213,7 +214,7 @@ export function GroupOrderHistory() {
                   </p>
                 )}
                 <div className="overflow-x-auto">
-                  <table className="w-full min-w-[32rem] text-sm">
+                  <table className="w-full min-w-[38rem] text-sm">
                     <thead>
                       <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500 dark:border-slate-800 dark:text-slate-400">
                         <th scope="col" className="pb-2 font-medium">Branch</th>
@@ -221,6 +222,7 @@ export function GroupOrderHistory() {
                         <th scope="col" className="pb-2 text-right font-medium">Items</th>
                         <th scope="col" className="pb-2 text-right font-medium">Total</th>
                         <th scope="col" className="pb-2 text-right font-medium">Status</th>
+                        <th scope="col" className="pb-2 text-right font-medium">Payment</th>
                         <th scope="col" className="pb-2 text-right font-medium">Invoice</th>
                       </tr>
                     </thead>
@@ -305,6 +307,12 @@ export function GroupOrderHistory() {
                                 </span>
                               </span>
                             )}
+                          </td>
+                          <td className="py-2 text-right">
+                            <PaymentStatusBadge
+                              order={order}
+                              fallback={<span className="text-slate-300 dark:text-slate-600">—</span>}
+                            />
                           </td>
                           {/* Renders only once the order is approved; the
                               invoice endpoints re-check the same rule. */}

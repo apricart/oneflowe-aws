@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test"
 
 import { openFromSidebar } from "./support/admin-ui"
-import { signIn, testDatabaseUrl } from "./support/session"
+import { closeRoleRenameNoticeWhenShown, signIn, testDatabaseUrl } from "./support/session"
 import { destroyTenant, queryTestDb, seedTenant, tenantNames, type Tenant } from "./support/tenant"
 
 /**
@@ -87,7 +87,7 @@ test.describe.serial("joining an organization", () => {
       await page.getByLabel(/^Username/).fill(applicantUsername)
       await page.getByLabel(/^Password/).fill(APPLICANT_PASSWORD)
       await page.getByLabel(/^Confirm password/).fill(APPLICANT_PASSWORD)
-      await page.getByRole("button", { name: "Order Portal User", exact: true }).click()
+      await page.getByRole("button", { name: "Order Initiator", exact: true }).click()
       await page.getByLabel(/^Branch/).selectOption({ label: tenant.branches.front.name })
       await page.getByRole("button", { name: "Send request" }).click()
       await expect(page.getByRole("heading", { name: "Request sent" })).toBeVisible({ timeout: 150_000 })
@@ -126,6 +126,7 @@ test.describe.serial("joining an organization", () => {
     await page.goto("/login")
     await page.getByLabel("Username or Email").fill(applicantUsername)
     await page.getByLabel("Password", { exact: true }).fill(APPLICANT_PASSWORD)
+    await closeRoleRenameNoticeWhenShown(page)
     await page.getByRole("button", { name: /sign in/i }).click()
     await expect(page).toHaveURL(/\/shop/, { timeout: 150_000 })
   })

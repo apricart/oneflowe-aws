@@ -1589,7 +1589,7 @@ export async function POST(req: NextRequest) {
       userId,
       role,
       userEmail: session.user?.email,
-      requestedBy: String((session.user as any)?.fullName || "Order Portal user").trim().slice(0, 255),
+      requestedBy: String((session.user as any)?.fullName || "Order Initiator").trim().slice(0, 255),
       itemCount: items.length,
       invoiceSequenceReady,
     }))

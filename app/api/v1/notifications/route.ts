@@ -54,6 +54,8 @@ function notificationTitle(type: string) {
       return "Order returned for correction"
     case "ORDER_RESUBMITTED":
       return "Corrected order awaiting approval"
+    case "ORDER_DELIVERED":
+      return "Order delivered — please acknowledge"
     case "ORDER_RESUBMITTED_BY_COLLEAGUE":
       return "Order resubmitted by a colleague"
     case "ORDER_CANCELLED_BY_COLLEAGUE":
@@ -80,6 +82,7 @@ function notificationSeverity(type: string): "info" | "warning" | "critical" {
     case "ORDER_REJECTED":
     case "ORDER_RETURNED":
     case "ORDER_RESUBMITTED":
+    case "ORDER_DELIVERED":
     case "REFUND_REQUESTED":
     case "SUPPORT_THREAD_OPENED":
     case "SUPPORT_MESSAGE_RECEIVED":
@@ -131,6 +134,9 @@ function notificationCta(
       return requesterOrdersCta(role)
     case "ORDER_APPROVED_ADMIN":
       return reviewOrderCta(orderId, role === "SUPER_ADMIN")
+    case "ORDER_DELIVERED":
+      return requesterOrdersCta(role)
+        ?? (orderId ? { label: "Acknowledge delivery", href: `/orders/${orderId}` } : undefined)
     case "REFUND_REQUESTED":
       return { label: "Review refund", href: "/refunds" }
     default:

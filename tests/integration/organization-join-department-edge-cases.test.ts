@@ -741,7 +741,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
       try {
         const { item } = await review(stored.id)
         expect(item.approvers[1].resolution.kind).toBe("blocked")
-        expect(item.approvers[1].resolution.reason).toMatch(/created as a Branch Admin/)
+        expect(item.approvers[1].resolution.reason).toMatch(/created as a Financial Approver/)
         const response = await patch(stored.id, { decision: "approve", expectedResolutions: expectedFrom(item) })
         expect(response.status).toBe(409)
         expect(await accountsAt(body.email)).toHaveLength(0)
@@ -959,7 +959,9 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
   /* ── Head Office's edit at its limits ─────────────────────────────────── */
 
   describe("editing", () => {
-    it("stores a typed CRC naming exactly one branch as that branch, and a shared one as a CRC", async () => {
+    // plans/OF-JOIN-crc-match-at-review.md: an edit no longer folds a typed CRC
+    // into the branch carrying it; the review names the match instead.
+    it("keeps every typed CRC as a CRC, and the review names the one exactly one branch carries", async () => {
       const ownCrc = `IT-OWN-${unique()}`.toUpperCase()
       const ownBranchId = await newBranch({ name: `Own CRC ${ownCrc}`, costCenterId: ownCrc })
       const stored = await submitAccepted(signup())
@@ -968,11 +970,14 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
       expect(response.status, JSON.stringify(await response.clone().json())).toBe(200)
 
       const rows = await db.select().from(organizationJoinRequestBranches).where(eq(organizationJoinRequestBranches.requestId, stored.id))
-      expect(rows.map((row) => [row.existingBranchId, row.costCenterId]).sort()).toEqual([[null, sharedCrc], [ownBranchId, null]].sort())
+      expect(rows.map((row) => [row.existingBranchId, row.costCenterId]).sort()).toEqual([[null, sharedCrc], [null, ownCrc]].sort())
       const row = await requestRow(stored.id)
       expect(row.requestedRole).toBe("GROUP_ORDER_PORTAL")
       expect(row.requestedBranchId).toBeNull()
-      expect(row.requestedBranchIds).toEqual([ownBranchId])
+      expect(row.requestedBranchIds).toEqual([])
+
+      const matches = Object.fromEntries((await review(stored.id)).item.branches.map((entry: any) => [entry.costCenterId, entry.crcMatch]))
+      expect(matches).toEqual({ [ownCrc]: { branchId: ownBranchId, name: `Own CRC ${ownCrc}` }, [sharedCrc]: null })
     })
 
     it("turns a several-branch request into a one-branch request and back", async () => {

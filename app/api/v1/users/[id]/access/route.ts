@@ -239,7 +239,7 @@ function resolveAccessValues(input: any, target: any, targetRole: SystemRole, ac
     return { message: "You cannot assign this role", status: 403 } as const
   }
   if (input.budgetAllocationEnabled !== undefined && nextRole !== "GROUP_USER") {
-    return { message: "Budget allocation access applies only to Group Users", status: 400 } as const
+    return { message: "Budget allocation access applies only to Group Financial Approvers", status: 400 } as const
   }
   return {
     nextRole,

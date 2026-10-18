@@ -13,9 +13,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { securelySignOut } from "@/lib/session-coordination"
+import { ORDER_PORTAL_NAME, renamedRoleName } from "@/lib/role-display-names"
 
 function displayRole(role: string | null | undefined): string {
-  if (!role) return "Order Portal"
+  if (!role) return ORDER_PORTAL_NAME
+  const renamed = renamedRoleName(role)
+  if (renamed) return renamed
   return role.toLowerCase().replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 

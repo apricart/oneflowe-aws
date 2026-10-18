@@ -52,7 +52,7 @@ async function POST(req: NextRequest) {
     // Get user scope with proper role and organization/branch info
     const scope = await getRequestScope()
     if (scope?.role !== "BRANCH_ADMIN") {
-      return error("Not a branch admin", 403)
+      return error("Not a financial approver", 403)
     }
 
     const rateLimit = await withRateLimit("sensitive", scope.userId)
@@ -113,7 +113,7 @@ async function GET(req: NextRequest) {
     // Get user scope with proper role and organization/branch info
     const scope = await getRequestScope()
     if (scope?.role !== "BRANCH_ADMIN") {
-      return error("Not a branch admin", 403)
+      return error("Not a financial approver", 403)
     }
 
     const rateLimit = await withRateLimit("sensitive", scope.userId)
@@ -168,7 +168,7 @@ async function PUT(req: NextRequest) {
     // Get user scope with proper role and organization/branch info
     const scope = await getRequestScope()
     if (scope?.role !== "BRANCH_ADMIN") {
-      return error("Not a branch admin", 403)
+      return error("Not a financial approver", 403)
     }
 
     const rateLimit = await withRateLimit("sensitive", scope.userId)
@@ -242,7 +242,7 @@ async function DELETE(req: NextRequest) {
     // Get user scope with proper role and organization/branch info
     const scope = await getRequestScope()
     if (scope?.role !== "BRANCH_ADMIN") {
-      return error("Not a branch admin", 403)
+      return error("Not a financial approver", 403)
     }
 
     const userBranchId = scope.branchId

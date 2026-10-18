@@ -9,6 +9,7 @@ import {
   type ActivitySeverity,
 } from "@/lib/activity-log"
 import { compareCodeUnits } from "@/lib/code-unit-order"
+import { ROLE_DISPLAY_NAMES } from "@/lib/role-display-names"
 
 /**
  * Presentation rules for the activity screen, kept out of the components so
@@ -118,10 +119,10 @@ export const OPERATION_LABEL: Readonly<Record<ActivityOperation, string>> = {
 export const ACTOR_ROLE_LABEL: Readonly<Record<ActivityActorRole, string>> = {
   SUPER_ADMIN: "Super Admin",
   HEAD_OFFICE: "Head Office",
-  GROUP_USER: "Group User",
-  BRANCH_ADMIN: "Branch Admin",
-  GROUP_ORDER_PORTAL: "Group Order Portal",
-  ORDER_PORTAL: "Order Portal",
+  GROUP_USER: ROLE_DISPLAY_NAMES.GROUP_USER,
+  BRANCH_ADMIN: ROLE_DISPLAY_NAMES.BRANCH_ADMIN,
+  GROUP_ORDER_PORTAL: ROLE_DISPLAY_NAMES.GROUP_ORDER_PORTAL,
+  ORDER_PORTAL: ROLE_DISPLAY_NAMES.ORDER_PORTAL,
   VIEWER: "Viewer",
   ORDER_DESK: "Order Desk",
   APRICART_EXECUTIVE: "Apricart Executive",

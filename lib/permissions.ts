@@ -2,6 +2,8 @@
  * Comprehensive Permission System for Super Admin Control
  */
 
+import { ROLE_DISPLAY_NAMES } from "@/lib/role-display-names"
+
 export enum PermissionCategory {
   SYSTEM = "System Administration",
   ORGANIZATION = "Organization Management",
@@ -570,7 +572,7 @@ export const ROLE_TEMPLATES = {
     ],
   },
   BRANCH_ADMIN: {
-    name: "Branch Admin",
+    name: ROLE_DISPLAY_NAMES.BRANCH_ADMIN,
     description: "Branch-level operations and management",
     permissions: [
       Permission.INVENTORY_CREATE,
@@ -595,7 +597,7 @@ export const ROLE_TEMPLATES = {
     ],
   },
   GROUP_USER: {
-    name: "Group User",
+    name: ROLE_DISPLAY_NAMES.GROUP_USER,
     description: "Approves and manages orders on behalf of multiple branches",
     permissions: [
       Permission.INVENTORY_VIEW,
@@ -614,7 +616,7 @@ export const ROLE_TEMPLATES = {
     ],
   },
   GROUP_ORDER_PORTAL: {
-    name: "Group Order Portal User",
+    name: ROLE_DISPLAY_NAMES.GROUP_ORDER_PORTAL,
     description: "Places and manages orders on behalf of multiple branches",
     permissions: [
       Permission.INVENTORY_VIEW,
@@ -664,7 +666,7 @@ export const ROLE_TEMPLATES = {
     ],
   },
   ORDER_PORTAL: {
-    name: "Order Portal User",
+    name: ROLE_DISPLAY_NAMES.ORDER_PORTAL,
     description: "Restricted access for placing orders only",
     permissions: [
       Permission.INVENTORY_VIEW,

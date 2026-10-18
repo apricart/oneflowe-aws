@@ -1,11 +1,12 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { type ReactNode, useEffect, useMemo, useState } from "react"
 
 import useSWR from "swr"
 import { AlertTriangle, Loader2, Pencil } from "lucide-react"
 
 import { DepartmentJoinEditForm } from "@/components/join/department-join-edit-form"
+import { PakistanCityCombobox } from "@/components/join/pakistan-city-combobox"
 import type { JoinOption } from "@/components/join/join-scope-picker"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -32,6 +33,8 @@ import {
   newBranchDraftErrors,
 } from "@/lib/join-department-signup"
 import { type ApprovalLevelBand, approvalLevelBandText } from "@/lib/order-approval-levels"
+import { findPakistanCity } from "@/lib/pakistan-cities"
+import { ROLE_DISPLAY_NAMES } from "@/lib/role-display-names"
 
 /**
  * Head Office reviewing a department sign-up
@@ -72,6 +75,8 @@ type Review = {
     name: string | null
     costCenterId: string | null
     requestedName: string | null
+    /** An existing branch already carrying this CRC; Head Office must choose it or a new branch. */
+    crcMatch?: { branchId: number; name: string } | null
   }>
   addresses: Array<{ requestAddressId: number; address: string; branchId: number | null }>
   approvers: Array<{
@@ -86,10 +91,25 @@ type Review = {
   }>
   approvalLevelsApply: boolean
   emailDomain: string | null
+  /** Listed cities an Apricart warehouse serves, and how many; absent from older responses. */
+  warehouseCities?: Array<{ city: string; warehouseCount: number }>
   decisionReason: string | null
 }
 
+/**
+ * `mapToBranchId`: a branch id to use instead, `CREATE_NEW_BRANCH` to create
+ * one, or `UNDECIDED` while a CRC another branch carries awaits Head Office's
+ * choice (plans/OF-JOIN-crc-match-at-review.md).
+ */
 type NewBranchDraft = { mapToBranchId: string } & Record<NewBranchField, string>
+
+const CREATE_NEW_BRANCH = ""
+const UNDECIDED = "undecided"
+
+/** The branch a draft maps its CRC onto, or null when it creates one or has not chosen. */
+function mappedBranchIdOf(draft: NewBranchDraft): number | null {
+  return draft.mapToBranchId === CREATE_NEW_BRANCH || draft.mapToBranchId === UNDECIDED ? null : Number(draft.mapToBranchId)
+}
 
 const NEW_BRANCH_FIELD_LABELS: Record<NewBranchField, string> = {
   name: "Branch name",
@@ -98,12 +118,51 @@ const NEW_BRANCH_FIELD_LABELS: Record<NewBranchField, string> = {
   address: "Branch address",
 }
 
+/** The city before its province, which is filled in from it. */
+const NEW_BRANCH_FIELD_ORDER: readonly NewBranchField[] = ["name", "city", "province", "address"]
+
+/**
+ * The draft's errors, without a blank province while the city is missing too:
+ * the province comes from the city, so the city is the one thing to fix.
+ */
+function draftErrors(draft: NewBranchDraft): Partial<Record<NewBranchField, string>> {
+  const errors = newBranchDraftErrors(draft)
+  if (errors.city && !draft.province.trim()) delete errors.province
+  return errors
+}
+
+/**
+ * What approving means for deliveries from the new branch's city
+ * (plans/OF-JOIN-new-branch-city-warehouse.md). Counts only: Head Office is
+ * never told which Apricart account serves it.
+ */
+function WarehouseCoverageNote({ city, served }: Readonly<{ city: string; served: Review["warehouseCities"] }>) {
+  const listed = findPakistanCity(city)
+  if (!listed || served === undefined) return null
+  const count = served.find((entry) => entry.city === listed.name)?.warehouseCount ?? 0
+  if (count > 0) {
+    return (
+      <p className="text-xs text-emerald-800 sm:col-span-2">
+        {listed.name} is served by {count === 1 ? "an Apricart warehouse" : `${count} Apricart warehouses`}. Approving
+        adds this branch to {count === 1 ? "its" : "their"} deliveries.
+      </p>
+    )
+  }
+  return (
+    <p className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900 sm:col-span-2">
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+      No Apricart warehouse serves {listed.name} yet. This branch&apos;s orders will not reach a warehouse until
+      Apricart assigns one.
+    </p>
+  )
+}
+
 const ROLE_LABELS = {
-  ORDER_PORTAL: "Order Portal User (one branch)",
-  GROUP_ORDER_PORTAL: "Group Order Portal User (several branches)",
+  ORDER_PORTAL: `${ROLE_DISPLAY_NAMES.ORDER_PORTAL} (one branch)`,
+  GROUP_ORDER_PORTAL: `${ROLE_DISPLAY_NAMES.GROUP_ORDER_PORTAL} (several branches)`,
 } as const
 
-const CONVERTED_NOTE = "They become a Group User instead of a Branch Admin, keep their own branch, and are signed out."
+const CONVERTED_NOTE = "They become a Group Financial Approver instead of a Financial Approver, keep their own branch, and are signed out."
 
 /**
  * What approving does with one approver. `branchCount` is the count after
@@ -121,8 +180,8 @@ function resolutionText(
   switch (resolution.kind) {
     case "create":
       return newApproverRole(branchCount) === "BRANCH_ADMIN"
-        ? `No account yet: a Branch Admin of ${onlyBranch} is created with Level ${level}, and a temporary password is emailed.`
-        : `No account yet: a Group User is created with Level ${level} and these branches, and a temporary password is emailed.`
+        ? `No account yet: a Financial Approver of ${onlyBranch} is created with Level ${level}, and a temporary password is emailed.`
+        : `No account yet: a Group Financial Approver is created with Level ${level} and these branches, and a temporary password is emailed.`
     case "assign":
       return resolution.becomesGroupUser
         ? `${who}: is given Level ${level} and these branches. ${CONVERTED_NOTE}`
@@ -239,28 +298,35 @@ export function DepartmentJoinReviewDialog({
   const branchLabel = (row: Review["branches"][number]) =>
     row.name ?? row.requestedName ?? `New branch for CRC ${row.costCenterId}`
   // A new branch starts from the name the applicant gave it, never from its CRC.
-  const draftFor = (requestBranchId: number, requestedName: string | null): NewBranchDraft =>
-    newBranches[requestBranchId] ?? {
-      mapToBranchId: "",
-      name: requestedName ?? "",
+  // A CRC another branch already carries starts undecided: neither choice is
+  // made for Head Office.
+  const draftFor = (row: Review["branches"][number]): NewBranchDraft =>
+    newBranches[row.requestBranchId] ?? {
+      mapToBranchId: row.crcMatch ? UNDECIDED : CREATE_NEW_BRANCH,
+      name: row.requestedName ?? "",
       province: "",
       city: "",
       address: review?.addresses[0]?.address ?? "",
     }
-  const updateDraft = (requestBranchId: number, requestedName: string | null, patch: Partial<NewBranchDraft>) =>
-    setNewBranches((previous) => ({ ...previous, [requestBranchId]: { ...draftFor(requestBranchId, requestedName), ...patch } }))
-  /** The new branches Head Office still has to complete; mapping a CRC onto an existing branch needs no details. */
+  const updateDraft = (row: Review["branches"][number], patch: Partial<NewBranchDraft>) =>
+    setNewBranches((previous) => ({ ...previous, [row.requestBranchId]: { ...draftFor(row), ...patch } }))
+  /**
+   * The new branches Head Office still has to settle: a CRC another branch
+   * carries needs a choice, and a branch to create needs its details. Mapping
+   * a CRC onto an existing branch needs no details.
+   */
   const incompleteNewBranches = (review?.branches ?? []).flatMap((row) => {
     if (row.kind !== "new" || row.branchId !== null) return []
-    const draft = draftFor(row.requestBranchId, row.requestedName)
-    if (draft.mapToBranchId) return []
-    const errors = newBranchDraftErrors(draft)
-    return Object.keys(errors).length > 0 ? [{ row, errors }] : []
+    const draft = draftFor(row)
+    if (draft.mapToBranchId === UNDECIDED) return [{ row, errors: {} as Partial<Record<NewBranchField, string>>, undecided: true }]
+    if (draft.mapToBranchId !== CREATE_NEW_BRANCH) return []
+    const errors = draftErrors(draft)
+    return Object.keys(errors).length > 0 ? [{ row, errors, undecided: false }] : []
   })
   // The count the approval will see once each CRC's choice here is applied.
   const mappedBranchIds = Object.fromEntries(Object.entries(newBranches).map(([requestBranchId, draft]) => [
     Number(requestBranchId),
-    draft.mapToBranchId ? Number(draft.mapToBranchId) : null,
+    mappedBranchIdOf(draft),
   ]))
   const reviewedBranchCount = review?.branches.length ?? 0
   const finalBranchCount = review ? branchCountAfterReview(review.branches, mappedBranchIds) : 0
@@ -278,9 +344,13 @@ export function DepartmentJoinReviewDialog({
     if (!review) return
     if (decision === "approve" && incompleteNewBranches.length > 0) {
       // Presentation only: the decision schema refuses the same fields.
-      const [{ row, errors }] = incompleteNewBranches
-      const fields = NEW_BRANCH_FIELDS.filter((field) => errors[field]).map((field) => NEW_BRANCH_FIELD_LABELS[field].toLowerCase())
+      const [{ row, errors, undecided }] = incompleteNewBranches
       setShowBranchErrors(true)
+      if (undecided && row.crcMatch) {
+        setFailure(`CRC ${row.costCenterId} already belongs to ${row.crcMatch.name}. Choose whether to use ${row.crcMatch.name} or create a new branch before approving.`)
+        return
+      }
+      const fields = NEW_BRANCH_FIELDS.filter((field) => errors[field]).map((field) => NEW_BRANCH_FIELD_LABELS[field].toLowerCase())
       setFailure(`Complete the new branch for CRC ${row.costCenterId} before approving: ${fields.join(", ")}.`)
       return
     }
@@ -296,9 +366,10 @@ export function DepartmentJoinReviewDialog({
             newBranches: review.branches
               .filter((row) => row.kind === "new" && row.branchId === null)
               .map((row) => {
-                const draft = draftFor(row.requestBranchId, row.requestedName)
-                return draft.mapToBranchId
-                  ? { requestBranchId: row.requestBranchId, mapToBranchId: Number(draft.mapToBranchId) }
+                const draft = draftFor(row)
+                const mapToBranchId = mappedBranchIdOf(draft)
+                return mapToBranchId !== null
+                  ? { requestBranchId: row.requestBranchId, mapToBranchId }
                   : {
                       requestBranchId: row.requestBranchId,
                       name: draft.name.trim(),
@@ -398,42 +469,82 @@ export function DepartmentJoinReviewDialog({
               <h3 className="text-sm font-semibold text-slate-900">Branches (CRC)</h3>
               <ul className="space-y-2">
                 {review.branches.map((row) => {
-                  const draft = draftFor(row.requestBranchId, row.requestedName)
+                  const draft = draftFor(row)
                   const isNew = row.kind === "new" && row.branchId === null
+                  const match = isNew ? row.crcMatch ?? null : null
+                  const undecided = draft.mapToBranchId === UNDECIDED
+                  const crcMatchNoteId = `review-branch-${row.requestBranchId}-crc-match`
                   return (
                     <li key={row.requestBranchId} className="rounded-md border border-slate-200 p-3 text-sm">
                       <div className="flex items-center gap-2">
                         <span className="font-medium">{branchLabel(row)}</span>
                         {row.kind === "new" && <Badge variant="outline">CRC {row.costCenterId}</Badge>}
                       </div>
+                      {pending && match && (
+                        <p id={crcMatchNoteId} className="mt-2 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+                          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                          <span>
+                            CRC {row.costCenterId} already belongs to <strong>{match.name}</strong>. The applicant asked
+                            for a new branch{row.requestedName ? ` named "${row.requestedName}"` : ""}. Use {match.name},
+                            or create a new branch.
+                          </span>
+                        </p>
+                      )}
                       {pending && isNew && (
                         <div className="mt-2 grid gap-2 sm:grid-cols-2">
                           <select
                             aria-label={`Map CRC ${row.costCenterId} to an existing branch`}
                             value={draft.mapToBranchId}
-                            onChange={(event) => updateDraft(row.requestBranchId, row.requestedName, { mapToBranchId: event.target.value })}
+                            onChange={(event) => updateDraft(row, { mapToBranchId: event.target.value })}
+                            aria-invalid={showBranchErrors && undecided}
+                            aria-describedby={match ? crcMatchNoteId : undefined}
                             className="h-9 rounded-md border border-slate-300 px-2 text-sm sm:col-span-2"
                           >
-                            <option value="">Create a new branch</option>
-                            {organizationBranches.map((branch) => <option key={branch.id} value={branch.id}>Use existing: {branch.name}</option>)}
+                            {match && <option value={UNDECIDED} disabled>Choose: use {match.name} or create a new branch</option>}
+                            {match && <option value={match.branchId}>Use existing: {match.name} (has CRC {row.costCenterId})</option>}
+                            <option value={CREATE_NEW_BRANCH}>Create a new branch</option>
+                            {organizationBranches
+                              .filter((branch) => branch.id !== match?.branchId)
+                              .map((branch) => <option key={branch.id} value={branch.id}>Use existing: {branch.name}</option>)}
                           </select>
-                          {!draft.mapToBranchId && NEW_BRANCH_FIELDS.map((field) => {
+                          {draft.mapToBranchId === CREATE_NEW_BRANCH && NEW_BRANCH_FIELD_ORDER.map((field) => {
                             const fieldError = branchErrorsFor(row.requestBranchId)[field]
                             const errorId = `review-branch-${row.requestBranchId}-${field}-error`
-                            return (
-                              <div key={field} className="space-y-1">
+                            let control: ReactNode
+                            if (field === "city") {
+                              control = (
+                                <PakistanCityCombobox
+                                  value={draft.city}
+                                  onSelect={(city) => updateDraft(row, { city: city.name, province: city.province })}
+                                  invalid={Boolean(fieldError)}
+                                  describedBy={fieldError ? errorId : undefined}
+                                />
+                              )
+                            } else {
+                              control = (
                                 <Input
                                   aria-label={NEW_BRANCH_FIELD_LABELS[field]}
-                                  placeholder={NEW_BRANCH_FIELD_LABELS[field]}
+                                  placeholder={field === "province" ? "Filled in from the city" : NEW_BRANCH_FIELD_LABELS[field]}
                                   value={draft[field]}
-                                  onChange={(event) => updateDraft(row.requestBranchId, row.requestedName, { [field]: event.target.value })}
+                                  // The province is the city's own; it follows the city chosen.
+                                  readOnly={field === "province"}
+                                  className={field === "province" ? "bg-slate-50" : undefined}
+                                  onChange={(event) => updateDraft(row, { [field]: event.target.value })}
                                   aria-invalid={Boolean(fieldError)}
                                   aria-describedby={fieldError ? errorId : undefined}
                                 />
+                              )
+                            }
+                            return (
+                              <div key={field} className="space-y-1">
+                                {control}
                                 {fieldError && <p id={errorId} className="text-xs font-medium text-red-600">{fieldError}</p>}
                               </div>
                             )
                           })}
+                          {draft.mapToBranchId === CREATE_NEW_BRANCH && draft.city && (
+                            <WarehouseCoverageNote city={draft.city} served={review.warehouseCities} />
+                          )}
                         </div>
                       )}
                     </li>
@@ -475,7 +586,7 @@ export function DepartmentJoinReviewDialog({
                 <p className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
                   With your branch choices this person has {finalBranchCount} branch{finalBranchCount === 1 ? "" : "es"}, not {reviewedBranchCount}.
-                  Approver roles follow the final branches: one branch makes a Branch Admin, more make a Group User.
+                  Approver roles follow the final branches: one branch makes a Financial Approver, more make a Group Financial Approver.
                 </p>
               )}
               {!review.approvalLevelsApply && (

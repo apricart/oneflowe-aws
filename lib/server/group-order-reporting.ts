@@ -46,6 +46,7 @@ export type GroupOrderReportChild = {
   branchCostCenterId: string | null
   status: string
   fulfillmentStatus: string
+  paymentStatus: string
   totalCents: number
   refundCents: number
   itemCount: number
@@ -397,6 +398,7 @@ export async function listGroupOrderReport({
       branchCostCenterId: branches.costCenterId,
       status: orders.status,
       fulfillmentStatus: orders.fulfillmentStatus,
+      paymentStatus: orders.paymentStatus,
       totalCents: orders.totalCents,
       refundCents: refundCentsExpression,
       createdAt: orders.createdAt,
@@ -426,6 +428,7 @@ export async function listGroupOrderReport({
       branchCostCenterId: row.branchCostCenterId ?? null,
       status: row.status,
       fulfillmentStatus: row.fulfillmentStatus,
+      paymentStatus: row.paymentStatus,
       totalCents: row.totalCents,
       refundCents: Number(row.refundCents ?? 0),
       itemCount: row.itemCount,

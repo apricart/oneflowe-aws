@@ -147,6 +147,40 @@ describe("branch reach", () => {
     expect(migration).not.toMatch(/"warehouse_assignments"[\s\S]*"organization_id"/)
     expect(migration).toContain('"warehouse_assignments_user_branch_uq" ON "warehouse_assignments" USING btree ("user_id","branch_id")')
   })
+
+  /**
+   * Who may give a warehouse a branch. Super Admin on Warehouse Team, and a
+   * department sign-up's approval for the branch it has just created, to the
+   * warehouses already serving that city (plans/OF-JOIN-new-branch-city-warehouse.md).
+   * A new writer goes on this list deliberately, or not at all.
+   */
+  it("is written only by Warehouse Team and the join approval's city attachment", () => {
+    const writers: string[] = []
+    const walk = (current: string) => {
+      for (const entry of readdirSync(current)) {
+        if (entry === "node_modules" || entry === ".next") continue
+        const path = join(current, entry)
+        if (statSync(path).isDirectory()) walk(path)
+        else if (/\.tsx?$/.test(entry) && !/\.test\.tsx?$/.test(entry)
+          && /\.insert\(\s*warehouseAssignments\s*\)/.test(readFileSync(path, "utf8"))) {
+          writers.push(relative(process.cwd(), path).split("\\").join("/"))
+        }
+      }
+    }
+    for (const root of ["app", "lib", "scripts"]) walk(resolve(process.cwd(), root))
+    expect(writers.sort((a, b) => a.localeCompare(b))).toEqual([
+      "lib/server/warehouse-city-coverage.ts",
+      "lib/server/warehouse-team.ts",
+    ])
+
+    const attach = code("lib/server/warehouse-city-coverage.ts")
+    // Additive only, matched by the one city key, serialized against Super
+    // Admin's replacement, and audited as Super Admin's assignment is.
+    expect(attach).not.toMatch(/\.delete\(\s*warehouseAssignments\s*\)/)
+    expect(attach).toContain("branchCityKeySql(")
+    expect(attach).toContain('.for("share")')
+    expect(attach).toContain("action: WAREHOUSE_ASSIGNMENT_AUDIT_ACTION")
+  })
 })
 
 describe("request bodies", () => {

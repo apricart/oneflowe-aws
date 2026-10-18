@@ -5,6 +5,7 @@ import useSWR from "swr"
 import { Building2, ChevronRight } from "lucide-react"
 
 import { BranchOrderDetailSheet, type BranchOrder } from "@/components/group-portal/branch-order-detail-sheet"
+import { PaymentStatusBadge } from "@/components/orders/payment-status-badge"
 import { BranchOrderEditSheet } from "@/components/group-portal/branch-order-edit-sheet"
 import { ResubmitOrderDialog } from "@/components/orders/order-correction"
 import { isAwaitingCorrection } from "@/lib/order-correction"
@@ -202,6 +203,7 @@ function OrderRow({
               <Badge className={cn("rounded-lg px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider", statusStyle(order.status))}>
                 {isAwaitingCorrection(order) ? "Returned" : order.status}
               </Badge>
+              <PaymentStatusBadge order={order} className="text-[10px]" />
               {order.status.toUpperCase() === "APPROVED" && (
                 <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
                   {FULFILLMENT_STATUS_LABELS[progress]}

@@ -173,6 +173,7 @@ export type GroupOrderHistoryItem = {
     /** Set once refunded; decides whether a refunded row still offers its invoice. */
     statusAtRefund: string | null
     fulfillmentStatus: string
+    paymentStatus: string
     totalCents: number
     itemCount: number
     createdAt: string | null

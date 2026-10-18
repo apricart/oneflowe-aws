@@ -53,6 +53,34 @@ describe("order lifecycle notification security contracts", () => {
     expect(rejectBody).toContain("UPPER(${orders.status}) = 'PENDING'")
   })
 
+  it("asks the raiser and the approver to acknowledge a delivery, inside the delivering transaction", () => {
+    const service = source("lib/server/order-notifications.ts")
+    const progress = source("lib/server/order-fulfillment-progress.ts")
+    const delivered = service.slice(service.indexOf("export async function queueOrderDeliveredNotifications"))
+
+    const transaction = progress.indexOf("db.transaction")
+    const queued = progress.indexOf("queueOrderDeliveredNotifications(tx")
+    expect(queued).toBeGreaterThan(transaction)
+    expect(queued).toBeLessThan(progress.indexOf("transitionErrorOutcome(transitionError)"))
+    expect(progress.indexOf("attemptImmediateOrderEmailDelivery(deliveredEventKeys)"))
+      .toBeGreaterThan(progress.indexOf('if (updated === "conflict")'))
+
+    // Only an order still waiting for acknowledgement, never a desk order or
+    // one whose token was already handed over.
+    expect(delivered).toContain("isUnacknowledgedDelivery(order)")
+    expect(delivered).toContain("order.tokenHandoffAt")
+    expect(delivered).toContain('order.createdByRole === "ORDER_DESK"')
+    // The raiser and the person who approved it, each still in the tenant and
+    // reaching the branch.
+    expect(delivered).toContain("eq(users.id, order.createdByUserId)")
+    expect(delivered).toContain("eq(users.id, order.approvedByUserId)")
+    expect(delivered).toContain("creatorReachesOrderBranch(tx, creator, order.branchId)")
+    expect(delivered).toContain("approverReachesOrderBranch(tx, approver, order.branchId)")
+    // Re-checked at send time.
+    expect(service).toContain("recipient.orderApproverId === row.recipientUserId")
+    expect(service).toContain('template === "ORDER_DELIVERED" && recipient && !deliveredNoticeStillDue(recipient, row)')
+  })
+
   it("deduplicates both notification and email events at the database boundary", () => {
     const migration = source("drizzle/20260721120000_add_order_notification_outbox.sql")
     expect(migration).toContain('CREATE UNIQUE INDEX IF NOT EXISTS "notifications_event_key_uq"')

@@ -1,4 +1,5 @@
 import { safeFilenamePart } from "@/lib/security"
+import { ROLE_DISPLAY_NAMES } from "@/lib/role-display-names"
 
 export type OrganizationExportData = {
   id: number
@@ -93,8 +94,8 @@ const formatBudgetAllocation = (organization: OrganizationExportData) => {
 
 const formatOrderApproverRole = (value: unknown) => {
   if (value === "HEAD_OFFICE") return "Head Office"
-  if (value === "BRANCH_ADMIN") return "Branch Admin"
-  return "Branch Admin"
+  if (value === "BRANCH_ADMIN") return ROLE_DISPLAY_NAMES.BRANCH_ADMIN
+  return ROLE_DISPLAY_NAMES.BRANCH_ADMIN
 }
 
 /**

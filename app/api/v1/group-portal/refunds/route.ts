@@ -110,7 +110,7 @@ async function notifyAdminOperations(
     await sendGroupRefundRequestEmail({
       to: ADMIN_OPERATIONS_EMAIL,
       reference: submission.reference,
-      requestedBy: String(user?.email || "A group order portal user"),
+      requestedBy: String(user?.email || "A Group Order Initiator"),
       organizationId,
       totalAmountCents: submission.totalAmountCents,
       branches: submission.results

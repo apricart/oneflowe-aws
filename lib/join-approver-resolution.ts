@@ -116,7 +116,7 @@ export function newApproverRole(branchCount: number): NewApproverRole {
 }
 
 export const NEW_BRANCH_ADMIN_APPROVER_REFUSAL =
-  "A new approver for one branch is created as a Branch Admin, and in this organization a Branch Admin cannot hold an approval level (its approver role is Head Office). Name an existing Group User instead."
+  "A new approver for one branch is created as a Financial Approver, and in this organization a Financial Approver cannot hold an approval level (its approver role is Head Office). Name an existing Group Financial Approver instead."
 
 function resolveNewApprover(input: PlanInput): ApproverResolution {
   const role = newApproverRole(approverBranchCount(input))
@@ -139,7 +139,7 @@ export function branchAdminBecomesGroupUser(
 }
 
 export const BRANCH_ADMIN_ORDERS_IN_FLIGHT_REFUSAL =
-  "This Branch Admin would become a Group User to approve for all of this person's branches, but still has orders they raised that are pending or approved. A role cannot change until those orders are completed."
+  "This Financial Approver would become a Group Financial Approver to approve for all of this person's branches, but still has orders they raised that are pending or approved. A role cannot change until those orders are completed."
 
 /** Why an existing account cannot be this level's approver at all, or null. */
 function candidateRefusal(

@@ -1611,6 +1611,8 @@ export type DrillDownLine = {
   tid: string
   createdAt: string
   status: string
+  /** UNPAID / PAID — the order's, so every line of one order carries the same. */
+  paymentStatus: string
   branchId: number | null
   branchName: string
   requesterId: string | null
@@ -1685,6 +1687,7 @@ export async function loadDrillDownLines(
         tid: orders.tid,
         createdAt: orders.createdAt,
         status: orders.status,
+        paymentStatus: orders.paymentStatus,
         branchId: orders.branchId,
         branchName: sql<string>`COALESCE(${branches.name}, 'Unassigned')`,
         requesterId: orders.createdByUserId,
@@ -1753,6 +1756,7 @@ export async function loadDrillDownLines(
       tid: String(row.tid),
       createdAt: row.createdAt ? new Date(row.createdAt).toISOString() : "",
       status: String(row.status),
+      paymentStatus: String(row.paymentStatus),
       branchId: row.branchId ?? null,
       branchName: String(row.branchName),
       requesterId: row.requesterId ?? null,

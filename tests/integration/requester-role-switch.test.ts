@@ -430,7 +430,7 @@ describe.skipIf(!hasTestDatabase)("switching a user between the four branch and 
       })
 
       expect(status).toBe(400)
-      expect(payload.error).toContain("Group Users")
+      expect(payload.error).toContain("Group Financial Approvers")
       expect(await roleNameOf(userId)).toBe("ORDER_PORTAL")
     })
 

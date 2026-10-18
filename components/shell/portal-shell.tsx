@@ -7,6 +7,7 @@ import { AppContextProvider } from "@/components/context/app-context"
 import { OrgBranchProvider } from "@/components/context/org-branch-context"
 import { Toaster } from "@/components/ui/toaster"
 import { SessionGuard } from "@/components/shell/session-guard"
+import { RoleRenameNotice } from "@/components/shell/role-rename-notice"
 
 /**
  * The portal chrome — sidebar, topbar, and the providers the two depend on.
@@ -45,6 +46,7 @@ export function PortalShell({
             </div>
           </div>
           <Toaster />
+          <RoleRenameNotice />
         </SessionGuard>
       </OrgBranchProvider>
     </AppContextProvider>

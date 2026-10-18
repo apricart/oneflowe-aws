@@ -10,6 +10,7 @@ import {
   readTenantLedger,
   seedBudgetToggleE2E,
 } from "./support/budget-toggle-seed"
+import { closeRoleRenameNoticeWhenShown } from "./support/session"
 import { queryTestDb } from "./support/tenant"
 
 /**
@@ -35,6 +36,7 @@ async function signIn(page: Page, username: string): Promise<void> {
   await page.goto("/login")
   await page.getByLabel("Username or Email").fill(username)
   await page.getByLabel("Password", { exact: true }).fill(E2E_PASSWORD)
+  await closeRoleRenameNoticeWhenShown(page)
   await page.getByRole("button", { name: /sign in/i }).click()
   await page.waitForURL((url) => !url.pathname.startsWith("/login"), {
     waitUntil: "commit",

@@ -170,8 +170,8 @@ export async function sendJoinApproverNoticeEmail(payload: JoinApproverNoticeEma
             Orders at their branches in your level's range will come to you for approval.
           </p>${payload.becameGroupUser ? `
           <p style="font-size:15px;line-height:1.6;margin:0 0 16px;">
-            To approve for all of their branches, your account is now a Group User instead of a
-            Branch Admin, and you keep your own branch. You have been signed out; sign in again
+            To approve for all of their branches, your account is now a Group Financial Approver instead of a
+            Financial Approver, and you keep your own branch. You have been signed out; sign in again
             with your usual username and password.
           </p>` : ""}
           <p style="margin:24px 0;">
@@ -192,8 +192,8 @@ export async function sendJoinApproverNoticeEmail(payload: JoinApproverNoticeEma
         ...(payload.becameGroupUser
           ? [
               ``,
-              `To approve for all of their branches, your account is now a Group User instead of a`,
-              `Branch Admin, and you keep your own branch. You have been signed out; sign in again`,
+              `To approve for all of their branches, your account is now a Group Financial Approver instead of a`,
+              `Financial Approver, and you keep your own branch. You have been signed out; sign in again`,
               `with your usual username and password.`,
             ]
           : []),

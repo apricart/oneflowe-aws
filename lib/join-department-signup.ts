@@ -14,6 +14,7 @@
  */
 
 import { emailMatchesDomain } from "@/lib/organization-email-domain"
+import { findPakistanCity } from "@/lib/pakistan-cities"
 
 /** `organization_join_requests.form_version` of a department sign-up. */
 export const DEPARTMENT_SIGNUP_FORM_VERSION = 2
@@ -218,6 +219,26 @@ export function newBranchFieldError(field: NewBranchField, value: string): strin
   return null
 }
 
+export const UNLISTED_CITY_MESSAGE = "Choose the city from the list"
+
+/**
+ * Why a new branch's province cannot go with its city, or null. The city must
+ * be one of Pakistan's listed cities and the province its own
+ * (plans/OF-JOIN-new-branch-city-warehouse.md); a blank field is reported by
+ * the length rule instead.
+ */
+export function newBranchLocationError(
+  draft: Readonly<Pick<Record<NewBranchField, string>, "city" | "province">>,
+): Partial<Record<"city" | "province", string>> {
+  if (!draft.city.trim()) return {}
+  const city = findPakistanCity(draft.city)
+  if (!city) return { city: UNLISTED_CITY_MESSAGE }
+  if (draft.province.trim() && draft.province.trim() !== city.province) {
+    return { province: `${city.name} is in ${city.province}` }
+  }
+  return {}
+}
+
 /** Every field of a new branch that cannot be accepted, keyed by field; empty when all are fine. */
 export function newBranchDraftErrors(
   draft: Readonly<Record<NewBranchField, string>>,
@@ -227,5 +248,5 @@ export function newBranchDraftErrors(
     const problem = newBranchFieldError(field, draft[field])
     if (problem) errors[field] = problem
   }
-  return errors
+  return { ...newBranchLocationError(draft), ...errors }
 }

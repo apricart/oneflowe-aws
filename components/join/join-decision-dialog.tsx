@@ -227,7 +227,7 @@ export function JoinDecisionDialog({
                 Allow budget allocation
               </p>
               <p className="text-xs text-slate-600 dark:text-slate-400">
-                Lets this Group User allocate money to the branches assigned to them. Off unless you
+                Lets this Group Financial Approver allocate money to the branches assigned to them. Off unless you
                 turn it on — an applicant can never ask for it.
               </p>
             </div>

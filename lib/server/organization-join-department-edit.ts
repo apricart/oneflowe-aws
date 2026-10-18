@@ -35,7 +35,6 @@ import {
   type JoinFailure,
   loadDepartmentJoinSettings,
   loadRequestChildren,
-  matchCrcsToBranches,
 } from "@/lib/server/organization-join-department"
 
 /**
@@ -162,8 +161,6 @@ async function resolveEditedBranches(
   edited: DepartmentJoinUpdate["branches"],
 ): Promise<{ existingIds: number[]; newBranches: RequestedNewBranch[] }> {
   const pickedIds = [...new Set(edited.flatMap((entry) => ("branchId" in entry ? [entry.branchId] : [])))]
-  const typed = requestedNewBranches(edited)
-  const typedCrcs = typed.map((entry) => entry.crc)
 
   if (pickedIds.length > 0) {
     const found = await tx
@@ -179,12 +176,9 @@ async function resolveEditedBranches(
     }
   }
 
-  // As at submission: a CRC that belongs to exactly one active branch is that branch.
-  const matchedByCrc = await matchCrcsToBranches(tx, organizationId, typedCrcs)
-  return {
-    existingIds: [...new Set([...pickedIds, ...matchedByCrc.values()])],
-    newBranches: typed.filter((entry) => !matchedByCrc.has(entry.crc)),
-  }
+  // As at submission: a typed CRC stays a branch to create, even when an
+  // existing branch carries it; the review asks which (plans/OF-JOIN-crc-match-at-review.md).
+  return { existingIds: pickedIds, newBranches: requestedNewBranches(edited) }
 }
 
 async function writeBranchEdit(

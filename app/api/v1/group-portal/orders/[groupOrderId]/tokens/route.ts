@@ -87,7 +87,7 @@ export async function POST(
           to: ADMIN_OPERATIONS_EMAIL,
           reference: shareable.reference,
           groupName: shareable.groupName,
-          sharedBy: String(user?.email || "A group order portal user"),
+          sharedBy: String(user?.email || "A Group Order Initiator"),
           entries: shareable.entries
             .filter((entry) => unsentOrderIds.has(entry.orderId))
             .map((entry) => ({

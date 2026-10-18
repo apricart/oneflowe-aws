@@ -46,6 +46,7 @@ import {
   type ApprovalLevelBand,
   approvalLevelBands,
 } from "@/lib/order-approval-levels"
+import { PAKISTAN_CITIES, findPakistanCity } from "@/lib/pakistan-cities"
 import { generateRandomPassword, hashPassword } from "@/lib/password"
 import { organizationUsername } from "@/lib/username-prefix"
 import { totalBlockingOrders } from "@/lib/role-change-preconditions"
@@ -65,6 +66,11 @@ import {
 import { loadOrganizationApprovalLevels } from "@/lib/server/order-approval-levels"
 import { loadRoleChangeReadiness } from "@/lib/server/role-change-readiness"
 import { loadApprovalLevelContext, writeApprovalLevelInTx } from "@/lib/server/user-approval-level"
+import {
+  type NewBranchWarehouseCoverage,
+  attachNewBranchToCityWarehouses,
+  loadWarehouseServedCities,
+} from "@/lib/server/warehouse-city-coverage"
 
 /**
  * The department sign-up: the join form of an organization with order approval
@@ -150,8 +156,9 @@ export type DepartmentJoinSubmission = {
 
 /**
  * The typed CRCs that belong to exactly one active branch of the organization,
- * as that branch. A CRC shared by several branches stays a CRC, for Head Office
- * to map at review.
+ * as that branch. Read only for Head Office's review, which shows the match and
+ * asks whether to use that branch or create a new one; a request never stores
+ * a typed CRC as an existing branch (plans/OF-JOIN-crc-match-at-review.md).
  */
 export async function matchCrcsToBranches(
   executor: Executor,
@@ -179,37 +186,34 @@ export async function matchCrcsToBranches(
  * the answer to a public caller must not reveal whether a colleague has an
  * account. Head Office sees who they are at review.
  *
- * A new branch is stored with the name the applicant gave it and its CRC. A
- * typed CRC that belongs to exactly one active branch of the organization is
- * stored as that branch instead (the name is then not needed); the CRC itself
- * never leaves the server, and the caller's answer is the same either way.
+ * A new branch is stored with the name the applicant gave it and its CRC, even
+ * when an existing branch already carries that CRC: the applicant asked for a
+ * new branch, and folding it silently into another one lost the request
+ * (plans/OF-JOIN-crc-match-at-review.md). Head Office sees the match at review
+ * and chooses. No CRC of an existing branch is ever sent to the caller.
  */
 export async function createDepartmentJoinRequest(
   submission: DepartmentJoinSubmission,
 ): Promise<{ id: number } | JoinRequestFailure> {
   const { organizationId } = submission
 
-  const pickedIds = [...new Set(submission.branches.flatMap((entry) => ("branchId" in entry ? [entry.branchId] : [])))]
-  const typed = requestedNewBranches(submission.branches)
-  const typedCrcs = typed.map((entry) => entry.crc)
+  const existingIds = [...new Set(submission.branches.flatMap((entry) => ("branchId" in entry ? [entry.branchId] : [])))]
+  const newBranches = requestedNewBranches(submission.branches)
 
-  if (pickedIds.length > 0) {
+  if (existingIds.length > 0) {
     const found = await db
       .select({ id: branches.id })
       .from(branches)
       .where(and(
         eq(branches.organizationId, organizationId),
         eq(branches.status, "active"),
-        inArray(branches.id, pickedIds),
+        inArray(branches.id, existingIds),
       ))
-    if (found.length !== pickedIds.length) {
+    if (found.length !== existingIds.length) {
       return { kind: "scope", message: "A branch you chose is not available in this organization", status: 400 }
     }
   }
 
-  const matchedByCrc = await matchCrcsToBranches(db, organizationId, typedCrcs)
-  const existingIds = [...new Set([...pickedIds, ...matchedByCrc.values()])]
-  const newBranches = typed.filter((entry) => !matchedByCrc.has(entry.crc))
   const branchCount = existingIds.length + newBranches.length
   const role = initiatorRoleForBranchCount(branchCount)
 
@@ -444,6 +448,12 @@ export type DepartmentJoinReview = {
     costCenterId: string | null
     /** The name the applicant gave a branch to create; null when it gave none. */
     requestedName: string | null
+    /**
+     * A CRC still to resolve that exactly one active branch of this
+     * organization already carries: Head Office must choose between that
+     * branch and a new one. Null otherwise.
+     */
+    crcMatch: { branchId: number; name: string } | null
   }>
   addresses: Array<{ requestAddressId: number; address: string; branchId: number | null }>
   approvers: Array<{
@@ -463,6 +473,13 @@ export type DepartmentJoinReview = {
   approvalLevelsApply: boolean
   /** Head Office's own organization's domain, which an edited address must be at. */
   emailDomain: string | null
+  /**
+   * The listed cities an Apricart warehouse serves, with how many do; a city
+   * missing here is served by none. Counts only, never who
+   * (plans/OF-JOIN-new-branch-city-warehouse.md). Empty unless a pending
+   * request has a branch to create.
+   */
+  warehouseCities: Array<{ city: string; warehouseCount: number }>
   decisionReason: string | null
   decidedAt: Date | null
   createdAt: Date
@@ -507,8 +524,17 @@ export async function loadDepartmentJoinReview(input: {
   if (!settings) return null
   const children = await loadRequestChildren(db, stored.id)
 
-  const branchIds = children.requestBranches.flatMap((row) => [row.existingBranchId, row.resolvedBranchId])
-    .filter((id): id is number => id !== null)
+  const unresolvedCrcs = children.requestBranches.flatMap((row) => (
+    row.existingBranchId === null && row.resolvedBranchId === null && row.costCenterId !== null ? [row.costCenterId] : []
+  ))
+  const matchedByCrc = stored.status === "pending"
+    ? await matchCrcsToBranches(db, input.organizationId, unresolvedCrcs)
+    : new Map<string, number>()
+
+  const branchIds = [
+    ...children.requestBranches.flatMap((row) => [row.existingBranchId, row.resolvedBranchId]),
+    ...matchedByCrc.values(),
+  ].filter((id): id is number => id !== null)
   const branchNames = new Map<number, string>()
   if (branchIds.length > 0) {
     const rows = await db
@@ -562,6 +588,8 @@ export async function loadDepartmentJoinReview(input: {
     initiatorRole: initiatorRoleForBranchCount(children.requestBranches.length),
     branches: children.requestBranches.map((row) => {
       const branchId = row.existingBranchId ?? row.resolvedBranchId
+      const matchedId = branchId === null && row.costCenterId !== null ? matchedByCrc.get(row.costCenterId) : undefined
+      const matchedName = matchedId === undefined ? undefined : branchNames.get(matchedId)
       return {
         requestBranchId: row.id,
         kind: row.existingBranchId === null ? "new" as const : "existing" as const,
@@ -569,6 +597,7 @@ export async function loadDepartmentJoinReview(input: {
         name: branchId === null ? null : branchNames.get(branchId) ?? null,
         costCenterId: row.costCenterId,
         requestedName: row.requestedBranchName,
+        crcMatch: matchedId !== undefined && matchedName !== undefined ? { branchId: matchedId, name: matchedName } : null,
       }
     }),
     addresses: children.addresses.map((row) => ({
@@ -596,6 +625,9 @@ export async function loadDepartmentJoinReview(input: {
     })),
     approvalLevelsApply: usesDepartmentSignup(settings),
     emailDomain: settings.emailDomain,
+    warehouseCities: stored.status === "pending" && newBranchCount > 0
+      ? await loadWarehouseServedCities(db, PAKISTAN_CITIES.map((city) => city.name))
+      : [],
     decisionReason: stored.decisionReason,
     decidedAt: stored.decidedAt,
     createdAt: stored.createdAt,
@@ -724,6 +756,8 @@ export type DepartmentJoinDecisionOutcome =
       organizationName: string
       branchIds: number[]
       createdBranchIds: number[]
+      /** Per created branch: how many warehouses reach it, by city or by the row written. */
+      warehouseCoverage: NewBranchWarehouseCoverage[]
       approvers: Array<{
         level: number
         email: string
@@ -834,10 +868,10 @@ async function activeBranchInOrganization(tx: TransactionExecutor, branchId: num
 async function resolveRequestBranches(
   context: DecisionContext,
   requestBranches: StoredRequestBranch[],
-): Promise<{ branchByRequestBranch: Map<number, number>; createdBranchIds: number[] }> {
+): Promise<{ branchByRequestBranch: Map<number, number>; createdBranches: Array<{ id: number; city: string }> }> {
   const { tx, input } = context
   const branchByRequestBranch = new Map<number, number>()
-  const createdBranchIds: number[] = []
+  const createdBranches: Array<{ id: number; city: string }> = []
 
   for (const row of requestBranches) {
     if (row.existingBranchId !== null) {
@@ -850,11 +884,15 @@ async function resolveRequestBranches(
 
     const choice = input.newBranches?.find((entry) => entry.requestBranchId === row.id)
     if (!choice) throw new JoinDecisionAbort(400, `Give the details of the new branch for CRC ${row.costCenterId}.`)
-    const resolvedId = choice.mapToBranchId === undefined
-      ? await createRequestedBranch(context, row, choice)
-      : await activeBranchInOrganization(tx, choice.mapToBranchId, input.organizationId)
+    let resolvedId: number | null
+    if (choice.mapToBranchId === undefined) {
+      const created = await createRequestedBranch(context, row, choice)
+      createdBranches.push(created)
+      resolvedId = created.id
+    } else {
+      resolvedId = await activeBranchInOrganization(tx, choice.mapToBranchId, input.organizationId)
+    }
     if (resolvedId === null) throw new JoinDecisionAbort(400, "That branch is not available in your organization.")
-    if (choice.mapToBranchId === undefined) createdBranchIds.push(resolvedId)
 
     branchByRequestBranch.set(row.id, resolvedId)
     await tx
@@ -862,22 +900,29 @@ async function resolveRequestBranches(
       .set({ resolvedBranchId: resolvedId })
       .where(eq(organizationJoinRequestBranches.id, row.id))
   }
-  return { branchByRequestBranch, createdBranchIds }
+  return { branchByRequestBranch, createdBranches }
 }
 
 async function createRequestedBranch(
   context: DecisionContext,
   row: StoredRequestBranch,
   choice: NonNullable<DepartmentJoinDecisionInput["newBranches"]>[number],
-): Promise<number> {
+): Promise<{ id: number; city: string }> {
   if (!choice.name || !choice.province || !choice.city || !choice.address) {
     throw new JoinDecisionAbort(400, `Give the name, province, city and address of the new branch for CRC ${row.costCenterId}.`)
+  }
+  // The decision schema holds both rules already; held here too so no caller
+  // can create a branch in an unlisted city or under the wrong province.
+  const city = findPakistanCity(choice.city)
+  if (!city) throw new JoinDecisionAbort(400, `Choose the city of the new branch for CRC ${row.costCenterId} from the list.`)
+  if (choice.province !== city.province) {
+    throw new JoinDecisionAbort(400, `New branch: ${city.name} is in ${city.province}.`)
   }
   const creation = await createBranchInTx(context.tx, {
     organizationId: context.input.organizationId,
     name: choice.name,
-    province: choice.province,
-    city: choice.city,
+    province: city.province,
+    city: city.name,
     address: choice.address,
     costCenterId: row.costCenterId,
     status: "active",
@@ -887,7 +932,7 @@ async function createRequestedBranch(
     throw new JoinDecisionAbort(409, `A branch named "${choice.name}" already exists in your organization.`)
   }
   if (creation.kind !== "created") throw new JoinDecisionAbort(404, "Organization not found")
-  return creation.item.id
+  return { id: creation.item.id, city: city.name }
 }
 
 /**
@@ -1032,7 +1077,7 @@ async function createApprover(
   const { tx, input } = context
   const asBranchAdmin = role === "BRANCH_ADMIN"
   if (asBranchAdmin && branchIds.length !== 1) {
-    throw new JoinDecisionAbort(409, `Level ${approver.level}: a Branch Admin approver needs exactly one branch.`)
+    throw new JoinDecisionAbort(409, `Level ${approver.level}: a Financial Approver needs exactly one branch.`)
   }
   const username = await freeApproverUsername(approver.email, context)
   const name = deriveNameFromEmail(approver.email)
@@ -1188,7 +1233,8 @@ async function approveDepartmentRequest(
   const organization = await loadApprovalLevelContext(tx, input.organizationId, true)
   if (!organization) throw new JoinDecisionAbort(404, "Organization not found")
 
-  const { branchByRequestBranch, createdBranchIds } = await resolveRequestBranches(context, children.requestBranches)
+  const { branchByRequestBranch, createdBranches } = await resolveRequestBranches(context, children.requestBranches)
+  const createdBranchIds = createdBranches.map((branch) => branch.id)
   const branchIds = [...new Set(branchByRequestBranch.values())]
   const role = initiatorRoleForBranchCount(branchIds.length)
   const roleId = roleIdByName.get(role)
@@ -1210,6 +1256,19 @@ async function approveDepartmentRequest(
     }),
   }))
   assertReviewedResolutions(input, plans)
+
+  // A branch created here is served at once by the warehouses that serve its
+  // city (plans/OF-JOIN-new-branch-city-warehouse.md).
+  const warehouseCoverage: NewBranchWarehouseCoverage[] = []
+  for (const branch of createdBranches) {
+    warehouseCoverage.push(await attachNewBranchToCityWarehouses(tx, {
+      branchId: branch.id,
+      organizationId: input.organizationId,
+      city: branch.city,
+      actor: input.actor,
+      joinRequestId: stored.id,
+    }))
+  }
 
   const initiator = await createInitiator(context, stored, role, roleId, branchIds)
   await writeRequestAddresses(context, children.addresses, branchByRequestBranch, branchIds, initiator.id)
@@ -1278,6 +1337,7 @@ async function approveDepartmentRequest(
     role,
     branchIds,
     createdBranchIds,
+    warehouseCoverage,
     approvers: approverSummary,
     convertedUserIds,
     newApproverCredentials,
@@ -1343,6 +1403,7 @@ export async function decideDepartmentJoinRequest(
           role: stored.requestedRole as InitiatorRole,
           branchIds: [],
           createdBranchIds: [],
+          warehouseCoverage: [],
           approvers: [],
           convertedUserIds: [],
           newApproverCredentials: [],

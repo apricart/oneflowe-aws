@@ -8,6 +8,8 @@ vi.mock("next/navigation", async () => (await import("@/tests/support/ui-mocks")
 
 import { getSession, signIn } from "next-auth/react"
 
+import { isRoleRenameNoticeDue } from "@/lib/role-rename-notice"
+
 import LoginPage from "./page"
 
 /**
@@ -21,6 +23,7 @@ const originalLocation = window.location
 
 beforeEach(() => {
   resetUi(null)
+  sessionStorage.clear()
   installFetch([[/.*/, { message: "sent" }]])
   vi.mocked(signIn).mockReset()
   vi.mocked(getSession).mockReset()
@@ -57,6 +60,7 @@ describe("Login", () => {
     await submit()
     expect(await screen.findByText(message)).toBeTruthy()
     expect(replace).not.toHaveBeenCalled()
+    expect(isRoleRenameNoticeDue()).toBe(false)
   })
 
   it("tries the employee provider when the staff provider rejects the credentials", async () => {
@@ -80,6 +84,8 @@ describe("Login", () => {
     renderWithApp(<LoginPage />, { withAppContext: false })
     await submit()
     await waitFor(() => expect(replace).toHaveBeenCalledWith(path))
+    // The landing page shows the role-rename notice once for this sign-in.
+    expect(isRoleRenameNoticeDue()).toBe(true)
   })
 
   it("sends a flagged account to change its password first", async () => {

@@ -127,7 +127,7 @@ test.describe("changing a user's role", () => {
     // `disabled` attribute and no role could be changed at all. Gated on the
     // readiness request, so allow for a cold compile.
     await expect(editDialog(page).getByLabel("Role *")).toBeEnabled({ timeout: 150_000 })
-    await chooseRole(page, /^Order Portal User$/)
+    await chooseRole(page, /^Order Initiator$/)
     await expect(
       editDialog(page).getByText(/signs this user out of every device/i),
     ).toBeVisible()
@@ -148,7 +148,7 @@ test.describe("changing a user's role", () => {
     // saved until a group or branch is assigned.
     await signIn(page, SMOKE_USERNAMES.headOffice, /\/dashboard/)
     await openEditDialog(page, target)
-    await chooseRole(page, /^Group Order Portal User$/)
+    await chooseRole(page, /^Group Order Initiator$/)
 
     await expect(
       editDialog(page).getByText(/at least one group or one branch/i),
@@ -175,7 +175,7 @@ test.describe("changing a user's role", () => {
     await openEditDialog(page, target)
 
     await expect(editDialog(page).getByLabel("Role *")).toBeEnabled({ timeout: 150_000 })
-    await chooseRole(page, /^Branch Admin$/)
+    await chooseRole(page, /^Financial Approver$/)
     // A group-based user carries no branch, so moving to a pinned role has to
     // collect one. The dialog says so rather than letting the server refuse it.
     await expect(editDialog(page).getByText(/branch is required for this role/i))

@@ -35,6 +35,25 @@ describe("departmentJoinDecisionSchema — new branch details", () => {
     if (!parsed.success) expect(validationMessage(parsed.error)).toBe(message)
   })
 
+  // plans/OF-JOIN-new-branch-city-warehouse.md
+  it("refuses a city that is not on Pakistan's list", () => {
+    const parsed = departmentJoinDecisionSchema.safeParse(approval({ ...complete, city: "Atlantis" }))
+    expect(parsed.success).toBe(false)
+    if (!parsed.success) expect(validationMessage(parsed.error)).toBe("New branch: choose the city from the list")
+  })
+
+  it("refuses a province that is not the city's own", () => {
+    const parsed = departmentJoinDecisionSchema.safeParse(approval({ ...complete, province: "Punjab" }))
+    expect(parsed.success).toBe(false)
+    if (!parsed.success) expect(validationMessage(parsed.error)).toBe("New branch: Karachi is in Sindh")
+  })
+
+  it("stores the list's own spelling of the city", () => {
+    const parsed = departmentJoinDecisionSchema.safeParse(approval({ ...complete, city: "  karachi " }))
+    expect(parsed.success).toBe(true)
+    if (parsed.success) expect(parsed.data.newBranches?.[0].city).toBe("Karachi")
+  })
+
   it("refuses an over-long field with a message naming it", () => {
     const parsed = departmentJoinDecisionSchema.safeParse(approval({ ...complete, city: "x".repeat(101) }))
     expect(parsed.success).toBe(false)

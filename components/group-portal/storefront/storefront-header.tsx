@@ -104,7 +104,7 @@ export function StorefrontHeader({
 
           <div className="min-w-0">
             <h1 className="truncate text-xl font-semibold tracking-tight text-slate-900 dark:text-white sm:text-2xl">
-              Group Order Portal
+              Group Order Initiator Portal
             </h1>
             <div className="space-y-0.5 text-xs text-muted-foreground">
               <p className="truncate">Welcome, {userName}</p>

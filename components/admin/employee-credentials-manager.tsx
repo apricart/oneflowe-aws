@@ -200,7 +200,7 @@ export function EmployeeCredentialsManager() {
             <DialogTitle>{isCreate ? "Add Employee" : "Edit Employee"}</DialogTitle>
             <DialogDescription>
               {isCreate 
-                ? "Create a new employee credential for the Order Portal"
+                ? "Create a new employee credential for the Order Initiator Portal"
                 : "Update employee information"}
             </DialogDescription>
           </DialogHeader>
