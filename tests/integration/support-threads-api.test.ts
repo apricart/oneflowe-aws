@@ -1115,4 +1115,128 @@ describe.skipIf(!hasTestDatabase)("Support threads — routes against a real dat
       expect((await searchProducts()).body).toEqual({ items: [] })
     })
   })
+
+  // ── The Apricart Support agent ─────────────────────────────────────────
+
+  describe("the Apricart Support agent works the queue as Super Admin does", () => {
+    // plans/OF-SUPPORT-apricart-support-role.md. No organization, no branch;
+    // the Apricart side of every conversation.
+    let agent: Actor
+    let pngBytes: Buffer
+
+    beforeAll(async () => {
+      agent = { id: f.supportAgentId, role: "APRICART_SUPPORT", organizationId: null, branchId: null }
+      pngBytes = await sharp({ create: { width: 4, height: 4, channels: 3, background: "#00ff00" } }).png().toBuffer()
+    })
+
+    it("reads every tenant's queue, and narrows it to one", async () => {
+      signIn(agent)
+      const all = await listThreads({ pageSize: 50 })
+      expect(all.status).toBe(200)
+      for (const id of [seeded.ahmed, seeded.ho, seeded.foreign]) expect(ids(all.body)).toContain(id)
+
+      const tenantB = await listThreads({ organizationId: f.neighbourOrganizationId, pageSize: 50 })
+      expect(ids(tenantB.body)).toContain(seeded.foreign)
+      expect(ids(tenantB.body)).not.toContain(seeded.ahmed)
+
+      expect((await getStats()).status).toBe(200)
+    })
+
+    it("opens a thread in any tenant on the Apricart side, with triage rights", async () => {
+      signIn(agent)
+      const { status, body } = await getThread(seeded.foreign)
+      expect(status).toBe(200)
+      expect(body.viewer).toEqual(expect.objectContaining({ side: "APRICART", canManage: true, userId: f.supportAgentId }))
+    })
+
+    it("raises nothing — like Super Admin, it has no tenant to raise against", async () => {
+      signIn(agent)
+      expect((await createThread(plainQuery("Agent raising"))).status).toBe(403)
+    })
+
+    it("is mailed when a customer raises a query, and given no bell row it could never read", async () => {
+      const threadId = await raise(sana, "Sana asks the agent")
+      expect(await outboxFor(threadId, f.supportAgentId)).toEqual([
+        expect.objectContaining({ template: "SUPPORT_THREAD_OPENED", status: "PENDING" }),
+      ])
+      expect(await notificationsFor(threadId, f.supportAgentId)).toEqual([])
+      // Super Admin keeps both, exactly as before.
+      expect(await notificationsFor(threadId, f.superAdminId)).toEqual([
+        expect.objectContaining({ type: "SUPPORT_THREAD_OPENED" }),
+      ])
+    })
+
+    it("answers as Apricart, with a screenshot, and the raiser is told", async () => {
+      vi.mocked(getImage).mockImplementation(async () => ({
+        body: { transformToWebStream: () => new Blob([blobPart(pngBytes)]).stream() } as any,
+        contentType: "image/png",
+        contentLength: pngBytes.length,
+      }))
+      const threadId = await raise(sana, "Sana needs an answer")
+
+      signIn(agent)
+      const upload = await uploadAttachment(new File([blobPart(pngBytes)], "agent.png", { type: "image/png" }), threadId)
+      expect(upload.status, JSON.stringify(upload.body)).toBe(201)
+
+      const reply = await postMessage(threadId, { message: "Looking into it.", attachmentIds: [upload.body.id] })
+      expect(reply.status).toBe(201)
+      expect(reply.body.status).toBe("AWAITING_CUSTOMER")
+      expect((await threadRow(threadId)).firstResponseAt).not.toBeNull()
+
+      const last = (await getThread(threadId)).body.thread.messages.at(-1)
+      expect(last).toEqual(expect.objectContaining({
+        authorUserId: f.supportAgentId,
+        authorSide: "APRICART",
+        authorRole: "APRICART_SUPPORT",
+      }))
+      expect(await notificationsFor(threadId, f.sanaId)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "SUPPORT_MESSAGE_RECEIVED" }),
+      ]))
+
+      signIn(sana)
+      expect((await readAttachment(upload.body.id)).status).toBe(200)
+      signIn(foreignUser)
+      expect((await readAttachment(upload.body.id)).status).toBe(404)
+    })
+
+    it("triages: reprioritises, takes the thread, closes and reopens it", async () => {
+      const threadId = await raise(ahmed, "Ahmed's urgent query")
+
+      signIn(agent)
+      expect((await patchThread(threadId, { priority: "URGENT", assignedToUserId: f.supportAgentId })).status).toBe(200)
+      let row = await threadRow(threadId)
+      expect(row.priority).toBe("URGENT")
+      expect(row.assignedToUserId).toBe(f.supportAgentId)
+
+      expect((await patchThread(threadId, { status: "CLOSED" })).status).toBe(200)
+      row = await threadRow(threadId)
+      expect(row.closedByUserId).toBe(f.supportAgentId)
+      expect(await notificationsFor(threadId, f.ahmedId)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "SUPPORT_THREAD_CLOSED" }),
+      ]))
+
+      // Closed is closed for the customer; Apricart reopens it.
+      signIn(ahmed)
+      expect((await patchThread(threadId, { status: "OPEN" })).status).toBe(409)
+      signIn(agent)
+      expect((await patchThread(threadId, { status: "OPEN" })).status).toBe(200)
+      expect((await threadRow(threadId)).closedAt).toBeNull()
+    })
+
+    it("may be assigned a thread by Super Admin, and an agent may hand one to Super Admin", async () => {
+      const threadId = await raise(bilal, "Bilal's query for the agent")
+
+      signIn(apricart)
+      expect((await patchThread(threadId, { assignedToUserId: f.supportAgentId })).status).toBe(200)
+      expect((await threadRow(threadId)).assignedToUserId).toBe(f.supportAgentId)
+
+      signIn(agent)
+      expect((await patchThread(threadId, { assignedToUserId: f.superAdminId })).status).toBe(200)
+      expect((await threadRow(threadId)).assignedToUserId).toBe(f.superAdminId)
+
+      // A client user is still not an assignee.
+      expect((await patchThread(threadId, { assignedToUserId: f.headOfficeId })).status).toBe(200)
+      expect((await threadRow(threadId)).assignedToUserId).toBeNull()
+    })
+  })
 })

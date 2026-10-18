@@ -74,9 +74,10 @@ describe("every support route is a closed door", () => {
       const route = repositoryFile(path)
       // The one permitted read of `organizationId` from the request is Apricart
       // *narrowing* an already-unrestricted scope, in the list handler, and it
-      // is guarded by a SUPER_ADMIN comparison right there.
+      // is guarded by the Apricart-side check right there (`SUPPORT_APRICART_ROLES`,
+      // whose every member already reads every tenant).
       const body = route.replace(
-        /viewer\.role === "SUPER_ADMIN" && Number\.isInteger\(organizationId\)[\s\S]*?: undefined,/,
+        /isSupportApricartRole\(viewer\.role\) && Number\.isInteger\(organizationId\)[\s\S]*?: undefined,/,
         "",
       )
       expect(body, `${path} must not read organizationId from the request body`).not.toMatch(
@@ -103,9 +104,9 @@ describe("the thread rule is stated in exactly one place", () => {
   it("is never restated as an inline role comparison in a route", () => {
     for (const path of SUPPORT_ROUTES) {
       const route = repositoryFile(path)
-      // A route may name SUPER_ADMIN when Apricart *narrows* the list to one
-      // tenant. It must never decide who reads a thread that way — that is
-      // `lib/support-access.ts`.
+      // A route may ask whether the caller is on the Apricart side when Apricart
+      // *narrows* the list to one tenant. It must never decide who reads a
+      // thread by an inline role comparison — that is `lib/support-access.ts`.
       const readDecisions = route.match(/role === ["'](HEAD_OFFICE|BRANCH_ADMIN|ORDER_PORTAL)["']/g)
       expect(readDecisions, `${path} must not inline a visibility role check`).toBeNull()
     }

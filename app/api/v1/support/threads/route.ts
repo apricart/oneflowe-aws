@@ -7,6 +7,7 @@ import { logEvent } from "@/lib/global-logger"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { canRaiseSupportThread, isSupportParticipantRole } from "@/lib/support-access"
 import {
+  isSupportApricartRole,
   isSupportCategory,
   isSupportStatus,
   parseSupportOrderSearch,
@@ -69,7 +70,7 @@ export async function GET(req: NextRequest) {
       // For everybody else the parameter is ignored rather than honoured, and
       // their own scope still applies underneath.
       organizationId:
-        viewer.role === "SUPER_ADMIN" && Number.isInteger(organizationId) && organizationId > 0
+        isSupportApricartRole(viewer.role) && Number.isInteger(organizationId) && organizationId > 0
           ? organizationId
           : undefined,
       orderId: Number.isInteger(orderId) && orderId > 0 ? orderId : undefined,

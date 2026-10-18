@@ -7,6 +7,7 @@ import { users } from "@/db/schema"
 import { getRequestScope } from "@/lib/auth"
 import { db } from "@/lib/db"
 import type { SupportViewer } from "@/lib/support-access"
+import { isSupportApricartRole } from "@/lib/support-thread"
 import type { SupportAuthor } from "@/lib/server/support-threads"
 
 /**
@@ -124,7 +125,7 @@ export async function resolveSupportResponder(
   return {
     userId: scope.userId,
     role: scope.role,
-    fullName: row.fullName?.trim() || (scope.role === "SUPER_ADMIN" ? "The Apricart team" : "A colleague"),
+    fullName: row.fullName?.trim() || (isSupportApricartRole(scope.role) ? "The Apricart team" : "A colleague"),
     organizationId: scopeId(row.organizationId) ?? threadOrganizationId,
     branchId: scopeId(row.branchId),
   }

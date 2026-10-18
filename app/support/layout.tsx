@@ -2,8 +2,11 @@ import type { ReactNode } from "react"
 import { redirect } from "next/navigation"
 
 import { PortalShell } from "@/components/shell/portal-shell"
+import { RoleRenameNotice } from "@/components/shell/role-rename-notice"
 import { SessionGuard } from "@/components/shell/session-guard"
 import { SessionUnavailable } from "@/components/shell/session-unavailable"
+import { ApricartSupportHeader } from "@/components/support/apricart-support-header"
+import { isApricartSupportRole } from "@/lib/apricart-support-access"
 import { getProtectedPageSession } from "@/lib/server/page-session"
 import { supportUsesPortalShell } from "@/lib/support-shell"
 
@@ -40,6 +43,22 @@ export default async function SupportLayout({
     // No prefetch: support reads none of the portal's cached order, user or
     // branch lists.
     return <PortalShell preload={false}>{children}</PortalShell>
+  }
+
+  // Support is an Apricart Support agent's whole workspace. It does not mount
+  // the admin shell, whose sidebar, bell and context call endpoints the agent
+  // may not reach (`APRICART_SUPPORT_API_RULES`); it gets a bar with its
+  // profile menu instead, so it can sign out.
+  if (isApricartSupportRole(role)) {
+    return (
+      <SessionGuard>
+        <RoleRenameNotice />
+        <div className="min-h-svh bg-background dark:bg-slate-950">
+          <ApricartSupportHeader />
+          <main>{children}</main>
+        </div>
+      </SessionGuard>
+    )
   }
 
   // The root layout already provides the session, SWR and toast providers.

@@ -18,6 +18,13 @@ const APRICART: SupportViewer = {
   organizationId: null,
   branchId: null,
 }
+/** Apricart's support agent: no organization, the whole queue. */
+const SUPPORT_AGENT: SupportViewer = {
+  userId: "agent-1",
+  role: "APRICART_SUPPORT",
+  organizationId: null,
+  branchId: null,
+}
 const HEAD_OFFICE: SupportViewer = {
   userId: "ho-1",
   role: "HEAD_OFFICE",
@@ -77,6 +84,16 @@ const otherTenantThread = {
 describe("the visibility scope each role is narrowed to", () => {
   it("gives Apricart the whole platform", () => {
     expect(supportThreadVisibilityScope(APRICART)).toEqual({ kind: "all" })
+  })
+
+  it("gives the Apricart Support agent the whole platform, as Super Admin", () => {
+    expect(supportThreadVisibilityScope(SUPPORT_AGENT)).toEqual({ kind: "all" })
+  })
+
+  it("gives Apricart's other staff roles nothing", () => {
+    for (const role of ["ORDER_DESK", "APRICART_EXECUTIVE", "WAREHOUSE"]) {
+      expect(supportThreadVisibilityScope({ ...SUPPORT_AGENT, role }), role).toEqual({ kind: "none" })
+    }
   })
 
   it("gives Head Office its organization", () => {
@@ -246,9 +263,46 @@ describe("raising and triaging", () => {
 
   it("keeps triage with Apricart alone", () => {
     expect(canManageSupportThread("SUPER_ADMIN")).toBe(true)
-    for (const role of ["HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "GROUP_ORDER_PORTAL", "ORDER_PORTAL", null]) {
-      expect(canManageSupportThread(role)).toBe(false)
+    expect(canManageSupportThread("APRICART_SUPPORT")).toBe(true)
+    for (const role of [
+      "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "GROUP_ORDER_PORTAL", "ORDER_PORTAL", "VIEWER",
+      "ORDER_DESK", "APRICART_EXECUTIVE", "WAREHOUSE", null,
+    ]) {
+      expect(canManageSupportThread(role), String(role)).toBe(false)
     }
+  })
+})
+
+describe("the Apricart Support agent does on the queue what Super Admin does", () => {
+  const live = { ...otherTenantThread, status: "OPEN" as SupportStatus }
+  const closed = { ...otherTenantThread, status: "CLOSED" as SupportStatus }
+
+  it("reads every thread in every organization", () => {
+    for (const thread of [ownThread, peerThread, otherBranchThread, otherTenantThread]) {
+      expect(canReadSupportThread({ viewer: SUPPORT_AGENT, thread })).toBe(
+        canReadSupportThread({ viewer: APRICART, thread }),
+      )
+      expect(canReadSupportThread({ viewer: SUPPORT_AGENT, thread })).toBe(true)
+    }
+  })
+
+  it("replies to a live thread and, like everyone, not to a closed one", () => {
+    expect(canPostSupportMessage({ viewer: SUPPORT_AGENT, thread: live })).toBe(true)
+    expect(canPostSupportMessage({ viewer: SUPPORT_AGENT, thread: closed })).toBe(false)
+  })
+
+  it("may cite any order, as Super Admin may", () => {
+    const order = { organizationId: 11, branchId: 7, createdByUserId: "op-4" }
+    expect(canReferenceOrderInSupportThread({ viewer: SUPPORT_AGENT, order })).toBe(true)
+  })
+
+  it("is not widened by an organization on its session — Apricart's reach never depends on one", () => {
+    const pinned = { ...SUPPORT_AGENT, organizationId: 10, branchId: 5 }
+    expect(supportThreadVisibilityScope(pinned)).toEqual({ kind: "all" })
+  })
+
+  it("is refused without a user id, like every other viewer", () => {
+    expect(supportThreadVisibilityScope({ ...SUPPORT_AGENT, userId: "" })).toEqual({ kind: "none" })
   })
 })
 

@@ -27,6 +27,18 @@ describe("which side of the conversation a role speaks for", () => {
     expect(supportSideForRole("SUPER_ADMIN")).toBe("APRICART")
   })
 
+  it("puts the Apricart Support agent on the operator side too", () => {
+    expect(supportSideForRole("APRICART_SUPPORT")).toBe("APRICART")
+  })
+
+  it("keeps Apricart's other staff roles off the operator side", () => {
+    // They are Apricart's people, but not on the support queue: none of them
+    // may speak for Apricart in a client's conversation.
+    for (const role of ["ORDER_DESK", "APRICART_EXECUTIVE", "WAREHOUSE", "VIEWER"]) {
+      expect(supportSideForRole(role), role).toBe("CUSTOMER")
+    }
+  })
+
   it("puts every client role on the customer side", () => {
     for (const role of ["HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "GROUP_ORDER_PORTAL", "ORDER_PORTAL"]) {
       expect(supportSideForRole(role)).toBe("CUSTOMER")

@@ -1,6 +1,7 @@
 "use client"
 
 import { isReadOnlyRole } from "@/lib/viewer-access"
+import { isApricartSupportRole } from "@/lib/apricart-support-access"
 import { useState } from "react"
 import Link from "next/link"
 import { CheckCircle2, Download, Loader2, Lock, RotateCcw, Send } from "lucide-react"
@@ -159,12 +160,18 @@ export function SupportThreadView({ threadId }: Readonly<{ threadId: number }>) 
             </Detail>
             {thread.orderId ? (
               <Detail label="About order">
-                <Link
-                  href={`/invoices/${thread.orderId}`}
-                  className="font-semibold text-indigo-600 hover:underline dark:text-indigo-400"
-                >
-                  {thread.orderTid || `#${thread.orderId}`}
-                </Link>
+                {/* An Apricart Support agent reaches the support pages alone, so
+                    the invoice is named, not linked — the link would only bounce. */}
+                {isApricartSupportRole(sessionRole) ? (
+                  <span className="font-semibold">{thread.orderTid || `#${thread.orderId}`}</span>
+                ) : (
+                  <Link
+                    href={`/invoices/${thread.orderId}`}
+                    className="font-semibold text-indigo-600 hover:underline dark:text-indigo-400"
+                  >
+                    {thread.orderTid || `#${thread.orderId}`}
+                  </Link>
+                )}
               </Detail>
             ) : null}
             {thread.productCode ? (
