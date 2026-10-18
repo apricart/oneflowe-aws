@@ -22,6 +22,7 @@ import {
   type SupportViewer,
 } from "@/lib/support-access"
 import {
+  SUPPORT_APRICART_ROLES,
   nextSupportStatusAfterMessage,
   supportOrderSearchId,
   supportSideForRole,
@@ -1049,7 +1050,7 @@ function planStatusTransition(input: {
   }
 }
 
-/** An assignee must be an active Apricart administrator, or nobody. */
+/** An assignee must be an active Apricart account on the support queue, or nobody. */
 async function resolveAssignee(tx: any, userId: string | null): Promise<string | null> {
   if (!userId) return null
 
@@ -1059,7 +1060,7 @@ async function resolveAssignee(tx: any, userId: string | null): Promise<string |
     .innerJoin(roles, eq(roles.id, users.roleId))
     .where(and(
       eq(users.id, userId),
-      eq(roles.name, "SUPER_ADMIN"),
+      inArray(roles.name, [...SUPPORT_APRICART_ROLES]),
       eq(users.isActive, true),
       isNull(users.deletedAt),
     ))

@@ -131,8 +131,8 @@ export function SupportList() {
             ? "Queries and complaints raised by portal users"
             : "Your queries and complaints to the Apricart team"
         }
-        backHref={embedded ? undefined : home.href}
-        backLabel={embedded ? undefined : home.label}
+        backHref={embedded ? undefined : home?.href}
+        backLabel={embedded ? undefined : home?.label}
         actions={
           // The read-only Viewer reads its organization's threads and raises none.
           apricart || isReadOnlyRole(role) ? null : (

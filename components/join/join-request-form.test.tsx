@@ -25,7 +25,7 @@ function fillValidForm(emailLocalPart = "Ada.Lovelace") {
   fireEvent.change(screen.getByLabelText(/^Confirm password/), {
     target: { value: "Join-Flow-2026!x" },
   })
-  fireEvent.click(screen.getByRole("button", { name: "Order Portal User" }))
+  fireEvent.click(screen.getByRole("button", { name: "Order Initiator" }))
   fireEvent.change(screen.getByLabelText(/^Branch/), { target: { value: "7" } })
 }
 

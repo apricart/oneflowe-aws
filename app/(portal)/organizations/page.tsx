@@ -1474,7 +1474,7 @@ function CreateOrgDialog({
                 <div className="pr-4">
                   <Label htmlFor="create-order-approval-required">Require order approval</Label>
                   <p className="text-xs text-muted-foreground">
-                    Turn this off to approve new Order Portal and Group Order Portal orders immediately.
+                    Turn this off to approve new Order Initiator and Group Order Initiator orders immediately.
                   </p>
                 </div>
                 <Switch
@@ -1501,8 +1501,8 @@ function CreateOrgDialog({
                       orderApproverRole === "BRANCH_ADMIN" ? "border-indigo-500 ring-2 ring-indigo-100 dark:ring-indigo-900/40" : "hover:bg-muted/50",
                     )}
                   >
-                    <span className="text-sm font-semibold">Branch Admin</span>
-                    <span className="mt-1 block text-xs text-muted-foreground">Each Branch Admin decides orders for their own branch.</span>
+                    <span className="text-sm font-semibold">Financial Approver</span>
+                    <span className="mt-1 block text-xs text-muted-foreground">Each Financial Approver decides orders for their own branch.</span>
                   </button>
                   <button
                     type="button"
@@ -1580,9 +1580,9 @@ function CreateOrgDialog({
               <div className="space-y-3">
                 <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
                   <div>
-                    <Label htmlFor="create-hide-branch-admin-price-visibility">Hide Branch Admin prices</Label>
+                    <Label htmlFor="create-hide-branch-admin-price-visibility">Hide Financial Approver prices</Label>
                     <p className="text-xs text-muted-foreground">
-                      Hide product and order prices from branch admin users.
+                      Hide product and order prices from financial approver users.
                     </p>
                   </div>
                   <Switch
@@ -1594,9 +1594,9 @@ function CreateOrgDialog({
                 </div>
                 <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
                   <div>
-                    <Label htmlFor="create-hide-order-portal-price-visibility">Hide Order Portal prices</Label>
+                    <Label htmlFor="create-hide-order-portal-price-visibility">Hide Order Initiator prices</Label>
                     <p className="text-xs text-muted-foreground">
-                      Hide product and order prices from order portal users.
+                      Hide product and order prices from order initiator users.
                     </p>
                   </div>
                   <Switch
@@ -2187,8 +2187,8 @@ function EditOrgDialog({
                         orderApproverRole === "BRANCH_ADMIN" ? "border-indigo-500 ring-2 ring-indigo-100 dark:ring-indigo-900/40" : "hover:bg-muted/50",
                       )}
                     >
-                      <span className="text-sm font-semibold">Branch Admin</span>
-                      <span className="mt-1 block text-xs text-muted-foreground">Limited to the admin's own branch.</span>
+                      <span className="text-sm font-semibold">Financial Approver</span>
+                      <span className="mt-1 block text-xs text-muted-foreground">Limited to the approver's own branch.</span>
                     </button>
                     <button
                       type="button"
@@ -2268,9 +2268,9 @@ function EditOrgDialog({
                 />
                 <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
                   <div>
-                    <Label htmlFor="hide-branch-admin-price-visibility">Hide Branch Admin prices</Label>
+                    <Label htmlFor="hide-branch-admin-price-visibility">Hide Financial Approver prices</Label>
                     <p className="text-xs text-muted-foreground">
-                      Hide product and order prices from branch admin users.
+                      Hide product and order prices from financial approver users.
                     </p>
                   </div>
                   <Switch
@@ -2282,9 +2282,9 @@ function EditOrgDialog({
                 </div>
                 <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
                   <div>
-                    <Label htmlFor="hide-order-portal-price-visibility">Hide Order Portal prices</Label>
+                    <Label htmlFor="hide-order-portal-price-visibility">Hide Order Initiator prices</Label>
                     <p className="text-xs text-muted-foreground">
-                      Hide product and order prices from order portal users.
+                      Hide product and order prices from order initiator users.
                     </p>
                   </div>
                   <Switch

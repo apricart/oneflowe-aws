@@ -81,8 +81,8 @@ export type RequestBranchEditPlan = {
 
 /**
  * The request branch rows an edit keeps, drops and adds. `next` is the edited
- * list after typed CRCs were matched: existing branch ids, and the branches
- * still to be created. A row is kept when it names the same branch or the same
+ * list: existing branch ids picked by name, and the branches still to be
+ * created (a typed CRC is always one of these). A row is kept when it names the same branch or the same
  * CRC; a kept CRC row takes the edit's name when one is given, and keeps its
  * own when none is.
  */

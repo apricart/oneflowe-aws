@@ -717,7 +717,7 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Reado
               <div className="flex items-start justify-between gap-4">
                 <div className="space-y-1">
                   <p className="text-sm font-medium">Allow manual quantities</p>
-                  <p className="text-xs text-muted-foreground">When enabled, users on the order portal can freely type any quantity including decimals (e.g. 1.5 kg). Whole-unit products remain unchanged.</p>
+                  <p className="text-xs text-muted-foreground">When enabled, users on the Order Initiator Portal can freely type any quantity including decimals (e.g. 1.5 kg). Whole-unit products remain unchanged.</p>
                 </div>
                 <Switch
                   checked={productData.allowDecimalQuantity}

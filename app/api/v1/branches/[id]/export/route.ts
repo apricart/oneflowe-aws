@@ -386,7 +386,7 @@ export async function GET(
       { Field: "Group / Cluster", Value: branch.groupName || "Ungrouped" },
       { Field: "Group Description", Value: branch.groupDescription || "-" },
       { Field: "Group Status", Value: branch.groupId ? toStatus(branch.groupStatus) : "-" },
-      { Field: "Branch Administrator", Value: getUserName(branch.adminUserId) },
+      { Field: "Financial Approver", Value: getUserName(branch.adminUserId) },
       { Field: "Baseline Budget (PKR)", Value: toMoney(branch.baselineBudgetCents) },
       { Field: "Users", Value: branchUsers.length },
       { Field: "Portal Accounts", Value: portalAccounts.length },

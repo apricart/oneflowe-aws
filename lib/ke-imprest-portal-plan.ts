@@ -85,7 +85,7 @@ function repeatedAccounts(appearances: Appearance[], common: AccountIdentity,
   options: ImprestPlanOptions): ImprestAccount[] {
   const adminAppearances = appearances.filter(({ role }) => role === "BRANCH_ADMIN")
   assert(adminAppearances.length > 0,
-    `${common.email} repeats as an Order Portal user; confirm its intended group roles`)
+    `${common.email} repeats as an Order Initiator; confirm its intended group roles`)
   const adminBranches = [...new Set(adminAppearances.map(({ row }) => row.branchName))]
   const adminRows = [...new Set(adminAppearances.map(({ row }) => row.rowNumber))]
   const firstContact = options.groupContact === "first" ? adminAppearances[0].row : null

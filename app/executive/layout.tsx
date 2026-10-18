@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation"
 
 import { SessionGuard } from "@/components/shell/session-guard"
+import { RoleRenameNotice } from "@/components/shell/role-rename-notice"
 import { SessionUnavailable } from "@/components/shell/session-unavailable"
 import { isApricartExecutiveRole } from "@/lib/apricart-executive-access"
 import { getProtectedPageSession } from "@/lib/server/page-session"
@@ -36,5 +37,10 @@ export default async function ExecutiveLayout({
   const role = (pageSession.session.user as { role?: string }).role
   if (!isApricartExecutiveRole(role)) redirect("/dashboard")
 
-  return <SessionGuard>{children}</SessionGuard>
+  return (
+    <SessionGuard>
+      <RoleRenameNotice />
+      {children}
+    </SessionGuard>
+  )
 }

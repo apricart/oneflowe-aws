@@ -15,7 +15,7 @@ import {
   SMOKE_PRODUCT_CODE,
   SMOKE_USERNAMES,
 } from "./support/role-smoke-seed"
-import { markDelivered } from "./support/session"
+import { closeRoleRenameNoticeWhenShown, markDelivered } from "./support/session"
 
 type JsonBody = Record<string, any>
 
@@ -38,6 +38,7 @@ async function signIn(page: Page, username: string, landingPath: RegExp): Promis
   await page.goto("/login")
   await page.getByLabel("Username or Email").fill(username)
   await page.getByLabel("Password", { exact: true }).fill(E2E_PASSWORD)
+  await closeRoleRenameNoticeWhenShown(page)
   await page.getByRole("button", { name: /sign in/i }).click()
   // A cold Next development server may reload while compiling the first role
   // workspace. Poll the browser's current URL instead of attaching to one
@@ -120,30 +121,30 @@ test.describe("role deployment smoke checks", () => {
       probe: "/api/v1/branches?limit=1",
     },
     {
-      name: "Branch Admin",
+      name: "Financial Approver",
       username: SMOKE_USERNAMES.branchAdmin,
       role: "BRANCH_ADMIN",
       landing: /\/dashboard$/,
       probe: "/api/v1/orders?limit=1",
     },
     {
-      name: "Order Portal",
+      name: "Order Initiator",
       username: SMOKE_USERNAMES.orderPortal,
       role: "ORDER_PORTAL",
       landing: /\/shop$/,
       probe: `/api/v1/branch/inventory?limit=10&search=${SMOKE_PRODUCT_CODE}`,
-      heading: "Order Portal",
+      heading: "Order Initiator Portal",
     },
     {
-      name: "Group Order Portal",
+      name: "Group Order Initiator",
       username: SMOKE_USERNAMES.groupOrderPortal,
       role: "GROUP_ORDER_PORTAL",
       landing: /\/group-portal$/,
       probe: "/api/v1/group-portal/groups",
-      heading: "Group Order Portal",
+      heading: "Group Order Initiator Portal",
     },
     {
-      name: "Group User",
+      name: "Group Financial Approver",
       username: SMOKE_USERNAMES.groupUser,
       role: "GROUP_USER",
       landing: /\/dashboard$/,
@@ -155,7 +156,7 @@ test.describe("role deployment smoke checks", () => {
       role: "EMPLOYEE",
       landing: /\/shop$/,
       probe: `/api/v1/branch/inventory?limit=10&search=${SMOKE_PRODUCT_CODE}`,
-      heading: "Order Portal",
+      heading: "Order Initiator Portal",
     },
   ] as const
 

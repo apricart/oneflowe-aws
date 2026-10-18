@@ -815,7 +815,7 @@ async function createBranchOrder(context: BranchCreationContext): Promise<Branch
         const queued = initialApproval.approvalRequired
           ? await queueOrderCreatedNotifications(tx, {
             order: notificationOrder,
-            requestedBy: "Group Order Portal user",
+            requestedBy: "Group Order Initiator",
           })
           : await queueSuperAdminAutoApprovalNotifications(tx, { order: notificationOrder })
         eventKeys = queued.eventKeys

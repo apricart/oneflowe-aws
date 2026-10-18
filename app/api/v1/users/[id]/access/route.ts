@@ -22,6 +22,7 @@ import { USER_MANAGEMENT_ROLES } from "@/lib/user-management-access"
 import { isOrderDeskRole, orderDeskAccessChangeError } from "@/lib/order-desk-access"
 import { apricartExecutiveAccessChangeError, isApricartExecutiveRole } from "@/lib/apricart-executive-access"
 import { isWarehouseRole, warehouseAccessChangeError } from "@/lib/warehouse-access"
+import { apricartSupportAccessChangeError, isApricartSupportRole } from "@/lib/apricart-support-access"
 import { roleChangeRequiresSettledOrders } from "@/lib/role-change-preconditions"
 import { loadRoleChangeReadiness } from "@/lib/server/role-change-readiness"
 import {
@@ -120,6 +121,9 @@ async function getAccessShapeError({
   const warehouseError = warehouseAccessChangeError(targetRole, input)
   if (warehouseError) return warehouseError
   if (isWarehouseRole(nextRole)) return null
+  const supportError = apricartSupportAccessChangeError(targetRole, input)
+  if (supportError) return supportError
+  if (isApricartSupportRole(nextRole)) return null
   return getAssignmentError({ scope, nextRole, nextOrganizationId, nextBranchId })
 }
 
@@ -239,7 +243,7 @@ function resolveAccessValues(input: any, target: any, targetRole: SystemRole, ac
     return { message: "You cannot assign this role", status: 403 } as const
   }
   if (input.budgetAllocationEnabled !== undefined && nextRole !== "GROUP_USER") {
-    return { message: "Budget allocation access applies only to Group Users", status: 400 } as const
+    return { message: "Budget allocation access applies only to Group Financial Approvers", status: 400 } as const
   }
   return {
     nextRole,

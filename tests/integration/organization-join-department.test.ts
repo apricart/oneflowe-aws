@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { and, eq, inArray, notInArray, sql } from "drizzle-orm"
+import { and, eq, inArray, ne, notInArray, sql } from "drizzle-orm"
 import { NextRequest } from "next/server"
 import * as mockedNextAuth from "next-auth"
 
@@ -21,8 +21,11 @@ import {
   systemLogs,
   userBranchAssignments,
   users,
+  warehouseAssignments,
+  warehouseCityAssignments,
 } from "@/db/schema"
 import { closePool, db } from "@/lib/db"
+import { loadWarehouseReach } from "@/lib/server/warehouse-scope"
 import { organizationUsername } from "@/lib/username-prefix"
 
 import {
@@ -416,21 +419,78 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, end to end", () => {
       expect((await decide(stored.id, { decision: "approve", expectedResolutions: expectedFrom(item) })).status).toBe(409)
     })
 
-    it("gives one CRC the shop, and stores a typed CRC that names an existing branch as that branch", async () => {
+    // plans/OF-JOIN-crc-match-at-review.md: a typed CRC an existing branch
+    // carries used to be stored as that branch, dropping the new branch the
+    // applicant asked for. It is now kept, and the review names the match.
+    it("keeps a typed CRC an existing branch carries as a new branch, and shows Head Office the match", async () => {
       const body = signup({ branches: [{ name: "Typed CRC Depot", crc: `it-crc-${fixtures.suffix}` }] })
       const stored = await submitAccepted(body)
       const rows = await db.select().from(organizationJoinRequestBranches).where(eq(organizationJoinRequestBranches.requestId, stored.id))
-      expect(rows).toHaveLength(1)
-      expect(rows[0].existingBranchId).toBe(crcBranchId)
+      expect(rows).toEqual([expect.objectContaining({
+        existingBranchId: null,
+        costCenterId: `IT-CRC-${fixtures.suffix}`.toUpperCase(),
+        requestedBranchName: "Typed CRC Depot",
+      })])
       expect(stored.requestedRole).toBe("ORDER_PORTAL")
 
       const { item } = await review(stored.id)
-      const response = await decide(stored.id, { decision: "approve", expectedResolutions: expectedFrom(item) })
+      expect(item.branches).toEqual([expect.objectContaining({
+        kind: "new",
+        branchId: null,
+        requestedName: "Typed CRC Depot",
+        crcMatch: { branchId: crcBranchId, name: `CRC Branch ${fixtures.suffix}` },
+      })])
+
+      // An approval that settles nothing for the CRC is refused, as for any CRC.
+      const unsettled = await decide(stored.id, { decision: "approve", expectedResolutions: expectedFrom(item) })
+      expect(unsettled.status).toBe(400)
+
+      const response = await decide(stored.id, {
+        decision: "approve",
+        newBranches: [{ requestBranchId: item.branches[0].requestBranchId, mapToBranchId: crcBranchId }],
+        expectedResolutions: expectedFrom(item),
+      })
       expect(response.status, JSON.stringify(await response.clone().json())).toBe(200)
 
       const [initiator] = await db.select({ role: roles.name, branchId: users.branchId }).from(users)
         .innerJoin(roles, eq(users.roleId, roles.id)).where(eq(users.email, String(body.email)))
       expect(initiator).toEqual({ role: "ORDER_PORTAL", branchId: crcBranchId })
+    })
+
+    it("creates the branch the applicant named when Head Office chooses a new one over the matching branch", async () => {
+      const crc = `IT-CRC-NEW-${unique()}`.toUpperCase()
+      const [matching] = await db.insert(branches).values({
+        organizationId: fixtures.organizationId,
+        name: `Matching ${crc}`,
+        status: "active",
+        costCenterId: crc,
+      }).returning({ id: branches.id })
+      const body = signup({ branches: [{ name: `Orangi ${crc}`, crc }] })
+      const stored = await submitAccepted(body)
+      const { item } = await review(stored.id)
+      expect(item.branches[0].crcMatch).toEqual({ branchId: matching.id, name: `Matching ${crc}` })
+
+      const response = await decide(stored.id, {
+        decision: "approve",
+        newBranches: [{
+          requestBranchId: item.branches[0].requestBranchId,
+          name: item.branches[0].requestedName,
+          province: "Sindh",
+          city: "Karachi",
+          address: "Plot 1, Orangi, Karachi",
+        }],
+        expectedResolutions: expectedFrom(item),
+      })
+      expect(response.status, JSON.stringify(await response.clone().json())).toBe(200)
+
+      const created = await db.select({ id: branches.id, name: branches.name }).from(branches)
+        .where(and(eq(branches.costCenterId, crc), ne(branches.id, matching.id)))
+      expect(created).toEqual([{ id: expect.any(Number), name: `Orangi ${crc}` }])
+      const [initiator] = await db.select({ branchId: users.branchId }).from(users).where(eq(users.email, String(body.email)))
+      expect(initiator.branchId).toBe(created[0].id)
+
+      // Once decided, the review reports no match.
+      expect((await review(stored.id)).item.branches[0].crcMatch).toBeNull()
     })
 
     it("refuses an approval when an approver changed since the review, and creates nothing", async () => {
@@ -709,6 +769,151 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, end to end", () => {
         eq(auditLogs.entityId, String(stored.id)),
       ))
       expect(JSON.stringify(audit?.metadata ?? {})).not.toContain(TEMPORARY_PASSWORD)
+    })
+  })
+
+  /**
+   * plans/OF-JOIN-new-branch-city-warehouse.md: the city of a branch the
+   * approval creates comes from Pakistan's list, and the warehouses serving
+   * that city serve the branch from the moment the approval commits.
+   */
+  describe("the new branch's city and its warehouse", () => {
+    // Warehouses are Apricart's, with no organization; the outer clean-up
+    // cannot find them, so this block removes its own.
+    const warehouseIds: string[] = []
+    let byCity = ""
+    let byBranch = ""
+    let inactive = ""
+
+    beforeAll(async () => {
+      const warehouseRole = await resolveRoleId("WAREHOUSE")
+      const people = await db.insert(users).values(["city", "branch", "inactive"].map((kind) => ({
+        email: `wh-${kind}-${fixtures.suffix}@example.test`,
+        username: `it-wh-${kind}-${fixtures.suffix}`,
+        passwordHash: "x",
+        roleId: warehouseRole,
+        organizationId: null,
+        isActive: kind !== "inactive",
+      }))).returning({ id: users.id })
+      ;[byCity, byBranch, inactive] = people.map((person) => person.id)
+      warehouseIds.push(byCity, byBranch, inactive)
+
+      // A branch of the *other* tenant in Larkana: a warehouse's city is
+      // geography, so serving it there is serving Larkana.
+      const [larkana] = await db.insert(branches).values({
+        organizationId: fixtures.foreignOrganizationId,
+        name: `Larkana Depot ${fixtures.suffix}`,
+        status: "active",
+        city: " larkana ",
+      }).returning({ id: branches.id })
+
+      await db.insert(warehouseCityAssignments).values([
+        { userId: byCity, cityKey: "sukkur" },
+        { userId: inactive, cityKey: "sukkur" },
+      ])
+      await db.insert(warehouseAssignments).values([
+        { userId: byBranch, branchId: larkana.id },
+        { userId: inactive, branchId: larkana.id },
+      ])
+    })
+
+    afterAll(async () => {
+      if (warehouseIds.length > 0) await db.delete(users).where(inArray(users.id, warehouseIds))
+    })
+
+    async function approveNewBranch(location: { city: string; province: string }) {
+      const crc = `IT-WH-${unique()}`.toUpperCase()
+      const stored = await submitAccepted(signup({ branches: [{ name: `Warehouse Depot ${unique()}`, crc }] }))
+      const { item } = await review(stored.id)
+      const row = item.branches[0]
+      const response = await decide(stored.id, {
+        decision: "approve",
+        newBranches: [{ requestBranchId: row.requestBranchId, name: row.requestedName, address: "Plot 7, Main Road", ...location }],
+        expectedResolutions: expectedFrom(item),
+      })
+      const [created] = await db.select().from(branches).where(eq(branches.costCenterId, crc))
+      return { response, stored, item, created }
+    }
+
+    it("shows Head Office how many warehouses serve each city, and never who", async () => {
+      const stored = await submitAccepted(signup({ branches: [{ name: "Preview Depot", crc: `IT-WH-${unique()}` }] }))
+      const { item } = await review(stored.id)
+
+      expect(item.warehouseCities).toEqual(expect.arrayContaining([
+        { city: "Sukkur", warehouseCount: 1 },
+        { city: "Larkana", warehouseCount: 1 },
+      ]))
+      const text = JSON.stringify(item)
+      for (const id of warehouseIds) expect(text).not.toContain(id)
+      expect(text).not.toContain(`wh-city-${fixtures.suffix}`)
+    })
+
+    it("asks nothing of a request that creates no branch", async () => {
+      const stored = await submitAccepted(signup())
+      expect((await review(stored.id)).item.warehouseCities).toEqual([])
+    })
+
+    it("lets a whole-city warehouse reach the branch with no row written, in the list's spelling", async () => {
+      const { response, created } = await approveNewBranch({ city: "  sukkur ", province: "Sindh" })
+      expect(response.status, JSON.stringify(await response.clone().json())).toBe(200)
+      expect(created).toMatchObject({ city: "Sukkur", province: "Sindh" })
+
+      const rows = await db.select({ userId: warehouseAssignments.userId }).from(warehouseAssignments)
+        .where(eq(warehouseAssignments.branchId, created.id))
+      expect(rows).toEqual([])
+      expect(await loadWarehouseReach(db, byCity)).toContain(created.id)
+      // An inactive warehouse reaches nothing, whatever it holds.
+      expect(await loadWarehouseReach(db, inactive)).toEqual([])
+    })
+
+    it("gives the branch to a warehouse serving the city through a branch there, audited, and not to an inactive one", async () => {
+      const { response, stored, created } = await approveNewBranch({ city: "Larkana", province: "Sindh" })
+      expect(response.status, JSON.stringify(await response.clone().json())).toBe(200)
+
+      const rows = await db.select({ userId: warehouseAssignments.userId, createdBy: warehouseAssignments.createdByUserId })
+        .from(warehouseAssignments).where(eq(warehouseAssignments.branchId, created.id))
+      expect(rows).toEqual([{ userId: byBranch, createdBy: fixtures.headOfficeId }])
+      expect(await loadWarehouseReach(db, byBranch)).toContain(created.id)
+
+      const [audit] = await db.select({ metadata: auditLogs.metadata, organizationId: auditLogs.organizationId })
+        .from(auditLogs).where(and(eq(auditLogs.action, "UPDATE_WAREHOUSE_ASSIGNMENTS"), eq(auditLogs.entityId, byBranch)))
+      expect(audit.organizationId).toBe(fixtures.organizationId)
+      expect(audit.metadata).toMatchObject({
+        before: { branchIds: [] },
+        after: { branchIds: [created.id] },
+        source: "DEPARTMENT_JOIN_APPROVAL",
+        joinRequestId: stored.id,
+        city: "Larkana",
+      })
+
+      const [joinAudit] = await db.select({ metadata: auditLogs.metadata }).from(auditLogs).where(and(
+        eq(auditLogs.action, "APPROVE_ORGANIZATION_JOIN_REQUEST"),
+        eq(auditLogs.entityId, String(stored.id)),
+      ))
+      expect((joinAudit.metadata as any).warehouseCoverage).toEqual([
+        { branchId: created.id, city: "Larkana", servedByCity: 0, assigned: 1 },
+      ])
+    })
+
+    it("still approves a branch in a city no warehouse serves, giving it to no one", async () => {
+      const { response, created } = await approveNewBranch({ city: "Gwadar", province: "Balochistan" })
+      expect(response.status).toBe(200)
+      const rows = await db.select({ userId: warehouseAssignments.userId }).from(warehouseAssignments)
+        .where(eq(warehouseAssignments.branchId, created.id))
+      expect(rows).toEqual([])
+    })
+
+    it.each([
+      ["a city that is not on the list", { city: "Atlantis", province: "Sindh" }, /choose the city from the list/],
+      ["a province that is not the city's", { city: "Larkana", province: "Punjab" }, /Larkana is in Sindh/],
+    ])("refuses %s and creates nothing", async (_case, location, message) => {
+      const { response, stored, created } = await approveNewBranch(location)
+      expect(response.status).toBe(400)
+      expect((await response.json()).error).toMatch(message)
+      expect(created).toBeUndefined()
+      const [still] = await db.select({ status: organizationJoinRequests.status }).from(organizationJoinRequests)
+        .where(eq(organizationJoinRequests.id, stored.id))
+      expect(still.status).toBe("pending")
     })
   })
 

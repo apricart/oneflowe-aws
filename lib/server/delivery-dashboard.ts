@@ -34,6 +34,7 @@ import {
 } from "@/lib/delivery-sla"
 import { FULFILLMENT_STATUS_LABELS, normalizeFulfillmentStatus } from "@/lib/fulfillment-status"
 import { FULFILLED_ORDER_STATUSES } from "@/lib/order-delivery-status"
+import { ROLE_DISPLAY_NAMES } from "@/lib/role-display-names"
 
 /**
  * The management delivery dashboard's reads. See
@@ -208,10 +209,10 @@ export async function isActiveDeliveryDashboardReader(userId: string, sessionRol
 const ROLE_LABELS: Record<string, string> = {
   SUPER_ADMIN: "Super Admin",
   HEAD_OFFICE: "Head Office",
-  BRANCH_ADMIN: "Branch Admin",
-  GROUP_USER: "Group User",
-  ORDER_PORTAL: "Order Portal",
-  GROUP_ORDER_PORTAL: "Group Order Portal",
+  BRANCH_ADMIN: ROLE_DISPLAY_NAMES.BRANCH_ADMIN,
+  GROUP_USER: ROLE_DISPLAY_NAMES.GROUP_USER,
+  ORDER_PORTAL: ROLE_DISPLAY_NAMES.ORDER_PORTAL,
+  GROUP_ORDER_PORTAL: ROLE_DISPLAY_NAMES.GROUP_ORDER_PORTAL,
   ORDER_DESK: "Order Desk",
   WAREHOUSE: "Warehouse",
 }

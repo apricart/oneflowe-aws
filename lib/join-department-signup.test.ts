@@ -16,6 +16,7 @@ import {
   requestedBranchNameError,
   requestedNewBranches,
   splitFullName,
+  UNLISTED_CITY_MESSAGE,
 } from "./join-department-signup"
 
 /** plans/OF-JOIN-department-signup-multi-user.md */
@@ -177,6 +178,19 @@ describe("newBranchDraftErrors", () => {
     expect(newBranchDraftErrors({ name: "DEMOTTTT", province: "", city: "K", address: "Plot 4, Clifton" })).toEqual({
       province: "Enter the province",
       city: "The city needs at least 2 characters",
+    })
+  })
+
+  // plans/OF-JOIN-new-branch-city-warehouse.md
+  it("asks for a city from the list rather than one typed", () => {
+    expect(newBranchDraftErrors({ name: "DEMOTTTT", province: "Sindh", city: "Karachee", address: "Plot 4, Clifton" })).toEqual({
+      city: UNLISTED_CITY_MESSAGE,
+    })
+  })
+
+  it("names the province a city is in when another was given", () => {
+    expect(newBranchDraftErrors({ name: "DEMOTTTT", province: "Punjab", city: "karachi", address: "Plot 4, Clifton" })).toEqual({
+      province: "Karachi is in Sindh",
     })
   })
 })

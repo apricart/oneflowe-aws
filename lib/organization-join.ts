@@ -14,6 +14,7 @@
 
 import { emailMatchesDomain } from "@/lib/organization-email-domain"
 import type { Role } from "@/lib/rbac"
+import { ROLE_DISPLAY_NAMES } from "@/lib/role-display-names"
 
 /**
  * The only roles the public form may ask for.
@@ -39,10 +40,10 @@ export function isJoinableRole(value: unknown): value is JoinableRole {
 
 /** What each joinable role is called on the form and in the request queue. */
 export const JOINABLE_ROLE_LABELS: Record<JoinableRole, string> = {
-  BRANCH_ADMIN: "Branch Admin",
-  ORDER_PORTAL: "Order Portal User",
-  GROUP_USER: "Group User",
-  GROUP_ORDER_PORTAL: "Group Order Portal User",
+  BRANCH_ADMIN: ROLE_DISPLAY_NAMES.BRANCH_ADMIN,
+  ORDER_PORTAL: ROLE_DISPLAY_NAMES.ORDER_PORTAL,
+  GROUP_USER: ROLE_DISPLAY_NAMES.GROUP_USER,
+  GROUP_ORDER_PORTAL: ROLE_DISPLAY_NAMES.GROUP_ORDER_PORTAL,
 }
 
 /** Roles pinned to exactly one branch, mirroring `lib/server/multi-branch-scope.ts`. */

@@ -7,6 +7,7 @@ import {
   SEEDED_ENTITY_ID,
   SUPER_ADMIN_USERNAME,
 } from "./support/seed"
+import { closeRoleRenameNoticeWhenShown } from "./support/session"
 
 /**
  * The admin activity log in a real browser.
@@ -41,6 +42,7 @@ async function signIn(page: Page, username: string): Promise<void> {
   await page.goto("/login")
   await page.getByLabel("Username or Email").fill(username)
   await page.getByLabel("Password", { exact: true }).fill(E2E_PASSWORD)
+  await closeRoleRenameNoticeWhenShown(page)
   await page.getByRole("button", { name: /sign in/i }).click()
   // A cold development server compiles the landing workspace first.
   await page.waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: 150_000 })

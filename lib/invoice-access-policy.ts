@@ -114,6 +114,9 @@ const INVOICE_ROLE_RULES: Record<Role, InvoiceRoleRule> = {
   // read (`/api/v1/warehouse/orders/{id}`). No organization, so the tenant
   // check refuses it, and "none" refuses it again.
   WAREHOUSE: { tenant: "own-organization", branches: "none", ownOrdersOnly: true },
+  // Reads no invoice: its area is the support queue alone. No organization, so
+  // the tenant check refuses it, and "none" refuses it again.
+  APRICART_SUPPORT: { tenant: "own-organization", branches: "none", ownOrdersOnly: true },
 }
 
 /** Roles whose branch reach comes from group and branch assignments. */

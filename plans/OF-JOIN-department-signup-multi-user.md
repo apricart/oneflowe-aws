@@ -107,7 +107,7 @@ each field maps:
 | Department | Required, one of the HTML's nine values (`DEPARTMENTS`) |
 | Role "Order Initiator" (read-only) | Display only; the role is D2 |
 | Financial Approver Levels | One card per configured level (not fixed at 3): email (domain-locked), username (auto, read-only), designation; titled with the level's band |
-| Branch (multiple, chips with a checkbox; the design's "CRC No") | Each checked chip is a branch. While typing, existing branches are suggested **by name** from the lookup list (no CRC number ever leaves the server); picking one adds it as a chip. A name that is not listed is added as a new branch, and only then is its CRC asked for ("Branch names", below). A typed CRC is matched by the server to an existing branch with that cost centre if exactly one exists; otherwise Head Office creates the branch at approval under the applicant's name for it (correctable), filling in its province, city and address |
+| Branch (multiple, chips with a checkbox; the design's "CRC No") | Each checked chip is a branch. While typing, existing branches are suggested **by name** from the lookup list (no CRC number ever leaves the server); picking one adds it as a chip. A name that is not listed is added as a new branch, and only then is its CRC asked for ("Branch names", below). A typed CRC is always stored as a branch to create; if exactly one existing branch carries it, Head Office's review names that branch and Head Office chooses it or a new one (`plans/OF-JOIN-crc-match-at-review.md`). Otherwise Head Office creates the branch at approval under the applicant's name for it (correctable), filling in its province, city and address |
 | Delivery Address (multiple, chips with a checkbox) | Each checked address is stored on the request; at approval Head Office assigns each to one of the initiator's branches (automatic when there is one), and it is written to `branch_delivery_addresses` as approved |
 | Password / Confirm | The app's rule (12+, upper, lower, digit, symbol) |
 | UBL Master Code | **Removed.** The join code, checked on the server, is the first step |
@@ -136,8 +136,7 @@ Additive except one replaced check. Hand-written, journal `when` = last + 360000
   * `organization_join_requests_form_version_ck`: `form_version IN (1, 2)`.
 * `organization_join_request_branches` (new)
   * `request_id → organization_join_requests ON DELETE CASCADE`, `organization_id`
-  * either `existing_branch_id` (picked by name, or a typed CRC the server
-    matched to exactly one branch) or `cost_center_id` (a CRC to create),
+  * either `existing_branch_id` (picked by name) or `cost_center_id` (a CRC to create),
     never both (check)
   * `resolved_branch_id`, set at approval: the branch created for the CRC, or
     the existing branch Head Office mapped it onto
@@ -312,7 +311,7 @@ the applicant's alone: the **password** and the **acceptance of the terms**.
   organization's email domain (`joinEmailDomainRefusal`), the patterns, one
   distinct approver per level who is not the initiator (`approverListError`,
   against the levels the request was made with), branches active in this
-  organization, CRCs matched as at submission. Changed identity fields are held
+  organization, typed CRCs kept as CRCs as at submission. Changed identity fields are held
   to what the approval will require — no account holds the username, email,
   phone or employee ID, and no other pending request of the tenant the email or
   username (409). The role is recomputed from the branch count.
@@ -475,8 +474,9 @@ their cost centre. The field now works name-first:
   `requestedNewBranches` (`lib/join-department-signup.ts`) is the one place
   that normalises them, one per CRC, keeping the first name given.
 * **Storage.** The name goes in `requested_branch_name`. A typed CRC that
-  matches exactly one active branch is still stored as that branch, and the
-  name is then dropped.
+  matches exactly one active branch was stored as that branch, dropping the
+  name; superseded by `plans/OF-JOIN-crc-match-at-review.md`, which keeps it
+  as a CRC and asks Head Office at review.
 * **Review.** The review answers `requestedName` per branch; the dialog
   prefills the new branch's name from it, and starts **empty** (never the
   CRC) for a request that has none. Head Office may still correct the name

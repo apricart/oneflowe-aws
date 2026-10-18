@@ -11,6 +11,10 @@ import { settleDeliveredOrderAfterTokenHandoff } from "@/lib/server/order-fulfil
 import { issueTaxInvoice } from "@/lib/server/invoice-issuance"
 import { isInvoiceCodeMissingError } from "@/lib/invoice-number"
 import { issuesTaxInvoiceOnStep } from "@/lib/invoice-policy"
+import {
+  attemptImmediateOrderEmailDelivery,
+  queueOrderDeliveredNotifications,
+} from "@/lib/server/order-notifications"
 
 /**
  * Moving an order's delivery forward one stage — the single place it happens.
@@ -26,7 +30,10 @@ import { issuesTaxInvoiceOnStep } from "@/lib/invoice-policy"
  * it (`fulfillApprovedOrder`). Marking an order In Process issues its tax
  * invoice, in the same transaction, so the warehouse can print it and send it
  * with the goods (`issueTaxInvoice`, `issuesTaxInvoiceOnStep`,
- * plans/OF-INVOICE-issue-at-processing.md). See
+ * plans/OF-INVOICE-issue-at-processing.md). Recording the delivery tells the
+ * order's raiser and approver to acknowledge it, in the same transaction
+ * (`queueOrderDeliveredNotifications`,
+ * plans/OF-NOTIFY-order-delivered-acknowledge.md). See
  * plans/OF-WAREHOUSE-warehouse-fulfilment-role.md and
  * plans/OF-DELIVERY-CHALLAN-proof-of-delivery.md.
  */
@@ -174,6 +181,7 @@ export async function progressOrderFulfillment(input: {
   const { currentStatus } = check
 
   let updated: NonNullable<OrderRow> | "conflict" | "missing-column"
+  let deliveredEventKeys: string[] = []
   try {
     updated = await db.transaction(async (tx) => {
       if (input.guardInTransaction
@@ -221,6 +229,13 @@ export async function progressOrderFulfillment(input: {
         await issueTaxInvoice(tx, { orderId, actor, stage: nextStatus })
       }
 
+      // The goods have arrived: the raiser and the approver are asked to
+      // acknowledge them. Nobody is asked when the token was already handed
+      // over, because the settlement below fulfils the order at once.
+      if (nextStatus === "DELIVERED") {
+        deliveredEventKeys = (await queueOrderDeliveredNotifications(tx, { orderId })).eventKeys
+      }
+
       return (await loadOrder(tx, orderId)) ?? { ...order, fulfillmentStatus: nextStatus }
     })
   } catch (transitionError) {
@@ -231,6 +246,8 @@ export async function progressOrderFulfillment(input: {
 
   if (updated === "missing-column") return { kind: "missing-column" }
   if (updated === "conflict") return { kind: "conflict" }
+
+  await attemptImmediateOrderEmailDelivery(deliveredEventKeys)
 
   const fulfilled = nextStatus === "DELIVERED"
     && await settleOnDeliveryIfTokenHandedOff(

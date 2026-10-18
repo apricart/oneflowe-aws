@@ -34,6 +34,7 @@ import {
   type OrderCorrectionHistoryEntry,
 } from "@/components/orders/order-correction"
 import { isAwaitingCorrection } from "@/lib/order-correction"
+import { renamedRoleName, ROLE_DISPLAY_NAMES } from "@/lib/role-display-names"
 
 // ... (existing imports)
 
@@ -275,7 +276,7 @@ export default function SuperAdminOrderDetailsPage() {
     if (isReadOnlyRole(userRole)) {
       return "VIEW ONLY"
     }
-    return "BRANCH ADMIN"
+    return (renamedRoleName(userRole) ?? ROLE_DISPLAY_NAMES.BRANCH_ADMIN).toUpperCase()
   })()
 
   return (

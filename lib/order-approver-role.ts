@@ -1,4 +1,5 @@
 import type { Role } from "@/lib/rbac"
+import { ROLE_DISPLAY_NAMES } from "@/lib/role-display-names"
 
 export const ORDER_APPROVER_ROLES = ["BRANCH_ADMIN", "HEAD_OFFICE"] as const
 
@@ -7,7 +8,7 @@ export type OrderApproverRole = (typeof ORDER_APPROVER_ROLES)[number]
 export const DEFAULT_ORDER_APPROVER_ROLE: OrderApproverRole = "BRANCH_ADMIN"
 
 export const ORDER_APPROVER_ROLE_LABELS: Record<OrderApproverRole, string> = {
-  BRANCH_ADMIN: "Branch Admin",
+  BRANCH_ADMIN: ROLE_DISPLAY_NAMES.BRANCH_ADMIN,
   HEAD_OFFICE: "Head Office",
 }
 
@@ -31,7 +32,7 @@ export type OrderDecisionRole = OrderApproverRole | "GROUP_USER" | "APRICART_EXE
 
 export const ORDER_DECISION_ROLE_LABELS: Record<OrderDecisionRole, string> = {
   ...ORDER_APPROVER_ROLE_LABELS,
-  GROUP_USER: "Group User",
+  GROUP_USER: ROLE_DISPLAY_NAMES.GROUP_USER,
   APRICART_EXECUTIVE: "Apricart Executive",
 }
 

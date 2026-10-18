@@ -38,6 +38,7 @@ export { NO_DATABASE_REASON, hasTestDatabase } from "./pricing-fixtures"
  *             Sana   (ORDER_PORTAL, South)
  *             Group requester (GROUP_ORDER_PORTAL, no branch, assigned to North)
  *   Apricart (SUPER_ADMIN, no tenant)
+ *   Apricart support agent (APRICART_SUPPORT, no tenant)
  *
  *   catalogue: Carried   — assigned to A, active
  *              Withdrawn — assigned to A, is_active = false
@@ -57,6 +58,7 @@ export type SupportFixtures = {
   southBranchId: number
   foreignBranchId: number
   superAdminId: string
+  supportAgentId: string
   headOfficeId: string
   neighbourHeadOfficeId: string
   branchAdminNorthId: string
@@ -91,6 +93,7 @@ export async function createSupportFixtures(): Promise<SupportFixtures> {
   const suffix = randomUUID().slice(0, 8)
   const role = {
     superAdmin: await resolveRoleId("SUPER_ADMIN"),
+    supportAgent: await resolveRoleId("APRICART_SUPPORT"),
     headOffice: await resolveRoleId("HEAD_OFFICE"),
     branchAdmin: await resolveRoleId("BRANCH_ADMIN"),
     orderPortal: await resolveRoleId("ORDER_PORTAL"),
@@ -141,6 +144,7 @@ export async function createSupportFixtures(): Promise<SupportFixtures> {
   }
 
   const superAdminId = await person("apricart", role.superAdmin, null, null, `Apricart ${suffix}`)
+  const supportAgentId = await person("agent", role.supportAgent, null, null, `Support Agent ${suffix}`)
   const headOfficeId = await person("ho-a", role.headOffice, organization.id, null, `Head Office A ${suffix}`)
   const neighbourHeadOfficeId = await person("ho-b", role.headOffice, neighbour.id, null, `Head Office B ${suffix}`)
   const branchAdminNorthId = await person("ba-north", role.branchAdmin, organization.id, north.id, `Branch Admin North ${suffix}`)
@@ -212,6 +216,7 @@ export async function createSupportFixtures(): Promise<SupportFixtures> {
     southBranchId: south.id,
     foreignBranchId: foreign.id,
     superAdminId,
+    supportAgentId,
     headOfficeId,
     neighbourHeadOfficeId,
     branchAdminNorthId,
@@ -242,6 +247,7 @@ export async function destroySupportFixtures(f: SupportFixtures): Promise<void> 
   const organizationIds = [f.organizationId, f.neighbourOrganizationId]
   const userIds = [
     f.superAdminId,
+    f.supportAgentId,
     f.headOfficeId,
     f.neighbourHeadOfficeId,
     f.branchAdminNorthId,

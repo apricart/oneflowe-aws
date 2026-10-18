@@ -40,6 +40,9 @@ import {
 import { Input } from "@/components/ui/input"
 import { ListSkeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { PaymentStatusBadge } from "@/components/orders/payment-status-badge"
+import { shouldShowOrderPaymentStatus } from "@/lib/order-status-display"
+import { normalizePaymentStatus } from "@/lib/payment-status"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useDebounce } from "@/hooks/use-debounce"
 import { useToast } from "@/hooks/use-toast"
@@ -85,6 +88,7 @@ type ReportChild = {
   branchCostCenterId: string | null
   status: string
   fulfillmentStatus: string
+  paymentStatus: string
   totalCents: number
   refundCents: number
   itemCount: number
@@ -148,12 +152,14 @@ const GROUP_BREAKDOWN_SORT_ACCESSORS: Record<GroupBreakdownSortKey, (row: GroupB
   net: (row) => row.netCents,
 }
 
-type ReportChildSortKey = "branch" | "tid" | "status" | "items" | "quantity" | "total" | "refunded"
+type ReportChildSortKey = "branch" | "tid" | "status" | "payment" | "items" | "quantity" | "total" | "refunded"
 /** What each sortable column of a group order's branch-order table orders by. */
 const REPORT_CHILD_SORT_ACCESSORS: Record<ReportChildSortKey, (child: ReportChild) => SortValue> = {
   branch: (child) => child.branchName,
   tid: (child) => child.tid,
   status: (child) => String(child.status).toUpperCase(),
+  // A rejected or cancelled order shows no payment badge, so it sorts as blank.
+  payment: (child) => (shouldShowOrderPaymentStatus(child) ? normalizePaymentStatus(child.paymentStatus) : ""),
   items: (child) => child.itemCount,
   quantity: (child) => child.quantityOrdered,
   total: (child) => child.totalCents,
@@ -722,6 +728,9 @@ function GroupOrderRowCard({
                   <TableHead aria-sort={ariaSortFor(childSort, "status")} className="text-[10px] font-black uppercase tracking-widest text-slate-500">
                     <SortableHeader label="Status" sortKey="status" sort={childSort} onSort={toggleChildSort} />
                   </TableHead>
+                  <TableHead aria-sort={ariaSortFor(childSort, "payment")} className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+                    <SortableHeader label="Payment" sortKey="payment" sort={childSort} onSort={toggleChildSort} />
+                  </TableHead>
                   <TableHead aria-sort={ariaSortFor(childSort, "items")} className="text-right text-[10px] font-black uppercase tracking-widest text-slate-500">
                     <SortableHeader label="Items" sortKey="items" sort={childSort} onSort={toggleChildSort} firstDirection="desc" />
                   </TableHead>
@@ -755,6 +764,9 @@ function GroupOrderRowCard({
                       >
                         {String(child.status).toUpperCase()}
                       </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <PaymentStatusBadge order={child} fallback={<span className="text-xs text-slate-300 dark:text-slate-600">—</span>} />
                     </TableCell>
                     <TableCell className="text-right text-xs tabular-nums">{child.itemCount}</TableCell>
                     <TableCell className="text-right text-xs tabular-nums">{formatQuantity(child.quantityOrdered)}</TableCell>

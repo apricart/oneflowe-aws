@@ -2,6 +2,8 @@
  * Comprehensive Permission System for Super Admin Control
  */
 
+import { ROLE_DISPLAY_NAMES } from "@/lib/role-display-names"
+
 export enum PermissionCategory {
   SYSTEM = "System Administration",
   ORGANIZATION = "Organization Management",
@@ -100,7 +102,8 @@ export enum Permission {
   // Support & Communication — the direct channel between a client organization
   // and Apricart. View/create/reply belong to every role that can hold a
   // conversation; SUPPORT_MANAGE is Apricart's view of its own queue and is
-  // held by Super Admin alone. Enforced through `lib/support-access.ts`.
+  // held by the Apricart side alone — Super Admin and Apricart Support
+  // (`SUPPORT_APRICART_ROLES`). Enforced through `lib/support-access.ts`.
   SUPPORT_VIEW = "support:view",
   SUPPORT_CREATE = "support:create",
   SUPPORT_REPLY = "support:reply",
@@ -570,7 +573,7 @@ export const ROLE_TEMPLATES = {
     ],
   },
   BRANCH_ADMIN: {
-    name: "Branch Admin",
+    name: ROLE_DISPLAY_NAMES.BRANCH_ADMIN,
     description: "Branch-level operations and management",
     permissions: [
       Permission.INVENTORY_CREATE,
@@ -595,7 +598,7 @@ export const ROLE_TEMPLATES = {
     ],
   },
   GROUP_USER: {
-    name: "Group User",
+    name: ROLE_DISPLAY_NAMES.GROUP_USER,
     description: "Approves and manages orders on behalf of multiple branches",
     permissions: [
       Permission.INVENTORY_VIEW,
@@ -614,7 +617,7 @@ export const ROLE_TEMPLATES = {
     ],
   },
   GROUP_ORDER_PORTAL: {
-    name: "Group Order Portal User",
+    name: ROLE_DISPLAY_NAMES.GROUP_ORDER_PORTAL,
     description: "Places and manages orders on behalf of multiple branches",
     permissions: [
       Permission.INVENTORY_VIEW,
@@ -664,7 +667,7 @@ export const ROLE_TEMPLATES = {
     ],
   },
   ORDER_PORTAL: {
-    name: "Order Portal User",
+    name: ROLE_DISPLAY_NAMES.ORDER_PORTAL,
     description: "Restricted access for placing orders only",
     permissions: [
       Permission.INVENTORY_VIEW,
@@ -713,6 +716,21 @@ export const ROLE_TEMPLATES = {
       // ORG_* key: it moves a delivery forward and reads, nothing more.
       Permission.INVENTORY_VIEW,
       Permission.ORDER_VIEW,
+    ],
+  },
+  APRICART_SUPPORT: {
+    name: "Apricart Support",
+    description: "Apricart support agents: answer and triage every organization's support requests, nothing else",
+    permissions: [
+      // Descriptive only, like every template here. What confines this role is
+      // `lib/apricart-support-access.ts` — the /support area and an API
+      // allowlist enforced in `proxy.ts` — and `lib/support-access.ts` on each
+      // handler. It is the Apricart side of the queue, so it triages
+      // (SUPPORT_MANAGE) as Super Admin does; SUPPORT_CREATE is absent because
+      // Apricart raises no thread.
+      Permission.SUPPORT_VIEW,
+      Permission.SUPPORT_REPLY,
+      Permission.SUPPORT_MANAGE,
     ],
   },
 }

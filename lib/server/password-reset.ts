@@ -24,6 +24,7 @@ import { sendOTPEmail } from "@/lib/email"
 import { logError } from "@/lib/global-logger"
 import { hashPassword, validatePassword, verifyPassword } from "@/lib/password"
 import { ROLE_TEMPLATES } from "@/lib/permissions"
+import { ORDER_PORTAL_NAME } from "@/lib/role-display-names"
 import { invalidateSessionValidationCache } from "@/lib/session-validation-cache"
 import { recordAuthAuditEvent } from "@/lib/server/auth-audit"
 import { env } from "@/lib/server/env"
@@ -124,7 +125,7 @@ function auditIdentity(subject: ResetSubject): ResetAuditIdentity {
 }
 
 function accountLabel(subject: ResetSubject): string {
-  if (subject.subjectType === "employee") return "Order Portal Employee"
+  if (subject.subjectType === "employee") return `${ORDER_PORTAL_NAME} Employee`
   const template = (ROLE_TEMPLATES as Record<string, { name: string } | undefined>)[subject.role]
   return template?.name ?? subject.role
 }

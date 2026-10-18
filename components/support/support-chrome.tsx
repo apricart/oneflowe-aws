@@ -7,6 +7,7 @@ import { useSession } from "next-auth/react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { isApricartSupportRole } from "@/lib/apricart-support-access"
 import { supportUsesPortalShell } from "@/lib/support-shell"
 import {
   SUPPORT_CATEGORY_LABELS,
@@ -147,8 +148,13 @@ export function SupportHeader({
   )
 }
 
-/** Where a role goes when it leaves the support area. */
-export function homeHrefForRole(role: string | undefined): { href: string; label: string } {
+/**
+ * Where a role goes when it leaves the support area, or null when support *is*
+ * its home: an Apricart Support agent has nowhere else to go, and its header
+ * carries the profile menu instead.
+ */
+export function homeHrefForRole(role: string | undefined): { href: string; label: string } | null {
+  if (isApricartSupportRole(role)) return null
   if (role === "ORDER_PORTAL") return { href: "/shop", label: "Back to store" }
   if (role === "GROUP_ORDER_PORTAL") return { href: "/group-portal", label: "Back to portal" }
   return { href: "/dashboard", label: "Back to dashboard" }

@@ -54,8 +54,10 @@ const ROLE_ALIASES: Record<string, ImportableUserRole> = {
   headofficeuser: "HEAD_OFFICE",
   branchadmin: "BRANCH_ADMIN",
   branchadministrator: "BRANCH_ADMIN",
+  financialapprover: "BRANCH_ADMIN",
   orderportal: "ORDER_PORTAL",
   orderportaluser: "ORDER_PORTAL",
+  orderinitiator: "ORDER_PORTAL",
 }
 
 export function normalizeImportText(value: unknown): string {

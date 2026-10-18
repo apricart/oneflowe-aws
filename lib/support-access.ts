@@ -2,13 +2,14 @@
  * Who may read, answer and triage a support thread.
  *
  * A support thread is a conversation between one client organization and
- * Apricart. Apricart — `SUPER_ADMIN` — is a participant in every thread. On the
- * client side the participants are the person who raised it and the people
+ * Apricart. Apricart — `SUPER_ADMIN`, and the `APRICART_SUPPORT` agent who works
+ * the queue (`SUPPORT_APRICART_ROLES`) — is a participant in every thread. On
+ * the client side the participants are the person who raised it and the people
  * already accountable for that branch's orders:
  *
  * | Viewer                              | Sees                                       |
  * |-------------------------------------|--------------------------------------------|
- * | `SUPER_ADMIN`                       | every thread, every organization           |
+ * | `SUPER_ADMIN`, `APRICART_SUPPORT`   | every thread, every organization           |
  * | `HEAD_OFFICE`                       | every thread in their organization         |
  * | `BRANCH_ADMIN`                      | threads on their branch, plus their own    |
  * | `ORDER_PORTAL`                      | threads they raised                        |
@@ -25,11 +26,17 @@
  * facts from the session rather than from the request.
  */
 
-import { isTerminalSupportStatus, supportSideForRole, type SupportStatus } from "@/lib/support-thread"
+import {
+  isSupportApricartRole,
+  isTerminalSupportStatus,
+  supportSideForRole,
+  type SupportStatus,
+} from "@/lib/support-thread"
 
 /** Every role that may hold a conversation with Apricart. */
 export const SUPPORT_PARTICIPANT_ROLES = [
   "SUPER_ADMIN",
+  "APRICART_SUPPORT",
   "HEAD_OFFICE",
   "BRANCH_ADMIN",
   "GROUP_USER",
@@ -89,7 +96,7 @@ function positiveInteger(value: unknown): number | null {
 export function supportThreadVisibilityScope(viewer: SupportViewer): SupportVisibilityScope {
   if (!viewer?.userId || !isSupportParticipantRole(viewer.role)) return { kind: "none" }
 
-  if (viewer.role === "SUPER_ADMIN") return { kind: "all" }
+  if (isSupportApricartRole(viewer.role)) return { kind: "all" }
 
   // Every other role is pinned to a tenant. A session without one is refused
   // rather than widened — an absent organization is not "all organizations".
@@ -207,7 +214,7 @@ export function canReferenceOrderInSupportThread(input: {
   const { viewer, order } = input
   if (!order || !isSupportParticipantRole(viewer?.role)) return false
 
-  if (viewer.role === "SUPER_ADMIN") return true
+  if (isSupportApricartRole(viewer.role)) return true
 
   const organizationId = positiveInteger(viewer.organizationId)
   if (organizationId === null || order.organizationId !== organizationId) return false

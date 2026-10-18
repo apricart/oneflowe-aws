@@ -70,4 +70,14 @@ describe("user import parsing", () => {
     expect(parseImportRole("SUPER_ADMIN")).toBeNull()
     expect(normalizePhoneKey("+92 (300) 123-4567")).toBe("923001234567")
   })
+
+  it("accepts the renamed roles' display names beside the old ones and the codes", () => {
+    expect(parseImportRole("Order Initiator")).toBe("ORDER_PORTAL")
+    expect(parseImportRole("Financial Approver")).toBe("BRANCH_ADMIN")
+    expect(parseImportRole("Order Portal User")).toBe("ORDER_PORTAL")
+    expect(parseImportRole("Branch Admin")).toBe("BRANCH_ADMIN")
+    expect(parseImportRole("ORDER_PORTAL")).toBe("ORDER_PORTAL")
+    expect(parseImportRole("BRANCH_ADMIN")).toBe("BRANCH_ADMIN")
+    expect(parseImportRole("Group Order Initiator")).toBeNull()
+  })
 })

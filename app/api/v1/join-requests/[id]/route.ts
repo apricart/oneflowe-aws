@@ -355,14 +355,15 @@ async function patchDepartmentSignup(requestId: number, scope: ManagementScope, 
       reasonGiven: Boolean(input.reason),
       branchIds: outcome.branchIds,
       createdBranchIds: outcome.createdBranchIds,
+      // Counts per created branch; each assignment written has its own audit row.
+      warehouseCoverage: outcome.warehouseCoverage,
       approvers: outcome.approvers,
     },
   })
 
   if (outcome.decision === "approve") {
     await invalidateByPrefix("users")
-    if (outcome.createdBranchIds.length > 0) await invalidateByPrefix("branches")
-    // A Branch Admin converted to Group User was signed out in the transaction;
+    if (outcome.createdBranchIds.length > 0) await invalidateByPrefix("branches")    // A Branch Admin converted to Group User was signed out in the transaction;
     // its cached session check must not outlive that.
     for (const userId of outcome.convertedUserIds) await invalidateSessionValidationCache(userId)
   }

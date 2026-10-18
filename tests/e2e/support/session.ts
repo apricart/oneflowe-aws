@@ -46,7 +46,26 @@ export async function expectStatus(response: APIResponse, status = 200): Promise
   return body
 }
 
+const roleRenameNoticeHandled = new WeakSet<Page>()
+
+/**
+ * Closes the one-time "role names have changed" notice whenever it appears
+ * (`components/shell/role-rename-notice.tsx`), the way a person would, so a
+ * journey after sign-in is not blocked by the modal. Registered once per page,
+ * before the sign-in that marks the notice due. The spec about the notice
+ * itself does not call this.
+ */
+export async function closeRoleRenameNoticeWhenShown(page: Page): Promise<void> {
+  if (roleRenameNoticeHandled.has(page)) return
+  roleRenameNoticeHandled.add(page)
+  const notice = page.getByRole("dialog", { name: "Some role names have changed" })
+  await page.addLocatorHandler(notice, async () => {
+    await notice.getByRole("button", { name: "Got it" }).click()
+  })
+}
+
 export async function signIn(page: Page, username: string, landing?: RegExp): Promise<void> {
+  await closeRoleRenameNoticeWhenShown(page)
   await page.goto("/login")
   await page.getByLabel("Username or Email").fill(username)
   await page.getByLabel("Password", { exact: true }).fill(E2E_PASSWORD)

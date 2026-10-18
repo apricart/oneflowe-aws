@@ -17,6 +17,8 @@ import { isViewerRole, VIEWER_HOME } from "@/lib/viewer-access"
 import { isOrderDeskRole, ORDER_DESK_HOME } from "@/lib/order-desk-access"
 import { APRICART_EXECUTIVE_HOME, isApricartExecutiveRole } from "@/lib/apricart-executive-access"
 import { WAREHOUSE_HOME, isWarehouseRole } from "@/lib/warehouse-access"
+import { APRICART_SUPPORT_HOME, isApricartSupportRole } from "@/lib/apricart-support-access"
+import { markRoleRenameNoticeDue } from "@/lib/role-rename-notice"
 
 /**
  * Clear stale NextAuth session cookies to prevent "Invalid URL" errors.
@@ -131,10 +133,13 @@ function roleLandingPath(role: unknown): string | null {
   if (isApricartExecutiveRole(role)) return APRICART_EXECUTIVE_HOME
   // Apricart's warehouse has one workspace: its delivery queue.
   if (isWarehouseRole(role)) return WAREHOUSE_HOME
+  // Apricart's support agents have one workspace: the support queue.
+  if (isApricartSupportRole(role)) return APRICART_SUPPORT_HOME
   return null
 }
 
 function redirectAuthenticatedUser(session: any, callbackUrl: string | null): void {
+  markRoleRenameNoticeDue()
   if (session.user?.mustChangePassword === true) {
     window.location.replace("/change-password")
     return

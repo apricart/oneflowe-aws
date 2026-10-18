@@ -19,6 +19,7 @@ import {
   type WatchlistMetrics,
 } from "@/lib/budget-burn-risk"
 import type { DrillDownStatusSet } from "@/lib/executive-analytics"
+import { renamedRoleName } from "@/lib/role-display-names"
 import { ChartMessage, money } from "./chart-kit"
 import type { DrillTarget } from "./comparison-charts"
 import { toQuery, type ExecutiveFilterState } from "./executive-filters"
@@ -302,7 +303,7 @@ function WatchlistTable({ data, selectedKey, selectedItemsKey, onSelect, onSelec
                     {row.requesterName}
                   </button>
                   <div className="text-[10px] text-slate-500 dark:text-slate-400">
-                    {[row.employeeId, row.role.replace(/_/g, " ").toLowerCase(), row.accountStatus !== "ACTIVE" ? row.accountStatus.toLowerCase() : null]
+                    {[row.employeeId, (renamedRoleName(row.role) ?? row.role.replace(/_/g, " ")).toLowerCase(), row.accountStatus !== "ACTIVE" ? row.accountStatus.toLowerCase() : null]
                       .filter(Boolean)
                       .join(" · ")}
                   </div>

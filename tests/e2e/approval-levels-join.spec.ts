@@ -2,7 +2,7 @@ import bcrypt from "bcryptjs"
 import { expect, test, type Page } from "@playwright/test"
 
 import { E2E_PASSWORD } from "./support/environment"
-import { apiSession, placeOrder, post, signIn, testDatabaseUrl } from "./support/session"
+import { apiSession, closeRoleRenameNoticeWhenShown, placeOrder, post, signIn, testDatabaseUrl } from "./support/session"
 import { destroyTenant, queryTestDb, seedTenant, tenantNames, type Tenant } from "./support/tenant"
 
 /**
@@ -146,7 +146,7 @@ test.describe.serial("joining an organization with approval levels, and ordering
     // What approving would do, per level: assign the existing Group User; create
     // the other as the Branch Admin of the one branch.
     await expect(dialog.getByText(/Level One Approver: is given Level 1/)).toBeVisible({ timeout: 150_000 })
-    await expect(dialog.getByText(`No account yet: a Branch Admin of ${tenant.branches.north.name} is created with Level 2`, { exact: false })).toBeVisible()
+    await expect(dialog.getByText(`No account yet: a Financial Approver of ${tenant.branches.north.name} is created with Level 2`, { exact: false })).toBeVisible()
 
     await dialog.getByRole("button", { name: /Edit details/ }).click()
     await dialog.getByLabel(/^Phone/).fill(correctedPhone)
@@ -189,6 +189,7 @@ test.describe.serial("joining an organization with approval levels, and ordering
     await page.goto("/login")
     await page.getByLabel("Username or Email").fill(initiatorLocal)
     await page.getByLabel("Password", { exact: true }).fill(APPLICANT_PASSWORD)
+    await closeRoleRenameNoticeWhenShown(page)
     await page.getByRole("button", { name: /sign in/i }).click()
     await expect(page).toHaveURL(/\/shop/, { timeout: 150_000 })
   })

@@ -1,12 +1,13 @@
 import { redirect } from "next/navigation"
 
 import { SessionGuard } from "@/components/shell/session-guard"
+import { RoleRenameNotice } from "@/components/shell/role-rename-notice"
 import { SessionUnavailable } from "@/components/shell/session-unavailable"
 import { getProtectedPageSession } from "@/lib/server/page-session"
 import { GROUP_ORDER_PORTAL_ROLE } from "@/lib/server/multi-branch-scope"
 
 export const metadata = {
-  title: "Group Order Portal - Apricart OneFlowe",
+  title: "Group Order Initiator Portal - Apricart OneFlowe",
   description: "Order on behalf of assigned branches",
   icons: {
     icon: '/logo-web.png',
@@ -45,5 +46,10 @@ export default async function GroupPortalLayout({
   const role = (pageSession.session.user as { role?: string }).role
   if (role !== GROUP_ORDER_PORTAL_ROLE) redirect("/dashboard")
 
-  return <SessionGuard>{children}</SessionGuard>
+  return (
+    <SessionGuard>
+      <RoleRenameNotice />
+      {children}
+    </SessionGuard>
+  )
 }

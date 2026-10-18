@@ -147,15 +147,31 @@ export function isSupportSide(value: unknown): value is SupportSide {
 }
 
 /**
+ * The roles that speak for Apricart in a support conversation.
+ *
+ * `SUPER_ADMIN` operates the platform; `APRICART_SUPPORT` is the agent who
+ * works the support queue and nothing else
+ * (`lib/apricart-support-access.ts`). Both read every organization's threads
+ * and triage them. This list is the one place that is decided — no support
+ * module compares a role against `"SUPER_ADMIN"` itself.
+ */
+export const SUPPORT_APRICART_ROLES = ["SUPER_ADMIN", "APRICART_SUPPORT"] as const
+
+export function isSupportApricartRole(role: string | null | undefined): boolean {
+  return typeof role === "string"
+    && (SUPPORT_APRICART_ROLES as readonly string[]).includes(role)
+}
+
+/**
  * Which side of the conversation a role speaks for.
  *
- * Apricart operates this platform as `SUPER_ADMIN`; every other role is a
- * client of it. There is no third side, so this is deliberately total rather
- * than returning null for an unknown role — an unrecognised role is a customer,
- * which is the side that grants nothing.
+ * Apricart's roles are `SUPPORT_APRICART_ROLES`; every other role is a client.
+ * There is no third side, so this is deliberately total rather than returning
+ * null for an unknown role — an unrecognised role is a customer, which is the
+ * side that grants nothing.
  */
 export function supportSideForRole(role: string | null | undefined): SupportSide {
-  return role === "SUPER_ADMIN" ? "APRICART" : "CUSTOMER"
+  return isSupportApricartRole(role) ? "APRICART" : "CUSTOMER"
 }
 
 /** A closed thread is finished: nobody adds to it, on either side. */
