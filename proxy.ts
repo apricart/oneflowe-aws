@@ -44,6 +44,12 @@ import {
   isWarehouseRole,
 } from "@/lib/warehouse-access"
 import {
+  APRICART_SUPPORT_AREAS,
+  APRICART_SUPPORT_HOME,
+  isApricartSupportApiRequestAllowed,
+  isApricartSupportRole,
+} from "@/lib/apricart-support-access"
+import {
   HEAD_COUNT_REQUESTS_AREA,
   HEAD_COUNT_REQUEST_READ_ROLES,
 } from "@/lib/branch-head-count-access"
@@ -270,6 +276,15 @@ async function handleApiRequest(req: NextRequest, pathname: string, response: Ne
       pathname,
     )
   }
+  // And for Apricart's support agents, which also have no organization of
+  // their own: the support queue's calls, nothing else.
+  if (isApricartSupportRole((token as any)?.role) && !isApricartSupportApiRequestAllowed(req.method, pathname)) {
+    logger("middleware", { reason: "apricart_support_api_not_allowed", path: pathname })
+    return withSecurityHeaders(
+      NextResponse.json({ error: "Forbidden" }, { status: 403 }),
+      pathname,
+    )
+  }
   return withSecurityHeaders(response, pathname)
 }
 
@@ -384,6 +399,8 @@ function adminPortalRedirect(pathname: string): string | null {
  *   * APRICART_EXECUTIVE — Apricart's management: the delivery dashboard and
  *     nothing else, for the same reason.
  *   * WAREHOUSE — Apricart's warehouse: its delivery queue, for the same reason.
+ *   * APRICART_SUPPORT — Apricart's support agents: the shared support pages and
+ *     nothing else. Which threads it reads is `lib/support-access.ts`.
  */
 type TenantClaims = { organizationId: unknown; branchId: unknown }
 
@@ -400,6 +417,7 @@ const SINGLE_AREA_ROLES: ReadonlyArray<{
   { matches: isOrderDeskRole, allows: withinAreas(ORDER_DESK_AREAS), home: ORDER_DESK_HOME },
   { matches: isApricartExecutiveRole, allows: withinAreas(APRICART_EXECUTIVE_AREAS), home: APRICART_EXECUTIVE_HOME },
   { matches: isWarehouseRole, allows: withinAreas(WAREHOUSE_AREAS), home: WAREHOUSE_HOME },
+  { matches: isApricartSupportRole, allows: withinAreas(APRICART_SUPPORT_AREAS), home: APRICART_SUPPORT_HOME },
 ]
 
 /**

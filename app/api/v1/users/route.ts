@@ -15,6 +15,7 @@ import { isViewerRole, VIEWER_READ_REFUSED, viewerReadScope } from "@/lib/viewer
 import { isOrderDeskRole, orderDeskUserShapeError } from "@/lib/order-desk-access"
 import { apricartExecutiveUserShapeError, isApricartExecutiveRole } from "@/lib/apricart-executive-access"
 import { isWarehouseRole, warehouseUserShapeError } from "@/lib/warehouse-access"
+import { apricartSupportUserShapeError, isApricartSupportRole } from "@/lib/apricart-support-access"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { USER_MANAGEMENT_ROLES } from "@/lib/user-management-access"
 import { usernameExists } from "@/lib/user-username-uniqueness"
@@ -44,8 +45,9 @@ function getLoginUrl(requestUrl: string): string {
 
 /**
  * Apricart's own staff roles carry no organization and no branch: the Order
- * Desk's reach is the assignments Super Admin grants from Desk team, and
- * management reads every organization. Undefined for any other role.
+ * Desk's reach is the assignments Super Admin grants from Desk team,
+ * management reads every organization, and support answers every
+ * organization's queue. Undefined for any other role.
  */
 function apricartStaffShapeError(
   role: SystemRole,
@@ -56,6 +58,7 @@ function apricartStaffShapeError(
   if (isOrderDeskRole(role)) shapeError = orderDeskUserShapeError(organizationId, branchId)
   else if (isApricartExecutiveRole(role)) shapeError = apricartExecutiveUserShapeError(organizationId, branchId)
   else if (isWarehouseRole(role)) shapeError = warehouseUserShapeError(organizationId, branchId)
+  else if (isApricartSupportRole(role)) shapeError = apricartSupportUserShapeError(organizationId, branchId)
   else return undefined
   return shapeError ? { message: shapeError, status: 400 } : null
 }

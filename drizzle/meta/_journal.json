@@ -687,6 +687,13 @@
       "when": 1791082800000,
       "tag": "20261022120000_branch_head_count",
       "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "7",
+      "when": 1791086400000,
+      "tag": "20261023120000_add_apricart_support_role",
+      "breakpoints": true
     }
   ]
 }

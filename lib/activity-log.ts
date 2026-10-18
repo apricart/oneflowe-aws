@@ -102,6 +102,7 @@ export const ACTIVITY_ACTOR_ROLES = [
   "ORDER_DESK",
   "APRICART_EXECUTIVE",
   "WAREHOUSE",
+  "APRICART_SUPPORT",
 ] as const satisfies readonly Role[]
 
 export type ActivityActorRole = (typeof ACTIVITY_ACTOR_ROLES)[number]

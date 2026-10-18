@@ -1,6 +1,6 @@
 import "server-only"
 
-import { and, eq, isNull, ne } from "drizzle-orm"
+import { and, eq, inArray, isNull, ne } from "drizzle-orm"
 
 import { emailOutbox, notifications, organizations, roles, supportThreads, users } from "@/db/schema"
 import { db } from "@/lib/db"
@@ -10,9 +10,15 @@ import {
   type SupportEmailPayload,
   type SupportEmailTemplate,
 } from "@/lib/email/support"
+import { isApricartSupportRole } from "@/lib/apricart-support-access"
 import { isValidEmailAddress } from "@/lib/validation/email"
 import { canReadSupportThread } from "@/lib/support-access"
-import { supportThreadReference, type SupportSide } from "@/lib/support-thread"
+import {
+  SUPPORT_APRICART_ROLES,
+  isSupportApricartRole,
+  supportThreadReference,
+  type SupportSide,
+} from "@/lib/support-thread"
 import {
   markFailedAttempt,
   markSent,
@@ -81,7 +87,10 @@ export function supportNotificationEventKey(
   return `${template}:${threadId}:${discriminator}:${recipientUserId}`
 }
 
-/** Every active Apricart administrator. Apricart is a party to every thread. */
+/**
+ * Every active Apricart account on the support queue — Super Admin and the
+ * support agents. Apricart is a party to every thread.
+ */
 async function apricartRecipients(tx: any): Promise<SupportNotificationRecipient[]> {
   return tx
     .select({
@@ -94,7 +103,7 @@ async function apricartRecipients(tx: any): Promise<SupportNotificationRecipient
     .from(users)
     .innerJoin(roles, eq(users.roleId, roles.id))
     .where(and(
-      eq(roles.name, "SUPER_ADMIN"),
+      inArray(roles.name, [...SUPPORT_APRICART_ROLES]),
       eq(users.isActive, true),
       isNull(users.deletedAt),
     ))
@@ -150,16 +159,23 @@ async function insertSupportEvents(tx: any, input: {
   // and branch (`app/api/v1/notifications/route.ts`), so each row carries the
   // recipient's scope rather than the thread's. A row stamped with the thread's
   // branch would simply never be shown to a reader on another branch.
-  await tx.insert(notifications).values(rows.map(({ recipient, eventKey }) => ({
-    userId: recipient.id,
-    organizationId: recipient.organizationId,
-    branchId: recipient.branchId,
-    supportThreadId: input.thread.id,
-    eventKey,
-    type: input.template,
-    targetRole: recipient.role,
-    message: input.message,
-  }))).onConflictDoNothing()
+  //
+  // A support agent has no bell — no topbar, and the notifications API is
+  // outside its allowlist — so it is mailed but given no row it could never
+  // read. The thread list's unread marker is where it sees movement.
+  const bellRows = rows.filter(({ recipient }) => !isApricartSupportRole(recipient.role))
+  if (bellRows.length > 0) {
+    await tx.insert(notifications).values(bellRows.map(({ recipient, eventKey }) => ({
+      userId: recipient.id,
+      organizationId: recipient.organizationId,
+      branchId: recipient.branchId,
+      supportThreadId: input.thread.id,
+      eventKey,
+      type: input.template,
+      targetRole: recipient.role,
+      message: input.message,
+    }))).onConflictDoNothing()
+  }
 
   const payload: SupportEmailPayload = {
     threadId: input.thread.id,
@@ -182,7 +198,7 @@ async function insertSupportEvents(tx: any, input: {
     orderId: null,
     supportThreadId: input.thread.id,
     template: input.template,
-    payload: { ...payload, toApricart: recipient.role === "SUPER_ADMIN" },
+    payload: { ...payload, toApricart: isSupportApricartRole(recipient.role) },
   }))).onConflictDoNothing()
 
   return { eventKeys: rows.map((row) => row.eventKey), recipientCount: rows.length }

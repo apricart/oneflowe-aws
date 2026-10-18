@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react"
 import useSWR from "swr"
 import { APRICART_EXECUTIVE_LABEL, APRICART_EXECUTIVE_ROLE } from "@/lib/apricart-executive-access"
 import { WAREHOUSE_LABEL, WAREHOUSE_ROLE } from "@/lib/warehouse-access"
+import { APRICART_SUPPORT_LABEL, APRICART_SUPPORT_ROLE } from "@/lib/apricart-support-access"
 import { jsonFetcher } from "@/lib/fetcher"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogTrigger, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
@@ -83,12 +84,13 @@ function getRoleLabel(role: string) {
   if (role === "VIEWER") return "Viewer (read-only)"
   if (role === APRICART_EXECUTIVE_ROLE) return APRICART_EXECUTIVE_LABEL
   if (role === WAREHOUSE_ROLE) return WAREHOUSE_LABEL
+  if (role === APRICART_SUPPORT_ROLE) return APRICART_SUPPORT_LABEL
   return ROLE_DISPLAY_NAMES.ORDER_PORTAL
 }
 
 // Apricart's own cross-tenant staff created from this dialog: no organization,
 // no branch. Their reach is granted elsewhere (or is every tenant).
-const APRICART_STAFF_ROLES = new Set<string>([APRICART_EXECUTIVE_ROLE, WAREHOUSE_ROLE])
+const APRICART_STAFF_ROLES = new Set<string>([APRICART_EXECUTIVE_ROLE, WAREHOUSE_ROLE, APRICART_SUPPORT_ROLE])
 
 // Roles pinned to exactly one branch. The group roles are deliberately
 // excluded: their reach comes from the group/branch assignments instead.
@@ -976,6 +978,11 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                           {WAREHOUSE_LABEL} (assigned branches)
                         </SelectItem>
                       )}
+                      {userRole === "SUPER_ADMIN" && (
+                        <SelectItem value={APRICART_SUPPORT_ROLE}>
+                          {APRICART_SUPPORT_LABEL} (support queue only)
+                        </SelectItem>
+                      )}
                     </SelectContent>
                   </Select>
                   {errors.role && (
@@ -991,6 +998,12 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                     <p className="text-xs text-muted-foreground">
                       Apricart management. Reads the delivery dashboard across every organization and
                       can change nothing. No organization or branch is assigned.
+                    </p>
+                  )}
+                  {form.role === APRICART_SUPPORT_ROLE && (
+                    <p className="text-xs text-muted-foreground">
+                      Apricart support. Answers, triages and closes every organization&apos;s support
+                      requests, and reaches nothing else. No organization or branch is assigned.
                     </p>
                   )}
                 </div>
