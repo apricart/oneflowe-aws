@@ -1,5 +1,6 @@
 import { stringifyPrimitive } from "./stringify-primitive"
 import { isValidEmailAddress } from "@/lib/validation/email"
+import { renamedRoleName } from "@/lib/role-display-names"
 
 export const IMPORTABLE_USER_ROLES = ["HEAD_OFFICE", "BRANCH_ADMIN", "ORDER_PORTAL"] as const
 
@@ -264,7 +265,7 @@ function addImportFieldIssues(options: {
   }
   if (!role) issues.push(issue("error", "INVALID_ROLE", rowNumber, `Role "${rawRole || "(blank)"}" is not importable.`, "role"))
   if (["BRANCH_ADMIN", "ORDER_PORTAL"].includes(role ?? "") && !branchSource) {
-    issues.push(issue("error", "MISSING_BRANCH", rowNumber, `${role} requires a branch/department.`, "branch"))
+    issues.push(issue("error", "MISSING_BRANCH", rowNumber, `${renamedRoleName(role) ?? role} requires a branch/department.`, "branch"))
   }
   if (firstName.length > 100 || lastName.length > 100 || fullName.length > 255) issues.push(issue("error", "NAME_TOO_LONG", rowNumber, "Name exceeds the database length limit.", "name"))
   if (phone && phone.length > 32) issues.push(issue("error", "PHONE_TOO_LONG", rowNumber, "Phone exceeds 32 characters.", "phone"))

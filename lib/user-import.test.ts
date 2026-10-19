@@ -35,6 +35,18 @@ describe("user import parsing", () => {
     expect(row.issues.filter((issue) => issue.severity === "error")).toEqual([])
   })
 
+  it("names a role missing its branch by its display name, never the code", () => {
+    const [row] = parseUserImportRecords([{
+      Name: "Example Person",
+      Email: "person@example.com",
+      Username: "example.person",
+      "User Type": "ORDER_PORTAL",
+    }])
+
+    const missing = row.issues.find((issue) => issue.code === "MISSING_BRANCH")
+    expect(missing?.message).toBe("Order Initiator requires a branch/department.")
+  })
+
   it("derives a normalized first.last username when configured", () => {
     const [row] = parseUserImportRecords([{
       Name: "Éxample M. Person",

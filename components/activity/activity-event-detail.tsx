@@ -19,6 +19,7 @@ import {
   SEVERITY_MEANING,
   SEVERITY_TONE,
   actorLabel,
+  actorRoleLabel,
   changedFields,
   contextEntries,
   scopeLabel,
@@ -119,7 +120,7 @@ function DetailBody({ event }: Readonly<{ event: ActivityEvent }>) {
             ) : null}
             {event.actor.role ? (
               <div className="text-xs uppercase tracking-wide text-muted-foreground">
-                {event.actor.role}
+                {actorRoleLabel(event.actor.role)}
               </div>
             ) : null}
             {event.actor.id ? (
