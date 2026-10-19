@@ -17,6 +17,7 @@ import { toast } from "@/hooks/use-toast"
 import { sanitizeSpreadsheetRecords } from "@/lib/spreadsheet"
 import { getOrderStatusDisplay } from "@/lib/order-status-display"
 import type { OrderStatusContext } from "@/lib/order-status"
+import { renamedRoleName } from "@/lib/role-display-names"
 
 interface OrderExportProps {
     /**
@@ -103,7 +104,7 @@ export function OrderExport({ fetchOrders, totalOrders, role, statusContext = "d
         doc.text("Orders Report", 14, 22)
         doc.setFontSize(10)
         doc.text(`Generated on: ${new Date().toLocaleDateString()}`, 14, 30)
-        if (role) doc.text(`Role: ${role}`, 14, 36)
+        if (role) doc.text(`Role: ${renamedRoleName(role) ?? role.replaceAll("_", " ")}`, 14, 36)
 
         const isSuperAdmin = role === "SUPER_ADMIN"
         const headers = ["ID", "TID", "Date", "Group", "Branch", "Status", "Fulfillment", "Payment", "Refund", "Amount", "Items", "Reason"]

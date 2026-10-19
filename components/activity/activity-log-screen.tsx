@@ -33,6 +33,7 @@ import {
   SEVERITY_MEANING,
   SEVERITY_TONE,
   actorLabel,
+  actorRoleLabel,
   csvFileName,
   eventAriaLabel,
   eventsToCsv,
@@ -328,7 +329,7 @@ function EventRow({ event, onSelect }: Readonly<{ event: ActivityEvent; onSelect
           <span className="min-w-0 px-4 py-3">
             <span className="block truncate text-sm">{actorLabel(event)}</span>
             <span className="block truncate text-[10px] uppercase tracking-wide text-muted-foreground">
-              {event.actor.role ?? "—"}
+              {actorRoleLabel(event.actor.role) ?? "—"}
             </span>
           </span>
 

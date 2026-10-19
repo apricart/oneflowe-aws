@@ -1,5 +1,6 @@
 "use client"
 import { viewerAccessFor } from "@/lib/viewer-access"
+import { renamedRoleName } from "@/lib/role-display-names"
 import { useAppContext } from "@/components/context/app-context"
 import { MultiBranchFilter } from "@/components/dashboard/multi-branch-filter"
 import { NotificationBell } from "@/components/notifications/notification-center"
@@ -156,7 +157,7 @@ export function Topbar() {
                   {(session?.user as any)?.email || "user@example.com"}
                 </p>
                 <p className="text-[10px] leading-none text-muted-foreground mt-1 capitalize font-normal bg-slate-100 dark:bg-slate-800 w-fit px-1.5 py-0.5 rounded">
-                  {userRole?.toLowerCase().replace("_", " ")}
+                  {renamedRoleName(userRole) ?? userRole?.toLowerCase().replaceAll("_", " ")}
                 </p>
               </div>
             </DropdownMenuLabel>

@@ -3,6 +3,7 @@ import {
   ACTIVITY_MAX_WINDOW_DAYS,
   ACTIVITY_TENANT_ACTOR_ROLES,
   MS_PER_DAY,
+  isActivityActorRole,
   type ActivityActorRole,
   type ActivityEvent,
   type ActivityOperation,
@@ -140,6 +141,15 @@ export type ActorRoleOption = { value: ActivityActorRole; label: string }
 export function actorRoleOptions(platformWide: boolean): ActorRoleOption[] {
   const roles = platformWide ? ACTIVITY_ACTOR_ROLES : ACTIVITY_TENANT_ACTOR_ROLES
   return roles.map((role) => ({ value: role, label: ACTOR_ROLE_LABEL[role] }))
+}
+
+/**
+ * The role shown under the person. A recorded role the page knows is shown by
+ * its display name; anything else is shown as recorded rather than dropped.
+ */
+export function actorRoleLabel(role: string | null | undefined): string | null {
+  if (!role) return null
+  return isActivityActorRole(role) ? ACTOR_ROLE_LABEL[role] : role
 }
 
 /** Who did it, in one line, preferring the most identifying thing available. */
